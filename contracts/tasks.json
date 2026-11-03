@@ -214,7 +214,7 @@
       "primary_role": "python",
       "backup_role": "integrator",
       "reviewer_role": "validation",
-      "owner_instance": "bridge:f799e25c-4c1b-4b60-a429-a619a2493883",
+      "owner_instance": "bridge:0aa651c6-bb5f-47be-94f9-263a54ec3d48",
       "target_paths": [
         "src/codegen_python/",
         "runtime/python/",
@@ -237,7 +237,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python scalar code generation taskebbb2bde; committedT04inputb8ccf38 verified in actual worktree. Root owns common CMake/CLI integration."
+      "notes": "Python initial taskebbb2bde rejected: runtimeonly. Onecorrection4680b60a uses sameCodexSolmodel/xhigh; T04committedinput and explicitruntimesnapshot verified. Root owns commonCMake/buildCLI integration."
     },
     {
       "id": "T07",
