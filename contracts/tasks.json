@@ -11,12 +11,12 @@
     {
       "id": "T00",
       "title": "约定与工具链",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [],
       "primary_role": "integrator",
       "backup_role": "validation",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "2be96a1e-f7eb-40f3-b230-7300f7c9c011",
       "target_paths": [
         "CMakeLists.txt",
         "cmake/",

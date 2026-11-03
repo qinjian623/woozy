@@ -216,19 +216,26 @@ parser 不查询符号表。对于 `f[T]`、`values[i]` 和 `tensor[i, j]`，构
 
 ## 9 诊断契约
 
-稳定的字符串 `code` 用于工具判断；用户可读文本可以改进或本地化。示例形状如下，具体注册表由项目统一维护：
+稳定的字符串 `code` 用于工具判断；用户可读文本可以改进或本地化。机器输出采用 `contracts/diagnostic.schema.json`，内部 SourceSpan 的 begin_byte 在序列化时转换为 start_byte。示例形状如下，偏移仅用于展示格式：
 
 ```json
 {
   "schema_version": 1,
-  "phase": "type",
-  "severity": "error",
-  "code": "E_TYPE_MISMATCH",
-  "message": "实参类型为 string，参数 value 要求 i32",
-  "primary": {"file": "main.lang", "revision": "content-hash", "begin_byte": 48, "end_byte": 53},
-  "labels": [],
-  "notes": [],
-  "fixes": []
+  "compiler_version": "example-not-built",
+  "source_revision": "content-hash",
+  "status": "error",
+  "diagnostics": [
+    {
+      "phase": "type",
+      "severity": "error",
+      "code": "E_TYPE_MISMATCH",
+      "message": "实参类型为 string，参数 value 要求 i32",
+      "primary": {"path": "main.lang", "start_byte": 48, "end_byte": 53},
+      "related": [],
+      "notes": [],
+      "fixits": []
+    }
+  ]
 }
 ```
 

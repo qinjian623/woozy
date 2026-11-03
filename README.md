@@ -43,3 +43,5 @@ python3 tools/validate_package.py
 第三条检查文档包、相对链接、JSON 契约、任务依赖和样例的语法分类。它不是编译器测试。
 
 `langc`、CMake 工程、LLVM 后端、Python 转译器及运行库都由任务清单后续实现；本包中的相关命令是目标接口。
+
+T00 的 C++20 驱动与独立前端静态库现可构建，步骤见 [BUILD.md](docs/BUILD.md)。目前仅提供帮助、版本和明确的未实现错误；尚不能检查或编译源语言。

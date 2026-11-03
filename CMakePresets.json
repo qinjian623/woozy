@@ -1,0 +1,30 @@
+{
+  "version": 2,
+  "configurePresets": [
+    {
+      "name": "frontend-debug",
+      "generator": "Ninja",
+      "binaryDir": "${sourceDir}/build/frontend-debug",
+      "cacheVariables": {
+        "CMAKE_BUILD_TYPE": "Debug",
+        "LANG_ENABLE_LLVM": "OFF",
+        "BUILD_TESTING": "ON"
+      }
+    }
+  ],
+  "buildPresets": [
+    {
+      "name": "frontend-debug",
+      "configurePreset": "frontend-debug"
+    }
+  ],
+  "testPresets": [
+    {
+      "name": "frontend-debug",
+      "configurePreset": "frontend-debug",
+      "output": {
+        "outputOnFailure": true
+      }
+    }
+  ]
+}

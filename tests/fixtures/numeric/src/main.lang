@@ -1,0 +1,22 @@
+package main;
+
+func main() i32 {
+    let high i8 = 127;
+    let wrapped = high + 1;
+    if wrapped != -128 {
+        return 1;
+    }
+    let minimum i32 = -2_147_483_648;
+    let negative_one i32 = -1;
+    if minimum / negative_one != minimum {
+        return 2;
+    }
+    if minimum % negative_one != 0 {
+        return 3;
+    }
+    let negative i32 = -7;
+    if negative / 3 != -2 || negative % 3 != -1 {
+        return 4;
+    }
+    return 0;
+}

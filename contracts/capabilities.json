@@ -12,7 +12,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "scalar_integers",
@@ -22,7 +28,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "scalar_integers_python",
@@ -32,7 +44,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "struct_enum_trait_generics",
@@ -43,7 +61,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "typed_throws_and_defer",
@@ -54,7 +78,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "managed_vec_and_move",
@@ -65,7 +95,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "native_arc",
@@ -75,7 +111,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "python_numpy_torch",
@@ -85,7 +127,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "cxx_opaque_wrapper",
@@ -95,7 +143,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "portable_os_io",
@@ -105,7 +159,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "raw_syscall",
@@ -115,7 +175,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "capturing_closure",
@@ -123,7 +189,13 @@
       "planned_backends": [],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "strict_float_complete",
@@ -134,7 +206,13 @@
       ],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "dynamic_trait",
@@ -142,7 +220,13 @@
       "planned_backends": [],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     },
     {
       "name": "concurrent_arc",
@@ -150,7 +234,13 @@
       "planned_backends": [],
       "implemented": false,
       "verified": false,
-      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": false,
+        "check": false,
+        "generate": false,
+        "execute": false
+      }
     }
   ],
   "rule": "parser覆盖不等于语义/生成/执行支持；实际编译器的capabilities命令必须从已实现能力生成"

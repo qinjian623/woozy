@@ -1,0 +1,10 @@
+# Integration probe only; never used by the frontend.
+find_package(LLVM REQUIRED CONFIG)
+if(NOT LLVM_PACKAGE_VERSION STREQUAL "22.1.8")
+  message(FATAL_ERROR "LLVM 22.1.8 required; found ${LLVM_PACKAGE_VERSION}")
+endif()
+add_executable(lang_llvm_probe cmake/llvm_probe.cpp)
+target_include_directories(lang_llvm_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_features(lang_llvm_probe PRIVATE cxx_std_20)
+llvm_map_components_to_libnames(LANG_LLVM_LIBS Support)
+target_link_libraries(lang_llvm_probe PRIVATE ${LANG_LLVM_LIBS})

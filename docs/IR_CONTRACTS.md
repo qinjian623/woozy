@@ -1,6 +1,6 @@
 # AST 与中间表示契约
 
-版本：0.1。本文给出前端、LLVM 后端和 Python 后端共同遵守的待实现数据契约。示例是伪 C++ 和概念 IR，不是已存在的 API 或可执行实现。运行语义见 [SEMANTICS.md](SEMANTICS.md)，语法入口见 [FRONTEND.md](FRONTEND.md)。
+文档版本：0.1，对应本包实施接口版本 `compiler-dev/1`；两者分别表示文档修订和共同接口版本，不是两套接口。本文给出前端、LLVM 后端和 Python 后端共同遵守的待实现数据契约。示例是伪 C++ 和概念 IR，不是已存在的 API 或可执行实现。运行语义见 [SEMANTICS.md](SEMANTICS.md)，语法入口见 [FRONTEND.md](FRONTEND.md)。
 
 ## 1 三种表示的职责
 
