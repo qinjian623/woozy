@@ -97,6 +97,27 @@ int main() {
   r = resolve_project(p);
   check(r.diagnostics.size() == 1 && has(r, "E_NAME_NOT_FOUND"), "file alias leaked");
   check(manager.get(r.diagnostics[0].primary->snapshot)->path == "0/1.lang", "alias diagnostic wrong file");
+  p = project(manager, {{"package p; func f() { let a = func(x i32) i32 { return x; }; let b = func() { let c = func(y i32) i32 { return y; }; }; }"}});
+  r = resolve_project(p);
+  check(r.success(), "nested noncapturing literals rejected");
+  size_t literals = 0;
+  for (const auto &symbol : r.value->symbols) {
+    if (symbol.kind != SymbolKind::function || !symbol.name.empty()) continue;
+    ++literals;
+    check(symbol.id.value < r.value->symbols.size(), "invalid identity");
+    check(symbol.definition.has_value() && symbol.declaration.has_value(), "missing literal source");
+    const auto &ref = *symbol.definition;
+    const auto &literal = p->modules.at(ref.module.value).files.at(ref.file)->node(ref.node);
+    check(literal.kind == AstKind::FunctionLiteral && symbol.module == ref.module && !symbol.exported,
+          "incorrect literal identity");
+    check(symbol.declaration->begin_byte == literal.span.begin_byte &&
+          symbol.declaration->end_byte == literal.span.end_byte &&
+          symbol.declaration->snapshot == literal.span.snapshot, "incorrect literal span");
+    for (const auto &occurrence : r.value->occurrences)
+      check(occurrence.symbol != symbol.id, "literal treated as name reference");
+  }
+  check(literals == 3, "missing or duplicate literal identities");
+  example("package p; func f() { let a = func(x i32) { let b = func() i32 { return x; }; }; }", "E_CAPABILITY_UNAVAILABLE");
   std::stop_source stop;
   stop.request_stop();
   r = resolve_project(p, stop.get_token());

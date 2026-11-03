@@ -143,6 +143,11 @@ class Resolver {
     if (n.kind == AstKind::Parenthesized)
       return expression(n.children.at(0), scope);
     if (n.kind == AstKind::FunctionLiteral) {
+      // Anonymous identities never enter a lexical names table.
+      SymbolId identity(out.symbols.size());
+      out.symbols.push_back({identity, {}, SymbolKind::function, module,
+                             ref(id), n.span, false, {}});
+      owners.push_back(std::nullopt);
       function_body(id, scope);
       return {};
     }
