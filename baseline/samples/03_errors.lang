@@ -1,0 +1,80 @@
+package main;
+
+// 错误是显式类型；throws 函数中的调用自然传播，不加问号。
+enum InputError {
+    Negative(value i32);
+    TooLarge(value i32);
+}
+
+// 本地定义的普通枚举。Result 不是隐式解包语法。
+enum Result[T, E] {
+    Ok(value T);
+    Err(error E);
+}
+
+func checked_square(value i32) i32 throws InputError {
+    if value < 0 {
+        throw InputError.Negative(value);
+    }
+    if value > 1000 {
+        throw InputError.TooLarge(value);
+    }
+    // 已限制到 0..1000，此处不会发生 i32 乘法溢出。
+    return value * value;
+}
+
+func checked_square_result(value i32) Result[i32, InputError] {
+    try {
+        let answer = checked_square(value);
+        return Result[i32, InputError].Ok(answer);
+    } catch err InputError {
+        return Result[i32, InputError].Err(err);
+    }
+}
+
+func main() i32 {
+    var caught = false;
+    try {
+        let answer = checked_square(12);
+        if answer != 144 {
+            return 1;
+        }
+        let rejected = checked_square(-3);
+        return 2;
+    } catch err InputError {
+        switch err {
+            case InputError.Negative(value):
+                if value != -3 {
+                    return 3;
+                }
+                caught = true;
+            case InputError.TooLarge(value):
+                return 4;
+        }
+    }
+    if !caught {
+        return 5;
+    }
+
+    let outcomes Vec[Result[i32, InputError]] = [
+        checked_square_result(3),
+        checked_square_result(-1),
+    ];
+    var successes i32 = 0;
+    var failures i32 = 0;
+    for outcome in outcomes {
+        switch outcome {
+            case Result.Ok(value):
+                if value != 9 {
+                    return 6;
+                }
+                successes += 1;
+            case Result.Err(error):
+                failures += 1;
+        }
+    }
+    if successes != 1 || failures != 1 {
+        return 7;
+    }
+    return 0;
+}

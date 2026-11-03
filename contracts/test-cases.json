@@ -1,0 +1,83 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "cases": [
+    {
+      "id": "core",
+      "path": "examples/core.lang",
+      "syntax": "accept",
+      "semantic": "accept",
+      "execution": "expected_success",
+      "expected_exit": 0,
+      "required_tasks": [
+        "T05",
+        "T06"
+      ],
+      "backends": [
+        "native",
+        "python"
+      ]
+    },
+    {
+      "id": "numeric",
+      "path": "examples/numeric.lang",
+      "syntax": "accept",
+      "semantic": "accept",
+      "execution": "expected_success",
+      "expected_exit": 0,
+      "required_tasks": [
+        "T05",
+        "T06"
+      ],
+      "backends": [
+        "native",
+        "python"
+      ]
+    },
+    {
+      "id": "errors",
+      "path": "examples/errors.lang",
+      "syntax": "accept",
+      "semantic": "accept",
+      "execution": "expected_success",
+      "expected_exit": 0,
+      "required_tasks": [
+        "T08"
+      ],
+      "backends": [
+        "native",
+        "python"
+      ]
+    },
+    {
+      "id": "ownership",
+      "path": "examples/ownership.lang",
+      "syntax": "accept",
+      "semantic": "accept",
+      "execution": "expected_success",
+      "expected_exit": 0,
+      "required_tasks": [
+        "T09"
+      ],
+      "backends": [
+        "native",
+        "python"
+      ]
+    },
+    {
+      "id": "use_after_move",
+      "path": "examples/negative/use_after_move.lang",
+      "syntax": "accept",
+      "semantic": "reject",
+      "execution": "not_applicable",
+      "expected_diagnostic": "E_OWNERSHIP_USE_AFTER_MOVE",
+      "required_tasks": [
+        "T09"
+      ],
+      "backends": [
+        "native",
+        "python"
+      ]
+    }
+  ]
+}

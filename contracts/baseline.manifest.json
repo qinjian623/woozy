@@ -1,0 +1,106 @@
+{
+  "schema_version": 1,
+  "source": "lexical-syntax-v0.1",
+  "files": [
+    {
+      "path": "LEXICAL_SYNTAX.md",
+      "sha256": "abd32be1b010a6754aaee0e02f5d95c326a92d430efe70c0de9c26f3a5906b94"
+    },
+    {
+      "path": "README.md",
+      "sha256": "28d8e1038e57a6827f95b4b367251a318085a55d0c5eb4b3da6dbbc77f85a864"
+    },
+    {
+      "path": "VALIDATION.md",
+      "sha256": "5ea1c1e1288fb6d24cd8e4af83b22cb096823e393f0e2b30c30fd1898d2f6557"
+    },
+    {
+      "path": "examples_notes.json",
+      "sha256": "0b122450ea24e3a427513bf1ff16c8e26e6b7fdfe0c7faf95baf2fbd0d4b105d"
+    },
+    {
+      "path": "grammar.ebnf",
+      "sha256": "4bf4b90ad50bf5e5a74347dd07c89856488b25bdcf36cb2bbd1297c745f5bae4"
+    },
+    {
+      "path": "samples/01_basics.lang",
+      "sha256": "b8b035cd0fc09798abb310d23e416f714ad449806c1e0fb726306c82c2e70051"
+    },
+    {
+      "path": "samples/02_generics.lang",
+      "sha256": "114766f3e84c699eb84f040044b4b4121ddf02a1fa44ff776f48d4f8f78cbc46"
+    },
+    {
+      "path": "samples/03_errors.lang",
+      "sha256": "ecfdd1d5b938dcec277d135ad9c2e7ba2807a0ffd464c91a4ebae12cbb7a8ff3"
+    },
+    {
+      "path": "samples/04_numpy_torch.lang",
+      "sha256": "beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797"
+    },
+    {
+      "path": "samples/05_traits.lang",
+      "sha256": "d435ed5a30cfe75600bd982e12e27ec59306181c5fe998aba05751370bd3c961"
+    },
+    {
+      "path": "samples/06_control_flow.lang",
+      "sha256": "3fec2a91ab07928f9a2dbf1296ec4dde05a6bae5f75d03ad0c21179174655f2c"
+    },
+    {
+      "path": "samples/07_functions.lang",
+      "sha256": "b6d4de458f1d616821ba7a3f178bdaa6955c1a3cebb45112a419cd544c107f37"
+    },
+    {
+      "path": "samples/README.md",
+      "sha256": "ba395af3c1066e809703bd4cde67332b7b987f94e134c749bd4a875736194219"
+    },
+    {
+      "path": "samples/negative/01_missing_semicolon.lang",
+      "sha256": "faf098414c3df0c834fd24f82d58ffeebedad2b4e90f35b7254af4eacce8057b"
+    },
+    {
+      "path": "samples/negative/02_invalid_string_escape.lang",
+      "sha256": "d69766891e0eba444191d6904e948b0fad7340fbf8abd8c32d1f532a858c08a4"
+    },
+    {
+      "path": "samples/negative/03_positional_after_named.lang",
+      "sha256": "0b9725166f5e5252866096b917e50d3a85fbc05feb5a23d7f80888b55aedc685"
+    },
+    {
+      "path": "samples/negative/04_unhandled_throws.lang",
+      "sha256": "37a950b9047dfc7218b808201587bcc4165c8a637c7179b84fe99835ef45f17f"
+    },
+    {
+      "path": "samples/negative/05_type_mismatch.lang",
+      "sha256": "99b29e22d0f4877f3f10907eb6f8728869c77a3311c172f480ba4628ae181da9"
+    },
+    {
+      "path": "samples/negative/06_uninitialized_binding.lang",
+      "sha256": "5498225a9c5702f610ea92d845accf7670a9db4e464b0226eb9aadc1c88ecb6e"
+    },
+    {
+      "path": "samples/negative/07_result_is_not_unwrapped.lang",
+      "sha256": "819b691d6b3c00cb5fd6d2034fc3989e2e1fb956ca8e4541b4c12353e96e00ea"
+    },
+    {
+      "path": "samples/negative/08_throwing_cleanup.lang",
+      "sha256": "61270a7374f6af757107ee46809cb154156a1d41204dfe668189650413e5c91c"
+    },
+    {
+      "path": "samples/negative/09_ambiguous_function_return_type.lang",
+      "sha256": "abced4d53a3f8acb1ae8c580e3f065c7b9f7e6965e99c95e97c477f61670d3b4"
+    },
+    {
+      "path": "samples/numpy_torch_reference.py",
+      "sha256": "991e8692a123e68ad2a1e1941f39efdc8590e91b09050450a1323d739fc7080c"
+    },
+    {
+      "path": "tools/check_syntax.py",
+      "sha256": "6b6f3d4cc7d825947ff13f760bf83857ccd03fa00c0745a2ce35f796ca3cd871"
+    },
+    {
+      "path": "validation.json",
+      "sha256": "43198efaf67ab51637213335945bc54ffd1c0159298e4b9536f2b7062645f39f"
+    }
+  ]
+}

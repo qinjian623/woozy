@@ -1,0 +1,26 @@
+# 目标清单格式示例，不是已经可构建的工程。
+schema_version = 1
+
+[package]
+name = "training_example"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "python"
+word_bits = 64
+
+[dependencies.numpy]
+kind = "python"
+binding = "../contracts/python_bindings.example.json"
+host_package = "numpy"
+
+[dependencies.torch]
+kind = "python"
+binding = "../contracts/python_bindings.example.json"
+host_package = "torch"
+
+# source依赖：用明确的来源路径，不依赖系统目录扫描顺序。
+# [dependencies.geometry]
+# kind = "source"
+# path = "vendor/geometry"

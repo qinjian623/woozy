@@ -1,0 +1,84 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract",
+    "cases"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "contract": {
+      "const": "compiler-dev/1"
+    },
+    "cases": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "path",
+          "syntax",
+          "semantic",
+          "execution",
+          "required_tasks",
+          "backends"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "path": {
+            "type": "string"
+          },
+          "syntax": {
+            "enum": [
+              "accept",
+              "reject"
+            ]
+          },
+          "semantic": {
+            "enum": [
+              "accept",
+              "reject",
+              "not_applicable"
+            ]
+          },
+          "execution": {
+            "enum": [
+              "expected_success",
+              "not_applicable"
+            ]
+          },
+          "expected_exit": {
+            "type": "integer"
+          },
+          "expected_diagnostic": {
+            "type": "string"
+          },
+          "required_tasks": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^T[0-9]{2}$"
+            }
+          },
+          "backends": {
+            "type": "array",
+            "items": {
+              "enum": [
+                "native",
+                "python"
+              ]
+            }
+          }
+        }
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:compiler-dev:1:test-cases"
+}

@@ -1,0 +1,44 @@
+package main;
+
+// Python 后端样例；这些导入需要对应的已审核绑定和真实 Python 包。
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+import "torch/nn" as nn;
+import "torch/optim" as optim;
+import "torch/nn/functional" as F;
+
+func train() torch.Tensor throws py.Error {
+    torch.manual_seed(7);
+
+    let values = np.linspace(-1.0, 1.0, num: 128, dtype: np.float32);
+    let x_np = np.expand_dims(values, axis: 1);
+    let scaled = np.multiply(x_np, 2.0);
+    let shifted = np.add(scaled, 1.0);
+    let y_np = np.asarray(shifted, dtype: np.float32);
+
+    // 在数据边界显式复制。不要把这一步泛化为任意 Tensor 的隐式转换。
+    let x = torch.tensor(x_np, dtype: torch.float32, device: "cpu");
+    let y = torch.tensor(y_np, dtype: torch.float32, device: "cpu");
+
+    let model = nn.Linear(1, 1, device: "cpu", dtype: torch.float32);
+    let optimizer = optim.SGD(model.parameters(), lr: 0.1);
+
+    for var step i64 = 0; step < 200; step += 1 {
+        optimizer.zero_grad(set_to_none: true);
+        // 保留 Module 的实例调用，不改写为 model.forward(x)。
+        let prediction = model(x);
+        let loss = F.mse_loss(prediction, y);
+        loss.backward();
+        optimizer.step();
+    }
+
+    // 返回真实 Tensor；不隐式 item、detach、cpu 或 numpy。
+    let final_prediction = model(x);
+    return F.mse_loss(final_prediction, y);
+}
+
+func main() throws py.Error {
+    let final_loss = train();
+    return;
+}

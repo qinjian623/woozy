@@ -1,0 +1,14 @@
+package main;
+
+// 预期：语法通过，静态效果检查拒绝；当前语法检查器不实现该检查。
+enum Problem {
+    Failed;
+}
+
+func risky() i32 throws Problem {
+    throw Problem.Failed;
+}
+
+func main() i32 {
+    return risky();
+}

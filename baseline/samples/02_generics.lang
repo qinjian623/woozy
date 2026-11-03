@@ -1,0 +1,33 @@
+package main;
+
+// Ordered 是本文件声明的 trait，不依赖未定义的标准库 prelude。
+trait Ordered {
+    func less_than(self Self, other Self) bool;
+}
+
+impl Ordered for i32 {
+    func less_than(self i32, other i32) bool {
+        return self < other;
+    }
+}
+
+func less[T Ordered](a T, b T) bool {
+    return a.less_than(b);
+}
+
+func main() i32 {
+    // 元素类型由显式 Vec[i32] 上下文决定。
+    let values Vec[i32] = [4, 9, 2];
+    var best i32 = 0;
+
+    for value in values {
+        if less[i32](best, value) {
+            best = value;
+        }
+    }
+
+    if best != 9 {
+        return 1;
+    }
+    return 0;
+}

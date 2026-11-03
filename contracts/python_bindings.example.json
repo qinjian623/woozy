@@ -1,0 +1,714 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "review_status": "draft_requires_conformance",
+  "allowed_backends": [
+    "python"
+  ],
+  "package_requirements": [
+    {
+      "package": "numpy",
+      "version_policy": "T10按实际通过conformance的CPU环境写入lock"
+    },
+    {
+      "package": "torch",
+      "version_policy": "T10按实际通过conformance的CPU环境写入lock"
+    }
+  ],
+  "modules": [
+    {
+      "logical_path": "std/py",
+      "host_module": "langrt",
+      "provider": "language_runtime"
+    },
+    {
+      "logical_path": "numpy",
+      "host_module": "numpy",
+      "provider": "python_package"
+    },
+    {
+      "logical_path": "torch",
+      "host_module": "torch",
+      "provider": "python_package"
+    },
+    {
+      "logical_path": "torch/nn",
+      "host_module": "torch.nn",
+      "provider": "python_package"
+    },
+    {
+      "logical_path": "torch/optim",
+      "host_module": "torch.optim",
+      "provider": "python_package"
+    },
+    {
+      "logical_path": "torch/nn/functional",
+      "host_module": "torch.nn.functional",
+      "provider": "python_package"
+    }
+  ],
+  "types": [
+    {
+      "id": "lang.py.Error",
+      "module": "std/py",
+      "name": "Error",
+      "kind": "runtime_error",
+      "host_attribute": [
+        "Error"
+      ],
+      "copy": "error_payload_copy"
+    },
+    {
+      "id": "py.numpy.ndarray",
+      "module": "numpy",
+      "name": "ndarray",
+      "kind": "host_reference",
+      "host_attribute": [
+        "ndarray"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.numpy.DTypeSpec",
+      "module": "numpy",
+      "name": "DTypeSpec",
+      "kind": "opaque_protocol",
+      "host_attribute": [],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.Tensor",
+      "module": "torch",
+      "name": "Tensor",
+      "kind": "host_reference",
+      "host_attribute": [
+        "Tensor"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.dtype",
+      "module": "torch",
+      "name": "dtype",
+      "kind": "host_reference",
+      "host_attribute": [
+        "dtype"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.Generator",
+      "module": "torch",
+      "name": "Generator",
+      "kind": "host_reference",
+      "host_attribute": [
+        "Generator"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.ParameterIterator",
+      "module": "torch",
+      "name": "ParameterIterator",
+      "kind": "opaque_protocol",
+      "host_attribute": [],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.nn.Linear",
+      "module": "torch/nn",
+      "name": "Linear",
+      "kind": "host_reference",
+      "host_attribute": [
+        "Linear"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.optim.SGD",
+      "module": "torch/optim",
+      "name": "SGD",
+      "kind": "host_reference",
+      "host_attribute": [
+        "SGD"
+      ],
+      "copy": "shared_reference"
+    }
+  ],
+  "values": [
+    {
+      "module": "numpy",
+      "name": "float32",
+      "type": "py.numpy.DTypeSpec",
+      "host_attribute": [
+        "float32"
+      ]
+    },
+    {
+      "module": "torch",
+      "name": "float32",
+      "type": "py.torch.dtype",
+      "host_attribute": [
+        "float32"
+      ]
+    }
+  ],
+  "callables": [
+    {
+      "id": "numpy.linspace.scalar",
+      "module": "numpy",
+      "name": "linspace",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "linspace"
+      ],
+      "parameters": [
+        {
+          "name": "start",
+          "type": "f64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "stop",
+          "type": "f64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "num",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "dtype",
+          "type": "py.numpy.DTypeSpec",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.numpy.ndarray",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "copy"
+      },
+      "effects": [
+        "reads_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "numpy.expand_dims.array_axis",
+      "module": "numpy",
+      "name": "expand_dims",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "expand_dims"
+      ],
+      "parameters": [
+        {
+          "name": "a",
+          "type": "py.numpy.ndarray",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "may_retain"
+        },
+        {
+          "name": "axis",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.numpy.ndarray",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "view_or_alias"
+      },
+      "effects": [
+        "reads_arguments",
+        "retains_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "numpy.multiply.array_scalar",
+      "module": "numpy",
+      "name": "multiply",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "multiply"
+      ],
+      "parameters": [
+        {
+          "name": "x1",
+          "type": "py.numpy.ndarray",
+          "kind": "positional_only",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "x2",
+          "type": "f64",
+          "kind": "positional_only",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.numpy.ndarray",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "copy"
+      },
+      "effects": [
+        "reads_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "numpy.add.array_scalar",
+      "module": "numpy",
+      "name": "add",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "add"
+      ],
+      "parameters": [
+        {
+          "name": "x1",
+          "type": "py.numpy.ndarray",
+          "kind": "positional_only",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "x2",
+          "type": "f64",
+          "kind": "positional_only",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.numpy.ndarray",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "copy"
+      },
+      "effects": [
+        "reads_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "numpy.asarray.array_dtype",
+      "module": "numpy",
+      "name": "asarray",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "asarray"
+      ],
+      "parameters": [
+        {
+          "name": "a",
+          "type": "py.numpy.ndarray",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "may_retain"
+        },
+        {
+          "name": "dtype",
+          "type": "py.numpy.DTypeSpec",
+          "kind": "positional_or_keyword",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.numpy.ndarray",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "view_or_alias"
+      },
+      "effects": [
+        "reads_arguments",
+        "retains_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.manual_seed",
+      "module": "torch",
+      "name": "manual_seed",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "manual_seed"
+      ],
+      "parameters": [
+        {
+          "name": "seed",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.torch.Generator",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [
+        "mutates_host_rng"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.tensor.ndarray",
+      "module": "torch",
+      "name": "tensor",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "tensor"
+      ],
+      "parameters": [
+        {
+          "name": "data",
+          "type": "py.numpy.ndarray",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "dtype",
+          "type": "py.torch.dtype",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "device",
+          "type": "string",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.torch.Tensor",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "copy"
+      },
+      "effects": [
+        "reads_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.nn.Linear.constructor",
+      "module": "torch/nn",
+      "name": "Linear",
+      "call_kind": "constructor",
+      "owner_type": null,
+      "host_attribute": [
+        "Linear"
+      ],
+      "parameters": [
+        {
+          "name": "in_features",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "out_features",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "device",
+          "type": "string",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "dtype",
+          "type": "py.torch.dtype",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.torch.nn.Linear",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [
+        "mutates_host_rng"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.nn.Linear.parameters",
+      "module": "torch/nn",
+      "name": "parameters",
+      "call_kind": "method",
+      "owner_type": "py.torch.nn.Linear",
+      "host_attribute": [
+        "parameters"
+      ],
+      "parameters": [],
+      "return_type": "py.torch.ParameterIterator",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "view_or_alias"
+      },
+      "effects": [
+        "reads_arguments",
+        "retains_receiver"
+      ],
+      "receiver_escapes": "may_retain"
+    },
+    {
+      "id": "torch.nn.Linear.call",
+      "module": "torch/nn",
+      "name": "__call__",
+      "call_kind": "callable",
+      "owner_type": "py.torch.nn.Linear",
+      "host_attribute": [],
+      "parameters": [
+        {
+          "name": "input",
+          "type": "py.torch.Tensor",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "may_retain"
+        }
+      ],
+      "return_type": "py.torch.Tensor",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "host_defined"
+      },
+      "effects": [
+        "reads_arguments",
+        "autograd",
+        "retains_arguments",
+        "retains_receiver"
+      ],
+      "receiver_escapes": "may_retain"
+    },
+    {
+      "id": "torch.optim.SGD.constructor",
+      "module": "torch/optim",
+      "name": "SGD",
+      "call_kind": "constructor",
+      "owner_type": null,
+      "host_attribute": [
+        "SGD"
+      ],
+      "parameters": [
+        {
+          "name": "params",
+          "type": "py.torch.ParameterIterator",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "may_retain"
+        },
+        {
+          "name": "lr",
+          "type": "f64",
+          "kind": "positional_or_keyword",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.torch.optim.SGD",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [
+        "retains_arguments",
+        "consumes_iterator"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.optim.SGD.zero_grad",
+      "module": "torch/optim",
+      "name": "zero_grad",
+      "call_kind": "method",
+      "owner_type": "py.torch.optim.SGD",
+      "host_attribute": [
+        "zero_grad"
+      ],
+      "parameters": [
+        {
+          "name": "set_to_none",
+          "type": "bool",
+          "kind": "positional_or_keyword",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [
+        "mutates_receiver",
+        "retains_receiver"
+      ],
+      "receiver_escapes": "may_retain"
+    },
+    {
+      "id": "torch.nn.functional.mse_loss",
+      "module": "torch/nn/functional",
+      "name": "mse_loss",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "mse_loss"
+      ],
+      "parameters": [
+        {
+          "name": "input",
+          "type": "py.torch.Tensor",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "may_retain"
+        },
+        {
+          "name": "target",
+          "type": "py.torch.Tensor",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "may_retain"
+        }
+      ],
+      "return_type": "py.torch.Tensor",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "host_defined"
+      },
+      "effects": [
+        "reads_arguments",
+        "autograd",
+        "retains_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.Tensor.backward",
+      "module": "torch",
+      "name": "backward",
+      "call_kind": "method",
+      "owner_type": "py.torch.Tensor",
+      "host_attribute": [
+        "backward"
+      ],
+      "parameters": [],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [
+        "mutates_receiver",
+        "autograd",
+        "retains_receiver"
+      ],
+      "receiver_escapes": "may_retain"
+    },
+    {
+      "id": "torch.optim.SGD.step.no_closure",
+      "module": "torch/optim",
+      "name": "step",
+      "call_kind": "method",
+      "owner_type": "py.torch.optim.SGD",
+      "host_attribute": [
+        "step"
+      ],
+      "parameters": [],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [
+        "mutates_receiver",
+        "retains_receiver"
+      ],
+      "receiver_escapes": "may_retain"
+    }
+  ],
+  "conformance_required": [
+    "只覆盖baseline/samples/04_numpy_torch.lang所需有限重载，不是完整库stub",
+    "确认参数名/位置/省略行为与锁定版本一致",
+    "opaque_protocol是声明类型，不要求不存在的宿主同名类",
+    "constructor签名附着同名类型符号，不建立重复普通函数绑定",
+    "np.float32是DTypeSpec，不以isinstance(np.float32,np.dtype)误检",
+    "SGD.step仅绑定不传closure的本例形式并验证返回None",
+    "保留真实对象身份、Module实例调用与autograd",
+    "所有依赖导入只发生在显式执行/conformance阶段"
+  ]
+}

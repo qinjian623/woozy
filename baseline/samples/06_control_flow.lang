@@ -1,0 +1,33 @@
+package main;
+
+// inout 是参数模式；调用处也明确标记。
+func sum_until_zero(values Vec[i64], cleanup_count inout i64) i64 {
+    // 清理代码不允许向外传播未处理的 throws。
+    defer {
+        cleanup_count += 1;
+    }
+
+    var total i64 = 0;
+    for value in values {
+        if value < 0 {
+            continue;
+        }
+        if value == 0 {
+            return total;
+        }
+        total += value;
+    }
+    return total;
+}
+
+func main() i32 {
+    var cleanup_count i64 = 0;
+    let total = sum_until_zero([2, -9, 3, 0, 100], inout cleanup_count);
+    if total != 5 {
+        return 1;
+    }
+    if cleanup_count != 1 {
+        return 2;
+    }
+    return 0;
+}

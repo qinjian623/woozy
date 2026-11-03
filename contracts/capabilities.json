@@ -1,0 +1,157 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "status": "planned_capabilities_not_runtime_report",
+  "features": [
+    {
+      "name": "syntax_v0_1",
+      "task": "T02",
+      "planned_backends": [
+        "native",
+        "python"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "scalar_integers",
+      "task": "T05",
+      "planned_backends": [
+        "native"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "scalar_integers_python",
+      "task": "T06",
+      "planned_backends": [
+        "python"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "struct_enum_trait_generics",
+      "task": "T07",
+      "planned_backends": [
+        "native",
+        "python"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "typed_throws_and_defer",
+      "task": "T08",
+      "planned_backends": [
+        "native",
+        "python"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "managed_vec_and_move",
+      "task": "T09",
+      "planned_backends": [
+        "native",
+        "python"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "native_arc",
+      "task": "T09",
+      "planned_backends": [
+        "native"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "python_numpy_torch",
+      "task": "T10",
+      "planned_backends": [
+        "python"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "cxx_opaque_wrapper",
+      "task": "T11",
+      "planned_backends": [
+        "native"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "portable_os_io",
+      "task": "T11",
+      "planned_backends": [
+        "native"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "raw_syscall",
+      "task": "future",
+      "planned_backends": [
+        "native"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "capturing_closure",
+      "task": "future",
+      "planned_backends": [],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "strict_float_complete",
+      "task": "future",
+      "planned_backends": [
+        "native",
+        "python"
+      ],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "dynamic_trait",
+      "task": "future",
+      "planned_backends": [],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "concurrent_arc",
+      "task": "future",
+      "planned_backends": [],
+      "implemented": false,
+      "verified": false,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+    }
+  ],
+  "rule": "parser覆盖不等于语义/生成/执行支持；实际编译器的capabilities命令必须从已实现能力生成"
+}

@@ -1,0 +1,43 @@
+package main;
+
+enum StepError {
+    Negative;
+}
+
+func apply(callback func(i32) i32, value i32) i32 {
+    return callback(value);
+}
+
+func positive_step(value i32) i32 throws StepError {
+    if value < 0 {
+        throw StepError.Negative;
+    }
+    return value + 1;
+}
+
+// make_step 本身不抛错；返回的函数可能抛出 StepError。
+func make_step() (func(i32) i32 throws StepError) {
+    return positive_step;
+}
+
+func main() i32 {
+    let twice = func(value i32) i32 {
+        return value * 2;
+    };
+
+    if apply(twice, 3) != 6 {
+        return 1;
+    }
+
+    let callback = make_step();
+    try {
+        if callback(3) != 4 {
+            return 2;
+        }
+        callback(-1);
+        return 3;
+    } catch error StepError {
+        return 0;
+    }
+}
+

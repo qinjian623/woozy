@@ -1,0 +1,63 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "status": "initial_registry_not_implemented",
+  "codes": [
+    {
+      "code": "E_BINDING_INVALID",
+      "severity": "error"
+    },
+    {
+      "code": "E_CALL_ARGUMENT",
+      "severity": "error"
+    },
+    {
+      "code": "E_CAPABILITY_UNAVAILABLE",
+      "severity": "error"
+    },
+    {
+      "code": "E_CLEANUP_ESCAPE",
+      "severity": "error"
+    },
+    {
+      "code": "E_EFFECT_UNHANDLED",
+      "severity": "error"
+    },
+    {
+      "code": "E_IMPORT_CYCLE",
+      "severity": "error"
+    },
+    {
+      "code": "E_IMPORT_NOT_FOUND",
+      "severity": "error"
+    },
+    {
+      "code": "E_IR_INVALID",
+      "severity": "error"
+    },
+    {
+      "code": "E_NAME_DUPLICATE",
+      "severity": "error"
+    },
+    {
+      "code": "E_NAME_NOT_FOUND",
+      "severity": "error"
+    },
+    {
+      "code": "E_OWNERSHIP_USE_AFTER_MOVE",
+      "severity": "error"
+    },
+    {
+      "code": "E_PARSE_EXPECTED_TOKEN",
+      "severity": "error"
+    },
+    {
+      "code": "E_TOOLCHAIN_MISSING",
+      "severity": "error"
+    },
+    {
+      "code": "E_TYPE_MISMATCH",
+      "severity": "error"
+    }
+  ]
+}

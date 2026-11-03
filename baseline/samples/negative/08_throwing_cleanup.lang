@@ -1,0 +1,17 @@
+package main;
+
+// 预期：语法通过，静态清理规则拒绝。defer 中不能留下未处理的 throws。
+enum CleanupError {
+    Failed;
+}
+
+func fallible_cleanup() throws CleanupError {
+    throw CleanupError.Failed;
+}
+
+func main() throws CleanupError {
+    defer {
+        fallible_cleanup();
+    }
+    return;
+}

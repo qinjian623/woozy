@@ -1,0 +1,169 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:compiler-dev:1:diagnostic",
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "compiler_version",
+    "source_revision",
+    "status",
+    "diagnostics"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "compiler_version": {
+      "type": "string"
+    },
+    "source_revision": {
+      "type": "string"
+    },
+    "status": {
+      "enum": [
+        "ok",
+        "error",
+        "cancelled",
+        "internal_error"
+      ]
+    },
+    "diagnostics": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/diagnostic"
+      }
+    }
+  },
+  "$defs": {
+    "span": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "path",
+        "start_byte",
+        "end_byte"
+      ],
+      "properties": {
+        "path": {
+          "type": "string",
+          "minLength": 1
+        },
+        "start_byte": {
+          "type": "integer",
+          "minimum": 0
+        },
+        "end_byte": {
+          "type": "integer",
+          "minimum": 0
+        }
+      }
+    },
+    "diagnostic": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "code",
+        "phase",
+        "severity",
+        "message",
+        "primary"
+      ],
+      "properties": {
+        "code": {
+          "type": "string",
+          "pattern": "^[EW]_[A-Z0-9_]+$"
+        },
+        "phase": {
+          "enum": [
+            "lex",
+            "parse",
+            "resolve",
+            "type",
+            "effect",
+            "ownership",
+            "lowering",
+            "codegen",
+            "link",
+            "runtime",
+            "toolchain"
+          ]
+        },
+        "severity": {
+          "enum": [
+            "error",
+            "warning",
+            "note"
+          ]
+        },
+        "message": {
+          "type": "string"
+        },
+        "primary": {
+          "anyOf": [
+            {
+              "$ref": "#/$defs/span"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "related": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "required": [
+              "span",
+              "message"
+            ],
+            "additionalProperties": false,
+            "properties": {
+              "span": {
+                "$ref": "#/$defs/span"
+              },
+              "message": {
+                "type": "string"
+              }
+            }
+          }
+        },
+        "expected_type": {
+          "type": "string"
+        },
+        "actual_type": {
+          "type": "string"
+        },
+        "notes": {
+          "type": "array",
+          "items": {
+            "type": "string"
+          }
+        },
+        "fixits": {
+          "type": "array",
+          "items": {
+            "type": "object",
+            "additionalProperties": false,
+            "required": [
+              "span",
+              "replacement",
+              "source_revision"
+            ],
+            "properties": {
+              "span": {
+                "$ref": "#/$defs/span"
+              },
+              "replacement": {
+                "type": "string"
+              },
+              "source_revision": {
+                "type": "string"
+              }
+            }
+          }
+        }
+      }
+    }
+  }
+}

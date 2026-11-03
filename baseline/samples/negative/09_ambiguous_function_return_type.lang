@@ -1,0 +1,14 @@
+package main;
+
+// 预期：语法拒绝。函数返回类型必须括号化，以确定 throws 的归属。
+enum Failure {
+    Failed;
+}
+
+func identity(value i32) i32 {
+    return value;
+}
+
+func make() func(i32) i32 throws Failure {
+    return identity;
+}

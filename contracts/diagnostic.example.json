@@ -1,0 +1,32 @@
+{
+  "schema_version": 1,
+  "compiler_version": "example-not-built",
+  "source_revision": "example-source-revision",
+  "status": "error",
+  "diagnostics": [
+    {
+      "code": "E_EFFECT_UNHANDLED",
+      "phase": "effect",
+      "severity": "error",
+      "message": "此调用可能产生 ReadError，但当前函数未捕获或声明传播该错误。",
+      "primary": {
+        "path": "src/main.lang",
+        "start_byte": 100,
+        "end_byte": 112
+      },
+      "related": [
+        {
+          "span": {
+            "path": "src/io.lang",
+            "start_byte": 20,
+            "end_byte": 60
+          },
+          "message": "被调用函数声明 throws ReadError。"
+        }
+      ],
+      "notes": [
+        "示例偏移是诊断格式样例，不对应本包源码位置。"
+      ]
+    }
+  ]
+}

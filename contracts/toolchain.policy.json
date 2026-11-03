@@ -1,0 +1,36 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "status": "policy_not_environment_lock",
+  "cpp_standard": 20,
+  "llvm_version": "22.1.8",
+  "clang_version": "22.1.8",
+  "lld_version": "22.1.8",
+  "llvm_release": "https://github.com/llvm/llvm-project/releases/tag/llvmorg-22.1.8",
+  "build_system": "CMake",
+  "build_executor": "Ninja",
+  "python_baseline": "3.12.x",
+  "numpy_torch_policy": "T10锁定实际CPU环境版本、wheel来源和摘要，并运行conformance与训练测试",
+  "initial_native_target": "x86_64-unknown-linux-gnu",
+  "additional_targets": [
+    "aarch64-unknown-linux-gnu",
+    "x86_64-pc-windows-msvc",
+    "arm64-apple-macos"
+  ],
+  "python_word_bits": 64,
+  "required_environment_lock_fields": [
+    "host",
+    "target",
+    "llvm_version",
+    "compiler_version",
+    "cmake_version",
+    "ninja_version",
+    "python_version",
+    "sdk_identity",
+    "runtime_abi_version",
+    "artifact_sources",
+    "artifact_hashes"
+  ],
+  "frontend_loads_llvm": false,
+  "check_executes_python": false
+}

@@ -1,0 +1,463 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "task_states": [
+    "planned",
+    "in_progress",
+    "blocked",
+    "done"
+  ],
+  "tasks": [
+    {
+      "id": "T00",
+      "title": "约定与工具链",
+      "status": "planned",
+      "depends_on": [],
+      "primary_role": "integrator",
+      "backup_role": "validation",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "CMakeLists.txt",
+        "cmake/",
+        "contracts/"
+      ],
+      "outputs": [
+        "构建目标与空驱动",
+        "实际工具链 lock",
+        "阶段能力表"
+      ],
+      "acceptance": [
+        "C++20 + LLVM 22.1.8配置成功",
+        "前端目标独立于LLVM/Python"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T01",
+      "title": "公共基础",
+      "status": "planned",
+      "depends_on": [
+        "T00"
+      ],
+      "primary_role": "foundation",
+      "backup_role": "frontend",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/support/",
+        "tests/support/"
+      ],
+      "outputs": [
+        "SourceManager 与诊断",
+        "原始字节与 UTF-16 转换",
+        "强类型 ID"
+      ],
+      "acceptance": [
+        "CRLF/BOM/中文/UTF-16位置正确",
+        "诊断符合schema"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T02",
+      "title": "词法语法",
+      "status": "planned",
+      "depends_on": [
+        "T01"
+      ],
+      "primary_role": "frontend",
+      "backup_role": "foundation",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/syntax/",
+        "tests/syntax/"
+      ],
+      "outputs": [
+        "完整可恢复 AST",
+        "lexer/parser",
+        "基线分类回归"
+      ],
+      "acceptance": [
+        "59项原型分类逐项迁移",
+        "7正例及9负例语法阶段匹配",
+        "错误后能继续解析"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T03",
+      "title": "模块与名称",
+      "status": "planned",
+      "depends_on": [
+        "T02"
+      ],
+      "primary_role": "sema",
+      "backup_role": "frontend",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/modules/",
+        "tests/modules/"
+      ],
+      "outputs": [
+        "确定模块图",
+        "符号和导出表",
+        "导入补全索引"
+      ],
+      "acceptance": [
+        "导入缺失/冲突/环得到确定错误",
+        "check不执行依赖"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T04",
+      "title": "类型与效果基础",
+      "status": "planned",
+      "depends_on": [
+        "T03"
+      ],
+      "primary_role": "sema",
+      "backup_role": "frontend",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/sema/",
+        "src/hir/",
+        "tests/sema/"
+      ],
+      "outputs": [
+        "基础 typed HIR",
+        "局部推断与调用匹配",
+        "效果/能力诊断"
+      ],
+      "acceptance": [
+        "无未决名称和类型进入已验证HIR",
+        "不能用Any绕过静态检查"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T05",
+      "title": "原生标量闭环",
+      "status": "planned",
+      "depends_on": [
+        "T04"
+      ],
+      "primary_role": "native",
+      "backup_role": "integrator",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/native_ir/",
+        "src/codegen_llvm/",
+        "src/driver/",
+        "tests/native/"
+      ],
+      "outputs": [
+        "本机目标文件与程序",
+        "LLVM IR",
+        "O0/O2 执行记录"
+      ],
+      "acceptance": [
+        "core.lang实际编译链接运行返回0",
+        "numeric.lang的已实施整数规则与预期一致",
+        "O0/O2均验证和执行"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T06",
+      "title": "Python 标量闭环",
+      "status": "planned",
+      "depends_on": [
+        "T04"
+      ],
+      "primary_role": "python",
+      "backup_role": "integrator",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/codegen_python/",
+        "runtime/python/",
+        "src/bindings/",
+        "tests/python/"
+      ],
+      "outputs": [
+        "可读 Python",
+        "兼容运行时",
+        "公共子集执行记录"
+      ],
+      "acceptance": [
+        "core/numeric生成Python并执行",
+        "无NumPy/PyTorch环境可做基础检查",
+        "与native的公共语义比较"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T07",
+      "title": "泛型与聚合类型",
+      "status": "planned",
+      "depends_on": [
+        "T04"
+      ],
+      "primary_role": "sema",
+      "backup_role": "native",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/sema/",
+        "src/hir/",
+        "tests/generics/"
+      ],
+      "outputs": [
+        "泛型与 trait 检查",
+        "具体实例 HIR",
+        "枚举/模式表示"
+      ],
+      "acceptance": [
+        "约束错误和重叠impl拒绝",
+        "枚举模式和具体实例可验证",
+        "运行能力由后端接入后另验"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T08",
+      "title": "错误与清理",
+      "status": "planned",
+      "depends_on": [
+        "T05",
+        "T06",
+        "T07"
+      ],
+      "primary_role": "native",
+      "backup_role": "python",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/sema/",
+        "src/native_ir/",
+        "src/codegen_llvm/",
+        "src/codegen_python/",
+        "tests/cleanup/"
+      ],
+      "outputs": [
+        "TryCall 与清理边",
+        "Python 错误与 defer",
+        "退出路径事件测试"
+      ],
+      "acceptance": [
+        "errors.lang实际运行",
+        "正常/throw/return/break/continue清理正确",
+        "Panic隔离且Result不自动传播"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T09",
+      "title": "所有权与 ARC",
+      "status": "planned",
+      "depends_on": [
+        "T08"
+      ],
+      "primary_role": "native",
+      "backup_role": "sema",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "src/sema/",
+        "src/native_ir/",
+        "runtime/native/",
+        "runtime/python/",
+        "tests/ownership/"
+      ],
+      "outputs": [
+        "受限所有权检查",
+        "ARC 与 Vec",
+        "别名/移动/释放验收"
+      ],
+      "acceptance": [
+        "ownership.lang符合共享与移动规则",
+        "移动后读取被拒绝",
+        "正常/错误路径无双重drop",
+        "限制inout和捕获闭包"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T10",
+      "title": "NumPy 与 PyTorch",
+      "status": "planned",
+      "depends_on": [
+        "T06",
+        "T08"
+      ],
+      "primary_role": "python",
+      "backup_role": "interop",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "bindings/python/",
+        "tests/python/",
+        "runtime/python/"
+      ],
+      "outputs": [
+        "经 conformance 验证的绑定",
+        "锁定 CPU 依赖",
+        "生成的训练程序与执行记录"
+      ],
+      "acceptance": [
+        "完整04_numpy_torch.lang转译产物实际训练",
+        "依赖缺失不计为pass",
+        "model调用与autograd保留"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T11",
+      "title": "C++ 与 OS 接口",
+      "status": "planned",
+      "depends_on": [
+        "T09"
+      ],
+      "primary_role": "interop",
+      "backup_role": "native",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "bindings/native/",
+        "runtime/native/",
+        "stdlib/os/",
+        "tests/interop/"
+      ],
+      "outputs": [
+        "C++ 包装与 ABI 声明",
+        "受控句柄生命周期",
+        "最小可移植 OS I/O"
+      ],
+      "acceptance": [
+        "C++异常不越过包装边界",
+        "opaque handle最终销毁一次",
+        "部分写入/句柄错误有明确语义"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    },
+    {
+      "id": "T12",
+      "title": "多平台集成",
+      "status": "planned",
+      "depends_on": [
+        "T05",
+        "T06",
+        "T07",
+        "T08",
+        "T09",
+        "T10",
+        "T11"
+      ],
+      "primary_role": "integrator",
+      "backup_role": "validation",
+      "reviewer_role": "validation",
+      "owner_instance": null,
+      "target_paths": [
+        "cmake/",
+        "src/driver/",
+        "tests/platform/",
+        "docs/"
+      ],
+      "outputs": [
+        "真实平台矩阵",
+        "分发与 SDK 配置",
+        "回归报告"
+      ],
+      "acceptance": [
+        "每个声称支持平台有构建链接执行记录",
+        "交叉编译和实际运行分别记录",
+        "未支持能力可查询"
+      ],
+      "read": [
+        "DEVELOPMENT.md",
+        "docs/SEMANTICS.md",
+        "docs/IMPLEMENTATION_PLAN.md",
+        "docs/ACCEPTANCE.md"
+      ],
+      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+    }
+  ]
+}

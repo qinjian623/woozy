@@ -1,0 +1,20 @@
+package main;
+
+// 预期：语法通过，类型检查拒绝。throws 不会自动解包 Result。
+enum Problem {
+    Failed;
+}
+
+enum Result[T, E] {
+    Ok(value T);
+    Err(error E);
+}
+
+func compute() Result[i32, Problem] {
+    return Result[i32, Problem].Ok(7);
+}
+
+func main() i32 throws Problem {
+    let answer i32 = compute();
+    return answer;
+}

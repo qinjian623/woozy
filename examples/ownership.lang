@@ -1,0 +1,16 @@
+package main;
+
+func take(values move Vec[i32]) i32 {
+    return values[0];
+}
+
+func main() i32 {
+    let left Vec[i32] = [1, 2];
+    let right = left;
+    right[0] = 9;
+    let answer = take(move right);
+    if answer != 9 || left[0] != 9 {
+        return 1;
+    }
+    return 0;
+}

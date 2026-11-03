@@ -1,0 +1,10 @@
+package main;
+
+// 预期：调用形式拒绝。命名实参之后不能再写位置实参。
+func add(a i32, b i32) i32 {
+    return a + b;
+}
+
+func main() i32 {
+    return add(a: 1, 2);
+}

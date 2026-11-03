@@ -1,0 +1,270 @@
+(* Language v0.1 -- lexical and syntactic reference grammar.
+ * This is a proposal/reference recognizer contract, not an implemented language.
+ * [ X ] means optional; { X } means repetition; | means choice.
+ * Quoted punctuation and words are terminals. In these grammar quotations,
+ * backslash escapes denote their usual single-character values; they are
+ * notation, not additional source-language escapes. ? ... ? describes a
+ * special character set or lexical condition. EOF means end of source.
+ * Semantic restrictions are deliberately listed separately at the end.
+ *)
+
+(* ---------- Compilation units and declarations ---------- *)
+
+CompilationUnit = PackageDecl, { ImportDecl }, { TopDecl }, EOF ;
+PackageDecl     = "package", Identifier, ";" ;
+ImportDecl      = "import", TextString, [ "as", Identifier ], ";" ;
+(* An omitted alias is resolved by the module/name-resolution rules. *)
+
+TopDecl         = [ "pub" ],
+                  ( BindingDecl | FunctionDecl | StructDecl | EnumDecl
+                  | TraitDecl | ImplDecl ) ;
+
+BindingDecl     = BindingCore, ";" ;
+BindingCore     = ( "let" | "var" | "const" ), Identifier,
+                  [ Type ], "=", Expression ;
+
+FunctionDecl    = FunctionHeader, Block ;
+FunctionProto   = FunctionHeader, ";" ;
+FunctionHeader  = "func", Identifier, [ TypeParameters ],
+                  "(", [ Parameters ], ")",
+                  [ ReturnType ], [ ThrowsClause ] ;
+FunctionLiteral = "func", "(", [ Parameters ], ")",
+                  [ ReturnType ], [ ThrowsClause ], Block ;
+Parameters      = Parameter, { ",", Parameter }, [ "," ] ;
+Parameter       = Identifier, [ Mode ], Type ;
+Mode            = "inout" | "move" ;
+ThrowsClause    = "throws", Type ;
+
+TypeParameters  = "[", TypeParameter, { ",", TypeParameter }, [ "," ], "]" ;
+TypeParameter   = Identifier, [ NamedType ] ;
+(* A type parameter has at most one syntactic constraint. Whether it names an
+ * appropriate trait, and whether parameter names are unique, are semantic. *)
+
+StructDecl      = "struct", Identifier, [ TypeParameters ],
+                  "{", { [ "pub" ], FieldDecl }, "}" ;
+FieldDecl       = Identifier, Type, ";" ;
+
+EnumDecl        = "enum", Identifier, [ TypeParameters ],
+                  "{", { VariantDecl }, "}" ;
+VariantDecl     = Identifier, [ "(", [ PayloadFields ], ")" ], ";" ;
+PayloadFields   = PayloadField, { ",", PayloadField }, [ "," ] ;
+PayloadField    = Identifier, Type ;
+
+TraitDecl       = "trait", Identifier, [ TypeParameters ],
+                  "{", { [ "pub" ], FunctionProto }, "}" ;
+ImplDecl        = "impl", [ TypeParameters ], NamedType,
+                  [ "for", NamedType ],
+                  "{", { [ "pub" ], FunctionDecl }, "}" ;
+(* An explicit receiver is an ordinary named parameter: self Self or self Point.
+ * There is no omitted receiver-type syntax and no nested named function
+ * declaration. Function literals have neither a name nor generic parameters;
+ * their capture and escape behavior require semantic checking. *)
+
+(* ---------- Types ---------- *)
+
+Type            = NamedType | FunctionType | ParenthesizedType ;
+NamedType       = TypeSegment, { ".", TypeSegment } ;
+TypeSegment     = Identifier, [ TypeArguments ] ;
+TypeArguments   = "[", Type, { ",", Type }, [ "," ], "]" ;
+ParenthesizedType = "(", Type, ")" ;
+
+FunctionType    = "func", "(", [ FunctionTypeParameters ], ")",
+                  [ ReturnType ], [ ThrowsClause ] ;
+FunctionTypeParameters = FunctionTypeParameter,
+                        { ",", FunctionTypeParameter }, [ "," ] ;
+FunctionTypeParameter  = [ Mode ], Type ;
+ReturnType      = NamedType | ParenthesizedType ;
+(* An omitted return type denotes Unit in the semantic specification.
+ * A function returning a function type MUST parenthesize that return type:
+ *   func make() (func(i32) i32) throws E { ... }
+ *   func make() (func(i32) i32 throws E) { ... }
+ * The unparenthesized func make() func(i32) i32 throws E is rejected.
+ * Function-type parameters retain ownership modes, but have no argument labels.
+ * A function-value call's label restrictions require semantic checking.
+ *)
+
+(* ---------- Statements and control flow ---------- *)
+
+Block           = "{", { Statement }, "}" ;
+Statement       = BindingDecl | SimpleStatement, ";" | Block
+                | IfStatement | ForStatement | SwitchStatement
+                | TryStatement | DeferStatement | UnsafeStatement
+                | ReturnStatement | ThrowStatement
+                | BreakStatement | ContinueStatement ;
+
+SimpleStatement = Expression, [ AssignmentOperator, Expression ] ;
+AssignmentOperator = "=" | "+=" | "-=" | "*=" | "/=" | "%="
+                   | "<<=" | ">>=" | "&=" | "^=" | "|=" ;
+(* Assignment is a statement, never an expression. Whether its left side is a
+ * writable place is a semantic restriction, not checked by this grammar. *)
+
+IfStatement     = "if", Expression, Block,
+                  [ "else", ( IfStatement | Block ) ] ;
+
+ForStatement    = "for", Block
+                | "for", Identifier, "in", Expression, Block
+                | "for", [ ForInit ], ";", [ Expression ], ";",
+                  [ SimpleStatement ], Block
+                | "for", Expression, Block ;
+ForInit         = BindingCore | SimpleStatement ;
+(* The C-style header contains exactly two separator semicolons. BindingCore
+ * itself has no terminator inside that header. No for-in tuple binding, loop
+ * label, ++ or -- is included in v0.1. *)
+
+SwitchStatement = "switch", Expression, "{", { SwitchClause }, "}" ;
+SwitchClause    = "case", Pattern, ":", { Statement }
+                | "default", ":", { Statement } ;
+(* A clause ends before the next case/default or the switch's closing brace.
+ * Duplicate default clauses, exhaustiveness and reachability are semantic.
+ * There is no implicit fallthrough, nor a fallthrough statement. *)
+
+Pattern         = Identifier | Literal | "-", Number
+                | VariantPath, [ "(", [ Patterns ], ")" ] ;
+Patterns        = Pattern, { ",", Pattern }, [ "," ] ;
+VariantPath     = TypeSegment, ".", { TypeSegment, "." }, Identifier ;
+(* A bare identifier is a binding; _ is the wildcard by semantic convention.
+ * An enum variant MUST be qualified: Option[i32].Some(value), Result.Ok(x).
+ * Qualified module/type paths may have type arguments on any type segment;
+ * the final variant segment has no type arguments. No or/guard/range patterns. *)
+
+TryStatement    = "try", Block, CatchClause, { CatchClause } ;
+CatchClause     = "catch", Identifier, Type, Block ;
+DeferStatement  = "defer", Block ;
+UnsafeStatement = "unsafe", Block ;
+ReturnStatement = "return", [ Expression ], ";" ;
+ThrowStatement  = "throw", Expression, ";" ;
+BreakStatement  = "break", ";" ;
+ContinueStatement = "continue", ";" ;
+(* Loop context, return type, throws handling and defer's non-escaping control
+ * flow/cleanup obligations are checked after parsing, not by this recognizer. *)
+
+(* ---------- Expressions: precedence is low to high ---------- *)
+
+Expression      = LogicalOr ;
+LogicalOr       = LogicalAnd, { "||", LogicalAnd } ;
+LogicalAnd      = BitwiseOr, { "&&", BitwiseOr } ;
+BitwiseOr       = BitwiseXor, { "|", BitwiseXor } ;
+BitwiseXor      = BitwiseAnd, { "^", BitwiseAnd } ;
+BitwiseAnd      = Equality, { "&", Equality } ;
+Equality        = Comparison, { ( "==" | "!=" ), Comparison } ;
+Comparison      = Shift, { ( "<" | "<=" | ">" | ">=" ), Shift } ;
+Shift           = Additive, { ( "<<" | ">>" ), Additive } ;
+Additive        = Multiplicative, { ( "+" | "-" ), Multiplicative } ;
+Multiplicative  = Unary, { ( "*" | "/" | "%" ), Unary } ;
+Unary           = ( "+" | "-" | "!" | "~" | "move" | "inout" ), Unary
+                | Postfix ;
+Postfix         = Primary, { CallSuffix | MemberSuffix | BracketSuffix } ;
+Primary         = Identifier | Literal | "(", Expression, ")" | ArrayLiteral
+                | FunctionLiteral ;
+MemberSuffix    = ".", Identifier ;
+
+CallSuffix      = "(", [ Arguments ], ")" ;
+Arguments       = PositionalArguments, [ ",", NamedArguments ], [ "," ]
+                | NamedArguments, [ "," ] ;
+PositionalArguments = Expression, { ",", Expression } ;
+NamedArguments  = NamedArgument, { ",", NamedArgument } ;
+NamedArgument   = Identifier, ":", Expression ;
+(* No positional argument may follow a named argument. Duplicate/unknown
+ * labels and whether the callee preserves labels are semantic restrictions.
+ * inout/move at a call site are unary expressions: f(inout x), f(move x).
+ * Constructors use the same call syntax: Point(x: 1.0, y: 2.0).
+ *)
+
+BracketSuffix   = "[", [ Expression ], ":", [ Expression ], "]"
+                | "[", BracketArgument, { ",", BracketArgument }, [ "," ], "]" ;
+BracketArgument = Expression | Type ;
+ArrayLiteral    = "[", [ Expression, { ",", Expression }, [ "," ] ], "]" ;
+(* BracketArgument deliberately overlaps: f[T](x) and table[i](x) cannot always
+ * be classified without name/type analysis. A parser keeps neutral bracket
+ * contents rather than asserting a generic call. Function-type arguments,
+ * such as f[func(i32) i32](x), are accepted syntactically. A numeric item may
+ * be an index; it does NOT introduce constant type arguments. In a known type
+ * position only TypeArguments applies. Slices support only [start:end]; either
+ * bound may be omitted. No step, capacity, tuple or multidimensional index is
+ * specified here; multi-item neutral brackets need later classification.
+ * The empty array literal [] is syntactically valid; its type needs context.
+ *)
+
+(* ---------- Lexical contract ---------- *)
+
+Literal         = Number | TextString | RawString | "true" | "false" ;
+Number          = DecimalInteger | BinaryInteger | OctalInteger
+                | HexInteger | DecimalFloat ;
+
+Identifier      = IdentifierStart, { IdentifierContinue } ;
+IdentifierStart = ASCII_LETTER | "_" ;
+IdentifierContinue = IdentifierStart | DECIMAL_DIGIT ;
+(* An Identifier cannot equal an active or future-reserved keyword below. *)
+
+DecimalInteger  = "0" | NONZERO_DIGIT, { [ "_" ], DECIMAL_DIGIT } ;
+BinaryInteger   = "0b", BINARY_DIGIT, { [ "_" ], BINARY_DIGIT } ;
+OctalInteger    = "0o", OCTAL_DIGIT, { [ "_" ], OCTAL_DIGIT } ;
+HexInteger     = "0x", HEX_DIGIT, { [ "_" ], HEX_DIGIT } ;
+DecimalFloat    = DecimalInteger, ".", DecimalDigits, [ Exponent ]
+                | DecimalInteger, Exponent ;
+DecimalDigits   = DECIMAL_DIGIT, { [ "_" ], DECIMAL_DIGIT } ;
+Exponent        = ( "e" | "E" ), [ "+" | "-" ], DecimalDigits ;
+(* Prefixes are lowercase; hex digits allow A-F and a-f. Underscores occur
+ * strictly between digits of that radix. Decimal multi-digit leading zeroes,
+ * suffixes, adjacency to a letter/underscore, .5 and 1. are not number tokens.
+ * A minus sign is a separate unary operator. Integer/floating default types
+ * and range checking are semantic, not lexical. *)
+
+TextString      = '"', { TextCharacter | Escape }, '"' ;
+Escape          = "\\", ( "n" | "r" | "t" | "0" | '"' | "\\" )
+                | "\\u{", HEX_DIGIT, [ HEX_DIGIT ], [ HEX_DIGIT ],
+                  [ HEX_DIGIT ], [ HEX_DIGIT ], [ HEX_DIGIT ], "}" ;
+(* TextCharacter is any Unicode scalar except quote, backslash, a line break,
+ * or a literal C0/DEL control character. A Unicode escape contains 1-6 hex
+ * digits, denotes <= U+10FFFF and must not denote a surrogate. Escaped NUL is
+ * valid string data; literal NUL is forbidden everywhere in the source. *)
+RawString       = "`", { RAW_CHARACTER }, "`" ;
+(* RAW_CHARACTER is any Unicode scalar except backtick and literal NUL. Raw
+ * strings may span lines; they perform no escape processing or interpolation. *)
+
+LineComment     = "//", { NON_LINE_BREAK_CHARACTER } ;
+BlockComment    = "/*", { BLOCK_COMMENT_CHARACTER }, "*/" ;
+(* Block comments end at the first */ delimiter; nested openers have no special
+ * meaning. Comments and whitespace separate tokens and do not insert semicolons.
+ * Source is UTF-8, optionally with one initial BOM; LF and CRLF are accepted.
+ * A bare CR is rejected. A BOM is ignored only at the start of the file.
+ * Single-quoted character/string literals, ?, ->, ++ and -- are unavailable.
+ *)
+
+Trivia          = WhiteSpace | LineComment | BlockComment ;
+WhiteSpace      = " " | "\t" | "\n" | "\r\n" ;
+ASCII_LETTER    = ? ASCII A-Z or a-z ? ;
+DECIMAL_DIGIT   = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+NONZERO_DIGIT   = "1" | "2" | "3" | "4" | "5" | "6" | "7" | "8" | "9" ;
+BINARY_DIGIT    = "0" | "1" ;
+OCTAL_DIGIT     = "0" | "1" | "2" | "3" | "4" | "5" | "6" | "7" ;
+HEX_DIGIT       = DECIMAL_DIGIT | "a" | "b" | "c" | "d" | "e" | "f"
+                | "A" | "B" | "C" | "D" | "E" | "F" ;
+TextCharacter   = ? Unicode scalar except U+0022, U+005C, U+0000-U+001F and U+007F ? ;
+RAW_CHARACTER   = ? Unicode scalar except U+0060 and literal U+0000 ? ;
+NON_LINE_BREAK_CHARACTER = ? Unicode scalar except U+000A, U+000D and literal U+0000 ? ;
+BLOCK_COMMENT_CHARACTER = ? One Unicode scalar, excluding literal U+0000,
+                            whose source position does not begin the closing */ delimiter ? ;
+
+(* Active keywords:
+ * package import as pub func let var const struct enum trait impl for in if else
+ * switch case default try catch throw throws defer unsafe return break continue
+ * inout move true false
+ * Future-reserved, not usable syntax in v0.1:
+ * extern async await class extends operator
+ * auto, while, fn and null are NOT reserved words; they have no declaration/
+ * loop/function-keyword/null-literal meaning. share is an ordinary identifier/
+ * library function. An unresolved null identifier is a name-resolution error.
+ *)
+
+(* ---------- Scope of tools/check_syntax.py ----------
+ * It checks this compilation-unit syntax and the stated lexical constraints,
+ * stops at the first problem in each file, and does not produce executable code.
+ * It does NOT resolve imports/names; infer or check types; instantiate generics;
+ * validate calls/labels/places; prove throws handling; verify move/inout/ARC;
+ * check switch exhaustiveness, duplicate defaults, loop targets, cleanup effects,
+ * const evaluation, runtime arithmetic, target support or external ABI bindings.
+ * Type-vs-expression bracket candidates are accepted without a semantic choice.
+ * Extremely deep input may exceed the reference checker's recursion limit; that
+ * is reported as a checker limit, not a proof that the language syntax is invalid.
+ *)

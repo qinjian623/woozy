@@ -1,0 +1,7 @@
+package main;
+
+// 预期：语法通过，类型检查拒绝；当前语法检查器不实现该检查。
+func main() i32 {
+    let count i32 = "not an integer";
+    return count;
+}

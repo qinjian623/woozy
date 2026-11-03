@@ -1,0 +1,7 @@
+package main;
+
+// 预期：词法拒绝。\q 不是本稿支持的转义。
+func main() i32 {
+    let text = "bad\q";
+    return 0;
+}

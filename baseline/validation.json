@@ -1,0 +1,655 @@
+{
+  "validation_date": "2026-11-03",
+  "scope": "lexical_and_syntactic_only",
+  "self_test": {
+    "exit_code": 0,
+    "output": "v0.1 syntax reference checker (NOT a compiler/type/ownership/throws checker)\nSELF-TEST 59/59 passed"
+  },
+  "sample_count": 16,
+  "positive_count": 7,
+  "negative_count": 9,
+  "sample_results": [
+    {
+      "path": "samples/01_basics.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/01_basics.lang",
+            "accepted": true,
+            "token_count": 216,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/02_generics.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/02_generics.lang",
+            "accepted": true,
+            "token_count": 127,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/03_errors.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/03_errors.lang",
+            "accepted": true,
+            "token_count": 331,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/04_numpy_torch.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/04_numpy_torch.lang",
+            "accepted": true,
+            "token_count": 304,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/05_traits.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/05_traits.lang",
+            "accepted": true,
+            "token_count": 99,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/06_control_flow.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/06_control_flow.lang",
+            "accepted": true,
+            "token_count": 118,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/07_functions.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/07_functions.lang",
+            "accepted": true,
+            "token_count": 153,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/01_missing_semicolon.lang",
+      "expected_syntax": "reject",
+      "actual_syntax": "reject",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/01_missing_semicolon.lang",
+            "accepted": false,
+            "diagnostics": [
+              {
+                "phase": "syntax",
+                "code": "S001",
+                "message": "expected ';', found 'return'",
+                "line": 6,
+                "column": 5,
+                "token": "return"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/02_invalid_string_escape.lang",
+      "expected_syntax": "reject",
+      "actual_syntax": "reject",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/02_invalid_string_escape.lang",
+            "accepted": false,
+            "diagnostics": [
+              {
+                "phase": "lexical",
+                "code": "L024",
+                "message": "unsupported string escape; see the TextString escape list in grammar.ebnf",
+                "line": 5,
+                "column": 20,
+                "token": "\\"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/03_positional_after_named.lang",
+      "expected_syntax": "reject",
+      "actual_syntax": "reject",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/03_positional_after_named.lang",
+            "accepted": false,
+            "diagnostics": [
+              {
+                "phase": "syntax",
+                "code": "S010",
+                "message": "a positional argument cannot follow a named argument",
+                "line": 9,
+                "column": 22,
+                "token": "2"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/04_unhandled_throws.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/04_unhandled_throws.lang",
+            "accepted": true,
+            "token_count": 35,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/05_type_mismatch.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/05_type_mismatch.lang",
+            "accepted": true,
+            "token_count": 19,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/06_uninitialized_binding.lang",
+      "expected_syntax": "reject",
+      "actual_syntax": "reject",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/06_uninitialized_binding.lang",
+            "accepted": false,
+            "diagnostics": [
+              {
+                "phase": "syntax",
+                "code": "S001",
+                "message": "expected '=', found ';'",
+                "line": 5,
+                "column": 18,
+                "token": ";"
+              }
+            ]
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/07_result_is_not_unwrapped.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/07_result_is_not_unwrapped.lang",
+            "accepted": true,
+            "token_count": 75,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/08_throwing_cleanup.lang",
+      "expected_syntax": "accept",
+      "actual_syntax": "accept",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/08_throwing_cleanup.lang",
+            "accepted": true,
+            "token_count": 39,
+            "diagnostics": []
+          }
+        ]
+      }
+    },
+    {
+      "path": "samples/negative/09_ambiguous_function_return_type.lang",
+      "expected_syntax": "reject",
+      "actual_syntax": "reject",
+      "matches_expected": true,
+      "details": {
+        "schema": "language-v0.1-syntax-check/1",
+        "scope": {
+          "checks": [
+            "UTF-8 source restrictions",
+            "tokens",
+            "v0.1 compilation-unit syntax"
+          ],
+          "does_not_check": [
+            "names/imports",
+            "types/inference",
+            "generic constraints",
+            "throws handling",
+            "ownership/ARC/inout",
+            "control-flow validity",
+            "target support",
+            "runtime behavior"
+          ],
+          "first_error_per_file": true,
+          "compiler": false
+        },
+        "files": [
+          {
+            "path": "samples/negative/09_ambiguous_function_return_type.lang",
+            "accepted": false,
+            "diagnostics": [
+              {
+                "phase": "syntax",
+                "code": "S005",
+                "message": "a function-valued return type must be parenthesized to disambiguate throws",
+                "line": 12,
+                "column": 13,
+                "token": "func"
+              }
+            ]
+          }
+        ]
+      }
+    }
+  ],
+  "python_reference": {
+    "syntax_compile_passed": true,
+    "numpy_preparation_executed": true,
+    "numpy_version": "2.3.5",
+    "x_shape": [
+      128,
+      1
+    ],
+    "x_dtype": "float32",
+    "y_shape": [
+      128,
+      1
+    ],
+    "y_dtype": "float32",
+    "torch_installed": false,
+    "training_executed": false
+  },
+  "not_implemented": [
+    "name_resolution",
+    "type_checking",
+    "generic_constraint_checking",
+    "throws_effect_checking",
+    "ownership_ARC",
+    "code_generation",
+    "language_runtime"
+  ]
+}

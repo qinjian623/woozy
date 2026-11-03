@@ -1,0 +1,334 @@
+{
+  "type": "object",
+  "additionalProperties": false,
+  "required": [
+    "schema_version",
+    "contract",
+    "review_status",
+    "allowed_backends",
+    "package_requirements",
+    "modules",
+    "types",
+    "values",
+    "callables",
+    "conformance_required"
+  ],
+  "properties": {
+    "schema_version": {
+      "const": 1
+    },
+    "contract": {
+      "const": "compiler-dev/1"
+    },
+    "review_status": {
+      "enum": [
+        "draft_requires_conformance",
+        "verified_against_lock"
+      ]
+    },
+    "allowed_backends": {
+      "const": [
+        "python"
+      ]
+    },
+    "package_requirements": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "package",
+          "version_policy"
+        ],
+        "properties": {
+          "package": {
+            "type": "string"
+          },
+          "version_policy": {
+            "type": "string"
+          }
+        }
+      }
+    },
+    "modules": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "logical_path",
+          "host_module",
+          "provider"
+        ],
+        "properties": {
+          "logical_path": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*$"
+          },
+          "host_module": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)*$"
+          },
+          "provider": {
+            "enum": [
+              "python_package",
+              "language_runtime"
+            ]
+          }
+        }
+      }
+    },
+    "types": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "id",
+          "module",
+          "name",
+          "kind",
+          "host_attribute",
+          "copy"
+        ],
+        "properties": {
+          "id": {
+            "type": "string"
+          },
+          "module": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "kind": {
+            "enum": [
+              "host_reference",
+              "opaque_protocol",
+              "runtime_error"
+            ]
+          },
+          "host_attribute": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          },
+          "copy": {
+            "enum": [
+              "shared_reference",
+              "error_payload_copy"
+            ]
+          }
+        }
+      }
+    },
+    "values": {
+      "type": "array",
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": [
+          "module",
+          "name",
+          "type",
+          "host_attribute"
+        ],
+        "properties": {
+          "module": {
+            "type": "string"
+          },
+          "name": {
+            "type": "string"
+          },
+          "type": {
+            "type": "string"
+          },
+          "host_attribute": {
+            "type": "array",
+            "items": {
+              "type": "string",
+              "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+            }
+          }
+        }
+      }
+    },
+    "callables": {
+      "type": "array",
+      "items": {
+        "$ref": "#/$defs/callable"
+      }
+    },
+    "conformance_required": {
+      "type": "array",
+      "items": {
+        "type": "string"
+      }
+    }
+  },
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "urn:compiler-dev:1:python-bindings",
+  "$defs": {
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "name",
+        "type",
+        "kind",
+        "optional",
+        "mode",
+        "escapes"
+      ],
+      "properties": {
+        "name": {
+          "type": "string",
+          "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+        },
+        "type": {
+          "type": "string"
+        },
+        "kind": {
+          "enum": [
+            "positional_only",
+            "positional_or_keyword",
+            "keyword_only"
+          ]
+        },
+        "optional": {
+          "type": "boolean"
+        },
+        "mode": {
+          "enum": [
+            "ordinary",
+            "move",
+            "inout"
+          ]
+        },
+        "escapes": {
+          "enum": [
+            "no",
+            "may_retain"
+          ]
+        }
+      }
+    },
+    "callable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": [
+        "id",
+        "module",
+        "name",
+        "call_kind",
+        "owner_type",
+        "host_attribute",
+        "parameters",
+        "return_type",
+        "error_type",
+        "ownership",
+        "effects",
+        "receiver_escapes"
+      ],
+      "properties": {
+        "id": {
+          "type": "string"
+        },
+        "module": {
+          "type": "string"
+        },
+        "name": {
+          "type": "string"
+        },
+        "call_kind": {
+          "enum": [
+            "function",
+            "constructor",
+            "method",
+            "callable"
+          ]
+        },
+        "owner_type": {
+          "anyOf": [
+            {
+              "type": "string"
+            },
+            {
+              "type": "null"
+            }
+          ]
+        },
+        "host_attribute": {
+          "type": "array",
+          "items": {
+            "type": "string",
+            "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"
+          }
+        },
+        "parameters": {
+          "type": "array",
+          "items": {
+            "$ref": "#/$defs/parameter"
+          }
+        },
+        "return_type": {
+          "type": "string"
+        },
+        "error_type": {
+          "enum": [
+            "lang.py.Error",
+            null
+          ]
+        },
+        "ownership": {
+          "type": "object",
+          "additionalProperties": false,
+          "required": [
+            "return",
+            "storage"
+          ],
+          "properties": {
+            "return": {
+              "enum": [
+                "python_reference",
+                "unit",
+                "value"
+              ]
+            },
+            "storage": {
+              "enum": [
+                "host_defined",
+                "copy",
+                "view_or_alias",
+                "no_tensor_storage"
+              ]
+            }
+          }
+        },
+        "effects": {
+          "type": "array",
+          "items": {
+            "enum": [
+              "reads_arguments",
+              "mutates_receiver",
+              "retains_arguments",
+              "mutates_host_rng",
+              "autograd",
+              "consumes_iterator",
+              "retains_receiver"
+            ]
+          }
+        },
+        "receiver_escapes": {
+          "enum": [
+            "no",
+            "may_retain",
+            "not_applicable"
+          ]
+        }
+      }
+    }
+  }
+}
