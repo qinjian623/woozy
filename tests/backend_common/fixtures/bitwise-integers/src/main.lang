@@ -1,0 +1,48 @@
+package app;
+
+func main() i32 {
+    var a i32 = 0b1100;
+    var b i32 = 0b1010;
+    var zero i32 = 0;
+    let and_value = a & b;
+    let or_value = a | b;
+    let xor_value = a ^ b;
+    let not_zero = ~zero;
+    let not_a = ~a;
+
+    var ua u8 = 0xF0;
+    var ub u8 = 0x0F;
+    let u_and = ua & ub;
+    let u_or = ua | ub;
+    let u_xor = ua ^ ub;
+    let u_not = ~ua;
+
+    if and_value != 8 {
+        return 1;
+    }
+    if or_value != 14 {
+        return 2;
+    }
+    if xor_value != 6 {
+        return 3;
+    }
+    if not_zero != -1 {
+        return 4;
+    }
+    if not_a != -13 {
+        return 5;
+    }
+    if u_and != 0 {
+        return 6;
+    }
+    if u_or != 255 {
+        return 7;
+    }
+    if u_xor != 255 {
+        return 8;
+    }
+    if u_not != 15 {
+        return 9;
+    }
+    return 0;
+}

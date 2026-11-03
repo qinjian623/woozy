@@ -1,0 +1,49 @@
+package app;
+
+func main() i32 {
+    var sum i32 = 0;
+    for var index i32 = 0; index < 10; index += 1 {
+        if index % 2 == 0 {
+            continue;
+        }
+        if index > 5 {
+            break;
+        }
+        sum += index;
+    }
+    if sum != 9 {
+        return 1;
+    }
+
+    var count i32 = 0;
+    for count < 5 {
+        count += 1;
+        if count == 2 {
+            continue;
+        }
+        if count == 4 {
+            break;
+        }
+        sum += count;
+    }
+    if count != 4 {
+        return 2;
+    }
+    if sum != 13 {
+        return 3;
+    }
+
+    var nested i32 = 0;
+    for var outer i32 = 0; outer < 3; outer += 1 {
+        for var inner i32 = 0; inner < 3; inner += 1 {
+            if inner == 1 {
+                break;
+            }
+            nested += 1;
+        }
+    }
+    if nested != 3 {
+        return 4;
+    }
+    return 0;
+}

@@ -1,0 +1,44 @@
+package app;
+
+func main() i32 {
+    var negative i32 = -8;
+    var negative_one i32 = -1;
+    var one i32 = 1;
+    var amount_one i32 = 1;
+    var amount31 i32 = 31;
+    var sign i8 = 127;
+    var top u32 = 0x8000_0000;
+    var high_u8 u8 = 0x80;
+    var amount7 i8 = 7;
+
+    let arithmetic = negative >> amount_one;
+    let arithmetic_fill = negative_one >> amount31;
+    let sign_bit = one << amount31;
+    let left_drop_i8 = sign << amount_one;
+    let logical = top >> amount31;
+    let logical_u8 = high_u8 >> amount7;
+    let unsigned_drop = top << amount_one;
+
+    if arithmetic != -4 {
+        return 1;
+    }
+    if arithmetic_fill != -1 {
+        return 2;
+    }
+    if sign_bit != -2_147_483_648 {
+        return 3;
+    }
+    if left_drop_i8 != -2 {
+        return 4;
+    }
+    if logical != 1 {
+        return 5;
+    }
+    if logical_u8 != 1 {
+        return 6;
+    }
+    if unsigned_drop != 0 {
+        return 7;
+    }
+    return 0;
+}

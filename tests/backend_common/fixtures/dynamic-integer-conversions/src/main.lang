@@ -1,0 +1,65 @@
+package app;
+
+func narrow_i8(value i32) i8 {
+    return i8(value);
+}
+
+func narrow_u8(value i32) u8 {
+    return u8(value);
+}
+
+func widen_i32(value i8) i32 {
+    return i32(value);
+}
+
+func main() i32 {
+    var positive i32 = 127;
+    var negative i32 = -128;
+    var two_hundred i32 = 200;
+    var minimum64 i64 = -2_147_483_648;
+    var large i64 = 4_294_967_295;
+    var small_u16 u16 = 65_535;
+
+    let from_positive i8 = narrow_i8(positive);
+    let from_negative i8 = narrow_i8(negative);
+    let from_two_hundred u8 = narrow_u8(two_hundred);
+    let widened_i8 i32 = widen_i32(from_positive);
+    let minimum32 i32 = i32(minimum64);
+    let minimum64_again i64 = i64(minimum32);
+    let from_large u32 = u32(large);
+    let large_u64 u64 = u64(from_large);
+    let from_u16 i32 = i32(small_u16);
+    let widened_u8 u16 = u16(from_two_hundred);
+
+    if from_positive != 127 {
+        return 1;
+    }
+    if from_negative != -128 {
+        return 2;
+    }
+    if from_two_hundred != 200 {
+        return 3;
+    }
+    if widened_i8 != 127 {
+        return 4;
+    }
+    if minimum32 != -2_147_483_648 {
+        return 5;
+    }
+    if minimum64_again != -2_147_483_648 {
+        return 6;
+    }
+    if from_large != 4_294_967_295 {
+        return 7;
+    }
+    if large_u64 != 4_294_967_295 {
+        return 8;
+    }
+    if from_u16 != 65_535 {
+        return 9;
+    }
+    if widened_u8 != 200 {
+        return 10;
+    }
+    return 0;
+}

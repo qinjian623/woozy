@@ -1,0 +1,35 @@
+package app;
+
+func quotient(a i32, b i32) i32 {
+    return a / b;
+}
+
+func remainder(a i32, b i32) i32 {
+    return a % b;
+}
+
+func main() i32 {
+    var minimum32 i32 = -2_147_483_648;
+    var minus_one32 i32 = -1;
+    let quotient32 = quotient(minimum32, minus_one32);
+    let remainder32 = remainder(minimum32, minus_one32);
+
+    var minimum8 i8 = -128;
+    var minus_one8 i8 = -1;
+    let quotient8 = minimum8 / minus_one8;
+    let remainder8 = minimum8 % minus_one8;
+
+    if quotient32 != minimum32 {
+        return 1;
+    }
+    if remainder32 != 0 {
+        return 2;
+    }
+    if quotient8 != -128 {
+        return 3;
+    }
+    if remainder8 != 0 {
+        return 4;
+    }
+    return 0;
+}

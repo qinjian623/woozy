@@ -1,0 +1,38 @@
+package app;
+
+func main() i32 {
+    var value i32 = 1;
+    {
+        let value i32 = value + 1;
+        if value != 2 {
+            return 1;
+        }
+        {
+            var value i32 = value * 3;
+            value += 1;
+            if value != 7 {
+                return 2;
+            }
+        }
+        if value != 2 {
+            return 3;
+        }
+    }
+    if value != 1 {
+        return 4;
+    }
+
+    var index i32 = 99;
+    var shadow_sum i32 = 0;
+    for var index i32 = 0; index < 2; index += 1 {
+        let value i32 = index + 10;
+        shadow_sum += value;
+    }
+    if shadow_sum != 21 {
+        return 5;
+    }
+    if index != 99 {
+        return 6;
+    }
+    return 0;
+}

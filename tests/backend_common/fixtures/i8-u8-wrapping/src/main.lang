@@ -1,0 +1,47 @@
+package app;
+
+func main() i32 {
+    var high i8 = 127;
+    var low i8 = -128;
+    var hundred i8 = 100;
+    let up = high + 1;
+    let down = low - 1;
+    let negated = -low;
+    let product = hundred * 2;
+
+    var top u8 = 255;
+    var bottom u8 = 0;
+    var two_hundred u8 = 200;
+    let u_up = top + 1;
+    let u_down = bottom - 1;
+    let u_product = two_hundred * 2;
+
+    var compound u8 = 255;
+    compound += 1;
+
+    if up != -128 {
+        return 1;
+    }
+    if down != 127 {
+        return 2;
+    }
+    if negated != -128 {
+        return 3;
+    }
+    if product != -56 {
+        return 4;
+    }
+    if u_up != 0 {
+        return 5;
+    }
+    if u_down != 255 {
+        return 6;
+    }
+    if u_product != 144 {
+        return 7;
+    }
+    if compound != 0 {
+        return 8;
+    }
+    return 0;
+}

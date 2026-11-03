@@ -1,0 +1,897 @@
+{
+  "schema": "compiler-dev/backend-common-fixtures/1",
+  "contract": "compiler-dev/1",
+  "prepared_for": [
+    "T05",
+    "T06"
+  ],
+  "case_count": 15,
+  "stage_policy": {
+    "syntax": "Every fixture must be accepted by `langc check --syntax-only --format json`.",
+    "names": "Every fixture must be accepted by `lang_module_check` on its own `lang.toml`.",
+    "type_check": "Every fixture is intended to be accepted by the T04 scalar checker. `inout-argument-order` additionally requires the plain scalar `var` whole-binding inout subset that T04 is still completing. Type checking was not run for this data-preparation task.",
+    "native": "T05 must still compile, link and execute each project at O0 and O2. No result is claimed here.",
+    "python": "T06 must still generate and execute the common subset. No result is claimed here.",
+    "panic": "A `panic` expectation means the operation must fail with an uncatchable language Panic for the stated cause. Each panic fixture performs the dangerous operation and then returns 0 on its non-panic path. A runner must distinguish Panic from an ordinary 0 or any other main return; it must not accept an ordinary nonzero return as evidence of Panic. The specification does not define an exact process exit status or diagnostic text for that Panic, so neither is asserted."
+  },
+  "rules": {
+    "integer_wrapping": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| `+ - *` 与一元 `-` | 固定位宽模运算；结果按目标有符号/无符号类型解释 |"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "字面量超出目标类型范围与已定类型表达式运算回绕不同：`let x i8 = 128;` 是静态错误；`let x i8 = 127; let y = x + 1;` 得到 -128。常量折叠必须复用同一套数值规则。"
+        }
+      ],
+      "summary": "Operands here are already typed i8 or u8, so arithmetic wraps modulo 2^8 and the result is reinterpreted in that type."
+    },
+    "signed_division_remainder": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| 有符号 `/` | 向零截断；`MIN / -1` 返回 MIN，必须在 LLVM `sdiv` 前特判 |"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| 有符号 `%` | 余数符号随被除数；`MIN % -1` 返回 0 |"
+        }
+      ],
+      "summary": "Signed quotient truncates toward zero, and signed remainder is defined by a = (a / b) * b + (a % b) with the quotient from that rule."
+    },
+    "bitwise": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "bitwise 运算其他两操作数要求同一具体整数类型。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "2.8 运算符与分隔符",
+          "clause": "+  -  *  /  %  !  ~  &  |  ^  <  >"
+        }
+      ],
+      "summary": "Both operands have the same concrete integer type. Expected values use the declared width's fixed bit pattern; i32 and u8 are covered separately."
+    },
+    "shift": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| `<<` | 舍弃移出位，结果保持位宽；移位量必须在 `[0,width)` |"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| 有符号 `>>` | 算术右移；无符号为逻辑右移 |"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "移位左操作数必须为整数，右操作数允许任意整数类型，但先在其数学取值上检查有效范围。"
+        }
+      ],
+      "summary": "The result type is the left operand's type. i8 shift counts against i32/u8 operands check that the count is not required to have the same type."
+    },
+    "dynamic_integer_conversion": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "3 基础类型与推断",
+          "clause": "显式的整数到整数转换 `T(x)` 做范围检查；常量越界静态报错，动态越界产生 Panic。"
+        }
+      ],
+      "summary": "Every conversion in the success case is applied to a variable value that is inside the destination range."
+    },
+    "short_circuit": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "5 求值与控制流",
+          "clause": "操作数、被调用者、实参按源码从左到右求值；`&&`、`||` 短路。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| 除数为 0 | Panic，不能由 typed catch 捕获 |"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| 移位量为负或不小于位宽 | Panic；不能把非法移位直接交给 LLVM |"
+        }
+      ],
+      "summary": "The guarded right-hand expressions contain division by zero or an out-of-range shift, so evaluating an unneeded side would Panic."
+    },
+    "function_value": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.2 参数模式和移动",
+          "clause": "非捕获函数字面量和函数指针属于第一版。引用局部变量的闭包先报未支持，不能悄悄按 Python closure 规则生成。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.1 复制与对象身份",
+          "clause": "| 数值、bool、Unit、非捕获函数值 | 复制值 |"
+        },
+        {
+          "path": "docs/FRONTEND.md",
+          "section": "7.2 调用检查",
+          "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
+        }
+      ],
+      "summary": "All function literals in this case are non-capturing, are copied as values, and function-value calls use positional arguments only."
+    },
+    "loop_control": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "5 求值与控制流",
+          "clause": "`if/for` 条件必须是 bool。赋值不是表达式，没有隐式真假转换。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "10.3 跳转",
+          "clause": "- `break;` 退出最近的循环或 switch。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "10.3 跳转",
+          "clause": "- `continue;` 进入最近循环的下一轮。"
+        }
+      ],
+      "summary": "break and continue target the nearest loop; the nested loop checks that an inner break does not leave the outer loop."
+    },
+    "shadowing": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "2 名称与模块",
+          "clause": "同一作用域重名报错；嵌套局部作用域允许遮蔽，诊断可附可选提醒。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "2 名称与模块",
+          "clause": "| 局部 let/var/const 绑定 | 类型标注与初始化表达式在声明前的环境中解析；初始化完成后，新绑定才可见。内层 `let x = x + 1` 使用外层 x；不存在外层 x 时报告未声明名称 |"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "2 名称与模块",
+          "clause": "| 三段式 for 的初始化绑定 | 位于循环作用域，对条件、步进和循环体可见，循环后不可见 |"
+        }
+      ],
+      "summary": "The block binding sees the outer binding in its initializer, then shadows it; the loop initializer shadows the outer index only inside the loop."
+    },
+    "argument_order": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "5 求值与控制流",
+          "clause": "操作数、被调用者、实参按源码从左到右求值；`&&`、`||` 短路。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "5 求值与控制流",
+          "clause": "命名实参先按书写顺序求值到临时值，再按签名排列。重排参数不能重排副作用。"
+        },
+        {
+          "path": "docs/FRONTEND.md",
+          "section": "7.2 调用检查",
+          "clause": "**实参匹配顺序与求值顺序分开保存。** `f(second: a(), first: b())` 必须先求值 `a()` 再求值 `b()`，最后按形参位置传递临时结果；不能把表达式按标签排序后执行。若 `a()` 抛错，`b()` 不执行。调用对象及接收者也只求值一次。"
+        }
+      ],
+      "summary": "Positional and reversed-named calls evaluate argument expressions in source order; named results are then placed by formal parameter, not by the order of the labels."
+    },
+    "inout_writable_var": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.2 参数模式和移动",
+          "clause": "- `inout` 参数独占可写存储访问，不得逃逸、保存到对象或被捕获。第一版仅接受可证明无别名的 `var` 整体绑定，类型限定为数值/bool 或递归只含平凡值的 struct/enum；引用容器、外部对象、字段/索引位置的 inout 明确报未支持。独占约束不扩展为未知外部共享对象图的深层 noalias 证明。"
+        },
+        {
+          "path": "docs/FRONTEND.md",
+          "section": "7.3 Place 与模式",
+          "clause": "第一版 `inout` 仅接受可写的平凡值整变量绑定（类型限制见 SEMANTICS），不接受引用容器、外部对象、字段、索引或带复杂别名的位置；独占、逃逸和 `move` 规则见 `SEMANTICS.md`。"
+        }
+      ],
+      "summary": "The only inout fixture uses a whole i32 var binding and a plain scalar helper."
+    },
+    "panic_division": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| 除数为 0 | Panic，不能由 typed catch 捕获 |"
+        }
+      ],
+      "summary": "Division by zero is a runtime Panic, not a typed error value."
+    },
+    "panic_shift": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "4.1 整数",
+          "clause": "| 移位量为负或不小于位宽 | Panic；不能把非法移位直接交给 LLVM |"
+        }
+      ],
+      "summary": "An i32 shift count below 0 or at least 32 is outside [0, 32) and must Panic before any LLVM shift is executed."
+    },
+    "panic_conversion": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "3 基础类型与推断",
+          "clause": "显式的整数到整数转换 `T(x)` 做范围检查；常量越界静态报错，动态越界产生 Panic。"
+        }
+      ],
+      "summary": "The source value 128 is dynamically outside i8's range [-128, 127], so i8(source) Panics."
+    },
+    "panic_not_catchable": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "8 typed throws 与 Panic",
+          "clause": "Panic 表示除零、非法移位、越界等不可由 typed catch 恢复的运行失败。native 顶层终止程序；Python 使用 `langrt.Panic`（BaseException 子类）由生成的顶层 runner 转为失败诊断。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "8 typed throws 与 Panic",
+          "clause": "两端不保证 Panic 后执行语言清理；Python 生成的 finally 必须避免把 Panic 路径误当普通错误路径执行语言 defer。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "9 defer 和销毁顺序",
+          "clause": "Panic 路径按第 8 节的无保证规则隔离。"
+        }
+      ],
+      "summary": "Panic is not a recoverable typed error. This suite does not exercise defer, so it does not require observing cleanup after a Panic."
+    }
+  },
+  "cases": [
+    {
+      "id": "i8-u8-wrapping",
+      "manifest": "tests/backend_common/fixtures/i8-u8-wrapping/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "high + 1, with high i8 = 127",
+            "equals": -128,
+            "rule": "integer_wrapping",
+            "calculation": "127 + 1 = 128; 128 mod 2^8 = 128 = 0x80, interpreted as i8 -128."
+          },
+          {
+            "expression": "low - 1, with low i8 = -128",
+            "equals": 127,
+            "rule": "integer_wrapping",
+            "calculation": "-128 - 1 = -129; -129 mod 2^8 = 127."
+          },
+          {
+            "expression": "-low, with low i8 = -128",
+            "equals": -128,
+            "rule": "integer_wrapping",
+            "calculation": "-(-128) = 128; 128 mod 2^8 = 128 = 0x80, interpreted as i8 -128."
+          },
+          {
+            "expression": "hundred * 2, with hundred i8 = 100",
+            "equals": -56,
+            "rule": "integer_wrapping",
+            "calculation": "100 * 2 = 200; 200 - 256 = -56."
+          },
+          {
+            "expression": "top + 1, with top u8 = 255",
+            "equals": 0,
+            "rule": "integer_wrapping",
+            "calculation": "255 + 1 = 256; 256 mod 2^8 = 0."
+          },
+          {
+            "expression": "bottom - 1, with bottom u8 = 0",
+            "equals": 255,
+            "rule": "integer_wrapping",
+            "calculation": "0 - 1 = -1; -1 mod 2^8 = 255."
+          },
+          {
+            "expression": "two_hundred * 2, with two_hundred u8 = 200",
+            "equals": 144,
+            "rule": "integer_wrapping",
+            "calculation": "200 * 2 = 400; 400 mod 2^8 = 144."
+          },
+          {
+            "expression": "compound += 1, with compound u8 = 255",
+            "equals": 0,
+            "rule": "integer_wrapping",
+            "calculation": "255 + 1 = 256; 256 mod 2^8 = 0."
+          }
+        ]
+      }
+    },
+    {
+      "id": "signed-division-remainder",
+      "manifest": "tests/backend_common/fixtures/signed-division-remainder/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "-7 / 3",
+            "equals": -2,
+            "rule": "signed_division_remainder",
+            "calculation": "The real quotient is -2.333..., truncated toward zero to -2."
+          },
+          {
+            "expression": "-7 % 3",
+            "equals": -1,
+            "rule": "signed_division_remainder",
+            "calculation": "-7 = (-2 * 3) + (-1), so the remainder is -1 and has the dividend's sign."
+          },
+          {
+            "expression": "7 / -3",
+            "equals": -2,
+            "rule": "signed_division_remainder",
+            "calculation": "The real quotient is -2.333..., truncated toward zero to -2."
+          },
+          {
+            "expression": "7 % -3",
+            "equals": 1,
+            "rule": "signed_division_remainder",
+            "calculation": "7 = (-2 * -3) + 1, so the remainder is 1 and has the dividend's sign."
+          },
+          {
+            "expression": "-7 / -3",
+            "equals": 2,
+            "rule": "signed_division_remainder",
+            "calculation": "The real quotient is 2.333..., truncated toward zero to 2."
+          },
+          {
+            "expression": "-7 % -3",
+            "equals": -1,
+            "rule": "signed_division_remainder",
+            "calculation": "-7 = (2 * -3) + (-1), so the remainder is -1."
+          },
+          {
+            "expression": "i8(-7) / i8(3)",
+            "equals": -2,
+            "rule": "signed_division_remainder",
+            "calculation": "The same truncation rule applies at width 8: -2.333... becomes -2."
+          },
+          {
+            "expression": "i8(-7) % i8(3)",
+            "equals": -1,
+            "rule": "signed_division_remainder",
+            "calculation": "-7 = (-2 * 3) + (-1) in i8 as well."
+          }
+        ]
+      }
+    },
+    {
+      "id": "division-min-over-minus-one",
+      "manifest": "tests/backend_common/fixtures/division-min-over-minus-one/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "i32 minimum / i32 -1, minimum = -2_147_483_648",
+            "equals": -2147483648,
+            "rule": "signed_division_remainder",
+            "calculation": "The mathematical quotient 2_147_483_648 is not an i32; the required special case returns MIN = -2_147_483_648."
+          },
+          {
+            "expression": "i32 minimum % i32 -1",
+            "equals": 0,
+            "rule": "signed_division_remainder",
+            "calculation": "The required MIN % -1 special case returns 0."
+          },
+          {
+            "expression": "i8 minimum / i8 -1, minimum = -128",
+            "equals": -128,
+            "rule": "signed_division_remainder",
+            "calculation": "The mathematical quotient 128 is not an i8; the width-8 special case returns MIN = -128."
+          },
+          {
+            "expression": "i8 minimum % i8 -1",
+            "equals": 0,
+            "rule": "signed_division_remainder",
+            "calculation": "The width-8 MIN % -1 special case returns 0."
+          }
+        ]
+      }
+    },
+    {
+      "id": "bitwise-integers",
+      "manifest": "tests/backend_common/fixtures/bitwise-integers/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "0b1100 & 0b1010 as i32",
+            "equals": 8,
+            "rule": "bitwise",
+            "calculation": "12 = 1100_2, 10 = 1010_2; AND keeps bits 1000_2 = 8."
+          },
+          {
+            "expression": "0b1100 | 0b1010 as i32",
+            "equals": 14,
+            "rule": "bitwise",
+            "calculation": "OR of 1100_2 and 1010_2 is 1110_2 = 14."
+          },
+          {
+            "expression": "0b1100 ^ 0b1010 as i32",
+            "equals": 6,
+            "rule": "bitwise",
+            "calculation": "XOR of 1100_2 and 1010_2 is 0110_2 = 6."
+          },
+          {
+            "expression": "~i32(0)",
+            "equals": -1,
+            "rule": "bitwise",
+            "calculation": "All 32 bits are inverted from 0 to 0xFFFF_FFFF, which is i32 -1."
+          },
+          {
+            "expression": "~i32(12)",
+            "equals": -13,
+            "rule": "bitwise",
+            "calculation": "~0x0000_000C = 0xFFFF_FFF3, which is i32 -13."
+          },
+          {
+            "expression": "u8(0xF0) & u8(0x0F)",
+            "equals": 0,
+            "rule": "bitwise",
+            "calculation": "1111_0000_2 AND 0000_1111_2 = 0000_0000_2."
+          },
+          {
+            "expression": "u8(0xF0) | u8(0x0F)",
+            "equals": 255,
+            "rule": "bitwise",
+            "calculation": "1111_0000_2 OR 0000_1111_2 = 1111_1111_2 = 255."
+          },
+          {
+            "expression": "u8(0xF0) ^ u8(0x0F)",
+            "equals": 255,
+            "rule": "bitwise",
+            "calculation": "The operands have disjoint set bits, so XOR is 1111_1111_2 = 255."
+          },
+          {
+            "expression": "~u8(0xF0)",
+            "equals": 15,
+            "rule": "bitwise",
+            "calculation": "Inverting 1111_0000_2 within 8 bits gives 0000_1111_2 = 15."
+          }
+        ]
+      }
+    },
+    {
+      "id": "shift-left-right",
+      "manifest": "tests/backend_common/fixtures/shift-left-right/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "i32(-8) >> i32(1)",
+            "equals": -4,
+            "rule": "shift",
+            "calculation": "Signed right shift is arithmetic: -8 / 2 = -4, with the sign bit filled."
+          },
+          {
+            "expression": "i32(-1) >> i32(31)",
+            "equals": -1,
+            "rule": "shift",
+            "calculation": "All 32 bits are 1; arithmetic right shift fills with 1, so the result remains -1."
+          },
+          {
+            "expression": "i32(1) << i32(31)",
+            "equals": -2147483648,
+            "rule": "shift",
+            "calculation": "The result has 32 bits: 1 shifted to bit 31 is 0x8000_0000, interpreted as i32 MIN."
+          },
+          {
+            "expression": "i8(127) << i32(1)",
+            "equals": -2,
+            "rule": "shift",
+            "calculation": "0x7F << 1 = 0xFE = 254; keeping the 8-bit result and interpreting it as i8 gives -2. The count is allowed to be i32."
+          },
+          {
+            "expression": "u32(0x8000_0000) >> i32(31)",
+            "equals": 1,
+            "rule": "shift",
+            "calculation": "Unsigned right shift is logical: the top set bit moves to bit 0, giving 1."
+          },
+          {
+            "expression": "u8(0x80) >> i8(7)",
+            "equals": 1,
+            "rule": "shift",
+            "calculation": "The unsigned 8-bit value 1000_0000_2 shifted right by 7 is 0000_0001_2."
+          },
+          {
+            "expression": "u32(0x8000_0000) << i32(1)",
+            "equals": 0,
+            "rule": "shift",
+            "calculation": "Shifting the top bit left discards it from the 32-bit result, leaving 0."
+          }
+        ]
+      }
+    },
+    {
+      "id": "dynamic-integer-conversions",
+      "manifest": "tests/backend_common/fixtures/dynamic-integer-conversions/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "i8(i32 127)",
+            "equals": 127,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "127 is inside [-128, 127] and is unchanged."
+          },
+          {
+            "expression": "i8(i32 -128)",
+            "equals": -128,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "-128 is the minimum i8 and is unchanged."
+          },
+          {
+            "expression": "u8(i32 200)",
+            "equals": 200,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "200 is inside [0, 255] and is unchanged."
+          },
+          {
+            "expression": "i32(i8 127)",
+            "equals": 127,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "Widening i8 127 to i32 preserves the value."
+          },
+          {
+            "expression": "i32(i64 -2_147_483_648)",
+            "equals": -2147483648,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "The value is exactly the i32 minimum, so the dynamic range check passes."
+          },
+          {
+            "expression": "i64(i32 -2_147_483_648)",
+            "equals": -2147483648,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "Widening the i32 minimum to i64 preserves the value."
+          },
+          {
+            "expression": "u32(i64 4_294_967_295)",
+            "equals": 4294967295,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "4_294_967_295 is exactly the u32 maximum, so the dynamic range check passes."
+          },
+          {
+            "expression": "u64(u32 4_294_967_295)",
+            "equals": 4294967295,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "Widening the u32 maximum to u64 preserves the value."
+          },
+          {
+            "expression": "i32(u16 65_535)",
+            "equals": 65535,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "The u16 maximum 65_535 fits i32 and is unchanged."
+          },
+          {
+            "expression": "u16(u8 200)",
+            "equals": 200,
+            "rule": "dynamic_integer_conversion",
+            "calculation": "Widening u8 200 to u16 preserves the value."
+          }
+        ]
+      }
+    },
+    {
+      "id": "short-circuit-panic-guard",
+      "manifest": "tests/backend_common/fixtures/short-circuit-panic-guard/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "and_count after enabled && (7 / zero == 0) and enabled && (one << width == 0), enabled = false",
+            "equals": 0,
+            "rule": "short_circuit",
+            "calculation": "false && RHS does not evaluate RHS, so neither guarded Panic occurs and neither body increments the counter. The shift left operand is explicitly i32 one=1; width=32 is outside [0,32)."
+          },
+          {
+            "expression": "or_count after !enabled || (7 / zero == 0) and !enabled || (one << width == 0), enabled = false",
+            "equals": 11,
+            "rule": "short_circuit",
+            "calculation": "!false = true, so both || expressions short-circuit before the RHS; each body runs, adding 1 then 10."
+          },
+          {
+            "expression": "zero after the four guarded conditions",
+            "equals": 0,
+            "rule": "short_circuit",
+            "calculation": "The division and shift right-hand sides are never evaluated, so zero remains 0."
+          },
+          {
+            "expression": "width after the four guarded conditions",
+            "equals": 32,
+            "rule": "short_circuit",
+            "calculation": "The shift right-hand sides are never evaluated, so width remains 32."
+          }
+        ]
+      }
+    },
+    {
+      "id": "function-values",
+      "manifest": "tests/backend_common/fixtures/function-values/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "add(1, 2)",
+            "equals": 3,
+            "rule": "function_value",
+            "calculation": "Direct call of the declared function: 1 + 2 = 3."
+          },
+          {
+            "expression": "twice(21), twice = func(value) { return value * 2; }",
+            "equals": 42,
+            "rule": "function_value",
+            "calculation": "The non-capturing literal is called through its value: 21 * 2 = 42."
+          },
+          {
+            "expression": "apply(indirect, 2, 3), indirect = add",
+            "equals": 5,
+            "rule": "function_value",
+            "calculation": "The function pointer is passed positionally and called as op(2, 3): 2 + 3 = 5."
+          },
+          {
+            "expression": "alias(4), alias = twice",
+            "equals": 8,
+            "rule": "function_value",
+            "calculation": "Function values copy trivially; the copied value is called: 4 * 2 = 8."
+          }
+        ]
+      }
+    },
+    {
+      "id": "control-flow-break-continue",
+      "manifest": "tests/backend_common/fixtures/control-flow-break-continue/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "sum after the first loop",
+            "equals": 9,
+            "rule": "loop_control",
+            "calculation": "Odd indices below the break are 1, 3 and 5; 1 + 3 + 5 = 9. At 7 the break runs after the even/odd test, so 7 is not added."
+          },
+          {
+            "expression": "count after the second loop",
+            "equals": 4,
+            "rule": "loop_control",
+            "calculation": "The loop increments 1, 2, 3, 4; continue at 2 skips only the body remainder, and break executes at 4."
+          },
+          {
+            "expression": "sum after the second loop",
+            "equals": 13,
+            "rule": "loop_control",
+            "calculation": "The first loop leaves 9; the second adds 1 and then 3, because 2 continues and 4 breaks: 9 + 1 + 3 = 13."
+          },
+          {
+            "expression": "nested after the nested loops",
+            "equals": 3,
+            "rule": "loop_control",
+            "calculation": "Each of the three outer iterations adds once for inner index 0, then breaks at inner index 1: 3 additions."
+          }
+        ]
+      }
+    },
+    {
+      "id": "lexical-shadowing",
+      "manifest": "tests/backend_common/fixtures/lexical-shadowing/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "value inside the first nested block",
+            "equals": 2,
+            "rule": "shadowing",
+            "calculation": "The initializer sees the outer value 1, so the new block binding is 1 + 1 = 2."
+          },
+          {
+            "expression": "value inside the innermost block after += 1",
+            "equals": 7,
+            "rule": "shadowing",
+            "calculation": "The innermost initializer sees the enclosing 2: 2 * 3 = 6, then 6 + 1 = 7."
+          },
+          {
+            "expression": "value after leaving the innermost block",
+            "equals": 2,
+            "rule": "shadowing",
+            "calculation": "The innermost binding is out of scope; the enclosing block's binding is still 2."
+          },
+          {
+            "expression": "value after leaving the outer block",
+            "equals": 1,
+            "rule": "shadowing",
+            "calculation": "The block binding is out of scope; the function-body binding is still 1."
+          },
+          {
+            "expression": "shadow_sum after the for loop",
+            "equals": 21,
+            "rule": "shadowing",
+            "calculation": "Loop indices 0 and 1 create body values 0 + 10 = 10 and 1 + 10 = 11; 10 + 11 = 21."
+          },
+          {
+            "expression": "index after the for loop",
+            "equals": 99,
+            "rule": "shadowing",
+            "calculation": "The for initializer's index is scoped to the loop; the outer index remains 99."
+          }
+        ]
+      }
+    },
+    {
+      "id": "inout-argument-order",
+      "manifest": "tests/backend_common/fixtures/inout-argument-order/lang.toml",
+      "requires_inout": true,
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "pair(tick(inout counter), tick(inout counter)), counter initially 0",
+            "equals": 1,
+            "rule": "argument_order",
+            "calculation": "Left-to-right evaluation returns 0 for the first argument and 1 for the second, then pair computes 0 * 10 + 1 = 1. Reversing evaluation would produce 1 * 10 + 0 = 10."
+          },
+          {
+            "expression": "counter after the positional call",
+            "equals": 2,
+            "rule": "inout_writable_var",
+            "calculation": "Each helper call increments the same writable scalar once; the two sequential borrows leave 0 + 1 + 1 = 2."
+          },
+          {
+            "expression": "pair(second: tick(inout counter), first: tick(inout counter)), counter reset to 0",
+            "equals": 10,
+            "rule": "argument_order",
+            "calculation": "Source order evaluates the expression written for second first, returning 0, then the expression written for first, returning 1. Named results are placed by parameter: first=1 and second=0, so pair computes 1 * 10 + 0 = 10. Evaluating by formal order instead would give 0 * 10 + 1 = 1."
+          },
+          {
+            "expression": "counter after the reversed-named call",
+            "equals": 2,
+            "rule": "inout_writable_var",
+            "calculation": "The reset counter is incremented once by each of the two sequential helper calls: 0 + 1 + 1 = 2."
+          }
+        ]
+      }
+    },
+    {
+      "id": "panic-division-by-zero",
+      "manifest": "tests/backend_common/fixtures/panic-division-by-zero/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "panic",
+        "cause": "integer division by zero",
+        "trigger": {
+          "expression": "divide(numerator, denominator), numerator=10, denominator=0",
+          "calculation": "numerator = 10 and denominator = 0, so the / operation has divisor 0.",
+          "rule": "panic_division"
+        },
+        "catch_behavior": "No typed catch wraps the operation; Panic is not recoverable by typed catch.",
+        "rules": [
+          "panic_division",
+          "panic_not_catchable"
+        ],
+        "non_panic_path_main_return": 0
+      }
+    },
+    {
+      "id": "panic-invalid-shift",
+      "manifest": "tests/backend_common/fixtures/panic-invalid-shift/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "panic",
+        "cause": "shift amount outside [0, 32) for i32",
+        "trigger": {
+          "expression": "value << width, value i32=1, width i32=32",
+          "calculation": "The left operand is i32, so its width is 32; amount 32 is not in [0, 32).",
+          "rule": "panic_shift"
+        },
+        "catch_behavior": "No typed catch wraps the operation; Panic is not recoverable by typed catch.",
+        "rules": [
+          "panic_shift",
+          "panic_not_catchable"
+        ],
+        "non_panic_path_main_return": 0
+      }
+    },
+    {
+      "id": "panic-dynamic-conversion",
+      "manifest": "tests/backend_common/fixtures/panic-dynamic-conversion/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "panic",
+        "cause": "dynamic integer conversion out of range",
+        "trigger": {
+          "expression": "i8(source), source i32=128",
+          "calculation": "i8 range is [-128, 127]; the dynamic source value 128 is one above the maximum.",
+          "rule": "panic_conversion"
+        },
+        "catch_behavior": "No typed catch wraps the operation; Panic is not recoverable by typed catch.",
+        "rules": [
+          "panic_conversion",
+          "panic_not_catchable"
+        ],
+        "non_panic_path_main_return": 0
+      }
+    },
+    {
+      "id": "panic-negative-shift",
+      "manifest": "tests/backend_common/fixtures/panic-negative-shift/lang.toml",
+      "requires_inout": false,
+      "expected": {
+        "compile": "accept",
+        "status": "panic",
+        "cause": "negative shift amount for i32",
+        "trigger": {
+          "expression": "value << amount, value i32=1, amount i8=-1",
+          "calculation": "The left operand is i32, so its width is 32; the dynamic count -1 is below 0 and therefore outside [0, 32).",
+          "rule": "panic_shift"
+        },
+        "catch_behavior": "No typed catch wraps the operation; Panic is not recoverable by typed catch.",
+        "non_panic_path_main_return": 0,
+        "rules": [
+          "panic_shift",
+          "panic_not_catchable"
+        ]
+      }
+    }
+  ],
+  "unresolved_semantics": [
+    {
+      "id": "ordinary-parameter-assignment",
+      "status": "not_used",
+      "reason": "SEMANTICS does not decide whether an ordinary non-inout parameter is reassignable. These fixtures mutate only local var bindings or pass a plain scalar var whole binding as inout."
+    },
+    {
+      "id": "panic-exit-status-and-text",
+      "status": "not_asserted",
+      "reason": "SEMANTICS requires Panic and describes backend terminal handling, but does not specify one process exit status or diagnostic string. Panic cases assert failure, cause, uncatchability, and a normal return of 0 only on the non-panic path."
+    }
+  ]
+}

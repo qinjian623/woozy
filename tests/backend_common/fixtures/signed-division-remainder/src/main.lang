@@ -1,0 +1,45 @@
+package app;
+
+func quotient(a i32, b i32) i32 {
+    return a / b;
+}
+
+func remainder(a i32, b i32) i32 {
+    return a % b;
+}
+
+func main() i32 {
+    var negative i32 = -7;
+    var positive i32 = 7;
+    var three i32 = 3;
+    var negative_three i32 = -3;
+
+    if quotient(negative, three) != -2 {
+        return 1;
+    }
+    if remainder(negative, three) != -1 {
+        return 2;
+    }
+    if quotient(positive, negative_three) != -2 {
+        return 3;
+    }
+    if remainder(positive, negative_three) != 1 {
+        return 4;
+    }
+    if quotient(negative, negative_three) != 2 {
+        return 5;
+    }
+    if remainder(negative, negative_three) != -1 {
+        return 6;
+    }
+
+    var negative8 i8 = -7;
+    var three8 i8 = 3;
+    if negative8 / three8 != -2 {
+        return 7;
+    }
+    if negative8 % three8 != -1 {
+        return 8;
+    }
+    return 0;
+}

@@ -1,0 +1,32 @@
+package app;
+
+func tick(counter inout i32) i32 {
+    let before = counter;
+    counter += 1;
+    return before;
+}
+
+func pair(first i32, second i32) i32 {
+    return first * 10 + second;
+}
+
+func main() i32 {
+    var counter i32 = 0;
+    let observed = pair(tick(inout counter), tick(inout counter));
+    if observed != 1 {
+        return 1;
+    }
+    if counter != 2 {
+        return 2;
+    }
+
+    counter = 0;
+    let named = pair(second: tick(inout counter), first: tick(inout counter));
+    if named != 10 {
+        return 3;
+    }
+    if counter != 2 {
+        return 4;
+    }
+    return 0;
+}

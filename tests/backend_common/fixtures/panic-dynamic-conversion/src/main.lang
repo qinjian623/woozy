@@ -1,0 +1,7 @@
+package app;
+
+func main() i32 {
+    var source i32 = 128;
+    let narrowed i8 = i8(source);
+    return 0;
+}
