@@ -19,7 +19,7 @@ struct Fixture {
   std::shared_ptr<modules::ResolvedProject> resolved;
   HirModule m;
   TypeId unit, boolean, i32, signature, main_signature;
-  SymbolId add, main, a, b, x, iteration;
+  SymbolId add, main, a, b, x, y, iteration;
   HirNodeId call, value_call, loop, jump, cont, literal, read, binding, root,
       add_return, conversion;
   ScopeId add_scope, main_scope, loop_scope, body_scope;
@@ -56,7 +56,8 @@ struct Fixture {
   HirNodeId rd(SymbolId sym, ScopeId s, Source src) {
     return node(i32, s, src, Read{sym});
   }
-  Fixture() {
+  Fixture(unsigned inout_count = 0, bool unreachable_break = false,
+           bool false_branch_break = false) {
     std::string code = R"(package main;
 func add(a i32, b i32) i32 { return a + b; }
 func main() i32 {
@@ -66,6 +67,31 @@ func main() i32 {
  add(1, 2);
  return x;
 })";
+    if (unreachable_break) {
+      auto begin = code.find(" for var");
+      auto end = code.find("\n add(b:", begin);
+      code.replace(begin, end - begin,
+                   false_branch_break
+                       ? " for var i i32 = 0; true; i += 1 { if false { break; } continue; }"
+                       : " for var i i32 = 0; true; i += 1 { continue; break; }");
+      code.erase(code.find("\n add(b:"),
+                 code.rfind('}') - code.find("\n add(b:"));
+    }
+    if (inout_count) {
+      code.replace(code.find("a i32"), 5, "a inout i32");
+      code.replace(code.find("return a + b;"), 13,
+                   "a += 1; return a + b;");
+      code.replace(code.find("add(b: 2, a: 1);"), 16,
+                   "add(b: 2, a: inout x);");
+      code.replace(code.find("add(1, 2);"), 10, "add(inout x, 2);");
+    }
+    if (inout_count == 2) {
+      code.replace(code.find("b i32"), 5, "b inout i32");
+      code.insert(code.find(" for var"), " var y i32 = 2;\n");
+      code.replace(code.find("b: 2"), 4, "b: inout y");
+      code.replace(code.find("add(inout x, 2)"), 15,
+                   "add(inout x, inout y)");
+    }
     auto src = sources.update(sources.add_file("fixture.lang"), code);
     auto tokens = lex(src);
     require(tokens.success(), "fixture lexer");
@@ -96,6 +122,10 @@ func main() i32 {
     t.kind = TypeKind::Function;
     t.result = i32;
     t.parameters = {{ParamMode::ordinary, i32}, {ParamMode::ordinary, i32}};
+    if (inout_count)
+      t.parameters[0].mode = ParamMode::inout;
+    if (inout_count == 2)
+      t.parameters[1].mode = ParamMode::inout;
     signature = m.types.intern(t);
     t.parameters.clear();
     main_signature = m.types.intern(t);
@@ -104,6 +134,8 @@ func main() i32 {
     a = named("a");
     b = named("b");
     x = named("x");
+    if (inout_count == 2)
+      y = named("y");
     iteration = named("i");
     add_src = decl(add);
     main_src = decl(main);
@@ -113,6 +145,14 @@ func main() i32 {
     auto sum = node(i32, add_scope, add_src, Binary{BinaryOp::add}, {lhs, rhs});
     add_return = node(unit, add_scope, add_src, Return{add}, {sum});
     auto add_body = node(unit, add_scope, add_src, Block{}, {add_return});
+    if (inout_count) {
+      auto place = node(i32, add_scope, add_src, Place{a});
+      auto one = node(i32, add_scope, add_src, IntegerLiteral{"1", 1});
+      auto assignment = node(unit, add_scope, add_src, Assign{BinaryOp::add},
+                             {place, one});
+      m.nodes[add_body.value].children.insert(
+          m.nodes[add_body.value].children.begin(), assignment);
+    }
     m.functions.push_back(
         {add, signature, {{a, "a"}, {b, "b"}}, add_body, add_scope, add_src});
     literal = lit(0, main_scope);
@@ -121,40 +161,74 @@ func main() i32 {
     body_scope = scope(main, loop_scope, main_src);
     auto init = node(unit, loop_scope, decl(iteration),
                      Binding{iteration, true}, {lit(0, loop_scope)});
-    auto cond = node(boolean, loop_scope, main_src, Binary{BinaryOp::less},
-                     {rd(iteration, loop_scope, main_src), lit(4, loop_scope)});
+    auto cond = unreachable_break
+                    ? node(boolean, loop_scope, main_src, BoolLiteral{true})
+                    : node(boolean, loop_scope, main_src, Binary{BinaryOp::less},
+                           {rd(iteration, loop_scope, main_src), lit(4, loop_scope)});
     auto place = node(i32, loop_scope, main_src, Place{iteration});
     auto step = node(unit, loop_scope, main_src, Assign{BinaryOp::add},
                      {place, lit(1, loop_scope)});
-    auto if_scope = scope(main, body_scope, main_src);
-    jump = node(unit, if_scope, main_src, Break{HirNodeId{0}});
-    auto then_ = node(unit, if_scope, main_src, Block{}, {jump});
-    auto cmp = node(boolean, body_scope, main_src, Binary{BinaryOp::greater},
-                    {rd(x, body_scope, main_src), lit(1, body_scope)});
-    auto if_ = node(unit, body_scope, main_src, If{}, {cmp, then_});
-    cont = node(unit, body_scope, main_src, Continue{HirNodeId{0}});
-    auto body = node(unit, body_scope, main_src, Block{}, {if_, cont});
+    HirNodeId body;
+    if (false_branch_break) {
+      auto then_scope = scope(main, body_scope, main_src);
+      jump = node(unit, then_scope, main_src, Break{HirNodeId{0}});
+      auto then_ = node(unit, then_scope, main_src, Block{}, {jump});
+      auto false_ = node(boolean, body_scope, main_src, BoolLiteral{false});
+      auto if_ = node(unit, body_scope, main_src, If{}, {false_, then_});
+      cont = node(unit, body_scope, main_src, Continue{HirNodeId{0}});
+      body = node(unit, body_scope, main_src, Block{}, {if_, cont});
+    } else if (unreachable_break) {
+      cont = node(unit, body_scope, main_src, Continue{HirNodeId{0}});
+      jump = node(unit, body_scope, main_src, Break{HirNodeId{0}});
+      body = node(unit, body_scope, main_src, Block{}, {cont, jump});
+    } else {
+      auto if_scope = scope(main, body_scope, main_src);
+      jump = node(unit, if_scope, main_src, Break{HirNodeId{0}});
+      auto then_ = node(unit, if_scope, main_src, Block{}, {jump});
+      auto cmp = node(boolean, body_scope, main_src, Binary{BinaryOp::greater},
+                      {rd(x, body_scope, main_src), lit(1, body_scope)});
+      auto if_ = node(unit, body_scope, main_src, If{}, {cmp, then_});
+      cont = node(unit, body_scope, main_src, Continue{HirNodeId{0}});
+      body = node(unit, body_scope, main_src, Block{}, {if_, cont});
+    }
     loop = node(unit, loop_scope, main_src, For{}, {init, cond, step, body});
     std::get<Break>(m.nodes[jump.value].data).loop = loop;
     std::get<Continue>(m.nodes[cont.value].data).loop = loop;
-    auto arg0 = lit(2, main_scope), arg1 = lit(1, main_scope);
+    if (unreachable_break) {
+      root = node(unit, main_scope, main_src, Block{}, {binding, loop});
+      m.functions.push_back(
+          {main, main_signature, {}, root, main_scope, main_src});
+      return;
+    }
+    auto arg0 = inout_count == 2
+                    ? node(i32, main_scope, main_src, Place{y})
+                    : lit(2, main_scope);
+    auto arg1 = inout_count
+                    ? node(i32, main_scope, main_src, Place{x})
+                    : lit(1, main_scope);
     Call direct;
     direct.signature = signature;
     direct.direct_symbol = add;
-    direct.args = {{0, 1, "b", ParamMode::ordinary, arg0},
-                   {1, 0, "a", ParamMode::ordinary, arg1}};
+    direct.args = {{0, 1, "b", inout_count == 2 ? ParamMode::inout
+                                               : ParamMode::ordinary, arg0},
+                   {1, 0, "a", inout_count ? ParamMode::inout
+                                           : ParamMode::ordinary, arg1}};
     call = node(i32, main_scope, main_src, direct, {arg0, arg1});
     auto call_stmt =
         node(unit, main_scope, main_src, ExpressionStatement{}, {call});
     auto callee = node(signature, main_scope, main_src, FunctionValue{add});
-    arg0 = lit(1, main_scope);
-    arg1 = lit(2, main_scope);
+    arg0 = inout_count ? node(i32, main_scope, main_src, Place{x})
+                      : lit(1, main_scope);
+    arg1 = inout_count == 2 ? node(i32, main_scope, main_src, Place{y})
+                           : lit(2, main_scope);
     Call indirect;
     indirect.kind = CalleeKind::function_value;
     indirect.signature = signature;
     indirect.callee = callee;
-    indirect.args = {{0, 0, {}, ParamMode::ordinary, arg0},
-                     {1, 1, {}, ParamMode::ordinary, arg1}};
+    indirect.args = {{0, 0, {}, inout_count ? ParamMode::inout
+                                           : ParamMode::ordinary, arg0},
+                     {1, 1, {}, inout_count == 2 ? ParamMode::inout
+                                                : ParamMode::ordinary, arg1}};
     value_call =
         node(i32, main_scope, main_src, indirect, {callee, arg0, arg1});
     auto value_stmt =
@@ -164,6 +238,12 @@ func main() i32 {
     auto ret = node(unit, main_scope, main_src, Return{main}, {conversion});
     root = node(unit, main_scope, main_src, Block{},
                 {binding, loop, call_stmt, value_stmt, ret});
+    if (inout_count == 2) {
+      auto y_binding = node(unit, main_scope, decl(y), Binding{y, true},
+                             {lit(2, main_scope)});
+      auto &children = m.nodes[root.value].children;
+      children.insert(children.begin() + 1, y_binding);
+    }
     m.functions.push_back(
         {main, main_signature, {}, root, main_scope, main_src});
   }
@@ -181,9 +261,265 @@ void invalid(const Fixture &f, const char *name,
     throw std::runtime_error(std::string("invalid module accepted: ") + name);
   ++cases;
 }
+void inout_tests() {
+  Fixture f(1);
+  auto valid = verify(f.m);
+  if (!valid.success())
+    for (const auto &d : valid.diagnostics)
+      std::cerr << d.message << '\n';
+  require(valid.success(), "writable scalar inout fixture rejected");
+  for (auto backend : {Backend::native, Backend::python})
+    for (unsigned width : {32u, 64u}) {
+      auto m = f.m;
+      auto project = std::make_shared<modules::Project>(*f.project);
+      project->backend = backend == Backend::native ? "native" : "python";
+      project->word_bits = width;
+      auto resolved = std::make_shared<modules::ResolvedProject>(*f.resolved);
+      resolved->project = project;
+      m.resolved = resolved;
+      m.config = {backend, width};
+      require(verify(m).success(), "inout rejected under target profile");
+    }
+  invalid(f, "inout parameter source mode", [&](auto &m) {
+    Type t = *m.types.find(f.signature);
+    t.parameters[0].mode = ParamMode::ordinary;
+    m.functions[0].signature = m.types.intern(t);
+  });
+  invalid(f, "inout literal", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[1].expression;
+    m.nodes[arg.value].data = IntegerLiteral{"1", 1};
+  });
+  invalid(f, "inout binding readonly", [&](auto &m) {
+    std::get<Binding>(m.nodes[f.binding.value].data).writable = false;
+  });
+  invalid(f, "inout place wrong type", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[1].expression;
+    m.nodes[arg.value].type = f.boolean;
+  });
+  invalid(f, "ordinary argument cannot be place", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[0].expression;
+    m.nodes[arg.value].data = Place{f.x};
+  });
+  invalid(f, "inout argument needs mode", [&](auto &m) {
+    std::get<Call>(m.nodes[f.call.value].data).args[1].mode = ParamMode::ordinary;
+  });
+  invalid(f, "inout place is not a read", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[1].expression;
+    m.nodes[arg.value].data = Read{f.x};
+  });
+  invalid(f, "inout child order", [&](auto &m) {
+    std::swap(m.nodes[f.call.value].children[0],
+              m.nodes[f.call.value].children[1]);
+  });
+  invalid(f, "inout outside binding scope", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[1].expression;
+    m.nodes[arg.value].data = Place{f.iteration};
+  });
+  invalid(f, "inout place belongs to other function", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[1].expression;
+    m.nodes[arg.value].data = Place{f.a};
+  });
+  invalid(f, "inout also ordinary read", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[0].expression;
+    m.nodes[arg.value].data = Read{f.x};
+  });
+  invalid(f, "inout also nested read", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[f.call.value].data).args[0].expression;
+    HirNodeId read{m.nodes.size()};
+    m.nodes.push_back({f.i32, f.main_src, f.main_scope, {}, Read{f.x}});
+    m.nodes[arg.value].data = Unary{UnaryOp::negate};
+    m.nodes[arg.value].children = {read};
+  });
+  invalid(f, "inout nontrivial parameter", [&](auto &m) {
+    Type t;
+    t.kind = TypeKind::Function;
+    t.result = f.i32;
+    t.parameters = {{ParamMode::inout, f.signature}};
+    m.types.intern(t);
+  });
+  {
+    auto m = f.m;
+    // Build the forwarding call in the independent module copy.
+    HirNodeId forwarded{m.nodes.size()};
+    m.nodes.push_back({f.i32, f.add_src, f.add_scope, {}, Place{f.a}});
+    HirNodeId zero{m.nodes.size()};
+    m.nodes.push_back({f.i32, f.add_src, f.add_scope, {}, IntegerLiteral{"0", 0}});
+    Call call;
+    call.signature = f.signature;
+    call.direct_symbol = f.add;
+    call.args = {{0, 0, {}, ParamMode::inout, forwarded},
+                  {1, 1, {}, ParamMode::ordinary, zero}};
+    HirNodeId id{m.nodes.size()};
+    m.nodes.push_back({f.i32, f.add_src, f.add_scope, {forwarded, zero}, call});
+    HirNodeId statement{m.nodes.size()};
+    m.nodes.push_back({f.unit, f.add_src, f.add_scope, {id}, ExpressionStatement{}});
+    auto &body = m.nodes[m.functions[0].body.value].children;
+    body.insert(body.begin(), statement);
+    require(verify(m).success(), "exclusive scalar inout forwarding rejected");
+  }
+  Fixture pair(2);
+  valid = verify(pair.m);
+  if (!valid.success())
+    for (const auto &d : valid.diagnostics)
+      std::cerr << d.message << '\n';
+  require(valid.success(), "two distinct writable scalar inout arguments rejected");
+  invalid(pair, "duplicate inout whole storage", [&](auto &m) {
+    auto arg = std::get<Call>(m.nodes[pair.call.value].data).args[0].expression;
+    m.nodes[arg.value].data = Place{pair.x};
+  });
+}
+HirModule source_module(std::string code) {
+  SourceManager sources;
+  auto source = sources.update(sources.add_file("flow.lang"), std::move(code));
+  auto tokens = lex(source);
+  require(tokens.success(), "flow fixture lexer");
+  auto parsed = parse(*tokens.value);
+  require(parsed.success(), "flow fixture parser");
+  auto project = std::make_shared<modules::Project>();
+  project->backend = "native";
+  modules::Module module;
+  module.id = ModuleId{0};
+  module.logical_path = "app";
+  module.files.push_back(std::make_shared<const AstFile>(std::move(*parsed.value)));
+  project->modules.push_back(std::move(module));
+  auto resolved = modules::resolve_project(project);
+  require(resolved.success(), "flow fixture resolver");
+  HirModule m;
+  m.identity = ModuleId{0};
+  m.resolved = std::make_shared<const modules::ResolvedProject>(
+      std::move(*resolved.value));
+  return m;
+}
+std::pair<SymbolId, Source> source_function(const HirModule &m,
+                                          std::string_view name) {
+  for (const auto &s : m.resolved->symbols)
+    if (s.kind == modules::SymbolKind::function && s.name == name) {
+      const auto &ref = *s.definition;
+      return {s.id, {ref, m.resolved->project->modules[ref.module.value]
+                             .files[ref.file]->node(ref.node).span}};
+    }
+  throw std::runtime_error("missing flow function symbol");
+}
+void simple_flow_tests() {
+  {
+    auto m = source_module("package main; const x i32 = 1;");
+    require(verify(m).success(), "functionless scalar module rejected");
+    auto orphan_scope = m;
+    orphan_scope.scopes.push_back({SymbolId{0}, {}, {}});
+    require(!verify(orphan_scope).success(),
+            "orphan scope in functionless module accepted");
+    ++cases;
+    m.nodes.push_back({TypeId{0}, {}, ScopeId{0}, {}, Noop{}});
+    require(!verify(m).success(), "orphan node in functionless module accepted");
+    ++cases;
+  }
+  {
+    auto m = source_module("package main; func g() {} "
+                           "func f() { for g(); false; g() {} }");
+    auto [g, gs] = source_function(m, "g");
+    auto [f, fs] = source_function(m, "f");
+    Type t;
+    t.kind = TypeKind::Unit;
+    auto unit = m.types.intern(t);
+    t.kind = TypeKind::Bool;
+    auto boolean = m.types.intern(t);
+    t.kind = TypeKind::Function;
+    t.result = unit;
+    auto signature = m.types.intern(t);
+    m.scopes = {{g, {}, gs}, {f, {}, fs}, {f, ScopeId{1}, fs},
+                 {f, ScopeId{2}, fs}};
+    auto add = [&](TypeId type, Source source, ScopeId scope, NodeData data,
+                   std::vector<HirNodeId> children = {}) {
+      HirNodeId id{m.nodes.size()};
+      m.nodes.push_back({type, source, scope, std::move(children), std::move(data)});
+      return id;
+    };
+    auto g_body = add(unit, gs, ScopeId{0}, Block{});
+    Call call;
+    call.signature = signature;
+    call.direct_symbol = g;
+    auto init_call = add(unit, fs, ScopeId{2}, call);
+    auto init = add(unit, fs, ScopeId{2}, ExpressionStatement{}, {init_call});
+    auto condition = add(boolean, fs, ScopeId{2}, BoolLiteral{false});
+    auto step_call = add(unit, fs, ScopeId{2}, call);
+    auto step = add(unit, fs, ScopeId{2}, ExpressionStatement{}, {step_call});
+    auto body = add(unit, fs, ScopeId{3}, Block{});
+    auto loop = add(unit, fs, ScopeId{2}, For{}, {init, condition, step, body});
+    auto root = add(unit, fs, ScopeId{1}, Block{}, {loop});
+    m.functions = {{g, signature, {}, g_body, ScopeId{0}, gs},
+                    {f, signature, {}, root, ScopeId{1}, fs}};
+    require(verify(m).success(), "for expression-statement init rejected");
+  }
+  for (bool with_else : {false, true}) {
+    auto m = source_module(with_else
+        ? "package main; func f() i32 { if false { return 1; } else { return 2; } }"
+        : "package main; func f() i32 { if true { return 1; } }");
+    auto [f, source] = source_function(m, "f");
+    Type t;
+    t.kind = TypeKind::Unit;
+    auto unit = m.types.intern(t);
+    t.kind = TypeKind::Bool;
+    auto boolean = m.types.intern(t);
+    t.kind = TypeKind::SignedInt;
+    t.bits = 32;
+    auto integer = m.types.intern(t);
+    t = Type{};
+    t.kind = TypeKind::Function;
+    t.result = integer;
+    auto signature = m.types.intern(t);
+    m.scopes = {{f, {}, source}, {f, ScopeId{0}, source}};
+    auto add = [&](TypeId type, ScopeId scope, NodeData data,
+                   std::vector<HirNodeId> children = {}) {
+      HirNodeId id{m.nodes.size()};
+      m.nodes.push_back({type, source, scope, std::move(children), std::move(data)});
+      return id;
+    };
+    auto condition = add(boolean, ScopeId{0}, BoolLiteral{!with_else});
+    auto one = add(integer, ScopeId{1}, IntegerLiteral{"1", 1});
+    auto ret = add(unit, ScopeId{1}, Return{f}, {one});
+    auto then_ = add(unit, ScopeId{1}, Block{}, {ret});
+    std::vector<HirNodeId> children{condition, then_};
+    if (with_else) {
+      m.scopes.push_back({f, ScopeId{0}, source});
+      auto two = add(integer, ScopeId{2}, IntegerLiteral{"2", 2});
+      auto other_ret = add(unit, ScopeId{2}, Return{f}, {two});
+      children.push_back(add(unit, ScopeId{2}, Block{}, {other_ret}));
+    }
+    auto branch = add(unit, ScopeId{0}, If{}, std::move(children));
+    auto root = add(unit, ScopeId{0}, Block{}, {branch});
+    m.functions = {{f, signature, {}, root, ScopeId{0}, source}};
+    require(verify(m).success(), "known bool branch return rejected");
+    if (!with_else) {
+      m.nodes[condition.value].data = BoolLiteral{false};
+      require(!verify(m).success(), "false if without else incorrectly terminates");
+      ++cases;
+    }
+  }
+}
 } // namespace
 int main() {
   try {
+    inout_tests();
+    simple_flow_tests();
+    {
+      Fixture infinite(0, true);
+      require(verify(infinite.m).success(),
+              "unreachable break made infinite loop normally terminate");
+      invalid(infinite, "reachable loop break requires return", [&](auto &m) {
+        m.nodes[infinite.cont.value].data = Noop{};
+      });
+    }
+    {
+      Fixture infinite(0, true, true);
+      require(verify(infinite.m).success(),
+              "statically false branch break made infinite loop terminate");
+      invalid(infinite, "statically true loop break requires return", [&](auto &m) {
+        auto body = m.nodes[infinite.loop.value].children[3];
+        auto branch = m.nodes[body.value].children[0];
+        auto condition = m.nodes[branch.value].children[0];
+        m.nodes[condition.value].data = BoolLiteral{true};
+      });
+    }
     Fixture f;
     auto r = verify(f.m);
     if (!r.success())

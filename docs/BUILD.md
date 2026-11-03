@@ -1,6 +1,6 @@
 # 前端构建与检查
 
-契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja、toml++ 与 json-c 的开发文件。本机使用已安装的 toml++ 3.4.0、json-c 0.19。前端不链接或运行 LLVM/Python，包含源码快照、诊断、输入/取消、词法语法，以及项目、模块、名称和作用域解析。开发测试若找到 Python 会执行 80 个语法分类和 20 个独立模块项目；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时这些测试明确记为未运行。C++ 单元测试仍可运行。类型检查和代码生成尚未实现。
+契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja、pkg-config、toml++、json-c 和 GMPXX >= 6.3.0 的开发文件。本机使用 toml++ 3.4.0、json-c 0.19、GMP/GMPXX 6.3.0。前端不链接或运行 LLVM/Python，包含源码快照、诊断、输入/取消、词法语法、项目和名称解析，以及标量类型检查与 HIR 验证。开发测试若找到 Python 会执行 80 个语法分类和 20 个独立模块项目；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时这些测试明确记为未运行。C++ 单元测试仍可运行。代码生成尚未实现。
 
 ```sh
 cmake --preset frontend-debug
@@ -10,7 +10,7 @@ build/frontend-debug/langc --help
 build/frontend-debug/langc --version
 ```
 
-帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件，语法成功为 0、源码错误为 1、输入文件或参数错误为 2、内部错误为 3。全量语义 check、build、lsp 和 capabilities 返回 1 及 E_CAPABILITY_UNAVAILABLE。
+帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。检查成功为 0、源码错误或未支持操作为 1、输入文件/配置/参数错误为 2、内部错误为 3。build、lsp 和 capabilities 返回 1 及 E_CAPABILITY_UNAVAILABLE。
 
 ```sh
 build/frontend-debug/langc check --syntax-only examples/core.lang
@@ -20,7 +20,7 @@ python3 tests/syntax/run_cases.py build/frontend-debug/langc
 
 CTest 已包含 80 个分类的真实 C++ CLI 执行及 JSON schema 检查，另有 lexer、AST、恢复、深度、取消、源码和输入错误测试。文件用例先读取实际文件并与固定清单逐字节比较，防止只检查旧副本。
 
-T03 的 `lang_modules` 库提供 `load_project` 与 `resolve_project`。当前通过测试程序运行这两阶段，CLI 全量 check 仍等待 T04 类型检查。`lang_module_check` 只在 BUILD_TESTING 下构建，成功表示项目和名称检查通过：
+`lang_modules` 库提供 `load_project` 与 `resolve_project`，`lang::sema::check_project` 随后检查类型并调用唯一 HIR 验证器。CLI 的 `--backend` 覆盖清单中的 backend，字宽仍来自清单；检查不运行源程序。`lang_module_check` 只在 BUILD_TESTING 下构建，成功表示项目和名称检查通过：
 
 ```sh
 python3 tests/modules/run_cases.py build/frontend-debug/lang_module_check
@@ -72,4 +72,8 @@ numeric 使用同样命令，将 core 替换为 numeric。上述输出命名是�
 各阶段记录在外层 checks/。T00 的 C++20、LLVM 22.1.8 探针和 Clang/LLD 运行检查已通过；T02 的 Debug/Release 语法分类为 80/80。后续阶段记录自己的检查结果，不用工具链探针代替语言程序运行。
 
 
-T04 的类型表和 ordinary scalar HIR 验证组件已加入 lang_hir。hir.types 与 hir.scalar 包含 canonical 类型、控制流/调用元数据、55 个损坏数据和不可变发布检查。它们使用手写 typed HIR，不代替源语言类型检查器。类型 checker 与平凡 inout 的后续实现尚在进行。
+T04 的类型表与标量 HIR 验证组件位于 lang_hir，包含 74 项损坏检查。lang_sema 从真实
+项目/名称结果生成 HIR，支持基本整数、bool、Unit、函数值、无捕获匿名函数、控制流、
+调用和数值/bool 整体 inout；sema.scalar 执行 180 个静态项目检查，sema.cli 检查真实 CLI。
+范围、未支持操作与实际验证见 [CHECKER.md](../tests/sema/CHECKER.md)。代码生成、源语言运行
+以及完整严格浮点算术仍未实现；普通参数重新赋值规则等待用户选择。

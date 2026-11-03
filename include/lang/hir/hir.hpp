@@ -105,7 +105,7 @@ struct Read {
 };
 struct Place {
   SymbolId symbol;
-}; // whole writable binding, only for assignment
+}; // whole writable binding, for assignment or an inout argument
 struct FunctionValue {
   SymbolId symbol;
 }; // noncapturing function identity
@@ -145,7 +145,7 @@ struct Call {
 struct Block {};               // children: statements in execution order; Unit
 struct ExpressionStatement {}; // child: value expression; Unit
 struct If {}; // children: bool condition, then Block, optional else Block; Unit
-struct For {}; // children: init (Binding/Assign/Noop), bool condition,
+struct For {}; // children: init (Binding/Assign/ExpressionStatement/Noop), bool condition,
                // step (Assign/ExpressionStatement/Noop), body Block; Unit.
                // For owns a child scope; body owns a further child scope.
 struct Noop {};
@@ -204,7 +204,7 @@ struct HirNode {
 struct Parameter {
   SymbolId symbol;
   std::string
-      label; // direct-call declaration label, not part of Function TypeId
+      label; // direct-call label, empty for discard _, not part of Function TypeId
 };
 struct HirFunction {
   SymbolId symbol;

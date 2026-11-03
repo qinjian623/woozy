@@ -1,6 +1,6 @@
 # 工程工具和诊断接口
 
-版本：`compiler-dev/1`。本文件定义待实现接口，当前可运行工具只有包内语法原型和文档包校验器。
+版本：`compiler-dev/1`。本文件定义工具和诊断接口；当前实现范围见 [BUILD.md](BUILD.md)。
 
 ## 1 工具链策略
 
@@ -32,7 +32,7 @@ T03 采用以下目录约定：每个模块读取对应目录直接包含的 `.l
 
 ## 3 CLI 目标接口
 
-以下列出目标命令。当前 `langc` 支持单文件 syntax-only；项目和名称检查已由前端库实现，完整 check 与 build 等待后续阶段：
+`langc` 已支持单文件 syntax-only 和项目标量类型 check；下面的 build、capabilities 和 lsp 仍是待实现命令。高级构造在 check 中明确报未支持：
 
 ```bash
 langc check --syntax-only examples/core.lang

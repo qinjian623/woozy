@@ -20,7 +20,8 @@
   `resolved` 为 `shared_ptr<const modules::ResolvedProject>`，拥有符号和源码。
   不另建符号表。functions 可以包含所需项目模块的函数定义，直接调用必须找到其中的定义。
 - `HirFunction { symbol, signature, parameters, body, scope, source }`。
-  `Parameter { symbol, label }` 的顺序对应 Function Type 的 parameters；实际类型及 mode
+  `Parameter { symbol, label }` 中丢弃参数 `_` 的 label 为空；其它 label 与声明名字一致。
+  顺序对应 Function Type 的 parameters；实际类型及 mode
   来自唯一签名。根 body 为 Block，使用函数根作用域；参数与根 body 共用作用域。
 - `HirNode { type, source, scope, children, data }`，`kind()` 返回由 NodeData variant
   确定的 NodeKind，避免 kind 与 payload 不一致。每个节点包括语句均有有效 TypeId；
@@ -28,7 +29,7 @@
   HirNodeId/ScopeId 为容器的零起始下标；SymbolId 沿用 ResolvedProject 的零起始下标。
 - 节点字段与 children 顺序直接写在头文件中。`Read/Place/Binding` 保存 SymbolId；
   Binding 的类型来自已定类型的初始化表达式，Read/Place 必须精确相等。
-  Place 只允许整变量赋值目标。Assign 保存可选 compound 运算符，目标只求值一次。
+  Place 只允许整变量赋值目标或 inout 实参。Assign 保存可选 compound 运算符，目标只求值一次。
   `IntegerLiteral` 同时保存规范十进制数学值和零扩展目标位模式，Source 回指原文。
   `FloatLiteral` 保存精确 IEEE 位模式，不经过宿主 double 重新舍入。
 - `Call { kind, signature, direct_symbol, callee, args }`。
@@ -37,7 +38,8 @@
   直接调用可使用声明标签；函数值调用只使用位置参数。当前接受位置参数、命名参数、
   以及位置参数前缀后接命名参数；位置参数的 parameter_index 等于 source_index。
   其它混合形式暂不接受，不改变源语言规范。
-- `For` children 为 init、condition、step、body；缺省 init/step 使用 Noop，
+- `For` children 为 init、condition、step、body；init 接受 Binding、Assign、
+  ExpressionStatement 或 Noop，缺省 init/step 使用 Noop，
   缺省 condition 使用 BoolLiteral(true)。For 建立子作用域，body Block 再建立子作用域。
   每个普通 Block 也建立子作用域。`Return.function`、`Break.loop`、`Continue.loop`
   必须已经确定；loop 指向同函数最近包围的 For 节点。
@@ -60,16 +62,28 @@
 检查类型存在性、操作数/结果类型、整数数学值范围及位模式、符号身份与声明种类/原文、
 源码节点及区间、函数签名和参数、完整且唯一的调用参数匹配、求值顺序、标签和模式、
 作用域归属、初始化先于使用、写权限、跳转种类及同函数包围关系。
-对正常返回做保守分析：非 Unit 函数不能正常结束；只有字面量 true 且没有指向该循环的
-break 的 For 才认定为不正常结束。条件分析不做常量折叠。
+对正常返回做保守分析：非 Unit 函数不能正常结束；只有字面量 true 且没有可达的、指向
+该循环的 break 的 For 才认定为不正常结束。Block 在已终结的语句之后不再累计 break；
+内层循环的 break 不作为外层循环的退出。If 条件为 BoolLiteral 时只累计实际分支的
+正常出口和 break；其它条件仍保守检查各分支，不在 verifier 内做数值常量折叠。
+纯 const 项目可以没有函数、节点和作用域；游离节点或作用域仍被拒绝。checker 必须
+在调用 verify 之前实际检查顶层 const，不能借此跳过源程序检查。
 
 已支持 Unit/bool/定宽整数/目标整数/f32/f64/string/非捕获函数值，局部绑定、读取、赋值、
 复合赋值、一元/二元/短路运算、整数转换、直接及函数值调用、Block/If/For/Return/Break/Continue。
 这里的支持指 HIR 表示与结构验证，不表示已经实现运行时数值计算或字符串管理。
 
-未实现的泛型/聚合、错误效果与 defer、ARC/Vec、move/inout、捕获闭包、外部绑定均拒绝进入
-Verified。Function Type 可驻留 mode/throws 以固定身份，但标量验证阶段拒绝非 ordinary 模式
-或 throws。当前组件只验证普通参数的读取；普通参数重赋值的源语言规则仍待用户决定。string 仅支持值、绑定、普通参数/返回，尚无字符串
+支持数值/bool 的 var 整体 inout，支持在被调函数中读取、赋值和继续传入 inout。
+参数 mode 必须与真实 Parameter AST 的标记一致。调用必须以 Place 表示 inout 实参；
+Place 仍须满足同函数、可写、已初始化、作用域可见及类型相等条件。调用实参和 children
+保持源码顺序；两个 inout 实参不能指向同一 SymbolId，其它实参的整个表达式树也不能
+读取或借用该绑定。可接受的存储只有无引用位置的平凡局部绑定和已独占的 inout 参数；
+不据此推断未知对象图或生成 noalias 属性。
+
+未实现的泛型/聚合、错误效果与 defer、ARC/Vec、move、捕获闭包、外部绑定均拒绝进入
+Verified。Function Type 可驻留 mode/throws 以固定身份，但标量验证阶段只接受 ordinary
+和数值/bool inout 模式，不接受 throws。普通参数重赋值的源语言规则仍待用户决定，
+当前 verifier 保持它只读；checker 应为这个未定操作报告未支持。string 仅支持值、绑定、普通参数/返回，尚无字符串
 运算。未知成员、Error、NeutralBracket 等必须由 checker 拒绝或表示为 Unsupported；
 验证器同时拒绝来自恢复 AST/Error/NeutralBracket 的正常节点。
 
@@ -77,7 +91,7 @@ Verified。Function Type 可驻留 mode/throws 以固定身份，但标量验证
 例如 checker 必须先检查负数常量和字面量上下文，再生成确定类型与位模式。后端只读取
 节点与签名，不需要重新从 AST 判断类型、标签或跳转目标。
 
-## CMake 接入（由集成人执行，本任务未改 CMake）
+## CMake 接入（已由主代理接入）
 
 ```cmake
 add_library(lang_hir STATIC src/hir/hir.cpp)
@@ -107,7 +121,7 @@ ASAN_OPTIONS=detect_leaks=0 CXX=clang++ tests/hir/run.sh -O1 -g -DNDEBUG -fsanit
 ```
 
 测试检查有效函数、直接/函数值调用、命名参数反序匹配、循环初始化变量、跳转、类型驻留、
-55 项损坏、取消、保留可写 builder/项目/AST 引用后结果不变、确定 dump、四种 backend/字宽
+74 项损坏、取消、保留可写 builder/项目/AST 引用后结果不变、确定 dump、四种 backend/字宽
 组合和 Isize/Usize 32/64 位范围差异。测试使用运行时 require，不依赖 assert。
 
 2026-11-03 实测结果：
@@ -120,24 +134,56 @@ ASAN_OPTIONS=detect_leaks=0 CXX=clang++ tests/hir/run.sh -O1 -g -DNDEBUG -fsanit
 | 类型表和 HIR 两个测试程序 | Clang 23.1.3，ASan/UBSan，`-DNDEBUG`，`detect_leaks=0` | passed，退出 0 |
 | 默认 LeakSanitizer 检查 | 环境不允许其 ptrace 操作，第一次 sanitizer 执行因此失败 | not_run，未声称无内存泄漏 |
 | HIR 对象未定义符号检查 | `nm -uC /tmp/language-t04-hir-final.o` | passed，除标准库/C++运行库外仅依赖 `lang::validate_utf8`，无 LLVM/Python 符号 |
-| 接入主工程 CMake/CTest | 修改权限不包含 CMake | not_run，集成人使用上述片段接入 |
+| 接入主工程 CMake/CTest | 主代理接入，GNU Release 与 Clang22 ASan/UBSan | passed，各 14/14 组测试通过 |
 
 两测试的标准输出分别为：
 
 ```text
 type tests passed: canonical scalars/signatures/modes/throws/nominal identity, invalid type shapes
-HIR passed: valid function/direct+value calls/loop, 55 corruptions, cancellation, immutable snapshot, deterministic dump
+HIR passed: valid function/direct+value calls/loop, 74 corruptions, cancellation, immutable snapshot, deterministic dump
 ```
 
-## 接下来的 checker 任务
+## inout 扩展实测
 
-当前组件的验证范围是 ordinary scalar；这不等于整个 T04 完成。标量类型检查任务是唯一后续编辑者，除 src/sema 外还负责扩充 src/hir/hir.cpp 与 HIR 测试：
+2026-11-03，T04 checker 分工只修改本实现和指定测试，没有修改公共头。
+新增正例包括可写 var、被调函数内参数赋值、直接调用、函数值调用、两个不同绑定的
+inout 调用，以及把 inout 参数继续传入 inout；同一有效 inout HIR 分别按 native/python
+和 32/64 位四种配置验证。新增 14 个 inout 损坏案例检查声明 mode 不符、字面量/Read 冒充
+Place、只读绑定、错误类型/模式、children 顺序、错误作用域/所属函数、同绑定普通读取
+（含嵌套表达式）、非平凡参数及重复 inout。另有真实 parse/resolve 的无限循环正例：
+`for var i i32 = 0; true; i += 1 { continue; break; }`，其不可达 break 不应造成缺失
+return 诊断；把 continue 改为 Noop 后会正常退出循环，第 15 个新增损坏案例必须拒绝。
+补充测试从真实 parse/resolve 结果建立 HIR，覆盖 `for g(); false; g() {}` 的表达式初始化、
+纯 const 项目、`if true { return 1; }`、`if false ... else ...`，以及常量 false 分支中的
+break 不导致外层无限循环正常退出；改变成 true 分支则必须要求 return。空函数列表中
+的游离节点/作用域和 false 条件无 else 的缺失 return 也分别拒绝。
 
-- 支持平凡 scalar var 整体 inout，参数内可读写；拒绝不可写绑定、模式/类型不符及同调用重复借用。当前 Place 只用于赋值，需要扩充为明确的 inout 参数位置并继续检查调用顺序和作用域。
-- 支持无捕获函数字面量。当前 HirFunction 只接受 AstKind::Function，checker 需要为 FunctionLiteral 创建稳定的内部函数身份并扩充来源验证，不能伪造为外层函数声明。无需把匿名函数名字放入源语言词法作用域。
-- 普通参数写权限读取主目录最新 SEMANTICS；用户尚未选择时，对该操作明确报告未支持，不能把当前组件的读取限制当作语言规则。
-- 继续拒绝尚未实施的拥有对象、复杂借用、聚合/泛型、throws/defer 和外部调用。源错误在 verifier 前诊断，不能以跳过验证来通过独立测试。
+独立编译命令：
 
-集成时另外复现并修复：writable=true 的 let 绑定被错放行，以及 AstFile.recovered=true 的输入被错放行；对应反例已加入测试。
+```sh
+g++ -std=c++20 -O2 -DNDEBUG -Iinclude tests/hir/hir_test.cpp src/hir/hir.cpp src/support/source.cpp src/syntax/lexer.cpp src/syntax/parser.cpp src/modules/resolve.cpp -o /tmp/language-t04-hir-inout-release
+/tmp/language-t04-hir-inout-release
+```
 
-只读预审的调用/符号关联建议由 checker 的转换测试覆盖：同类型形参保持源声明顺序，实参保持源码求值顺序，Read/Place/direct callee 使用名称阶段选定的 SymbolId。当前 IR 验证器检查内部类型、结构和来源区间，不证明 AST 到 HIR 的转换逐项等价。常量整数转换越界由 checker 静态拒绝；动态 IntegerConvert 保留运行时 Panic 检查。
+结果：passed，退出 0。另用 `-O2 -DNDEBUG` 编译运行本测试和主目录发布的
+`tests/hir/type_test.cpp`，均 passed、退出 0；Clang 的
+`-O1 -g -DNDEBUG -fsanitize=address,undefined -fno-omit-frame-pointer` 与
+`ASAN_OPTIONS=detect_leaks=0` 检查本测试也 passed、退出 0。
+测试检查使用 require，NDEBUG 下仍执行。
+
+公共头的数据结构/API 保持不变。主代理已更新两处注释：Place 可用于赋值
+或 inout 实参；For 的 init 列表包含 ExpressionStatement。
+
+## 与 checker 的交接
+
+本次 checker 已从真实名称检查结果生成 ordinary scalar 和数值/bool 整体 inout，
+并调用本验证器；具体范围、CMake 接入与运行记录见 `tests/sema/CHECKER.md`。
+同类型形参使用声明顺序，实参使用源码顺序，Read/Place/direct callee 使用名称阶段选定的
+SymbolId。验证器检查内部类型、结构和来源区间，不证明每项 AST 到 HIR 的转换都等价。
+常量整数转换越界由 checker 静态拒绝，动态 IntegerConvert 保留运行时 Panic 检查。
+
+无捕获 FunctionLiteral 已使用 resolver 发布的独立函数 SymbolId；HirFunction 来源
+只能是真实 Function 或 FunctionLiteral，不伪造外层函数声明。普通参数重新赋值的规则
+仍未确定，checker 对该操作报告未支持。
+拥有对象、复杂借用、聚合/泛型、throws/defer 和外部调用均在进入 verifier 前明确拒绝。
+标成 writable 的 let 和 recovered AstFile 的拒绝测试已经通过，不再列作待修复项。

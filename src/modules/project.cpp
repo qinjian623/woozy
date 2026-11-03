@@ -59,6 +59,7 @@ struct Loader {
   void error(std::string code, std::string msg,
              std::optional<SourceSpan> span = {},
              FailureKind kind = FailureKind::source) {
+    if (code == "E_MANIFEST_INVALID") kind = FailureKind::environment;
     Diagnostic d;
     d.code = std::move(code);
     d.phase = "resolve";

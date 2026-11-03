@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract": "compiler-dev/1",
-  "status": "registry_includes_T00_T03_implementations",
+  "status": "registry_includes_T00_T04_implementations",
   "codes": [
     {
       "code": "E_BINDING_INVALID",

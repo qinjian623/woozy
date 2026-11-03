@@ -18,6 +18,7 @@ bool signed_integer(TypeKind k) {
   return k == TypeKind::SignedInt || k == TypeKind::Isize;
 }
 bool number(TypeKind k) { return integer(k) || k == TypeKind::Float; }
+bool inout_scalar(TypeKind k) { return number(k) || k == TypeKind::Bool; }
 bool mode_valid(ParamMode m) {
   return m == ParamMode::ordinary || m == ParamMode::inout ||
          m == ParamMode::move;
@@ -216,8 +217,10 @@ class Verifier {
       // Dependencies precede each canonical function type; no recursive type
       // graph.
       for (auto p : t.parameters) {
-        need(p.mode == ParamMode::ordinary,
-             "move/inout execution is unsupported");
+        need(p.mode == ParamMode::ordinary ||
+                 (p.mode == ParamMode::inout &&
+                  inout_scalar(type(p.type).kind)),
+             "move or nontrivial inout execution is unsupported");
         need(p.type.value < id.value, "invalid function parameter type edge");
       }
       need(t.result.value < id.value, "invalid function result type edge");
@@ -311,6 +314,7 @@ class Verifier {
     if (offset)
       need(n.children[0] == *c.callee, "callee must be evaluated first");
     std::vector<bool> seen(sig.parameters.size());
+    std::set<uint64_t> borrowed;
     bool named = false;
     for (size_t i = 0; i < c.args.size(); ++i) {
       check_cancelled(stop);
@@ -322,8 +326,19 @@ class Verifier {
       need(n.children[i + offset] == a.expression,
            "call children must preserve source order");
       auto p = sig.parameters[a.parameter_index];
-      need(a.mode == p.mode && expr(a.expression).type == p.type,
+      const auto &argument = node(a.expression);
+      need(a.mode == p.mode && argument.type == p.type,
            "call argument mode/type");
+      if (p.mode == ParamMode::inout) {
+        need(argument.kind() == NodeKind::place &&
+                 inout_scalar(type(p.type).kind),
+             "inout requires a whole trivial scalar place");
+        need(borrowed.insert(std::get<Place>(argument.data).symbol.value).second,
+             "duplicate inout storage in call");
+      } else {
+        need(p.mode == ParamMode::ordinary, "unsupported argument mode");
+        expr(a.expression);
+      }
       if (a.label) {
         named = true;
         need(direct && !a.label->empty() &&
@@ -332,6 +347,32 @@ class Verifier {
       } else {
         need(!named && a.parameter_index == i,
              "positional argument index/order");
+      }
+    }
+    // Whole local scalar bindings cannot alias each other. An inout parameter
+    // is also unique because every caller is checked by this same rule. Scan
+    // nested argument expressions too: f(inout x, g(x)) must not read x while
+    // f's exclusive access is active, and g(inout x) must not borrow it again.
+    for (const auto &a : c.args) {
+      if (a.mode == ParamMode::inout)
+        continue;
+      std::vector<HirNodeId> pending{a.expression};
+      std::set<uint64_t> visited;
+      while (!pending.empty()) {
+        check_cancelled(stop);
+        auto id = pending.back();
+        pending.pop_back();
+        need(visited.insert(id.value).second,
+             "cycle/shared child in call argument");
+        const auto &part = node(id);
+        if (part.kind() == NodeKind::read || part.kind() == NodeKind::place) {
+          auto storage = part.kind() == NodeKind::read
+                             ? std::get<Read>(part.data).symbol
+                             : std::get<Place>(part.data).symbol;
+          need(!borrowed.contains(storage.value),
+               "inout storage is also accessed by another argument");
+        }
+        pending.insert(pending.end(), part.children.begin(), part.children.end());
       }
     }
   }
@@ -473,6 +514,7 @@ class Verifier {
       unit(n);
       auto init = node(ch[0]).kind(), step = node(ch[2]).kind();
       need((init == NodeKind::binding || init == NodeKind::assign ||
+            init == NodeKind::expression_statement ||
             init == NodeKind::noop) &&
                (step == NodeKind::assign ||
                 step == NodeKind::expression_statement ||
@@ -544,9 +586,14 @@ class Verifier {
         else
           need(n.scope == p.scope,
                "node scope differs from enclosing construct");
-        if (n.kind() == NodeKind::place)
-          need(p.kind() == NodeKind::assign && p.children[0] == id,
-               "place used outside assignment target");
+        if (n.kind() == NodeKind::place) {
+          bool allowed = p.kind() == NodeKind::assign && p.children[0] == id;
+          if (p.kind() == NodeKind::call)
+            for (const auto &a : std::get<Call>(p.data).args)
+              allowed = allowed ||
+                        (a.mode == ParamMode::inout && a.expression == id);
+          need(allowed, "place used outside assignment or inout argument");
+        }
       }
       if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_) {
         need(!scope_used[n.scope.value],
@@ -615,12 +662,11 @@ class Verifier {
     }
   }
   void uses_and_flow() const {
-    std::vector<bool> falls(m.nodes.size(), true), has_break(m.nodes.size());
+    std::vector<bool> falls(m.nodes.size(), true);
+    std::vector<std::set<uint64_t>> reachable_breaks(m.nodes.size());
     for (size_t i = 0; i < m.nodes.size(); ++i) {
       check_cancelled(stop);
       const auto &n = m.nodes[i];
-      if (n.kind() == NodeKind::break_)
-        has_break[std::get<Break>(n.data).loop.value] = true;
       if (n.kind() != NodeKind::read && n.kind() != NodeKind::place)
         continue;
       auto s = n.kind() == NodeKind::read ? std::get<Read>(n.data).symbol
@@ -646,23 +692,46 @@ class Verifier {
       check_cancelled(stop);
       const auto &n = m.nodes[i];
       switch (n.kind()) {
-      case NodeKind::return_:
       case NodeKind::break_:
+        reachable_breaks[i].insert(std::get<Break>(n.data).loop.value);
+        falls[i] = false;
+        break;
+      case NodeKind::return_:
       case NodeKind::continue_:
         falls[i] = false;
         break;
       case NodeKind::block:
-        for (auto c : n.children)
-          falls[i] = falls[i] && falls[c.value];
+        for (auto c : n.children) {
+          if (!falls[i])
+            break;
+          const auto &exits = reachable_breaks[c.value];
+          reachable_breaks[i].insert(exits.begin(), exits.end());
+          falls[i] = falls[c.value];
+        }
         break;
-      case NodeKind::if_:
-        falls[i] = falls[n.children[1].value] || n.children.size() == 2 ||
-                   falls[n.children[2].value];
+      case NodeKind::if_: {
+        size_t first = 1, end = n.children.size();
+        const auto &condition = node(n.children[0]);
+        if (condition.kind() == NodeKind::bool_literal) {
+          first = std::get<BoolLiteral>(condition.data).value ? 1 : 2;
+          end = std::min(first + 1, n.children.size());
+          falls[i] = first == end || falls[n.children[first].value];
+        } else
+          falls[i] = falls[n.children[1].value] || n.children.size() == 2 ||
+                     falls[n.children[2].value];
+        for (size_t branch = first; branch < end; ++branch) {
+          const auto &exits = reachable_breaks[n.children[branch].value];
+          reachable_breaks[i].insert(exits.begin(), exits.end());
+        }
         break;
+      }
       case NodeKind::for_: {
         const auto &cond = node(n.children[1]);
         falls[i] = !(cond.kind() == NodeKind::bool_literal &&
-                     std::get<BoolLiteral>(cond.data).value && !has_break[i]);
+                     std::get<BoolLiteral>(cond.data).value &&
+                     !reachable_breaks[n.children[3].value].contains(i));
+        // Breaks from this body terminate this For. They cannot leave an
+        // enclosing loop because tree() requires the nearest loop target.
         break;
       }
       default:
@@ -700,11 +769,15 @@ public:
       check_cancelled(stop);
       scalar(TypeId{i});
     }
-    need(!m.functions.empty(), "scalar HIR requires a function definition");
     for (const auto &f : m.functions) {
       check_cancelled(stop);
+      source(f.source);
+      auto ast_kind = project.modules[f.source.node.module.value]
+                          .files[f.source.node.file]->node(f.source.node.node).kind;
+      need(ast_kind == AstKind::Function || ast_kind == AstKind::FunctionLiteral,
+           "function source is not a declaration or literal");
       declaration(f.symbol, f.source, modules::SymbolKind::function,
-                  AstKind::Function);
+                  ast_kind);
       need(functions.emplace(f.symbol.value, &f).second,
            "duplicate function identity");
       const auto &sig = type(f.signature);
@@ -723,17 +796,30 @@ public:
         Source src{*s.definition, *s.declaration};
         declaration(p.symbol, src, modules::SymbolKind::value,
                     AstKind::Parameter);
+        const auto &file = *project.modules[src.node.module.value]
+                                .files[src.node.file];
+        const auto &ast = file.node(src.node.node);
+        need(ast.token_begin + 1 < file.tokens.size(), "parameter token range");
+        auto mode_token = file.tokens[ast.token_begin + 1].spelling;
+        auto declared_mode = mode_token == "inout" ? ParamMode::inout
+                             : mode_token == "move" ? ParamMode::move
+                                                    : ParamMode::ordinary;
+        need(sig.parameters[i].mode == declared_mode,
+             "parameter mode differs from source declaration");
         need(src.node.module == f.source.node.module &&
                  src.node.file == f.source.node.file &&
                  src.span.begin_byte >= f.source.span.begin_byte &&
                  src.span.end_byte <= f.source.span.end_byte,
              "parameter belongs to another function");
-        need(!p.label.empty() && labels.insert(p.label).second &&
-                 p.label == s.name,
+        need((s.name == "_" && p.label.empty()) ||
+                 (s.name != "_" && !p.label.empty() && p.label == s.name &&
+                  labels.insert(p.label).second),
              "duplicate/invalid parameter label");
         need(locals
                  .emplace(p.symbol.value, Local{sig.parameters[i].type, f.scope,
-                                                f.symbol, false, 0})
+                                                f.symbol,
+                                                declared_mode == ParamMode::inout,
+                                                0})
                  .second,
              "duplicate parameter symbol");
       }

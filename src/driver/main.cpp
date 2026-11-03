@@ -1,11 +1,12 @@
 #include "lang/version.hpp"
 #include "lang/support/input.hpp"
 #include "lang/syntax/parser.hpp"
+#include "lang/sema/check.hpp"
 #include <iostream>
 #include <string_view>
 
 namespace {
-int syntax_check(const char* path, bool json) {
+int check(const char* path, bool syntax, bool json, std::string_view backend) {
     lang::SourceManager sources;
     auto finish = [&](const auto& result) {
         if (json) {
@@ -13,7 +14,7 @@ int syntax_check(const char* path, bool json) {
                 sources, std::string(lang::version()), "cli-request",
                 result.status(), result.diagnostics) << '\n';
         } else if (result.success()) {
-            std::cout << "syntax ok: " << path << '\n';
+            std::cout << (syntax ? "syntax ok: " : "check ok: ") << path << '\n';
         } else {
             for (const auto& diagnostic : result.diagnostics) {
                 if (diagnostic.primary) {
@@ -27,6 +28,14 @@ int syntax_check(const char* path, bool json) {
         return static_cast<int>(result.exit_code());
     };
     try {
+        if (!syntax) {
+            auto project = lang::modules::load_project({path, {}, {}}, sources);
+            if (!project.success()) return finish(project);
+            if (!backend.empty()) project.value->backend = backend;
+            auto resolved = lang::modules::resolve_project(
+                std::make_shared<const lang::modules::Project>(std::move(*project.value)));
+            return finish(lang::sema::check_project(resolved));
+        }
         auto input = lang::read_source(path, sources);
         if (!input.success()) return finish(input);
         auto tokens = lang::lex(*input.value);
@@ -45,7 +54,8 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: langc --help | --version\n"
                      "       langc check --syntax-only [--format json] FILE\n"
-                     "Full check, build, lsp and capabilities are not implemented\n";
+                     "       langc check --project MANIFEST [--backend native|python] [--format json]\n"
+                     "Build, lsp and capabilities are not implemented\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--version") {
@@ -54,36 +64,44 @@ int main(int argc, char** argv) {
     }
     if (argc >= 2) {
         const std::string_view command(argv[1]);
-        bool syntax = false;
-        for (int i = 2; i < argc; ++i)
-            syntax = syntax || std::string_view(argv[i]) == "--syntax-only";
-        if (command == "check" && syntax) {
-            bool json = false;
+        if (command == "check") {
+            bool syntax = false, json = false;
             const char* path = nullptr;
+            const char* project = nullptr;
+            std::string_view backend;
             for (int i = 2; i < argc; ++i) {
                 const std::string_view argument(argv[i]);
-                if (argument == "--syntax-only") continue;
+                if (argument == "--syntax-only") { syntax = true; continue; }
                 if (argument == "--format" && i + 1 < argc &&
                     std::string_view(argv[i + 1]) == "json") {
                     json = true;
                     ++i;
+                } else if (argument == "--project" && i + 1 < argc && !project &&
+                           !std::string_view(argv[i + 1]).empty() &&
+                           !std::string_view(argv[i + 1]).starts_with('-')) {
+                    project = argv[++i];
+                } else if (argument == "--backend" && i + 1 < argc && backend.empty() &&
+                           (std::string_view(argv[i + 1]) == "native" ||
+                            std::string_view(argv[i + 1]) == "python")) {
+                    backend = argv[++i];
                 } else if (argument.empty() || argument.front() == '-' || path) {
-                    std::cerr << "E_DRIVER_ARGUMENT: expected one source file and optional --format json\n";
+                    std::cerr << "E_DRIVER_ARGUMENT: invalid check arguments\n";
                     return 2;
                 } else {
                     path = argv[i];
                 }
             }
-            if (!path) {
-                std::cerr << "E_DRIVER_ARGUMENT: source file is required\n";
+            if ((syntax && (!path || project || !backend.empty())) ||
+                (!syntax && (!project || path))) {
+                std::cerr << "E_DRIVER_ARGUMENT: use --syntax-only FILE or --project MANIFEST\n";
                 return 2;
             }
-            return syntax_check(path, json);
+            return check(syntax ? path : project, syntax, json, backend);
         }
-        if (command == "check" || command == "build" || command == "lsp" ||
+        if (command == "build" || command == "lsp" ||
             command == "capabilities") {
             std::cerr << "E_CAPABILITY_UNAVAILABLE: " << command
-                      << " is not implemented in T00 bootstrap\n";
+                      << " is not implemented\n";
             return 1;
         }
     }

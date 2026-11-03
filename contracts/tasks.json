@@ -139,7 +139,7 @@
     {
       "id": "T04",
       "title": "类型与效果基础",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T03"
       ],
@@ -167,7 +167,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+      "notes": "Root integrated real project/name-to-typed-HIR checker, scalar inout, noncapturing function literals and CLI check. GNU Debug/Release and Clang22 ASan/UBSan each14/14;180 real source checks including21 independent type cases and15 shared sources for native/python64. Five static-review findings reproduced and fixed. Ordinary parameter rebinding remains explicitly unsupported pending user choice; no code generation/runtime claim."
     },
     {
       "id": "T05",
