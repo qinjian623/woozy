@@ -1,10 +1,10 @@
-# 前端构建与语法检查
+# 前端构建与检查
 
-契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja。前端不链接或运行 LLVM/Python，包含源码快照、诊断、输入/取消、词法分析和 parser。开发测试若找到 Python 会执行 80 个分类及文件一致性检查；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时明确记为未运行，不影响 C++ 前端构建。类型检查和代码生成尚未实现。
+契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja、toml++ 与 json-c 的开发文件。本机使用已安装的 toml++ 3.4.0、json-c 0.19。前端不链接或运行 LLVM/Python，包含源码快照、诊断、输入/取消、词法语法，以及项目、模块、名称和作用域解析。开发测试若找到 Python 会执行 80 个语法分类和 20 个独立模块项目；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时这些测试明确记为未运行。C++ 单元测试仍可运行。类型检查和代码生成尚未实现。
 
 ```sh
 cmake --preset frontend-debug
-cmake --build --preset frontend-debug --target lang_frontend langc
+cmake --build --preset frontend-debug
 ctest --preset frontend-debug
 build/frontend-debug/langc --help
 build/frontend-debug/langc --version
@@ -19,6 +19,15 @@ python3 tests/syntax/run_cases.py build/frontend-debug/langc
 ```
 
 CTest 已包含 80 个分类的真实 C++ CLI 执行及 JSON schema 检查，另有 lexer、AST、恢复、深度、取消、源码和输入错误测试。文件用例先读取实际文件并与固定清单逐字节比较，防止只检查旧副本。
+
+T03 的 `lang_modules` 库提供 `load_project` 与 `resolve_project`。当前通过测试程序运行这两阶段，CLI 全量 check 仍等待 T04 类型检查。`lang_module_check` 只在 BUILD_TESTING 下构建，成功表示项目和名称检查通过：
+
+```sh
+python3 tests/modules/run_cases.py build/frontend-debug/lang_module_check
+python3 tools/validate_module_fixtures.py --langc build/frontend-debug/langc
+```
+
+第一条真正执行 C++ 项目和名称解析，并检查错误种类与原始文件区间。第二条只检查资料引用及语法，不代替名称检查。实例成员和 trait 选择留给 T04；局部新绑定在初始化完成后才可见，初始化表达式可以引用同名外层绑定。
 
 可选接入探针：
 
@@ -60,4 +69,4 @@ python3 build/core/python/core.py
 
 numeric 使用同样命令，将 core 替换为 numeric。上述输出命名是后续实现应确认的约定，当前驱动不会生成文件。两项目预期无标准输出、程序退出 0。core 验证循环和函数调用；numeric 验证整数回绕、最小整数除 -1、余数和负数截断。native O0/O2 及 Python 执行均未运行，需 T05/T06 后端实现后验证。
 
-本次 Debug 配置、编译及 bootstrap CLI 测试通过；日志位于 ignored reports/t00-{configure,build,test}.log。LLVM 22.1.8 探针未运行，工具链由主任务另行安装。测试检查帮助/版本文本、退出码及失败时 stdout 为空，不声称语言检查通过。
+各阶段记录在外层 checks/。T00 的 C++20、LLVM 22.1.8 探针和 Clang/LLD 运行检查已通过；T02 的 Debug/Release 语法分类为 80/80。后续阶段记录自己的检查结果，不用工具链探针代替语言程序运行。

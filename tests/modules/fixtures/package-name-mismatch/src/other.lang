@@ -1,0 +1,5 @@
+package other;
+
+func other_value() i32 {
+    return 1;
+}

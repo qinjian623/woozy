@@ -28,9 +28,11 @@ LLVM API 示例优先查 22.1.x 发布文档和 22.1.8 头文件，禁止从主�
 
 标准库位置可以由工具链安装目录、显式 `--sysroot` 或配置指定。后两者进入有效配置与缓存 key；源码不随机器路径变化。导入补全使用同一个模块索引，支持标准库、项目库和已声明依赖。
 
+T03 采用以下目录约定：每个模块读取对应目录直接包含的 `.lang` 文件，按文件名排序；`app/foo` 读取 `package.source_root/foo/`，不把 `foo.lang` 同时当成候选。source 依赖的 path 指项目目录，存在 `lang.toml` 时读取其 source_root 和 dependencies，否则显式 path 本身作为源码根。库的 entry 不影响导入模块的选择。源码目录先取 canonical 身份，同一目录经不同别名导入只加载一次；不同来源提供同一逻辑模块时报告冲突。
+
 ## 3 CLI 目标接口
 
-以下命令由开发任务实现，当前并不存在可运行的 `langc`：
+以下列出目标命令。当前 `langc` 支持单文件 syntax-only；项目和名称检查已由前端库实现，完整 check 与 build 等待后续阶段：
 
 ```bash
 langc check --syntax-only examples/core.lang

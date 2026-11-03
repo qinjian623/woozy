@@ -1,0 +1,5 @@
+package dep;
+
+pub func answer() i32 {
+    return 42;
+}

@@ -1,0 +1,9 @@
+package app;
+
+func identity(value Self) Self {
+    return value;
+}
+
+func main() i32 {
+    return 0;
+}

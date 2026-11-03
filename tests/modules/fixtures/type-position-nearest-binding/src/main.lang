@@ -1,0 +1,15 @@
+package app;
+
+struct Thing {
+    value i32;
+}
+
+func resolve_type() i32 {
+    let Thing i32 = 1;
+    let other Thing = 2;
+    return other;
+}
+
+func main() i32 {
+    return resolve_type();
+}

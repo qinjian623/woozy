@@ -1,0 +1,11 @@
+package app;
+
+func main() i32 {
+    if uses_alias() != 42 {
+        return 1;
+    }
+    if leaks_alias() != 42 {
+        return 2;
+    }
+    return 0;
+}

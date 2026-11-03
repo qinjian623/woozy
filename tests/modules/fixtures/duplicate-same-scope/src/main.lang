@@ -1,0 +1,11 @@
+package app;
+
+func duplicate() i32 {
+    let value i32 = 1;
+    let value i32 = 2;
+    return value;
+}
+
+func main() i32 {
+    return duplicate();
+}

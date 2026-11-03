@@ -1,0 +1,10 @@
+package app;
+
+func shadow_parameter(parameter i32) i32 {
+    let parameter i32 = 1;
+    return parameter;
+}
+
+func main() i32 {
+    return shadow_parameter(1);
+}

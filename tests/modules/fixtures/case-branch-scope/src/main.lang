@@ -1,0 +1,20 @@
+package app;
+
+enum Choice {
+    None;
+    Some(value i32);
+}
+
+func escaped(input Choice) i32 {
+    switch input {
+        case Choice.Some(value):
+            return value;
+        case Choice.None:
+            return value;
+    }
+    return value;
+}
+
+func main() i32 {
+    return escaped(Choice.None);
+}

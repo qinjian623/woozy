@@ -92,6 +92,7 @@ void validate_ast(const AstFile &a) {
   }
 }
 void integration_tests() {
+  require(!real_parse("package p; enum E { pub Value; }").success());
   auto exported = real_parse("package p; pub const exported i32 = 1;");
   require(exported.success());
   const auto &binding = exported.value->node(

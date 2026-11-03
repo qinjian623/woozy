@@ -1,0 +1,20 @@
+package app;
+
+enum Problem {
+    Failed;
+}
+
+func escaped() i32 {
+    try {
+        let value i32 = 1;
+    } catch first Problem {
+        let first_value i32 = 1;
+    } catch second Problem {
+        return first;
+    }
+    return second;
+}
+
+func main() i32 {
+    return escaped();
+}

@@ -107,7 +107,7 @@
     {
       "id": "T03",
       "title": "模块与名称",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T02"
       ],
@@ -139,14 +139,14 @@
     {
       "id": "T04",
       "title": "类型与效果基础",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T03"
       ],
       "primary_role": "sema",
       "backup_role": "frontend",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/sema/",
         "src/hir/",

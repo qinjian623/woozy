@@ -490,6 +490,8 @@ class Parser {
     expect("{");
     while (!at("}") && !end()) {
       size_t q = p;
+      if (k == AstKind::Enum && at("pub"))
+        fail("enum variants do not accept pub");
       eat("pub");
       if (k == AstKind::Struct) {
         ident();

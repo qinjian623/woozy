@@ -1,0 +1,15 @@
+package app;
+
+func is_even(value i32) bool {
+    if value == 0 {
+        return true;
+    }
+    return is_odd(value - 1);
+}
+
+func is_odd(value i32) bool {
+    if value == 0 {
+        return false;
+    }
+    return is_even(value - 1);
+}

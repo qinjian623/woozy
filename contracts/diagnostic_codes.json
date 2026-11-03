@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract": "compiler-dev/1",
-  "status": "initial_registry_not_implemented",
+  "status": "registry_includes_T00_T03_implementations",
   "codes": [
     {
       "code": "E_BINDING_INVALID",
@@ -20,6 +20,10 @@
       "severity": "error"
     },
     {
+      "code": "E_CONSTANT_CYCLE",
+      "severity": "error"
+    },
+    {
       "code": "E_DRIVER_ARGUMENT",
       "severity": "error"
     },
@@ -33,6 +37,10 @@
     },
     {
       "code": "E_IMPORT_NOT_FOUND",
+      "severity": "error"
+    },
+    {
+      "code": "E_IMPORT_PATH",
       "severity": "error"
     },
     {
@@ -60,7 +68,23 @@
       "severity": "error"
     },
     {
+      "code": "E_MANIFEST_INVALID",
+      "severity": "error"
+    },
+    {
+      "code": "E_MODULE_CONFLICT",
+      "severity": "error"
+    },
+    {
+      "code": "E_MODULE_EMPTY",
+      "severity": "error"
+    },
+    {
       "code": "E_NAME_DUPLICATE",
+      "severity": "error"
+    },
+    {
+      "code": "E_NAME_KIND",
       "severity": "error"
     },
     {
@@ -72,7 +96,19 @@
       "severity": "error"
     },
     {
+      "code": "E_PACKAGE_MISMATCH",
+      "severity": "error"
+    },
+    {
       "code": "E_PARSE_EXPECTED_TOKEN",
+      "severity": "error"
+    },
+    {
+      "code": "E_PRIVATE_ACCESS",
+      "severity": "error"
+    },
+    {
+      "code": "E_PRIVATE_TYPE_LEAK",
       "severity": "error"
     },
     {

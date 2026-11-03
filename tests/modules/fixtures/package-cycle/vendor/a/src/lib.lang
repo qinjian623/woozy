@@ -1,0 +1,7 @@
+package a;
+
+import "b" as b;
+
+pub func from_a() i32 {
+    return b.from_b();
+}

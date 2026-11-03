@@ -1,0 +1,416 @@
+{
+  "schema": "compiler-dev/module-fixtures/1",
+  "contract": "compiler-dev/1",
+  "case_count": 20,
+  "rules": {
+    "same_package_shared": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "同包顶层声明在包内共享"
+      }
+    },
+    "function_forward_reference": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "6.2 声明收集和依赖",
+        "clause": "由此支持同一包内函数前向引用和相互递归"
+      }
+    },
+    "mutual_function_recursion": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "6.2 声明收集和依赖",
+        "clause": "由此支持同一包内函数前向引用和相互递归"
+      }
+    },
+    "same_scope_duplicate": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "同一作用域重名报错"
+      }
+    },
+    "parameter_body_same_scope": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "函数参数与最外层函数体"
+      }
+    },
+    "nested_shadowing_allowed": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "嵌套局部作用域允许遮蔽"
+      }
+    },
+    "for_init_binding_scope": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "三段式 for 的初始化绑定"
+      }
+    },
+    "type_position_nearest_binding_kind": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "类型位置不会绕过同名局部变量去寻找外层类型"
+      }
+    },
+    "import_alias_file_local": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "import alias 只在当前文件有效"
+      }
+    },
+    "cross_package_pub_visible": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "6.3 名字空间",
+        "clause": "`pub` 明确导出"
+      }
+    },
+    "cross_package_private_hidden": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "6.3 名字空间",
+        "clause": "跨包读取私有声明报错"
+      }
+    },
+    "inconsistent_package_name": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "同一包的所有源文件必须声明一致的 package 名"
+      }
+    },
+    "top_level_let_unsupported": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "顶层 `let/var` 即使可解析，也报告未支持"
+      }
+    },
+    "invalid_logical_import_path": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "6.1 模块解析",
+        "clause": "禁止绝对路径、反斜线、`..`、空段和非 ASCII 标识符段"
+      }
+    },
+    "package_dependency_cycle_full_path": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "循环导入在解析依赖图时报告完整循环路径"
+      }
+    },
+    "const_dependency_cycle": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "6.2 声明收集和依赖",
+        "clause": "常量依赖另外检测循环"
+      }
+    },
+    "for_init_not_visible_after_loop": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "三段式 for 的初始化绑定"
+      }
+    },
+    "for_in_binding_body_only": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "for-in 的元素绑定"
+      }
+    },
+    "catch_binding_branch_only": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "catch 的错误绑定"
+      }
+    },
+    "case_binding_branch_only": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "switch 的 case/default"
+      }
+    },
+    "discard_not_readable": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "6.3 名字空间",
+        "clause": "`_` 在绑定和模式中表示丢弃，不创建可读取符号"
+      }
+    },
+    "self_valid_in_trait_impl": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "`Self` 仅在 trait/impl 上下文有效"
+      }
+    },
+    "self_outside_trait_impl": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "2 名称与模块",
+        "clause": "`Self` 仅在 trait/impl 上下文有效"
+      }
+    }
+  },
+  "cases": [
+    {
+      "id": "same-package-mutual-recursion",
+      "manifest": "tests/modules/fixtures/same-package-mutual-recursion/lang.toml",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "same_package_shared",
+          "function_forward_reference",
+          "mutual_function_recursion"
+        ]
+      },
+      "reference": "SEMANTICS §2 包内共享；FRONTEND §6.2 预收集函数声明"
+    },
+    {
+      "id": "duplicate-same-scope",
+      "manifest": "tests/modules/fixtures/duplicate-same-scope/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "same_scope_duplicate"
+        ]
+      },
+      "reference": "SEMANTICS §2 同一作用域重名"
+    },
+    {
+      "id": "parameter-body-scope",
+      "manifest": "tests/modules/fixtures/parameter-body-scope/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "parameter_body_same_scope"
+        ]
+      },
+      "reference": "SEMANTICS §2 参数与最外层函数体同作用域"
+    },
+    {
+      "id": "nested-shadow-and-for-init",
+      "manifest": "tests/modules/fixtures/nested-shadow-and-for-init/lang.toml",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "nested_shadowing_allowed",
+          "for_init_binding_scope"
+        ]
+      },
+      "reference": "SEMANTICS §2 嵌套遮蔽；三段式 for 初始化绑定"
+    },
+    {
+      "id": "type-position-nearest-binding",
+      "manifest": "tests/modules/fixtures/type-position-nearest-binding/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "type_position_nearest_binding_kind"
+        ]
+      },
+      "reference": "SEMANTICS §2 类型位置采用最近绑定并检查 kind"
+    },
+    {
+      "id": "import-alias-file-local",
+      "manifest": "tests/modules/fixtures/import-alias-file-local/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "import_alias_file_local"
+        ]
+      },
+      "reference": "SEMANTICS §2 import alias 仅当前文件"
+    },
+    {
+      "id": "cross-package-public",
+      "manifest": "tests/modules/fixtures/cross-package-public/lang.toml",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "cross_package_pub_visible"
+        ]
+      },
+      "reference": "FRONTEND §6.3 pub 跨包可见"
+    },
+    {
+      "id": "cross-package-private",
+      "manifest": "tests/modules/fixtures/cross-package-private/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "cross_package_private_hidden"
+        ]
+      },
+      "reference": "FRONTEND §6.3 跨包私有声明拒绝"
+    },
+    {
+      "id": "package-name-mismatch",
+      "manifest": "tests/modules/fixtures/package-name-mismatch/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "inconsistent_package_name"
+        ]
+      },
+      "reference": "SEMANTICS §2 同包 package 名一致"
+    },
+    {
+      "id": "top-level-let",
+      "manifest": "tests/modules/fixtures/top-level-let/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "top_level_let_unsupported"
+        ]
+      },
+      "reference": "SEMANTICS §2 顶层 let/var 未支持"
+    },
+    {
+      "id": "invalid-logical-import",
+      "manifest": "tests/modules/fixtures/invalid-logical-import/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "invalid_logical_import_path"
+        ]
+      },
+      "reference": "FRONTEND §6.1 逻辑导入路径规则"
+    },
+    {
+      "id": "package-cycle",
+      "manifest": "tests/modules/fixtures/package-cycle/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "package_dependency_cycle_full_path"
+        ]
+      },
+      "reference": "SEMANTICS §2 包依赖 DAG 与完整循环路径"
+    },
+    {
+      "id": "const-cycle",
+      "manifest": "tests/modules/fixtures/const-cycle/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "const_dependency_cycle"
+        ]
+      },
+      "reference": "FRONTEND §6.2 常量依赖循环独立检测"
+    },
+    {
+      "id": "for-init-escapes",
+      "manifest": "tests/modules/fixtures/for-init-escapes/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "for_init_not_visible_after_loop"
+        ]
+      },
+      "reference": "SEMANTICS §2 三段式 for 初始化绑定不离开循环"
+    },
+    {
+      "id": "for-in-escapes",
+      "manifest": "tests/modules/fixtures/for-in-escapes/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "for_in_binding_body_only"
+        ]
+      },
+      "reference": "SEMANTICS §2 for-in 元素绑定仅本轮循环体"
+    },
+    {
+      "id": "catch-branch-scope",
+      "manifest": "tests/modules/fixtures/catch-branch-scope/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "catch_binding_branch_only"
+        ]
+      },
+      "reference": "SEMANTICS §2 catch 错误绑定不进入其他 catch 或后方"
+    },
+    {
+      "id": "case-branch-scope",
+      "manifest": "tests/modules/fixtures/case-branch-scope/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "case_binding_branch_only"
+        ]
+      },
+      "reference": "SEMANTICS §2 case 模式绑定仅本分支"
+    },
+    {
+      "id": "discard-not-readable",
+      "manifest": "tests/modules/fixtures/discard-not-readable/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "discard_not_readable"
+        ]
+      },
+      "reference": "FRONTEND §6.3 _ 不创建可读取符号"
+    },
+    {
+      "id": "self-outside-context",
+      "manifest": "tests/modules/fixtures/self-outside-context/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "self_outside_trait_impl"
+        ]
+      },
+      "reference": "SEMANTICS §2 Self 仅 trait/impl 上下文"
+    },
+    {
+      "id": "self-in-context",
+      "manifest": "tests/modules/fixtures/self-in-context/lang.toml",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "self_valid_in_trait_impl"
+        ]
+      },
+      "reference": "SEMANTICS §2 Self 由 trait/impl 类型环境提供"
+    }
+  ]
+}

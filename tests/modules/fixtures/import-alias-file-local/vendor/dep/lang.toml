@@ -1,0 +1,10 @@
+schema_version = 1
+
+[package]
+name = "dep"
+source_root = "src"
+entry = "dep"
+
+[build]
+backend = "native"
+word_bits = 64

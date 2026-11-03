@@ -1,0 +1,10 @@
+package app;
+
+import "dep" as dep;
+
+func main() i32 {
+    if dep.answer() != 42 {
+        return 1;
+    }
+    return 0;
+}

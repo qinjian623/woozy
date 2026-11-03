@@ -1,0 +1,5 @@
+package app;
+
+func leaks_alias() i32 {
+    return dep.answer();
+}

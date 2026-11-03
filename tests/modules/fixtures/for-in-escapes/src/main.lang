@@ -1,0 +1,12 @@
+package app;
+
+func escaped() i32 {
+    let values Vec[i32] = [1, 2];
+    for value in values {
+    }
+    return value;
+}
+
+func main() i32 {
+    return escaped();
+}

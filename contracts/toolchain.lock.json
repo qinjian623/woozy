@@ -63,5 +63,17 @@
     "llvm23_config_rejected": true,
     "language_program_compilation": "not_run",
     "clang22_lld22_cxx20_link_run": true
+  },
+  "frontend_dependencies": {
+    "tomlplusplus": {
+      "version": "3.4.0",
+      "source": "existing_system_package",
+      "verification": "pkg-config and CMake imported target"
+    },
+    "json-c": {
+      "version": "0.19",
+      "source": "existing_system_package",
+      "verification": "pkg-config and CMake imported target"
+    }
   }
 }

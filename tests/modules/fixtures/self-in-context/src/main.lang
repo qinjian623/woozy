@@ -1,0 +1,19 @@
+package app;
+
+struct Point {
+    x i32;
+}
+
+trait Identity {
+    func same(self Self, other Self) bool;
+}
+
+impl Identity for Point {
+    func same(self Self, other Self) bool {
+        return true;
+    }
+}
+
+func main() i32 {
+    return 0;
+}

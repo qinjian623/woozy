@@ -206,6 +206,11 @@ def validate():
         schema_check(read_json("contracts/"+data_name), schema, schema)
     by_id = check_tasks()
     codes = {c["code"] for c in read_json("contracts/diagnostic_codes.json")["codes"]}
+    for directory in (ROOT/"src", ROOT/"include"):
+        for path in directory.rglob("*"):
+            if path.suffix in {".cpp", ".hpp"}:
+                used = set(re.findall(r"\b[EW]_[A-Z][A-Z0-9_]*\b", path.read_text()))
+                require(used <= codes, f"unregistered codes in {path.relative_to(ROOT)}: {used-codes}")
     for case in read_json("contracts/test-cases.json")["cases"]:
         require((ROOT/case["path"]).is_file(), f"missing test {case['path']}")
         require(set(case["required_tasks"]) <= set(by_id), "unknown case task")

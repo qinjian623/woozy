@@ -1,0 +1,4 @@
+package app;
+
+const FIRST i32 = SECOND + 1;
+const SECOND i32 = FIRST + 1;

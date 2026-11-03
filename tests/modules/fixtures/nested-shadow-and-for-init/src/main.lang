@@ -1,0 +1,28 @@
+package app;
+
+func nested_shadow() i32 {
+    let value i32 = 1;
+    if true {
+        let value i32 = 2;
+        return value;
+    }
+    return value;
+}
+
+func loop_scope() i32 {
+    var total i32 = 0;
+    for var index i32 = 0; index < 3; index += 1 {
+        total += index;
+    }
+    return total;
+}
+
+func main() i32 {
+    if nested_shadow() != 2 {
+        return 1;
+    }
+    if loop_scope() != 3 {
+        return 2;
+    }
+    return 0;
+}

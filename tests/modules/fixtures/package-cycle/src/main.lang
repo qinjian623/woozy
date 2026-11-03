@@ -1,0 +1,7 @@
+package app;
+
+import "a" as a;
+
+func main() i32 {
+    return a.from_a();
+}
