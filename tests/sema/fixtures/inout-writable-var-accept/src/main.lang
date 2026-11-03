@@ -1,0 +1,11 @@
+package app;
+
+func bump(value inout i32) {
+    value += 1;
+}
+
+func main() i32 {
+    var value i32 = 0;
+    bump(inout value);
+    return value - 1;
+}

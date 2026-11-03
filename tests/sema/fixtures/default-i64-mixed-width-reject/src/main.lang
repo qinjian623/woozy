@@ -1,0 +1,8 @@
+package app;
+
+func main() i32 {
+    let inferred = 1;
+    let narrow i32 = 2;
+    let mixed = inferred + narrow;
+    return 0;
+}

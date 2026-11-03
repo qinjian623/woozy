@@ -1,0 +1,8 @@
+package app;
+
+func main() i32 {
+    let count i32 = 1;
+    let ratio f64 = 0.5;
+    let mixed = count + ratio;
+    return 0;
+}

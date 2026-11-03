@@ -1,0 +1,8 @@
+package app;
+
+func main() i32 {
+    let signed i32 = 1;
+    let unsigned u32 = 2;
+    let mixed = signed + unsigned;
+    return 0;
+}

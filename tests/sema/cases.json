@@ -1,0 +1,509 @@
+{
+  "schema": "compiler-dev/sema-fixtures/1",
+  "contract": "compiler-dev/1",
+  "case_count": 20,
+  "stage_policy": {
+    "syntax": "All fixtures must be accepted by `langc check --syntax-only --format json`.",
+    "names": "All fixtures must be accepted by `lang_module_check` on their lang.toml; reject cases must fail for a type/effect reason, not a misspelled name or import.",
+    "type_check": "Expected accept/reject is derived from the cited specification. `unavailable` means the construct belongs to T07, T08 or T09 and expects the published E_CAPABILITY_UNAVAILABLE, not a T04 static type error.",
+    "diagnostic_codes": "Unavailable cases bind only the published E_CAPABILITY_UNAVAILABLE. T04-specific reject/accept codes are not bound because they are not published."
+  },
+  "rules": {
+    "core_numeric_positive": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "实现 `bool`、`i8/i16/i32/i64`、`u8/u16/u32/u64`、`isize/usize`、`f32/f64`、`string`、`Unit`。"
+      },
+      "reason": "Fixed-width scalar types and explicit local types are the T04 scalar core."
+    },
+    "local_literal_default_i64": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "整数和浮点字面量先保留未定类型常量。有上下文时检查目标类型，无上下文时默认 i64/f64。"
+      },
+      "reason": "An unconstrained integer literal defaults to i64; an explicit i64 context is therefore valid."
+    },
+    "explicit_negative_minimum": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "负整数字面量在完成一元负号语义后检查范围，允许最小负整数；不能在 lexer 中先把正数字面量塞进宿主 i64。"
+      },
+      "reason": "The minimum negative i32 value is legal when the unary minus and target range are checked together."
+    },
+    "i8_boundary_and_wrap": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "4.1 整数",
+        "clause": "字面量超出目标类型范围与已定类型表达式运算回绕不同：`let x i8 = 128;` 是静态错误；`let x i8 = 127; let y = x + 1;` 得到 -128。常量折叠必须复用同一套数值规则。"
+      },
+      "reason": "i8=127 and i8=-128 are representable; an already-i8 expression wraps at runtime instead of becoming a literal-range error."
+    },
+    "literal_out_of_range": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "4.1 整数",
+        "clause": "字面量超出目标类型范围与已定类型表达式运算回绕不同：`let x i8 = 128;` 是静态错误；`let x i8 = 127; let y = x + 1;` 得到 -128。常量折叠必须复用同一套数值规则。"
+      },
+      "reason": "128 and -129 are outside the i8 range and are rejected before any runtime wrap."
+    },
+    "no_implicit_mixed_width": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "变量之间不隐式混合有符号、无符号、不同位宽或整数与浮点；字面量可以受上下文约束。赋值、实参、返回值均使用这一规则。"
+      },
+      "reason": "The inferred i64 and explicit i32 are already-determined variables; no common width is inferred implicitly."
+    },
+    "no_signed_unsigned_mix": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "变量之间不隐式混合有符号、无符号、不同位宽或整数与浮点；字面量可以受上下文约束。赋值、实参、返回值均使用这一规则。"
+      },
+      "reason": "i32 and u32 have different signedness; both operands are variables, so no implicit conversion is applied."
+    },
+    "no_integer_float_mix": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "变量之间不隐式混合有符号、无符号、不同位宽或整数与浮点；字面量可以受上下文约束。赋值、实参、返回值均使用这一规则。"
+      },
+      "reason": "i32 and f64 are different numeric families; integer-to-float conversion must be explicit."
+    },
+    "bool_condition_only": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "5 求值与控制流",
+        "clause": "`if/for` 条件必须是 bool。赋值不是表达式，没有隐式真假转换。"
+      },
+      "reason": "The if condition is an integer literal, not bool; there is no implicit truthiness conversion."
+    },
+    "let_not_reassignable": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "7.1 复制与对象身份",
+        "clause": "`let` 禁止重新绑定和修改本语言值字段；引用对象允许通过已声明的可变操作修改内部状态。"
+      },
+      "reason": "Assigning to a let-bound local is a rebinding even when the value type is unchanged."
+    },
+    "var_reassignable": {
+      "expected": "accept",
+      "source": {
+        "path": "baseline/LEXICAL_SYNTAX.md",
+        "section": "5.1 let、var、const",
+        "clause": "`var`：绑定可以重新赋值。"
+      },
+      "reason": "A var local can be assigned and compound-assigned while retaining its declared type."
+    },
+    "return_type_checked": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "赋值、实参、返回值均使用这一规则。"
+      },
+      "reason": "The function declares i32 but returns a bool expression; returns obey the no-implicit-conversion rule."
+    },
+    "all_paths_return": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "5 求值与控制流",
+        "clause": "非 Unit 函数所有可达正常结束路径必须返回；无限循环和无正常返回的 Panic 可作为终结路径。"
+      },
+      "reason": "When flag is false, control reaches the end of an i32 function without a return value."
+    },
+    "call_required_arguments": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "7.2 调用检查",
+        "clause": "检查缺失参数、未知标签、重复提供同一形参、参数模式、泛型约束和外部可省略参数。"
+      },
+      "reason": "add has two required parameters but the call provides only one argument."
+    },
+    "call_known_labels": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "7.2 调用检查",
+        "clause": "检查缺失参数、未知标签、重复提供同一形参、参数模式、泛型约束和外部可省略参数。"
+      },
+      "reason": "The direct function's labels are a and b; left is unknown and a is missing. Named syntax itself is legal."
+    },
+    "call_unique_parameter_binding": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "7.2 调用检查",
+        "clause": "检查缺失参数、未知标签、重复提供同一形参、参数模式、泛型约束和外部可省略参数。"
+      },
+      "reason": "The positional argument already binds a, then the named a duplicates that parameter; b is never supplied."
+    },
+    "direct_named_arguments": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "7.2 调用检查",
+        "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
+      },
+      "reason": "A direct function call may provide known labels in any order."
+    },
+    "function_value_positional_calls": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "7.2 调用检查",
+        "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
+      },
+      "reason": "A parameter of function type is called only with positional arguments."
+    },
+    "function_value_no_named_labels": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/FRONTEND.md",
+        "section": "7.2 调用检查",
+        "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
+      },
+      "reason": "op is a function value, so its call cannot use parameter labels even when the underlying function was declared with those names."
+    },
+    "inout_writable_var": {
+      "expected": "accept",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "7.2 参数模式和移动",
+        "clause": "第一版仅接受可证明无别名的 `var` 整体绑定，类型限定为数值/bool 或递归只含平凡值的 struct/enum；引用容器、外部对象、字段/索引位置的 inout 明确报未支持。"
+      },
+      "reason": "An i32 local declared with var is a writable whole binding; the parameter and call-site inout annotations agree."
+    },
+    "inout_requires_writable_var": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "7.2 参数模式和移动",
+        "clause": "第一版仅接受可证明无别名的 `var` 整体绑定，类型限定为数值/bool 或递归只含平凡值的 struct/enum；引用容器、外部对象、字段/索引位置的 inout 明确报未支持。"
+      },
+      "reason": "A let binding is known not to be a writable var whole binding. FRONTEND 7.3 makes this a static place/writability rejection in T04; T09 covers alias, escape and ARC, not this known-unwritable argument.",
+      "supporting_sources": [
+        {
+          "path": "docs/FRONTEND.md",
+          "section": "7.3 Place 与模式",
+          "clause": "第一版 `inout` 仅接受可写的平凡值整变量绑定（类型限制见 SEMANTICS），不接受引用容器、外部对象、字段、索引或带复杂别名的位置；独占、逃逸和 `move` 规则见 `SEMANTICS.md`。"
+        }
+      ]
+    },
+    "generic_stage_unavailable": {
+      "expected": "unavailable",
+      "eventual": "accept",
+      "source": {
+        "path": "docs/IMPLEMENTATION_PLAN.md",
+        "section": "T07 泛型与聚合类型",
+        "clause": "native 第一版采用单态化，缓存键包括泛型声明身份和规范化类型实参。"
+      },
+      "reason": "Generic declaration and instantiation are T07 work; T04 must not accept the call with Any or an ad-hoc instance."
+    },
+    "vec_stage_unavailable": {
+      "expected": "unavailable",
+      "eventual": "accept",
+      "source": {
+        "path": "docs/IMPLEMENTATION_PLAN.md",
+        "section": "T09 所有权与 ARC",
+        "clause": "增加 native Vec 与包含拥有成员的聚合类型清理；资源失败注入必须覆盖部分构造状态。"
+      },
+      "reason": "Vec[i32] and its list initializer require aggregate/Vec work outside the T04 scalar core; T04 must not model it as an arbitrary Any value."
+    },
+    "throws_stage_unavailable": {
+      "expected": "unavailable",
+      "eventual": "accept",
+      "source": {
+        "path": "docs/IMPLEMENTATION_PLAN.md",
+        "section": "T08 错误与清理",
+        "clause": "`throws` 属于函数类型；函数值与直接调用使用一致的效果检查。"
+      },
+      "reason": "Typed throws, throw and effect propagation are T08 work; the fixture is not a T04 type error."
+    }
+  },
+  "unresolved_semantics": [
+    {
+      "id": "ordinary-parameter-assignment",
+      "example": "func bump(x i32) i32 { x = x + 1; return x; }",
+      "current_text": "SEMANTICS §2 fixes parameter scope but does not state whether an ordinary (non-inout) parameter is reassignable; §7.2 only defines inout and move access.",
+      "status": "not_used_in_expected_cases"
+    }
+  ],
+  "cases": [
+    {
+      "id": "numeric-boundaries-accept",
+      "manifest": "tests/sema/fixtures/numeric-boundaries-accept/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "core_numeric_positive",
+          "local_literal_default_i64",
+          "explicit_negative_minimum",
+          "i8_boundary_and_wrap",
+          "var_reassignable"
+        ],
+        "reason": "Scalar boundaries, an explicit negative minimum, default-i64 inference, fixed-width i8 wrapping, var assignment and a direct call are all legal T04 scalar constructs."
+      }
+    },
+    {
+      "id": "i8-out-of-range-reject",
+      "manifest": "tests/sema/fixtures/i8-out-of-range-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "literal_out_of_range"
+        ],
+        "reason": "128 is above i8's maximum and -129 is below its minimum; both are literal range errors, not runtime wraps."
+      }
+    },
+    {
+      "id": "default-i64-mixed-width-reject",
+      "manifest": "tests/sema/fixtures/default-i64-mixed-width-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "no_implicit_mixed_width"
+        ],
+        "reason": "The unconstrained `inferred` is i64; adding the explicit i32 `narrow` is a mixed-width operation with no implicit common type."
+      }
+    },
+    {
+      "id": "signed-unsigned-mixed-reject",
+      "manifest": "tests/sema/fixtures/signed-unsigned-mixed-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "no_signed_unsigned_mix"
+        ],
+        "reason": "i32 and u32 are both determined variables, so their signedness cannot be unified implicitly."
+      }
+    },
+    {
+      "id": "integer-float-mixed-reject",
+      "manifest": "tests/sema/fixtures/integer-float-mixed-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "no_integer_float_mix"
+        ],
+        "reason": "An i32 variable and an f64 variable cannot be mixed without an explicit conversion."
+      }
+    },
+    {
+      "id": "bool-condition-int-reject",
+      "manifest": "tests/sema/fixtures/bool-condition-int-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "bool_condition_only"
+        ],
+        "reason": "The if condition is an integer rather than bool; the language has no implicit truthiness."
+      }
+    },
+    {
+      "id": "let-assignment-reject",
+      "manifest": "tests/sema/fixtures/let-assignment-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "let_not_reassignable"
+        ],
+        "reason": "A let binding cannot be reassigned, regardless of whether the new value has the same type."
+      }
+    },
+    {
+      "id": "var-assignment-accept",
+      "manifest": "tests/sema/fixtures/var-assignment-accept/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "var_reassignable",
+          "core_numeric_positive"
+        ],
+        "reason": "A var i32 is writable; plain assignment and compound assignment preserve the scalar type."
+      }
+    },
+    {
+      "id": "return-type-mismatch-reject",
+      "manifest": "tests/sema/fixtures/return-type-mismatch-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "return_type_checked"
+        ],
+        "reason": "The declared return type is i32 while the return expression is bool; a return value is not implicitly converted."
+      }
+    },
+    {
+      "id": "missing-return-reject",
+      "manifest": "tests/sema/fixtures/missing-return-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "all_paths_return"
+        ],
+        "reason": "The false branch of the if reaches the end of an i32 function without returning a value."
+      }
+    },
+    {
+      "id": "call-missing-argument-reject",
+      "manifest": "tests/sema/fixtures/call-missing-argument-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "call_required_arguments"
+        ],
+        "reason": "add requires both a and b, but the call supplies only one positional argument."
+      }
+    },
+    {
+      "id": "call-unknown-label-reject",
+      "manifest": "tests/sema/fixtures/call-unknown-label-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "call_known_labels"
+        ],
+        "reason": "left is not a parameter of the directly called add; a is also missing. Positional-then-named syntax itself is legal."
+      }
+    },
+    {
+      "id": "call-duplicate-parameter-reject",
+      "manifest": "tests/sema/fixtures/call-duplicate-parameter-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "call_unique_parameter_binding"
+        ],
+        "reason": "The positional 1 already binds a, then `a: 2` provides the same parameter again; b is missing."
+      }
+    },
+    {
+      "id": "call-labels-and-function-value-accept",
+      "manifest": "tests/sema/fixtures/call-labels-and-function-value-accept/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "direct_named_arguments",
+          "function_value_positional_calls"
+        ],
+        "reason": "A direct function call uses known named arguments in reordered form, while a function value call uses only positional arguments."
+      }
+    },
+    {
+      "id": "function-value-named-label-reject",
+      "manifest": "tests/sema/fixtures/function-value-named-label-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "function_value_no_named_labels"
+        ],
+        "reason": "op has function type, not a direct function declaration; function types carry parameter modes, result and throws but not parameter labels."
+      }
+    },
+    {
+      "id": "inout-writable-var-accept",
+      "manifest": "tests/sema/fixtures/inout-writable-var-accept/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "accept",
+        "rules": [
+          "inout_writable_var"
+        ],
+        "reason": "The argument is a whole writable var i32 and the call-site inout marker matches the parameter mode. Exclusivity and escape checks remain T09 work."
+      }
+    },
+    {
+      "id": "generic-unavailable",
+      "manifest": "tests/sema/fixtures/generic-unavailable/lang.toml",
+      "blocked_by": [
+        "T07"
+      ],
+      "expected": {
+        "status": "unavailable",
+        "eventual": "accept",
+        "rules": [
+          "generic_stage_unavailable"
+        ],
+        "reason": "The syntax and names are valid, but checking/instantiating the generic function requires T07. T04 must not bypass it with Any.",
+        "expected_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      }
+    },
+    {
+      "id": "vec-unavailable",
+      "manifest": "tests/sema/fixtures/vec-unavailable/lang.toml",
+      "blocked_by": [
+        "T07",
+        "T09"
+      ],
+      "expected": {
+        "status": "unavailable",
+        "eventual": "accept",
+        "rules": [
+          "vec_stage_unavailable"
+        ],
+        "reason": "Vec[i32] and its list initializer are outside the T04 scalar core. The fixture is syntactically and name-valid, but the type capability is unavailable until the aggregate/Vec work.",
+        "expected_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      }
+    },
+    {
+      "id": "throws-unavailable",
+      "manifest": "tests/sema/fixtures/throws-unavailable/lang.toml",
+      "blocked_by": [
+        "T07",
+        "T08"
+      ],
+      "expected": {
+        "status": "unavailable",
+        "eventual": "accept",
+        "rules": [
+          "throws_stage_unavailable"
+        ],
+        "reason": "The throws declaration, throw expression and propagation are syntactically and name-valid, but typed effect checking belongs to T08.",
+        "expected_diagnostic": "E_CAPABILITY_UNAVAILABLE"
+      }
+    },
+    {
+      "id": "inout-let-nonwritable-reject",
+      "manifest": "tests/sema/fixtures/inout-let-nonwritable-reject/lang.toml",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "inout_requires_writable_var"
+        ],
+        "reason": "The let binding is not a writable var whole binding; T04 rejects the known-unwritable inout argument. Alias, escape and ARC checks remain T09, and no unpublished T04 code is bound."
+      },
+      "available_in": "T04"
+    }
+  ]
+}

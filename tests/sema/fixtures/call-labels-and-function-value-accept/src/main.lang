@@ -1,0 +1,15 @@
+package app;
+
+func add(a i32, b i32) i32 {
+    return a + b;
+}
+
+func apply(op func(i32, i32) i32, a i32, b i32) i32 {
+    return op(a, b);
+}
+
+func main() i32 {
+    let direct = add(b: 2, a: 1);
+    let indirect = apply(add, direct, 3);
+    return indirect - 6;
+}

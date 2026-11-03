@@ -1,0 +1,9 @@
+package app;
+
+func identity[T](value T) T {
+    return value;
+}
+
+func main() i32 {
+    return identity(7) - 7;
+}

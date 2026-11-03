@@ -1,0 +1,9 @@
+package app;
+
+func wrong() i32 {
+    return true;
+}
+
+func main() i32 {
+    return wrong();
+}

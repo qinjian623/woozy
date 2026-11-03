@@ -1,0 +1,20 @@
+package app;
+
+enum Failure {
+    Failed;
+}
+
+func may_fail(flag bool) i32 throws Failure {
+    if flag {
+        throw Failure.Failed;
+    }
+    return 1;
+}
+
+func maybe(flag bool) i32 throws Failure {
+    return may_fail(flag);
+}
+
+func main() i32 throws Failure {
+    return maybe(true);
+}
