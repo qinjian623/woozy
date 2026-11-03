@@ -1,6 +1,6 @@
 # T01 独立 support 测试
 
-契约 compiler-dev/1。仅局部实现；T00 完整工具链及 CMake 接入未验证。
+契约 compiler-dev/1。源码、诊断、阶段结果与输入模块已接入 CMake/CTest，Debug 与 Release 均已由主 agent 独立构建运行；没有实现 lexer/parser。
 
 构建和运行，所有运行时检查使用 check，Release 下同样执行：
 
@@ -27,4 +27,25 @@ normalized()、span()、position()、byte() 只接受有效源码快照；非法
 
 测试覆盖 BOM/CRLF/LF、中文/非 BMP/制表符、非法编码/NUL/独立 CR、原始错误诊断、不可变旧快照、非法位置/ID、旧 fixit、JSON 转义和各类非法 UTF-8 元数据。标准输出只有孤立续字节源码的真实诊断 JSON，错误范围为 test.lang 的 [1,2)。
 
-未实现：磁盘读取、编辑应用、修复原文比较、终端显示列、UTF-8/UTF-32 LSP 协商、lexer/parser、通用 IR、诊断排序和 driver 集成。每个非法快照仅记录首个输入错误；完整 schema 检查交主 agent，本测试不替代 schema 验证。
+未实现：编辑应用、修复原文比较、终端显示列、UTF-8/UTF-32 LSP 协商、lexer/parser、通用 IR、诊断排序和 driver 集成。每个非法快照仅记录首个输入错误。真实序列化结果已由主 agent 使用包内 schema 检查器逐项检查。
+
+
+阶段与输入补充：`phase.hpp` 定义 PhaseState、FailureKind、PhaseResult<T>。
+只有 complete、存在 value 且无 error 诊断时 success() 为真；调用方负责传入有效的 T。
+exit_code()/status() 使用已有枚举。`input.hpp` 提供 read_source(path, manager, stop_token)。
+SourceManager::update 和 SourceSnapshot 构造函数接受可选 stop_token；取消抛 Cancelled，
+不发布快照、不增加 revision 或 snapshot ID。SourceManager 不支持并发访问。
+取消不生成源码诊断；非法输入发布可用于诊断的原始快照，但结果不含成功 value。
+
+独立测试（输出包含取消、missing-file、非法 UTF-8/NUL/CR 的真实 JSON）：
+
+```sh
+c++ -std=c++20 -pthread -Wall -Wextra -Wpedantic -Werror -Iinclude src/support/source.cpp src/support/diagnostic.cpp src/support/input.cpp tests/support/phase_test.cpp -o /tmp/phase-test
+/tmp/phase-test
+c++ -std=c++20 -pthread -O2 -DNDEBUG -Wall -Wextra -Wpedantic -Werror -Iinclude src/support/source.cpp src/support/diagnostic.cpp src/support/input.cpp tests/support/phase_test.cpp -o /tmp/phase-test-release
+/tmp/phase-test-release
+```
+
+规范化取消测试在大输入处理期间从另一线程请求停止；线程仅用于测试。
+未覆盖：读取中的确定时点取消、设备 I/O 故障、分配失败、driver/CMake 集成。
+E_INPUT_IO 已登记。未完整填写的阶段结果默认归为内部错误；源码/未支持/环境错误由各阶段明确分类。主 agent 的测试记录在仓库外层 checks/。

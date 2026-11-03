@@ -42,14 +42,14 @@
     {
       "id": "T01",
       "title": "公共基础",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T00"
       ],
       "primary_role": "foundation",
       "backup_role": "frontend",
       "reviewer_role": "validation",
-      "owner_instance": "f8192d80-f2ac-4043-a4b7-23470413261d",
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/support/",
         "tests/support/"
@@ -74,14 +74,14 @@
     {
       "id": "T02",
       "title": "词法语法",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T01"
       ],
       "primary_role": "frontend",
       "backup_role": "foundation",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/syntax/",
         "tests/syntax/"

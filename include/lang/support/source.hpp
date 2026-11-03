@@ -5,6 +5,7 @@
 #include <memory>
 #include <optional>
 #include <stdexcept>
+#include <stop_token>
 #include <string>
 #include <string_view>
 #include <vector>
@@ -51,6 +52,13 @@ struct Position {
   uint64_t line, character;
   auto operator<=>(const Position &) const = default;
 }; // zero based UTF-16
+struct Cancelled : std::exception {
+  const char *what() const noexcept override { return "cancelled"; }
+};
+inline void check_cancelled(std::stop_token token) {
+  if (token.stop_requested())
+    throw Cancelled{};
+}
 struct SourceError : std::runtime_error {
   uint64_t byte;
   uint64_t length;
@@ -65,8 +73,8 @@ public:
   const RevisionId revision;
   const SourceSnapshotId id;
   const std::string path, original;
-  SourceSnapshot(FileId, RevisionId, SourceSnapshotId, std::string,
-                 std::string);
+  SourceSnapshot(FileId, RevisionId, SourceSnapshotId, std::string, std::string,
+                 std::stop_token = {});
   bool valid() const { return !error_; }
   const std::optional<SourceError> &error() const { return error_; }
   const std::string &normalized() const;
@@ -89,7 +97,8 @@ class SourceManager {
 
 public:
   FileId add_file(std::string path);
-  std::shared_ptr<const SourceSnapshot> update(FileId, std::string bytes);
+  std::shared_ptr<const SourceSnapshot> update(FileId, std::string bytes,
+                                               std::stop_token = {});
   std::shared_ptr<const SourceSnapshot> get(SourceSnapshotId) const;
 };
 } // namespace lang

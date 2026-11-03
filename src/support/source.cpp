@@ -43,14 +43,17 @@ void validate_utf8(std::string_view bytes) {
   }
 }
 SourceSnapshot::SourceSnapshot(FileId f, RevisionId r, SourceSnapshotId s,
-                               std::string p, std::string b)
+                               std::string p, std::string b,
+                               std::stop_token token)
     : file(f), revision(r), id(s), path(std::move(p)), original(std::move(b)) {
+  check_cancelled(token);
   try {
     size_t i = original.starts_with("\xef\xbb\xbf") ? 3 : 0;
     Position pos{0, 0};
     offsets_.push_back(i);
     positions_[i] = pos;
     while (i < original.size()) {
+      check_cancelled(token);
       size_t n;
       auto cp = decode(original, i, n);
       if (cp == 0)
@@ -75,6 +78,7 @@ SourceSnapshot::SourceSnapshot(FileId f, RevisionId r, SourceSnapshotId s,
         pos.character += cp > 65535 ? 2 : 1;
       positions_[i] = pos;
     }
+    check_cancelled(token);
   } catch (const SourceError &e) {
     error_ = e;
     text_.clear();
@@ -119,13 +123,15 @@ FileId SourceManager::add_file(std::string p) {
   files_.push_back(std::move(p));
   return FileId(files_.size());
 }
-std::shared_ptr<const SourceSnapshot> SourceManager::update(FileId f,
-                                                            std::string b) {
+std::shared_ptr<const SourceSnapshot>
+SourceManager::update(FileId f, std::string b, std::stop_token token) {
+  check_cancelled(token);
   if (!f.value || f.value > files_.size())
     throw std::out_of_range("unknown file");
   auto s = std::make_shared<const SourceSnapshot>(
       f, RevisionId(revision_ + 1), SourceSnapshotId(snapshots_.size() + 1),
-      files_[f.value - 1], std::move(b));
+      files_[f.value - 1], std::move(b), token);
+  check_cancelled(token);
   ++revision_;
   snapshots_.push_back(s);
   return s;

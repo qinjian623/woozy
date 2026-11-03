@@ -5,7 +5,8 @@ option(LANG_ENABLE_LLVM "Build LLVM integration probe (no code generation)" OFF)
 add_library(lang_frontend STATIC
   src/support/version.cpp
   src/support/source.cpp
-  src/support/diagnostic.cpp)
+  src/support/diagnostic.cpp
+  src/support/input.cpp)
 target_include_directories(lang_frontend PUBLIC include)
 target_compile_features(lang_frontend PUBLIC cxx_std_20)
 add_executable(langc src/driver/main.cpp)
@@ -15,6 +16,10 @@ if(LANG_ENABLE_LLVM)
 endif()
 include(CTest)
 if(BUILD_TESTING)
+  find_package(Threads REQUIRED)
+  add_executable(lang_phase_test tests/support/phase_test.cpp)
+  target_link_libraries(lang_phase_test PRIVATE lang_frontend Threads::Threads)
+  add_test(NAME support.phase COMMAND lang_phase_test)
   add_executable(lang_support_test tests/support/support_test.cpp)
   target_link_libraries(lang_support_test PRIVATE lang_frontend)
   add_test(NAME support.core COMMAND lang_support_test)

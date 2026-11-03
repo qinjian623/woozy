@@ -32,6 +32,10 @@
       "severity": "error"
     },
     {
+      "code": "E_INPUT_IO",
+      "severity": "error"
+    },
+    {
       "code": "E_INVALID_SOURCE",
       "severity": "error"
     },
