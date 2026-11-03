@@ -33,9 +33,14 @@ def main():
         source = Path(temporary) / "input.lang"
         for case in cases:
             try:
-                source.write_bytes(source_for_case(case, ROOT))
+                payload = source_for_case(case, ROOT)
+                if "path" in case:
+                    input_path = (ROOT / case["path"]).resolve()
+                else:
+                    source.write_bytes(payload)
+                    input_path = source
                 run = subprocess.run(
-                    [str(compiler), "check", "--syntax-only", "--format", "json", str(source)],
+                    [str(compiler), "check", "--syntax-only", "--format", "json", str(input_path)],
                     capture_output=True, text=True, timeout=10)
                 expected = 0 if case["expected_syntax"] == "accept" else 1
                 document = json.loads(run.stdout)
