@@ -2,7 +2,7 @@
 
 日期：2026-11-03。面向实现前端、LLVM 后端、Python 后端、运行库及开发工具的 agent。
 
-T00–T03 已完成：可构建独立 C++20 前端，并用 langc 检查完整 v0.1 表层语法、输出 JSON 诊断和恢复 AST。Debug/Release 各通过 80 个语法分类，以及源码、诊断、取消和 AST 测试。项目/模块与名称/作用域实现通过独立项目用例 20/20，Debug、Release、Clang22 ASan/UBSan 各 10 组 CTest 全部通过。类型检查、代码生成和 ARC 仍待实现。
+T00–T03 已完成：可构建独立 C++20 前端，并用 langc 检查完整 v0.1 表层语法、输出 JSON 诊断和恢复 AST。Debug/Release 各通过 80 个语法分类，以及源码、诊断、取消和 AST 测试。项目/模块与名称/作用域实现通过独立项目用例 20/20，Debug、Release、Clang22 ASan/UBSan 各 10 组 CTest 全部通过。T04 的普通标量 HIR 类型表和验证器已加入，三种构建各 12 组 CTest 通过；源码类型检查、代码生成和 ARC 仍待完成。
 
 ## 从哪里开始
 

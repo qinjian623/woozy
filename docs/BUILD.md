@@ -70,3 +70,6 @@ python3 build/core/python/core.py
 numeric 使用同样命令，将 core 替换为 numeric。上述输出命名是后续实现应确认的约定，当前驱动不会生成文件。两项目预期无标准输出、程序退出 0。core 验证循环和函数调用；numeric 验证整数回绕、最小整数除 -1、余数和负数截断。native O0/O2 及 Python 执行均未运行，需 T05/T06 后端实现后验证。
 
 各阶段记录在外层 checks/。T00 的 C++20、LLVM 22.1.8 探针和 Clang/LLD 运行检查已通过；T02 的 Debug/Release 语法分类为 80/80。后续阶段记录自己的检查结果，不用工具链探针代替语言程序运行。
+
+
+T04 的类型表和 ordinary scalar HIR 验证组件已加入 lang_hir。hir.types 与 hir.scalar 包含 canonical 类型、控制流/调用元数据、55 个损坏数据和不可变发布检查。它们使用手写 typed HIR，不代替源语言类型检查器。类型 checker 与平凡 inout 的后续实现尚在进行。

@@ -5,7 +5,7 @@
 ## 数据
 
 - `schema`: `compiler-dev/sema-fixtures/1`，合同版本 `compiler-dev/1`。
-- 20 个独立项目：4 个 `accept`、13 个 `reject`、3 个 `unavailable`。
+- 21 个独立项目：4 个 `accept`、14 个 `reject`、3 个 `unavailable`。
 - `available_in: T04` 的案例属于当前标量类型/调用/控制流基础。
 - `unavailable` 分别是 T07（泛型）、T07/T09（Vec）、T07/T08（typed throws；夹具使用 T07 的枚举作为错误类型），预期 `E_CAPABILITY_UNAVAILABLE`。它们不是 T04 类型错误。
 - 局部 `const` 是编译期常量，不允许后续赋值；本组为保持 20 例上限未新增单独 fixture。
@@ -64,3 +64,5 @@ func bump(x i32) i32 {
 ```
 
 `SEMANTICS §2` 只规定参数与函数体同作用域；没有说明普通参数是否可重新赋值，`inout`/`move` 规则不能反推普通参数的写权限。
+
+集成审查另加 constant-integer-conversion-overflow-reject：源码 i8(300) 必须静态拒绝；typed HIR 的 IntegerConvert 仍可表达动态范围检查。原 20 个项目的记录保持为此前检查结果；新增项目单独检查语法和名称，类型检查尚未运行。

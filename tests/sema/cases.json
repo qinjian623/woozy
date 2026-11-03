@@ -1,7 +1,7 @@
 {
   "schema": "compiler-dev/sema-fixtures/1",
   "contract": "compiler-dev/1",
-  "case_count": 20,
+  "case_count": 21,
   "stage_policy": {
     "syntax": "All fixtures must be accepted by `langc check --syntax-only --format json`.",
     "names": "All fixtures must be accepted by `lang_module_check` on their lang.toml; reject cases must fail for a type/effect reason, not a misspelled name or import.",
@@ -234,6 +234,15 @@
         "clause": "`throws` 属于函数类型；函数值与直接调用使用一致的效果检查。"
       },
       "reason": "Typed throws, throw and effect propagation are T08 work; the fixture is not a T04 type error."
+    },
+    "constant_integer_conversion_range": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "3 基础类型与推断",
+        "clause": "显式的整数到整数转换 `T(x)` 做范围检查；常量越界静态报错，动态越界产生 Panic。"
+      },
+      "reason": "A source constant i8(300) must be rejected before constructing typed HIR; the dynamic IntegerConvert operation retains runtime range checks."
     }
   },
   "unresolved_semantics": [
@@ -504,6 +513,18 @@
         "reason": "The let binding is not a writable var whole binding; T04 rejects the known-unwritable inout argument. Alias, escape and ARC checks remain T09, and no unpublished T04 code is bound."
       },
       "available_in": "T04"
+    },
+    {
+      "id": "constant-integer-conversion-overflow-reject",
+      "manifest": "tests/sema/fixtures/constant-integer-conversion-overflow-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "constant_integer_conversion_range"
+        ],
+        "reason": "300 is a compile-time integer constant outside i8; this is a source type error."
+      }
     }
   ]
 }
