@@ -32,6 +32,10 @@
       "severity": "error"
     },
     {
+      "code": "E_INVALID_SOURCE",
+      "severity": "error"
+    },
+    {
       "code": "E_IR_INVALID",
       "severity": "error"
     },

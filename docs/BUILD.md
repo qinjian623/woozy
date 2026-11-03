@@ -22,6 +22,25 @@ build/llvm/lang_llvm_probe
 
 仅接受 LLVM_PACKAGE_VERSION 精确等于 22.1.8。探针链接 LLVM Support，打印版本；没有代码生成。此选项不验证完整 Clang/LLD、SDK 或 ABI 配置，不能代替主任务的工具链 lock。不要提交本机 LLVM_DIR 或构建缓存。
 
+已验证的独立工具链版本、来源和摘要见 contracts/toolchain.lock.json。本机的官方 Linux 包另外需要 libxml2.so.2 和静态 zstd：兼容库取自验证过发行签名的 Arch libxml2-legacy，zstd 1.5.7 从官方源码构建并核对发布的 SHA-256。系统库没有被替换。
+
+本机复查 LLVM 接入时，使用外层 toolchains/ 中的目录：
+
+```sh
+tc="$(cd ../toolchains && pwd)"
+export LD_LIBRARY_PATH="$tc/libxml2-legacy-2.13.9/usr/lib"
+cmake -S . -B build/llvm-clang22 -G Ninja \
+  -DLANG_ENABLE_LLVM=ON \
+  -DLLVM_DIR="$tc/llvm-22.1.8/lib/cmake/llvm" \
+  -Dzstd_STATIC_LIBRARY="$tc/zstd-1.5.7/lib/libzstd.a" \
+  -DCMAKE_CXX_COMPILER="$tc/llvm-22.1.8/bin/clang++"
+cmake --build build/llvm-clang22
+ctest --test-dir build/llvm-clang22 --output-on-failure
+build/llvm-clang22/lang_llvm_probe
+```
+
+已分别运行 LLVM 22.1.8 接入探针，以及 Clang 22.1.8 + LLD 22.1.8 的 C++20 编译、链接、运行检查。LLVM 23.1.3 配置会被版本检查拒绝。这些结果不表示本语言程序已经可以编译。
+
 独立验收工程为 tests/fixtures/core 和 tests/fixtures/numeric，每个只有 src/main.lang 的一个 main，源码分别复制 examples/core.lang、examples/numeric.lang，未改历史样例。清单遵循现有项目格式。未来分别执行：
 
 ```sh

@@ -2,7 +2,10 @@ cmake_minimum_required(VERSION 3.20)
 project(lang VERSION 0.1.0 LANGUAGES CXX)
 set(CMAKE_CXX_EXTENSIONS OFF)
 option(LANG_ENABLE_LLVM "Build LLVM integration probe (no code generation)" OFF)
-add_library(lang_frontend STATIC src/support/version.cpp)
+add_library(lang_frontend STATIC
+  src/support/version.cpp
+  src/support/source.cpp
+  src/support/diagnostic.cpp)
 target_include_directories(lang_frontend PUBLIC include)
 target_compile_features(lang_frontend PUBLIC cxx_std_20)
 add_executable(langc src/driver/main.cpp)
@@ -12,6 +15,9 @@ if(LANG_ENABLE_LLVM)
 endif()
 include(CTest)
 if(BUILD_TESTING)
+  add_executable(lang_support_test tests/support/support_test.cpp)
+  target_link_libraries(lang_support_test PRIVATE lang_frontend)
+  add_test(NAME support.core COMMAND lang_support_test)
   add_test(NAME bootstrap.cli COMMAND ${CMAKE_COMMAND}
     -DLANGC=$<TARGET_FILE:langc> -P ${CMAKE_CURRENT_SOURCE_DIR}/tests/bootstrap/cli.cmake)
 endif()

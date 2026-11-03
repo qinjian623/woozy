@@ -11,12 +11,12 @@
     {
       "id": "T00",
       "title": "约定与工具链",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [],
       "primary_role": "integrator",
       "backup_role": "validation",
       "reviewer_role": "validation",
-      "owner_instance": "2be96a1e-f7eb-40f3-b230-7300f7c9c011",
+      "owner_instance": "root-integrator",
       "target_paths": [
         "CMakeLists.txt",
         "cmake/",
@@ -42,14 +42,14 @@
     {
       "id": "T01",
       "title": "公共基础",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T00"
       ],
       "primary_role": "foundation",
       "backup_role": "frontend",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "f8192d80-f2ac-4043-a4b7-23470413261d",
       "target_paths": [
         "src/support/",
         "tests/support/"

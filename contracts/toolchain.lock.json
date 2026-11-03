@@ -1,0 +1,67 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "status": "verified_T00_bootstrap_not_language_codegen",
+  "host": {
+    "system": "Linux",
+    "machine": "x86_64",
+    "libc": [
+      "glibc",
+      "2.44"
+    ]
+  },
+  "target": {
+    "triple": "x86_64-unknown-linux-gnu",
+    "cpu": "generic",
+    "features": [],
+    "data_layout": "generated_by_TargetMachine_in_T05_not_yet_implemented"
+  },
+  "llvm_version": "22.1.8",
+  "compiler_version": {
+    "clang": "clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)",
+    "bootstrap_host_cxx": "c++ (GCC) 16.2.1 20260810"
+  },
+  "lld_version": "LLD 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1) (compatible with GNU linkers)",
+  "cmake_version": "cmake version 4.4.4",
+  "ninja_version": "1.13.0.git.kitware.jobserver-pipe-1",
+  "python_version": "Python 3.12.15",
+  "python_word_bits": 64,
+  "sdk_identity": {
+    "kind": "host_linux_headers_and_glibc",
+    "libc": "glibc 2.44",
+    "cross_sdks": "not_configured"
+  },
+  "runtime_abi_version": "not_implemented_T00",
+  "llvm_build": {
+    "rtti": "NO",
+    "link_mode": "static",
+    "exceptions": false,
+    "cxx11_abi": 1
+  },
+  "artifact_sources": {
+    "llvm": "https://github.com/llvm/llvm-project/releases/download/llvmorg-22.1.8/LLVM-22.1.8-Linux-X64.tar.xz",
+    "python": "https://releases.astral.sh/github/python-build-standalone/releases/download/20261013/cpython-3.12.15%2B20261013-x86_64-unknown-linux-gnu-install_only_stripped.tar.gz",
+    "libxml2_legacy": "https://stable-mirror.omarchy.org/extra/os/x86_64/libxml2-legacy-2.13.9-2-x86_64.pkg.tar.zst",
+    "zstd": "https://github.com/meta/zstd/releases/download/v1.5.7/zstd-1.5.7.tar.gz"
+  },
+  "artifact_hashes": {
+    "llvm_archive_sha256": "df0e1ecf16caf3489a272a5eea4eec9b0d82878f6477fa309504f918a0006384",
+    "python_executable_sha256": "eaaa308032c4aa063df5880c4c293cd458b4629d503fbc2c03ec163d71f7f790",
+    "libxml2_archive_sha256": "aac28a52e81422935e3bfa44044030640c5d525ad8f65a9672a3ab7139974652",
+    "zstd_archive_sha256": "eb33e51f49a15e023950cd7825ca74a4a2b43db8354825ac24fc1b7ee09e6fa3",
+    "zstd_static_library_sha256": "f492c9387c68baa738d56264b47407e45482b5f9967095d7b84f83534037b988"
+  },
+  "verification": {
+    "llvm_archive_matches_published_digest": true,
+    "libxml2_pacman_signature": true,
+    "zstd_archive_matches_published_digest": true,
+    "frontend_host_cxx_build": true,
+    "clang22_bootstrap_build": true,
+    "llvm22_probe_run": true,
+    "lld_version_run": true,
+    "python312_version_run": true,
+    "llvm23_config_rejected": true,
+    "language_program_compilation": "not_run",
+    "clang22_lld22_cxx20_link_run": true
+  }
+}
