@@ -172,14 +172,14 @@
     {
       "id": "T05",
       "title": "原生标量闭环",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T04"
       ],
       "primary_role": "native",
       "backup_role": "integrator",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "bridge:ebc594c3-38b1-411a-be07-c34b960c5d7b",
       "target_paths": [
         "src/native_ir/",
         "src/codegen_llvm/",
@@ -202,19 +202,19 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+      "notes": "Native scalar code generation taskcff93d59; committedT04inputb8ccf38 verified in actual worktree. Root owns common CMake/CLI integration."
     },
     {
       "id": "T06",
       "title": "Python 标量闭环",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T04"
       ],
       "primary_role": "python",
       "backup_role": "integrator",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "bridge:f799e25c-4c1b-4b60-a429-a619a2493883",
       "target_paths": [
         "src/codegen_python/",
         "runtime/python/",
@@ -237,7 +237,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+      "notes": "Python scalar code generation taskebbb2bde; committedT04inputb8ccf38 verified in actual worktree. Root owns common CMake/CLI integration."
     },
     {
       "id": "T07",
