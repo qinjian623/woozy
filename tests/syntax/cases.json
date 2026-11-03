@@ -1,0 +1,453 @@
+{
+  "schema": "compiler-dev/syntax-cases/1",
+  "contract": "compiler-dev/1",
+  "source": {
+    "prototype": "baseline/tools/check_syntax.py",
+    "baseline_records": [
+      "baseline/validation.json",
+      "baseline/examples_notes.json"
+    ],
+    "contract_records": [
+      "contracts/test-cases.json"
+    ]
+  },
+  "in_memory_cases": [
+    {
+      "name": "minimal",
+      "source": "package sample;",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "leading BOM and CRLF",
+      "source": "﻿package sample;\r\nfunc main() {}\r\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "imports and pub",
+      "source": "package sample;\nimport \"std/io\" as io; pub func main() {}",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "import without explicit alias",
+      "source": "package sample;\nimport \"std/os\"; func main() { os.cwd(); }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "let var const",
+      "source": "package sample;\nconst N i64 = 3; func f() { let x = 2; var y i64 = x; y += 1; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "numeric forms",
+      "source": "package sample;\nfunc check() { let a = 0b10_01; let b = 0o7_1; let c = 0xAf_01; let d = 12_345; let e = 1.25e-2; let f = 1e3; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "unicode and raw strings",
+      "source": "package sample;\nfunc check() { let s = \"a\\n\\r\\t\\0\\\"\\\\\\u{1F600}\";let r = `a\n/* raw */\\n`; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "comments",
+      "source": "// head\npackage sample; /* outer /* ignored opener */ func f() {}",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "arrays slices and precedence",
+      "source": "package sample;\nfunc check() { let a = [1, 2,]; let empty = []; let x = a[:]; let y = a[1:]; let z = a[:2]; let n = ~1 + 2 * 3 << 1 & 7 == 3 || false; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "generic declaration and neutral postfix",
+      "source": "package sample;\nfunc f[T Trait, U](x T, y U,) T { return x; } func main() { let x = f[i32, i64](1, 2); let y = table[i](x); }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "function type in bracket",
+      "source": "package sample;\nfunc check() { let x = factory[func(inout i32) Unit](value); let y = factory[(func(i32) i32 throws E)](value); }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "function-valued return with outer throws",
+      "source": "package sample;\nfunc make() (func(i32) i32) throws E { return callback; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "function-valued return with inner throws",
+      "source": "package sample;\nfunc make() (func(i32) i32 throws E) { return callback; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "function literals",
+      "source": "package sample;\nfunc check() { let twice = func(x i32) i32 { return x * 2; }; let action func(inout i32) Unit = func(x inout i32) Unit { x += 1; }; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "fallible function literal",
+      "source": "package sample;\nfunc check() { let checked = func(x i32) i32 throws E { if x < 0 { throw E.Bad(); } return x; }; let mapped = transform(values, func(x i32) i32 { return x + 1; }); }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "parameter modes",
+      "source": "package sample;\nfunc f(x inout i32, y move Node) { g(inout x, value: move y); }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "struct trait impl",
+      "source": "package sample;\npub struct Point { pub x f64; y f64; } trait Size { func size(self Self) f64; } impl Size for Point { func size(self Point) f64 { return self.x; } } impl[T Trait] Vec[T] { func len(self Self) i64 { return 0; } }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "enum and patterns",
+      "source": "package sample;\nenum Option[T] { None; Some(value T); } func f(x Option[i32]) { switch x { case Option[i32].Some(value): g(value); case Option.None: return; default: return; } switch y { case -3: return; case name: return; } }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "all for forms",
+      "source": "package sample;\nfunc check() { for { break; } for ready { continue; } for value in values { g(value); } for var i i32 = 0; i < 3; i += 1 { g(i); } for ;; {} }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "try cleanup unsafe",
+      "source": "package sample;\nfunc check() { defer { cleanup(); } try { f(); } catch err E { throw err; } catch other Other { return; } unsafe { f(); } }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "semantic errors deliberately accepted",
+      "source": "package sample;\nfunc f() i32 { let x i32 = \"wrong\"; break; unknown(); defer { throw bad; } return x; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "not keywords",
+      "source": "package sample;\nfunc auto(while i32) i32 { let fn = while; let null = fn; return null; }",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "missing package",
+      "source": "func main() {}",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "late import",
+      "source": "package sample;\nfunc f() {} import \"x\" as x;",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "missing initializer",
+      "source": "package sample;\nfunc check() { var value i32; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "missing semicolon",
+      "source": "package sample;\nfunc check() { let value = 1 }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "assignment expression",
+      "source": "package sample;\nfunc check() { let value = (a = 1); }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "unparenthesized function result",
+      "source": "package sample;\nfunc make() func(i32) i32 throws E { return callback; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "named then positional",
+      "source": "package sample;\nfunc check() { f(x: 1, 2); }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "default source parameter",
+      "source": "package sample;\nfunc f(x i32 = 1) {}",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "enum unqualified variant",
+      "source": "package sample;\nfunc check() { switch x { case Some(value): return; } }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "slice step",
+      "source": "package sample;\nfunc check() { let x = values[0:10:2]; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "empty postfix bracket",
+      "source": "package sample;\nfunc check() { let x = f[](); }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "constant type argument",
+      "source": "package sample;\nfunc check() { let x Array[4] = values; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "raw address unary",
+      "source": "package sample;\nfunc check() { let p = &value; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "raw dereference unary",
+      "source": "package sample;\nfunc check() { let x = *pointer; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "try without catch",
+      "source": "package sample;\nfunc check() { try {} }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "arrow result",
+      "source": "package sample;\nfunc f() -> i32 { return 1; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "question token",
+      "source": "package sample;\nfunc check() { let x = f()?; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "increment token",
+      "source": "package sample;\nfunc check() { i++; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "future keyword",
+      "source": "package sample;\nextern func f();",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "character literal",
+      "source": "package sample;\nfunc check() { let x = 'a'; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "leading decimal zero",
+      "source": "package sample;\nfunc check() { let x = 007; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "base underscore",
+      "source": "package sample;\nfunc check() { let x = 0x_FF; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "bad radix",
+      "source": "package sample;\nfunc check() { let x = 0b102; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "numeric suffix",
+      "source": "package sample;\nfunc check() { let x = 42i32; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "numeric trailing underscore",
+      "source": "package sample;\nfunc check() { let x = 12_; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "float no leading digits",
+      "source": "package sample;\nfunc check() { let x = .5; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "float no fractional digits",
+      "source": "package sample;\nfunc check() { let x = 1.; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "float no exponent digits",
+      "source": "package sample;\nfunc check() { let x = 1e+; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "invalid escape",
+      "source": "package sample;\nfunc check() { let x = \"\\x41\"; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "surrogate escape",
+      "source": "package sample;\nfunc check() { let x = \"\\u{D800}\"; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "large unicode escape",
+      "source": "package sample;\nfunc check() { let x = \"\\u{110000}\"; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "empty unicode escape",
+      "source": "package sample;\nfunc check() { let x = \"\\u{}\"; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "raw unterminated",
+      "source": "package sample;\nfunc check() { let x = `raw; }",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "comment unterminated",
+      "source": "package sample;\n/*",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "literal NUL in comment",
+      "source": "package sample;\n// \u0000",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "bare CR",
+      "source": "package sample;\rfunc f() {}",
+      "expected_syntax": "reject"
+    },
+    {
+      "name": "non-ASCII identifier",
+      "source": "package sample;\nfunc 函数() {}",
+      "expected_syntax": "reject"
+    }
+  ],
+  "file_cases": [
+    {
+      "name": "baseline/01_basics",
+      "path": "baseline/samples/01_basics.lang",
+      "source": "package main;\n\n// v0.1 草案示例；.lang 是临时扩展名。\n// 本文件展示词法、初始化、值构造和两种 for。\n\nstruct Point {\n    x f64;\n    y f64;\n}\n\nfunc squared_distance(a Point, b Point) f64 {\n    let dx = a.x - b.x;\n    let dy = a.y - b.y;\n    return dx * dx + dy * dy;\n}\n\nfunc main() i32 {\n    let decimal i64 = 1_024;\n    let hexadecimal i64 = 0x2A;\n    let binary i64 = 0b101010;\n    let exponent f64 = 1.25e2;\n    let text = \"中文与 UTF-8\\nquote: \\\"; slash: \\\\\";\n    let enabled = true;\n\n    let origin = Point(x: 0.0, y: 0.0);\n    let position = Point(x: 3.0, y: 4.0);\n    let distance = squared_distance(origin, position);\n\n    var count i32 = 0;\n    for var i i32 = 0; i < 4; i += 1 {\n        count += i;\n    }\n    for count < 10 {\n        count += 1;\n    }\n\n    if decimal != 1024 || hexadecimal != 42 || binary != 42 {\n        return 1;\n    }\n    if exponent != 125.0 || !enabled {\n        return 2;\n    }\n    if distance != 25.0 || count != 10 {\n        return 3;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "baseline/02_generics",
+      "path": "baseline/samples/02_generics.lang",
+      "source": "package main;\n\n// Ordered 是本文件声明的 trait，不依赖未定义的标准库 prelude。\ntrait Ordered {\n    func less_than(self Self, other Self) bool;\n}\n\nimpl Ordered for i32 {\n    func less_than(self i32, other i32) bool {\n        return self < other;\n    }\n}\n\nfunc less[T Ordered](a T, b T) bool {\n    return a.less_than(b);\n}\n\nfunc main() i32 {\n    // 元素类型由显式 Vec[i32] 上下文决定。\n    let values Vec[i32] = [4, 9, 2];\n    var best i32 = 0;\n\n    for value in values {\n        if less[i32](best, value) {\n            best = value;\n        }\n    }\n\n    if best != 9 {\n        return 1;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "baseline/03_errors",
+      "path": "baseline/samples/03_errors.lang",
+      "source": "package main;\n\n// 错误是显式类型；throws 函数中的调用自然传播，不加问号。\nenum InputError {\n    Negative(value i32);\n    TooLarge(value i32);\n}\n\n// 本地定义的普通枚举。Result 不是隐式解包语法。\nenum Result[T, E] {\n    Ok(value T);\n    Err(error E);\n}\n\nfunc checked_square(value i32) i32 throws InputError {\n    if value < 0 {\n        throw InputError.Negative(value);\n    }\n    if value > 1000 {\n        throw InputError.TooLarge(value);\n    }\n    // 已限制到 0..1000，此处不会发生 i32 乘法溢出。\n    return value * value;\n}\n\nfunc checked_square_result(value i32) Result[i32, InputError] {\n    try {\n        let answer = checked_square(value);\n        return Result[i32, InputError].Ok(answer);\n    } catch err InputError {\n        return Result[i32, InputError].Err(err);\n    }\n}\n\nfunc main() i32 {\n    var caught = false;\n    try {\n        let answer = checked_square(12);\n        if answer != 144 {\n            return 1;\n        }\n        let rejected = checked_square(-3);\n        return 2;\n    } catch err InputError {\n        switch err {\n            case InputError.Negative(value):\n                if value != -3 {\n                    return 3;\n                }\n                caught = true;\n            case InputError.TooLarge(value):\n                return 4;\n        }\n    }\n    if !caught {\n        return 5;\n    }\n\n    let outcomes Vec[Result[i32, InputError]] = [\n        checked_square_result(3),\n        checked_square_result(-1),\n    ];\n    var successes i32 = 0;\n    var failures i32 = 0;\n    for outcome in outcomes {\n        switch outcome {\n            case Result.Ok(value):\n                if value != 9 {\n                    return 6;\n                }\n                successes += 1;\n            case Result.Err(error):\n                failures += 1;\n        }\n    }\n    if successes != 1 || failures != 1 {\n        return 7;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "baseline/04_numpy_torch",
+      "path": "baseline/samples/04_numpy_torch.lang",
+      "source": "package main;\n\n// Python 后端样例；这些导入需要对应的已审核绑定和真实 Python 包。\nimport \"std/py\" as py;\nimport \"numpy\" as np;\nimport \"torch\" as torch;\nimport \"torch/nn\" as nn;\nimport \"torch/optim\" as optim;\nimport \"torch/nn/functional\" as F;\n\nfunc train() torch.Tensor throws py.Error {\n    torch.manual_seed(7);\n\n    let values = np.linspace(-1.0, 1.0, num: 128, dtype: np.float32);\n    let x_np = np.expand_dims(values, axis: 1);\n    let scaled = np.multiply(x_np, 2.0);\n    let shifted = np.add(scaled, 1.0);\n    let y_np = np.asarray(shifted, dtype: np.float32);\n\n    // 在数据边界显式复制。不要把这一步泛化为任意 Tensor 的隐式转换。\n    let x = torch.tensor(x_np, dtype: torch.float32, device: \"cpu\");\n    let y = torch.tensor(y_np, dtype: torch.float32, device: \"cpu\");\n\n    let model = nn.Linear(1, 1, device: \"cpu\", dtype: torch.float32);\n    let optimizer = optim.SGD(model.parameters(), lr: 0.1);\n\n    for var step i64 = 0; step < 200; step += 1 {\n        optimizer.zero_grad(set_to_none: true);\n        // 保留 Module 的实例调用，不改写为 model.forward(x)。\n        let prediction = model(x);\n        let loss = F.mse_loss(prediction, y);\n        loss.backward();\n        optimizer.step();\n    }\n\n    // 返回真实 Tensor；不隐式 item、detach、cpu 或 numpy。\n    let final_prediction = model(x);\n    return F.mse_loss(final_prediction, y);\n}\n\nfunc main() throws py.Error {\n    let final_loss = train();\n    return;\n}\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "baseline/05_traits",
+      "path": "baseline/samples/05_traits.lang",
+      "source": "package main;\n\nstruct Point {\n    x f64;\n    y f64;\n}\n\ntrait SquaredNorm {\n    func squared_norm(self Self) f64;\n}\n\nimpl SquaredNorm for Point {\n    func squared_norm(self Point) f64 {\n        return self.x * self.x + self.y * self.y;\n    }\n}\n\nfunc main() i32 {\n    let point = Point(x: 3.0, y: 4.0);\n    let norm = point.squared_norm();\n    if norm != 25.0 {\n        return 1;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "baseline/06_control_flow",
+      "path": "baseline/samples/06_control_flow.lang",
+      "source": "package main;\n\n// inout 是参数模式；调用处也明确标记。\nfunc sum_until_zero(values Vec[i64], cleanup_count inout i64) i64 {\n    // 清理代码不允许向外传播未处理的 throws。\n    defer {\n        cleanup_count += 1;\n    }\n\n    var total i64 = 0;\n    for value in values {\n        if value < 0 {\n            continue;\n        }\n        if value == 0 {\n            return total;\n        }\n        total += value;\n    }\n    return total;\n}\n\nfunc main() i32 {\n    var cleanup_count i64 = 0;\n    let total = sum_until_zero([2, -9, 3, 0, 100], inout cleanup_count);\n    if total != 5 {\n        return 1;\n    }\n    if cleanup_count != 1 {\n        return 2;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "baseline/07_functions",
+      "path": "baseline/samples/07_functions.lang",
+      "source": "package main;\n\nenum StepError {\n    Negative;\n}\n\nfunc apply(callback func(i32) i32, value i32) i32 {\n    return callback(value);\n}\n\nfunc positive_step(value i32) i32 throws StepError {\n    if value < 0 {\n        throw StepError.Negative;\n    }\n    return value + 1;\n}\n\n// make_step 本身不抛错；返回的函数可能抛出 StepError。\nfunc make_step() (func(i32) i32 throws StepError) {\n    return positive_step;\n}\n\nfunc main() i32 {\n    let twice = func(value i32) i32 {\n        return value * 2;\n    };\n\n    if apply(twice, 3) != 6 {\n        return 1;\n    }\n\n    let callback = make_step();\n    try {\n        if callback(3) != 4 {\n            return 2;\n        }\n        callback(-1);\n        return 3;\n    } catch error StepError {\n        return 0;\n    }\n}\n\n",
+      "expected_syntax": "accept"
+    },
+    {
+      "name": "baseline/negative/01_missing_semicolon",
+      "path": "baseline/samples/negative/01_missing_semicolon.lang",
+      "source": "package main;\n\n// 预期：语法拒绝。let 声明末尾缺少分号。\nfunc main() i32 {\n    let value i32 = 42\n    return 0;\n}\n",
+      "expected_syntax": "reject",
+      "rejection_phase": "syntax"
+    },
+    {
+      "name": "baseline/negative/02_invalid_string_escape",
+      "path": "baseline/samples/negative/02_invalid_string_escape.lang",
+      "source": "package main;\n\n// 预期：词法拒绝。\\q 不是本稿支持的转义。\nfunc main() i32 {\n    let text = \"bad\\q\";\n    return 0;\n}\n",
+      "expected_syntax": "reject",
+      "rejection_phase": "lexical"
+    },
+    {
+      "name": "baseline/negative/03_positional_after_named",
+      "path": "baseline/samples/negative/03_positional_after_named.lang",
+      "source": "package main;\n\n// 预期：调用形式拒绝。命名实参之后不能再写位置实参。\nfunc add(a i32, b i32) i32 {\n    return a + b;\n}\n\nfunc main() i32 {\n    return add(a: 1, 2);\n}\n",
+      "expected_syntax": "reject",
+      "rejection_phase": "syntax_call_form"
+    },
+    {
+      "name": "baseline/negative/04_unhandled_throws",
+      "path": "baseline/samples/negative/04_unhandled_throws.lang",
+      "source": "package main;\n\n// 预期：语法通过，静态效果检查拒绝；当前语法检查器不实现该检查。\nenum Problem {\n    Failed;\n}\n\nfunc risky() i32 throws Problem {\n    throw Problem.Failed;\n}\n\nfunc main() i32 {\n    return risky();\n}\n",
+      "expected_syntax": "accept",
+      "rejection_phase": "static_effect"
+    },
+    {
+      "name": "baseline/negative/05_type_mismatch",
+      "path": "baseline/samples/negative/05_type_mismatch.lang",
+      "source": "package main;\n\n// 预期：语法通过，类型检查拒绝；当前语法检查器不实现该检查。\nfunc main() i32 {\n    let count i32 = \"not an integer\";\n    return count;\n}\n",
+      "expected_syntax": "accept",
+      "rejection_phase": "type"
+    },
+    {
+      "name": "baseline/negative/06_uninitialized_binding",
+      "path": "baseline/samples/negative/06_uninitialized_binding.lang",
+      "source": "package main;\n\n// 预期：语法拒绝。let/var 声明必须包含初始化表达式。\nfunc main() i32 {\n    let value i32;\n    return 0;\n}\n",
+      "expected_syntax": "reject",
+      "rejection_phase": "syntax"
+    },
+    {
+      "name": "baseline/negative/07_result_is_not_unwrapped",
+      "path": "baseline/samples/negative/07_result_is_not_unwrapped.lang",
+      "source": "package main;\n\n// 预期：语法通过，类型检查拒绝。throws 不会自动解包 Result。\nenum Problem {\n    Failed;\n}\n\nenum Result[T, E] {\n    Ok(value T);\n    Err(error E);\n}\n\nfunc compute() Result[i32, Problem] {\n    return Result[i32, Problem].Ok(7);\n}\n\nfunc main() i32 throws Problem {\n    let answer i32 = compute();\n    return answer;\n}\n",
+      "expected_syntax": "accept",
+      "rejection_phase": "type"
+    },
+    {
+      "name": "baseline/negative/08_throwing_cleanup",
+      "path": "baseline/samples/negative/08_throwing_cleanup.lang",
+      "source": "package main;\n\n// 预期：语法通过，静态清理规则拒绝。defer 中不能留下未处理的 throws。\nenum CleanupError {\n    Failed;\n}\n\nfunc fallible_cleanup() throws CleanupError {\n    throw CleanupError.Failed;\n}\n\nfunc main() throws CleanupError {\n    defer {\n        fallible_cleanup();\n    }\n    return;\n}\n",
+      "expected_syntax": "accept",
+      "rejection_phase": "static_cleanup_effect"
+    },
+    {
+      "name": "baseline/negative/09_ambiguous_function_return_type",
+      "path": "baseline/samples/negative/09_ambiguous_function_return_type.lang",
+      "source": "package main;\n\n// 预期：语法拒绝。函数返回类型必须括号化，以确定 throws 的归属。\nenum Failure {\n    Failed;\n}\n\nfunc identity(value i32) i32 {\n    return value;\n}\n\nfunc make() func(i32) i32 throws Failure {\n    return identity;\n}\n",
+      "expected_syntax": "reject",
+      "rejection_phase": "syntax"
+    },
+    {
+      "name": "contracts/core",
+      "path": "examples/core.lang",
+      "source": "package main;\n\nfunc max_i32(a i32, b i32) i32 {\n    if a > b {\n        return a;\n    }\n    return b;\n}\n\nfunc main() i32 {\n    var total i32 = 0;\n    for var i i32 = 0; i < 4; i += 1 {\n        total += i;\n    }\n    if max_i32(total, 5) != 6 {\n        return 1;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept",
+      "expected_semantic": "accept"
+    },
+    {
+      "name": "contracts/numeric",
+      "path": "examples/numeric.lang",
+      "source": "package main;\n\nfunc main() i32 {\n    let high i8 = 127;\n    let wrapped = high + 1;\n    if wrapped != -128 {\n        return 1;\n    }\n    let minimum i32 = -2_147_483_648;\n    let negative_one i32 = -1;\n    if minimum / negative_one != minimum {\n        return 2;\n    }\n    if minimum % negative_one != 0 {\n        return 3;\n    }\n    let negative i32 = -7;\n    if negative / 3 != -2 || negative % 3 != -1 {\n        return 4;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept",
+      "expected_semantic": "accept"
+    },
+    {
+      "name": "contracts/errors",
+      "path": "examples/errors.lang",
+      "source": "package main;\n\nenum ReadError {\n    Missing;\n}\n\nfunc read_value(found bool, cleaned inout i32) i32 throws ReadError {\n    defer {\n        cleaned += 1;\n    }\n    if !found {\n        throw ReadError.Missing;\n    }\n    return 7;\n}\n\nfunc main() i32 {\n    var cleaned i32 = 0;\n    try {\n        let first = read_value(true, inout cleaned);\n        if first != 7 || cleaned != 1 {\n            return 1;\n        }\n        let second = read_value(false, inout cleaned);\n        return 2;\n    } catch err ReadError {\n        if cleaned != 2 {\n            return 3;\n        }\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept",
+      "expected_semantic": "accept"
+    },
+    {
+      "name": "contracts/ownership",
+      "path": "examples/ownership.lang",
+      "source": "package main;\n\nfunc take(values move Vec[i32]) i32 {\n    return values[0];\n}\n\nfunc main() i32 {\n    let left Vec[i32] = [1, 2];\n    let right = left;\n    right[0] = 9;\n    let answer = take(move right);\n    if answer != 9 || left[0] != 9 {\n        return 1;\n    }\n    return 0;\n}\n",
+      "expected_syntax": "accept",
+      "expected_semantic": "accept"
+    },
+    {
+      "name": "contracts/use_after_move",
+      "path": "examples/negative/use_after_move.lang",
+      "source": "package main;\n\nfunc take(values move Vec[i32]) i32 {\n    return values[0];\n}\n\nfunc main() i32 {\n    let values Vec[i32] = [1];\n    let answer = take(move values);\n    return values[0];\n}\n",
+      "expected_syntax": "accept",
+      "expected_semantic": "reject"
+    }
+  ]
+}

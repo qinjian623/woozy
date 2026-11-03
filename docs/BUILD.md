@@ -1,6 +1,6 @@
-# T00 工程构建
+# 前端构建与语法检查
 
-契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja。默认不查找 LLVM 或 Python，不执行 Python。lang_frontend 是仅含版本信息的真实静态库，后续前端模块可加入此目标；尚无 lexer、parser、类型检查或代码生成，T01 未完成。
+契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja。前端不链接或运行 LLVM/Python，包含源码快照、诊断、输入/取消、词法分析和 parser。开发测试若找到 Python 会执行 80 个分类及文件一致性检查；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时明确记为未运行，不影响 C++ 前端构建。类型检查和代码生成尚未实现。
 
 ```sh
 cmake --preset frontend-debug
@@ -10,7 +10,15 @@ build/frontend-debug/langc --help
 build/frontend-debug/langc --version
 ```
 
-帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2；check/build/lsp/capabilities 返回 1 并输出 E_CAPABILITY_UNAVAILABLE。尚未解析这些命令的子参数，不能用其结果判断输入文件是否合法。输入文件错误的退出码 2 在后续实现命令时单独测试。
+帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件，语法成功为 0、源码错误为 1、输入文件或参数错误为 2、内部错误为 3。全量语义 check、build、lsp 和 capabilities 返回 1 及 E_CAPABILITY_UNAVAILABLE。
+
+```sh
+build/frontend-debug/langc check --syntax-only examples/core.lang
+build/frontend-debug/langc check --syntax-only --format json examples/core.lang
+python3 tests/syntax/run_cases.py build/frontend-debug/langc
+```
+
+CTest 已包含 80 个分类的真实 C++ CLI 执行及 JSON schema 检查，另有 lexer、AST、恢复、深度、取消、源码和输入错误测试。文件用例先读取实际文件并与固定清单逐字节比较，防止只检查旧副本。
 
 可选接入探针：
 

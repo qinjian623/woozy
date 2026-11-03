@@ -2,7 +2,7 @@
 
 日期：2026-11-03。面向实现前端、LLVM 后端、Python 后端、运行库及开发工具的 agent。
 
-本包以词法与语法 v0.1 为输入，规定模块边界、共享数据结构、实施默认语义、任务依赖和验收方法。当前已有的是语法文档、样例和 Python 实现的语法检查原型；本包没有把待实现的 C++ 编译器描述为已完成。
+T00–T02 已完成：可构建独立 C++20 前端，并用 langc 检查完整 v0.1 表层语法、输出 JSON 诊断和恢复 AST。Debug/Release 各通过 80 个语法分类，以及源码、诊断、取消和 AST 测试。T03 模块/名称解析及其后的类型检查、代码生成、ARC 仍待实现。
 
 ## 从哪里开始
 
@@ -42,6 +42,13 @@ python3 tools/validate_package.py
 
 第三条检查文档包、相对链接、JSON 契约、任务依赖和样例的语法分类。它不是编译器测试。
 
-`langc`、CMake 工程、LLVM 后端、Python 转译器及运行库都由任务清单后续实现；本包中的相关命令是目标接口。
+构建与使用见 [BUILD.md](docs/BUILD.md)。当前可执行：
 
-T00 的 C++20 驱动与独立前端静态库现可构建，步骤见 [BUILD.md](docs/BUILD.md)。目前仅提供帮助、版本和明确的未实现错误；尚不能检查或编译源语言。
+```sh
+cmake --preset frontend-debug
+cmake --build --preset frontend-debug
+ctest --preset frontend-debug
+build/frontend-debug/langc check --syntax-only --format json examples/core.lang
+```
+
+不带 syntax-only 的语义检查、build、lsp 和 capabilities 命令仍明确报告未支持。语法接受不表示名称、类型、所有权或程序运行正确；LLVM 接入探针也没有生成本语言程序。

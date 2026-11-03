@@ -10,11 +10,11 @@
         "native",
         "python"
       ],
-      "implemented": false,
-      "verified": false,
+      "implemented": true,
+      "verified": true,
       "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
       "stages": {
-        "parse": false,
+        "parse": true,
         "check": false,
         "generate": false,
         "execute": false

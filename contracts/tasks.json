@@ -74,7 +74,7 @@
     {
       "id": "T02",
       "title": "词法语法",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T01"
       ],
@@ -107,14 +107,14 @@
     {
       "id": "T03",
       "title": "模块与名称",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T02"
       ],
       "primary_role": "sema",
       "backup_role": "frontend",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/modules/",
         "tests/modules/"

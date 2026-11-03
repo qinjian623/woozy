@@ -20,6 +20,10 @@
       "severity": "error"
     },
     {
+      "code": "E_DRIVER_ARGUMENT",
+      "severity": "error"
+    },
+    {
       "code": "E_EFFECT_UNHANDLED",
       "severity": "error"
     },
@@ -36,11 +40,23 @@
       "severity": "error"
     },
     {
+      "code": "E_INTERNAL_ERROR",
+      "severity": "error"
+    },
+    {
       "code": "E_INVALID_SOURCE",
       "severity": "error"
     },
     {
       "code": "E_IR_INVALID",
+      "severity": "error"
+    },
+    {
+      "code": "E_LEX_INVALID_LITERAL",
+      "severity": "error"
+    },
+    {
+      "code": "E_LEX_INVALID_TOKEN",
       "severity": "error"
     },
     {
