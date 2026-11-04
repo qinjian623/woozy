@@ -14,10 +14,12 @@ check_types(const PhaseResult<modules::ResolvedProject> &,
             std::optional<CheckConfig> = {}, std::stop_token = {});
 PhaseResult<hir::VerifiedHirModule>
     check_project(std::shared_ptr<const modules::ResolvedProject>,
-                  std::optional<CheckConfig> = {}, std::stop_token = {});
+                  std::optional<CheckConfig> = {}, std::stop_token = {},
+                  hir::VerifyMode = hir::VerifyMode::backend);
 // This overload preserves failed/recovered/cancelled resolve results. A value
 // carried by a failed phase is not permission to enter the checker.
 PhaseResult<hir::VerifiedHirModule>
 check_project(const PhaseResult<modules::ResolvedProject> &,
-              std::optional<CheckConfig> = {}, std::stop_token = {});
+              std::optional<CheckConfig> = {}, std::stop_token = {},
+              hir::VerifyMode = hir::VerifyMode::backend);
 } // namespace lang::sema

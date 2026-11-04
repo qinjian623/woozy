@@ -1,5 +1,6 @@
 #include "lang/sema/check.hpp"
 #include "../hir/ownership.hpp"
+#include "../hir/foreign.hpp"
 #include <algorithm>
 #include <functional>
 #include <gmpxx.h>
@@ -248,6 +249,11 @@ class Checker {
       return it == self_types.end() ? parameter_type(*s) : it->second;
     }
     if (kind == modules::SymbolKind::type) {
+      if (auto ex = m.resolved->foreign_export(*s)) {
+        if (!args.empty()) reject(r, "external type does not accept type arguments");
+        if (!ex->declaration) reject(r, "external type lacks declaration");
+        return m.foreign_bindings.at(ex->declaration->value).type;
+      }
       auto it = nominal_ids.find(s->value);
       if (it == nominal_ids.end())
         unavailable(r, "foreign types require T10/T11");
@@ -266,6 +272,8 @@ class Checker {
     if (name == "Vec") {
       if (args.size() != 1)
         reject(r, "Vec requires one element type");
+      if (type(args[0]).kind == TypeKind::ForeignOpaque)
+        unavailable(r, "external values in Vec are not supported");
       Type t;
       t.kind = TypeKind::Vec;
       t.type_args = args;
@@ -308,6 +316,8 @@ class Checker {
       auto pm = mode(cr);
       auto pt = parse_type(child(cr, 0));
 
+      if (pm != ParamMode::ordinary && type(pt).kind == TypeKind::ForeignOpaque)
+        unavailable(cr, "external move/inout parameters are not supported");
       if (pm == ParamMode::move && type(pt).kind == TypeKind::String)
         unavailable(cr, "owned string parameter is not supported");
       if (pm == ParamMode::inout && !integer(pt) &&
@@ -573,9 +583,18 @@ class Checker {
           reject(r, "type member is not a value");
         }
         auto base = expression(base_ref);
+        if (type(base.value.type).kind == TypeKind::ForeignOpaque)
+          unavailable(r, "external data attributes and escaping method values are not supported");
         const auto f = find_field(r, base.value.type);
         auto t = field_type(base.value.type, f);
         result = {node(r, t, FieldRead{f.symbol}, {base.id}), {t, {}, {}}};
+        break;
+      }
+      if (auto ex = m.resolved->foreign_export(*s)) {
+        if (ex->kind != modules::ForeignExportKind::value || !ex->declaration)
+          unavailable(r, "external function/type values cannot escape a call");
+        const auto &b = m.foreign_bindings.at(ex->declaration->value);
+        result = {node(r, b.type, ForeignRead{b.binding}), {b.type, {}, {}}};
         break;
       }
       auto k = symbol(*s).kind;
@@ -635,6 +654,8 @@ class Checker {
               (l.writable && symbol(*sid).definition &&
                ast(*symbol(*sid).definition).kind == AstKind::Parameter))
             reject(r, "borrowed parameter cannot be moved", "E_CALL_ARGUMENT");
+          if (type(l.type).kind == TypeKind::ForeignOpaque)
+            unavailable(r, "external move is not supported");
           if (type(l.type).kind == TypeKind::String)
             unavailable(r, "owned string move is not supported");
           match(r, l.type, expected);
@@ -644,6 +665,8 @@ class Checker {
             ast(er).kind == AstKind::NeutralBracket)
           unavailable(r, "partial field/element move is not supported");
         auto e = expression(er, expected);
+        if (type(e.value.type).kind == TypeKind::ForeignOpaque)
+          unavailable(r, "external move is not supported");
         if (type(e.value.type).kind == TypeKind::String)
           unavailable(r, "owned string move is not supported");
         return {node(r, e.value.type, Move{{}}, {e.id}), e.value};
@@ -764,6 +787,8 @@ class Checker {
     }
     case AstKind::Slice: {
       auto base = expression(child(r, 0));
+      if (type(base.value.type).kind == TypeKind::ForeignOpaque)
+        unavailable(r, "external slicing is not supported");
       if (type(base.value.type).kind == TypeKind::String)
         unavailable(r, "string slicing is not supported");
       if (type(base.value.type).kind != TypeKind::Vec)
@@ -796,6 +821,8 @@ class Checker {
       auto s = occurrence(base);
       if (!s || symbol(*s).kind != modules::SymbolKind::function) {
         auto v = expression(base);
+        if (type(v.value.type).kind == TypeKind::ForeignOpaque)
+          unavailable(r, "external indexing is not supported");
         if (type(v.value.type).kind == TypeKind::String)
           unavailable(r, "string indexing is not supported");
         if (type(v.value.type).kind != TypeKind::Vec)
@@ -1128,23 +1155,110 @@ class Checker {
     return {node(r, target, std::move(data), std::move(children)),
             {target, {}, {}}};
   }
+  std::vector<ForeignBindingId> foreign_members(TypeId owner, std::string_view name,
+                                                       std::string_view kind) const {
+    std::vector<ForeignBindingId> result;
+    const auto &d = m.resolved->project->foreign_binding(type(owner).binding);
+    for (auto id : std::get<modules::BindingType>(d.detail).members) {
+      const auto &member = m.resolved->project->foreign_binding(id);
+      const auto &c = std::get<modules::BindingCallable>(member.detail);
+      if (c.call_kind == kind && (kind == "callable" || member.name == name))
+        result.push_back(id);
+    }
+    return result;
+  }
+  Expr foreign_call(Ref r, Ref target, const std::vector<ForeignBindingId> &candidates,
+                    std::optional<Expr> receiver = {}) {
+    std::vector<std::optional<std::string>> labels;
+    for (size_t i = 1; i < ast(r).children.size(); ++i) {
+      auto ar = child(r, i);
+      labels.push_back(token(ar, 1) == ":" ? std::optional(std::string(token(ar))) : std::nullopt);
+    }
+    auto build = [&](Checker &builder, ForeignBindingId binding,
+                     const hir::detail::BoundArguments &bound) -> Expr {
+      const auto b = builder.m.foreign_bindings.at(binding.value);
+      const auto sig = builder.type(*b.signature);
+      Call call; call.kind = CalleeKind::foreign; call.binding = binding;
+      call.signature = *b.signature; call.omitted = bound.omitted;
+      std::vector<HirNodeId> children, receiver_nodes;
+      if (receiver) receiver_nodes.push_back(receiver->id);
+      call.callee = builder.node(target, b.type, ForeignRead{binding}, receiver_nodes);
+      children.push_back(*call.callee);
+      for (size_t i = 0; i < labels.size(); ++i) {
+        auto ar = builder.child(r, i + 1), er = builder.child(ar, 0);
+        while (builder.ast(er).kind == AstKind::Parenthesized) er = builder.child(er, 0);
+        if (builder.ast(er).kind == AstKind::Unary &&
+            (builder.token(er) == "move" || builder.token(er) == "inout"))
+          builder.reject(ar, "external arguments require ordinary mode", "E_CALL_ARGUMENT");
+        auto pi = bound.parameters[i];
+        if (sig.parameters[pi].mode != ParamMode::ordinary)
+          builder.unavailable(ar, "external move/inout is not supported");
+        auto e = builder.expression(er, sig.parameters[pi].type);
+        call.args.push_back({uint32_t(i), pi, labels[i], ParamMode::ordinary, e.id});
+        children.push_back(e.id);
+      }
+      auto id = builder.node(r, sig.result, std::move(call), std::move(children));
+      return {id, {sig.result, {}, {}}};
+    };
+    if (candidates.size() == 1) {
+      auto binding = candidates.front();
+      const auto &decl = std::get<modules::BindingCallable>(m.resolved->project->foreign_binding(binding).detail);
+      auto bound = hir::detail::bind_arguments(decl, labels);
+      if (!bound) reject(r, "no external candidate accepts these arguments", "E_CALL_ARGUMENT");
+      return build(*this, binding, *bound);
+    }
+    std::optional<ForeignBindingId> selected;
+    std::optional<Rejected> failure;
+    for (auto binding : candidates) {
+      const auto &d = m.resolved->project->foreign_binding(binding);
+      const auto &decl = std::get<modules::BindingCallable>(d.detail);
+      auto bound = hir::detail::bind_arguments(decl, labels);
+      if (!bound) continue;
+      Checker trial(*this);
+      trial.owned = std::make_shared<modules::ResolvedProject>(*owned);
+      trial.m.resolved = trial.owned;
+      try { build(trial, binding, *bound); }
+      catch (const Rejected &e) { failure = e; continue; }
+      if (selected) reject(r, "ambiguous external call", "E_CALL_ARGUMENT");
+      selected = binding;
+    }
+    if (!selected) {
+      if (failure) throw *failure;
+      reject(r, "no external candidate accepts these arguments", "E_CALL_ARGUMENT");
+    }
+    const auto &decl = std::get<modules::BindingCallable>(m.resolved->project->foreign_binding(*selected).detail);
+    return build(*this, *selected, *hir::detail::bind_arguments(decl, labels));
+  }
   Expr call(Ref r, std::optional<TypeId> expected) {
     auto callee_ref = child(r, 0);
+    if (auto sid = occurrence(callee_ref))
+      if (auto ex = m.resolved->foreign_export(*sid); ex && !ex->candidates.empty())
+        return foreign_call(r, callee_ref, ex->candidates);
     if (auto t = type_expression(callee_ref)) {
       if (type(*t).kind == TypeKind::NominalStruct)
         return constructor(r, *t);
       return scalar_call(r);
     }
-    auto method_ref = callee_ref;
+    // Parentheses around an immediately-called target do not save or return
+    // a method value. Remove only those transparent wrappers while keeping
+    // the actual Member/Call source identity used by the HIR.
+    auto transparent = [&](Ref value) {
+      while (ast(value).kind == AstKind::Parenthesized)
+        value = child(value, 0);
+      return value;
+    };
+    auto method_ref = transparent(callee_ref);
     std::vector<TypeId> method_args;
     bool method_explicit = false;
     if (ast(method_ref).kind == AstKind::NeutralBracket &&
-        ast(child(method_ref, 0)).kind == AstKind::Member &&
-        !occurrence(child(method_ref, 0))) {
-      method_explicit = true;
-      for (size_t i = 1; i < ast(method_ref).children.size(); ++i)
-        method_args.push_back(parse_type(child(method_ref, i)));
-      method_ref = child(method_ref, 0);
+        !ast(method_ref).children.empty()) {
+      auto inner = transparent(child(method_ref, 0));
+      if (ast(inner).kind == AstKind::Member && !occurrence(inner)) {
+        method_explicit = true;
+        for (size_t i = 1; i < ast(method_ref).children.size(); ++i)
+          method_args.push_back(parse_type(child(method_ref, i)));
+        method_ref = inner;
+      }
     }
     if (ast(method_ref).kind == AstKind::Member && !occurrence(method_ref)) {
       auto base = child(method_ref, 0);
@@ -1184,6 +1298,12 @@ class Checker {
                           expected);
       }
       auto receiver = expression(base);
+      if (type(receiver.value.type).kind == TypeKind::ForeignOpaque) {
+        if (method_explicit) unavailable(r, "external generic methods are not supported");
+        auto candidates = foreign_members(receiver.value.type, name, "method");
+        if (candidates.empty()) unavailable(r, "external member is not declared");
+        return foreign_call(r, method_ref, candidates, receiver);
+      }
       if (type(receiver.value.type).kind == TypeKind::NominalStruct)
         for (const auto &f : nominal(receiver.value.type).fields)
           if (symbol(f.symbol).name == name) {
@@ -1367,6 +1487,11 @@ class Checker {
       c.signature = signatures.at(s->value);
     } else {
       auto callee = checked_callee ? *checked_callee : expression(callee_ref);
+      if (type(callee.value.type).kind == TypeKind::ForeignOpaque) {
+        auto candidates = foreign_members(callee.value.type, "", "callable");
+        if (candidates.empty()) reject(r, "external object is not callable", "E_CALL_ARGUMENT");
+        return foreign_call(r, callee_ref, candidates, callee);
+      }
       if (type(callee.value.type).kind != TypeKind::Function)
         reject(callee_ref, "callee is not a function", "E_CALL_ARGUMENT");
       c.kind = CalleeKind::function_value;
@@ -1612,6 +1737,8 @@ class Checker {
       if (auto c = std::get_if<ConstraintCall>(&n.data))
         if (auto e = type(c->signature).throws_type)
           out.errors.insert(e->value);
+      if (auto r = std::get_if<ForeignRead>(&n.data))
+        out.errors.insert(m.foreign_bindings.at(r->binding.value).read_error.value);
       if (n.kind() == NodeKind::throw_) {
         out.errors.insert(m.nodes.at(n.children[0].value).type.value);
         out.falls = false;
@@ -2073,15 +2200,28 @@ class Checker {
     return type_patterns_overlap(a, b, m.types);
   }
   void declarations() {
+    const auto &project = *m.resolved->project;
+    const bool has_read_error = std::any_of(project.foreign_bindings.begin(), project.foreign_bindings.end(),
+      [](const auto &d) { auto t = std::get_if<modules::BindingType>(&d.detail);
+        return t && t->kind == "runtime_error" && d.identity == "lang.py.Error"; });
+    if (!project.foreign_bindings.empty() && !has_read_error)
+      for (const auto &owner : project.modules)
+        for (const auto &im : owner.imports)
+          if (project.module(im.target).binding)
+            unavailable({owner.id, im.file, im.node},
+              "foreign reads require the declared lang.py.Error type (toolchain std binding)");
+    m.foreign_bindings = hir::detail::binding_records(project, m.types);
     std::vector<Ref> top;
     for (const auto &mod : m.resolved->project->modules) {
-      if (!mod.foreign_exports.empty() || mod.files.empty()) {
-        for (const auto &owner : m.resolved->project->modules)
-          for (const auto &im : owner.imports)
-            if (im.target == mod.id)
-              unavailable({owner.id, im.file, im.node},
-                          "foreign declarations require T10/T11");
-        throw std::invalid_argument("foreign module has no importing source");
+      if (mod.binding) {
+        const auto &backends = m.resolved->project->bindings.at(mod.binding->bundle).allowed_backends;
+        const std::string backend = m.config.backend == Backend::python ? "python" : "native";
+        if (std::find(backends.begin(), backends.end(), backend) == backends.end())
+          for (const auto &owner : m.resolved->project->modules)
+            for (const auto &im : owner.imports)
+              if (im.target == mod.id)
+                unavailable({owner.id, im.file, im.node}, "external module is unavailable for this backend");
+        continue;
       }
       for (size_t f = 0; f < mod.files.size(); ++f)
         for (auto id : mod.files[f]->node(mod.files[f]->root).children) {
@@ -2123,6 +2263,8 @@ class Checker {
       }
     auto field_value_type = [&](Ref field) {
       auto t = parse_type(child(field, 0));
+      if (type(t).kind == TypeKind::ForeignOpaque)
+        unavailable(field, "external aggregate fields are not supported");
       if (type(t).kind == TypeKind::String)
         unavailable(field,
                     "string aggregate fields require owned-value support");
@@ -2387,6 +2529,8 @@ class Checker {
         own_error = type(c->signature).throws_type;
       if (auto c = std::get_if<ConstraintCall>(&n.data))
         own_error = type(c->signature).throws_type;
+      if (auto r = std::get_if<ForeignRead>(&n.data))
+        own_error = m.foreign_bindings.at(r->binding.value).read_error;
       if (std::holds_alternative<Throw>(n.data))
         own_error = m.nodes.at(n.children[0].value).type;
       if (own_error) {
@@ -2807,10 +2951,10 @@ check_types(const PhaseResult<modules::ResolvedProject> &resolved,
 }
 PhaseResult<VerifiedHirModule>
 check_project(std::shared_ptr<const modules::ResolvedProject> r,
-              std::optional<CheckConfig> c, std::stop_token stop) {
+              std::optional<CheckConfig> c, std::stop_token stop, hir::VerifyMode mode) {
   auto typed = check_types(std::move(r), c, stop);
   if (typed.success())
-    return hir::verify(*typed.value, stop);
+    return hir::verify(*typed.value, stop, mode);
   PhaseResult<VerifiedHirModule> result;
   result.state = typed.state;
   result.failure = typed.failure;
@@ -2819,10 +2963,10 @@ check_project(std::shared_ptr<const modules::ResolvedProject> r,
 }
 PhaseResult<VerifiedHirModule>
 check_project(const PhaseResult<modules::ResolvedProject> &r,
-              std::optional<CheckConfig> c, std::stop_token stop) {
+              std::optional<CheckConfig> c, std::stop_token stop, hir::VerifyMode mode) {
   auto typed = check_types(r, c, stop);
   if (typed.success())
-    return hir::verify(*typed.value, stop);
+    return hir::verify(*typed.value, stop, mode);
   PhaseResult<VerifiedHirModule> result;
   result.state = typed.state;
   result.failure = typed.failure;

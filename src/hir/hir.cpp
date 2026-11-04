@@ -1,5 +1,6 @@
 #include "lang/hir/hir.hpp"
 #include "ownership.hpp"
+#include "foreign.hpp"
 #include <algorithm>
 #include <functional>
 #include <iomanip>
@@ -69,6 +70,7 @@ TypeId TypeContext::intern(Type t) {
   case TypeKind::NominalEnum:
   case TypeKind::TypeParameter:
   case TypeKind::ForeignOpaque:
+  case TypeKind::ForeignCallable:
   case TypeKind::Error:
     break;
   default:
@@ -80,7 +82,7 @@ TypeId TypeContext::intern(Type t) {
   if (t.kind != TypeKind::SignedInt && t.kind != TypeKind::UnsignedInt &&
       t.kind != TypeKind::Float && t.bits)
     bad();
-  if (!nominal(t.kind) && t.kind != TypeKind::ForeignOpaque &&
+  if (!nominal(t.kind) && t.kind != TypeKind::ForeignOpaque && t.kind != TypeKind::ForeignCallable &&
       (t.declaration.value || t.binding.value))
     bad();
   if (nominal(t.kind) && t.binding.value)
@@ -423,6 +425,7 @@ class Verifier {
     case NodeKind::vec_init:
     case NodeKind::index_read:
     case NodeKind::vec_slice:
+    case NodeKind::foreign_read:
       return true;
     default:
       return false;
@@ -451,8 +454,16 @@ class Verifier {
     if (validated_types.count({id.value, allowed}))
       return;
     const auto &t = type(id);
-    need(t.kind != TypeKind::Error && t.kind != TypeKind::ForeignOpaque,
-         "invalid/unimplemented type");
+    need(t.kind != TypeKind::Error, "invalid/unimplemented type");
+    if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable) {
+      need(!t.declaration.value && t.binding.value < m.foreign_bindings.size(),
+           "foreign type binding index");
+      const auto &d = m.resolved->project->foreign_binding(t.binding);
+      need(t.kind == TypeKind::ForeignOpaque
+               ? std::holds_alternative<modules::BindingType>(d.detail)
+               : std::holds_alternative<modules::BindingCallable>(d.detail),
+           "foreign type declaration category");
+    }
     if (t.kind == TypeKind::TypeParameter) {
       need(allowed.count(t.declaration.value),
            "unbound type parameter in function/declaration");
@@ -475,7 +486,13 @@ class Verifier {
     if (t.kind == TypeKind::Function) {
       if (t.throws_type)
         valid_type(*t.throws_type, allowed, depth + 1);
+      need(type(t.result).kind != TypeKind::ForeignCallable &&
+               (!t.throws_type || type(*t.throws_type).kind != TypeKind::ForeignCallable),
+           "internal foreign callable in function output");
       for (auto p : t.parameters) {
+        need(type(p.type).kind != TypeKind::ForeignCallable &&
+                 (type(p.type).kind != TypeKind::ForeignOpaque || p.mode == ParamMode::ordinary),
+             "internal callable/external move parameter");
         need(
             p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
                 (p.mode == ParamMode::inout && inout_scalar(type(p.type).kind)),
@@ -588,7 +605,157 @@ class Verifier {
     need(l.bits == ((neg ? uint64_t{0} - magnitude : magnitude) & mask),
          "integer bit pattern mismatch");
   }
+  modules::NodeRef unwrapped(modules::NodeRef ref) const {
+    const auto &file = *m.resolved->project->module(ref.module).files.at(ref.file);
+    while (file.node(ref.node).kind == AstKind::Parenthesized ||
+           file.node(ref.node).kind == AstKind::BracketItem ||
+           (file.node(ref.node).kind == AstKind::Unary &&
+            file.tokens.at(file.node(ref.node).token_begin).spelling == "+"))
+      ref.node = file.node(ref.node).children.at(0);
+    return ref;
+  }
+  std::optional<SymbolId> resolved_source(modules::NodeRef ref) const {
+    ref = unwrapped(ref);
+    for (const auto &o : m.resolved->occurrences)
+      if (same_ref(o.source, ref)) return o.symbol;
+    return {};
+  }
+  const ForeignBinding &foreign_binding(ForeignBindingId id) const {
+    need(id.value < m.foreign_bindings.size(), "foreign binding index");
+    return m.foreign_bindings[id.value];
+  }
+  void foreign_read(HirNodeId id) const {
+    const auto &n = node(id);
+    auto binding = std::get<ForeignRead>(n.data).binding;
+    const auto &b = foreign_binding(binding);
+    const auto &d = m.resolved->project->foreign_binding(binding);
+    need(n.type == b.type, "foreign read result type");
+    if (b.signature) {
+      size_t uses = 0;
+      for (const auto &parent : m.nodes)
+        for (auto ch : parent.children)
+          if (ch == id) {
+            auto call = std::get_if<Call>(&parent.data);
+            need(call && call->kind == CalleeKind::foreign && call->callee == id &&
+                     call->binding == binding, "foreign callable escaped adjacent call");
+            ++uses;
+          }
+      need(uses == 1, "foreign callable must have one adjacent call");
+    } else
+      need(std::holds_alternative<modules::BindingValue>(d.detail),
+           "external type declaration is not a runtime value");
+    auto ref = unwrapped(n.source.node);
+    const auto &file = *m.resolved->project->module(ref.module).files.at(ref.file);
+    const auto &ast = file.node(ref.node);
+    if (b.owner) {
+      need(n.children.size() == 1 && expr(n.children[0]).type == *b.owner,
+           "foreign receiver type/arity");
+      const auto &c = std::get<modules::BindingCallable>(d.detail);
+      auto receiver_ref = ref;
+      if (c.call_kind == "method") {
+        need(ast.kind == AstKind::Member && file.tokens.at(ast.token_end - 1).spelling == d.name,
+             "foreign source method name");
+        receiver_ref.node = ast.children.at(0);
+      } else need(c.call_kind == "callable", "foreign receiver call kind");
+      need(same_ref(unwrapped(node(n.children[0]).source.node), unwrapped(receiver_ref)),
+           "foreign receiver differs from source");
+      const auto &owner = m.resolved->project->foreign_binding(type(*b.owner).binding);
+      const auto &members = std::get<modules::BindingType>(owner.detail).members;
+      need(std::find(members.begin(), members.end(), binding) != members.end(),
+           "foreign owner member identity");
+    } else {
+      need(n.children.empty(), "module foreign read cannot have receiver");
+      auto sid = resolved_source(ref);
+      need(sid.has_value(), "foreign export source has no symbol");
+      auto ex = m.resolved->foreign_export(*sid);
+      need(ex && (b.signature ? std::find(ex->candidates.begin(), ex->candidates.end(), binding) != ex->candidates.end()
+                             : ex->declaration == binding), "foreign read differs from resolved export");
+    }
+  }
+  void foreign_call(const HirNode &n, const Call &c) const {
+    need(c.binding.has_value() && c.callee.has_value() && !c.direct_symbol && c.type_args.empty(),
+         "foreign call metadata");
+    const auto &b = foreign_binding(*c.binding);
+    need(b.signature == c.signature && n.type == type(c.signature).result,
+         "foreign call signature/result");
+    const auto &target = expr(*c.callee);
+    auto read = std::get_if<ForeignRead>(&target.data);
+    need(read && read->binding == *c.binding && target.type == b.type,
+         "foreign call target identity");
+    const auto &decl = std::get<modules::BindingCallable>(m.resolved->project->foreign_binding(*c.binding).detail);
+    const auto &file = *m.resolved->project->module(n.source.node.module).files.at(n.source.node.file);
+    const auto &ast = file.node(n.source.node.node);
+    need(ast.kind == AstKind::Call && ast.children.size() == c.args.size() + 1 &&
+             n.children.size() == c.args.size() + 1 && n.children[0] == *c.callee,
+         "foreign call source/children arity and target order");
+    auto ref = n.source.node; ref.node = ast.children[0];
+    need(same_ref(unwrapped(target.source.node), unwrapped(ref)), "foreign call source target");
+    std::vector<std::optional<std::string>> labels;
+    for (size_t i = 0; i < c.args.size(); ++i) {
+      const auto &a = c.args[i];
+      const auto &syntax = file.node(ast.children[i + 1]);
+      need(syntax.kind == AstKind::Argument && syntax.children.size() == 1,
+           "foreign source argument kind");
+      std::optional<std::string> label;
+      if (file.tokens.at(syntax.token_begin + 1).spelling == ":")
+        label = std::string(file.tokens.at(syntax.token_begin).spelling);
+      labels.push_back(label);
+      ref.node = syntax.children[0];
+      auto er = unwrapped(ref);
+      const auto &e = file.node(er.node);
+      need(!(e.kind == AstKind::Unary &&
+             (file.tokens.at(e.token_begin).spelling == "move" ||
+              file.tokens.at(e.token_begin).spelling == "inout")), "foreign source argument mode");
+      need(a.source_index == i && a.label == label && a.mode == ParamMode::ordinary &&
+               n.children[i + 1] == a.expression &&
+               same_ref(unwrapped(expr(a.expression).source.node), er),
+           "foreign argument source order/identity/label/mode");
+    }
+    auto bound = detail::bind_arguments(decl, labels);
+    need(bound.has_value() && bound->omitted == c.omitted, "foreign missing/optional parameters");
+    std::vector<ForeignBindingId> candidates;
+    if (b.owner) {
+      const auto &owner = m.resolved->project->foreign_binding(type(*b.owner).binding);
+      const auto &name = m.resolved->project->foreign_binding(*c.binding).name;
+      for (auto member : std::get<modules::BindingType>(owner.detail).members) {
+        const auto &d = m.resolved->project->foreign_binding(member);
+        const auto &other = std::get<modules::BindingCallable>(d.detail);
+        if (other.call_kind == decl.call_kind && d.name == name) candidates.push_back(member);
+      }
+    } else {
+      auto sid = resolved_source(target.source.node);
+      need(sid.has_value(), "foreign candidate source identity");
+      auto ex = m.resolved->foreign_export(*sid);
+      need(ex != nullptr, "foreign candidate source export");
+      candidates = ex->candidates;
+    }
+    size_t matches = 0;
+    for (auto candidate : candidates) {
+      const auto &other = std::get<modules::BindingCallable>(m.resolved->project->foreign_binding(candidate).detail);
+      auto mapping = detail::bind_arguments(other, labels);
+      if (!mapping) continue;
+      const auto &signature = type(*foreign_binding(candidate).signature);
+      bool match = true;
+      for (size_t i = 0; i < c.args.size(); ++i)
+        match &= expr(c.args[i].expression).type == signature.parameters.at(mapping->parameters[i]).type;
+      matches += match;
+    }
+    need(matches == 1, "foreign candidate is not uniquely selected");
+    const auto &sig = type(c.signature);
+    for (size_t i = 0; i < c.args.size(); ++i) {
+      const auto &a = c.args[i];
+      need(a.parameter_index == bound->parameters[i] &&
+               sig.parameters.at(a.parameter_index).mode == ParamMode::ordinary &&
+               expr(a.expression).type == sig.parameters.at(a.parameter_index).type,
+           "foreign argument parameter index/type");
+    }
+  }
   void check_call(const HirNode &n, const Call &c) const {
+    if (c.kind == CalleeKind::foreign) {
+      foreign_call(n, c);
+      return;
+    }
+    need(!c.binding && c.omitted.empty(), "foreign metadata on ordinary call");
     for (auto argument : c.type_args)
       valid_type(argument, allowed(scope(n.scope).function));
     const auto &sig = type(c.signature);
@@ -694,6 +861,8 @@ class Verifier {
     need(!n.data.valueless_by_exception(), "valueless HIR payload");
     source(n.source);
     valid_type(n.type, allowed(scope(n.scope).function));
+    need(type(n.type).kind != TypeKind::ForeignCallable || n.kind() == NodeKind::foreign_read,
+         "internal foreign callable used as a source value");
     const auto &ch = n.children;
     auto arity = [&](size_t count) {
       need(ch.size() == count, "node child count");
@@ -870,6 +1039,7 @@ class Verifier {
       effect_shape(n);
       break;
     case NodeKind::move: {
+      need(type(n.type).kind != TypeKind::ForeignOpaque, "external move is unsupported");
       const auto &mv = std::get<Move>(n.data);
       need(mv.binding ? ch.empty() : ch.size() == 1, "move source arity");
       if (!mv.binding)
@@ -916,6 +1086,9 @@ class Verifier {
                   AstKind::ForIn);
       break;
     }
+    case NodeKind::foreign_read:
+      foreign_read(id);
+      break;
     case NodeKind::unsupported:
       fail("unsupported HIR node: " + std::get<Unsupported>(n.data).feature,
            n.source.span);
@@ -962,6 +1135,12 @@ class Verifier {
       t.kind = TypeKind::TypeParameter;
       t.declaration = *sid;
     } else if (s.kind == modules::SymbolKind::type) {
+      if (auto ex = m.resolved->foreign_export(*sid)) {
+        need(ex->kind == modules::ForeignExportKind::type && ex->declaration && n.children.empty(),
+             "foreign source type identity/arity");
+        Type ft; ft.kind = TypeKind::ForeignOpaque; ft.binding = *ex->declaration;
+        return substituted.intern(ft);
+      }
       auto it = nominals.find(sid->value);
       need(it != nominals.end(), "type syntax nominal declaration");
       t.kind = it->second->kind;
@@ -2107,6 +2286,176 @@ class Verifier {
       return true;
     };
     std::map<uint64_t, size_t> expected, actual;
+    std::set<uint64_t> expected_foreign_reads, expected_foreign_calls;
+    std::set<uint64_t> actual_foreign_reads, actual_foreign_calls;
+    std::map<uint64_t, std::set<uint64_t>> node_types;
+    for (const auto &n : m.nodes)
+      if (scope(n.scope).function == f.symbol)
+        node_types[n.source.node.node.value].insert(n.type.value);
+    auto unwrap_source = [&](AstNodeId id) {
+      for (;;) {
+        const auto &a = file.node(id);
+        if (a.kind != AstKind::Parenthesized &&
+            a.kind != AstKind::BracketItem &&
+            !(a.kind == AstKind::Unary &&
+              file.tokens.at(a.token_begin).spelling == "+"))
+          return id;
+        need(!a.children.empty(), "transparent source wrapper has no operand");
+        id = a.children[0];
+      }
+    };
+    auto source_symbol = [&](AstNodeId id) -> std::optional<SymbolId> {
+      auto r = ref;
+      r.node = unwrap_source(id);
+      for (const auto &o : m.resolved->occurrences)
+        if (same_ref(o.source, r))
+          return o.symbol;
+      return {};
+    };
+    auto local_type = [&](AstNodeId id) -> std::optional<TypeId> {
+      auto sid = source_symbol(id);
+      if (!sid)
+        return {};
+      for (const auto &instance : m.instances)
+        if (instance.symbol == f.symbol)
+          for (auto [from, to] : instance.renamed)
+            if (from == *sid) {
+              sid = to;
+              break;
+            }
+      auto local = locals.find(sid->value);
+      if (local == locals.end() || local->second.function != f.symbol)
+        return {};
+      return local->second.type;
+    };
+    auto member_name = [&](AstNodeId id) {
+      const auto &a = file.node(id);
+      need(a.token_end > a.token_begin, "member source token range");
+      return file.tokens[a.token_end - 1].spelling;
+    };
+    auto common_result = [&](const std::vector<ForeignBindingId> &candidates)
+        -> std::optional<TypeId> {
+      std::optional<TypeId> result;
+      for (auto candidate : candidates) {
+        need(candidate.value < m.foreign_bindings.size(),
+             "foreign candidate index");
+        const auto &binding = m.foreign_bindings[candidate.value];
+        need(binding.signature.has_value(), "foreign candidate signature");
+        auto type = this->type(*binding.signature).result;
+        if (result && *result != type)
+          return {};
+        result = type;
+      }
+      return result;
+    };
+    auto method_candidates = [&](TypeId receiver, std::string_view name) {
+      std::vector<ForeignBindingId> result;
+      const auto &t = type(receiver);
+      if (t.kind != TypeKind::ForeignOpaque)
+        return result;
+      const auto &owner = m.resolved->project->foreign_binding(t.binding);
+      const auto *decl = std::get_if<modules::BindingType>(&owner.detail);
+      if (!decl)
+        return result;
+      for (auto id : decl->members) {
+        const auto &member = m.resolved->project->foreign_binding(id);
+        const auto *call = std::get_if<modules::BindingCallable>(&member.detail);
+        if (call && call->call_kind == "method" && member.name == name)
+          result.push_back(id);
+      }
+      return result;
+    };
+    auto callable_candidates = [&](TypeId receiver) {
+      std::vector<ForeignBindingId> result;
+      const auto &t = type(receiver);
+      if (t.kind != TypeKind::ForeignOpaque)
+        return result;
+      const auto &owner = m.resolved->project->foreign_binding(t.binding);
+      const auto *decl = std::get_if<modules::BindingType>(&owner.detail);
+      if (!decl)
+        return result;
+      for (auto id : decl->members) {
+        const auto &member = m.resolved->project->foreign_binding(id);
+        const auto *call = std::get_if<modules::BindingCallable>(&member.detail);
+        if (call && call->call_kind == "callable")
+          result.push_back(id);
+      }
+      return result;
+    };
+    std::function<std::optional<TypeId>(AstNodeId, unsigned)> ast_type;
+    ast_type = [&](AstNodeId id, unsigned depth) -> std::optional<TypeId> {
+      if (depth > 64)
+        return {};
+      id = unwrap_source(id);
+      const auto &a = file.node(id);
+      if (a.kind == AstKind::Name || a.kind == AstKind::Member) {
+        if (auto local = local_type(id))
+          return local;
+        if (auto sid = source_symbol(id))
+          if (auto ex = m.resolved->foreign_export(*sid);
+              ex && ex->declaration &&
+              ex->declaration->value < m.foreign_bindings.size())
+            return m.foreign_bindings[ex->declaration->value].type;
+        if (a.kind == AstKind::Member) {
+          auto base = ast_type(a.children.at(0), depth + 1);
+          if (base && type(*base).kind == TypeKind::ForeignOpaque) {
+            auto candidates = method_candidates(*base, member_name(id));
+            if (!candidates.empty())
+              return m.foreign_bindings[candidates.front().value].type;
+          }
+          if (base && type(*base).kind == TypeKind::NominalStruct) {
+            const auto &d = nominal_type(*base);
+            for (const auto &field : d.fields)
+              if (symbol(field.symbol).name == member_name(id))
+                return field_type(*base, field);
+          }
+        }
+        auto found = node_types.find(id.value);
+        if (found != node_types.end() && found->second.size() == 1)
+          return TypeId{*found->second.begin()};
+        return {};
+      }
+      if (a.kind == AstKind::Call && !a.children.empty()) {
+        auto callee = a.children[0];
+        auto target = unwrap_source(callee);
+        const auto &t = file.node(target);
+        if (auto sid = source_symbol(target)) {
+          if (auto ex = m.resolved->foreign_export(*sid);
+              ex && !ex->candidates.empty())
+            return common_result(ex->candidates);
+          if (symbol(*sid).kind == modules::SymbolKind::function) {
+            auto function = functions.find(sid->value);
+            if (function != functions.end())
+              return type(function->second->signature).result;
+          }
+        }
+        auto method = target;
+        if (t.kind == AstKind::NeutralBracket && !t.children.empty())
+          method = unwrap_source(t.children[0]);
+        const auto &mnode = file.node(method);
+        if (mnode.kind == AstKind::Member && !source_symbol(method)) {
+          auto base = ast_type(mnode.children.at(0), depth + 1);
+          if (base && type(*base).kind == TypeKind::ForeignOpaque) {
+            auto candidates = method_candidates(*base, member_name(method));
+            if (!candidates.empty())
+              return common_result(candidates);
+          }
+        }
+        if (auto callee_type = ast_type(callee, depth + 1)) {
+          if (type(*callee_type).kind == TypeKind::Function)
+            return type(*callee_type).result;
+          if (type(*callee_type).kind == TypeKind::ForeignOpaque) {
+            auto candidates = callable_candidates(*callee_type);
+            if (!candidates.empty())
+              return common_result(candidates);
+          }
+        }
+        auto found = node_types.find(id.value);
+        if (found != node_types.end() && found->second.size() == 1)
+          return TypeId{*found->second.begin()};
+      }
+      return {};
+    };
     std::vector<AstNodeId> todo{ref.node};
     while (!todo.empty()) {
       check_cancelled(stop);
@@ -2117,6 +2466,51 @@ class Verifier {
           (n.kind == AstKind::Function || n.kind == AstKind::FunctionLiteral ||
            n.kind == AstKind::FunctionType))
         continue;
+      if (n.kind == AstKind::Call && !n.children.empty()) {
+        auto callee = n.children[0];
+        auto target = unwrap_source(callee);
+        const auto &t = file.node(target);
+        bool foreign = false;
+        if (auto sid = source_symbol(target))
+          if (auto ex = m.resolved->foreign_export(*sid);
+              ex && !ex->candidates.empty()) {
+            expected_foreign_reads.insert(target.value);
+            foreign = true;
+          }
+        auto method = target;
+        if (t.kind == AstKind::NeutralBracket && !t.children.empty())
+          method = unwrap_source(t.children[0]);
+        const auto &mnode = file.node(method);
+        if (!foreign && mnode.kind == AstKind::Member && !source_symbol(method)) {
+          auto base = ast_type(mnode.children.at(0), 0);
+          if (base && type(*base).kind == TypeKind::ForeignOpaque) {
+            expected_foreign_reads.insert(unwrap_source(method).value);
+            foreign = true;
+          }
+        }
+        if (!foreign) {
+          auto callee_type = ast_type(callee, 0);
+          if (callee_type && type(*callee_type).kind == TypeKind::ForeignOpaque) {
+            expected_foreign_reads.insert(target.value);
+            foreign = true;
+          }
+        }
+        if (foreign)
+          expected_foreign_calls.insert(id.value);
+      }
+      if (n.kind == AstKind::Name || n.kind == AstKind::Member) {
+        auto key = unwrap_source(id);
+        if (auto sid = source_symbol(id))
+          if (auto ex = m.resolved->foreign_export(*sid);
+              ex && (ex->kind == modules::ForeignExportKind::value ||
+                     ex->kind == modules::ForeignExportKind::function))
+            expected_foreign_reads.insert(key.value);
+        if (n.kind == AstKind::Member && !source_symbol(id)) {
+          auto base = ast_type(n.children.at(0), 0);
+          if (base && type(*base).kind == TypeKind::ForeignOpaque)
+            expected_foreign_reads.insert(key.value);
+        }
+      }
       if (n.kind == AstKind::Try || n.kind == AstKind::Defer ||
           n.kind == AstKind::Throw || n.kind == AstKind::Catch ||
           n.kind == AstKind::List || n.kind == AstKind::Slice ||
@@ -2132,6 +2526,11 @@ class Verifier {
       const auto &n = node(pending.back());
       pending.pop_back();
       const auto kind = file.node(n.source.node.node).kind;
+      if (n.kind() == NodeKind::foreign_read)
+        actual_foreign_reads.insert(unwrapped(n.source.node).node.value);
+      if (auto call = std::get_if<Call>(&n.data);
+          call && call->kind == CalleeKind::foreign)
+        actual_foreign_calls.insert(n.source.node.node.value);
       if (kind == AstKind::Try || kind == AstKind::Defer ||
           kind == AstKind::Throw || kind == AstKind::List ||
           kind == AstKind::Slice || kind == AstKind::ForIn ||
@@ -2157,6 +2556,10 @@ class Verifier {
           ++actual[c.source.node.node.value];
       pending.insert(pending.end(), n.children.begin(), n.children.end());
     }
+    need(actual_foreign_reads == expected_foreign_reads,
+         "HIR foreign reads differ from source operations");
+    need(actual_foreign_calls == expected_foreign_calls,
+         "HIR foreign calls differ from source operations");
     need(actual == expected,
          "HIR omits or duplicates source error/cleanup constructs");
     bool owning = false;
@@ -2523,6 +2926,8 @@ class Verifier {
         return type(c->signature).throws_type;
       if (auto c = std::get_if<ConstraintCall>(&n.data))
         return type(c->signature).throws_type;
+      if (auto r = std::get_if<ForeignRead>(&n.data))
+        return m.foreign_bindings.at(r->binding.value).read_error;
       if (n.kind() == NodeKind::throw_)
         return node(n.children[0]).type;
       return {};
@@ -2836,6 +3241,8 @@ class Verifier {
         if (auto c = std::get_if<ConstraintCall>(&n.data))
           if (auto e = type(c->signature).throws_type)
             out.errors.insert(e->value);
+        if (auto r = std::get_if<ForeignRead>(&n.data))
+          out.errors.insert(m.foreign_bindings.at(r->binding.value).read_error.value);
         if (n.kind() == NodeKind::throw_) {
           out.errors.insert(node(n.children[0]).type.value);
           out.falls = false;
@@ -2882,6 +3289,10 @@ public:
     need(m.identity.value < project.modules.size() &&
              project.modules[m.identity.value].id == m.identity,
          "module identity index");
+    auto projected = m.types;
+    auto expected_bindings = detail::binding_records(project, projected);
+    need(projected.size() == m.types.size() && expected_bindings == m.foreign_bindings,
+         "foreign typed records differ from declarations");
     declarations();
     std::set<uint64_t> declared_parameters;
     for (const auto &sym : m.resolved->symbols)
@@ -3080,9 +3491,11 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
     std::set<uint64_t> checked_types;
     std::function<bool(TypeId)> supported = [&](TypeId id) {
       check_cancelled(stop);
+      const auto t = *storage_types.find(id);
+      if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable)
+        return false;
       if (!checked_types.insert(id.value).second)
         return true;
-      const auto t = *storage_types.find(id);
       if (t.kind == TypeKind::Vec)
         return ownership_values && supported(t.type_args.at(0));
       if (t.kind == TypeKind::NominalStruct ||
@@ -3120,7 +3533,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
           if (!seen.insert(current.value).second)
             continue;
           const auto value = *storage_types.find(current);
-          if (value.kind == TypeKind::Vec && !ownership_values)
+          if (value.kind == TypeKind::ForeignOpaque || value.kind == TypeKind::ForeignCallable ||
+              (value.kind == TypeKind::Vec && !ownership_values))
             return false;
           if (value.kind == TypeKind::NominalStruct ||
               value.kind == TypeKind::NominalEnum) {
@@ -3150,7 +3564,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       // Function fields are storage leaves. Do not expand their signatures
       // here (e.g. S[T].f: func() S[S[T]]); functions/calls are checked below.
       return t.kind != TypeKind::Vec && t.kind != TypeKind::TypeParameter &&
-             t.kind != TypeKind::Error && t.kind != TypeKind::ForeignOpaque;
+             t.kind != TypeKind::Error && t.kind != TypeKind::ForeignOpaque &&
+             t.kind != TypeKind::ForeignCallable;
     };
     auto signature_supported = [&](TypeId id) {
       const auto t = *m.types.find(id);
@@ -3176,6 +3591,12 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         auto id = todo.back();
         todo.pop_back();
         const auto &n = m.nodes[id.value];
+        if (n.kind() == NodeKind::foreign_read ||
+            (std::holds_alternative<Call>(n.data) &&
+             std::get<Call>(n.data).kind == CalleeKind::foreign)) {
+          unavailable(n.source, "backend has not implemented foreign reads/calls");
+          return r;
+        }
         switch (n.kind()) {
         case NodeKind::struct_init:
         case NodeKind::enum_init:
@@ -3223,11 +3644,28 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
   return r;
 }
 PhaseResult<VerifiedHirModule> verify(const HirModule &input,
-                                      std::stop_token stop) {
+                                      std::stop_token stop, VerifyMode mode) {
   PhaseResult<VerifiedHirModule> r;
   try {
     auto module = freeze(input, stop);
-    auto checked = check_backend_capabilities(*module, stop);
+    auto checked = mode == VerifyMode::backend
+                       ? check_backend_capabilities(*module, stop)
+                       : verify_types(*module, stop);
+    if (checked.success()) {
+      const auto &p = *module->resolved->project;
+      for (const auto &mod : p.modules)
+        if (mod.binding) {
+          const auto &backends = p.bindings.at(mod.binding->bundle).allowed_backends;
+          const std::string name = module->config.backend == Backend::python ? "python" : "native";
+          if (std::find(backends.begin(), backends.end(), name) == backends.end()) {
+            checked.value.reset(); checked.state = PhaseState::failed;
+            checked.failure = FailureKind::unsupported;
+            checked.diagnostics.push_back({"E_CAPABILITY_UNAVAILABLE", "type", "error",
+              "foreign source module is unavailable for this backend"});
+            break;
+          }
+        }
+    }
     if (!checked.success()) {
       r.state = checked.state;
       r.failure = checked.failure;
@@ -3285,6 +3723,13 @@ std::string dump(const HirModule &m) {
     << " backend=" << int(m.config.backend)
     << " word_bits=" << m.config.word_bits << '\n';
   s << dump(m.types);
+  for (const auto &b : m.foreign_bindings) {
+    s << "foreign " << b.binding.value << " type=" << b.type.value << " signature=";
+    if (b.signature) s << b.signature->value; else s << '-';
+    s << " owner=";
+    if (b.owner) s << b.owner->value; else s << '-';
+    s << " read_error=" << b.read_error.value << '\n';
+  }
   auto params = [&](const auto &ps) {
     for (const auto &p : ps) {
       s << " generic=" << p.symbol.value << ':';
@@ -3500,9 +3945,13 @@ std::string dump(const HirModule &m) {
             for (const auto &a : data.args)
               s << " arg=" << a.source_index << ':' << a.parameter_index << ':'
                 << a.expression.value;
+          } else if constexpr (std::is_same_v<T, ForeignRead>) {
+            s << " foreign_read=" << data.binding.value;
           } else if constexpr (std::is_same_v<T, Call>) {
             for (auto t : data.type_args)
               s << " type_arg=" << t.value;
+            if (data.binding) s << " binding=" << data.binding->value;
+            for (auto p : data.omitted) s << " omitted=" << p;
             s << " callee_kind=" << int(data.kind)
               << " signature=" << data.signature.value << " direct=";
             if (data.direct_symbol)

@@ -19,7 +19,8 @@ enum class TypeKind {
   TypeParameter,
   ForeignOpaque,
   Error,
-  Vec
+  Vec,
+  ForeignCallable
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -131,7 +132,7 @@ struct ShortCircuit {
 }; // children: lhs, rhs; rhs is conditional
 struct IntegerConvert {
 }; // child: integer; checked conversion (Panic on overflow)
-enum class CalleeKind { direct, function_value };
+enum class CalleeKind { direct, function_value, foreign };
 struct CallArg {
   uint32_t source_index = 0, parameter_index = 0;
   std::optional<std::string> label;
@@ -145,6 +146,8 @@ struct Call {
   std::optional<HirNodeId> callee;
   std::vector<CallArg> args; // source order, never sorted by parameter_index
   std::vector<TypeId> type_args;
+  std::optional<ForeignBindingId> binding;
+  std::vector<uint32_t> omitted; // declaration indices, sorted; no value slots
   // children: [callee when function_value], then args in source order.
 };
 struct Block {};               // children: statements in execution order; Unit
@@ -233,6 +236,20 @@ struct ForIn {
   SymbolId element;
   ScopeId body_scope;
   HirNodeId body;
+};
+struct ForeignRead {
+  ForeignBindingId binding;
+  // A method/callable has one receiver child. Module exports have none.
+};
+// Typed projection of Project.foreign_bindings, at the same zero-based index.
+// Identity, host attributes, parameter restrictions, ownership and effects are
+// read from the corresponding frozen Project declaration, not import aliases.
+struct ForeignBinding {
+  ForeignBindingId binding;
+  TypeId type; // opaque type, exported value, or internal ForeignCallable
+  std::optional<TypeId> signature, owner;
+  TypeId read_error; // lang.py.Error, distinct from diagnostic TypeKind::Error
+  bool operator==(const ForeignBinding &) const = default;
 };
 enum class OwnerKind {
   binding,
@@ -339,7 +356,7 @@ using NodeData =
                  ExpressionStatement, If, For, Noop, Return, Break, Continue,
                  Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
                  Switch, ConstraintCall, Try, Defer, Throw, Move, VecInit,
-                 IndexRead, IndexPlace, VecSlice, ForIn>;
+                 IndexRead, IndexPlace, VecSlice, ForIn, ForeignRead>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -379,7 +396,8 @@ enum class NodeKind {
   index_read,
   index_place,
   vec_slice,
-  for_in
+  for_in,
+  foreign_read
 };
 struct HirNode {
   TypeId type;
@@ -478,6 +496,7 @@ struct HirModule {
   std::vector<FunctionTemplate> templates;
   std::vector<FunctionInstance> instances;
   Ownership ownership;
+  std::vector<ForeignBinding> foreign_bindings;
 };
 enum class ValueKind {
   trivial,
@@ -485,7 +504,10 @@ enum class ValueKind {
   structure,
   enumeration,
   dependent,
-  unsupported
+  unsupported,
+  foreign_reference,
+  foreign_callable,
+  foreign_error
 };
 struct ValueField {
   std::optional<SymbolId> variant;
@@ -511,13 +533,15 @@ PhaseResult<std::monostate> verify_types(const HirModule &,
 PhaseResult<std::monostate> check_backend_capabilities(const HirModule &,
                                                        std::stop_token = {});
 class VerifiedHirModule;
-PhaseResult<VerifiedHirModule> verify(const HirModule &, std::stop_token = {});
+enum class VerifyMode { backend, static_only };
+PhaseResult<VerifiedHirModule> verify(const HirModule &, std::stop_token = {},
+                                     VerifyMode = VerifyMode::backend);
 class VerifiedHirModule {
   std::shared_ptr<const HirModule> module_;
   explicit VerifiedHirModule(std::shared_ptr<const HirModule> m)
       : module_(std::move(m)) {}
   friend PhaseResult<VerifiedHirModule> verify(const HirModule &,
-                                               std::stop_token);
+                                               std::stop_token, VerifyMode);
 
 public:
   const HirModule &module() const { return *module_; }

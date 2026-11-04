@@ -52,8 +52,15 @@ ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
     out.kind = ValueKind::dependent;
     return out;
   }
-  if (t.kind == TypeKind::String || t.kind == TypeKind::Error ||
-      t.kind == TypeKind::ForeignOpaque) {
+  if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable) {
+    const auto &d = m.resolved->project->foreign_binding(t.binding);
+    out.kind = t.kind == TypeKind::ForeignCallable ? ValueKind::foreign_callable :
+      std::get<modules::BindingType>(d.detail).kind == "runtime_error"
+        ? ValueKind::foreign_error : ValueKind::foreign_reference;
+    out.needs_drop = true;
+    return out;
+  }
+  if (t.kind == TypeKind::String || t.kind == TypeKind::Error) {
     out.reason =
         "dynamic string/foreign/error value ownership is not supported";
     return out;
@@ -77,8 +84,11 @@ ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
   active.insert(key);
   if (t.kind == TypeKind::Vec) {
     auto e = classify(m, t.type_args.at(0), active);
-    out.kind = e.kind == ValueKind::unsupported ? ValueKind::unsupported
-                                                : ValueKind::vec;
+    out.kind = e.kind == ValueKind::unsupported || e.kind == ValueKind::foreign_reference ||
+                       e.kind == ValueKind::foreign_callable || e.kind == ValueKind::foreign_error
+                   ? ValueKind::unsupported : ValueKind::vec;
+    if (out.kind == ValueKind::unsupported && e.reason.empty())
+      e.reason = "external values in Vec are not supported";
     out.needs_drop = out.kind != ValueKind::unsupported;
     out.reason = e.reason;
   } else {
@@ -101,9 +111,10 @@ ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
         out.fields.push_back({v, f.symbol, ft});
         out.needs_drop |= ops.needs_drop;
         out.pod_inout &= ops.pod_inout;
-        if (ops.kind == ValueKind::unsupported) {
+        if (ops.kind == ValueKind::unsupported || ops.kind == ValueKind::foreign_reference ||
+            ops.kind == ValueKind::foreign_callable || ops.kind == ValueKind::foreign_error) {
           out.kind = ValueKind::unsupported;
-          out.reason = ops.reason;
+          out.reason = ops.reason.empty() ? "external aggregate fields are not supported" : ops.reason;
         }
       }
     };
@@ -315,8 +326,13 @@ class Analysis {
           live.push_back(c);
     } else if (auto args = call_args(x)) {
       auto floor = active_borrows.size();
-      if (auto callee = call_callee(x))
+      if (auto callee = call_callee(x)) {
         expr_records(*callee, fe, live);
+        if (owned(n(*callee).type))
+          active_borrows.push_back({CleanupKind::end_borrow,
+                                    {OwnerKind::temporary, callee->value},
+                                    n(*callee).type});
+      }
       for (const auto &a : *args) {
         auto root = a.mode == ParamMode::ordinary ? borrow_root(a.expression)
                                                   : std::nullopt;
@@ -505,6 +521,8 @@ class Analysis {
       return ty(m, c->signature).throws_type;
     if (auto c = std::get_if<ConstraintCall>(&x.data))
       return ty(m, c->signature).throws_type;
+    if (auto r = std::get_if<ForeignRead>(&x.data))
+      return m.foreign_bindings.at(r->binding.value).read_error;
     if (x.kind() == NodeKind::throw_)
       return n(x.children[0]).type;
     return {};

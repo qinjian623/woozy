@@ -1,0 +1,8 @@
+find_package(json-c CONFIG REQUIRED)
+add_executable(lang_binding_static_test static_test.cpp)
+target_link_libraries(lang_binding_static_test PRIVATE lang_sema lang_backend_python json-c::json-c)
+add_test(NAME sema.t10 COMMAND lang_binding_static_test "${CMAKE_SOURCE_DIR}" "${CMAKE_CURRENT_BINARY_DIR}/cases")
+if(LANG_ENABLE_LLVM)
+  target_link_libraries(lang_binding_static_test PRIVATE lang_native)
+  target_compile_definitions(lang_binding_static_test PRIVATE LANG_T10_NATIVE=1)
+endif()
