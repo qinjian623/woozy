@@ -22,7 +22,7 @@ auto checked = sema::check_project(resolved, {}, {}, hir::VerifyMode::static_onl
 
 `static_only` 只跳过尚未实现的生成支持检查。项目 backend/word_bits 必须匹配，声明 `allowed_backends` 仍有效；使用外部模块的 native 源报 `E_CAPABILITY_UNAVAILABLE`。外部读取需要声明中的 `lang.py.Error`；没有该类型的旧测试绑定继续明确报未支持，不伪造 std 声明或恢复类型。
 
-`check_backend_capabilities` 始终拒绝具体函数可达的外部类型、`ForeignRead` 和外部 `Call`。即便调用只有标量参数、返回 Unit、调用签名没有 throws，也按操作本身拒绝。Python emit 仍独立调用该检查，静态包装不能用于生成外部代码；native lower 仍独立拒绝不支持的输入。未使用模板和类型池中的外部声明不会被当作可执行操作扫描。
+`check_backend_capabilities` 现在只对 Python/64 开放已实现的外部类型、读取和调用：可执行 callable 必须声明 `error_type=lang.py.Error`，所有参数为 ordinary；外部值读取也要求声明存在。native/其他 profile、无 throws 的外部 callable、move/inout 参数及其他未实现组合仍报 `E_CAPABILITY_UNAVAILABLE`。即便调用只有标量参数、返回 Unit，也按操作和声明本身检查。外部对象进入 Vec/聚合、函数值逃逸、外部索引/数据属性仍拒绝；返回外部对象的函数类型签名本身不被误拒。Python emit 仍独立调用该检查，native lower 仍独立拒绝不支持的输入；未使用模板和类型池中的外部声明不会被当作可执行操作扫描。实际生成范围见 [T10_PYTHON.md](T10_PYTHON.md)。
 
 ## 公共表示
 
@@ -67,10 +67,10 @@ ForeignOpaque、ForeignCallable、py.Error 的 `classify_value` 都返回 `needs
 
 紧邻调用目标外的透明括号不构成方法值逃逸：`(x.backward)()`、`(np.linspace)(...)`、`(m)(x)` 和 `get(x).backward()` 都按实际紧邻 Call 处理，并保留真实 Call/Member/自变量顺序。真正保存、返回或传递括号方法值，例如 `let v=(x.backward);`，仍报 `E_CAPABILITY_UNAVAILABLE`。
 
-未实现 Python 外部代码生成、异常桥接 runtime、真实库执行、训练或 GPU 验证。driver 尚未提供工具链标准绑定配置；本阶段通过上文 API 检查项目。没有修改后端、runtime、schema、正式锁或原 fixtures。
+Python/64 的有限外部生成和 runtime 异常桥接已实现，范围见 [T10_PYTHON.md](T10_PYTHON.md)；原 04 的 CPU 生成执行已在独立检查中用 API 和专用解释器实测，不等于正式依赖锁、完整 conformance、CLI 集成或 GPU 验证。driver 尚未提供工具链标准绑定配置；CLI 不能据此声称已接入 `std/py`。没有修改 schema、正式锁或原 fixtures；绑定仍为 draft。
 
 ## 测试和接入
 
 新增入口是 `tests/bindings/static_test.cpp`，总 CMake 已注册 `sema.t10`。测试使用真实 load/resolve/check_types/verify_types/verify/check_project API；额外绑定变体只写入测试输出目录。函数值调用的返回类型从已验证的 Function 签名取得，支持函数参数取得 Tensor 或 Linear 后的立即方法/对象调用，不依赖可被篡改的调用结果节点。
 
-测试包含原 04、P01–P06、原负例、零号绑定、重载、省略、乱序命名实参、读取与调用各自错误出口、失败前缀、对象和错误载荷 copy/返回/丢弃、冻结别名，以及逐类合法对照和坏 HIR。另有括号方法/函数/ callable、计算方法接收者、未知方法、方法值逃逸负例，以及实例方法/对象 callable/dtype 值读取三类外部操作被删除后清空 errors/exits 并重算 ownership 的坏 HIR；每类都有合法对照，删除后 `verify_types` 和静态 `verify` 都报 `E_IR_INVALID`。还实际检查静态包装不能通过 Python emit；LLVM 构建另检查 native lower 拒绝 Python 静态包装。所有失败尝试保留，实际构建与测试状态以外层 `checks/t10-static-implementation/correction/` 中报告、完整命令、退出码及源码 SHA-256 为准，不引用声明阶段或初版中断任务的历史通过数量。
+测试包含原 04、P01–P06、原负例、零号绑定、重载、省略、乱序命名实参、读取与调用各自错误出口、失败前缀、对象和错误载荷 copy/返回/丢弃、冻结别名，以及逐类合法对照和坏 HIR。另有括号方法/函数/ callable、计算方法接收者、未知方法、方法值逃逸负例，以及实例方法/对象 callable/dtype 值读取三类外部操作被删除后清空 errors/exits 并重算 ownership 的坏 HIR；每类都有合法对照，删除后 `verify_types` 和静态 `verify` 都报 `E_IR_INVALID`。还实际检查没有声明 `lang.py.Error` 的静态包装不能通过 Python emit；LLVM 构建另检查 native lower 拒绝 Python 静态包装。所有失败尝试保留，实际构建与测试状态以外层 `checks/t10-static-implementation/correction/` 中报告、完整命令、退出码及源码 SHA-256 为准，不引用声明阶段或初版中断任务的历史通过数量。

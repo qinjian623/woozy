@@ -86,3 +86,24 @@ add_test(NAME python.ownership_runtime COMMAND "${LANG_PYTHON312}"
 add_executable(lang_python_ownership_ir_test ownership_ir_test.cpp)
 target_link_libraries(lang_python_ownership_ir_test PRIVATE lang_sema lang_backend_python)
 add_test(NAME python.ownership_ir COMMAND lang_python_ownership_ir_test)
+# T10 generated host/binding and original-04 execution.  The interpreter must
+# be the dedicated CPython 3.12 environment with NumPy/PyTorch CPU installed;
+# a plain python3.12 without those packages is intentionally not substituted.
+set(LANG_T10_PYTHON "" CACHE FILEPATH "CPython 3.12 venv with NumPy/PyTorch CPU for T10")
+if(LANG_T10_PYTHON AND EXISTS "${LANG_T10_PYTHON}")
+  add_test(NAME python.t10_bindings COMMAND "${LANG_T10_PYTHON}"
+    "${CMAKE_CURRENT_LIST_DIR}/run_t10_bindings.py"
+    --helper $<TARGET_FILE:lang_python_emit>
+    --root "${LANG_PYTHON_TEST_ROOT}"
+    --out "${CMAKE_CURRENT_BINARY_DIR}/t10-bindings"
+    --python "${LANG_T10_PYTHON}"
+    --binding "${LANG_PYTHON_TEST_ROOT}/tests/python/t10_binding.json"
+    --example-binding "${LANG_PYTHON_TEST_ROOT}/contracts/python_bindings.example.json"
+    --reference "${LANG_PYTHON_TEST_ROOT}/baseline/samples/numpy_torch_reference.py"
+    --observe "${CMAKE_CURRENT_LIST_DIR}/observe_t10.py"
+    --original-observer "${CMAKE_CURRENT_LIST_DIR}/t10_original04.py"
+    --reference-observer "${CMAKE_CURRENT_LIST_DIR}/t10_reference04.py")
+  set_tests_properties(python.t10_bindings PROPERTIES TIMEOUT 600)
+else()
+  message(STATUS "python.t10_bindings: not_run (set LANG_T10_PYTHON)")
+endif()

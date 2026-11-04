@@ -3487,17 +3487,26 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
     const bool ownership_values =
         (m.config.backend == Backend::native || m.config.backend == Backend::python) &&
         m.config.word_bits == 64;
+    const bool foreign_values =
+        m.config.backend == Backend::python && m.config.word_bits == 64;
     TypeContext storage_types = m.types;
     std::set<uint64_t> checked_types;
     std::function<bool(TypeId)> supported = [&](TypeId id) {
       check_cancelled(stop);
       const auto t = *storage_types.find(id);
       if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable)
-        return false;
+        return foreign_values;
       if (!checked_types.insert(id.value).second)
         return true;
-      if (t.kind == TypeKind::Vec)
-        return ownership_values && supported(t.type_args.at(0));
+      if (t.kind == TypeKind::Vec) {
+        if (!ownership_values)
+          return false;
+        const auto &element = *storage_types.find(t.type_args.at(0));
+        if (element.kind == TypeKind::ForeignOpaque ||
+            element.kind == TypeKind::ForeignCallable)
+          return false;
+        return supported(t.type_args.at(0));
+      }
       if (t.kind == TypeKind::NominalStruct ||
           t.kind == TypeKind::NominalEnum) {
         const auto d = std::find_if(
@@ -3511,8 +3520,10 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         auto fields = [&](const auto &fs) {
           for (const auto &f : fs) {
             auto field = substitute(f.type, subst, storage_types);
-            if (storage_types.find(field)->kind == TypeKind::String ||
-                !supported(field))
+            const auto kind = storage_types.find(field)->kind;
+            if (kind == TypeKind::String ||
+                kind == TypeKind::ForeignOpaque ||
+                kind == TypeKind::ForeignCallable || !supported(field))
               return false;
           }
           return true;
@@ -3533,18 +3544,39 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
           if (!seen.insert(current.value).second)
             continue;
           const auto value = *storage_types.find(current);
-          if (value.kind == TypeKind::ForeignOpaque || value.kind == TypeKind::ForeignCallable ||
-              (value.kind == TypeKind::Vec && !ownership_values))
-            return false;
+          if (value.kind == TypeKind::ForeignOpaque ||
+              value.kind == TypeKind::ForeignCallable) {
+            if (!foreign_values)
+              return false;
+            continue;
+          }
+          if (value.kind == TypeKind::Vec) {
+            if (!ownership_values)
+              return false;
+            const auto &element = *storage_types.find(value.type_args.at(0));
+            if (element.kind == TypeKind::ForeignOpaque ||
+                element.kind == TypeKind::ForeignCallable)
+              return false;
+          }
           if (value.kind == TypeKind::NominalStruct ||
               value.kind == TypeKind::NominalEnum) {
             for (const auto &d : m.nominals)
               if (d.symbol == value.declaration) {
+                auto add = [&](TypeId field) {
+                  const auto kind = storage_types.find(field)->kind;
+                  if (kind == TypeKind::ForeignOpaque ||
+                      kind == TypeKind::ForeignCallable)
+                    return false;
+                  pending.push_back(field);
+                  return true;
+                };
                 for (const auto &f : d.fields)
-                  pending.push_back(f.type);
+                  if (!add(f.type))
+                    return false;
                 for (const auto &v : d.variants)
                   for (const auto &f : v.payload)
-                    pending.push_back(f.type);
+                    if (!add(f.type))
+                      return false;
               }
           }
           pending.insert(pending.end(), value.type_args.begin(),
@@ -3594,8 +3626,37 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         if (n.kind() == NodeKind::foreign_read ||
             (std::holds_alternative<Call>(n.data) &&
              std::get<Call>(n.data).kind == CalleeKind::foreign)) {
-          unavailable(n.source, "backend has not implemented foreign reads/calls");
-          return r;
+          if (!foreign_values) {
+            unavailable(n.source,
+                        "foreign reads/calls require the Python/64 profile");
+            return r;
+          }
+          auto binding = n.kind() == NodeKind::foreign_read
+                             ? std::get<ForeignRead>(n.data).binding
+                             : *std::get<Call>(n.data).binding;
+          if (binding.value >= m.foreign_bindings.size()) {
+            unavailable(n.source, "foreign binding index is invalid");
+            return r;
+          }
+          const auto &declaration =
+              m.resolved->project->foreign_binding(binding);
+          if (const auto *callable =
+                  std::get_if<modules::BindingCallable>(&declaration.detail)) {
+            if (!callable->error_type ||
+                *callable->error_type != "lang.py.Error") {
+              unavailable(n.source,
+                          "Python foreign callable requires declared "
+                          "lang.py.Error");
+              return r;
+            }
+            for (const auto &parameter : callable->parameters)
+              if (parameter.mode != "ordinary") {
+                unavailable(n.source,
+                            "Python foreign callable supports ordinary "
+                            "parameters only");
+                return r;
+              }
+          }
         }
         switch (n.kind()) {
         case NodeKind::struct_init:

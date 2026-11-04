@@ -190,6 +190,11 @@ class Emitter {
     std::string desc = "_rt.ValueType()";
     if (v.kind == ValueKind::vec)
       desc = "_rt.ValueType('vec')";
+    if (v.kind == ValueKind::foreign_reference ||
+        v.kind == ValueKind::foreign_callable)
+      desc = "_rt.ValueType('foreign')";
+    if (v.kind == ValueKind::foreign_error)
+      desc = "_rt.ValueType('error')";
     if (v.kind == ValueKind::structure) {
       std::vector<std::string> fields;
       for (auto f : v.fields)
@@ -222,6 +227,71 @@ class Emitter {
           if (d.fields[i].symbol == field)
             return i;
     throw std::logic_error("verified field has no declaration index");
+  }
+  const modules::ForeignDeclaration &
+  foreign_declaration(ForeignBindingId id) const {
+    return m.resolved->project->foreign_binding(id);
+  }
+  std::string host_module_name(const std::string &logical) const {
+    for (const auto &module : m.resolved->project->modules)
+      if (module.logical_path == logical) {
+        const auto *binding = m.resolved->project->binding_module(module.id);
+        if (binding)
+          return binding->host_module;
+      }
+    throw std::logic_error("foreign module is not loaded: " + logical);
+  }
+  std::string source_path(const Source &source) const {
+    const auto &module = m.resolved->project->module(source.node.module);
+    if (source.node.file >= module.files.size())
+      throw std::logic_error("foreign source file index is invalid");
+    return module.files[source.node.file]->source->path;
+  }
+  std::string strings(const std::vector<std::string> &values) const {
+    std::vector<std::string> literals;
+    for (const auto &value : values)
+      literals.push_back(string_literal(value));
+    return "[" + join(literals) + "]";
+  }
+  std::string path_tuple(const std::vector<std::string> &values) const {
+    std::vector<std::string> literals;
+    for (const auto &value : values)
+      literals.push_back(string_literal(value));
+    return tuple(literals);
+  }
+  std::string binding_info() const {
+    std::vector<std::string> bundles;
+    for (const auto &bundle : m.resolved->project->bindings) {
+      std::vector<std::string> modules;
+      for (const auto &module : bundle.modules)
+        modules.push_back(
+            "{'logical_path': " + string_literal(module.logical_path) +
+            ", 'host_module': " + string_literal(module.host_module) +
+            ", 'provider': " + string_literal(module.provider) + "}");
+      std::vector<std::string> requirements;
+      for (const auto &requirement : bundle.package_requirements)
+        requirements.push_back(
+            "{'package': " + string_literal(requirement.package) +
+            ", 'version_policy': " +
+            string_literal(requirement.version_policy) + "}");
+      bundles.push_back(
+          "{'path': " + string_literal(bundle.path.string()) +
+          ", 'sha256': " + string_literal(bundle.sha256) +
+          ", 'contract': " + string_literal(bundle.contract) +
+          ", 'review_status': " + string_literal(bundle.review_status) +
+          ", 'allowed_backends': " + strings(bundle.allowed_backends) +
+          ", 'package_requirements': [" + join(requirements) +
+          "], 'modules': [" + join(modules) + "]}");
+    }
+    return "{'runtime_version': " + string_literal(runtime_version) +
+           ", 'bundles': [" + join(bundles) + "]}";
+  }
+  std::string foreign_location(const HirNode &n,
+                               const modules::ForeignDeclaration &declaration) const {
+    return string_literal(source_path(n.source)) + ", " +
+           std::to_string(n.source.span.begin_byte) + ", " +
+           std::to_string(n.source.span.end_byte) + ", " +
+           string_literal(declaration.identity);
   }
   void check_signature(TypeId id, SourceSpan source) const {
     const auto &t = type(id);
@@ -270,6 +340,16 @@ class Emitter {
     }
     case TypeKind::Vec:
       return "Vec[" + type_key(t.type_args[0]) + "]";
+    case TypeKind::ForeignOpaque: {
+      const auto &d = m.resolved->project->foreign_binding(t.binding);
+      const auto *binding = std::get_if<modules::BindingType>(&d.detail);
+      if (binding == nullptr)
+        throw std::logic_error("foreign type declaration is invalid");
+      if (binding->kind != "runtime_error")
+        throw Rejected{"Python foreign error payload requires a runtime_error declaration",
+                       d.source};
+      return d.identity;
+    }
     case TypeKind::Function: {
       std::string key = "func(";
       for (size_t i = 0; i < t.parameters.size(); ++i) {
@@ -542,6 +622,71 @@ class Emitter {
     }
     case NodeKind::call: {
       const auto &call = std::get<Call>(n.data);
+      if (call.kind == CalleeKind::foreign) {
+        if (!call.callee || !call.binding)
+          throw std::logic_error("verified foreign call lost target/binding");
+        const auto &declaration = foreign_declaration(*call.binding);
+        const auto &declared =
+            std::get<modules::BindingCallable>(declaration.detail);
+        auto callee = expression(*call.callee, suite);
+        std::vector<std::string> positional, keywords;
+        size_t operand = 1;
+        for (const auto &arg : call.args) {
+          auto value = expression(arg.expression, suite);
+          for (const auto &u : m.ownership.uses)
+            if (u.consumer == id && u.operand == operand &&
+                u.kind == UseKind::borrow && !u.destination) {
+              auto key = u.root
+                             ? this->key(OwnerKind::binding, u.root->value)
+                             : this->key(OwnerKind::temporary,
+                                         arg.expression.value);
+              line(suite, "_frame.borrow(" + key + ")", n);
+            }
+          ++operand;
+          if (arg.mode != ParamMode::ordinary)
+            throw Rejected{"Python foreign calls support ordinary arguments "
+                           "only",
+                           n.source.span};
+          if (arg.label)
+            keywords.push_back(
+                string_literal(declared.parameters.at(arg.parameter_index)
+                                   .name) +
+                ": " + value);
+          else
+            positional.push_back(value);
+        }
+        const bool unit =
+            type(type(call.signature).result).kind == TypeKind::Unit;
+        Suite invoke;
+        auto value = value_save(
+            invoke,
+            "_rt.foreign_call(" + callee + ", " + tuple(positional) + ", {" +
+                join(keywords) + "}, " +
+                foreign_location(n, declaration) + ", " +
+                (unit ? "True" : "False") + ")",
+            id);
+        bool error = false;
+        Suite failure;
+        for (const auto &plan : n.exits)
+          if (plan.kind == ExitKind::error) {
+            steps(plan.actions, failure, n, true);
+            error = true;
+          }
+        if (error) {
+          suite.push_back({"try", n.source.span, true, std::move(invoke), {}});
+          line(failure, "raise", n);
+          suite.push_back({"except _rt.TypedError",
+                           n.source.span,
+                           true,
+                           std::move(failure),
+                           {}});
+        } else
+          suite.insert(suite.end(), invoke.begin(), invoke.end());
+        for (const auto &c : m.ownership.calls)
+          if (c.node == id)
+            steps(c.on_return, suite, n);
+        return value;
+      }
       auto callee = call.kind == CalleeKind::direct
                         ? save(suite, function_name(*call.direct_symbol), n)
                         : expression(*call.callee, suite);
@@ -585,6 +730,60 @@ class Emitter {
       for (const auto &c : m.ownership.calls)
         if (c.node == id)
           steps(c.on_return, suite, n);
+      return value;
+    }
+    case NodeKind::foreign_read: {
+      const auto &read = std::get<ForeignRead>(n.data);
+      const auto &declaration = foreign_declaration(read.binding);
+      const auto &binding = m.foreign_bindings.at(read.binding.value);
+      const modules::BindingCallable *declared = nullptr;
+      if (binding.signature)
+        declared = &std::get<modules::BindingCallable>(declaration.detail);
+      std::string base, path;
+      if (binding.owner) {
+        if (!declared || n.children.size() != 1)
+          throw std::logic_error("verified foreign receiver arity changed");
+        base = expression(n.children[0], suite);
+        if (declared->call_kind == "callable")
+          path = "()";
+        else if (declared->call_kind == "method" &&
+                 !declaration.host_attribute.empty())
+          path = path_tuple(declaration.host_attribute);
+        else
+          throw std::logic_error("verified foreign method has no host path");
+      } else {
+        if (!n.children.empty() || declaration.host_attribute.empty())
+          throw std::logic_error("verified module read has no host path");
+        base = save(
+            suite,
+            "_rt.host_module(" + string_literal(declaration.module) + ", " +
+                string_literal(host_module_name(declaration.module)) + ")",
+            n);
+        path = path_tuple(declaration.host_attribute);
+      }
+      Suite invoke;
+      auto value = value_save(
+          invoke,
+          "_rt.foreign_read(" + base + ", " + path + ", " +
+              foreign_location(n, declaration) + ")",
+          id);
+      bool error = false;
+      Suite failure;
+      for (const auto &plan : n.exits)
+        if (plan.kind == ExitKind::error) {
+          steps(plan.actions, failure, n, true);
+          error = true;
+        }
+      if (error) {
+        suite.push_back({"try", n.source.span, true, std::move(invoke), {}});
+        line(failure, "raise", n);
+        suite.push_back({"except _rt.TypedError",
+                         n.source.span,
+                         true,
+                         std::move(failure),
+                         {}});
+      } else
+        suite.insert(suite.end(), invoke.begin(), invoke.end());
       return value;
     }
     default:
@@ -1073,6 +1272,8 @@ public:
            {},
            {}}},
          {}}};
+    program.push_back(
+        {"_LANG_BINDING_INFO = " + binding_info(), {}, false, {}, {}});
     std::set<uint64_t> emitted_types;
     for (auto t : value_types)
       emit_type(TypeId{t}, program, emitted_types);

@@ -44,7 +44,7 @@ int failure(SourceManager &sources, const char *code, const std::exception &e,
 int main(int argc, char **argv) {
   SourceManager sources;
   try {
-    fs::path manifest, out;
+    fs::path manifest, out, std_binding;
     bool runner = true;
     for (int i = 1; i < argc; ++i) {
       std::string_view arg = argv[i];
@@ -52,15 +52,22 @@ int main(int argc, char **argv) {
         manifest = argv[++i];
       else if (arg == "--out-dir" && i + 1 < argc)
         out = argv[++i];
+      else if (arg == "--std-binding" && i + 1 < argc)
+        std_binding = argv[++i];
       else if (arg == "--no-runner")
         runner = false;
       else
         throw BadArguments("usage: lang_python_emit --project MANIFEST "
-                           "--out-dir DIR [--no-runner]");
+                           "--out-dir DIR [--std-binding BUNDLE] "
+                           "[--no-runner]");
     }
     if (manifest.empty() || out.empty())
       throw BadArguments("--project and --out-dir are required");
-    auto loaded = modules::load_project({manifest, {}, {}}, sources);
+    auto loaded = modules::load_project(
+        {manifest, {},
+         std_binding.empty() ? std::optional<fs::path>{}
+                             : std::optional<fs::path>{std_binding}},
+        sources);
     if (!loaded.success())
       return report(sources, loaded);
     // The test helper selects Python before resolution/checking, as the driver

@@ -383,7 +383,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "绑定声明和纯C++外部类型/读取/调用静态检查已实施，真实接口见docs/T10_DECLARATIONS.md与T10_STATIC.md。原04/P01-P06通过静态API；root补函数值返回类型检查，82项静态探针及12个独立对照通过。GNU Debug/Release和Clang ASan/UBSan各41/41，LLVMoff31/31，无跳过。Python外部生成、runtime异常桥接、CLI标准绑定配置及原04生成训练仍未实现；正式依赖锁未更新，整项未完成。"
+      "notes": "Python/64声明读取、静态HIR/拥有和外部读取/调用生成及py.Error运行库已实施；runtime values/5。真实API原04完成200步CPU训练，201模型调用，最终loss9.684752999561397e-13与未改参考一致并保留Tensor图。root补参考检查状态及不支持错误载荷诊断；完整42/42/42/32无跳过，T10生成测试12例。CLI标准绑定配置、正式CPU依赖锁和完整T10尚未完成，绑定仍draft；见docs/T10_PYTHON.md。"
     },
     {
       "id": "T11",

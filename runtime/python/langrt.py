@@ -1,16 +1,67 @@
 """Value runtime. Generated programs pass explicit target widths."""
+import importlib
 import math
 import struct
 import sys
+import traceback
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/4'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/5'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
+HOST_ERROR_MARKER = 'LANG_HOST_ERROR: '
 
 
 class Panic(BaseException):
     pass
+
+
+class HostEnvironmentError(RuntimeError):
+    """A declared host module could not be imported.
+
+    This is an execution-environment failure, not a source py.Error.  It is
+    raised before the external-operation bridge so it is never converted into
+    a typed language error.
+    """
+
+
+class Error:
+    """Payload of the fixed lang.py.Error type.
+
+    It keeps the original host exception, its cause and formatted traceback,
+    plus the source operation that failed.  Copying language ownership shares
+    this payload; it never copies the host exception or takes a TypedError
+    payload twice.
+    """
+    __slots__ = ('exception', 'cause', 'traceback_text', 'file',
+                 'begin_byte', 'end_byte', 'operation', 'type_name', 'message')
+
+    def __init__(self, exception, file, begin_byte, end_byte, operation):
+        self.exception = exception
+        self.cause = exception.__cause__
+        self.traceback_text = ''.join(traceback.format_exception(
+            type(exception), exception, exception.__traceback__))
+        self.file = file
+        self.begin_byte = begin_byte
+        self.end_byte = end_byte
+        self.operation = operation
+        cls = type(exception)
+        self.type_name = cls.__module__ + '.' + cls.__qualname__
+        self.message = str(exception)
+
+    def copy(self):
+        return self
+
+    def drop(self):
+        # Python owns the actual exception reference.  The language owner
+        # only releases this payload slot; it does not deep-copy or destroy
+        # the host exception.
+        pass
+
+    def describe(self):
+        message = self.message.replace('\n', '\\n')
+        return (f"{self.type_name}: {message} at {self.file}:"
+                f"{self.begin_byte}:{self.end_byte} ({self.operation})")
 
 
 class TypedError(Exception):
@@ -246,6 +297,8 @@ def run(main):
         raise SystemExit(PANIC_EXIT_CODE) from None
     except TypedError as error:
         print(TYPED_ERROR_MARKER + error.type_key, file=sys.stderr)
+        if isinstance(error.value, Error):
+            print(HOST_ERROR_MARKER + error.value.describe(), file=sys.stderr)
         error.drop()
         raise SystemExit(1) from None
     raise SystemExit(0 if result is None else result)
@@ -268,6 +321,10 @@ class ValueType:
         if self.kind == 'vec':
             value.retain()
             return value
+        if self.kind in ('foreign', 'error'):
+            # A language copy keeps the same host object.  For errors this is
+            # the declared error_payload_copy relation, not a deep copy.
+            return value
         if self.kind == 'struct':
             return tuple(t.copy(v) for t, v in zip(self.fields, value))
         if self.kind == 'enum':
@@ -278,6 +335,12 @@ class ValueType:
     def drop(self, value):
         if self.kind == 'vec':
             value.release()
+        elif self.kind == 'error':
+            value.drop()
+        elif self.kind == 'foreign':
+            # Dropping a language owner does not promise immediate host
+            # destruction or release a host reference held elsewhere.
+            pass
         elif self.kind in ('struct', 'enum'):
             fields, values = (self.fields, value) if self.kind == 'struct' else (
                 self.variants[value[0]], value[1])
@@ -342,6 +405,79 @@ class Frame:
             if self.borrows[i] == key:
                 del self.borrows[i]
                 break
+
+
+ERROR_TYPE_KEY = 'lang.py.Error'
+ERROR_OPS = ValueType('error')
+_HOST_MODULES = {}
+
+
+def host_module(logical_path, host_module_name):
+    """Import only a declared host module; keep import failures separate.
+
+    The cache key includes both declaration identity and the declared host
+    module.  Two logical modules may intentionally map to different Python
+    modules; a logical-path-only key would silently return the wrong host
+    object and turn a later operation into a misleading py.Error.
+    """
+    key = (logical_path, host_module_name)
+    module = _HOST_MODULES.get(key)
+    if module is not None:
+        return module
+    try:
+        module = importlib.import_module(host_module_name)
+    except Exception as exc:
+        raise HostEnvironmentError(
+            f"cannot import declared host module {host_module_name!r} "
+            f"for {logical_path!r}: "
+            f"{type(exc).__module__}.{type(exc).__qualname__}: {exc}"
+        ) from exc
+    _HOST_MODULES[key] = module
+    return module
+
+
+def _host_typed_error(exception, file, begin_byte, end_byte, operation):
+    payload = Error(exception, file, begin_byte, end_byte, operation)
+    return TypedError(ERROR_TYPE_KEY, payload, ERROR_OPS)
+
+
+def foreign_read(base, attribute_path, file, begin_byte, end_byte, operation):
+    """Read exactly one declared host attribute path.
+
+    Only the declared path is consulted; unknown names never fall back to a
+    general attribute search.  Internal typed errors and BaseException
+    subclasses keep their original propagation.
+    """
+    try:
+        value = base
+        for attribute in attribute_path:
+            value = getattr(value, attribute)
+        return value
+    except TypedError:
+        raise
+    except Exception as exc:
+        raise _host_typed_error(
+            exc, file, begin_byte, end_byte, operation) from exc
+
+
+def foreign_call(function, positional, keywords, file, begin_byte, end_byte,
+                 operation, returns_unit):
+    """Call one already-read declared host target.
+
+    The caller evaluated the target and every source argument before this
+    function.  Omitted optional parameters are absent from both containers;
+    they are never replaced with None.
+    """
+    try:
+        value = function(*positional, **keywords)
+    except TypedError:
+        raise
+    except Exception as exc:
+        raise _host_typed_error(
+            exc, file, begin_byte, end_byte, operation) from exc
+    if returns_unit and value is not None:
+        raise Panic('foreign callable declared Unit returned a non-None value')
+    return value
 
 
 def _allocation_size(count, stride):

@@ -205,8 +205,10 @@ int main(int argc, char **argv) try {
   auto erased_read=accepted(imports+"func f() Unit throws py.Error { np.float32; }", "erased-value-read-control");
   bad(erased_read,"erased-value-read",[&](auto &m){erase_value_read(m);},true);
   auto factory_method=accepted(imports+"func sink(a Unit,b Unit,c Unit) Unit { } func f(g func() torch.Tensor) Unit throws py.Error { g().backward(); }", "function-value-method-control");
+  need(check_backend_capabilities(factory_method).success(),"function value returning external object backend support");
   bad(factory_method,"erased-function-value-method",[&](auto &m){erase_foreign_call(m,"torch.Tensor.backward");},true);
   auto factory_callable=accepted(imports+"func sink(a Unit,b Unit,c Unit,d Unit) Unit { } func f(g func() nn.Linear,x torch.Tensor) Unit throws py.Error { g()(x); }", "function-value-callable-control");
+  need(check_backend_capabilities(factory_callable).success(),"function value returning external object backend support 2");
   bad(factory_callable,"erased-function-value-callable",[&](auto &m){erase_foreign_call(m,"torch.nn.Linear.call");},true);
   std::vector<std::pair<std::string,std::string>> negatives={
     {"07", "E_CALL_ARGUMENT"},{"08","E_CAPABILITY_UNAVAILABLE"},{"09","E_TYPE_MISMATCH"},
@@ -234,10 +236,10 @@ int main(int argc, char **argv) try {
   need(!native.success()&&has(native,"E_CAPABILITY_UNAVAILABLE"),"native external source");
   auto resolved=resolve(read(repo/"baseline/samples/04_numpy_torch.lang"),"project-api");
   need(sema::check_project(resolved,{}, {}, VerifyMode::static_only).success(),"shared check_project static");
-  auto default_checked=sema::check_project(resolved); need(!default_checked.success()&&has(default_checked,"E_CAPABILITY_UNAVAILABLE"),"default backend check_project");
+  auto default_checked=sema::check_project(resolved); need(default_checked.success(),"default backend check_project for supported Python 04");
   PhaseResult<modules::ResolvedProject> phase; phase.state=PhaseState::complete; phase.value=*resolved;
   need(sema::check_project(phase,{}, {}, VerifyMode::static_only).success(),"phase check_project static");
-  need(!sema::check_project(phase).success(),"phase default backend");
+  need(sema::check_project(phase).success(),"phase default backend for supported Python 04");
   auto typed=sema::check_types(resolved); need(typed.success(),"freeze builder");
   auto frozen=verify(*typed.value,{},VerifyMode::static_only); need(frozen.success(),"freeze token");
   auto before=dump(*frozen.value);
@@ -316,7 +318,7 @@ int main(int argc, char **argv) try {
        unit.types.find(unit.nodes[uc.args[0].expression.value].type)->kind==TypeKind::SignedInt,"pure scalar Unit foreign call");
   auto unsupported=check_backend_capabilities(unit);
   need(!unsupported.success()&&has(unsupported,"E_CAPABILITY_UNAVAILABLE")&&
-       unsupported.diagnostics[0].message=="backend has not implemented foreign reads/calls","Unit foreign call backend rejection");
+       unsupported.diagnostics[0].message=="Python foreign callable requires declared lang.py.Error","Unit foreign call backend rejection");
   auto token=verify(unit,{},VerifyMode::static_only);need(token.success(),"Unit static token");
   auto emitted=backend::python::emit(*token.value,unit.functions[0].symbol);
   need(!emitted.success()&&!emitted.value&&has(emitted,"E_CAPABILITY_UNAVAILABLE"),"static token cannot emit foreign Unit");

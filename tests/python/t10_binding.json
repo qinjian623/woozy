@@ -1,0 +1,616 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "review_status": "draft_requires_conformance",
+  "allowed_backends": [
+    "python"
+  ],
+  "package_requirements": [
+    {
+      "package": "t10host",
+      "version_policy": "test-only host fixture"
+    }
+  ],
+  "modules": [
+    {
+      "logical_path": "std/py",
+      "host_module": "langrt",
+      "provider": "language_runtime"
+    },
+    {
+      "logical_path": "t10host",
+      "host_module": "t10host",
+      "provider": "python_package"
+    }
+  ],
+  "types": [
+    {
+      "id": "lang.py.Error",
+      "module": "std/py",
+      "name": "Error",
+      "kind": "runtime_error",
+      "host_attribute": [
+        "Error"
+      ],
+      "copy": "error_payload_copy"
+    },
+    {
+      "id": "t10host.Probe",
+      "module": "t10host",
+      "name": "Probe",
+      "kind": "host_reference",
+      "host_attribute": [
+        "Probe"
+      ],
+      "copy": "shared_reference"
+    }
+  ],
+  "values": [
+    {
+      "module": "t10host",
+      "name": "marker",
+      "type": "t10host.Probe",
+      "host_attribute": [
+        "marker"
+      ]
+    }
+  ],
+  "callables": [
+    {
+      "id": "t10host.make",
+      "module": "t10host",
+      "name": "make",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "make"
+      ],
+      "parameters": [],
+      "return_type": "t10host.Probe",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.make_bad",
+      "module": "t10host",
+      "name": "make_bad",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "make_bad"
+      ],
+      "parameters": [],
+      "return_type": "t10host.Probe",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.arg",
+      "module": "t10host",
+      "name": "arg",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "arg"
+      ],
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.arg_fail",
+      "module": "t10host",
+      "name": "arg_fail",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "arg_fail"
+      ],
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.same",
+      "module": "t10host",
+      "name": "same",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "same"
+      ],
+      "parameters": [
+        {
+          "name": "a",
+          "type": "t10host.Probe",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "b",
+          "type": "t10host.Probe",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "bool",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.set_value",
+      "module": "t10host",
+      "name": "set_value",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "set_value"
+      ],
+      "parameters": [
+        {
+          "name": "probe",
+          "type": "t10host.Probe",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "value",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.get_value",
+      "module": "t10host",
+      "name": "get_value",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "get_value"
+      ],
+      "parameters": [
+        {
+          "name": "probe",
+          "type": "t10host.Probe",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.optional",
+      "module": "t10host",
+      "name": "optional",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "optional"
+      ],
+      "parameters": [
+        {
+          "name": "a",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "b",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "c",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.note",
+      "module": "t10host",
+      "name": "note",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "note"
+      ],
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.check_marker",
+      "module": "t10host",
+      "name": "check_marker",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "check_marker"
+      ],
+      "parameters": [
+        {
+          "name": "probe",
+          "type": "t10host.Probe",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.inspect",
+      "module": "t10host",
+      "name": "inspect",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "inspect"
+      ],
+      "parameters": [
+        {
+          "name": "error",
+          "type": "lang.py.Error",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.error_source",
+      "module": "t10host",
+      "name": "error_source",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "error_source"
+      ],
+      "parameters": [],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.raise_internal",
+      "module": "t10host",
+      "name": "raise_internal",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "raise_internal"
+      ],
+      "parameters": [
+        {
+          "name": "kind",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.raise_base",
+      "module": "t10host",
+      "name": "raise_base",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "raise_base"
+      ],
+      "parameters": [
+        {
+          "name": "kind",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.take_i64",
+      "module": "t10host",
+      "name": "take_i64",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "take_i64"
+      ],
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.return_none",
+      "module": "t10host",
+      "name": "return_none",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "return_none"
+      ],
+      "parameters": [],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.return_bad_unit",
+      "module": "t10host",
+      "name": "return_bad_unit",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "return_bad_unit"
+      ],
+      "parameters": [],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "t10host.Probe.ping",
+      "module": "t10host",
+      "name": "ping",
+      "call_kind": "method",
+      "owner_type": "t10host.Probe",
+      "host_attribute": [
+        "ping"
+      ],
+      "parameters": [
+        {
+          "name": "x",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "no"
+    },
+    {
+      "id": "t10host.Probe.broken",
+      "module": "t10host",
+      "name": "broken",
+      "call_kind": "method",
+      "owner_type": "t10host.Probe",
+      "host_attribute": [
+        "broken"
+      ],
+      "parameters": [],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "no"
+    },
+    {
+      "id": "t10host.Probe.fail_call",
+      "module": "t10host",
+      "name": "fail_call",
+      "call_kind": "method",
+      "owner_type": "t10host.Probe",
+      "host_attribute": [
+        "fail_call"
+      ],
+      "parameters": [],
+      "return_type": "Unit",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "unit",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "no"
+    },
+    {
+      "id": "t10host.Probe.call",
+      "module": "t10host",
+      "name": "__call__",
+      "call_kind": "callable",
+      "owner_type": "t10host.Probe",
+      "host_attribute": [],
+      "parameters": [
+        {
+          "name": "x",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "no"
+    }
+  ],
+  "conformance_required": []
+}
