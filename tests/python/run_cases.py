@@ -148,7 +148,7 @@ UNSUPPORTED_SOURCES = {
 
 
 # Keep the old source bytes and execute the now-supported operations.
-for _ident in ('float-arithmetic', 'float-comparison'):
+for _ident in ('float-arithmetic', 'float-comparison', 'vec'):
     EXTRA_SOURCES[_ident] = UNSUPPORTED_SOURCES.pop(_ident)
 
 def command(argv, **kwargs):

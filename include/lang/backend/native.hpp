@@ -3,6 +3,7 @@
 
 namespace lang::backend::native {
 inline constexpr std::string_view runtime_abi = "lang-native-scalars/1";
+inline constexpr std::string_view ownership_runtime_abi = "lang-native-values/1";
 struct Options {
   std::string triple = "x86_64-unknown-linux-gnu";
   std::string cpu = "generic";

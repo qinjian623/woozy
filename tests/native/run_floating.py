@@ -180,7 +180,8 @@ def main():
                 row['status'] = 'passed'
         # Panic, ordinary exit101, and an uncaught typed float error stay distinct.
         for ident, exit_code, marker_text in [('panic', 101, 'LANG_NATIVE_PANIC:v1:division-by-zero:'),
-                                             ('return101', 101, ''), ('uncaught', 1, 'LANG_TYPED_ERROR: f64\n')]:
+                                             ('return101', 101, ''), ('uncaught', 1, 'LANG_TYPED_ERROR: f64\n'),
+                                             ('reject-move', 0, ''), ('reject-vec', 0, '')]:
             manifest = args.root / f'tests/native/floating/{ident}/lang.toml'
             for opt in (0, 2):
                 out = args.out / ident / f'O{opt}'
@@ -199,6 +200,8 @@ def main():
         rejection_root = Path(tempfile.mkdtemp(prefix='rejected-', dir=args.out))
         rejects = [c for c in published['cases'] if c['expected_static']['status'] == 'reject']
         for path in sorted((args.root / 'tests/native/floating').glob('reject-*/lang.toml')):
+            if path.parent.name in ('reject-move', 'reject-vec'):
+                continue
             rejects.append(dict(id=path.parent.name, manifest=str(path.relative_to(args.root))))
             codes[path.parent.name] = 'E_CAPABILITY_UNAVAILABLE'
         for case in rejects:

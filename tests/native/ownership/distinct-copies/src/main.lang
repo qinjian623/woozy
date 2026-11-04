@@ -1,0 +1,9 @@
+package main;
+func main() i32 {
+    let a Vec[i32] = [7];
+    let b = a;
+    let c = a;
+    b[0] = 9;
+    if a[0] != 9 || c[0] != 9 {return 1;}
+    return 0;
+}

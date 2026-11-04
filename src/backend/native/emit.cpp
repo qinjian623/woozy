@@ -80,6 +80,7 @@ class Emitter {
     case hir::TypeKind::Float:
       return t.bits == 32 ? builder.getFloatTy() : builder.getDoubleTy();
     case hir::TypeKind::Function:
+    case hir::TypeKind::Vec:
       return builder.getPtrTy();
     case hir::TypeKind::String: {
       auto *layout = llvm::StructType::get(
@@ -151,6 +152,8 @@ class Emitter {
       }
       return key;
     }
+    case hir::TypeKind::Vec:
+      return "Vec[" + type_key(t.type_args[0]) + "]";
     case hir::TypeKind::Function: {
       std::string key = "func(";
       for (size_t a = 0; a < t.parameters.size(); ++a) {
@@ -329,12 +332,89 @@ class Emitter {
     guard(bad, 3, i.source);
     return builder.CreateIntCast(v, lower_type(i.type), signed_(from));
   }
+#include "value_ops.inc"
   void instruction(const ir::Instruction &i) {
     std::vector<llvm::Value *> args;
     for (auto v : i.inputs)
       args.push_back(values.at(v));
     llvm::Value *v = nullptr;
     switch (i.op) {
+    case ir::Op::copy:
+      v = copy_value(i.type, args[0]); break;
+    case ir::Op::borrow:
+      v = args[0]; break;
+    case ir::Op::move:
+      v = builder.CreateLoad(lower_type(i.type), slots.at(i.slot.value));
+      if (active.at(i.slot.value)) builder.CreateStore(builder.getFalse(), active.at(i.slot.value));
+      break;
+    case ir::Op::take:
+      builder.CreateStore(builder.getFalse(), active.at(i.slot.value)); break;
+    case ir::Op::destroy:
+      destroy_slot(i.slot.value, current_function->slots.at(i.slot.value).type); break;
+    case ir::Op::iteration_end:
+      runtime("lang_vec_end_v1", builder.getVoidTy(),
+              {builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value))}); break;
+    case ir::Op::iteration_begin: {
+      auto *vec = builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value));
+      auto *length = runtime("lang_vec_begin_v1", builder.getInt64Ty(), {vec});
+      builder.CreateStore(length, iteration_lengths.at(i.slot.value));
+      builder.CreateStore(builder.getInt64(0), iteration_indices.at(i.slot.value)); break;
+    }
+    case ir::Op::iteration_test:
+      v = builder.CreateICmpULT(builder.CreateLoad(builder.getInt64Ty(), iteration_indices.at(i.slot.value)),
+                               builder.CreateLoad(builder.getInt64Ty(), iteration_lengths.at(i.slot.value))); break;
+    case ir::Op::iteration_next: {
+      auto *index = iteration_indices.at(i.slot.value);
+      builder.CreateStore(builder.CreateAdd(builder.CreateLoad(builder.getInt64Ty(), index), builder.getInt64(1)), index); break;
+    }
+    case ir::Op::iteration_read: {
+      auto *vec = builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value));
+      auto *index = builder.CreateLoad(builder.getInt64Ty(), iteration_indices.at(i.slot.value));
+      auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {vec, index});
+      v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address)); break;
+    }
+    case ir::Op::vec_length:
+      v = runtime("lang_vec_length_v1", builder.getInt64Ty(), {args[0]}); break;
+    case ir::Op::vec_init: {
+      auto element = type(i.type).type_args[0];
+      v = runtime("lang_vec_new_v1", builder.getPtrTy(),
+                  {builder.getInt64(args.size()),
+                   builder.getInt64(stride(element)),
+                   value_op(element, true), value_op(element, false)});
+      for (auto *arg : args) {
+        auto *address = element_storage(element, arg);
+        runtime("lang_vec_init_v1", builder.getVoidTy(), {v, address});
+      }
+      break;
+    }
+    case ir::Op::vec_check: {
+      auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
+      runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index}); break;
+    }
+    case ir::Op::vec_read: {
+      auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
+      auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
+      v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address)); break;
+    }
+    case ir::Op::vec_set: {
+      auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
+      auto *address = element_storage(value_types.at(i.inputs[2]), args[2]);
+      runtime("lang_vec_set_v1", builder.getVoidTy(), {args[0], index, address}); break;
+    }
+    case ir::Op::vec_slice: {
+      size_t p = 1;
+      auto *start = (i.bits & 1) ? checked_index(args[p], value_types.at(i.inputs[p]), i.source, 9)
+                               : static_cast<llvm::Value *>(builder.getInt64(0));
+      if (i.bits & 1) ++p;
+      auto *end = (i.bits & 2) ? checked_index(args[p], value_types.at(i.inputs[p]), i.source, 9)
+                             : runtime("lang_vec_length_v1", builder.getInt64Ty(), {args[0]});
+      v = runtime("lang_vec_slice_v1", builder.getPtrTy(), {args[0], start, end}); break;
+    }
+    case ir::Op::begin_borrow:
+    case ir::Op::ownership_begin:
+    case ir::Op::ownership_end:
+    case ir::Op::end_borrow:
+    case ir::Op::save_output:
     case ir::Op::exit_begin:
     case ir::Op::cleanup_begin:
     case ir::Op::cleanup_end:
@@ -378,6 +458,7 @@ class Emitter {
       break;
     case ir::Op::store:
       builder.CreateStore(args[0], slots.at(i.slot.value));
+      if (active.at(i.slot.value)) builder.CreateStore(builder.getTrue(), active.at(i.slot.value));
       break;
     case ir::Op::struct_init:
     case ir::Op::enum_init: {
@@ -407,6 +488,10 @@ class Emitter {
     }
     case ir::Op::load_indirect:
       v = builder.CreateLoad(lower_type(i.type), args[0]);
+      break;
+    case ir::Op::replace_indirect:
+      builder.CreateCall(value_op(value_types.at(i.inputs[0]), false), {args[0]});
+      builder.CreateStore(args[1], args[0]);
       break;
     case ir::Op::store_indirect:
       builder.CreateStore(args[1], args[0]);
@@ -452,7 +537,11 @@ class Emitter {
       value_types.emplace(*i.result, i.type);
     }
   }
+  std::map<size_t, llvm::Value *> iteration_lengths, iteration_indices;
+  const ir::Function *current_function = nullptr;
   void function(const ir::Function &f) {
+    current_function = &f;
+    active.clear(); iteration_lengths.clear(); iteration_indices.clear();
     values.clear();
     value_types.clear();
     slots.clear();
@@ -470,12 +559,23 @@ class Emitter {
       else
         storage = builder.CreateAlloca(lower_type(slot.type));
       slots.push_back(storage);
+      llvm::Value *flag = nullptr;
+      if (slot.owner) {
+        flag = builder.CreateAlloca(builder.getInt1Ty());
+        builder.CreateStore(builder.getInt1(slot.owning_parameter), flag);
+      }
+      active.push_back(flag);
     }
     for (size_t s = 0; s < f.slots.size(); ++s) {
       const auto &slot = f.slots[s];
       if (slot.parameter && !slot.inout)
         builder.CreateStore(fn->getArg(*slot.parameter), slots[s]);
     }
+    for (const auto &b : f.blocks) for (const auto &i : b.instructions)
+      if (i.op == ir::Op::iteration_begin) {
+        iteration_lengths.emplace(i.slot.value, builder.CreateAlloca(builder.getInt64Ty()));
+        iteration_indices.emplace(i.slot.value, builder.CreateAlloca(builder.getInt64Ty()));
+      }
     struct TryStorage {
       llvm::Value *value = nullptr, *error = nullptr;
     };
@@ -662,6 +762,7 @@ public:
       const auto key = type_key(*sig.throws_type);
       builder.CreateCall(report, {builder.CreateGlobalString(key),
                                   builder.getInt64(key.size())});
+      if (owning(*sig.throws_type)) builder.CreateCall(value_op(*sig.throws_type, false), {outputs.back()});
       builder.CreateRet(builder.getInt32(1));
     }
     verify_llvm(module);

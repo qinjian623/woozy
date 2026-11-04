@@ -1,0 +1,3 @@
+package app;
+enum E { Bad(value Vec[Vec[i32]]); }
+func main() throws E {let a Vec[Vec[i32]]=[[1],[2]]; throw E.Bad(value:a);}

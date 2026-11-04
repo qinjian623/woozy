@@ -1,0 +1,7 @@
+package main;
+struct S {v Vec[i32];}
+func read_vec(v Vec[i32]) i32 {let saved=v;return saved[0];}
+func read_struct(s S) i32 {let saved=s;return saved.v[0];}
+func apply_vec(cb func(Vec[i32]) i32,v Vec[i32]) i32 {return cb(v);}
+func apply_struct(cb func(S) i32,s S) i32 {return cb(s);}
+func main() i32 {if apply_vec(read_vec,[5])!=5 || apply_struct(read_struct,S(v:[6]))!=6 {return 1;}return 0;}

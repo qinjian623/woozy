@@ -126,10 +126,13 @@ void facts(const HirModule &m) {
   }
   auto cap = check_backend_capabilities(m);
   auto pub = verify(m);
-  need(!cap.success() && has(cap, "E_CAPABILITY_UNAVAILABLE") && !pub.value &&
-           has(pub, "E_CAPABILITY_UNAVAILABLE"),
-       "unsupported ownership published: " + diagnostics(cap) +
-           diagnostics(pub));
+  if (m.config.word_bits == 64)
+    need(cap.success() && pub.success() && pub.value,
+         "supported ownership rejected: " + diagnostics(cap) + diagnostics(pub));
+  else
+    need(!cap.success() && has(cap, "E_CAPABILITY_UNAVAILABLE") && !pub.value &&
+             has(pub, "E_CAPABILITY_UNAVAILABLE"),
+         "unsupported ownership width published: " + diagnostics(cap) + diagnostics(pub));
 }
 const ExitPlan &exit(const HirModule &m, HirNodeId id, ExitKind k) {
   for (const auto &p : m.nodes[id.value].exits)
@@ -299,8 +302,8 @@ void extra_tests() {
   rejected("func f[T](v move T) {} func g() {let v Vec[i32]=[1];f(move v);}",
            "E_CAPABILITY_UNAVAILABLE");
   auto cb = accepted("func f(cb func(Vec[i32]) i32) {} ");
-  need(has(check_backend_capabilities(cb), "E_CAPABILITY_UNAVAILABLE"),
-       "Vec callback signature reached backend");
+  need(check_backend_capabilities(cb).success() && verify(cb).success(),
+       "Vec callback signature rejected");
   auto v = accepted("func keep(v Vec[i32]) Vec[i32] {let a=v;return v;}");
   auto return_id = find(v, NodeKind::return_);
   auto read_id = v.nodes[return_id.value].children[0];
@@ -421,9 +424,9 @@ void extra_tests() {
   facts(explicit_copy);
   auto callback_aggregate =
       accepted("struct S {items Vec[i32];} func f(callback func(S) i32) {} ");
-  need(has(check_backend_capabilities(callback_aggregate),
-           "E_CAPABILITY_UNAVAILABLE"),
-       "owning aggregate callback signature reached backend");
+  need(check_backend_capabilities(callback_aggregate).success() &&
+           verify(callback_aggregate).success(),
+       "owning aggregate callback signature rejected");
   auto loop = accepted(
       "func f(v Vec[Vec[i32]]) Vec[i32] {for e in v {return e;}return [];}");
   const auto &rp = exit(loop, find(loop, NodeKind::return_), ExitKind::return_);

@@ -1,5 +1,7 @@
 # T09 Python 拥有值执行
 
+本文保留独立交付时的检查记录；正式启用、主代理修正和最终共同检查见 [T09_EXECUTION.md](T09_EXECUTION.md)。
+
 共同版本仍为 `compiler-dev/1`；Python runtime 从 `compiler-dev/1-python-values/3` 更新为 `/4`。公共头、嵌入 runtime、生成程序版本检查和新增 runtime 测试一致更新。源码基点是 `ff3ace254080036373cd08b1f785163a8804a80c`。
 
 `src/backend/python/emitter.cpp` 只接收公开的 `VerifiedHirModule`，保留公共支持检查。它读取 `classify_value`、`ValueUse`、`Temporary`、`LocalLifetime`、`FullExpression`、`CallLifetime` 和 `ExitPlan.actions`，没有另建公共 HIR 或从源码猜测拥有操作。

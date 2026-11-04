@@ -1,0 +1,5 @@
+package app;
+struct Box[T] { value T; }
+enum E { One(value Vec[Vec[i32]]); Empty; }
+func identity[T](value T) T { return value; }
+func main() i32 {let a Vec[Vec[i32]]=[[7],[8]]; let b=Box[Vec[Vec[i32]]](value:a); let e=E.One(value:identity(b.value)); switch e {case E.One(value): value[0][0]=9; case E.Empty: return 1;} if a[0][0]!=9{return 2;} return 0;}

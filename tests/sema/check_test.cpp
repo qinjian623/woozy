@@ -157,7 +157,7 @@ void independent(const fs::path &published) {
       expected = json_object_get_string(get(override, "status"));
     auto p = published / json_object_get_string(get(c, "manifest"));
     auto r = check(p);
-    if (id == "throws-unavailable") expected = "accept"; // native T08 is executable
+    if (id == "throws-unavailable" || id == "vec-unavailable") expected = "accept";
     require(r.success() == (expected == "accept"),
             "independent " + id + "\n" + messages(r));
     if (expected == "unavailable")
@@ -469,7 +469,7 @@ void suite(const fs::path &published) {
   source("func f() { let x=u64(18446744073709551615); }");
   source("func f() { let x=i32(true); }", "E_CAPABILITY_UNAVAILABLE");
   source("func f() { let x=f32(1); }", "E_CAPABILITY_UNAVAILABLE");
-  source("func f() { let x=[1]; }", "E_CAPABILITY_UNAVAILABLE");
+  source("func f() { let x=[1]; }");
   source("func f() { switch 1 { default: break; } }",
          "E_CAPABILITY_UNAVAILABLE");
   source("func f() { defer {} }");

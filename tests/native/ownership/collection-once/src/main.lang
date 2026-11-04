@@ -1,0 +1,1 @@
+package app;func values(log inout i64) Vec[Vec[i32]] {log+=1;return [[1],[2],[3]];} func main() i32 {var log i64=0;var sum i32=0;for x in values(inout log) {sum+=x[0];}if log!=1 || sum!=6{return 1;}return 0;}

@@ -1,0 +1,1 @@
+package app;enum E{Bad(value Vec[i32]);}func bad() i32 throws E {throw E.Bad(value:[2]);}func consume(v move Vec[i32],n i32) Vec[i32]{return move v;}func main() i32 {var a Vec[i32]=[1];try{a=consume(move a,bad());}catch e E{}a=[3];if a[0]!=3{return 1;}return 0;}

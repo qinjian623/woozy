@@ -1,0 +1,6 @@
+package app;
+enum E { Bad(value Vec[i32]); }
+func mark(log inout i64,digit i64){log=log*10+digit;}
+func f(log inout i64) Vec[i32] {let a Vec[i32]=[1]; defer {mark(inout log,1);} {let b Vec[i32]=[2]; defer {mark(inout log,2);} return a;}}
+func bad(log inout i64) Vec[i32] throws E {let a Vec[i32]=[3]; defer {mark(inout log,3);} {let b Vec[i32]=[4]; defer {mark(inout log,4);} throw E.Bad(value:a);}}
+func main() i32 {var log i64=0; let v=f(inout log); try {let x=bad(inout log);} catch err E {switch err {case E.Bad(value): if value[0]!=3{return 1;}}} if log!=2143 || v[0]!=1{return 2;} return 0;}

@@ -1,0 +1,5 @@
+package app;
+enum E { Bad(value Vec[i32]); }
+func early(a Vec[Vec[i32]]) Vec[i32] {for x in a {if x[0]==2{return x;} continue;} return [9];}
+func bad(a Vec[Vec[i32]]) throws E {for x in a {if x[0]==2{throw E.Bad(value:x);} continue;}}
+func main() i32 {let a Vec[Vec[i32]]=[[1],[2],[3]]; var sum i32=0; for x in a {let y=x; if x[0]==1{continue;} sum+=x[0]; break;} let r=early(a); try {bad(a);} catch e E {switch e {case E.Bad(value): if value[0]!=2{return 1;}}} if sum!=2 || r[0]!=2{return 2;} return 0;}

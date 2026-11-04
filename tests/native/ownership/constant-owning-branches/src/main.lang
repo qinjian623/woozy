@@ -1,0 +1,12 @@
+package main;
+func take(x move Vec[i32]) bool {return true;}
+func main() i32 {
+    let a Vec[i32] = [1];
+    if false {let consumed = take(move a);}
+    let b Vec[i32] = [2];
+    if true {} else {let consumed = take(move b);}
+    let c Vec[i32] = [3];
+    let skipped = false && take(move c);
+    if a[0] != 1 || b[0] != 2 || c[0] != 3 || skipped {return 1;}
+    return 0;
+}

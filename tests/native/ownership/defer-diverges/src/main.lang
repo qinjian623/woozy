@@ -1,0 +1,1 @@
+package app; func main() {let a Vec[i32]=[1]; defer {for ;; {}} return;}

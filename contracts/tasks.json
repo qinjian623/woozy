@@ -204,7 +204,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Native/64 Linux x86_64的整数、平凡POD、字面量字符串、typed throws/defer及同宽严格f32/f64已实现；core/numeric、O0/O2和原12浮点正例含两个baseline副本实际运行。三种完整构建各34/34、LLVMoff26/26；每套152项原探针及6288项补充浮点观察通过，334次浮点坏IR拒绝。RNE且FTZ/DAZ关闭，无fast/contract/FMA。转换、动态字符串、ARC/Vec/move、foreign与其他平台另有未支持限制。"
+      "notes": "Native/64 Linux x86_64的整数、平凡POD、字面量字符串、typed throws/defer及同宽严格f32/f64已实现；core/numeric、O0/O2和原12浮点正例含两个baseline副本实际运行。三种完整构建各34/34、LLVMoff26/26；每套152项原探针及6288项补充浮点观察通过，334次浮点坏IR拒绝。RNE且FTZ/DAZ关闭，无fast/contract/FMA。转换、动态字符串、foreign与其他平台另有未支持限制。"
     },
     {
       "id": "T06",
@@ -239,7 +239,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python/64 CPython3.12.15已支持整数、POD、字面量字符串、typed throws/defer及严格f32/f64四则/neg/比较；runtime版本/3。有限数用精确整数比直接按目标精度RNE舍入，浮点除零不触发语言Panic。三种完整构建34/34，LLVM关闭26/26；每套原76探针、3362动态向量、27项目实际执行和3447次探针调用通过。两端17份同源程序在三种构建共9660项结果比较通过。ARC/Vec、foreign、move、转换和其他未支持范围保留。"
+      "notes": "Python/64 CPython3.12.15已支持整数、POD、字面量字符串、typed throws/defer及严格f32/f64四则/neg/比较；runtime版本/4。有限数用精确整数比直接按目标精度RNE舍入，浮点除零不触发语言Panic。三种完整构建34/34，LLVM关闭26/26；每套原76探针、3362动态向量、27项目实际执行和3447次探针调用通过。两端17份同源程序在三种构建共9660项结果比较通过。foreign、转换等限制保留；有限Vec与拥有值执行见T09说明。"
     },
     {
       "id": "T07",
@@ -348,7 +348,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "公共HIR与受限所有权静态检查已实现并验证；两后端仍拒绝Vec/move生成。ARC/runtime和实际释放、共享、Panic执行尚未实现；共享头由集成负责人统一修改。"
+      "notes": "native/64 Linux x86_64与python/64 CPython3.12.15已支持有限无环Vec、拥有struct/enum、move、借用/返回复制、索引/切片/for-in及正常/typed-error清理。root修复复制结果重复转交验证漏项和字面量分支误报。三种LLVM构建各40/40，LLVM关闭30/30；80份同源输入240项比较、三个原样例27次执行通过。完整ARC、动态字符串、非平凡inout、递归拥有图、外部绑定和其他未支持组合仍未完成。见docs/T09_EXECUTION.md。"
     },
     {
       "id": "T10",

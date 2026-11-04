@@ -70,3 +70,20 @@ if(LANG_TEST_PYTHON)
     --out ${CMAKE_CURRENT_BINARY_DIR}/floating-results)
   set_tests_properties(native.floating PROPERTIES TIMEOUT 240)
 endif()
+add_executable(lang_native_vec_runtime_test vec_runtime_test.cpp)
+target_link_libraries(lang_native_vec_runtime_test PRIVATE lang_native_runtime)
+target_link_options(lang_native_vec_runtime_test PRIVATE -Wl,--wrap=malloc)
+add_test(NAME native.vec_runtime COMMAND lang_native_vec_runtime_test)
+add_executable(lang_native_ownership_probe ownership_probe.cpp)
+target_include_directories(lang_native_ownership_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_options(lang_native_ownership_probe PRIVATE -fno-rtti)
+target_link_libraries(lang_native_ownership_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.ownership COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_ownership.py --cli $<TARGET_FILE:langc>
+    --probe $<TARGET_FILE:lang_native_ownership_probe> --root ${LANG_SOURCE_ROOT}
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
+    --runtime-test $<TARGET_FILE:lang_native_vec_runtime_test>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/ownership-results)
+  set_tests_properties(native.ownership PROPERTIES TIMEOUT 240)
+endif()

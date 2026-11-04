@@ -1,5 +1,7 @@
 # Python 标量实现与验证
 
+本文保留此前阶段记录。当前 Vec、拥有字段及 move 执行范围见 [T09_EXECUTION.md](T09_EXECUTION.md)。
+
 严格f32/f64四则、负号、六种比较和复合赋值已支持，见
 [浮点执行说明](../tests/python/STRICT_FLOATING.md)。有限数先按精确整数比计算，再直接
 按目标精度舍入；浮点除零不产生整数Panic。原76探针和3362个动态向量已实际观察。

@@ -1,5 +1,7 @@
 # T05 原生标量实现与交接
 
+本文保留此前阶段记录。当前 Vec、拥有字段及 move 执行范围见 [T09_EXECUTION.md](T09_EXECUTION.md)。
+
 原生严格f32/f64四则、负号、六种比较和复合赋值已实现，见
 [浮点执行说明](../tests/native/STRICT_FLOAT.md)。原76探针及两个baseline副本已实际执行。
 当前三种完整构建各34/34、LLVM关闭26/26；后文保留各开发阶段的记录。

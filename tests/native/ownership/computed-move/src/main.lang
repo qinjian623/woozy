@@ -1,0 +1,1 @@
+package app; func f() Vec[i32] {return [1];} func main() i32 {let a=move f(); return a[0]-1;}

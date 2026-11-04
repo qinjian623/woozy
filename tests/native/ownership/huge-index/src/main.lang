@@ -1,0 +1,1 @@
+package app; func main() {let a Vec[i32]=[1]; let i u64=18446744073709551615; let x=a[i];}

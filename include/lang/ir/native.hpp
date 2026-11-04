@@ -2,9 +2,8 @@
 #include "lang/hir/hir.hpp"
 
 namespace lang::ir {
-// Trivial-value CFG. IDs and language types come from the public frontend. Unit
-// has one trivial value. Cleanup markers check the shared HIR exit plans; no
-// ARC.
+// Native CFG. IDs, value types and ownership plans come from frozen HIR.
+// Owning slots have runtime initialization flags; copy/drop are type-specific.
 enum class Op {
   constant,
   function,
@@ -26,7 +25,10 @@ enum class Op {
   string_literal,
   exit_begin,
   cleanup_begin,
-  cleanup_end
+  cleanup_end,
+  copy, move, take, destroy, borrow, end_borrow, save_output,
+  vec_init, vec_read, vec_set, vec_slice, iteration_begin, iteration_end,
+  vec_length, iteration_test, iteration_read, iteration_next, ownership_begin, ownership_end, replace_indirect, begin_borrow, vec_check
 };
 struct ExitSite {
   HirNodeId origin;
@@ -52,6 +54,7 @@ struct Instruction {
   std::optional<HirNodeId> cleanup; // cleanup_begin/end: defer registration
   std::optional<HirNodeId>
       origin; // call: source call identity, including inline copies
+  std::optional<hir::OwnerRef> owner;
   hir::UnaryOp unary = hir::UnaryOp::negate;
   hir::BinaryOp binary = hir::BinaryOp::add;
   SourceSpan source{SourceSnapshotId{0}, 0, 0};
@@ -93,6 +96,9 @@ struct Slot {
   TypeId type;
   std::optional<uint32_t> parameter;
   bool inout = false;
+  std::optional<hir::OwnerRef> owner;
+  bool owning_parameter = false;
+  std::optional<SymbolId> binding;
 };
 struct Handler {
   hir::CatchTarget target;

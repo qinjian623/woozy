@@ -1,0 +1,5 @@
+package app;
+enum E { Bad(value Vec[i32]); }
+struct Pair { first Vec[i32]; second Vec[i32]; }
+func bad() Vec[i32] throws E {throw E.Bad(value:[8]);}
+func main() i32 {var a Vec[i32]=[1]; let alias=a; try {a=bad();} catch err E {switch err {case E.Bad(value): if value[0]!=8{return 1;}}} if a[0]!=1 || alias[0]!=1{return 2;} try {let x=Pair(first:[3],second:bad());} catch err E {} try {let y Vec[Vec[i32]]=[[4],bad()];} catch err E {} return 0;}

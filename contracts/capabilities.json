@@ -94,15 +94,16 @@
         "native",
         "python"
       ],
-      "implemented": false,
-      "verified": false,
+      "implemented": true,
+      "verified": true,
       "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
       "stages": {
-        "parse": false,
-        "check": false,
-        "generate": false,
-        "execute": false
-      }
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
+      },
+      "notes": "仅已验证的64位有限无环Vec/拥有struct与enum；native为Linux x86_64 O0/O2，Python为CPython3.12.15。完整ARC、动态字符串、循环拥有图、非平凡inout和外部对象仍不支持；没有公开长度修改API。见docs/T09_EXECUTION.md。"
     },
     {
       "name": "native_arc",
@@ -110,15 +111,16 @@
       "planned_backends": [
         "native"
       ],
-      "implemented": false,
-      "verified": false,
+      "implemented": true,
+      "verified": true,
       "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
       "stages": {
-        "parse": false,
-        "check": false,
-        "generate": false,
-        "execute": false
-      }
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
+      },
+      "notes": "仅已验证的64位有限无环Vec/拥有struct与enum；native为Linux x86_64 O0/O2，Python为CPython3.12.15。完整ARC、动态字符串、循环拥有图、非平凡inout和外部对象仍不支持；没有公开长度修改API。见docs/T09_EXECUTION.md。"
     },
     {
       "name": "python_numpy_torch",

@@ -1,8 +1,8 @@
 # T09 第一段静态实现
 
-本阶段基点为 `db563f46ee49ab9528a248c549bb423c0f6d2f66`，共同版本仍为 `compiler-dev/1`。本文件描述已写入生产前端的 API；Python 拥有值执行记录见 `T09_PYTHON.md`。两后端 Vec 正式支持尚未同时开放，T09 整体仍未完成。
+本阶段基点为 `db563f46ee49ab9528a248c549bb423c0f6d2f66`，共同版本仍为 `compiler-dev/1`。本文件描述已写入生产前端的 API；Python 拥有值执行记录见 `T09_PYTHON.md`。两个 64 位后端已支持有限 Vec 与拥有聚合，实际范围及检查见 `T09_EXECUTION.md`。完整 ARC 及其他未支持组合仍未完成。
 
-`sema::check_types` 产生实际类型及拥有记录，随后调用 `hir::verify_types`。`check_project` 和 `hir::verify` 继续执行后端支持检查；Vec、move、拥有聚合及含 Vec/move 的函数签名不能取得 `VerifiedHirModule`。freeze 和唯一 Verified 构造者未变。没有另建 AST、HIR 或中间 Verified 包装。
+`sema::check_types` 产生实际类型及拥有记录，随后调用 `hir::verify_types`。`check_project` 和 `hir::verify` 继续执行后端支持检查；已支持的 Vec、move、拥有聚合及函数签名在 native/64 与 python/64 可取得 `VerifiedHirModule`；32 位拥有值及其他未支持组合仍拒绝。freeze 和唯一 Verified 构造者未变。没有另建 AST、HIR 或中间 Verified 包装。
 
 ## 类型和节点
 
@@ -62,7 +62,7 @@ return/throw 先保存拥有输出，再销毁当前 full-expression 的剩余�
 
 继续拒绝普通参数重赋值、动态 string/Vec[string]/原受限 string 成员、部分字段/元素 move、非平凡 inout、索引 inout、索引聚合投影写回、递归拥有图、捕获闭包、foreign 和原 T07 不支持的泛型/方法 move/inout/trait 组合。POD 整体 inout 仍沿用原阶段限制，分类结果没有自动开放后端。
 
-没有新增 len/push/share 等源 API，RHS 改变长度时的检查时点仍未规定。Vec 分配失败或分配大小溢出按 `SEMANTICS.md` 第 7.1 节产生 Panic。静态检查不能证明 ARC/drop 次数、Vec 共享或 Panic 运行结果。Python 的实际运行记录见 `T09_PYTHON.md`；Native 执行、runtime sanitizer 和两端比较仍待独立审查。
+没有新增 len/push/share 等源 API，RHS 改变长度时的检查时点仍未规定。Vec 分配失败或分配大小溢出按 `SEMANTICS.md` 第 7.1 节产生 Panic。静态检查不能证明 ARC/drop 次数、Vec 共享或 Panic 运行结果。两端实际运行、runtime sanitizer 和结果比较见 `T09_EXECUTION.md`。
 
 测试入口为 `tests/ownership/static_test.cpp`，原 18 份项目及 cases.json 原样保留。`static-extra/independent` 是新增独立源码项目。最终实际命令、环境、失败日志、逐项 CLI JSON、hash 和未执行项记录在 `/tmp/language-t09-static-20261104/{report.md,summary.json,checks/}`；构建结果以这些文件为准，不引用旧任务的通过数量。
 

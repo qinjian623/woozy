@@ -1,0 +1,1 @@
+package app;enum E{Bad(value Vec[i32]);}func f(ok bool) Vec[i32] throws E {if ok{return [1];}throw E.Bad(value:[2,2]);}func main() i32 {try{let a=f(true);if a[0]!=1{return 1;}}catch e E{return 2;}try{let b=f(false);return 3;}catch e E{switch e{case E.Bad(value):if value[0]!=2{return 4;}}}return 0;}

@@ -108,7 +108,12 @@ class Verifier {
         need(i.result.has_value() ==
                  (i.op != Op::store && i.op != Op::store_indirect &&
                   i.op != Op::exit_begin && i.op != Op::cleanup_begin &&
-                  i.op != Op::cleanup_end),
+                  i.op != Op::cleanup_end && i.op != Op::take &&
+                  i.op != Op::destroy && i.op != Op::end_borrow &&
+                  i.op != Op::save_output && i.op != Op::vec_set &&
+                  i.op != Op::iteration_end && i.op != Op::iteration_begin &&
+                  i.op != Op::iteration_next && i.op != Op::ownership_begin &&
+                  i.op != Op::ownership_end && i.op != Op::replace_indirect && i.op != Op::begin_borrow && i.op != Op::vec_check),
              "invalid instruction result", i.source);
         if (i.result)
           need(defs.emplace(*i.result, Def{b, p + 1, i.type,
@@ -249,6 +254,108 @@ class Verifier {
                      (i.op == Op::cleanup_begin || i.op == Op::cleanup_end),
              "invalid cleanup metadata", i.source);
         switch (i.op) {
+        case Op::begin_borrow:
+          arity(1);
+          need(i.owner && i.slot.value < f.slots.size() &&
+               ((i.owner->kind == hir::OwnerKind::binding && f.slots[i.slot.value].binding == SymbolId{i.owner->identity}) ||
+                f.slots[i.slot.value].owner == i.owner), "borrow actual storage differs from owner", i.source);
+          break;
+        case Op::ownership_begin:
+        case Op::ownership_end:
+          arity(0); need(i.origin && i.bits <= 1 && t.kind == hir::TypeKind::Unit,
+                        "ownership batch shape", i.source); break;
+        case Op::copy:
+        case Op::borrow:
+          arity(1); value(0);
+          need(args[0].type == i.type, "copy/borrow type", i.source);
+          if (i.origin) {
+            const auto &source = m.hir.module().nodes.at(i.origin->value);
+            if (source.kind() == hir::NodeKind::read) {
+              bool matches = false;
+              for (const auto &u : m.hir.module().ownership.uses)
+                if (u.consumer == *i.origin && !u.destination && u.operand == 0)
+                  matches = (i.op == Op::copy ? hir::UseKind::copy : hir::UseKind::borrow) == u.kind;
+              need(matches, "copy/borrow differs from HIR use", i.source);
+              auto definition = instructions.find(i.inputs[0]);
+              need(definition != instructions.end() && definition->second->op == Op::load,
+                   "copy/borrow does not read binding", i.source);
+              const auto &slot = f.slots.at(definition->second->slot.value);
+              if (slot.owner)
+                need(slot.owner == hir::OwnerRef{hir::OwnerKind::binding, std::get<hir::Read>(source.data).symbol.value},
+                     "copy/borrow from wrong binding", i.source);
+            }
+          }
+          break;
+        case Op::move:
+          arity(0);
+          need(i.slot.value < f.slots.size() && f.slots[i.slot.value].type == i.type && i.origin,
+               "move slot/type/origin", i.source);
+          { const auto &source = m.hir.module().nodes.at(i.origin->value);
+            const auto *move = std::get_if<hir::Move>(&source.data);
+            need(move && move->binding && (!f.slots[i.slot.value].owner ||
+                 f.slots[i.slot.value].owner == hir::OwnerRef{hir::OwnerKind::binding, move->binding->value}),
+                 "move differs from HIR", i.source);
+          }
+          break;
+        case Op::take:
+        case Op::destroy:
+        case Op::iteration_end:
+          arity(0);
+          need(t.kind == hir::TypeKind::Unit && i.slot.value < f.slots.size() &&
+                   f.slots[i.slot.value].owner,
+               "owning action without live slot", i.source);
+          if (i.owner) need(i.owner == f.slots[i.slot.value].owner,
+                            "owning action uses another slot", i.source);
+          break;
+        case Op::end_borrow:
+          arity(0); need(i.owner.has_value(), "end borrow without identity", i.source); break;
+        case Op::save_output:
+          arity(1); value(0);
+          need(i.owner && hir::classify_value(m.hir.module(), args[0].type).needs_drop,
+               "save output without owned value", i.source); break;
+        case Op::vec_init:
+          need(t.kind == hir::TypeKind::Vec, "Vec constructor type", i.source);
+          for (size_t a = 0; a < args.size(); ++a) {
+            value(a); need(args[a].type == t.type_args[0], "Vec element type", i.source);
+          }
+          break;
+        case Op::vec_read:
+        case Op::vec_check:
+        case Op::vec_set:
+          arity(i.op == Op::vec_set ? 3 : 2);
+          need(value(0).kind == hir::TypeKind::Vec && integer(value(1).kind),
+               "Vec access receiver/index", i.source);
+          if (i.op == Op::vec_read)
+            need(type(args[0].type, i.source).type_args[0] == i.type, "Vec read result", i.source);
+          else if (i.op == Op::vec_check) need(t.kind == hir::TypeKind::Unit, "Vec check type", i.source);
+          else {
+            value(2); need(type(args[0].type, i.source).type_args[0] == args[2].type &&
+                          t.kind == hir::TypeKind::Unit, "Vec write type", i.source);
+          }
+          break;
+        case Op::vec_slice:
+          need(value(0).kind == hir::TypeKind::Vec && args[0].type == i.type && i.bits <= 3,
+               "Vec slice type", i.source);
+          arity(1 + bool(i.bits & 1) + bool(i.bits & 2));
+          for (size_t a = 1; a < args.size(); ++a) need(integer(value(a).kind), "slice endpoint type", i.source);
+          break;
+        case Op::iteration_begin:
+        case Op::iteration_next:
+        case Op::iteration_read:
+        case Op::iteration_test:
+          arity(0);
+          need(i.slot.value < f.slots.size() && f.slots[i.slot.value].owner &&
+               f.slots[i.slot.value].owner->kind == hir::OwnerKind::iteration &&
+               type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::Vec,
+               "iteration slot", i.source);
+          if (i.op == Op::iteration_read)
+            need(i.type == type(f.slots[i.slot.value].type, i.source).type_args[0], "iteration element type", i.source);
+          else need(t.kind == (i.op == Op::iteration_test ? hir::TypeKind::Bool : hir::TypeKind::Unit),
+                    "iteration operation type", i.source);
+          break;
+        case Op::vec_length:
+          arity(1); need(value(0).kind == hir::TypeKind::Vec && t.kind == hir::TypeKind::Usize,
+                         "iteration/length type", i.source); break;
         case Op::exit_begin:
           need(t.kind == hir::TypeKind::Unit, "exit marker type", i.source);
           for (size_t a = 0; a < args.size(); ++a)
@@ -408,12 +515,15 @@ class Verifier {
           need(args[0].address && args[0].type == i.type,
                "indirect load type/mode", i.source);
           break;
+        case Op::replace_indirect:
         case Op::store_indirect:
           arity(2);
           value(1);
           need(args[0].address && args[0].type == args[1].type &&
                    t.kind == hir::TypeKind::Unit,
                "indirect store type/mode", i.source);
+          need(hir::classify_value(m.hir.module(), args[1].type).needs_drop ==
+               (i.op == Op::replace_indirect), "owned field replacement lacks actual destroy", i.source);
           break;
         case Op::enum_test:
         case Op::enum_payload: {
@@ -510,7 +620,10 @@ class Verifier {
           impossible.insert(b);
       }
     cleanup(f, dom, predecessors, impossible);
+    ownership(f);
   }
+
+#include "ownership_verify.inc"
 
   // Independent CFG dataflow over exit obligations. It reads immutable HIR
   // plans, never calls Lower and never trusts copied cleanup order in NativeIR.
@@ -579,6 +692,7 @@ class Verifier {
       size_t next = 0;
       bool active = false;
       std::vector<ValueId> saved;
+      size_t action = 0;
       bool operator==(const Frame &) const = default;
     };
     using State = std::vector<Frame>;
@@ -636,6 +750,11 @@ class Verifier {
                    p.defers[top.next] == *i.cleanup &&
                    node(*i.cleanup).kind() == hir::NodeKind::defer_,
                "cleanup registration/order differs from HIR", i.source);
+          if (!p.actions.empty()) {
+            need(top.action < p.actions.size() && p.actions[top.action].kind == hir::CleanupKind::defer_ &&
+                 p.actions[top.action].owner.identity == i.cleanup->value,
+                 "defer moved across destroy/output actions", i.source);
+          }
           top.active = true;
         } else if (i.op == Op::cleanup_end) {
           need(!state.empty(), "cleanup end without begin", i.source);
@@ -645,6 +764,21 @@ class Verifier {
                "cleanup end mismatch", i.source);
           top.active = false;
           ++top.next;
+          if (!p.actions.empty()) ++top.action;
+        } else if (!state.empty() && !state.back().active &&
+                   (i.op == Op::destroy || i.op == Op::end_borrow ||
+                    i.op == Op::save_output || i.op == Op::iteration_end)) {
+          auto &top = state.back(); const auto &p = plan(top.site);
+          need(top.action < p.actions.size(), "extra owning cleanup", i.source);
+          const auto &expected = p.actions[top.action++];
+          auto kind = i.op == Op::destroy ? hir::CleanupKind::destroy_if_live :
+                      i.op == Op::end_borrow ? hir::CleanupKind::end_borrow :
+                      i.op == Op::save_output ? hir::CleanupKind::save_output : hir::CleanupKind::end_iteration;
+          need(kind == expected.kind && i.owner == expected.owner,
+               "actual owning operation/order differs from HIR exit", i.source);
+          if (i.op == Op::save_output) need(i.inputs == top.saved, "saved wrong owning output", i.source);
+          if (i.op == Op::destroy) need(f.slots.at(i.slot.value).type == expected.type,
+                                      "destroy type differs from HIR", i.source);
         }
       }
       const auto &t = bb.terminator;
@@ -669,7 +803,7 @@ class Verifier {
         need(t.origin == t.exit->origin && !state.empty(),
              "exit end without begin", t.source);
         auto top = state.back();
-        need(top.site == *t.exit && !top.active && top.next == p.defers.size(),
+        need(top.site == *t.exit && !top.active && top.next == p.defers.size() && top.action == p.actions.size(),
              "exit before all cleanups completed", t.source);
         if (p.kind == hir::ExitKind::return_ ||
             p.kind == hir::ExitKind::error) {
@@ -822,7 +956,9 @@ std::string dump(const Module &m) {
             "struct_init",   "enum_init",     "field_read",
             "field_address", "load_indirect", "store_indirect",
             "enum_test",     "enum_payload",  "string_literal",
-            "exit_begin",    "cleanup_begin", "cleanup_end"};
+            "exit_begin",    "cleanup_begin", "cleanup_end",
+            "copy", "move", "take", "destroy", "borrow", "end_borrow", "save_output",
+            "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check"};
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;

@@ -1,8 +1,7 @@
 # LLVM 与 Python 后端开发契约
 
 本文规定后端开发要求；当前实现范围见[NATIVE_SCALARS](NATIVE_SCALARS.md)、
-[PYTHON_SCALARS](PYTHON_SCALARS.md)及两端T08执行说明。ARC和外部绑定
-仍未完成。严格标量浮点执行见两端的浮点说明，其他目标要求不能当成实现结果。本文以 [SEMANTICS.md](SEMANTICS.md) 的语言语义、[IR_CONTRACTS.md](IR_CONTRACTS.md) 的 IR 定义为准。后端不得自行选择另一套数值、所有权或清理规则。
+[PYTHON_SCALARS](PYTHON_SCALARS.md)、两端T08说明及[T09执行记录](T09_EXECUTION.md)。有限无环 Vec/拥有聚合已实施；其他 ARC 组合和外部绑定仍未完成。严格标量浮点执行见两端的浮点说明，其他目标要求不能当成实现结果。本文以 [SEMANTICS.md](SEMANTICS.md) 的语言语义、[IR_CONTRACTS.md](IR_CONTRACTS.md) 的 IR 定义为准。后端不得自行选择另一套数值、所有权或清理规则。
 
 ## 1 目标与模块边界
 

@@ -3073,6 +3073,9 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
                              std::move(feature), s.span});
   };
   try {
+    const bool ownership_values =
+        (m.config.backend == Backend::native || m.config.backend == Backend::python) &&
+        m.config.word_bits == 64;
     TypeContext storage_types = m.types;
     std::set<uint64_t> checked_types;
     std::function<bool(TypeId)> supported = [&](TypeId id) {
@@ -3080,6 +3083,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       if (!checked_types.insert(id.value).second)
         return true;
       const auto t = *storage_types.find(id);
+      if (t.kind == TypeKind::Vec)
+        return ownership_values && supported(t.type_args.at(0));
       if (t.kind == TypeKind::NominalStruct ||
           t.kind == TypeKind::NominalEnum) {
         const auto d = std::find_if(
@@ -3115,7 +3120,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
           if (!seen.insert(current.value).second)
             continue;
           const auto value = *storage_types.find(current);
-          if (value.kind == TypeKind::Vec)
+          if (value.kind == TypeKind::Vec && !ownership_values)
             return false;
           if (value.kind == TypeKind::NominalStruct ||
               value.kind == TypeKind::NominalEnum) {
@@ -3135,7 +3140,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
             if (value.throws_type)
               pending.push_back(*value.throws_type);
             for (auto p : value.parameters) {
-              if (p.mode == ParamMode::move)
+              if (p.mode == ParamMode::move && !ownership_values)
                 return false;
               pending.push_back(p.type);
             }
@@ -3152,7 +3157,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       if (t.throws_type && !supported(*t.throws_type))
         return false;
       for (auto p : t.parameters)
-        if (p.mode == ParamMode::move || !supported(p.type))
+        if ((p.mode == ParamMode::move && !ownership_values) ||
+            !supported(p.type))
           return false;
       return supported(t.result);
     };
@@ -3187,6 +3193,9 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         case NodeKind::index_place:
         case NodeKind::vec_slice:
         case NodeKind::for_in:
+          if (ownership_values)
+            break;
+          [[fallthrough]];
         case NodeKind::constraint_call:
           unavailable(n.source,
                       "backend has not implemented this aggregate operation");

@@ -1,0 +1,1 @@
+package app; struct Pair {first Vec[i32];second Vec[i32];} enum E { Value(first Vec[i32],second Vec[i32]); } func main() i32 {var p=Pair(first:[1],second:[2,2]); p.first=[3,3,3]; let e=E.Value(first:[4,4,4,4],second:[5,5,5,5,5]); if p.first[0]!=3{return 1;}return 0;}

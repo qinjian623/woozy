@@ -1,0 +1,1 @@
+package app;func main() i32 {let a Vec[bool]=[true,false];let b Vec[f32]=[1.0,2.0];let c Vec[i8]=[1,2];a[1]=true;b[0]=b[1];c[0]=c[1];if !a[1] || b[0]!=2.0 || c[0]!=2{return 1;}return 0;}

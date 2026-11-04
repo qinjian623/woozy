@@ -14,6 +14,67 @@ class Lower {
   std::map<SymbolId, LocalSlotId> slots;
   std::map<HirNodeId, std::pair<BlockId, BlockId>> loops;
   TypeId unit, boolean;
+  std::map<HirNodeId, LocalSlotId> temporaries, iterations;
+  bool owning(TypeId t) const { return hir::classify_value(h, t).needs_drop; }
+  void effect(Op op, LocalSlotId slot, SourceSpan source,
+              std::vector<ValueId> inputs = {}, std::optional<hir::OwnerRef> owner = {}) {
+    Instruction i; i.op = op; i.type = unit; i.slot = slot;
+    i.inputs = std::move(inputs); i.source = source; i.owner = owner;
+    f.blocks[current.value].instructions.push_back(std::move(i));
+  }
+  LocalSlotId owner_slot(hir::OwnerRef ref) const {
+    if (ref.kind == hir::OwnerKind::binding) return slots.at(SymbolId{ref.identity});
+    if (ref.kind == hir::OwnerKind::iteration) return iterations.at(HirNodeId{ref.identity});
+    return temporaries.at(HirNodeId{ref.identity});
+  }
+  void begin_borrow(hir::OwnerRef owner, ValueId value, SourceSpan source) {
+    effect(Op::begin_borrow, owner_slot(owner), source, {value}, owner);
+  }
+  void take(HirNodeId id) {
+    if (auto it = temporaries.find(id); it != temporaries.end())
+      effect(Op::take, it->second, node(id).source.span);
+  }
+  void actions(const std::vector<hir::CleanupStep> &steps, SourceSpan source,
+               std::optional<ValueId> saved = {}) {
+    for (const auto &a : steps) {
+      if (!live()) break;
+      if (a.kind == hir::CleanupKind::defer_) {
+        HirNodeId d{a.owner.identity};
+        marker(Op::cleanup_begin, {}, d);
+        auto outer_slots = slots; auto outer_loops = loops;
+        auto outer_handlers = handlers; auto outer_temps = temporaries;
+        auto outer_iterations = iterations;
+        stmt(node(d).children[0]);
+        slots = std::move(outer_slots); loops = std::move(outer_loops);
+        handlers = std::move(outer_handlers); temporaries = std::move(outer_temps);
+        iterations = std::move(outer_iterations);
+        if (live()) marker(Op::cleanup_end, {}, d);
+      } else if (a.kind == hir::CleanupKind::destroy_if_live) {
+        effect(Op::destroy, owner_slot(a.owner), source, {}, a.owner);
+      } else if (a.kind == hir::CleanupKind::end_iteration) {
+        effect(Op::iteration_end, owner_slot(a.owner), source, {}, a.owner);
+      } else if (a.kind == hir::CleanupKind::end_borrow) {
+        effect(Op::end_borrow, LocalSlotId{0}, source, {}, a.owner);
+      } else if (a.kind == hir::CleanupKind::save_output) {
+        effect(Op::save_output, LocalSlotId{0}, source, {*saved}, a.owner);
+      }
+    }
+  }
+  void batch(HirNodeId id, uint64_t kind, const std::vector<hir::CleanupStep> &steps) {
+    Instruction i; i.op = Op::ownership_begin; i.type = unit; i.origin = id;
+    i.bits = kind; i.source = node(id).source.span;
+    f.blocks[current.value].instructions.push_back(i);
+    actions(steps, i.source);
+    i.op = Op::ownership_end; f.blocks[current.value].instructions.push_back(i);
+  }
+  void full(HirNodeId id) {
+    for (const auto &fe : h.ownership.full_expressions)
+      if (fe.node == id) { batch(id, 0, fe.actions); return; }
+  }
+  void call_end(HirNodeId id) {
+    for (const auto &c : h.ownership.calls)
+      if (c.node == id) { batch(id, 1, c.on_return); return; }
+  }
   std::map<std::pair<HirNodeId, uint32_t>, Handler> handlers;
   const hir::ExitPlan *plan(const ExitSite &site) const {
     for (const auto &p : node(site.origin).exits)
@@ -37,19 +98,12 @@ class Lower {
     if (const auto *p = plan(site)) {
       marker(Op::exit_begin, site, {},
              saved ? std::vector{*saved} : std::vector<ValueId>{});
-      for (auto d : p->defers) {
-        marker(Op::cleanup_begin, {}, d);
-        // Each expansion gets fresh local slots and control targets. External
-        // bindings retain the very same slot, and nested expansions restore
-        // their parent's context before the next deferred body is emitted.
-        auto outer_slots = slots;
-        auto outer_loops = loops;
-        auto outer_handlers = handlers;
-        stmt(node(d).children[0]);
-        slots = std::move(outer_slots);
-        loops = std::move(outer_loops);
-        handlers = std::move(outer_handlers);
-        marker(Op::cleanup_end, {}, d);
+      if (!p->actions.empty()) actions(p->actions, node(site.origin).source.span, saved);
+      else {
+        std::vector<hir::CleanupStep> defers;
+        for (auto d : p->defers) defers.push_back({hir::CleanupKind::defer_,
+          {hir::OwnerKind::temporary, d.value}, TypeId{0}});
+        actions(defers, node(site.origin).source.span, saved);
       }
     }
   }
@@ -138,6 +192,13 @@ class Lower {
     if (p.binding) {
       auto local = slot(p.type);
       slots.emplace(*p.binding, local);
+      f.slots[local.value].binding = p.binding;
+      if (owning(p.type)) {
+        f.slots[local.value].owner = hir::OwnerRef{hir::OwnerKind::binding, p.binding->value};
+        Instruction copy; copy.op = Op::copy; copy.type = p.type;
+        copy.inputs = {value}; copy.source = p.source.span;
+        value = emit(copy);
+      }
       store(local, value, p.source.span);
     }
     if (p.variant) {
@@ -158,6 +219,18 @@ class Lower {
     }
   }
   ValueId expr(HirNodeId id) {
+    auto value = raw_expr(id);
+    for (const auto &t : h.ownership.temporaries)
+      if (t.producer == id) {
+        auto storage = slot(t.type);
+        f.slots[storage.value].owner = hir::OwnerRef{hir::OwnerKind::temporary, id.value};
+        temporaries[id] = storage;
+        store(storage, value, node(id).source.span);
+        break;
+      }
+    return value;
+  }
+  ValueId raw_expr(HirNodeId id) {
     const auto &n = node(id);
     Instruction i;
     i.type = n.type;
@@ -178,9 +251,40 @@ class Lower {
       i.op = Op::string_literal;
       i.utf8 = std::get<hir::StringLiteral>(n.data).utf8;
       return emit(i);
-    case hir::NodeKind::read:
-      return access(Op::load, slots.at(std::get<hir::Read>(n.data).symbol),
-                    i.source);
+    case hir::NodeKind::read: {
+      auto value = access(Op::load, slots.at(std::get<hir::Read>(n.data).symbol), i.source);
+      for (const auto &u : h.ownership.uses)
+        if (u.consumer == id && u.operand == 0 && !u.destination) {
+          i.op = u.kind == hir::UseKind::copy ? Op::copy : Op::borrow;
+          i.inputs = {value}; i.origin = id;
+          return emit(i);
+        }
+      return value;
+    }
+    case hir::NodeKind::move: {
+      i.op = Op::move; i.origin = id;
+      if (auto binding = std::get<hir::Move>(n.data).binding) {
+        i.slot = slots.at(*binding);
+        return emit(i);
+      }
+      auto value = expr(n.children[0]); take(n.children[0]);
+      return value;
+    }
+    case hir::NodeKind::vec_init:
+      i.op = Op::vec_init;
+      for (auto child : n.children) i.inputs.push_back(expr(child));
+      for (auto child : n.children) take(child);
+      return emit(i);
+    case hir::NodeKind::index_read:
+      i.op = Op::vec_read;
+      i.inputs = {expr(n.children[0]), expr(n.children[1])};
+      return emit(i);
+    case hir::NodeKind::vec_slice:
+      i.op = Op::vec_slice;
+      for (auto child : n.children) i.inputs.push_back(expr(child));
+      i.bits = (std::get<hir::VecSlice>(n.data).start ? 1 : 0) |
+               (std::get<hir::VecSlice>(n.data).end ? 2 : 0);
+      return emit(i);
     case hir::NodeKind::place:
       return access(Op::address, slots.at(std::get<hir::Place>(n.data).symbol),
                     i.source);
@@ -199,6 +303,7 @@ class Lower {
       i.inputs.resize(args.size());
       for (const auto &a : args)
         i.inputs[a.parameter_index] = expr(a.expression);
+      for (const auto &a : args) take(a.expression);
       return emit(i);
     }
     case hir::NodeKind::field_read:
@@ -209,7 +314,12 @@ class Lower {
                     ? std::get<hir::FieldRead>(n.data).field
                     : std::get<hir::FieldPlace>(n.data).field;
       i.inputs = {expr(n.children[0])};
-      return emit(i);
+      { auto value = emit(i);
+        bool own = false;
+        for (const auto &t : h.ownership.temporaries) if (t.producer == id) own = true;
+        if (own) { i.op = Op::copy; i.inputs = {value}; return emit(i); }
+        return value;
+      }
     case hir::NodeKind::unary:
       i.op = Op::unary;
       i.unary = std::get<hir::Unary>(n.data).op;
@@ -264,10 +374,24 @@ class Lower {
       for (const auto &arg : c.args) {
         auto value = expr(arg.expression);
         i.inputs[arg.parameter_index + 1] = value;
+        bool lifetime = false;
+        for (const auto &call : h.ownership.calls) if (call.node == id) lifetime = true;
+        if (lifetime && arg.mode != hir::ParamMode::move) {
+          size_t offset = c.callee ? 1 : 0;
+          for (const auto &u : h.ownership.uses)
+            if (u.consumer == id && !u.destination && u.operand == arg.source_index + offset &&
+                (u.kind == hir::UseKind::borrow || u.kind == hir::UseKind::inout)) {
+              if (u.root) begin_borrow({hir::OwnerKind::binding, u.root->value}, value, i.source);
+              else if (owning(u.type)) begin_borrow({hir::OwnerKind::temporary, arg.expression.value}, value, i.source);
+              break;
+            }
+        }
       }
       const auto &signature = *h.types.find(c.signature);
-      if (!signature.throws_type)
-        return emit(i);
+      for (const auto &a : c.args) if (a.mode == hir::ParamMode::move) take(a.expression);
+      if (!signature.throws_type) {
+        auto result = emit(i); call_end(id); return result;
+      }
       auto ok = block(), fail = block();
       ValueId value{next_value++}, error_value{next_value++};
       f.blocks[ok.value].parameters.push_back({value, n.type, id, false});
@@ -279,6 +403,7 @@ class Lower {
       current = fail;
       error(id, *signature.throws_type, error_value);
       current = ok;
+      call_end(id);
       return value;
     }
     default:
@@ -309,6 +434,7 @@ class Lower {
       break;
     case hir::NodeKind::throw_: {
       auto value = expr(n.children[0]);
+      take(n.children[0]);
       error(id, node(n.children[0]).type, value);
       break;
     }
@@ -325,6 +451,9 @@ class Lower {
         handlers.emplace(std::pair{id, c}, handler);
         f.handlers.push_back(handler);
         slots.emplace(catch_.binding, handler.slot);
+        f.slots[handler.slot.value].binding = catch_.binding;
+        if (owning(catch_.error_type)) f.slots[handler.slot.value].owner =
+          hir::OwnerRef{hir::OwnerKind::binding, catch_.binding.value};
       }
       stmt(n.children[0]);
       if (live())
@@ -342,17 +471,48 @@ class Lower {
       break;
     case hir::NodeKind::expression_statement:
       (void)expr(n.children[0]);
+      full(id);
       break;
     case hir::NodeKind::binding: {
       auto initial = expr(n.children[0]);
       auto target = slot(node(n.children[0]).type);
-      slots.emplace(std::get<hir::Binding>(n.data).symbol, target);
+      auto symbol = std::get<hir::Binding>(n.data).symbol;
+      slots.emplace(symbol, target);
+      f.slots[target.value].binding = symbol;
+      if (owning(node(n.children[0]).type)) f.slots[target.value].owner =
+          hir::OwnerRef{hir::OwnerKind::binding, symbol.value};
+      take(n.children[0]);
       store(target, initial, s);
+      full(id);
       break;
     }
     case hir::NodeKind::assign: {
       const auto &place = node(n.children[0]);
+      if (place.kind() == hir::NodeKind::index_place) {
+        auto receiver = expr(place.children[0]); auto index = expr(place.children[1]);
+        effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index});
+        auto compound = std::get<hir::Assign>(n.data).compound;
+        std::optional<ValueId> lhs;
+        if (compound) {
+          Instruction read; read.op = Op::vec_read; read.type = place.type;
+          read.inputs = {receiver, index}; read.source = s;
+          lhs = emit(read);
+        }
+        auto rhs = expr(n.children[1]);
+        if (compound) {
+          Instruction op; op.op = Op::binary; op.type = place.type;
+          op.inputs = {*lhs, rhs}; op.binary = *compound; op.source = s;
+          rhs = emit(op);
+        }
+        take(n.children[1]);
+        effect(Op::vec_set, LocalSlotId{0}, s, {receiver, index, rhs});
+        full(id); break;
+      }
       auto target = expr(n.children[0]);
+      if (place.kind() == hir::NodeKind::field_place)
+        for (const auto &fe : h.ownership.full_expressions) if (fe.node == id)
+          for (const auto &a : fe.actions) if (a.kind == hir::CleanupKind::end_borrow)
+            begin_borrow(a.owner, target, s);
       auto compound = std::get<hir::Assign>(n.data).compound;
       std::optional<ValueId> lhs;
       if (compound)
@@ -367,16 +527,28 @@ class Lower {
         i.source = s;
         rhs = emit(i);
       }
+      take(n.children[1]);
+      if (auto binding = std::get_if<hir::Place>(&place.data); binding && owning(place.type))
+        effect(Op::destroy, slots.at(binding->symbol), s);
       Instruction write;
-      write.op = Op::store_indirect;
+      write.op = owning(place.type) ? Op::replace_indirect : Op::store_indirect;
       write.type = unit;
       write.inputs = {target, rhs};
       write.source = s;
-      f.blocks[current.value].instructions.push_back(write);
+      if (auto binding = std::get_if<hir::Place>(&place.data); binding && owning(place.type))
+        store(slots.at(binding->symbol), rhs, s);
+      else
+        f.blocks[current.value].instructions.push_back(write);
+      full(id);
       break;
     }
     case hir::NodeKind::switch_: {
-      auto value = expr(n.children[0]);
+      ValueId value;
+      if (owning(node(n.children[0]).type)) {
+        auto symbol = std::get<hir::Read>(node(n.children[0]).data).symbol;
+        value = access(Op::load, slots.at(symbol), s);
+        begin_borrow({hir::OwnerKind::binding, symbol.value}, value, s);
+      } else { value = expr(n.children[0]); full(n.children[0]); }
       auto after = block();
       loops.emplace(id, std::pair{after, after});
       for (const auto &arm : std::get<hir::Switch>(n.data).arms) {
@@ -393,6 +565,7 @@ class Lower {
           jump(body, s);
         current = body;
         bind_pattern(arm.pattern, value);
+        full(id);
         stmt(arm.body);
         if (live())
           jump(after, s);
@@ -405,6 +578,7 @@ class Lower {
     }
     case hir::NodeKind::if_: {
       auto condition = expr(n.children[0]);
+      full(n.children[0]);
       auto yes = block(), no = block(), join = block();
       end(Exit::conditional, {condition}, {yes, no}, s);
       current = yes;
@@ -426,6 +600,7 @@ class Lower {
       loops.emplace(id, std::pair{after, step});
       current = condition;
       auto test = expr(n.children[1]);
+      full(n.children[1]);
       end(Exit::conditional, {test}, {body, after}, s);
       current = body;
       stmt(n.children[3]);
@@ -437,12 +612,44 @@ class Lower {
         jump(condition, s);
       loops.erase(id);
       current = after;
+      ExitSite site{id, hir::ExitKind::normal, {}};
+      if (plan(site)) { clean(site); auto next = block(); jump(next, s); finish(site); current = next; }
       break;
+    }
+    case hir::NodeKind::for_in: {
+      const auto &fi = std::get<hir::ForIn>(n.data);
+      auto collection = expr(n.children[0]); take(n.children[0]);
+      auto hidden = slot(node(n.children[0]).type);
+      iterations[id] = hidden;
+      f.slots[hidden.value].owner = hir::OwnerRef{hir::OwnerKind::iteration, id.value};
+      store(hidden, collection, s); full(id);
+      effect(Op::iteration_begin, hidden, s);
+      auto condition = block(), body = block(), step = block(), done = block(), after = block();
+      jump(condition, s); loops.emplace(id, std::pair{after, step});
+      current = condition;
+      Instruction cmp; cmp.op = Op::iteration_test; cmp.type = boolean; cmp.slot = hidden; cmp.source = s;
+      end(Exit::conditional, {emit(cmp)}, {body, done}, s);
+      current = body;
+      auto element_type = h.types.find(node(n.children[0]).type)->type_args[0];
+      Instruction read; read.op = Op::iteration_read; read.type = element_type;
+      read.slot = hidden; read.source = s;
+      auto element = emit(read);
+      auto local = slot(element_type); slots[fi.element] = local;
+      f.slots[local.value].binding = fi.element;
+      if (owning(element_type)) f.slots[local.value].owner = hir::OwnerRef{hir::OwnerKind::binding, fi.element.value};
+      store(local, element, s);
+      stmt(fi.body); if (live()) jump(step, s);
+      current = step;
+      effect(Op::iteration_next, hidden, s); jump(condition, s);
+      current = done;
+      ExitSite site{id, hir::ExitKind::normal, {}}; clean(site); jump(after, s); finish(site);
+      loops.erase(id); current = after; break;
     }
     case hir::NodeKind::return_: {
       auto result =
           n.children.empty() ? constant(unit, 0, s) : expr(n.children[0]);
       ExitSite site{id, hir::ExitKind::return_, {}};
+      if (!n.children.empty()) take(n.children[0]);
       clean(site, n.children.empty() ? std::nullopt : std::optional{result});
       end(Exit::return_, {result}, {}, s);
       finish(site);
@@ -486,7 +693,12 @@ public:
       auto type = signature.parameters[p];
       auto local = slot(type.type);
       f.slots.back().parameter = p;
+      f.slots.back().binding = fn.parameters[p].symbol;
       f.slots.back().inout = type.mode == hir::ParamMode::inout;
+      if (owning(type.type)) {
+        f.slots.back().owner = hir::OwnerRef{hir::OwnerKind::binding, fn.parameters[p].symbol.value};
+        f.slots.back().owning_parameter = type.mode == hir::ParamMode::move;
+      }
       // Discard labels do not affect position or SymbolId identity.
       slots.emplace(fn.parameters[p].symbol, local);
     }
