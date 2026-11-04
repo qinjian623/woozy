@@ -1,0 +1,9 @@
+package app;
+struct Box[T] { value T; }
+struct Unused { nested Box[i32]; }
+enum Choice[T] { Empty; Some(value T); }
+func pack[T](x T) Box[T] { return Box[T](value: x); }
+func choose[T](x T) Choice[T] { return Choice[T].Some(value: x); }
+func unpack[T](x Box[T]) T { return x.value; }
+func unusedCallback[T](f func(T) T, x T) T { return f(x); }
+func main() i32 { return 0; }

@@ -24,6 +24,11 @@ if(LANG_TEST_PYTHON)
     --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --out ${CMAKE_CURRENT_BINARY_DIR}/cli-results)
   set_tests_properties(native.cli PROPERTIES TIMEOUT 180)
+  add_test(NAME native.generics COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_generics.py --cli $<TARGET_FILE:langc>
+    --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --out ${CMAKE_CURRENT_BINARY_DIR}/generic-results)
+  set_tests_properties(native.generics PROPERTIES TIMEOUT 180)
 else()
   message(STATUS "native.cli: not_run (test Python not found)")
 endif()

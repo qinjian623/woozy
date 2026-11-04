@@ -364,18 +364,8 @@ public:
       fail("x86_64 DataLayout is not 64-bit");
   }
   Output run(SymbolId entry, const Options &options) {
-    // Reject future HIR capabilities before generating any LLVM instruction.
-    for (uint64_t id = 1; id <= types.size(); ++id) {
-      const auto &t = type(TypeId{id});
-      if (t.kind == hir::TypeKind::Function) {
-        if (t.throws_type)
-          unsupported("typed throws is not implemented by native scalars");
-        for (auto p : t.parameters)
-          if (p.mode == hir::ParamMode::move)
-            unsupported("move is not implemented by native scalars");
-      } else if (t.kind != hir::TypeKind::Error)
-        (void)lower_type(TypeId{id});
-    }
+    // Only concrete CFG functions and their used types reach LLVM. The shared
+    // context also contains legal, non-executable generic declarations.
     for (const auto &f : input.functions)
       functions.emplace(
           f.symbol,
@@ -444,7 +434,18 @@ public:
 PhaseResult<Output> emit(const ir::VerifiedModule &input, SymbolId entry,
                          const Options &options) {
   PhaseResult<Output> r;
+  auto capabilities =
+      hir::check_backend_capabilities(input.module().hir.module());
+  if (!capabilities.success()) {
+    r.state = capabilities.state;
+    r.failure = capabilities.failure;
+    r.diagnostics = std::move(capabilities.diagnostics);
+    return r;
+  }
   try {
+    if (input.module().hir.config().backend != hir::Backend::native ||
+        input.module().hir.config().word_bits != 64)
+      unsupported("native scalars require native/64 HIR");
     if (options.triple != "x86_64-unknown-linux-gnu" ||
         options.cpu != "generic" || !options.features.empty() ||
         (options.optimization != 0 && options.optimization != 2))
@@ -465,6 +466,14 @@ PhaseResult<Output> emit(const ir::VerifiedModule &input, SymbolId entry,
 }
 PhaseResult<Output> emit(const hir::VerifiedHirModule &input, SymbolId entry,
                          const Options &options) {
+  auto capabilities = hir::check_backend_capabilities(input.module());
+  if (!capabilities.success()) {
+    PhaseResult<Output> r;
+    r.state = capabilities.state;
+    r.failure = capabilities.failure;
+    r.diagnostics = std::move(capabilities.diagnostics);
+    return r;
+  }
   auto cfg = ir::lower(input);
   if (!cfg.success()) {
     PhaseResult<Output> r;

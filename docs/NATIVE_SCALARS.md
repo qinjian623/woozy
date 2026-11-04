@@ -11,6 +11,81 @@ ASan/UBSan 各21/21组测试通过，包含正式CLI的34次主项目执行和2�
 本文件下方保留组件实现和早期验证记录。T05整项仍为in_progress，
 简单结构体和常量字符串需在T07接口发布后补齐。
 
+## 2026-11-04：T07 具体标量实例
+
+operation_id：`language-native-t07-scalar-instances-20261104`。本次起点为
+`fb8ba96ebe1a911ca3a036949c15484e58769519`，契约仍为 `compiler-dev/1`。
+下方 T05 记录中的“泛型未实施”由本节更新；聚合与字符串生成仍未实施。
+
+`ir::lower` 和两个 `native::emit` 公开入口先调用公共
+`hir::check_backend_capabilities`；失败时保留它的 state、failure、diagnostics，
+不返回对象。native/64、Linux x86_64、generic CPU、空 features、O0/O2 和
+LLVM 22.1.8 限制继续有效。删除了 Emitter 对整个 TypeContext 的拒绝扫描，
+仅降低具体 CFG 函数的签名、存储和指令所使用的类型。未使用的 nominal 声明、
+模板类型和模板体保留在公共 HIR 中，不生成 LLVM 函数或类型。
+
+已支持具体标量泛型函数、同实例递归、跨包别名、静态 trait 方法选择，以及函数类型
+实参与 callback 参数。实际构造或使用 struct/enum、字段及 switch 继续返回
+`E_CAPABILITY_UNAVAILABLE`，不进入 `E_IR_INVALID` 或产生部分输出。
+没有修改前端、共享接口、CLI/helper、Python 后端、既有 27 个泛型项目或任务清单。
+
+`tests/native/run_generics.py` 从未改的 `tests/generics/cases.json` 读取七项
+`runtime_expected.main_return`。另外三个小项目位于 `tests/native/generics`。
+下表每格在 GNU Debug、Release 下分别经正式 CLI build、链接和 ELF x86_64 执行；
+全部 stdout/stderr 为空，均为普通返回，未被当作 Panic。
+
+| 项目 | O0 exit | O2 exit |
+| --- | ---: | ---: |
+| explicit | 7 | 7 |
+| inferred | 8 | 8 |
+| return-context | 0 | 0 |
+| multi-instance | 3 | 3 |
+| function-argument | 5 | 5 |
+| same-recursion | 5 | 5 |
+| cross-package-alias | 7 | 7 |
+| trait-scalar | 9 | 9 |
+| unused-aggregate | 0 | 0 |
+| callback | 11 | 11 |
+
+每套构建新增 20 次执行通过。六个既有聚合正例（trait-unique、fields-reordered、
+nested-copy、enum-empty、enum-payload、field-evaluation-order）在 O0/O2 各做两次
+失败构建：空输出目录不写文件，已有成功输出不改变。每套 24 次均只有 E_CAPABILITY_UNAVAILABLE 诊断，
+报告按 12 个“项目/优化等级”记录为 unsupported。
+
+`native.cli` 也覆盖全部原 native 标量项目和新增 callee 求值次序项目，每套 64 次
+主测试执行及 2 次普通返回 7 对照通过；其中原 15 shared 与 core/numeric 是 34 次。
+覆盖 callee 只求值一次且先于实参、命名实参源码顺序、inout 转传、整数回绕、
+除法/移位/转换 Panic 和无 Panic 的普通非零返回。
+
+本次 GNU 16.2.1 Debug 与 Release 各 22/22 CTest passed，包含 native.ir、
+native.llvm、native.cli、native.generics、sema.t07；显式排除旧 python.projects
+分类错误，由另一任务处理，本次记为 not_run。Clang ASan/UBSan 留给 root 统一运行，
+本次未运行。T05/T07 整项状态不变；聚合、字符串、ARC、foreign 和严格浮点执行
+不在本次实现范围内。
+
+复现命令（`tc` 由调用者指定为已有外层 toolchains，不安装软件）：
+
+```sh
+export LD_LIBRARY_PATH="$tc/libxml2-legacy-2.13.9/usr/lib"
+cmake -S . -B /tmp/language-native-t07-debug -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug -DCMAKE_CXX_COMPILER=/usr/bin/g++ \
+  -DLANG_ENABLE_LLVM=ON -DLLVM_DIR="$tc/llvm-22.1.8/lib/cmake/llvm" \
+  -Dzstd_STATIC_LIBRARY="$tc/zstd-1.5.7/lib/libzstd.a"
+cmake --build /tmp/language-native-t07-debug -j4
+ctest --test-dir /tmp/language-native-t07-debug --output-on-failure \
+  -E '^python.projects$'
+```
+
+Release 使用独立目录及 `-DCMAKE_BUILD_TYPE=Release`。实际命令、构建日志、完整
+CLI 参数与输出留在 `/tmp/language-native-t07-{debug,release}*`；每套的
+`tests/native/{cli-results,generic-results}/results.json` 保存完整执行记录。
+原worktree的 `tests/native/generic-results.json` 已保留在外层
+checks/t07-native-worker-report.json，含源码SHA-256、ELF检查和执行结果，未加入源代码仓库。
+
+主代理合并两后端后，GNU Debug、Release和Clang22 ASan/UBSan完整测试各24/24通过，
+不再排除Python项目。7个公共源码的O0/O2及Python结果一致，另交叉运行两后端的
+6个附加源码，均符合预期。记录见外层checks/t07-native-python-comparison.json。
+
 ## API 与 CMake
 
 公共入口为 `include/lang/backend/native.hpp`：

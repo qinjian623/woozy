@@ -1,0 +1,4 @@
+package app;
+func apply[T](callback func(T) T, x T) T { return callback(x); }
+func inc(x i32) i32 { return x + 1; }
+func main() i32 { return apply[i32](inc, 10); }

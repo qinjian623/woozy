@@ -31,14 +31,24 @@ def main():
             report['tools'][name] = tool
             assert tool['exit'] == 0 and '22.1.8' in tool['stdout'], tool
         published = json.loads((args.root / 'tests/backend_common/cases.json').read_text())['cases']
-        cases = [(c['id'], args.root / c['manifest'], c['expected']['status']) for c in published]
-        cases += [(n, args.root / f'tests/fixtures/{n}/lang.toml', 'return') for n in ('core', 'numeric')]
-        for ident, manifest, expected in cases:
+        cases = [(c['id'], args.root / c['manifest'], c['expected']['status'],
+                  c['expected'].get('main_return', 0)) for c in published]
+        cases += [(n, args.root / f'tests/fixtures/{n}/lang.toml', 'return', 0) for n in ('core', 'numeric')]
+        cases += [(n, args.root / f'tests/modules/fixtures/{p}/lang.toml', 'return', 0)
+                  for n, p in (('mutual-recursion', 'same-package-mutual-recursion'),
+                               ('cross-package-call', 'cross-package-public'))]
+        cases += [(p.parent.name, p, 'panic' if p.parent.name.startswith('panic-') else 'return',
+                   7 if p.parent.name == 'nonzero-main' else 0)
+                  for p in sorted((args.root / 'tests/native/fixtures').glob('*/lang.toml'))]
+        for ident, manifest, expected, main_return in cases:
             for opt in (0, 2):
                 out = args.out / ident / f'O{opt}'
                 built = command([args.cli, 'build', '--project', manifest, '--backend', 'native',
                                  '--opt', opt, '--out-dir', out, '--format', 'json'])
-                row = dict(id=ident, opt=opt, build=built)
+                row = dict(id=ident, opt=opt, build=built, expected_main_return=main_return,
+                           source_sha256={str(p.relative_to(args.root)): digest(p)
+                                          for p in sorted(manifest.parent.rglob('*'))
+                                          if p.is_file() and (p.suffix == '.lang' or p.name == 'lang.toml')})
                 report['runs'].append(row)
                 assert built['exit'] == 0 and not built['stderr'], built
                 assert json.loads(built['stdout'])['status'] == 'ok', built
@@ -49,11 +59,11 @@ def main():
                 row['execute'] = ran = command([program.resolve()])
                 row['panic'] = panic_record(ran)
                 if expected == 'panic':
-                    cause = ('division-by-zero' if 'division' in ident else
+                    cause = ('division-by-zero' if 'division' in ident or 'remainder' in ident else
                              'invalid-shift' if 'shift' in ident else 'integer-conversion')
                     assert row['panic'] and f':{cause}:' in ran['stderr'], ran
                 else:
-                    assert ran['exit'] == 0 and not ran['stdout'] and not ran['stderr'], ran
+                    assert ran['exit'] == main_return and not row['panic'] and not ran['stdout'] and not ran['stderr'], ran
                 row['status'] = 'passed'
         for opt in (0, 2):
             out = args.out / 'ordinary-return' / f'O{opt}'

@@ -308,6 +308,14 @@ public:
 };
 } // namespace
 PhaseResult<VerifiedModule> lower(const hir::VerifiedHirModule &input) {
+  auto capabilities = hir::check_backend_capabilities(input.module());
+  if (!capabilities.success()) {
+    PhaseResult<VerifiedModule> r;
+    r.state = capabilities.state;
+    r.failure = capabilities.failure;
+    r.diagnostics = std::move(capabilities.diagnostics);
+    return r;
+  }
   if (input.config().backend != hir::Backend::native ||
       input.config().word_bits != 64) {
     PhaseResult<VerifiedModule> r;
