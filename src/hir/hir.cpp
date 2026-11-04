@@ -302,6 +302,7 @@ class Verifier {
   std::vector<size_t> enter, leave;
   std::vector<std::optional<SymbolId>> owners;
   std::vector<bool> scope_used;
+  std::vector<std::optional<HirNodeId>> parents, scope_nodes;
   size_t clock = 0;
   std::map<uint64_t, const FunctionTemplate *> templates;
   std::map<uint64_t, const NominalDecl *> nominals;
@@ -448,7 +449,8 @@ class Verifier {
         valid_type(a, allowed, depth + 1);
     }
     if (t.kind == TypeKind::Function) {
-      need(!t.throws_type, "throws execution is unsupported");
+      if (t.throws_type)
+        valid_type(*t.throws_type, allowed, depth + 1);
       for (auto p : t.parameters) {
         need(p.mode == ParamMode::ordinary || (p.mode == ParamMode::inout &&
                                                inout_scalar(type(p.type).kind)),
@@ -830,6 +832,11 @@ class Verifier {
     case NodeKind::constraint_call:
       aggregate_shape(n);
       break;
+    case NodeKind::try_:
+    case NodeKind::defer_:
+    case NodeKind::throw_:
+      effect_shape(n);
+      break;
     case NodeKind::unsupported:
       fail("unsupported HIR node: " + std::get<Unsupported>(n.data).feature,
            n.source.span);
@@ -917,25 +924,30 @@ class Verifier {
     Type u;
     u.kind = TypeKind::Unit;
     t.result = substituted.intern(u);
-    for (auto c : file.node(r.node).children) {
+    const auto parts = split_signature(file, r.node);
+    for (auto c : parts.parameters) {
       auto cr = r;
-      cr.node = c;
       const auto &n = file.node(c);
-      if (n.kind == AstKind::Parameter) {
-        auto mode = ParamMode::ordinary;
-        for (size_t i = n.token_begin;
-             i < file.node(n.children.at(0)).token_begin; ++i) {
-          if (file.tokens[i].spelling == "inout")
-            mode = ParamMode::inout;
-          if (file.tokens[i].spelling == "move")
-            mode = ParamMode::move;
-        }
-        cr.node = n.children.at(0);
-        t.parameters.push_back({mode, source_type(cr)});
-      } else if (n.kind == AstKind::NamedType ||
-                 n.kind == AstKind::FunctionType ||
-                 n.kind == AstKind::ParenthesizedType)
-        t.result = source_type(cr);
+      auto mode = ParamMode::ordinary;
+      for (size_t i = n.token_begin;
+           i < file.node(n.children.at(0)).token_begin; ++i) {
+        if (file.tokens.at(i).spelling == "inout")
+          mode = ParamMode::inout;
+        if (file.tokens.at(i).spelling == "move")
+          mode = ParamMode::move;
+      }
+      cr.node = n.children.at(0);
+      t.parameters.push_back({mode, source_type(cr)});
+    }
+    if (parts.result) {
+      auto cr = r;
+      cr.node = *parts.result;
+      t.result = source_type(cr);
+    }
+    if (parts.throws_type) {
+      auto cr = r;
+      cr.node = *parts.throws_type;
+      t.throws_type = source_type(cr);
     }
     return substituted.intern(t);
   }
@@ -1212,6 +1224,84 @@ class Verifier {
         need(traits.count(im.trait->value), "impl trait missing");
     }
   }
+  TypeId source_type_in_function(modules::NodeRef ref, SymbolId owner) const {
+    auto t = source_type(ref);
+    for (const auto &i : m.instances)
+      if (i.symbol == owner) {
+        const auto &ps = templates.at(i.origin.value)->params;
+        need(ps.size() == i.type_args.size(), "instance error type arity");
+        Substitutions sub;
+        for (size_t p = 0; p < ps.size(); ++p)
+          sub.emplace_back(ps[p].symbol, i.type_args[p]);
+        return substitute(t, sub, substituted);
+      }
+    return t;
+  }
+  void effect_shape(const HirNode &n) const {
+    unit(n);
+    const auto &file = *m.resolved->project->module(n.source.node.module)
+                            .files.at(n.source.node.file);
+    const auto &ast = file.node(n.source.node.node);
+    auto source_child = [&](HirNodeId id, AstNodeId expected) {
+      auto ref = n.source.node;
+      ref.node = expected;
+      need(same_ref(node(id).source.node, ref),
+           "effect body differs from source");
+    };
+    if (auto t = std::get_if<Try>(&n.data)) {
+      need(ast.kind == AstKind::Try &&
+               ast.children.size() == t->catches.size() + 1 &&
+               n.children.size() == ast.children.size() && !t->catches.empty(),
+           "try source/handler count");
+      need(node(n.children[0]).kind() == NodeKind::block,
+           "try protected block");
+      source_child(n.children[0], ast.children[0]);
+      std::set<uint64_t> caught;
+      for (size_t i = 0; i < t->catches.size(); ++i) {
+        const auto &c = t->catches[i];
+        source(c.source);
+        auto ref = n.source.node;
+        ref.node = ast.children[i + 1];
+        need(same_ref(c.source.node, ref), "catch source/order mismatch");
+        declaration(c.binding, c.source, modules::SymbolKind::value,
+                    AstKind::Catch);
+        const auto &ca = file.node(ref.node);
+        need(ca.children.size() == 2, "catch syntax shape");
+        ref.node = ca.children[0];
+        valid_type(c.error_type, allowed(scope(n.scope).function));
+        need(c.error_type ==
+                 source_type_in_function(ref, scope(n.scope).function),
+             "catch error type differs from source");
+        need(caught.insert(c.error_type.value).second, "duplicate catch type");
+        need(c.body == n.children[i + 1] &&
+                 node(c.body).kind() == NodeKind::block &&
+                 node(c.body).scope == c.scope &&
+                 scope(c.scope).parent == n.scope &&
+                 same_ref(scope(c.scope).source.node, c.source.node),
+             "catch scope/body mismatch");
+        source_child(c.body, ca.children[1]);
+      }
+    } else if (auto d = std::get_if<Defer>(&n.data)) {
+      need(ast.kind == AstKind::Defer && ast.children.size() == 1 &&
+               n.children.size() == 1 &&
+               node(n.children[0]).kind() == NodeKind::block &&
+               d->owner_scope == n.scope,
+           "defer source/body/registration scope");
+      source_child(n.children[0], ast.children[0]);
+      for (auto r : d->references)
+        symbol(r);
+    } else {
+      need(ast.kind == AstKind::Throw && ast.children.size() == 1 &&
+               n.children.size() == 1,
+           "throw source/arity");
+      const auto &value = expr(n.children[0]);
+      const auto &original = file.node(ast.children[0]);
+      need(value.source.span.begin_byte >= original.span.begin_byte &&
+               value.source.span.end_byte <= original.span.end_byte,
+           "throw expression differs from source");
+    }
+  }
+
   void register_pattern(const Pattern &p, ScopeId s, SymbolId f, size_t ready) {
     source(p.source);
     valid_type(p.type, allowed(f));
@@ -1446,6 +1536,107 @@ class Verifier {
            "constraint argument type/order");
     }
   }
+  void instance_body(const HirFunction &origin, const HirFunction &f,
+                     const Substitutions &sub,
+                     const std::map<uint64_t, SymbolId> &renamed) const {
+    std::map<uint64_t, HirNodeId> nodes;
+    std::map<uint64_t, ScopeId> scopes;
+    std::set<uint64_t> destinations;
+    std::vector<std::pair<HirNodeId, HirNodeId>> work{{origin.body, f.body}};
+    while (!work.empty()) {
+      check_cancelled(stop);
+      auto [a, b] = work.back();
+      work.pop_back();
+      const auto &x = node(a), &y = node(b);
+      need(nodes.emplace(a.value, b).second &&
+               destinations.insert(b.value).second,
+           "instance body is not a unique clone");
+      const auto [it, inserted] = scopes.emplace(x.scope.value, y.scope);
+      need(inserted || it->second == y.scope,
+           "instance scope substitution mismatch");
+      need(same_ref(x.source.node, y.source.node) &&
+               x.source.span.snapshot == y.source.span.snapshot &&
+               x.source.span.begin_byte == y.source.span.begin_byte &&
+               x.source.span.end_byte == y.source.span.end_byte &&
+               substitute(x.type, sub, substituted) == y.type &&
+               x.children.size() == y.children.size(),
+           "instance source/type/children differ from template");
+      need(x.kind() == y.kind() || (x.kind() == NodeKind::constraint_call &&
+                                    y.kind() == NodeKind::call),
+           "instance node kind differs from template");
+      for (size_t i = 0; i < x.children.size(); ++i)
+        work.emplace_back(x.children[i], y.children[i]);
+    }
+    auto local = [&](SymbolId id) {
+      const auto it = renamed.find(id.value);
+      need(it != renamed.end(),
+           "instance metadata references a nonlocal template symbol");
+      return it->second;
+    };
+    for (const auto &[a, b] : nodes) {
+      check_cancelled(stop);
+      const auto &x = node(HirNodeId{a}), &y = node(b);
+      auto parent = scope(x.scope).parent;
+      const auto &original_source = scope(x.scope).source;
+      const auto &instance_source = scope(y.scope).source;
+      need(same_ref(original_source.node, instance_source.node) &&
+               original_source.span.snapshot == instance_source.span.snapshot &&
+               original_source.span.begin_byte == instance_source.span.begin_byte &&
+               original_source.span.end_byte == instance_source.span.end_byte,
+           "instance scope source differs from template");
+      need(
+          scope(y.scope).parent ==
+              (parent ? std::optional(scopes.at(parent->value)) : std::nullopt),
+          "instance parent scope differs from template");
+      // Errors and exits are derived records. Concrete catch matching can
+      // differ from the template. effects_and_exits() independently validates
+      // them against this instance's checked source structure and types.
+      if (auto d = std::get_if<Defer>(&x.data)) {
+        const auto &actual = std::get<Defer>(y.data);
+        std::vector<SymbolId> refs;
+        for (auto s : d->references)
+          refs.push_back(local(s));
+        std::sort(refs.begin(), refs.end(),
+                  [](auto a, auto b) { return a.value < b.value; });
+        need(actual.owner_scope == scopes.at(d->owner_scope.value) &&
+                 actual.references == refs,
+             "instance defer references were not renamed");
+      }
+      if (auto t = std::get_if<Try>(&x.data)) {
+        const auto &actual = std::get<Try>(y.data);
+        need(t->catches.size() == actual.catches.size(),
+             "instance handler count");
+        for (size_t i = 0; i < t->catches.size(); ++i) {
+          const auto &c = t->catches[i], &v = actual.catches[i];
+          need(v.error_type == substitute(c.error_type, sub, substituted) &&
+                   v.binding == local(c.binding) &&
+                   v.scope == scopes.at(c.scope.value) &&
+                   v.body == nodes.at(c.body.value) &&
+                   same_ref(v.source.node, c.source.node),
+               "instance handler metadata was not substituted/renamed");
+        }
+      }
+      if (auto r = std::get_if<Read>(&x.data))
+        need(std::get<Read>(y.data).symbol == local(r->symbol),
+             "instance read binding mismatch");
+      if (auto r = std::get_if<Place>(&x.data))
+        need(std::get<Place>(y.data).symbol == local(r->symbol),
+             "instance place binding mismatch");
+      if (auto r = std::get_if<Binding>(&x.data))
+        need(std::get<Binding>(y.data).symbol == local(r->symbol),
+             "instance declaration binding mismatch");
+      if (auto r = std::get_if<Return>(&x.data))
+        need(std::get<Return>(y.data).function == local(r->function),
+             "instance return target mismatch");
+      if (auto r = std::get_if<Break>(&x.data))
+        need(std::get<Break>(y.data).loop == nodes.at(r->loop.value),
+             "instance break target mismatch");
+      if (auto r = std::get_if<Continue>(&x.data))
+        need(std::get<Continue>(y.data).loop == nodes.at(r->loop.value),
+             "instance continue target mismatch");
+    }
+  }
+
   void instance_records() {
     std::set<uint64_t> generated;
     // Resolver declarations precede generated copies. Retain their actual
@@ -1486,7 +1677,7 @@ class Verifier {
         if (id != ref.node && (n.kind == AstKind::Function ||
                                n.kind == AstKind::FunctionLiteral)) continue;
         if (id == ref.node || n.kind == AstKind::Parameter ||
-            n.kind == AstKind::Binding ||
+            n.kind == AstKind::Binding || n.kind == AstKind::Catch ||
             (n.kind == AstKind::BindPattern &&
              file.tokens[n.token_begin].spelling != "_"))
           originals.insert(original_declarations.at(std::make_tuple(
@@ -1583,6 +1774,7 @@ class Verifier {
         need(locals.count(sid) && locals.at(sid).function == i.symbol,
              "renamed symbol is not owned by its instance");
       }
+      instance_body(t.function, f, sub, renamed);
     }
     for (const auto &f : m.functions)
       if (!source_generics(f.source).empty())
@@ -1629,6 +1821,7 @@ class Verifier {
       const auto &n = node(id);
       need(!owners[id.value], "HIR node cycle or shared executable child");
       owners[id.value] = f.symbol;
+      parents[id.value] = parent;
       enter[id.value] = ++clock;
       need(n.source.node.module == f.source.node.module &&
                n.source.node.file == f.source.node.file &&
@@ -1663,6 +1856,7 @@ class Verifier {
         need(!scope_used[n.scope.value],
              "scope has multiple owning constructs");
         scope_used[n.scope.value] = true;
+        scope_nodes[n.scope.value] = id;
       }
       if (n.kind() == NodeKind::for_)
         loops.push_back(id);
@@ -1672,6 +1866,14 @@ class Verifier {
         for (const auto &a : std::get<Switch>(n.data).arms)
           register_pattern(a.pattern, a.scope, f.symbol, enter[id.value]);
       }
+      if (auto t = std::get_if<Try>(&n.data))
+        for (const auto &c : t->catches)
+          need(locals
+                   .emplace(c.binding.value,
+                            Local{c.error_type, c.scope, f.symbol, false,
+                                  enter[id.value]})
+                   .second,
+               "duplicate catch binding identity");
       if (n.kind() == NodeKind::return_) {
         need(std::get<Return>(n.data).function == f.symbol,
              "return target function mismatch");
@@ -1739,9 +1941,329 @@ class Verifier {
       stack.pop_back();
     }
   }
+  // New source error/cleanup constructs cannot silently disappear from HIR.
+  void source_effect_nodes(const HirFunction &f) const {
+    const auto &ref = f.source.node;
+    const auto &file =
+        *m.resolved->project->module(ref.module).files.at(ref.file);
+    std::map<uint64_t, size_t> expected, actual;
+    std::vector<AstNodeId> todo{ref.node};
+    while (!todo.empty()) {
+      check_cancelled(stop);
+      auto id = todo.back();
+      todo.pop_back();
+      const auto &n = file.node(id);
+      if (id != ref.node &&
+          (n.kind == AstKind::Function || n.kind == AstKind::FunctionLiteral ||
+           n.kind == AstKind::FunctionType))
+        continue;
+      if (n.kind == AstKind::Try || n.kind == AstKind::Defer ||
+          n.kind == AstKind::Throw || n.kind == AstKind::Catch)
+        ++expected[id.value];
+      todo.insert(todo.end(), n.children.begin(), n.children.end());
+    }
+    std::vector<HirNodeId> pending{f.body};
+    while (!pending.empty()) {
+      check_cancelled(stop);
+      const auto &n = node(pending.back());
+      pending.pop_back();
+      const auto kind = file.node(n.source.node.node).kind;
+      if (kind == AstKind::Try || kind == AstKind::Defer ||
+          kind == AstKind::Throw) {
+        need((kind == AstKind::Try && n.kind() == NodeKind::try_) ||
+                 (kind == AstKind::Defer && n.kind() == NodeKind::defer_) ||
+                 (kind == AstKind::Throw && n.kind() == NodeKind::throw_),
+             "source effect construct was erased or replaced");
+        ++actual[n.source.node.node.value];
+      }
+      if (auto t = std::get_if<Try>(&n.data))
+        for (const auto &c : t->catches)
+          ++actual[c.source.node.node.value];
+      pending.insert(pending.end(), n.children.begin(), n.children.end());
+    }
+    need(actual == expected,
+         "HIR omits or duplicates source error/cleanup constructs");
+    if (expected.empty())
+      return; // preserve existing scalar builder lowering
+    const auto &syntax_function = file.node(ref.node);
+    need(!syntax_function.children.empty(), "function has no source body");
+    auto exact_child = [&](HirNodeId child, AstNodeId syntax) {
+      auto expected_ref = ref;
+      expected_ref.node = syntax;
+      need(same_ref(node(child).source.node, expected_ref),
+           "HIR statement source order/control owner differs from AST");
+    };
+    exact_child(f.body, syntax_function.children.back());
+    // Check statements, not expression equivalence: wrappers/constant folding
+    // inside expressions remain legal. Synthetic else-if and Case Blocks use
+    // the same source forms as the producer's established lowering.
+    std::vector<HirNodeId> statements{f.body};
+    while (!statements.empty()) {
+      check_cancelled(stop);
+      const auto id = statements.back();
+      statements.pop_back();
+      const auto &n = node(id);
+      const auto &syntax = file.node(n.source.node.node);
+      auto kind = [&](AstKind expected_kind) {
+        need(syntax.kind == expected_kind,
+             "statement kind differs from its AST source");
+      };
+      switch (n.kind()) {
+      case NodeKind::block: {
+        std::vector<AstNodeId> sequence;
+        if (syntax.kind == AstKind::Block)
+          sequence = syntax.children;
+        else if (syntax.kind == AstKind::Case) {
+          const bool def =
+              file.tokens.at(syntax.token_begin).spelling == "default";
+          sequence.assign(syntax.children.begin() + (def ? 0 : 1),
+                          syntax.children.end());
+        } else if (syntax.kind == AstKind::If)
+          sequence.push_back(n.source.node.node);
+        else
+          fail("lexical block has no supported AST statement sequence");
+        need(n.children.size() == sequence.size(),
+             "HIR omits or adds a source statement");
+        for (size_t c = 0; c < sequence.size(); ++c)
+          exact_child(n.children[c], sequence[c]);
+        break;
+      }
+      case NodeKind::if_:
+        kind(AstKind::If);
+        need(n.children.size() == syntax.children.size(),
+             "if source branch count");
+        for (size_t branch = 1; branch < n.children.size(); ++branch)
+          exact_child(n.children[branch], syntax.children[branch]);
+        break;
+      case NodeKind::for_:
+        kind(AstKind::For);
+        exact_child(n.children[3], syntax.children.back());
+        break;
+      case NodeKind::switch_: {
+        kind(AstKind::Switch);
+        const auto &arms = std::get<Switch>(n.data).arms;
+        need(syntax.children.size() == arms.size() + 1,
+             "switch source arm count");
+        for (size_t a = 0; a < arms.size(); ++a)
+          exact_child(arms[a].body, syntax.children[a + 1]);
+        break;
+      }
+      case NodeKind::binding:
+        kind(AstKind::Binding);
+        break;
+      case NodeKind::assign:
+        kind(AstKind::Assign);
+        break;
+      case NodeKind::expression_statement:
+        kind(AstKind::ExpressionStatement);
+        break;
+      case NodeKind::return_:
+        kind(AstKind::Return);
+        break;
+      case NodeKind::break_:
+        kind(AstKind::Break);
+        break;
+      case NodeKind::continue_:
+        kind(AstKind::Continue);
+        break;
+      case NodeKind::noop:
+        kind(AstKind::For);
+        break; // synthetic init/step only
+      // effect_shape already checks these bodies and handler source ownership.
+      case NodeKind::try_:
+        kind(AstKind::Try);
+        break;
+      case NodeKind::defer_:
+        kind(AstKind::Defer);
+        break;
+      case NodeKind::throw_:
+        kind(AstKind::Throw);
+        break;
+      default:
+        break;
+      }
+      statements.insert(statements.end(), n.children.begin(), n.children.end());
+    }
+  }
+
+  // Reconstruct effects from types and the structured tree, never from a
+  // checker's effect summaries or a published/verified token.
+  void effects_and_exits() const {
+    std::vector<std::set<uint64_t>> errors(m.nodes.size());
+    std::vector<size_t> postorder(m.nodes.size());
+    for (size_t i = 0; i < postorder.size(); ++i)
+      postorder[i] = i;
+    std::sort(postorder.begin(), postorder.end(),
+              [&](auto a, auto b) { return leave[a] < leave[b]; });
+    auto own_error = [&](const HirNode &n) -> std::optional<TypeId> {
+      if (auto c = std::get_if<Call>(&n.data))
+        return type(c->signature).throws_type;
+      if (auto c = std::get_if<ConstraintCall>(&n.data))
+        return type(c->signature).throws_type;
+      if (n.kind() == NodeKind::throw_)
+        return node(n.children[0]).type;
+      return {};
+    };
+    for (auto id : postorder) {
+      check_cancelled(stop);
+      const auto &n = m.nodes[id];
+      auto &out = errors[id];
+      if (auto t = std::get_if<Try>(&n.data)) {
+        out = errors[n.children[0].value];
+        for (const auto &c : t->catches)
+          out.erase(c.error_type.value);
+        for (const auto &c : t->catches) {
+          const auto &handler = errors[c.body.value];
+          out.insert(handler.begin(), handler.end());
+        }
+      } else if (n.kind() == NodeKind::defer_) {
+        need(errors[n.children[0].value].empty(),
+             "typed error escapes cleanup body");
+      } else {
+        for (auto ch : n.children)
+          out.insert(errors[ch.value].begin(), errors[ch.value].end());
+        if (auto e = own_error(n))
+          out.insert(e->value);
+      }
+      std::vector<TypeId> expected;
+      for (auto e : out)
+        expected.push_back(TypeId{e});
+      need(n.errors == expected,
+           "effect set differs from independently computed errors");
+    }
+    std::map<uint64_t, std::set<uint64_t>> references;
+    auto contains = [&](HirNodeId outer, HirNodeId inner) {
+      return enter[outer.value] <= enter[inner.value] &&
+             leave[inner.value] <= leave[outer.value];
+    };
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      check_cancelled(stop);
+      HirNodeId id{i};
+      const auto &n = node(id);
+      auto owner = scope(n.scope).function;
+      std::optional<SymbolId> read;
+      if (auto r = std::get_if<Read>(&n.data))
+        read = r->symbol;
+      if (auto p = std::get_if<Place>(&n.data))
+        read = p->symbol;
+      std::optional<HirNodeId> enclosing_defer;
+      auto branch = id;
+      // Ancestor inspection also distinguishes the protected body of a Try
+      // from its handlers. A handler cannot catch itself or a sibling.
+      std::optional<CatchTarget> handler;
+      const auto error = own_error(n);
+      for (auto parent = parents[i]; parent; parent = parents[parent->value]) {
+        const auto &p = node(*parent);
+        if (p.kind() == NodeKind::defer_) {
+          if (!enclosing_defer)
+            enclosing_defer = *parent;
+          if (read) {
+            const auto &l = locals.at(read->value);
+            if (!ancestor(node(p.children[0]).scope, l.scope)) {
+              need(l.function == owner && ancestor(l.scope, p.scope) &&
+                       l.ready < enter[parent->value],
+                   "defer reference was not visible at registration");
+              references[parent->value].insert(read->value);
+            }
+          }
+        }
+        if (error && !handler && !enclosing_defer &&
+            p.kind() == NodeKind::try_ && branch == p.children[0]) {
+          const auto &cs = std::get<Try>(p.data).catches;
+          for (size_t c = 0; c < cs.size(); ++c)
+            if (cs[c].error_type == *error) {
+              handler = CatchTarget{*parent, uint32_t(c)};
+              break;
+            }
+        }
+        branch = *parent;
+      }
+      std::vector<ExitPlan> expected;
+      auto exit = [&](ExitKind kind, ExitTarget target,
+                      std::optional<ScopeId> keep, std::optional<TypeId> e,
+                      bool saves) {
+        ExitPlan plan{kind, e, target, {}, {}, saves};
+        std::optional<ScopeId> s = n.scope;
+        while (s != keep) {
+          need(s.has_value(), "exit target is not an ancestor scope");
+          plan.exited_scopes.push_back(*s);
+          const auto construct = scope_nodes.at(s->value);
+          need(construct.has_value(), "exit scope has no owning construct");
+          const auto &block = node(*construct);
+          if (block.kind() == NodeKind::block) {
+            size_t before = block.children.size();
+            if (*construct != id) {
+              before = 0;
+              while (before < block.children.size() &&
+                     !contains(block.children[before], id))
+                ++before;
+              need(before < block.children.size(),
+                   "exit is outside its scope's block");
+            }
+            while (before) {
+              auto candidate = block.children[--before];
+              if (node(candidate).kind() == NodeKind::defer_)
+                plan.defers.push_back(candidate);
+            }
+          }
+          s = scope(*s).parent;
+        }
+        if (e || !plan.defers.empty())
+          expected.push_back(std::move(plan));
+      };
+      if (error) {
+        if (handler)
+          exit(ExitKind::error, *handler, node(handler->try_node).scope, error,
+               true);
+        else {
+          need(!enclosing_defer, "error crosses defer boundary");
+          need(type(function(owner).signature).throws_type == error,
+               "unhandled typed error not declared by function");
+          exit(ExitKind::error, FunctionExit{owner}, {}, error, true);
+        }
+      }
+      if (n.kind() == NodeKind::return_) {
+        need(!enclosing_defer, "return crosses defer boundary");
+        exit(ExitKind::return_, FunctionExit{owner}, {}, {},
+             !n.children.empty());
+      }
+      if (n.kind() == NodeKind::break_ || n.kind() == NodeKind::continue_) {
+        const auto target = n.kind() == NodeKind::break_
+                                ? std::get<Break>(n.data).loop
+                                : std::get<Continue>(n.data).loop;
+        if (enclosing_defer)
+          need(contains(node(*enclosing_defer).children[0], target),
+               "jump crosses defer boundary");
+        std::optional<ScopeId> keep = node(target).scope;
+        if (n.kind() == NodeKind::break_ &&
+            node(target).kind() == NodeKind::for_)
+          keep = scope(*keep).parent;
+        exit(n.kind() == NodeKind::break_ ? ExitKind::break_
+                                          : ExitKind::continue_,
+             JumpExit{target}, keep, {}, false);
+      }
+      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_)
+        exit(ExitKind::normal, ScopeExit{scope(n.scope).parent},
+             scope(n.scope).parent, {}, false);
+      need(n.exits == expected,
+           "exit target/scopes/cleanup order/value preservation mismatch");
+      if (auto d = std::get_if<Defer>(&n.data))
+        need(scope_nodes.at(d->owner_scope.value) &&
+                 node(*scope_nodes.at(d->owner_scope.value)).kind() ==
+                     NodeKind::block,
+             "defer registration must belong to nearest lexical block");
+    }
+    for (size_t i = 0; i < m.nodes.size(); ++i)
+      if (auto d = std::get_if<Defer>(&m.nodes[i].data)) {
+        std::vector<SymbolId> expected;
+        for (auto s : references[i])
+          expected.push_back(SymbolId{s});
+        need(d->references == expected,
+             "defer references differ from actual external uses");
+      }
+  }
+
   void uses_and_flow() const {
-    std::vector<bool> falls(m.nodes.size(), true);
-    std::vector<std::set<uint64_t>> reachable_breaks(m.nodes.size());
     for (size_t i = 0; i < m.nodes.size(); ++i) {
       check_cancelled(stop);
       const auto &n = m.nodes[i];
@@ -1766,70 +2288,133 @@ class Verifier {
       order[i] = i;
     std::sort(order.begin(), order.end(),
               [&](size_t a, size_t b) { return leave[a] < leave[b]; });
+    // Recompute reachable typed exits too. Stored HirNode.errors are not used
+    // to decide whether a handler can complete normally or break a loop.
+    struct Flow {
+      bool falls = true;
+      std::set<uint64_t> errors, breaks, continues;
+    };
+    std::vector<Flow> flows(m.nodes.size());
     for (auto i : order) {
       check_cancelled(stop);
       const auto &n = m.nodes[i];
+      auto &out = flows[i];
+      auto child = [&](size_t index) -> const Flow & {
+        return flows[n.children[index].value];
+      };
+      auto merge = [&](const Flow &f) {
+        out.errors.insert(f.errors.begin(), f.errors.end());
+        out.breaks.insert(f.breaks.begin(), f.breaks.end());
+        out.continues.insert(f.continues.begin(), f.continues.end());
+      };
       switch (n.kind()) {
-      case NodeKind::break_:
-        reachable_breaks[i].insert(std::get<Break>(n.data).loop.value);
-        falls[i] = false;
+      case NodeKind::defer_:
         break;
-      case NodeKind::return_:
-      case NodeKind::continue_:
-        falls[i] = false;
+      case NodeKind::short_circuit: {
+        merge(child(0));
+        const auto *known =
+            std::get_if<BoolLiteral>(&node(n.children[0]).data);
+        const auto op = std::get<ShortCircuit>(n.data).op;
+        if (!known || (op == LogicalOp::and_ ? known->value : !known->value))
+          merge(child(1));
         break;
+      }
       case NodeKind::block:
         for (auto c : n.children) {
-          if (!falls[i])
+          if (!out.falls)
             break;
-          const auto &exits = reachable_breaks[c.value];
-          reachable_breaks[i].insert(exits.begin(), exits.end());
-          falls[i] = falls[c.value];
+          merge(flows[c.value]);
+          out.falls = flows[c.value].falls;
         }
         break;
       case NodeKind::if_: {
-        size_t first = 1, end = n.children.size();
-        const auto &condition = node(n.children[0]);
-        if (condition.kind() == NodeKind::bool_literal) {
-          first = std::get<BoolLiteral>(condition.data).value ? 1 : 2;
-          end = std::min(first + 1, n.children.size());
-          falls[i] = first == end || falls[n.children[first].value];
-        } else
-          falls[i] = falls[n.children[1].value] || n.children.size() == 2 ||
-                     falls[n.children[2].value];
-        for (size_t branch = first; branch < end; ++branch) {
-          const auto &exits = reachable_breaks[n.children[branch].value];
-          reachable_breaks[i].insert(exits.begin(), exits.end());
+        merge(child(0));
+        const auto *condition =
+            std::get_if<BoolLiteral>(&node(n.children[0]).data);
+        out.falls = n.children.size() == 2 && (!condition || !condition->value);
+        for (size_t branch = 1; branch < n.children.size(); ++branch) {
+          if (condition && branch != (condition->value ? 1u : 2u))
+            continue;
+          merge(child(branch));
+          out.falls |= child(branch).falls;
         }
         break;
       }
-      case NodeKind::switch_: {
-        falls[i] = false;
-        for (size_t a = 1; a < n.children.size(); ++a) {
-          auto ch = n.children[a].value;
-          falls[i] = falls[i] || falls[ch] || reachable_breaks[ch].contains(i);
-          for (auto target : reachable_breaks[ch])
-            if (target != i)
-              reachable_breaks[i].insert(target);
+      case NodeKind::try_: {
+        const auto &body = child(0);
+        out = body;
+        const auto &handlers = std::get<Try>(n.data).catches;
+        for (const auto &c : handlers)
+          out.errors.erase(c.error_type.value);
+        for (const auto &c : handlers) {
+          bool reachable = std::any_of(
+              body.errors.begin(), body.errors.end(), [&](auto error) {
+                return type_patterns_overlap(TypeId{error}, c.error_type,
+                                             m.types);
+              });
+          if (!reachable)
+            continue;
+          const auto &handler = flows[c.body.value];
+          merge(handler);
+          out.falls |= handler.falls;
         }
         break;
       }
+      case NodeKind::switch_:
+        merge(child(0));
+        out.falls = false;
+        for (size_t arm = 1; arm < n.children.size(); ++arm) {
+          const auto &f = child(arm);
+          merge(f);
+          out.falls |= f.falls || f.breaks.contains(i);
+        }
+        out.breaks.erase(i);
+        break;
       case NodeKind::for_: {
-        const auto &cond = node(n.children[1]);
-        falls[i] = !(cond.kind() == NodeKind::bool_literal &&
-                     std::get<BoolLiteral>(cond.data).value &&
-                     !reachable_breaks[n.children[3].value].contains(i));
-        // Breaks from this body terminate this For. They cannot leave an
-        // enclosing loop because tree() requires the nearest loop target.
+        merge(child(0));
+        merge(child(1));
+        const auto *condition =
+            std::get_if<BoolLiteral>(&node(n.children[1]).data);
+        if (condition && !condition->value)
+          break;
+        const auto &body = child(3);
+        merge(body);
+        if (body.falls || body.continues.contains(i))
+          merge(child(2));
+        out.falls = !condition || body.breaks.contains(i);
+        out.breaks.erase(i);
+        out.continues.erase(i);
         break;
       }
       default:
+        for (auto c : n.children)
+          merge(flows[c.value]);
+        if (auto c = std::get_if<Call>(&n.data))
+          if (auto e = type(c->signature).throws_type)
+            out.errors.insert(e->value);
+        if (auto c = std::get_if<ConstraintCall>(&n.data))
+          if (auto e = type(c->signature).throws_type)
+            out.errors.insert(e->value);
+        if (n.kind() == NodeKind::throw_) {
+          out.errors.insert(node(n.children[0]).type.value);
+          out.falls = false;
+        }
+        if (n.kind() == NodeKind::return_)
+          out.falls = false;
+        if (auto b = std::get_if<Break>(&n.data)) {
+          out.breaks.insert(b->loop.value);
+          out.falls = false;
+        }
+        if (auto c = std::get_if<Continue>(&n.data)) {
+          out.continues.insert(c->loop.value);
+          out.falls = false;
+        }
         break;
       }
     }
     for (const auto *fp : all_functions)
       need(type(type(fp->signature).result).kind == TypeKind::Unit ||
-               !falls[fp->body.value],
+               !flows[fp->body.value].falls,
            "non-Unit function has a normal exit without return");
   }
 
@@ -1837,6 +2422,7 @@ public:
   Verifier(const HirModule &module, std::stop_token token)
       : m(module), stop(token), enter(m.nodes.size()), leave(m.nodes.size()),
         owners(m.nodes.size()), scope_used(m.scopes.size()),
+        parents(m.nodes.size()), scope_nodes(m.scopes.size()),
         substituted(m.types) {}
   void run() {
     check_cancelled(stop);
@@ -1973,8 +2559,10 @@ public:
         node(c);
       shape(HirNodeId{i});
     }
-    for (const auto *f : all_functions)
+    for (const auto *f : all_functions) {
       tree(*f);
+      source_effect_nodes(*f);
+    }
     instance_records();
     finite_layouts();
     for (auto owner : owners)
@@ -1982,6 +2570,7 @@ public:
     for (bool used : scope_used)
       need(used, "orphan scope");
     uses_and_flow();
+    effects_and_exits();
   }
 };
 std::shared_ptr<const HirModule> freeze(const HirModule &input,
@@ -2083,9 +2672,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
     for (const auto &f : m.functions) {
       check_cancelled(stop);
       if (!signature_supported(f.signature)) {
-        unavailable(
-            f.source,
-            "backend does not support this concrete aggregate signature");
+        unavailable(f.source,
+                    "backend does not support this concrete function signature");
         return r;
       }
       std::vector<HirNodeId> todo{f.body};
@@ -2101,6 +2689,12 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         case NodeKind::field_place:
         case NodeKind::switch_:
           break;
+        case NodeKind::try_:
+        case NodeKind::defer_:
+        case NodeKind::throw_:
+          unavailable(n.source,
+                      "typed errors and defer execution are not implemented by this backend");
+          return r;
         case NodeKind::constraint_call:
           unavailable(n.source,
                       "backend has not implemented this aggregate operation");
@@ -2381,6 +2975,16 @@ std::string dump(const HirModule &m) {
               s << " arm=" << a.scope.value << ':' << a.body.value;
               pattern(a.pattern);
             }
+          } else if constexpr (std::is_same_v<T, Try>) {
+            for (const auto &c : data.catches) {
+              s << " catch=" << c.error_type.value << ':' << c.binding.value
+                << ':' << c.scope.value << ':' << c.body.value;
+              print_source(s, c.source);
+            }
+          } else if constexpr (std::is_same_v<T, Defer>) {
+            s << " owner_scope=" << data.owner_scope.value;
+            for (auto r : data.references)
+              s << " reference=" << r.value;
           } else if constexpr (std::is_same_v<T, ConstraintCall>) {
             s << " trait=" << data.trait.value
               << " method=" << data.method.value
@@ -2414,6 +3018,36 @@ std::string dump(const HirModule &m) {
           }
         },
         n.data);
+    for (auto e : n.errors)
+      s << " error=" << e.value;
+    for (const auto &e : n.exits) {
+      s << " exit=" << int(e.kind) << " saves_value=" << e.saves_value;
+      if (e.error_type)
+        s << " error_type=" << e.error_type->value;
+      std::visit(
+          [&](const auto &target) {
+            using T = std::decay_t<decltype(target)>;
+            if constexpr (std::is_same_v<T, ScopeExit>) {
+              s << " resume_scope=";
+              if (target.scope)
+                s << target.scope->value;
+              else
+                s << '-';
+            } else if constexpr (std::is_same_v<T, FunctionExit>)
+              s << " function=" << target.function.value;
+            else if constexpr (std::is_same_v<T, JumpExit>)
+              s << " jump=" << target.node.value;
+            else
+              s << " handler=" << target.try_node.value << ':' << target.index;
+          },
+          e.target);
+      s << " exited_scopes=";
+      for (auto scope : e.exited_scopes)
+        s << scope.value << ',';
+      s << " defers=";
+      for (auto d : e.defers)
+        s << d.value << ',';
+    }
     s << '\n';
   }
   return s.str();

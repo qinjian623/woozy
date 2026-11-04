@@ -202,13 +202,57 @@ struct ConstraintCall {
   std::vector<CallArg>
       args; // receiver first, then explicit args in source order
 }; // template only; becomes a direct Call in concrete instances
+struct Catch {
+  TypeId error_type;
+  SymbolId binding; // real AstKind::Catch declaration, including discard _
+  ScopeId scope;
+  HirNodeId body;
+  Source source;
+};
+struct Try {
+  std::vector<Catch> catches;
+}; // children: protected Block, then handler Blocks in source order
+struct Defer {
+  ScopeId owner_scope; // nearest lexical Block; body is the only child
+  // Sorted unique external locals; read when executed, never value snapshots.
+  std::vector<SymbolId> references;
+};
+struct Throw {}; // child: error value, saved before executing any cleanup
+enum class ExitKind { normal, return_, break_, continue_, error };
+struct ScopeExit {
+  std::optional<ScopeId> scope; // resume in parent, or normal function end
+  bool operator==(const ScopeExit &) const = default;
+};
+struct FunctionExit {
+  SymbolId function;
+  bool operator==(const FunctionExit &) const = default;
+};
+struct JumpExit {
+  HirNodeId node; // For or Switch; kind distinguishes break from continue
+  bool operator==(const JumpExit &) const = default;
+};
+struct CatchTarget {
+  HirNodeId try_node;
+  uint32_t index;
+  bool operator==(const CatchTarget &) const = default;
+};
+using ExitTarget = std::variant<ScopeExit, FunctionExit, JumpExit, CatchTarget>;
+struct ExitPlan {
+  ExitKind kind;
+  std::optional<TypeId> error_type; // only the operation's own typed failure
+  ExitTarget target;
+  std::vector<ScopeId> exited_scopes; // inner to outer, excludes resumed scope
+  std::vector<HirNodeId> defers;      // active registrations in execution order
+  bool saves_value = false; // value/error evaluated and saved before defers
+  bool operator==(const ExitPlan &) const = default;
+};
 using NodeData =
     std::variant<UnitLiteral, BoolLiteral, IntegerLiteral, FloatLiteral,
                  StringLiteral, Read, Place, FunctionValue, Binding, Assign,
                  Unary, Binary, ShortCircuit, IntegerConvert, Call, Block,
                  ExpressionStatement, If, For, Noop, Return, Break, Continue,
                  Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
-                 Switch, ConstraintCall>;
+                 Switch, ConstraintCall, Try, Defer, Throw>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -239,7 +283,10 @@ enum class NodeKind {
   field_read,
   field_place,
   switch_,
-  constraint_call
+  constraint_call,
+  try_,
+  defer_,
+  throw_
 };
 struct HirNode {
   TypeId type;
@@ -247,6 +294,11 @@ struct HirNode {
   ScopeId scope;
   std::vector<HirNodeId> children;
   NodeData data;
+  std::vector<TypeId> errors; // sorted unique errors escaping this subtree;
+                              // Panic and ordinary Result data are excluded
+  // Error exits always have a plan. Other exits have a plan iff at least one
+  // registered defer runs; trivial exits are fully determined by the tree.
+  std::vector<ExitPlan> exits;
   NodeKind kind() const { return static_cast<NodeKind>(data.index()); }
 };
 struct Parameter {

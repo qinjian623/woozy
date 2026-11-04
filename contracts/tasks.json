@@ -278,7 +278,7 @@
     {
       "id": "T08",
       "title": "错误与清理",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T05",
         "T06",
@@ -287,7 +287,7 @@
       "primary_role": "native",
       "backup_role": "python",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/sema/",
         "src/native_ir/",
@@ -311,7 +311,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+      "notes": "静态类型/效果/清理HIR已实施并接入sema.t08，主代理修复短路handler可达性漏项；三种构建各29/29、LLVM关闭23/23，210静态检查含60次坏HIR拒绝。此阶段不实现两个后端执行，整项保持in_progress；原19个清理输入和数值预期未改。"
     },
     {
       "id": "T09",

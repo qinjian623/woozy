@@ -352,3 +352,11 @@ Python 后端接收 `VerifiedHirModule`、目标语义配置和已锁定的绑�
 8. 原生和 Python 数值边界测试使用同一预期结果表；与宿主默认运算不同的输入必须覆盖。
 
 这些用例属于实现后的验收计划；本资料包没有声称它们已经通过。
+
+## T08 已实施的静态记录
+
+实际 C++ 字段、编号、稀疏退出记录规则、Verifier 独立重算和泛型复制要求见
+[T08_STATIC.md](T08_STATIC.md)。这些字段仍使用本节原有 TypeId/SymbolId/ScopeId/
+HirNodeId，不增加身份图。`check_types`/`verify_types` 接受静态 T08，具体函数的
+throws、Try、Defer、Throw 仍由共用后端支持检查明确拒绝；`hir::verify` 的唯一发布
+入口及不可变快照要求保持。本文概念 Native IR 的 TryCall/ErrorReturn 尚未在本轮实现。

@@ -46,6 +46,7 @@ class Checker {
   std::set<uint64_t> evaluating;
   SymbolId function{0};
   ScopeId scope{0};
+  size_t cleanup_depth = 0;
   TypeId unit{0}, boolean{0}, i64{0};
   std::vector<HirNodeId> loops, break_targets;
   std::shared_ptr<modules::ResolvedProject> owned;
@@ -221,7 +222,7 @@ class Checker {
         n.kind == AstKind::Parenthesized || n.kind == AstKind::BracketItem)
       return parse_type(child(r, 0));
     if (n.kind == AstKind::FunctionType)
-      return signature(r, false);
+      return signature(r);
     std::optional<SymbolId> s;
     std::vector<TypeId> args;
     if (n.kind == AstKind::NeutralBracket) {
@@ -288,35 +289,27 @@ class Checker {
     }
     unavailable(r, "type is not implemented");
   }
-  TypeId signature(Ref r, bool declaration) {
+  TypeId signature(Ref r) {
     Type t;
     t.kind = TypeKind::Function;
     t.result = unit;
-    for (size_t i = ast(r).token_begin; i < ast(r).token_end; ++i)
-      if (file(r).tokens[i].spelling == "throws") {
-        // Only signature tokens: a nested body's throws is diagnosed in body.
-        if (!declaration ||
-            i < ast(child(r, ast(r).children.size() - 1)).token_begin)
-          unavailable(r, "typed throws requires T08");
-      }
-    for (auto c : ast(r).children) {
+    const auto parts = split_signature(file(r), r.node);
+    for (auto c : parts.parameters) {
       auto cr = at(r, c);
-      const auto k = ast(cr).kind;
-      if (k == AstKind::GenericParameter)
-        continue;
-      if (k == AstKind::Parameter) {
-        auto pm = mode(cr);
-        auto pt = parse_type(child(cr, 0));
-        if (pm == ParamMode::move)
-          unavailable(cr, "move parameters require T09");
-        if (pm == ParamMode::inout && !integer(pt) &&
-            type(pt).kind != TypeKind::Bool && type(pt).kind != TypeKind::Float)
-          unavailable(cr,
-                      "inout accepts only trivial numeric/bool whole bindings");
-        t.parameters.push_back({pm, pt});
-      } else if (k != AstKind::Block)
-        t.result = parse_type(cr);
+      auto pm = mode(cr);
+      auto pt = parse_type(child(cr, 0));
+      if (pm == ParamMode::move)
+        unavailable(cr, "move parameters require T09");
+      if (pm == ParamMode::inout && !integer(pt) &&
+          type(pt).kind != TypeKind::Bool && type(pt).kind != TypeKind::Float)
+        unavailable(cr,
+                    "inout accepts only trivial numeric/bool whole bindings");
+      t.parameters.push_back({pm, pt});
     }
+    if (parts.result)
+      t.result = parse_type(at(r, *parts.result));
+    if (parts.throws_type)
+      t.throws_type = parse_type(at(r, *parts.throws_type));
     return m.types.intern(t);
   }
   std::optional<mpz_class> literal_integer(Ref r) const {
@@ -1354,6 +1347,132 @@ class Checker {
     m.scopes.push_back({function, parent, source(r)});
     return id;
   }
+  struct Flow {
+    bool falls = true;
+    std::set<uint64_t> errors, breaks, continues;
+  };
+  // This is reachability analysis, separate from the conservative typed effect
+  // records. A template handler remains possible if finite substitution can
+  // make its error type equal to an error produced by the protected body.
+  Flow flow(HirNodeId id, size_t depth = 0) const {
+    check_cancelled(stop);
+    if (depth > 512)
+      throw std::invalid_argument("flow nesting limit");
+    const auto &n = m.nodes.at(id.value);
+    Flow out;
+    auto part = [&](HirNodeId ch) { return flow(ch, depth + 1); };
+    auto merge = [&](const Flow &f) {
+      out.errors.insert(f.errors.begin(), f.errors.end());
+      out.breaks.insert(f.breaks.begin(), f.breaks.end());
+      out.continues.insert(f.continues.begin(), f.continues.end());
+    };
+    switch (n.kind()) {
+    case NodeKind::defer_:
+      return out; // registration itself cannot throw or leave this block
+    case NodeKind::short_circuit: {
+      merge(part(n.children[0]));
+      const auto *known =
+          std::get_if<BoolLiteral>(&m.nodes.at(n.children[0].value).data);
+      const auto op = std::get<ShortCircuit>(n.data).op;
+      if (!known || (op == LogicalOp::and_ ? known->value : !known->value))
+        merge(part(n.children[1]));
+      return out;
+    }
+    case NodeKind::block:
+      for (auto ch : n.children) {
+        if (!out.falls)
+          break;
+        auto f = part(ch);
+        merge(f);
+        out.falls = f.falls;
+      }
+      return out;
+    case NodeKind::if_: {
+      merge(part(n.children[0]));
+      const auto *known =
+          std::get_if<BoolLiteral>(&m.nodes.at(n.children[0].value).data);
+      out.falls = !known && n.children.size() == 2;
+      for (size_t i = 1; i < n.children.size(); ++i) {
+        if (known && (known->value ? i != 1 : i != 2))
+          continue;
+        auto f = part(n.children[i]);
+        merge(f);
+        out.falls |= f.falls;
+      }
+      if (known && !known->value && n.children.size() == 2)
+        out.falls = true;
+      return out;
+    }
+    case NodeKind::try_: {
+      const auto body = part(n.children[0]);
+      out = body;
+      const auto &catches = std::get<Try>(n.data).catches;
+      for (const auto &c : catches)
+        out.errors.erase(c.error_type.value);
+      for (const auto &c : catches) {
+        bool reachable = false;
+        for (auto e : body.errors)
+          reachable |= type_patterns_overlap(TypeId{e}, c.error_type, m.types);
+        if (!reachable)
+          continue;
+        auto handler = part(c.body);
+        merge(handler);
+        out.falls |= handler.falls;
+      }
+      return out;
+    }
+    case NodeKind::switch_:
+      merge(part(n.children[0]));
+      out.falls = false;
+      for (size_t i = 1; i < n.children.size(); ++i) {
+        auto arm = part(n.children[i]);
+        merge(arm);
+        out.falls |= arm.falls || arm.breaks.contains(id.value);
+      }
+      out.breaks.erase(id.value);
+      return out;
+    case NodeKind::for_: {
+      merge(part(n.children[0]));
+      merge(part(n.children[1]));
+      const auto *known =
+          std::get_if<BoolLiteral>(&m.nodes.at(n.children[1].value).data);
+      if (known && !known->value)
+        return out;
+      const auto body = part(n.children[3]);
+      merge(body);
+      if (body.falls || body.continues.contains(id.value))
+        merge(part(n.children[2]));
+      out.falls = !known || body.breaks.contains(id.value);
+      out.breaks.erase(id.value);
+      out.continues.erase(id.value);
+      return out;
+    }
+    default:
+      for (auto ch : n.children)
+        merge(part(ch));
+      if (auto c = std::get_if<Call>(&n.data))
+        if (auto e = type(c->signature).throws_type)
+          out.errors.insert(e->value);
+      if (auto c = std::get_if<ConstraintCall>(&n.data))
+        if (auto e = type(c->signature).throws_type)
+          out.errors.insert(e->value);
+      if (n.kind() == NodeKind::throw_) {
+        out.errors.insert(m.nodes.at(n.children[0].value).type.value);
+        out.falls = false;
+      }
+      if (n.kind() == NodeKind::return_)
+        out.falls = false;
+      if (auto b = std::get_if<Break>(&n.data)) {
+        out.breaks.insert(b->loop.value);
+        out.falls = false;
+      }
+      if (auto c = std::get_if<Continue>(&n.data)) {
+        out.continues.insert(c->loop.value);
+        out.falls = false;
+      }
+      return out;
+    }
+  }
   struct Statement {
     HirNodeId id;
     bool falls = true;
@@ -1557,7 +1676,51 @@ class Checker {
       auto e = expression(child(r, 0));
       return {node(r, unit, ExpressionStatement{}, {e.id})};
     }
+    case AstKind::Try: {
+      const auto id = node(r, unit, Try{});
+      std::vector<Catch> catches;
+      std::set<uint64_t> types;
+      // Reserve the Try identity before checking its protected body.
+      for (size_t i = 1; i < n.children.size(); ++i) {
+        auto cr = child(r, i);
+        auto t = parse_type(child(cr, 0));
+        if (!types.insert(t.value).second)
+          unavailable(cr, "duplicate catch types are not implemented");
+        catches.push_back(
+            {t, definition(cr), ScopeId{0}, HirNodeId{0}, source(cr)});
+      }
+      auto body = block(child(r, 0));
+      std::vector<HirNodeId> children{body.id};
+      for (size_t i = 0; i < catches.size(); ++i) {
+        auto cr = child(r, i + 1);
+        auto saved = scope;
+        scope = new_scope(cr, saved);
+        locals[catches[i].binding.value] = {catches[i].error_type, false};
+        auto handler = block(child(cr, 1), true);
+        catches[i].scope = scope;
+        catches[i].body = handler.id;
+        children.push_back(handler.id);
+        scope = saved;
+      }
+      m.nodes[id.value].children = std::move(children);
+      m.nodes[id.value].data = Try{std::move(catches)};
+      const auto summary = flow(id);
+      return {id, summary.falls, !summary.breaks.empty()};
+    }
+    case AstKind::Defer: {
+      auto owner = scope;
+      ++cleanup_depth;
+      auto body = block(child(r, 0));
+      --cleanup_depth;
+      return {node(r, unit, Defer{owner, {}}, {body.id})};
+    }
+    case AstKind::Throw: {
+      auto e = expression(child(r, 0));
+      return {node(r, unit, Throw{}, {e.id}), false};
+    }
     case AstKind::Return: {
+      if (cleanup_depth)
+        reject(r, "return escapes defer body", "E_CLEANUP_ESCAPE");
       auto result = type(signatures.at(function.value)).result;
       std::vector<HirNodeId> children;
       if (n.children.empty())
@@ -1667,11 +1830,13 @@ class Checker {
     case AstKind::Continue:
       if (n.kind == AstKind::Break) {
         if (break_targets.empty())
-          reject(r, "break has no enclosing loop or switch");
+          reject(r, "break has no enclosing loop or switch",
+                 cleanup_depth ? "E_CLEANUP_ESCAPE" : "E_TYPE_MISMATCH");
         return {node(r, unit, Break{break_targets.back()}), false, true};
       }
       if (loops.empty())
-        reject(r, "continue has no enclosing loop");
+        reject(r, "continue has no enclosing loop",
+               cleanup_depth ? "E_CLEANUP_ESCAPE" : "E_TYPE_MISMATCH");
       return {node(r, unit, Continue{loops.back()}), false, false};
     default:
       unavailable(r, "switch/aggregate, typed errors, cleanup, or ownership "
@@ -1691,7 +1856,7 @@ class Checker {
     auto own = generics(r);
     inherited.insert(inherited.end(), own.begin(), own.end());
     generic_params[id.value] = inherited;
-    signatures[id.value] = signature(r, true);
+    signatures[id.value] = signature(r);
     for (auto c : ast(r).children)
       if (ast(at(r, c)).kind == AstKind::Parameter) {
         auto p = definition(at(r, c));
@@ -1868,6 +2033,207 @@ class Checker {
       if (ast(r).kind == AstKind::Binding)
         const_functions(r);
   }
+  // Produce cleanup/effect records from this function's structured HIR. The
+  // independent verifier below the sema API never calls this producer.
+  void annotate(const HirFunction &f) {
+    std::vector<HirNodeId> handlers, active;
+    std::map<uint64_t, ScopeId> visible;
+    for (auto p : f.parameters)
+      visible.emplace(p.symbol.value, f.scope);
+    struct Cleanup {
+      size_t handler_floor;
+      ScopeId body;
+      std::set<uint64_t> external, references;
+    };
+    std::vector<Cleanup> cleanups;
+    auto inside = [&](ScopeId outer, ScopeId inner) {
+      for (;;) {
+        if (outer == inner)
+          return true;
+        auto parent = m.scopes.at(inner.value).parent;
+        if (!parent)
+          return false;
+        inner = *parent;
+      }
+    };
+    auto plan = [&](HirNodeId id, ExitKind kind, ExitTarget target,
+                    std::optional<ScopeId> keep, std::optional<TypeId> error,
+                    bool saves) {
+      const auto &n = m.nodes.at(id.value);
+      ExitPlan p{kind, error, target, {}, {}, saves};
+      std::optional<ScopeId> s = n.scope;
+      while (s != keep) {
+        if (!s)
+          throw std::invalid_argument("exit target is not an ancestor");
+        p.exited_scopes.push_back(*s);
+        s = m.scopes.at(s->value).parent;
+      }
+      for (auto it = active.rbegin(); it != active.rend(); ++it)
+        if (std::find(p.exited_scopes.begin(), p.exited_scopes.end(),
+                      m.nodes.at(it->value).scope) != p.exited_scopes.end())
+          p.defers.push_back(*it);
+      if (error || !p.defers.empty())
+        m.nodes.at(id.value).exits.push_back(std::move(p));
+    };
+    auto error_exit = [&](HirNodeId id, TypeId error) {
+      const auto floor = cleanups.empty() ? 0 : cleanups.back().handler_floor;
+      for (size_t h = handlers.size(); h > floor; --h) {
+        auto target = handlers[h - 1];
+        const auto &cs = std::get<Try>(m.nodes.at(target.value).data).catches;
+        for (size_t i = 0; i < cs.size(); ++i)
+          if (cs[i].error_type == error) {
+            plan(id, ExitKind::error, CatchTarget{target, uint32_t(i)},
+                 m.nodes.at(target.value).scope, error, true);
+            return;
+          }
+      }
+      const auto ref = m.nodes.at(id.value).source.node;
+      if (!cleanups.empty())
+        reject(ref, "typed error escapes defer body", "E_CLEANUP_ESCAPE");
+      if (type(f.signature).throws_type != error)
+        reject(ref,
+               "typed error is neither caught nor declared by this function",
+               "E_EFFECT_UNHANDLED");
+      plan(id, ExitKind::error, FunctionExit{f.symbol}, {}, error, true);
+    };
+    std::function<void(const Pattern &, ScopeId)> bind_pattern =
+        [&](const Pattern &p, ScopeId s) {
+          if (p.binding)
+            visible[p.binding->value] = s;
+          for (const auto &ch : p.payload)
+            bind_pattern(ch, s);
+        };
+    std::function<void(HirNodeId, size_t)> visit = [&](HirNodeId id,
+                                                       size_t depth) {
+      check_cancelled(stop);
+      if (depth > 512)
+        throw std::invalid_argument("effect nesting limit");
+      auto n = m.nodes.at(id.value); // child traversal must not retain aliases
+      m.nodes.at(id.value).exits.clear();
+      const bool scoped =
+          n.kind() == NodeKind::block || n.kind() == NodeKind::for_ ||
+          n.kind() == NodeKind::switch_ || n.kind() == NodeKind::try_ ||
+          n.kind() == NodeKind::defer_;
+      const auto saved_visible =
+          scoped ? visible : std::map<uint64_t, ScopeId>{};
+      const auto active_size = active.size();
+      if (auto s = std::get_if<Switch>(&n.data)) {
+        visit(n.children[0], depth + 1);
+        for (const auto &a : s->arms) {
+          visible = saved_visible;
+          bind_pattern(a.pattern, a.scope);
+          visit(a.body, depth + 1);
+        }
+        visible = saved_visible;
+      } else if (auto t = std::get_if<Try>(&n.data)) {
+        handlers.push_back(id);
+        visit(n.children[0], depth + 1);
+        handlers.pop_back(); // handlers' errors go to the outer try
+        for (const auto &c : t->catches) {
+          visible = saved_visible;
+          visible[c.binding.value] = c.scope;
+          visit(c.body, depth + 1);
+        }
+        visible = saved_visible;
+      } else if (std::holds_alternative<Defer>(n.data)) {
+        Cleanup c{
+            handlers.size(), m.nodes.at(n.children[0].value).scope, {}, {}};
+        for (const auto &[s, owner] : visible)
+          c.external.insert(s);
+        cleanups.push_back(std::move(c));
+        visit(n.children[0], depth + 1);
+        auto &d = std::get<Defer>(m.nodes.at(id.value).data);
+        d.references.clear();
+        for (auto s : cleanups.back().references)
+          d.references.push_back(SymbolId{s});
+        cleanups.pop_back();
+        visible = saved_visible;
+        active.push_back(id); // only after the registration point
+      } else {
+        for (auto ch : n.children)
+          visit(ch, depth + 1);
+      }
+      if (auto b = std::get_if<Binding>(&n.data))
+        visible[b->symbol.value] = n.scope;
+      std::optional<SymbolId> read;
+      if (auto r = std::get_if<Read>(&n.data))
+        read = r->symbol;
+      if (auto p = std::get_if<Place>(&n.data))
+        read = p->symbol;
+      if (read) {
+        if (!visible.count(read->value))
+          throw std::invalid_argument(
+              "binding not visible at use/registration");
+        for (auto &c : cleanups)
+          if (c.external.count(read->value))
+            c.references.insert(read->value);
+      }
+      std::set<uint64_t> errors;
+      for (auto ch : n.children)
+        for (auto e : m.nodes.at(ch.value).errors)
+          errors.insert(e.value);
+      if (auto t = std::get_if<Try>(&n.data)) {
+        errors.clear();
+        for (auto e : m.nodes.at(n.children[0].value).errors) {
+          bool caught = false;
+          for (const auto &c : t->catches)
+            caught |= c.error_type == e;
+          if (!caught)
+            errors.insert(e.value);
+        }
+        for (const auto &c : t->catches)
+          for (auto e : m.nodes.at(c.body.value).errors)
+            errors.insert(e.value);
+      }
+      std::optional<TypeId> own_error;
+      if (auto c = std::get_if<Call>(&n.data))
+        own_error = type(c->signature).throws_type;
+      if (auto c = std::get_if<ConstraintCall>(&n.data))
+        own_error = type(c->signature).throws_type;
+      if (std::holds_alternative<Throw>(n.data))
+        own_error = m.nodes.at(n.children[0].value).type;
+      if (own_error) {
+        errors.insert(own_error->value);
+        error_exit(id, *own_error);
+      }
+      if (std::holds_alternative<Defer>(n.data))
+        errors.clear();
+      auto &out = m.nodes.at(id.value);
+      out.errors.clear();
+      for (auto e : errors)
+        out.errors.push_back(TypeId{e});
+      if (n.kind() == NodeKind::return_) {
+        if (!cleanups.empty())
+          reject(n.source.node, "return escapes defer body",
+                 "E_CLEANUP_ESCAPE");
+        plan(id, ExitKind::return_, FunctionExit{f.symbol}, {}, {},
+             !n.children.empty());
+      }
+      if (n.kind() == NodeKind::break_ || n.kind() == NodeKind::continue_) {
+        auto target = n.kind() == NodeKind::break_
+                          ? std::get<Break>(n.data).loop
+                          : std::get<Continue>(n.data).loop;
+        const auto &dest = m.nodes.at(target.value);
+        if (!cleanups.empty() && !inside(cleanups.back().body, dest.scope))
+          reject(n.source.node, "jump escapes defer body", "E_CLEANUP_ESCAPE");
+        auto keep = std::optional(dest.scope);
+        if (n.kind() == NodeKind::break_ && dest.kind() == NodeKind::for_)
+          keep = m.scopes.at(dest.scope.value).parent;
+        plan(id,
+             n.kind() == NodeKind::break_ ? ExitKind::break_
+                                          : ExitKind::continue_,
+             JumpExit{target}, keep, {}, false);
+      }
+      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_) {
+        plan(id, ExitKind::normal, ScopeExit{m.scopes.at(n.scope.value).parent},
+             m.scopes.at(n.scope.value).parent, {}, false);
+        visible = saved_visible;
+        active.resize(active_size);
+      }
+    };
+    visit(f.body, 0);
+  }
+
   void check_body(SymbolId id) {
     function = id;
     auto r = bodies.at(id.value);
@@ -1875,6 +2241,7 @@ class Checker {
     locals.clear();
     loops.clear();
     break_targets.clear();
+    cleanup_depth = 0;
     active_params = generic_params[id.value];
     scope = new_scope(r, {});
     auto ps = parameters.at(id.value);
@@ -1884,9 +2251,10 @@ class Checker {
           ft.parameters[i].type, ft.parameters[i].mode == ParamMode::inout,
           ft.parameters[i].mode == ParamMode::ordinary};
     auto body = block(child(r, ast(r).children.size() - 1), true);
-    if (ft.result != unit && body.falls)
+    if (ft.result != unit && flow(body.id).falls)
       reject(r, "non-Unit function has a reachable normal exit without return");
     HirFunction f{id, sig, ps, body.id, scope, source(r)};
+    annotate(f);
     if (active_params.empty())
       m.functions.push_back(f);
     else {
@@ -2009,6 +2377,16 @@ class Checker {
         b->symbol = rename(b->symbol);
       if (auto b = std::get_if<Return>(&n.data))
         b->function = result;
+      if (auto t = std::get_if<Try>(&n.data))
+        for (auto &c : t->catches) {
+          c.error_type = substitute(c.error_type, sub, m.types);
+          c.binding = rename(c.binding);
+        }
+      // Matching can change after substitution (A and B may become equal).
+      // Derive these records from the completed concrete tree, not the
+      // template.
+      n.errors.clear();
+      n.exits.clear();
       HirNodeId id{m.nodes.size()};
       m.nodes.push_back(n);
       nodes[old.value] = id;
@@ -2044,6 +2422,22 @@ class Checker {
           a.scope = scopes.at(a.scope.value);
           a.body = nodes.at(a.body.value);
         }
+      if (auto t = std::get_if<Try>(&n.data)) {
+        std::set<uint64_t> caught;
+        for (auto &c : t->catches) {
+          if (!caught.insert(c.error_type.value).second)
+            unavailable(use, "instance has duplicate catch types");
+          c.scope = scopes.at(c.scope.value);
+          c.body = nodes.at(c.body.value);
+        }
+      }
+      if (auto d = std::get_if<Defer>(&n.data)) {
+        d->owner_scope = clone_scope(d->owner_scope);
+        for (auto &s : d->references)
+          s = rename(s);
+        std::sort(d->references.begin(), d->references.end(),
+                  [](auto a, auto b) { return a.value < b.value; });
+      }
       if (auto b = std::get_if<Break>(&n.data))
         b->loop = nodes.at(b->loop.value);
       if (auto b = std::get_if<Continue>(&n.data))
@@ -2060,6 +2454,10 @@ class Checker {
     m.functions.push_back(f);
     // Identity and signature are present before resolving recursive uses.
     transform_node(f.body, 0);
+    annotate(f);
+    if (type(f.signature).result != unit && flow(f.body).falls)
+      reject(use,
+             "instantiated non-Unit function has a normal exit without return");
     --instantiation_depth;
     return result;
   }

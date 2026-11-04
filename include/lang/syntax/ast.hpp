@@ -72,4 +72,11 @@ struct AstFile {
   bool recovered = false;
   const AstNode &node(AstNodeId id) const { return nodes.at(id.value); }
 };
+// Only direct children belong to this signature. In particular, a throws
+// inside a parameter or returned FunctionType is not an outer throws.
+struct SignatureSyntax {
+  std::vector<AstNodeId> parameters;
+  std::optional<AstNodeId> result, throws_type;
+};
+SignatureSyntax split_signature(const AstFile &, AstNodeId);
 } // namespace lang

@@ -589,4 +589,28 @@ public:
 PhaseResult<AstFile> parse(const TokenBuffer &b, std::stop_token stop) {
   return Parser(b, stop).run();
 }
+SignatureSyntax split_signature(const AstFile &file, AstNodeId id) {
+  const auto &n = file.node(id);
+  if (n.kind != AstKind::Function && n.kind != AstKind::FunctionLiteral &&
+      n.kind != AstKind::FunctionType)
+    throw std::invalid_argument("signature owner is not a function");
+  SignatureSyntax result;
+  for (auto child : n.children) {
+    const auto &c = file.node(child);
+    if (c.kind == AstKind::Parameter)
+      result.parameters.push_back(child);
+    else if (c.kind == AstKind::NamedType || c.kind == AstKind::FunctionType ||
+             c.kind == AstKind::ParenthesizedType) {
+      if (!c.token_begin || c.token_end > file.tokens.size())
+        throw std::invalid_argument("invalid signature type token range");
+      auto &slot = file.tokens[c.token_begin - 1].spelling == "throws"
+                       ? result.throws_type
+                       : result.result;
+      if (slot)
+        throw std::invalid_argument("duplicate signature type component");
+      slot = child;
+    }
+  }
+  return result;
+}
 } // namespace lang
