@@ -62,7 +62,7 @@ return/throw 先保存拥有输出，再销毁当前 full-expression 的剩余�
 
 继续拒绝普通参数重赋值、动态 string/Vec[string]/原受限 string 成员、部分字段/元素 move、非平凡 inout、索引 inout、索引聚合投影写回、递归拥有图、捕获闭包、foreign 和原 T07 不支持的泛型/方法 move/inout/trait 组合。POD 整体 inout 仍沿用原阶段限制，分类结果没有自动开放后端。
 
-没有新增 len/push/share 等源 API，RHS 改变长度时的检查时点仍未规定。Vec 分配失败或分配大小溢出按 `SEMANTICS.md` 第 6 节产生 Panic。所有 ARC/drop 次数、Vec 共享运行结果、Panic 运行结果、两后端 Vec 执行、runtime sanitizer 均为 not_run。
+没有新增 len/push/share 等源 API，RHS 改变长度时的检查时点仍未规定。Vec 分配失败或分配大小溢出按 `SEMANTICS.md` 第 7.1 节产生 Panic。所有 ARC/drop 次数、Vec 共享运行结果、Panic 运行结果、两后端 Vec 执行、runtime sanitizer 均为 not_run。
 
 测试入口为 `tests/ownership/static_test.cpp`，原 18 份项目及 cases.json 原样保留。`static-extra/independent` 是新增独立源码项目。最终实际命令、环境、失败日志、逐项 CLI JSON、hash 和未执行项记录在 `/tmp/language-t09-static-20261104/{report.md,summary.json,checks/}`；构建结果以这些文件为准，不引用旧任务的通过数量。
 
