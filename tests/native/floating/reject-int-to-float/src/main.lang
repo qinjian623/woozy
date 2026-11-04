@@ -1,0 +1,2 @@
+package app;
+func convert(x i32) f32 {return f32(x);}func main() {}

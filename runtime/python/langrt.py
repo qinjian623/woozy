@@ -1,8 +1,9 @@
 """Value runtime. Generated programs pass explicit target widths."""
+import math
 import struct
 import sys
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/2'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/3'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
@@ -130,6 +131,97 @@ def ieee(pattern, bits):
     if bits == 64:
         return struct.unpack('>d', pattern.to_bytes(8, 'big'))[0]
     raise ValueError('unsupported IEEE width')
+
+
+def _float_round(numerator, denominator, bits, negative=False):
+    """Round a nonnegative exact ratio directly to the target IEEE format.
+
+    The quantum is 2**(max(floor(log2(n/d)), emin) - fraction_bits).
+    Integer divmod retains the entire remainder, including division sticky
+    bits. One ties-to-even decision covers normal, subnormal and overflow
+    results; there is no intermediate binary64 rounding.
+    """
+    fraction, bias = {32: (23, 127), 64: (52, 1023)}[bits]
+    sign = int(negative) << (bits - 1)
+    if numerator == 0:
+        return ieee(sign, bits)
+    exponent = numerator.bit_length() - denominator.bit_length()
+    if exponent >= 0:
+        exponent -= numerator < (denominator << exponent)
+    else:
+        exponent -= (numerator << -exponent) < denominator
+    exponent = max(exponent, 1 - bias)
+    quantum = exponent - fraction
+    if quantum >= 0:
+        denominator <<= quantum
+    else:
+        numerator <<= -quantum
+    significand, remainder = divmod(numerator, denominator)
+    twice = remainder << 1
+    if twice > denominator or (twice == denominator and significand & 1):
+        significand += 1
+    if significand == 1 << (fraction + 1):
+        significand >>= 1
+        exponent += 1
+    if exponent > bias:
+        pattern = ((1 << (bits - fraction - 1)) - 1) << fraction
+    elif significand < 1 << fraction:
+        pattern = significand
+    else:
+        pattern = ((exponent + bias) << fraction) | (significand - (1 << fraction))
+    return ieee(sign | pattern, bits)
+
+
+def float_neg(value, bits):
+    # Changing the sign needs no arithmetic or rounding, including for -0.
+    fmt = {32: '>f', 64: '>d'}[bits]
+    pattern = int.from_bytes(struct.pack(fmt, value), 'big')
+    return ieee(pattern ^ (1 << (bits - 1)), bits)
+
+
+def float_binary(op, a, b, bits):
+    if bits not in (32, 64):
+        raise ValueError('unsupported IEEE width')
+    if op in ('eq', 'ne', 'lt', 'le', 'gt', 'ge'):
+        return binary(op, a, b, 0, False)
+    if op == 'sub':
+        b = float_neg(b, bits)
+        op = 'add'
+    if op not in ('add', 'mul', 'div'):
+        raise ValueError('unknown floating operation')
+    if math.isnan(a) or math.isnan(b):
+        return math.nan
+    aneg = math.copysign(1.0, a) < 0
+    bneg = math.copysign(1.0, b) < 0
+    negative = aneg != bneg
+    ai, bi = math.isinf(a), math.isinf(b)
+    if op == 'add':
+        if ai or bi:
+            return math.nan if ai and bi and negative else (a if ai else b)
+        an, ad = a.as_integer_ratio()
+        bn, bd = b.as_integer_ratio()
+        numerator, denominator = an * bd + bn * ad, ad * bd
+        negative = numerator < 0 or (numerator == 0 and aneg and bneg)
+    else:
+        if op == 'mul':
+            if (ai and b == 0) or (bi and a == 0):
+                return math.nan
+            if ai or bi:
+                return -math.inf if negative else math.inf
+        else:
+            if (ai and bi) or (a == 0 and b == 0):
+                return math.nan
+            if ai or b == 0:
+                return -math.inf if negative else math.inf
+            if bi:
+                return _float_round(0, 1, bits, negative)
+        an, ad = a.as_integer_ratio()
+        bn, bd = b.as_integer_ratio()
+        if op == 'mul':
+            numerator, denominator = an * bn, ad * bd
+        else:
+            numerator, denominator = an * bd, ad * bn
+    return _float_round(abs(numerator), abs(denominator), bits, negative)
 
 
 def run(main):

@@ -112,6 +112,34 @@ int main(int argc, char **argv) {
       json_object_array_add(symbols, item);
     }
     json_object_object_add(raw, "symbols", symbols);
+    // Test observers check the concrete HIR signature before calling a probe.
+    auto scalar = [&](TypeId id) {
+      const auto &t = *module.types.find(id);
+      switch (t.kind) {
+      case hir::TypeKind::Float: return "f" + std::to_string(t.bits);
+      case hir::TypeKind::SignedInt: return "i" + std::to_string(t.bits);
+      case hir::TypeKind::UnsignedInt: return "u" + std::to_string(t.bits);
+      case hir::TypeKind::Bool: return std::string("bool");
+      case hir::TypeKind::Unit: return std::string("Unit");
+      default: return std::string("non_scalar");
+      }
+    };
+    auto *functions = json_object_new_array();
+    for (const auto &f : module.functions) {
+      const auto &signature = *module.types.find(f.signature);
+      auto *item = json_object_new_object();
+      auto generated = "_f" + std::to_string(f.symbol.value);
+      json_object_object_add(item, "generated", json_object_new_string(generated.c_str()));
+      json_object_object_add(item, "source_name", json_object_new_string(
+          module.resolved->symbols.at(f.symbol.value).name.c_str()));
+      json_object_object_add(item, "result", json_object_new_string(scalar(signature.result).c_str()));
+      auto *parameters = json_object_new_array();
+      for (const auto &p : signature.parameters)
+        json_object_array_add(parameters, json_object_new_string(scalar(p.type).c_str()));
+      json_object_object_add(item, "parameters", parameters);
+      json_object_array_add(functions, item);
+    }
+    json_object_object_add(raw, "functions", functions);
     auto *lines = json_object_new_array();
     for (const auto &s : emitted.value->source_map) {
       auto *item = json_object_new_object();

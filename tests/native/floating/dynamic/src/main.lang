@@ -1,0 +1,30 @@
+package app;
+func add32(a f32, b f32) f32 {return a + b;}
+func sub32(a f32, b f32) f32 {return a - b;}
+func mul32(a f32, b f32) f32 {return a * b;}
+func div32(a f32, b f32) f32 {return a / b;}
+func neg32(a f32) f32 {return -a;}
+func eq32(a f32, b f32) bool {return a == b;}
+func ne32(a f32, b f32) bool {return a != b;}
+func lt32(a f32, b f32) bool {return a < b;}
+func le32(a f32, b f32) bool {return a <= b;}
+func gt32(a f32, b f32) bool {return a > b;}
+func ge32(a f32, b f32) bool {return a >= b;}
+func compound32(a f32, b f32) f32 {var x=a;x+=b;x-=b;x*=b;x/=b;return x;}
+func step32(a f32, b f32, c f32) f32 {return (a+b)+c;}
+func nofma32(a f32, b f32, c f32) f32 {return a*b+c;}
+func add64(a f64, b f64) f64 {return a + b;}
+func sub64(a f64, b f64) f64 {return a - b;}
+func mul64(a f64, b f64) f64 {return a * b;}
+func div64(a f64, b f64) f64 {return a / b;}
+func neg64(a f64) f64 {return -a;}
+func eq64(a f64, b f64) bool {return a == b;}
+func ne64(a f64, b f64) bool {return a != b;}
+func lt64(a f64, b f64) bool {return a < b;}
+func le64(a f64, b f64) bool {return a <= b;}
+func gt64(a f64, b f64) bool {return a > b;}
+func ge64(a f64, b f64) bool {return a >= b;}
+func compound64(a f64, b f64) f64 {var x=a;x+=b;x-=b;x*=b;x/=b;return x;}
+func step64(a f64, b f64, c f64) f64 {return (a+b)+c;}
+func nofma64(a f64, b f64, c f64) f64 {return a*b+c;}
+func main() i32 {if div32(7.0,3.0)<=2.0 || div64(7.0,3.0)<=2.0 {return 1;}return 0;}

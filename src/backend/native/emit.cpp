@@ -215,6 +215,23 @@ class Emitter {
     const auto &left = type(value_types.at(i.inputs[0]));
     bool sign = signed_(left);
     using B = hir::BinaryOp;
+    if (left.kind == hir::TypeKind::Float) {
+      // These operations round in their own LLVM float/double type. No
+      // widening, fast-math flags, contraction, or integer zero guard.
+      switch (i.binary) {
+      case B::add: return builder.CreateFAdd(a, b);
+      case B::subtract: return builder.CreateFSub(a, b);
+      case B::multiply: return builder.CreateFMul(a, b);
+      case B::divide: return builder.CreateFDiv(a, b);
+      case B::equal: return builder.CreateFCmpOEQ(a, b);
+      case B::not_equal: return builder.CreateFCmpUNE(a, b);
+      case B::less: return builder.CreateFCmpOLT(a, b);
+      case B::less_equal: return builder.CreateFCmpOLE(a, b);
+      case B::greater: return builder.CreateFCmpOGT(a, b);
+      case B::greater_equal: return builder.CreateFCmpOGE(a, b);
+      default: fail("invalid verified floating operation");
+      }
+    }
     switch (i.binary) {
     case B::add:
       return builder.CreateAdd(a, b);
@@ -411,8 +428,12 @@ class Emitter {
       break;
     }
     case ir::Op::unary:
-      v = i.unary == hir::UnaryOp::negate ? builder.CreateNeg(args[0])
-                                          : builder.CreateNot(args[0]);
+      // fneg flips the sign bit, including +/-0; subtraction from +0 does not.
+      v = i.unary == hir::UnaryOp::negate
+              ? (type(i.type).kind == hir::TypeKind::Float
+                     ? builder.CreateFNeg(args[0])
+                     : builder.CreateNeg(args[0]))
+              : builder.CreateNot(args[0]);
       break;
     case ir::Op::binary:
       v = binary(i, args[0], args[1]);
@@ -568,8 +589,10 @@ public:
     auto *target = llvm::TargetRegistry::lookupTarget(triple, error);
     if (!target)
       throw Failure{"E_TOOLCHAIN_MISSING", error, FailureKind::environment};
+    llvm::TargetOptions target_options;
+    target_options.AllowFPOpFusion = llvm::FPOpFusion::Strict;
     machine.reset(target->createTargetMachine(
-        triple, options.cpu, options.features, llvm::TargetOptions{},
+        triple, options.cpu, options.features, target_options,
         llvm::Reloc::PIC_, llvm::CodeModel::Small,
         options.optimization == 2 ? llvm::CodeGenOptLevel::Default
                                   : llvm::CodeGenOptLevel::None));

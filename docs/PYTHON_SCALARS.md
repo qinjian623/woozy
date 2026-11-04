@@ -1,8 +1,12 @@
 # Python 标量实现与验证
 
+严格f32/f64四则、负号、六种比较和复合赋值已支持，见
+[浮点执行说明](../tests/python/STRICT_FLOATING.md)。有限数先按精确整数比计算，再直接
+按目标精度舍入；浮点除零不产生整数Panic。原76探针和3362个动态向量已实际观察。
+
 Python 已支持 typed throws、精确类型 catch 和词法块 defer，见
 [错误与清理执行说明](PYTHON_T08_EXECUTION.md)。当前运行库版本为
-`compiler-dev/1-python-values/2`；旧版运行库会被生成程序的版本检查拒绝。
+`compiler-dev/1-python-values/3`；旧版运行库会被生成程序的版本检查拒绝。
 同块平铺 defer 不增加 Python 控制块深度；超过生成深度限制的输入在 build 时
 返回 `E_CAPABILITY_UNAVAILABLE`，check 仍可通过。后文保留各阶段的验证记录。
 

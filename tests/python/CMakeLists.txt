@@ -58,6 +58,19 @@ add_test(NAME python.cleanup_regressions COMMAND "${LANG_PYTHON312}"
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/cleanup-regressions"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.cleanup_regressions PROPERTIES TIMEOUT 180)
+if(LANG_ENABLE_LLVM)
+  add_executable(lang_python_float_oracle float_oracle.cpp)
+  target_include_directories(lang_python_float_oracle SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+  llvm_map_components_to_libnames(LANG_PYTHON_ORACLE_LIBS Support)
+  target_link_libraries(lang_python_float_oracle PRIVATE ${LANG_PYTHON_ORACLE_LIBS})
+  set(LANG_PYTHON_FLOAT_ORACLE_ARGS --oracle $<TARGET_FILE:lang_python_float_oracle>)
+endif()
+add_test(NAME python.floating COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/run_floating.py"
+  --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/floating"
+  --python "${LANG_PYTHON312}" ${LANG_PYTHON_FLOAT_ORACLE_ARGS})
+set_tests_properties(python.floating PROPERTIES TIMEOUT 180)
 add_test(NAME python.cli COMMAND ${CMAKE_COMMAND}
   -DLANGC=$<TARGET_FILE:langc> -DPYTHON=${LANG_PYTHON312}
   -DROOT=${LANG_PYTHON_TEST_ROOT} -DNATIVE_AVAILABLE=${LANG_ENABLE_LLVM}

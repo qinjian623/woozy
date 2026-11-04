@@ -231,6 +231,9 @@ class Emitter {
   }
   std::string binary(BinaryOp op, const std::string &a, const std::string &b,
                      TypeId operand) const {
+    if (type(operand).kind == TypeKind::Float)
+      return "_rt.float_binary('" + operation(op) + "', " + a + ", " + b +
+             ", " + std::to_string(type(operand).bits) + ")";
     return "_rt.binary('" + operation(op) + "', " + a + ", " + b + ", " +
            numeric(operand) + ")";
   }
@@ -292,6 +295,9 @@ class Emitter {
       auto text = op == UnaryOp::negate        ? "neg"
                   : op == UnaryOp::logical_not ? "not"
                                                : "inv";
+      if (type(node(n.children[0]).type).kind == TypeKind::Float)
+        return save(suite, "_rt.float_neg(" + operand + ", " +
+                               std::to_string(type(n.type).bits) + ")", n);
       return save(suite,
                   "_rt.unary('" + std::string(text) + "', " + operand + ", " +
                       numeric(node(n.children[0]).type) + ")",

@@ -362,12 +362,12 @@ void suite(const fs::path &published) {
   source("func f() { let op=func(x i32) i32 { return true; }; }", "E_TYPE_MISMATCH");
   source("func f() { let op=func(x i32) i32 { return x; }; op(x:1); }", "E_CALL_ARGUMENT");
   source("func f(a f32) f32 { return a; }");
-  source("func f() { var x f32=1.0; x+=1.0; }", "E_CAPABILITY_UNAVAILABLE");
+  source("func f() { var x f32=1.0; x+=1.0; }");
   source("func f() { let x f32=1.0; let y=x%1.0; }", "E_TYPE_MISMATCH");
   source("func unit() {} func f() { let x=unit(); return x; }");
   source("func a(x i32) i32 { return x; } func b(y i32) i32 { return y+1; } "
          "func f() i32 { var op func(i32) i32=a; op=b; return op(2); }");
-  source("func f(a f32) f32 { return a+a; }", "E_CAPABILITY_UNAVAILABLE");
+  source("func f(a f32) f32 { return a+a; }");
   source("func f() { let x i8=i8(300); }", "E_TYPE_MISMATCH");
   source("func f(x i64) i8 { return i8(x); }");
   source("func f() { let x f32=1.0; let y f64=1.0; }");
@@ -453,12 +453,16 @@ void suite(const fs::path &published) {
                "E_TYPE_MISMATCH");
   typed_source("func p(x f32, y f64) { let z = x + y; }",
                "E_TYPE_MISMATCH");
-  source("func p(x f32) bool { return 1.0 < x; }",
-         "E_CAPABILITY_UNAVAILABLE");
-  source("func p(x f64) bool { return (-1.0) >= x; }",
-         "E_CAPABILITY_UNAVAILABLE");
-  source("func p(x f32) f32 { return (1.0 + 2.0) + x; }",
-         "E_CAPABILITY_UNAVAILABLE");
+  source("func p(x f32) bool { return 1.0 < x; }");
+  source("func p(x f64) bool { return (-1.0) >= x; }");
+  source("func p(x f32) f32 { return (1.0 + 2.0) + x; }");
+  for (const auto *body : {
+           "func f() { var x f32=1.0; x+=1.0; }",
+           "func f(a f32) f32 { return a+a; }",
+           "func p(x f32) bool { return 1.0 < x; }",
+           "func p(x f64) bool { return (-1.0) >= x; }",
+           "func p(x f32) f32 { return (1.0 + 2.0) + x; }"})
+    source(body, nullptr, "python");
   source("func f() { let x=-true; }", "E_TYPE_MISMATCH");
   source("func f() { let x=~true; }", "E_TYPE_MISMATCH");
   source("func f() { let x=+true; }", "E_TYPE_MISMATCH");

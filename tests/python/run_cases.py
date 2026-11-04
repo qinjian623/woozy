@@ -147,6 +147,10 @@ UNSUPPORTED_SOURCES = {
 }
 
 
+# Keep the old source bytes and execute the now-supported operations.
+for _ident in ('float-arithmetic', 'float-comparison'):
+    EXTRA_SOURCES[_ident] = UNSUPPORTED_SOURCES.pop(_ident)
+
 def command(argv, **kwargs):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONNOUSERSITE='1')
     # Avoid inherited import hooks changing generated-program behavior.

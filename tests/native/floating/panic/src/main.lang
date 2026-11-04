@@ -1,0 +1,8 @@
+package app;
+
+enum E {Bad;}
+func fail() f32 {let x f32=1.0/0.0;var z i32=0;let q=1/z;return x;}
+func main() i32 {
+    try {defer {let bad i32=1;}let x=fail();}
+    catch e E {return 9;}return 0;
+}

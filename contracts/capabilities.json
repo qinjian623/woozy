@@ -26,14 +26,14 @@
       "planned_backends": [
         "native"
       ],
-      "implemented": false,
-      "verified": false,
+      "implemented": true,
+      "verified": true,
       "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
       "stages": {
-        "parse": false,
-        "check": false,
-        "generate": false,
-        "execute": false
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
       }
     },
     {
@@ -42,14 +42,14 @@
       "planned_backends": [
         "python"
       ],
-      "implemented": false,
-      "verified": false,
+      "implemented": true,
+      "verified": true,
       "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
       "stages": {
-        "parse": false,
-        "check": false,
-        "generate": false,
-        "execute": false
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
       }
     },
     {
@@ -242,6 +242,24 @@
         "generate": false,
         "execute": false
       }
+    },
+    {
+      "name": "strict_scalar_floating",
+      "task": "T05",
+      "planned_backends": [
+        "native",
+        "python"
+      ],
+      "implemented": true,
+      "verified": true,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
+      },
+      "notes": "当前支持同宽f32/f64四则、neg和六比较，无FMA；native/64 Linux x86_64的RNE/FTZ/DAZ环境及Python/64 CPython3.12.15已验证。浮点整数转换与浮点宽度转换仍未支持；NaN不承诺payload或sign。"
     }
   ],
   "rule": "parser覆盖不等于语义/生成/执行支持；实际编译器的capabilities命令必须从已实现能力生成"

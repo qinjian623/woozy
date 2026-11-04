@@ -172,7 +172,7 @@
     {
       "id": "T05",
       "title": "原生标量闭环",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T04"
       ],
@@ -204,7 +204,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "已支持native标量、POD聚合、字面量来源的不可变UTF-8字符串及typed throws/catch/defer。三种完整构建各32/32，关闭LLVM25/25；T08每套92次原生执行和92次受控观察通过。动态字符串、ARC、严格浮点执行和完整基础样例仍未完成，整项保持in_progress。"
+      "notes": "Native/64 Linux x86_64的整数、平凡POD、字面量字符串、typed throws/defer及同宽严格f32/f64已实现；core/numeric、O0/O2和原12浮点正例含两个baseline副本实际运行。三种完整构建各34/34、LLVMoff26/26；每套152项原探针及6288项补充浮点观察通过，334次浮点坏IR拒绝。RNE且FTZ/DAZ关闭，无fast/contract/FMA。转换、动态字符串、ARC/Vec/move、foreign与其他平台另有未支持限制。"
     },
     {
       "id": "T06",
@@ -239,7 +239,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python标量、具体泛型、POD聚合、常量字符串、位置式enum及typed throws/catch/defer已支持；运行库版本compiler-dev/1-python-values/2。主代理GNU Debug/Release与Clang22 ASan/UBSan完整测试各32/32，关闭LLVM25/25；每套原19清理项中11项运行、8项源码拒绝，18项补充运行，新增52项中48项运行、4项生成深度超限拒绝。正式CLI每套89项目检查/构建、77项目实际运行；生成Python与已观察程序逐字节相同。ARC、foreign和严格浮点运算未实施。 两端T08现已合并；三套另有46份同源程序的138项实际结果比较通过。"
+      "notes": "Python/64 CPython3.12.15已支持整数、POD、字面量字符串、typed throws/defer及严格f32/f64四则/neg/比较；runtime版本/3。有限数用精确整数比直接按目标精度RNE舍入，浮点除零不触发语言Panic。三种完整构建34/34，LLVM关闭26/26；每套原76探针、3362动态向量、27项目实际执行和3447次探针调用通过。两端17份同源程序在三种构建共9660项结果比较通过。ARC/Vec、foreign、move、转换和其他未支持范围保留。"
     },
     {
       "id": "T07",
@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态、标量泛型及两端POD聚合已通过；位置式enum及混合参数绑定已修复，非法变体后类型实参报E_CALL_ARGUMENT。三构建完整28/28、LLVMoff22/22，新同源项目9次运行及108次诊断/输出保留检查通过。泛型trait及trait泛型方法、嵌套变体模式、泛型inout/move和严格FP仍未实施，原05_traits仅静态通过，整项in_progress。"
+      "notes": "静态、标量泛型及两端POD聚合已通过；位置式enum及混合参数绑定已修复，非法变体后类型实参报E_CALL_ARGUMENT。三构建完整28/28、LLVMoff22/22，新同源项目9次运行及108次诊断/输出保留检查通过。严格浮点和原05_traits两端执行已通过；泛型trait及trait泛型方法、嵌套变体模式、泛型inout/move仍未实施，整项in_progress。"
     },
     {
       "id": "T08",

@@ -828,14 +828,15 @@ void extra(const fs::path &root) {
        "full 05_traits static check failed: " + messages(traits));
   need(hir::verify_types(*traits.value).success(), "05_traits invalid HIR");
   auto cap = hir::verify(*traits.value);
-  need(!cap.success() && has(cap, "E_CAPABILITY_UNAVAILABLE") &&
-           cap.failure == FailureKind::unsupported,
-       "05_traits should await backend aggregate/float execution");
+  need(cap.success(), "native 05_traits floating execution unavailable");
   auto floating = good("func f(x f64) f64{return -x*x+1.0;} func main() i32{if "
                        "f(2.0)<0.0{return 1;}return 0;}");
-  need(!hir::verify(floating).success() &&
-           has(hir::verify(floating), "E_CAPABILITY_UNAVAILABLE"),
-       "float operations reached backend");
+  need(hir::verify(floating).success(), "native floating operations unavailable");
+  auto python_float = source(
+      "func f(x f64) f64{return -x*x+1.0;} func main() i32{if "
+      "f(2.0)<0.0{return 1;}return 0;}", "python");
+  need(python_float.success() && hir::verify(*python_float.value).success(),
+       "Python strict floating operations rejected");
   invalid(method, "Self owner missing", [](auto &x) {
     auto r = std::make_shared<modules::ResolvedProject>(*x.resolved);
     r->self_parameters.clear();

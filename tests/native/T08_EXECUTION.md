@@ -91,5 +91,6 @@ case-10 原程序检查 division-by-zero、原第 12 行及 exit101；受控观�
 两个过时throws/defer拒绝预期，保留141项f32检查。旧字符串拒绝表中的这两条也删除，
 执行由两端cleanup测试覆盖。没有改根CMake、原fixture清单或数值预期。
 
-动态字符串、ARC/Vec、foreign、严格浮点运算和generic inout/move仍未支持。
+动态字符串、ARC/Vec、foreign和generic inout/move仍未支持。
+严格浮点已实现，见[执行说明](STRICT_FLOAT.md)。
 ASan/UBSan检查编译器；受控观察程序没有启用sanitizer，不含LeakSanitizer结论。

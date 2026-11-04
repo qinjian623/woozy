@@ -1,0 +1,62 @@
+package app;
+
+struct Box[T] {value T; f func(T) T;}
+enum E {Bad(value f32);}
+func identity[T](x T) T {return x;}
+func twice32(x f32) f32 {return x*2.0;}
+func twice64(x f64) f64 {return x*2.0;}
+func probe_values32() f32 {
+    var b=Box[f32](f:twice32,value:identity[f32](1.25));
+    b.value+=0.5;let copy=b;b.value*=4.0;
+    let callback=copy.f;return callback(copy.value)+b.value;
+}
+func probe_values64() f64 {
+    var b=Box[f64](f:twice64,value:identity[f64](1.25));
+    b.value-=0.25;b.value*=3.0;b.value/=2.0;
+    return b.f(b.value);
+}
+func mark(log inout i64, digit i64) {log=log*10+digit;}
+func tick(log inout i64, digit i64, x f32) f32 {mark(inout log,digit);return x;}
+func pair(a f32,b f32) f32 {return a*10.0+b;}
+func probe_order() f32 {
+    var log i64=0;
+    let r=pair(b:tick(inout log,1,2.0),a:tick(inout log,2,3.0));
+    let a=false && tick(inout log,8,0.0)>0.0;
+    let b=true || tick(inout log,9,0.0)>0.0;
+    let c=tick(inout log,3,4.0)+tick(inout log,4,5.0);
+    if log!=1234 || a || !b {return -1.0;}return r+c;
+}
+func produce(log inout i64, fail bool) f32 throws E {
+    var x f32=1.25;
+    defer {mark(inout log,3);x*=4.0;}
+    if fail {throw E.Bad(value:x+2.0);}
+    return x*2.0;
+}
+func probe_cleanup() f32 {
+    var log i64=0;var total f32=0.0;
+    try {
+        defer {mark(inout log,4);}
+        total=produce(inout log,false);
+        let r=produce(inout log,true);total=r;
+    } catch e E {
+        switch e {case E.Bad(value):total+=value;}
+        mark(inout log,5);
+    }
+    if log!=3345 {return -1.0;}return total;
+}
+func same_type(fail bool) f64 throws f64 {
+    var x f64=1.5;defer {x*=4.0;}
+    if fail {throw x+0.25;}return x+0.5;
+}
+func probe_same_type() f64 {
+    var value f64=0.0;
+    try {value=same_type(false);let x=same_type(true);value=x;}
+    catch err f64 {value+=err;}return value;
+}
+func probe_inout() f32 {var x f32=1.0;bump(inout x);return x;}
+func bump(x inout f32) {x+=0.5;x*=2.0;}
+func main() i32 {
+    if probe_values32()!=10.5 || probe_values64()!=3.0 || probe_order()!=41.0 {return 1;}
+    if probe_cleanup()!=5.75 || probe_same_type()!=3.75 || probe_inout()!=3.0 {return 2;}
+    return 0;
+}

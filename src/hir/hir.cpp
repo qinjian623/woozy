@@ -2710,21 +2710,6 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
                       "backend does not support this concrete aggregate type");
           return r;
         }
-        bool float_operation = false;
-        if (n.kind() == NodeKind::binary || n.kind() == NodeKind::unary)
-          float_operation =
-              !n.children.empty() &&
-              m.types.find(m.nodes[n.children[0].value].type)->kind ==
-                  TypeKind::Float;
-        if (auto a = std::get_if<Assign>(&n.data); a && a->compound)
-          float_operation =
-              m.types.find(m.nodes[n.children[0].value].type)->kind ==
-              TypeKind::Float;
-        if (float_operation) {
-          unavailable(n.source, "strict floating point operations are not "
-                                "implemented by this backend");
-          return r;
-        }
         todo.insert(todo.end(), n.children.begin(), n.children.end());
       }
     }

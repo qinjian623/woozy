@@ -3,7 +3,7 @@
 
 namespace lang::backend::python {
 inline constexpr std::string_view runtime_version =
-    "compiler-dev/1-python-values/2";
+    "compiler-dev/1-python-values/3";
 struct Options {
   // Without a runner, the output can be imported by an explicit test harness.
   bool entrypoint = true;

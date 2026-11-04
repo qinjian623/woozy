@@ -1,0 +1,2 @@
+package app;
+func main() i32 throws f64 {let z f64=0.0;throw z/z;}

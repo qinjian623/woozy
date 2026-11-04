@@ -1,7 +1,7 @@
 # Python typed throws、catch 与 defer 执行
 
-契约仍为 `compiler-dev/1`。Python runtime 升为
-`compiler-dev/1-python-values/2`，公共头、生成代码的版本检查和嵌入的
+契约仍为 `compiler-dev/1`。T08引入的运行库版本为`/2`，当前严格浮点版本为
+`compiler-dev/1-python-values/3`；公共头、生成代码的版本检查和嵌入的
 `langrt.py` 使用同一版本。旧 runtime 无法运行新生成的程序。
 
 ## 生成行为
@@ -118,6 +118,7 @@ cmake --build <gnu-release-build>
 ctest --test-dir <gnu-release-build> --output-on-failure
 ```
 
-动态 ARC/Vec、foreign、捕获闭包、泛型直接 inout 调用和严格浮点执行仍未支持。
+动态 ARC/Vec、foreign、捕获闭包及泛型直接 inout 调用仍未支持。
+严格浮点现已实现，见[浮点说明](../tests/python/STRICT_FLOATING.md)。
 原生说明见[Native T08](../tests/native/T08_EXECUTION.md)。两端共同使用稳定错误类型键，
 原生O0/O2及Python3.12.15的同源执行另有记录。

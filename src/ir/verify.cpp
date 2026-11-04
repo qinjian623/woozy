@@ -317,9 +317,9 @@ class Verifier {
           need(args[0].type == i.type &&
                    (i.unary == hir::UnaryOp::logical_not
                         ? k == hir::TypeKind::Bool
-                        : (i.unary == hir::UnaryOp::negate ||
-                           i.unary == hir::UnaryOp::bit_not) &&
-                              integer(k)),
+                        : i.unary == hir::UnaryOp::negate
+                              ? integer(k) || k == hir::TypeKind::Float
+                              : i.unary == hir::UnaryOp::bit_not && integer(k)),
                "invalid unary types/op", i.source);
           break;
         }
@@ -332,9 +332,14 @@ class Verifier {
                        i.binary == hir::BinaryOp::shift_right;
           bool eq = i.binary == hir::BinaryOp::equal ||
                     i.binary == hir::BinaryOp::not_equal;
+          bool floating = l == hir::TypeKind::Float && r == l &&
+                          (comparison || i.binary == hir::BinaryOp::add ||
+                           i.binary == hir::BinaryOp::subtract ||
+                           i.binary == hir::BinaryOp::multiply ||
+                           i.binary == hir::BinaryOp::divide);
           need(i.binary >= hir::BinaryOp::add &&
                    i.binary <= hir::BinaryOp::greater_equal &&
-                   ((integer(l) && integer(r)) ||
+                   ((integer(l) && integer(r)) || floating ||
                     (eq && l == hir::TypeKind::Bool && r == l)) &&
                    (shift || args[0].type == args[1].type) &&
                    (comparison ? t.kind == hir::TypeKind::Bool

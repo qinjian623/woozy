@@ -208,6 +208,9 @@ REJECTED = {
 }
 
 
+for _ident in ('aggregate-float-operation', 'float-negation'):
+    SOURCES[_ident] = REJECTED.pop(_ident)
+
 def main():
     parser = argparse.ArgumentParser()
     for name in ('langc', 'helper', 'root', 'out', 'python'):
