@@ -20,6 +20,7 @@ struct Symbol {
   std::optional<SourceSpan> declaration;
   bool exported = false;
   std::optional<ModuleId> target;
+  std::optional<ForeignExportRef> foreign;
 };
 struct Occurrence {
   NodeRef source;
@@ -33,6 +34,10 @@ struct ResolvedProject {
   // Instance/type members require T04's types; no symbol is guessed here.
   std::vector<NodeRef> deferred_members;
   std::vector<std::pair<NodeRef, SymbolId>> self_parameters;
+  const ForeignExport *foreign_export(SymbolId id) const {
+    const auto &ref = symbols.at(id.value).foreign;
+    return ref ? &project->foreign_export(*ref) : nullptr;
+  }
 };
 PhaseResult<ResolvedProject> resolve_project(std::shared_ptr<const Project>,
                                            std::stop_token = {});

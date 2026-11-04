@@ -353,7 +353,7 @@
     {
       "id": "T10",
       "title": "NumPy 与 PyTorch",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T06",
         "T08"
@@ -361,7 +361,7 @@
       "primary_role": "python",
       "backup_role": "interop",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "root-integrator",
       "target_paths": [
         "bindings/python/",
         "tests/python/",
@@ -383,7 +383,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+      "notes": "纯C++绑定声明读取和名称解析已实施，实际接口见docs/T10_DECLARATIONS.md；类型字符串尚未转成HIR，foreign类型/调用及Python生成仍未实现。CPU宿主接口测试已核实冻结的原始声明，正式依赖锁仍未更新；宿主参考训练不能替代原04生成程序的训练，整项未完成。共享HIR/sema/driver由integrator指定唯一编辑者。"
     },
     {
       "id": "T11",

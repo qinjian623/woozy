@@ -323,10 +323,15 @@ class Resolver {
       module = m.id;
       auto &scope = packages.at(module.value);
       scope.parent = &prelude;
-      for (const auto &e : m.foreign_exports)
-        add(scope, e.name, e.kind == ForeignExportKind::type ? SymbolKind::type :
+      for (size_t i = 0; i < m.foreign_exports.size(); ++i) {
+        const auto &e = m.foreign_exports[i];
+        auto source = out.project->foreign_binding(
+            e.declaration ? *e.declaration : e.candidates.at(0)).source;
+        auto id = add(scope, e.name, e.kind == ForeignExportKind::type ? SymbolKind::type :
              e.kind == ForeignExportKind::function ? SymbolKind::function : SymbolKind::value,
-            {}, {}, true);
+            {}, source, true);
+        out.symbols.at(id.value).foreign = ForeignExportRef{m.id, i};
+      }
       for (file = 0; file < m.files.size(); ++file) {
         ast = m.files[file].get();
         for (auto id : node(ast->root).children) {
