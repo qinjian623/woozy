@@ -2,7 +2,9 @@
 
 本轮实现 `compiler-dev/1` 的静态部分。`sema::check_types` 从真实项目生成 HIR，
 `hir::verify_types` 独立检查类型、错误与清理记录。两者不授予代码生成权限。
-T08 执行仍未实现，不能将静态检查通过说成清理事件、错误载荷或退出码运行通过。
+两端T08执行现已接入，见[原生说明](../tests/native/T08_EXECUTION.md)和
+[Python说明](PYTHON_T08_EXECUTION.md)。下文保留静态阶段的接口和验证记录；
+静态检查本身仍不证明清理事件、错误载荷或退出码。
 
 ## 公共接口
 

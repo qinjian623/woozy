@@ -1,0 +1,1 @@
+package app;import "app/errors" as errors;func main() i32 throws errors.Err[i32] {errors.fail();return 0;}

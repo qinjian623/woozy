@@ -1,0 +1,1 @@
+package errors;pub enum Err[T] {Bad(v T);} pub func fail() throws Err[i32] {throw Err[i32].Bad(v:7);}

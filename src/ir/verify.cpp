@@ -1,5 +1,6 @@
 #include "lang/ir/native.hpp"
 #include "layout.hpp"
+#include "obligations.hpp"
 #include <algorithm>
 #include <functional>
 #include <set>
@@ -8,7 +9,8 @@
 namespace lang::ir {
 namespace {
 using Set = std::set<size_t>;
-template <class T> std::set<T> intersect(const std::set<T> &a, const std::set<T> &b) {
+template <class T>
+std::set<T> intersect(const std::set<T> &a, const std::set<T> &b) {
   std::set<T> r;
   std::set_intersection(a.begin(), a.end(), b.begin(), b.end(),
                         std::inserter(r, r.end()));
@@ -77,11 +79,16 @@ class Verifier {
       case Exit::conditional:
         shape = t.inputs.size() == 1 && t.targets.size() == 2;
         break;
+      case Exit::error_return:
       case Exit::return_:
         shape = t.inputs.size() == 1 && t.targets.empty();
         break;
       case Exit::unreachable:
         shape = t.inputs.empty() && t.targets.empty();
+        break;
+      case Exit::try_call:
+        shape = !t.inputs.empty() && t.targets.size() == 2 &&
+                t.targets[0] != t.targets[1];
         break;
       case Exit::missing:
         break;
@@ -92,14 +99,21 @@ class Verifier {
              "invalid branch target or edge into entry", t.source);
         predecessors[dest.value].insert(b);
       }
+      for (const auto &param : bb.parameters)
+        need(defs.emplace(param.value, Def{b, 0, param.type, false}).second,
+             "duplicate block parameter", t.source);
       for (size_t p = 0; p < bb.instructions.size(); ++p) {
         auto &i = bb.instructions[p];
         type(i.type, i.source);
-        need(i.result.has_value() == (i.op != Op::store && i.op != Op::store_indirect),
+        need(i.result.has_value() ==
+                 (i.op != Op::store && i.op != Op::store_indirect &&
+                  i.op != Op::exit_begin && i.op != Op::cleanup_begin &&
+                  i.op != Op::cleanup_end),
              "invalid instruction result", i.source);
         if (i.result)
-          need(defs.emplace(*i.result, Def{b, p, i.type, i.op == Op::address ||
-                                                       i.op == Op::field_address})
+          need(defs.emplace(*i.result, Def{b, p + 1, i.type,
+                                           i.op == Op::address ||
+                                               i.op == Op::field_address})
                    .second,
                "duplicate value definition", i.source);
         if (i.result)
@@ -134,12 +148,15 @@ class Verifier {
         }
     }
     // A payload read requires the same SSA enum value's matching true edge on
-    // every incoming path. Merely having a dominating tag comparison is not enough.
-    using Facts = std::set<std::pair<ValueId, SymbolId>>;
+    // every incoming path. Merely having a dominating tag comparison is not
+    // enough.
+    using Facts = std::set<std::tuple<ValueId, SymbolId, bool>>;
     Facts universe;
     for (auto [value, i] : instructions)
-      if (i->op == Op::enum_test && i->inputs.size() == 1)
-        universe.emplace(i->inputs[0], i->variant);
+      if (i->op == Op::enum_test && i->inputs.size() == 1) {
+        universe.emplace(i->inputs[0], i->variant, true);
+        universe.emplace(i->inputs[0], i->variant, false);
+      }
     std::vector<Facts> facts(f.blocks.size(), universe);
     facts[0].clear();
     changed = true;
@@ -152,13 +169,14 @@ class Verifier {
         for (auto p : predecessors[b]) {
           auto edge = facts[p];
           const auto &term = f.blocks[p].terminator;
-          if (term.kind == Exit::conditional && term.targets[0].value == b &&
-              term.targets[1].value != b) {
+          if (term.kind == Exit::conditional &&
+              term.targets[0] != term.targets[1]) {
             auto found = instructions.find(term.inputs[0]);
             if (found != instructions.end()) {
               const auto &test = *found->second;
               if (test.op == Op::enum_test && test.inputs.size() == 1)
-                edge.emplace(test.inputs[0], test.variant);
+                edge.emplace(test.inputs[0], test.variant,
+                             term.targets[0].value == b);
             }
           }
           next = intersect(next, edge);
@@ -218,7 +236,7 @@ class Verifier {
              "string bytes on a non-string instruction", i.source);
         std::vector<Def> args;
         for (auto v : i.inputs)
-          args.push_back(use(v, b, p, i.source));
+          args.push_back(use(v, b, p + 1, i.source));
         auto arity = [&](size_t n) {
           need(args.size() == n, "instruction operand count", i.source);
         };
@@ -226,7 +244,21 @@ class Verifier {
           need(!args.at(n).address, "address used as scalar value", i.source);
           return type(args[n].type, i.source);
         };
+        need(i.exit.has_value() == (i.op == Op::exit_begin) &&
+                 i.cleanup.has_value() ==
+                     (i.op == Op::cleanup_begin || i.op == Op::cleanup_end),
+             "invalid cleanup metadata", i.source);
         switch (i.op) {
+        case Op::exit_begin:
+          need(t.kind == hir::TypeKind::Unit, "exit marker type", i.source);
+          for (size_t a = 0; a < args.size(); ++a)
+            value(a);
+          break;
+        case Op::cleanup_begin:
+        case Op::cleanup_end:
+          arity(0);
+          need(t.kind == hir::TypeKind::Unit, "cleanup marker type", i.source);
+          break;
         case Op::string_literal:
           arity(0);
           need(t.kind == hir::TypeKind::String && i.bits == 0,
@@ -316,8 +348,16 @@ class Verifier {
                "invalid integer conversion", i.source);
           break;
         case Op::call: {
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "call without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes[i.origin->value];
+          const auto *call = std::get_if<hir::Call>(&source.data);
+          need(call && call->signature == i.signature &&
+                   m.hir.module().scopes.at(source.scope.value).function ==
+                       f.symbol,
+               "call origin/signature differs from HIR", i.source);
           const auto &cs = type(i.signature, i.source);
-          need(cs.kind == hir::TypeKind::Function,
+          need(cs.kind == hir::TypeKind::Function && !cs.throws_type,
                "call signature is not function", i.source);
           arity(cs.parameters.size() + 1);
           value(0);
@@ -336,12 +376,13 @@ class Verifier {
           need(t.kind == (structure ? hir::TypeKind::NominalStruct
                                     : hir::TypeKind::NominalEnum),
                "aggregate constructor kind", i.source);
-          auto fields = aggregates.fields(i.type, structure ? std::nullopt
-                                                            : std::optional{i.variant});
+          auto fields = aggregates.fields(
+              i.type, structure ? std::nullopt : std::optional{i.variant});
           arity(fields.size());
           for (size_t a = 0; a < fields.size(); ++a) {
             value(a);
-            need(args[a].type == fields[a].type, "constructor field type", i.source);
+            need(args[a].type == fields[a].type, "constructor field type",
+                 i.source);
           }
           break;
         }
@@ -349,7 +390,8 @@ class Verifier {
         case Op::field_address: {
           arity(1);
           need(args[0].address == (i.op == Op::field_address) &&
-                   type(args[0].type, i.source).kind == hir::TypeKind::NominalStruct,
+                   type(args[0].type, i.source).kind ==
+                       hir::TypeKind::NominalStruct,
                "field receiver type/mode", i.source);
           auto fields = aggregates.fields(args[0].type);
           auto index = aggregates.field_index(args[0].type, i.field);
@@ -378,9 +420,11 @@ class Verifier {
             need(t.kind == hir::TypeKind::Bool, "enum test result", i.source);
           else {
             auto fields = aggregates.fields(args[0].type, i.variant);
-            auto index = aggregates.field_index(args[0].type, i.field, i.variant);
-            need(fields[index].type == i.type, "enum payload result type", i.source);
-            need(facts[b].contains({i.inputs[0], i.variant}),
+            auto index =
+                aggregates.field_index(args[0].type, i.field, i.variant);
+            need(fields[index].type == i.type, "enum payload result type",
+                 i.source);
+            need(facts[b].contains({i.inputs[0], i.variant, true}),
                  "enum payload without matching variant edge", i.source);
           }
           break;
@@ -390,15 +434,299 @@ class Verifier {
         }
       }
       const auto &t = bb.terminator;
-      for (auto v : t.inputs) {
-        const auto &d = use(v, b, bb.instructions.size(), t.source);
-        need(!d.address &&
-                 (t.kind == Exit::return_
-                      ? d.type == sig.result
-                      : type(d.type, t.source).kind == hir::TypeKind::Bool),
-             "terminator type mismatch", t.source);
+      if (t.kind == Exit::error_return)
+        need(t.origin && t.exit && t.exit->kind == hir::ExitKind::error &&
+                 t.exit->error_type == sig.throws_type,
+             "ErrorReturn without verified error exit", t.source);
+      if (t.kind == Exit::return_ && !t.origin)
+        need(type(sig.result, t.source).kind == hir::TypeKind::Unit &&
+                 t.source.snapshot == f.source.snapshot &&
+                 t.source.begin_byte == f.source.begin_byte &&
+                 t.source.end_byte == f.source.end_byte,
+             "explicit return without source exit identity", t.source);
+      std::vector<Def> operands;
+      for (auto v : t.inputs)
+        operands.push_back(use(v, b, bb.instructions.size() + 1, t.source));
+      if (t.kind == Exit::try_call) {
+        const auto &cs = type(t.signature, t.source);
+        need(cs.kind == hir::TypeKind::Function && cs.throws_type && t.origin,
+             "TryCall requires throwing signature and source call", t.source);
+        need(t.origin->value < m.hir.module().nodes.size(),
+             "unknown TryCall origin", t.source);
+        const auto *call =
+            std::get_if<hir::Call>(&m.hir.module().nodes[t.origin->value].data);
+        need(call && call->signature == t.signature,
+             "TryCall differs from source signature", t.source);
+        need(operands.size() == cs.parameters.size() + 1 &&
+                 !operands[0].address && operands[0].type == t.signature,
+             "TryCall callee/arity", t.source);
+        for (size_t a = 0; a < cs.parameters.size(); ++a)
+          need(operands[a + 1].type == cs.parameters[a].type &&
+                   operands[a + 1].address ==
+                       (cs.parameters[a].mode == hir::ParamMode::inout),
+               "TryCall argument type/mode", t.source);
+        for (unsigned side = 0; side < 2; ++side) {
+          auto target = t.targets[side].value;
+          const auto &params = f.blocks[target].parameters;
+          need(
+              predecessors[target] == Set{b} && params.size() == 1 &&
+                  params[0].type == (side == 0 ? cs.result : *cs.throws_type) &&
+                  params[0].call == *t.origin && params[0].error == (side == 1),
+              "TryCall side parameter/predecessor", t.source);
+        }
+      } else {
+        need(t.signature.value == 0, "signature on non-TryCall", t.source);
+        for (const auto &d : operands)
+          need(!d.address &&
+                   (t.kind == Exit::return_ ? d.type == sig.result
+                    : t.kind == Exit::error_return
+                        ? sig.throws_type == d.type
+                        : type(d.type, t.source).kind == hir::TypeKind::Bool),
+               "terminator type mismatch", t.source);
+      }
+      if (!bb.parameters.empty()) {
+        need(b != 0 && predecessors[b].size() == 1, "orphan block parameter",
+             t.source);
+        const auto &pred = f.blocks[*predecessors[b].begin()].terminator;
+        need(pred.kind == Exit::try_call, "parameter without TryCall edge",
+             t.source);
       }
     }
+    Set impossible;
+    for (size_t b = 0; b < f.blocks.size(); ++b)
+      for (const auto &[value, variant, matches] : facts[b]) {
+        if (matches)
+          continue;
+        const auto &variants = aggregates.declaration(defs.at(value).type).variants;
+        if (!variants.empty() &&
+            std::all_of(variants.begin(), variants.end(), [&](const auto &v) {
+              return facts[b].contains({value, v.symbol, false});
+            }))
+          impossible.insert(b);
+      }
+    cleanup(f, dom, predecessors, impossible);
+  }
+
+  // Independent CFG dataflow over exit obligations. It reads immutable HIR
+  // plans, never calls Lower and never trusts copied cleanup order in NativeIR.
+  void cleanup(const Function &f, const std::vector<Set> &dom,
+               const std::vector<Set> &predecessors,
+               const Set &impossible) const {
+    const auto &h = m.hir.module();
+    auto node = [&](HirNodeId id) -> const hir::HirNode & {
+      need(id.value < h.nodes.size() &&
+               h.scopes.at(h.nodes[id.value].scope.value).function == f.symbol,
+           "exit/cleanup from another function", f.source);
+      return h.nodes.at(id.value);
+    };
+    auto plan = [&](const ExitSite &site) -> const hir::ExitPlan & {
+      for (const auto &p : node(site.origin).exits)
+        if (p.kind == site.kind && p.error_type == site.error_type)
+          return p;
+      need(false, "exit marker without HIR plan", f.source);
+      throw std::logic_error("unreachable");
+    };
+    // Same HIR Try can have multiple inline instances. Identity includes its
+    // actual protected entry and handler destination; bindings are never
+    // shared.
+    std::map<std::tuple<HirNodeId, uint32_t, BlockId>, const Handler *>
+        handlers;
+    std::set<BlockId> handler_blocks;
+    std::set<LocalSlotId> handler_slots;
+    std::set<std::tuple<HirNodeId, uint32_t, BlockId>> instances;
+    for (const auto &handler : f.handlers) {
+      const auto &n = node(handler.target.try_node);
+      auto t = std::get_if<hir::Try>(&n.data);
+      need(t && handler.target.index < t->catches.size() &&
+               handler.block.value < f.blocks.size() &&
+               handler.protected_entry.value < f.blocks.size() &&
+               handler.slot.value < f.slots.size(),
+           "invalid native handler", f.source);
+      const auto &incoming = predecessors[handler.protected_entry.value];
+      need(incoming.size() == 1,
+           "handler protected entry is not a concrete Try entry", f.source);
+      const auto &entry = f.blocks[*incoming.begin()].terminator;
+      need(entry.kind == Exit::branch &&
+               entry.origin == handler.target.try_node &&
+               entry.source.snapshot == n.source.span.snapshot &&
+               entry.source.begin_byte == n.source.span.begin_byte &&
+               entry.source.end_byte == n.source.span.end_byte,
+           "handler protected entry differs from source Try", f.source);
+      need(f.slots[handler.slot.value].type ==
+                   t->catches[handler.target.index].error_type &&
+               !f.slots[handler.slot.value].parameter &&
+               handler.block != handler.protected_entry &&
+               handler_blocks.insert(handler.block).second &&
+               handler_slots.insert(handler.slot).second &&
+               instances
+                   .emplace(handler.target.try_node, handler.target.index,
+                            handler.protected_entry)
+                   .second &&
+               handlers
+                   .emplace(std::tuple{handler.target.try_node,
+                                       handler.target.index, handler.block},
+                            &handler)
+                   .second,
+           "handler binding type/identity", f.source);
+    }
+    struct Frame {
+      ExitSite site;
+      size_t next = 0;
+      bool active = false;
+      std::vector<ValueId> saved;
+      bool operator==(const Frame &) const = default;
+    };
+    using State = std::vector<Frame>;
+    detail::Obligations actual;
+    auto context = [&](const State &state) {
+      detail::Obligations::Context path;
+      for (const auto &frame : state)
+        if (frame.active) {
+          auto d = plan(frame.site).defers.at(frame.next);
+          path.emplace_back(frame.site.origin, frame.site.kind,
+                            frame.site.error_type, d);
+        }
+      return path;
+    };
+    std::vector<std::optional<State>> states(f.blocks.size());
+    states[0] = State{};
+    std::vector<size_t> work{0};
+    while (!work.empty()) {
+      auto b = work.back();
+      work.pop_back();
+      auto state = *states[b];
+      const auto &bb = f.blocks[b];
+      for (const auto &i : bb.instructions) {
+        if (i.op != Op::cleanup_begin && i.op != Op::cleanup_end) {
+          for (const auto &frame : state)
+            if (frame.active) {
+              const auto &p = plan(frame.site);
+              const auto &body =
+                  node(node(p.defers.at(frame.next)).children[0]);
+              const auto &range = body.source.span;
+              need(i.source.snapshot == range.snapshot &&
+                       i.source.begin_byte >= range.begin_byte &&
+                       i.source.end_byte <= range.end_byte,
+                   "instruction moved across cleanup bodies", i.source);
+            }
+        }
+        if (i.op == Op::call && !impossible.contains(b))
+          ++actual.calls[{context(state), *i.origin}];
+        if (i.op == Op::exit_begin) {
+          const auto &site = *i.exit;
+          if (!impossible.contains(b))
+            ++actual.exits[{context(state), site.origin, site.kind,
+                            site.error_type}];
+          const auto &p = plan(site);
+          need(state.empty() || state.back().active,
+               "exit begins during pending cleanup", i.source);
+          need(i.inputs.size() == (p.saves_value ? 1u : 0u),
+               "exit value not saved before cleanup", i.source);
+          state.push_back({*i.exit, 0, false, i.inputs});
+        } else if (i.op == Op::cleanup_begin) {
+          need(!state.empty(), "cleanup without exit obligation", i.source);
+          auto &top = state.back();
+          const auto &p = plan(top.site);
+          need(!top.active && top.next < p.defers.size() &&
+                   p.defers[top.next] == *i.cleanup &&
+                   node(*i.cleanup).kind() == hir::NodeKind::defer_,
+               "cleanup registration/order differs from HIR", i.source);
+          top.active = true;
+        } else if (i.op == Op::cleanup_end) {
+          need(!state.empty(), "cleanup end without begin", i.source);
+          auto &top = state.back();
+          const auto &p = plan(top.site);
+          need(top.active && p.defers.at(top.next) == *i.cleanup,
+               "cleanup end mismatch", i.source);
+          top.active = false;
+          ++top.next;
+        }
+      }
+      const auto &t = bb.terminator;
+      if (t.kind == Exit::try_call && !impossible.contains(b))
+        ++actual.calls[{context(state), *t.origin}];
+      if (t.origin && t.kind != Exit::try_call) {
+        const auto &n = node(*t.origin);
+        for (const auto &p : n.exits) {
+          bool relevant =
+              t.kind == Exit::return_        ? p.kind == hir::ExitKind::return_
+              : t.kind == Exit::error_return ? p.kind == hir::ExitKind::error
+                                             : true;
+          if (relevant)
+            need(t.exit && t.exit->origin == *t.origin &&
+                     p.kind == t.exit->kind &&
+                     p.error_type == t.exit->error_type,
+                 "exit omitted required cleanup plan", t.source);
+        }
+      }
+      if (t.exit) {
+        const auto &p = plan(*t.exit);
+        need(t.origin == t.exit->origin && !state.empty(),
+             "exit end without begin", t.source);
+        auto top = state.back();
+        need(top.site == *t.exit && !top.active && top.next == p.defers.size(),
+             "exit before all cleanups completed", t.source);
+        if (p.kind == hir::ExitKind::return_ ||
+            p.kind == hir::ExitKind::error) {
+          if (auto target = std::get_if<hir::CatchTarget>(&p.target)) {
+            need(t.kind == Exit::branch, "catch exit is not a branch",
+                 t.source);
+            auto found =
+                handlers.find({target->try_node, target->index, t.targets[0]});
+            need(found != handlers.end() && t.kind == Exit::branch &&
+                     t.targets[0] == found->second->block &&
+                     !top.saved.empty() &&
+                     dom[b].contains(found->second->protected_entry.value),
+                 "error delivered to wrong handler", t.source);
+            need(!bb.instructions.empty(), "missing error binding store",
+                 t.source);
+            const auto &store = bb.instructions.back();
+            need(store.op == Op::store && store.slot == found->second->slot &&
+                     store.inputs == top.saved,
+                 "handler received different error value", t.source);
+          } else {
+            need(t.kind == (p.kind == hir::ExitKind::error ? Exit::error_return
+                                                           : Exit::return_),
+                 "wrong function exit kind", t.source);
+            if (p.saves_value)
+              need(t.inputs == top.saved, "exit value changed after cleanup",
+                   t.source);
+          }
+        } else
+          need(t.kind == Exit::branch, "normal/jump exit is not branch",
+               t.source);
+        state.pop_back();
+      }
+      // An exhaustive enum switch's default edge cannot execute, even when
+      // generated inside a cleanup. Other unfinished exits remain invalid.
+      if (t.kind == Exit::return_ || t.kind == Exit::error_return ||
+          (t.kind == Exit::unreachable && !impossible.contains(b)))
+        need(state.empty(), "function exits with unfinished cleanup", t.source);
+      for (auto target : t.targets) {
+        if (!states[target.value]) {
+          states[target.value] = state;
+          work.push_back(target.value);
+        } else
+          need(*states[target.value] == state,
+               "inconsistent cleanup state at CFG join", t.source);
+      }
+    }
+    obligations(f, actual);
+  }
+
+  void obligations(const Function &f, const detail::Obligations &actual) const {
+    const hir::HirFunction *source = nullptr;
+    for (const auto &candidate : m.hir.module().functions)
+      if (candidate.symbol == f.symbol)
+        source = &candidate;
+    need(source != nullptr, "missing HIR function for exit obligations",
+         f.source);
+    const auto expected = detail::RequiredExits(m.hir.module()).run(*source);
+    need(actual.exits == expected.exits,
+         "required HIR exit/cleanup occurrence missing or duplicated",
+         f.source);
+    need(actual.calls == expected.calls,
+         "required HIR call occurrence missing or duplicated", f.source);
   }
 
 public:
@@ -468,18 +796,28 @@ std::string dump(const Module &m) {
         out << " parameter=" << *slot.parameter << " inout=" << slot.inout;
       out << '\n';
     }
+    for (const auto &handler : f.handlers)
+      out << " handler try=" << handler.target.try_node.value << ':'
+          << handler.target.index << " entry=b" << handler.protected_entry.value
+          << " block=b" << handler.block.value << " slot=$"
+          << handler.slot.value << '\n';
     for (size_t b = 0; b < f.blocks.size(); ++b) {
-      out << " b" << b << ":\n";
+      out << " b" << b << ":";
+      for (auto p : f.blocks[b].parameters)
+        out << " %" << p.value.value << ":" << p.type.value;
+      out << '\n';
       for (auto &i : f.blocks[b].instructions) {
         out << "  ";
         if (i.result)
           out << '%' << i.result->value << " = ";
-        static constexpr const char *names[] = {"constant", "function", "load",
-                                                "address",  "store",    "unary",
-                                                "binary",   "convert",  "call",
-            "struct_init", "enum_init", "field_read", "field_address",
-            "load_indirect", "store_indirect", "enum_test", "enum_payload",
-            "string_literal"};
+        static constexpr const char *names[] = {
+            "constant",      "function",      "load",
+            "address",       "store",         "unary",
+            "binary",        "convert",       "call",
+            "struct_init",   "enum_init",     "field_read",
+            "field_address", "load_indirect", "store_indirect",
+            "enum_test",     "enum_payload",  "string_literal",
+            "exit_begin",    "cleanup_begin", "cleanup_end"};
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;
@@ -499,10 +837,19 @@ std::string dump(const Module &m) {
           out << " op=" << static_cast<unsigned>(i.binary);
         if (i.op == Op::call)
           out << " signature=" << i.signature.value;
-        if (i.op == Op::field_read || i.op == Op::field_address || i.op == Op::enum_payload)
+        if (i.op == Op::field_read || i.op == Op::field_address ||
+            i.op == Op::enum_payload)
           out << " field=@" << i.field.value;
-        if (i.op == Op::enum_init || i.op == Op::enum_test || i.op == Op::enum_payload)
+        if (i.op == Op::enum_init || i.op == Op::enum_test ||
+            i.op == Op::enum_payload)
           out << " variant=@" << i.variant.value;
+        if (i.origin)
+          out << " origin=" << i.origin->value;
+        if (i.exit)
+          out << " origin=" << i.exit->origin.value
+              << " exit=" << int(i.exit->kind);
+        if (i.cleanup)
+          out << " defer=" << i.cleanup->value;
         for (auto a : i.inputs)
           out << " %" << a.value;
         out << " source=" << i.source.snapshot.value << ':'
@@ -510,8 +857,13 @@ std::string dump(const Module &m) {
       }
       const auto &t = f.blocks[b].terminator;
       static constexpr const char *exits[] = {
-          "missing", "branch", "conditional", "return", "unreachable"};
+          "missing",     "branch",   "conditional", "return",
+          "unreachable", "try_call", "error_return"};
       out << "  " << exits[static_cast<unsigned>(t.kind)];
+      if (t.kind == Exit::try_call)
+        out << " signature=" << t.signature.value;
+      if (t.origin)
+        out << " origin=" << t.origin->value;
       for (auto v : t.inputs)
         out << " %" << v.value;
       for (auto d : t.targets)

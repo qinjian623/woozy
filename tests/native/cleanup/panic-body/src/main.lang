@@ -1,0 +1,4 @@
+package app;
+enum E {Bad(code i32);}
+func mark(log inout i64,digit i64) {log=log*10+digit;}
+func main() i32 {var log i64=0;defer {mark(inout log,9);}try {defer {mark(inout log,8);}mark(inout log,1);var zero i32=0;let x=i32(1)/zero;}catch e E {mark(inout log,7);}return 0;}

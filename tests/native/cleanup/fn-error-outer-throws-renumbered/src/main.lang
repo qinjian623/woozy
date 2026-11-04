@@ -1,0 +1,8 @@
+package app;
+enum Before {Different(v i64);}
+struct Earlier {value bool;}
+enum E{Bad;}
+func padding(x u64)i64{return i64(x);}
+func inner() {}
+func outer() (func()) throws E {return inner;}
+func main() throws (func() (func()) throws E) {throw outer;}

@@ -157,6 +157,7 @@ void independent(const fs::path &published) {
       expected = json_object_get_string(get(override, "status"));
     auto p = published / json_object_get_string(get(c, "manifest"));
     auto r = check(p);
+    if (id == "throws-unavailable") expected = "accept"; // native T08 is executable
     require(r.success() == (expected == "accept"),
             "independent " + id + "\n" + messages(r));
     if (expected == "unavailable")
@@ -467,7 +468,7 @@ void suite(const fs::path &published) {
   source("func f() { let x=[1]; }", "E_CAPABILITY_UNAVAILABLE");
   source("func f() { switch 1 { default: break; } }",
          "E_CAPABILITY_UNAVAILABLE");
-  source("func f() { defer {} }", "E_CAPABILITY_UNAVAILABLE");
+  source("func f() { defer {} }");
   source("func f() { let x=1; unsafe {} }", "E_CAPABILITY_UNAVAILABLE");
   // Constant expressions keep their typed wrap/truncation semantics when
   // materialized; conversion checks use those values, not host arithmetic.

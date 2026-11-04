@@ -1,0 +1,2 @@
+package app;
+enum E {Bad(code i32);} func main() i32 throws E {throw E.Bad(code:7);}

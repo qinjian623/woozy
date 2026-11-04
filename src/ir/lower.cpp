@@ -14,6 +14,66 @@ class Lower {
   std::map<SymbolId, LocalSlotId> slots;
   std::map<HirNodeId, std::pair<BlockId, BlockId>> loops;
   TypeId unit, boolean;
+  std::map<std::pair<HirNodeId, uint32_t>, Handler> handlers;
+  const hir::ExitPlan *plan(const ExitSite &site) const {
+    for (const auto &p : node(site.origin).exits)
+      if (p.kind == site.kind && p.error_type == site.error_type)
+        return &p;
+    return nullptr;
+  }
+  void marker(Op op, std::optional<ExitSite> site,
+              std::optional<HirNodeId> cleanup,
+              std::vector<ValueId> inputs = {}) {
+    Instruction i;
+    i.op = op;
+    i.type = unit;
+    i.exit = site;
+    i.cleanup = cleanup;
+    i.inputs = std::move(inputs);
+    i.source = node(site ? site->origin : *cleanup).source.span;
+    f.blocks[current.value].instructions.push_back(std::move(i));
+  }
+  void clean(const ExitSite &site, std::optional<ValueId> saved = {}) {
+    if (const auto *p = plan(site)) {
+      marker(Op::exit_begin, site, {},
+             saved ? std::vector{*saved} : std::vector<ValueId>{});
+      for (auto d : p->defers) {
+        marker(Op::cleanup_begin, {}, d);
+        // Each expansion gets fresh local slots and control targets. External
+        // bindings retain the very same slot, and nested expansions restore
+        // their parent's context before the next deferred body is emitted.
+        auto outer_slots = slots;
+        auto outer_loops = loops;
+        auto outer_handlers = handlers;
+        stmt(node(d).children[0]);
+        slots = std::move(outer_slots);
+        loops = std::move(outer_loops);
+        handlers = std::move(outer_handlers);
+        marker(Op::cleanup_end, {}, d);
+      }
+    }
+  }
+  void finish(const ExitSite &site) {
+    auto &t = f.blocks[current.value].terminator;
+    t.origin = site.origin;
+    if (plan(site))
+      t.exit = site;
+  }
+  void error(HirNodeId id, TypeId type, ValueId value) {
+    ExitSite site{id, hir::ExitKind::error, type};
+    const auto *p = plan(site);
+    if (!p)
+      throw std::logic_error("missing verified error exit");
+    clean(site, value);
+    if (auto c = std::get_if<hir::CatchTarget>(&p->target)) {
+      const auto &handler = handlers.at({c->try_node, c->index});
+      store(handler.slot, value, node(id).source.span);
+      jump(handler.block, node(id).source.span);
+    } else {
+      end(Exit::error_return, {value}, {}, node(id).source.span);
+    }
+    finish(site);
+  }
   const hir::HirNode &node(HirNodeId id) const { return h.nodes.at(id.value); }
   bool live() const {
     return f.blocks[current.value].terminator.kind == Exit::missing;
@@ -133,7 +193,7 @@ class Lower {
       const bool structure = n.kind() == hir::NodeKind::struct_init;
       i.op = structure ? Op::struct_init : Op::enum_init;
       const auto &args = structure ? std::get<hir::StructInit>(n.data).fields
-                                  : std::get<hir::EnumInit>(n.data).payload;
+                                   : std::get<hir::EnumInit>(n.data).payload;
       if (!structure)
         i.variant = std::get<hir::EnumInit>(n.data).variant;
       i.inputs.resize(args.size());
@@ -144,7 +204,7 @@ class Lower {
     case hir::NodeKind::field_read:
     case hir::NodeKind::field_place:
       i.op = n.kind() == hir::NodeKind::field_read ? Op::field_read
-                                                 : Op::field_address;
+                                                   : Op::field_address;
       i.field = n.kind() == hir::NodeKind::field_read
                     ? std::get<hir::FieldRead>(n.data).field
                     : std::get<hir::FieldPlace>(n.data).field;
@@ -185,6 +245,7 @@ class Lower {
     case hir::NodeKind::call: {
       const auto &c = std::get<hir::Call>(n.data);
       i.op = Op::call;
+      i.origin = id;
       i.signature = c.signature;
       ValueId callee;
       if (c.callee)
@@ -204,7 +265,21 @@ class Lower {
         auto value = expr(arg.expression);
         i.inputs[arg.parameter_index + 1] = value;
       }
-      return emit(i);
+      const auto &signature = *h.types.find(c.signature);
+      if (!signature.throws_type)
+        return emit(i);
+      auto ok = block(), fail = block();
+      ValueId value{next_value++}, error_value{next_value++};
+      f.blocks[ok.value].parameters.push_back({value, n.type, id, false});
+      f.blocks[fail.value].parameters.push_back(
+          {error_value, *signature.throws_type, id, true});
+      end(Exit::try_call, i.inputs, {ok, fail}, i.source);
+      f.blocks[current.value].terminator.signature = c.signature;
+      f.blocks[current.value].terminator.origin = id;
+      current = fail;
+      error(id, *signature.throws_type, error_value);
+      current = ok;
+      return value;
     }
     default:
       throw std::logic_error("non-expression in native expression lowering");
@@ -216,10 +291,53 @@ class Lower {
     const auto &n = node(id);
     auto s = n.source.span;
     switch (n.kind()) {
-    case hir::NodeKind::block:
+    case hir::NodeKind::block: {
       for (auto child : n.children)
         stmt(child);
+      ExitSite site{id, hir::ExitKind::normal, {}};
+      if (live() && plan(site)) {
+        clean(site);
+        auto next = block();
+        jump(next, s);
+        finish(site);
+        current = next;
+      }
       break;
+    }
+    case hir::NodeKind::defer_:
+      // Registration is represented by the VerifiedHIR plan at each exit.
+      break;
+    case hir::NodeKind::throw_: {
+      auto value = expr(n.children[0]);
+      error(id, node(n.children[0]).type, value);
+      break;
+    }
+    case hir::NodeKind::try_: {
+      const auto &t = std::get<hir::Try>(n.data);
+      auto protected_entry = block(), after = block();
+      jump(protected_entry, s);
+      f.blocks[current.value].terminator.origin = id;
+      current = protected_entry;
+      for (uint32_t c = 0; c < t.catches.size(); ++c) {
+        const auto &catch_ = t.catches[c];
+        Handler handler{
+            {id, c}, block(), slot(catch_.error_type), protected_entry};
+        handlers.emplace(std::pair{id, c}, handler);
+        f.handlers.push_back(handler);
+        slots.emplace(catch_.binding, handler.slot);
+      }
+      stmt(n.children[0]);
+      if (live())
+        jump(after, s);
+      for (uint32_t c = 0; c < t.catches.size(); ++c) {
+        current = handlers.at({id, c}).block;
+        stmt(t.catches[c].body);
+        if (live())
+          jump(after, s);
+      }
+      current = after;
+      break;
+    }
     case hir::NodeKind::noop:
       break;
     case hir::NodeKind::expression_statement:
@@ -324,15 +442,26 @@ class Lower {
     case hir::NodeKind::return_: {
       auto result =
           n.children.empty() ? constant(unit, 0, s) : expr(n.children[0]);
+      ExitSite site{id, hir::ExitKind::return_, {}};
+      clean(site, n.children.empty() ? std::nullopt : std::optional{result});
       end(Exit::return_, {result}, {}, s);
+      finish(site);
       break;
     }
-    case hir::NodeKind::break_:
+    case hir::NodeKind::break_: {
+      ExitSite site{id, hir::ExitKind::break_, {}};
+      clean(site);
       jump(loops.at(std::get<hir::Break>(n.data).loop).first, s);
+      finish(site);
       break;
-    case hir::NodeKind::continue_:
+    }
+    case hir::NodeKind::continue_: {
+      ExitSite site{id, hir::ExitKind::continue_, {}};
+      clean(site);
       jump(loops.at(std::get<hir::Continue>(n.data).loop).second, s);
+      finish(site);
       break;
+    }
     default:
       (void)expr(id);
       break;
@@ -395,6 +524,14 @@ public:
     for (auto &b : kept)
       for (auto &target : b.terminator.targets)
         target = remap[target.value];
+    std::vector<Handler> kept_handlers;
+    for (auto handler : f.handlers)
+      if (reachable[handler.block.value]) {
+        handler.block = remap[handler.block.value];
+        handler.protected_entry = remap[handler.protected_entry.value];
+        kept_handlers.push_back(handler);
+      }
+    f.handlers = std::move(kept_handlers);
     f.blocks = std::move(kept);
     return std::move(f);
   }

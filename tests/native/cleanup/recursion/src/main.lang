@@ -1,0 +1,5 @@
+package app;
+enum E {Bad(code i32);}
+func mark(log inout i64,digit i64) {log=log*10+digit;}
+func recur(n i32,log inout i64) i32 throws E {defer {mark(inout log,i64(n)+1);}if n==0 {throw E.Bad(code:7);}return recur(n-1,inout log);}
+func main() i32 {var log i64=0;try {recur(2,inout log);}catch e E {switch e {case E.Bad(code):if code!=7 {return 1;}}mark(inout log,4);}if log!=1234 {return 2;}return 0;}

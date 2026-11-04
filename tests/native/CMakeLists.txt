@@ -46,3 +46,15 @@ if(LANG_TEST_PYTHON)
 else()
   message(STATUS "native.cli: not_run (test Python not found)")
 endif()
+add_executable(lang_native_cleanup_probe cleanup_probe.cpp)
+target_include_directories(lang_native_cleanup_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_options(lang_native_cleanup_probe PRIVATE -fno-rtti)
+target_link_libraries(lang_native_cleanup_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.cleanup COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_cleanup.py --cli $<TARGET_FILE:langc>
+    --probe $<TARGET_FILE:lang_native_cleanup_probe> --root ${LANG_SOURCE_ROOT}
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/cleanup-results)
+  set_tests_properties(native.cleanup PROPERTIES TIMEOUT 240)
+endif()

@@ -1,0 +1,2 @@
+package app;
+enum E {Bad;} func main() i32 throws E {return 101;}

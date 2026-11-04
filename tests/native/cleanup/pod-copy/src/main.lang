@@ -1,0 +1,7 @@
+package app;
+enum E {Bad(code i32);}
+func mark(log inout i64,digit i64) {log=log*10+digit;}
+struct S {x i32;}
+func value(log inout i64) S {var s=S(x:7);defer {s.x=9;mark(inout log,1);}return s;}
+func fail(log inout i64) throws S {var s=S(x:3);defer {s.x=8;mark(inout log,2);}throw s;}
+func main() i32 {var log i64=0;let s=value(inout log);if s.x!=7 {return 1;}try {fail(inout log);}catch e S {if e.x!=3 {return 2;}mark(inout log,3);}if log!=123 {return 3;}return 0;}

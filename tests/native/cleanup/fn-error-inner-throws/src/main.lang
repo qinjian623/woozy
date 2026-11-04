@@ -1,0 +1,5 @@
+package app;
+enum E{Bad;}
+func inner() throws E {}
+func outer() (func() throws E) {return inner;}
+func main() throws (func() (func() throws E)) {throw outer;}

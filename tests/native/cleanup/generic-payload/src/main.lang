@@ -1,0 +1,7 @@
+package app;
+enum E {Bad(code i32);}
+func mark(log inout i64,digit i64) {log=log*10+digit;}
+enum Err[T] {Bad(v T);}
+func fail[T](x T) T throws Err[T] {throw Err[T].Bad(v:x);}
+func apply[T](f func(T) T throws Err[T],x T) T throws Err[T] {return f(x);}
+func main() i32 {var log i64=0;try {defer {mark(inout log,1);}let x=apply[i32](fail[i32],7);}catch e Err[i32] {switch e {case Err.Bad(v):if v!=7 {return 1;}}mark(inout log,2);}if log!=12 {return 2;}return 0;}

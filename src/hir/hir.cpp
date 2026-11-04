@@ -2662,8 +2662,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
     };
     auto signature_supported = [&](TypeId id) {
       const auto t = *m.types.find(id);
-      if (t.throws_type &&
-          (m.config.backend != Backend::python || !supported(*t.throws_type)))
+      if (t.throws_type && !supported(*t.throws_type))
         return false;
       for (auto p : t.parameters)
         if (!supported(p.type))
@@ -2693,11 +2692,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         case NodeKind::try_:
         case NodeKind::defer_:
         case NodeKind::throw_:
-          if (m.config.backend == Backend::python)
-            break;
-          unavailable(n.source,
-                      "typed errors and defer execution are not implemented by this backend");
-          return r;
+          break;
         case NodeKind::constraint_call:
           unavailable(n.source,
                       "backend has not implemented this aggregate operation");

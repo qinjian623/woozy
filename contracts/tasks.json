@@ -204,7 +204,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "已支持native标量、POD聚合和字面量来源的不可变UTF-8字符串；三种完整构建各28/28，关闭LLVM22/22，180次字符串字节/长度检查通过。动态字符串、ARC、严格浮点执行和完整基础样例仍未完成，整项保持in_progress。"
+      "notes": "已支持native标量、POD聚合、字面量来源的不可变UTF-8字符串及typed throws/catch/defer。三种完整构建各32/32，关闭LLVM25/25；T08每套92次原生执行和92次受控观察通过。动态字符串、ARC、严格浮点执行和完整基础样例仍未完成，整项保持in_progress。"
     },
     {
       "id": "T06",
@@ -239,7 +239,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python标量、具体泛型、POD聚合、常量字符串、位置式enum及typed throws/catch/defer已支持；运行库版本compiler-dev/1-python-values/2。主代理GNU Debug/Release与Clang22 ASan/UBSan完整测试各31/31，关闭LLVM25/25；每套原19清理项中11项运行、8项源码拒绝，18项补充运行，新增52项中48项运行、4项生成深度超限拒绝。正式CLI每套89项目检查/构建、77项目实际运行；生成Python与已观察程序逐字节相同。ARC、foreign和严格浮点运算未实施。"
+      "notes": "Python标量、具体泛型、POD聚合、常量字符串、位置式enum及typed throws/catch/defer已支持；运行库版本compiler-dev/1-python-values/2。主代理GNU Debug/Release与Clang22 ASan/UBSan完整测试各32/32，关闭LLVM25/25；每套原19清理项中11项运行、8项源码拒绝，18项补充运行，新增52项中48项运行、4项生成深度超限拒绝。正式CLI每套89项目检查/构建、77项目实际运行；生成Python与已观察程序逐字节相同。ARC、foreign和严格浮点运算未实施。 两端T08现已合并；三套另有46份同源程序的138项实际结果比较通过。"
     },
     {
       "id": "T07",
@@ -278,7 +278,7 @@
     {
       "id": "T08",
       "title": "错误与清理",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T05",
         "T06",
@@ -311,7 +311,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态类型/效果/清理HIR及Python执行已实施，native唯一修正仍进行中，整项保持in_progress。Python同块defer按注册计数倒序执行；函数错误类型键保留返回/throws层级。主代理三种构建各31/31，LLVM关闭25/25；267次正式CLI项目检查与构建、231次实际Python运行通过。生成深度超限在build前拒绝，check可通过；原19清理输入和数值预期未改。native初版因重复展开和缺失清理验证问题退回，未合入。"
+      "notes": "静态类型/效果/清理HIR及两端typed throws/catch/defer已实施。主代理修正native穷尽enum switch的不可达出口检查，并验证不可达调用不能抵算清理。GNU Debug/Release与Clang22 ASan/UBSan各32/32，关闭LLVM25/25；每套92次原生CLI和92次受控观察执行、274条记录、1122次坏IR拒绝检查。46份相同源码的native O0/O2与Python真实退出/marker/事件/载荷检查在三种构建共138项比较通过。原19输入和预期不变；Python生成深度超限在build前明确拒绝，check可通过。T09拥有值、ARC/Vec及其他后续任务未因此完成。"
     },
     {
       "id": "T09",

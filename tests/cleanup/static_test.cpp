@@ -110,20 +110,11 @@ void invalid(const HirModule &input, const std::string &name,
   ++probes;
   std::cout << "bad_hir " << name << " passed\n";
 }
-void unavailable(const HirModule &m) {
+void supported(const HirModule &m) {
   auto cap = check_backend_capabilities(m);
   auto token = verify(m);
-  if (m.config.backend == Backend::python) {
-    need(cap.success() && token.success(),
-         "Python T08 execution support: " + diagnostics(cap) + diagnostics(token));
-    return;
-  }
-  need(!cap.success() && cap.failure == FailureKind::unsupported &&
-           has(cap, "E_CAPABILITY_UNAVAILABLE"),
-       diagnostics(cap));
-  need(!token.value && token.failure == FailureKind::unsupported &&
-           has(token, "E_CAPABILITY_UNAVAILABLE"),
-       "T08 received execution token");
+  need(cap.success() && token.success(),
+       "T08 execution support: " + diagnostics(cap) + diagnostics(token));
 }
 // Build a real source-backed T08 HIR without calling the source checker. Its
 // error/cleanup records then receive the same verifier as checker-produced HIR.
@@ -197,7 +188,7 @@ HirModule independent() {
   m.functions.push_back({f, signature, {}, HirNodeId{4}, ScopeId{0}, src(fd)});
   auto r = verify_types(m);
   need(r.success(), "independent builder rejected: " + diagnostics(r));
-  unavailable(m);
+  supported(m);
   ++probes;
   return m;
 }
@@ -235,7 +226,7 @@ void module_probes() {
           prefix + "func f() {try {defer {} a.fail();}catch e a.E {}}");
     auto good = project(temp.path / "lang.toml", backend);
     need(good.success(), "qualified catch identity: " + diagnostics(good));
-    unavailable(*good.value);
+    supported(*good.value);
     write("src/main.lang", prefix + "func f() {try {a.fail();}catch e b.E {}}");
     auto wrong = project(temp.path / "lang.toml", backend);
     need(!wrong.value && has(wrong, "E_EFFECT_UNHANDLED"),
@@ -458,7 +449,7 @@ void corruptions(const std::map<std::string, HirModule> &fixtures) {
                "{continue;}break;}catch e Err[T] {throw e;}} return y;} "
                "func main() {try {use(1);}catch e Err[i64] {}}");
   need(generic.instances.size() >= 2, "generic instances not produced");
-  unavailable(generic);
+  supported(generic);
   auto generated = generic.instances[0].symbol;
   auto is_generated = [&](const HirModule &v, const HirNode &n) {
     return v.scopes[n.scope.value].function == generated;
@@ -548,7 +539,7 @@ void correction_probes() {
       need(std::holds_alternative<CatchTarget>(exit.target) == equal &&
                exit.defers.size() == (equal ? 1u : 2u),
            "instance error target/cleanup was copied from the template");
-      unavailable(m);
+      supported(m);
       invalid(m,
               equal ? "instance-equal-stale-effects"
                     : "instance-distinct-erased-effects",
@@ -799,7 +790,7 @@ void fixtures(const fs::path &root) {
         need(r.success(), id + " " + diagnostics(r));
         auto v = verify_types(*r.value);
         need(v.success(), id + " " + diagnostics(v));
-        unavailable(*r.value);
+        supported(*r.value);
         need(dump(*r.value) == dump(*r.value), "dump changed");
         if (b == Backend::native)
           positive.emplace(id, *r.value);

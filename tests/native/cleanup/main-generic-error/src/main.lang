@@ -1,0 +1,2 @@
+package app;
+enum Err[T] {Bad(v T);} func main() i32 throws Err[i32] {throw Err[i32].Bad(v:7);}

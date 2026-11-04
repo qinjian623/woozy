@@ -1,0 +1,2 @@
+package app;
+enum E {Bad;} func main() throws E {throw E.Bad;}

@@ -1,0 +1,1 @@
+package app;enum E{Bad;}func fail() throws E{throw E.Bad;} func f(x bool,log inout i32) i32{defer{let delta i32=4;log+=delta;}if x{return 1;}return 2;}func main() i32{var log i32=0;let a=f(true,inout log);let b=f(false,inout log);if a!=1 || b!=2 || log!=8{return 3;}return 0;}

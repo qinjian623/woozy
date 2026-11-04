@@ -104,11 +104,11 @@ finally 的代码体各按 3 计，while 的代码体按 1 计，每条嵌套路
 此 profile 的限制不改变源语言语法或清理规则。
 
 原 19 项、原泛型输入及清单、baseline、floating fixtures 在运行前后比较 SHA256。
-原 Python throws/defer 拒绝项改由本执行测试检查；native 仍检查这些操作的拒绝。
+原 Python/native throws/defer 拒绝项改由两端执行测试检查。
 其他未支持项继续检查拒绝。重复运行拒绝测试时，每次使用独立的新输出目录，
 再向该目录写入旧文件并检查失败 build 保留全部字节。
 
-共享 HIR 后端支持检查现已启用 Python T08，native 仍拒绝。
+共享 HIR 后端支持检查现已启用 Python 和 native T08。
 `python.cleanup` 和 `python.cleanup_regressions` 已加入测试。执行：
 
 ```sh
@@ -119,4 +119,5 @@ ctest --test-dir <gnu-release-build> --output-on-failure
 ```
 
 动态 ARC/Vec、foreign、捕获闭包、泛型直接 inout 调用和严格浮点执行仍未支持。
-native T08 尚未合入；本文件不因此声明两个后端的 T08 均已完成。
+原生说明见[Native T08](../tests/native/T08_EXECUTION.md)。两端共同使用稳定错误类型键，
+原生O0/O2及Python3.12.15的同源执行另有记录。

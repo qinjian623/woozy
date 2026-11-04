@@ -1,0 +1,1 @@
+package app;enum E{Bad;}func callback(x i32,y inout i64)i32 throws E{return x;}func main()throws (func(i32,inout i64)i32 throws E){throw callback;}

@@ -76,15 +76,16 @@
         "native",
         "python"
       ],
-      "implemented": false,
-      "verified": false,
+      "implemented": true,
+      "verified": true,
       "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
       "stages": {
-        "parse": false,
-        "check": false,
-        "generate": false,
-        "execute": false
-      }
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
+      },
+      "notes": "已验证native/64 O0/O2和Python/64 3.12.15的平凡值及字面量字符串；拥有值留待T09。Python生成控制深度与缩进超范围时build拒绝，check可通过。见tests/native/T08_EXECUTION.md和docs/PYTHON_T08_EXECUTION.md。"
     },
     {
       "name": "managed_vec_and_move",

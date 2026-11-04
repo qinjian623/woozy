@@ -34,3 +34,23 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t cause,
   }
   std::_Exit(101);
 }
+
+// Separate ordinary typed-error entry diagnostic; no panic or unwinding.
+extern "C" void lang_native_typed_error_v1(const char *key,
+                                           uint64_t size) noexcept {
+  auto write_all = [](const char *bytes, size_t count) {
+    while (count) {
+      auto n = ::write(STDERR_FILENO, bytes, count);
+      if (n < 0 && errno == EINTR)
+        continue;
+      if (n <= 0)
+        break;
+      bytes += n;
+      count -= static_cast<size_t>(n);
+    }
+  };
+  constexpr char prefix[] = "LANG_TYPED_ERROR: ";
+  write_all(prefix, sizeof(prefix) - 1);
+  write_all(key, static_cast<size_t>(size));
+  write_all("\n", 1);
+}

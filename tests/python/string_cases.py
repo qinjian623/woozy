@@ -39,8 +39,6 @@ REJECTED = {
     'index': ('func main() {let x="x";let y=x[0];}', CAP),
     'inout': ('func f(x inout string) {} func main() {}', CAP),
     'move': ('func f(x move string) {} func main() {}', CAP),
-    'throws': ('enum E {A;} func main() throws E {}', CAP),
-    'defer': ('func main() {let x="x";defer {}}', CAP),
     'foreign': ('import "py" as p;func main() {p.run();}', CAP),
     'float': ('func main() {let x f64=1.0;let y=x+x;}', CAP),
     'parameter-reassign': ('func f(x string) {x="y";} func main() {}', CAP),
@@ -68,10 +66,6 @@ def succeeded(row):
 def rejection_checks(cli, backend, out):
     rows = []
     for ident, (source, code) in REJECTED.items():
-        # These two old capability rejections became Python execution tests in
-        # run_cleanup.py. Keep the native profile's original expectations.
-        if backend == 'python' and ident in ('throws', 'defer'):
-            continue
         project = out / 'rejected' / ident
         (project / 'src').mkdir(parents=True, exist_ok=True)
         manifest = project / 'lang.toml'

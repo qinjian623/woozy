@@ -1,5 +1,5 @@
-#include "lang/backend/native.hpp"
 #include "../../ir/layout.hpp"
+#include "lang/backend/native.hpp"
 #include <functional>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/SmallVector.h>
@@ -83,13 +83,15 @@ class Emitter {
       return builder.getPtrTy();
     case hir::TypeKind::String: {
       auto *layout = llvm::StructType::get(
-          context, {builder.getPtrTy(), module.getDataLayout().getIntPtrType(context)});
+          context,
+          {builder.getPtrTy(), module.getDataLayout().getIntPtrType(context)});
       layouts.emplace(id, layout);
       return layout;
     }
     case hir::TypeKind::NominalStruct:
     case hir::TypeKind::NominalEnum: {
-      auto *layout = llvm::StructType::create(context, "value." + std::to_string(id.value));
+      auto *layout = llvm::StructType::create(
+          context, "value." + std::to_string(id.value));
       layouts.emplace(id, layout);
       std::vector<llvm::Type *> fields;
       if (t.kind == hir::TypeKind::NominalStruct) {
@@ -112,6 +114,62 @@ class Emitter {
     }
     return nullptr;
   }
+  std::string type_key(TypeId id) const {
+    const auto t = type(id);
+    switch (t.kind) {
+    case hir::TypeKind::Unit:
+      return "Unit";
+    case hir::TypeKind::Bool:
+      return "bool";
+    case hir::TypeKind::String:
+      return "string";
+    case hir::TypeKind::Isize:
+      return "isize";
+    case hir::TypeKind::Usize:
+      return "usize";
+    case hir::TypeKind::SignedInt:
+      return "i" + std::to_string(t.bits);
+    case hir::TypeKind::UnsignedInt:
+      return "u" + std::to_string(t.bits);
+    case hir::TypeKind::Float:
+      return "f" + std::to_string(t.bits);
+    case hir::TypeKind::NominalStruct:
+    case hir::TypeKind::NominalEnum: {
+      const auto &resolved = *input.hir.module().resolved;
+      const auto &symbol = resolved.symbols.at(t.declaration.value);
+      std::string key =
+          resolved.project->modules.at(symbol.module.value).logical_path + "." +
+          symbol.name;
+      if (!t.type_args.empty()) {
+        key += "[";
+        for (size_t a = 0; a < t.type_args.size(); ++a) {
+          if (a)
+            key += ",";
+          key += type_key(t.type_args[a]);
+        }
+        key += "]";
+      }
+      return key;
+    }
+    case hir::TypeKind::Function: {
+      std::string key = "func(";
+      for (size_t a = 0; a < t.parameters.size(); ++a) {
+        if (a)
+          key += ",";
+        if (t.parameters[a].mode == hir::ParamMode::inout)
+          key += "inout ";
+        key += type_key(t.parameters[a].type);
+      }
+      key += ")->(" + type_key(t.result) + ")";
+      if (t.throws_type)
+        key += " throws(" + type_key(*t.throws_type) + ")";
+      return key;
+    }
+    default:
+      fail("non-concrete entry error type");
+    }
+    return {};
+  }
   llvm::FunctionType *signature(TypeId id) {
     const auto &t = type(id);
     std::vector<llvm::Type *> parameters;
@@ -119,7 +177,14 @@ class Emitter {
       parameters.push_back(p.mode == hir::ParamMode::inout
                                ? builder.getPtrTy()
                                : lower_type(p.type));
-    return llvm::FunctionType::get(lower_type(t.result), parameters, false);
+    if (t.throws_type) {
+      if (type(t.result).kind != hir::TypeKind::Unit)
+        parameters.push_back(builder.getPtrTy());
+      parameters.push_back(builder.getPtrTy());
+    }
+    return llvm::FunctionType::get(t.throws_type ? builder.getInt1Ty()
+                                                 : lower_type(t.result),
+                                   parameters, false);
   }
   void guard(llvm::Value *bad, uint32_t cause, SourceSpan s) {
     auto *fn = builder.GetInsertBlock()->getParent();
@@ -253,6 +318,10 @@ class Emitter {
       args.push_back(values.at(v));
     llvm::Value *v = nullptr;
     switch (i.op) {
+    case ir::Op::exit_begin:
+    case ir::Op::cleanup_begin:
+    case ir::Op::cleanup_end:
+      break; // verified compile-time obligations; no runtime bookkeeping
     case ir::Op::string_literal: {
       // No added terminator. Even the empty value has static storage; the
       // logical value is the pointer plus the exact target-sized byte count.
@@ -265,7 +334,8 @@ class Emitter {
       storage->setAlignment(llvm::Align(1));
       auto *layout = llvm::cast<llvm::StructType>(lower_type(i.type));
       auto *length = llvm::ConstantInt::get(
-          llvm::cast<llvm::IntegerType>(layout->getElementType(1)), i.utf8.size());
+          llvm::cast<llvm::IntegerType>(layout->getElementType(1)),
+          i.utf8.size());
       v = llvm::ConstantStruct::get(layout, {storage, length});
       break;
     }
@@ -299,7 +369,8 @@ class Emitter {
         for (unsigned a = 0; a < args.size(); ++a)
           v = builder.CreateInsertValue(v, args[a], {a});
       } else {
-        auto index = static_cast<unsigned>(aggregates.variant_index(i.type, i.variant));
+        auto index =
+            static_cast<unsigned>(aggregates.variant_index(i.type, i.variant));
         v = builder.CreateInsertValue(v, builder.getInt32(index), {0});
         for (unsigned a = 0; a < args.size(); ++a)
           v = builder.CreateInsertValue(v, args[a], {index + 1, a});
@@ -309,7 +380,8 @@ class Emitter {
     case ir::Op::field_read:
     case ir::Op::field_address: {
       auto receiver = value_types.at(i.inputs[0]);
-      auto index = static_cast<unsigned>(aggregates.field_index(receiver, i.field));
+      auto index =
+          static_cast<unsigned>(aggregates.field_index(receiver, i.field));
       if (i.op == ir::Op::field_read)
         v = builder.CreateExtractValue(args[0], {index});
       else
@@ -323,15 +395,18 @@ class Emitter {
       builder.CreateStore(args[1], args[0]);
       break;
     case ir::Op::enum_test: {
-      auto index = aggregates.variant_index(value_types.at(i.inputs[0]), i.variant);
+      auto index =
+          aggregates.variant_index(value_types.at(i.inputs[0]), i.variant);
       v = builder.CreateICmpEQ(builder.CreateExtractValue(args[0], {0}),
                                builder.getInt32(index));
       break;
     }
     case ir::Op::enum_payload: {
       auto receiver = value_types.at(i.inputs[0]);
-      auto variant = static_cast<unsigned>(aggregates.variant_index(receiver, i.variant));
-      auto field = static_cast<unsigned>(aggregates.field_index(receiver, i.field, i.variant));
+      auto variant =
+          static_cast<unsigned>(aggregates.variant_index(receiver, i.variant));
+      auto field = static_cast<unsigned>(
+          aggregates.field_index(receiver, i.field, i.variant));
       v = builder.CreateExtractValue(args[0], {variant + 1, field});
       break;
     }
@@ -361,6 +436,7 @@ class Emitter {
     value_types.clear();
     slots.clear();
     auto *fn = functions.at(f.symbol);
+    const auto sig = type(f.signature);
     std::vector<llvm::BasicBlock *> blocks;
     for (size_t b = 0; b < f.blocks.size(); ++b)
       blocks.push_back(
@@ -378,6 +454,26 @@ class Emitter {
       const auto &slot = f.slots[s];
       if (slot.parameter && !slot.inout)
         builder.CreateStore(fn->getArg(*slot.parameter), slots[s]);
+    }
+    struct TryStorage {
+      llvm::Value *value = nullptr, *error = nullptr;
+    };
+    std::map<size_t, TryStorage> outputs;
+    std::map<size_t, llvm::Value *> incoming;
+    for (size_t b = 0; b < f.blocks.size(); ++b) {
+      const auto &t = f.blocks[b].terminator;
+      if (t.kind != ir::Exit::try_call)
+        continue;
+      const auto cs = type(t.signature);
+      TryStorage storage;
+      if (type(cs.result).kind != hir::TypeKind::Unit)
+        storage.value =
+            builder.CreateAlloca(lower_type(cs.result), nullptr, "try.value");
+      storage.error = builder.CreateAlloca(lower_type(*cs.throws_type), nullptr,
+                                           "try.error");
+      outputs.emplace(b, storage);
+      incoming.emplace(t.targets[0].value, storage.value);
+      incoming.emplace(t.targets[1].value, storage.error);
     }
     // Dominating definitions precede uses, including nested short-circuit CFGs
     // whose numeric block IDs are not topologically ordered.
@@ -399,6 +495,14 @@ class Emitter {
       }
     for (auto b : order) {
       builder.SetInsertPoint(blocks[b]);
+      for (auto p : f.blocks[b].parameters) {
+        auto *address = incoming.at(b);
+        values.emplace(p.value,
+                       address ? static_cast<llvm::Value *>(builder.CreateLoad(
+                                     lower_type(p.type), address))
+                               : llvm::ConstantInt::get(lower_type(p.type), 0));
+        value_types.emplace(p.value, p.type);
+      }
       for (const auto &i : f.blocks[b].instructions)
         instruction(i);
       const auto &t = f.blocks[b].terminator;
@@ -410,8 +514,33 @@ class Emitter {
         builder.CreateCondBr(values.at(t.inputs[0]), blocks[t.targets[0].value],
                              blocks[t.targets[1].value]);
         break;
+      case ir::Exit::try_call: {
+        llvm::SmallVector<llvm::Value *, 8> actual;
+        for (size_t a = 1; a < t.inputs.size(); ++a)
+          actual.push_back(values.at(t.inputs[a]));
+        const auto &storage = outputs.at(b);
+        if (storage.value)
+          actual.push_back(storage.value);
+        actual.push_back(storage.error);
+        auto *success = builder.CreateCall(signature(t.signature),
+                                           values.at(t.inputs[0]), actual);
+        builder.CreateCondBr(success, blocks[t.targets[0].value],
+                             blocks[t.targets[1].value]);
+        break;
+      }
       case ir::Exit::return_:
-        builder.CreateRet(values.at(t.inputs[0]));
+        if (sig.throws_type) {
+          if (type(sig.result).kind != hir::TypeKind::Unit)
+            builder.CreateStore(values.at(t.inputs[0]),
+                                fn->getArg(sig.parameters.size()));
+          builder.CreateRet(builder.getTrue());
+        } else
+          builder.CreateRet(values.at(t.inputs[0]));
+        break;
+      case ir::Exit::error_return:
+        builder.CreateStore(values.at(t.inputs[0]),
+                            fn->getArg(fn->arg_size() - 1));
+        builder.CreateRet(builder.getFalse());
         break;
       case ir::Exit::unreachable:
         builder.CreateUnreachable();
@@ -481,9 +610,37 @@ public:
         llvm::FunctionType::get(builder.getInt32Ty(), {}, false),
         llvm::GlobalValue::ExternalLinkage, "main", module);
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", main));
-    llvm::Value *value = builder.CreateCall(chosen->second);
-    builder.CreateRet(result.kind == hir::TypeKind::Unit ? builder.getInt32(0)
-                                                         : value);
+    if (!sig.throws_type) {
+      llvm::Value *value = builder.CreateCall(chosen->second);
+      builder.CreateRet(result.kind == hir::TypeKind::Unit ? builder.getInt32(0)
+                                                           : value);
+    } else {
+      llvm::SmallVector<llvm::Value *, 2> outputs;
+      llvm::Value *value = nullptr;
+      if (result.kind != hir::TypeKind::Unit) {
+        value = builder.CreateAlloca(lower_type(sig.result));
+        outputs.push_back(value);
+      }
+      outputs.push_back(builder.CreateAlloca(lower_type(*sig.throws_type)));
+      auto *success = builder.CreateCall(chosen->second, outputs);
+      auto *ok = llvm::BasicBlock::Create(context, "main.success", main);
+      auto *error = llvm::BasicBlock::Create(context, "main.error", main);
+      builder.CreateCondBr(success, ok, error);
+      builder.SetInsertPoint(ok);
+      builder.CreateRet(value ? static_cast<llvm::Value *>(builder.CreateLoad(
+                                    lower_type(sig.result), value))
+                              : builder.getInt32(0));
+      builder.SetInsertPoint(error);
+      auto report = module.getOrInsertFunction(
+          "lang_native_typed_error_v1",
+          llvm::FunctionType::get(builder.getVoidTy(),
+                                  {builder.getPtrTy(), builder.getInt64Ty()},
+                                  false));
+      const auto key = type_key(*sig.throws_type);
+      builder.CreateCall(report, {builder.CreateGlobalString(key),
+                                  builder.getInt64(key.size())});
+      builder.CreateRet(builder.getInt32(1));
+    }
     verify_llvm(module);
     Output out;
     out.native_ir = ir::dump(input);
