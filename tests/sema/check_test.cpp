@@ -99,6 +99,39 @@ auto source(const std::string &body, const char *error = nullptr,
     require(r.success(), "source rejected: " + body + "\n" + messages(r));
   return r;
 }
+auto typed_source(const std::string &body, const char *error = nullptr,
+                  std::string backend = "native", unsigned width = 64) {
+  Temp t;
+  manifest(t.path, backend, width);
+  write(t.path / "src/main.lang", "package app; " + body);
+  auto r = [&] {
+    try {
+      SourceManager sources;
+      auto result = sema::check_types(resolve(t.path / "lang.toml", sources));
+      ++checked;
+      return result;
+    } catch (const std::exception &e) {
+      throw std::runtime_error(body + "\n" + e.what());
+    }
+  }();
+  if (error) {
+    require(!r.success() && !r.value && has(r, error),
+            "expected " + std::string(error) + ": " + body + "\n" +
+                messages(r));
+    require(r.failure == (std::string_view(error) == "E_CAPABILITY_UNAVAILABLE"
+                              ? FailureKind::unsupported
+                              : FailureKind::source),
+            "failure category");
+    require(r.exit_code() == ExitCode::source_error,
+            "source/unsupported exit code");
+    require(r.diagnostics[0].primary.has_value(),
+            "diagnostic source span missing");
+    require(r.diagnostics[0].phase == "type",
+            "diagnostic phase not in the shared schema");
+  } else
+    require(r.success(), "source rejected: " + body + "\n" + messages(r));
+  return r;
+}
 void independent(const fs::path &published) {
   auto path = published / "tests/sema/cases.json";
   json_object *raw = json_object_from_file(path.c_str());
@@ -376,6 +409,55 @@ void suite(const fs::path &published) {
       require(found == 1, "missing long decimal literal");
     }
   }
+  for (const char *backend : {"native", "python"})
+    for (const char *type : {"f32", "f64"})
+      for (const char *op : {"<", "==", "!=", "<=", ">", ">="})
+        for (const char *literal : {"1.0", "-1.0", "(1.0)", "(-1.0)",
+                                    "(1.0 + 2.0)"}) {
+          auto r = typed_source(
+              "func p(x " + std::string(type) + ") bool { return " +
+                  literal + " " + op + " x; }",
+              nullptr, backend);
+          unsigned expected_bits = std::string(type) == "f32" ? 32 : 64;
+          size_t floats = 0;
+          for (const auto &n : r.value->nodes)
+            if (std::get_if<hir::FloatLiteral>(&n.data)) {
+              auto t = r.value->types.find(n.type);
+              require(t && t->bits == expected_bits,
+                      "literal-left comparison did not use its peer width");
+              ++floats;
+            }
+          require(floats == (std::string(literal) == "(1.0 + 2.0)" ? 2 : 1),
+                  "literal-left comparison nodes missing");
+        }
+  for (const char *backend : {"native", "python"})
+    for (const char *type : {"f32", "f64"})
+      for (const char *op : {"+", "-", "*", "/"}) {
+        auto r = typed_source("func p(x " + std::string(type) + ") " +
+                                  std::string(type) + " { return 1.0 " + op +
+                                  " x; }",
+                              nullptr, backend);
+        unsigned expected_bits = std::string(type) == "f32" ? 32 : 64;
+        size_t floats = 0;
+        for (const auto &n : r.value->nodes)
+          if (std::get_if<hir::FloatLiteral>(&n.data)) {
+            auto t = r.value->types.find(n.type);
+            require(t && t->bits == expected_bits,
+                    "literal-left arithmetic did not use its peer width");
+            ++floats;
+          }
+        require(floats == 1, "literal-left arithmetic nodes missing");
+      }
+  typed_source("func p(x f32, y f64) bool { return x < y; }",
+               "E_TYPE_MISMATCH");
+  typed_source("func p(x f32, y f64) { let z = x + y; }",
+               "E_TYPE_MISMATCH");
+  source("func p(x f32) bool { return 1.0 < x; }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func p(x f64) bool { return (-1.0) >= x; }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func p(x f32) f32 { return (1.0 + 2.0) + x; }",
+         "E_CAPABILITY_UNAVAILABLE");
   source("func f() { let x=-true; }", "E_TYPE_MISMATCH");
   source("func f() { let x=~true; }", "E_TYPE_MISMATCH");
   source("func f() { let x=+true; }", "E_TYPE_MISMATCH");

@@ -438,11 +438,16 @@ class Checker {
       reject(r, "value type does not match the expected type");
   }
   bool contextual(Ref r) const {
-    if (literal_integer(r))
-      return true;
-    if (ast(r).kind == AstKind::Parenthesized)
+    const auto &n = ast(r);
+    if (n.kind == AstKind::Parenthesized)
       return contextual(child(r, 0));
-    if (ast(r).kind == AstKind::Binary)
+    if (n.kind == AstKind::Unary && (token(r) == "+" || token(r) == "-"))
+      return contextual(child(r, 0));
+    if (n.kind == AstKind::Literal) {
+      auto kind = file(r).tokens[n.token_begin].kind;
+      return kind == TokenKind::integer || kind == TokenKind::floating;
+    }
+    if (n.kind == AstKind::Binary)
       return contextual(child(r, 0)) && contextual(child(r, 1));
     return false;
   }
