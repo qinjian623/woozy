@@ -1,0 +1,130 @@
+package app;
+
+struct Holder {
+    items Vec[i32];
+    marker i32;
+}
+
+struct Box {
+    items Vec[i32];
+    marker i32;
+}
+
+enum E {
+    A;
+    B(x i32);
+}
+
+func relay[T](value move T) T {
+    return move value;
+}
+
+impl Holder {
+    func take[T](self Self, value move T) T {
+        return move value;
+    }
+
+    func take_static[T](value move T) T {
+        return move value;
+    }
+
+    func pair[T](self Self, value move T, hint T) T {
+        return move value;
+    }
+
+    func two[A, B](self Self, first move A, second move B) B {
+        return move second;
+    }
+
+    func forward[T](self Self, value move T) T {
+        return relay(move value);
+    }
+
+    func nested[T](self Self, value move T) T {
+        return self.take(move value);
+    }
+
+    func keep_with_defer[T](self Self, value move T) T {
+        let local Vec[i32] = [8];
+        defer {
+            let read = local[0];
+        }
+        return move value;
+    }
+}
+
+impl E {
+    func take[T](value move T) T {
+        return move value;
+    }
+}
+
+func main() i32 {
+    let h = Holder(items: [1], marker: 2);
+
+    var a Vec[i32] = [3];
+    let alias = a;
+    let result = h.take(move a);
+    result[0] = 7;
+    if alias[0] != 7 {
+        return 1;
+    }
+
+    var b Vec[i32] = [4];
+    let static_result = Holder.take_static(move b);
+
+    var c Vec[i32] = [5];
+    let explicit = h.take[Vec[i32]](move c);
+
+    var d Vec[i32] = [6];
+    let static_explicit = Holder.take_static[Vec[i32]](move d);
+
+    var e Vec[i32] = [7];
+    let enum_result = E.take(move e);
+
+    var f Vec[i32] = [8];
+    let enum_explicit = E.take[Vec[i32]](move f);
+
+    let hint i32 = 0;
+    let scalar = h.pair(move 2, hint);
+
+    var i i32 = 1;
+    var g Vec[i32] = [9];
+    let multi = h.two(move i, move g);
+
+    var j Vec[i32] = [10];
+    let forwarded = h.forward(move j);
+
+    var k Vec[i32] = [11];
+    let nested_result = h.nested(move k);
+
+    var box = Box(items: [12], marker: 0);
+    let box_alias = box;
+    let box_result = h.take(move box);
+    box_result.items[0] = 13;
+    if box_alias.items[0] != 13 {
+        return 2;
+    }
+
+    var kept = Box(items: [14], marker: 1);
+    let kept_alias = kept;
+    let kept_result = h.keep_with_defer(move kept);
+    kept_result.items[0] = 15;
+    if kept_alias.items[0] != 15 {
+        return 3;
+    }
+
+    let copy = h;
+    let copy_result = h.take(move copy);
+    if copy_result.marker != 2 || h.marker != 2 {
+        return 4;
+    }
+
+    let total = static_result[0] + explicit[0] + static_explicit[0] +
+                enum_result[0] + enum_explicit[0] + scalar + multi[0] +
+                forwarded[0] + nested_result[0] + copy_result.marker;
+    if total != 64 {
+        return 5;
+    }
+    return 0;
+}

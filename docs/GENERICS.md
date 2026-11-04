@@ -68,13 +68,23 @@ let/const、普通参数、临时值、字段和索引不能经此入口作为�
 
 receiver 先求值且只求值一次，命名实参仍按书写顺序求值。ordinary self 与后面的 move 实参引用同一绑定时拒绝；另一个拥有副本即使与 self 共享内部 Vec，也可移动。receiver 或后续实参抛错时，尚未执行的 move 不发生，已转交的临时值按现有顺序清理；callee 抛错不重复释放参数，返回值先保存再执行 defer。
 
-move/inout self、方法 inout、泛型 impl 或泛型方法的 move、trait 方法 move、绑定方法值逃逸、部分字段 move、foreign 和动态 string move 继续拒绝。本次未改公共 HIR、ABI 或运行库。
+move/inout self、方法 inout、泛型 impl 的 move、带 trait 约束的泛型方法 move、trait 方法 move、绑定方法值逃逸、部分字段 move、foreign 和动态 string move 继续拒绝。本次未改公共 HIR、ABI 或运行库。
 
 主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 的 LLVM 构建各46/46，关闭 LLVM 为33/33，共171项，无跳过。每个 LLVM 构建新增方法测试包含6个同源项目的 Native O0/O2/Python3.12.15 共18次实际执行；另12条为check、2条为拒绝构建。独立程序补查了求值顺序、错误清理、实际地址复用，以及枚举本身作为静态方法目标。生成 Native 程序和预编译 LLVM 未声称全部经过 sanitizer 插桩。
+
+## 固有 impl 内的泛型方法 move
+
+非泛型、无 trait 的固有 impl 中，方法自身现可带一个或多个无 trait 约束的类型参数，例如 `func take[T](self Self,value move T)T{return move value;}`；无 self 的静态方法也支持。显式和推断类型实参、多类型参数、方法之间及与自由泛型函数之间转交，均使用已有实例化过程。枚举本身可作为静态泛型方法目标，真实变体仍优先构造。
+
+实例按原方法 SymbolId 和具体类型实参缓存；同名但属于不同 impl 的方法分别生成实例，相同组合只生成一次。ordinary self 类型保留为所属 impl 的固定类型，move 参数和 Move.binding 指向具体实例重命名后的符号。具体调用不保留类型参数或 ConstraintCall。静态声明中的普通 `self T` 参数不会因 T 后来取 impl 类型就改认成隐藏 receiver。普通 callback 内的合法 inout 继续接受，方法自身 inout 仍拒绝。
+
+泛型 impl、trait 方法、带 trait 约束的泛型方法及前节列出的其他限制仍未开放；没有新增 HIR 字段或后端接口。原方法运行例扩充为泛型形式，仍保留非泛型拥有副本、标量实例和静态 move 的执行检查。
+
+本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各46/46，关闭 LLVM 为33/33，共171项，无跳过。每个 LLVM 构建的7个方法项目共21次正式 Native O0/O2/Python 执行，另14条为check、2条为拒绝构建。独立新程序与49d4428的完整非泛型positive另有12次执行及12次释放观察，参数顺序、enum静态目标、throws/defer及共享返回值符合预期。
 
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型trait及trait泛型方法、嵌套变体模式、泛型impl或泛型/trait方法的move调用、方法inout，以及非scalar数据或有trait约束的泛型函数自身inout仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型trait及trait泛型方法、嵌套变体模式、泛型impl的move调用、带trait约束的泛型方法及trait方法move、方法inout，以及非scalar数据或有trait约束的泛型函数自身inout仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。

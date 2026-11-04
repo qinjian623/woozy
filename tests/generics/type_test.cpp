@@ -645,22 +645,19 @@ void generic_move(const fs::path &root) {
   good("func pair[T](a move T,b T) T{return move a;} "
        "func main() i32{let x i32=2;let r=pair(move 1,x);"
        "return i32(r)-1;}");
-  unsupported(
+  good(
       "impl i32{func take[T](self Self,value move T)T{return move value;}} "
       "func main() i32{let x i32=1;let v Vec[i32]=[2];let r=x.take(move v);"
-      "return r[0];}",
-      "E_CAPABILITY_UNAVAILABLE");
+      "return r[0];}");
   const std::string static_move =
       "impl i32{func take[T](value move T)T{return move value;}} ";
-  unsupported(static_move +
-                  "func main() i32{let values Vec[i32]=[7];"
-                  "let result=i32.take(move values);return result[0];}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported(static_move +
-                  "func main() i32{let values Vec[i32]=[7];"
-                  "let result=i32.take[Vec[i32]](move values);"
-                  "return result[0];}",
-              "E_CAPABILITY_UNAVAILABLE");
+  good(static_move +
+       "func main() i32{let values Vec[i32]=[7];"
+       "let result=i32.take(move values);return result[0];}");
+  good(static_move +
+       "func main() i32{let values Vec[i32]=[7];"
+       "let result=i32.take[Vec[i32]](move values);"
+       "return result[0];}");
   unsupported("struct Box[T]{value T;} impl[T] Box[T]{"
               "func take[U](value move U)U{return move value;}} "
               "func main() i32{let values Vec[i32]=[7];"
@@ -1584,11 +1581,16 @@ void method_move(const fs::path &root) {
       "func take(self Self,value move Vec[i32])Vec[i32]{return move value;}} "
       "func main()i32{let b=B[i32](x:1);var v Vec[i32]=[1];"
       "let r=b.take(move v);return r[0];}");
-  unsupported(
+  good(
       "struct H{marker i32;} impl H{"
       "func take[U](self Self,value move U)U{return move value;}} "
       "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
       "let r=h.take(move v);return r[0];}");
+  unsupported(
+      "trait V{} impl V for i32{} struct H{marker i32;} impl H{"
+      "func take[U V](self Self,value move U)U{return move value;}} "
+      "func main()i32{let h=H(marker:0);var v i32=1;"
+      "let r=h.take(move v);return r-1;}");
   unsupported(
       "trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
       "struct H{items Vec[i32];marker i32;} impl V for H{"
@@ -1699,7 +1701,7 @@ void method_move(const fs::path &root) {
       "func main()i32{return lib.E.value()-7;}");
   need(public_enum.success(), messages(public_enum));
 
-  unsupported(
+  good(
       "enum E{A;} impl E{func take[U](value move U)U{return move value;}} "
       "func main()i32{var v Vec[i32]=[1];let r=E.take(move v);return r[0];}");
   unsupported(
@@ -1767,6 +1769,331 @@ void method_move(const fs::path &root) {
   });
 }
 
+
+void generic_method_move(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "generic method move HIR rejected: " + messages(hir::verify(*r.value)));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+
+  const std::string positive =
+      "struct Holder{items Vec[i32];marker i32;} "
+      "struct Box{items Vec[i32];marker i32;} "
+      "enum E{A;B(x i32);} "
+      "func relay[T](value move T)T{return move value;} "
+      "impl Holder{"
+      "func take[T](self Self,value move T)T{return move value;}"
+      "func take_static[T](value move T)T{return move value;}"
+      "func pair[T](self Self,value move T,hint T)T{return move value;}"
+      "func two[A,B](self Self,first move A,second move B)B{return move second;}"
+      "func forward[T](self Self,value move T)T{return relay(move value);}"
+      "func nested[T](self Self,value move T)T{return self.take(move value);}"
+      "func keep_with_defer[T](self Self,value move T)T{"
+      "let local Vec[i32]=[8];defer{let read=local[0];}return move value;}"
+      "func accept_box(self Self,value move Box)Box{return move value;}"
+      "func named_self[T](self T,value move Vec[i32])i32{return value[0];}"
+      "} "
+      "impl E{func take[T](value move T)T{return move value;}} "
+      "func main()i32{"
+      "let h=Holder(items:[1],marker:2);"
+      "var a Vec[i32]=[3];let alias=a;let r=h.take(move a);"
+      "r[0]=7;if alias[0]!=7{return 1;}"
+      "var b Vec[i32]=[4];let sr=Holder.take_static(move b);"
+      "var c Vec[i32]=[5];let er=h.take[Vec[i32]](move c);"
+      "var d Vec[i32]=[6];let es=Holder.take_static[Vec[i32]](move d);"
+      "var e Vec[i32]=[7];let ee=E.take(move e);"
+      "var f Vec[i32]=[8];let ex=E.take[Vec[i32]](move f);"
+      "let hint i32=0;let scalar=h.pair(move 2,hint);"
+      "var i i32=1;var g Vec[i32]=[9];let multi=h.two(move i,move g);"
+      "var j Vec[i32]=[10];let fw=h.forward(move j);"
+      "var k Vec[i32]=[11];let ne=h.nested(move k);"
+      "let copy=h;let cr=h.take(move copy);"
+      "var box=Box(items:[12],marker:1);let ba=box;"
+      "let br=h.accept_box(move box);br.items[0]=13;"
+      "if ba.items[0]!=13{return 2;}"
+      "var kb=Box(items:[14],marker:2);let ka=kb;"
+      "let kr=h.keep_with_defer(move kb);kr.items[0]=15;"
+      "if ka.items[0]!=15{return 3;}"
+      "var nv Vec[i32]=[16];"
+      "let ns=Holder.named_self[Holder](h,move nv);"
+      "return sr[0]+er[0]+es[0]+ee[0]+ex[0]+scalar+multi[0]+fw[0]+"
+      "ne[0]+cr.marker+ns-"
+      "(4+5+6+7+8+2+9+10+11+2+16);}";
+  auto m = good(positive);
+
+  auto nominal_name = [&](TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t ||
+        (t->kind != hir::TypeKind::NominalStruct &&
+         t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return m.resolved->symbols.at(t->declaration.value).name;
+  };
+  auto is_vec_i32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    if (!t || t->kind != hir::TypeKind::Vec || t->type_args.size() != 1)
+      return false;
+    auto e = m.types.find(t->type_args[0]);
+    return e && e->kind == hir::TypeKind::SignedInt && e->bits == 32;
+  };
+  SymbolId main_symbol{0};
+  for (const auto &f : m.functions)
+    if (m.resolved->symbols[f.symbol.value].name == "main")
+      main_symbol = f.symbol;
+  need(main_symbol.value != 0, "generic method main symbol missing");
+
+  const hir::FunctionTemplate *h_take = nullptr, *e_take = nullptr;
+  for (const auto &t : m.templates) {
+    const auto &name = m.resolved->symbols[t.function.symbol.value].name;
+    auto sig = m.types.find(t.function.signature);
+    need(sig && sig->kind == hir::TypeKind::Function,
+         "template signature kind");
+    if (name == "take" && sig->parameters.size() == 2 &&
+        nominal_name(sig->parameters[0].type) == "Holder")
+      h_take = &t;
+    if (name == "take" && sig->parameters.size() == 1)
+      e_take = &t;
+  }
+  need(h_take && e_take, "generic method templates missing");
+  need(h_take->params.size() == 1 && e_take->params.size() == 1,
+       "method generic parameter arity");
+
+  const hir::FunctionInstance *h_vec_instance = nullptr;
+  const hir::FunctionInstance *e_vec_instance = nullptr;
+  size_t h_vec_instances = 0, e_vec_instances = 0;
+  for (const auto &i : m.instances) {
+    if (i.origin == h_take->function.symbol) {
+      if (i.type_args.size() == 1 && is_vec_i32(i.type_args[0])) {
+        ++h_vec_instances;
+        h_vec_instance = &i;
+      }
+    }
+    if (i.origin == e_take->function.symbol) {
+      ++e_vec_instances;
+      e_vec_instance = &i;
+    }
+  }
+  need(h_vec_instances == 1,
+       "same concrete method combination did not deduplicate");
+  need(e_vec_instances == 1, "enum static method instance count");
+  need(h_vec_instance && e_vec_instance &&
+           h_vec_instance->symbol != e_vec_instance->symbol,
+       "same-name methods lost distinct origins");
+
+  auto function_for = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  const auto *hf = function_for(h_vec_instance->symbol);
+  const auto *ef = function_for(e_vec_instance->symbol);
+  need(hf && ef, "generic method concrete functions missing");
+  auto hs = m.types.find(hf->signature);
+  auto es = m.types.find(ef->signature);
+  need(hs && hs->parameters.size() == 2 && es && es->parameters.size() == 1,
+       "generic method instance signature arity");
+  need(hs->parameters[0].mode == hir::ParamMode::ordinary &&
+           nominal_name(hs->parameters[0].type) == "Holder" &&
+           hs->parameters[1].mode == hir::ParamMode::move &&
+           is_vec_i32(hs->parameters[1].type) &&
+           hs->result == hs->parameters[1].type,
+       "generic method instance signature substitution/modes");
+  need(es->parameters[0].mode == hir::ParamMode::move &&
+           is_vec_i32(es->parameters[0].type) && es->result == es->parameters[0].type,
+       "enum static generic method signature");
+  auto ht = m.types.find(h_take->function.signature);
+  need(ht && ht->parameters.size() == 2 &&
+           m.types.find(ht->parameters[1].type)->kind ==
+               hir::TypeKind::TypeParameter,
+       "method template signature lost its type parameter");
+
+  std::map<uint64_t, SymbolId> renamed;
+  for (auto [from, to] : h_vec_instance->renamed)
+    renamed[from.value] = to;
+  need(renamed.at(h_take->function.symbol.value) == hf->symbol &&
+           renamed.at(h_take->function.parameters[0].symbol.value) ==
+               hf->parameters[0].symbol &&
+           renamed.at(h_take->function.parameters[1].symbol.value) ==
+               hf->parameters[1].symbol,
+       "generic method instance did not rename self/move parameter");
+
+  size_t instance_moves = 0, template_moves = 0;
+  for (const auto &n : m.nodes) {
+    const auto owner = m.scopes[n.scope.value].function;
+    if (owner == hf->symbol) {
+      need(m.types.find(n.type) &&
+               m.types.find(n.type)->kind != hir::TypeKind::TypeParameter,
+           "generic method instance retained a type parameter");
+      if (auto mv = std::get_if<hir::Move>(&n.data); mv && mv->binding) {
+        need(*mv->binding == hf->parameters[1].symbol,
+             "instance Move binding was not renamed to its concrete parameter");
+        ++instance_moves;
+      }
+    }
+    if (owner == h_take->function.symbol)
+      if (auto mv = std::get_if<hir::Move>(&n.data); mv && mv->binding) {
+        need(*mv->binding == h_take->function.parameters[1].symbol,
+             "template Move binding changed");
+        ++template_moves;
+      }
+  }
+  need(instance_moves == 1 && template_moves == 1,
+       "generic method Move binding count");
+
+  size_t main_h_calls = 0, main_e_calls = 0;
+  std::set<uint64_t> template_symbols, concrete_functions;
+  for (const auto &t : m.templates)
+    template_symbols.insert(t.function.symbol.value);
+  for (const auto &f : m.functions)
+    concrete_functions.insert(f.symbol.value);
+  for (const auto &n : m.nodes) {
+    if (!concrete_functions.count(m.scopes[n.scope.value].function.value))
+      continue;
+    need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+         "concrete generic method retained a constraint call");
+    if (auto c = std::get_if<hir::Call>(&n.data)) {
+      need(c->type_args.empty(),
+           "concrete generic method call retained type arguments");
+      if (c->direct_symbol)
+        need(!template_symbols.count(c->direct_symbol->value),
+             "concrete call still targets a method template");
+      if (m.scopes[n.scope.value].function == main_symbol && c->direct_symbol) {
+        if (*c->direct_symbol == h_vec_instance->symbol)
+          ++main_h_calls;
+        if (*c->direct_symbol == e_vec_instance->symbol)
+          ++main_e_calls;
+      }
+    }
+  }
+  need(main_h_calls == 2 && main_e_calls == 2,
+       "inferred/explicit instance and enum static calls missing");
+
+  invalid_recomputed(m, "generic method instance origin", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == h_vec_instance->symbol) {
+        i.origin = e_take->function.symbol;
+        return;
+      }
+    throw std::runtime_error("generic method instance record missing");
+  });
+  const auto h_args = h_vec_instance->type_args;
+  invalid_recomputed(m, "generic method unresolved instance call", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          *c->direct_symbol == h_vec_instance->symbol) {
+        c->direct_symbol = h_take->function.symbol;
+        c->type_args = h_args;
+        return;
+      }
+    throw std::runtime_error("generic method concrete call missing");
+  });
+  invalid_recomputed(m, "generic method call argument mode", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          *c->direct_symbol == h_vec_instance->symbol && c->args.size() == 2) {
+        c->args[1].mode = hir::ParamMode::ordinary;
+        return;
+      }
+    throw std::runtime_error("generic method move call missing");
+  });
+  invalid(m, "generic method move binding rename", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (m.scopes[n.scope.value].function == h_vec_instance->symbol)
+        if (auto mv = std::get_if<hir::Move>(&n.data); mv && mv->binding) {
+          *mv->binding = h_take->function.parameters[1].symbol;
+          return;
+        }
+    throw std::runtime_error("generic method instance Move missing");
+  });
+
+  const std::string prefix =
+      "struct H{items Vec[i32];marker i32;} impl H{"
+      "func take[T](self Self,value move T)T{return move value;}"
+      "func both[T](self Self,a move T,b move T)i32{return 0;}} ";
+  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+               "var v Vec[i32]=[1];let r=h.take(v);return r[0];}",
+      "E_CALL_ARGUMENT");
+  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+               "let r=h.take(move h);return 0;}",
+      "E_CALL_ARGUMENT");
+  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+               "var v Vec[i32]=[1];let r=h.take(move v);return v[0];}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+               "var v Vec[i32]=[1];return h.both(move v,move v);}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  unsupported(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+                       "let r=h.take(move h.items);return r[0];}");
+  unsupported(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+                       "var v Vec[i32]=[1];"
+                       "let r=H.take(h,move v);return r[0];}");
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func take[T](self move Self,value move T)T{return move value;}} "
+      "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
+      "let r=h.take(move v);return r[0];}");
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func take[T](self Self,value move T)T{return move value;}} "
+      "func main()i32{let h=H(marker:0);"
+      "let r=h.take[string](move \"x\");return 0;}");
+  good(
+      "struct H{marker i32;} func bump(x inout i32){x+=1;} "
+      "impl H{func keep[T](self Self,value move T,cb func(inout i32))T{"
+      "return move value;}} "
+      "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
+      "let r=h.keep(move v,bump);return r[0]-1;}");
+
+  auto foreign_check = [&](const std::string &text) {
+    Temp t;
+    fs::copy_file(root / "contracts/python_bindings.example.json",
+                  t.path / "binding.json");
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"main\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"python\"\n"
+          "[dependencies.numpy]\nkind=\"python\"\nbinding=\"binding.json\"\n"
+          "host_package=\"numpy\"\n");
+    write(t.path / "src/main.lang", "package app; " + text);
+    SourceManager sm;
+    auto loaded = modules::load_project(
+        {t.path / "lang.toml", {}, t.path / "binding.json"}, sm);
+    need(loaded.success(), messages(loaded));
+    auto resolved = modules::resolve_project(
+        std::make_shared<const modules::Project>(*loaded.value));
+    need(resolved.success(), messages(resolved));
+    return sema::check_types(resolved);
+  };
+  auto foreign = foreign_check(
+      "import \"std/py\" as py; import \"numpy\" as np; "
+      "struct H{marker i32;} impl H{"
+      "func take[T](self Self,value move T)T{return move value;}} "
+      "func use[T](h H,value T)T{let local=value;return h.take(move local);} "
+      "func make() np.ndarray throws py.Error{return np.linspace(-1.0,1.0);} "
+      "func main()i32 throws py.Error{let h=H(marker:0);"
+      "let r=use(h,make());return 0;}");
+  need(!foreign.success() && foreign.failure == FailureKind::unsupported &&
+           has(foreign, "E_CAPABILITY_UNAVAILABLE"),
+       "foreign generic method move was not rejected at its concrete instance\n" +
+           messages(foreign));
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -1819,6 +2146,7 @@ int main(int argc, char **argv) {
     generic_move(root);
     generic_inout(root);
     method_move(root);
+    generic_method_move(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

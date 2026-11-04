@@ -20,8 +20,8 @@ func bad_make(log inout i64) Holder throws E {
 }
 
 impl Holder {
-    func touch(self Self, value move Vec[i32], first i32, second i32) i32 {
-        return self.marker + value[0] + first + second;
+    func touch[T](self Self, value move T, first i32, second i32) i32 {
+        return self.marker + first + second;
     }
 }
 

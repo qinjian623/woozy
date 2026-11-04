@@ -20,15 +20,15 @@ impl E {
         return 4;
     }
 
-    func take(value move Vec[i32]) Vec[i32] {
+    func take[T](value move T) T {
         return move value;
     }
 
-    func take_box(value move Box) Box {
+    func take_box[T](value move T) T {
         return move value;
     }
 
-    func take_payload(value move Payload) Payload {
+    func take_payload[T](value move T) T {
         return move value;
     }
 }

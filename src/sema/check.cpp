@@ -240,17 +240,21 @@ class Checker {
     const auto &params = type(sig).parameters;
     return !params.empty() && params.front().type == im->self_type;
   }
-  // This route only covers a non-generic inherent impl method. An instance
-  // call needs a declared ordinary self; a type-qualified call needs a method
-  // whose declaration has no self at all. Receiver presence alone is not a
-  // declaration and cannot open move through a static call.
+  // This route covers an inherent method in a non-generic impl. The method
+  // itself may have unconstrained generic parameters, but no trait
+  // constraints. An instance call needs a declared ordinary self; a
+  // type-qualified call needs a method whose declaration has no self at all.
+  // Receiver presence alone is not a declaration and cannot open move through
+  // a static call.
   bool inherent_method_move(SymbolId target, bool receiver,
                             TypeId signature) const {
     const auto *im = impl_of(target);
     if (!im || im->trait || !im->params.empty())
       return false;
     auto generics = generic_params.find(target.value);
-    if (generics == generic_params.end() || !generics->second.empty())
+    if (generics == generic_params.end() ||
+        !std::all_of(generics->second.begin(), generics->second.end(),
+                     [](const GenericParam &p) { return !p.trait; }))
       return false;
     const auto &params = type(signature).parameters;
     const bool self = declared_self(target);

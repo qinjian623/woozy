@@ -11,7 +11,7 @@ import sys
 sys.dont_write_bytecode = True
 
 CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
-         'callee-throws', 'enum-static')
+         'callee-throws', 'enum-static', 'generic-explicit')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -19,6 +19,7 @@ EXPECTED_EVENTS = {
     'receiver-fails': [2, 3],
     'callee-throws': [],
     'enum-static': [],
+    'generic-explicit': [],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -27,6 +28,7 @@ EXPECTED_ALLOCATIONS = {
     'receiver-fails': 2,
     'callee-throws': 5,
     'enum-static': 4,
+    'generic-explicit': 13,
 }
 
 
@@ -152,6 +154,11 @@ def assert_python(case, data):
         assert snapshots['alias']['object'] == snapshots['result']['object'], data
         assert snapshots['box_alias'] == snapshots['box_result'], data
         assert snapshots['payload_alias'] == snapshots['payload_result'], data
+    elif case == 'generic-explicit':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['alias']['object'] == snapshots['result']['object'], data
+        assert snapshots['box_alias'] == snapshots['box_result'], data
+        assert snapshots['kept_alias'] == snapshots['kept_result'], data
     else:
         assert any(error['function'] == 'consume' and
                    error['type'] == 'app.E' for error in data['errors']), data

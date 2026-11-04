@@ -6,7 +6,7 @@ struct Holder {
 }
 
 impl Holder {
-    func take(self Self, value move Vec[i32]) Vec[i32] {
+    func take[T](self Self, value move T) T {
         return move value;
     }
 }

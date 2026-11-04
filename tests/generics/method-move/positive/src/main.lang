@@ -25,19 +25,19 @@ func later(log inout i64, digit i64) i32 {
 }
 
 impl Holder {
-    func take(self Self, value move Vec[i32]) Vec[i32] {
+    func take[T](self Self, value move T) T {
         return move value;
     }
 
-    func take_static(value move Vec[i32]) Vec[i32] {
+    func take_static[T](value move T) T {
         return move value;
     }
 
-    func take_box(self Self, value move Box) Box {
+    func take_box[T](self Self, value move T) T {
         return move value;
     }
 
-    func take_box_static(value move Box) Box {
+    func take_box_static[T](value move T) T {
         return move value;
     }
 
@@ -53,7 +53,7 @@ impl Holder {
         return value;
     }
 
-    func keep_with_defer(self Self, value move Box) Box {
+    func keep_with_defer[T](self Self, value move T) T {
         let local Vec[i32] = [7];
         defer {
             let read = local[0];
@@ -61,8 +61,8 @@ impl Holder {
         return move value;
     }
 
-    func touch(self Self, value move Vec[i32], first i32, second i32) i32 {
-        return self.marker + value[0] + first + second;
+    func touch[T](self Self, value move T, first i32, second i32) i32 {
+        return self.marker + first + second;
     }
 }
 
@@ -143,7 +143,7 @@ func main() i32 {
     let ordered = make(inout log).touch(second: later(inout log, 3),
                                         value: [1],
                                         first: later(inout log, 2));
-    if ordered != 6 || log != 932 {
+    if ordered != 5 || log != 932 {
         return 13;
     }
     return 0;

@@ -15,7 +15,7 @@ struct Box {
 }
 
 impl Holder {
-    func consume(self Self, value move Box) i32 throws E {
+    func consume[T](self Self, value move T) i32 throws E {
         let local = Box(items: [9], marker: 1);
         defer {
             let read = local.items[0];
@@ -23,7 +23,7 @@ impl Holder {
         throw E.Bad;
     }
 
-    func keep(self Self, value move Box) Box {
+    func keep[T](self Self, value move T) T {
         let local Vec[i32] = [8];
         defer {
             let read = local[0];
