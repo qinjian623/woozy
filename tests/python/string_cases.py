@@ -78,10 +78,11 @@ def rejection_checks(cli, backend, out):
                 file.write('[dependencies.py]\nkind="python"\nbinding="binding.json"\nhost_package="host"\n')
             (project / 'binding.json').write_text(json.dumps({
                 'schema_version': 1, 'contract': 'compiler-dev/1',
-                'package_requirements': [{'package': 'host'}],
-                'modules': [{'logical_path': 'py', 'host_module': 'host'}],
+                'review_status': 'draft_requires_conformance', 'allowed_backends': ['python'], 'conformance_required': [],
+                'package_requirements': [{'package': 'host', 'version_policy': 'test fixture only'}],
+                'modules': [{'logical_path': 'py', 'host_module': 'host', 'provider': 'python_package'}],
                 'types': [], 'values': [], 'callables': [
-                    {'module': 'py', 'name': 'run', 'call_kind': 'function', 'id': 'host.run'}]}))
+                    {'module': 'py', 'name': 'run', 'call_kind': 'function', 'id': 'host.run', 'owner_type': None, 'host_attribute': ['run'], 'parameters': [], 'return_type': 'Unit', 'error_type': None, 'ownership': {'return': 'unit', 'storage': 'no_tensor_storage'}, 'effects': [], 'receiver_escapes': 'not_applicable'}]}))
         output = Path(tempfile.mkdtemp(prefix='build-', dir=project)) / 'output'
         row = dict(id=ident, expected=code, source_sha256=sha(path), status='failed')
         rows.append(row)

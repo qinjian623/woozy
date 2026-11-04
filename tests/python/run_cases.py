@@ -395,10 +395,11 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
         file.write('[dependencies.py]\nkind="python"\nbinding="binding.json"\nhost_package="host"\n')
     foreign.parent.joinpath('binding.json').write_text(json.dumps({
         'schema_version': 1, 'contract': 'compiler-dev/1',
-        'package_requirements': [{'package': 'host'}],
-        'modules': [{'logical_path': 'py', 'host_module': 'host'}],
+        'review_status': 'draft_requires_conformance', 'allowed_backends': ['python'], 'conformance_required': [],
+        'package_requirements': [{'package': 'host', 'version_policy': 'test fixture only'}],
+        'modules': [{'logical_path': 'py', 'host_module': 'host', 'provider': 'python_package'}],
         'types': [], 'values': [], 'callables': [
-            {'module': 'py', 'name': 'run', 'call_kind': 'function', 'id': 'host.run'}]}))
+            {'module': 'py', 'name': 'run', 'call_kind': 'function', 'id': 'host.run', 'owner_type': None, 'host_attribute': ['run'], 'parameters': [], 'return_type': 'Unit', 'error_type': None, 'ownership': {'return': 'unit', 'storage': 'no_tensor_storage'}, 'effects': [], 'receiver_escapes': 'not_applicable'}]}))
     unavailable = [(ident, source_project(args.out, 'unsupported-' + ident, body))
                    for ident, body in UNSUPPORTED_SOURCES.items() if ident != 'string'] + [('foreign', foreign)]
     for ident, manifest in unavailable:

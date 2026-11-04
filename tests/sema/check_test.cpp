@@ -518,7 +518,7 @@ void suite(const fs::path &published) {
     }
     write(
         t.path / "binding.json",
-        R"({"schema_version":1,"contract":"compiler-dev/1","package_requirements":[{"package":"host"}],"modules":[{"logical_path":"py","host_module":"host"}],"types":[],"values":[],"callables":[{"module":"py","name":"run","call_kind":"function","id":"host.run"}]})");
+        R"({"schema_version":1,"contract":"compiler-dev/1","review_status":"draft_requires_conformance","allowed_backends":["python"],"package_requirements":[{"package":"host","version_policy":"test fixture only"}],"modules":[{"logical_path":"py","host_module":"host","provider":"python_package"}],"types":[],"values":[],"callables":[{"module":"py","name":"run","call_kind":"function","id":"host.run","owner_type":null,"host_attribute":["run"],"parameters":[],"return_type":"Unit","error_type":null,"ownership":{"return":"unit","storage":"no_tensor_storage"},"effects":[],"receiver_escapes":"not_applicable"}],"conformance_required":[]})");
     write(t.path / "src/main.lang",
           "package app; import \"py\" as p; func f() { p.run(); }");
     auto r = check(t.path / "lang.toml");
