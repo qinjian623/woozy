@@ -1,0 +1,40 @@
+package app;
+
+func relay[T](value move T) T {
+    return move value;
+}
+
+struct Box {
+    items Vec[i32];
+    marker i32;
+}
+
+func main() i32 {
+    var values Vec[i32] = [1, 2];
+    let alias = values;
+    let result = relay(move values);
+    result[0] = 7;
+    if alias[0] != 7 {
+        return 1;
+    }
+
+    let explicit = relay[Vec[i32]]([3, 4]);
+    explicit[0] = 9;
+    if explicit[0] != 9 {
+        return 2;
+    }
+
+    let inferred = relay(42);
+    if i32(inferred) != 42 {
+        return 3;
+    }
+
+    var box Box = Box(items: [5, 6], marker: 0);
+    let box_alias = box;
+    let box_result = relay[Box](move box);
+    box_result.items[0] = 11;
+    if box_alias.items[0] != 11 {
+        return 4;
+    }
+    return 0;
+}

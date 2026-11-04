@@ -36,11 +36,23 @@ switch/for补充程序。主代理GNU Debug、GNU Release、Clang22 ASan/UBSan
 正确源码位置且保留已有输出；新增15个损坏HIR继续由验证器拒绝。
 旧Python分类失败日志仅作为修正前记录保留。
 
-资源限制测试在普通构建使用384MiB虚拟地址限制、3秒CPU和10秒wall超时。ASan自身保留大块虚拟地址，因此其测试只保留CPU和wall限制；未运行LeakSanitizer。ASan覆盖本项目代码，不涵盖预编译LLVM与生成程序。
+资源限制测试在普通构建使用384MiB虚拟地址限制、3秒CPU和10秒wall超时。ASan自身保留大块虚拟地址，因此其测试只保留CPU和wall限制；未运行LeakSanitizer。ASan覆盖本项目代码，不涵盖预编译LLVM与生成程序。这里是上述历史测试的范围；本次新增检查的泄漏检测结果见下节。
+
+## 普通泛型函数的 move 参数
+
+无 trait 约束的自由泛型函数直接调用现已支持 `move` 形参，例如 `func relay[T](value move T) T { return move value; }`。已有绑定必须显式写 `relay(move values)`；临时值可按现有规则转交，具体类型来自显式实参或既有推断。已验证 Vec 整体移动、含 Vec 的拥有 struct、返回后别名共享，以及移动后的 var 重新初始化。模板不直接进入执行，具体实例和调用保留真实参数模式与 Move 来源。
+
+实参仍按源码顺序求值，命名实参只改变形参对应关系。后续实参抛错时，已经移动的临时值在 catch 前清理，原绑定不恢复；尚未求值的 move 不执行。普通借用参数直接 move、漏写 move、重复 move、移动后读取、defer 读取已移动值仍拒绝。
+
+这里新增的是直接调用；具体泛型函数值仍使用既有的标量调用处理。独立对比旧、新编译器确认，带 trait 约束的 move 泛型函数值有一条原先就接受的入口，本次保留其原行为，不把它记为新增或完整受约束调用支持。
+
+方法、trait 约束泛型的直接 move 调用和 inout 不在这次新增范围。静态方法即使没有 receiver，仍按 impl 成员身份拒绝 move；普通静态方法保持原行为。foreign 和动态 string 的 move 实例给出 `E_CAPABILITY_UNAVAILABLE`，损坏的参数模式、源码 Move、模板/实例关系仍由既有 HIR 检查拒绝。
+
+主目录 GNU Debug/Release 和 Clang22 ASan+UBSan+LSan 的 LLVM 构建各44/44，关闭 LLVM 为33/33，共165项，无跳过。三个 LLVM 构建每套实际运行三份同源项目的 Native O0/O2 与 Python3.12.15，共9项；关闭 LLVM 不执行这9项。独立新增的嵌套泛型聚合抛错例在两端验证两个 Vec 按逆序各释放一次，Python Frame 无残留。泄漏检测覆盖本项目检查程序，不声称预编译 LLVM 或生成程序也全部经过 sanitizer 插桩。
 
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型trait及trait泛型方法、嵌套变体模式、泛型或方法的inout/move调用、Vec、ARC、throws/defer、foreign和严格浮点执行仍明确拒绝。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型trait及trait泛型方法、嵌套变体模式、泛型inout和方法的move/inout调用仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。

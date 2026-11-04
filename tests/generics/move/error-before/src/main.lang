@@ -1,0 +1,43 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func later(log inout i64) i32 {
+    mark(inout log, 9);
+    return 3;
+}
+
+func consume[T](value move T, first i32, second i32) i32 {
+    return first + second;
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var values Vec[i32] = [1];
+    try {
+        let result = consume(second: bad(inout log),
+                             first: later(inout log),
+                             value: move values);
+        mark(inout log, 8);
+    } catch err E {
+        mark(inout log, 3);
+        if values[0] != 1 {
+            return 1;
+        }
+    }
+    if log != 23 {
+        return 2;
+    }
+    return 0;
+}

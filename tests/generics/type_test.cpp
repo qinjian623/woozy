@@ -500,6 +500,238 @@ void repairs(const fs::path &root) {
   });
   need(!failures, std::to_string(failures) + " T07 repair groups failed");
 }
+void generic_move(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto call_named = [](const hir::HirModule &m, const std::string &name) {
+    std::vector<const hir::HirNode *> result;
+    for (const auto &n : m.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          m.resolved->symbols[c->direct_symbol->value].name == name)
+        result.push_back(&n);
+    return result;
+  };
+
+  const auto positive =
+      check(root / "tests/generics/move/positive/lang.toml");
+  need(positive.success(), messages(positive));
+  need(hir::verify(*positive.value).success(), "generic move HIR rejected");
+  const auto &m = *positive.value;
+  auto calls = call_named(m, "relay");
+  need(calls.size() == 4, "generic move calls missing");
+  size_t binding_moves = 0, temporary_moves = 0;
+  for (const auto *call_node : calls) {
+    const auto &call = std::get<hir::Call>(call_node->data);
+    need(call.args.size() == 1, "generic move arity");
+    const auto &arg = call.args[0];
+    need(arg.mode == hir::ParamMode::move, "generic move argument mode");
+    const auto &value = m.nodes[arg.expression.value];
+    if (value.kind() == hir::NodeKind::move) {
+      need(std::get<hir::Move>(value.data).binding.has_value(),
+           "generic binding move lacks its source binding");
+      ++binding_moves;
+    } else {
+      need(value.kind() == hir::NodeKind::vec_init ||
+               value.kind() == hir::NodeKind::integer_literal,
+           "generic temporary move shape");
+      ++temporary_moves;
+    }
+  }
+  need(binding_moves == 2 && temporary_moves == 2,
+       "generic move source kinds changed");
+  need(m.templates.size() == 1, "generic relay template missing");
+  need(m.instances.size() == 3, "generic relay instance count");
+  need(m.templates[0].function.parameters.size() == 1,
+       "generic relay template parameter missing");
+  need(m.types.find(m.templates[0].function.signature)->parameters[0].mode ==
+           hir::ParamMode::move,
+       "generic template parameter mode");
+  for (const auto &instance : m.instances) {
+    auto function = std::find_if(
+        m.functions.begin(), m.functions.end(),
+        [&](const auto &f) { return f.symbol == instance.symbol; });
+    need(function != m.functions.end(), "generic move instance function");
+    need(m.types.find(function->signature)->parameters[0].mode ==
+             hir::ParamMode::move,
+         "generic instance parameter mode");
+    for (const auto *call_node : calls)
+      if (auto c = std::get_if<hir::Call>(&call_node->data))
+        need(!c->direct_symbol || *c->direct_symbol != instance.origin,
+             "generic template entered execution");
+  }
+
+  auto named = check(root / "tests/generics/move/error-before/lang.toml");
+  need(named.success(), messages(named));
+  need(hir::verify(*named.value).success(), "generic named move HIR rejected");
+  auto consumed = call_named(*named.value, "consume");
+  need(consumed.size() == 1, "generic named call missing");
+  const auto &named_call = std::get<hir::Call>(consumed[0]->data);
+  need(named_call.args.size() == 3 &&
+           named_call.args[0].parameter_index == 2 &&
+           named_call.args[1].parameter_index == 1 &&
+           named_call.args[2].parameter_index == 0,
+       "generic named parameters were not reordered");
+  for (size_t i = 1; i < named_call.args.size(); ++i)
+    need(named.value->nodes[named_call.args[i - 1].expression.value]
+                 .source.span.begin_byte <
+             named.value->nodes[named_call.args[i].expression.value]
+                 .source.span.begin_byte,
+         "generic named argument evaluation order changed");
+  need(named_call.args[2].mode == hir::ParamMode::move &&
+           named.value->nodes[named_call.args[2].expression.value].kind() ==
+               hir::NodeKind::move,
+       "generic named move mode/source");
+
+  bad("func relay[T](value move T) T{return move value;} "
+      "func main() i32{let values Vec[i32]=[1];let result=relay(values);"
+      "return result[0];}",
+      "E_CALL_ARGUMENT");
+  bad("func relay[T](value move T) T{return move value;} "
+      "func forward[T](value T) T{return relay(move value);} "
+      "func main() i32{return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("func relay[T](value move T) T{return move value;} "
+      "func main() i32{let values Vec[i32]=[1];let result=relay(move "
+      "values);return result[0]+values[0];}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad("func relay[T](value move T) T{return move value;} "
+      "func main() i32{let values Vec[i32]=[1];let a=relay(move values);"
+      "let b=relay(move values);return a[0]+b[0];}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad("func use[T](first T,second move T){} "
+      "func main() i32{let values Vec[i32]=[1];use(values,move values);"
+      "return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("func relay[T](value move T) T{return move value;} "
+      "func main() i32{var values Vec[i32]=[1];defer{let x=values[0];}"
+      "let result=relay(move values);return result[0];}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad("enum E{Bad;} func bad() i32 throws E{throw E.Bad;} "
+      "func consume[T](value move T,first i32,second i32)i32{return first;} "
+      "func main() i32{var values Vec[i32]=[1];try{let r=consume(value:move "
+      "values,first:0,second:bad());}catch e E{return values[0];}"
+      "return 0;}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  good("func relay[T](value move T) T{return move value;} "
+       "func main() i32{var values Vec[i32]=[1];let a=relay(move "
+       "values);values=[7,8];return values[0]-7;}");
+  good("func pair[T](a move T,b T) T{return move a;} "
+       "func main() i32{let x i32=2;let r=pair(move 1,x);"
+       "return i32(r)-1;}");
+  unsupported(
+      "impl i32{func take[T](self Self,value move T)T{return move value;}} "
+      "func main() i32{let x i32=1;let v Vec[i32]=[2];let r=x.take(move v);"
+      "return r[0];}",
+      "E_CAPABILITY_UNAVAILABLE");
+  const std::string static_move =
+      "impl i32{func take[T](value move T)T{return move value;}} ";
+  unsupported(static_move +
+                  "func main() i32{let values Vec[i32]=[7];"
+                  "let result=i32.take(move values);return result[0];}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported(static_move +
+                  "func main() i32{let values Vec[i32]=[7];"
+                  "let result=i32.take[Vec[i32]](move values);"
+                  "return result[0];}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("struct Box[T]{value T;} impl[T] Box[T]{"
+              "func take[U](value move U)U{return move value;}} "
+              "func main() i32{let values Vec[i32]=[7];"
+              "let result=Box[i32].take(move values);return result[0];}",
+              "E_CAPABILITY_UNAVAILABLE");
+  good("impl i32{func id[T](value T)T{return value;}} "
+       "func main() i32{return i32.id(7)-7;}");
+  good("impl i32{func id[T](value T)T{return value;}} "
+       "func main() i32{return i32.id[i32](7)-7;}");
+  good("struct Box[T]{value T;} impl[T] Box[T]{"
+       "func id[U](self Self,value U)U{return value;}} "
+       "func main() i32{let box=Box[i32](value:1);return box.id(7)-7;}");
+  unsupported("func swap[T](a inout T,b inout T){} "
+              "func main() i32{var x i32=1;var y i32=2;"
+              "swap(inout x,inout y);return x;}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("trait V{} impl V for i32{} "
+              "func take[T V](value move T)T{return move value;} "
+              "func main() i32{var x i32=1;let r=take(move x);return r;}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("func relay[T](value move T)T{return move value;} "
+              "func main(){let r=relay[string](move \"x\");}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("func relay[T](value move T)T{return move value;} "
+              "func main(){let r=relay[string](\"x\");}",
+              "E_CAPABILITY_UNAVAILABLE");
+
+  auto move_hir = good(
+      "func relay[T](value move T) T{return move value;} "
+      "func main() i32{var values Vec[i32]=[1];let result=relay(move "
+      "values);return 0;}");
+  auto relay_call = [](auto &x) -> hir::Call & {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          x.resolved->symbols[c->direct_symbol->value].name == "relay")
+        return *c;
+    throw std::runtime_error("generic move call missing");
+  };
+  invalid(move_hir, "generic move argument mode", [&](auto &x) {
+    auto &call = relay_call(x);
+    need(call.args.size() == 1, "generic move arity");
+    call.args[0].mode = hir::ParamMode::ordinary;
+  });
+  invalid(move_hir, "generic move source marker", [&](auto &x) {
+    auto &call = relay_call(x);
+    const auto &value = x.nodes[call.args[0].expression.value];
+    const auto &move = std::get<hir::Move>(value.data);
+    need(move.binding.has_value(), "generic move binding missing");
+    auto names = std::make_shared<modules::ResolvedProject>(*x.resolved);
+    auto project = std::make_shared<modules::Project>(*names->project);
+    auto file = std::make_shared<AstFile>(
+        *project->modules[value.source.node.module.value].files.at(
+            value.source.node.file));
+    auto &ast = file->node(value.source.node.node);
+    need(ast.kind == AstKind::Unary &&
+             file->tokens.at(ast.token_begin).spelling == "move",
+         "generic move source token missing");
+    file->tokens[ast.token_begin].spelling = "+";
+    project->modules[value.source.node.module.value]
+        .files[value.source.node.file] = file;
+    names->project = project;
+    x.resolved = names;
+  });
+  invalid(move_hir, "generic instance parameter mode", [](auto &x) {
+    need(!x.instances.empty(), "generic move instance missing");
+    for (auto &f : x.functions)
+      if (f.symbol == x.instances[0].symbol) {
+        auto sig = *x.types.find(f.signature);
+        sig.parameters[0].mode = hir::ParamMode::ordinary;
+        f.signature = x.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("generic move instance function missing");
+  });
+  invalid(move_hir, "generic template parameter mode", [](auto &x) {
+    need(!x.templates.empty(), "generic move template missing");
+    auto &f = x.templates[0].function;
+    auto sig = *x.types.find(f.signature);
+    sig.parameters[0].mode = hir::ParamMode::ordinary;
+    f.signature = x.types.intern(sig);
+  });
+}
+
 void extra(const fs::path &root) {
   auto good = [&](const std::string &s) {
     auto r = source(s);
@@ -900,6 +1132,7 @@ int main(int argc, char **argv) {
     need(!failures, std::to_string(failures) + " fixture failures");
     std::cout << "27 T07 static source fixtures passed\n";
     extra(root);
+    generic_move(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

@@ -177,6 +177,25 @@ class Checker {
     }
     return ParamMode::ordinary;
   }
+  struct ArgumentMode {
+    Ref value;
+    Ref marked;
+    ParamMode requested;
+    bool has_marker;
+  };
+  ArgumentMode argument_mode(Ref r) const {
+    auto value = child(r, 0);
+    while (ast(value).kind == AstKind::Parenthesized)
+      value = child(value, 0);
+    auto marked = value;
+    auto requested = ParamMode::ordinary;
+    if (ast(value).kind == AstKind::Unary &&
+        (token(value) == "inout" || token(value) == "move")) {
+      requested = token(value) == "inout" ? ParamMode::inout : ParamMode::move;
+      value = child(value, 0);
+    }
+    return {value, marked, requested, requested != ParamMode::ordinary};
+  }
   TypeId parameter_type(SymbolId s) {
     Type t;
     t.kind = TypeKind::TypeParameter;
@@ -461,7 +480,8 @@ class Checker {
     const auto &n = ast(r);
     if (n.kind == AstKind::Parenthesized)
       return contextual(child(r, 0));
-    if (n.kind == AstKind::Unary && (token(r) == "+" || token(r) == "-"))
+    if (n.kind == AstKind::Unary &&
+        (token(r) == "+" || token(r) == "-" || token(r) == "move"))
       return contextual(child(r, 0));
     if (n.kind == AstKind::Literal) {
       auto kind = file(r).tokens[n.token_begin].kind;
@@ -1382,6 +1402,7 @@ class Checker {
     std::vector<std::optional<Expr>> values(ast(r).children.size() - 1);
     std::vector<size_t> indices(values.size());
     std::vector<std::optional<std::string>> labels(values.size());
+    std::vector<ParamMode> modes(values.size());
     if (receiver) {
       infer(r, original_type.parameters.at(0).type, receiver->value.type, sub);
       args.push_back({0, 0, {}, ParamMode::ordinary, receiver->id});
@@ -1402,6 +1423,19 @@ class Checker {
       seen[pi] = true;
       indices[i] = pi;
     }
+    // Only an ordinary unconstrained generic function opens a concrete move
+    // instance here. Impl members include static methods called through a type,
+    // which have no receiver expression but are still methods.
+    const bool impl_method =
+        std::any_of(m.impls.begin(), m.impls.end(), [&](const ImplDecl &im) {
+          return std::find(im.methods.begin(), im.methods.end(), target) !=
+                 im.methods.end();
+        });
+    const auto &target_params = generic_params[target.value];
+    const bool allow_move =
+        !receiver && !constraint && !impl_method && !target_params.empty() &&
+        std::all_of(target_params.begin(), target_params.end(),
+                    [](const GenericParam &p) { return !p.trait; });
     for (size_t pass = 0; pass < 2; ++pass)
       for (size_t i = 0; i < values.size(); ++i) {
         auto ar = child(r, i + 1), er = child(ar, 0);
@@ -1409,18 +1443,37 @@ class Checker {
           continue;
         auto pt =
             substitute(original_type.parameters[indices[i]].type, sub, m.types);
-        auto pm = original_type.parameters[indices[i]].mode;
-        if (pm != ParamMode::ordinary)
+        const auto parameter_mode =
+            original_type.parameters[indices[i]].mode;
+        const auto argument = argument_mode(ar);
+        er = argument.value;
+        auto pm = argument.requested;
+        if (parameter_mode == ParamMode::move && allow_move) {
+          if (pm == ParamMode::ordinary) {
+            auto tmp = er;
+            while (ast(tmp).kind == AstKind::Parenthesized)
+              tmp = child(tmp, 0);
+            if (ast(tmp).kind == AstKind::Name ||
+                ast(tmp).kind == AstKind::Member ||
+                ast(tmp).kind == AstKind::NeutralBracket)
+              reject(ar, "existing binding requires explicit move",
+                     "E_CALL_ARGUMENT");
+            pm = ParamMode::move;
+          }
+        } else if (parameter_mode != ParamMode::ordinary) {
           unavailable(
               ar, "generic/method inout and move calls are not implemented");
-        auto marker = er;
-        while (ast(marker).kind == AstKind::Parenthesized)
-          marker = child(marker, 0);
-        if (ast(marker).kind == AstKind::Unary &&
-            (token(marker) == "move" || token(marker) == "inout"))
-          reject(marker,
+        }
+        if (parameter_mode == ParamMode::ordinary && argument.has_marker)
+          reject(argument.marked,
                  "generic/method argument mode differs from ordinary parameter",
                  "E_CALL_ARGUMENT");
+        if (pm != parameter_mode)
+          reject(ar, "argument mode differs from parameter mode",
+                 "E_CALL_ARGUMENT");
+        if (argument.has_marker && argument.requested == ParamMode::move)
+          er = argument.marked;
+        modes[i] = pm;
 
         auto e = expression(er, contains_parameter(pt) ? std::nullopt
                                                        : std::optional(pt));
@@ -1436,7 +1489,7 @@ class Checker {
       auto e = *values[i];
       match(r, e.value.type, ft.parameters[indices[i]].type);
       args.push_back({uint32_t(i + offset), uint32_t(indices[i]), labels[i],
-                      ParamMode::ordinary, e.id});
+                      modes[i], e.id});
       children.push_back(e.id);
     }
     if (constraint)
@@ -1526,13 +1579,9 @@ class Checker {
       seen[pi] = true;
       while (ast(er).kind == AstKind::Parenthesized)
         er = child(er, 0);
-      auto mode_ref = er;
-      ParamMode pm = ParamMode::ordinary;
-      if (ast(er).kind == AstKind::Unary &&
-          (token(er) == "inout" || token(er) == "move")) {
-        pm = token(er) == "inout" ? ParamMode::inout : ParamMode::move;
-        er = child(er, 0);
-      }
+      const auto argument = argument_mode(ar);
+      er = argument.value;
+      auto pm = argument.requested;
       if (sig.parameters[pi].mode == ParamMode::move &&
           pm == ParamMode::ordinary) {
         auto tmp = er;
@@ -1548,9 +1597,8 @@ class Checker {
       if (pm != sig.parameters[pi].mode)
         reject(ar, "argument mode differs from parameter mode",
                "E_CALL_ARGUMENT");
-      if (pm == ParamMode::move && ast(mode_ref).kind == AstKind::Unary &&
-          token(mode_ref) == "move")
-        er = mode_ref;
+      if (argument.has_marker && argument.requested == ParamMode::move)
+        er = argument.marked;
       auto e = pm == ParamMode::inout ? place(er, true)
                                       : expression(er, sig.parameters[pi].type);
       match(ar, e.value.type, sig.parameters[pi].type);
@@ -2682,6 +2730,16 @@ class Checker {
     };
     f.symbol = result;
     f.signature = substitute(f.signature, sub, m.types);
+    // A generic declaration defers direct mode/type restrictions until the
+    // concrete type is known; reject them before publishing invalid HIR.
+    for (const auto &p : type(f.signature).parameters) {
+      if (p.mode != ParamMode::ordinary &&
+          type(p.type).kind == TypeKind::ForeignOpaque)
+        unavailable(use, "external move/inout parameters are not supported");
+      if (p.mode == ParamMode::move &&
+          type(p.type).kind == TypeKind::String)
+        unavailable(use, "owned string parameter is not supported");
+    }
     for (auto &p : f.parameters)
       p.symbol = rename(p.symbol);
     std::map<uint64_t, ScopeId> scopes;

@@ -299,8 +299,10 @@ void extra_tests() {
   rejected("struct S {v Vec[i32];marker i32;} func take(v move S) {} func f() "
            "{var s=S(v:[1],marker:0);take(move s);s.marker=1;}",
            "E_OWNERSHIP_USE_AFTER_MOVE");
-  rejected("func f[T](v move T) {} func g() {let v Vec[i32]=[1];f(move v);}",
-           "E_CAPABILITY_UNAVAILABLE");
+  auto generic_move_call =
+      accepted("func f[T](v move T) {} func g() {let v Vec[i32]=[1];f(move "
+               "v);}");
+  facts(generic_move_call);
   auto cb = accepted("func f(cb func(Vec[i32]) i32) {} ");
   need(check_backend_capabilities(cb).success() && verify(cb).success(),
        "Vec callback signature rejected");
