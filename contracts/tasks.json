@@ -353,7 +353,7 @@
     {
       "id": "T10",
       "title": "NumPy 与 PyTorch",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T06",
         "T08"
@@ -383,7 +383,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python/64声明读取、静态HIR/拥有和外部读取/调用生成及py.Error运行库已实施；runtime values/5。真实API原04完成200步CPU训练，201模型调用，最终loss9.684752999561397e-13与未改参考一致并保留Tensor图。root补参考检查状态及不支持错误载荷诊断；完整42/42/42/32无跳过，T10生成测试12例。CLI标准绑定配置、正式CPU依赖锁和完整T10尚未完成，绑定仍draft；见docs/T10_PYTHON.md。"
+      "notes": "Python/64、Linux x86_64、锁定CPython3.12.15/NumPy2.5.4/Torch2.15.0+cpu的首批声明集完成。正式CLI --std-binding及真实原04的200步训练通过，201次model调用，loss9.684752999561397e-13与未改参考一致、保留Tensor图。真实ndarray/Tensor身份和别名修改、真实NumPy py.Error/源位置/清理通过。11个CPU wheel的来源/版本/SHA写入toolchain.lock的python_cpu；原binding仍draft且字节不改，按冻结SHA记录实测。root四配置43/43/43/33无跳过，绑定测试各14例、CLI各7例。记录锁尚不自动检查运行环境；GPU、任意Python API、其他平台与原生ARC不在本项完成范围。见docs/T10_CPU_VERIFICATION.md。"
     },
     {
       "id": "T11",

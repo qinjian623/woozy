@@ -98,7 +98,8 @@ void write_python(const fs::path& out, const lang::backend::python::Output& outp
     }
 }
 int compile(const char* path, bool syntax, bool json, std::string_view backend,
-            const char* out = nullptr, const char* opt = nullptr, const char* target = nullptr) {
+            const char* out = nullptr, const char* opt = nullptr, const char* target = nullptr,
+            const char* std_binding = nullptr) {
     lang::SourceManager sources;
     auto finish = [&](const auto& result) {
         if (json) {
@@ -129,13 +130,18 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
     };
     try {
         if (!syntax) {
-            auto project = lang::modules::load_project({path, {}, {}}, sources);
+            auto project = lang::modules::load_project(
+                {path, {},
+                 std_binding ? std::optional<fs::path>(std_binding)
+                             : std::optional<fs::path>{}},
+                sources);
             if (!project.success()) return finish(project);
             if (!backend.empty()) project.value->backend = backend;
             if (out && project.value->backend == "native") {
 #ifdef LANG_NATIVE_HELPER
                 std::vector<std::string> args{LANG_NATIVE_HELPER, "--project", path,
                                               "--out-dir", out, "--opt", opt ? opt : "0"};
+                if (std_binding) args.insert(args.end(), {"--std-binding", std_binding});
                 if (target) args.insert(args.end(), {"--target", target});
                 if (json) args.insert(args.end(), {"--format", "json"});
                 auto result = lang::run_process(args);
@@ -204,9 +210,9 @@ int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
         std::cout << "Usage: langc --help | --version\n"
                      "       langc check --syntax-only [--format json] FILE\n"
-                     "       langc check --project MANIFEST [--backend native|python] [--format json]\n"
-                     "       langc build --project MANIFEST --backend python --out-dir DIR [--format json]\n"
-                     "       langc build --project MANIFEST --backend native --out-dir DIR [--opt 0|2] [--target TRIPLE] [--format json]\n"
+                     "       langc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n"
+                     "       langc build --project MANIFEST --backend python --out-dir DIR [--std-binding BUNDLE] [--format json]\n"
+                     "       langc build --project MANIFEST --backend native --out-dir DIR [--std-binding BUNDLE] [--opt 0|2] [--target TRIPLE] [--format json]\n"
                      "Native build requires LANG_ENABLE_LLVM=ON; lsp and capabilities are not implemented\n";
         return 0;
     }
@@ -223,6 +229,7 @@ int main(int argc, char** argv) {
             const char* out = nullptr;
             const char* opt = nullptr;
             const char* target = nullptr;
+            const char* std_binding = nullptr;
             std::string_view backend;
             for (int i = 2; i < argc; ++i) {
                 const std::string_view argument(argv[i]);
@@ -239,6 +246,10 @@ int main(int argc, char** argv) {
                            i + 1 < argc && !out && !std::string_view(argv[i + 1]).empty() &&
                            !std::string_view(argv[i + 1]).starts_with('-')) {
                     out = argv[++i];
+                } else if (argument == "--std-binding" && i + 1 < argc && !std_binding &&
+                           !std::string_view(argv[i + 1]).empty() &&
+                           !std::string_view(argv[i + 1]).starts_with('-')) {
+                    std_binding = argv[++i];
                 } else if (argument == "--backend" && i + 1 < argc && backend.empty() &&
                            (std::string_view(argv[i + 1]) == "native" ||
                             std::string_view(argv[i + 1]) == "python")) {
@@ -256,12 +267,13 @@ int main(int argc, char** argv) {
                     path = argv[i];
                 }
             }
-            if ((syntax && (!path || project || !backend.empty() || command == "build")) ||
+            if ((syntax && (!path || project || !backend.empty() || std_binding || command == "build")) ||
                 (!syntax && (!project || path)) || (command == "build" && !out)) {
                 std::cerr << "E_DRIVER_ARGUMENT: use check --syntax-only FILE, check --project MANIFEST, or build --project MANIFEST --out-dir DIR\n";
                 return 2;
             }
-            return compile(syntax ? path : project, syntax, json, backend, out, opt, target);
+            return compile(syntax ? path : project, syntax, json, backend, out, opt, target,
+                           std_binding);
         }
         if (command == "lsp" ||
             command == "capabilities") {

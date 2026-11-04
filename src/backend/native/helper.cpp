@@ -76,8 +76,8 @@ int main(int argc, char **argv) {
         continue;
       }
       if (key == "--help") {
-        std::cout << "lang_native_helper --project MANIFEST [--entry NAME | "
-                     "--entry-symbol ID]\n"
+        std::cout << "lang_native_helper --project MANIFEST [--std-binding BUNDLE] "
+                     "[--entry NAME | --entry-symbol ID]\n"
                      "  [--check-only] [--opt 0|2] [--target "
                      "x86_64-unknown-linux-gnu]\n"
                      "  --out-dir DIR | --out-object FILE [--out-llvm FILE] [--out-llvm-before "
@@ -85,11 +85,15 @@ int main(int argc, char **argv) {
                      "  [--out-native FILE] [--format json]\n";
         return 0;
       }
-      if (key != "--project" && key != "--entry" && key != "--entry-symbol" &&
-          key != "--opt" && key != "--target" && key != "--out-object" &&
-          key != "--out-llvm" && key != "--out-llvm-before" &&
-          key != "--out-native" && key != "--out-dir" && key != "--format")
+      if (key != "--project" && key != "--std-binding" && key != "--entry" &&
+          key != "--entry-symbol" && key != "--opt" && key != "--target" &&
+          key != "--out-object" && key != "--out-llvm" &&
+          key != "--out-llvm-before" && key != "--out-native" &&
+          key != "--out-dir" && key != "--format")
         throw std::runtime_error("unknown option: " + key);
+      if (key == "--std-binding" &&
+          (a + 1 == argc || !argv[a + 1][0] || argv[a + 1][0] == '-'))
+        throw std::runtime_error("missing or invalid value for --std-binding");
       if (++a == argc || !args.emplace(key, argv[a]).second)
         throw std::runtime_error("missing or duplicate option: " + key);
     }
@@ -98,6 +102,8 @@ int main(int argc, char **argv) {
         throw std::runtime_error("--format must be json");
       json = true;
     }
+    if (args.contains("--std-binding") && args.at("--std-binding").empty())
+      throw std::runtime_error("empty option: --std-binding");
     executable = args.contains("--out-dir");
     if (!args.contains("--project") ||
         (!check_only && !executable && !args.contains("--out-object")))
@@ -109,8 +115,12 @@ int main(int argc, char **argv) {
                        args.contains("--out-llvm") || args.contains("--out-llvm-before") ||
                        args.contains("--out-native")))
       throw std::runtime_error("--out-dir cannot be combined with explicit output files or --check-only");
-    auto project =
-        modules::load_project({args.at("--project"), {}, {}}, sources);
+    auto project = modules::load_project(
+        {args.at("--project"), {},
+         args.contains("--std-binding")
+             ? std::optional<fs::path>(args.at("--std-binding"))
+             : std::optional<fs::path>{}},
+        sources);
     if (!project.success())
       return report(project);
     // Explicit native helper selection; word_bits remains the manifest's value.

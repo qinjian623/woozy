@@ -41,11 +41,15 @@ langc check --project lang.toml --backend python --format json
 langc build --project lang.toml --backend native --emit llvm
 langc build --project lang.toml --backend native --target x86_64-unknown-linux-gnu
 langc build --project lang.toml --backend python --out-dir build/python
+langc check --project lang.toml --backend python --std-binding BUNDLE --format json
+langc build --project lang.toml --backend python --std-binding BUNDLE --out-dir build/python
 langc capabilities --format json
 langc lsp
 ```
 
 `check --syntax-only` 不要求依赖安装或链接器；全量 check 读取项目、绑定、目标能力并检查语义，但不运行代码、不启动 Python、不加载 LLVM 后端。build 才进行代码生成和链接；build 默认不执行产物。生成 Python 之后的运行是显式独立步骤。
+
+`--std-binding BUNDLE` 是可选的工具链标准声明文件，只用于 `check --project` 和 `build --project`。它通过现有 `ProjectOptions::std_binding_bundle` 交给项目加载器，不接受 `--syntax-only`，不读取项目依赖来猜标准库，也没有默认路径、环境变量或新配置格式。未传该参数时保持原行为；项目声明 `std` 依赖仍按清单规则拒绝。`build --backend native` 会把该参数转发给 `lang_native_helper`，helper 同样解析和加载它；Python 外部源在 native 下仍明确报 `E_CAPABILITY_UNAVAILABLE`，不会因该参数切换到 Python 后端。路径按 argv 原样传递，不做解释器探测或宿主包 import。
 
 ### 3.1 退出码
 

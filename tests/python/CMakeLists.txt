@@ -104,6 +104,25 @@ if(LANG_T10_PYTHON AND EXISTS "${LANG_T10_PYTHON}")
     --original-observer "${CMAKE_CURRENT_LIST_DIR}/t10_original04.py"
     --reference-observer "${CMAKE_CURRENT_LIST_DIR}/t10_reference04.py")
   set_tests_properties(python.t10_bindings PROPERTIES TIMEOUT 600)
+  set(LANG_T10_CLI_NATIVE_ARGS)
+  if(LANG_ENABLE_LLVM AND TARGET lang_native_helper)
+    list(APPEND LANG_T10_CLI_NATIVE_ARGS
+      --native-helper $<TARGET_FILE:lang_native_helper>)
+  endif()
+  add_test(NAME python.t10_cli COMMAND "${LANG_T10_PYTHON}"
+    "${CMAKE_CURRENT_LIST_DIR}/run_t10_cli.py"
+    --langc $<TARGET_FILE:langc>
+    --helper $<TARGET_FILE:lang_python_emit>
+    --root "${LANG_PYTHON_TEST_ROOT}"
+    --out "${CMAKE_CURRENT_BINARY_DIR}/t10-cli"
+    --python "${LANG_T10_PYTHON}"
+    --binding "${LANG_PYTHON_TEST_ROOT}/contracts/python_bindings.example.json"
+    --reference "${LANG_PYTHON_TEST_ROOT}/baseline/samples/numpy_torch_reference.py"
+    --original-observer "${CMAKE_CURRENT_LIST_DIR}/t10_original04.py"
+    --reference-observer "${CMAKE_CURRENT_LIST_DIR}/t10_reference04.py"
+    ${LANG_T10_CLI_NATIVE_ARGS})
+  set_tests_properties(python.t10_cli PROPERTIES TIMEOUT 1800)
 else()
   message(STATUS "python.t10_bindings: not_run (set LANG_T10_PYTHON)")
+  message(STATUS "python.t10_cli: not_run (set LANG_T10_PYTHON)")
 endif()

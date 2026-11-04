@@ -1,6 +1,6 @@
 # T10 Python 外部生成和运行库
 
-本文件记录 Python 后端当前实际实现的有限范围，不是整个 T10、ARC、正式依赖锁或 CLI 集成完成声明。公共静态表示仍以 [T10_STATIC.md](T10_STATIC.md) 和 `include/lang/hir/hir.hpp` 为准；声明读取见 [T10_DECLARATIONS.md](T10_DECLARATIONS.md)。绑定输入仍是 `review_status=draft_requires_conformance`。
+本文件记录 Python 后端当前实现的有限范围；CPU 实测、依赖版本和检查范围见 [T10_CPU_VERIFICATION.md](T10_CPU_VERIFICATION.md)。公共静态表示仍以 [T10_STATIC.md](T10_STATIC.md) 和 `include/lang/hir/hir.hpp` 为准；声明读取见 [T10_DECLARATIONS.md](T10_DECLARATIONS.md)。绑定输入仍是 `review_status=draft_requires_conformance`。
 
 ## 1. 已实现的生成范围
 
@@ -19,7 +19,7 @@
 
 ## 2. API 生成
 
-标准绑定通过 `ProjectOptions::std_binding_bundle` 提供；普通依赖仍使用清单中的 binding 文件。`check_project` 默认后端模式已会检查 Python/64 外部操作。
+标准绑定通过 `ProjectOptions::std_binding_bundle` 提供；普通依赖仍使用清单中的 binding 文件。正式 `langc` 的 `check/build --project` 已提供可选 `--std-binding BUNDLE`，把操作者选择的工具链标准声明直接交给同一个 `load_project`。`check_project` 默认后端模式已会检查 Python/64 外部操作。
 
 ```cpp
 SourceManager sources;
@@ -37,7 +37,18 @@ for (const auto &symbol : output.value->symbols)
 
 入口只要求零参数、返回 Unit 或 i32。测试辅助程序通过 `Output.symbols` 定位 `train`，不是按生成名猜函数；原 `04_numpy_torch.lang` 保持不变。
 
-`emit` 只生成字符串，不启动 Python、不 import NumPy/PyTorch，也不访问文件系统或子进程。本仓库 driver 尚未传入 `std_binding_bundle`，所以 CLI 目前不能用同一标准绑定生成外部程序；API 成功不能写成 CLI 已接入 `std/py`。
+`emit` 只生成字符串，不启动 Python、不 import NumPy/PyTorch，也不访问文件系统或子进程。正式 CLI 使用同一路径：
+
+```bash
+langc check --project lang.toml --backend python \
+  --std-binding contracts/python_bindings.example.json --format json
+langc build --project lang.toml --backend python \
+  --std-binding contracts/python_bindings.example.json --out-dir build/python
+```
+
+`BUNDLE` 是 argv 给出的现有绑定文件，不从项目依赖或默认机器路径推断，也不执行 Python 包探测。该参数不能用于 `--syntax-only`，项目声明同名 `std` 依赖仍拒绝。未提供时保持旧行为：缺少 `std` 源的导入报 `E_IMPORT_NOT_FOUND`。Python build 只写 `program.py` 和 `langrt.py`；测试用同一项目、同一绑定运行现有 API helper，确认 CLI 与 API 生成的两个文件逐字节相同，并用 API 的 `metadata.symbols` 定位 `train` 后执行 CLI 生成的程序。`build --backend native` 会转发该参数给 native helper，但 Python 外部源仍报 `E_CAPABILITY_UNAVAILABLE`，不会切换后端。
+
+CLI 参数只负责选择绑定文件。该 example bundle 保留 `draft_requires_conformance` 原字节；指定 CPU 环境的实际检查按其内容摘要记录在 [T10_CPU_VERIFICATION.md](T10_CPU_VERIFICATION.md)，依赖版本见正式锁的 `python_cpu`。
 
 ## 3. 求值顺序和参数
 
@@ -58,7 +69,7 @@ for (const auto &symbol : output.value->symbols)
 - `ValueType('foreign')` 和 `ValueType('error')` 的 copy 保持宿主对象身份；drop 只释放语言 owner 槽，不承诺宿主对象立即析构或释放宿主缓冲区。
 - Unit callable 成功返回必须是 `None`；其他返回值触发明确 `Panic`，不静默丢弃。未捕获的 `py.Error` 先输出稳定的 `LANG_TYPED_ERROR: lang.py.Error` 行，再输出可用原因/源位置并 drop。
 
-已声明的宿主对象身份、别名修改、读取/后参/调用失败前缀、typed error catch/copy/跨模块/cause/traceback/span、内部 `TypedError` 和三种 `BaseException` 不重包装，以及正常/typed-error 后无活动 owner/borrow，均由测试用专用 host/binding 实际执行。测试不使用真实库冒充小例。
+已声明的宿主对象身份、别名修改、读取/后参/调用失败前缀、typed error catch/copy/跨模块/cause/traceback/span、内部 `TypedError` 和三种 `BaseException` 不重包装，以及正常/typed-error 后无活动 owner/borrow，均由测试用专用 host/binding 实际执行。专用宿主用例与真实库小例分别记录。
 
 ## 5. 生成文件中的声明信息
 
@@ -76,7 +87,8 @@ for (const auto &symbol : output.value->symbols)
 - `tests/python/t10_binding.json`、`t10_host.py`：测试专用 ordinary 声明和宿主，不导入真实 NumPy/PyTorch，不冒充 conformance。
 - `tests/python/run_t10_bindings.py`：真实 API 生成，执行顺序/省略/别名/Error/cause/span/cross-module/BaseException/失败清理/无 throws E_CAP/缺宿主环境错误，并检查 Frame 无活动 owner/borrow。
 - `tests/python/t10_original04.py`：使用专用 CPython 3.12.15、NumPy 2.5.4、PyTorch 2.15.0+cpu，调用真实生成的 `train`；检查 seed 7、Linear(1,1)、lr 0.1、200 次 backward/step/zero_grad、201 次真实 model forward hook、x/y 形状/dtype、y=2x+1、参数更新、loss 下降和返回零维 CPU float32 Tensor 保留 autograd。数值读取仅在测试端进行。
+- `tests/python/t10_real_objects.py`：对生成的普通参数/let/返回函数传入真实 ndarray、Tensor、view 和带梯度的派生 Tensor，检查身份、data_ptr、双向别名修改及无隐式转换；真实 NumPy ValueError 经生成代码包装为 py.Error，保留消息、traceback、源位置，函数退出后 owner/borrow 清空。宿主测试中的索引和 no_grad 不扩展源语言。
 - `tests/python/t10_reference04.py` 独立执行原手写参考，按 `rtol=1e-5/atol=1e-6` 比较，不修改参考。
-- 本地 `tests/python/CMakeLists.txt` 只在配置了 `LANG_T10_PYTHON` 时注册 `python.t10_bindings`；普通 `python3.12` 未被替换成专用依赖环境。
+- 本地 `tests/python/CMakeLists.txt` 只在配置了 `LANG_T10_PYTHON` 时注册 `python.t10_bindings` 和 `python.t10_cli`；普通 `python3.12` 未被替换成专用依赖环境。`python.t10_cli` 使用正式 `langc` 的 `--std-binding`，检查参数/路径/错误保留/native 转发，并实际执行 CLI 生成的原 04 训练函数。
 
-本地 continuation 证据在 `/home/qin/Work/language-dev-20261103/checks/t10-python-backend/continuation/`，包含完整命令、退出码、生成文件 hash、环境 hash、原 04 和参考结果。实际 CPU 结果只覆盖该专用环境和该样例；正式依赖锁、完整 T10、GPU/CUDA、其他训练和 CLI 标准绑定仍未完成。
+原 04 的 API 与正式 CLI 生成、真实 CPU 执行、参考比较以及依赖锁的检查结果见 [T10_CPU_VERIFICATION.md](T10_CPU_VERIFICATION.md)。这些结果只覆盖所记录的环境、声明集和样例，不代表 GPU/CUDA、其他训练或任意 Python 库已经支持。

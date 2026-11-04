@@ -75,5 +75,123 @@
       "source": "existing_system_package",
       "verification": "pkg-config and CMake imported target"
     }
+  },
+  "python_cpu": {
+    "backend": "python",
+    "word_bits": 64,
+    "device": "cpu",
+    "platform": "Linux x86_64 glibc 2.44",
+    "python": {
+      "implementation": "CPython",
+      "version": "3.12.15",
+      "executable_sha256": "eaaa308032c4aa063df5880c4c293cd458b4629d503fbc2c03ec163d71f7f790"
+    },
+    "runtime_version": "compiler-dev/1-python-values/5",
+    "binding_bundle": {
+      "repository_path": "contracts/python_bindings.example.json",
+      "contract": "compiler-dev/1",
+      "sha256": "44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f",
+      "declared_review_status": "draft_requires_conformance"
+    },
+    "roots": [
+      "numpy",
+      "torch"
+    ],
+    "extras": [],
+    "packages": [
+      {
+        "name": "filelock",
+        "version": "4.2.7",
+        "filename": "filelock-4.2.7-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/1d/1a/1fcf0d3886bad15b92459a0e529dd86a1ec4d9ef30e789df48044fd3698c/filelock-4.2.7-py3-none-any.whl",
+        "sha256": "d08972bbca2b8767ee552aff877b091dd111ffb1d22de7de885766ea7d719d5e"
+      },
+      {
+        "name": "fsspec",
+        "version": "2026.9.0",
+        "filename": "fsspec-2026.9.0-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/6c/c0/a98505f18594f1bce828bb159cec0fcf9860562f1a2c85913409fc8f3d9e/fsspec-2026.9.0-py3-none-any.whl",
+        "sha256": "8dd6e646e99ea382bd85f97a45e6b526a442d79423a7dc673f1e2756d05fcb5f"
+      },
+      {
+        "name": "jinja2",
+        "version": "3.1.6",
+        "filename": "jinja2-3.1.6-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/62/a1/3d680cbfd5f4b8f15abc1d571870c5fc3e594bb582bc3b64ea099db13e56/jinja2-3.1.6-py3-none-any.whl",
+        "sha256": "85ece4451f492d0c13c5dd7c13a64681a86afae63a5f347908daf103ce6d2f67"
+      },
+      {
+        "name": "markupsafe",
+        "version": "3.0.4",
+        "filename": "markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "source_url": "https://files.pythonhosted.org/packages/4f/a7/aeedb5140afa41fc74c225e9184ab96723a6e873b6ee1c9fede7283456d8/markupsafe-3.0.4-cp312-cp312-manylinux2014_x86_64.manylinux_2_17_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "8e124f974786f831d6043728e38296969d3579db8896fe004682f5758e613581"
+      },
+      {
+        "name": "mpmath",
+        "version": "1.3.0",
+        "filename": "mpmath-1.3.0-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/43/e3/7d92a15f894aa0c9c4b49b8ee9ac9850d6e63b03c9c32c0367a13ae62209/mpmath-1.3.0-py3-none-any.whl",
+        "sha256": "a0b2b9fe80bbcd81a6647ff13108738cfb482d481d826cc0e02f5b35e5c88d2c"
+      },
+      {
+        "name": "networkx",
+        "version": "3.7",
+        "filename": "networkx-3.7-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/7e/cd/fe58041e9011f307c490e3e17dd48cc516448f7c698a3f2d9d9d65d7e6a8/networkx-3.7-py3-none-any.whl",
+        "sha256": "e3fd2c13a7814cee3746340d8d7f8598a67f16a58bf47fb7f8793fab6efca1b0"
+      },
+      {
+        "name": "numpy",
+        "version": "2.5.4",
+        "filename": "numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "source_url": "https://files.pythonhosted.org/packages/43/a3/c799c62e19c337e6d3770b08e475887fb30ce8477d3c09efca6b2f0228a6/numpy-2.5.4-cp312-cp312-manylinux_2_27_x86_64.manylinux_2_28_x86_64.whl",
+        "sha256": "fbde6962867ee75b48b0ee29b2b9372ec5d617799dbaf38e82dc0596f2f7738a"
+      },
+      {
+        "name": "setuptools",
+        "version": "84.2.1",
+        "filename": "setuptools-84.2.1-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/ef/55/6dc6d6bb953bdfc52519a0059592c52b6e3b8ad51cf8256dffceb55b0610/setuptools-84.2.1-py3-none-any.whl",
+        "sha256": "ca140b45d5325a9478f880e351484f62fef15f336462e449ca0c03c873d589c2"
+      },
+      {
+        "name": "sympy",
+        "version": "1.14.0",
+        "filename": "sympy-1.14.0-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/a2/09/77d55d46fd61b4a135c444fc97158ef34a095e5681d0a6c10b75bf356191/sympy-1.14.0-py3-none-any.whl",
+        "sha256": "e091cc3e99d2141a0ba2847328f5479b05d94a6635cb96148ccb3f34671bd8f5"
+      },
+      {
+        "name": "torch",
+        "version": "2.15.0+cpu",
+        "filename": "torch-2.15.0+cpu-cp312-cp312-manylinux_2_28_x86_64.whl",
+        "source_url": "https://download-r2.pytorch.org/whl/cpu/torch-2.15.0%2Bcpu-cp312-cp312-manylinux_2_28_x86_64.whl#sha256=0955c7e3446326293f48af18fad67872fa31dee5a36a87690eb9e5be8b465be3",
+        "sha256": "0955c7e3446326293f48af18fad67872fa31dee5a36a87690eb9e5be8b465be3"
+      },
+      {
+        "name": "typing-extensions",
+        "version": "4.16.0",
+        "filename": "typing_extensions-4.16.0-py3-none-any.whl",
+        "source_url": "https://files.pythonhosted.org/packages/49/d3/b8441a820a491ddfc024b0b0cf0393375b75ea13866d9c66727e54c2fc80/typing_extensions-4.16.0-py3-none-any.whl",
+        "sha256": "481caa481374e813c1b176ada14e97f1f67a4539ce9cfeb3f350d78d6370c2e8"
+      }
+    ],
+    "verification": {
+      "scope": "Frozen original bundle on the recorded Linux x86_64 Python/64 CPU environment; see report for host conformance, generated object/error checks and original04 CLI execution.",
+      "host_conformance_report_sha256": "332d00e1e98187d35ac6acb0cbb2bcc118cf3f9e5378a3f10730033c85c72696",
+      "api_integration_revision": "889577800cebcabada07edba2ee6cf3487289d67",
+      "api_review_sha256": "d90f3738dc16293df905b58f5a20aed53ce069deb094e45fd9494c93658ab5a0",
+      "report": "docs/T10_CPU_VERIFICATION.md",
+      "cli_original04_report_sha256": "86dce63e4b65c70f664b8b4c0b07255491001ad7b018748534ee913b0e9155ac",
+      "material_check_report_sha256": "79d0fb3cdcb578b4e662d2fa47bc578eee3277f2e82c2cb980545006361c83e6",
+      "status": "passed",
+      "root_integration_report_sha256": "4dd885865f1bbbc0748dc2ac4de000d4ee2f4731911f36c0abcb03c8bef52833",
+      "real_objects_report_sha256": "9c58ca95a56e3b9a6463d9d56d90b836a1ea910b7c781914bb8fd860f40b1910",
+      "cli_source_sha256": {
+        "src/driver/main.cpp": "59ee41daca24dd9c71815618ea80cf9b6d38ddc6d3de974ae9962a4b19bd63e1",
+        "src/backend/native/helper.cpp": "7513ca925b61b40aa0f7fa7bad2482851fa2df7f970a00f872a19dbb8282ca5a"
+      }
+    }
   }
 }

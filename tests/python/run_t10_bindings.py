@@ -4,7 +4,7 @@
 The helper uses the real public load/resolve/check/verify/emit API.  Generated
 programs are executed only by the explicitly supplied CPython path; this
 runner does not import NumPy/PyTorch itself except through the independent
-original-04 observer/reference subprocesses.
+original-04, real-object and reference subprocesses.
 """
 import argparse
 import hashlib
@@ -34,6 +34,7 @@ class Runner:
     def __init__(self, args):
         self.args = args
         self.rows = []
+        self.registered = set()
         self.commands = []
         self.env = dict(os.environ)
         for name in THREAD_ENV:
@@ -114,11 +115,22 @@ host_package = "t10host"
                   if line.startswith('T10HOST ')]
         return observed, events
 
+    def real_observe(self, row, out, mode):
+        record = self.command(
+            row, [self.args.python, self.args.real_observer, out, mode], out)
+        assert record['exit'] == 0, record
+        lines = record['stdout'].splitlines()
+        assert lines, record
+        return json.loads(lines[-1])
+
     def direct(self, row, out, timeout=180):
         return self.command(row, [self.args.python, '-s', out / 'program.py'],
                             out, timeout=timeout)
 
     def add(self, name, fn):
+        self.registered.add(name)
+        if self.args.only and name not in self.args.only:
+            return None
         row = {'name': name, 'status': 'failed', 'commands': []}
         self.rows.append(row)
         try:
@@ -157,6 +169,9 @@ def main():
     parser.add_argument('--observe', type=Path, required=True)
     parser.add_argument('--original-observer', type=Path, required=True)
     parser.add_argument('--reference-observer', type=Path, required=True)
+    parser.add_argument('--real-observer', type=Path)
+    parser.add_argument('--only', nargs='+', default=[],
+                        help='run only these named cases in this invocation')
     args = parser.parse_args()
     # Keep the venv interpreter path itself: resolving its symlink selects the
     # base CPython and loses the dedicated NumPy/PyTorch site-packages.
@@ -164,6 +179,10 @@ def main():
     for key in ('helper', 'root', 'out', 'binding', 'example_binding',
                 'reference', 'observe', 'original_observer', 'reference_observer'):
         setattr(args, key, getattr(args, key).resolve())
+    if args.real_observer is None:
+        args.real_observer = args.root / 'tests/python/t10_real_objects.py'
+    else:
+        args.real_observer = args.real_observer.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
     r = Runner(args)
     binding = str(args.binding)
@@ -443,6 +462,92 @@ host_package = "t10_missing_host"
 
     r.add('missing-host-environment-error', missing_host_case)
 
+    real_objects_source = '''package main;
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+
+// Ordinary host references: let copy and return must preserve identity.
+func pass_array(value np.ndarray) np.ndarray {
+    let copy = value;
+    return copy;
+}
+func pass_tensor(value torch.Tensor) torch.Tensor {
+    let copy = value;
+    return copy;
+}
+func main() Unit throws py.Error {
+    let values = np.linspace(0.0, 1.0, num: 3, dtype: np.float32);
+    let array_copy = pass_array(values);
+    let tensor = torch.tensor(array_copy, dtype: torch.float32, device: "cpu");
+    let tensor_copy = pass_tensor(tensor);
+    return;
+}
+'''
+    real_error_source = '''package main;
+import "std/py" as py;
+import "numpy" as np;
+
+func fail_negative_num() Unit throws py.Error {
+    let values = np.linspace(0.0, 1.0, num: -1, dtype: np.float32);
+    return;
+}
+func main() Unit throws py.Error {
+    try { fail_negative_num(); } catch e py.Error { let saved = e; return; }
+    return;
+}
+'''
+
+    def real_project(name, source, packages):
+        project = args.out / 'projects' / name
+        if project.exists():
+            shutil.rmtree(project)
+        write(project / 'src/main.lang', source)
+        dependencies = ''.join(f'''[dependencies.{package}]
+kind = "python"
+binding = "{args.example_binding}"
+host_package = "{package}"
+''' for package in packages)
+        write(project / 'lang.toml', f'''schema_version = 1
+[package]
+name = "app"
+source_root = "src"
+entry = "app"
+[build]
+backend = "python"
+word_bits = 64
+''' + dependencies)
+        return project
+
+    def real_objects_case(row):
+        project = real_project('real-objects', real_objects_source,
+                               ('numpy', 'torch'))
+        out, _ = r.emit(row, project, args.example_binding)
+        observed = r.real_observe(row, out, 'identity')
+        require(observed['mode'] == 'identity', observed)
+        require(observed['status'] == 'passed', observed)
+        require(all(observed['acceptance'].values()), observed)
+        require(observed['generated']['pass_array'] != observed['generated']['pass_tensor'],
+                observed)
+        row['observation'] = observed
+
+    r.add('real-ndarray-tensor-identity', real_objects_case)
+
+    def real_error_case(row):
+        project = real_project('real-host-exception', real_error_source,
+                               ('numpy',))
+        out, _ = r.emit(row, project, args.example_binding)
+        observed = r.real_observe(row, out, 'error')
+        require(observed['mode'] == 'error', observed)
+        require(observed['status'] == 'passed', observed)
+        require(all(observed['acceptance'].values()), observed)
+        require(observed['payload']['type_key'] == 'lang.py.Error', observed)
+        require(observed['payload']['type_name'] == 'builtins.ValueError', observed)
+        require(observed['payload']['operation'] == 'numpy.linspace.scalar', observed)
+        row['observation'] = observed
+
+    r.add('real-host-exception', real_error_case)
+
     def original04_case(row):
         source = args.root / 'baseline/samples/04_numpy_torch.lang'
         expected_sha = 'beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797'
@@ -504,6 +609,12 @@ host_package = "torch"
         }
 
     r.add('original-04-cpu', original04_case)
+
+    # shortcut: matched cases may run before an unknown-name error; collect
+    # cases first if rejection before execution is needed.
+    unknown_only = [name for name in args.only if name not in r.registered]
+    if unknown_only:
+        parser.error('unknown --only case(s): ' + ', '.join(unknown_only))
 
     status = 'passed' if all(row['status'] == 'passed' for row in r.rows) else 'failed'
     summary = {
