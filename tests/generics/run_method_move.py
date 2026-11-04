@@ -11,7 +11,8 @@ import sys
 sys.dont_write_bytecode = True
 
 CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
-         'callee-throws', 'enum-static', 'generic-explicit')
+         'callee-throws', 'enum-static', 'generic-explicit', 'generic-impl',
+         'generic-impl-errors')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -20,6 +21,8 @@ EXPECTED_EVENTS = {
     'callee-throws': [],
     'enum-static': [],
     'generic-explicit': [],
+    'generic-impl': [9, 3, 2],
+    'generic-impl-errors': [9, 2, 3, 9, 2, 3, 2, 3, 3],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -29,6 +32,8 @@ EXPECTED_ALLOCATIONS = {
     'callee-throws': 5,
     'enum-static': 4,
     'generic-explicit': 13,
+    'generic-impl': 24,
+    'generic-impl-errors': 16,
 }
 
 
@@ -118,6 +123,31 @@ def assert_native(case, observations, allocations):
         assert first < observations.index(('obs', 3, 23)), observations
         assert observations.index(('free', allocations[0])) > \
             observations.index(('obs', 3, 23)), observations
+    elif case == 'generic-impl-errors':
+        # The generic-impl receiver, moved argument and throwing callee all use
+        # the existing cleanup records. The first receiver temp frees before
+        # catch, the moved temp frees before its receiver in reverse creation
+        # order, and the throwing callee's local plus moved argument free before
+        # the catch event.
+        assert frees == [2, 1, 3, 5, 4, 8, 7, 13, 12, 11, 15, 14, 10, 9,
+                         6, 0], observations
+        assert observations.index(('obs', 2, 92)) < \
+            observations.index(('free', 2)) < \
+            observations.index(('free', 1)) < \
+            observations.index(('obs', 3, 923)), observations
+        assert observations.index(('obs', 2, 92392)) < \
+            observations.index(('free', 3)) < \
+            observations.index(('free', 5)) < \
+            observations.index(('free', 4)) < \
+            observations.index(('obs', 3, 923923)), observations
+        assert observations.index(('obs', 2, 9239232)) < \
+            observations.index(('free', 8)) < \
+            observations.index(('free', 7)) < \
+            observations.index(('obs', 3, 92392323)), observations
+        assert observations.index(('free', 13)) < \
+            observations.index(('free', 12)) < \
+            observations.index(('free', 11)) < \
+            observations.index(('obs', 3, 923923233)), observations
 
 
 def assert_python(case, data):
@@ -159,6 +189,33 @@ def assert_python(case, data):
         assert snapshots['alias']['object'] == snapshots['result']['object'], data
         assert snapshots['box_alias'] == snapshots['box_result'], data
         assert snapshots['kept_alias'] == snapshots['kept_result'], data
+    elif case == 'generic-impl':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['alias']['object'] == snapshots['result']['object'], data
+        assert snapshots['static_alias']['object'] == \
+            snapshots['static_result']['object'], data
+        assert snapshots['kept_alias']['object'] == snapshots['kept_result']['object'], data
+        assert snapshots['maybe_alias']['object'] == \
+            snapshots['maybe_result']['object'], data
+        assert snapshots['inner_alias'][1]['object'] == \
+            snapshots['inner'][1]['object'], data
+        assert snapshots['moved_box'][1]['object'] == \
+            snapshots['inner'][1]['object'], data
+    elif case == 'generic-impl-errors':
+        assert sequence == [
+            ['event', 9], ['event', 2], ['free', 2], ['free', 1],
+            ['event', 3], ['event', 9], ['event', 2], ['free', 3],
+            ['free', 5], ['free', 4], ['event', 3], ['event', 2],
+            ['free', 8], ['free', 7], ['event', 3], ['free', 13],
+            ['free', 12], ['free', 11], ['event', 3], ['free', 15],
+            ['free', 14], ['free', 10], ['free', 9], ['free', 6],
+            ['free', 0]], sequence
+        assert any(error['function'] == 'bad' and error['type'] == 'app.E'
+                   for error in data['errors']), data
+        assert any(error['function'] == 'bad_make' and error['type'] == 'app.E'
+                   for error in data['errors']), data
+        assert any(error['function'] == 'fail' and error['type'] == 'app.E'
+                   for error in data['errors']), data
     else:
         assert any(error['function'] == 'consume' and
                    error['type'] == 'app.E' for error in data['errors']), data

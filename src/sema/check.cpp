@@ -240,22 +240,33 @@ class Checker {
     const auto &params = type(sig).parameters;
     return !params.empty() && params.front().type == im->self_type;
   }
-  // This route covers an inherent method in a non-generic impl. The method
-  // itself may have unconstrained generic parameters, but no trait
-  // constraints. An instance call needs a declared ordinary self; a
-  // type-qualified call needs a method whose declaration has no self at all.
-  // Receiver presence alone is not a declaration and cannot open move through
-  // a static call.
+  // This route covers an inherent method in a non-generic impl, plus a method
+  // in a generic impl when its declaration adds no generic parameters of its
+  // own. The method may have unconstrained generic parameters only in the
+  // former case; the latter must inherit exactly the impl parameters in
+  // declaration order. No trait constraints are accepted on either route. An
+  // instance call needs a declared ordinary self; a type-qualified call needs
+  // a method whose declaration has no self at all. Receiver presence alone is
+  // not a declaration and cannot open move through a static call.
   bool inherent_method_move(SymbolId target, bool receiver,
                             TypeId signature) const {
     const auto *im = impl_of(target);
-    if (!im || im->trait || !im->params.empty())
+    if (!im || im->trait)
       return false;
     auto generics = generic_params.find(target.value);
     if (generics == generic_params.end() ||
         !std::all_of(generics->second.begin(), generics->second.end(),
                      [](const GenericParam &p) { return !p.trait; }))
       return false;
+    if (!im->params.empty()) {
+      if (std::any_of(im->params.begin(), im->params.end(),
+                      [](const GenericParam &p) { return p.trait; }) ||
+          generics->second.size() != im->params.size())
+        return false;
+      for (size_t i = 0; i < im->params.size(); ++i)
+        if (generics->second[i].symbol != im->params[i].symbol)
+          return false;
+    }
     const auto &params = type(signature).parameters;
     const bool self = declared_self(target);
     if (receiver)

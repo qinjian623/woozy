@@ -1,0 +1,198 @@
+package app;
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+    marker i32;
+}
+
+struct Pair[A, B] {
+    first A;
+    second B;
+    items Vec[i32];
+}
+
+enum Maybe[T] {
+    None;
+    Some(value T);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func make_box(log inout i64) Box[Vec[i32]] {
+    mark(inout log, 9);
+    return Box[Vec[i32]](value: [1], items: [2], marker: 3);
+}
+
+func relay[T](value move T) T {
+    return move value;
+}
+
+impl[T] Box[T] {
+    func take(self Self, value move T) T {
+        return move value;
+    }
+
+    func take_static(value move T) T {
+        return move value;
+    }
+
+    func take_named(self Self, first i32, value move T, second i32) T {
+        return move value;
+    }
+
+    func forward(self Self, value move T) T {
+        return relay(move value);
+    }
+
+    func nested(self Self, value move T) T {
+        return self.take(move value);
+    }
+
+    func keep_with_defer(self Self, value move T) T {
+        let local Vec[i32] = [8];
+        defer {
+            let read = local[0];
+        }
+        return move value;
+    }
+
+    func choose(self Self, other Self) Self {
+        return other;
+    }
+
+    func accept(self Self, value move Self) i32 {
+        return self.marker + value.marker;
+    }
+}
+
+impl[A, B] Pair[A, B] {
+    func move_second(self Self, first move A, second move B) B {
+        return move second;
+    }
+}
+
+impl[T] Maybe[T] {
+    func take(value move T) T {
+        return move value;
+    }
+}
+
+func main() i32 {
+    let b = Box[Vec[i32]](value: [1], items: [2], marker: 3);
+
+    var values Vec[i32] = [4];
+    let alias = values;
+    let result = b.take(move values);
+    result[0] = 7;
+    if alias[0] != 7 {
+        return 1;
+    }
+
+    let temp = b.take([5]);
+    if temp[0] != 5 {
+        return 2;
+    }
+
+    var static_values Vec[i32] = [6];
+    let static_alias = static_values;
+    let static_result = Box[Vec[i32]].take_static(move static_values);
+    static_result[0] = 9;
+    if static_alias[0] != 9 {
+        return 3;
+    }
+
+    let static_temp = Box[Vec[i32]].take_static([10]);
+    if static_temp[0] != 10 {
+        return 4;
+    }
+
+    var forwarded Vec[i32] = [11];
+    let forwarded_result = b.forward(move forwarded);
+
+    var nested Vec[i32] = [12];
+    let nested_result = b.nested(move nested);
+
+    var kept Vec[i32] = [13];
+    let kept_alias = kept;
+    let kept_result = b.keep_with_defer(move kept);
+    kept_result[0] = 14;
+    if kept_alias[0] != 14 {
+        return 5;
+    }
+
+    let scalar_box = Box[i32](value: 1, items: [15], marker: 4);
+    var scalar i32 = 5;
+    let scalar_result = scalar_box.take(move scalar);
+    if scalar_result != 5 {
+        return 6;
+    }
+    let scalar_static = Box[i32].take_static(16);
+    if scalar_static != 16 {
+        return 7;
+    }
+
+    let inner = Box[i32](value: 17, items: [18], marker: 8);
+    let inner_alias = inner;
+    let outer = Box[Box[i32]](value: inner, items: [19], marker: 9);
+    let moved_box = outer.take(move inner_alias);
+    moved_box.items[0] = 20;
+    if inner.items[0] != 20 {
+        return 8;
+    }
+
+    let pair = Pair[i32, Vec[i32]](first: 1, second: [21], items: [22]);
+    var pair_values Vec[i32] = [23];
+    let pair_result = pair.move_second(move 2, move pair_values);
+    if pair_result[0] != 23 {
+        return 9;
+    }
+
+    let maybe_temp = Maybe[Vec[i32]].take([24]);
+    var maybe_values Vec[i32] = [25];
+    let maybe_alias = maybe_values;
+    let maybe_result = Maybe[Vec[i32]].take(move maybe_values);
+    maybe_result[0] = 26;
+    if maybe_alias[0] != 26 {
+        return 10;
+    }
+    let maybe_again = Maybe[Vec[i32]].take([24]);
+    if maybe_again[0] != 24 {
+        return 11;
+    }
+
+    let chosen = b.choose(b);
+    if chosen.marker != 3 {
+        return 12;
+    }
+
+    var accepted = Box[Vec[i32]](value: [27], items: [28], marker: 12);
+    let accepted_result = b.accept(move accepted);
+    if accepted_result != 15 {
+        return 13;
+    }
+
+    var log i64 = 0;
+    var named_values Vec[i32] = [29];
+    let named = make_box(inout log).take_named(
+        second: mark_value(inout log, 3),
+        value: move named_values,
+        first: mark_value(inout log, 2));
+    if named[0] != 29 || log != 932 {
+        return 14;
+    }
+
+    let total = i32(forwarded_result[0]) + i32(nested_result[0]) +
+                i32(maybe_temp[0]) + i32(maybe_again[0]);
+    if total != 11 + 12 + 24 + 24 {
+        return 15;
+    }
+    return 0;
+}
