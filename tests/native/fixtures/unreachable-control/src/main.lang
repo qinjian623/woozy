@@ -1,0 +1,8 @@
+package app;
+func choose() (func(bool) i32) {return func(b bool) i32 {if b{return 1;}return 0;};}
+func decide(b bool) i32 {
+    if b {return 9;} else {return 8;}
+    let never = choose()(true && false);
+    return never;
+}
+func main() i32 {if decide(true)!=9 || decide(false)!=8 {return 1;}return 0;}

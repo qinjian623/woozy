@@ -1,0 +1,10 @@
+package app;
+
+func main() i32 {
+    let quotient i32 = -2_147_483_648 / -1;
+    let remainder i32 = -2_147_483_648 % -1;
+    if quotient != -2_147_483_648 || remainder != 0 { return 1; }
+    let left u64 = 1 << 63;
+    if left != 9_223_372_036_854_775_808 { return 2; }
+    return 0;
+}

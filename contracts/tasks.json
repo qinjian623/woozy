@@ -179,10 +179,12 @@
       "primary_role": "native",
       "backup_role": "integrator",
       "reviewer_role": "validation",
-      "owner_instance": "bridge:ebc594c3-38b1-411a-be07-c34b960c5d7b",
+      "owner_instance": "root-integrator",
       "target_paths": [
-        "src/native_ir/",
-        "src/codegen_llvm/",
+        "include/lang/ir/",
+        "src/ir/",
+        "src/backend/native/",
+        "runtime/native/",
         "src/driver/",
         "tests/native/"
       ],
@@ -202,7 +204,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Native scalar code generation taskcff93d59; committedT04inputb8ccf38 verified in actual worktree. Root owns common CMake/CLI integration."
+      "notes": "标量组件与正式build CLI已集成。GNU Debug/Release及Clang22 ASan/UBSan各21/21；独立62次ELF执行，正式CLI34次主项目+2次普通非零对照。简单结构体和常量字符串依赖T07接口，补齐前整项保持in_progress。"
     },
     {
       "id": "T06",
@@ -216,7 +218,7 @@
       "reviewer_role": "validation",
       "owner_instance": "root-integrator",
       "target_paths": [
-        "src/codegen_python/",
+        "src/backend/python/",
         "runtime/python/",
         "src/bindings/",
         "tests/python/"
@@ -237,19 +239,19 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Pythonemitter4680b60a accepted; readonlyreview310f6335 found0confirmedissues. Root integratedformalbuildCLI. GNU Debug/Release andClang22ASan each17/17;17actualgeneratedprojects,15extra,5negativecontrols,12unsupportedverified withPython3.12.15. NoARC/foreign/strictfloatarithmeticclaim."
+      "notes": "Python标量生成与正式build CLI已完成，提交aea15c0。正式集成三种构建各21/21，Python3.12.15实际执行17个主项目、15个补充和5个分类对照，12类未支持明确拒绝。17份相同源码与native O0/O2共34项比较通过。ARC、foreign和严格浮点算术尚未实施。"
     },
     {
       "id": "T07",
       "title": "泛型与聚合类型",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T04"
       ],
       "primary_role": "sema",
       "backup_role": "native",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/sema/",
         "src/hir/",
@@ -271,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+      "notes": "接口只读提案已接受，尚无T07实现完成声明；独立源码正反例由bridge:b601e93b-15b1-41cc-abc2-ec551783894c负责。公共HIR/sema仅指定一位实现者，root负责CMake、CLI和两后端操作支持检查。"
     },
     {
       "id": "T08",

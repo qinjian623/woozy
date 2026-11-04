@@ -3,15 +3,45 @@
 #include "lang/syntax/parser.hpp"
 #include "lang/sema/check.hpp"
 #include "lang/backend/python.hpp"
+#include "lang/support/process.hpp"
+#include <algorithm>
+#include <cctype>
 #include <cerrno>
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
+#include <json-c/json.h>
+#include <limits>
 #include <iostream>
 #include <string_view>
 
 namespace {
 namespace fs = std::filesystem;
+#ifdef LANG_NATIVE_HELPER
+bool diagnostic_document(const std::string& text, int exit) {
+    if (text.size() > static_cast<size_t>(std::numeric_limits<int>::max())) return false;
+    auto* parser = json_tokener_new();
+    if (!parser) throw std::bad_alloc();
+    auto* value = json_tokener_parse_ex(parser, text.data(), static_cast<int>(text.size()));
+    auto end = json_tokener_get_parse_end(parser);
+    bool valid = value && json_tokener_get_error(parser) == json_tokener_success &&
+        std::all_of(text.begin() + end, text.end(), [](unsigned char c) { return std::isspace(c); });
+    if (valid) {
+        auto* status = json_object_object_get(value, "status");
+        auto* diagnostics = json_object_object_get(value, "diagnostics");
+        valid = status && json_object_is_type(status, json_type_string) &&
+            diagnostics && json_object_is_type(diagnostics, json_type_array);
+        if (valid) {
+            std::string_view s = json_object_get_string(status);
+            valid = (exit == 0 && s == "ok") || ((exit == 1 || exit == 2) && s == "error") ||
+                (exit == 3 && s == "internal_error") || (exit == 130 && s == "cancelled");
+        }
+    }
+    if (value) json_object_put(value);
+    json_tokener_free(parser);
+    return valid;
+}
+#endif
 void write_python(const fs::path& out, const lang::backend::python::Output& output) {
     fs::create_directories(out);
     auto pattern = (out / ".langc-XXXXXX").string();
@@ -39,7 +69,7 @@ void write_python(const fs::path& out, const lang::backend::python::Output& outp
     }
 }
 int compile(const char* path, bool syntax, bool json, std::string_view backend,
-            const char* out = nullptr) {
+            const char* out = nullptr, const char* opt = nullptr, const char* target = nullptr) {
     lang::SourceManager sources;
     auto finish = [&](const auto& result) {
         if (json) {
@@ -73,6 +103,35 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
             auto project = lang::modules::load_project({path, {}, {}}, sources);
             if (!project.success()) return finish(project);
             if (!backend.empty()) project.value->backend = backend;
+            if (out && project.value->backend == "native") {
+#ifdef LANG_NATIVE_HELPER
+                std::vector<std::string> args{LANG_NATIVE_HELPER, "--project", path,
+                                              "--out-dir", out, "--opt", opt ? opt : "0"};
+                if (target) args.insert(args.end(), {"--target", target});
+                if (json) args.insert(args.end(), {"--format", "json"});
+                auto result = lang::run_process(args);
+                if (result.signalled)
+                    return fail("E_INTERNAL_ERROR", "native helper terminated with status " +
+                                std::to_string(result.exit_code) + ": " + result.output,
+                                lang::FailureKind::internal);
+                if (result.exit_code != 0 && result.exit_code != 1 &&
+                    result.exit_code != 2 && result.exit_code != 3 && result.exit_code != 130)
+                    return fail("E_TOOLCHAIN_MISSING", "native helper failed with status " +
+                                std::to_string(result.exit_code) + ": " + result.output,
+                                lang::FailureKind::environment);
+                if (json && !diagnostic_document(result.output, result.exit_code))
+                    return fail("E_INTERNAL_ERROR", "invalid native helper diagnostics: " + result.output,
+                                lang::FailureKind::internal);
+                (json || result.exit_code == 0 ? std::cout : std::cerr) << result.output;
+                return result.exit_code;
+#else
+                return fail("E_CAPABILITY_UNAVAILABLE", "native build requires LANG_ENABLE_LLVM=ON",
+                            lang::FailureKind::unsupported, "codegen");
+#endif
+            }
+            if (out && (opt || target))
+                return fail("E_DRIVER_ARGUMENT", "--opt and --target require native build",
+                            lang::FailureKind::environment);
             auto resolved = lang::modules::resolve_project(
                 std::make_shared<const lang::modules::Project>(std::move(*project.value)));
             auto checked = lang::sema::check_project(resolved);
@@ -104,6 +163,8 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
         return fail("E_INPUT_IO", error.what(), lang::FailureKind::environment);
     } catch (const std::ios_base::failure& error) {
         return fail("E_INPUT_IO", error.what(), lang::FailureKind::environment);
+    } catch (const std::system_error& error) {
+        return fail("E_TOOLCHAIN_MISSING", error.what(), lang::FailureKind::environment);
     } catch (const std::exception& error) {
         return fail("E_INTERNAL_ERROR", error.what(), lang::FailureKind::internal);
     }
@@ -116,7 +177,8 @@ int main(int argc, char** argv) {
                      "       langc check --syntax-only [--format json] FILE\n"
                      "       langc check --project MANIFEST [--backend native|python] [--format json]\n"
                      "       langc build --project MANIFEST --backend python --out-dir DIR [--format json]\n"
-                     "Native build, lsp and capabilities are not implemented\n";
+                     "       langc build --project MANIFEST --backend native --out-dir DIR [--opt 0|2] [--target TRIPLE] [--format json]\n"
+                     "Native build requires LANG_ENABLE_LLVM=ON; lsp and capabilities are not implemented\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--version") {
@@ -130,6 +192,8 @@ int main(int argc, char** argv) {
             const char* path = nullptr;
             const char* project = nullptr;
             const char* out = nullptr;
+            const char* opt = nullptr;
+            const char* target = nullptr;
             std::string_view backend;
             for (int i = 2; i < argc; ++i) {
                 const std::string_view argument(argv[i]);
@@ -150,6 +214,12 @@ int main(int argc, char** argv) {
                            (std::string_view(argv[i + 1]) == "native" ||
                             std::string_view(argv[i + 1]) == "python")) {
                     backend = argv[++i];
+                } else if (argument == "--opt" && command == "build" && i + 1 < argc && !opt &&
+                           (std::string_view(argv[i + 1]) == "0" || std::string_view(argv[i + 1]) == "2")) {
+                    opt = argv[++i];
+                } else if (argument == "--target" && command == "build" && i + 1 < argc && !target &&
+                           !std::string_view(argv[i + 1]).empty() && !std::string_view(argv[i + 1]).starts_with('-')) {
+                    target = argv[++i];
                 } else if (argument.empty() || argument.front() == '-' || path) {
                     std::cerr << "E_DRIVER_ARGUMENT: invalid check/build arguments\n";
                     return 2;
@@ -162,7 +232,7 @@ int main(int argc, char** argv) {
                 std::cerr << "E_DRIVER_ARGUMENT: use check --syntax-only FILE, check --project MANIFEST, or build --project MANIFEST --out-dir DIR\n";
                 return 2;
             }
-            return compile(syntax ? path : project, syntax, json, backend, out);
+            return compile(syntax ? path : project, syntax, json, backend, out, opt, target);
         }
         if (command == "lsp" ||
             command == "capabilities") {

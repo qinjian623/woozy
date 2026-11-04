@@ -1,0 +1,7 @@
+package app;
+
+func factorial(n i32) i32 {if n<2{return 1;} return n*factorial(n-1);}
+func toggle(value inout bool) {value = !value;}
+func forward(value inout bool) {toggle(inout value);}
+func main() i32 {var flag = false;forward(inout flag); if !flag{return 1;}
+if factorial(6)!=720{return 2;} return 0;}

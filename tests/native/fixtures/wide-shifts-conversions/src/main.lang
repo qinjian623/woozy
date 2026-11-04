@@ -1,0 +1,14 @@
+package app;
+
+func id(x u64) u64{return x;}
+func main() i32 {let one i64=1; let sixty_three i8=63; if one<<sixty_three != -9_223_372_036_854_775_808{return 1;}
+let top u64=id(18_446_744_073_709_551_615); if top>>sixty_three !=1{return 2;}
+let neg i64=-1; if neg>>sixty_three != -1{return 3;}
+let byte u8=255;let count u64=7; if byte>>count !=1{return 4;}
+let narrow i8=-128;if i64(narrow)!=-128{return 5;}
+let full u64=18_446_744_073_709_551_615;if u64(full)!=full{return 6;}
+let signed_max i64=9_223_372_036_854_775_807;if u64(signed_max)!=9_223_372_036_854_775_807{return 7;}
+let low i16=-32_768; let minus i16=-1; if low/minus!=low || low%minus!=0{return 8;}
+let hi u16=65_535;if hi+1!=0{return 9;} let hi32 u32=4_294_967_295;if hi32+1!=0{return 10;}
+let p isize=-1;let q usize=18_446_744_073_709_551_615;if p>>count != -1 || q>>sixty_three!=1{return 11;}
+return 0;}

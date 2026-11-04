@@ -1,0 +1,272 @@
+# T05 原生标量实现与交接
+
+operation_id：`language-t05-native-scalars-20261103`。契约：`compiler-dev/1`。
+基础 HEAD：`b8ccf384a16e85141994995fe1869fd5fc084100`。
+
+2026-11-04：root 已接入正式 `langc build --backend native --out-dir DIR --opt 0|2`，
+输出 program.o 和 program，构建不运行程序。GNU Debug、GNU Release、Clang22
+ASan/UBSan 各21/21组测试通过，包含正式CLI的34次主项目执行和2次普通返回7对照。
+组件的独立62次ELF执行另有记录；两组数字不重复合计为不同源码数。
+
+本文件下方保留组件实现和早期验证记录。T05整项仍为in_progress，
+简单结构体和常量字符串需在T07接口发布后补齐。
+
+## API 与 CMake
+
+公共入口为 `include/lang/backend/native.hpp`：
+
+```cpp
+lang::PhaseResult<lang::backend::native::Output> emit(
+    const lang::hir::VerifiedHirModule &,
+    lang::SymbolId entry,
+    const lang::backend::native::Options & = {});
+```
+
+另有接收 `const lang::ir::VerifiedModule &` 的重载。入口 SymbolId 由调用者从
+ResolvedProject 选择。后端不解析源码，不查变量名或调用名字，不复制 TypeContext。
+`Output` 包含 `object` 字节、`native_ir`、`llvm_before_optimization`、`llvm_ir`、
+`triple` 和 `data_layout`。`Options` 目前仅接受 triple
+`x86_64-unknown-linux-gnu`、CPU `generic`、空 features 和优化等级 0/2；其它配置
+返回 `E_CAPABILITY_UNAVAILABLE`。可执行入口支持无参 `i32` 或 `Unit`。
+
+`include/lang/ir/native.hpp` 发布 `ir::lower`、`ir::verify`、`ir::dump`。
+`VerifiedModule` 只能由 verifier 发布，复制并持有不可变 CFG；它引用同一公共
+VerifiedHirModule 中的类型。统一使用已有 BlockId/ValueId/LocalSlotId/TypeId/
+SymbolId/SourceSpan，没有另建共享 HIR。正式链接驱动新增已登记诊断 E_LINK_FAILED。
+
+root 可在现有前端目标之后添加：
+
+```cmake
+add_subdirectory(src/backend/native)
+```
+
+该片段定义 `lang_native_ir`、`lang_native`、`lang_native_runtime` 和
+`lang_native_helper`。LLVM 只出现在 native 目标中；`langc` 链接前端、Python发射器和进程工具，不链接LLVM或CPython。
+不应把 lang_native 链接到 check 或未来的 LSP 目标。
+
+helper 的参数：
+
+```text
+lang_native_helper --project MANIFEST
+  [--entry NAME | --entry-symbol ID] [--opt 0|2]
+  [--target x86_64-unknown-linux-gnu] --out-object FILE
+  [--out-llvm FILE] [--out-llvm-before FILE] [--out-native FILE]
+  [--format json]
+lang_native_helper --project MANIFEST --check-only [--format json]
+```
+
+默认入口为入口模块中的 main；名字选择发生在 helper 这个调用者内，库只接收 ID。
+helper 明确选择 native 后端，保留清单字宽。每次进程只执行一次真实
+load/resolve/check，再执行 lower/verify/LLVM/对象输出；没有 HIR 跨进程序列化。
+`--check-only` 只报告静态结果，不声称后端支持该字宽。生成成功的 JSON 标记
+`phase=object`，链接和执行由调用者完成。诊断写 stderr，退出码采用共享 PhaseResult；
+输出写入失败为 `E_INPUT_IO`/2。
+
+正式 build CLI 通过 helper 的 --out-dir 模式生成并链接；显式对象输出模式仍供测试使用。
+build 默认不执行程序；执行步骤属于本测试 runner。
+
+## 实现规则
+
+HIR 首先展开为有类型值、slot、基本块和单个 terminator。循环使用 HIR 的目标 ID，
+continue 跳到步进块；短路通过条件边和临时 bool slot 实现。lowering 删除没有入口可达
+前驱的生成块，避免在两侧都 return 后继续产生不可达表达式。
+
+原生 verifier 检查函数集合/签名、参数位置/模式、值的唯一性与先定义后使用、
+跨块支配关系、分支目标、操作数/调用/返回类型，以及 slot 的所有可达前驱都已初始化。
+不能用 LLVM verifier 代替这些检查。LLVM 发射器随后运行 verifyFunction、
+verifyModule；O2 使用 PassBuilder 标准 O2 流程，然后再次 verifyModule。
+
+- Unit、bool、全部整数、函数值和无捕获 lambda 使用确定的标量表示。
+  私有 ABI 中 Unit 为 i8 零值，bool 为 i1，整数保持位宽，函数值为代码指针；
+  inout 为标量存储指针。Unit 入口的 C main 返回 0，i32 入口原样返回。
+  这不是已发布的 C/foreign ABI。
+- 函数预声明后再生成函数体，支持直接/间接调用、递归及跨模块调用。
+  callee 先求值一次，再按源码次序保存实参，最后依据 parameter_index 组装调用。
+  空 label 的丢弃参数仍按位置和 SymbolId 接收。
+- 普通局部存储只在入口块分配；循环反复进入不会不断增加 alloca。
+  整体标量 inout 直接传存储地址，支持继续传给另一个 inout 参数。
+  不添加未证明的 noalias/readonly/noescape 属性。
+- 加减乘与负号不手工加 nsw/nuw。除零先进入 Panic；MIN/-1 和 MIN%-1
+  分别返回 MIN 和 0，普通分支才执行 sdiv/srem。
+- 移位量先依自身符号性扩展到 i65，检查负值及大于等于左值位宽，再转成左值
+  位宽执行 shift。右值类型不会改变左值类型。动态转换也在 i65 中比较目标上下界，
+  合法后才转换，覆盖完整 u64 范围。
+- 使用 IRBuilder NoFolder 保留 O0 检查分支，防止字面量危险运算提前折成 poison。
+  LLVM 的后续优化可以根据已经证明的条件简化代码。
+- f32/f64 常量由 HIR 的确切位模式建立 APFloat，不经过 host double。
+  支持字面量、参数、返回、绑定和普通传递。没有 fast-math；严格浮点算术未实施。
+
+目标由 LLVM 22.1.8 TargetMachine 固定为 Linux x86_64/PIC/small/generic；
+实际 DataLayout 为：
+
+```text
+e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128
+```
+
+Native IR dump 保存每个操作的 SourceSpan；Panic 记录保存 snapshot/begin/end。
+本阶段没有生成 DWARF 行号，也未实现稳定跨构建符号 ABI。
+
+## Panic 与未支持项
+
+运行库 ABI 为 `lang-native-scalars/1`，符号为 `lang_native_panic_v1`。
+运行时向 stderr 写一条记录，然后 `_Exit(101)`：
+
+```text
+LANG_NATIVE_PANIC:v1:division-by-zero:2:57:62
+LANG_NATIVE_PANIC:v1:invalid-shift:2:97:111
+LANG_NATIVE_PANIC:v1:integer-conversion:2:80:90
+```
+
+runner 同时检查完整记录、原因、空 stdout 与非零/信号终止。普通非零 main、
+无记录的 SIGSEGV、加载/链接失败、超时均不算 Panic 通过。返回 7 的源程序实际执行
+了 O0/O2，两次都没有被判为 Panic。四个共享 Panic 案例没有更改预期，错误实现若
+没有 Panic 而返回 0 就会失败。
+
+string、聚合、泛型、throws/try/typed catch、defer、ARC/move、foreign、复杂 Place、
+捕获 lambda、严格浮点算术/比较/转换均未实施，由 checker 或目标检查报告
+`E_CAPABILITY_UNAVAILABLE`。普通参数重新赋值仍遵循 checker 的未支持诊断，
+没有自行决定写权限。native32、其它目标/CPU/features/O 等级均未开放。
+Panic 直接终止，不进入 typed catch，不执行语言 defer；本阶段不保证 Panic 无泄漏。
+
+## 实际命令
+
+本机 Linux x86_64，GNU 16.2.1；LLVM、Clang、LLD 均精确为 22.1.8。
+前端使用已安装的 GMP/GMPXX 6.3.0、toml++ 和 json-c。仅使用外层已有工具链，
+没有联网下载或替换系统库。以下 `tc` 指向外层 toolchains，路径由调用者提供：
+
+```sh
+tc=/home/qin/Work/language-dev-20261103/toolchains
+export LD_LIBRARY_PATH="$tc/libxml2-legacy-2.13.9/usr/lib"
+cmake -S tests/native -B /tmp/language-t05-native-build -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DLLVM_DIR="$tc/llvm-22.1.8/lib/cmake/llvm" \
+  -Dzstd_STATIC_LIBRARY="$tc/zstd-1.5.7/lib/libzstd.a"
+cmake --build /tmp/language-t05-native-build -j4
+ctest --test-dir /tmp/language-t05-native-build --output-on-failure
+python3 tests/native/run.py --build /tmp/language-t05-native-build \
+  --toolchains "$tc" --out /tmp/language-t05-native-runs \
+  --report tests/native/verification.json
+```
+
+单项目编译、链接和执行的完整示例：
+
+```sh
+mkdir -p /tmp/t05-core
+/tmp/language-t05-native-build/native/lang_native_helper \
+  --project tests/fixtures/core/lang.toml --entry main --opt 2 \
+  --out-object /tmp/t05-core/core.o --out-llvm /tmp/t05-core/core.ll \
+  --out-native /tmp/t05-core/core.nir --format json
+"$tc/llvm-22.1.8/bin/clang" --target=x86_64-unknown-linux-gnu \
+  --ld-path="$tc/llvm-22.1.8/bin/ld.lld" /tmp/t05-core/core.o \
+  /tmp/language-t05-native-build/native/liblang_native_runtime.a -o /tmp/t05-core/core
+/tmp/t05-core/core
+```
+
+runner 通过 argv 运行 Clang、LLD、opt 和 ELF 程序，没有 shell 拼接。Python 只负责
+启动进程和写测试记录，没有解释或执行源语言/Python 替代程序，也没有 C++ 探针充作
+源语言执行。15 个共享 native64 静态前提全部成功后才开始对象生成。每次输出的
+优化前后 LLVM 文本还交给同版本 opt 再次验证。产物存放在受控 /tmp 目录。
+
+Clang22 ASan/UBSan 构建使用同一个 standalone CMake 工程：
+
+```sh
+cmake -S tests/native -B /tmp/language-t05-native-asan -G Ninja \
+  -DCMAKE_BUILD_TYPE=Debug \
+  -DCMAKE_C_COMPILER="$tc/llvm-22.1.8/bin/clang" \
+  -DCMAKE_CXX_COMPILER="$tc/llvm-22.1.8/bin/clang++" \
+  -DCMAKE_CXX_FLAGS=-fsanitize=address,undefined \
+  -DCMAKE_EXE_LINKER_FLAGS=-fsanitize=address,undefined \
+  -DLLVM_DIR="$tc/llvm-22.1.8/lib/cmake/llvm" \
+  -Dzstd_STATIC_LIBRARY="$tc/zstd-1.5.7/lib/libzstd.a"
+cmake --build /tmp/language-t05-native-asan -j4
+ASAN_OPTIONS=detect_leaks=0 ctest --test-dir /tmp/language-t05-native-asan --output-on-failure
+```
+
+该检查覆盖前端、CFG、LLVM 生成与位模式测试。没有声称做过 LeakSanitizer，
+也没有把带 sanitizer 的 C++ 生成器测试当作源语言程序运行。
+
+## 结果与证据
+
+`tests/native/verification.json` 保存每个 O0/O2 项目的源码 SHA-256、helper 参数、
+CFG/LLVM 验证结果、target/DataLayout、Clang/LLD 参数、链接退出码、ELF x86_64
+检查、二进制摘要及执行 exit/stdout/stderr。`tests/native/ctest.json` 保存两套
+真实 CTest 的命令与输出。全部结果基于本 worktree，而非旧 rejected 任务代码。
+
+下表每一行的 O0/O2 都实际编译、链接并执行，Panic 行都检查了记录；其它行无输出。
+
+| 项目 | O0 exit | O2 exit | Panic 原因或普通返回 |
+| --- | ---: | ---: | --- |
+| i8-u8-wrapping | 0 | 0 | 普通返回 |
+| signed-division-remainder | 0 | 0 | 普通返回 |
+| division-min-over-minus-one | 0 | 0 | 普通返回 |
+| bitwise-integers | 0 | 0 | 普通返回 |
+| shift-left-right | 0 | 0 | 普通返回 |
+| dynamic-integer-conversions | 0 | 0 | 普通返回 |
+| short-circuit-panic-guard | 0 | 0 | 普通返回，无 Panic |
+| function-values | 0 | 0 | 普通返回，含 lambda |
+| control-flow-break-continue | 0 | 0 | 普通返回 |
+| lexical-shadowing | 0 | 0 | 普通返回 |
+| inout-argument-order | 0 | 0 | 普通返回 |
+| panic-division-by-zero | 101 | 101 | division-by-zero |
+| panic-invalid-shift | 101 | 101 | invalid-shift |
+| panic-dynamic-conversion | 101 | 101 | integer-conversion |
+| panic-negative-shift | 101 | 101 | invalid-shift |
+| core | 0 | 0 | 普通返回 |
+| numeric | 0 | 0 | 普通返回 |
+| mutual-recursion | 0 | 0 | 同包跨文件相互递归 |
+| cross-package-call | 0 | 0 | 外部源包调用 |
+| arithmetic-literals | 0 | 0 | 字面量 MIN/-1、余数、u64 shift |
+| float-transfer | 0 | 0 | f32/f64 字面量及传递 |
+| nonzero-main | 7 | 7 | 普通非零返回，无 Panic |
+| panic-huge-unsigned-shift | 101 | 101 | invalid-shift |
+| panic-negative-conversion | 101 | 101 | integer-conversion |
+| panic-remainder-zero | 101 | 101 | division-by-zero |
+| panic-u64-to-i64-conversion | 101 | 101 | integer-conversion |
+| recursive-inout-bool | 0 | 0 | 递归、bool inout 转传 |
+| unit-discard-lambda | 0 | 0 | Unit、重复丢弃参数、嵌套/返回 lambda |
+| unit-main | 0 | 0 | Unit 入口 |
+| unreachable-control | 0 | 0 | 两侧 return 后的不可达调用 |
+| wide-shifts-conversions | 0 | 0 | 各位宽回绕、不同 RHS 类型、完整 u64 范围 |
+
+实际结果：62/62 次源语言 ELF 执行通过，其中共享 15 例 30/30、core/numeric 4/4。
+GNU Debug 与 Clang22 ASan/UBSan 各 16/16 CTest 通过。native.ir 拒绝 18 种损坏
+CFG，并检查不可变发布、O0/O2 对象输出及不支持目标。native.llvm 从真实源码生成
+Verified 后检查 f32/f64 ties-to-even 和最小 f32 subnormal 的精确位模式，无 fast-math；
+直接用 LLVM C++ API 构造的无 terminator 和错误返回类型模块被 verifyModule 拒绝。
+另有合法语法但破坏支配关系的 LLVM 文本被 opt verifier 拒绝。
+
+native32、普通参数写入、严格浮点算术、string、defer 五类实际输入均得到未支持诊断；
+不计入功能执行通过数。`langc` 的动态依赖和未解析符号检查未发现 LLVM。
+前端 14 个既有 CTest 保持通过；当前没有 LSP 实现可运行。
+
+## 首轮失败及修正
+
+首次完整运行中，30 次执行成功，另外 24 项在链接处失败。原因是 GNU 为 noexcept
+Panic 函数产生了 `__gxx_personality_v0` 引用，而 C 链接命令没有 C++ 异常运行库。
+记录见 `tests/native/first-run-failures.json`。该运行库只调用 libc 且从不抛出，
+现通过 `-fno-exceptions -fno-rtti` 编译；修正后所有含 Panic 的共享案例和额外边界例
+均实际链接、运行成功。此规则已经写入 native CMake，无需使用者另补 C++ 异常库。
+
+## 正式 CLI 集成结果
+
+```sh
+build/native-cli/langc build --project tests/fixtures/core/lang.toml \
+  --backend native --out-dir build/core/native --opt 2 --format json
+build/core/native/program
+```
+
+默认O0；目标仅支持 x86_64-unknown-linux-gnu。正式模式输出共享诊断JSON，
+对象私有模式仍保留先前元信息格式。helper 和链接器通过直接argv调用，
+临时文件在同一输出目录创建，程序最后替换；源码错误不修改已有输出。
+
+主目录实际报告位于外层 checks/t05-native-cli-verification.json；
+独立对象测试位于 checks/t05-root-runtime-verification.json。
+上文 tests/native/verification.json、ctest.json 和 first-run-failures.json 为
+原组件worktree的历史记录，没有复制进源代码仓库。
+
+集成的首次ASan构建暴露运行库误继承编译器检查选项，造成 __asan_* 和 __ubsan_*
+链接未定义。已对生成程序使用的运行库设置 -fno-sanitize=all，
+编译器、helper、HIR/CFG和发射器继续检查；重新运行21/21通过。
+预编译LLVM、目标程序和该运行库不包含在ASan覆盖声明内，LeakSanitizer未运行。
+
+待完成：T07发布后接入简单聚合与静态字符串，继续明确拒绝尚未实施的操作。

@@ -1,0 +1,4 @@
+package app;
+
+func accept(_ i32, _ i32) {}
+func main() { accept(1, 2); }

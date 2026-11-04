@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract": "compiler-dev/1",
-  "status": "registry_includes_T00_T04_implementations",
+  "status": "registry_includes_T00_T06_implemented_components",
   "codes": [
     {
       "code": "E_BINDING_INVALID",
@@ -65,6 +65,10 @@
     },
     {
       "code": "E_LEX_INVALID_TOKEN",
+      "severity": "error"
+    },
+    {
+      "code": "E_LINK_FAILED",
       "severity": "error"
     },
     {
