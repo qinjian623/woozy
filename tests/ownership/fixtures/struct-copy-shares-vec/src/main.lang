@@ -1,0 +1,24 @@
+package main;
+
+struct Holder {
+    items Vec[i32];
+    marker i32;
+}
+
+func main() i32 {
+    let inner Vec[i32] = [1, 2];
+    let original = Holder(items: inner, marker: 3);
+    var copy = original;
+    copy.marker = 9;
+    copy.items[0] = 8;
+    if original.marker != 3 {
+        return 1;
+    }
+    if original.items[0] != 8 {
+        return 2;
+    }
+    if inner[0] != 8 {
+        return 3;
+    }
+    return 0;
+}

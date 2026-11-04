@@ -1,0 +1,14 @@
+package main;
+
+func take(values move Vec[i32]) i32 {
+    return values[0];
+}
+
+func main() i32 {
+    var values Vec[i32] = [1];
+    defer {
+        let observed = values[0];
+    }
+    let first = take(move values);
+    return first;
+}

@@ -1,0 +1,15 @@
+package main;
+
+func main() i32 {
+    let inner Vec[i32] = [4];
+    let outer Vec[Vec[i32]] = [inner];
+    let part = outer[0:1];
+    part[0][0] = 7;
+    if inner[0] != 7 {
+        return 1;
+    }
+    if outer[0][0] != 7 {
+        return 2;
+    }
+    return 0;
+}

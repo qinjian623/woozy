@@ -1,0 +1,726 @@
+{
+  "schema": "compiler-dev/ownership-fixtures/1",
+  "contract": "compiler-dev/1",
+  "root_revision": "e808169",
+  "case_count": 18,
+  "accepted_count": 11,
+  "reject_count": 7,
+  "accepted_note": "accepted_count 包含 panic-vec-index：其源码未来应通过静态检查，但运行时必须 Panic；不等于运行通过。",
+  "stage_policy": {
+    "syntax": "全部 18 个项目的 src/main.lang 必须通过现有 C++ langc check --syntax-only --format json：退出 0、status=ok、diagnostics 为空。语法通过不代表类型、所有权、后端生成或执行通过。",
+    "current_full_check": "在根版本 e808169 的现有完整 check 下，native 与 python 各 18/18 都在当前 Vec 类型处返回 E_CAPABILITY_UNAVAILABLE。该结果只是 T09 未实现前的当前能力拒绝，不是未来 expected_static 的 accept/reject 结果。",
+    "future_static": "expected_static 是 T09 实现后的目标。5个已移动绑定反例采用既有 E_OWNERSHIP_USE_AFTER_MOVE，inout Vec采用 E_CAPABILITY_UNAVAILABLE；普通参数借用不可直接move尚无专用固定诊断，code保留null，不在资料中新增code。",
+    "runtime": "runtime_expected 全部是未来目标；没有 T09 runtime/native/Python 执行。所有 runtime_expected 和 future_observations 都标 not_run，不能把语法通过或当前 E_CAPABILITY_UNAVAILABLE 算作运行通过。"
+  },
+  "observation_policy": {
+    "source_level": "源码只能直接观察整数返回、log 更新和分支结果；没有用户定义析构函数、显式 drop、retain/release 或引用计数 API，不能从 main 返回 0 推出析构或计数正确。",
+    "destruction": "drop 顺序、对象释放和部分构造清理必须由未来 runtime 观察、失败注入或地址检查器验证；本目录只记录按规范的未来期望，状态 not_run。",
+    "counts": "retain/release/drop 的精确内部次数未冻结，优化可消除冗余操作；测试不得要求 O0 与 O2 的内部计数相同。未执行的值/计数一律 not_run。",
+    "length_modification": "冻结规范只规定活跃遍历期间改变长度必须在修改前 Panic，没有冻结 push/append/truncate 等源 API 名称；本目录不发明方法名，长度修改正例和 Panic 反例列为 TODO。",
+    "index_type": "冻结文本只说 Vec 索引为非负整数，没有单独冻结索引表达式的整数类型；for-in-element-copy 和 panic-vec-index 使用 i32 动态索引。若 T09 接口限定具体整数类型，应先更新规范并复核这两个案例。",
+    "partial_construction": "本批没有单独的 enum 活动 payload 销毁或“部分构造失败只逆序销毁已完成成员”项目；需要能在构造实参中抛错并观察已完成成员 drop 的运行期支持，列为未覆盖资料缺口。",
+    "borrow_limits": "本批没有单独覆盖 A07 的借用逃逸、同一存储同时作为 inout 与另一访问、受限借用期间销毁或移动拥有者；18 例优先用户指定的 Vec/move/defer/error/Panic 主路径。"
+  },
+  "current_check": {
+    "date": "2026-11-04",
+    "compiler_version": "0.1.0-bootstrap (compiler-dev/1)",
+    "root_revision": "e808169",
+    "syntax_command": "langc check --syntax-only --format json <source>",
+    "full_command": "langc check --project <manifest> --format json",
+    "syntax_passed": 18,
+    "syntax_failed": 0,
+    "full_check_accepted": 0,
+    "full_check_rejected": 18,
+    "full_check_codes": {
+      "E_CAPABILITY_UNAVAILABLE": 18
+    },
+    "note": "实际 argv、绝对路径、逐项退出码和原始 native/python JSON 保存在 /tmp/language-t09-ownership-fixtures-correction-20261104/checks.json；cases.json 的 current_check 记录 native，Python 结果见该机器记录。",
+    "full_check_python_rejected": 18,
+    "full_check_python_codes": {
+      "E_CAPABILITY_UNAVAILABLE": 18
+    },
+    "full_command_native": "langc check --project <manifest> --backend native --format json",
+    "full_command_python": "langc check --project <manifest> --backend python --format json"
+  },
+  "cases": [
+    {
+      "id": "vec-shared-index",
+      "purpose": "两个 Vec 绑定共享同一容器；经 right 的索引写入对 left 可见。",
+      "specification": "docs/SEMANTICS.md §7.1 复制与对象身份（Vec 逻辑复制、索引写入所有别名可见）；docs/ACCEPTANCE.md A07 所有权和 ARC；DEVELOPMENT.md D10",
+      "expected_static": {
+        "status": "accept",
+        "reason": "left 与 right 是同一容器的两个拥有句柄；right[0]=9 修改共享容器，left[0] 必须观察到 9。let 只禁止改绑定/值字段，允许 Vec 的已声明索引写入。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "left_after_write": 9,
+          "right_after_write": 9
+        },
+        "reason": "写入后两别名都读到 9；main 的所有检查通过并返回 0。",
+        "future_observations": {
+          "retain_release": {
+            "status": "not_run",
+            "expected": "left/right 是同一容器的两个拥有句柄，不得深复制；最后一个句柄释放时按元素索引逆序销毁。精确 retain/release 次数未冻结，不从 O0/O2 推断。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/vec-shared-index/lang.toml",
+      "source": "tests/ownership/fixtures/vec-shared-index/src/main.lang",
+      "source_sha256": "821e1ed0be0cbd34e8af7f06a8d2bc1f9ad287552fd7f5637da0130614ff4310",
+      "source_bytes": 167,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "slice-copy-scalars",
+      "purpose": "切片返回新 Vec，i32 元素按逻辑复制取得；修改 part 不改变 base 元素。",
+      "specification": "docs/SEMANTICS.md §7.1 值、容器与 ARC（切片新容器、左闭右开、元素逻辑 copy）；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "base[1:3] 产生新 Vec，元素 i32 按值复制；part[0]=9 只修改 part 自己的槽，base[1] 仍为 2。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "base_1": 2,
+          "part": [
+            9,
+            3
+          ]
+        },
+        "reason": "切片区间为 [1,3)，复制 base[1]=2、base[2]=3；写 part[0]=9 不影响 base[1]。",
+        "future_observations": {
+          "drop_order": {
+            "status": "not_run",
+            "expected": "part 与 base 是不同容器；按局部声明逆序 part 先于 base 销毁，每个容器元素按索引逆序销毁。未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/slice-copy-scalars/lang.toml",
+      "source": "tests/ownership/fixtures/slice-copy-scalars/src/main.lang",
+      "source_sha256": "10dd7f5e3f82e947cd658eb732849e8ee83679d2b02f14c16d18a8227d56b7d2",
+      "source_bytes": 235,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "slice-shares-elements",
+      "purpose": "切片复制元素的逻辑值；元素类型为 Vec 时复制句柄，内层容器仍共享。",
+      "specification": "docs/SEMANTICS.md §7.1 复制表（Vec 共享同一容器）及切片规则；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "outer 的元素是 Vec[i32] 句柄；outer[0:1] 复制该句柄而不是深复制内层元素。part[0][0]=7 对 inner 和 outer[0][0] 都可见。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "inner_0": 7,
+          "outer_0_0": 7
+        },
+        "reason": "内层容器 [4] 被改写为 [7]；外层容器及其切片中的句柄观察到同一对象。",
+        "future_observations": {
+          "retain_release": {
+            "status": "not_run",
+            "expected": "outer 与 part 是不同外层容器；inner 容器被多个句柄共享，最后一个句柄释放后销毁其元素。共享关系需运行期对象身份/计数观察。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/slice-shares-elements/lang.toml",
+      "source": "tests/ownership/fixtures/slice-shares-elements/src/main.lang",
+      "source_sha256": "a3c896da082467c2f863f2788e3b620c409b95cd5a419e311d3fa485c73dfbec",
+      "source_bytes": 262,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "struct-copy-shares-vec",
+      "purpose": "struct 值复制递归复制标量字段，Vec 字段共享容器；字段修改与共享写入分别可观察。",
+      "specification": "docs/SEMANTICS.md §7.1 struct 按字段递归 copy、Vec 共享容器；docs/SEMANTICS.md §7.2 值字段修改限制；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "copy=original 复制 marker 的值并新增 items 的 Vec 句柄；copy.marker=9 只改副本字段，copy.items[0]=8 通过共享容器对 original.items 与 inner 可见。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "original_marker": 3,
+          "original_items_0": 8,
+          "inner_0": 8
+        },
+        "reason": "marker 是独立值副本；items 的三个句柄（original/copy/inner）指向同一容器。",
+        "future_observations": {
+          "drop_order": {
+            "status": "not_run",
+            "expected": "copy 与 original 是独立 struct 值，按局部逆声明 copy 先销毁；字段逆序销毁，marker 平凡，items 句柄最后释放共享 inner。未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/struct-copy-shares-vec/lang.toml",
+      "source": "tests/ownership/fixtures/struct-copy-shares-vec/src/main.lang",
+      "source_sha256": "47c96fee5f184f56f16efbf9c4210451e3287ee317e9dbc5a7d26b2e12024b6e",
+      "source_bytes": 415,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "ordinary-param-return",
+      "purpose": "普通参数不消费调用者拥有值；返回 Vec 参数时取得合法共享 copy/retain，调用者继续可读。",
+      "specification": "docs/SEMANTICS.md §7.2 参数模式和移动；docs/SEMANTICS.md §7.1 Vec 逻辑复制；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "first/keep 的普通参数均为借用；keep 返回 values 时必须生成合法 copy/retain，新持有者 kept 与调用者 values 共享同一容器。main 未 move values。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "answer": 5,
+          "values_0": 6,
+          "kept_0": 6
+        },
+        "reason": "first 读到 5；keep 返回共享句柄；kept[0]=6 对 values[0] 可见。",
+        "future_observations": {
+          "retain_release": {
+            "status": "not_run",
+            "expected": "values 与 kept 共享容器；返回时增加拥有关系，作用域退出时各释放一次，不得重复释放。精确计数未冻结，未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/ordinary-param-return/lang.toml",
+      "source": "tests/ownership/fixtures/ordinary-param-return/src/main.lang",
+      "source_sha256": "e4ad7fc8e4ab1478027b557bdc6a26cdac82ab48c927cf7e580ff62dae05aa7d",
+      "source_bytes": 370,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "move-reinitialize",
+      "purpose": "显式 move 整个 Vec 拥有绑定后读取被禁止；重新初始化后恢复可读。",
+      "specification": "docs/SEMANTICS.md §7.2 move 消费整个拥有绑定、未重建不得读；docs/SEMANTICS.md §9 被移动值不销毁；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "take(move values) 在实参求值时把 values 的所有权转移到 move 参数；随后 values=[7,8] 重新初始化，再读取 values[0] 合法。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "first": 1,
+          "values_0": 7
+        },
+        "reason": "take 从旧容器读到 1；旧容器由 take 的 move 参数负责销毁；新容器 [7,8] 在 main 退出时销毁。",
+        "future_observations": {
+          "drop_order": {
+            "status": "not_run",
+            "expected": "旧容器在 take 返回路径销毁一次；新容器在 main 块退出时销毁一次；不得因移动源绑定恢复而重复 drop。未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/move-reinitialize/lang.toml",
+      "source": "tests/ownership/fixtures/move-reinitialize/src/main.lang",
+      "source_sha256": "d4a1ed968a305e4b63fb00df55371e930e8ac6c932295d3a9f093ad6417479ab",
+      "source_bytes": 294,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "branch-reinit-merge",
+      "purpose": "分支一侧 move 后重新初始化、另一侧保留；合流后两种路径都拥有有效绑定。",
+      "specification": "docs/SEMANTICS.md §7.2 移动后的有效状态；docs/ACCEPTANCE.md A07 分支一侧移动、另一侧保留的合流检查",
+      "expected_static": {
+        "status": "accept",
+        "reason": "flag=true 时 local 先 move 给 take，随后赋 [2] 重新初始化；flag=false 时未 move。合流后 local 在两条路径都已初始化，return local[0] 合法。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "choose_true": 2,
+          "choose_false": 1
+        },
+        "reason": "true 分支重初始化后读到 2；false 分支保留原值 [1] 并读到 1；main 两个检查都通过。",
+        "future_observations": {
+          "drop_order": {
+            "status": "not_run",
+            "expected": "两次 choose 调用使用独立容器；true 路径旧容器随 take 结束销毁，新容器随函数结束销毁；false 路径原容器随函数结束销毁。未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/branch-reinit-merge/lang.toml",
+      "source": "tests/ownership/fixtures/branch-reinit-merge/src/main.lang",
+      "source_sha256": "4f44003f40a07c34e11ea470e8c20f01a8cce5c7d886e77584869eea5a86998e",
+      "source_bytes": 433,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "defer-before-destroy",
+      "purpose": "块退出先执行 defer，再销毁仍拥有的局部 Vec；defer 用显式 i64 转换读取 i32 元素。",
+      "specification": "docs/SEMANTICS.md §3 已定整数位宽不得隐式混合（显式 i64(...) 转换）；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/SEMANTICS.md §7.1 Vec 销毁；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "probe 的 defer 在 values 仍存活时读取 values[0]；i32 元素经显式 i64(values[0]) 转为 i64，避免与 log 的 i64 混合位宽。defer 执行后块退出，values 才按局部销毁规则释放。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "result": 0,
+          "log_after_defer": 17
+        },
+        "reason": "probe 先把 log 设为 1；return 0 的结果先保存，退出块时 defer 执行 log=1*10+i64(7)=17，随后销毁 values。",
+        "future_observations": {
+          "drop_order": {
+            "status": "not_run",
+            "expected": "values 的销毁必须发生在执行 defer 之后；仅从源码返回值不能证明析构时点，需要运行期 drop/release 观察。未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/defer-before-destroy/lang.toml",
+      "source": "tests/ownership/fixtures/defer-before-destroy/src/main.lang",
+      "source_sha256": "3b114f5d427438f3eaceb9614dec5279707088d144ff66ac9690bde145ad8139",
+      "source_bytes": 345,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "error-arg-interrupt",
+      "purpose": "实参从左到右求值；先 move 的实参在后续实参抛错时由调用前清理销毁，后续实参不执行，源绑定不恢复。",
+      "specification": "docs/SEMANTICS.md §5 求值与控制流（实参失败清理、move 不恢复）；docs/SEMANTICS.md §7.2 move；docs/SEMANTICS.md §8 typed throws；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "consume 的第一个实参 move values 在求值时转移；第二个 bad 记 2 后抛 E，第三个 later 不求值；move 临时值在调用前清理销毁；main 不读取 values，因此通过所有权检查。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "events": [
+          2,
+          3
+        ],
+        "log": 23,
+        "forbidden_events": [
+          9,
+          8
+        ],
+        "reason": "bad 记 2 并抛 E；later 不执行；catch 记 3；log=23。被移动容器的清理不产生用户事件。",
+        "future_observations": {
+          "drop_order": {
+            "status": "not_run",
+            "expected": "move 产生的调用前临时容器恰好销毁一次；values 不恢复，main 退出时不再销毁该旧容器；后续实参 later 不执行。需要运行期 drop 观察，未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/error-arg-interrupt/lang.toml",
+      "source": "tests/ownership/fixtures/error-arg-interrupt/src/main.lang",
+      "source_sha256": "4cf654b6702f5fddbc8de1e618289bb9405dab95c41432d45d2c5417a2afcd34",
+      "source_bytes": 824,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "for-in-element-copy",
+      "purpose": "for-in 每轮取得当前元素逻辑副本；写当前槽后 value 不变；首轮改 values[1] 使后续迭代必须读到新值。",
+      "specification": "docs/SEMANTICS.md §7.1 Vec 遍历（入口长度、每轮读取当前索引元素的逻辑拥有值、元素写入可观察、长度修改前 Panic）；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "每轮先把 value 保存到 before；values[index]=value+10 后断言 value==before，证明写槽没有把本轮 value 变成槽引用；index==0 时写 values[1]=20，下一轮读取当前索引必须得到 20。正确迭代值为 1、20、3，sum=24，最终槽为 11、30、13。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "main_return": 0,
+        "observations": {
+          "iteration_values": [
+            1,
+            20,
+            3
+          ],
+          "sum": 24,
+          "values": [
+            11,
+            30,
+            13
+          ]
+        },
+        "reason": "第 1 轮读 1，写 values[0]=11 后 value 仍为 1，再写 values[1]=20；第 2 轮必须读到新值 20，写 values[1]=30 后 value 仍为 20；第 3 轮读 3、写 values[2]=13。sum=1+20+3=24，最终 values=[11,30,13]。若 value 是当前槽引用或遍历使用整表快照，写后断言或 sum/最终槽检查会失败。",
+        "future_observations": {
+          "drop_order": {
+            "status": "not_run",
+            "expected": "循环结束后 values 容器在 main 块退出时销毁，元素按索引逆序销毁；每轮 value 是标量逻辑副本。未真实执行。"
+          },
+          "length_modification": {
+            "status": "not_run",
+            "expected": "活跃遍历中改变长度的 API 名称未在冻结规范中给出；本任务不发明 push/append/truncate，相关正例和“修改前 Panic”留作 TODO。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/for-in-element-copy/lang.toml",
+      "source": "tests/ownership/fixtures/for-in-element-copy/src/main.lang",
+      "source_sha256": "0714fb3dc6a7f6b276df254b551ba2bf557be260c11d92f4a17a5ea39395e186",
+      "source_bytes": 521,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "reject-read-after-move",
+      "purpose": "move 后未重建就读取源绑定。",
+      "specification": "docs/SEMANTICS.md §7.2 被移动绑定在重新初始化前不可读；docs/ACCEPTANCE.md A07 移动后读取",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_OWNERSHIP_USE_AFTER_MOVE",
+        "reason": "take(move values) 后 values 已移动；first+values[0] 读取未重新初始化的绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
+      },
+      "manifest": "tests/ownership/fixtures/reject-read-after-move/lang.toml",
+      "source": "tests/ownership/fixtures/reject-read-after-move/src/main.lang",
+      "source_sha256": "5fdaf039d37ed8abc66d41a0c4de3b54dd0d32579821523fc8d6c653b8e9cafd",
+      "source_bytes": 194,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "reject-double-move",
+      "purpose": "同一绑定在重建前重复 move。",
+      "specification": "docs/SEMANTICS.md §7.2 move 消费整个拥有绑定；docs/ACCEPTANCE.md A07 重复移动",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_OWNERSHIP_USE_AFTER_MOVE",
+        "reason": "第一次 take(move values) 后 values 已移动；重建前再次 move 同一绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
+      },
+      "manifest": "tests/ownership/fixtures/reject-double-move/lang.toml",
+      "source": "tests/ownership/fixtures/reject-double-move/src/main.lang",
+      "source_sha256": "7b8dca524e829bd1582aca23cbec3fe3d71d43aba820a1a12b337c678d54201b",
+      "source_bytes": 227,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "reject-move-ordinary-param",
+      "purpose": "普通参数只是借用，不能直接 move。",
+      "specification": "docs/SEMANTICS.md §7.2 普通参数不消费调用者拥有值、默认借用不能被 move；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "reject",
+        "code": null,
+        "reason": "forward 的 values 是普通参数借用，不是调用者转移的拥有值；take(move values) 不允许。T09 诊断码未冻结，不绑定 code。"
+      },
+      "manifest": "tests/ownership/fixtures/reject-move-ordinary-param/lang.toml",
+      "source": "tests/ownership/fixtures/reject-move-ordinary-param/src/main.lang",
+      "source_sha256": "e74fab3ee5b12eec451e625c791dc4094edea7402e1f5f4e2926c80f395660be",
+      "source_bytes": 226,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "reject-defer-moved",
+      "purpose": "defer 捕获的绑定已被 move 且未重建，退出时不能读取。",
+      "specification": "docs/SEMANTICS.md §9 defer 执行期间读取已移动且未重建绑定应报所有权错误；docs/SEMANTICS.md §7.2",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_OWNERSHIP_USE_AFTER_MOVE",
+        "reason": "defer 注册后 values 被移走且未重新初始化；执行 defer 时读取该绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
+      },
+      "manifest": "tests/ownership/fixtures/reject-defer-moved/lang.toml",
+      "source": "tests/ownership/fixtures/reject-defer-moved/src/main.lang",
+      "source_sha256": "4c2e53bf713ce1949eec2eb1b2ced8f0a4a3ef691b11b7e211ee38cba17de143",
+      "source_bytes": 234,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "reject-error-does-not-restore",
+      "purpose": "后续实参抛错不会恢复先前 move 的源绑定；catch 中读取必须拒绝。",
+      "specification": "docs/SEMANTICS.md §5 move 在求值时转移、后续实参失败不恢复源绑定；docs/SEMANTICS.md §7.2；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_OWNERSHIP_USE_AFTER_MOVE",
+        "reason": "第一个实参 move values 已完成，后续实参抛错不恢复源绑定；catch 中读取 values[0]，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
+      },
+      "manifest": "tests/ownership/fixtures/reject-error-does-not-restore/lang.toml",
+      "source": "tests/ownership/fixtures/reject-error-does-not-restore/src/main.lang",
+      "source_sha256": "6d4364aa91ba4c9aa0e304033199767a1d9cf902dbb638f9dc46de3583d22bbc",
+      "source_bytes": 523,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "reject-inout-vec",
+      "purpose": "首版 inout 只接受平凡数值/bool 整体绑定，Vec 共享容器不支持。",
+      "specification": "docs/SEMANTICS.md §7.2 inout 类型限制（引用容器明确未支持）；docs/ACCEPTANCE.md A07；DEVELOPMENT.md 阶段未覆盖使用 E_CAPABILITY_UNAVAILABLE",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_CAPABILITY_UNAVAILABLE",
+        "reason": "bump 的 inout Vec[i32] 是共享引用容器；首版 inout 明确拒绝引用容器，使用已发布的 E_CAPABILITY_UNAVAILABLE，不把槽独占推导成深层 noalias。"
+      },
+      "manifest": "tests/ownership/fixtures/reject-inout-vec/lang.toml",
+      "source": "tests/ownership/fixtures/reject-inout-vec/src/main.lang",
+      "source_sha256": "f23ed989164e7513dd698cf13e842b8d3bc92d8cacfbe04763e3f4e218850cb2",
+      "source_bytes": 185,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "reject-branch-maybe-moved",
+      "purpose": "分支一侧 move 后未重建、另一侧保留，合流读取可能已移动的绑定。",
+      "specification": "docs/SEMANTICS.md §7.2 移动后的有效状态；docs/ACCEPTANCE.md A07 分支一侧移动、另一侧保留",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_OWNERSHIP_USE_AFTER_MOVE",
+        "reason": "分支一侧 move 后未重建，另一侧保留；合流读取可能已移动的绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
+      },
+      "manifest": "tests/ownership/fixtures/reject-branch-maybe-moved/lang.toml",
+      "source": "tests/ownership/fixtures/reject-branch-maybe-moved/src/main.lang",
+      "source_sha256": "2990c689a45f5889edf0588f01da879731ae8934598b6cfa49a19564fe33e6ec",
+      "source_bytes": 306,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    },
+    {
+      "id": "panic-vec-index",
+      "purpose": "Vec 动态索引 1 越界于长度 1；运行时 Panic，不是 typed error，也不保证清理。",
+      "specification": "docs/SEMANTICS.md §7.1 原生 Vec 非负索引、越界 Panic；docs/SEMANTICS.md §8 Panic 无清理保证；docs/ACCEPTANCE.md A07",
+      "expected_static": {
+        "status": "accept",
+        "reason": "values 长度为 1，动态 index=1 越界；源本身通过类型/所有权检查，运行时必须产生 Panic。"
+      },
+      "runtime_expected": {
+        "status": "not_run",
+        "normal_return": false,
+        "panic": {
+          "required": true,
+          "cause": "Vec index out of bounds: index 1, length 1",
+          "reason_code": null,
+          "reason_note": "SEMANTICS 只规定越界 Panic；T09 未冻结 Vec 越界的原因码和进程退出状态，不绑定具体文本/码。",
+          "typed_catchable": false
+        },
+        "observations": {
+          "defer_guarantee": "not_guaranteed",
+          "log": null
+        },
+        "reason": "panic-vec-index 的 probe 注册了一个 defer 后执行越界读取；Panic 不保证执行语言 defer 或析构，不能断言 log=1 或任何 drop 计数。",
+        "future_observations": {
+          "cleanup": {
+            "status": "not_run",
+            "expected": "按 §8 不保证 Panic 后的语言清理；未来只能验证进程/顶层 runner 报 Panic，不能把未执行的 defer/drop 记为通过。未真实执行。"
+          }
+        }
+      },
+      "manifest": "tests/ownership/fixtures/panic-vec-index/lang.toml",
+      "source": "tests/ownership/fixtures/panic-vec-index/src/main.lang",
+      "source_sha256": "ccb39b766a41575fa14bb8a85da77a4e512d93008833ca4ee57eff91271af17d",
+      "source_bytes": 269,
+      "current_check": {
+        "syntax_only": {
+          "status": "passed",
+          "exit": 0
+        },
+        "full_check": {
+          "status": "rejected",
+          "exit": 1,
+          "code": "E_CAPABILITY_UNAVAILABLE",
+          "phase": "type",
+          "message": "container, owned string and Result support requires T08/T09"
+        }
+      }
+    }
+  ],
+  "correction_operation_id": "language-t09-ownership-fixtures-20261104-correction",
+  "root_evidence_correction_count": 1,
+  "correction_note": "初版 task 已 rejected，不作为 accepted dependency。初版 root 审查后只修正两点：defer-before-destroy 使用显式 i64(values[0])；for-in-element-copy 增加写后 value 断言和首轮后续槽修改。其余 16 份源码和 18 份 manifest 保持初版逐字不变。",
+  "initial_task": {
+    "id": "94ac60b1-5847-4f02-92cb-6a20db40a8d7",
+    "status": "rejected",
+    "accepted_dependency": false
+  },
+  "root_integration_note": "root依据contracts/diagnostic_codes.json和contracts/test-cases.json补用已登记的E_OWNERSHIP_USE_AFTER_MOVE；18份修正后源码及所有数值/事件预期不变，未来静态和运行仍not_run。"
+}

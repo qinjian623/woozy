@@ -1,0 +1,14 @@
+package main;
+
+func take(values move Vec[i32]) i32 {
+    return values[0];
+}
+
+func forward(values Vec[i32]) i32 {
+    return take(move values);
+}
+
+func main() i32 {
+    let values Vec[i32] = [1];
+    return forward(values);
+}

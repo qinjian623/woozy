@@ -1,0 +1,11 @@
+package main;
+
+func bump(values inout Vec[i32]) {
+    values[0] = values[0] + 1;
+}
+
+func main() i32 {
+    var values Vec[i32] = [1];
+    bump(inout values);
+    return values[0] - 2;
+}

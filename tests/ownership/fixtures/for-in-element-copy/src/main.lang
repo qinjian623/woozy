@@ -1,0 +1,26 @@
+package main;
+
+func main() i32 {
+    let values Vec[i32] = [1, 2, 3];
+    var sum i32 = 0;
+    var index i32 = 0;
+    for value in values {
+        let before = value;
+        values[index] = value + 10;
+        if value != before {
+            return 1;
+        }
+        if index == 0 {
+            values[1] = 20;
+        }
+        sum += value;
+        index += 1;
+    }
+    if sum != 24 {
+        return 2;
+    }
+    if values[0] != 11 || values[1] != 30 || values[2] != 13 {
+        return 3;
+    }
+    return 0;
+}

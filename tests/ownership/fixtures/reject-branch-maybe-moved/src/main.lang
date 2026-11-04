@@ -1,0 +1,19 @@
+package main;
+
+func take(values move Vec[i32]) i32 {
+    return values[0];
+}
+
+func choose(flag bool) i32 {
+    var local Vec[i32] = [1];
+    if flag {
+        let taken = take(move local);
+    } else {
+        let kept = local[0];
+    }
+    return local[0];
+}
+
+func main() i32 {
+    return choose(true);
+}

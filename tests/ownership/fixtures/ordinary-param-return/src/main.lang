@@ -1,0 +1,23 @@
+package main;
+
+func first(values Vec[i32]) i32 {
+    return values[0];
+}
+
+func keep(values Vec[i32]) Vec[i32] {
+    return values;
+}
+
+func main() i32 {
+    let values Vec[i32] = [5];
+    let answer = first(values);
+    let kept = keep(values);
+    kept[0] = 6;
+    if answer != 5 {
+        return 1;
+    }
+    if values[0] != 6 {
+        return 2;
+    }
+    return 0;
+}
