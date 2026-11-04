@@ -18,7 +18,8 @@ enum class TypeKind {
   NominalEnum,
   TypeParameter,
   ForeignOpaque,
-  Error
+  Error,
+  Vec
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -158,7 +159,7 @@ struct Return {
 }; // optional child: result, Unit node type
 struct Break {
   HirNodeId loop;
-}; // no children, target must be enclosing For
+}; // no children, target must be enclosing For/ForIn
 struct Continue {
   HirNodeId loop;
 };
@@ -218,6 +219,90 @@ struct Defer {
   std::vector<SymbolId> references;
 };
 struct Throw {}; // child: error value, saved before executing any cleanup
+struct Move {
+  std::optional<SymbolId> binding; // otherwise one newly computed child
+};
+struct VecInit {};
+struct IndexRead {};
+struct IndexPlace {
+}; // protected receiver/index, never a borrowed element address
+struct VecSlice {
+  std::optional<HirNodeId> start, end;
+};
+struct ForIn {
+  SymbolId element;
+  ScopeId body_scope;
+  HirNodeId body;
+};
+enum class OwnerKind {
+  binding,
+  temporary,
+  return_output,
+  error_output,
+  iteration
+};
+struct OwnerRef {
+  OwnerKind kind;
+  uint64_t identity; // SymbolId for binding; HirNodeId otherwise
+  bool operator==(const OwnerRef &) const = default;
+};
+enum class CleanupKind {
+  save_output,
+  end_borrow,
+  destroy_if_live,
+  defer_,
+  end_iteration
+};
+struct CleanupStep {
+  CleanupKind kind;
+  OwnerRef owner;
+  TypeId type{0}; // zero only for defer/iteration registration
+  bool operator==(const CleanupStep &) const = default;
+};
+enum class UseKind { borrow, copy, take, inout };
+struct ValueUse {
+  HirNodeId consumer;
+  uint32_t operand;
+  UseKind kind;
+  std::optional<SymbolId> root;
+  TypeId type;
+  std::optional<SymbolId>
+      destination; // pattern/catch/per-iteration acquisition
+  bool operator==(const ValueUse &) const = default;
+};
+struct Temporary {
+  HirNodeId producer, full_expression;
+  TypeId type;
+  bool operator==(const Temporary &) const = default;
+};
+struct LocalLifetime {
+  SymbolId symbol;
+  ScopeId scope;
+  TypeId type;
+  uint32_t order;
+  ParamMode mode; // ordinary parameters borrowed; local bindings use move
+  bool operator==(const LocalLifetime &) const = default;
+};
+struct FullExpression {
+  HirNodeId node;
+  std::vector<CleanupStep> actions;
+  bool operator==(const FullExpression &) const = default;
+};
+struct CallLifetime {
+  HirNodeId node;
+  // Runs at the call's successful return, before the parent expression.
+  // Error returns use the matching ExitPlan.actions instead.
+  std::vector<CleanupStep> on_return;
+  bool operator==(const CallLifetime &) const = default;
+};
+struct Ownership {
+  std::vector<ValueUse> uses;
+  std::vector<Temporary> temporaries;
+  std::vector<LocalLifetime> locals;
+  std::vector<FullExpression> full_expressions;
+  std::vector<CallLifetime> calls;
+  bool operator==(const Ownership &) const = default;
+};
 enum class ExitKind { normal, return_, break_, continue_, error };
 struct ScopeExit {
   std::optional<ScopeId> scope; // resume in parent, or normal function end
@@ -228,7 +313,7 @@ struct FunctionExit {
   bool operator==(const FunctionExit &) const = default;
 };
 struct JumpExit {
-  HirNodeId node; // For or Switch; kind distinguishes break from continue
+  HirNodeId node; // For/ForIn or Switch; kind distinguishes break from continue
   bool operator==(const JumpExit &) const = default;
 };
 struct CatchTarget {
@@ -244,6 +329,7 @@ struct ExitPlan {
   std::vector<ScopeId> exited_scopes; // inner to outer, excludes resumed scope
   std::vector<HirNodeId> defers;      // active registrations in execution order
   bool saves_value = false; // value/error evaluated and saved before defers
+  std::vector<CleanupStep> actions;
   bool operator==(const ExitPlan &) const = default;
 };
 using NodeData =
@@ -252,7 +338,8 @@ using NodeData =
                  Unary, Binary, ShortCircuit, IntegerConvert, Call, Block,
                  ExpressionStatement, If, For, Noop, Return, Break, Continue,
                  Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
-                 Switch, ConstraintCall, Try, Defer, Throw>;
+                 Switch, ConstraintCall, Try, Defer, Throw, Move, VecInit,
+                 IndexRead, IndexPlace, VecSlice, ForIn>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -286,7 +373,13 @@ enum class NodeKind {
   constraint_call,
   try_,
   defer_,
-  throw_
+  throw_,
+  move,
+  vec_init,
+  index_read,
+  index_place,
+  vec_slice,
+  for_in
 };
 struct HirNode {
   TypeId type;
@@ -296,8 +389,8 @@ struct HirNode {
   NodeData data;
   std::vector<TypeId> errors; // sorted unique errors escaping this subtree;
                               // Panic and ordinary Result data are excluded
-  // Error exits always have a plan. Other exits have a plan iff at least one
-  // registered defer runs; trivial exits are fully determined by the tree.
+  // Error exits always have a plan. Other exits have a plan when defer or
+  // owning cleanup is required; trivial exits are determined by the tree.
   std::vector<ExitPlan> exits;
   NodeKind kind() const { return static_cast<NodeKind>(data.index()); }
 };
@@ -384,11 +477,33 @@ struct HirModule {
   std::vector<ImplDecl> impls;
   std::vector<FunctionTemplate> templates;
   std::vector<FunctionInstance> instances;
+  Ownership ownership;
 };
+enum class ValueKind {
+  trivial,
+  vec,
+  structure,
+  enumeration,
+  dependent,
+  unsupported
+};
+struct ValueField {
+  std::optional<SymbolId> variant;
+  SymbolId field;
+  TypeId type;
+};
+struct ValueOps {
+  ValueKind kind = ValueKind::unsupported;
+  bool needs_drop = false, pod_inout = false;
+  std::vector<ValueField> fields; // declaration order, enum grouped by variant
+  std::string reason;
+};
+// All returned TypeIds belong to module.types. No private layout IDs escape.
+ValueOps classify_value(const HirModule &, TypeId);
 // Returns a declaration with infinite value layout, including unused templates.
 // Function signatures and unused type arguments do not contribute value fields.
 std::optional<SymbolId> infinite_value_layout(const HirModule &,
-                                             std::stop_token = {});
+                                              std::stop_token = {});
 PhaseResult<std::monostate> verify_types(const HirModule &,
                                          std::stop_token = {});
 // Checks only executable functions, reachable nodes and recursively used types.

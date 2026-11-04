@@ -1,4 +1,5 @@
 #include "lang/sema/check.hpp"
+#include "../hir/ownership.hpp"
 #include <algorithm>
 #include <functional>
 #include <gmpxx.h>
@@ -262,7 +263,15 @@ class Checker {
     if (kind != modules::SymbolKind::builtin_type)
       reject(r, "name does not denote a value type", "E_NAME_KIND");
     const auto name = symbol(*s).name;
-    if (name == "Vec" || name == "Result")
+    if (name == "Vec") {
+      if (args.size() != 1)
+        reject(r, "Vec requires one element type");
+      Type t;
+      t.kind = TypeKind::Vec;
+      t.type_args = args;
+      return m.types.intern(t);
+    }
+    if (name == "Result")
       unavailable(
           r, "container, owned string and Result support requires T08/T09");
     if (!args.empty())
@@ -298,8 +307,9 @@ class Checker {
       auto cr = at(r, c);
       auto pm = mode(cr);
       auto pt = parse_type(child(cr, 0));
-      if (pm == ParamMode::move)
-        unavailable(cr, "move parameters require T09");
+
+      if (pm == ParamMode::move && type(pt).kind == TypeKind::String)
+        unavailable(cr, "owned string parameter is not supported");
       if (pm == ParamMode::inout && !integer(pt) &&
           type(pt).kind != TypeKind::Bool && type(pt).kind != TypeKind::Float)
         unavailable(cr,
@@ -514,6 +524,7 @@ class Checker {
     const auto &n = ast(r);
     Expr result{HirNodeId{0}, {unit, {}, {}}};
     switch (n.kind) {
+    case AstKind::BracketItem:
     case AstKind::Parenthesized:
       return expression(child(r, 0), expected);
     case AstKind::Literal:
@@ -525,12 +536,14 @@ class Checker {
         if (type(t).kind != TypeKind::Float)
           reject(r, "float literal requires float context");
         result = {node(r, t, FloatLiteral{float_bits(r, t)}), {t, {}, {}}};
-      } else if (file(r).tokens[n.token_begin].kind == TokenKind::string_literal) {
+      } else if (file(r).tokens[n.token_begin].kind ==
+                 TokenKind::string_literal) {
         auto t = scalar(TypeKind::String);
         // The lexer already decoded escapes and normalized physical newlines.
         // Keep its complete byte sequence, including embedded NULs.
-        result = {node(r, t, StringLiteral{
-                      file(r).tokens[n.token_begin].string_value.value()}),
+        result = {node(r, t,
+                       StringLiteral{
+                           file(r).tokens[n.token_begin].string_value.value()}),
                   {t, {}, {}}};
       } else
         unavailable(r, "string/owned literals require T09");
@@ -609,7 +622,33 @@ class Checker {
     }
     case AstKind::Unary: {
       auto op = token(r);
-      if (op == "inout" || op == "move")
+      if (op == "move") {
+        auto er = child(r, 0);
+        while (ast(er).kind == AstKind::Parenthesized)
+          er = child(er, 0);
+        if (ast(er).kind == AstKind::Name) {
+          auto sid = occurrence(er);
+          if (!sid || !locals.count(sid->value))
+            reject(r, "move requires a local owner", "E_CALL_ARGUMENT");
+          auto l = locals.at(sid->value);
+          if (l.ordinary_parameter ||
+              (l.writable && symbol(*sid).definition &&
+               ast(*symbol(*sid).definition).kind == AstKind::Parameter))
+            reject(r, "borrowed parameter cannot be moved", "E_CALL_ARGUMENT");
+          if (type(l.type).kind == TypeKind::String)
+            unavailable(r, "owned string move is not supported");
+          match(r, l.type, expected);
+          return {node(r, l.type, Move{sid}), {l.type, {}, {}}};
+        }
+        if (ast(er).kind == AstKind::Member ||
+            ast(er).kind == AstKind::NeutralBracket)
+          unavailable(r, "partial field/element move is not supported");
+        auto e = expression(er, expected);
+        if (type(e.value.type).kind == TypeKind::String)
+          unavailable(r, "owned string move is not supported");
+        return {node(r, e.value.type, Move{{}}, {e.id}), e.value};
+      }
+      if (op == "inout")
         reject(r, "argument mode marker outside its matching call",
                "E_CALL_ARGUMENT");
       auto a = expression(child(r, 0),
@@ -700,12 +739,76 @@ class Checker {
     case AstKind::Call:
       result = call(r, expected);
       break;
+    case AstKind::List: {
+      std::optional<TypeId> element;
+      if (expected) {
+        if (type(*expected).kind != TypeKind::Vec)
+          reject(r, "list requires Vec context");
+        element = type(*expected).type_args.at(0);
+      }
+      std::vector<HirNodeId> values;
+      for (auto c : n.children) {
+        auto e = expression(at(r, c), element);
+        if (!element)
+          element = e.value.type;
+        values.push_back(e.id);
+      }
+      if (!element)
+        reject(r, "empty list requires a Vec context");
+      Type t;
+      t.kind = TypeKind::Vec;
+      t.type_args = {*element};
+      auto vt = m.types.intern(t);
+      result = {node(r, vt, VecInit{}, values), {vt, {}, {}}};
+      break;
+    }
+    case AstKind::Slice: {
+      auto base = expression(child(r, 0));
+      if (type(base.value.type).kind == TypeKind::String)
+        unavailable(r, "string slicing is not supported");
+      if (type(base.value.type).kind != TypeKind::Vec)
+        reject(r, "slice receiver must be Vec");
+      std::vector<HirNodeId> values{base.id};
+      VecSlice slice;
+      // A start endpoint is a BracketItem; an end endpoint is a plain expr.
+      // Confirm the delimiter using token ranges, including nested slices.
+      size_t colon = ast(child(r, 0)).token_end + 1;
+      if (n.children.size() > 1 &&
+          ast(child(r, 1)).kind == AstKind::BracketItem)
+        colon = ast(child(r, 1)).token_end;
+      if (file(r).tokens.at(colon).spelling != ":")
+        reject(r, "invalid slice delimiter");
+      for (size_t i = 1; i < n.children.size(); ++i) {
+        auto e = expression(child(r, i));
+        if (!integer(e.value.type))
+          reject(r, "slice endpoint must be integer");
+        values.push_back(e.id);
+        if (ast(child(r, i)).token_begin < colon)
+          slice.start = e.id;
+        else
+          slice.end = e.id;
+      }
+      result = {node(r, base.value.type, slice, values), base.value};
+      break;
+    }
     case AstKind::NeutralBracket: {
       auto base = child(r, 0);
       auto s = occurrence(base);
-      if (!s || symbol(*s).kind != modules::SymbolKind::function)
-        unavailable(
-            r, "index operations require T09 or declared external interfaces");
+      if (!s || symbol(*s).kind != modules::SymbolKind::function) {
+        auto v = expression(base);
+        if (type(v.value.type).kind == TypeKind::String)
+          unavailable(r, "string indexing is not supported");
+        if (type(v.value.type).kind != TypeKind::Vec)
+          reject(r, "index receiver must be Vec");
+        if (n.children.size() != 2)
+          reject(r, "Vec requires one index");
+        auto index = expression(child(r, 1));
+        if (!integer(index.value.type))
+          reject(r, "Vec index must be integer");
+        auto t = type(v.value.type).type_args.at(0);
+        result = {node(r, t, IndexRead{}, {v.id, index.id}), {t, {}, {}}};
+        break;
+      }
       auto ps = generic_params.at(s->value);
       Substitutions sub;
       if (n.children.size() - 1 != ps.size())
@@ -740,10 +843,26 @@ class Checker {
   Expr place(Ref r, bool inout) {
     if (ast(r).kind == AstKind::Parenthesized)
       return place(child(r, 0), inout);
+    if (ast(r).kind == AstKind::NeutralBracket) {
+      if (inout)
+        unavailable(r, "indexed inout is not supported");
+      auto base = expression(child(r, 0));
+      if (type(base.value.type).kind != TypeKind::Vec)
+        reject(r, "index receiver must be Vec");
+      if (ast(r).children.size() != 2)
+        reject(r, "Vec requires one index");
+      auto index = expression(child(r, 1));
+      if (!integer(index.value.type))
+        reject(r, "Vec index must be integer");
+      auto t = type(base.value.type).type_args.at(0);
+      return {node(r, t, IndexPlace{}, {base.id, index.id}), {t, {}, {}}};
+    }
     if (ast(r).kind == AstKind::Member) {
       if (inout)
         unavailable(r, "field inout is not implemented");
       auto base = place(child(r, 0), false);
+      if (m.nodes[base.id.value].kind() == NodeKind::index_place)
+        unavailable(r, "indexed value-field writeback is not supported");
       auto f = find_field(r, base.value.type);
       auto t = field_type(base.value.type, f);
       return {node(r, t, FieldPlace{f.symbol}, {base.id}), {t, {}, {}}};
@@ -993,6 +1112,8 @@ class Checker {
         reject(ar, "field is private", "E_PRIVATE_ACCESS");
       seen[pi] = true;
       auto er = child(ar, 0);
+      while (ast(er).kind == AstKind::Parenthesized)
+        er = child(er, 0);
       if (ast(er).kind == AstKind::Unary &&
           (token(er) == "inout" || token(er) == "move"))
         reject(ar, "constructor fields require ordinary arguments",
@@ -1071,8 +1192,9 @@ class Checker {
                      "E_CALL_ARGUMENT");
             auto field = find_field(method_ref, receiver.value.type);
             auto t = field_type(receiver.value.type, field);
-            Expr callee{node(method_ref, t, FieldRead{field.symbol},
-                             {receiver.id}), {t, {}, {}}};
+            Expr callee{
+                node(method_ref, t, FieldRead{field.symbol}, {receiver.id}),
+                {t, {}, {}}};
             return scalar_call(r, callee);
           }
       if (type(receiver.value.type).kind == TypeKind::TypeParameter) {
@@ -1171,6 +1293,15 @@ class Checker {
         if (pm != ParamMode::ordinary)
           unavailable(
               ar, "generic/method inout and move calls are not implemented");
+        auto marker = er;
+        while (ast(marker).kind == AstKind::Parenthesized)
+          marker = child(marker, 0);
+        if (ast(marker).kind == AstKind::Unary &&
+            (token(marker) == "move" || token(marker) == "inout"))
+          reject(marker,
+                 "generic/method argument mode differs from ordinary parameter",
+                 "E_CALL_ARGUMENT");
+
         auto e = expression(er, contains_parameter(pt) ? std::nullopt
                                                        : std::optional(pt));
         infer(ar, original_type.parameters[indices[i]].type, e.value.type, sub);
@@ -1268,17 +1399,33 @@ class Checker {
       if (pi >= seen.size() || seen[pi])
         reject(ar, "parameter provided more than once", "E_CALL_ARGUMENT");
       seen[pi] = true;
+      while (ast(er).kind == AstKind::Parenthesized)
+        er = child(er, 0);
+      auto mode_ref = er;
       ParamMode pm = ParamMode::ordinary;
       if (ast(er).kind == AstKind::Unary &&
           (token(er) == "inout" || token(er) == "move")) {
         pm = token(er) == "inout" ? ParamMode::inout : ParamMode::move;
         er = child(er, 0);
       }
+      if (sig.parameters[pi].mode == ParamMode::move &&
+          pm == ParamMode::ordinary) {
+        auto tmp = er;
+        while (ast(tmp).kind == AstKind::Parenthesized)
+          tmp = child(tmp, 0);
+        if (ast(tmp).kind == AstKind::Name ||
+            ast(tmp).kind == AstKind::Member ||
+            ast(tmp).kind == AstKind::NeutralBracket)
+          reject(ar, "existing binding requires explicit move",
+                 "E_CALL_ARGUMENT");
+        pm = ParamMode::move;
+      }
       if (pm != sig.parameters[pi].mode)
         reject(ar, "argument mode differs from parameter mode",
                "E_CALL_ARGUMENT");
-      if (pm == ParamMode::move)
-        unavailable(ar, "move arguments require T09");
+      if (pm == ParamMode::move && ast(mode_ref).kind == AstKind::Unary &&
+          token(mode_ref) == "move")
+        er = mode_ref;
       auto e = pm == ParamMode::inout ? place(er, true)
                                       : expression(er, sig.parameters[pi].type);
       match(ar, e.value.type, sig.parameters[pi].type);
@@ -1304,6 +1451,10 @@ class Checker {
         if (auto p = std::get_if<Read>(&n.data);
             p && borrowed.count(p->symbol.value))
           reject(r, "inout binding is also read by this call",
+                 "E_CALL_ARGUMENT");
+        if (auto p = std::get_if<Move>(&n.data);
+            p && p->binding && borrowed.count(p->binding->value))
+          reject(r, "inout binding is also moved by this call",
                  "E_CALL_ARGUMENT");
         if (auto p = std::get_if<Place>(&n.data);
             p && borrowed.count(p->symbol.value)) {
@@ -1776,6 +1927,40 @@ class Checker {
       }
       return {node(r, unit, If{}, std::move(children)), falls, breaks};
     }
+    case AstKind::ForIn: {
+      auto collection = expression(child(r, 0));
+      if (type(collection.value.type).kind != TypeKind::Vec)
+        reject(r, "for-in requires Vec");
+      auto saved = scope;
+      scope = new_scope(r, saved);
+      auto id = node(r, unit, ForIn{definition(r), ScopeId{0}, HirNodeId{0}});
+      loops.push_back(id);
+      break_targets.push_back(id);
+      auto bodyref = child(r, n.children.size() - 1);
+      auto loop_scope = scope;
+      scope = new_scope(bodyref, loop_scope);
+      auto bs = scope;
+      locals[definition(r).value] = {type(collection.value.type).type_args[0],
+                                     false};
+      auto body = block(bodyref, true);
+      scope = loop_scope;
+      m.nodes[id.value].children = {collection.id, body.id};
+      m.nodes[id.value].data = ForIn{definition(r), bs, body.id};
+      loops.pop_back();
+      break_targets.pop_back();
+      scope = saved;
+      // Collection is evaluated before entering the loop's owning scope.
+      m.nodes[collection.id.value].scope = loop_scope;
+      std::vector<HirNodeId> todo = m.nodes[collection.id.value].children;
+      while (!todo.empty()) {
+        auto c = todo.back();
+        todo.pop_back();
+        m.nodes[c.value].scope = loop_scope;
+        auto ch = m.nodes[c.value].children;
+        todo.insert(todo.end(), ch.begin(), ch.end());
+      }
+      return {id, true, false};
+    }
     case AstKind::For: {
       auto saved = scope;
       scope = new_scope(r, saved);
@@ -1939,7 +2124,8 @@ class Checker {
     auto field_value_type = [&](Ref field) {
       auto t = parse_type(child(field, 0));
       if (type(t).kind == TypeKind::String)
-        unavailable(field, "string aggregate fields require owned-value support");
+        unavailable(field,
+                    "string aggregate fields require owned-value support");
       return t;
     };
     for (auto &d : m.nominals) {
@@ -2117,8 +2303,8 @@ class Checker {
       m.nodes.at(id.value).exits.clear();
       const bool scoped =
           n.kind() == NodeKind::block || n.kind() == NodeKind::for_ ||
-          n.kind() == NodeKind::switch_ || n.kind() == NodeKind::try_ ||
-          n.kind() == NodeKind::defer_;
+          n.kind() == NodeKind::for_in || n.kind() == NodeKind::switch_ ||
+          n.kind() == NodeKind::try_ || n.kind() == NodeKind::defer_;
       const auto saved_visible =
           scoped ? visible : std::map<uint64_t, ScopeId>{};
       const auto active_size = active.size();
@@ -2130,6 +2316,10 @@ class Checker {
           visit(a.body, depth + 1);
         }
         visible = saved_visible;
+      } else if (auto fi = std::get_if<ForIn>(&n.data)) {
+        visit(n.children[0], depth + 1);
+        visible[fi->element.value] = fi->body_scope;
+        visit(fi->body, depth + 1);
       } else if (auto t = std::get_if<Try>(&n.data)) {
         handlers.push_back(id);
         visit(n.children[0], depth + 1);
@@ -2165,6 +2355,8 @@ class Checker {
         read = r->symbol;
       if (auto p = std::get_if<Place>(&n.data))
         read = p->symbol;
+      if (auto p = std::get_if<Move>(&n.data))
+        read = p->binding;
       if (read) {
         if (!visible.count(read->value))
           throw std::invalid_argument(
@@ -2222,14 +2414,16 @@ class Checker {
         if (!cleanups.empty() && !inside(cleanups.back().body, dest.scope))
           reject(n.source.node, "jump escapes defer body", "E_CLEANUP_ESCAPE");
         auto keep = std::optional(dest.scope);
-        if (n.kind() == NodeKind::break_ && dest.kind() == NodeKind::for_)
+        if (n.kind() == NodeKind::break_ &&
+            (dest.kind() == NodeKind::for_ || dest.kind() == NodeKind::for_in))
           keep = m.scopes.at(dest.scope.value).parent;
         plan(id,
              n.kind() == NodeKind::break_ ? ExitKind::break_
                                           : ExitKind::continue_,
              JumpExit{target}, keep, {}, false);
       }
-      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_) {
+      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_ ||
+          n.kind() == NodeKind::for_in) {
         plan(id, ExitKind::normal, ScopeExit{m.scopes.at(n.scope.value).parent},
              m.scopes.at(n.scope.value).parent, {}, false);
         visible = saved_visible;
@@ -2380,6 +2574,10 @@ class Checker {
         b->symbol = rename(b->symbol);
       if (auto b = std::get_if<Place>(&n.data))
         b->symbol = rename(b->symbol);
+      if (auto b = std::get_if<Move>(&n.data); b && b->binding)
+        b->binding = rename(*b->binding);
+      if (auto b = std::get_if<ForIn>(&n.data))
+        b->element = rename(b->element);
       if (auto b = std::get_if<Return>(&n.data))
         b->function = result;
       if (auto t = std::get_if<Try>(&n.data))
@@ -2416,6 +2614,16 @@ class Checker {
         c->signature = substitute(c->signature, sub, m.types);
         c->receiver = substitute(c->receiver, sub, m.types);
         update_args(c->args);
+      }
+      if (auto c = std::get_if<VecSlice>(&n.data)) {
+        if (c->start)
+          c->start = nodes.at(c->start->value);
+        if (c->end)
+          c->end = nodes.at(c->end->value);
+      }
+      if (auto c = std::get_if<ForIn>(&n.data)) {
+        c->body = nodes.at(c->body.value);
+        c->body_scope = scopes.at(c->body_scope.value);
       }
       if (auto c = std::get_if<StructInit>(&n.data))
         update_args(c->fields);
@@ -2512,6 +2720,14 @@ public:
     if (auto infinite = infinite_value_layout(m, stop))
       reject(m.nominals.at(nominal_ids.at(infinite->value)).source.node,
              "value type has an infinite recursive layout");
+    auto ownership = detail::produce_ownership(m, stop);
+    if (!ownership.success()) {
+      if (ownership.diagnostics.empty())
+        throw Cancelled{};
+      auto d = ownership.diagnostics.front();
+      auto kind = ownership.failure;
+      throw Rejected{std::move(d), kind};
+    }
     return std::move(m);
   }
 };

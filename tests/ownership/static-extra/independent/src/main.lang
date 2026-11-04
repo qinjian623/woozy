@@ -1,0 +1,32 @@
+package main;
+enum Failure { Bad(items Vec[i32]); }
+enum Item { Some(items Vec[i32]); None; }
+struct Box[T] { value T; }
+func keep[T](input T) T { let saved = input; return saved; }
+func fail() i32 throws Failure { throw Failure.Bad([8]); }
+func consume(value move Vec[i32], later i32) {}
+func main() i32 {
+    let source Vec[Vec[i32]] = [[1], [2]];
+    let item = Item.Some(keep(source[0]));
+    switch item {
+        case Item.Some(value):
+            let outer = Box[Box[Vec[i32]]](value: Box[Vec[i32]](value: value));
+            let copy = keep(outer);
+        case Item.None:
+            return 0;
+    }
+    for element in source {
+        try {
+            consume(move element, fail());
+        } catch error Failure {
+            switch error {
+                case Failure.Bad(items):
+                    let local = items;
+                    defer { let observed = local[0]; }
+            }
+            continue;
+        }
+        break;
+    }
+    return 0;
+}

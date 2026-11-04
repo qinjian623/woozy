@@ -1,4 +1,5 @@
 #include "lang/hir/hir.hpp"
+#include "ownership.hpp"
 #include <algorithm>
 #include <functional>
 #include <iomanip>
@@ -48,6 +49,10 @@ TypeId TypeContext::intern(Type t) {
     if (t.bits != 32 && t.bits != 64)
       bad();
     break;
+  case TypeKind::Vec:
+    if (t.type_args.size() != 1)
+      bad();
+    break;
   case TypeKind::Function:
     if (!find(t.result) || (t.throws_type && !find(*t.throws_type)))
       bad();
@@ -81,7 +86,7 @@ TypeId TypeContext::intern(Type t) {
   if (nominal(t.kind) && t.binding.value)
     bad();
   if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum &&
-      !t.type_args.empty())
+      t.kind != TypeKind::Vec && !t.type_args.empty())
     bad();
   for (auto a : t.type_args)
     if (!find(a))
@@ -204,7 +209,7 @@ bool type_patterns_overlap(TypeId a, TypeId b, const TypeContext &ctx) {
   return true;
 }
 std::optional<SymbolId> infinite_value_layout(const HirModule &m,
-                                             std::stop_token stop) {
+                                              std::stop_token stop) {
   // A value layout depends on a subset of its type arguments. Find that
   // subset from declarations, without substituting or interning new types.
   // For example Box[T]{x T} uses T, while F[T]{f func() T} does not.
@@ -218,11 +223,15 @@ std::optional<SymbolId> infinite_value_layout(const HirModule &m,
       check_cancelled(stop);
       auto id = pending.back();
       pending.pop_back();
-      if (!seen.insert(id.value).second) continue;
+      if (!seen.insert(id.value).second)
+        continue;
       auto t = m.types.find(id);
-      if (!t) throw std::invalid_argument("layout has invalid type");
-      if (t->kind == TypeKind::TypeParameter) visit(*t);
-      if (t->kind != TypeKind::NominalStruct && t->kind != TypeKind::NominalEnum)
+      if (!t)
+        throw std::invalid_argument("layout has invalid type");
+      if (t->kind == TypeKind::TypeParameter)
+        visit(*t);
+      if (t->kind != TypeKind::NominalStruct &&
+          t->kind != TypeKind::NominalEnum)
         continue;
       visit(*t);
       for (auto i : used.at(t->declaration.value))
@@ -230,9 +239,11 @@ std::optional<SymbolId> infinite_value_layout(const HirModule &m,
     }
   };
   auto fields = [&](const NominalDecl &d, const auto &visit) {
-    for (const auto &f : d.fields) walk(f.type, visit);
+    for (const auto &f : d.fields)
+      walk(f.type, visit);
     for (const auto &v : d.variants)
-      for (const auto &f : v.payload) walk(f.type, visit);
+      for (const auto &f : v.payload)
+        walk(f.type, visit);
   };
   bool changed;
   do {
@@ -256,8 +267,10 @@ std::optional<SymbolId> infinite_value_layout(const HirModule &m,
       if (t.kind == TypeKind::NominalStruct || t.kind == TypeKind::NominalEnum)
         deps.insert(t.declaration.value);
     });
-    for (auto target : deps) dependents[target].insert(d.symbol.value);
-    if (deps.empty()) leaves.push_back(d.symbol.value);
+    for (auto target : deps)
+      dependents[target].insert(d.symbol.value);
+    if (deps.empty())
+      leaves.push_back(d.symbol.value);
   }
   while (!leaves.empty()) {
     check_cancelled(stop);
@@ -266,11 +279,13 @@ std::optional<SymbolId> infinite_value_layout(const HirModule &m,
     for (auto parent : dependents[finite]) {
       auto &deps = dependencies.at(parent);
       deps.erase(finite);
-      if (deps.empty()) leaves.push_back(parent);
+      if (deps.empty())
+        leaves.push_back(parent);
     }
   }
   for (const auto &d : m.nominals)
-    if (!dependencies.at(d.symbol.value).empty()) return d.symbol;
+    if (!dependencies.at(d.symbol.value).empty())
+      return d.symbol;
   return {};
 }
 unsigned bit_width(const Type &t, const Config &c) {
@@ -404,6 +419,10 @@ class Verifier {
     case NodeKind::enum_init:
     case NodeKind::field_read:
     case NodeKind::constraint_call:
+    case NodeKind::move:
+    case NodeKind::vec_init:
+    case NodeKind::index_read:
+    case NodeKind::vec_slice:
       return true;
     default:
       return false;
@@ -416,7 +435,8 @@ class Verifier {
   }
   bool statement(const HirNode &n) const {
     return !expression(n) && n.kind() != NodeKind::place &&
-           n.kind() != NodeKind::field_place;
+           n.kind() != NodeKind::field_place &&
+           n.kind() != NodeKind::index_place;
   }
   const HirFunction &function(SymbolId s) const {
     symbol(s);
@@ -448,13 +468,18 @@ class Verifier {
       for (auto a : t.type_args)
         valid_type(a, allowed, depth + 1);
     }
+    if (t.kind == TypeKind::Vec) {
+      need(t.type_args.size() == 1, "Vec element arity");
+      valid_type(t.type_args[0], allowed, depth + 1);
+    }
     if (t.kind == TypeKind::Function) {
       if (t.throws_type)
         valid_type(*t.throws_type, allowed, depth + 1);
       for (auto p : t.parameters) {
-        need(p.mode == ParamMode::ordinary || (p.mode == ParamMode::inout &&
-                                               inout_scalar(type(p.type).kind)),
-             "unsupported move/nontrivial inout");
+        need(
+            p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
+                (p.mode == ParamMode::inout && inout_scalar(type(p.type).kind)),
+            "unsupported move/nontrivial inout");
         valid_type(p.type, allowed, depth + 1);
       }
       valid_type(t.result, allowed, depth + 1);
@@ -617,7 +642,8 @@ class Verifier {
             borrowed.insert(std::get<Place>(argument.data).symbol.value).second,
             "duplicate inout storage in call");
       } else {
-        need(p.mode == ParamMode::ordinary, "unsupported argument mode");
+        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
+             "unsupported argument mode");
         expr(a.expression);
       }
       if (a.label) {
@@ -646,10 +672,14 @@ class Verifier {
         need(visited.insert(id.value).second,
              "cycle/shared child in call argument");
         const auto &part = node(id);
-        if (part.kind() == NodeKind::read || part.kind() == NodeKind::place) {
+        if (part.kind() == NodeKind::read || part.kind() == NodeKind::place ||
+            (part.kind() == NodeKind::move &&
+             std::get<Move>(part.data).binding)) {
           auto storage = part.kind() == NodeKind::read
                              ? std::get<Read>(part.data).symbol
-                             : std::get<Place>(part.data).symbol;
+                         : part.kind() == NodeKind::place
+                             ? std::get<Place>(part.data).symbol
+                             : *std::get<Move>(part.data).binding;
           need(!borrowed.contains(storage.value),
                "inout storage is also accessed by another argument");
         }
@@ -728,7 +758,9 @@ class Verifier {
       unit(n);
       const auto &lhs = node(ch[0]);
       const auto &rhs = expr(ch[1]);
-      need(lhs.kind() == NodeKind::place || lhs.kind() == NodeKind::field_place,
+      need(lhs.kind() == NodeKind::place ||
+               lhs.kind() == NodeKind::field_place ||
+               lhs.kind() == NodeKind::index_place,
            "assignment requires writable place");
       auto op = std::get<Assign>(n.data).compound;
       if (op) {
@@ -837,6 +869,53 @@ class Verifier {
     case NodeKind::throw_:
       effect_shape(n);
       break;
+    case NodeKind::move: {
+      const auto &mv = std::get<Move>(n.data);
+      need(mv.binding ? ch.empty() : ch.size() == 1, "move source arity");
+      if (!mv.binding)
+        need(expr(ch[0]).type == n.type, "move temporary type");
+      break;
+    }
+    case NodeKind::vec_init:
+      need(type(n.type).kind == TypeKind::Vec, "list type must be Vec");
+      for (auto c : ch)
+        need(expr(c).type == type(n.type).type_args[0], "Vec element type");
+      break;
+    case NodeKind::index_read:
+    case NodeKind::index_place:
+      arity(2);
+      need(type(expr(ch[0]).type).kind == TypeKind::Vec &&
+               integer(type(expr(ch[1]).type).kind),
+           "Vec index types");
+      need(n.type == type(node(ch[0]).type).type_args[0],
+           "Vec indexed element type");
+      break;
+    case NodeKind::vec_slice: {
+      const auto &sl = std::get<VecSlice>(n.data);
+      need(ch.size() == 1 + bool(sl.start) + bool(sl.end), "slice arity");
+      need(type(n.type).kind == TypeKind::Vec && expr(ch[0]).type == n.type,
+           "slice receiver type");
+      size_t i = 1;
+      if (sl.start)
+        need(ch[i++] == *sl.start && integer(type(expr(*sl.start).type).kind),
+             "slice start");
+      if (sl.end)
+        need(ch[i++] == *sl.end && integer(type(expr(*sl.end).type).kind),
+             "slice end");
+      break;
+    }
+    case NodeKind::for_in: {
+      arity(2);
+      unit(n);
+      const auto &fi = std::get<ForIn>(n.data);
+      need(type(expr(ch[0]).type).kind == TypeKind::Vec && fi.body == ch[1] &&
+               node(fi.body).kind() == NodeKind::block &&
+               node(fi.body).scope == fi.body_scope,
+           "for-in type/body");
+      declaration(fi.element, n.source, modules::SymbolKind::value,
+                  AstKind::ForIn);
+      break;
+    }
     case NodeKind::unsupported:
       fail("unsupported HIR node: " + std::get<Unsupported>(n.data).feature,
            n.source.span);
@@ -892,7 +971,11 @@ class Verifier {
     } else {
       need(s.kind == modules::SymbolKind::builtin_type,
            "type syntax symbol kind");
-      if (s.name == "Unit")
+      if (s.name == "Vec") {
+        t.kind = TypeKind::Vec;
+        for (auto c : n.children)
+          t.type_args.push_back(source_type(cr(c)));
+      } else if (s.name == "Unit")
         t.kind = TypeKind::Unit;
       else if (s.name == "bool")
         t.kind = TypeKind::Bool;
@@ -1120,7 +1203,8 @@ class Verifier {
     for (auto id : file.node(owner.node.node).children)
       if (file.node(id).kind == kind)
         expected.push_back(id);
-    need(expected.size() == entries.size(), "declaration member count differs from source");
+    need(expected.size() == entries.size(),
+         "declaration member count differs from source");
     for (size_t i = 0; i < expected.size(); ++i) {
       auto ref = owner.node;
       ref.node = expected[i];
@@ -1421,7 +1505,8 @@ class Verifier {
                    *a.label == file.tokens[argument.token_begin].spelling,
                "constructor field/source label mismatch");
         } else
-          need(kind == TypeKind::NominalEnum && !named && a.parameter_index == i,
+          need(kind == TypeKind::NominalEnum && !named &&
+                   a.parameter_index == i,
                "constructor positional argument index/order");
         auto er = argument.children[0];
         const auto &original = file.node(er);
@@ -1581,7 +1666,8 @@ class Verifier {
       const auto &instance_source = scope(y.scope).source;
       need(same_ref(original_source.node, instance_source.node) &&
                original_source.span.snapshot == instance_source.span.snapshot &&
-               original_source.span.begin_byte == instance_source.span.begin_byte &&
+               original_source.span.begin_byte ==
+                   instance_source.span.begin_byte &&
                original_source.span.end_byte == instance_source.span.end_byte,
            "instance scope source differs from template");
       need(
@@ -1625,6 +1711,18 @@ class Verifier {
       if (auto r = std::get_if<Binding>(&x.data))
         need(std::get<Binding>(y.data).symbol == local(r->symbol),
              "instance declaration binding mismatch");
+      if (auto r = std::get_if<Move>(&x.data))
+        need(
+            std::get<Move>(y.data).binding ==
+                (r->binding ? std::optional(local(*r->binding)) : std::nullopt),
+            "instance move source mismatch");
+      if (auto r = std::get_if<ForIn>(&x.data)) {
+        const auto &v = std::get<ForIn>(y.data);
+        need(v.element == local(r->element) &&
+                 v.body == nodes.at(r->body.value) &&
+                 v.body_scope == scopes.at(r->body_scope.value),
+             "instance for-in identity mismatch");
+      }
       if (auto r = std::get_if<Return>(&x.data))
         need(std::get<Return>(y.data).function == local(r->function),
              "instance return target mismatch");
@@ -1641,7 +1739,8 @@ class Verifier {
     std::set<uint64_t> generated;
     // Resolver declarations precede generated copies. Retain their actual
     // SymbolIds so an instance copy with the same AST/name is not an origin.
-    std::map<std::tuple<uint64_t, size_t, uint64_t>, SymbolId> original_declarations;
+    std::map<std::tuple<uint64_t, size_t, uint64_t>, SymbolId>
+        original_declarations;
     for (const auto &s : m.resolved->symbols)
       if (s.definition) {
         const auto &r = *s.definition;
@@ -1664,7 +1763,8 @@ class Verifier {
              "template parameter belongs to another source file");
       }
       const auto &ref = t.function.source.node;
-      const auto &file = *m.resolved->project->module(ref.module).files[ref.file];
+      const auto &file =
+          *m.resolved->project->module(ref.module).files[ref.file];
       auto &originals = template_symbols[t.function.symbol.value];
       std::vector<AstNodeId> pending{ref.node};
       while (!pending.empty()) {
@@ -1673,15 +1773,20 @@ class Verifier {
         pending.pop_back();
         const auto &n = file.node(id);
         // Function-type parameters have no variable declaration symbols.
-        if (n.kind == AstKind::FunctionType) continue;
-        if (id != ref.node && (n.kind == AstKind::Function ||
-                               n.kind == AstKind::FunctionLiteral)) continue;
+        if (n.kind == AstKind::FunctionType)
+          continue;
+        if (id != ref.node &&
+            (n.kind == AstKind::Function || n.kind == AstKind::FunctionLiteral))
+          continue;
         if (id == ref.node || n.kind == AstKind::Parameter ||
             n.kind == AstKind::Binding || n.kind == AstKind::Catch ||
+            n.kind == AstKind::ForIn ||
             (n.kind == AstKind::BindPattern &&
              file.tokens[n.token_begin].spelling != "_"))
-          originals.insert(original_declarations.at(std::make_tuple(
-              ref.module.value, ref.file, id.value)).value);
+          originals.insert(
+              original_declarations
+                  .at(std::make_tuple(ref.module.value, ref.file, id.value))
+                  .value);
         pending.insert(pending.end(), n.children.begin(), n.children.end());
       }
       need(originals.count(t.function.symbol.value),
@@ -1721,7 +1826,8 @@ class Verifier {
       const auto &originals = template_symbols.at(i.origin.value);
       for (const auto &[sid, l] : locals)
         if (l.function == i.origin)
-          need(originals.count(sid), "template local is not an original symbol");
+          need(originals.count(sid),
+               "template local is not an original symbol");
       need(i.renamed.size() == originals.size(),
            "instance map omits original template symbols");
       std::map<uint64_t, SymbolId> renamed;
@@ -1835,13 +1941,15 @@ class Verifier {
              "function root block/scope");
       } else {
         const auto &p = node(*parent);
-        if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_)
+        if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_ ||
+            n.kind() == NodeKind::for_in)
           need(s.parent && *s.parent == p.scope,
                "nested scope must have structural parent");
         else
           need(n.scope == p.scope,
                "node scope differs from enclosing construct");
-        if (n.kind() == NodeKind::place || n.kind() == NodeKind::field_place) {
+        if (n.kind() == NodeKind::place || n.kind() == NodeKind::field_place ||
+            n.kind() == NodeKind::index_place) {
           bool allowed = p.kind() == NodeKind::assign && p.children[0] == id;
           if (p.kind() == NodeKind::call)
             for (const auto &a : std::get<Call>(p.data).args)
@@ -1852,15 +1960,17 @@ class Verifier {
           need(allowed, "place used outside assignment or inout argument");
         }
       }
-      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_) {
+      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_ ||
+          n.kind() == NodeKind::for_in) {
         need(!scope_used[n.scope.value],
              "scope has multiple owning constructs");
         scope_used[n.scope.value] = true;
         scope_nodes[n.scope.value] = id;
       }
-      if (n.kind() == NodeKind::for_)
+      if (n.kind() == NodeKind::for_ || n.kind() == NodeKind::for_in)
         loops.push_back(id);
-      if (n.kind() == NodeKind::for_ || n.kind() == NodeKind::switch_)
+      if (n.kind() == NodeKind::for_ || n.kind() == NodeKind::for_in ||
+          n.kind() == NodeKind::switch_)
         break_targets.push_back(id);
       if (n.kind() == NodeKind::switch_) {
         for (const auto &a : std::get<Switch>(n.data).arms)
@@ -1874,6 +1984,14 @@ class Verifier {
                                   enter[id.value]})
                    .second,
                "duplicate catch binding identity");
+      if (auto fi = std::get_if<ForIn>(&n.data))
+        need(locals
+                 .emplace(fi->element.value,
+                          Local{type(node(n.children[0]).type).type_args[0],
+                                fi->body_scope, f.symbol, false,
+                                enter[id.value]})
+                 .second,
+             "duplicate for-in element");
       if (n.kind() == NodeKind::return_) {
         need(std::get<Return>(n.data).function == f.symbol,
              "return target function mismatch");
@@ -1889,6 +2007,7 @@ class Verifier {
         const auto &targets =
             n.kind() == NodeKind::break_ ? break_targets : loops;
         need((node(target).kind() == NodeKind::for_ ||
+              node(target).kind() == NodeKind::for_in ||
               (n.kind() == NodeKind::break_ &&
                node(target).kind() == NodeKind::switch_)) &&
                  !targets.empty() && targets.back() == target,
@@ -1934,9 +2053,10 @@ class Verifier {
                  .second,
              "duplicate local/parameter identity");
       }
-      if (n.kind() == NodeKind::for_)
+      if (n.kind() == NodeKind::for_ || n.kind() == NodeKind::for_in)
         loops.pop_back();
-      if (n.kind() == NodeKind::for_ || n.kind() == NodeKind::switch_)
+      if (n.kind() == NodeKind::for_ || n.kind() == NodeKind::for_in ||
+          n.kind() == NodeKind::switch_)
         break_targets.pop_back();
       stack.pop_back();
     }
@@ -1946,6 +2066,46 @@ class Verifier {
     const auto &ref = f.source.node;
     const auto &file =
         *m.resolved->project->module(ref.module).files.at(ref.file);
+    std::function<bool(AstNodeId)> type_syntax = [&](AstNodeId id) {
+      const auto &a = file.node(id);
+      if (a.kind == AstKind::FunctionType || a.kind == AstKind::NamedType)
+        return true;
+      if (a.kind == AstKind::BracketItem || a.kind == AstKind::Parenthesized ||
+          a.kind == AstKind::ParenthesizedType)
+        return type_syntax(a.children.at(0));
+      auto ref = f.source.node;
+      ref.node = id;
+      if (a.kind == AstKind::NeutralBracket)
+        return type_syntax(a.children.at(0));
+      for (const auto &o : m.resolved->occurrences)
+        if (same_ref(o.source, ref)) {
+          auto k = symbol(o.symbol).kind;
+          return k == modules::SymbolKind::type ||
+                 k == modules::SymbolKind::builtin_type ||
+                 k == modules::SymbolKind::type_parameter;
+        }
+      return false;
+    };
+    auto index_syntax = [&](const AstNode &a) {
+      if (a.kind != AstKind::NeutralBracket)
+        return false;
+      bool types = a.children.size() > 1;
+      for (size_t i = 1; i < a.children.size(); ++i)
+        types &= type_syntax(a.children[i]);
+      if (types)
+        return false;
+      auto ref = f.source.node;
+      ref.node = a.children.at(0);
+      for (const auto &o : m.resolved->occurrences)
+        if (same_ref(o.source, ref)) {
+          auto k = symbol(o.symbol).kind;
+          return k != modules::SymbolKind::function &&
+                 k != modules::SymbolKind::type &&
+                 k != modules::SymbolKind::builtin_type &&
+                 k != modules::SymbolKind::type_parameter;
+        }
+      return true;
+    };
     std::map<uint64_t, size_t> expected, actual;
     std::vector<AstNodeId> todo{ref.node};
     while (!todo.empty()) {
@@ -1958,7 +2118,11 @@ class Verifier {
            n.kind == AstKind::FunctionType))
         continue;
       if (n.kind == AstKind::Try || n.kind == AstKind::Defer ||
-          n.kind == AstKind::Throw || n.kind == AstKind::Catch)
+          n.kind == AstKind::Throw || n.kind == AstKind::Catch ||
+          n.kind == AstKind::List || n.kind == AstKind::Slice ||
+          n.kind == AstKind::ForIn || index_syntax(n) ||
+          (n.kind == AstKind::Unary &&
+           file.tokens[n.token_begin].spelling == "move"))
         ++expected[id.value];
       todo.insert(todo.end(), n.children.begin(), n.children.end());
     }
@@ -1969,10 +2133,22 @@ class Verifier {
       pending.pop_back();
       const auto kind = file.node(n.source.node.node).kind;
       if (kind == AstKind::Try || kind == AstKind::Defer ||
-          kind == AstKind::Throw) {
+          kind == AstKind::Throw || kind == AstKind::List ||
+          kind == AstKind::Slice || kind == AstKind::ForIn ||
+          index_syntax(file.node(n.source.node.node)) ||
+          (kind == AstKind::Unary &&
+           file.tokens[file.node(n.source.node.node).token_begin].spelling ==
+               "move")) {
         need((kind == AstKind::Try && n.kind() == NodeKind::try_) ||
                  (kind == AstKind::Defer && n.kind() == NodeKind::defer_) ||
-                 (kind == AstKind::Throw && n.kind() == NodeKind::throw_),
+                 (kind == AstKind::Throw && n.kind() == NodeKind::throw_) ||
+                 (kind == AstKind::List && n.kind() == NodeKind::vec_init) ||
+                 (kind == AstKind::Slice && n.kind() == NodeKind::vec_slice) ||
+                 (kind == AstKind::ForIn && n.kind() == NodeKind::for_in) ||
+                 (kind == AstKind::Unary && n.kind() == NodeKind::move) ||
+                 (index_syntax(file.node(n.source.node.node)) &&
+                  (n.kind() == NodeKind::index_read ||
+                   n.kind() == NodeKind::index_place)),
              "source effect construct was erased or replaced");
         ++actual[n.source.node.node.value];
       }
@@ -1983,7 +2159,12 @@ class Verifier {
     }
     need(actual == expected,
          "HIR omits or duplicates source error/cleanup constructs");
-    if (expected.empty())
+    bool owning = false;
+    for (const auto &n : m.nodes)
+      if (scope(n.scope).function == f.symbol)
+        owning |= n.kind() == NodeKind::move || n.kind() == NodeKind::for_in ||
+                  classify_value(m, n.type).needs_drop;
+    if (expected.empty() && !owning)
       return; // preserve existing scalar builder lowering
     const auto &syntax_function = file.node(ref.node);
     need(!syntax_function.children.empty(), "function has no source body");
@@ -2035,6 +2216,10 @@ class Verifier {
         for (size_t branch = 1; branch < n.children.size(); ++branch)
           exact_child(n.children[branch], syntax.children[branch]);
         break;
+      case NodeKind::for_in:
+        kind(AstKind::ForIn);
+        exact_child(n.children[1], syntax.children.back());
+        break;
       case NodeKind::for_:
         kind(AstKind::For);
         exact_child(n.children[3], syntax.children.back());
@@ -2083,6 +2268,244 @@ class Verifier {
         break;
       }
       statements.insert(statements.end(), n.children.begin(), n.children.end());
+    }
+  }
+
+  void ownership_sources() const {
+    std::set<uint64_t> owning_functions;
+    for (const auto &n : m.nodes)
+      if (n.kind() == NodeKind::move || n.kind() == NodeKind::for_in ||
+          classify_value(m, n.type).needs_drop)
+        owning_functions.insert(scope(n.scope).function.value);
+    auto origin = [&](SymbolId id) {
+      for (const auto &i : m.instances)
+        for (auto [from, to] : i.renamed)
+          if (to == id)
+            return from;
+      return id;
+    };
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      const auto &n = m.nodes[i];
+      const auto &file = *m.resolved->project->module(n.source.node.module)
+                              .files.at(n.source.node.file);
+      auto r = n.source.node;
+      auto ast = file.node(r.node);
+      auto unwrap = [&] {
+        while (ast.kind == AstKind::Parenthesized ||
+               ast.kind == AstKind::BracketItem) {
+          r.node = ast.children.at(0);
+          ast = file.node(r.node);
+        }
+      };
+      auto source_input = [&](HirNodeId input, AstNodeId syntax,
+                              const char *message) {
+        const auto &value = node(input);
+        auto expected = n.source.node;
+        expected.node = syntax;
+        // Only transparent wrappers may disappear during type checking.
+        // A nested subexpression of a call is not the endpoint itself.
+        for (;;) {
+          if (same_ref(value.source.node, expected))
+            return;
+          const auto &source = file.node(expected.node);
+          const bool wrapper =
+              source.kind == AstKind::Parenthesized ||
+              source.kind == AstKind::BracketItem ||
+              (source.kind == AstKind::Unary &&
+               file.tokens.at(source.token_begin).spelling == "+");
+          need(
+              wrapper && source.children.size() == 1,
+              message);
+          expected.node = source.children[0];
+        }
+      };
+      std::optional<SymbolId> read;
+      if (auto p = std::get_if<Read>(&n.data);
+          p && classify_value(m, n.type).needs_drop)
+        read = p->symbol;
+      if (auto mv = std::get_if<Move>(&n.data)) {
+        need(ast.kind == AstKind::Unary &&
+                 file.tokens.at(ast.token_begin).spelling == "move",
+             "move lost source marker");
+        r.node = ast.children.at(0);
+        ast = file.node(r.node);
+        unwrap();
+        // The immutable source chooses the move category, not the submitted
+        // payload. A Name operand always moves its actual local binding.
+        if (ast.kind == AstKind::Name) {
+          std::optional<SymbolId> expected;
+          for (const auto &o : m.resolved->occurrences)
+            if (same_ref(o.source, r))
+              expected = o.symbol;
+          need(expected.has_value(), "move binding has no resolved source");
+          const auto kind = symbol(*expected).kind;
+          need(kind == modules::SymbolKind::value ||
+                   kind == modules::SymbolKind::constant,
+               "move source is not a local binding");
+          const auto owner = scope(n.scope).function;
+          for (const auto &instance : m.instances)
+            if (instance.symbol == owner)
+              for (auto [from, to] : instance.renamed)
+                if (from == *expected) {
+                  expected = to;
+                  break;
+                }
+          const auto local = locals.find(expected->value);
+          need(local != locals.end() && local->second.function == owner &&
+                   mv->binding == expected,
+               "source binding move was replaced or has wrong instance "
+               "identity");
+          read = expected;
+        } else {
+          need(!mv->binding, "computed move source cannot name a binding");
+          need(n.children.size() == 1, "move temporary source");
+          source_input(n.children[0], r.node,
+                       "computed move operand differs from source");
+        }
+      }
+      if (read) {
+        unwrap();
+        std::optional<SymbolId> actual;
+        for (const auto &o : m.resolved->occurrences)
+          if (same_ref(o.source, r))
+            actual = o.symbol;
+        need(actual && *actual == origin(*read),
+             "owning read/move source identity differs from resolver");
+      }
+      if (owning_functions.count(scope(n.scope).function.value)) {
+        auto within = [&](HirNodeId value, AstNodeId input) {
+          const auto &a = file.node(input);
+          const auto &v = node(value);
+          need(v.source.span.begin_byte >= a.span.begin_byte &&
+                   v.source.span.end_byte <= a.span.end_byte,
+               "owning expression source evaluation order");
+        };
+        if (n.kind() == NodeKind::binary ||
+            n.kind() == NodeKind::short_circuit) {
+          need(ast.kind == AstKind::Binary && ast.children.size() == 2,
+               "owning expression binary source");
+          within(n.children[0], ast.children[0]);
+          within(n.children[1], ast.children[1]);
+        }
+        if (n.kind() == NodeKind::field_read ||
+            n.kind() == NodeKind::field_place) {
+          need(ast.kind == AstKind::Member, "owning field source");
+          within(n.children[0], ast.children[0]);
+        }
+        if (auto b = std::get_if<BoolLiteral>(&n.data)) {
+          if (ast.kind == AstKind::Literal)
+            need(file.tokens.at(ast.token_begin).spelling ==
+                     (b->value ? "true" : "false"),
+                 "branch boolean differs from source literal");
+          else if (ast.kind == AstKind::Name || ast.kind == AstKind::Member) {
+            bool constant = false;
+            for (const auto &o : m.resolved->occurrences)
+              if (same_ref(o.source, n.source.node))
+                constant =
+                    symbol(o.symbol).kind == modules::SymbolKind::constant;
+            need(constant, "branch condition replaced a live source variable "
+                           "with a constant");
+          } else
+            need(ast.kind == AstKind::For && b->value,
+                 "unexpected synthetic branch boolean");
+        }
+        if (auto c = std::get_if<Call>(&n.data)) {
+          need(ast.kind == AstKind::Call && !ast.children.empty(),
+               "owning call lost source call");
+          size_t offset = c->args.size() + 1 == ast.children.size() ? 0 : 1;
+          need(c->args.size() + 1 == ast.children.size() + offset,
+               "owning call source arity");
+          for (size_t j = offset; j < c->args.size(); ++j) {
+            auto a = file.node(ast.children[j - offset + 1]);
+            need(a.kind == AstKind::Argument && a.children.size() == 1,
+                 "owning call source argument");
+            within(c->args[j].expression, a.children[0]);
+          }
+          auto callee = ast.children[0];
+          while (file.node(callee).kind == AstKind::NeutralBracket ||
+                 file.node(callee).kind == AstKind::Parenthesized)
+            callee = file.node(callee).children[0];
+          auto ref = n.source.node;
+          ref.node = callee;
+          if (c->direct_symbol)
+            for (const auto &o : m.resolved->occurrences)
+              if (same_ref(o.source, ref) &&
+                  symbol(o.symbol).kind == modules::SymbolKind::function) {
+                auto target = *c->direct_symbol;
+                for (const auto &instance : m.instances)
+                  if (instance.symbol == target) {
+                    target = instance.origin;
+                    break;
+                  }
+                need(target == o.symbol,
+                     "owning call target differs from resolved source");
+              }
+        }
+      }
+      if (auto b = std::get_if<Binding>(&n.data)) {
+        const auto &a = file.node(n.source.node.node);
+        if (a.children.size() == 2) {
+          auto ref = n.source.node;
+          ref.node = a.children[0];
+          auto expected = source_type(ref);
+          for (const auto &instance : m.instances)
+            if (instance.symbol == scope(n.scope).function) {
+              const auto &t = *templates.at(instance.origin.value);
+              Substitutions sub;
+              for (size_t j = 0; j < t.params.size(); ++j)
+                sub.push_back({t.params[j].symbol, instance.type_args[j]});
+              expected = substitute(expected, sub, substituted);
+            }
+          need(expected == node(n.children[0]).type,
+               "binding annotation type differs from source");
+        }
+      }
+      if (n.kind() == NodeKind::index_read ||
+          n.kind() == NodeKind::index_place) {
+        need(ast.kind == AstKind::NeutralBracket && ast.children.size() == 2,
+             "index source kind/arity");
+        auto index = file.node(ast.children[1]);
+        if (index.kind == AstKind::BracketItem)
+          index = file.node(index.children[0]);
+        need(node(n.children[0]).source.span.begin_byte >=
+                     file.node(ast.children[0]).span.begin_byte &&
+                 node(n.children[0]).source.span.end_byte <=
+                     file.node(ast.children[0]).span.end_byte &&
+                 node(n.children[1]).source.span.begin_byte >=
+                     index.span.begin_byte &&
+                 node(n.children[1]).source.span.end_byte <=
+                     index.span.end_byte,
+             "index source evaluation order");
+      }
+      if (auto sl = std::get_if<VecSlice>(&n.data)) {
+        need(ast.kind == AstKind::Slice, "slice source kind");
+        bool start = ast.children.size() > 1 &&
+                     file.node(ast.children[1]).kind == AstKind::BracketItem;
+        need(bool(sl->start) == start &&
+                 bool(sl->end) == (ast.children.size() == 3 ||
+                                   (ast.children.size() == 2 && !start)),
+             "slice omitted endpoint differs from tokens");
+        source_input(n.children[0], ast.children[0],
+                     "slice receiver/endpoint differs from source evaluation order");
+        if (sl->start)
+          source_input(*sl->start, ast.children[1],
+                       "slice receiver/endpoint differs from source evaluation order");
+        if (sl->end)
+          source_input(*sl->end, ast.children.back(),
+                       "slice receiver/endpoint differs from source evaluation order");
+      }
+      if (n.kind() == NodeKind::vec_init) {
+        need(ast.kind == AstKind::List &&
+                 ast.children.size() == n.children.size(),
+             "list source kind/arity");
+        for (size_t j = 0; j < n.children.size(); ++j) {
+          const auto &a = file.node(ast.children[j]);
+          const auto &v = node(n.children[j]);
+          need(v.source.span.begin_byte >= a.span.begin_byte &&
+                   v.source.span.end_byte <= a.span.end_byte,
+               "list source order");
+        }
+      }
     }
   }
 
@@ -2146,6 +2569,8 @@ class Verifier {
         read = r->symbol;
       if (auto p = std::get_if<Place>(&n.data))
         read = p->symbol;
+      if (auto p = std::get_if<Move>(&n.data))
+        read = p->binding;
       std::optional<HirNodeId> enclosing_defer;
       auto branch = id;
       // Ancestor inspection also distinguishes the protected body of a Try
@@ -2236,16 +2661,24 @@ class Verifier {
                "jump crosses defer boundary");
         std::optional<ScopeId> keep = node(target).scope;
         if (n.kind() == NodeKind::break_ &&
-            node(target).kind() == NodeKind::for_)
+            (node(target).kind() == NodeKind::for_ ||
+             node(target).kind() == NodeKind::for_in))
           keep = scope(*keep).parent;
         exit(n.kind() == NodeKind::break_ ? ExitKind::break_
                                           : ExitKind::continue_,
              JumpExit{target}, keep, {}, false);
       }
-      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_)
+      if (n.kind() == NodeKind::block || n.kind() == NodeKind::for_ ||
+          n.kind() == NodeKind::for_in)
         exit(ExitKind::normal, ScopeExit{scope(n.scope).parent},
              scope(n.scope).parent, {}, false);
-      need(n.exits == expected,
+      auto actual = n.exits;
+      for (auto &p : actual)
+        p.actions.clear();
+      std::erase_if(actual, [](const auto &p) {
+        return !p.error_type && p.defers.empty();
+      });
+      need(actual == expected,
            "exit target/scopes/cleanup order/value preservation mismatch");
       if (auto d = std::get_if<Defer>(&n.data))
         need(scope_nodes.at(d->owner_scope.value) &&
@@ -2267,10 +2700,12 @@ class Verifier {
     for (size_t i = 0; i < m.nodes.size(); ++i) {
       check_cancelled(stop);
       const auto &n = m.nodes[i];
-      if (n.kind() != NodeKind::read && n.kind() != NodeKind::place)
+      if (n.kind() != NodeKind::read && n.kind() != NodeKind::place &&
+          !(n.kind() == NodeKind::move && std::get<Move>(n.data).binding))
         continue;
-      auto s = n.kind() == NodeKind::read ? std::get<Read>(n.data).symbol
-                                          : std::get<Place>(n.data).symbol;
+      auto s = n.kind() == NodeKind::read    ? std::get<Read>(n.data).symbol
+               : n.kind() == NodeKind::place ? std::get<Place>(n.data).symbol
+                                             : *std::get<Move>(n.data).binding;
       symbol(s);
       auto it = locals.find(s.value);
       need(it != locals.end(), "read/place has no typed binding");
@@ -2312,8 +2747,7 @@ class Verifier {
         break;
       case NodeKind::short_circuit: {
         merge(child(0));
-        const auto *known =
-            std::get_if<BoolLiteral>(&node(n.children[0]).data);
+        const auto *known = std::get_if<BoolLiteral>(&node(n.children[0]).data);
         const auto op = std::get<ShortCircuit>(n.data).op;
         if (!known || (op == LogicalOp::and_ ? known->value : !known->value))
           merge(child(1));
@@ -2369,6 +2803,13 @@ class Verifier {
           out.falls |= f.falls || f.breaks.contains(i);
         }
         out.breaks.erase(i);
+        break;
+      case NodeKind::for_in:
+        merge(child(0));
+        merge(child(1));
+        out.breaks.erase(i);
+        out.continues.erase(i);
+        out.falls = true;
         break;
       case NodeKind::for_: {
         merge(child(0));
@@ -2570,7 +3011,14 @@ public:
     for (bool used : scope_used)
       need(used, "orphan scope");
     uses_and_flow();
+    ownership_sources();
     effects_and_exits();
+    auto ownership = detail::verify_ownership(m, stop);
+    if (ownership.state == PhaseState::cancelled)
+      throw Cancelled{};
+    if (!ownership.success())
+      fail(ownership.diagnostics.front().message,
+           ownership.diagnostics.front().primary);
   }
 };
 std::shared_ptr<const HirModule> freeze(const HirModule &input,
@@ -2632,9 +3080,11 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       if (!checked_types.insert(id.value).second)
         return true;
       const auto t = *storage_types.find(id);
-      if (t.kind == TypeKind::NominalStruct || t.kind == TypeKind::NominalEnum) {
-        const auto d = std::find_if(m.nominals.begin(), m.nominals.end(),
-                                   [&](const auto &d) { return d.symbol == t.declaration; });
+      if (t.kind == TypeKind::NominalStruct ||
+          t.kind == TypeKind::NominalEnum) {
+        const auto d = std::find_if(
+            m.nominals.begin(), m.nominals.end(),
+            [&](const auto &d) { return d.symbol == t.declaration; });
         if (d == m.nominals.end())
           return false;
         Substitutions subst;
@@ -2643,7 +3093,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         auto fields = [&](const auto &fs) {
           for (const auto &f : fs) {
             auto field = substitute(f.type, subst, storage_types);
-            if (storage_types.find(field)->kind == TypeKind::String || !supported(field))
+            if (storage_types.find(field)->kind == TypeKind::String ||
+                !supported(field))
               return false;
           }
           return true;
@@ -2655,25 +3106,62 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
             return false;
         return true;
       }
+      if (t.kind == TypeKind::Function) {
+        std::vector<TypeId> pending{id};
+        std::set<uint64_t> seen;
+        while (!pending.empty()) {
+          auto current = pending.back();
+          pending.pop_back();
+          if (!seen.insert(current.value).second)
+            continue;
+          const auto value = *storage_types.find(current);
+          if (value.kind == TypeKind::Vec)
+            return false;
+          if (value.kind == TypeKind::NominalStruct ||
+              value.kind == TypeKind::NominalEnum) {
+            for (const auto &d : m.nominals)
+              if (d.symbol == value.declaration) {
+                for (const auto &f : d.fields)
+                  pending.push_back(f.type);
+                for (const auto &v : d.variants)
+                  for (const auto &f : v.payload)
+                    pending.push_back(f.type);
+              }
+          }
+          pending.insert(pending.end(), value.type_args.begin(),
+                         value.type_args.end());
+          if (value.kind == TypeKind::Function) {
+            pending.push_back(value.result);
+            if (value.throws_type)
+              pending.push_back(*value.throws_type);
+            for (auto p : value.parameters) {
+              if (p.mode == ParamMode::move)
+                return false;
+              pending.push_back(p.type);
+            }
+          }
+        }
+      }
       // Function fields are storage leaves. Do not expand their signatures
       // here (e.g. S[T].f: func() S[S[T]]); functions/calls are checked below.
-      return t.kind != TypeKind::TypeParameter && t.kind != TypeKind::Error &&
-             t.kind != TypeKind::ForeignOpaque;
+      return t.kind != TypeKind::Vec && t.kind != TypeKind::TypeParameter &&
+             t.kind != TypeKind::Error && t.kind != TypeKind::ForeignOpaque;
     };
     auto signature_supported = [&](TypeId id) {
       const auto t = *m.types.find(id);
       if (t.throws_type && !supported(*t.throws_type))
         return false;
       for (auto p : t.parameters)
-        if (!supported(p.type))
+        if (p.mode == ParamMode::move || !supported(p.type))
           return false;
       return supported(t.result);
     };
     for (const auto &f : m.functions) {
       check_cancelled(stop);
       if (!signature_supported(f.signature)) {
-        unavailable(f.source,
-                    "backend does not support this concrete function signature");
+        unavailable(
+            f.source,
+            "backend does not support this concrete function signature");
         return r;
       }
       std::vector<HirNodeId> todo{f.body};
@@ -2693,6 +3181,12 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         case NodeKind::defer_:
         case NodeKind::throw_:
           break;
+        case NodeKind::move:
+        case NodeKind::vec_init:
+        case NodeKind::index_read:
+        case NodeKind::index_place:
+        case NodeKind::vec_slice:
+        case NodeKind::for_in:
         case NodeKind::constraint_call:
           unavailable(n.source,
                       "backend has not implemented this aggregate operation");
@@ -2964,6 +3458,27 @@ std::string dump(const HirModule &m) {
                 << ':' << c.scope.value << ':' << c.body.value;
               print_source(s, c.source);
             }
+          } else if constexpr (std::is_same_v<T, Move>) {
+            s << " moved_binding=";
+            if (data.binding)
+              s << data.binding->value;
+            else
+              s << '-';
+          } else if constexpr (std::is_same_v<T, VecSlice>) {
+            s << " slice_start=";
+            if (data.start)
+              s << data.start->value;
+            else
+              s << '-';
+            s << " slice_end=";
+            if (data.end)
+              s << data.end->value;
+            else
+              s << '-';
+          } else if constexpr (std::is_same_v<T, ForIn>) {
+            s << " element=" << data.element.value
+              << " body_scope=" << data.body_scope.value
+              << " body=" << data.body.value;
           } else if constexpr (std::is_same_v<T, Defer>) {
             s << " owner_scope=" << data.owner_scope.value;
             for (auto r : data.references)
@@ -3030,8 +3545,43 @@ std::string dump(const HirModule &m) {
       s << " defers=";
       for (auto d : e.defers)
         s << d.value << ',';
+      for (auto a : e.actions)
+        s << " action=" << int(a.kind) << ':' << int(a.owner.kind) << ':'
+          << a.owner.identity << ':' << a.type.value;
     }
     s << '\n';
+  }
+  for (auto u : m.ownership.uses) {
+    s << "use " << u.consumer.value << ':' << u.operand << ':' << int(u.kind)
+      << ':' << u.type.value << " root=";
+    if (u.root)
+      s << u.root->value;
+    else
+      s << '-';
+    if (u.destination)
+      s << " destination=" << u.destination->value;
+    s << '\n';
+  }
+  for (auto t : m.ownership.temporaries)
+    s << "temporary " << t.producer.value << " full=" << t.full_expression.value
+      << " type=" << t.type.value << '\n';
+  for (auto l : m.ownership.locals)
+    s << "lifetime " << l.symbol.value << " scope=" << l.scope.value
+      << " type=" << l.type.value << " order=" << l.order
+      << " mode=" << int(l.mode) << '\n';
+  auto actions = [&](const auto &as) {
+    for (auto a : as)
+      s << " action=" << int(a.kind) << ':' << int(a.owner.kind) << ':'
+        << a.owner.identity << ':' << a.type.value;
+    s << '\n';
+  };
+  for (const auto &f : m.ownership.full_expressions) {
+    s << "full_expression " << f.node.value;
+    actions(f.actions);
+  }
+  for (const auto &c : m.ownership.calls) {
+    s << "call_return " << c.node.value;
+    actions(c.on_return);
   }
   return s.str();
 }

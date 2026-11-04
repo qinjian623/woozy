@@ -316,14 +316,14 @@
     {
       "id": "T09",
       "title": "所有权与 ARC",
-      "status": "planned",
+      "status": "in_progress",
       "depends_on": [
         "T08"
       ],
       "primary_role": "native",
       "backup_role": "sema",
       "reviewer_role": "validation",
-      "owner_instance": null,
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/sema/",
         "src/native_ir/",
@@ -348,7 +348,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "路径是目标代码目录，未声称代码已存在；多个角色共享目录时由integrator分配唯一编辑者。"
+      "notes": "公共HIR与受限所有权静态检查已实现并验证；两后端仍拒绝Vec/move生成。ARC/runtime和实际释放、共享、Panic执行尚未实现；共享头由集成负责人统一修改。"
     },
     {
       "id": "T10",
