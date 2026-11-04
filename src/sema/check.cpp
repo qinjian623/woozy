@@ -65,6 +65,7 @@ class Checker {
   std::set<std::pair<uint64_t, uint64_t>> active_constraints;
   size_t instantiated_nodes = 0;
   std::vector<GenericParam> active_params;
+  std::set<uint64_t> signature_parameters;
 
   const AstFile &file(Ref r) const {
     return *m.resolved->project->module(r.module).files.at(r.file);
@@ -201,6 +202,107 @@ class Checker {
     t.kind = TypeKind::TypeParameter;
     t.declaration = s;
     return m.types.intern(t);
+  }
+  bool template_inout_type(TypeId t) const {
+    if (type(t).kind != TypeKind::TypeParameter)
+      return false;
+    auto declaration = type(t).declaration;
+    if (symbol(declaration).kind != modules::SymbolKind::type_parameter)
+      return false;
+    if (signature_parameters.count(declaration.value))
+      return true;
+    return std::any_of(active_params.begin(), active_params.end(),
+                       [&](const GenericParam &p) {
+                         return p.symbol == declaration;
+                       });
+  }
+  bool scalar_inout_type(TypeId t) const {
+    return integer(t) || type(t).kind == TypeKind::Bool ||
+           type(t).kind == TypeKind::Float;
+  }
+  bool impl_method(SymbolId target) const {
+    return std::any_of(m.impls.begin(), m.impls.end(), [&](const ImplDecl &im) {
+      return std::find(im.methods.begin(), im.methods.end(), target) !=
+             im.methods.end();
+    });
+  }
+  bool free_unconstrained_template(SymbolId target) const {
+    auto found = generic_params.find(target.value);
+    if (found == generic_params.end() || found->second.empty() ||
+        impl_method(target))
+      return false;
+    return std::all_of(found->second.begin(), found->second.end(),
+                       [](const GenericParam &p) { return !p.trait; });
+  }
+  bool check_inout_graph(Ref r, TypeId root, bool allow_template) {
+    std::set<uint64_t> visited_args, expanded_nominals, nominal_path;
+    bool direct_inout = false;
+    std::function<void(TypeId, size_t)> visit = [&](TypeId id, size_t depth) {
+      check_cancelled(stop);
+      if (depth > 512)
+        unavailable(r, "inout type graph exceeds checking budget");
+      const auto t = type(id);
+      if (t.kind == TypeKind::TypeParameter)
+        return;
+      if (t.kind == TypeKind::Vec) {
+        if (!visited_args.insert(id.value).second)
+          return;
+        for (auto a : t.type_args)
+          visit(a, depth + 1);
+        return;
+      }
+      if (t.kind == TypeKind::NominalStruct ||
+          t.kind == TypeKind::NominalEnum) {
+        if (visited_args.insert(id.value).second)
+          for (auto a : t.type_args)
+            visit(a, depth + 1);
+        const auto &d = nominal(id);
+        if (!nominal_path.insert(d.symbol.value).second)
+          return;
+        if (expanded_nominals.insert(id.value).second) {
+          auto subs = nominal_subs(id);
+          auto field = [&](const FieldDecl &f) {
+            visit(substitute(f.type, subs, m.types), depth + 1);
+          };
+          for (const auto &f : d.fields)
+            field(f);
+          for (const auto &v : d.variants)
+            for (const auto &f : v.payload)
+              field(f);
+        }
+        nominal_path.erase(d.symbol.value);
+        return;
+      }
+      if (t.kind != TypeKind::Function ||
+          !visited_args.insert(id.value).second)
+        return;
+      for (const auto &p : t.parameters) {
+        if (p.mode == ParamMode::inout) {
+          // Callback modes do not change the enclosing function's modes.
+          if (id == root)
+            direct_inout = true;
+          if (!scalar_inout_type(p.type) &&
+              !(allow_template && template_inout_type(p.type)))
+            unavailable(
+                r,
+                "inout accepts only trivial numeric/bool whole bindings");
+        }
+        visit(p.type, depth + 1);
+      }
+      visit(t.result, depth + 1);
+      if (t.throws_type)
+        visit(*t.throws_type, depth + 1);
+    };
+    visit(root, 0);
+    return direct_inout;
+  }
+  void check_function_value_inout(Ref r, SymbolId target, TypeId sig) {
+    if (!check_inout_graph(r, sig, true))
+      return;
+    auto found = generic_params.find(target.value);
+    if (found != generic_params.end() && !found->second.empty() &&
+        !free_unconstrained_template(target))
+      unavailable(r, "generic/method inout is not implemented");
   }
   std::vector<GenericParam> generics(Ref r) {
     std::vector<GenericParam> ps;
@@ -339,8 +441,8 @@ class Checker {
         unavailable(cr, "external move/inout parameters are not supported");
       if (pm == ParamMode::move && type(pt).kind == TypeKind::String)
         unavailable(cr, "owned string parameter is not supported");
-      if (pm == ParamMode::inout && !integer(pt) &&
-          type(pt).kind != TypeKind::Bool && type(pt).kind != TypeKind::Float)
+      if (pm == ParamMode::inout && !scalar_inout_type(pt) &&
+          !template_inout_type(pt))
         unavailable(cr,
                     "inout accepts only trivial numeric/bool whole bindings");
       t.parameters.push_back({pm, pt});
@@ -631,6 +733,7 @@ class Checker {
           args = finish_arguments(r, generic_params[s->value], sub);
           sig = substitute(sig, sub, m.types);
         }
+        check_function_value_inout(r, *s, sig);
         result = {node(r, sig, FunctionValue{*s, args}), {sig, {}, {}}};
       } else if (k == modules::SymbolKind::constant &&
                  !locals.count(s->value)) {
@@ -641,11 +744,12 @@ class Checker {
         }
         if (c.value.boolean)
           result = {node(r, boolean, BoolLiteral{*c.value.boolean}), c.value};
-        else if (c.function)
+        else if (c.function) {
+          check_function_value_inout(r, *c.function, c.value.type);
           result = {
               node(r, c.value.type, FunctionValue{*c.function, c.type_args}),
               c.value};
-        else
+        } else
           unavailable(r, "constant value cannot be materialized by scalar HIR");
       } else {
         auto l = locals.find(s->value);
@@ -868,6 +972,7 @@ class Checker {
       }
       check_constraints(r, ps, args);
       auto sig = substitute(signatures.at(s->value), sub, m.types);
+      check_function_value_inout(r, *s, sig);
       result = {node(r, sig, FunctionValue{*s, args}), {sig, {}, {}}};
       break;
     }
@@ -877,6 +982,7 @@ class Checker {
       std::vector<TypeId> args;
       for (const auto &p : generic_params[s.value])
         args.push_back(parameter_type(p.symbol));
+      check_function_value_inout(r, s, sig);
       result = {node(r, sig, FunctionValue{s, args}), {sig, {}, {}}};
       break;
     }
@@ -934,8 +1040,7 @@ class Checker {
     if (!l.writable)
       reject(r, "let/const bindings are not writable",
              inout ? "E_CALL_ARGUMENT" : "E_TYPE_MISMATCH");
-    if (inout && !integer(l.type) && type(l.type).kind != TypeKind::Bool &&
-        type(l.type).kind != TypeKind::Float)
+    if (inout && !scalar_inout_type(l.type) && !template_inout_type(l.type))
       unavailable(r, "inout requires a trivial numeric/bool binding");
     return {node(r, l.type, Place{*s}), {l.type, {}, {}}};
   }
@@ -1384,6 +1489,46 @@ class Checker {
     }
     return scalar_call(r);
   }
+  void check_call_borrows(Ref r, const std::vector<CallArg> &args,
+                          const std::vector<HirNodeId> &children) const {
+    // In the supported scalar subset each binding identifies its entire
+    // storage. Include nested reads/places in arguments and the callee.
+    std::set<uint64_t> borrowed;
+    for (const auto &a : args)
+      if (a.mode == ParamMode::inout) {
+        auto id =
+            std::get<Place>(m.nodes[a.expression.value].data).symbol.value;
+        if (!borrowed.insert(id).second)
+          reject(r, "same binding borrowed by inout twice", "E_CALL_ARGUMENT");
+      }
+    for (auto root : children) {
+      std::vector<HirNodeId> todo{root};
+      while (!todo.empty()) {
+        auto id = todo.back();
+        todo.pop_back();
+        const auto &n = m.nodes[id.value];
+        if (auto p = std::get_if<Read>(&n.data);
+            p && borrowed.count(p->symbol.value))
+          reject(r, "inout binding is also read by this call",
+                 "E_CALL_ARGUMENT");
+        if (auto p = std::get_if<Move>(&n.data);
+            p && p->binding && borrowed.count(p->binding->value))
+          reject(r, "inout binding is also moved by this call",
+                 "E_CALL_ARGUMENT");
+        if (auto p = std::get_if<Place>(&n.data);
+            p && borrowed.count(p->symbol.value)) {
+          bool top = false;
+          for (auto &a : args)
+            if (a.mode == ParamMode::inout && a.expression == id)
+              top = true;
+          if (!top)
+            reject(r, "nested call aliases an inout argument",
+                   "E_CALL_ARGUMENT");
+        }
+        todo.insert(todo.end(), n.children.begin(), n.children.end());
+      }
+    }
+  }
   Expr typed_call(Ref r, SymbolId target,
                   std::optional<TypeId> signature_override, Substitutions sub,
                   std::optional<Expr> receiver, std::optional<TypeId> expected,
@@ -1423,19 +1568,12 @@ class Checker {
       seen[pi] = true;
       indices[i] = pi;
     }
-    // Only an ordinary unconstrained generic function opens a concrete move
-    // instance here. Impl members include static methods called through a type,
-    // which have no receiver expression but are still methods.
-    const bool impl_method =
-        std::any_of(m.impls.begin(), m.impls.end(), [&](const ImplDecl &im) {
-          return std::find(im.methods.begin(), im.methods.end(), target) !=
-                 im.methods.end();
-        });
-    const auto &target_params = generic_params[target.value];
+    // Only an ordinary unconstrained generic function opens concrete move or
+    // inout instances here. Impl members include static methods called through
+    // a type, which have no receiver expression but are still methods.
     const bool allow_move =
-        !receiver && !constraint && !impl_method && !target_params.empty() &&
-        std::all_of(target_params.begin(), target_params.end(),
-                    [](const GenericParam &p) { return !p.trait; });
+        !receiver && !constraint && free_unconstrained_template(target);
+    const bool allow_inout = allow_move;
     for (size_t pass = 0; pass < 2; ++pass)
       for (size_t i = 0; i < values.size(); ++i) {
         auto ar = child(r, i + 1), er = child(ar, 0);
@@ -1460,9 +1598,10 @@ class Checker {
                      "E_CALL_ARGUMENT");
             pm = ParamMode::move;
           }
-        } else if (parameter_mode != ParamMode::ordinary) {
-          unavailable(
-              ar, "generic/method inout and move calls are not implemented");
+        } else if (parameter_mode != ParamMode::inout || !allow_inout) {
+          if (parameter_mode != ParamMode::ordinary)
+            unavailable(
+                ar, "generic/method inout and move calls are not implemented");
         }
         if (parameter_mode == ParamMode::ordinary && argument.has_marker)
           reject(argument.marked,
@@ -1475,8 +1614,11 @@ class Checker {
           er = argument.marked;
         modes[i] = pm;
 
-        auto e = expression(er, contains_parameter(pt) ? std::nullopt
-                                                       : std::optional(pt));
+        auto e = pm == ParamMode::inout
+                     ? place(er, true)
+                     : expression(er, contains_parameter(pt)
+                                          ? std::nullopt
+                                          : std::optional(pt));
         infer(ar, original_type.parameters[indices[i]].type, e.value.type, sub);
         values[i] = e;
       }
@@ -1484,6 +1626,7 @@ class Checker {
     if (!constraint)
       type_args = finish_arguments(r, generic_params[target.value], sub);
     auto sig = substitute(original, sub, m.types);
+    check_inout_graph(r, sig, true);
     auto ft = type(sig);
     for (size_t i = 0; i < values.size(); ++i) {
       auto e = *values[i];
@@ -1492,6 +1635,7 @@ class Checker {
                       modes[i], e.id});
       children.push_back(e.id);
     }
+    check_call_borrows(r, args, children);
     if (constraint)
       return {node(r, ft.result,
                    ConstraintCall{*constraint, target, receiver->value.type,
@@ -1605,43 +1749,7 @@ class Checker {
       c.args.push_back({uint32_t(i - 1), uint32_t(pi), label, pm, e.id});
       children.push_back(e.id);
     }
-    // In the supported scalar subset each binding identifies its entire
-    // storage. Include nested reads/places in arguments and the callee.
-    std::set<uint64_t> borrowed;
-    for (const auto &a : c.args)
-      if (a.mode == ParamMode::inout) {
-        auto id =
-            std::get<Place>(m.nodes[a.expression.value].data).symbol.value;
-        if (!borrowed.insert(id).second)
-          reject(r, "same binding borrowed by inout twice", "E_CALL_ARGUMENT");
-      }
-    for (auto root : children) {
-      std::vector<HirNodeId> todo{root};
-      while (!todo.empty()) {
-        auto id = todo.back();
-        todo.pop_back();
-        const auto &n = m.nodes[id.value];
-        if (auto p = std::get_if<Read>(&n.data);
-            p && borrowed.count(p->symbol.value))
-          reject(r, "inout binding is also read by this call",
-                 "E_CALL_ARGUMENT");
-        if (auto p = std::get_if<Move>(&n.data);
-            p && p->binding && borrowed.count(p->binding->value))
-          reject(r, "inout binding is also moved by this call",
-                 "E_CALL_ARGUMENT");
-        if (auto p = std::get_if<Place>(&n.data);
-            p && borrowed.count(p->symbol.value)) {
-          bool top = false;
-          for (auto &a : c.args)
-            if (a.mode == ParamMode::inout && a.expression == id)
-              top = true;
-          if (!top)
-            reject(r, "nested call aliases an inout argument",
-                   "E_CALL_ARGUMENT");
-        }
-        todo.insert(todo.end(), n.children.begin(), n.children.end());
-      }
-    }
+    check_call_borrows(r, c.args, children);
     return {node(r, sig.result, std::move(c), std::move(children)),
             {sig.result, {}, {}}};
   }
@@ -2221,7 +2329,13 @@ class Checker {
     auto own = generics(r);
     inherited.insert(inherited.end(), own.begin(), own.end());
     generic_params[id.value] = inherited;
+    auto saved_signature_parameters = signature_parameters;
+    signature_parameters.clear();
+    for (const auto &p : inherited)
+      signature_parameters.insert(p.symbol.value);
     signatures[id.value] = signature(r);
+    check_inout_graph(r, signatures[id.value], true);
+    signature_parameters = std::move(saved_signature_parameters);
     for (auto c : ast(r).children)
       if (ast(at(r, c)).kind == AstKind::Parameter) {
         auto p = definition(at(r, c));
@@ -2320,6 +2434,10 @@ class Checker {
     };
     for (auto &d : m.nominals) {
       auto r = d.source.node;
+      auto saved_signature_parameters = signature_parameters;
+      signature_parameters.clear();
+      for (const auto &p : d.params)
+        signature_parameters.insert(p.symbol.value);
       for (auto c : ast(r).children) {
         auto cr = at(r, c);
         if (ast(cr).kind == AstKind::Field)
@@ -2335,6 +2453,7 @@ class Checker {
           d.variants.push_back(std::move(v));
         }
       }
+      signature_parameters = std::move(saved_signature_parameters);
     }
     for (auto r : top)
       if (ast(r).kind == AstKind::Impl) {
@@ -2732,6 +2851,10 @@ class Checker {
     f.signature = substitute(f.signature, sub, m.types);
     // A generic declaration defers direct mode/type restrictions until the
     // concrete type is known; reject them before publishing invalid HIR.
+    const bool inout_source =
+        !impl_method(origin) && !temp.params.empty() &&
+        std::all_of(temp.params.begin(), temp.params.end(),
+                    [](const GenericParam &p) { return !p.trait; });
     for (const auto &p : type(f.signature).parameters) {
       if (p.mode != ParamMode::ordinary &&
           type(p.type).kind == TypeKind::ForeignOpaque)
@@ -2740,6 +2863,8 @@ class Checker {
           type(p.type).kind == TypeKind::String)
         unavailable(use, "owned string parameter is not supported");
     }
+    if (check_inout_graph(use, f.signature, false) && !inout_source)
+      unavailable(use, "generic/method inout is not implemented");
     for (auto &p : f.parameters)
       p.symbol = rename(p.symbol);
     std::map<uint64_t, ScopeId> scopes;

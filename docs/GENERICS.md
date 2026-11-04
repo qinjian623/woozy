@@ -48,11 +48,21 @@ switch/for补充程序。主代理GNU Debug、GNU Release、Clang22 ASan/UBSan
 
 方法、trait 约束泛型的直接 move 调用和 inout 不在这次新增范围。静态方法即使没有 receiver，仍按 impl 成员身份拒绝 move；普通静态方法保持原行为。foreign 和动态 string 的 move 实例给出 `E_CAPABILITY_UNAVAILABLE`，损坏的参数模式、源码 Move、模板/实例关系仍由既有 HIR 检查拒绝。
 
-主目录 GNU Debug/Release 和 Clang22 ASan+UBSan+LSan 的 LLVM 构建各44/44，关闭 LLVM 为33/33，共165项，无跳过。三个 LLVM 构建每套实际运行三份同源项目的 Native O0/O2 与 Python3.12.15，共9项；关闭 LLVM 不执行这9项。独立新增的嵌套泛型聚合抛错例在两端验证两个 Vec 按逆序各释放一次，Python Frame 无残留。泄漏检测覆盖本项目检查程序，不声称预编译 LLVM 或生成程序也全部经过 sanitizer 插桩。
+合入 move 调用这一批时，主目录 GNU Debug/Release 和 Clang22 ASan+UBSan+LSan 的 LLVM 构建各44/44，关闭 LLVM 为33/33，共165项，无跳过。三个 LLVM 构建每套实际运行三份同源项目的 Native O0/O2 与 Python3.12.15，共9项；关闭 LLVM 不执行这9项。独立新增的嵌套泛型聚合抛错例在两端验证两个 Vec 按逆序各释放一次，Python Frame 无残留。泄漏检测覆盖本项目检查程序，不声称预编译 LLVM 或生成程序也全部经过 sanitizer 插桩。
+
+## 普通泛型函数的 inout 参数
+
+无 trait 约束的自由泛型函数现已支持数字/bool 的整体可写绑定，例如 `func swap[T](a inout T,b inout T){let tmp=a;a=b;b=tmp;}`。已验证 i32/bool/f32/f64、显式和推断实参、泛型之间转交、已有 inout 参数转交及具体函数值调用。返回值先保存，再执行 defer；随后修改调用者槽不会改变已返回的标量值。
+
+let/const、普通参数、临时值、字段和索引不能经此入口作为可写整体绑定。重复借用同一槽、另一实参读取/移动该槽、嵌套调用再次访问同一槽均拒绝，不因命名参数重排而改变。不同绑定即使值相等仍接受。
+
+当前方法及有 trait 约束的泛型函数自身的 inout 参数仍未开放；普通参数只是接收或返回带 inout 的 callback 时，不按目标函数自身的 inout 处理，保留原有合法调用。嵌套 FunctionType、struct/enum callback 字段具体化后也检查 inout 数据类型：合法模板中的真实 T 可以保留，具体非 scalar 数据报源级 `E_CAPABILITY_UNAVAILABLE`，不能落成内部 HIR 错误。具体函数与实例不能残留 T，Place、模板来源和重复存储检查仍保留。
+
+主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 的 LLVM 构建各45/45，关闭 LLVM 为33/33，共168项，无跳过。每个 LLVM 构建的新测试有5条记录，其中2条为check，3条为Native O0/O2和Python3.12.15实际执行。独立组合程序另验证先取得inout后的后参抛错、callee自身抛错与defer恢复、return先复制再清理、循环continue/break，以及不同事件值区分的命名实参源码顺序；Python23个Frame无残留。scalar inout没有动态begin/end-borrow调用，空borrow列表不被记成观察到借用登记次数。
 
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型trait及trait泛型方法、嵌套变体模式、泛型inout和方法的move/inout调用仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型trait及trait泛型方法、嵌套变体模式、方法的move/inout调用，以及非scalar数据或有trait约束的泛型函数自身inout仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。

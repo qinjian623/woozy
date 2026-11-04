@@ -1,0 +1,172 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func later(log inout i64) i32 {
+    mark(inout log, 9);
+    return 3;
+}
+
+func use[T](slot inout T, first i32, second i32) i32 {
+    return first + second;
+}
+
+func swap[T](a inout T, b inout T) {
+    let tmp = a;
+    a = b;
+    b = tmp;
+}
+
+func relay[T](a inout T, b inout T) {
+    swap(inout a, inout b);
+}
+
+func replace[T](slot inout T, value T) T {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func failing[T](slot inout T, error E) i32 throws E {
+    throw error;
+}
+
+func other[U](value U) {
+}
+
+func wrapper(a inout i32, b inout i32) {
+    swap(inout a, inout b);
+}
+
+func main() i32 {
+    var x i32 = 1;
+    var y i32 = 2;
+    swap(inout x, inout y);
+    if x != 2 || y != 1 {
+        return 1;
+    }
+
+    var bx bool = true;
+    var by bool = false;
+    swap(b: inout by, a: inout bx);
+    if bx || !by {
+        return 2;
+    }
+
+    var fx f32 = 1.5;
+    var fy f32 = 2.5;
+    swap(inout fx, inout fy);
+    if fx < 2.0 || fy > 2.0 {
+        return 3;
+    }
+
+    var dx f64 = 3.5;
+    var dy f64 = 4.5;
+    swap[i32](inout x, inout y);
+    swap(inout dx, inout dy);
+    if dx < 4.0 || dy > 4.0 || x != 1 || y != 2 {
+        return 4;
+    }
+
+    var rx i32 = 5;
+    let old = replace(inout rx, 7);
+    if old != 5 || rx != 7 {
+        return 5;
+    }
+    rx = 9;
+    if old != 5 {
+        return 6;
+    }
+
+    var gx i32 = 10;
+    var gy i32 = 20;
+    relay(inout gx, inout gy);
+    if gx != 20 || gy != 10 {
+        return 7;
+    }
+
+    var wx i32 = 30;
+    var wy i32 = 40;
+    wrapper(inout wx, inout wy);
+    if wx != 40 || wy != 30 {
+        return 8;
+    }
+
+    var vx i32 = 50;
+    var vy i32 = 60;
+    let f func(inout i32, inout i32) = swap;
+    f(inout vx, inout vy);
+    if vx != 60 || vy != 50 {
+        return 9;
+    }
+
+    var sx i32 = 7;
+    var sy i32 = 7;
+    swap(inout sx, inout sy);
+    if sx != 7 || sy != 7 {
+        return 10;
+    }
+
+    var lx i32 = 1;
+    var ly i32 = 2;
+    for var i i32 = 0; i < 2; i += 1 {
+        swap(inout lx, inout ly);
+    }
+    if lx != 1 || ly != 2 {
+        return 11;
+    }
+
+    var dfx i32 = 11;
+    var dfy i32 = 22;
+    {
+        defer {
+            swap(inout dfx, inout dfy);
+        }
+    }
+    if dfx != 22 || dfy != 11 {
+        return 12;
+    }
+
+    var tx i32 = 1;
+    var ty i32 = 2;
+    try {
+        let ignored = failing(inout tx, E.Bad);
+    } catch err E {
+    }
+    swap(inout tx, inout ty);
+    if tx != 2 || ty != 1 {
+        return 13;
+    }
+
+    var log i64 = 0;
+    try {
+        let ignored = use(second: bad(inout log), slot: inout tx,
+                          first: later(inout log));
+    } catch err E {
+        mark(inout log, 3);
+    }
+    if log != 23 {
+        return 14;
+    }
+
+    var nx i32 = 1;
+    var ny i32 = 2;
+    var order i64 = 0;
+    let total = use(first: later(inout order), slot: inout nx,
+                    second: later(inout order));
+    if total != 6 || order != 99 || nx != 1 || ny != 2 {
+        return 15;
+    }
+    return 0;
+}

@@ -493,10 +493,14 @@ class Verifier {
         need(type(p.type).kind != TypeKind::ForeignCallable &&
                  (type(p.type).kind != TypeKind::ForeignOpaque || p.mode == ParamMode::ordinary),
              "internal callable/external move parameter");
-        need(
-            p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
-                (p.mode == ParamMode::inout && inout_scalar(type(p.type).kind)),
-            "unsupported move/nontrivial inout");
+        const auto parameter_kind = type(p.type).kind;
+        const bool dependent_inout =
+            parameter_kind == TypeKind::TypeParameter &&
+            allowed.count(type(p.type).declaration.value);
+        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
+                 (p.mode == ParamMode::inout &&
+                  (inout_scalar(parameter_kind) || dependent_inout)),
+             "unsupported move/nontrivial inout");
         valid_type(p.type, allowed, depth + 1);
       }
       valid_type(t.result, allowed, depth + 1);
@@ -787,6 +791,7 @@ class Verifier {
       need(n.children[0] == *c.callee, "callee must be evaluated first");
     std::vector<bool> seen(sig.parameters.size());
     std::set<uint64_t> borrowed;
+    const auto owner_allowed = allowed(scope(n.scope).function);
     bool named = false;
     for (size_t i = 0; i < c.args.size(); ++i) {
       check_cancelled(stop);
@@ -802,8 +807,11 @@ class Verifier {
       need(a.mode == p.mode && argument.type == p.type,
            "call argument mode/type");
       if (p.mode == ParamMode::inout) {
+        const bool dependent =
+            type(p.type).kind == TypeKind::TypeParameter &&
+            owner_allowed.count(type(p.type).declaration.value);
         need(argument.kind() == NodeKind::place &&
-                 inout_scalar(type(p.type).kind),
+                 (inout_scalar(type(p.type).kind) || dependent),
              "inout requires a whole trivial scalar place");
         need(
             borrowed.insert(std::get<Place>(argument.data).symbol.value).second,

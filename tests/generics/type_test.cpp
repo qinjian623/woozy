@@ -660,10 +660,9 @@ void generic_move(const fs::path &root) {
   good("struct Box[T]{value T;} impl[T] Box[T]{"
        "func id[U](self Self,value U)U{return value;}} "
        "func main() i32{let box=Box[i32](value:1);return box.id(7)-7;}");
-  unsupported("func swap[T](a inout T,b inout T){} "
-              "func main() i32{var x i32=1;var y i32=2;"
-              "swap(inout x,inout y);return x;}",
-              "E_CAPABILITY_UNAVAILABLE");
+  good("func swap[T](a inout T,b inout T){} "
+       "func main() i32{var x i32=1;var y i32=2;"
+       "swap(inout x,inout y);return x;}");
   unsupported("trait V{} impl V for i32{} "
               "func take[T V](value move T)T{return move value;} "
               "func main() i32{var x i32=1;let r=take(move x);return r;}",
@@ -730,6 +729,316 @@ void generic_move(const fs::path &root) {
     sig.parameters[0].mode = hir::ParamMode::ordinary;
     f.signature = x.types.intern(sig);
   });
+}
+
+
+void generic_inout(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported && has(r, code),
+         text + "\n" + messages(r));
+  };
+  const std::string swap =
+      "func swap[T](a inout T,b inout T){let tmp=a;a=b;b=tmp;} ";
+
+  good(swap + "func main()i32{var x i32=1;var y i32=2;"
+              "swap(inout x,inout y);return x-2;}");
+  good(swap + "func main()i32{var x bool=true;var y bool=false;"
+              "swap(b:inout y,a:inout x);if x{return 1;}return 0;}");
+  good(swap + "func main()i32{var x f32=1.5;var y f32=2.5;"
+              "swap(inout x,inout y);if x>2.0{return 0;}return 1;}");
+  good(swap + "func main()i32{var x f64=1.5;var y f64=2.5;"
+              "swap[f64](inout x,inout y);return 0;}");
+  good(swap + "func relay[T](a inout T,b inout T){"
+              "swap(inout a,inout b);} func main()i32{var x i32=1;"
+              "var y i32=2;relay(inout x,inout y);return x-2;}");
+  good("func swap[T](a inout T,b inout T){let tmp=a;a=b;b=tmp;} "
+       "func inner(a inout i32,b inout i32){swap(inout a,inout b);} "
+       "func main()i32{var x i32=1;var y i32=2;"
+       "inner(inout x,inout y);return x-2;}");
+  good(swap + "func main()i32{var x i32=1;var y i32=2;"
+              "let f=swap[i32];f(inout x,inout y);return x-2;}");
+  good(swap + "func main()i32{var x i32=1;var y i32=2;"
+              "let f func(inout i32,inout i32)=swap;f(inout x,inout y);"
+              "return x-2;}");
+  good(swap + "func main()i32{var x i32=7;var y i32=7;"
+              "swap(inout x,inout y);return x-7;}");
+  good(swap + "func main()i32{var x i32=1;var y i32=2;"
+              "swap(b:inout y,a:inout x);return x-2;}");
+
+  bad(swap + "func main(){var x i32=1;swap(inout x,inout x);}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){var x i32=1;swap(inout x,x);}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){var x i32=1;swap(x,inout x);}",
+      "E_CALL_ARGUMENT");
+  bad("func mix[T](a inout T,b T){let tmp=a;a=b;} "
+      "func main(){var x i32=1;mix(inout x,x);}",
+      "E_CALL_ARGUMENT");
+  bad("func mix[T](a inout T,b T){let tmp=a;a=b;} "
+      "func main(){var x i32=1;mix(x,inout x);}",
+      "E_CALL_ARGUMENT");
+  bad("func g(x inout i32)i32{x+=1;return x;} "
+      "func use[T](a inout T,b T){} func main(){var x i32=1;"
+      "use(inout x,g(inout x));}",
+      "E_CALL_ARGUMENT");
+  bad("func g(x i32)i32{return x;} func use[T](a inout T,b T){} "
+      "func main(){var x i32=1;use(inout x,g(x));}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){var x i32=1;var y i32=2;"
+              "swap(b:inout x,a:inout x);}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){var x i32=1;var y i32=2;swap(x,y);}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){var x i32=1;var y i32=2;"
+              "swap(move x,inout y);}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){let x i32=1;var y i32=2;"
+              "swap(inout x,inout y);}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){const x i32=1;var y i32=2;"
+              "swap(inout x,inout y);}",
+      "E_CALL_ARGUMENT");
+  bad("func swap[T](a inout T,b inout T){} func main(x i32){var y i32=2;"
+      "swap(inout x,inout y);}",
+      "E_CALL_ARGUMENT");
+  bad(swap + "func main(){var x i32=1;var y i64=2;"
+              "swap(inout x,inout y);}",
+      "E_TYPE_MISMATCH");
+
+  unsupported(swap + "func main(){swap(inout 1,inout 2);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("struct S { x i32; } " + swap +
+                  "func main(){var s S=S(x:1);var t S=S(x:2);"
+                  "swap(inout s,inout t);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("enum E { A; } " + swap +
+                  "func main(){var x E=E.A;var y E=E.A;"
+                  "swap(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported(swap + "func main(){var x Vec[i32]=[1];var y Vec[i32]=[2];"
+              "swap(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported(swap + "func main(){var x string=\"a\";var y string=\"b\";"
+              "swap(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("func inc(x i32)i32{return x;} " + swap +
+                  "func main(){var f func(i32)i32=inc;"
+                  "var g func(i32)i32=inc;swap(inout f,inout g);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("func make(){} " + swap +
+                  "func main(){var x Unit=make();var y Unit=make();"
+                  "swap(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("struct S { x i32; } " + swap +
+                  "func main(){var s S=S(x:1);var y i32=2;"
+                  "swap(inout s.x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("func swap[T](a inout T,b inout T){} "
+              "func main(){var v Vec[i32]=[1];var y i32=2;"
+              "swap(inout v[0],inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("trait V{} impl V for i32{} "
+              "func swap[T V](a inout T,b inout T){} "
+              "func main(){var x i32=1;var y i32=2;"
+              "swap(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("trait V{} impl V for i32{} "
+              "func swap[T V](a inout T,b inout T){} "
+              "func main(){var x i32=1;var y i32=2;"
+              "let f=swap[i32];f(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("impl i32{func swap[T](a inout T,b inout T){} } "
+              "func main(){var x i32=1;var y i32=2;"
+              "i32.swap(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("struct Box[T]{value T;} impl[T] Box[T]{"
+              "func swap[U](a inout U,b inout U){} } "
+              "func main(){var x i32=1;var y i32=2;"
+              "Box[i32].swap(inout x,inout y);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("impl i32{func bump(self Self,x inout i32){x+=1;}} "
+              "func main(){var x i32=1;x.bump(inout x);}",
+              "E_CAPABILITY_UNAVAILABLE");
+
+  auto unsupported_span = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+    need(!r.diagnostics.empty() && r.diagnostics.front().primary &&
+             r.diagnostics.front().primary->begin_byte <
+                 r.diagnostics.front().primary->end_byte,
+         "nested inout diagnostic lacks a source span: " + text + "\n" +
+             messages(r));
+  };
+  const std::string keep =
+      "func keep[T](cb func(inout T))i32{return 0;} ";
+  unsupported_span(keep + "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  unsupported_span("struct Box[T]{cb func(inout T);} "
+                   "func keep(value Box[Vec[i32]])i32{return 0;} "
+                   "func main()i32{return 0;}");
+  unsupported_span("func keep[T](cb func() (func(inout T)))i32{return 0;} "
+                   "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  unsupported_span("func keep[T](cb func(func(inout T)))i32{return 0;} "
+                   "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  unsupported_span("struct Box[T]{cb func(inout T);} "
+                   "func keep[T](cb func() Box[T])i32{return 0;} "
+                   "func main()i32{let f=keep[Vec[i32]];return 0;}");
+  unsupported_span("func make[T]() (func(inout T)){"
+                   "return func(x inout T){};} "
+                   "func main()i32{let f=make[Vec[i32]];return 0;}");
+  unsupported_span("enum E[T]{A(cb func(inout T));} "
+                   "func keep(value E[Vec[i32]])i32{return 0;} "
+                   "func main()i32{return 0;}");
+  unsupported_span("struct S[T]{f func() S[S[T]];cb func(inout T);} "
+                   "func take(value S[S[i32]])i32{return 0;} "
+                   "func main()i32{return 0;}");
+  unsupported_span("struct A[T]{b B[T];} "
+                   "struct B[T]{f func() A[T];cb func(inout T);} "
+                   "func take(value A[Vec[i32]])i32{return 0;} "
+                   "func main()i32{return 0;}");
+
+  good(keep + "func main()i32{let f=keep[i32];return 0;}");
+  good(keep + "func main()i32{let f=keep[bool];return 0;}");
+  good(keep + "func main()i32{let f=keep[f32];return 0;}");
+  good(keep + "func main()i32{let f=keep[f64];return 0;}");
+  good(keep + "func main()i32{return 0;}");
+  good("struct Box[T]{cb func(inout T);} "
+       "func keep(value Box[i32])i32{return 0;} "
+       "func main()i32{return 0;}");
+  good("struct S[T]{f func() S[S[T]];} "
+       "func take(value S[S[i32]])i32{return 0;} "
+       "func main()i32{return 0;}");
+  good("struct A[T]{b B[T];} "
+       "struct B[T]{f func() A[T];cb func(inout T);} "
+       "func take(value A[i32])i32{return 0;} "
+       "func main()i32{return 0;}");
+
+  // Existing concrete function-value inout calls and generic move calls keep
+  // their behavior; only the newly available generic inout route is added.
+  good("func bump(x inout i32){x+=1;} "
+       "func main()i32{var x i32=0;let op=bump;op(inout x);return x-1;}");
+  good("func relay[T](value move T)T{return move value;} "
+       "func main()i32{let v Vec[i32]=[1];let r=relay(move v);"
+       "return r[0]-1;}");
+  good("trait V{} impl V for i32{} "
+       "func take[T V](value move T)T{return move value;} "
+       "func main()i32{var x i32=1;let f=take[i32];"
+       "let r=f(move x);return r-1;}");
+
+  const std::string ordinary_callback =
+      "trait V{} impl V for i32{} func bump(x inout i32){} "
+      "func keep[T V](cb func(inout i32),value T)T{return value;} ";
+  good(ordinary_callback +
+       "func main()i32{return keep(bump,7)-7;}");
+  good(ordinary_callback +
+       "func main()i32{let f=keep[i32];return f(bump,7)-7;}");
+  good("func bump(x inout i32){} struct Box[T]{value T;} "
+       "impl[T] Box[T]{func keep(cb func(inout i32),value T)T{return value;}} "
+       "func main()i32{return Box[i32].keep(bump,7)-7;}");
+
+  auto positive = check(root / "tests/generics/inout/positive/lang.toml");
+  need(positive.success(), messages(positive));
+  need(hir::verify(*positive.value).success(), "generic inout HIR rejected");
+  const auto &m = *positive.value;
+  size_t inout_arguments = 0;
+  for (const auto &n : m.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data))
+      for (const auto &a : c->args)
+        if (a.mode == hir::ParamMode::inout) {
+          need(m.nodes[a.expression.value].kind() == hir::NodeKind::place,
+               "generic inout argument is not a Place");
+          ++inout_arguments;
+        }
+  need(inout_arguments >= 20, "generic inout calls missing");
+  need(!m.templates.empty() && !m.instances.empty(),
+       "generic inout template/instance missing");
+  for (const auto &instance : m.instances) {
+    auto f = std::find_if(
+        m.functions.begin(), m.functions.end(),
+        [&](const auto &candidate) {
+          return candidate.symbol == instance.symbol;
+        });
+    need(f != m.functions.end(), "generic inout instance function missing");
+    for (const auto &p : m.types.find(f->signature)->parameters)
+      if (p.mode == hir::ParamMode::inout)
+        need(m.types.find(p.type)->kind != hir::TypeKind::TypeParameter,
+             "concrete generic inout signature retains T");
+  }
+
+  auto type_parameter = [](auto &x, const std::string &name) {
+    for (uint64_t id = 1; id <= x.types.size(); ++id) {
+      auto t = x.types.find(TypeId{id});
+      if (t->kind == hir::TypeKind::TypeParameter &&
+          x.resolved->symbols[t->declaration.value].name == name)
+        return TypeId{id};
+    }
+    throw std::runtime_error("type parameter missing: " + name);
+  };
+  auto swap_call = [](auto &x) -> hir::Call & {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          x.resolved->symbols[c->direct_symbol->value].name == "swap")
+        return *c;
+    throw std::runtime_error("generic inout call missing");
+  };
+  invalid(*positive.value, "generic inout argument mode", [&](auto &x) {
+    auto &call = swap_call(x);
+    need(call.args.size() == 2, "generic inout call arity");
+    call.args[0].mode = hir::ParamMode::ordinary;
+  });
+  invalid(*positive.value, "generic inout read as place", [&](auto &x) {
+    auto &call = swap_call(x);
+    auto &node = x.nodes[call.args[0].expression.value];
+    auto symbol = std::get<hir::Place>(node.data).symbol;
+    node.data = hir::Read{symbol};
+  });
+  invalid(*positive.value, "generic inout duplicate storage", [&](auto &x) {
+    auto &call = swap_call(x);
+    auto first = std::get<hir::Place>(
+        x.nodes[call.args[0].expression.value].data).symbol;
+    x.nodes[call.args[1].expression.value].data = hir::Place{first};
+  });
+  invalid(*positive.value, "generic inout foreign template parameter",
+          [&](auto &x) {
+            auto foreign = type_parameter(x, "U");
+            for (auto &t : x.templates)
+              if (x.resolved->symbols[t.function.symbol.value].name == "swap") {
+                auto sig = *x.types.find(t.function.signature);
+                sig.parameters[0].type = foreign;
+                t.function.signature = x.types.intern(sig);
+                return;
+              }
+            throw std::runtime_error("swap template missing");
+          });
+  invalid(*positive.value, "generic inout instance signature",
+          [&](auto &x) {
+            auto parameter = type_parameter(x, "T");
+            for (auto &f : x.functions)
+              for (const auto &instance : x.instances)
+                if (f.symbol == instance.symbol) {
+                  auto sig = *x.types.find(f.signature);
+                  for (auto &p : sig.parameters)
+                    if (p.mode == hir::ParamMode::inout) {
+                      p.type = parameter;
+                      f.signature = x.types.intern(sig);
+                      return;
+                    }
+                }
+            throw std::runtime_error("generic inout instance missing");
+          });
 }
 
 void extra(const fs::path &root) {
@@ -1133,6 +1442,7 @@ int main(int argc, char **argv) {
     std::cout << "27 T07 static source fixtures passed\n";
     extra(root);
     generic_move(root);
+    generic_inout(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";
