@@ -66,7 +66,12 @@ auto source(const std::string &s, std::string backend = "native",
   write(t.path / "src/main.lang", "package app; " + s);
   SourceManager sm;
   auto loaded = modules::load_project({t.path / "lang.toml", {}, {}}, sm);
-  need(loaded.success(), messages(loaded));
+  if (!loaded.success()) {
+    PhaseResult<hir::HirModule> r;
+    r.diagnostics = loaded.diagnostics;
+    r.failure = loaded.failure;
+    return r;
+  }
   auto resolved = modules::resolve_project(
       std::make_shared<const modules::Project>(*loaded.value));
   if (!resolved.success())
@@ -276,6 +281,148 @@ void repairs(const fs::path &root) {
     r = packages("pub enum E{A(x i32);}",
         "func main() i32{switch lib.E.A(x:1){case lib.E.A(x):return x;}}");
     need(r.success(), messages(r));
+  });
+  test("positional-enum-constructors", [&] {
+    auto shared = check(root / "tests/generics/positional/payload/lang.toml");
+    need(shared.success() && hir::verify(*shared.value).success(),
+         messages(shared));
+    auto r = packages("pub enum E[T]{A(x T);}",
+        "func main() i32{switch lib.E[i32].A(42){case lib.E.A(x):return x;}}");
+    need(r.success(), messages(r));
+    r = packages("enum E[T]{A(x T);} pub func marker(){}",
+        "func main(){let e=lib.E[i32].A(42);}");
+    need(!r.success() && has(r, "E_PRIVATE_ACCESS"), messages(r));
+    good("enum E[T]{A(x T);} struct Box[T]{x T;} "
+         "func main(){let e=E[Box[i32]].A(Box[i32](x:42));}");
+    const std::string prefix = "enum E[T]{A(x T,y T);} func main(){";
+    for (const auto *call : {"E[i32].A(1)", "E[i32].A(1,2,3)",
+                            "E[i32].A(1,x:2)", "E[i32].A(x:1,x:2)",
+                            "E[i32].A(1,unknown:2)"})
+      bad(prefix + "let e=" + call + ";}", "E_CALL_ARGUMENT");
+    bad(prefix + "let e=E[i32].A(1,false);}", "E_TYPE_MISMATCH");
+    bad(prefix + "let e=E[i32].A(y:1,2);}", "E_PARSE_EXPECTED_TOKEN");
+    for (const auto *call : {"E[i32].A(inout n,2)", "E[i32].A(move n,2)",
+                            "E[i32].A(1,y:inout n)", "E[i32].A(1,y:move n)",
+                            "E[i32].A((move n),2)"})
+      bad(prefix + "var n i32=0;let e=" + call + ";}", "E_CALL_ARGUMENT");
+    bad("struct S{x i32;} func main(){let s=S(1);}", "E_CALL_ARGUMENT");
+    bad("struct S{x i32;y i32;} func main(){let s=S(1,y:2);}", "E_CALL_ARGUMENT");
+    bad("struct S{x i32;} func main(){var n i32=0;let s=S(x:move n);}",
+        "E_CALL_ARGUMENT");
+    bad("struct S{x i32;} func main(){var n i32=0;let s=S(x:inout n);}",
+        "E_CALL_ARGUMENT");
+    for (bool generic : {false, true}) {
+      const std::string declaration = generic ? "enum E[T]{A(value T);} "
+                                               : "enum E{A(value i32);} ";
+      const std::string callee = generic ? "E[i32].A[bool]" : "E.A[i64]";
+      for (const auto *argument : {"42", "value:42"})
+        bad(declaration + "func main(){let e=" + callee + "(" + argument + ");}",
+            "E_CALL_ARGUMENT");
+      bad((generic ? "enum E[T]{A;} " : "enum E{A;} ") +
+              std::string("func main(){let e=") + callee + "();}",
+          "E_CALL_ARGUMENT");
+    }
+
+    auto m = good("enum E{A(x i32,y i32);B(x i32,y i32);} "
+                  "func main(){let e=E.A(1,2);}");
+    auto init = [](auto &x) -> hir::EnumInit & {
+      for (auto &n : x.nodes)
+        if (auto e = std::get_if<hir::EnumInit>(&n.data))
+          return *e;
+      throw std::runtime_error("missing enum constructor");
+    };
+    invalid(m, "positional out-of-range index", [&](auto &x) {
+      init(x).payload[0].parameter_index = 2;
+    });
+    invalid(m, "positional duplicate index", [&](auto &x) {
+      init(x).payload[1].parameter_index = 0;
+    });
+    invalid(m, "positional reordered indices", [&](auto &x) {
+      auto &args = init(x).payload;
+      std::swap(args[0].parameter_index, args[1].parameter_index);
+    });
+    invalid(m, "positional source index", [&](auto &x) {
+      init(x).payload[0].source_index = 1;
+    });
+    invalid(m, "positional invented label", [&](auto &x) {
+      init(x).payload[0].label = "x";
+    });
+    invalid(m, "same-shaped foreign variant", [&](auto &x) {
+      auto &e = init(x);
+      for (const auto &d : x.nominals)
+        for (const auto &v : d.variants)
+          if (v.symbol != e.variant) {
+            e.variant = v.symbol;
+            return;
+          }
+    });
+    for (auto mode : {hir::ParamMode::inout, hir::ParamMode::move})
+      invalid(m, "positional mode", [&](auto &x) {
+        init(x).payload[0].mode = mode;
+      });
+    invalid(m, "positional expression order", [&](auto &x) {
+      for (auto &n : x.nodes)
+        if (auto e = std::get_if<hir::EnumInit>(&n.data)) {
+          std::swap(e->payload[0].expression, e->payload[1].expression);
+          std::swap(n.children[0], n.children[1]);
+          return;
+        }
+    });
+    auto named = good("enum E{A(x i32,y i32);} func main(){let e=E.A(y:2,x:1);}");
+    invalid(named, "named label removed", [&](auto &x) {
+      init(x).payload[0].label.reset();
+    });
+    invalid(named, "named field identity changed", [&](auto &x) {
+      auto &args = init(x).payload;
+      std::swap(args[0].parameter_index, args[1].parameter_index);
+      std::swap(args[0].label, args[1].label);
+    });
+    invalid(named, "named source order changed", [&](auto &x) {
+      for (auto &n : x.nodes)
+        if (auto e = std::get_if<hir::EnumInit>(&n.data)) {
+          std::swap(e->payload[0], e->payload[1]);
+          e->payload[0].source_index = 0;
+          e->payload[1].source_index = 1;
+          std::swap(n.children[0], n.children[1]);
+          return;
+        }
+    });
+    auto wrapped = good("enum E{A(x i32);} "
+                        "func main(){var n i32=1;let e=E.A((+n));}");
+    for (const auto *mode : {"inout", "move"})
+      invalid(wrapped, "erased source argument mode", [&](auto &x) {
+        auto names = std::make_shared<modules::ResolvedProject>(*x.resolved);
+        auto project = std::make_shared<modules::Project>(*names->project);
+        auto file = std::make_shared<AstFile>(*project->modules[0].files[0]);
+        bool changed = false;
+        for (const auto &n : file->nodes)
+          if (n.kind == AstKind::Unary &&
+              file->tokens[n.token_begin].spelling == "+") {
+            file->tokens[n.token_begin].spelling = mode;
+            changed = true;
+          }
+        need(changed, "missing source mode corruption target");
+        project->modules[0].files[0] = file;
+        names->project = project;
+        x.resolved = names;
+      });
+    auto mixed = good("enum E{A(x i32,y i32,z i32);} "
+                      "func main(){let e=E.A(1,z:3,y:2);}");
+    for (const auto &n : mixed.nodes)
+      if (auto e = std::get_if<hir::EnumInit>(&n.data))
+        need(e->payload.size() == 3 && !e->payload[0].label &&
+                 e->payload[0].parameter_index == 0 &&
+                 e->payload[1].parameter_index == 2 &&
+                 e->payload[2].parameter_index == 1,
+             "mixed constructor lost source order/field indices");
+    auto structure = good("struct S{x i32;} func main(){let s=S(x:1);}");
+    invalid(structure, "struct positional HIR", [](auto &x) {
+      for (auto &n : x.nodes)
+        if (auto s = std::get_if<hir::StructInit>(&n.data)) {
+          s->fields[0].label.reset();
+          return;
+        }
+    });
   });
   test("repair-6-method-visibility", [&] {
     auto r = packages("impl i32{func hidden(self Self)i32{return 42;}} "

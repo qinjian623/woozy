@@ -969,21 +969,37 @@ class Checker {
     std::vector<CallArg> args;
     std::vector<HirNodeId> children;
     std::vector<bool> seen(fields.size());
+    bool named = false;
     for (size_t i = 1; i < ast(r).children.size(); ++i) {
       auto ar = child(r, i);
-      if (token(ar, 1) != ":")
-        reject(ar, "constructor requires named fields", "E_CALL_ARGUMENT");
-      std::string label(token(ar));
-      size_t pi = 0;
-      while (pi < fields.size() && symbol(fields[pi].symbol).name != label)
-        ++pi;
+      std::optional<std::string> label;
+      size_t pi = i - 1;
+      if (token(ar, 1) == ":") {
+        named = true;
+        label = std::string(token(ar));
+        pi = 0;
+        while (pi < fields.size() && symbol(fields[pi].symbol).name != *label)
+          ++pi;
+      } else {
+        if (!variant)
+          reject(ar, "struct constructor requires named fields",
+                 "E_CALL_ARGUMENT");
+        if (named)
+          reject(ar, "positional argument follows named argument",
+                 "E_CALL_ARGUMENT");
+      }
       if (pi == fields.size() || seen[pi])
         reject(ar, "unknown or duplicate constructor field", "E_CALL_ARGUMENT");
       if (!variant && symbol(fields[pi].symbol).module != r.module &&
           !fields[pi].exported)
         reject(ar, "field is private", "E_PRIVATE_ACCESS");
       seen[pi] = true;
-      auto e = expression(child(ar, 0), field_type(target, fields[pi]));
+      auto er = child(ar, 0);
+      if (ast(er).kind == AstKind::Unary &&
+          (token(er) == "inout" || token(er) == "move"))
+        reject(ar, "constructor fields require ordinary arguments",
+               "E_CALL_ARGUMENT");
+      auto e = expression(er, field_type(target, fields[pi]));
       args.push_back(
           {uint32_t(i - 1), uint32_t(pi), label, ParamMode::ordinary, e.id});
       children.push_back(e.id);
@@ -1036,8 +1052,12 @@ class Checker {
       if (auto t = type_expression(base)) {
         if (type(*t).kind == TypeKind::NominalEnum) {
           for (const auto &v : nominal(*t).variants)
-            if (symbol(v.symbol).name == name)
+            if (symbol(v.symbol).name == name) {
+              if (method_explicit)
+                reject(callee_ref, "enum variants do not take type arguments",
+                       "E_CALL_ARGUMENT");
               return constructor(r, *t, v.symbol);
+            }
           reject(r, "unknown enum variant");
         }
         auto selected = method_subs(select_method(r, *t, name));

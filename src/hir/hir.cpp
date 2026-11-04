@@ -1288,7 +1288,26 @@ class Verifier {
       need(fields && args->size() == fields->size() &&
                n.children.size() == args->size(),
            "constructor field/variant arity");
+      const auto &file = *m.resolved->project->module(n.source.node.module)
+                              .files.at(n.source.node.file);
+      const auto &syntax = file.node(n.source.node.node);
+      need((syntax.kind == AstKind::Call &&
+            syntax.children.size() == args->size() + 1) ||
+               (kind == TypeKind::NominalEnum && args->empty() &&
+                syntax.kind == AstKind::Member),
+           "constructor source kind/arity");
+      if (kind == TypeKind::NominalEnum) {
+        const auto &callee = syntax.kind == AstKind::Call
+                                 ? file.node(syntax.children[0])
+                                 : syntax;
+        need(callee.kind == AstKind::Member && callee.token_end > 0 &&
+                 callee.token_end <= file.tokens.size() &&
+                 file.tokens[callee.token_end - 1].spelling ==
+                     symbol(std::get<EnumInit>(n.data).variant).name,
+             "constructor source variant identity");
+      }
       std::set<uint32_t> seen;
+      bool named = false;
       for (size_t i = 0; i < args->size(); ++i) {
         const auto &a = (*args)[i];
         need(a.source_index == i && a.parameter_index < fields->size() &&
@@ -1296,9 +1315,49 @@ class Verifier {
              "constructor argument mapping");
         const auto &f = (*fields)[a.parameter_index];
         need(n.children[i] == a.expression && a.mode == ParamMode::ordinary &&
-                 a.label && *a.label == symbol(f.symbol).name &&
                  expr(a.expression).type == field_type(n.type, f),
-             "constructor argument type/label/order");
+             "constructor argument type/mode/order");
+        const auto &argument = file.node(syntax.children[i + 1]);
+        need(argument.kind == AstKind::Argument &&
+                 argument.children.size() == 1 &&
+                 argument.token_begin + 1 < file.tokens.size(),
+             "constructor source argument");
+        bool labelled = file.tokens[argument.token_begin + 1].spelling == ":";
+        need(a.label.has_value() == labelled,
+             "constructor source label presence");
+        if (a.label) {
+          named = true;
+          need(*a.label == symbol(f.symbol).name &&
+                   *a.label == file.tokens[argument.token_begin].spelling,
+               "constructor field/source label mismatch");
+        } else
+          need(kind == TypeKind::NominalEnum && !named && a.parameter_index == i,
+               "constructor positional argument index/order");
+        auto er = argument.children[0];
+        const auto &original = file.node(er);
+        // Parentheses and unary + may disappear during checking. The value
+        // must still come from this source argument, with no erased mode.
+        for (;;) {
+          const auto &value = file.node(er);
+          if (value.kind == AstKind::Parenthesized ||
+              (value.kind == AstKind::Unary &&
+               file.tokens[value.token_begin].spelling == "+")) {
+            need(value.children.size() == 1, "constructor source wrapper");
+            er = value.children[0];
+            continue;
+          }
+          need(value.kind != AstKind::Unary ||
+                   (file.tokens[value.token_begin].spelling != "inout" &&
+                    file.tokens[value.token_begin].spelling != "move"),
+               "constructor source argument mode");
+          break;
+        }
+        const auto &src = node(a.expression).source;
+        need(src.node.module == n.source.node.module &&
+                 src.node.file == n.source.node.file &&
+                 src.span.begin_byte >= original.span.begin_byte &&
+                 src.span.end_byte <= original.span.end_byte,
+             "constructor expression differs from source argument");
       }
       return;
     }

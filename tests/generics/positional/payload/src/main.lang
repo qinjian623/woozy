@@ -1,0 +1,60 @@
+package app;
+import "app/lib" as types;
+
+enum UnitPayload { Empty; Value(value Unit); }
+enum Mixed { Value(number i32, flag bool); }
+
+func tick(n inout i32) i32 { n += 1; return n; }
+func unit(n inout i32) { n += 1; }
+func wrap[T](value T) types.Option[T] { return types.Option[T].Some(value); }
+func read[T](value types.Option[T], fallback T) T {
+    switch value {
+    case types.Option.Some(value): return value;
+    case types.Option.None: return fallback;
+    }
+}
+
+func main() i32 {
+    if read(types.Option[i32].Some(42), 0) != 42 { return 1; }
+    if read(types.Option[i32].Some(value: 43), 0) != 43 { return 2; }
+    if read(wrap[i64](44), 0) != 44 { return 3; }
+    if read(types.Option[i64].None, 45) != 45 { return 4; }
+    if read(types.Option[i32].None(), 46) != 46 { return 5; }
+
+    var n i32 = 0;
+    let positional = types.Payload[i32].Values(
+        tick(inout n), tick(inout n), tick(inout n), unit(inout n));
+    if n != 4 { return 6; }
+    switch positional {
+    case types.Payload.Values(first, second, third, _):
+        if first != 1 || second != 2 || third != 3 { return 7; }
+    case types.Payload.Empty: return 8;
+    }
+
+    let mixed = types.Payload[i32].Values(
+        tick(inout n), third: tick(inout n), unit: unit(inout n), second: tick(inout n));
+    if n != 8 { return 9; }
+    switch mixed {
+    case types.Payload.Values(first, second, third, _):
+        if first != 5 || second != 8 || third != 6 { return 10; }
+    case types.Payload.Empty: return 11;
+    }
+
+    let named = types.Payload[i32].Values(
+        third: tick(inout n), second: tick(inout n), unit: unit(inout n), first: tick(inout n));
+    if n != 12 { return 12; }
+    switch named {
+    case types.Payload.Values(first, second, third, _):
+        if first != 12 || second != 10 || third != 9 { return 13; }
+    case types.Payload.Empty: return 14;
+    }
+
+    switch UnitPayload.Value(unit(inout n)) {
+    case UnitPayload.Value(_): if n != 13 { return 15; }
+    case UnitPayload.Empty: return 16;
+    }
+    switch Mixed.Value((+tick(inout n)), flag: true) {
+    case Mixed.Value(number, flag): if number != 14 || !flag || n != 14 { return 17; }
+    }
+    return 0;
+}

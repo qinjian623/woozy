@@ -56,6 +56,8 @@ def main():
                                       ('callback', 11))]
         cases += [(p.parent.name, p, 0) for p in
                   sorted((args.root / 'tests/native/pod').glob('*/lang.toml'))]
+        cases += [('positional-' + p.parent.name, p, 0) for p in
+                  sorted((args.root / 'tests/generics/positional').glob('*/lang.toml'))]
         for ident, manifest, expected in cases:
             for opt in (0, 2):
                 out = args.out / ident / f'O{opt}'

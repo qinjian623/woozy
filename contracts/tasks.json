@@ -239,7 +239,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python标量、具体泛型、POD聚合和常量字符串已支持；三种完整构建各28/28，关闭LLVM22/22。每套17主项目、18补充、5分类对照、13公共泛型、19聚合程序和20字符串观察通过。运行库版本仍compiler-dev/1-python-values/1；ARC、foreign和严格浮点运算未实施。"
+      "notes": "Python标量、具体泛型、POD聚合、常量字符串及位置式enum已支持；三种完整构建各28/28，关闭LLVM22/22。每套17主项目、18补充、5分类对照、13公共泛型、20聚合程序和20字符串观察通过。运行库版本仍compiler-dev/1-python-values/1；ARC、foreign和严格浮点运算未实施。"
     },
     {
       "id": "T07",
@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态、标量泛型及两后端POD聚合通过；字符串阶段三种完整构建各28/28、关闭LLVM22/22，原13项目78项比较继续通过。已复现位置式enum载荷构造被误拒，待字符串前端合并后修复。原05_traits仅静态通过；严格浮点、泛型trait/方法、嵌套变体模式、泛型inout/move未实施，整项保留in_progress。"
+      "notes": "静态、标量泛型及两端POD聚合已通过；位置式enum及混合参数绑定已修复，非法变体后类型实参报E_CALL_ARGUMENT。三构建完整28/28、LLVMoff22/22，新同源项目9次运行及108次诊断/输出保留检查通过。泛型trait及trait泛型方法、嵌套变体模式、泛型inout/move和严格FP仍未实施，原05_traits仅静态通过，整项in_progress。"
     },
     {
       "id": "T08",

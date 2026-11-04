@@ -271,6 +271,8 @@ def main():
         panic = ident == 'enum-panic-is-not-switch-break'
         run(ident, source_project(args.out, ident, body), 101 if panic else 0, panic)
     run('finite-callback', args.root / 'tests/python/fixtures/finite-callback/lang.toml')
+    for manifest in sorted((args.root / 'tests/generics/positional').glob('*/lang.toml')):
+        run('positional-' + manifest.parent.name, manifest)
 
     def control(ident, result, passed, **details):
         report['controls'].append(dict(id=ident, execute=result, status='passed' if passed else 'failed', **details))

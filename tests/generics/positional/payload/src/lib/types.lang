@@ -1,0 +1,4 @@
+package types;
+
+pub enum Option[T] { None; Some(value T); }
+pub enum Payload[T] { Empty; Values(first T, second T, third T, unit Unit); }
