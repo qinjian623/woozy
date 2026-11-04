@@ -142,6 +142,13 @@ struct HirFunction {
 
 `VerifiedHirModule` 是包含只读 HirModule、规范版本、功能配置、目标配置和绑定摘要的受控结果包装，只能由语义验证阶段构造。已按 Python 配置验证的包装不能直接冒充按 native 配置验证；公共结构可以复用，目标相关检查结果分别保存。
 
+T07 的模板与具体函数使用同一种 HIR 节点和 TypeContext。模板中已有声明和约束的
+TypeParameter 是已绑定类型；具体执行函数中不得残留它或模板专用调用。
+`sema::check_types` 与 `hir::verify_types` 只返回静态检查结果，不授予后端生成权限。
+唯一发布函数 `hir::verify` 深复制数据并检查所选后端已支持的操作，才构造
+VerifiedHirModule。后端支持检查只遍历具体函数及其可达节点、实际使用的类型；
+未实例化模板及类型池中未使用的条目不作为拒绝生成的理由。
+
 ## 6 调用和求值计划
 
 ```cpp

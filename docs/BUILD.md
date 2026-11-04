@@ -77,6 +77,8 @@ T04 的类型表与标量 HIR 验证组件位于 lang_hir，包含 74 项损坏�
 调用和数值/bool 整体 inout；sema.scalar 执行 180 个静态项目检查，sema.cli 检查真实 CLI。
 范围、未支持操作与实际验证见 [CHECKER.md](../tests/sema/CHECKER.md)。两个标量后端已生成并运行程序；
 完整严格浮点算术仍未实现；普通参数重新赋值规则等待用户选择。
+T07 的泛型、聚合类型和 trait 静态接口及当前限制见 [GENERICS.md](GENERICS.md)；
+静态 HIR 通过不等于新增后端执行已经通过。
 
 ## Python 标量程序
 

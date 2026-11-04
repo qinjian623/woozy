@@ -251,7 +251,7 @@
       "primary_role": "sema",
       "backup_role": "native",
       "reviewer_role": "validation",
-      "owner_instance": "bridge:06e0ec20-e256-44f2-a4d2-3ab164f7c918",
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/sema/",
         "src/hir/",
@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "接口提案已接受，27个独立正反例已提交3e45cc7。公共HIR/sema/Self归属及共用后端操作检查由唯一实现者task929051c2负责；root负责总CMake、CLI、两后端接入与实际运行，尚无T07完成声明。"
+      "notes": "静态组件已接受（唯一修正fb8d37c9加root补丁）。27原项目、14源码探针和结构损坏测试通过；GNU Debug相关18/18，Release/Clang22ASan相关21/21，明确排除旧Python项目分类错误。新增两后端运行尚未验证，整项保持in_progress。"
     },
     {
       "id": "T08",

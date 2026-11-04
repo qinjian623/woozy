@@ -32,6 +32,7 @@ struct ResolvedProject {
   std::vector<Occurrence> occurrences;
   // Instance/type members require T04's types; no symbol is guessed here.
   std::vector<NodeRef> deferred_members;
+  std::vector<std::pair<NodeRef, SymbolId>> self_parameters;
 };
 PhaseResult<ResolvedProject> resolve_project(std::shared_ptr<const Project>,
                                            std::stop_token = {});

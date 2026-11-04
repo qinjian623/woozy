@@ -231,10 +231,31 @@ class Resolver {
           false, {}, true);
     } else if (n.kind == AstKind::VariantPattern) {
       const auto &t = token(n.token_begin);
-      name(id, scope, t.spelling, t.span);
+      // The last top-level dot names the variant; preceding dots qualify
+      // its enum. Parentheses inside type arguments are not payloads.
+      std::vector<size_t> dots;
+      size_t depth = 0;
+      for (size_t p = n.token_begin; p < n.token_end; ++p) {
+        auto text = token(p).spelling;
+        if (text == "(" && depth == 0) break;
+        if (text == "[") ++depth;
+        else if (text == "]") --depth;
+        else if (text == "." && depth == 0) dots.push_back(p);
+      }
+      auto current = name(id, scope, t.spelling, t.span);
+      for (size_t i = 0; i + 1 < dots.size(); ++i) {
+        const auto &part = token(dots[i] + 1);
+        if (current)
+          current = member(id, *current, part.spelling, part.span,
+                           i + 2 == dots.size());
+      }
+      if (current && !is_type(out.symbols[current->value].kind))
+        error("E_NAME_KIND", "pattern qualifier is not a type", t.span);
       out.deferred_members.push_back(ref(id));
       for (auto child : n.children) {
-        if (node(child).kind == AstKind::NamedType) type(child, scope);
+        if (node(child).kind == AstKind::NamedType ||
+            node(child).kind == AstKind::ParenthesizedType ||
+            node(child).kind == AstKind::FunctionType) type(child, scope);
         else pattern(child, scope);
       }
     }
@@ -356,15 +377,18 @@ class Resolver {
     }
     Scope inner{&scope, {}};
     generics(n, inner, exported);
-    if (n.kind == AstKind::Trait || n.kind == AstKind::Impl)
-      add(inner, "Self", SymbolKind::type_parameter);
+    if (n.kind == AstKind::Trait || n.kind == AstKind::Impl) {
+      auto self = add(inner, "Self", SymbolKind::type_parameter);
+      out.self_parameters.push_back({ref(id), self});
+    }
     Scope members;
     for (auto child : n.children) {
       const auto &c = node(child);
       if (c.kind == AstKind::GenericParameter) continue;
       if (c.kind == AstKind::Function) {
         const auto &t = token(start(c) + 1);
-        add(members, std::string(t.spelling), SymbolKind::function, ref(child), t.span);
+        add(members, std::string(t.spelling), SymbolKind::function, ref(child),
+            t.span, token(c.token_begin).spelling == "pub");
         function_body(child, inner, exported || token(c.token_begin).spelling == "pub");
       } else if (c.kind == AstKind::Field || c.kind == AstKind::Variant) {
         const auto &t = token(start(c));

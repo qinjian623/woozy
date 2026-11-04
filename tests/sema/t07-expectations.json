@@ -1,0 +1,11 @@
+{
+  "schema": "compiler-dev/sema-stage-expectations/1",
+  "contract": "compiler-dev/1",
+  "stage": "T07",
+  "overrides": {
+    "generic-unavailable": {
+      "status": "accept",
+      "reason": "T07 implements the existing eventual accept expectation. Vec and throws remain unavailable."
+    }
+  }
+}

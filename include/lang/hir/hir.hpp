@@ -34,6 +34,8 @@ struct Type {
   std::vector<ParameterType> parameters;
   TypeId result = TypeId{0};
   std::optional<TypeId> throws_type;
+  std::vector<TypeId>
+      type_args; // nominal declaration arguments, in declaration order
   bool operator==(const Type &) const = default;
 };
 // TypeId 0 is invalid. All other IDs index their owning context, starting at 1.
@@ -108,6 +110,7 @@ struct Place {
 }; // whole writable binding, for assignment or an inout argument
 struct FunctionValue {
   SymbolId symbol;
+  std::vector<TypeId> type_args;
 }; // noncapturing function identity
 struct Binding {
   SymbolId symbol;
@@ -140,14 +143,15 @@ struct Call {
   std::optional<SymbolId> direct_symbol;
   std::optional<HirNodeId> callee;
   std::vector<CallArg> args; // source order, never sorted by parameter_index
+  std::vector<TypeId> type_args;
   // children: [callee when function_value], then args in source order.
 };
 struct Block {};               // children: statements in execution order; Unit
 struct ExpressionStatement {}; // child: value expression; Unit
 struct If {}; // children: bool condition, then Block, optional else Block; Unit
-struct For {}; // children: init (Binding/Assign/ExpressionStatement/Noop), bool condition,
-               // step (Assign/ExpressionStatement/Noop), body Block; Unit.
-               // For owns a child scope; body owns a further child scope.
+struct For {}; // children: init (Binding/Assign/ExpressionStatement/Noop), bool
+               // condition, step (Assign/ExpressionStatement/Noop), body Block;
+               // Unit. For owns a child scope; body owns a further child scope.
 struct Noop {};
 struct Return {
   SymbolId function;
@@ -161,12 +165,50 @@ struct Continue {
 struct Unsupported {
   std::string feature;
 }; // includes Error/NeutralBracket etc.
+// Appended payloads preserve NodeKind 0..23 and use the existing arena.
+struct StructInit {
+  std::vector<CallArg> fields;
+};
+struct EnumInit {
+  SymbolId variant;
+  std::vector<CallArg> payload;
+};
+struct FieldRead {
+  SymbolId field;
+}; // child: receiver value
+struct FieldPlace {
+  SymbolId field;
+}; // child: writable base place
+struct Pattern {
+  TypeId type;
+  Source source;
+  std::optional<SymbolId> variant;
+  std::optional<SymbolId> binding;
+  std::vector<Pattern> payload;
+}; // no variant/binding: wildcard
+struct Arm {
+  Pattern pattern;
+  ScopeId scope;
+  HirNodeId body;
+  Source source;
+};
+struct Switch {
+  std::vector<Arm> arms;
+  bool exhaustive = false;
+};
+struct ConstraintCall {
+  SymbolId trait, method;
+  TypeId receiver, signature;
+  std::vector<CallArg>
+      args; // receiver first, then explicit args in source order
+}; // template only; becomes a direct Call in concrete instances
 using NodeData =
     std::variant<UnitLiteral, BoolLiteral, IntegerLiteral, FloatLiteral,
                  StringLiteral, Read, Place, FunctionValue, Binding, Assign,
                  Unary, Binary, ShortCircuit, IntegerConvert, Call, Block,
                  ExpressionStatement, If, For, Noop, Return, Break, Continue,
-                 Unsupported>;
+                 Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
+                 Switch, ConstraintCall>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -191,7 +233,13 @@ enum class NodeKind {
   return_,
   break_,
   continue_,
-  unsupported
+  unsupported,
+  struct_init,
+  enum_init,
+  field_read,
+  field_place,
+  switch_,
+  constraint_call
 };
 struct HirNode {
   TypeId type;
@@ -203,8 +251,8 @@ struct HirNode {
 };
 struct Parameter {
   SymbolId symbol;
-  std::string
-      label; // direct-call label, empty for discard _, not part of Function TypeId
+  std::string label; // direct-call label, empty for discard _, not part of
+                     // Function TypeId
 };
 struct HirFunction {
   SymbolId symbol;
@@ -214,6 +262,63 @@ struct HirFunction {
   ScopeId scope;
   Source source;
 };
+struct GenericParam {
+  SymbolId symbol;
+  std::optional<SymbolId> trait;
+  Source source;
+};
+struct FieldDecl {
+  SymbolId symbol;
+  TypeId type;
+  bool exported;
+  Source source;
+};
+struct VariantDecl {
+  SymbolId symbol;
+  std::vector<FieldDecl> payload;
+  Source source;
+};
+struct NominalDecl {
+  SymbolId symbol;
+  TypeKind kind;
+  std::vector<GenericParam> params;
+  std::vector<FieldDecl> fields;
+  std::vector<VariantDecl> variants;
+  Source source;
+};
+struct MethodPrototype {
+  SymbolId symbol;
+  TypeId signature;
+  std::vector<Parameter> parameters;
+  Source source;
+};
+struct TraitDecl {
+  SymbolId symbol, self;
+  std::vector<MethodPrototype> methods;
+  Source source;
+};
+struct ImplDecl {
+  std::vector<GenericParam> params;
+  std::optional<SymbolId> trait;
+  SymbolId self_parameter;
+  TypeId self_type;
+  std::vector<SymbolId> methods;
+  Source source;
+};
+struct FunctionTemplate {
+  HirFunction function;
+  std::vector<GenericParam> params;
+};
+struct FunctionInstance {
+  SymbolId symbol, origin;
+  std::vector<TypeId> type_args;
+  std::vector<std::pair<SymbolId, SymbolId>> renamed;
+  Config target;
+};
+using Substitutions = std::vector<std::pair<SymbolId, TypeId>>;
+TypeId substitute(TypeId, const Substitutions &, TypeContext &);
+// True when the two type patterns admit a common finite substitution.
+bool type_patterns_overlap(TypeId, TypeId, const TypeContext &);
 struct HirModule {
   std::shared_ptr<const modules::ResolvedProject> resolved;
   ModuleId identity;
@@ -222,7 +327,22 @@ struct HirModule {
   std::vector<HirFunction> functions;
   std::vector<HirNode> nodes;
   std::vector<Scope> scopes;
+  std::vector<NominalDecl> nominals;
+  std::vector<TraitDecl> traits;
+  std::vector<ImplDecl> impls;
+  std::vector<FunctionTemplate> templates;
+  std::vector<FunctionInstance> instances;
 };
+// Returns a declaration with infinite value layout, including unused templates.
+// Function signatures and unused type arguments do not contribute value fields.
+std::optional<SymbolId> infinite_value_layout(const HirModule &,
+                                             std::stop_token = {});
+PhaseResult<std::monostate> verify_types(const HirModule &,
+                                         std::stop_token = {});
+// Checks only executable functions, reachable nodes and recursively used types.
+// Target-width restrictions of code generation remain at backend entry points.
+PhaseResult<std::monostate> check_backend_capabilities(const HirModule &,
+                                                       std::stop_token = {});
 class VerifiedHirModule;
 PhaseResult<VerifiedHirModule> verify(const HirModule &, std::stop_token = {});
 class VerifiedHirModule {
@@ -240,8 +360,9 @@ public:
 // verify deep-copies mutable builder data, resolved/project and AST arenas
 // before checking. A retained mutable builder/ResolvedProject/AstFile alias
 // cannot change the published module. SourceSnapshot is an immutable support
-// object. E_IR_INVALID is an internal error; unsupported constructs are
-// rejected with that code too (their source diagnostics belong to the checker).
+// object. Malformed HIR (including Unsupported payloads) is E_IR_INVALID;
+// well-typed operations unavailable in the selected backend are
+// E_CAPABILITY_UNAVAILABLE.
 std::string dump(const TypeContext &);
 std::string dump(const HirModule &);
 std::string dump(const VerifiedHirModule &);

@@ -1,0 +1,752 @@
+#include "lang/sema/check.hpp"
+#include <algorithm>
+#include <cstdlib>
+#include <filesystem>
+#include <fstream>
+#include <functional>
+#include <iostream>
+#include <json-c/json.h>
+#include <set>
+#include <stdexcept>
+#include <sys/resource.h>
+#include <sys/wait.h>
+#include <unistd.h>
+using namespace lang;
+namespace fs = std::filesystem;
+void need(bool b, const std::string &msg) {
+  if (!b)
+    throw std::runtime_error(msg);
+}
+std::string messages(const auto &r) {
+  std::string s;
+  for (const auto &d : r.diagnostics)
+    s += d.code + ": " + d.message + "\n";
+  return s;
+}
+auto check(const fs::path &p) {
+  SourceManager sm;
+  auto loaded = modules::load_project({p, {}, {}}, sm);
+  if (!loaded.success()) {
+    PhaseResult<hir::HirModule> r;
+    r.diagnostics = loaded.diagnostics;
+    r.failure = loaded.failure;
+    return r;
+  }
+  auto resolved = modules::resolve_project(
+      std::make_shared<const modules::Project>(*loaded.value));
+  return sema::check_types(resolved);
+}
+struct Temp {
+  fs::path path;
+  Temp() {
+    char p[] = "/tmp/lang-t07-XXXXXX";
+    auto t = mkdtemp(p);
+    need(t, "mkdtemp");
+    path = t;
+    fs::create_directories(path / "src");
+  }
+  ~Temp() {
+    std::error_code ec;
+    fs::remove_all(path, ec);
+  }
+};
+void write(const fs::path &p, const std::string &s) {
+  std::ofstream f(p);
+  f << s;
+  need(bool(f), "write test fixture");
+}
+auto source(const std::string &s, std::string backend = "native",
+            unsigned width = 64) {
+  Temp t;
+  write(t.path / "lang.toml",
+        "schema_version = "
+        "1\n[package]\nname=\"test\"\nsource_root=\"src\"\nentry=\"app\"\n["
+        "build]\nbackend=\"" +
+            backend + "\"\nword_bits=" + std::to_string(width) + "\n");
+  write(t.path / "src/main.lang", "package app; " + s);
+  SourceManager sm;
+  auto loaded = modules::load_project({t.path / "lang.toml", {}, {}}, sm);
+  need(loaded.success(), messages(loaded));
+  auto resolved = modules::resolve_project(
+      std::make_shared<const modules::Project>(*loaded.value));
+  if (!resolved.success())
+    return sema::check_types(resolved);
+  auto input = std::make_shared<modules::ResolvedProject>(*resolved.value);
+  auto size = input->symbols.size(), occurrences = input->occurrences.size();
+  auto result = sema::check_types(input);
+  need(input->symbols.size() == size &&
+           input->occurrences.size() == occurrences,
+       "checker mutated input ResolvedProject");
+  if (result.success())
+    need(result.value->resolved.get() != input.get(),
+         "checker did not own its symbol additions");
+  return result;
+}
+bool has(const auto &r, std::string_view code) {
+  for (const auto &d : r.diagnostics)
+    if (d.code == code)
+      return true;
+  return false;
+}
+void invalid(hir::HirModule m, const std::string &name, const auto &change) {
+  change(m);
+  auto r = hir::verify_types(m);
+  need(!r.success() && !r.value && r.failure == FailureKind::internal &&
+           has(r, "E_IR_INVALID"),
+       "corruption accepted: " + name + "\n" + messages(r));
+  auto published = hir::verify(m);
+  need(!published.success() && has(published, "E_IR_INVALID"),
+       "corrupt module published: " + name);
+}
+void repairs(const fs::path &root) {
+  auto good = [](const std::string &s) {
+    auto r = source(s);
+    need(r.success(), s + "\n" + messages(r));
+    return *r.value;
+  };
+  auto bad = [](const std::string &s, const std::string &code) {
+    auto r = source(s);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         s + "\n" + messages(r));
+  };
+  auto packages = [](const std::string &lib, const std::string &app) {
+    Temp t;
+    fs::create_directories(t.path / "src/lib");
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
+    write(t.path / "src/main.lang",
+          "package app; import \"app/lib\" as lib; " + app);
+    return check(t.path / "lang.toml");
+  };
+  size_t failures = 0;
+  auto test = [&](const char *id, const std::function<void()> &f,
+                  bool bounded = false) {
+    try {
+      if (bounded) {
+        std::cout.flush();
+        auto pid = fork();
+        need(pid >= 0, "fork resource-limited layout test");
+        if (!pid) {
+          rlimit memory{384 * 1024 * 1024, 384 * 1024 * 1024};
+          rlimit cpu{3, 3};
+          // ASan reserves a large address range; CPU/wall limits still apply.
+#if defined(__SANITIZE_ADDRESS__)
+          constexpr bool limit_address_space = false;
+#elif defined(__has_feature)
+          constexpr bool limit_address_space = !__has_feature(address_sanitizer);
+#else
+          constexpr bool limit_address_space = true;
+#endif
+          if ((limit_address_space && setrlimit(RLIMIT_AS, &memory)) ||
+              setrlimit(RLIMIT_CPU, &cpu))
+            _exit(2);
+          alarm(10);
+          try {
+            f();
+            _exit(0);
+          } catch (const std::exception &e) {
+            std::cerr << e.what() << "\n";
+            _exit(1);
+          }
+        }
+        int status = 0;
+        need(waitpid(pid, &status, 0) == pid, "wait layout child");
+        need(WIFEXITED(status) && WEXITSTATUS(status) == 0,
+             "layout child failed (exit/signal status=" +
+                 std::to_string(status) + "); kill/timeout is a test failure");
+      } else
+        f();
+      std::cout << id << ": passed\n";
+    } catch (const std::exception &e) {
+      ++failures;
+      std::cout << id << ": FAILED: " << e.what() << "\n";
+    }
+  };
+  test("repair-1-finite-layout", [&] {
+    auto m = good("struct S[T]{f func() (S[S[T]]);} func main() i32{return 0;}");
+    need(m.types.size() < 32, "function field expanded unused types");
+    good("enum E[T]{A(f func(E[E[T]]) E[E[T]]);} func main() i32{return 0;}");
+    good("struct Ignore[T]{x i32;} struct S[T]{x Ignore[S[S[T]]];} "
+         "func main() i32{return 0;}");
+    good("struct A[T]{x B[T];} struct B[T]{f func() A[A[T]];} "
+         "func main() i32{return 0;}");
+    good("trait V{func v(self Self) i32;} struct S[T V]{f func() S[S[T]];} "
+         "impl[T V] V for S[T]{func v(self Self) i32{return 0;}} "
+         "func main() i32{return 0;}");
+    good("struct Box[T]{x T;} struct P{x Box[Box[i32]];} func main() i32{return 0;}");
+    std::string deep;
+    for (size_t i = 0; i < 80; ++i)
+      deep += "struct S" + std::to_string(i) + "{x " +
+              (i == 79 ? "i32" : "S" + std::to_string(i + 1)) + ";}";
+    good(deep + "func main() i32{return 0;}");
+    bad("struct Box[T]{x T;} struct S[T]{x Box[S[Box[T]]];} "
+        "func main() i32{return 0;}", "E_TYPE_MISMATCH");
+    bad("enum E[T]{A(x E[E[T]]);} func main() i32{return 0;}", "E_TYPE_MISMATCH");
+  }, true);
+  test("repair-2-qualified-enum-pattern", [&] {
+    auto r = packages("pub enum E{A;}",
+                      "func main() i32{switch lib.E.A{case lib.E.A:return 0;}}");
+    need(r.success(), messages(r));
+    r = packages("enum E{A;} pub func marker(){}",
+                 "func main() i32{switch lib.E.A{case lib.E.A:return 0;}}");
+    need(!r.success() && has(r, "E_PRIVATE_ACCESS"), messages(r));
+    r = packages("pub enum E{A;} pub enum F{A;}",
+                 "func main() i32{switch lib.E.A{case lib.F.A:return 0;}}");
+    need(!r.success() && has(r, "E_TYPE_MISMATCH"), messages(r));
+    r = packages("pub enum E{A;}",
+                 "func main() i32{switch lib.E.A{case lib.Missing.A:return 0;}}");
+    need(!r.success() && has(r, "E_NAME_NOT_FOUND"), messages(r));
+    r = packages("pub enum E{A;} pub const N=1;",
+                 "func main() i32{switch lib.E.A{case lib.N.A:return 0;}}");
+    need(!r.success() && has(r, "E_NAME_KIND"), messages(r));
+  });
+  test("repair-3-callable-field", [&] {
+    good("struct C{cb func() i32;} func invoke(c C)i32{return c.cb();} "
+         "func main() i32{return 0;}");
+    good("struct C{cb func() i32;} func invoke(c C)i32{return (c.cb)();} "
+         "func main() i32{return 0;}");
+    auto m = good("struct C{cb func(i32) i32;} func id(x i32)i32{return x;} "
+                  "func make() C{return C(cb:id);} func arg() i32{return 2;} "
+                  "func main() i32{return make().cb(arg());}");
+    auto once = [&](const std::string &name) {
+      return std::count_if(m.nodes.begin(), m.nodes.end(), [&](const auto &n) {
+        auto c = std::get_if<hir::Call>(&n.data);
+        return c && c->direct_symbol &&
+               m.resolved->symbols[c->direct_symbol->value].name == name;
+      });
+    };
+    need(once("make") == 1 && once("arg") == 1, "callee/arg evaluated twice");
+    bool saw = false;
+    for (const auto &n : m.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data); c && c->callee) {
+        const auto &field = m.nodes[c->callee->value];
+        need(field.kind() == hir::NodeKind::field_read && n.children.size() == 2 &&
+                 n.children[0] == *c->callee &&
+                 m.nodes[field.children[0].value].kind() == hir::NodeKind::call &&
+                 n.children[1] == c->args[0].expression,
+             "field callee/argument HIR order");
+        saw = true;
+      }
+    need(saw, "function field call missing");
+    bad("struct C{cb i32;} func invoke(c C)i32{return c.cb();} "
+        "func main() i32{return 0;}", "E_CALL_ARGUMENT");
+    good("struct C{cb func() i32;} impl C{func cb(self Self)i32{return 9;}} "
+         "func invoke(c C)i32{return c.cb();} func main() i32{return 0;}");
+  });
+  test("repair-4-pattern-type-arguments", [&] {
+    good("enum E[T]{A(x T);} func main() i32{let e=E[i32].A(x:1); "
+         "switch e{case E[(i32)].A(x):return x;}}");
+    good("enum E[T]{A(x T);} struct Box[T]{x T;} "
+         "func main() i32{let e=E[Box[i32]].A(x:Box[i32](x:1)); "
+         "switch e{case E[Box[(i32)]].A(x):return x.x;}}");
+    good("enum E[T]{A(x T);} func id(x i32)i32{return x;} "
+         "func main() i32{let e=E[func(i32) i32].A(x:id); "
+         "switch e{case E[func((i32)) (i32)].A(f):return f(1);}}");
+    bad("enum E[T]{A(x T);} func main() i32{let e=E[i32].A(x:1); "
+        "switch e{case E[(Missing)].A(x):return x;}}", "E_NAME_NOT_FOUND");
+    bad("enum E[T]{A(x T);} func id(x i32)i32{return x;} "
+        "func main() i32{let e=E[func(i32)i32].A(x:id); "
+        "switch e{case E[func(Missing)i32].A(f):return f(1);}}", "E_NAME_NOT_FOUND");
+    bad("enum E[T]{A(x T);} const N=1; func main() i32{let e=E[i32].A(x:1); "
+        "switch e{case E[(N)].A(x):return x;}}", "E_NAME_KIND");
+    auto r = packages("pub enum E[T]{A(x T);} pub struct P{pub x i32;}",
+        "func main() i32{let e=lib.E[lib.P].A(x:lib.P(x:1)); "
+        "switch e{case lib.E[(lib.P)].A(x):return x.x;}}");
+    need(r.success(), messages(r));
+    r = packages("pub enum E[T]{A(x T);} struct Hidden{x i32;}",
+        "func main() i32{let e=lib.E[i32].A(x:1); "
+        "switch e{case lib.E[(lib.Hidden)].A(x):return x;}}");
+    need(!r.success() && has(r, "E_PRIVATE_ACCESS"), messages(r));
+    r = packages("pub enum E[T]{A(x T);} struct Hidden{x i32;}",
+        "func id(x i32)i32{return x;} "
+        "func main() i32{let e=lib.E[func(i32)i32].A(x:id); "
+        "switch e{case lib.E[func(lib.Hidden)i32].A(f):return 0;}}");
+    need(!r.success() && has(r, "E_PRIVATE_ACCESS"), messages(r));
+  });
+  test("repair-5-constructor-visibility", [&] {
+    auto r = packages("pub struct P{secret i32;}",
+        "func main() i32{let p=lib.P(secret:1);return 0;}");
+    need(!r.success() && has(r, "E_PRIVATE_ACCESS"), messages(r));
+    r = packages("pub struct P{pub x i32;}",
+        "func main() i32{return lib.P(x:1).x;}");
+    need(r.success(), messages(r));
+    good("struct P{x i32;} func main() i32{return P(x:1).x;}");
+    r = packages("pub enum E{A(x i32);}",
+        "func main() i32{switch lib.E.A(x:1){case lib.E.A(x):return x;}}");
+    need(r.success(), messages(r));
+  });
+  test("repair-6-method-visibility", [&] {
+    auto r = packages("impl i32{func hidden(self Self)i32{return 42;}} "
+                      "pub func marker(){}",
+        "func main() i32{let x i32=0;return x.hidden();}");
+    need(!r.success() && has(r, "E_PRIVATE_ACCESS"), messages(r));
+    r = packages("impl i32{pub func value(self Self)i32{return 42;}} "
+                 "pub func marker(){}",
+        "func main() i32{let x i32=0;return x.value();}");
+    need(r.success(), messages(r));
+    r = packages("pub struct P{pub x i32;} "
+                 "impl P{func hidden(self Self)i32{return self.x;}}",
+        "func main() i32{return lib.P(x:1).hidden();}");
+    need(!r.success() && has(r, "E_PRIVATE_ACCESS"), messages(r));
+    r = packages("pub struct P{pub x i32;} "
+                 "impl P{pub func value(self Self)i32{return self.x;}}",
+        "func main() i32{return lib.P(x:1).value();}");
+    need(r.success(), messages(r));
+    good("impl i32{func hidden(self Self)i32{return 42;}} "
+         "func main() i32{let x i32=0;return x.hidden();}");
+    r = packages("pub trait V{func value(self Self)i32;} "
+                 "impl V for i32{func value(self Self)i32{return 7;}}",
+        "func get[T lib.V](x T)i32{return x.value();} "
+        "func main() i32{let x i32=0;return get(x)+x.value();}");
+    need(r.success(), messages(r));
+  });
+  test("repair-7-instance-symbol-origins", [&] {
+    auto r = check(root / "tests/generics/fixtures/multi-instance/lang.toml");
+    need(r.success(), messages(r));
+    auto m = *r.value;
+    size_t other = 1;
+    while (other < m.instances.size() &&
+           m.instances[other].origin != m.instances[0].origin)
+      ++other;
+    need(other < m.instances.size(), "second instance missing");
+    for (size_t j = 0; j < m.instances[0].renamed.size(); ++j)
+      invalid(m, "foreign instance source " + std::to_string(j), [=](auto &x) {
+        auto from = x.instances[0].renamed[j].first;
+        for (auto [original, concrete] : x.instances[other].renamed)
+          if (original == from) {
+            x.instances[0].renamed[j].first = concrete;
+            return;
+          }
+        throw std::runtime_error("matching foreign symbol missing");
+      });
+    invalid(m, "missing original local plus target remapped", [](auto &x) {
+      auto &i = x.instances[0];
+      auto original = i.renamed.back().first, target = i.renamed.back().second;
+      i.renamed.pop_back();
+      for (auto &n : x.nodes)
+        if (x.scopes[n.scope.value].function == i.origin)
+          if (auto b = std::get_if<hir::Binding>(&n.data); b && b->symbol == original)
+            b->symbol = target;
+    });
+    need(hir::verify_types(m).success(), "valid multi-instance HIR rejected");
+    auto patterns = good("enum E[T]{A(x T);} func unwrap[T](e E[T])T{"
+        "switch e{case E.A(x):return x;}} func main()i32{"
+        "let a=unwrap(E[i32].A(x:1));let b=unwrap(E[i64].A(x:2));return a;}");
+    invalid(patterns, "foreign instance pattern origin", [](auto &x) {
+      auto &a = x.instances[0];
+      const auto &b = x.instances[1];
+      for (auto &entry : a.renamed) {
+        auto original = x.resolved->symbols[entry.first.value].definition;
+        if (original && x.resolved->project->module(original->module)
+                            .files[original->file]->node(original->node).kind ==
+                            AstKind::BindPattern)
+          for (auto [from, to] : b.renamed)
+            if (from == entry.first) { entry.first = to; return; }
+      }
+      throw std::runtime_error("pattern symbol missing");
+    });
+    invalid(patterns, "missing template pattern symbol", [](auto &x) {
+      x.instances[0].renamed.pop_back();
+    });
+  });
+  need(!failures, std::to_string(failures) + " T07 repair groups failed");
+}
+void extra(const fs::path &root) {
+  auto good = [&](const std::string &s) {
+    auto r = source(s);
+    need(r.success(), s + "\n" + messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &s, std::string code = "E_TYPE_MISMATCH") {
+    auto r = source(s);
+    need(!r.success() && has(r, code) && r.failure == FailureKind::source,
+         s + "\n" + messages(r));
+  };
+  good("func keep[T](x T,cb func(i32) i32) T{return x;} "
+       "func main() i32{return 0;}");
+  good("func keep[T](x T,cb func(i32) i32) T{return x;} "
+       "func id(x i32) i32{return x;} func main() i32{return keep[i32](3,id);}");
+  auto generic_calls = good("func g[T](){} func h[U](){g[U]();let f=g[U];} "
+                            "func other[X](x X){} func main() i32{return 0;}");
+  for (auto invalid_id : {uint64_t{0}, uint64_t{999999}}) {
+    invalid(generic_calls, "invalid generic call type argument", [=](auto &m) {
+      for (auto &n : m.nodes)
+        if (auto c = std::get_if<hir::Call>(&n.data); c && !c->type_args.empty()) {
+          c->type_args[0] = TypeId{invalid_id}; return;
+        }
+      throw std::runtime_error("missing generic call");
+    });
+    invalid(generic_calls, "invalid generic function value type argument", [=](auto &m) {
+      for (auto &n : m.nodes)
+        if (auto v = std::get_if<hir::FunctionValue>(&n.data); v && !v->type_args.empty()) {
+          v->type_args[0] = TypeId{invalid_id}; return;
+        }
+      throw std::runtime_error("missing generic function value");
+    });
+  }
+  invalid(generic_calls, "foreign template type parameter", [](auto &m) {
+    TypeId foreign{0};
+    for (uint64_t id=1; id<=m.types.size(); ++id) {
+      auto t=m.types.find(TypeId{id});
+      if (t->kind==hir::TypeKind::TypeParameter &&
+          m.resolved->symbols[t->declaration.value].name=="X") foreign=TypeId{id};
+    }
+    need(foreign.value != 0, "foreign type parameter missing");
+    for (auto &n:m.nodes)
+      if (auto c=std::get_if<hir::Call>(&n.data); c && !c->type_args.empty()) {
+        c->type_args[0]=foreign; return;
+      }
+  });
+  auto declarations = good("struct Pair[A,B]{first A;second B;} enum E{None;Some(x i32);} "
+                           "enum F{Other;} func main() i32{return 0;}");
+  invalid(declarations, "missing nominal field", [](auto &m){m.nominals[0].fields.pop_back();});
+  invalid(declarations, "reordered nominal fields", [](auto &m){std::swap(m.nominals[0].fields[0],m.nominals[0].fields[1]);});
+  invalid(declarations, "missing enum variant", [](auto &m){m.nominals[1].variants.pop_back();});
+  invalid(declarations, "missing enum payload", [](auto &m){m.nominals[1].variants[1].payload.clear();});
+  invalid(declarations, "foreign enum variant owner", [](auto &m){m.nominals[1].variants.push_back(m.nominals[2].variants[0]);});
+  invalid(declarations, "reordered nominal parameters", [](auto &m){std::swap(m.nominals[0].params[0],m.nominals[0].params[1]);});
+  auto foreign_parameter = good("struct A[X]{} struct B[Y]{} func main() i32{return 0;}");
+  invalid(foreign_parameter, "foreign nominal parameter owner", [](auto &m){m.nominals[0].params[0]=m.nominals[1].params[0];});
+  auto multi = check(root / "tests/generics/fixtures/multi-instance/lang.toml");
+  need(multi.success(), messages(multi));
+  const auto m = *multi.value;
+  need(m.templates.size() == 2 && m.instances.size() == 4,
+       "missing independent local/lambda template instances");
+  std::set<uint64_t> generated, scopes, nodes;
+  for (const auto &instance : m.instances) {
+    for (auto [from, to] : instance.renamed)
+      need(from != to && generated.insert(to.value).second,
+           "shared instantiated symbol");
+    auto f = std::find_if(
+        m.functions.begin(), m.functions.end(),
+        [&](const auto &f) { return f.symbol == instance.symbol; });
+    need(f != m.functions.end(), "instance has no concrete function");
+    need(scopes.insert(f->scope.value).second, "instances share a root scope");
+    std::vector<HirNodeId> todo{f->body};
+    while (!todo.empty()) {
+      auto id = todo.back();
+      todo.pop_back();
+      need(nodes.insert(id.value).second, "instances share a node");
+      const auto &n = m.nodes[id.value];
+      need(m.types.find(n.type)->kind != hir::TypeKind::TypeParameter,
+           "unsubstituted concrete type");
+      todo.insert(todo.end(), n.children.begin(), n.children.end());
+    }
+  }
+  invalid(m, "signature replacement", [](auto &x) {
+    for (auto &f : x.functions)
+      if (f.symbol == x.instances[0].symbol) {
+        auto sig = *x.types.find(f.signature);
+        sig.result = TypeId{1};
+        f.signature = x.types.intern(sig);
+        break;
+      }
+  });
+  invalid(m, "unresolved concrete template call", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data); c && c->direct_symbol) {
+        for (const auto &i : x.instances)
+          if (*c->direct_symbol == i.symbol) {
+            c->direct_symbol = i.origin;
+            c->type_args = i.type_args;
+            return;
+          }
+      }
+  });
+  invalid(m, "missing instance record",
+          [](auto &x) { x.instances.erase(x.instances.begin()); });
+  invalid(m, "mapping missing local",
+          [](auto &x) { x.instances[0].renamed.pop_back(); });
+  invalid(m, "forged symbol origin", [](auto &x) {
+    x.instances[0].renamed[0].first = x.instances[0].renamed[0].second;
+  });
+  invalid(m, "wrong target",
+          [](auto &x) { x.instances[0].target.word_bits = 32; });
+  invalid(m, "unsubstituted type", [](auto &x) {
+    auto sid = x.instances[0].symbol;
+    TypeId t{0};
+    for (size_t i = 1; i <= x.types.size(); ++i)
+      if (x.types.find(TypeId{i})->kind == hir::TypeKind::TypeParameter) {
+        t = TypeId{i};
+        break;
+      }
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == sid &&
+          n.kind() == hir::NodeKind::read) {
+        n.type = t;
+        break;
+      }
+  });
+  auto two = good("func a[T](x T) T { return x; } func b[T](x T) T { return x; "
+                  "} func main() i32 { return a[i32](1)+b[i32](2); }");
+  invalid(two, "same-type cross-instance local read", [](auto &x) {
+    SymbolId from = x.instances[0].symbol, foreign = x.instances[1].symbol;
+    SymbolId parameter{0};
+    for (auto &f : x.functions)
+      if (f.symbol == foreign)
+        parameter = f.parameters[0].symbol;
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == from &&
+          n.kind() == hir::NodeKind::read) {
+        std::get<hir::Read>(n.data).symbol = parameter;
+        break;
+      }
+  });
+  // The sole publisher deep-copies generated symbols, templates, instances,
+  // source ASTs and project state as well as the executable arena.
+  auto frozen = hir::verify(m);
+  need(frozen.success(), messages(frozen));
+  auto before = hir::dump(*frozen.value);
+  auto mutable_builder = m;
+  mutable_builder.instances.clear();
+  mutable_builder.templates.clear();
+  mutable_builder.nodes.clear();
+  auto mutable_resolved = std::const_pointer_cast<modules::ResolvedProject>(
+      mutable_builder.resolved);
+  mutable_resolved->symbols.clear();
+  need(hir::dump(*frozen.value) == before &&
+           hir::verify(frozen.value->module()).success(),
+       "published generic HIR changed through builder aliases");
+  auto repeat = good("func id[T](x T) T {return x;} func main() i32 {return "
+                     "id[i32](1)+id[i32](2);}");
+  need(repeat.instances.size() == 1, "repeat calls were not deduplicated");
+  auto unused = good("struct Box[T] {value T;} func id[T](x T) T{return x;} "
+                     "func main() i32{return 0;}");
+  need(unused.instances.empty() && hir::verify(unused).success(),
+       "unused declarations treated as backend operations");
+  good("func id[T](x T) T{return x;} func main() i32 {let f func(i32) i32=id; "
+       "return f(3);}");
+  good("func id[T](x T) T{return x;} const f=id[i32]; func main() i32{return "
+       "f(3);}");
+  good("struct Box[T] {value T;} enum Option[T] {None;Some(value T);} func "
+       "main() i32 {let c=Option[Box[i32]].Some(value:Box[i32](value:5)); "
+       "switch c {case Option.Some(x):return x.value;case Option.None:return "
+       "0;}}");
+  good("struct P {x i32;} impl P {func value(self Self) i32{return self.x;}} "
+       "func main() i32{return P(x:4).value();}");
+  good("trait Value{func value(self Self) i32;} struct Box[T]{x T;} impl[T] "
+       "Value for Box[T]{func value(self Self) i32{return 1;}} func get[T "
+       "Value](x T) i32{return x.value();} func main() i32{return "
+       "get(Box[i32](x:3));}");
+  good("enum E {A;B(x i32);} func main() i32 {let e=E.B(x:5);switch e {case "
+       "x:return 0;}}");
+  good("enum E {A;B;} func main() i32 {var n=0;for n<2 {switch E.A {case "
+       "E.A:n+=1;continue;case E.B:break;} break;}return 0;}");
+  good("trait Ordered{func less(self Self,other Self) bool;} impl Ordered for "
+       "i32{func less(self i32,other i32) bool{return self<other;}} func "
+       "less[T Ordered](a T,b T) bool{return a.less(b);} func main() i32{if "
+       "less[i32](1,2){return 0;}return 1;}");
+  good("struct Box[T]{x T;} impl[T] Box[T]{func wrap[U](self Self,y U) "
+       "U{return y;}} func main() i32{return Box[i64](x:3).wrap[i32](4);}");
+  good("func f(x f32) f32{var y=x; y+=x;return y;} func main() i32{return 0;}");
+  bad("trait V{func v(self Self) i32;} trait W{func w(self Self) i32;} struct "
+      "Box[T]{x T;} impl[T V] W for Box[T]{func w(self Self) i32{return 1;}} "
+      "func use[T W](x T) i32{return 0;} func main() i32{return "
+      "use(Box[i32](x:3));}");
+  good("trait V{func v(self Self) i32;} struct Pair[A,B]{a A;b B;} impl[T] V "
+       "for Pair[T,Pair[T,T]]{func v(self Self) i32{return 1;}} impl[U] V for "
+       "Pair[Pair[U,U],U]{func v(self Self) i32{return 2;}} func main() "
+       "i32{return 0;}");
+  bad("trait V{func v(self Self) i32;} struct Pair[A,B]{a A;b B;} impl[T] V "
+      "for Pair[T,i32]{func v(self Self) i32{return 1;}} impl[U] V for "
+      "Pair[i32,U]{func v(self Self) i32{return 2;}} func main() i32{return "
+      "0;}");
+  bad("struct Pair[A,B]{a A;b B;} func grow[T](x T) i32{return "
+      "grow[Pair[T,T]](Pair[T,T](a:x,b:x));} func main() i32{return "
+      "grow[i32](0);}",
+      "E_INSTANTIATION_LIMIT");
+  bad("func f[T](x T) T {return x;} func main() i32 {let a=f[3](1);return 0;}",
+      "E_NAME_KIND");
+  bad("func f[T]() i32 {return 0;} func main() i32 {return f();}");
+  bad("trait V{func v(self Self) i32;} func bad[T V](x T) T{return x+x;} func "
+      "main() i32{return 0;}");
+  bad("trait V{func v(self Self) i32;} struct P{x i32;} impl V for P{func "
+      "v(self P) i64{return 0;}} func main() i32{return 0;}");
+  bad("trait V{func v(self Self) i32;} struct P{x i32;} impl V for P{} func "
+      "main() i32{return 0;}");
+  bad("trait V{func v(self Self) i32;} struct P{x i32;} impl V for P{func "
+      "v(other P) i32{return 0;}} func main() i32{return 0;}");
+  bad("struct A{b B;} struct B{a A;} func main() i32{return 0;}");
+  bad("struct Box[T]{x T;} struct A[T]{next A[Box[T]];} func main() i32{return "
+      "0;}");
+  bad("enum E{A;B;} func main() i32{switch E.A{case E.A:return 0;case "
+      "E.A:return 1;case E.B:return 2;}}");
+  bad("enum E{A;B;} func main() i32{switch E.A{default:return 0;case "
+      "E.A:return 1;}}");
+  auto fields =
+      check(root / "tests/generics/fixtures/fields-reordered/lang.toml");
+  need(fields.success(), messages(fields));
+  invalid(*fields.value, "foreign field", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto f = std::get_if<hir::FieldRead>(&n.data)) {
+        f->field = x.functions[0].symbol;
+        break;
+      }
+  });
+  invalid(*fields.value, "duplicate constructor mapping", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::StructInit>(&n.data)) {
+        c->fields[1].parameter_index = c->fields[0].parameter_index;
+        break;
+      }
+  });
+  auto order =
+      check(root / "tests/generics/fixtures/field-evaluation-order/lang.toml");
+  need(order.success(), messages(order));
+  bool saw = false;
+  for (const auto &n : order.value->nodes)
+    if (auto c = std::get_if<hir::StructInit>(&n.data)) {
+      need(c->fields.size() == 2 && c->fields[0].parameter_index == 1 &&
+               c->fields[1].parameter_index == 0,
+           "constructor reordered named fields");
+      need(order.value->nodes[n.children[0].value].source.span.begin_byte <
+               order.value->nodes[n.children[1].value].source.span.begin_byte,
+           "constructor changed evaluation order");
+      saw = true;
+    }
+  need(saw, "constructor missing");
+  auto enumeration =
+      check(root / "tests/generics/fixtures/enum-payload/lang.toml");
+  need(enumeration.success(), messages(enumeration));
+  invalid(*enumeration.value, "invalid variant", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::EnumInit>(&n.data)) {
+        c->variant = x.functions[0].symbol;
+        break;
+      }
+  });
+  invalid(*enumeration.value, "nonexhaustive switch", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Switch>(&n.data)) {
+        c->exhaustive = false;
+        break;
+      }
+  });
+  invalid(*enumeration.value, "pattern scope", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Switch>(&n.data)) {
+        c->arms[1].scope = c->arms[0].scope;
+        break;
+      }
+  });
+  invalid(*enumeration.value, "Unsupported corruption", [](auto &x) {
+    x.nodes[0].data = hir::Unsupported{"NeutralBracket"};
+  });
+  auto method = good("struct P{x i32;} impl P{func value(self Self) i32{return "
+                     "self.x;}} func main() i32{return P(x:5).value();}");
+  bool saw_receiver = false;
+  for (const auto &n : method.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data);
+        c && c->direct_symbol &&
+        method.resolved->symbols[c->direct_symbol->value].name == "value") {
+      need(c->args.size() == 1 && n.children.size() == 1 &&
+               c->args[0].expression == n.children[0] &&
+               method.nodes[n.children[0].value].kind() ==
+                   hir::NodeKind::struct_init,
+           "method receiver not evaluated once before args");
+      saw_receiver = true;
+    }
+  need(saw_receiver, "method call missing");
+  for (const auto *backend : {"native", "python"})
+    for (unsigned width : {32u, 64u}) {
+      auto scalar = source(
+          "func id[T](x T) T{return x;} func main() i32{return id(7)-7;}",
+          backend, width);
+      need(scalar.success() && hir::verify(*scalar.value).success(),
+           "generic scalar profile failed");
+      auto capability = hir::check_backend_capabilities(*fields.value);
+      need(!capability.success() &&
+               capability.failure == FailureKind::unsupported &&
+               has(capability, "E_CAPABILITY_UNAVAILABLE"),
+           "aggregate backend refusal is not E_CAP");
+    }
+  Temp baseline;
+  write(baseline.path / "lang.toml",
+        "schema_version=1\n[package]\nname=\"app\"\nsource_root=\"src\"\nentry="
+        "\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+  fs::copy_file(root / "baseline/samples/05_traits.lang",
+                baseline.path / "src/main.lang");
+  auto traits = check(baseline.path / "lang.toml");
+  need(traits.success(),
+       "full 05_traits static check failed: " + messages(traits));
+  need(hir::verify_types(*traits.value).success(), "05_traits invalid HIR");
+  auto cap = hir::verify(*traits.value);
+  need(!cap.success() && has(cap, "E_CAPABILITY_UNAVAILABLE") &&
+           cap.failure == FailureKind::unsupported,
+       "05_traits should await backend aggregate/float execution");
+  auto floating = good("func f(x f64) f64{return -x*x+1.0;} func main() i32{if "
+                       "f(2.0)<0.0{return 1;}return 0;}");
+  need(!hir::verify(floating).success() &&
+           has(hir::verify(floating), "E_CAPABILITY_UNAVAILABLE"),
+       "float operations reached backend");
+  invalid(method, "Self owner missing", [](auto &x) {
+    auto r = std::make_shared<modules::ResolvedProject>(*x.resolved);
+    r->self_parameters.clear();
+    x.resolved = r;
+  });
+  std::stop_source stop;
+  stop.request_stop();
+  need(hir::verify_types(floating, stop.get_token()).state ==
+           PhaseState::cancelled,
+       "static verifier ignored cancellation");
+  std::cout << "T07 identities, corruption, constraints, layout, scopes, "
+               "order, full traits, freezing and capability checks passed\n";
+}
+
+int main(int argc, char **argv) {
+  try {
+    need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
+         "root argument required");
+    fs::path root = argv[1];
+    if (argc == 3) {
+      repairs(root);
+      return 0;
+    }
+    auto path = root / "tests/generics/cases.json";
+    auto raw = json_object_from_file(path.c_str());
+    need(raw, "read cases.json");
+    std::unique_ptr<json_object, decltype(&json_object_put)> owner(
+        raw, json_object_put);
+    auto cases = json_object_object_get(raw, "cases");
+    size_t failures = 0;
+    for (size_t i = 0; i < json_object_array_length(cases); ++i) {
+      auto c = json_object_array_get_idx(cases, i);
+      std::string id = json_object_get_string(json_object_object_get(c, "id"));
+      std::string manifest =
+          json_object_get_string(json_object_object_get(c, "manifest"));
+      auto expected = json_object_object_get(c, "expected_static");
+      bool accept = std::string(json_object_get_string(json_object_object_get(
+                        expected, "status"))) == "accept";
+      auto r = check(root / manifest);
+      bool good = r.success() == accept &&
+                  (accept || (r.failure == FailureKind::source &&
+                              !r.diagnostics.empty()));
+      std::cout << id << ": " << (good ? "passed" : "FAILED") << "\n";
+      if (!good) {
+        std::cout << messages(r);
+        ++failures;
+      }
+      if (id == "expanding-recursion")
+        need(!r.success() &&
+                 messages(r).find("E_INSTANTIATION_LIMIT") != std::string::npos,
+             "expansion did not stop at its dedicated budget diagnostic: " +
+                 messages(r));
+      if (r.success()) {
+        auto verified = hir::verify_types(*r.value);
+        need(verified.success(), messages(verified));
+        if (id == "cross-package-alias")
+          need(r.value->instances.size() == 1,
+               "alias failed instance deduplication");
+      }
+    }
+    need(!failures, std::to_string(failures) + " fixture failures");
+    std::cout << "27 T07 static source fixtures passed\n";
+    extra(root);
+    repairs(root);
+  } catch (const std::exception &e) {
+    std::cerr << e.what() << "\n";
+    return 1;
+  }
+}

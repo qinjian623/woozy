@@ -5,6 +5,13 @@ namespace lang::sema {
 // A supplied configuration must match Project's target. Omitting it uses the
 // manifest's backend and word_bits; Python has no dependency on the host width.
 using CheckConfig = hir::Config;
+// Static T07 checking; this result does not grant permission to generate code.
+PhaseResult<hir::HirModule>
+    check_types(std::shared_ptr<const modules::ResolvedProject>,
+                std::optional<CheckConfig> = {}, std::stop_token = {});
+PhaseResult<hir::HirModule>
+check_types(const PhaseResult<modules::ResolvedProject> &,
+            std::optional<CheckConfig> = {}, std::stop_token = {});
 PhaseResult<hir::VerifiedHirModule>
     check_project(std::shared_ptr<const modules::ResolvedProject>,
                   std::optional<CheckConfig> = {}, std::stop_token = {});

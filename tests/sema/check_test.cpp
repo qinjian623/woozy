@@ -107,6 +107,11 @@ void independent(const fs::path &published) {
       raw, json_object_put);
   json_object *cases = nullptr;
   require(json_object_object_get_ex(raw, "cases", &cases), "cases array");
+  auto stage_path = published / "tests/sema/t07-expectations.json";
+  std::unique_ptr<json_object, decltype(&json_object_put)> stage(
+      json_object_from_file(stage_path.c_str()), json_object_put);
+  require(bool(stage), "read T07 stage expectations");
+  auto overrides = json_object_object_get(stage.get(), "overrides");
   for (size_t i = 0; i < json_object_array_length(cases); ++i) {
     auto c = json_object_array_get_idx(cases, i);
     auto get = [](json_object *v, const char *key) {
@@ -115,6 +120,8 @@ void independent(const fs::path &published) {
     std::string id = json_object_get_string(get(c, "id"));
     std::string expected =
         json_object_get_string(get(get(c, "expected"), "status"));
+    if (auto override = json_object_object_get(overrides, id.c_str()))
+      expected = json_object_get_string(get(override, "status"));
     auto p = published / json_object_get_string(get(c, "manifest"));
     auto r = check(p);
     require(r.success() == (expected == "accept"),

@@ -1,7 +1,7 @@
 {
   "schema_version": 1,
   "contract": "compiler-dev/1",
-  "status": "registry_includes_T00_T06_implemented_components",
+  "status": "registry_includes_T00_T07_implemented_components",
   "codes": [
     {
       "code": "E_BINDING_INVALID",
@@ -45,6 +45,10 @@
     },
     {
       "code": "E_INPUT_IO",
+      "severity": "error"
+    },
+    {
+      "code": "E_INSTANTIATION_LIMIT",
       "severity": "error"
     },
     {

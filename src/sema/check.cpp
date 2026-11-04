@@ -1,5 +1,6 @@
 #include "lang/sema/check.hpp"
 #include <algorithm>
+#include <functional>
 #include <gmpxx.h>
 #include <map>
 #include <set>
@@ -32,6 +33,7 @@ struct Local {
 struct Constant {
   Value value;
   std::optional<SymbolId> function;
+  std::vector<TypeId> type_args;
 };
 class Checker {
   HirModule m;
@@ -45,7 +47,21 @@ class Checker {
   SymbolId function{0};
   ScopeId scope{0};
   TypeId unit{0}, boolean{0}, i64{0};
-  std::vector<HirNodeId> loops;
+  std::vector<HirNodeId> loops, break_targets;
+  std::shared_ptr<modules::ResolvedProject> owned;
+  std::map<uint64_t, size_t> nominal_ids;
+  std::map<uint64_t, TypeId> self_types;
+  std::map<uint64_t, std::vector<GenericParam>> generic_params;
+  std::map<uint64_t, std::optional<SymbolId>> bounds;
+  std::map<uint64_t, Ref> bodies;
+  std::map<uint64_t, size_t> template_ids;
+  std::map<std::pair<uint64_t, std::vector<uint64_t>>, SymbolId> instance_cache;
+  size_t instantiation_depth = 0;
+  size_t constraint_depth = 0;
+  std::map<std::pair<uint64_t, uint64_t>, bool> trait_results;
+  std::set<std::pair<uint64_t, uint64_t>> active_constraints;
+  size_t instantiated_nodes = 0;
+  std::vector<GenericParam> active_params;
 
   const AstFile &file(Ref r) const {
     return *m.resolved->project->module(r.module).files.at(r.file);
@@ -158,23 +174,98 @@ class Checker {
     }
     return ParamMode::ordinary;
   }
+  TypeId parameter_type(SymbolId s) {
+    Type t;
+    t.kind = TypeKind::TypeParameter;
+    t.declaration = s;
+    return m.types.intern(t);
+  }
+  std::vector<GenericParam> generics(Ref r) {
+    std::vector<GenericParam> ps;
+    for (auto c : ast(r).children) {
+      auto cr = at(r, c);
+      if (ast(cr).kind != AstKind::GenericParameter)
+        continue;
+      auto id = definition(cr);
+      std::optional<SymbolId> trait;
+      if (!ast(cr).children.empty()) {
+        trait = occurrence(child(cr, 0));
+        if (!trait || symbol(*trait).kind != modules::SymbolKind::trait)
+          reject(cr, "generic constraint must name a trait");
+        if (!ast(child(cr, 0)).children.empty())
+          unavailable(cr, "generic traits are not implemented");
+      }
+      bounds[id.value] = trait;
+      ps.push_back({id, trait, source(cr)});
+      parameter_type(id);
+    }
+    return ps;
+  }
+  const NominalDecl &nominal(TypeId id) const {
+    return m.nominals.at(nominal_ids.at(type(id).declaration.value));
+  }
+  Substitutions nominal_subs(TypeId id) const {
+    Substitutions result;
+    const auto &d = nominal(id);
+    for (size_t i = 0; i < d.params.size(); ++i)
+      result.push_back({d.params[i].symbol, type(id).type_args.at(i)});
+    return result;
+  }
+  TypeId field_type(TypeId id, const FieldDecl &f) {
+    return substitute(f.type, nominal_subs(id), m.types);
+  }
   TypeId parse_type(Ref r) {
     check_cancelled(stop);
     const auto &n = ast(r);
-    if (n.kind == AstKind::ParenthesizedType)
+    if (n.kind == AstKind::ParenthesizedType ||
+        n.kind == AstKind::Parenthesized || n.kind == AstKind::BracketItem)
       return parse_type(child(r, 0));
     if (n.kind == AstKind::FunctionType)
       return signature(r, false);
-    if ((n.kind != AstKind::NamedType && n.kind != AstKind::Name &&
-         n.kind != AstKind::Member) ||
-        (n.kind == AstKind::NamedType && !n.children.empty()))
-      unavailable(r, "generic and aggregate types require T07/T09");
-    auto s = occurrence(r);
+    std::optional<SymbolId> s;
+    std::vector<TypeId> args;
+    if (n.kind == AstKind::NeutralBracket) {
+      s = occurrence(child(r, 0));
+      for (size_t i = 1; i < n.children.size(); ++i)
+        args.push_back(parse_type(child(r, i)));
+    } else if (n.kind == AstKind::NamedType || n.kind == AstKind::Name ||
+               n.kind == AstKind::Member) {
+      s = occurrence(r);
+      for (auto c : n.children)
+        if (n.kind == AstKind::NamedType)
+          args.push_back(parse_type(at(r, c)));
+    } else
+      reject(r, "generic arguments must be types", "E_NAME_KIND");
     if (!s)
       reject(r, "type has no resolved symbol", "E_NAME_KIND");
-    if (symbol(*s).kind != modules::SymbolKind::builtin_type)
-      unavailable(r, "nominal and foreign types require T07/T10/T11");
-    const auto &name = symbol(*s).name;
+    auto kind = symbol(*s).kind;
+    if (kind == modules::SymbolKind::type_parameter) {
+      if (!args.empty())
+        reject(r, "type parameter does not accept arguments");
+      auto it = self_types.find(s->value);
+      return it == self_types.end() ? parameter_type(*s) : it->second;
+    }
+    if (kind == modules::SymbolKind::type) {
+      auto it = nominal_ids.find(s->value);
+      if (it == nominal_ids.end())
+        unavailable(r, "foreign types require T10/T11");
+      const auto &d = m.nominals[it->second];
+      if (args.size() != d.params.size())
+        reject(r, "wrong number of type arguments");
+      Type t;
+      t.kind = d.kind;
+      t.declaration = *s;
+      t.type_args = std::move(args);
+      return m.types.intern(t);
+    }
+    if (kind != modules::SymbolKind::builtin_type)
+      reject(r, "name does not denote a value type", "E_NAME_KIND");
+    const auto name = symbol(*s).name;
+    if (name == "Vec" || name == "Result" || name == "string")
+      unavailable(
+          r, "container, owned string and Result support requires T08/T09");
+    if (!args.empty())
+      reject(r, "scalar type does not accept type arguments");
     if (name == "Unit")
       return unit;
     if (name == "bool")
@@ -193,7 +284,7 @@ class Checker {
       return scalar(
           name[0] == 'i' ? TypeKind::SignedInt : TypeKind::UnsignedInt, w);
     }
-    unavailable(r, "this type is outside the scalar checker");
+    unavailable(r, "type is not implemented");
   }
   TypeId signature(Ref r, bool declaration) {
     Type t;
@@ -210,7 +301,7 @@ class Checker {
       auto cr = at(r, c);
       const auto k = ast(cr).kind;
       if (k == AstKind::GenericParameter)
-        unavailable(cr, "generics require T07");
+        continue;
       if (k == AstKind::Parameter) {
         auto pm = mode(cr);
         auto pt = parse_type(child(cr, 0));
@@ -440,15 +531,48 @@ class Checker {
     case AstKind::Name:
     case AstKind::Member: {
       auto s = occurrence(r);
-      if (!s)
-        unavailable(r,
-                    "field and external member expressions are not supported");
+      if (!s) {
+        if (n.kind != AstKind::Member)
+          reject(r, "unresolved value");
+        auto base_ref = child(r, 0);
+        if (auto bt = type_expression(base_ref)) {
+          if (type(*bt).kind == TypeKind::NominalEnum) {
+            const auto &d = nominal(*bt);
+            auto name = token(r, n.token_end - n.token_begin - 1);
+            for (const auto &v : d.variants)
+              if (symbol(v.symbol).name == name) {
+                if (!v.payload.empty())
+                  reject(r, "variant payload requires a constructor call");
+                result = {node(r, *bt, EnumInit{v.symbol, {}}), {*bt, {}, {}}};
+                break;
+              }
+            if (result.value.type == unit)
+              reject(r, "unknown enum variant");
+            break;
+          }
+          reject(r, "type member is not a value");
+        }
+        auto base = expression(base_ref);
+        const auto f = find_field(r, base.value.type);
+        auto t = field_type(base.value.type, f);
+        result = {node(r, t, FieldRead{f.symbol}, {base.id}), {t, {}, {}}};
+        break;
+      }
       auto k = symbol(*s).kind;
       if (k == modules::SymbolKind::function) {
         auto it = signatures.find(s->value);
         if (it == signatures.end())
           unavailable(r, "foreign function calls require T10/T11");
-        result = {node(r, it->second, FunctionValue{*s}), {it->second, {}, {}}};
+        std::vector<TypeId> args;
+        auto sig = it->second;
+        if (!generic_params[s->value].empty()) {
+          Substitutions sub;
+          if (expected)
+            infer(r, sig, *expected, sub);
+          args = finish_arguments(r, generic_params[s->value], sub);
+          sig = substitute(sig, sub, m.types);
+        }
+        result = {node(r, sig, FunctionValue{*s, args}), {sig, {}, {}}};
       } else if (k == modules::SymbolKind::constant &&
                  !locals.count(s->value)) {
         const auto c = constant(*s);
@@ -459,7 +583,9 @@ class Checker {
         if (c.value.boolean)
           result = {node(r, boolean, BoolLiteral{*c.value.boolean}), c.value};
         else if (c.function)
-          result = {node(r, c.value.type, FunctionValue{*c.function}), c.value};
+          result = {
+              node(r, c.value.type, FunctionValue{*c.function, c.type_args}),
+              c.value};
         else
           unavailable(r, "constant value cannot be materialized by scalar HIR");
       } else {
@@ -482,9 +608,8 @@ class Checker {
       auto a = expression(child(r, 0),
                           op == "!" ? std::optional(boolean) : expected);
       if (op == "+") {
-        if (type(a.value.type).kind == TypeKind::Float)
-          unavailable(r, "strict float unary arithmetic is not implemented");
-        if (!integer(a.value.type))
+        if (!integer(a.value.type) &&
+            type(a.value.type).kind != TypeKind::Float)
           reject(r, "unary plus requires a numeric operand");
         return a;
       }
@@ -495,9 +620,8 @@ class Checker {
         match(r, a.value.type, boolean);
       else if (op == "~" && !integer(a.value.type))
         reject(r, "bitwise not requires an integer operand");
-      else if (!integer(a.value.type)) {
-        if (type(a.value.type).kind == TypeKind::Float)
-          unavailable(r, "strict float unary arithmetic is not implemented");
+      else if (!integer(a.value.type) &&
+               type(a.value.type).kind != TypeKind::Float) {
         reject(r, "integer unary operator requires an integer operand");
       }
       result = {node(r, a.value.type, Unary{u}, {a.id}), a.value};
@@ -552,9 +676,7 @@ class Checker {
            bop == BinaryOp::bit_or || bop == BinaryOp::bit_xor) &&
           !integer(a.value.type))
         reject(r, "bitwise and remainder operators require integer operands");
-      if (k == TypeKind::Float)
-        unavailable(r, "strict float operations are not implemented");
-      if (!integer(a.value.type) &&
+      if (!integer(a.value.type) && k != TypeKind::Float &&
           !(k == TypeKind::Bool &&
             (bop == BinaryOp::equal || bop == BinaryOp::not_equal)))
         reject(r, "invalid scalar operator operands");
@@ -569,12 +691,36 @@ class Checker {
       break;
     }
     case AstKind::Call:
-      result = call(r);
+      result = call(r, expected);
       break;
+    case AstKind::NeutralBracket: {
+      auto base = child(r, 0);
+      auto s = occurrence(base);
+      if (!s || symbol(*s).kind != modules::SymbolKind::function)
+        unavailable(
+            r, "index operations require T09 or declared external interfaces");
+      auto ps = generic_params.at(s->value);
+      Substitutions sub;
+      if (n.children.size() - 1 != ps.size())
+        reject(r, "wrong number of generic arguments");
+      std::vector<TypeId> args;
+      for (size_t i = 0; i < ps.size(); ++i) {
+        auto t = parse_type(child(r, i + 1));
+        args.push_back(t);
+        sub.push_back({ps[i].symbol, t});
+      }
+      check_constraints(r, ps, args);
+      auto sig = substitute(signatures.at(s->value), sub, m.types);
+      result = {node(r, sig, FunctionValue{*s, args}), {sig, {}, {}}};
+      break;
+    }
     case AstKind::FunctionLiteral: {
       auto s = definition(r);
       auto sig = signatures.at(s.value);
-      result = {node(r, sig, FunctionValue{s}), {sig, {}, {}}};
+      std::vector<TypeId> args;
+      for (const auto &p : generic_params[s.value])
+        args.push_back(parameter_type(p.symbol));
+      result = {node(r, sig, FunctionValue{s, args}), {sig, {}, {}}};
       break;
     }
     default:
@@ -587,6 +733,14 @@ class Checker {
   Expr place(Ref r, bool inout) {
     if (ast(r).kind == AstKind::Parenthesized)
       return place(child(r, 0), inout);
+    if (ast(r).kind == AstKind::Member) {
+      if (inout)
+        unavailable(r, "field inout is not implemented");
+      auto base = place(child(r, 0), false);
+      auto f = find_field(r, base.value.type);
+      auto t = field_type(base.value.type, f);
+      return {node(r, t, FieldPlace{f.symbol}, {base.id}), {t, {}, {}}};
+    }
     if (ast(r).kind != AstKind::Name)
       unavailable(
           r, "only a whole writable scalar binding can be used as a place");
@@ -612,7 +766,417 @@ class Checker {
       unavailable(r, "inout requires a trivial numeric/bool binding");
     return {node(r, l.type, Place{*s}), {l.type, {}, {}}};
   }
-  Expr call(Ref r) {
+  bool contains_parameter(TypeId id) const {
+    std::vector<TypeId> pending{id};
+    std::set<uint64_t> visited;
+    while (!pending.empty()) {
+      auto current = pending.back();
+      pending.pop_back();
+      if (!visited.insert(current.value).second)
+        continue;
+      const auto &t = type(current);
+      if (t.kind == TypeKind::TypeParameter)
+        return true;
+      pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+      for (auto p : t.parameters)
+        pending.push_back(p.type);
+      if (t.kind == TypeKind::Function) {
+        pending.push_back(t.result);
+        if (t.throws_type)
+          pending.push_back(*t.throws_type);
+      }
+    }
+    return false;
+  }
+  std::optional<TypeId> type_expression(Ref r) {
+    if (ast(r).kind == AstKind::Parenthesized)
+      return type_expression(child(r, 0));
+    auto base = r;
+    if (ast(r).kind == AstKind::NeutralBracket)
+      base = child(r, 0);
+    auto s = occurrence(base);
+    if (s && (symbol(*s).kind == modules::SymbolKind::type ||
+              symbol(*s).kind == modules::SymbolKind::type_parameter ||
+              symbol(*s).kind == modules::SymbolKind::builtin_type))
+      return parse_type(r);
+    return {};
+  }
+  FieldDecl find_field(Ref r, TypeId t) {
+    if (type(t).kind != TypeKind::NominalStruct)
+      reject(r, "field receiver is not a struct");
+    auto name = file(r).tokens[ast(r).token_end - 1].spelling;
+    for (const auto &f : nominal(t).fields)
+      if (symbol(f.symbol).name == name) {
+        if (symbol(f.symbol).module != r.module && !f.exported)
+          reject(r, "field is private", "E_PRIVATE_ACCESS");
+        return f;
+      }
+    reject(r, "unknown struct field");
+  }
+  void infer(Ref r, TypeId pattern, TypeId actual, Substitutions &sub) {
+    auto p = type(pattern), a = type(actual);
+    if (p.kind == TypeKind::TypeParameter) {
+      for (auto [id, t] : sub)
+        if (id == p.declaration) {
+          if (t != actual)
+            reject(r, "conflicting generic type inference");
+          return;
+        }
+      sub.push_back({p.declaration, actual});
+      return;
+    }
+    if (p.kind != a.kind || p.bits != a.bits ||
+        p.declaration != a.declaration ||
+        p.parameters.size() != a.parameters.size() ||
+        p.type_args.size() != a.type_args.size() ||
+        p.throws_type.has_value() != a.throws_type.has_value())
+      reject(r, "type inference mismatch");
+    for (size_t i = 0; i < p.type_args.size(); ++i)
+      infer(r, p.type_args[i], a.type_args[i], sub);
+    if (p.kind == TypeKind::Function) {
+      for (size_t i = 0; i < p.parameters.size(); ++i) {
+        if (p.parameters[i].mode != a.parameters[i].mode)
+          reject(r, "function argument mode mismatch");
+        infer(r, p.parameters[i].type, a.parameters[i].type, sub);
+      }
+      infer(r, p.result, a.result, sub);
+      if (p.throws_type)
+        infer(r, *p.throws_type, *a.throws_type, sub);
+    }
+  }
+  bool try_infer(Ref r, TypeId pattern, TypeId actual, Substitutions &sub) {
+    try {
+      infer(r, pattern, actual, sub);
+      return true;
+    } catch (const Rejected &) {
+      return false;
+    }
+  }
+  std::vector<TypeId> finish_arguments(Ref r,
+                                       const std::vector<GenericParam> &ps,
+                                       Substitutions &sub) {
+    std::vector<TypeId> args;
+    for (const auto &p : ps) {
+      auto it = std::find_if(sub.begin(), sub.end(),
+                             [&](auto x) { return x.first == p.symbol; });
+      if (it == sub.end())
+        reject(r,
+               "cannot infer type argument; provide explicit type arguments");
+      args.push_back(it->second);
+    }
+    check_constraints(r, ps, args);
+    return args;
+  }
+  bool satisfies(Ref r, TypeId actual, SymbolId trait) {
+    auto key = std::make_pair(actual.value, trait.value);
+    if (auto it = trait_results.find(key); it != trait_results.end())
+      return it->second;
+    if (constraint_depth >= 48 || !active_constraints.insert(key).second)
+      return false;
+    ++constraint_depth;
+    const auto t = type(actual);
+    size_t found = 0;
+    if (t.kind == TypeKind::TypeParameter) {
+      found = bounds[t.declaration.value] == trait ? 1 : 0;
+    } else
+      for (const auto &im : m.impls)
+        if (im.trait == trait) {
+          Substitutions sub;
+          if (!try_infer(r, im.self_type, actual, sub))
+            continue;
+          bool valid = true;
+          for (auto p : im.params) {
+            auto it = std::find_if(sub.begin(), sub.end(), [&](auto entry) {
+              return entry.first == p.symbol;
+            });
+            if (it == sub.end() ||
+                (p.trait && !satisfies(r, it->second, *p.trait))) {
+              valid = false;
+              break;
+            }
+          }
+          if (valid)
+            ++found;
+        }
+    --constraint_depth;
+    active_constraints.erase(key);
+    return trait_results[key] = found == 1;
+  }
+  void check_constraints(Ref r, const std::vector<GenericParam> &ps,
+                         const std::vector<TypeId> &args) {
+    for (size_t i = 0; i < ps.size(); ++i)
+      if (ps[i].trait && !satisfies(r, args.at(i), *ps[i].trait))
+        reject(r, "generic constraint requires one applicable explicit trait "
+                  "implementation");
+  }
+  struct Selection {
+    SymbolId method;
+    Substitutions substitutions;
+  };
+  Selection select_method(Ref r, TypeId receiver, std::string_view name,
+                          std::optional<SymbolId> required = {}) {
+    std::optional<Selection> result;
+    for (const auto &im : m.impls) {
+      if (required && im.trait != required)
+        continue;
+      Substitutions sub;
+      if (!try_infer(r, im.self_type, receiver, sub))
+        continue;
+      const auto saved_depth = constraint_depth;
+      try {
+        finish_arguments(r, im.params, sub);
+      } catch (const Rejected &) {
+        constraint_depth = saved_depth;
+        continue;
+      }
+      for (auto method : im.methods)
+        if (symbol(method).name == name) {
+          // Trait methods use the trait's public interface. Inherent
+          // methods have their own pub declaration.
+          if (symbol(method).module != r.module &&
+              !(im.trait ? symbol(*im.trait).exported
+                         : symbol(method).exported))
+            reject(r, "method is private", "E_PRIVATE_ACCESS");
+          if (result)
+            reject(r, "ambiguous method implementation");
+          result = Selection{method, sub};
+        }
+    }
+    if (!result)
+      reject(r, "no matching explicit method implementation");
+    return *result;
+  }
+  Expr constructor(Ref r, TypeId target, std::optional<SymbolId> variant = {}) {
+    const auto &d = nominal(target);
+    std::vector<FieldDecl> fields = d.fields;
+    if (variant) {
+      for (const auto &v : d.variants)
+        if (v.symbol == *variant)
+          fields = v.payload;
+    }
+    if (ast(r).children.size() - 1 != fields.size())
+      reject(r, "constructor requires every field exactly once",
+             "E_CALL_ARGUMENT");
+    std::vector<CallArg> args;
+    std::vector<HirNodeId> children;
+    std::vector<bool> seen(fields.size());
+    for (size_t i = 1; i < ast(r).children.size(); ++i) {
+      auto ar = child(r, i);
+      if (token(ar, 1) != ":")
+        reject(ar, "constructor requires named fields", "E_CALL_ARGUMENT");
+      std::string label(token(ar));
+      size_t pi = 0;
+      while (pi < fields.size() && symbol(fields[pi].symbol).name != label)
+        ++pi;
+      if (pi == fields.size() || seen[pi])
+        reject(ar, "unknown or duplicate constructor field", "E_CALL_ARGUMENT");
+      if (!variant && symbol(fields[pi].symbol).module != r.module &&
+          !fields[pi].exported)
+        reject(ar, "field is private", "E_PRIVATE_ACCESS");
+      seen[pi] = true;
+      auto e = expression(child(ar, 0), field_type(target, fields[pi]));
+      args.push_back(
+          {uint32_t(i - 1), uint32_t(pi), label, ParamMode::ordinary, e.id});
+      children.push_back(e.id);
+    }
+    NodeData data = variant ? NodeData(EnumInit{*variant, args})
+                            : NodeData(StructInit{args});
+    return {node(r, target, std::move(data), std::move(children)),
+            {target, {}, {}}};
+  }
+  Expr call(Ref r, std::optional<TypeId> expected) {
+    auto callee_ref = child(r, 0);
+    if (auto t = type_expression(callee_ref)) {
+      if (type(*t).kind == TypeKind::NominalStruct)
+        return constructor(r, *t);
+      return scalar_call(r);
+    }
+    auto method_ref = callee_ref;
+    std::vector<TypeId> method_args;
+    bool method_explicit = false;
+    if (ast(method_ref).kind == AstKind::NeutralBracket &&
+        ast(child(method_ref, 0)).kind == AstKind::Member &&
+        !occurrence(child(method_ref, 0))) {
+      method_explicit = true;
+      for (size_t i = 1; i < ast(method_ref).children.size(); ++i)
+        method_args.push_back(parse_type(child(method_ref, i)));
+      method_ref = child(method_ref, 0);
+    }
+    if (ast(method_ref).kind == AstKind::Member && !occurrence(method_ref)) {
+      auto base = child(method_ref, 0);
+      auto name = file(r).tokens[ast(method_ref).token_end - 1].spelling;
+      auto method_subs = [&](Selection selected) {
+        if (method_explicit) {
+          std::vector<GenericParam> unbound;
+          for (auto p : generic_params[selected.method.value]) {
+            bool bound = false;
+            for (auto [s, t] : selected.substitutions)
+              if (s == p.symbol)
+                bound = true;
+            if (!bound)
+              unbound.push_back(p);
+          }
+          if (unbound.size() != method_args.size())
+            reject(r, "wrong number of method type arguments");
+          for (size_t i = 0; i < unbound.size(); ++i)
+            selected.substitutions.push_back(
+                {unbound[i].symbol, method_args[i]});
+        }
+        return selected;
+      };
+      if (auto t = type_expression(base)) {
+        if (type(*t).kind == TypeKind::NominalEnum) {
+          for (const auto &v : nominal(*t).variants)
+            if (symbol(v.symbol).name == name)
+              return constructor(r, *t, v.symbol);
+          reject(r, "unknown enum variant");
+        }
+        auto selected = method_subs(select_method(r, *t, name));
+        return typed_call(r, selected.method, {}, selected.substitutions, {},
+                          expected);
+      }
+      auto receiver = expression(base);
+      if (type(receiver.value.type).kind == TypeKind::NominalStruct)
+        for (const auto &f : nominal(receiver.value.type).fields)
+          if (symbol(f.symbol).name == name) {
+            if (method_explicit)
+              reject(r, "function fields do not take type arguments",
+                     "E_CALL_ARGUMENT");
+            auto field = find_field(method_ref, receiver.value.type);
+            auto t = field_type(receiver.value.type, field);
+            Expr callee{node(method_ref, t, FieldRead{field.symbol},
+                             {receiver.id}), {t, {}, {}}};
+            return scalar_call(r, callee);
+          }
+      if (type(receiver.value.type).kind == TypeKind::TypeParameter) {
+        if (method_explicit)
+          unavailable(r, "generic trait methods are not implemented");
+        auto bound = bounds[type(receiver.value.type).declaration.value];
+        if (!bound)
+          reject(r, "method requires a declared trait constraint");
+        for (const auto &tr : m.traits)
+          if (tr.symbol == *bound)
+            for (const auto &method : tr.methods)
+              if (symbol(method.symbol).name == name) {
+                auto sig =
+                    substitute(method.signature,
+                               {{tr.self, receiver.value.type}}, m.types);
+                return typed_call(r, method.symbol, sig, {}, receiver, expected,
+                                  *bound);
+              }
+        reject(r, "method is not declared by the constraint");
+      }
+      auto selected = method_subs(select_method(r, receiver.value.type, name));
+      return typed_call(r, selected.method, {}, selected.substitutions,
+                        receiver, expected);
+    }
+    auto base = callee_ref;
+    std::vector<TypeId> explicit_args;
+    if (ast(base).kind == AstKind::NeutralBracket) {
+      for (size_t i = 1; i < ast(base).children.size(); ++i)
+        explicit_args.push_back(parse_type(child(base, i)));
+      base = child(base, 0);
+    }
+    auto s = occurrence(base);
+    if (s && symbol(*s).kind == modules::SymbolKind::function &&
+        signatures.count(s->value)) {
+      if (generic_params[s->value].empty() &&
+          ast(callee_ref).kind != AstKind::NeutralBracket)
+        return scalar_call(r);
+      Substitutions sub;
+      auto ps = generic_params[s->value];
+      if (ast(callee_ref).kind == AstKind::NeutralBracket) {
+        if (explicit_args.size() != ps.size())
+          reject(r, "wrong number of generic arguments");
+        for (size_t i = 0; i < ps.size(); ++i)
+          sub.push_back({ps[i].symbol, explicit_args[i]});
+      }
+      return typed_call(r, *s, {}, sub, {}, expected);
+    }
+    return scalar_call(r);
+  }
+  Expr typed_call(Ref r, SymbolId target,
+                  std::optional<TypeId> signature_override, Substitutions sub,
+                  std::optional<Expr> receiver, std::optional<TypeId> expected,
+                  std::optional<SymbolId> constraint = {}) {
+    auto original = signature_override.value_or(signatures.at(target.value));
+    auto original_type = type(original);
+    if (expected)
+      infer(r, original_type.result, *expected, sub);
+    const auto ps = parameters.at(target.value);
+    size_t offset = receiver ? 1 : 0;
+    if (ast(r).children.size() - 1 + offset != ps.size())
+      reject(r, "wrong number of arguments", "E_CALL_ARGUMENT");
+    std::vector<CallArg> args;
+    std::vector<HirNodeId> children;
+    std::vector<bool> seen(ps.size());
+    std::vector<std::optional<Expr>> values(ast(r).children.size() - 1);
+    std::vector<size_t> indices(values.size());
+    std::vector<std::optional<std::string>> labels(values.size());
+    if (receiver) {
+      infer(r, original_type.parameters.at(0).type, receiver->value.type, sub);
+      args.push_back({0, 0, {}, ParamMode::ordinary, receiver->id});
+      children.push_back(receiver->id);
+      seen[0] = true;
+    }
+    for (size_t i = 0; i < values.size(); ++i) {
+      auto ar = child(r, i + 1);
+      size_t pi = i + offset;
+      if (token(ar, 1) == ":") {
+        labels[i] = std::string(token(ar));
+        pi = 0;
+        while (pi < ps.size() && ps[pi].label != *labels[i])
+          ++pi;
+      }
+      if (pi >= ps.size() || seen[pi])
+        reject(ar, "unknown or duplicate argument", "E_CALL_ARGUMENT");
+      seen[pi] = true;
+      indices[i] = pi;
+    }
+    for (size_t pass = 0; pass < 2; ++pass)
+      for (size_t i = 0; i < values.size(); ++i) {
+        auto ar = child(r, i + 1), er = child(ar, 0);
+        if (values[i] || (pass == 0 && contextual(er)))
+          continue;
+        auto pt =
+            substitute(original_type.parameters[indices[i]].type, sub, m.types);
+        auto pm = original_type.parameters[indices[i]].mode;
+        if (pm != ParamMode::ordinary)
+          unavailable(
+              ar, "generic/method inout and move calls are not implemented");
+        auto e = expression(er, contains_parameter(pt) ? std::nullopt
+                                                       : std::optional(pt));
+        infer(ar, original_type.parameters[indices[i]].type, e.value.type, sub);
+        values[i] = e;
+      }
+    std::vector<TypeId> type_args;
+    if (!constraint)
+      type_args = finish_arguments(r, generic_params[target.value], sub);
+    auto sig = substitute(original, sub, m.types);
+    auto ft = type(sig);
+    for (size_t i = 0; i < values.size(); ++i) {
+      auto e = *values[i];
+      match(r, e.value.type, ft.parameters[indices[i]].type);
+      args.push_back({uint32_t(i + offset), uint32_t(indices[i]), labels[i],
+                      ParamMode::ordinary, e.id});
+      children.push_back(e.id);
+    }
+    if (constraint)
+      return {node(r, ft.result,
+                   ConstraintCall{*constraint, target, receiver->value.type,
+                                  sig, args},
+                   children),
+              {ft.result, {}, {}}};
+    Call c;
+    c.kind = CalleeKind::direct;
+    c.signature = sig;
+    c.direct_symbol = target;
+    c.args = std::move(args);
+    c.type_args = std::move(type_args);
+    return {node(r, ft.result, std::move(c), children), {ft.result, {}, {}}};
+  }
+
+  Expr scalar_call(Ref r, std::optional<Expr> checked_callee = {}) {
     auto callee_ref = child(r, 0);
     auto s = occurrence(callee_ref);
     if (s && symbol(*s).kind == modules::SymbolKind::builtin_type) {
@@ -644,7 +1208,7 @@ class Checker {
       c.direct_symbol = s;
       c.signature = signatures.at(s->value);
     } else {
-      auto callee = expression(callee_ref);
+      auto callee = checked_callee ? *checked_callee : expression(callee_ref);
       if (type(callee.value.type).kind != TypeKind::Function)
         reject(callee_ref, "callee is not a function", "E_CALL_ARGUMENT");
       c.kind = CalleeKind::function_value;
@@ -744,8 +1308,10 @@ class Checker {
       expected = parse_type(child(r, 0));
     auto e = expression(child(r, ast(r).children.size() - 1), expected);
     Constant c{e.value, {}};
-    if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data))
+    if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data)) {
       c.function = f->symbol;
+      c.type_args = f->type_args;
+    }
     if (!c.value.integer && !c.value.boolean && !c.function)
       unavailable(
           r, "const initializer must be a non-Panic scalar compile-time value");
@@ -782,12 +1348,139 @@ class Checker {
     scope = saved;
     return {id, falls, breaks};
   }
+  Pattern pattern(Ref r, TypeId t) {
+    Pattern p{t, source(r), {}, {}, {}};
+    if (ast(r).kind == AstKind::BindPattern) {
+      if (token(r) != "_") {
+        auto s = definition(r);
+        p.binding = s;
+        locals[s.value] = {t, false};
+      }
+      return p;
+    }
+    if (ast(r).kind != AstKind::VariantPattern)
+      unavailable(
+          r,
+          "only enum variant, binding and wildcard patterns are implemented");
+    if (type(t).kind != TypeKind::NominalEnum)
+      reject(r, "variant pattern requires an enum");
+    auto base = occurrence(r);
+    if (!base || *base != type(t).declaration)
+      reject(r, "pattern belongs to a different enum");
+    std::string_view name;
+    unsigned depth = 0;
+    for (size_t i = ast(r).token_begin; i < ast(r).token_end; ++i) {
+      auto tok = file(r).tokens[i].spelling;
+      if (tok == "(" && !depth)
+        break;
+      if (tok == "[")
+        ++depth;
+      if (tok == "]")
+        --depth;
+      if (tok == "." && !depth)
+        name = file(r).tokens[i + 1].spelling;
+    }
+    const VariantDecl *v = nullptr;
+    for (const auto &candidate : nominal(t).variants)
+      if (symbol(candidate.symbol).name == name)
+        v = &candidate;
+    if (!v)
+      reject(r, "unknown enum pattern variant");
+    p.variant = v->symbol;
+    size_t pi = 0, ti = 0;
+    for (auto id : ast(r).children) {
+      auto cr = at(r, id);
+      if (ast(cr).kind == AstKind::NamedType ||
+          ast(cr).kind == AstKind::FunctionType ||
+          ast(cr).kind == AstKind::ParenthesizedType) {
+        if (ti >= type(t).type_args.size() ||
+            parse_type(cr) != type(t).type_args[ti++])
+          reject(cr, "enum pattern type arguments mismatch");
+        continue;
+      }
+      if (pi >= v->payload.size())
+        reject(r, "wrong variant pattern payload count");
+      p.payload.push_back(pattern(cr, field_type(t, v->payload[pi++])));
+    }
+    if (pi != v->payload.size())
+      reject(r, "wrong variant pattern payload count");
+    return p;
+  }
+  Statement switch_statement(Ref r) {
+    auto value = expression(child(r, 0));
+    if (type(value.value.type).kind != TypeKind::NominalEnum)
+      unavailable(r, "only enum switch is implemented in T07");
+    auto id = node(r, unit, Switch{});
+    break_targets.push_back(id);
+    std::vector<HirNodeId> children{value.id};
+    std::vector<Arm> arms;
+    std::set<uint64_t> covered;
+    bool wildcard = false, falls = false;
+    for (size_t i = 1; i < ast(r).children.size(); ++i) {
+      auto cr = child(r, i);
+      auto saved = scope;
+      scope = new_scope(cr, saved);
+      if (wildcard)
+        reject(cr, "unreachable switch arm after exhaustive pattern");
+      bool def = token(cr) == "default";
+      Pattern p = def ? Pattern{value.value.type, source(cr), {}, {}, {}}
+                      : pattern(child(cr, 0), value.value.type);
+      for (auto c : ast(cr).children) {
+        if (ast(at(cr, c)).kind == AstKind::VariantPattern)
+          for (auto payload : ast(at(cr, c)).children)
+            if (ast(at(cr, payload)).kind == AstKind::VariantPattern)
+              unavailable(at(cr, payload),
+                          "nested enum variant patterns are not implemented");
+      }
+      bool total_payload = true;
+      std::function<void(const Pattern &)> total = [&](const Pattern &pat) {
+        if (pat.variant)
+          total_payload = false;
+        for (const auto &c : pat.payload)
+          total(c);
+      };
+      for (const auto &c : p.payload)
+        total(c);
+      if (p.variant) {
+        if (covered.count(p.variant->value))
+          reject(cr, "unreachable repeated enum variant");
+        if (total_payload)
+          covered.insert(p.variant->value);
+      } else
+        wildcard = true;
+      std::vector<HirNodeId> statements;
+      bool arm_falls = true, arm_breaks = false;
+      for (size_t j = def ? 0 : 1; j < ast(cr).children.size(); ++j) {
+        auto st = statement(child(cr, j));
+        statements.push_back(st.id);
+        if (arm_falls) {
+          arm_breaks |= st.breaks;
+          arm_falls = st.falls;
+        }
+      }
+      auto body = node(cr, unit, Block{}, statements);
+      arms.push_back({std::move(p), scope, body, source(cr)});
+      children.push_back(body);
+      scope = saved;
+      falls |= arm_falls || arm_breaks;
+    }
+    bool exhaustive =
+        wildcard || covered.size() == nominal(value.value.type).variants.size();
+    if (!exhaustive)
+      reject(r, "enum switch is not exhaustive");
+    m.nodes[id.value].children = std::move(children);
+    m.nodes[id.value].data = Switch{std::move(arms), exhaustive};
+    break_targets.pop_back();
+    return {id, falls, false};
+  }
   Statement statement(Ref r) {
     check_cancelled(stop);
     const auto &n = ast(r);
     switch (n.kind) {
     case AstKind::Block:
       return block(r);
+    case AstKind::Switch:
+      return switch_statement(r);
     case AstKind::Binding: {
       auto s = definition(r);
       std::optional<TypeId> expected;
@@ -803,8 +1496,10 @@ class Checker {
       locals[s.value] = {e.value.type, writable};
       if (first(r) == "const") {
         Constant c{e.value, {}};
-        if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data))
+        if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data)) {
           c.function = f->symbol;
+          c.type_args = f->type_args;
+        }
         constants[s.value] = c;
       }
       return {node(r, unit, Binding{s, writable}, {e.id})};
@@ -818,11 +1513,11 @@ class Checker {
       std::optional<BinaryOp> compound;
       if (op != "=") {
         compound = binary_op(op.substr(0, op.size() - 1));
-        if (type(p.value.type).kind == TypeKind::Float &&
+        bool floating =
+            type(p.value.type).kind == TypeKind::Float &&
             (*compound == BinaryOp::add || *compound == BinaryOp::subtract ||
-             *compound == BinaryOp::multiply || *compound == BinaryOp::divide))
-          unavailable(r, "strict float compound arithmetic is not implemented");
-        if (!integer(p.value.type) || !integer(rhs.value.type))
+             *compound == BinaryOp::multiply || *compound == BinaryOp::divide);
+        if (!floating && (!integer(p.value.type) || !integer(rhs.value.type)))
           reject(r, "compound assignment requires integer operands");
         if (!shift)
           match(r, rhs.value.type, p.value.type);
@@ -889,6 +1584,7 @@ class Checker {
       scope = new_scope(r, saved);
       auto id = node(r, unit, For{});
       loops.push_back(id);
+      break_targets.push_back(id);
       auto bodyref = child(r, n.children.size() - 1);
       size_t first_semicolon = ast(bodyref).token_begin,
              second_semicolon = first_semicolon;
@@ -931,6 +1627,7 @@ class Checker {
       auto body = block(bodyref);
       m.nodes[id.value].children = {ini, cond.id, st, body.id};
       loops.pop_back();
+      break_targets.pop_back();
       scope = saved;
       bool forever =
           std::holds_alternative<BoolLiteral>(m.nodes[cond.id.value].data) &&
@@ -939,10 +1636,13 @@ class Checker {
     }
     case AstKind::Break:
     case AstKind::Continue:
+      if (n.kind == AstKind::Break) {
+        if (break_targets.empty())
+          reject(r, "break has no enclosing loop or switch");
+        return {node(r, unit, Break{break_targets.back()}), false, true};
+      }
       if (loops.empty())
-        reject(r, "jump has no enclosing loop");
-      if (n.kind == AstKind::Break)
-        return {node(r, unit, Break{loops.back()}), false, true};
+        reject(r, "continue has no enclosing loop");
       return {node(r, unit, Continue{loops.back()}), false, false};
     default:
       unavailable(r, "switch/aggregate, typed errors, cleanup, or ownership "
@@ -950,11 +1650,391 @@ class Checker {
     }
   }
 
+  SymbolId self_parameter(Ref r) const {
+    for (auto [owner, s] : m.resolved->self_parameters)
+      if (key(owner) == key(r))
+        return s;
+    throw std::invalid_argument("missing resolver Self owner");
+  }
+  void register_function(Ref r, std::vector<GenericParam> inherited,
+                         bool prototype = false) {
+    auto id = definition(r);
+    auto own = generics(r);
+    inherited.insert(inherited.end(), own.begin(), own.end());
+    generic_params[id.value] = inherited;
+    signatures[id.value] = signature(r, true);
+    for (auto c : ast(r).children)
+      if (ast(at(r, c)).kind == AstKind::Parameter) {
+        auto p = definition(at(r, c));
+        parameters[id.value].push_back(
+            {p, symbol(p).name == "_" ? "" : symbol(p).name});
+      }
+    parameters.try_emplace(id.value);
+    if (prototype)
+      return;
+    bodies[id.value] = r;
+    std::function<void(Ref)> nested = [&](Ref cr) {
+      if (ast(cr).kind == AstKind::FunctionLiteral) {
+        register_function(cr, inherited);
+        return;
+      }
+      for (auto c : ast(cr).children)
+        nested(at(cr, c));
+    };
+    for (auto c : ast(r).children)
+      if (ast(at(r, c)).kind == AstKind::Block)
+        nested(at(r, c));
+  }
+  bool overlap(TypeId a, TypeId b) {
+    return type_patterns_overlap(a, b, m.types);
+  }
+  void declarations() {
+    std::vector<Ref> top;
+    for (const auto &mod : m.resolved->project->modules) {
+      if (!mod.foreign_exports.empty() || mod.files.empty()) {
+        for (const auto &owner : m.resolved->project->modules)
+          for (const auto &im : owner.imports)
+            if (im.target == mod.id)
+              unavailable({owner.id, im.file, im.node},
+                          "foreign declarations require T10/T11");
+        throw std::invalid_argument("foreign module has no importing source");
+      }
+      for (size_t f = 0; f < mod.files.size(); ++f)
+        for (auto id : mod.files[f]->node(mod.files[f]->root).children) {
+          Ref r{mod.id, f, id};
+          top.push_back(r);
+          if (ast(r).kind == AstKind::Struct || ast(r).kind == AstKind::Enum) {
+            auto s = definition(r);
+            nominal_ids[s.value] = m.nominals.size();
+            m.nominals.push_back({s,
+                                  ast(r).kind == AstKind::Struct
+                                      ? TypeKind::NominalStruct
+                                      : TypeKind::NominalEnum,
+                                  generics(r),
+                                  {},
+                                  {},
+                                  source(r)});
+          }
+        }
+    }
+    for (auto r : top)
+      if (ast(r).kind == AstKind::Trait) {
+        if (!generics(r).empty())
+          unavailable(r, "generic traits are not implemented");
+        auto self = self_parameter(r);
+        self_types[self.value] = parameter_type(self);
+        bounds[self.value] = definition(r);
+        TraitDecl tr{definition(r), self, {}, source(r)};
+        for (auto id : ast(r).children)
+          if (ast(at(r, id)).kind == AstKind::Function) {
+            auto cr = at(r, id);
+            register_function(cr, {}, true);
+            auto method = definition(cr);
+            if (!generic_params[method.value].empty())
+              unavailable(cr, "generic trait methods are not implemented");
+            tr.methods.push_back({method, signatures.at(method.value),
+                                  parameters.at(method.value), source(cr)});
+          }
+        m.traits.push_back(std::move(tr));
+      }
+    for (auto &d : m.nominals) {
+      auto r = d.source.node;
+      for (auto c : ast(r).children) {
+        auto cr = at(r, c);
+        if (ast(cr).kind == AstKind::Field)
+          d.fields.push_back({definition(cr), parse_type(child(cr, 0)),
+                              token(cr) == "pub", source(cr)});
+        if (ast(cr).kind == AstKind::Variant) {
+          VariantDecl v{definition(cr), {}, source(cr)};
+          for (auto f : ast(cr).children) {
+            auto fr = at(cr, f);
+            v.payload.push_back(
+                {definition(fr), parse_type(child(fr, 0)), true, source(fr)});
+          }
+          d.variants.push_back(std::move(v));
+        }
+      }
+    }
+    for (auto r : top)
+      if (ast(r).kind == AstKind::Impl) {
+        auto ps = generics(r);
+        std::vector<Ref> ts;
+        for (auto c : ast(r).children)
+          if (ast(at(r, c)).kind == AstKind::NamedType)
+            ts.push_back(at(r, c));
+        std::optional<SymbolId> trait;
+        if (ts.size() == 2) {
+          trait = occurrence(ts[0]);
+          if (!trait || symbol(*trait).kind != modules::SymbolKind::trait)
+            reject(ts[0], "impl requires a nominal trait");
+        }
+        auto self = parse_type(ts.back());
+        auto sp = self_parameter(r);
+        self_types[sp.value] = self;
+        if (type(self).kind != TypeKind::NominalStruct &&
+            type(self).kind != TypeKind::NominalEnum && !integer(self) &&
+            type(self).kind != TypeKind::Float &&
+            type(self).kind != TypeKind::Bool)
+          unavailable(r, "impl target is not an implemented value type");
+        ImplDecl im{ps, trait, sp, self, {}, source(r)};
+        for (auto c : ast(r).children)
+          if (ast(at(r, c)).kind == AstKind::Function) {
+            auto cr = at(r, c);
+            register_function(cr, ps);
+            im.methods.push_back(definition(cr));
+          }
+        for (const auto &previous : m.impls)
+          if (previous.trait == im.trait &&
+              overlap(previous.self_type, im.self_type))
+            reject(r, "duplicate or overlapping impl");
+        m.impls.push_back(std::move(im));
+      }
+    for (const auto &im : m.impls)
+      if (im.trait) {
+        const TraitDecl *tr = nullptr;
+        for (const auto &t : m.traits)
+          if (t.symbol == *im.trait)
+            tr = &t;
+        if (!tr)
+          reject(im.source.node, "unknown trait implementation");
+        if (im.methods.size() != tr->methods.size())
+          reject(im.source.node,
+                 "impl must define every trait method exactly once");
+        for (const auto &proto : tr->methods) {
+          std::optional<SymbolId> method;
+          for (auto id : im.methods)
+            if (symbol(id).name == symbol(proto.symbol).name)
+              method = id;
+          if (!method)
+            reject(im.source.node, "impl is missing a trait method");
+          auto expected =
+              substitute(proto.signature, {{tr->self, im.self_type}}, m.types);
+          if (signatures.at(method->value) != expected)
+            reject(im.source.node,
+                   "impl method signature does not match trait");
+          auto ps = parameters.at(method->value);
+          for (size_t i = 0; i < ps.size(); ++i)
+            if (ps[i].label != proto.parameters[i].label)
+              reject(im.source.node, "impl method labels do not match trait");
+        }
+      }
+    for (auto r : top)
+      if (ast(r).kind == AstKind::Function)
+        register_function(r, {});
+    std::function<void(Ref)> const_functions = [&](Ref r) {
+      if (ast(r).kind == AstKind::FunctionLiteral) {
+        register_function(r, {});
+        return;
+      }
+      for (auto c : ast(r).children)
+        const_functions(at(r, c));
+    };
+    for (auto r : top)
+      if (ast(r).kind == AstKind::Binding)
+        const_functions(r);
+  }
+  void check_body(SymbolId id) {
+    function = id;
+    auto r = bodies.at(id.value);
+    auto sig = signatures.at(id.value);
+    locals.clear();
+    loops.clear();
+    break_targets.clear();
+    active_params = generic_params[id.value];
+    scope = new_scope(r, {});
+    auto ps = parameters.at(id.value);
+    auto ft = type(sig);
+    for (size_t i = 0; i < ps.size(); ++i)
+      locals[ps[i].symbol.value] = {
+          ft.parameters[i].type, ft.parameters[i].mode == ParamMode::inout,
+          ft.parameters[i].mode == ParamMode::ordinary};
+    auto body = block(child(r, ast(r).children.size() - 1), true);
+    if (ft.result != unit && body.falls)
+      reject(r, "non-Unit function has a reachable normal exit without return");
+    HirFunction f{id, sig, ps, body.id, scope, source(r)};
+    if (active_params.empty())
+      m.functions.push_back(f);
+    else {
+      template_ids[id.value] = m.templates.size();
+      m.templates.push_back({f, active_params});
+    }
+  }
+  SymbolId duplicate_symbol(SymbolId origin) {
+    auto s = symbol(origin);
+    s.id = SymbolId{owned->symbols.size()};
+    owned->symbols.push_back(s);
+    return s.id;
+  }
+  void transform_node(HirNodeId id, size_t depth) {
+    if (depth > 512)
+      throw std::invalid_argument("HIR transform nesting limit");
+    auto n = m.nodes.at(id.value);
+    if (auto c = std::get_if<Call>(&n.data);
+        c && c->direct_symbol && template_ids.count(c->direct_symbol->value)) {
+      auto original = *c->direct_symbol;
+      auto target = instantiate(original, c->type_args, n.source.node);
+      c->direct_symbol = target;
+      c->type_args.clear();
+    }
+    if (auto v = std::get_if<FunctionValue>(&n.data);
+        v && template_ids.count(v->symbol.value)) {
+      v->symbol = instantiate(v->symbol, v->type_args, n.source.node);
+      v->type_args.clear();
+    }
+    if (auto c = std::get_if<ConstraintCall>(&n.data)) {
+      auto name = symbol(c->method).name;
+      auto selected = select_method(n.source.node, c->receiver, name, c->trait);
+      auto args =
+          finish_arguments(n.source.node, generic_params[selected.method.value],
+                           selected.substitutions);
+      auto target = selected.method;
+      if (template_ids.count(target.value))
+        target = instantiate(target, args, n.source.node);
+      Call concrete;
+      concrete.kind = CalleeKind::direct;
+      concrete.signature = c->signature;
+      concrete.direct_symbol = target;
+      concrete.args = c->args;
+      n.data = std::move(concrete);
+    }
+    m.nodes.at(id.value) = n;
+    for (auto ch : n.children)
+      transform_node(ch, depth + 1);
+  }
+  SymbolId instantiate(SymbolId origin, const std::vector<TypeId> &args,
+                       Ref use) {
+    const auto temp = m.templates.at(template_ids.at(origin.value));
+    if (args.size() != temp.params.size())
+      throw std::invalid_argument("instance type argument count");
+    check_constraints(use, temp.params, args);
+    std::vector<uint64_t> ids;
+    for (auto t : args) {
+      if (contains_parameter(t))
+        throw std::invalid_argument("nonconcrete instance request");
+      ids.push_back(t.value);
+    }
+    auto key = std::make_pair(origin.value, ids);
+    if (auto it = instance_cache.find(key); it != instance_cache.end())
+      return it->second;
+    if (instance_cache.size() >= 128 || instantiation_depth >= 48)
+      reject(use, "generic instantiation budget exceeded",
+             "E_INSTANTIATION_LIMIT");
+    ++instantiation_depth;
+    Substitutions sub;
+    for (size_t i = 0; i < args.size(); ++i)
+      sub.push_back({temp.params[i].symbol, args[i]});
+    auto f = temp.function;
+    const auto result = duplicate_symbol(origin);
+    instance_cache.emplace(key, result);
+    std::map<uint64_t, SymbolId> renamed;
+    renamed[origin.value] = result;
+    auto rename = [&](SymbolId s) {
+      auto it = renamed.find(s.value);
+      if (it != renamed.end())
+        return it->second;
+      return renamed[s.value] = duplicate_symbol(s);
+    };
+    f.symbol = result;
+    f.signature = substitute(f.signature, sub, m.types);
+    for (auto &p : f.parameters)
+      p.symbol = rename(p.symbol);
+    std::map<uint64_t, ScopeId> scopes;
+    std::function<ScopeId(ScopeId)> clone_scope = [&](ScopeId old) {
+      if (auto it = scopes.find(old.value); it != scopes.end())
+        return it->second;
+      auto sc = m.scopes.at(old.value);
+      sc.function = result;
+      if (sc.parent)
+        sc.parent = clone_scope(*sc.parent);
+      ScopeId sid{m.scopes.size()};
+      m.scopes.push_back(sc);
+      scopes[old.value] = sid;
+      return sid;
+    };
+    std::map<uint64_t, HirNodeId> nodes;
+    std::function<void(Pattern &)> clone_pattern = [&](Pattern &p) {
+      p.type = substitute(p.type, sub, m.types);
+      if (p.binding)
+        p.binding = rename(*p.binding);
+      for (auto &c : p.payload)
+        clone_pattern(c);
+    };
+    std::function<HirNodeId(HirNodeId)> clone = [&](HirNodeId old) {
+      if (++instantiated_nodes > 200000)
+        reject(use, "generic instantiated node budget exceeded",
+               "E_INSTANTIATION_LIMIT");
+      auto n = m.nodes.at(old.value);
+      n.type = substitute(n.type, sub, m.types);
+      n.scope = clone_scope(n.scope);
+      if (auto b = std::get_if<Binding>(&n.data))
+        b->symbol = rename(b->symbol);
+      if (auto b = std::get_if<Read>(&n.data))
+        b->symbol = rename(b->symbol);
+      if (auto b = std::get_if<Place>(&n.data))
+        b->symbol = rename(b->symbol);
+      if (auto b = std::get_if<Return>(&n.data))
+        b->function = result;
+      HirNodeId id{m.nodes.size()};
+      m.nodes.push_back(n);
+      nodes[old.value] = id;
+      for (auto &c : n.children)
+        c = clone(c);
+      auto update_args = [&](auto &as) {
+        for (auto &a : as)
+          a.expression = nodes.at(a.expression.value);
+      };
+      if (auto c = std::get_if<Call>(&n.data)) {
+        c->signature = substitute(c->signature, sub, m.types);
+        for (auto &t : c->type_args)
+          t = substitute(t, sub, m.types);
+        if (c->callee)
+          c->callee = nodes.at(c->callee->value);
+        update_args(c->args);
+      }
+      if (auto v = std::get_if<FunctionValue>(&n.data))
+        for (auto &t : v->type_args)
+          t = substitute(t, sub, m.types);
+      if (auto c = std::get_if<ConstraintCall>(&n.data)) {
+        c->signature = substitute(c->signature, sub, m.types);
+        c->receiver = substitute(c->receiver, sub, m.types);
+        update_args(c->args);
+      }
+      if (auto c = std::get_if<StructInit>(&n.data))
+        update_args(c->fields);
+      if (auto c = std::get_if<EnumInit>(&n.data))
+        update_args(c->payload);
+      if (auto c = std::get_if<Switch>(&n.data))
+        for (auto &a : c->arms) {
+          clone_pattern(a.pattern);
+          a.scope = scopes.at(a.scope.value);
+          a.body = nodes.at(a.body.value);
+        }
+      if (auto b = std::get_if<Break>(&n.data))
+        b->loop = nodes.at(b->loop.value);
+      if (auto b = std::get_if<Continue>(&n.data))
+        b->loop = nodes.at(b->loop.value);
+      m.nodes[id.value] = std::move(n);
+      return id;
+    };
+    f.scope = clone_scope(f.scope);
+    f.body = clone(f.body);
+    FunctionInstance instance{result, origin, args, {}, m.config};
+    for (auto [old, s] : renamed)
+      instance.renamed.push_back({SymbolId{old}, s});
+    m.instances.push_back(std::move(instance));
+    m.functions.push_back(f);
+    // Identity and signature are present before resolving recursive uses.
+    transform_node(f.body, 0);
+    --instantiation_depth;
+    return result;
+  }
+
 public:
   Checker(std::shared_ptr<const modules::ResolvedProject> r, Config config,
           std::stop_token s)
       : stop(s) {
-    m.resolved = std::move(r);
+    owned = std::make_shared<modules::ResolvedProject>(*r);
+    m.resolved = owned;
     m.config = config;
     m.identity = m.resolved->project->entry;
     unit = scalar(TypeKind::Unit);
@@ -967,53 +2047,7 @@ public:
       occurrences[key(o.source)] = o.symbol;
   }
   HirModule run() {
-    // Predeclare every signature, then check bodies: recursion and cross-file
-    // calls use resolved IDs without inferring an interface from its body.
-    for (const auto &mod : m.resolved->project->modules) {
-      if (!mod.foreign_exports.empty() || mod.files.empty()) {
-        for (const auto &owner : m.resolved->project->modules)
-          for (const auto &import : owner.imports)
-            if (import.target == mod.id)
-              unavailable({owner.id, import.file, import.node},
-                          "foreign declarations require T10/T11");
-        Diagnostic d;
-        d.code = "E_CAPABILITY_UNAVAILABLE";
-        d.phase = "type";
-        d.severity = "error";
-        d.message = "foreign declarations require T10/T11";
-        throw Rejected{std::move(d), FailureKind::unsupported};
-      }
-      for (size_t f = 0; f < mod.files.size(); ++f) {
-        const auto &a = *mod.files[f];
-        for (auto id : a.node(a.root).children) {
-          Ref r{mod.id, f, id};
-          auto k = ast(r).kind;
-          if (k == AstKind::Package || k == AstKind::Import)
-            continue;
-          if (k == AstKind::Binding)
-            continue;
-          if (k != AstKind::Function)
-            unavailable(r, "aggregate/trait/impl declarations require T07");
-        }
-      }
-    }
-    for (const auto &s : m.resolved->symbols) {
-      if (s.kind != modules::SymbolKind::function || !s.definition)
-        continue;
-      auto r = *s.definition;
-      if (ast(r).kind != AstKind::Function &&
-          ast(r).kind != AstKind::FunctionLiteral)
-        continue;
-      signatures[s.id.value] = signature(r, true);
-      for (auto c : ast(r).children)
-        if (ast(at(r, c)).kind == AstKind::Parameter) {
-          auto p = definition(at(r, c));
-          auto name = symbol(p).name;
-          parameters[s.id.value].push_back({p, name == "_" ? "" : name});
-        }
-      parameters.try_emplace(s.id.value);
-    }
-    // Validate unused top-level constants too; they cannot hide bad types.
+    declarations();
     for (const auto &mod : m.resolved->project->modules)
       for (size_t f = 0; f < mod.files.size(); ++f)
         for (auto id : mod.files[f]->node(mod.files[f]->root).children) {
@@ -1021,30 +2055,30 @@ public:
           if (ast(r).kind == AstKind::Binding)
             constant(definition(r));
         }
-    for (const auto &[sid, sig] : signatures) {
+    for (auto [id, r] : bodies) {
       check_cancelled(stop);
-      function = SymbolId{sid};
-      auto r = *symbol(function).definition;
-      locals.clear();
-      loops.clear();
-      scope = new_scope(r, {});
-      const auto ps = parameters.at(sid);
-      const auto ft = type(sig);
-      for (size_t i = 0; i < ps.size(); ++i)
-        locals[ps[i].symbol.value] = {
-            ft.parameters[i].type, ft.parameters[i].mode == ParamMode::inout,
-            ft.parameters[i].mode == ParamMode::ordinary};
-      auto body = block(child(r, ast(r).children.size() - 1), true);
-      if (ft.result != unit && body.falls)
-        reject(r,
-               "non-Unit function has a reachable normal exit without return");
-      m.functions.push_back({function, sig, ps, body.id, scope, source(r)});
+      check_body(SymbolId{id});
     }
+    auto concrete = m.functions;
+    for (const auto &f : concrete)
+      transform_node(f.body, 0);
+    const auto type_roots = m.types.size();
+    for (size_t i = 1; i <= type_roots; ++i) {
+      auto t = TypeId{i};
+      if (type(t).kind == TypeKind::NominalStruct ||
+          type(t).kind == TypeKind::NominalEnum) {
+        auto d = nominal(t);
+        check_constraints(d.source.node, d.params, type(t).type_args);
+      }
+    }
+    if (auto infinite = infinite_value_layout(m, stop))
+      reject(m.nominals.at(nominal_ids.at(infinite->value)).source.node,
+             "value type has an infinite recursive layout");
     return std::move(m);
   }
 };
-PhaseResult<VerifiedHirModule> internal(std::string message) {
-  PhaseResult<VerifiedHirModule> r;
+template <class T> PhaseResult<T> internal(std::string message) {
+  PhaseResult<T> r;
   Diagnostic d;
   d.code = "E_INTERNAL_ERROR";
   d.phase = "type";
@@ -1054,60 +2088,91 @@ PhaseResult<VerifiedHirModule> internal(std::string message) {
   return r;
 }
 } // namespace
-PhaseResult<VerifiedHirModule>
-check_project(std::shared_ptr<const modules::ResolvedProject> resolved,
-              std::optional<CheckConfig> config, std::stop_token stop) {
+PhaseResult<HirModule>
+check_types(std::shared_ptr<const modules::ResolvedProject> resolved,
+            std::optional<CheckConfig> config, std::stop_token stop) {
   try {
     check_cancelled(stop);
     if (!resolved || !resolved->project)
-      return internal(
+      return internal<HirModule>(
           "checker requires an owning successfully resolved project");
     const auto &p = *resolved->project;
     if (p.backend != "native" && p.backend != "python")
-      return internal("invalid project backend");
+      return internal<HirModule>("invalid project backend");
     Config c{p.backend == "native" ? Backend::native : Backend::python,
              p.word_bits};
     if (config && *config != c)
-      return internal("CheckConfig does not match Project target");
+      return internal<HirModule>("CheckConfig does not match Project target");
     if (c.word_bits != 32 && c.word_bits != 64)
-      return internal("target word_bits must be 32 or 64");
+      return internal<HirModule>("target word_bits must be 32 or 64");
     Checker checker(std::move(resolved), c, stop);
     auto m = checker.run();
-    return hir::verify(m, stop); // the sole constructor of VerifiedHirModule
+    auto verified = hir::verify_types(m, stop);
+    PhaseResult<HirModule> result;
+    result.state = verified.state;
+    result.failure = verified.failure;
+    result.diagnostics = std::move(verified.diagnostics);
+    if (verified.success())
+      result.value = std::move(m);
+    return result;
   } catch (const Cancelled &) {
-    PhaseResult<VerifiedHirModule> r;
+    PhaseResult<HirModule> r;
     r.state = PhaseState::cancelled;
     return r;
   } catch (const Rejected &e) {
-    PhaseResult<VerifiedHirModule> r;
+    PhaseResult<HirModule> r;
     r.failure = e.kind;
     r.diagnostics = {e.diagnostic};
     return r;
   } catch (const std::exception &e) {
-    return internal(e.what());
+    return internal<HirModule>(e.what());
   }
 }
-PhaseResult<VerifiedHirModule>
-check_project(const PhaseResult<modules::ResolvedProject> &resolved,
-              std::optional<CheckConfig> config, std::stop_token stop) {
+PhaseResult<HirModule>
+check_types(const PhaseResult<modules::ResolvedProject> &resolved,
+            std::optional<CheckConfig> config, std::stop_token stop) {
   if (stop.stop_requested()) {
-    PhaseResult<VerifiedHirModule> r;
+    PhaseResult<HirModule> r;
     r.state = PhaseState::cancelled;
     return r;
   }
   if (!resolved.success()) {
-    PhaseResult<VerifiedHirModule> r;
+    PhaseResult<HirModule> r;
     r.state = resolved.state;
     r.failure = resolved.failure;
     r.diagnostics = resolved.diagnostics;
     if (r.state == PhaseState::complete)
       r.state = PhaseState::failed;
     if (r.diagnostics.empty() && r.state != PhaseState::cancelled)
-      return internal("resolve did not successfully complete");
+      return internal<HirModule>("resolve did not successfully complete");
     return r;
   }
-  return check_project(
+  return check_types(
       std::make_shared<const modules::ResolvedProject>(*resolved.value), config,
       stop);
+}
+PhaseResult<VerifiedHirModule>
+check_project(std::shared_ptr<const modules::ResolvedProject> r,
+              std::optional<CheckConfig> c, std::stop_token stop) {
+  auto typed = check_types(std::move(r), c, stop);
+  if (typed.success())
+    return hir::verify(*typed.value, stop);
+  PhaseResult<VerifiedHirModule> result;
+  result.state = typed.state;
+  result.failure = typed.failure;
+  result.diagnostics = std::move(typed.diagnostics);
+  return result;
+}
+PhaseResult<VerifiedHirModule>
+check_project(const PhaseResult<modules::ResolvedProject> &r,
+              std::optional<CheckConfig> c, std::stop_token stop) {
+  auto typed = check_types(r, c, stop);
+  if (typed.success())
+    return hir::verify(*typed.value, stop);
+  PhaseResult<VerifiedHirModule> result;
+  result.state = typed.state;
+  result.failure = typed.failure;
+  result.diagnostics = std::move(typed.diagnostics);
+  return result;
 }
 } // namespace lang::sema
