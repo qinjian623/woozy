@@ -1,0 +1,74 @@
+package app;
+import "app/helper";
+import "dep";
+
+func identity(x string) string { return x; }
+func generic[T](x T) T { return x; }
+func unused_string_template[T](x T) string { return "仅未实例化模板"; }
+func apply(f func(string) string, x string) string { return f(x); }
+func pair(first string, second string) string { return first; }
+func choose(n inout i32) (func(string,string) string) { n+=1; return pair; }
+func tick(n inout i32) string {
+    n+=1;
+    if n==2 { return "第二"; }
+    return "第三";
+}
+func recursive(n i32, x string) string {
+    if n==0 { return x; }
+    return recursive(n-1,x);
+}
+func probe_empty() string { return ""; }
+func probe_ascii() string { return "hello"; }
+func probe_chinese() string { return "你好，世界"; }
+func probe_escapes() string { return "\\\"\n\r\t\0A"; }
+func probe_unicode() string { return "\u{0}\u{7F}\u{80}\u{800}\u{FFFF}\u{10000}\u{10FFFF}"; }
+func probe_raw() string { return `第一行
+第二行\n\0`; }
+func probe_copy() string {
+    var x="原值";
+    let saved=x;
+    x="新值";
+    return saved;
+}
+func probe_rebind() string {
+    var x="原值";
+    let saved=x;
+    x="新值";
+    return x;
+}
+func probe_local() string { let x="局部\0之后"; return identity(x); }
+func probe_shadow() string {
+    let x="外层";
+    { let x=x; return x; }
+}
+func probe_parameter() string { let x="按值"; return apply(identity,x); }
+func probe_generic() string { return generic[string]("泛型"); }
+func probe_inferred() string { return generic("推断"); }
+func probe_function_value() string {
+    let f func(string) string=generic[string];
+    return apply(f,"函数值");
+}
+func probe_lambda() string {
+    return (func(x string) string { let local=x; return local; })("字面函数");
+}
+func probe_module() string { return helper.pass("跨模块"); }
+func probe_package() string { return dep.pass("跨包"); }
+func probe_recursion() string { return recursive(8,"递归\0尾部"); }
+func probe_order() string {
+    var n i32=0;
+    let x=choose(inout n)(tick(inout n),tick(inout n));
+    if n!=3 { return "错误"; }
+    return x;
+}
+func probe_named_order() string {
+    var n i32=1;
+    let x=pair(second:tick(inout n),first:tick(inout n));
+    if n!=3 { return "错误"; }
+    return x;
+}
+func main() i32 {
+    let a=probe_empty(); let b=probe_chinese(); let c=probe_local();
+    let d=probe_copy(); let e=probe_rebind(); let f=probe_generic();
+    let g=probe_function_value(); let h=probe_module(); let i=probe_package();
+    return 0;
+}

@@ -114,6 +114,10 @@ class Lower {
     case hir::NodeKind::float_literal:
       return constant(n.type, std::get<hir::FloatLiteral>(n.data).bits,
                       i.source);
+    case hir::NodeKind::string_literal:
+      i.op = Op::string_literal;
+      i.utf8 = std::get<hir::StringLiteral>(n.data).utf8;
+      return emit(i);
     case hir::NodeKind::read:
       return access(Op::load, slots.at(std::get<hir::Read>(n.data).symbol),
                     i.source);

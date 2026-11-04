@@ -261,7 +261,7 @@ class Checker {
     if (kind != modules::SymbolKind::builtin_type)
       reject(r, "name does not denote a value type", "E_NAME_KIND");
     const auto name = symbol(*s).name;
-    if (name == "Vec" || name == "Result" || name == "string")
+    if (name == "Vec" || name == "Result")
       unavailable(
           r, "container, owned string and Result support requires T08/T09");
     if (!args.empty())
@@ -270,6 +270,8 @@ class Checker {
       return unit;
     if (name == "bool")
       return boolean;
+    if (name == "string")
+      return scalar(TypeKind::String);
     if (name == "isize")
       return scalar(TypeKind::Isize);
     if (name == "usize")
@@ -525,6 +527,13 @@ class Checker {
         if (type(t).kind != TypeKind::Float)
           reject(r, "float literal requires float context");
         result = {node(r, t, FloatLiteral{float_bits(r, t)}), {t, {}, {}}};
+      } else if (file(r).tokens[n.token_begin].kind == TokenKind::string_literal) {
+        auto t = scalar(TypeKind::String);
+        // The lexer already decoded escapes and normalized physical newlines.
+        // Keep its complete byte sequence, including embedded NULs.
+        result = {node(r, t, StringLiteral{
+                      file(r).tokens[n.token_begin].string_value.value()}),
+                  {t, {}, {}}};
       } else
         unavailable(r, "string/owned literals require T09");
       break;
@@ -1737,19 +1746,25 @@ class Checker {
           }
         m.traits.push_back(std::move(tr));
       }
+    auto field_value_type = [&](Ref field) {
+      auto t = parse_type(child(field, 0));
+      if (type(t).kind == TypeKind::String)
+        unavailable(field, "string aggregate fields require owned-value support");
+      return t;
+    };
     for (auto &d : m.nominals) {
       auto r = d.source.node;
       for (auto c : ast(r).children) {
         auto cr = at(r, c);
         if (ast(cr).kind == AstKind::Field)
-          d.fields.push_back({definition(cr), parse_type(child(cr, 0)),
+          d.fields.push_back({definition(cr), field_value_type(cr),
                               token(cr) == "pub", source(cr)});
         if (ast(cr).kind == AstKind::Variant) {
           VariantDecl v{definition(cr), {}, source(cr)};
           for (auto f : ast(cr).children) {
             auto fr = at(cr, f);
             v.payload.push_back(
-                {definition(fr), parse_type(child(fr, 0)), true, source(fr)});
+                {definition(fr), field_value_type(fr), true, source(fr)});
           }
           d.variants.push_back(std::move(v));
         }

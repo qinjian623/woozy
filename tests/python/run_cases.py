@@ -311,7 +311,8 @@ def main():
         report['cases'][-1]['published_expected'] = case['expected']
     for ident in ('core', 'numeric'):
         compile_case(ident, args.root / f'tests/fixtures/{ident}/lang.toml', 'cases')
-    sources = dict(EXTRA_SOURCES, **{'all-integer-widths': integer_width_project(),
+    sources = dict(EXTRA_SOURCES, **{'string': UNSUPPORTED_SOURCES['string'],
+                                    'all-integer-widths': integer_width_project(),
                                     'float-bits-and-transmission': float_project()})
     generated = {}
     for ident, body in sources.items():
@@ -397,7 +398,7 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
         'types': [], 'values': [], 'callables': [
             {'module': 'py', 'name': 'run', 'call_kind': 'function', 'id': 'host.run'}]}))
     unavailable = [(ident, source_project(args.out, 'unsupported-' + ident, body))
-                   for ident, body in UNSUPPORTED_SOURCES.items()] + [('foreign', foreign)]
+                   for ident, body in UNSUPPORTED_SOURCES.items() if ident != 'string'] + [('foreign', foreign)]
     for ident, manifest in unavailable:
         directory = args.out / 'generated' / ('unsupported-' + ident)
         result = command([args.helper, '--project', manifest, '--out-dir', directory])

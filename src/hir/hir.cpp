@@ -889,6 +889,8 @@ class Verifier {
         t.kind = TypeKind::Unit;
       else if (s.name == "bool")
         t.kind = TypeKind::Bool;
+      else if (s.name == "string")
+        t.kind = TypeKind::String;
       else if (s.name == "isize")
         t.kind = TypeKind::Isize;
       else if (s.name == "usize")
@@ -2007,8 +2009,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       }
       // Function fields are storage leaves. Do not expand their signatures
       // here (e.g. S[T].f: func() S[S[T]]); functions/calls are checked below.
-      return !(m.config.backend == Backend::python && t.kind == TypeKind::String) &&
-             t.kind != TypeKind::TypeParameter && t.kind != TypeKind::Error &&
+      return t.kind != TypeKind::TypeParameter && t.kind != TypeKind::Error &&
              t.kind != TypeKind::ForeignOpaque;
     };
     auto signature_supported = [&](TypeId id) {

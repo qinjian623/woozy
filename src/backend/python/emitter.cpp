@@ -28,6 +28,18 @@ bool integer(const Type &t) {
 }
 std::string name(SymbolId s) { return "_s" + std::to_string(s.value); }
 std::string function_name(SymbolId s) { return "_f" + std::to_string(s.value); }
+std::string string_literal(std::string_view utf8) {
+  // Escape bytes into a Python bytes literal, then decode UTF-8 as text once.
+  // Escaping each byte as a Unicode character would corrupt non-ASCII text.
+  static constexpr char hex[] = "0123456789abcdef";
+  std::string result = "b'";
+  for (unsigned char c : utf8) {
+    result += "\\x";
+    result += hex[c >> 4];
+    result += hex[c & 15];
+  }
+  return result + "'.decode('utf-8')";
+}
 std::string join(const std::vector<std::string> &values) {
   std::string result;
   for (const auto &v : values) {
@@ -181,6 +193,8 @@ class Emitter {
                       std::to_string(std::get<FloatLiteral>(n.data).bits) +
                       ", " + std::to_string(type(n.type).bits) + ")",
                   n);
+    case NodeKind::string_literal:
+      return save(suite, string_literal(std::get<StringLiteral>(n.data).utf8), n);
     case NodeKind::read:
       return save(suite, read(std::get<Read>(n.data).symbol), n);
     case NodeKind::place:
@@ -457,8 +471,7 @@ public:
           if (b->writable)
             cells.insert(b->symbol);
         }
-        if (n.kind() == NodeKind::unsupported ||
-            n.kind() == NodeKind::string_literal)
+        if (n.kind() == NodeKind::unsupported)
           throw Rejected{"Unsupported operation in Python value profile",
                          n.source.span};
         pending.insert(pending.end(), n.children.begin(), n.children.end());

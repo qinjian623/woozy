@@ -1,0 +1,2 @@
+package helper;
+pub func pass(x string) string { let local=x; return local; }

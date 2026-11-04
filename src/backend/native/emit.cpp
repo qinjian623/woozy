@@ -81,6 +81,12 @@ class Emitter {
       return t.bits == 32 ? builder.getFloatTy() : builder.getDoubleTy();
     case hir::TypeKind::Function:
       return builder.getPtrTy();
+    case hir::TypeKind::String: {
+      auto *layout = llvm::StructType::get(
+          context, {builder.getPtrTy(), module.getDataLayout().getIntPtrType(context)});
+      layouts.emplace(id, layout);
+      return layout;
+    }
     case hir::TypeKind::NominalStruct:
     case hir::TypeKind::NominalEnum: {
       auto *layout = llvm::StructType::create(context, "value." + std::to_string(id.value));
@@ -247,6 +253,22 @@ class Emitter {
       args.push_back(values.at(v));
     llvm::Value *v = nullptr;
     switch (i.op) {
+    case ir::Op::string_literal: {
+      // No added terminator. Even the empty value has static storage; the
+      // logical value is the pointer plus the exact target-sized byte count.
+      auto *bytes = llvm::ConstantDataArray::getString(
+          context, llvm::StringRef(i.utf8.data(), i.utf8.size()), false);
+      auto *storage = new llvm::GlobalVariable(
+          module, bytes->getType(), true, llvm::GlobalValue::PrivateLinkage,
+          bytes, "string.bytes");
+      storage->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+      storage->setAlignment(llvm::Align(1));
+      auto *layout = llvm::cast<llvm::StructType>(lower_type(i.type));
+      auto *length = llvm::ConstantInt::get(
+          llvm::cast<llvm::IntegerType>(layout->getElementType(1)), i.utf8.size());
+      v = llvm::ConstantStruct::get(layout, {storage, length});
+      break;
+    }
     case ir::Op::constant: {
       const auto &t = type(i.type);
       if (t.kind == hir::TypeKind::Float) {

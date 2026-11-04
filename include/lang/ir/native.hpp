@@ -21,7 +21,8 @@ enum class Op {
   load_indirect,
   store_indirect,
   enum_test,
-  enum_payload
+  enum_payload,
+  string_literal
 };
 struct Instruction {
   Op op = Op::constant;
@@ -34,6 +35,9 @@ struct Instruction {
   SymbolId field;   // resolved declaration identity, never a source name
   SymbolId variant; // enum declaration identity; enum_test produces bool
   uint64_t bits = 0;
+  // Only string_literal: validated UTF-8 bytes in immortal read-only storage.
+  // Length is utf8.size(), never a terminator scan; no dynamic ownership here.
+  std::string utf8;
   hir::UnaryOp unary = hir::UnaryOp::negate;
   hir::BinaryOp binary = hir::BinaryOp::add;
   SourceSpan source{SourceSnapshotId{0}, 0, 0};

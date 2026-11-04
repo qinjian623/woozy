@@ -204,7 +204,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "native平凡值struct/enum提交31c034f已接受；两后端合并后三种完整构建各26/26，关闭LLVM21/21。每种LLVM构建50次泛型/POD ELF及66次标量CLI运行。常量字符串、严格浮点运算仍待实现，整项保持in_progress。"
+      "notes": "已支持native标量、POD聚合和字面量来源的不可变UTF-8字符串；三种完整构建各28/28，关闭LLVM22/22，180次字符串字节/长度检查通过。动态字符串、ARC、严格浮点执行和完整基础样例仍未完成，整项保持in_progress。"
     },
     {
       "id": "T06",
@@ -239,7 +239,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python标量与具体泛型已完成；本次加入平凡值struct/enum、按值复制、字段赋值及switch。运行库版本compiler-dev/1-python-values/1。三种完整构建各26/26；每套17主项目、17补充、5分类对照、13公共泛型及19聚合程序运行通过。ARC、foreign和严格浮点运算仍未实施。"
+      "notes": "Python标量、具体泛型、POD聚合和常量字符串已支持；三种完整构建各28/28，关闭LLVM22/22。每套17主项目、18补充、5分类对照、13公共泛型、19聚合程序和20字符串观察通过。运行库版本仍compiler-dev/1-python-values/1；ARC、foreign和严格浮点运算未实施。"
     },
     {
       "id": "T07",
@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态检查、标量泛型及两后端POD聚合均已接受；三种完整构建各26/26，无排除，关闭LLVM21/21。原13个正例三构建O0/O2/Python共78项比较，另34份补充源码新增56次交叉执行，结果一致。原05_traits仍仅静态通过，因严格浮点执行未实施；泛型trait/方法、嵌套变体模式和泛型inout/move继续明确拒绝，整项保留in_progress。"
+      "notes": "静态、标量泛型及两后端POD聚合通过；字符串阶段三种完整构建各28/28、关闭LLVM22/22，原13项目78项比较继续通过。已复现位置式enum载荷构造被误拒，待字符串前端合并后修复。原05_traits仅静态通过；严格浮点、泛型trait/方法、嵌套变体模式、泛型inout/move未实施，整项保留in_progress。"
     },
     {
       "id": "T08",

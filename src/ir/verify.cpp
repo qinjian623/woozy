@@ -214,6 +214,8 @@ class Verifier {
       for (size_t p = 0; p < bb.instructions.size(); ++p) {
         const auto &i = bb.instructions[p];
         const auto &t = type(i.type, i.source);
+        need(i.op == Op::string_literal || i.utf8.empty(),
+             "string bytes on a non-string instruction", i.source);
         std::vector<Def> args;
         for (auto v : i.inputs)
           args.push_back(use(v, b, p, i.source));
@@ -225,6 +227,16 @@ class Verifier {
           return type(args[n].type, i.source);
         };
         switch (i.op) {
+        case Op::string_literal:
+          arity(0);
+          need(t.kind == hir::TypeKind::String && i.bits == 0,
+               "invalid string literal type/bits", i.source);
+          try {
+            validate_utf8(i.utf8);
+          } catch (const SourceError &) {
+            need(false, "invalid UTF-8 string literal", i.source);
+          }
+          break;
         case Op::constant:
           arity(0);
           need(integer(t.kind) || t.kind == hir::TypeKind::Unit ||
@@ -466,10 +478,17 @@ std::string dump(const Module &m) {
                                                 "address",  "store",    "unary",
                                                 "binary",   "convert",  "call",
             "struct_init", "enum_init", "field_read", "field_address",
-            "load_indirect", "store_indirect", "enum_test", "enum_payload"};
+            "load_indirect", "store_indirect", "enum_test", "enum_payload",
+            "string_literal"};
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;
+        if (i.op == Op::string_literal) {
+          static constexpr char hex[] = "0123456789abcdef";
+          out << " bytes=" << i.utf8.size() << " utf8=";
+          for (unsigned char c : i.utf8)
+            out << hex[c >> 4] << hex[c & 15];
+        }
         if (i.op == Op::function)
           out << " @" << i.function.value;
         if (i.op == Op::load || i.op == Op::store || i.op == Op::address)
