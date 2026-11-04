@@ -1,0 +1,11 @@
+package app;
+
+func probe() f64 {
+    let narrow f32 = 1.0;
+    let wide f64 = 2.0;
+    return narrow + wide;
+}
+
+func main() i32 {
+    return 0;
+}

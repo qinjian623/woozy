@@ -1,0 +1,15 @@
+package app;
+
+func positive_overflow() f64 {
+    let max_finite f64 = 1.7976931348623157e308;
+    return max_finite * 2.0;
+}
+
+func negative_overflow() f64 {
+    let max_finite f64 = 1.7976931348623157e308;
+    return -max_finite * 2.0;
+}
+
+func main() i32 {
+    return 0;
+}

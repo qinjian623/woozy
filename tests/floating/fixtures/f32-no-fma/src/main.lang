@@ -1,0 +1,10 @@
+package app;
+
+func separate_mul_add(a f32, b f32, c f32) f32 {
+    return a * b + c;
+}
+
+func main() i32 {
+    let observed f32 = separate_mul_add(1.00000011920928955078125, 1.00000011920928955078125, -1.0000002384185791015625);
+    return 0;
+}

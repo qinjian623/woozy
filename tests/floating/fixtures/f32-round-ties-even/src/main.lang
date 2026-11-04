@@ -1,0 +1,31 @@
+package app;
+
+func tie_down_add() f32 {
+    let half f32 = 0.000000059604644775390625;
+    return 1.0 + half;
+}
+
+func tie_up_add() f32 {
+    let three_halves f32 = 0.000000178813934326171875;
+    return 1.0 + three_halves;
+}
+
+func tie_down_literal() f32 {
+    return 1.000000059604644775390625;
+}
+
+func tie_up_literal() f32 {
+    return 1.000000178813934326171875;
+}
+
+func literal_above_lower_midpoint() f32 {
+    return 1.0000000596046447753906250000000000000000001;
+}
+
+func literal_below_upper_midpoint() f32 {
+    return 1.0000001788139343261718749999999999999999999;
+}
+
+func main() i32 {
+    return 0;
+}

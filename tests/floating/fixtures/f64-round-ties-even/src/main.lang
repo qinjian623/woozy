@@ -1,0 +1,23 @@
+package app;
+
+func tie_down_add() f64 {
+    let half f64 = 0.00000000000000011102230246251565404236316680908203125;
+    return 1.0 + half;
+}
+
+func tie_up_add() f64 {
+    let three_halves f64 = 0.00000000000000033306690738754696212708950042724609375;
+    return 1.0 + three_halves;
+}
+
+func tie_down_literal() f64 {
+    return 1.00000000000000011102230246251565404236316680908203125;
+}
+
+func tie_up_literal() f64 {
+    return 1.00000000000000033306690738754696212708950042724609375;
+}
+
+func main() i32 {
+    return 0;
+}

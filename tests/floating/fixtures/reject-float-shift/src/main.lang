@@ -1,0 +1,10 @@
+package app;
+
+func probe() f32 {
+    let value f32 = 1.0;
+    return value << 1;
+}
+
+func main() i32 {
+    return 0;
+}

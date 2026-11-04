@@ -1,0 +1,145 @@
+package app;
+
+func positive_zero() f32 {
+    return 0.0;
+}
+
+func negative_zero() f32 {
+    return -0.0;
+}
+
+func opposite_zero_sum() f32 {
+    let positive f32 = 0.0;
+    let negative f32 = -0.0;
+    return positive + negative;
+}
+
+func negative_zero_sum() f32 {
+    let left f32 = -0.0;
+    let right f32 = -0.0;
+    return left + right;
+}
+
+func negative_zero_subtract() f32 {
+    let left f32 = -0.0;
+    let right f32 = 0.0;
+    return left - right;
+}
+
+func negative_zero_product() f32 {
+    let negative f32 = -0.0;
+    return negative * 1.0;
+}
+
+func negative_zero_quotient() f32 {
+    let negative f32 = -0.0;
+    return negative / 1.0;
+}
+
+func positive_infinity() f32 {
+    let zero f32 = 0.0;
+    return 1.0 / zero;
+}
+
+func negative_infinity_numerator() f32 {
+    let negative_one f32 = -1.0;
+    let zero f32 = 0.0;
+    return negative_one / zero;
+}
+
+func negative_infinity_divisor() f32 {
+    let negative_zero f32 = -0.0;
+    return 1.0 / negative_zero;
+}
+
+func nan_zero_over_zero() f32 {
+    let zero f32 = 0.0;
+    return zero / zero;
+}
+
+func nan_inf_minus_inf() f32 {
+    let zero f32 = 0.0;
+    let infinity f32 = 1.0 / zero;
+    return infinity - infinity;
+}
+
+func nan_equal_self() bool {
+    let nan f32 = 0.0 / 0.0;
+    return nan == nan;
+}
+
+func nan_not_equal_self() bool {
+    let nan f32 = 0.0 / 0.0;
+    return nan != nan;
+}
+
+func nan_less_than_one() bool {
+    let nan f32 = 0.0 / 0.0;
+    return nan < 1.0;
+}
+
+func one_less_than_nan() bool {
+    let nan f32 = 0.0 / 0.0;
+    let one f32 = 1.0;
+    return one < nan;
+}
+
+func nan_less_equal_one() bool {
+    let nan f32 = 0.0 / 0.0;
+    return nan <= 1.0;
+}
+
+func nan_greater_equal_one() bool {
+    let nan f32 = 0.0 / 0.0;
+    return nan >= 1.0;
+}
+
+func nan_greater_than_one() bool {
+    let nan f32 = 0.0 / 0.0;
+    return nan > 1.0;
+}
+
+func nan_equal_zero() bool {
+    let nan f32 = 0.0 / 0.0;
+    return nan == 0.0;
+}
+
+func finite_less_than() bool {
+    let left f32 = 1.0;
+    let right f32 = 2.0;
+    return left < right;
+}
+
+func finite_less_equal() bool {
+    let left f32 = 1.0;
+    let right f32 = 1.0;
+    return left <= right;
+}
+
+func finite_greater_than() bool {
+    let left f32 = 2.0;
+    let right f32 = 1.0;
+    return left > right;
+}
+
+func finite_greater_equal() bool {
+    let left f32 = 1.0;
+    let right f32 = 1.0;
+    return left >= right;
+}
+
+func positive_zero_equal_negative_zero() bool {
+    let positive f32 = 0.0;
+    let negative f32 = -0.0;
+    return positive == negative;
+}
+
+func positive_zero_not_equal_negative_zero() bool {
+    let positive f32 = 0.0;
+    let negative f32 = -0.0;
+    return positive != negative;
+}
+
+func main() i32 {
+    return 0;
+}

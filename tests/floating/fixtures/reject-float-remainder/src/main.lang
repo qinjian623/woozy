@@ -1,0 +1,11 @@
+package app;
+
+func probe() f64 {
+    let dividend f64 = 5.0;
+    let divisor f64 = 2.0;
+    return dividend % divisor;
+}
+
+func main() i32 {
+    return 0;
+}

@@ -1,0 +1,25 @@
+package app;
+
+func min_normal_halved() f64 {
+    let min_normal f64 = 2.2250738585072014e-308;
+    return min_normal / 2.0;
+}
+
+func min_subnormal_halved() f64 {
+    let min_subnormal f64 = 4.9406564584124654e-324;
+    return min_subnormal / 2.0;
+}
+
+func subnormal_tie() f64 {
+    let min_subnormal f64 = 4.9406564584124654e-324;
+    return min_subnormal * 1.5;
+}
+
+func negative_underflow() f64 {
+    let min_subnormal f64 = 4.9406564584124654e-324;
+    return -min_subnormal / 2.0;
+}
+
+func main() i32 {
+    return 0;
+}
