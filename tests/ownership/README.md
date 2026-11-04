@@ -1,9 +1,9 @@
 # T09 所有权与 Vec fixtures
 
-operation_id: `language-t09-ownership-fixtures-20261104`  
-correction_operation_id: `language-t09-ownership-fixtures-20261104-correction`  
-root_evidence_correction_count: `1`  
-契约版本：`compiler-dev/1`  
+operation_id: `language-t09-ownership-fixtures-20261104`
+correction_operation_id: `language-t09-ownership-fixtures-20261104-correction`
+root_evidence_correction_count: `1`
+契约版本：`compiler-dev/1`
 根版本：`e808169`
 
 本目录只准备 T09 的独立源码项目和未来预期，不实现生产代码。没有修改 `src/`、runtime、driver、根 CMake、contracts、旧文档或原 baseline；没有新增 runner、CMake 或 schema 文件。`cases.json` 的 `schema` 字段只是数据格式标签。
