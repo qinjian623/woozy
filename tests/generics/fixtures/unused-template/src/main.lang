@@ -1,0 +1,2 @@
+package app;
+func bad[T](x T) T { return x + x; } func main() i32 { return 0; }

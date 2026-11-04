@@ -1,0 +1,3 @@
+package app;
+enum Choice { Empty; Some(value i32); }
+func main() i32 { let c = Choice.Empty; switch c { case Choice.Some(x): return x; case Choice.Empty: return x; } }

@@ -1,0 +1,6 @@
+package app;
+trait Value { func value(self Self) i32; }
+struct Item { n i32; }
+impl Value for Item { func value(self Item) i32 { return self.n; } }
+impl Value for Item { func value(self Item) i32 { return self.n; } }
+func main() i32 { return 0; }

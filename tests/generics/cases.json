@@ -1,0 +1,328 @@
+{
+  "schema": "compiler-dev/generics-fixtures/1",
+  "contract": "compiler-dev/1",
+  "cases": [
+    {
+      "id": "explicit",
+      "manifest": "tests/generics/fixtures/explicit/lang.toml",
+      "purpose": "显式 i32 返回 7",
+      "expected_static": {
+        "status": "accept",
+        "reason": "显式 i32 返回 7"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait",
+      "runtime_expected": {
+        "main_return": 7,
+        "reason": "显式 i32 返回 7"
+      }
+    },
+    {
+      "id": "inferred",
+      "manifest": "tests/generics/fixtures/inferred/lang.toml",
+      "purpose": "由实参推断 i32，返回 8",
+      "expected_static": {
+        "status": "accept",
+        "reason": "由实参推断 i32，返回 8"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait",
+      "runtime_expected": {
+        "main_return": 8,
+        "reason": "由实参推断 i32，返回 8"
+      }
+    },
+    {
+      "id": "return-context",
+      "manifest": "tests/generics/fixtures/return-context/lang.toml",
+      "purpose": "返回 i32 的期望传到 identity，7-7=0",
+      "expected_static": {
+        "status": "accept",
+        "reason": "返回 i32 的期望传到 identity，7-7=0"
+      },
+      "specification": "docs/SEMANTICS.md §3 基础类型与推断",
+      "runtime_expected": {
+        "main_return": 0,
+        "reason": "返回 i32 的期望传到 identity，7-7=0"
+      }
+    },
+    {
+      "id": "multi-instance",
+      "manifest": "tests/generics/fixtures/multi-instance/lang.toml",
+      "purpose": "i32/i64 分别实例化，返回 3",
+      "expected_static": {
+        "status": "accept",
+        "reason": "i32/i64 分别实例化，返回 3"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait",
+      "runtime_expected": {
+        "main_return": 3,
+        "reason": "i32/i64 分别实例化，返回 3"
+      }
+    },
+    {
+      "id": "function-argument",
+      "manifest": "tests/generics/fixtures/function-argument/lang.toml",
+      "purpose": "类型替换包含函数类型，inc(4)=5",
+      "expected_static": {
+        "status": "accept",
+        "reason": "类型替换包含函数类型，inc(4)=5"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait",
+      "runtime_expected": {
+        "main_return": 5,
+        "reason": "类型替换包含函数类型，inc(4)=5"
+      }
+    },
+    {
+      "id": "inference-conflict",
+      "manifest": "tests/generics/fixtures/inference-conflict/lang.toml",
+      "purpose": "同一 T 不能同时为 i32 和 i64",
+      "expected_static": {
+        "status": "reject",
+        "reason": "同一 T 不能同时为 i32 和 i64"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait"
+    },
+    {
+      "id": "unused-template",
+      "manifest": "tests/generics/fixtures/unused-template/lang.toml",
+      "purpose": "无约束 T 不允许加法，即使模板未调用或实参为整数",
+      "expected_static": {
+        "status": "reject",
+        "reason": "无约束 T 不允许加法，即使模板未调用或实参为整数"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait"
+    },
+    {
+      "id": "used-template",
+      "manifest": "tests/generics/fixtures/used-template/lang.toml",
+      "purpose": "无约束 T 不允许加法，即使模板未调用或实参为整数",
+      "expected_static": {
+        "status": "reject",
+        "reason": "无约束 T 不允许加法，即使模板未调用或实参为整数"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait"
+    },
+    {
+      "id": "trait-unique",
+      "manifest": "tests/generics/fixtures/trait-unique/lang.toml",
+      "purpose": "唯一显式 impl 静态选择 value，返回 9",
+      "expected_static": {
+        "status": "accept",
+        "reason": "唯一显式 impl 静态选择 value，返回 9"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait",
+      "runtime_expected": {
+        "main_return": 9,
+        "reason": "唯一显式 impl 静态选择 value，返回 9"
+      }
+    },
+    {
+      "id": "trait-missing",
+      "manifest": "tests/generics/fixtures/trait-missing/lang.toml",
+      "purpose": "Item 未实现 Value",
+      "expected_static": {
+        "status": "reject",
+        "reason": "Item 未实现 Value"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait"
+    },
+    {
+      "id": "impl-duplicate",
+      "manifest": "tests/generics/fixtures/impl-duplicate/lang.toml",
+      "purpose": "同一 trait/type 不允许两个 impl",
+      "expected_static": {
+        "status": "reject",
+        "reason": "同一 trait/type 不允许两个 impl"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait"
+    },
+    {
+      "id": "impl-overlap",
+      "manifest": "tests/generics/fixtures/impl-overlap/lang.toml",
+      "purpose": "泛化与具体 impl 在 Box[i32] 重叠",
+      "expected_static": {
+        "status": "reject",
+        "reason": "泛化与具体 impl 在 Box[i32] 重叠"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait"
+    },
+    {
+      "id": "fields-reordered",
+      "manifest": "tests/generics/fixtures/fields-reordered/lang.toml",
+      "purpose": "命名字段按名字对应，7-2=5",
+      "expected_static": {
+        "status": "accept",
+        "reason": "命名字段按名字对应，7-2=5"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流",
+      "runtime_expected": {
+        "main_return": 5,
+        "reason": "命名字段按名字对应，7-2=5"
+      }
+    },
+    {
+      "id": "field-missing",
+      "manifest": "tests/generics/fixtures/field-missing/lang.toml",
+      "purpose": "缺少字段 y",
+      "expected_static": {
+        "status": "reject",
+        "reason": "缺少字段 y"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流"
+    },
+    {
+      "id": "field-duplicate",
+      "manifest": "tests/generics/fixtures/field-duplicate/lang.toml",
+      "purpose": "字段 x 重复",
+      "expected_static": {
+        "status": "reject",
+        "reason": "字段 x 重复"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流"
+    },
+    {
+      "id": "field-unknown",
+      "manifest": "tests/generics/fixtures/field-unknown/lang.toml",
+      "purpose": "不存在字段 z",
+      "expected_static": {
+        "status": "reject",
+        "reason": "不存在字段 z"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流"
+    },
+    {
+      "id": "let-field-write",
+      "manifest": "tests/generics/fixtures/let-field-write/lang.toml",
+      "purpose": "let 绑定字段不可写",
+      "expected_static": {
+        "status": "reject",
+        "reason": "let 绑定字段不可写"
+      },
+      "specification": "docs/SEMANTICS.md §7 值、容器与 ARC"
+    },
+    {
+      "id": "nested-copy",
+      "manifest": "tests/generics/fixtures/nested-copy/lang.toml",
+      "purpose": "嵌套值字段复制，修改 b 后 a.p.x 仍为 1",
+      "expected_static": {
+        "status": "accept",
+        "reason": "嵌套值字段复制，修改 b 后 a.p.x 仍为 1"
+      },
+      "specification": "docs/SEMANTICS.md §7.1 复制与对象身份",
+      "runtime_expected": {
+        "main_return": 1,
+        "reason": "嵌套值字段复制，修改 b 后 a.p.x 仍为 1"
+      }
+    },
+    {
+      "id": "enum-empty",
+      "manifest": "tests/generics/fixtures/enum-empty/lang.toml",
+      "purpose": "无载荷 Empty 分支返回 0",
+      "expected_static": {
+        "status": "accept",
+        "reason": "无载荷 Empty 分支返回 0"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流",
+      "runtime_expected": {
+        "main_return": 0,
+        "reason": "无载荷 Empty 分支返回 0"
+      }
+    },
+    {
+      "id": "enum-payload",
+      "manifest": "tests/generics/fixtures/enum-payload/lang.toml",
+      "purpose": "载荷绑定 x 为 6",
+      "expected_static": {
+        "status": "accept",
+        "reason": "载荷绑定 x 为 6"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流",
+      "runtime_expected": {
+        "main_return": 6,
+        "reason": "载荷绑定 x 为 6"
+      }
+    },
+    {
+      "id": "enum-nonexhaustive",
+      "manifest": "tests/generics/fixtures/enum-nonexhaustive/lang.toml",
+      "purpose": "缺少 Some 且没有 default",
+      "expected_static": {
+        "status": "reject",
+        "reason": "缺少 Some 且没有 default"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流"
+    },
+    {
+      "id": "branch-scope",
+      "manifest": "tests/generics/fixtures/branch-scope/lang.toml",
+      "purpose": "Some 的模式变量 x 在 Empty 分支不可见",
+      "expected_static": {
+        "status": "reject",
+        "reason": "Some 的模式变量 x 在 Empty 分支不可见"
+      },
+      "specification": "docs/SEMANTICS.md §2 名称与模块"
+    },
+    {
+      "id": "same-recursion",
+      "manifest": "tests/generics/fixtures/same-recursion/lang.toml",
+      "purpose": "同一实例递归三次，返回 5",
+      "expected_static": {
+        "status": "accept",
+        "reason": "同一实例递归三次，返回 5"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait",
+      "runtime_expected": {
+        "main_return": 5,
+        "reason": "同一实例递归三次，返回 5"
+      }
+    },
+    {
+      "id": "expanding-recursion",
+      "manifest": "tests/generics/fixtures/expanding-recursion/lang.toml",
+      "purpose": "不断生成 Box[T]，必须在实例预算内诊断停止；不规定具体预算",
+      "expected_static": {
+        "status": "reject",
+        "reason": "不断生成 Box[T]，必须在实例预算内诊断停止；不规定具体预算"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait"
+    },
+    {
+      "id": "infinite-layout",
+      "manifest": "tests/generics/fixtures/infinite-layout/lang.toml",
+      "purpose": "直接递归值字段没有有限布局",
+      "expected_static": {
+        "status": "reject",
+        "reason": "直接递归值字段没有有限布局"
+      },
+      "specification": "docs/SEMANTICS.md §7 值、容器与 ARC"
+    },
+    {
+      "id": "field-evaluation-order",
+      "manifest": "tests/generics/fixtures/field-evaluation-order/lang.toml",
+      "purpose": "源码先计算 y=1 再计算 x=2，返回 21",
+      "expected_static": {
+        "status": "accept",
+        "reason": "源码先计算 y=1 再计算 x=2，返回 21"
+      },
+      "specification": "docs/SEMANTICS.md §5 求值与控制流",
+      "runtime_expected": {
+        "main_return": 21,
+        "reason": "源码先计算 y=1 再计算 x=2，返回 21"
+      }
+    },
+    {
+      "id": "cross-package-alias",
+      "manifest": "tests/generics/fixtures/cross-package-alias/lang.toml",
+      "purpose": "两别名指向同一声明及 i32 实例，3+4=7；实例去重需后续 HIR 检查",
+      "expected_static": {
+        "status": "accept",
+        "reason": "两别名指向同一声明及 i32 实例，3+4=7；实例去重需后续 HIR 检查"
+      },
+      "specification": "docs/SEMANTICS.md §6 泛型和 trait",
+      "runtime_expected": {
+        "main_return": 7,
+        "reason": "两别名指向同一声明及 i32 实例，3+4=7；实例去重需后续 HIR 检查"
+      }
+    }
+  ]
+}

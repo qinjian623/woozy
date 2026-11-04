@@ -1,0 +1,2 @@
+package app;
+trait Value { func value(self Self) i32; } struct Box[T] { n T; } impl[T] Value for Box[T] { func value(self Box[T]) i32 { return 1; } } impl Value for Box[i32] { func value(self Box[i32]) i32 { return 2; } } func main() i32 { return 0; }

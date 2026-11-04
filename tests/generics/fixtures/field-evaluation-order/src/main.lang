@@ -1,0 +1,2 @@
+package app;
+struct Pair { x i32; y i32; } func step(n inout i32) i32 { n = n + 1; return n; } func main() i32 { var n i32 = 0; let p = Pair(y: step(inout n),x: step(inout n)); return p.x * 10 + p.y; }

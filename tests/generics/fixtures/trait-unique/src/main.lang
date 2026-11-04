@@ -1,0 +1,5 @@
+package app;
+trait Value { func value(self Self) i32; }
+struct Item { n i32; }
+impl Value for Item { func value(self Item) i32 { return self.n; } }
+func read[T Value](x T) i32 { return x.value(); } func main() i32 { return read(Item(n: 9)); }

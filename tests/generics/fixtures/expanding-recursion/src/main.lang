@@ -1,0 +1,2 @@
+package app;
+struct Box[T] { value T; } func grow[T](x T) i32 { return grow[Box[T]](Box[T](value: x)); } func main() i32 { return grow[i32](0); }

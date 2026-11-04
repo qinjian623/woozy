@@ -1,0 +1,2 @@
+package app;
+func walk[T](x T, n i32) T { if n == 0 { return x; } return walk[T](x,n-1); } func main() i32 { return walk[i32](5,3); }

@@ -1,0 +1,3 @@
+package app;
+func identity[T](x T) T { let local = x; let f = (func(y T) T { return y; }); return f(local); }
+func main() i32 { let a = identity[i32](3); let b = identity[i64](4); if b == 4 { return a; } return 0; }

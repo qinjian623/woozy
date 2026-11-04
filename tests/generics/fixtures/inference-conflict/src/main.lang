@@ -1,0 +1,2 @@
+package app;
+func first[T](a T, b T) T { return a; } func main() i32 { let a i32 = 1; let b i64 = 2; return first(a,b); }
