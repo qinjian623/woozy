@@ -1,0 +1,23 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+import "torch/nn/functional" as F;
+
+// x 和 y 都是真实 Tensor；y = 2*x + 1 来自源码中的 NumPy 管线。
+func build_loss() torch.Tensor throws py.Error {
+    let values = np.linspace(-1.0, 1.0, num: 128, dtype: np.float32);
+    let x_np = np.expand_dims(values, axis: 1);
+    let scaled = np.multiply(x_np, 2.0);
+    let shifted = np.add(scaled, 1.0);
+    let y_np = np.asarray(shifted, dtype: np.float32);
+    let x = torch.tensor(x_np, dtype: torch.float32, device: "cpu");
+    let y = torch.tensor(y_np, dtype: torch.float32, device: "cpu");
+    return F.mse_loss(x, y);
+}
+
+func main() throws py.Error {
+    let ignored = build_loss();
+    return;
+}

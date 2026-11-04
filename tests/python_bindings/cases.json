@@ -1,0 +1,784 @@
+{
+  "inventory_version": 1,
+  "contract": "compiler-dev/1",
+  "label": "T10 python binding fixture inventory (test-only; not a public schema)",
+  "scope": "为 T10 准备独立源码正反例、未来静态期望和未来 CPU 执行观察；不实现编译器、绑定或运行库。",
+  "source_policy": {
+    "fixture_count": 12,
+    "source_hashes": "sha256 of raw fixture bytes; files have final newline",
+    "baseline_unchanged": true,
+    "no_compiler_or_runtime_changes": true,
+    "no_public_schema_added": true,
+    "no_real_torch_or_numpy_imported": true,
+    "no_training_executed": true,
+    "future_execution_status": "not_run for every case and baseline reference"
+  },
+  "baseline_reference": {
+    "path": "baseline/samples/04_numpy_torch.lang",
+    "sha256": "beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797",
+    "git_head_blob_sha256": "beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797",
+    "unchanged": true,
+    "future_static": {
+      "expectation": "accept",
+      "stage": "name/type/effect check with the original binding example",
+      "reason": "这是 T10 的完整训练样例；未来必须用锁定依赖生成并运行，当前仅做 syntax-only。"
+    },
+    "future_execution": {
+      "status": "not_run",
+      "reason": "T10 未实施；未安装/导入真实 PyTorch，未运行训练。",
+      "observations": [
+        "A08: 实际执行生成的 Python；NumPy x、y shape=(128,1)、dtype=float32、y=2x+1。",
+        "A08: CPU nn.Linear(1,1)、MSE、SGD lr=0.1、200 次 backward/step；返回真实零维 Tensor，保留 autograd。",
+        "A08: 最终 MSE 有限、非负、验收阈值 <1e-3；这是待测阈值，不是已得到数值。",
+        "A08: 生成产物不得插入 detach/item/cpu/numpy；Module 调用 hook 必须观察到 model(x)。"
+      ]
+    },
+    "current_syntax": {
+      "status": "passed",
+      "exit_code": 0,
+      "status_field": "ok",
+      "diagnostic_count": 0
+    }
+  },
+  "binding_inputs": {
+    "schema": {
+      "path": "contracts/python-bindings.schema.json",
+      "sha256": "ce1cd32fda0a6cc2b3f86b34e8a6c412f6667d5d92ddef45d08434c286220dbf"
+    },
+    "example_bundle": {
+      "path": "contracts/python_bindings.example.json",
+      "sha256": "44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f",
+      "review_status": "draft_requires_conformance"
+    },
+    "note": "所有正例只引用示例绑定中已存在的模块、类型、值和 callable；U01 暴露 schema 没有属性/下标表达的问题，未新增绑定。"
+  },
+  "future_target": {
+    "backend": "python",
+    "required_environment": "锁定 Python 3.12.x、NumPy CPU、PyTorch CPU 及实际通过 conformance 的版本",
+    "static_check": "不导入真实 Python 包；只读取语言项目与纯声明绑定。",
+    "execution": "T10 生成的 Python 在显式独立步骤运行；手写参考只作行为对照。",
+    "forbidden_fixture_shortcuts": [
+      "fake torch/numpy module",
+      "implicit detach/item/cpu/numpy",
+      "Any fallback",
+      "silent backend switch"
+    ]
+  },
+  "current_environment": {
+    "head_commit": "51363f5",
+    "head_subject": "Enable Vec ownership in both backends and verify value transfers",
+    "worktree": "/home/qin/.local/state/cli-agent-bridge/worktrees/d3f462ee99f0fc72ea6c575f",
+    "compiler_source": "current source tree at 51363f5; built without LLVM in /tmp",
+    "build_command": "cmake -G Ninja -DCMAKE_BUILD_TYPE=Debug -DLANG_ENABLE_LLVM=OFF -DBUILD_TESTING=OFF /home/qin/.local/state/cli-agent-bridge/worktrees/d3f462ee99f0fc72ea6c575f && ninja langc",
+    "compiler_version": "langc 0.1.0-bootstrap (compiler-dev/1)",
+    "compiler_artifact": "/tmp/language-t10-binding-fixtures-20261104/build/langc",
+    "tooling_read": [
+      "docs/TOOLING.md §3",
+      "langc --help",
+      "langc check --syntax-only"
+    ],
+    "syntax_command_template": "/tmp/language-t10-binding-fixtures-20261104/build/langc check --syntax-only --format json <fixture>",
+    "syntax_result": {
+      "passed": 13,
+      "total": 13,
+      "note": "12 个新 fixture + 原 04 样例；全部 status=ok、0 diagnostics。语法通过不等于 T10 类型/执行通过。"
+    },
+    "full_check_command_template": "/tmp/language-t10-binding-fixtures-20261104/build/langc check --project <temp>/lang.toml --backend python --format json",
+    "full_check": {
+      "status": "blocked_before_T10",
+      "note": "实际运行了 CLI 全量 check；12 个 fixture 都导入 std/py，CLI 未提供 std binding bundle，因此在 resolve 阶段先失败，未进入 T10 绑定语义。",
+      "exit_code": 1,
+      "phase": "resolve",
+      "code": "E_IMPORT_NOT_FOUND",
+      "message": "std source is not configured",
+      "actual_json_dir": "/tmp/language-t10-binding-fixtures-20261104/correction/current-full-check"
+    },
+    "foreign_probe": {
+      "status": "blocked_before_T10",
+      "note": "为区分 std 配置缺失与 foreign 未实现，仅在 /tmp 去掉 std/py 后重跑；解析和项目载入成功，在 type 阶段报告 foreign 未实现。该临时源不进入仓库。",
+      "exit_code": 1,
+      "phase": "type",
+      "code": "E_CAPABILITY_UNAVAILABLE",
+      "message": "foreign declarations require T10/T11",
+      "actual_json": "/tmp/language-t10-binding-fixtures-20261104/initial/full-check/probe_foreign.json"
+    },
+    "commands_log": "/tmp/language-t10-binding-fixtures-20261104/initial/commands.log",
+    "actual_json_root": "/tmp/language-t10-binding-fixtures-20261104"
+  },
+  "cases": [
+    {
+      "id": "P01_imports_types",
+      "kind": "positive",
+      "covers": [
+        "imports",
+        "foreign_types",
+        "py.Error",
+        "binding_type_surface"
+      ],
+      "spec": [
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "13",
+          "claim": "导入名与 numpy/torch/nn/optim/functional 的逻辑模块映射；绑定保留真实类型。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "10",
+          "claim": "检查器只解析纯声明绑定，不导入真实 Python 包；外部类型由绑定声明。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A03",
+          "claim": "仅依赖纯声明绑定时，即使 Python 包未安装，静态检查仍可完成。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "modules/types",
+          "claim": "本用例引用的 std/py、numpy、torch、torch/nn、torch/optim 模块与全部类型均在示例绑定中声明。"
+        }
+      ],
+      "future_static": {
+        "expectation": "accept",
+        "stage": "name/type/effect check with contracts/python_bindings.example.json",
+        "reason": "所有导入、类型名和 py.Error 均来自原绑定示例；不得在 check 阶段启动 Python 或导入 numpy/torch。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "纯类型面，无运行入口；T10 尚未实施，且未导入真实 NumPy/PyTorch。",
+        "observations": [
+          "若 T10 harness 生成并导入模块，类型名只在实际执行时绑定到宿主对象；记录锁定环境的 Python/NumPy/PyTorch 版本。",
+          "不得为了通过静态检查伪造 torch 或 numpy 模块。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/01_imports_and_types.lang",
+      "sha256": "d2012ae5ba3b8543355cdb69e320fa44812c2cee626aa28b7fe323850b1cfbdf"
+    },
+    {
+      "id": "P02_numpy_pipeline",
+      "kind": "positive",
+      "covers": [
+        "numpy_pipeline",
+        "explicit_torch_tensor_copy",
+        "keyword_arguments",
+        "dtype_separation",
+        "tensor_ops"
+      ],
+      "spec": [
+        {
+          "path": "baseline/samples/README.md",
+          "section": "Python reference and binding conventions",
+          "claim": "torch.tensor(ndarray) 是源码明确的显式复制；np.float32 与 torch.float32 分属不同库。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "callables numpy.linspace/expand_dims/multiply/add/asarray and torch.tensor",
+          "claim": "参数名、位置/关键字限定、返回类型和 storage 契约。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A08",
+          "claim": "NumPy x、y 形状为 (128, 1)，dtype 为 float32，y = 2x + 1；数据转换显式使用 torch.tensor。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "10",
+          "claim": "外部 shape/dtype 是运行时约束；不隐式 item/detach/cpu/numpy。"
+        }
+      ],
+      "future_static": {
+        "expectation": "accept",
+        "stage": "name/type/effect check with original binding example",
+        "reason": "所有调用和关键字均由示例绑定覆盖；np.float32 作为 DTypeSpec、torch.float32 作为 torch.dtype 分别传入。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "需要 T10 生成的 Python 和锁定的 CPU NumPy/PyTorch 环境；当前未导入真实包、未训练。",
+        "observations": [
+          "记录 x_np、y_np 的 shape=(128, 1)、dtype=float32，并验证 y_np = 2*x_np + 1（锁定环境内与参考计算比较）。",
+          "记录 x、y 是 CPU float32 torch.Tensor；torch.tensor 只在这两个显式数据边界调用。",
+          "返回的 MSE 是有限标量 Tensor；精确值用同一锁定环境的纯 NumPy/Python 参考公式 mean((x-y)^2) 比较，不写死训练 loss。",
+          "检查生成代码没有插入隐式 detach、item、cpu、numpy 或未声明的列表转换。"
+        ],
+        "numeric_basis": "数值关系来自 fixture 源码中的 linspace/expand_dims/multiply/add/asarray 与 y=2x+1；不引用任何训练结果。"
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/02_numpy_pipeline.lang",
+      "sha256": "8d7e408446977c94108ca571ab2cb51693b56d8405e2ba569e5088efc56da2f8"
+    },
+    {
+      "id": "P03_module_call_optimizer",
+      "kind": "positive",
+      "covers": [
+        "construction",
+        "keyword_arguments",
+        "module_instance_call",
+        "optimizer",
+        "call_counts"
+      ],
+      "spec": [
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "13",
+          "claim": "model(x) 保留模块实例调用，不自动替换为 model.forward(x)；构造参数与关键字覆盖 torch/nn/optim 声明。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "torch.nn.Linear.constructor/parameters/call, torch.optim.SGD.constructor/zero_grad/step, torch.Tensor.backward",
+          "claim": "签名、命名参数、effects 和 receiver_escapes。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A08",
+          "claim": "用 Module 调用 hook 观察 model(x)；计数 backward 与 optimizer.step；保留 autograd。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "10",
+          "claim": "外部对象调用保持 Python 对象身份；不隐式改变 Tensor 行为。"
+        }
+      ],
+      "future_static": {
+        "expectation": "accept",
+        "stage": "name/type/effect check with original binding example",
+        "reason": "构造、方法调用、model(x) 和关键字均对应示例绑定的有限签名。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "需要真实 PyTorch CPU 环境和 T10 生成产物；当前未执行训练。",
+        "observations": [
+          "通过 Module __call__/forward hook 记录 model(x) 发生 1 次；不得观察到被改写成 model.forward(x)。",
+          "记录 optimizer.zero_grad(set_to_none: true)、loss.backward()、optimizer.step() 各 1 次。",
+          "SGD 的 params 来自 model.parameters()，lr=0.1；model 为 CPU float32 nn.Linear(1, 1)。",
+          "loss 保留 autograd 图；不比较手写训练得到的 loss 数值。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/03_module_call_optimizer.lang",
+      "sha256": "4f3f428da92155a90d957e7f8fde0b9ded1496ef2e71727c1ed3566f0cd9cb11"
+    },
+    {
+      "id": "P04_autograd_loss",
+      "kind": "positive",
+      "covers": [
+        "tensor_ops",
+        "autograd",
+        "no_detach",
+        "tensor_return"
+      ],
+      "spec": [
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A08",
+          "claim": "训练返回真实零维 Tensor；requires_grad/grad_fn 符合本例 autograd 路径；产物不插入 detach/item/cpu/numpy。"
+        },
+        {
+          "path": "docs/IMPLEMENTATION_PLAN.md",
+          "section": "T10",
+          "claim": "保留真实 Tensor 和 autograd 图；不能通过隐式 detach/item 修复类型问题。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "torch.nn.functional.mse_loss and torch.Tensor.backward",
+          "claim": "两者声明 autograd effect；mse_loss 返回 host-defined storage。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "10",
+          "claim": "外部张量运算由外部库执行，不隐式标量化。"
+        }
+      ],
+      "future_static": {
+        "expectation": "accept",
+        "stage": "name/type/effect check with original binding example",
+        "reason": "F.mse_loss 接受两个 Tensor，loss.backward 是 Tensor 方法；loss 直接作为 Tensor 返回。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "需要真实 PyTorch CPU 环境；当前未训练，也未读取任何 autograd 属性。",
+        "observations": [
+          "返回的 loss.requires_grad 为 true，grad_fn 链包含 MSE 反向节点；loss 为零维 Tensor。",
+          "backward 后模型参数的 grad 非空，证明梯度经过返回的 Tensor 路径。",
+          "生成代码/运行时没有对 loss 调用 detach、item、cpu 或 numpy。",
+          "不写死 loss 数值；本用例只验证图与对象身份。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/04_autograd_loss.lang",
+      "sha256": "42887b4ed0ced405027c3f890491b2bd38ab519f275dbbca9cafe6336a35e413"
+    },
+    {
+      "id": "P05_py_error_cause",
+      "kind": "positive",
+      "covers": [
+        "py.Error",
+        "exception_bridge",
+        "preserve_cause",
+        "typed_catch",
+        "no_BaseException_wrap"
+      ],
+      "spec": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "8",
+          "claim": "外部 Python Exception 在绑定边界转换为 py.Error 并保留 cause/traceback；不捕获所有 BaseException。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "13",
+          "claim": "Python 异常保留原始异常信息与源代码映射。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "numpy.expand_dims.array_axis and std/py Error",
+          "claim": "expand_dims 声明 throws lang.py.Error；axis 是运行时约束。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A08",
+          "claim": "独立小例验证抛出 Python 异常时的桥接行为。"
+        }
+      ],
+      "future_static": {
+        "expectation": "accept",
+        "stage": "name/type/effect check with original binding example",
+        "reason": "axis=9 是合法 i64；shape 合法性属于运行时约束。main 在 try/catch 中处理 py.Error。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "需要锁定 NumPy 环境并运行生成的 Python；当前未导入 NumPy、未执行。",
+        "observations": [
+          "对一维输入使用 axis=9，直接 Python/NumPy 调用产生版本相关的 AxisError（ValueError/IndexError 家族）；记录实际类和消息作为基准。",
+          "生成代码的 catch 观察到 py.Error，main 返回 0；原始异常的 cause/traceback 保留，并可与直接调用比较。",
+          "不得把 KeyboardInterrupt、SystemExit 或语言 Panic 包装成 py.Error；本用例不涉及这些路径，但桥接实现需保持该边界。",
+          "不硬编码 AxisError 的版本特定文本。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/05_error_cause.lang",
+      "sha256": "67dc592d70716e4be2bee8349cd3d496e35df6a80ac8cf5ee51523b9aaa0d383"
+    },
+    {
+      "id": "P06_named_argument_order",
+      "kind": "positive",
+      "covers": [
+        "construction",
+        "keyword_arguments",
+        "named_argument_evaluation_order",
+        "constructor_field_values",
+        "trivial_inout"
+      ],
+      "spec": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "5",
+          "claim": "命名实参先按书写顺序求值到临时值，再按签名排列；重排参数不能重排副作用。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "6.3",
+          "claim": "位置实参在前、命名实参在后；参数名、漏传/重复属于静态错误。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "torch.nn.Linear.constructor",
+          "claim": "in_features/out_features 为 positional_or_keyword，device/dtype 为 keyword_only。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A03",
+          "claim": "包含副作用和中途抛错的用例能观察到命名实参的源码求值顺序。"
+        }
+      ],
+      "future_static": {
+        "expectation": "accept",
+        "stage": "name/type/effect/ownership check",
+        "reason": "全部实参均为命名实参且名称在示例绑定中；mark 的 inout 是平凡 i64 整体绑定。源码顺序是 out_features 再 in_features，按 SEMANTICS §5 应保留该求值顺序。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "需要真实 PyTorch 和生成的 Python；当前未执行。",
+        "observations": [
+          "main 返回 0 且 order 恰为 21：先求值 out_features 的 mark(2,2)，再求值 in_features 的 mark(1,1)，不能按形参顺序重排。",
+          "模型 in_features=1、out_features=2，dtype=torch.float32、device=\"cpu\"；不比较训练 loss。",
+          "错误实现若先按形参顺序（in_features 再 out_features）求值，会得到 order=12；验收必须区分 21 与 12。",
+          "dtype 写在 device 之前但二者无副作用；本用例只用两个带副作用的 mark 证明命名实参顺序。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/06_named_argument_order.lang",
+      "sha256": "45b4da9669c5afb608d9db864edbf10c5bcb00b98214c0912429439767602afe"
+    },
+    {
+      "id": "N01_bad_call_signature",
+      "kind": "negative",
+      "covers": [
+        "wrong_signature",
+        "unknown_keyword",
+        "keyword_only_positional"
+      ],
+      "spec": [
+        {
+          "path": "contracts/python-bindings.schema.json",
+          "section": "$defs.parameter.kind",
+          "claim": "参数必须声明 positional_only、positional_or_keyword 或 keyword_only。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "numpy.linspace and torch.tensor",
+          "claim": "linspace 没有 count 参数；torch.tensor 的 dtype 是 keyword_only。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "6.3",
+          "claim": "参数名不存在、漏传必需参数、关键字限定参数按位置传递属于静态错误。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "5",
+          "claim": "实参按源码顺序求值并绑定到已声明形参。"
+        }
+      ],
+      "future_static": {
+        "expectation": "reject",
+        "stage": "call binding/type check",
+        "reason": "unknown_label 使用未声明的 count；keyword_only_positional 把 keyword_only 的 dtype 作为第二个位置实参。",
+        "expected_diagnostic_codes": [
+          "E_CALL_ARGUMENT"
+        ],
+        "diagnostic_code_note": "具体稳定码由 T10 诊断表确认；规范只要求静态拒绝。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "应在静态 check 拒绝，不生成也不执行 Python。",
+        "observations": [
+          "若未来实现错误地接受，执行阶段会出现未定义绑定顺序或 TypeError；这不构成期望行为。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/07_bad_call_signature.lang",
+      "sha256": "9cc5a017dd008115d3582808711f17ade794ac317b4c9d18d1ca5dd90debb9fe"
+    },
+    {
+      "id": "N02_bad_member",
+      "kind": "negative",
+      "covers": [
+        "wrong_member",
+        "undeclared_host_member",
+        "model_call_semantics"
+      ],
+      "spec": [
+        {
+          "path": "baseline/samples/README.md",
+          "section": "Python reference and binding conventions",
+          "claim": "model(x) 保留模块实例调用，不替换成 model.forward(x)。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "torch.nn.Linear.call",
+          "claim": "绑定只声明 __call__，没有声明 forward 成员。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "14",
+          "claim": "暂缺绑定应明确报告未覆盖的接口，不能把未知符号静默视作动态成功。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "10",
+          "claim": "model(x) 保持 Python 对象调用；检查器只解析绑定文件。"
+        }
+      ],
+      "future_static": {
+        "expectation": "reject",
+        "stage": "name/member resolution",
+        "reason": "model.forwad 不在有限绑定成员集；绑定的模型调用接口是 __call__，源码必须写 model(x)。",
+        "expected_diagnostic_codes": [
+          "E_NAME_NOT_FOUND"
+        ],
+        "diagnostic_code_note": "也可由 T10 统一为未覆盖成员诊断；关键是不接受未声明成员。",
+        "note": "没有把 model.forward 写成预期拒绝：它是 PyTorch 宿主的真实方法名，未来是否新增绑定属于契约决定；此处用明确不在绑定中的拼写成员测试“未声明成员”，正向 model(x) 由 P03 覆盖。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "应在静态 check 拒绝，不执行。",
+        "observations": [
+          "不能依赖真实 nn.Linear 的任意宿主方法名；未声明的成员必须在静态检查拒绝。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/08_bad_member.lang",
+      "sha256": "87ca7db360131e466b5fb8f403913d448f313d5c3b0ed934509c910714727f83"
+    },
+    {
+      "id": "N03_bad_types",
+      "kind": "negative",
+      "covers": [
+        "invalid_type",
+        "dtype_separation",
+        "ndarray_vs_tensor"
+      ],
+      "spec": [
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "types/values",
+          "claim": "np.float32 是 py.numpy.DTypeSpec，torch.float32 是 py.torch.dtype；ndarray 与 Tensor 是不同类型。"
+        },
+        {
+          "path": "baseline/samples/README.md",
+          "section": "Python reference and binding conventions",
+          "claim": "np.float32 与 torch.float32 分属各自库，不能混成同一参数类型。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "3",
+          "claim": "变量、实参和返回值不做隐式类型混合。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A03",
+          "claim": "字符串赋给 i32 等类型错误必须拒绝；外部类型同样按声明检查。"
+        }
+      ],
+      "future_static": {
+        "expectation": "reject",
+        "stage": "type check",
+        "reason": "np.linspace 的 dtype 需要 DTypeSpec 而非 torch.dtype；F.mse_loss 的 input/target 需要 Tensor 而非 ndarray。",
+        "expected_diagnostic_codes": [
+          "E_TYPE_MISMATCH"
+        ]
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "应在静态 check 拒绝，不执行。",
+        "observations": [
+          "不得为了运行而把 torch.float32 自动转换成 np.float32，也不得把 ndarray 隐式变成 Tensor。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/09_bad_types.lang",
+      "sha256": "0ab3ae5c4d573b86d5944dbbed005c3a19a9d2f43c82da2c1d60f52e11b88de8"
+    },
+    {
+      "id": "N04_bad_move",
+      "kind": "negative",
+      "covers": [
+        "wrong_move",
+        "borrowed_parameter",
+        "ordinary_parameter_mode"
+      ],
+      "spec": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.2",
+          "claim": "普通参数不消费调用者拥有值；move 参数才消费拥有值，已有绑定需要显式 move。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.2",
+          "claim": "借用参数不得逃逸或无故转移所有权。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A07",
+          "claim": "借用参数不会无故转移所有权；move 必须按规定消耗整个拥有绑定。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "torch.nn.functional.mse_loss",
+          "claim": "input/target 为 ordinary 参数，不能被调用方用 move 消费。"
+        }
+      ],
+      "future_static": {
+        "expectation": "reject",
+        "stage": "ownership/argument-mode check",
+        "reason": "x 是普通借用参数，调用处写 move x 试图消费调用者仍拥有的值，且 mse_loss 的参数模式是 ordinary。",
+        "expected_diagnostic_codes": [
+          "E_CALL_ARGUMENT"
+        ],
+        "diagnostic_code_note": "沿用现有借用 move 和 ordinary 参数模式检查的 E_CALL_ARGUMENT；同时检查拒绝位置，不只匹配自然语言 message。"
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "应在静态 check 拒绝，不执行。",
+        "observations": [
+          "不能通过在生成的 Python 中直接调用 mse_loss 来掩盖 move/借用错误。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/10_bad_move.lang",
+      "sha256": "2f8eb16de0e8e77368aa4d54336595a55728b1174133f3baa46dc3de4f212353"
+    },
+    {
+      "id": "N05_bad_inout",
+      "kind": "negative",
+      "covers": [
+        "wrong_inout",
+        "external_object",
+        "unsupported_capability"
+      ],
+      "spec": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.2",
+          "claim": "inout 首版只接受可证明无别名的 var 整体平凡值；引用容器、外部对象、字段/索引位置明确报未支持。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "14",
+          "claim": "inout 只允许首版平凡值整体绑定；拒绝共享 Vec 或外部对象的 inout。"
+        },
+        {
+          "path": "docs/IMPLEMENTATION_PLAN.md",
+          "section": "T09/T10",
+          "claim": "外部 Python 对象遵循绑定 ownership；不把外部共享对象图误标成深层独占。"
+        },
+        {
+          "path": "contracts/python_bindings.example.json",
+          "section": "types py.torch.nn.Linear",
+          "claim": "Linear 是 host_reference/shared_reference 外部对象。"
+        }
+      ],
+      "future_static": {
+        "expectation": "reject",
+        "stage": "parameter/ownership capability check",
+        "reason": "nn.Linear 是外部对象，不是平凡可写整体绑定；其 inout 属于明确未支持能力。",
+        "expected_diagnostic_codes": [
+          "E_CAPABILITY_UNAVAILABLE"
+        ]
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "应在静态 check 拒绝，不生成也不执行 Python。",
+        "observations": [
+          "不能把 Python 对象传引用当作独占 inout，也不能由此推导深层 noalias。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/11_bad_inout.lang",
+      "sha256": "968ba10cd154ab137788d9c8790e4064d8461558e4f83c9a4fd34508273c48b0"
+    },
+    {
+      "id": "U01_external_index_attributes",
+      "kind": "unresolved",
+      "covers": [
+        "external_indexing",
+        "external_attributes",
+        "vec_negative_index_not_applied"
+      ],
+      "spec": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.1",
+          "claim": "Vec 索引非负且越界 Panic；外部 ndarray/Tensor 下标保持绑定声明的外部语义，不能套用 Vec 规则。"
+        },
+        {
+          "path": "baseline/LEXICAL_SYNTAX.md",
+          "section": "7",
+          "claim": "tensor[i, j] 的多项下标是否允许由类型/绑定决定；方括号保留候选。"
+        },
+        {
+          "path": "docs/ACCEPTANCE.md",
+          "section": "A08",
+          "claim": "还需独立小例验证 ndarray/Tensor 透传身份、原地修改、参数顺序和异常桥接。"
+        },
+        {
+          "path": "contracts/python-bindings.schema.json",
+          "section": "$defs.callable",
+          "claim": "schema 只有 callable/method/constructor 的参数列表，没有字段属性或下标专用条目。"
+        }
+      ],
+      "future_static": {
+        "expectation": "unresolved",
+        "reason": "原绑定示例没有声明 Tensor.device 或 Tensor/ndarray __getitem__；schema 也没有表达属性、单/多下标或下标结果类型的字段。规范明确外部下标不得套用 Vec 规则，但未给出本绑定下的静态签名。",
+        "must_not_do": [
+          "不得把 x[-1, 0] 按 Vec 的非负索引规则静态拒绝或改成 Vec 语义。",
+          "不得自行发明 Tensor.device、__getitem__ 或多下标绑定类型来让当前检查通过。",
+          "在 integrator 确认前，不把该文件写成未来 accept 或 reject。"
+        ]
+      },
+      "future_execution": {
+        "status": "not_run",
+        "reason": "静态契约未定，且需要真实 PyTorch；当前未执行。",
+        "observations": [
+          "若未来绑定声明了外部下标/属性：在锁定 PyTorch 环境比较 x[-1,0] 与直接 Python 调用的结果、对象身份和异常行为；负数下标遵循外部库而非 Vec。",
+          "若未来明确不提供这些绑定：静态检查应报未覆盖成员/能力，而不是生成错误语义。"
+        ]
+      },
+      "current_syntax": {
+        "status": "passed",
+        "exit_code": 0,
+        "status_field": "ok",
+        "diagnostic_count": 0
+      },
+      "file": "fixtures/12_external_index_attributes.lang",
+      "sha256": "22ee850f50d8455de882a9de6fe30412967ef49ff8298db6a58540741c09d0d4"
+    }
+  ],
+  "unresolved_questions": [
+    {
+      "id": "Q1_external_attribute_index_binding",
+      "affected": [
+        "U01_external_index_attributes"
+      ],
+      "question": "原绑定 schema 没有字段属性、Tensor/ndarray 下标、单/多下标或结果类型声明。T10 是扩展绑定契约，还是把外部属性和下标统一报为未支持能力？",
+      "why_it_matters": "这决定 x.device 与 x[-1, 0] 的未来静态 accept/reject；不能用 Vec 的非负索引规则代替外部库语义。",
+      "required_decision": "integrator/T10 owner 在公共绑定契约中给出唯一表达；本目录不自行新增 schema 或 API。"
+    }
+  ]
+}

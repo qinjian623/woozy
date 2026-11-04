@@ -1,0 +1,10 @@
+package main;
+
+import "std/py" as py;
+import "torch" as torch;
+import "torch/nn/functional" as F;
+
+// x 是普通参数，调用者仍拥有它；不能把借用的 x 当作 move 实参消费。
+func move_borrowed(x torch.Tensor, y torch.Tensor) torch.Tensor throws py.Error {
+    return F.mse_loss(move x, y);
+}

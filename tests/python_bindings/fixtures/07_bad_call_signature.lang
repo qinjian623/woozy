@@ -1,0 +1,15 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+
+func unknown_label() torch.Tensor throws py.Error {
+    let values = np.linspace(-1.0, 1.0, count: 8, dtype: np.float32);
+    return torch.tensor(values, dtype: torch.float32, device: "cpu");
+}
+
+func keyword_only_positional() torch.Tensor throws py.Error {
+    let values = np.linspace(-1.0, 1.0, num: 8, dtype: np.float32);
+    return torch.tensor(values, torch.float32);
+}

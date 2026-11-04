@@ -1,0 +1,30 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+import "torch/nn" as nn;
+import "torch/optim" as optim;
+import "torch/nn/functional" as F;
+
+// model(x) 必须保持 Module 实例调用；不改成 model.forward(x)。
+func one_update() torch.Tensor throws py.Error {
+    torch.manual_seed(7);
+    let values = np.linspace(-1.0, 1.0, num: 32, dtype: np.float32);
+    let x_np = np.expand_dims(values, axis: 1);
+    let x = torch.tensor(x_np, dtype: torch.float32, device: "cpu");
+    let y = torch.tensor(x_np, dtype: torch.float32, device: "cpu");
+    let model = nn.Linear(1, 1, device: "cpu", dtype: torch.float32);
+    let optimizer = optim.SGD(model.parameters(), lr: 0.1);
+    optimizer.zero_grad(set_to_none: true);
+    let prediction = model(x);
+    let loss = F.mse_loss(prediction, y);
+    loss.backward();
+    optimizer.step();
+    return loss;
+}
+
+func main() throws py.Error {
+    let ignored = one_update();
+    return;
+}

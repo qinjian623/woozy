@@ -1,0 +1,9 @@
+package main;
+
+import "std/py" as py;
+import "torch/nn" as nn;
+
+// SEMANTICS 7.2：外部对象不能作为首版 inout 参数。
+func reset_model(model inout nn.Linear) Unit throws py.Error {
+    return;
+}

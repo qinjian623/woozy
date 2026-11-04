@@ -1,0 +1,12 @@
+package main;
+
+import "std/py" as py;
+import "torch" as torch;
+
+// x 是外部 Tensor，不是 Vec；[-1, 0] 不能套用 Vec 的非负下标规则。
+// 原绑定 schema 没有声明 Tensor 属性或下标，故未来静态期望待定。
+func extract_last(x torch.Tensor) torch.Tensor throws py.Error {
+    let device = x.device;
+    let last = x[-1, 0];
+    return last;
+}

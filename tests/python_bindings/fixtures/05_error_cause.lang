@@ -1,0 +1,25 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+
+// axis=9 对一维数组非法；外部异常应桥接为 py.Error 并保留原因。
+func fail_in_expand() i64 throws py.Error {
+    let values = np.linspace(-1.0, 1.0, num: 8, dtype: np.float32);
+    let expanded = np.expand_dims(values, axis: 9);
+    return 0;
+}
+
+func main() i32 {
+    var caught = false;
+    try {
+        let ignored = fail_in_expand();
+        return 1;
+    } catch error py.Error {
+        caught = true;
+    }
+    if !caught {
+        return 2;
+    }
+    return 0;
+}

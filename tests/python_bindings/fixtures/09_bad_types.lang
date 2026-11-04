@@ -1,0 +1,15 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+import "torch/nn/functional" as F;
+
+func numpy_dtype_from_torch() np.ndarray throws py.Error {
+    return np.linspace(-1.0, 1.0, num: 4, dtype: torch.float32);
+}
+
+func tensor_from_array() torch.Tensor throws py.Error {
+    let values = np.linspace(-1.0, 1.0, num: 4, dtype: np.float32);
+    return F.mse_loss(values, values);
+}

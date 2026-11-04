@@ -1,0 +1,14 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+import "torch/nn" as nn;
+
+// forwad 不在绑定成员集；正确接口是 model(x)，不是任意宿主方法名。
+func wrong_member() torch.Tensor throws py.Error {
+    let values = np.linspace(-1.0, 1.0, num: 4, dtype: np.float32);
+    let x = torch.tensor(values, dtype: torch.float32, device: "cpu");
+    let model = nn.Linear(1, 1, device: "cpu", dtype: torch.float32);
+    return model.forwad(x);
+}

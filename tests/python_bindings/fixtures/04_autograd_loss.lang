@@ -1,0 +1,26 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+import "torch/nn" as nn;
+import "torch/nn/functional" as F;
+
+// loss 必须保留 autograd 图；返回前不调用 detach、item、cpu 或 numpy。
+func loss_only() torch.Tensor throws py.Error {
+    torch.manual_seed(11);
+    let values = np.linspace(-1.0, 1.0, num: 4, dtype: np.float32);
+    let x_np = np.expand_dims(values, axis: 1);
+    let x = torch.tensor(x_np, dtype: torch.float32, device: "cpu");
+    let y = torch.tensor(x_np, dtype: torch.float32, device: "cpu");
+    let model = nn.Linear(1, 1, device: "cpu", dtype: torch.float32);
+    let prediction = model(x);
+    let loss = F.mse_loss(prediction, y);
+    loss.backward();
+    return loss;
+}
+
+func main() throws py.Error {
+    let ignored = loss_only();
+    return;
+}

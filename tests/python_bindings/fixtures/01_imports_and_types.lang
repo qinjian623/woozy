@@ -1,0 +1,26 @@
+package main;
+
+import "std/py" as py;
+import "numpy" as np;
+import "torch" as torch;
+import "torch/nn" as nn;
+import "torch/optim" as optim;
+import "torch/nn/functional" as F;
+
+// 覆盖 04 样例依赖的全部导入和外部类型。
+func echo_tensor(value torch.Tensor) torch.Tensor throws py.Error {
+    return value;
+}
+
+func type_surface(
+    array np.ndarray,
+    dtype_spec np.DTypeSpec,
+    tensor torch.Tensor,
+    host_dtype torch.dtype,
+    generator torch.Generator,
+    parameters torch.ParameterIterator,
+    model nn.Linear,
+    optimizer optim.SGD,
+) Unit {
+    return;
+}
