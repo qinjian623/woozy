@@ -12,10 +12,11 @@ void require(bool b, const char *message) {
     throw std::runtime_error(message);
 }
 auto checked(const std::filesystem::path &root, const char *backend,
-             unsigned bits) {
+             unsigned bits,
+             const char *manifest = "tests/fixtures/core/lang.toml") {
   SourceManager sources;
   auto p = modules::load_project(
-      {root / "tests/fixtures/core/lang.toml", {}, {}}, sources);
+      {root / manifest, {}, {}}, sources);
   require(p.success(), "real project load");
   p.value->backend = backend;
   p.value->word_bits = bits;
@@ -69,6 +70,23 @@ int main(int argc, char **argv) {
     require(cancelled.state == PhaseState::cancelled && !cancelled.value &&
                 cancelled.exit_code() == ExitCode::cancelled,
             "cancel has no partial output");
+    auto shared_cancel =
+        hir::check_backend_capabilities(m.module(), stop.get_token());
+    require(cancelled.state == shared_cancel.state &&
+                cancelled.failure == shared_cancel.failure &&
+                cancelled.diagnostics.size() == shared_cancel.diagnostics.size(),
+            "shared capability result preserved");
+    auto generic = checked(argv[1], "python", 64,
+                           "tests/generics/fixtures/multi-instance/lang.toml");
+    require(!generic.module().templates.empty() &&
+                !generic.module().instances.empty(),
+            "real template and concrete instance input");
+    auto concrete = backend::python::emit(generic, entry(generic));
+    require(concrete.success(), "emit concrete scalar instance");
+    for (const auto &instance : generic.module().instances)
+      for (const auto &renamed : instance.renamed)
+        for (const auto &s : concrete.value->symbols)
+          require(s.symbol != renamed.first, "template-owned symbol excluded");
     for (const auto &[backend, bits] :
          {std::pair{"native", 64U}, {"python", 32U}}) {
       auto unsupported = checked(argv[1], backend, bits);

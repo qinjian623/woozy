@@ -27,6 +27,9 @@ CAUSES = {
 }
 
 EXTRA_SOURCES = {
+    # Declarations alone are not executable aggregate/generic operations.
+    'unused-aggregate-declaration': 'struct Box {value i32;} func main() {}',
+    'unused-generic-declaration': 'func f[T](x T) T {return x;} func main() {}',
     'callee-once-before-arguments': '''
 func tick(x inout i32) i32 { let old=x; x+=1; return old; }
 func pair(a i32,b i32) i32 {return a*10+b;}
@@ -140,8 +143,10 @@ UNSUPPORTED_SOURCES = {
     'ordinary-parameter-rebinding': 'func f(x i32) {x=2;} func main() {}',
     'string': 'func main() {let x="hello";}',
     'vec': 'func main() {let x=[1,2];}',
-    'aggregate': 'struct Box {value i32;} func main() {}',
-    'generic': 'func f[T](x T) T {return x;} func main() {}',
+    'aggregate-construction': 'struct Box {value i32;} func main() {let b=Box(value:1);}',
+    'aggregate-field-read': 'struct Box {value i32;} func main() i32 {let b=Box(value:1);return b.value;}',
+    'aggregate-field-write': 'struct Box {value i32;} func main() {var b=Box(value:1);b.value=2;}',
+    'enum-switch': 'enum E {A;B;} func main() i32 {switch E.A {case E.A:return 0;case E.B:return 1;}}',
     'defer': 'func main() {defer {}}',
     'throws': 'func main() throws i32 {}',
     'capturing-lambda': 'func main() {let x i32=1;let f=func() i32 {return x;};}',
@@ -401,9 +406,12 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
         directory = args.out / 'generated' / ('unsupported-' + ident)
         result = command([args.helper, '--project', manifest, '--out-dir', directory])
         parsed = json.loads(result['stdout'])
+        source = manifest.parent / 'src/main.lang'
         passed = (result['returncode'] == 1 and parsed['status'] == 'error' and
-                  any(d['code'] == 'E_CAPABILITY_UNAVAILABLE' and d['primary'] is not None
-                      for d in parsed['diagnostics']) and not (directory / 'program.py').exists())
+                  any(d['code'] == 'E_CAPABILITY_UNAVAILABLE' and d['primary'] is not None and
+                      Path(d['primary']['path']).resolve() == source.resolve() and
+                      0 <= d['primary']['start_byte'] < d['primary']['end_byte'] <= source.stat().st_size
+                      for d in parsed['diagnostics']) and not directory.exists())
         report['unsupported'].append({'id': ident, 'compile': result,
                                       'status': 'unsupported' if passed else 'failed'})
         if not passed: report['failures'].append('unsupported diagnostic: ' + ident)

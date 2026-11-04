@@ -364,26 +364,26 @@ public:
         if (type(f.signature).parameters[i].mode == ParamMode::inout)
           cells.insert(symbol);
       }
-    }
-    for (const auto &n : m.nodes) {
-      check_cancelled(stop);
-      capability(n.type, n.source.span);
-      if (const auto *b = std::get_if<Binding>(&n.data)) {
-        named.insert(b->symbol);
-        if (b->writable)
-          cells.insert(b->symbol);
+      // The arena also owns non-executable template bodies. Only concrete
+      // functions and their body trees contribute types, locals and Cells.
+      std::vector<HirNodeId> pending{f.body};
+      while (!pending.empty()) {
+        check_cancelled(stop);
+        auto id = pending.back();
+        pending.pop_back();
+        const auto &n = node(id);
+        capability(n.type, n.source.span);
+        if (const auto *b = std::get_if<Binding>(&n.data)) {
+          named.insert(b->symbol);
+          if (b->writable)
+            cells.insert(b->symbol);
+        }
+        if (n.kind() == NodeKind::unsupported ||
+            n.kind() == NodeKind::string_literal)
+          throw Rejected{"Unsupported operation in Python scalar profile",
+                         n.source.span};
+        pending.insert(pending.end(), n.children.begin(), n.children.end());
       }
-      if ((n.kind() == NodeKind::binary || n.kind() == NodeKind::unary ||
-           (n.kind() == NodeKind::assign &&
-            std::get<Assign>(n.data).compound)) &&
-          type(node(n.children[0]).type).kind == TypeKind::Float)
-        throw Rejected{"Strict f32/f64 arithmetic is unavailable in the Python "
-                       "scalar profile",
-                       n.source.span};
-      if (n.kind() == NodeKind::unsupported ||
-          n.kind() == NodeKind::string_literal)
-        throw Rejected{"Unsupported operation in Python scalar profile",
-                       n.source.span};
     }
     for (auto s : named)
       output.symbols.push_back({s, name(s)});
@@ -425,11 +425,19 @@ PhaseResult<Output> emit(const hir::VerifiedHirModule &verified, SymbolId entry,
                          const Options &options, std::stop_token stop) {
   PhaseResult<Output> result;
   try {
+    auto checked = hir::check_backend_capabilities(verified.module(), stop);
+    const bool supported = checked.success();
+    result.state = checked.state;
+    result.failure = checked.failure;
+    result.diagnostics = std::move(checked.diagnostics);
+    if (!supported)
+      return result;
     result.value = Emitter(verified.module(), stop).generate(entry, options);
     result.state = PhaseState::complete;
   } catch (const Cancelled &) {
     result.state = PhaseState::cancelled;
   } catch (const Rejected &e) {
+    result.state = PhaseState::failed;
     result.failure = FailureKind::unsupported;
     Diagnostic d;
     d.code = "E_CAPABILITY_UNAVAILABLE";
@@ -439,6 +447,7 @@ PhaseResult<Output> emit(const hir::VerifiedHirModule &verified, SymbolId entry,
     d.primary = e.source;
     result.diagnostics.push_back(std::move(d));
   } catch (const std::exception &e) {
+    result.state = PhaseState::failed;
     result.failure = FailureKind::internal;
     Diagnostic d;
     d.code = "E_IR_INVALID";

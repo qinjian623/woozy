@@ -1,4 +1,79 @@
-# T06 Python 标量实现与验证
+# Python 标量实现与验证
+
+## T07 具体标量泛型实例接入（2026-11-04）
+
+operation_id：`language-python-t07-scalar-instances-20261104`；契约 `compiler-dev/1`。
+本次 HEAD 为 `fb8ba96ebe1a911ca3a036949c15484e58769519`，开始时工作树干净。
+读取了该提交的 HIR、共用检查函数和静态泛型测试；没有修改共享 HIR、sema、CLI、
+Native、运行库、contracts 或既有 27 个泛型项目。
+
+`python::emit` 入口调用 `hir::check_backend_capabilities`，失败或取消时保留它的
+state、failure 和诊断，无部分输出。Python/64 和入口签名限制保留。
+生成器只从 `m.functions` 的签名、参数和每个 body 的子节点收集类型、局部名字与 Cell；
+不再遍历整个节点 arena。模板中的 TypeParameter、聚合类型、构造、字段操作和 switch
+仍由静态检查器检查，但未实例化的模板不生成 Python。具体实例已含确定的 SymbolId 和类型，
+emitter 直接使用这些 ID，没有重新按名字查找或自行实例化。
+
+callee 一次求值、实参源码顺序、inout Cell、continue step、函数值和非捕获 lambda 的
+生成规则未改。真实聚合构造、字段读写、enum switch 和严格浮点操作继续报告
+`E_CAPABILITY_UNAVAILABLE`；Verified 输入仍只由共用 `hir::verify` 发布。
+
+`tests/python/run_generics.py` 读取原 `tests/generics/cases.json` 中的预期返回值。
+每个项目分别执行正式 `langc check`、`langc build --backend python`，再以独立的
+Python **3.12.15** 进程运行生成的 `program.py`。check/build 子进程的 PATH 只含会失败的
+Python 命令，确认它们无需通过 PATH 启动 Python；代码检查也确认 Python build 分支只写文件。
+执行阶段使用指定解释器绝对路径。生成器没有新增解释器调用或 Python 导入。
+
+| 原公共项目 | Debug / Release 的实际 main 返回值 | 状态 |
+| --- | --- | --- |
+| explicit | 7 / 7 | passed |
+| inferred | 8 / 8 | passed |
+| return-context | 0 / 0 | passed |
+| multi-instance | 3 / 3 | passed |
+| function-argument | 5 / 5 | passed |
+| same-recursion | 5 / 5 | passed |
+| cross-package-alias | 7 / 7 | passed |
+
+七项均无 stdout/stderr，普通非零返回按 `ordinary_nonzero` 记录，不当作 Panic。
+同一 runner 另生成并实际运行三个小源码：i32 的 trait 约束（显式与推断实例）、
+泛型 callback 的函数类型参数及模板内非捕获 lambda、未实例化但含泛型 struct/enum
+构造与字段读写和 switch 的模板。两种构建中三项均返回 0。
+
+旧 `UNSUPPORTED_SOURCES` 的 aggregate/generic 只有未使用声明，已移入正例并实际运行。
+新增真正执行 struct 构造、字段读取、字段写入、enum switch 的四个拒绝例，检查诊断 code、
+原文件和有效字节区间，且没有生成输出目录。原 shared15 源码与预期未改。
+API 测试另检查具体多实例输出不含模板原始符号，并比较取消时共用检查结果。
+
+本工作树 GNU 16.2.1、Linux x86_64，Debug 与 Release 完整 CTest 各 **20/20 passed**
+（`LANG_ENABLE_LLVM=OFF`），包含四项 Python 测试。每种构建的 `python.projects` 都保留
+17 个必测项目、原 15 个补充执行和 5 个分类对照；加上两个未使用声明正例后补充为 17 项。
+14 项拒绝检查记为 `unsupported`，不计为功能运行通过。普通 return 101 与语言 Panic、
+宿主 Python 异常的区分保持通过。
+
+复现命令（`PY312` 指向外层 `toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`）：
+
+```sh
+cmake -S . -B build/t07-python-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DLANG_ENABLE_LLVM=OFF -DLANG_PYTHON312="$PY312" -DLANG_TEST_PYTHON="$PY312"
+cmake --build build/t07-python-debug -j4
+ctest --test-dir build/t07-python-debug --output-on-failure -j4
+cmake -S . -B build/t07-python-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DLANG_ENABLE_LLVM=OFF -DLANG_PYTHON312="$PY312" -DLANG_TEST_PYTHON="$PY312"
+cmake --build build/t07-python-release -j4
+ctest --test-dir build/t07-python-release --output-on-failure -j4
+```
+
+逐项 check/build 命令、源码及清单 SHA-256、program.py/langrt.py SHA-256、解释器版本和
+实际退出码/输出保存在两种构建的 `tests/python/generics/generic-results.json`；
+生成程序在相邻 `generics/generated/<项目>/`，新增源程序在 `generics/sources/<项目>/`。
+既有 Python 逐项执行与拒绝记录在两种构建的 `tests/python/results/results.json`。
+公共七项的两种构建记录另汇总至临时 `tests/python/generic-results.json`，含本机路径，不应提交。
+
+接口变化：无。Clang ASan/UBSan 留给主代理统一运行，本次记为 not_run。
+Native 执行与比较由另一 agent 负责，本次未测；聚合执行、ARC、第三方库和严格浮点执行
+不在本次范围。没有 commit、push、stash 或派子代理。
+
+## T06 初版记录
 
 任务：T06；operation_id：`language-t06-python-scalars-20261103`；契约：`compiler-dev/1`。
 本次在 T04 提交 `b8ccf384a16e85141994995fe1869fd5fc084100` 的独立工作目录实现并运行验证。
@@ -75,9 +150,10 @@ IntegerConvert 检查目标范围，动态越界产生 Panic。
 
 ## 拒绝的输入
 
-严格浮点算术/比较/转换、捕获闭包、string、Vec、聚合、泛型、typed throws、defer、ARC、move、
+T06 初版拒绝严格浮点算术/比较/转换、捕获闭包、string、Vec、聚合、泛型、typed throws、defer、ARC、move、
 复杂 Place/借用及 foreign 均不在本标量版本内；已有前端或 emitter 报
 `E_CAPABILITY_UNAVAILABLE`，不会转成 Any 或切换后端。
+本次 T07 已接入的具体标量泛型与未使用声明见文首，不能继续按初版分类为未支持。
 普通参数重新赋值仍等待用户选择，checker 对它报告同一未支持诊断。
 Python/32 虽可通过前端验证，本 emitter 仍在 codegen 阶段明确拒绝。
 没有新增共享类型、SourceSpan、PhaseResult 或诊断 code。
