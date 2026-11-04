@@ -1,0 +1,123 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+    marker i32;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func make_box(log inout i64) Box[Vec[i32]] {
+    mark(inout log, 9);
+    return Box[Vec[i32]](value: [7], items: [8], marker: 0);
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func later(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func bad_make(log inout i64) Box[Vec[i32]] throws E {
+    let local = Box[Vec[i32]](value: [9], items: [10], marker: 0);
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+impl[T] Box[T] {
+    func touch[U](self Self, value move U, first i32, second i32) i32 {
+        return self.marker + first + second;
+    }
+
+    func fail[U](self Self, value move U) i32 throws E {
+        let local = Box[Vec[i32]](value: [11], items: [12], marker: 0);
+        defer {
+            let read = local.items[0];
+        }
+        throw E.Bad;
+    }
+
+    func keep_with_defer[U](self Self, value move U) U {
+        let local Vec[i32] = [13];
+        defer {
+            let read = local[0];
+        }
+        return move value;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+
+    var first Vec[i32] = [1];
+    try {
+        let ignored = make_box(inout log).touch(
+            second: bad(inout log),
+            value: move first,
+            first: later(inout log, 8));
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+        if first[0] != 1 {
+            return 1;
+        }
+    }
+
+    var second Vec[i32] = [2];
+    try {
+        let ignored = make_box(inout log).touch(
+            value: move second,
+            second: bad(inout log),
+            first: later(inout log, 8));
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+    }
+
+    var third Vec[i32] = [3];
+    try {
+        let ignored = bad_make(inout log).touch(
+            value: move third,
+            first: 0,
+            second: 0);
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+        if third[0] != 3 {
+            return 2;
+        }
+    }
+
+    let holder = Box[Vec[i32]](value: [14], items: [15], marker: 0);
+    var failing Vec[i32] = [4];
+    try {
+        let ignored = holder.fail(move failing);
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+    }
+
+    var kept Vec[i32] = [5];
+    let kept_alias = kept;
+    let kept_result = holder.keep_with_defer(move kept);
+    kept_result[0] = 6;
+    if kept_alias[0] != 6 {
+        return 3;
+    }
+
+    if log != 923923233 {
+        return 4;
+    }
+    return 0;
+}

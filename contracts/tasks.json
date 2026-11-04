@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态、标量泛型、POD/有限拥有聚合、原05_traits、位置式enum及混合参数已通过。自由泛型move、数字/bool泛型inout和ordinary callback兼容保持。非泛型无trait固有impl支持无约束泛型方法move；无trait/无约束generic impl现支持方法自身无泛型参数的ordinary self/无self静态move，Self完整替换，沿用origin/完整类型实参缓存与Move重命名检查。enum静态目标及variant优先保持。generic impl+方法自身泛型、trait/约束方法move、self move/inout、方法inout、非scalar或约束泛型自身inout、泛型trait及嵌套变体模式仍未实施。主目录四配置46/46/46/33共171无跳过，Clang开启LSan；每LLVM配置9项目27次实际生成执行。整项仍in_progress，见docs/GENERICS.md。"
+      "notes": "静态、标量泛型、POD/有限拥有聚合、原05_traits、位置式enum及混合参数已通过。自由泛型move、数字/bool泛型inout和ordinary callback兼容保持。无trait、无约束固有方法move已支持非泛型impl、方法自身泛型、泛型impl，以及impl与方法各带类型参数的组合。实例保留真实impl参数前缀和方法参数后缀，Self只替换impl参数，按origin与完整类型实参缓存；Move绑定使用具体实例符号。enum静态目标及variant优先保持。trait/约束方法move、self move/inout、方法inout、非scalar或约束泛型自身inout、泛型trait及嵌套变体模式仍未实施。主目录四配置46/46/46/33共171无跳过，Clang开启LSan；每LLVM配置11项目33次实际生成执行。整项仍in_progress，见docs/GENERICS.md。"
     },
     {
       "id": "T08",

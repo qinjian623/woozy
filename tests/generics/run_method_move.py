@@ -12,7 +12,8 @@ sys.dont_write_bytecode = True
 
 CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
          'callee-throws', 'enum-static', 'generic-explicit', 'generic-impl',
-         'generic-impl-errors')
+         'generic-impl-errors', 'generic-impl-own',
+         'generic-impl-own-errors')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -23,6 +24,8 @@ EXPECTED_EVENTS = {
     'generic-explicit': [],
     'generic-impl': [9, 3, 2],
     'generic-impl-errors': [9, 2, 3, 9, 2, 3, 2, 3, 3],
+    'generic-impl-own': [9, 3, 2],
+    'generic-impl-own-errors': [9, 2, 3, 9, 2, 3, 2, 3, 3],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -34,6 +37,8 @@ EXPECTED_ALLOCATIONS = {
     'generic-explicit': 13,
     'generic-impl': 24,
     'generic-impl-errors': 16,
+    'generic-impl-own': 23,
+    'generic-impl-own-errors': 16,
 }
 
 
@@ -123,7 +128,7 @@ def assert_native(case, observations, allocations):
         assert first < observations.index(('obs', 3, 23)), observations
         assert observations.index(('free', allocations[0])) > \
             observations.index(('obs', 3, 23)), observations
-    elif case == 'generic-impl-errors':
+    elif case in ('generic-impl-errors', 'generic-impl-own-errors'):
         # The generic-impl receiver, moved argument and throwing callee all use
         # the existing cleanup records. The first receiver temp frees before
         # catch, the moved temp frees before its receiver in reverse creation
@@ -201,6 +206,39 @@ def assert_python(case, data):
             snapshots['inner'][1]['object'], data
         assert snapshots['moved_box'][1]['object'] == \
             snapshots['inner'][1]['object'], data
+    elif case == 'generic-impl-own':
+        snapshots = data.get('snapshots', {})
+        for alias, result in (('y_alias', 'ry'), ('z_alias', 'rz'),
+                              ('s0_alias', 'rs0'), ('s2_alias', 'rs2'),
+                              ('m2_alias', 'rm'), ('fw_alias', 'fwr'),
+                              ('named_alias', 'named'), ('kept_alias',
+                                                         'kept_result'),
+                              ('e1_alias', 're')):
+            assert snapshots[alias]['object'] == snapshots[result]['object'], data
+        assert snapshots['y_alias']['items'] == [15], data
+        assert snapshots['z_alias']['items'] == [16], data
+        assert snapshots['s0_alias']['items'] == [17], data
+        assert snapshots['s2_alias']['items'] == [18], data
+        assert snapshots['m2_alias']['items'] == [19], data
+        assert snapshots['fw_alias']['items'] == [20], data
+        assert snapshots['named_alias']['items'] == [21], data
+        assert snapshots['kept_alias']['items'] == [22], data
+        assert snapshots['e1_alias']['items'] == [27], data
+    elif case == 'generic-impl-own-errors':
+        assert sequence == [
+            ['event', 9], ['event', 2], ['free', 2], ['free', 1],
+            ['event', 3], ['event', 9], ['event', 2], ['free', 3],
+            ['free', 5], ['free', 4], ['event', 3], ['event', 2],
+            ['free', 8], ['free', 7], ['event', 3], ['free', 13],
+            ['free', 12], ['free', 11], ['event', 3], ['free', 15],
+            ['free', 14], ['free', 10], ['free', 9], ['free', 6],
+            ['free', 0]], sequence
+        assert any(error['function'] == 'bad' and error['type'] == 'app.E'
+                   for error in data['errors']), data
+        assert any(error['function'] == 'bad_make' and
+                   error['type'] == 'app.E' for error in data['errors']), data
+        assert any(error['function'] == 'fail' and error['type'] == 'app.E'
+                   for error in data['errors']), data
     elif case == 'generic-impl-errors':
         assert sequence == [
             ['event', 9], ['event', 2], ['free', 2], ['free', 1],
