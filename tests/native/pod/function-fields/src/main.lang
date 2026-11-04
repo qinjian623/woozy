@@ -1,0 +1,7 @@
+package app;
+struct Functions { f func(i32) i32; g func() (func(i32) i32); }
+func inc(x i32) i32 {return x+1;}
+func maker() (func(i32) i32) {return inc;}
+func step(n inout i32) i32 {n+=1;return n;}
+func get(n inout i32) Functions {n=n*10+1;return Functions(g:maker,f:inc);}
+func main() i32 {var n i32=0; let x=get(inout n).f(step(inout n)); let p=Functions(g:maker,f:inc); let q=p; if n!=2 || x!=3 || q.g()(4)!=5 {return 1;} return 0;}

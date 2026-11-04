@@ -1,0 +1,8 @@
+package app;
+struct Empty {}
+struct Bits { empty Empty; a f32; b f64; c f32; u Unit; f bool; }
+enum Data { Empty; Bits(x Bits); Other(x i64); }
+func noop() {}
+func pass(x Data) Data {return x;}
+func passbits(x Bits) Bits {return x;}
+func main() i32 {let e=Empty(); let a=Bits(empty:e,a:1.000000059604644775390625,b:1.00000000000000011102230246251565404236316680908203125,c:1.401298464324817070923729583289916131280e-45,u:noop(),f:true); let b=passbits(a); switch pass(Data.Bits(x:b)) {case Data.Empty:return 1;case Data.Bits(x):if !x.f {return 2;}case Data.Other(_):return 3;}return 0;}

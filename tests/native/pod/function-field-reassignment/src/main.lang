@@ -1,0 +1,18 @@
+package app;
+struct Functions { f func(i32) i32; }
+enum Task { Empty; Run(f func(i32) i32); }
+func inc(x i32) i32 { return x + 1; }
+func dec(x i32) i32 { return x - 1; }
+func pass(x Task) Task { return x; }
+func main() i32 {
+  var changed = Functions(f: inc);
+  let copied = changed;
+  let original = pass(Task.Run(f: changed.f));
+  changed.f = dec;
+  if changed.f(4) != 3 || copied.f(4) != 5 { return 1; }
+  switch original {
+    case Task.Run(f): if f(4) != 5 { return 2; }
+    case Task.Empty: return 3;
+  }
+  return 0;
+}

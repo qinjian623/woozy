@@ -1,4 +1,5 @@
 #include "lang/backend/native.hpp"
+#include "../../ir/layout.hpp"
 #include <functional>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/SmallVector.h>
@@ -49,7 +50,8 @@ void verify_llvm(const llvm::Module &m) {
 }
 class Emitter {
   const ir::Module &input;
-  const hir::TypeContext &types;
+  ir::detail::AggregateTypes aggregates;
+  std::map<TypeId, llvm::Type *> layouts;
   llvm::LLVMContext context;
   llvm::Module module{"lang.native.scalars", context};
   // Keep guards and dangerous operations in their actual blocks at O0, even
@@ -60,9 +62,11 @@ class Emitter {
   std::map<ValueId, llvm::Value *> values;
   std::map<ValueId, TypeId> value_types;
   std::vector<llvm::Value *> slots;
-  const hir::Type &type(TypeId id) const { return *types.find(id); }
+  hir::Type type(TypeId id) const { return *aggregates.types.find(id); }
   llvm::Type *lower_type(TypeId id) {
-    const auto &t = type(id);
+    if (auto found = layouts.find(id); found != layouts.end())
+      return found->second;
+    const auto t = type(id);
     switch (t.kind) {
     case hir::TypeKind::Unit:
       return builder.getInt8Ty();
@@ -77,6 +81,26 @@ class Emitter {
       return t.bits == 32 ? builder.getFloatTy() : builder.getDoubleTy();
     case hir::TypeKind::Function:
       return builder.getPtrTy();
+    case hir::TypeKind::NominalStruct:
+    case hir::TypeKind::NominalEnum: {
+      auto *layout = llvm::StructType::create(context, "value." + std::to_string(id.value));
+      layouts.emplace(id, layout);
+      std::vector<llvm::Type *> fields;
+      if (t.kind == hir::TypeKind::NominalStruct) {
+        for (auto f : aggregates.fields(id))
+          fields.push_back(lower_type(f.type));
+      } else {
+        fields.push_back(builder.getInt32Ty());
+        for (const auto &v : aggregates.declaration(id).variants) {
+          std::vector<llvm::Type *> payload;
+          for (auto f : aggregates.fields(id, v.symbol))
+            payload.push_back(lower_type(f.type));
+          fields.push_back(llvm::StructType::get(context, payload));
+        }
+      }
+      layout->setBody(fields);
+      return layout;
+    }
     default:
       unsupported("native scalar type is not implemented");
     }
@@ -246,6 +270,49 @@ class Emitter {
     case ir::Op::store:
       builder.CreateStore(args[0], slots.at(i.slot.value));
       break;
+    case ir::Op::struct_init:
+    case ir::Op::enum_init: {
+      v = llvm::Constant::getNullValue(lower_type(i.type));
+      if (i.op == ir::Op::struct_init) {
+        for (unsigned a = 0; a < args.size(); ++a)
+          v = builder.CreateInsertValue(v, args[a], {a});
+      } else {
+        auto index = static_cast<unsigned>(aggregates.variant_index(i.type, i.variant));
+        v = builder.CreateInsertValue(v, builder.getInt32(index), {0});
+        for (unsigned a = 0; a < args.size(); ++a)
+          v = builder.CreateInsertValue(v, args[a], {index + 1, a});
+      }
+      break;
+    }
+    case ir::Op::field_read:
+    case ir::Op::field_address: {
+      auto receiver = value_types.at(i.inputs[0]);
+      auto index = static_cast<unsigned>(aggregates.field_index(receiver, i.field));
+      if (i.op == ir::Op::field_read)
+        v = builder.CreateExtractValue(args[0], {index});
+      else
+        v = builder.CreateStructGEP(lower_type(receiver), args[0], index);
+      break;
+    }
+    case ir::Op::load_indirect:
+      v = builder.CreateLoad(lower_type(i.type), args[0]);
+      break;
+    case ir::Op::store_indirect:
+      builder.CreateStore(args[1], args[0]);
+      break;
+    case ir::Op::enum_test: {
+      auto index = aggregates.variant_index(value_types.at(i.inputs[0]), i.variant);
+      v = builder.CreateICmpEQ(builder.CreateExtractValue(args[0], {0}),
+                               builder.getInt32(index));
+      break;
+    }
+    case ir::Op::enum_payload: {
+      auto receiver = value_types.at(i.inputs[0]);
+      auto variant = static_cast<unsigned>(aggregates.variant_index(receiver, i.variant));
+      auto field = static_cast<unsigned>(aggregates.field_index(receiver, i.field, i.variant));
+      v = builder.CreateExtractValue(args[0], {variant + 1, field});
+      break;
+    }
     case ir::Op::unary:
       v = i.unary == hir::UnaryOp::negate ? builder.CreateNeg(args[0])
                                           : builder.CreateNot(args[0]);
@@ -339,7 +406,7 @@ class Emitter {
 
 public:
   Emitter(const ir::Module &m, const Options &options)
-      : input(m), types(m.hir.module().types) {
+      : input(m), aggregates(m.hir.module()) {
     static std::once_flag initialized;
     std::call_once(initialized, [] {
       llvm::InitializeNativeTarget();

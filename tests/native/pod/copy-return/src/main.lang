@@ -1,0 +1,5 @@
+package app;
+struct Inner { x i32; y i64; }
+struct Outer { inner Inner; flag bool; }
+func pass(x Outer) Outer { var y=x; y.inner.x=8; return y; }
+func main() i32 { var a=Outer(inner:Inner(x:3,y:4),flag:true); let b=a; var c=pass(a); c.inner.x+=2; a.inner.y=9; if b.inner.x!=3 || b.inner.y!=4 || a.inner.x!=3 || c.inner.x!=10 || !c.flag {return 1;} return 0; }

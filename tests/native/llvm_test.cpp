@@ -15,9 +15,10 @@ void require(bool b, const char *s) {
 }
 int main(int argc, char **argv) {
   try {
-    require(argc == 2, "float manifest required");
+    require(argc == 3, "scalar and aggregate float manifests required");
+    for (int input = 1; input < argc; ++input) {
     SourceManager sources;
-    auto project = modules::load_project({argv[1], {}, {}}, sources);
+    auto project = modules::load_project({argv[input], {}, {}}, sources);
     require(project.success(), "load");
     auto resolved = modules::resolve_project(
         std::make_shared<const modules::Project>(std::move(*project.value)));
@@ -57,6 +58,7 @@ int main(int argc, char **argv) {
             require(!llvm::isa<llvm::FPMathOperator>(i) ||
                         !i.getFastMathFlags().any(),
                     "unexpected fast-math");
+    }
     }
     // These are valid C++ API constructions of invalid LLVM, with no parser
     // involved. This independently exercises the exact linked verifyModule.

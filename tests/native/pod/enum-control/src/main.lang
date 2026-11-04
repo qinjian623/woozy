@@ -1,0 +1,5 @@
+package app;
+enum Choice { Empty; Num(x i32); Pair(x i32,y i32); }
+func choose(n i32) Choice {if n==0 {return Choice.Empty();} if n==1 {return Choice.Num(x:7);} return Choice.Pair(y:3,x:4);}
+func value(c Choice) i32 { let x i32=100; switch c {case Choice.Empty: return 1; case Choice.Num(x): return x; case Choice.Pair(x,_): return x;} }
+func main() i32 { var sum i32=0; for var i i32=0; i<4; i+=1 {switch choose(i) {case Choice.Empty: continue; case Choice.Num(x): sum+=x; break; default: switch choose(0) {case Choice.Empty: break; default: return 20;} sum+=2;} sum+=10;} if sum!=41 {return 1;} if value(choose(0))!=1 || value(choose(1))!=7 || value(choose(2))!=4 {return 2;} let x i32=9; switch choose(1) {case Choice.Num(x): if x!=7 {return 3;} default: return 4;} if x!=9 {return 5;} return 0; }

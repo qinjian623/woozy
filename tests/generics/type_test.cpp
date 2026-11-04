@@ -656,11 +656,18 @@ void extra(const fs::path &root) {
           backend, width);
       need(scalar.success() && hir::verify(*scalar.value).success(),
            "generic scalar profile failed");
-      auto capability = hir::check_backend_capabilities(*fields.value);
-      need(!capability.success() &&
-               capability.failure == FailureKind::unsupported &&
-               has(capability, "E_CAPABILITY_UNAVAILABLE"),
-           "aggregate backend refusal is not E_CAP");
+      auto aggregate = source(
+          "struct P{x i32;} func main() i32{return P(x:5).x;}", backend, width);
+      need(aggregate.success(), messages(aggregate));
+      auto capability = hir::check_backend_capabilities(*aggregate.value);
+      if (std::string_view(backend) == "native")
+        need(capability.success() && hir::verify(*aggregate.value).success(),
+             "native POD aggregate profile rejected");
+      else
+        need(!capability.success() &&
+                 capability.failure == FailureKind::unsupported &&
+                 has(capability, "E_CAPABILITY_UNAVAILABLE"),
+             "aggregate backend refusal is not E_CAP");
     }
   Temp baseline;
   write(baseline.path / "lang.toml",

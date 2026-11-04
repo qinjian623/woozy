@@ -1,0 +1,4 @@
+package app;
+enum E { A(x i32,y i32); B; }
+func step(n inout i32) i32 {n+=1;return n;}
+func main() i32 {var n i32=0;let e=E.A(y:step(inout n),x:step(inout n));switch e {case E.A(x,y):if x!=2 || y!=1 || n!=2 {return 1;} case E.B:return 2;}return 0;}

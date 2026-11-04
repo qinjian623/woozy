@@ -1,0 +1,2 @@
+package app;
+struct S { f f32; } func main() i32 {var x=S(f:1.0);x.f+=2.0;return 0;}

@@ -1975,28 +1975,62 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
                              std::move(feature), s.span});
   };
   try {
+    TypeContext storage_types = m.types;
     std::set<uint64_t> checked_types;
     std::function<bool(TypeId)> supported = [&](TypeId id) {
+      check_cancelled(stop);
       if (!checked_types.insert(id.value).second)
         return true;
-      const auto &t = *m.types.find(id);
-      if (t.kind == TypeKind::NominalStruct ||
-          t.kind == TypeKind::NominalEnum ||
-          t.kind == TypeKind::TypeParameter || t.kind == TypeKind::Error ||
-          t.kind == TypeKind::ForeignOpaque)
-        return false;
-      if (t.kind == TypeKind::Function) {
+      const auto t = *storage_types.find(id);
+      if (t.kind == TypeKind::NominalStruct || t.kind == TypeKind::NominalEnum) {
+        if (m.config.backend != Backend::native)
+          return false;
+        const auto d = std::find_if(m.nominals.begin(), m.nominals.end(),
+                                   [&](const auto &d) { return d.symbol == t.declaration; });
+        if (d == m.nominals.end())
+          return false;
+        Substitutions subst;
+        for (size_t p = 0; p < d->params.size(); ++p)
+          subst.emplace_back(d->params[p].symbol, t.type_args[p]);
+        auto fields = [&](const auto &fs) {
+          for (const auto &f : fs) {
+            auto field = substitute(f.type, subst, storage_types);
+            if (storage_types.find(field)->kind == TypeKind::String || !supported(field))
+              return false;
+          }
+          return true;
+        };
+        if (!fields(d->fields))
+          return false;
+        for (const auto &v : d->variants)
+          if (!fields(v.payload))
+            return false;
+        return true;
+      }
+      if (m.config.backend == Backend::python && t.kind == TypeKind::Function) {
         for (auto p : t.parameters)
           if (!supported(p.type))
             return false;
         if (!supported(t.result))
           return false;
       }
-      return true;
+      // Function values occupy one pointer. Do not expand their signatures
+      // while inspecting storage (e.g. S[T].f: func() S[S[T]]).
+      return t.kind != TypeKind::TypeParameter && t.kind != TypeKind::Error &&
+             t.kind != TypeKind::ForeignOpaque;
+    };
+    auto signature_supported = [&](TypeId id) {
+      const auto t = *m.types.find(id);
+      if (t.throws_type)
+        return false;
+      for (auto p : t.parameters)
+        if (!supported(p.type))
+          return false;
+      return supported(t.result);
     };
     for (const auto &f : m.functions) {
       check_cancelled(stop);
-      if (!supported(f.signature)) {
+      if (!signature_supported(f.signature)) {
         unavailable(
             f.source,
             "backend does not support this concrete aggregate signature");
@@ -2014,12 +2048,20 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         case NodeKind::field_read:
         case NodeKind::field_place:
         case NodeKind::switch_:
+          if (m.config.backend == Backend::native)
+            break;
+          [[fallthrough]];
         case NodeKind::constraint_call:
           unavailable(n.source,
                       "backend has not implemented this aggregate operation");
           return r;
         default:
           break;
+        }
+        if (auto c = std::get_if<Call>(&n.data);
+            c && !signature_supported(c->signature)) {
+          unavailable(n.source, "backend does not support this call signature");
+          return r;
         }
         if (!supported(n.type)) {
           unavailable(n.source,

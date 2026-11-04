@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build concrete T07 scalar instances with langc and execute the ELF files."""
+"""Build concrete T07 trivial-value instances with langc and execute the ELF files."""
 import argparse
 import json
 from pathlib import Path
@@ -41,7 +41,7 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     catalog = args.root / 'tests/generics/cases.json'
     published = {c['id']: c for c in json.loads(catalog.read_text())['cases']}
-    report = dict(operation_id='language-native-t07-scalar-instances-20261104',
+    report = dict(operation_id='language-native-pod-aggregates-20261104',
                   contract='compiler-dev/1', status='failed', runs=[], rejections=[],
                   cases_sha256=digest(catalog), tools={})
     try:
@@ -50,10 +50,12 @@ def main():
             report['tools'][name] = result
             assert result['exit'] == 0 and '22.1.8' in result['stdout'], result
         cases = [(n, args.root / published[n]['manifest'],
-                  published[n]['runtime_expected']['main_return']) for n in SCALARS]
+                  published[n]['runtime_expected']['main_return']) for n in SCALARS + AGGREGATES]
         cases += [(n, args.root / f'tests/native/generics/{n}/lang.toml', expected)
                   for n, expected in (('trait-scalar', 9), ('unused-aggregate', 0),
                                       ('callback', 11))]
+        cases += [(p.parent.name, p, 0) for p in
+                  sorted((args.root / 'tests/native/pod').glob('*/lang.toml'))]
         for ident, manifest, expected in cases:
             for opt in (0, 2):
                 out = args.out / ident / f'O{opt}'
@@ -75,21 +77,17 @@ def main():
                 assert ran['exit'] == expected and not row['panic'], ran
                 assert not ran['stdout'] and not ran['stderr'], ran
                 row['status'] = 'passed'
-        for ident in AGGREGATES:
-            manifest = args.root / published[ident]['manifest']
+        for manifest in sorted((args.root / 'tests/native/pod-reject').glob('*/lang.toml')):
             for opt in (0, 2):
-                out = args.out / 'unsupported' / ident / f'O{opt}'
-                # An empty directory permits repeated runs while detecting any
-                # partial object, executable or staging file from this build.
+                out = args.out / 'unsupported' / manifest.parent.name / f'O{opt}'
                 out.mkdir(parents=True, exist_ok=True)
                 assert not list(out.iterdir()), 'unexpected rejection output'
-                row = dict(id=ident, opt=opt, source_sha256=sources(args.root, manifest),
-                           status='failed')
+                row = dict(id=manifest.parent.name, opt=opt,
+                           source_sha256=sources(args.root, manifest), status='failed')
                 report['rejections'].append(row)
                 row['build'] = result = build(args, manifest, opt, out)
                 rejected(result)
                 assert not list(out.iterdir()), 'unsupported build wrote output'
-                # Also check that existing successful outputs survive rejection.
                 existing = args.out / 'explicit' / f'O{opt}'
                 before = {p.name: digest(p) for p in existing.iterdir()}
                 row['existing_output_build'] = result = build(args, manifest, opt, existing)

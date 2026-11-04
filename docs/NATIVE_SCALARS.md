@@ -1,5 +1,83 @@
 # T05 原生标量实现与交接
 
+
+## 2026-11-04：平凡值 struct/enum
+
+operation_id：`language-native-pod-aggregates-20261104`；起点为
+`1bff58aa6c50b946bc6d7a5761d1bf486e513aa4`，契约仍为 `compiler-dev/1`。
+本节更新下方历史记录中的聚合未支持说明，不修改共享规范和原有 fixtures。
+
+已实现平凡 struct/enum 的构造、复制、嵌套字段读写、普通按值参数/返回、
+函数字段调用、enum 模式绑定/通配、case 独立作用域，以及 switch/for 内的
+break/continue/return。字段仅允许 Unit、bool、整数、f32/f64 位模式、
+无捕获函数值和递归仅含这些字段的聚合；浮点运算、拥有字段、字符串、Vec、
+ARC、foreign、throws/defer、泛型 inout/move 仍不支持。
+
+Native IR 的公开变化在 `include/lang/ir/native.hpp`：追加
+`struct_init`、`enum_init`、`field_read`、`field_address`、`load_indirect`、
+`store_indirect`、`enum_test`、`enum_payload`；Instruction 新增已解析的
+`field` 与 `variant` SymbolId。原有枚举编号保持不变，store_indirect 无结果，
+field_address 的 type 是所指字段类型。构造操作数已经按声明顺序排列，
+其定义仍按源码顺序执行。switch 使用 enum_test 和条件边，payload 提取只在
+对应变体的真分支中执行。case 绑定各自使用 HIR SymbolId；break/continue
+直接使用 HIR 已确定的 switch/for 目标，continue 到 for 步进且只执行一次。
+
+`src/ir/layout.hpp` 在私有 TypeContext 副本上计算替换后的字段类型。
+新增的私有类型只用于检查或 LLVM 布局，不能写入 Native IR。布局递归到
+函数字段立即停止；实际函数和 Call 的签名另行检查。
+`finite-function-field` 中 `S[T].f: func() S[S[T]]` 经正式 CLI 在 O0/O2
+生成执行，未调用 bottom；共享类型表始终保持不变，测试要求条目数少于 100。
+
+LLVM 的私有 ABI 使用声明顺序 struct，enum 使用
+`{ i32 tag, { variant0 fields }, { variant1 fields }, ... }`。
+未活动载荷初始化为零，只读取活动载荷。普通参数与返回使用 LLVM aggregate
+值；局部存储使用目标 DataLayout 的 alloca/load/store，字段地址由已验证的
+字段索引生成。嵌套写入不会改变此前复制出的值。不使用宿主 sizeof，也没有
+增加 noalias、readonly、fast-math、nsw/nuw 或运行库入口；PanicABI 保持不变。
+
+Native IR verifier 在原有操作数、跳转、初始化与支配检查之外，检查构造字段
+数量/类型、接收者类型、字段/变体声明身份、地址和值的区别。载荷读取要求
+所有进入路径都通过同一 SSA enum 值对应变体的真分支；交换真假目标、绕过
+判断、读取其他变体都会失败。21 种新增损坏 CFG 与原 18 种标量损坏 CFG
+均由本语言 verifier 拒绝；随后 LLVM verifyFunction/verifyModule 检查生成结果，
+优化前后 LLVM 文本还交给同版本 opt 验证。
+
+GNU 16.2.1 Debug/Release 各实际构建运行：
+
+| 检查 | 每套结果 |
+| --- | --- |
+| 原 13 个 accept 项目，原 cases.json runtime_expected，O0/O2 | 26 passed |
+| 原 3 个附加标量泛型项目，O0/O2 | 6 passed |
+| 新增 7 个 POD 项目，O0/O2 | 14 passed |
+| 原 scalar CLI 执行及普通返回 7 对照 | 64 + 2 passed |
+| 拥有字段、浮点运算、浮点字段复合赋值、defer | 8 unsupported；16 次失败构建均无新增输出或已有输出改动 |
+| 原 sema.t07 原源码/预期 | failed：仅旧 aggregate 拒绝断言已不适用，前 27 个静态 fixtures passed |
+| 临时副本应用独立 sema 预期补丁 | passed |
+| 完整 CTest | 24 passed、1 failed（上述原 sema.t07） |
+| Clang22 ASan/UBSan | not_run，由 root 随后执行 |
+
+7 个新增运行项目为 copy-return、empty-and-float、enum-control、enum-copy、
+enum-eval-order、finite-function-field、function-fields。
+原有 Python 标量/泛型测试用外层已安装的 3.12.15 运行，未改 Python 实现。
+每个实际生成项目的源摘要、正式 CLI 命令、对象/ELF 摘要、退出值和输出保存在
+工作区外的两套逐项 JSON。另对同一对象使用 Clang/LLD 22.1.8 独立链接、执行，
+并核对与 CLI 生成程序完全相同的退出值及 stdout/stderr。
+
+主代理已合并共享检查，并把 sema.t07 改为按实际 backend/word_bits 创建聚合
+程序：native 接受，Python 暂时拒绝。GNU Debug、GNU Release 和 Clang22
+ASan/UBSan完整CTest各25/25通过，无排除项。另加入宽整数嵌套泛型enum复制和
+函数字段改写两个项目，各构建O0/O2通过。原27个fixtures和cases.json未改。
+agent原始共享补丁和预期补丁保留在外层reviews/，未作为源文件提交。
+主代理的实际运行记录保存在外层checks/t07-native-pod-root-verification.json。
+
+首轮检查记录与修正后的结果分别保留：首轮新增样例误用了浮点一元负号和
+缺括号的函数返回类型，capability 也误拒既有裸字符串 HIR 测试；这一次修正
+只调整新增样例，并将字符串拒绝限定到拥有字段。裸字符串 HIR 既有验证行为
+保持不变，native emitter 仍拒绝字符串生成。首次 CMake 选中 3.12.14 后，
+通过 LANG_PYTHON312 指定已有的 3.12.15；未修改 Python 安装或测试预期。
+
+以下保留先前阶段的接口与检查记录。
+
 operation_id：`language-t05-native-scalars-20261103`。契约：`compiler-dev/1`。
 基础 HEAD：`b8ccf384a16e85141994995fe1869fd5fc084100`。
 

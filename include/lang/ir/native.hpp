@@ -2,7 +2,7 @@
 #include "lang/hir/hir.hpp"
 
 namespace lang::ir {
-// Scalar CFG. IDs and language types come from the public frontend. Unit has
+// Trivial-value CFG. IDs and language types come from the public frontend. Unit has
 // one trivial value; no ownership/cleanup operation is implemented here.
 enum class Op {
   constant,
@@ -13,7 +13,15 @@ enum class Op {
   unary,
   binary,
   convert,
-  call
+  call,
+  struct_init,
+  enum_init,
+  field_read,
+  field_address,
+  load_indirect,
+  store_indirect,
+  enum_test,
+  enum_payload
 };
 struct Instruction {
   Op op = Op::constant;
@@ -23,6 +31,8 @@ struct Instruction {
   LocalSlotId slot;
   SymbolId function;
   TypeId signature;
+  SymbolId field;   // resolved declaration identity, never a source name
+  SymbolId variant; // enum declaration identity; enum_test produces bool
   uint64_t bits = 0;
   hir::UnaryOp unary = hir::UnaryOp::negate;
   hir::BinaryOp binary = hir::BinaryOp::add;

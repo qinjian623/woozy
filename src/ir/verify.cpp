@@ -1,4 +1,5 @@
 #include "lang/ir/native.hpp"
+#include "layout.hpp"
 #include <algorithm>
 #include <functional>
 #include <set>
@@ -7,8 +8,8 @@
 namespace lang::ir {
 namespace {
 using Set = std::set<size_t>;
-Set intersect(const Set &a, const Set &b) {
-  Set r;
+template <class T> std::set<T> intersect(const std::set<T> &a, const std::set<T> &b) {
+  std::set<T> r;
   std::set_intersection(a.begin(), a.end(), b.begin(), b.end(),
                         std::inserter(r, r.end()));
   return r;
@@ -35,6 +36,7 @@ class Verifier {
     return *t;
   }
   void function(const Function &f) const {
+    detail::AggregateTypes aggregates(m.hir.module());
     const auto s = f.source;
     const auto &sig = type(f.signature, s);
     need(functions.contains(f.symbol) && functions.at(f.symbol) == f.signature,
@@ -62,6 +64,7 @@ class Verifier {
       bool address;
     };
     std::map<ValueId, Def> defs;
+    std::map<ValueId, const Instruction *> instructions;
     std::vector<Set> predecessors(f.blocks.size());
     for (size_t b = 0; b < f.blocks.size(); ++b) {
       const auto &bb = f.blocks[b];
@@ -92,12 +95,15 @@ class Verifier {
       for (size_t p = 0; p < bb.instructions.size(); ++p) {
         auto &i = bb.instructions[p];
         type(i.type, i.source);
-        need(i.result.has_value() == (i.op != Op::store),
+        need(i.result.has_value() == (i.op != Op::store && i.op != Op::store_indirect),
              "invalid instruction result", i.source);
         if (i.result)
-          need(defs.emplace(*i.result, Def{b, p, i.type, i.op == Op::address})
+          need(defs.emplace(*i.result, Def{b, p, i.type, i.op == Op::address ||
+                                                       i.op == Op::field_address})
                    .second,
                "duplicate value definition", i.source);
+        if (i.result)
+          instructions.emplace(*i.result, &i);
       }
     }
     Set reachable;
@@ -108,6 +114,7 @@ class Verifier {
         visit(d.value);
     };
     visit(0);
+    need(reachable.size() == f.blocks.size(), "unreachable native block", s);
     std::vector<Set> dom(f.blocks.size(), reachable);
     dom[0] = {0};
     bool changed = true;
@@ -125,6 +132,42 @@ class Verifier {
             changed = true;
           }
         }
+    }
+    // A payload read requires the same SSA enum value's matching true edge on
+    // every incoming path. Merely having a dominating tag comparison is not enough.
+    using Facts = std::set<std::pair<ValueId, SymbolId>>;
+    Facts universe;
+    for (auto [value, i] : instructions)
+      if (i->op == Op::enum_test && i->inputs.size() == 1)
+        universe.emplace(i->inputs[0], i->variant);
+    std::vector<Facts> facts(f.blocks.size(), universe);
+    facts[0].clear();
+    changed = true;
+    while (changed) {
+      changed = false;
+      for (auto b : reachable) {
+        if (b == 0)
+          continue;
+        auto next = universe;
+        for (auto p : predecessors[b]) {
+          auto edge = facts[p];
+          const auto &term = f.blocks[p].terminator;
+          if (term.kind == Exit::conditional && term.targets[0].value == b &&
+              term.targets[1].value != b) {
+            auto found = instructions.find(term.inputs[0]);
+            if (found != instructions.end()) {
+              const auto &test = *found->second;
+              if (test.op == Op::enum_test && test.inputs.size() == 1)
+                edge.emplace(test.inputs[0], test.variant);
+            }
+          }
+          next = intersect(next, edge);
+        }
+        if (next != facts[b]) {
+          facts[b] = std::move(next);
+          changed = true;
+        }
+      }
     }
     auto use = [&](ValueId id, size_t b, size_t pos,
                    SourceSpan src) -> const Def & {
@@ -275,6 +318,61 @@ class Verifier {
                  "call argument type/mode mismatch", i.source);
           break;
         }
+        case Op::struct_init:
+        case Op::enum_init: {
+          bool structure = i.op == Op::struct_init;
+          need(t.kind == (structure ? hir::TypeKind::NominalStruct
+                                    : hir::TypeKind::NominalEnum),
+               "aggregate constructor kind", i.source);
+          auto fields = aggregates.fields(i.type, structure ? std::nullopt
+                                                            : std::optional{i.variant});
+          arity(fields.size());
+          for (size_t a = 0; a < fields.size(); ++a) {
+            value(a);
+            need(args[a].type == fields[a].type, "constructor field type", i.source);
+          }
+          break;
+        }
+        case Op::field_read:
+        case Op::field_address: {
+          arity(1);
+          need(args[0].address == (i.op == Op::field_address) &&
+                   type(args[0].type, i.source).kind == hir::TypeKind::NominalStruct,
+               "field receiver type/mode", i.source);
+          auto fields = aggregates.fields(args[0].type);
+          auto index = aggregates.field_index(args[0].type, i.field);
+          need(i.type == fields[index].type, "field result type", i.source);
+          break;
+        }
+        case Op::load_indirect:
+          arity(1);
+          need(args[0].address && args[0].type == i.type,
+               "indirect load type/mode", i.source);
+          break;
+        case Op::store_indirect:
+          arity(2);
+          value(1);
+          need(args[0].address && args[0].type == args[1].type &&
+                   t.kind == hir::TypeKind::Unit,
+               "indirect store type/mode", i.source);
+          break;
+        case Op::enum_test:
+        case Op::enum_payload: {
+          arity(1);
+          need(value(0).kind == hir::TypeKind::NominalEnum,
+               "enum operation receiver", i.source);
+          aggregates.variant_index(args[0].type, i.variant);
+          if (i.op == Op::enum_test)
+            need(t.kind == hir::TypeKind::Bool, "enum test result", i.source);
+          else {
+            auto fields = aggregates.fields(args[0].type, i.variant);
+            auto index = aggregates.field_index(args[0].type, i.field, i.variant);
+            need(fields[index].type == i.type, "enum payload result type", i.source);
+            need(facts[b].contains({i.inputs[0], i.variant}),
+                 "enum payload without matching variant edge", i.source);
+          }
+          break;
+        }
         default:
           need(false, "unknown native operation", i.source);
         }
@@ -366,7 +464,9 @@ std::string dump(const Module &m) {
           out << '%' << i.result->value << " = ";
         static constexpr const char *names[] = {"constant", "function", "load",
                                                 "address",  "store",    "unary",
-                                                "binary",   "convert",  "call"};
+                                                "binary",   "convert",  "call",
+            "struct_init", "enum_init", "field_read", "field_address",
+            "load_indirect", "store_indirect", "enum_test", "enum_payload"};
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;
@@ -380,6 +480,10 @@ std::string dump(const Module &m) {
           out << " op=" << static_cast<unsigned>(i.binary);
         if (i.op == Op::call)
           out << " signature=" << i.signature.value;
+        if (i.op == Op::field_read || i.op == Op::field_address || i.op == Op::enum_payload)
+          out << " field=@" << i.field.value;
+        if (i.op == Op::enum_init || i.op == Op::enum_test || i.op == Op::enum_payload)
+          out << " variant=@" << i.variant.value;
         for (auto a : i.inputs)
           out << " %" << a.value;
         out << " source=" << i.source.snapshot.value << ':'

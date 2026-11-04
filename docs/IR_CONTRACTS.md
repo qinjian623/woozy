@@ -272,6 +272,13 @@ Native IR 采用块参数形式表达跨块值，局部可变绑定先表示为�
 
 词法允许但原生目标不支持的外部 Python 操作应在目标能力检查时拒绝，不得在 Native IR 中放一个未定义地址的 Python 调用占位符。
 
+当前平凡值实现追加 `struct_init`、`enum_init`、`field_read`、`field_address`、
+`load_indirect`、`store_indirect`、`enum_test`、`enum_payload`，保留原操作编号。
+字段与变体使用已解析的 SymbolId；地址结果的 TypeId 表示所指值类型，地址不能
+作为普通值使用。载荷读取要求所有进入路径都经过同一 SSA 枚举值对应变体的
+真分支。存储布局替换使用私有 TypeContext 副本，其新增 ID 不进入公开 Native IR。
+具体结构和检查见 `include/lang/ir/native.hpp` 与 `docs/NATIVE_SCALARS.md`。
+
 ### 9.3 可失败调用
 
 ```text

@@ -1,4 +1,5 @@
 #include "lang/ir/native.hpp"
+#include "layout.hpp"
 #include <map>
 #include <stdexcept>
 
@@ -6,6 +7,7 @@ namespace lang::ir {
 namespace {
 class Lower {
   const hir::HirModule &h;
+  detail::AggregateTypes aggregates;
   Function f;
   BlockId current;
   uint64_t next_value = 0;
@@ -64,6 +66,37 @@ class Lower {
     i.source = s;
     return emit(i);
   }
+  ValueId indirect(ValueId address, TypeId type, SourceSpan s) {
+    Instruction i;
+    i.op = Op::load_indirect;
+    i.type = type;
+    i.inputs = {address};
+    i.source = s;
+    return emit(i);
+  }
+  void bind_pattern(const hir::Pattern &p, ValueId value) {
+    if (p.binding) {
+      auto local = slot(p.type);
+      slots.emplace(*p.binding, local);
+      store(local, value, p.source.span);
+    }
+    if (p.variant) {
+      auto fields = aggregates.fields(p.type, p.variant);
+      for (size_t a = 0; a < p.payload.size(); ++a) {
+        // Wildcards need no payload read.
+        if (!p.payload[a].binding)
+          continue;
+        Instruction i;
+        i.op = Op::enum_payload;
+        i.type = p.payload[a].type;
+        i.variant = *p.variant;
+        i.field = fields[a].symbol;
+        i.inputs = {value};
+        i.source = p.payload[a].source.span;
+        bind_pattern(p.payload[a], emit(i));
+      }
+    }
+  }
   ValueId expr(HirNodeId id) {
     const auto &n = node(id);
     Instruction i;
@@ -90,6 +123,28 @@ class Lower {
     case hir::NodeKind::function_value:
       i.op = Op::function;
       i.function = std::get<hir::FunctionValue>(n.data).symbol;
+      return emit(i);
+    case hir::NodeKind::struct_init:
+    case hir::NodeKind::enum_init: {
+      const bool structure = n.kind() == hir::NodeKind::struct_init;
+      i.op = structure ? Op::struct_init : Op::enum_init;
+      const auto &args = structure ? std::get<hir::StructInit>(n.data).fields
+                                  : std::get<hir::EnumInit>(n.data).payload;
+      if (!structure)
+        i.variant = std::get<hir::EnumInit>(n.data).variant;
+      i.inputs.resize(args.size());
+      for (const auto &a : args)
+        i.inputs[a.parameter_index] = expr(a.expression);
+      return emit(i);
+    }
+    case hir::NodeKind::field_read:
+    case hir::NodeKind::field_place:
+      i.op = n.kind() == hir::NodeKind::field_read ? Op::field_read
+                                                 : Op::field_address;
+      i.field = n.kind() == hir::NodeKind::field_read
+                    ? std::get<hir::FieldRead>(n.data).field
+                    : std::get<hir::FieldPlace>(n.data).field;
+      i.inputs = {expr(n.children[0])};
       return emit(i);
     case hir::NodeKind::unary:
       i.op = Op::unary;
@@ -175,11 +230,11 @@ class Lower {
     }
     case hir::NodeKind::assign: {
       const auto &place = node(n.children[0]);
-      auto target = slots.at(std::get<hir::Place>(place.data).symbol);
+      auto target = expr(n.children[0]);
       auto compound = std::get<hir::Assign>(n.data).compound;
       std::optional<ValueId> lhs;
       if (compound)
-        lhs = access(Op::load, target, s);
+        lhs = indirect(target, place.type, s);
       auto rhs = expr(n.children[1]);
       if (compound) {
         Instruction i;
@@ -190,7 +245,40 @@ class Lower {
         i.source = s;
         rhs = emit(i);
       }
-      store(target, rhs, s);
+      Instruction write;
+      write.op = Op::store_indirect;
+      write.type = unit;
+      write.inputs = {target, rhs};
+      write.source = s;
+      f.blocks[current.value].instructions.push_back(write);
+      break;
+    }
+    case hir::NodeKind::switch_: {
+      auto value = expr(n.children[0]);
+      auto after = block();
+      loops.emplace(id, std::pair{after, after});
+      for (const auto &arm : std::get<hir::Switch>(n.data).arms) {
+        auto body = block(), next = block();
+        if (arm.pattern.variant) {
+          Instruction test;
+          test.op = Op::enum_test;
+          test.type = boolean;
+          test.variant = *arm.pattern.variant;
+          test.inputs = {value};
+          test.source = arm.source.span;
+          end(Exit::conditional, {emit(test)}, {body, next}, s);
+        } else
+          jump(body, s);
+        current = body;
+        bind_pattern(arm.pattern, value);
+        stmt(arm.body);
+        if (live())
+          jump(after, s);
+        current = next;
+      }
+      end(Exit::unreachable, {}, {}, s);
+      loops.erase(id);
+      current = after;
       break;
     }
     case hir::NodeKind::if_: {
@@ -248,7 +336,8 @@ class Lower {
   }
 
 public:
-  Lower(const hir::HirModule &input, const hir::HirFunction &fn) : h(input) {
+  Lower(const hir::HirModule &input, const hir::HirFunction &fn)
+      : h(input), aggregates(input) {
     for (uint64_t t = 1; t <= h.types.size(); ++t) {
       auto k = h.types.find(TypeId{t})->kind;
       if (k == hir::TypeKind::Unit)

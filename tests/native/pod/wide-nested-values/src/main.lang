@@ -1,0 +1,25 @@
+package app;
+struct Pair[T] { x T; y T; }
+enum E[T] { Empty; Value(value T); Wide(a u64, b i8, c T); }
+struct Wrap[T] { value E[T]; }
+func pass[T](x Wrap[T]) Wrap[T] { return x; }
+func main() i32 {
+  var first = Wrap[Pair[u64]](value: E[Pair[u64]].Wide(
+      c: Pair[u64](y: 1, x: 18446744073709551615), b: -128,
+      a: 18446744073709551615));
+  let copied = first;
+  let returned = pass(first);
+  first.value = E[Pair[u64]].Empty();
+  switch copied.value {
+    case E[Pair[u64]].Wide(a, b, c):
+      if a != 18446744073709551615 || b != -128 ||
+         c.x != 18446744073709551615 || c.y != 1 { return 1; }
+    default: return 2;
+  }
+  switch returned.value {
+    case E[Pair[u64]].Wide(_, _, c):
+      if c.x != 18446744073709551615 { return 3; }
+    default: return 4;
+  }
+  switch first.value { case E[Pair[u64]].Empty: return 0; default: return 5; }
+}
