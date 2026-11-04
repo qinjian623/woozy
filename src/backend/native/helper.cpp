@@ -16,6 +16,7 @@ namespace {
 namespace fs = std::filesystem;
 struct Stage {
   fs::path path;
+  bool preserve = false;
   explicit Stage(const fs::path &out) {
     fs::create_directories(out);
     auto pattern = (out / ".langc-native-XXXXXX").string();
@@ -26,7 +27,7 @@ struct Stage {
   }
   ~Stage() {
     std::error_code ignored;
-    fs::remove_all(path, ignored);
+    if (!preserve) fs::remove_all(path, ignored);
   }
 };
 struct WriteError : std::runtime_error {
@@ -187,8 +188,35 @@ int main(int argc, char **argv) {
         failed.diagnostics.push_back(std::move(diagnostic));
         return report(failed);
       }
-      fs::rename(object, directory / "program.o");
-      fs::rename(program, directory / "program");
+      for (const char* name : {"program.o", "program"}) {
+          const auto status = fs::symlink_status(directory / name);
+          if (status.type() != fs::file_type::not_found && !fs::is_regular_file(status))
+              throw fs::filesystem_error("output must be a regular file", directory / name,
+                                        std::make_error_code(std::errc::invalid_argument));
+      }
+      // shortcut: rollback covers reported errors; process interruption needs separate recovery.
+      const auto backup = stage.path / "previous-first";
+      const bool had_first = fs::exists(directory / "program.o");
+      if (had_first) fs::copy_file(directory / "program.o", backup);
+      bool published = false;
+      try {
+          fs::rename(stage.path / "program.o", directory / "program.o");
+          published = true;
+          fs::rename(stage.path / "program", directory / "program");
+      } catch (...) {
+          if (published) {
+              std::error_code error;
+              if (had_first) fs::rename(backup, directory / "program.o", error);
+              else fs::remove(directory / "program.o", error);
+              if (error) {
+                  stage.preserve = true;
+                  throw fs::filesystem_error((had_first ? "restore first output failed; previous output retained at " + backup.string()
+                                              : "remove new output failed; retained at " + (directory / "program.o").string()),
+                                            directory / "program.o", error);
+              }
+          }
+          throw;
+      }
       if (json)
         std::cout << diagnostic_json(sources, std::string(version()), "cli-request",
                                      emitted.status(), emitted.diagnostics) << '\n';

@@ -258,6 +258,10 @@ build/core/native/program
 默认O0；目标仅支持 x86_64-unknown-linux-gnu。正式模式输出共享诊断JSON，
 对象私有模式仍保留先前元信息格式。helper 和链接器通过直接argv调用，
 临时文件在同一输出目录创建，程序最后替换；源码错误不修改已有输出。
+独立审查发现第二次替换失败时旧object可能被覆盖，已补目的文件类型检查和旧文件备份。
+第二次替换报错会恢复旧object；没有旧object时移除新文件。恢复失败保留备份并报告位置。
+Python的同类发布代码一并修复。两个后端各3项实际文件替换故障测试通过，含恢复失败；
+这不保证进程被中断或掉电时两个文件同时替换。
 
 主目录实际报告位于外层 checks/t05-native-cli-verification.json；
 独立对象测试位于 checks/t05-root-runtime-verification.json。

@@ -251,7 +251,7 @@
       "primary_role": "sema",
       "backup_role": "native",
       "reviewer_role": "validation",
-      "owner_instance": "root-integrator",
+      "owner_instance": "bridge:06e0ec20-e256-44f2-a4d2-3ab164f7c918",
       "target_paths": [
         "src/sema/",
         "src/hir/",
@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "接口只读提案已接受，尚无T07实现完成声明；独立源码正反例由bridge:b601e93b-15b1-41cc-abc2-ec551783894c负责。公共HIR/sema仅指定一位实现者，root负责CMake、CLI和两后端操作支持检查。"
+      "notes": "接口提案已接受，27个独立正反例已提交3e45cc7。公共HIR/sema/Self归属及共用后端操作检查由唯一实现者task929051c2负责；root负责总CMake、CLI、两后端接入与实际运行，尚无T07完成声明。"
     },
     {
       "id": "T08",

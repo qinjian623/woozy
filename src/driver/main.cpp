@@ -49,6 +49,7 @@ void write_python(const fs::path& out, const lang::backend::python::Output& outp
         throw fs::filesystem_error("create build staging directory", out,
                                    std::error_code(errno, std::generic_category()));
     const fs::path stage(pattern);
+    bool preserve = false;
     try {
         auto write = [&](const char* name, const std::string& text) {
             std::ofstream file;
@@ -59,12 +60,40 @@ void write_python(const fs::path& out, const lang::backend::python::Output& outp
         };
         write("program.py", output.code);
         write("langrt.py", output.runtime);
-        fs::rename(stage / "langrt.py", out / "langrt.py");
-        fs::rename(stage / "program.py", out / "program.py");
+        for (const char* name : {"langrt.py", "program.py"}) {
+            const auto status = fs::symlink_status(out / name);
+            if (status.type() != fs::file_type::not_found && !fs::is_regular_file(status))
+                throw fs::filesystem_error("output must be a regular file", out / name,
+                                          std::make_error_code(std::errc::invalid_argument));
+        }
+        // shortcut: rollback covers reported errors; process interruption needs separate recovery.
+        const auto backup = stage / "previous-first";
+        const bool had_first = fs::exists(out / "langrt.py");
+        if (had_first) fs::copy_file(out / "langrt.py", backup);
+        bool published = false;
+        try {
+            fs::rename(stage / "langrt.py", out / "langrt.py");
+            published = true;
+            fs::rename(stage / "program.py", out / "program.py");
+        } catch (...) {
+            if (published) {
+                std::error_code error;
+                if (had_first) fs::rename(backup, out / "langrt.py", error);
+                else fs::remove(out / "langrt.py", error);
+                if (error) {
+                    preserve = true;
+                    throw fs::filesystem_error((had_first ? "restore first output failed; previous output retained at " + backup.string()
+                                              : "remove new output failed; retained at " + (out / "langrt.py").string()),
+                                              out / "langrt.py", error);
+                }
+            }
+            throw;
+        }
+        fs::remove(backup);
         fs::remove(stage);
     } catch (...) {
         std::error_code ignored;
-        fs::remove_all(stage, ignored);
+        if (!preserve) fs::remove_all(stage, ignored);
         throw;
     }
 }

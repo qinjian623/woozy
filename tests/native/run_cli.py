@@ -82,11 +82,24 @@ def main():
         (project / 'src/main.lang').write_text('package app; func main() {}')
         blocked = args.out / 'blocked'
         (blocked / 'program').mkdir(parents=True, exist_ok=True)
+        # Clear only files owned by this repeated failure test.
+        (blocked / 'program.o').unlink(missing_ok=True)
+        (blocked / 'unrelated').unlink(missing_ok=True)
         io = command([args.cli, 'build', '--project', manifest, '--backend', 'native', '--out-dir', blocked, '--format', 'json'])
         assert io['exit'] == 2 and not io['stderr'] and json.loads(io['stdout'])['diagnostics'][0]['code'] == 'E_INPUT_IO', io
         assert (blocked / 'program').is_dir() and not list(blocked.glob('.langc-native-*'))
         report['controls'].append(dict(id='io-error-cleans-stage', build=io))
+        assert not (blocked / 'program.o').exists()
+        (blocked / 'program.o').write_bytes(b'old-object-sentinel')
+        (blocked / 'unrelated').write_bytes(b'keep')
+        io = command([args.cli, 'build', '--project', manifest, '--backend', 'native', '--out-dir', blocked, '--format', 'json'])
+        assert io['exit'] == 2 and not io['stderr'] and json.loads(io['stdout'])['diagnostics'][0]['code'] == 'E_INPUT_IO', io
+        assert (blocked / 'program.o').read_bytes() == b'old-object-sentinel'
+        assert (blocked / 'unrelated').read_bytes() == b'keep'
+        assert (blocked / 'program').is_dir() and not list(blocked.glob('.langc-*'))
         (blocked / 'program').rmdir()
+        (blocked / 'program.o').unlink()
+        (blocked / 'unrelated').unlink()
         deps = command(['ldd', args.cli])
         assert deps['exit'] == 0 and 'libLLVM' not in deps['stdout'] and 'libpython' not in deps['stdout'], deps
         report['frontend_dependencies'] = deps
