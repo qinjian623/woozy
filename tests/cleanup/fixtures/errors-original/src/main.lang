@@ -1,0 +1,32 @@
+package main;
+
+enum ReadError {
+    Missing;
+}
+
+func read_value(found bool, cleaned inout i32) i32 throws ReadError {
+    defer {
+        cleaned += 1;
+    }
+    if !found {
+        throw ReadError.Missing;
+    }
+    return 7;
+}
+
+func main() i32 {
+    var cleaned i32 = 0;
+    try {
+        let first = read_value(true, inout cleaned);
+        if first != 7 || cleaned != 1 {
+            return 1;
+        }
+        let second = read_value(false, inout cleaned);
+        return 2;
+    } catch err ReadError {
+        if cleaned != 2 {
+            return 3;
+        }
+    }
+    return 0;
+}

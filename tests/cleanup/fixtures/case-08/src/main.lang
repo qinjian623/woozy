@@ -1,0 +1,23 @@
+package main;
+enum E { Bad(code i32); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+
+func danger(x i32) i32 throws E {
+    if x<0 {throw E.Bad(code:x);}return x+1;
+}
+func make(log inout i64) (func(i32) i32 throws E) {
+    mark(inout log,1);return danger;
+}
+func apply(f func(i32) i32 throws E,x i32) i32 throws E {return f(x);}
+func main() i32 {
+    var log i64=0;let callback=make(inout log);
+    try {
+        defer {mark(inout log,3);}
+        if apply(callback,3)!=4 {return 1;}
+        mark(inout log,2);apply(callback,-1);mark(inout log,9);
+    } catch err E {
+        switch err {case E.Bad(code):if code!=-1 {return 2;}}
+        mark(inout log,4);
+    }
+    if log!=1234 {return 3;}return 0;
+}

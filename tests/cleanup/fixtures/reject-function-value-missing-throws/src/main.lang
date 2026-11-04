@@ -1,0 +1,14 @@
+package main;
+
+enum E {
+    Bad(code i32);
+}
+
+func danger(x i32) i32 throws E {
+    return x;
+}
+
+func main() i32 {
+    let callback func(i32) i32 = danger;
+    return 0;
+}

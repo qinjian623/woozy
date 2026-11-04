@@ -1,0 +1,21 @@
+package main;
+enum E { Bad(code i32); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+
+enum Result[T,X] {Ok(value T);Err(error X);}
+func compute() Result[i32,E] {
+    return Result[i32,E].Err(error:E.Bad(code:7));
+}
+func main() i32 {
+    var log i64=0;var found bool=false;var fail bool=false;
+    try {
+        defer {mark(inout log,3);}
+        let r=compute();mark(inout log,1);
+        if fail {throw E.Bad(code:0);}
+        switch r {
+            case Result.Ok(value):return 1;
+            case Result.Err(error):found=true;mark(inout log,2);
+        }
+    } catch err E {mark(inout log,9);}
+    if !found || log!=123 {return 2;}return 0;
+}

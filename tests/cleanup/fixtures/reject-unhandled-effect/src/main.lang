@@ -1,0 +1,13 @@
+package main;
+
+enum E {
+    Bad(code i32);
+}
+
+func fail() i32 throws E {
+    throw E.Bad(code:1);
+}
+
+func main() i32 {
+    return fail();
+}

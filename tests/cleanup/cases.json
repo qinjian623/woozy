@@ -1,0 +1,385 @@
+{
+  "schema": "compiler-dev/cleanup-fixtures/1",
+  "contract": "compiler-dev/1",
+  "case_count": 19,
+  "positive_count": 11,
+  "reject_count": 8,
+  "stage_policy": {
+    "syntax": "全部 19 个项目的源码必须通过现有 C++ `langc check --syntax-only --format json`，退出 0、status=ok 且无诊断。语法通过不代表类型/效果检查或执行通过。",
+    "current_full_check": "T08 实现前，现有 `langc check --project` 对这些项目返回 E_CAPABILITY_UNAVAILABLE。该结果只记录当前能力拒绝，不是未来 expected_static 的结果。",
+    "future_static": "expected_static 是 T08 实现后的目标结果，不是当前检查结果。反例只绑定已公布的 E_TYPE_MISMATCH、E_EFFECT_UNHANDLED、E_CLEANUP_ESCAPE，不新增诊断码。",
+    "runtime": "runtime_expected 全部是未来执行目标。当前 native/Python 执行均为 not_run；不得把当前 E_CAPABILITY_UNAVAILABLE 或语法通过算作运行通过。"
+  },
+  "cases": [
+    {
+      "id": "case-01",
+      "manifest": "tests/cleanup/fixtures/case-01/lang.toml",
+      "purpose": "最近词法块退出、defer 执行时读取与显式快照；probe 返回 7，事件 1,2,3,9。",
+      "specification": "docs/SEMANTICS.md §9 defer 和销毁顺序；docs/SEMANTICS.md §5 求值与控制流；docs/ACCEPTANCE.md A06.1/A06.2",
+      "expected_static": {
+        "status": "accept",
+        "reason": "inout 数值整体绑定、嵌套块 defer、return 与执行时绑定读取均通过 T08 类型/效果/清理检查。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "function_returns": {
+          "probe": 7
+        },
+        "events": [
+          1,
+          2,
+          3,
+          9
+        ],
+        "log": 1239,
+        "reason": "内块后注册的old快照先记1，再执行先注册的x并读取2；块外记3，probe退出记9。"
+      }
+    },
+    {
+      "id": "case-02",
+      "manifest": "tests/cleanup/fixtures/case-02/lang.toml",
+      "purpose": "返回值先求值并保存；清理中的 x=8 不改变返回结果；probe 返回 4，事件 1,2,3。",
+      "specification": "docs/SEMANTICS.md §5 求值与控制流；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.2",
+      "expected_static": {
+        "status": "accept",
+        "reason": "return 表达式先保存，之后执行内块和外层 defer；defer 中修改局部不改变已保存返回值。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "function_returns": {
+          "probe": 4
+        },
+        "events": [
+          1,
+          2,
+          3
+        ],
+        "log": 123,
+        "reason": "pick 先记 1 并返回 4；内块 defer 记 2；外层 defer 先设 x=8 再记 3，最终返回仍为 4。"
+      }
+    },
+    {
+      "id": "case-03",
+      "manifest": "tests/cleanup/fixtures/case-03/lang.toml",
+      "purpose": "continue 先清理本轮再执行 step；循环 break 跳过 step；switch break 穿过 try 只执行清理；catch 8 不进入。",
+      "specification": "docs/SEMANTICS.md §9 defer 和销毁顺序；docs/SEMANTICS.md §5 求值与控制流；docs/ACCEPTANCE.md A06.3",
+      "expected_static": {
+        "status": "accept",
+        "reason": "循环体与 switch 分支的 break/continue 目标、try 内 defer 和循环 step 顺序均合法。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          4,
+          1,
+          4,
+          2,
+          5,
+          6,
+          7,
+          9
+        ],
+        "log": 41425679,
+        "forbidden_events": [
+          8
+        ],
+        "reason": "i=1的continue先退出内块记4和本轮循环体记1，再step；i=2的break记4、2且不step。退出循环记5，switch中的try退出清理记6，不进入catch8；随后记7，函数退出记9。"
+      }
+    },
+    {
+      "id": "case-04",
+      "manifest": "tests/cleanup/fixtures/case-04/lang.toml",
+      "purpose": "throw 后按从内到外逆序清理；清理完成后才进入 catch；未经过的 defer 8 不激活。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.4/A06.5",
+      "expected_static": {
+        "status": "accept",
+        "reason": "fail 声明的 E 效果由 main 的 try/catch 捕获；throw 离开的块与调用者 try 的清理计划可验证。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7
+        ],
+        "log": 1234567,
+        "caught": {
+          "type": "E",
+          "variant": "Bad",
+          "code": 7
+        },
+        "reason": "记 1 后 throw；未经过的 defer 8 不执行；依次清理内块 2、函数 defer 3、调用者 try 的 defer 4；catch 记 5，其块尾 defer 记 6；随后记 7。"
+      }
+    },
+    {
+      "id": "case-05",
+      "manifest": "tests/cleanup/fixtures/case-05/lang.toml",
+      "purpose": "命名实参按书写顺序求值；中途 typed error 停止后续实参和 sink 调用；事件 1,2,3,4。",
+      "specification": "docs/SEMANTICS.md §5 求值与控制流；docs/SEMANTICS.md §8 typed throws 与 Panic；docs/ACCEPTANCE.md A06.4",
+      "expected_static": {
+        "status": "accept",
+        "reason": "sink 的命名实参先按源码顺序求值，bad 的 E 效果由 try/catch 处理；后续实参未求值。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "log": 1234,
+        "unexecuted": [
+          "later",
+          "sink"
+        ],
+        "reason": "按书写顺序good记1，bad记2后抛错；later和sink不执行；try清理记3，随后catch记4。"
+      }
+    },
+    {
+      "id": "case-06",
+      "manifest": "tests/cleanup/fixtures/case-06/lang.toml",
+      "purpose": "handler 抛错交给外层，不回到同一 try 的其他 catch；内层清理先于外层 catch；事件 1,2,3,4，9 不进入。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.6",
+      "expected_static": {
+        "status": "accept",
+        "reason": "内层 try 只捕获 E；E handler 产生的 F 错误流向外部 F catch，同一 try 的 F handler 不接收 handler 错误。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "log": 1234,
+        "forbidden_events": [
+          9
+        ],
+        "caught": {
+          "inner": "E.Bad(7)",
+          "outer": "F.Bad"
+        },
+        "reason": "内层try抛E，退出时defer记1；E handler记2并抛F，先执行其defer记3，再进入外层F handler记4；同一try的F handler9不执行。"
+      }
+    },
+    {
+      "id": "case-07",
+      "manifest": "tests/cleanup/fixtures/case-07/lang.toml",
+      "purpose": "defer 内部允许自己的循环跳转和局部 try/catch；后注册 defer 先执行；事件 1,2,3,4。",
+      "specification": "docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.6",
+      "expected_static": {
+        "status": "accept",
+        "reason": "defer 体内的 continue/break 只影响其内部循环，局部 try/catch 消化 E，不向清理体外传播错误。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "log": 1234,
+        "reason": "普通主体记 1；后注册 defer 先执行：内部循环跳转后局部 try 记 2，捕获 E 记 3；随后执行较早 defer 记 4。"
+      }
+    },
+    {
+      "id": "case-08",
+      "manifest": "tests/cleanup/fixtures/case-08/lang.toml",
+      "purpose": "返回 throws 函数值不使构造函数自动成为 throws；间接调用保留效果；成功返回 4，失败载荷 -1，事件 1,2,3,4。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/ACCEPTANCE.md A06.8/A06.9",
+      "expected_static": {
+        "status": "accept",
+        "reason": "make 返回 func(i32) i32 throws E 但没有自身错误效果；apply 声明并传播同一 E，main 的 catch 处理失败调用。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          1,
+          2,
+          3,
+          4
+        ],
+        "log": 1234,
+        "successful_call_return": 4,
+        "error_code": -1,
+        "reason": "make 记 1 并返回 danger；apply(callback,3) 返回 4；记 2 后 apply(callback,-1) 抛 E(-1)，执行 try defer 记 3，再 catch 记 4。"
+      }
+    },
+    {
+      "id": "case-09",
+      "manifest": "tests/cleanup/fixtures/case-09/lang.toml",
+      "purpose": "普通 Result.Err 是数据，不自动传播为 typed error；found=true，事件 1,2,3，catch 9 不进入。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/ACCEPTANCE.md A06.7",
+      "expected_static": {
+        "status": "accept",
+        "reason": "compute 返回普通 Result[i32,E]；Err 模式绑定是普通数据处理，不触发 throws 传播。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          1,
+          2,
+          3
+        ],
+        "log": 123,
+        "found": true,
+        "forbidden_events": [
+          9
+        ],
+        "reason": "compute 返回普通 Err 数据；记 1；fail 为 false 不抛；Err 模式设 found 为真并记 2；正常退出 try 执行 defer 3，不进入 catch 9。"
+      }
+    },
+    {
+      "id": "case-10",
+      "manifest": "tests/cleanup/fixtures/case-10/lang.toml",
+      "purpose": "defer 内除零 Panic 不被 typed catch 捕获，也不继续执行较早 defer；无正常返回。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/BACKENDS.md §6.3",
+      "expected_static": {
+        "status": "accept",
+        "reason": "probe 声明的 E 效果由 main 的 catch 处理；defer 内的除零是 Panic 路径，不是 typed error 传播。"
+      },
+      "runtime_expected": {
+        "normal_return": false,
+        "events": [
+          1,
+          2
+        ],
+        "log_at_panic": 12,
+        "panic": {
+          "reason": "division-by-zero",
+          "source": "tests/cleanup/fixtures/case-10/src/main.lang",
+          "line": 12,
+          "expression": "i32(1)/zero"
+        },
+        "native": {
+          "runner_exit": 101,
+          "local_log_observable": false
+        },
+        "python_non_entrypoint": {
+          "log": 12,
+          "catch_panic": true
+        },
+        "observation_limit": "native 进程终止后不能直接读取局部 log=12；只能检查 Panic 原因、源位置和退出状态。Python 未来可用 entrypoint=false 调用 probe，捕获 Panic 后检查 Cell 的 12。不能把较早 defer 中的非法移位当成实际 Panic。",
+        "reason": "主体记 1；后注册 defer 记 2 后除零 Panic；typed catch 不捕获，较早 defer 9 及其非法移位不执行。"
+      }
+    },
+    {
+      "id": "errors-original",
+      "manifest": "tests/cleanup/fixtures/errors-original/lang.toml",
+      "purpose": "examples/errors.lang 的字节不变副本：成功调用、失败调用、defer 计数和 catch 后正常返回 0。",
+      "source_origin": "examples/errors.lang",
+      "source_copy": "byte_identical",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06",
+      "expected_static": {
+        "status": "accept",
+        "reason": "read_value 的 ReadError 效果由 main 的 try/catch 处理；两条调用路径的 defer 和 catch 均可验证。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          1,
+          2
+        ],
+        "event_meaning": "每次 read_value 的 defer 执行后 cleaned 的值",
+        "cleaned": 2,
+        "caught": "ReadError.Missing",
+        "reason": "第一次 found=true，defer 后 cleaned=1 并返回 7；第二次 found=false，defer 后 cleaned=2 并抛 Missing，catch 检查 cleaned=2 后 main 返回 0。"
+      }
+    },
+    {
+      "id": "reject-function-value-missing-throws",
+      "manifest": "tests/cleanup/fixtures/reject-function-value-missing-throws/lang.toml",
+      "purpose": "throws E 的函数值不能赋给无 throws 的函数类型。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/ACCEPTANCE.md A06.8",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_TYPE_MISMATCH",
+        "reason": "danger 的类型是 func(i32) i32 throws E，目标类型是 func(i32) i32；不得隐式擦除 throws。"
+      }
+    },
+    {
+      "id": "reject-function-value-wrong-throws",
+      "manifest": "tests/cleanup/fixtures/reject-function-value-wrong-throws/lang.toml",
+      "purpose": "throws E 的函数值不能赋给 throws F 的函数类型。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/ACCEPTANCE.md A06.8",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_TYPE_MISMATCH",
+        "reason": "danger 声明 E 效果，目标函数类型声明 throws F；错误类型必须精确匹配，不能自动转换。"
+      }
+    },
+    {
+      "id": "reject-unhandled-effect",
+      "manifest": "tests/cleanup/fixtures/reject-unhandled-effect/lang.toml",
+      "purpose": "main 未声明 throws 且没有 try/catch，直接调用可能抛 E 的函数。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/ACCEPTANCE.md A06.8",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_EFFECT_UNHANDLED",
+        "reason": "fail() 可能产生 E，main 既未声明 throws E，也未捕获该效果。"
+      }
+    },
+    {
+      "id": "reject-defer-return",
+      "manifest": "tests/cleanup/fixtures/reject-defer-return/lang.toml",
+      "purpose": "defer 体向外 return。",
+      "specification": "docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.6",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_CLEANUP_ESCAPE",
+        "reason": "defer 体内的 return 会离开清理体进入外层函数，规范禁止 defer 向外 return。"
+      }
+    },
+    {
+      "id": "reject-defer-break",
+      "manifest": "tests/cleanup/fixtures/reject-defer-break/lang.toml",
+      "purpose": "defer 体向外 break 到外层循环。",
+      "specification": "docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.6",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_CLEANUP_ESCAPE",
+        "reason": "defer 体内没有自己的循环，break 目标是外层循环，构成清理体向外跳转。"
+      }
+    },
+    {
+      "id": "reject-defer-continue",
+      "manifest": "tests/cleanup/fixtures/reject-defer-continue/lang.toml",
+      "purpose": "defer 体向外 continue 到外层循环。",
+      "specification": "docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.6",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_CLEANUP_ESCAPE",
+        "reason": "defer 体内没有自己的循环，continue 目标是外层循环，构成清理体向外跳转。"
+      }
+    },
+    {
+      "id": "reject-defer-throw",
+      "manifest": "tests/cleanup/fixtures/reject-defer-throw/lang.toml",
+      "purpose": "defer 体向外传播 typed error。",
+      "specification": "docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06.6",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_CLEANUP_ESCAPE",
+        "reason": "即使 probe 声明 throws E，defer 体也不得向外传播 typed error；清理体必须自行捕获消化。"
+      }
+    },
+    {
+      "id": "reject-result-as-scalar",
+      "manifest": "tests/cleanup/fixtures/reject-result-as-scalar/lang.toml",
+      "purpose": "把 Result[i32,E] 当普通 i32 值使用。",
+      "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/ACCEPTANCE.md A06.7",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_TYPE_MISMATCH",
+        "reason": "compute() 返回 Result[i32,E]，不能直接初始化 i32；Result 是普通枚举数据，不参与自动传播或隐式解包。"
+      }
+    }
+  ]
+}

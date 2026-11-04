@@ -1,0 +1,19 @@
+package main;
+
+enum E {
+    Bad(code i32);
+}
+
+enum Result[T,X] {
+    Ok(value T);
+    Err(error X);
+}
+
+func compute() Result[i32,E] {
+    return Result[i32,E].Ok(value:1);
+}
+
+func main() i32 {
+    let value i32 = compute();
+    return value;
+}

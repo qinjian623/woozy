@@ -1,0 +1,14 @@
+package main;
+enum E { Bad(code i32); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+
+func pick(log inout i64, x i64) i64 {mark(inout log,1);return x;}
+func probe(log inout i64) i64 {
+    var x i64=4;
+    defer {x=8;mark(inout log,3);}
+    {defer {mark(inout log,2);} return pick(inout log,x);}
+}
+func main() i32 {
+    var log i64=0;let r=probe(inout log);
+    if r!=4 || log!=123 {return 1;}return 0;
+}

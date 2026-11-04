@@ -1,0 +1,20 @@
+package main;
+enum E { Bad(code i32); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+
+func probe(log inout i64) throws E {
+    defer {
+        mark(inout log,9);
+        var shift i32=32;let bad=i32(1)<<shift;
+    }
+    defer {
+        mark(inout log,2);
+        var zero i32=0;let bad=i32(1)/zero;
+    }
+    mark(inout log,1);
+}
+func main() i32 {
+    var log i64=0;
+    try {probe(inout log);}catch err E {return 0;}
+    return 2;
+}

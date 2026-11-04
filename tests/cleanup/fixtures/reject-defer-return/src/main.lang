@@ -1,0 +1,12 @@
+package main;
+
+func probe() {
+    defer {
+        return;
+    }
+}
+
+func main() i32 {
+    probe();
+    return 0;
+}

@@ -1,0 +1,20 @@
+package main;
+enum E { Bad(code i32); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+
+enum F { Bad; }
+func main() i32 {
+    var log i64=0;
+    try {
+        try {
+            defer {mark(inout log,1);}
+            var first bool=true;
+            if first {throw E.Bad(code:7);}
+            throw F.Bad;
+        } catch err E {
+            defer {mark(inout log,3);}
+            mark(inout log,2);throw F.Bad;
+        } catch err F {mark(inout log,9);}
+    } catch err F {mark(inout log,4);}
+    if log!=1234 {return 1;}return 0;
+}

@@ -1,0 +1,14 @@
+package main;
+
+func probe() {
+    for var i i32 = 0; i < 1; i += 1 {
+        defer {
+            break;
+        }
+    }
+}
+
+func main() i32 {
+    probe();
+    return 0;
+}

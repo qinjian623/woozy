@@ -1,0 +1,20 @@
+package main;
+
+enum E {
+    Bad(code i32);
+}
+
+func probe() throws E {
+    defer {
+        throw E.Bad(code:1);
+    }
+}
+
+func main() i32 {
+    try {
+        probe();
+    } catch err E {
+        return 1;
+    }
+    return 0;
+}
