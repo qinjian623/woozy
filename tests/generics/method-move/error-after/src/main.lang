@@ -1,0 +1,52 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+struct Holder {
+    items Vec[i32];
+    marker i32;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func make(log inout i64) Holder {
+    mark(inout log, 9);
+    return Holder(items: [7], marker: 0);
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func later(log inout i64) i32 {
+    mark(inout log, 8);
+    return 3;
+}
+
+impl Holder {
+    func touch(self Self, value move Vec[i32], first i32, second i32) i32 {
+        return self.marker + value[0] + first + second;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var values Vec[i32] = [1];
+    try {
+        let ignored = make(inout log).touch(value: move values,
+                                            second: bad(inout log),
+                                            first: later(inout log));
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+    }
+    if log != 923 {
+        return 1;
+    }
+    return 0;
+}

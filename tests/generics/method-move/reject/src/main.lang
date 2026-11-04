@@ -1,0 +1,19 @@
+package app;
+
+struct Holder {
+    items Vec[i32];
+    marker i32;
+}
+
+impl Holder {
+    func take(self Self, value move Vec[i32]) Vec[i32] {
+        return move value;
+    }
+}
+
+func main() i32 {
+    let h = Holder(items: [1], marker: 0);
+    let values Vec[i32] = [2];
+    let result = h.take(values);
+    return result[0];
+}

@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态、标量泛型、两端POD聚合和原05_traits已通过。位置式enum及混合参数绑定已修复。无trait约束自由泛型move直接调用、数字/bool整体绑定的泛型inout已支持，保留显式/推断/函数值与源码顺序。嵌套callback具体非scalar inout报源级E_CAP；root修复ordinary callback被误当目标自身inout的回归并补控制。root四配置45/45/45/33无跳过，Clang开启LSan；每LLVM配置新inout测试5记录/3次真实执行。方法move/inout、非scalar或约束泛型自身inout、泛型trait/trait泛型方法、嵌套变体模式仍未实施。整项仍in_progress，见docs/GENERICS.md。"
+      "notes": "静态、标量泛型、两端POD聚合和原05_traits已通过。位置式enum及混合参数绑定已修复。无trait约束自由泛型move直接调用、数字/bool整体绑定泛型inout保留显式/推断/函数值与源码顺序；嵌套callback具体非scalar inout报源级E_CAP，ordinary callback兼容控制保持。非泛型无trait固有方法已支持普通self借用下的非receiver move，以及无self静态move；enum目标静态方法漏项已修复，真实variant继续优先。方法inout、self move/inout、泛型impl或泛型/trait方法move、非scalar或约束泛型自身inout、泛型trait/trait泛型方法和嵌套变体模式仍未实施。主目录四配置46/46/46/33共171无跳过，Clang开启LSan；每LLVM配置6项目18次实际生成执行。整项仍in_progress，见docs/GENERICS.md。"
     },
     {
       "id": "T08",

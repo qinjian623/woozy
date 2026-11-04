@@ -1,0 +1,150 @@
+package app;
+
+struct Holder {
+    items Vec[i32];
+    marker i32;
+}
+
+struct Box {
+    items Vec[i32];
+    marker i32;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func make(log inout i64) Holder {
+    mark(inout log, 9);
+    return Holder(items: [7], marker: 0);
+}
+
+func later(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+impl Holder {
+    func take(self Self, value move Vec[i32]) Vec[i32] {
+        return move value;
+    }
+
+    func take_static(value move Vec[i32]) Vec[i32] {
+        return move value;
+    }
+
+    func take_box(self Self, value move Box) Box {
+        return move value;
+    }
+
+    func take_box_static(value move Box) Box {
+        return move value;
+    }
+
+    func accept(self Self, value move Holder) i32 {
+        return self.marker + value.marker;
+    }
+
+    func scalar(self Self, value move i64) i64 {
+        return value + i64(self.marker);
+    }
+
+    func scalar_static(value move i64) i64 {
+        return value;
+    }
+
+    func keep_with_defer(self Self, value move Box) Box {
+        let local Vec[i32] = [7];
+        defer {
+            let read = local[0];
+        }
+        return move value;
+    }
+
+    func touch(self Self, value move Vec[i32], first i32, second i32) i32 {
+        return self.marker + value[0] + first + second;
+    }
+}
+
+func main() i32 {
+    let h = Holder(items: [1], marker: 3);
+
+    var values Vec[i32] = [1, 2];
+    let alias = values;
+    let result = h.take(move values);
+    result[0] = 7;
+    if alias[0] != 7 {
+        return 1;
+    }
+
+    let temp = h.take([3, 4]);
+    temp[0] = 9;
+    if temp[0] != 9 {
+        return 2;
+    }
+
+    var static_values Vec[i32] = [5, 6];
+    let static_alias = static_values;
+    let static_result = Holder.take_static(move static_values);
+    static_result[0] = 11;
+    if static_alias[0] != 11 {
+        return 3;
+    }
+
+    let static_temp = Holder.take_static([7, 8]);
+    if static_temp[0] != 7 {
+        return 4;
+    }
+
+    var box = Box(items: [10], marker: 1);
+    let box_alias = box;
+    let box_result = h.take_box(move box);
+    box_result.items[0] = 12;
+    if box_alias.items[0] != 12 {
+        return 5;
+    }
+
+    let box_temp = Holder.take_box_static(Box(items: [13], marker: 2));
+    if box_temp.items[0] != 13 {
+        return 6;
+    }
+
+    var copy = h;
+    let accepted = h.accept(move copy);
+    if accepted != 6 {
+        return 7;
+    }
+    if h.marker != 3 {
+        return 8;
+    }
+
+    var scalar_value i64 = 40;
+    let scalar_result = h.scalar(move scalar_value);
+    if scalar_result != 43 {
+        return 9;
+    }
+    let scalar_temp = Holder.scalar_static(5);
+    if scalar_temp != 5 {
+        return 10;
+    }
+
+    var kept = Box(items: [14], marker: 4);
+    let kept_alias = kept;
+    let kept_result = h.keep_with_defer(move kept);
+    kept_result.items[0] = 15;
+    if kept_alias.items[0] != 15 {
+        return 11;
+    }
+    if h.items[0] != 1 {
+        return 12;
+    }
+
+    var log i64 = 0;
+    let ordered = make(inout log).touch(second: later(inout log, 3),
+                                        value: [1],
+                                        first: later(inout log, 2));
+    if ordered != 6 || log != 932 {
+        return 13;
+    }
+    return 0;
+}

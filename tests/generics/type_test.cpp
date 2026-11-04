@@ -1,3 +1,4 @@
+#include "../../src/hir/ownership.hpp"
 #include "lang/sema/check.hpp"
 #include <algorithm>
 #include <cstdlib>
@@ -102,6 +103,18 @@ void invalid(hir::HirModule m, const std::string &name, const auto &change) {
   auto published = hir::verify(m);
   need(!published.success() && has(published, "E_IR_INVALID"),
        "corrupt module published: " + name);
+}
+void invalid_recomputed(hir::HirModule m, const std::string &name,
+                        const auto &change) {
+  change(m);
+  auto derived = hir::detail::produce_ownership(m, {});
+  need(derived.success(),
+       "recomputed ownership failed before verification: " + name + "\n" +
+           messages(derived));
+  auto r = hir::verify_types(m);
+  need(!r.success() && !r.value && r.failure == FailureKind::internal &&
+           has(r, "E_IR_INVALID"),
+       "recomputed corruption accepted: " + name + "\n" + messages(r));
 }
 void repairs(const fs::path &root) {
   auto good = [](const std::string &s) {
@@ -1392,6 +1405,368 @@ void extra(const fs::path &root) {
                "order, full traits, freezing and capability checks passed\n";
 }
 
+void method_move(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(), "method move HIR rejected");
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  auto calls_named = [](const hir::HirModule &m, const std::string &name) {
+    std::vector<const hir::HirNode *> result;
+    for (const auto &n : m.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          m.resolved->symbols[c->direct_symbol->value].name == name)
+        result.push_back(&n);
+    return result;
+  };
+
+  const std::string positive =
+      "struct Holder{items Vec[i32];marker i32;} "
+      "struct Box{items Vec[i32];marker i32;} "
+      "impl Holder{"
+      "func take(self Self,value move Vec[i32])Vec[i32]{return move value;}"
+      "func take_static(value move Vec[i32])Vec[i32]{return move value;}"
+      "func accept(self Self,value move Holder)i32{"
+      "return self.marker+value.marker;}"
+      "func scalar(self Self,value move i64)i64{return value;}} "
+      "func main()i32{let h=Holder(items:[1],marker:2);"
+      "var v Vec[i32]=[3];let a=v;let r=h.take(move v);"
+      "var sv Vec[i32]=[6];let s0=Holder.take_static([4]);"
+      "let s1=Holder.take_static(move sv);let c=h;"
+      "let n=h.accept(move c);let q=h.scalar(5);"
+      "return h.marker+a[0]+r[0]+s0[0]+s1[0]+n+i32(q)-37;}";
+  auto method_hir = good(positive);
+  need(method_hir.templates.empty() && method_hir.instances.empty(),
+       "non-generic method move created templates");
+  auto take = calls_named(method_hir, "take");
+  need(take.size() == 1, "instance method move call missing");
+  const auto &take_node = *take[0];
+  const auto &take_call = std::get<hir::Call>(take_node.data);
+  need(take_call.args.size() == 2 &&
+           take_call.args[0].parameter_index == 0 &&
+           take_call.args[0].mode == hir::ParamMode::ordinary &&
+           take_call.args[1].parameter_index == 1 &&
+           take_call.args[1].mode == hir::ParamMode::move,
+       "instance method parameter modes");
+  need(take_node.children.size() == 2 &&
+           take_node.children[0] == take_call.args[0].expression &&
+           take_node.children[1] == take_call.args[1].expression,
+       "instance method receiver/argument source order");
+  need(method_hir.nodes[take_node.children[0].value].source.span.begin_byte <
+           method_hir.nodes[take_node.children[1].value].source.span.begin_byte,
+       "receiver did not precede arguments");
+  const auto &take_value =
+      method_hir.nodes[take_call.args[1].expression.value];
+  need(take_value.kind() == hir::NodeKind::move &&
+           std::get<hir::Move>(take_value.data).binding.has_value(),
+       "instance move lacks its real binding source");
+  for (const auto &n : method_hir.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data);
+        c && c->direct_symbol &&
+        method_hir.resolved->symbols[c->direct_symbol->value].name == "take") {
+      const auto &sig =
+          *method_hir.types.find(c->signature);
+      need(sig.parameters.size() == 2 &&
+               sig.parameters[0].mode == hir::ParamMode::ordinary &&
+               sig.parameters[1].mode == hir::ParamMode::move,
+           "instance method signature lost self/move modes");
+    }
+
+  auto statics = calls_named(method_hir, "take_static");
+  need(statics.size() == 2, "static method move calls missing");
+  bool static_binding = false, static_temporary = false;
+  for (const auto *node : statics) {
+    const auto &call = std::get<hir::Call>(node->data);
+    need(call.args.size() == 1 &&
+             call.args[0].parameter_index == 0 &&
+             call.args[0].mode == hir::ParamMode::move &&
+             node->children.size() == 1 &&
+             node->children[0] == call.args[0].expression,
+         "static method move mode/source order");
+    const auto &value = method_hir.nodes[call.args[0].expression.value];
+    if (value.kind() == hir::NodeKind::move) {
+      need(std::get<hir::Move>(value.data).binding.has_value(),
+           "static binding move lacks source binding");
+      static_binding = true;
+    } else {
+      need(value.kind() == hir::NodeKind::vec_init,
+           "static temporary move shape");
+      static_temporary = true;
+    }
+    const auto &sig = *method_hir.types.find(call.signature);
+    need(sig.parameters.size() == 1 &&
+             sig.parameters[0].mode == hir::ParamMode::move,
+         "static method signature gained a receiver");
+  }
+  need(static_binding && static_temporary,
+       "static method explicit/temporary move coverage");
+  auto accepted = calls_named(method_hir, "accept");
+  need(accepted.size() == 1, "shared-copy receiver call missing");
+  const auto &accepted_call = std::get<hir::Call>(accepted[0]->data);
+  need(accepted_call.args.size() == 2 &&
+           accepted_call.args[0].mode == hir::ParamMode::ordinary &&
+           accepted_call.args[1].mode == hir::ParamMode::move,
+       "shared-copy owned argument mode");
+  auto scalar = calls_named(method_hir, "scalar");
+  need(scalar.size() == 1, "scalar method move missing");
+  const auto &scalar_call = std::get<hir::Call>(scalar[0]->data);
+  need(scalar_call.args.size() == 2 &&
+           scalar_call.args[1].mode == hir::ParamMode::move &&
+           method_hir.nodes[scalar_call.args[1].expression.value].kind() ==
+               hir::NodeKind::integer_literal,
+       "scalar temporary move mode");
+
+  const std::string prefix =
+      "struct H{items Vec[i32];marker i32;} "
+      "impl H{func take(self Self,value move Vec[i32])Vec[i32]{"
+      "return move value;}} ";
+  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+               "let v Vec[i32]=[1];let r=h.take(v);return r[0];}",
+      "E_CALL_ARGUMENT");
+  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+               "var v Vec[i32]=[1];let r=h.take(inout v);return r[0];}",
+      "E_CALL_ARGUMENT");
+  const std::string accept_prefix =
+      "struct H{marker i32;} "
+      "impl H{func accept(self Self,value move H)i32{"
+      "return self.marker+value.marker;}} ";
+  bad(accept_prefix + "func main()i32{let h=H(marker:1);"
+                      "return h.accept(move h);}",
+      "E_CALL_ARGUMENT");
+  bad("struct H{marker i32;} func id(value move H)H{return move value;} "
+      "impl H{func accept(self Self,value move H)i32{"
+      "return self.marker+value.marker;}} "
+      "func main()i32{let h=H(marker:1);return h.accept(id(move h));}",
+      "E_CALL_ARGUMENT");
+  bad("struct H{marker i32;} impl H{"
+      "func pair(self Self,a move Vec[i32],b move Vec[i32])i32{return 0;}} "
+      "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
+      "return h.pair(move v,move v);}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  unsupported(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+                       "let r=h.take(move h.items);return r[0];}");
+  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+               "let f=h.take;return 0;}",
+      "E_TYPE_MISMATCH");
+
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func take(self move Self,value move Vec[i32])Vec[i32]{"
+      "return move value;}} "
+      "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
+      "let r=h.take(move v);return r[0];}");
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func take(self move Self,value move Vec[i32])Vec[i32]{"
+      "return move value;}} "
+      "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
+      "let r=H.take(move h,move v);return r[0];}");
+  unsupported(
+      "impl i32{func take(self inout i32,value move Vec[i32])Vec[i32]{"
+      "return move value;}} "
+      "func main()i32{var h i32=1;var v Vec[i32]=[1];"
+      "let r=h.take(move v);return r[0];}");
+  unsupported(
+      "struct B[T]{x T;} impl[T] B[T]{"
+      "func take(self Self,value move Vec[i32])Vec[i32]{return move value;}} "
+      "func main()i32{let b=B[i32](x:1);var v Vec[i32]=[1];"
+      "let r=b.take(move v);return r[0];}");
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func take[U](self Self,value move U)U{return move value;}} "
+      "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
+      "let r=h.take(move v);return r[0];}");
+  unsupported(
+      "trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
+      "struct H{items Vec[i32];marker i32;} impl V for H{"
+      "func take(self Self,value move Vec[i32])Vec[i32]{return move value;}} "
+      "func main()i32{let h=H(items:[1],marker:0);var v Vec[i32]=[1];"
+      "let r=h.take(move v);return r[0];}");
+  unsupported(
+      "trait V{func take(self move Self)Self;} "
+      "struct H{marker i32;} impl V for H{"
+      "func take(self move Self)Self{return move self;}} "
+      "func use[T V](x T)T{return x.take();} "
+      "func main()i32{let h=H(marker:0);let r=use(h);return r.marker;}");
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func swap(a inout i32,b inout i32){let t=a;a=b;b=t;}} "
+      "func main()i32{var x i32=1;var y i32=2;"
+      "H.swap(inout x,inout y);return x-2;}");
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func bump(self Self,a inout i32){a+=1;}} "
+      "func main()i32{let h=H(marker:0);var x i32=1;"
+      "h.bump(inout x);return x-2;}");
+  unsupported(
+      "struct H{marker i32;} impl H{"
+      "func take(self Self,value move string)string{return move value;}} "
+      "func main()i32{let h=H(marker:0);let r=h.take(move \"x\");return 0;}");
+
+  const std::string enum_positive =
+      "enum E{A;B(x i32);} enum Payload{Items(items Vec[i32]);Empty;} "
+      "struct Box{items Vec[i32];marker i32;} "
+      "impl E{func marker()i32{return 4;}"
+      "func take(value move Vec[i32])Vec[i32]{return move value;}"
+      "func take_box(value move Box)Box{return move value;}"
+      "func take_payload(value move Payload)Payload{return move value;}} "
+      "func main()i32{var v Vec[i32]=[1];let a=v;let r=E.take(move v);"
+      "r[0]=7;if a[0]!=7{return 1;}let t=E.take([2]);"
+      "if t[0]!=2{return 2;}var b=Box(items:[3],marker:0);"
+      "let ba=b;let br=E.take_box(move b);br.items[0]=9;"
+      "if ba.items[0]!=9{return 3;}var p=Payload.Items([8]);"
+      "let pa=p;let pr=E.take_payload(move p);"
+      "switch pr{case Payload.Items(items):items[0]=10;"
+      "case Payload.Empty:return 4;}"
+      "switch pa{case Payload.Items(items):if items[0]!=10{return 5;}"
+      "case Payload.Empty:return 6;}"
+      "if E.marker()!=4{return 7;}let variant=E.B(x:5);"
+      "switch variant{case E.B(x):if x!=5{return 8;}case E.A:return 9;}"
+      "return 0;}";
+  auto enum_hir = good(enum_positive);
+  need(enum_hir.templates.empty(), "enum static method move created templates");
+  auto enum_take = calls_named(enum_hir, "take");
+  need(enum_take.size() == 2, "enum static method move calls missing");
+  for (const auto *node : enum_take) {
+    const auto &call = std::get<hir::Call>(node->data);
+    need(call.args.size() == 1 &&
+             call.args[0].parameter_index == 0 &&
+             call.args[0].mode == hir::ParamMode::move &&
+             node->children.size() == 1 &&
+             node->children[0] == call.args[0].expression,
+         "enum static move mode/source order");
+    const auto &sig = *enum_hir.types.find(call.signature);
+    need(sig.parameters.size() == 1 &&
+             sig.parameters[0].mode == hir::ParamMode::move,
+         "enum static method signature gained a receiver");
+  }
+  auto enum_box = calls_named(enum_hir, "take_box");
+  need(enum_box.size() == 1, "enum static owned-struct method move missing");
+  auto enum_payload = calls_named(enum_hir, "take_payload");
+  need(enum_payload.size() == 1, "enum static enum-data method move missing");
+
+  auto variant_priority = good(
+      "enum E{A(x i32);} impl E{func A()i32{return 9;}} "
+      "func main()i32{let v=E.A(1);"
+      "switch v{case E.A(x):return x-1;}}");
+  bool saw_variant = false;
+  for (const auto &n : variant_priority.nodes) {
+    if (std::holds_alternative<hir::EnumInit>(n.data))
+      saw_variant = true;
+  }
+  need(saw_variant, "same-name variant lost constructor priority");
+  for (const auto &n : variant_priority.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data);
+        c && c->direct_symbol &&
+        variant_priority.resolved->symbols[c->direct_symbol->value].name == "A")
+      throw std::runtime_error("same-name variant became a method call");
+  bad("enum E{A(x i32);} impl E{func A()i32{return 9;}} "
+      "func main()i32{let v=E.A();return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("enum E{A;} func main()i32{return E.missing();}", "E_TYPE_MISMATCH");
+
+  auto packages = [&](const std::string &lib, const std::string &app) {
+    Temp t;
+    fs::create_directories(t.path / "src/lib");
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
+    write(t.path / "src/main.lang",
+          "package app; import \"app/lib\" as lib; " + app);
+    return check(t.path / "lang.toml");
+  };
+  auto private_enum = packages(
+      "pub enum E{A;} impl E{func hidden()i32{return 1;}}",
+      "func main()i32{return lib.E.hidden();}");
+  need(!private_enum.success() && has(private_enum, "E_PRIVATE_ACCESS"),
+       "private enum static method accepted\n" + messages(private_enum));
+  auto public_enum = packages(
+      "pub enum E{A;} impl E{pub func value()i32{return 7;}}",
+      "func main()i32{return lib.E.value()-7;}");
+  need(public_enum.success(), messages(public_enum));
+
+  unsupported(
+      "enum E{A;} impl E{func take[U](value move U)U{return move value;}} "
+      "func main()i32{var v Vec[i32]=[1];let r=E.take(move v);return r[0];}");
+  unsupported(
+      "enum E[T]{A(x T);} impl[T] E[T]{"
+      "func take(value move Vec[i32])Vec[i32]{return move value;}} "
+      "func main()i32{var v Vec[i32]=[1];let r=E[i32].take(move v);"
+      "return r[0];}");
+  unsupported(
+      "trait V{func take(value move Vec[i32])Vec[i32];} enum E{A;} "
+      "impl V for E{func take(value move Vec[i32])Vec[i32]{"
+      "return move value;}} "
+      "func main()i32{var v Vec[i32]=[1];let r=E.take(move v);return r[0];}");
+  unsupported(
+      "enum E{A;} impl E{func bump(x inout i32){x+=1;}} "
+      "func main()i32{var x i32=1;E.bump(inout x);return x-2;}");
+  unsupported(
+      "enum E{A;} impl E{func take(self move Self)Self{return move self;}} "
+      "func main()i32{let e=E.A;let r=e.take();return 0;}");
+
+  auto invalid_call = [](auto &x, const std::string &name) -> hir::Call & {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          x.resolved->symbols[c->direct_symbol->value].name == name)
+        return *c;
+    throw std::runtime_error("method move call missing: " + name);
+  };
+  invalid_recomputed(method_hir, "method move argument mode", [&](auto &x) {
+    auto &call = invalid_call(x, "take");
+    need(call.args.size() == 2, "method move arity");
+    call.args[1].mode = hir::ParamMode::ordinary;
+  });
+  invalid_recomputed(method_hir, "method move source marker", [&](auto &x) {
+    auto &call = invalid_call(x, "take");
+    const auto &value = x.nodes[call.args[1].expression.value];
+    const auto &move = std::get<hir::Move>(value.data);
+    need(move.binding.has_value(), "method move binding missing");
+    auto names = std::make_shared<modules::ResolvedProject>(*x.resolved);
+    auto project = std::make_shared<modules::Project>(*names->project);
+    auto file = std::make_shared<AstFile>(
+        *project->modules[value.source.node.module.value].files.at(
+            value.source.node.file));
+    auto &ast = file->node(value.source.node.node);
+    need(ast.kind == AstKind::Unary &&
+             file->tokens.at(ast.token_begin).spelling == "move",
+         "method move source token missing");
+    file->tokens[ast.token_begin].spelling = "+";
+    project->modules[value.source.node.module.value]
+        .files[value.source.node.file] = file;
+    names->project = project;
+    x.resolved = names;
+  });
+  invalid_recomputed(method_hir, "method move source order", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto call = std::get_if<hir::Call>(&n.data);
+          call && call->direct_symbol &&
+          x.resolved->symbols[call->direct_symbol->value].name == "take") {
+        need(call->args.size() == 2 && n.children.size() == 2,
+             "method move source order arity");
+        std::swap(call->args[0], call->args[1]);
+        std::swap(n.children[0], n.children[1]);
+        return;
+      }
+    throw std::runtime_error("method move source order call missing");
+  });
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -1443,6 +1818,7 @@ int main(int argc, char **argv) {
     extra(root);
     generic_move(root);
     generic_inout(root);
+    method_move(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

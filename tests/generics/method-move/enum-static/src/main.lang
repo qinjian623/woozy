@@ -1,0 +1,90 @@
+package app;
+
+enum E {
+    A;
+    B(x i32);
+}
+
+enum Payload {
+    Items(items Vec[i32]);
+    Empty;
+}
+
+struct Box {
+    items Vec[i32];
+    marker i32;
+}
+
+impl E {
+    func marker() i32 {
+        return 4;
+    }
+
+    func take(value move Vec[i32]) Vec[i32] {
+        return move value;
+    }
+
+    func take_box(value move Box) Box {
+        return move value;
+    }
+
+    func take_payload(value move Payload) Payload {
+        return move value;
+    }
+}
+
+func main() i32 {
+    var values Vec[i32] = [1, 2];
+    let alias = values;
+    let result = E.take(move values);
+    result[0] = 7;
+    if alias[0] != 7 {
+        return 1;
+    }
+
+    let temp = E.take([3, 4]);
+    if temp[0] != 3 {
+        return 2;
+    }
+
+    var box = Box(items: [5], marker: 1);
+    let box_alias = box;
+    let box_result = E.take_box(move box);
+    box_result.items[0] = 9;
+    if box_alias.items[0] != 9 {
+        return 3;
+    }
+
+    var payload = Payload.Items([8]);
+    let payload_alias = payload;
+    let payload_result = E.take_payload(move payload);
+    switch payload_result {
+    case Payload.Items(items):
+        items[0] = 10;
+    case Payload.Empty:
+        return 4;
+    }
+    switch payload_alias {
+    case Payload.Items(items):
+        if items[0] != 10 {
+            return 5;
+        }
+    case Payload.Empty:
+        return 6;
+    }
+
+    if E.marker() != 4 {
+        return 7;
+    }
+
+    let variant = E.B(x: 5);
+    switch variant {
+    case E.B(x):
+        if x != 5 {
+            return 8;
+        }
+    case E.A:
+        return 9;
+    }
+    return 0;
+}

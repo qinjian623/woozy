@@ -46,7 +46,7 @@ switch/for补充程序。主代理GNU Debug、GNU Release、Clang22 ASan/UBSan
 
 这里新增的是直接调用；具体泛型函数值仍使用既有的标量调用处理。独立对比旧、新编译器确认，带 trait 约束的 move 泛型函数值有一条原先就接受的入口，本次保留其原行为，不把它记为新增或完整受约束调用支持。
 
-方法、trait 约束泛型的直接 move 调用和 inout 不在这次新增范围。静态方法即使没有 receiver，仍按 impl 成员身份拒绝 move；普通静态方法保持原行为。foreign 和动态 string 的 move 实例给出 `E_CAPABILITY_UNAVAILABLE`，损坏的参数模式、源码 Move、模板/实例关系仍由既有 HIR 检查拒绝。
+这一批只增加自由泛型函数的直接 move 调用；后续固有方法和数字/bool 泛型 inout 的支持见下文。trait 约束泛型的直接 move 调用仍未开放。foreign 和动态 string 的 move 实例给出 `E_CAPABILITY_UNAVAILABLE`，损坏的参数模式、源码 Move、模板/实例关系仍由既有 HIR 检查拒绝。
 
 合入 move 调用这一批时，主目录 GNU Debug/Release 和 Clang22 ASan+UBSan+LSan 的 LLVM 构建各44/44，关闭 LLVM 为33/33，共165项，无跳过。三个 LLVM 构建每套实际运行三份同源项目的 Native O0/O2 与 Python3.12.15，共9项；关闭 LLVM 不执行这9项。独立新增的嵌套泛型聚合抛错例在两端验证两个 Vec 按逆序各释放一次，Python Frame 无残留。泄漏检测覆盖本项目检查程序，不声称预编译 LLVM 或生成程序也全部经过 sanitizer 插桩。
 
@@ -60,9 +60,21 @@ let/const、普通参数、临时值、字段和索引不能经此入口作为�
 
 主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 的 LLVM 构建各45/45，关闭 LLVM 为33/33，共168项，无跳过。每个 LLVM 构建的新测试有5条记录，其中2条为check，3条为Native O0/O2和Python3.12.15实际执行。独立组合程序另验证先取得inout后的后参抛错、callee自身抛错与defer恢复、return先复制再清理、循环continue/break，以及不同事件值区分的命名实参源码顺序；Python23个Frame无残留。scalar inout没有动态begin/end-borrow调用，空borrow列表不被记成观察到借用登记次数。
 
+## 固有方法的 move 参数
+
+非泛型、无 trait 的固有 impl 现已支持非 receiver 的 move 参数。实例方法的 self 必须是 ordinary 参数，只借用调用者的值；无 self 的静态方法通过类型名调用。结构体、枚举和已支持的标量 impl 使用相同的选择和参数检查。参数数据沿用现有64位标量、Vec、有限拥有 struct/enum；已有绑定需显式 move，临时值可以直接转交。
+
+枚举类型上的静态方法现可调用。成员名对应真实变体时仍先按变体构造，构造参数不合要求时不会改选同名方法；其余名称进入已有方法选择。私有方法继续拒绝。此修复没有新增重载规则或 HIR 字段。
+
+receiver 先求值且只求值一次，命名实参仍按书写顺序求值。ordinary self 与后面的 move 实参引用同一绑定时拒绝；另一个拥有副本即使与 self 共享内部 Vec，也可移动。receiver 或后续实参抛错时，尚未执行的 move 不发生，已转交的临时值按现有顺序清理；callee 抛错不重复释放参数，返回值先保存再执行 defer。
+
+move/inout self、方法 inout、泛型 impl 或泛型方法的 move、trait 方法 move、绑定方法值逃逸、部分字段 move、foreign 和动态 string move 继续拒绝。本次未改公共 HIR、ABI 或运行库。
+
+主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 的 LLVM 构建各46/46，关闭 LLVM 为33/33，共171项，无跳过。每个 LLVM 构建新增方法测试包含6个同源项目的 Native O0/O2/Python3.12.15 共18次实际执行；另12条为check、2条为拒绝构建。独立程序补查了求值顺序、错误清理、实际地址复用，以及枚举本身作为静态方法目标。生成 Native 程序和预编译 LLVM 未声称全部经过 sanitizer 插桩。
+
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型trait及trait泛型方法、嵌套变体模式、方法的move/inout调用，以及非scalar数据或有trait约束的泛型函数自身inout仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型trait及trait泛型方法、嵌套变体模式、泛型impl或泛型/trait方法的move调用、方法inout，以及非scalar数据或有trait约束的泛型函数自身inout仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。

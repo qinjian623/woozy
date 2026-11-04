@@ -220,11 +220,44 @@ class Checker {
     return integer(t) || type(t).kind == TypeKind::Bool ||
            type(t).kind == TypeKind::Float;
   }
-  bool impl_method(SymbolId target) const {
-    return std::any_of(m.impls.begin(), m.impls.end(), [&](const ImplDecl &im) {
-      return std::find(im.methods.begin(), im.methods.end(), target) !=
-             im.methods.end();
-    });
+  const ImplDecl *impl_of(SymbolId target) const {
+    for (const auto &im : m.impls)
+      if (std::find(im.methods.begin(), im.methods.end(), target) !=
+          im.methods.end())
+        return &im;
+    return nullptr;
+  }
+  bool impl_method(SymbolId target) const { return impl_of(target) != nullptr; }
+  bool declared_self(SymbolId target) const {
+    const auto *im = impl_of(target);
+    if (!im)
+      return false;
+    const auto found = parameters.find(target.value);
+    if (found == parameters.end() || found->second.empty() ||
+        found->second.front().label != "self")
+      return false;
+    const auto sig = signatures.at(target.value);
+    const auto &params = type(sig).parameters;
+    return !params.empty() && params.front().type == im->self_type;
+  }
+  // This route only covers a non-generic inherent impl method. An instance
+  // call needs a declared ordinary self; a type-qualified call needs a method
+  // whose declaration has no self at all. Receiver presence alone is not a
+  // declaration and cannot open move through a static call.
+  bool inherent_method_move(SymbolId target, bool receiver,
+                            TypeId signature) const {
+    const auto *im = impl_of(target);
+    if (!im || im->trait || !im->params.empty())
+      return false;
+    auto generics = generic_params.find(target.value);
+    if (generics == generic_params.end() || !generics->second.empty())
+      return false;
+    const auto &params = type(signature).parameters;
+    const bool self = declared_self(target);
+    if (receiver)
+      return self && !params.empty() &&
+             params.front().mode == ParamMode::ordinary;
+    return !self;
   }
   bool free_unconstrained_template(SymbolId target) const {
     auto found = generic_params.find(target.value);
@@ -1409,6 +1442,9 @@ class Checker {
       };
       if (auto t = type_expression(base)) {
         if (type(*t).kind == TypeKind::NominalEnum) {
+          // A real variant keeps constructor priority. If no variant has this
+          // name, the type-qualified member may still be an inherent method;
+          // method selection below keeps the same impl/SymbolId rules.
           for (const auto &v : nominal(*t).variants)
             if (symbol(v.symbol).name == name) {
               if (method_explicit)
@@ -1416,7 +1452,6 @@ class Checker {
                        "E_CALL_ARGUMENT");
               return constructor(r, *t, v.symbol);
             }
-          reject(r, "unknown enum variant");
         }
         auto selected = method_subs(select_method(r, *t, name));
         return typed_call(r, selected.method, {}, selected.substitutions, {},
@@ -1568,12 +1603,24 @@ class Checker {
       seen[pi] = true;
       indices[i] = pi;
     }
-    // Only an ordinary unconstrained generic function opens concrete move or
-    // inout instances here. Impl members include static methods called through
-    // a type, which have no receiver expression but are still methods.
-    const bool allow_move =
+    // Concrete move is available on unconstrained generic free functions and
+    // on non-generic inherent methods. Keep inout on its old free-function
+    // route: adding method move must not open method or static-method inout.
+    const bool free_move_inout =
         !receiver && !constraint && free_unconstrained_template(target);
-    const bool allow_inout = allow_move;
+    const bool allow_move =
+        free_move_inout ||
+        (!constraint &&
+         inherent_method_move(target, receiver.has_value(), original));
+    const bool allow_inout = free_move_inout;
+    // Any instance route whose declared first parameter is move/inout is an
+    // unsupported self mode, including a trait method reached through a
+    // constraint. A type-qualified static call to an impl method with a
+    // declared self is rejected by the same rule below.
+    if ((receiver || (impl_method(target) && declared_self(target))) &&
+        !original_type.parameters.empty() &&
+        original_type.parameters.front().mode != ParamMode::ordinary)
+      unavailable(r, "move/inout self is not implemented");
     for (size_t pass = 0; pass < 2; ++pass)
       for (size_t i = 0; i < values.size(); ++i) {
         auto ar = child(r, i + 1), er = child(ar, 0);
