@@ -207,14 +207,14 @@
     {
       "id": "T06",
       "title": "Python 标量闭环",
-      "status": "in_progress",
+      "status": "done",
       "depends_on": [
         "T04"
       ],
       "primary_role": "python",
       "backup_role": "integrator",
       "reviewer_role": "validation",
-      "owner_instance": "bridge:0aa651c6-bb5f-47be-94f9-263a54ec3d48",
+      "owner_instance": "root-integrator",
       "target_paths": [
         "src/codegen_python/",
         "runtime/python/",
@@ -237,7 +237,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python initial taskebbb2bde rejected: runtimeonly. Onecorrection4680b60a uses sameCodexSolmodel/xhigh; T04committedinput and explicitruntimesnapshot verified. Root owns commonCMake/buildCLI integration."
+      "notes": "Pythonemitter4680b60a accepted; readonlyreview310f6335 found0confirmedissues. Root integratedformalbuildCLI. GNU Debug/Release andClang22ASan each17/17;17actualgeneratedprojects,15extra,5negativecontrols,12unsupportedverified withPython3.12.15. NoARC/foreign/strictfloatarithmeticclaim."
     },
     {
       "id": "T07",

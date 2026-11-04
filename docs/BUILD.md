@@ -1,6 +1,6 @@
 # 前端构建与检查
 
-契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja、pkg-config、toml++、json-c 和 GMPXX >= 6.3.0 的开发文件。本机使用 toml++ 3.4.0、json-c 0.19、GMP/GMPXX 6.3.0。前端不链接或运行 LLVM/Python，包含源码快照、诊断、输入/取消、词法语法、项目和名称解析，以及标量类型检查与 HIR 验证。开发测试若找到 Python 会执行 80 个语法分类和 20 个独立模块项目；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时这些测试明确记为未运行。C++ 单元测试仍可运行。代码生成尚未实现。
+契约版本 compiler-dev/1。需要 C++20 编译器、CMake >= 3.20、Ninja、pkg-config、toml++、json-c 和 GMPXX >= 6.3.0 的开发文件。本机使用 toml++ 3.4.0、json-c 0.19、GMP/GMPXX 6.3.0。前端不链接或运行 LLVM/Python，包含源码快照、诊断、输入/取消、词法语法、项目和名称解析，以及标量类型检查与 HIR 验证。开发测试若找到 Python 会执行 80 个语法分类和 20 个独立模块项目；可用 LANG_TEST_PYTHON 指定测试解释器，缺少时这些测试明确记为未运行。C++ 单元测试仍可运行。Python 标量代码生成和显式运行测试已实现；原生后端正在接入正式 CLI。
 
 ```sh
 cmake --preset frontend-debug
@@ -10,7 +10,7 @@ build/frontend-debug/langc --help
 build/frontend-debug/langc --version
 ```
 
-帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。检查成功为 0、源码错误或未支持操作为 1、输入文件/配置/参数错误为 2、内部错误为 3。build、lsp 和 capabilities 返回 1 及 E_CAPABILITY_UNAVAILABLE。
+帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。检查成功为 0、源码错误或未支持操作为 1、输入文件/配置/参数错误为 2、内部错误为 3。build 的 Python/64 标量版本已实现，原生 build、lsp 和 capabilities 当前返回 E_CAPABILITY_UNAVAILABLE。
 
 ```sh
 build/frontend-debug/langc check --syntax-only examples/core.lang
@@ -77,3 +77,18 @@ T04 的类型表与标量 HIR 验证组件位于 lang_hir，包含 74 项损坏�
 调用和数值/bool 整体 inout；sema.scalar 执行 180 个静态项目检查，sema.cli 检查真实 CLI。
 范围、未支持操作与实际验证见 [CHECKER.md](../tests/sema/CHECKER.md)。代码生成、源语言运行
 以及完整严格浮点算术仍未实现；普通参数重新赋值规则等待用户选择。
+
+## Python 标量程序
+
+```sh
+langc build --project tests/fixtures/core/lang.toml --backend python --out-dir build/core/python
+/path/to/python3.12 -s build/core/python/program.py
+```
+
+build 检查源程序并写入 program.py 和 langrt.py，不执行 Python。执行是独立步骤。
+生成器与前端不链接 CPython 或 LLVM。Python 首执行 profile 为64位；32位项目在生成阶段
+明确拒绝。安装的解释器只供运行测试使用，可用 -DLANG_PYTHON312=/path/to/python3.12
+指定；未找到时 python.projects/python.cli 明确记为 not_run，C++ API 测试仍可运行。
+
+主目录 GNU Debug/Release、Clang22 ASan/UBSan 各17/17通过；17个必须执行项目、15项补充、
+5项Panic分类对照均实际通过。检查清单与限制见 [PYTHON_SCALARS.md](PYTHON_SCALARS.md)。
