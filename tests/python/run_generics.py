@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build concrete scalar generics with langc, then run independent Python files."""
+"""Build all published accept projects with langc and run independent Python files."""
 import argparse
 import json
 from pathlib import Path
@@ -9,10 +9,6 @@ sys.dont_write_bytecode = True
 from run_cases import classify, command, sha, source_project
 
 
-PUBLIC_CASES = (
-    'explicit', 'inferred', 'return-context', 'multi-instance',
-    'function-argument', 'same-recursion', 'cross-package-alias',
-)
 EXTRA_SOURCES = {
     'scalar-trait-constraint': '''
 trait Ordered {func less(self Self,other Self) bool;}
@@ -77,13 +73,13 @@ def main():
         trap.write_text('#!/bin/sh\necho unexpected-python-during-compilation >&2\nexit 118\n')
         trap.chmod(0o755)
     report = {
-        'task': 'T07 Python scalar instances',
-        'operation_id': 'language-python-t07-scalar-instances-20261104',
+        'task': 'T07 Python value instances',
+        'operation_id': 'language-python-pod-aggregates-20261104',
         'contract': published['contract'], 'python': version,
         'source_head': command(['git', '-C', args.root, 'rev-parse', 'HEAD'])['stdout'].strip(),
         'fixture_sha256': before, 'cases': [], 'extra': [], 'failures': [],
         'not_run': ['native execution and comparison (separate agent)',
-                    'Clang ASan/UBSan (integrator)', 'aggregate/ARC/foreign execution',
+                    'Clang ASan/UBSan (integrator)', 'ARC/foreign execution',
                     'strict floating point execution'],
     }
 
@@ -117,8 +113,11 @@ def main():
         if not passed:
             report['failures'].append(f'{ident}: unexpected generated-program behavior')
 
-    for ident in PUBLIC_CASES:
-        case = indexed[ident]
+    accepts = [case for case in indexed.values() if case['expected_static']['status'] == 'accept']
+    if len(accepts) != 13 or any('runtime_expected' not in case for case in accepts):
+        raise RuntimeError('expected the original 13 accepts with published runtime_expected')
+    for case in accepts:
+        ident = case['id']
         run(ident, args.root / case['manifest'], case['runtime_expected']['main_return'], 'cases')
     for ident, body in EXTRA_SOURCES.items():
         run(ident, source_project(args.out, ident, body), 0, 'extra')

@@ -22,17 +22,18 @@ HIR沿用唯一TypeContext、SymbolId和节点arena。名义类型按声明身�
 非零main返回按普通返回处理。两后端各有3个附加项目，主代理交叉重编译这6份源码，
 结果也一致，共13份相同源码完成两后端比较。
 
-native平凡值struct/enum已通过原13个正例的O0/O2执行，以及值复制、字段赋值、
-函数值字段和switch/for补充程序。主代理GNU Debug、GNU Release、Clang22
-ASan/UBSan完整CTest各25/25通过，无排除项；另外两组宽整数复制和函数字段
-改写程序也在各构建的O0/O2通过。Python聚合实现另行审查，仍按未支持处理。
+平凡值struct/enum已在两个后端通过原13个正例及值复制、字段赋值、函数值字段和
+switch/for补充程序。主代理GNU Debug、GNU Release、Clang22 ASan/UBSan
+完整CTest各26/26通过，无排除项；关闭LLVM的前端构建21/21通过。
+原13个项目在三种构建中完成native O0/O2与Python比较，共78项；另将两个后端
+各自测试中的34份补充源码交叉编译，新增56次执行，结果一致。
 旧Python分类失败日志仅作为修正前记录保留。
 
 资源限制测试在普通构建使用384MiB虚拟地址限制、3秒CPU和10秒wall超时。ASan自身保留大块虚拟地址，因此其测试只保留CPU和wall限制；未运行LeakSanitizer。ASan覆盖本项目代码，不涵盖预编译LLVM与生成程序。
 
 ## 尚未实施
 
-标量泛型及native平凡值聚合生成执行已通过；Python聚合仍待审查。两个后端入口均调用共用检查，
+标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
 泛型trait及trait泛型方法、嵌套变体模式、泛型或方法的inout/move调用、Vec、ARC、throws/defer、foreign和严格浮点执行仍明确拒绝。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。

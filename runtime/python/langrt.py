@@ -1,8 +1,8 @@
-"""Scalar runtime. Generated programs pass explicit target widths."""
+"""Value runtime. Generated programs pass explicit target widths."""
 import struct
 import sys
 
-RUNTIME_VERSION = 'compiler-dev/1-python-scalars/1'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/1'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 
@@ -16,6 +16,41 @@ class Cell:
 
     def __init__(self, value):
         self.value = value
+
+
+class Field:
+    """Short-lived field place; never stored in a source-language value."""
+    __slots__ = ('root', 'path')
+
+    def __init__(self, base, index):
+        if isinstance(base, Cell):
+            self.root, self.path = base, (index,)
+        else:
+            self.root, self.path = base.root, base.path + (index,)
+
+    @property
+    def value(self):
+        result = self.root.value
+        for index in self.path:
+            result = result[index]
+        return result
+
+    @value.setter
+    def value(self, replacement):
+        def replace(value, depth):
+            if depth == len(self.path):
+                return replacement
+            index = self.path[depth]
+            return value[:index] + (replace(value[index], depth + 1),) + value[index + 1:]
+        self.root.value = replace(self.root.value, 0)
+
+
+class SwitchBreak(BaseException):
+    """Internal control transfer, separate from Panic and typed errors."""
+    __slots__ = ('target',)
+
+    def __init__(self, target):
+        self.target = target
 
 
 def wrap(value, bits, signed):

@@ -35,6 +35,12 @@ add_test(NAME python.generics COMMAND "${LANG_PYTHON312}"
   --langc $<TARGET_FILE:langc> --root "${LANG_PYTHON_TEST_ROOT}"
   --out "${CMAKE_CURRENT_BINARY_DIR}/generics" --python "${LANG_PYTHON312}")
 set_tests_properties(python.generics PROPERTIES TIMEOUT 180)
+add_test(NAME python.aggregates COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/run_aggregates.py"
+  --langc $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/aggregates"
+  --python "${LANG_PYTHON312}")
+set_tests_properties(python.aggregates PROPERTIES TIMEOUT 180)
 add_test(NAME python.cli COMMAND ${CMAKE_COMMAND}
   -DLANGC=$<TARGET_FILE:langc> -DPYTHON=${LANG_PYTHON312}
   -DROOT=${LANG_PYTHON_TEST_ROOT} -DNATIVE_AVAILABLE=${LANG_ENABLE_LLVM}

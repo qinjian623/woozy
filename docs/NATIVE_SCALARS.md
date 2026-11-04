@@ -64,11 +64,14 @@ enum-eval-order、finite-function-field、function-fields。
 并核对与 CLI 生成程序完全相同的退出值及 stdout/stderr。
 
 主代理已合并共享检查，并把 sema.t07 改为按实际 backend/word_bits 创建聚合
-程序：native 接受，Python 暂时拒绝。GNU Debug、GNU Release 和 Clang22
+程序。native单独集成时接受native、拒绝Python；Python集成后两端均接受。
+native阶段GNU Debug、GNU Release和Clang22
 ASan/UBSan完整CTest各25/25通过，无排除项。另加入宽整数嵌套泛型enum复制和
 函数字段改写两个项目，各构建O0/O2通过。原27个fixtures和cases.json未改。
 agent原始共享补丁和预期补丁保留在外层reviews/，未作为源文件提交。
 主代理的实际运行记录保存在外层checks/t07-native-pod-root-verification.json。
+两后端合并后完整CTest各26/26，源码比较记录另见外层
+checks/t07-pod-backend-comparison.json；运行库、ARC及严格浮点运算的限制仍然保留。
 
 首轮检查记录与修正后的结果分别保留：首轮新增样例误用了浮点一元负号和
 缺括号的函数返回类型，capability 也误拒既有裸字符串 HIR 测试；这一次修正

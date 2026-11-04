@@ -204,7 +204,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "标量组件与正式build CLI已集成；当前GNU Debug/Release及Clang22 ASan/UBSan各完整24/24。正式CLI每构建66次标量执行；泛型测试另20次ELF执行。native平凡值struct/enum由bridge:62e26eba-3d4c-4faf-8592-184db9b3db7d从1bff58a实现；简单结构体和常量字符串补齐前整项保持in_progress。"
+      "notes": "native平凡值struct/enum提交31c034f已接受；两后端合并后三种完整构建各26/26，关闭LLVM21/21。每种LLVM构建50次泛型/POD ELF及66次标量CLI运行。常量字符串、严格浮点运算仍待实现，整项保持in_progress。"
     },
     {
       "id": "T06",
@@ -239,7 +239,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python标量生成与正式build CLI已完成；具体标量泛型提交0f0aa91。当前三种构建各完整24/24；Python3.12.15实际执行17个主项目、17个补充和5个分类对照，14类未支持明确拒绝。T07另13份相同源码在Python及native O0/O2结果一致。平凡值聚合由bridge:4730559b-ad8a-4ffa-b6be-e6a668c1b0ea独立实现；ARC、foreign和严格浮点算术尚未实施。"
+      "notes": "Python标量与具体泛型已完成；本次加入平凡值struct/enum、按值复制、字段赋值及switch。运行库版本compiler-dev/1-python-values/1。三种完整构建各26/26；每套17主项目、17补充、5分类对照、13公共泛型及19聚合程序运行通过。ARC、foreign和严格浮点运算仍未实施。"
     },
     {
       "id": "T07",
@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态组件fb8ba96、Python标量泛型0f0aa91、native标量泛型1bff58a已接受。三种完整构建各24/24，无排除；旧Python分类错误已修正。13份相同源码两后端结果一致，尚不包含实际聚合操作。native agent 62e26eba与Python agent 4730559b分别实现平凡值struct/enum执行；root负责共享HIR与最终合并，整项保持in_progress。"
+      "notes": "静态检查、标量泛型及两后端POD聚合均已接受；三种完整构建各26/26，无排除，关闭LLVM21/21。原13个正例三构建O0/O2/Python共78项比较，另34份补充源码新增56次交叉执行，结果一致。原05_traits仍仅静态通过，因严格浮点执行未实施；泛型trait/方法、嵌套变体模式和泛型inout/move继续明确拒绝，整项保留in_progress。"
     },
     {
       "id": "T08",

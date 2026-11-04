@@ -37,6 +37,9 @@ std::string join(const std::vector<std::string> &values) {
   }
   return result;
 }
+std::string tuple(const std::vector<std::string> &values) {
+  return "(" + join(values) + (values.empty() ? "" : ",") + ")";
+}
 std::string operation(BinaryOp op) {
   switch (op) {
   case BinaryOp::add:
@@ -78,40 +81,60 @@ class Emitter {
   const HirModule &m;
   std::stop_token stop;
   std::set<SymbolId> cells, named;
-  std::set<TypeId> checked_types;
   SymbolId current;
   uint64_t serial = 0;
   struct Loop {
     HirNodeId id, step;
   };
   std::vector<Loop> loops;
+  std::vector<HirNodeId> break_targets;
   Output output;
 
   const HirNode &node(HirNodeId id) const { return m.nodes.at(id.value); }
   const Type &type(TypeId id) const { return *m.types.find(id); }
-  void capability(TypeId id, std::optional<SourceSpan> source) {
-    if (!checked_types.insert(id).second)
-      return;
+  size_t field_index(TypeId receiver, SymbolId field) const {
+    for (const auto &d : m.nominals)
+      if (d.symbol == type(receiver).declaration)
+        for (size_t i = 0; i < d.fields.size(); ++i)
+          if (d.fields[i].symbol == field)
+            return i;
+    throw std::logic_error("verified field has no declaration index");
+  }
+  void check_signature(TypeId id, SourceSpan source) const {
     const auto &t = type(id);
-    if (integer(t) || t.kind == TypeKind::Unit || t.kind == TypeKind::Bool ||
-        t.kind == TypeKind::Float)
-      return;
-    if (t.kind != TypeKind::Function)
-      throw Rejected{"Python scalar profile does not support this type",
-                     source};
     if (t.throws_type)
-      throw Rejected{"Python scalar profile does not support throws", source};
-    capability(t.result, source);
-    for (const auto &p : t.parameters) {
-      capability(p.type, source);
+      throw Rejected{"Python value profile does not support throws", source};
+    for (const auto &p : t.parameters)
       if (p.mode == ParamMode::move ||
           (p.mode == ParamMode::inout && !integer(type(p.type)) &&
            type(p.type).kind != TypeKind::Float &&
            type(p.type).kind != TypeKind::Bool))
-        throw Rejected{"Python scalar profile requires ordinary or "
-                       "numeric/bool inout parameters",
-                       source};
-    }
+        throw Rejected{"Python value profile requires ordinary or "
+                       "numeric/bool inout parameters", source};
+  }
+  void pattern_names(const Pattern &p) {
+    if (p.binding)
+      named.insert(*p.binding);
+    for (const auto &child : p.payload)
+      pattern_names(child);
+  }
+  std::string pattern_test(const Pattern &p, const std::string &value) const {
+    if (!p.variant)
+      return "True";
+    std::string test = value + "[0] == " + std::to_string(p.variant->value);
+    for (size_t i = 0; i < p.payload.size(); ++i)
+      if (p.payload[i].variant)
+        test += " and (" + pattern_test(p.payload[i], value + "[1][" +
+                         std::to_string(i) + "]") + ")";
+    return test;
+  }
+  void pattern_bind(const Pattern &p, const std::string &value, Suite &suite) {
+    if (p.binding)
+      suite.push_back({name(*p.binding) + " = " + value, p.source.span,
+                       false, {}, {}});
+    for (size_t i = 0; i < p.payload.size(); ++i)
+      pattern_bind(p.payload[i], value + "[1][" + std::to_string(i) + "]",
+                   suite);
   }
   std::string numeric(TypeId id) const {
     const auto &t = type(id);
@@ -165,6 +188,31 @@ class Emitter {
     case NodeKind::function_value:
       return save(suite, function_name(std::get<FunctionValue>(n.data).symbol),
                   n);
+    case NodeKind::struct_init: {
+      const auto &init = std::get<StructInit>(n.data);
+      std::vector<std::string> values(init.fields.size());
+      for (const auto &arg : init.fields)
+        values.at(arg.parameter_index) = expression(arg.expression, suite);
+      return save(suite, tuple(values), n);
+    }
+    case NodeKind::enum_init: {
+      const auto &init = std::get<EnumInit>(n.data);
+      std::vector<std::string> values(init.payload.size());
+      for (const auto &arg : init.payload)
+        values.at(arg.parameter_index) = expression(arg.expression, suite);
+      return save(suite, "(" + std::to_string(init.variant.value) + ", " +
+                         tuple(values) + ")", n);
+    }
+    case NodeKind::field_read:
+    case NodeKind::field_place: {
+      const bool place = n.kind() == NodeKind::field_place;
+      auto receiver = expression(n.children[0], suite);
+      auto field = place ? std::get<FieldPlace>(n.data).field
+                         : std::get<FieldRead>(n.data).field;
+      auto index = std::to_string(field_index(node(n.children[0]).type, field));
+      return save(suite, place ? "_rt.Field(" + receiver + ", " + index + ")"
+                               : receiver + "[" + index + "]", n);
+    }
     case NodeKind::unary: {
       auto operand = expression(n.children[0], suite);
       const auto op = std::get<Unary>(n.data).op;
@@ -278,10 +326,33 @@ class Emitter {
                            {{"break", n.source.span, false, {}, {}}},
                            {}});
       loops.push_back({id, n.children[2]});
+      break_targets.push_back(id);
       statement(n.children[3], loop.body);
+      break_targets.pop_back();
       loops.pop_back();
       statement(n.children[2], loop.body);
       suite.push_back(std::move(loop));
+      break;
+    }
+    case NodeKind::switch_: {
+      auto value = expression(n.children[0], suite);
+      const auto &arms = std::get<Switch>(n.data).arms;
+      Suite branches;
+      break_targets.push_back(id);
+      for (auto arm = arms.rbegin(); arm != arms.rend(); ++arm) {
+        Statement branch{"if " + pattern_test(arm->pattern, value),
+                         arm->pattern.source.span, true, {}, {}};
+        pattern_bind(arm->pattern, value, branch.body);
+        statement(arm->body, branch.body);
+        branch.otherwise = std::move(branches);
+        branches = {std::move(branch)};
+      }
+      break_targets.pop_back();
+      suite.push_back({"try", n.source.span, true, std::move(branches), {}});
+      suite.push_back({"except _rt.SwitchBreak as _jump", n.source.span,
+                       true, {{"if _jump.target != " + std::to_string(id.value),
+                               n.source.span, true,
+                               {{"raise", n.source.span, false, {}, {}}}, {}}}, {}});
       break;
     }
     case NodeKind::return_: {
@@ -290,12 +361,16 @@ class Emitter {
       line(suite, "return " + std::string(value), n);
       break;
     }
-    case NodeKind::break_:
-      if (loops.empty() || loops.back().id != std::get<Break>(n.data).loop)
+    case NodeKind::break_: {
+      auto target = std::get<Break>(n.data).loop;
+      if (break_targets.empty() || break_targets.back() != target)
         throw std::logic_error(
-            "verified break target is not the enclosing loop");
-      line(suite, "break", n);
+            "verified break target is not the enclosing loop/switch");
+      line(suite, node(target).kind() == NodeKind::switch_
+                      ? "raise _rt.SwitchBreak(" + std::to_string(target.value) + ")"
+                      : "break", n);
       break;
+    }
     case NodeKind::continue_: {
       if (loops.empty() || loops.back().id != std::get<Continue>(n.data).loop)
         throw std::logic_error(
@@ -341,7 +416,7 @@ public:
     check_cancelled(stop);
     if (m.config.backend != Backend::python || m.config.word_bits != 64)
       throw Rejected{
-          "Python scalar emitter requires a Python/64 verified profile", {}};
+          "Python value emitter requires a Python/64 verified profile", {}};
     auto found = std::find_if(m.functions.begin(), m.functions.end(),
                               [&](const auto &f) { return f.symbol == entry; });
     if (found == m.functions.end())
@@ -356,7 +431,7 @@ public:
           found->source.span};
     for (const auto &f : m.functions) {
       check_cancelled(stop);
-      capability(f.signature, f.source.span);
+      check_signature(f.signature, f.source.span);
       output.symbols.push_back({f.symbol, function_name(f.symbol)});
       for (size_t i = 0; i < f.parameters.size(); ++i) {
         auto symbol = f.parameters[i].symbol;
@@ -372,7 +447,11 @@ public:
         auto id = pending.back();
         pending.pop_back();
         const auto &n = node(id);
-        capability(n.type, n.source.span);
+        if (auto c = std::get_if<Call>(&n.data))
+          check_signature(c->signature, n.source.span);
+        if (auto s = std::get_if<Switch>(&n.data))
+          for (const auto &arm : s->arms)
+            pattern_names(arm.pattern);
         if (const auto *b = std::get_if<Binding>(&n.data)) {
           named.insert(b->symbol);
           if (b->writable)
@@ -380,7 +459,7 @@ public:
         }
         if (n.kind() == NodeKind::unsupported ||
             n.kind() == NodeKind::string_literal)
-          throw Rejected{"Unsupported operation in Python scalar profile",
+          throw Rejected{"Unsupported operation in Python value profile",
                          n.source.span};
         pending.insert(pending.end(), n.children.begin(), n.children.end());
       }
@@ -392,7 +471,10 @@ public:
                    false,
                    {},
                    {}},
-                  {"import langrt as _rt", {}, false, {}, {}}};
+                  {"import langrt as _rt", {}, false, {}, {}},
+                  {"if _rt.RUNTIME_VERSION != '" + std::string(runtime_version) + "'",
+                   {}, true, {{"raise RuntimeError('incompatible langrt version')",
+                               {}, false, {}, {}}}, {}}};
     for (const auto &f : m.functions) {
       current = f.symbol;
       serial = 0;

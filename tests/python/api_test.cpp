@@ -87,6 +87,36 @@ int main(int argc, char **argv) {
       for (const auto &renamed : instance.renamed)
         for (const auto &s : concrete.value->symbols)
           require(s.symbol != renamed.first, "template-owned symbol excluded");
+    auto enumeration = checked(argv[1], "python", 64,
+                               "tests/generics/fixtures/enum-payload/lang.toml");
+    auto patterns = backend::python::emit(enumeration, entry(enumeration));
+    require(patterns.success(), "emit real enum/pattern input");
+    bool saw_binding = false;
+    for (const auto &n : enumeration.module().nodes)
+      if (const auto *s = std::get_if<hir::Switch>(&n.data))
+        for (const auto &arm : s->arms)
+          for (const auto &p : arm.pattern.payload)
+            if (p.binding) {
+              saw_binding = true;
+              bool named = false, mapped = false;
+              for (const auto &s : patterns.value->symbols)
+                named |= s.symbol == *p.binding &&
+                         s.name == "_s" + std::to_string(p.binding->value);
+              for (const auto &line : patterns.value->source_map)
+                mapped |= line.source.snapshot == p.source.span.snapshot &&
+                          line.source.begin_byte == p.source.span.begin_byte &&
+                          line.source.end_byte == p.source.span.end_byte;
+              require(named && mapped, "pattern SymbolId and exact SourceSpan");
+            }
+    require(saw_binding, "pattern mapping test exercised");
+    auto finite = checked(argv[1], "python", 64,
+                          "tests/python/fixtures/finite-callback/lang.toml");
+    auto count = finite.module().types.size();
+    auto finite_check = hir::check_backend_capabilities(finite.module());
+    auto finite_output = backend::python::emit(finite, entry(finite));
+    require(finite_check.success() && finite_output.success() &&
+                finite.module().types.size() == count,
+            "function field finite compilation without changing public TypeContext");
     for (const auto &[backend, bits] :
          {std::pair{"native", 64U}, {"python", 32U}}) {
       auto unsupported = checked(argv[1], backend, bits);

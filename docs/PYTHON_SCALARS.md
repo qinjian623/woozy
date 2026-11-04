@@ -1,5 +1,132 @@
 # Python 标量实现与验证
 
+## T07 平凡 struct/enum 值执行（2026-11-04）
+
+主代理已将两个后端合并：GNU Debug、GNU Release和Clang22 ASan/UBSan完整
+CTest各26/26，关闭LLVM的前端构建21/21。原13个项目在三种构建中完成
+native O0/O2与Python比较；另34份补充源码新增56次交叉执行，结果一致。
+独立只读审查另跑6个Python程序通过，含普通返回101与嵌套switch/for。
+运行记录保存在外层checks/t07-python-pod-root-verification.json和
+checks/t07-pod-backend-comparison.json。下方GNU Debug/Release表格保留agent交接时的结果。
+
+任务：T07 Python；operation_id：`language-python-pod-aggregates-20261104`；契约 `compiler-dev/1`。
+基于 `1bff58aa6c50b946bc6d7a5761d1bf486e513aa4`，初始工作区干净。
+开始前实际运行旧版本四项 Python 测试，全部 passed；其中原有 generic 为 7 个公共程序与
+3 个补充程序，均由正式 CLI build 后使用独立 Python 3.12.15 进程执行。
+完整读取 root 的 `reviews/t07-value-backend-plan.md`、AGENTS、DEVELOPMENT、tasks、
+GENERICS、SEMANTICS 和现有 emitter/runtime 后实施。本节说明本次版本；后文为历史记录。
+
+### 实现与输出
+
+- `src/backend/python/emitter.cpp`：struct 按声明顺序保存为 tuple；enum 保存为
+  `(variant SymbolId, active_payload_tuple)`，只含活动变体的字段。构造参数按 HIR 的源码顺序
+  各求值一次，再按 `parameter_index` 排列。字段位置按声明的 SymbolId 查找，不按源码名字重新解析。
+- `runtime/python/langrt.py`：`Field` 保存根 Cell 与字段下标序列；赋值重建该序列经过的 tuple，
+  再替换根 Cell 的值。先前副本、兄弟字段、普通实参和返回值均保持独立的值行为。
+  所有平凡成员不可变，因此无需可变对象浅复制或全局 deepcopy。
+- 函数字段和非捕获函数值直接保存函数身份；字段 callee 先求值一次，再按源码顺序求实参。
+  普通参数重新赋值的现有限制未改。
+- case 绑定使用各自 SymbolId 的 `_s<ID>` 名称，加入 `Output.symbols`；生成绑定语句使用
+  Pattern 的原始 SourceSpan，加入 `Output.source_map`。C++ API 测试实际检查这两项。
+- switch 生成 `try` 与 if/else 分支；`break` 发出带目标 HIR ID 的内部 `SwitchBreak`，
+  仅由对应 switch 捕获。没有为 switch 增加 while。continue 仍使用外层 For 的 step，
+  每次只执行一次；循环 break、嵌套 switch、内层循环和 return 分别保留 HIR 的目标。
+  `SwitchBreak` 是独立的 BaseException 子类，不属于 Panic 或普通 Exception。
+
+C++ `emit`、Options、Output 字段和语言契约没有变化。Python 私有值表示及运行库版本改为
+`compiler-dev/1-python-values/1`，生成文件导入后立即检查运行库版本；旧版本运行库会产生
+明确的 `RuntimeError('incompatible langrt version')`。版本不匹配仍按宿主异常处理，
+不当作语言 Panic。整数运算、转换与 Panic runner 未改。
+
+### 单列的 sharedcap 本地修改
+
+`src/hir/hir.cpp` 只修改 `check_backend_capabilities`；agent独立补丁保留在外层
+`reviews/python-pod-sharedcap-local.patch`，由root与native改动共同合入。
+该补丁是运行本次Python聚合测试所需的本地修改，不能只取emitter。
+
+只对 Python 放开平凡聚合操作。字段类型在 TypeContext 的私有副本中替换，公开 TypeContext
+不变；函数字段只按函数值存储处理，不沿函数返回类型继续展开名义类型。实际函数与 Call 的
+参数/返回签名单独检查。计划中的 `S[T] {f func() S[S[T]];}` 已有限编译运行，bottom 没有调用；
+API 测试另确认共用检查及 emit 前后公开类型数量不变。
+严格浮点运算与拥有字段继续拒绝。所有输入仍经唯一 `hir::verify` 发布 VerifiedHirModule，
+没有绕过类型、实例或 HIR 检查。没有修改 sema；原 sema.t07 已实际通过，无需本地阶段预期补丁。
+
+### 实际验证
+
+环境：Linux x86_64、GNU 16.2.1、LLVM=OFF，独立执行解释器为
+`/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12`。
+check/build 仍为 C++，正式 CLI 子进程的 PATH 只含会失败的 Python 命令；执行阶段使用解释器
+绝对路径。未安装第三方库，未安装或修改系统 Python。
+
+| 检查 | GNU Debug | GNU Release |
+| --- | --- | --- |
+| 完整 Python CTest | 5/5 passed | 5/5 passed |
+| 其余现有 CTest，含 sema.t07 | 16/16 passed | 16/16 passed |
+| 原 13 个 generic accept（正式 CLI check/build/独立运行） | 13/13 passed | 13/13 passed |
+| 原 3 个 generic 补充程序 | 3/3 passed | 3/3 passed |
+| 既有必测 / 补充 / 异常分类对照 | 17 / 17 / 5 passed | 17 / 17 / 5 passed |
+| 聚合实际程序 / 辅助检查 | 19 / 3 passed | 19 / 3 passed |
+| 新增未支持操作检查 | 7 unsupported，无失败 | 7 unsupported，无失败 |
+
+Debug 的 Python 与其余测试分两次执行，合计覆盖全部 21 项；Release 单次完整 CTest 为 21/21。
+新增 C++ 代码另经 GNU O2/NDEBUG 的 `-Wall -Wextra -Wpedantic -Werror -fsyntax-only`，passed。
+
+13 个项目继续读取原 `tests/generics/cases.json` 的 `runtime_expected`，所有原源码、预期与
+27 个 fixture 均未改。新增的六个聚合公共项目实际返回：trait-unique=9、fields-reordered=5、
+nested-copy=1、enum-empty=0、enum-payload=6、field-evaluation-order=21。
+原四个 aggregate 拒绝程序已原样移至运行正例；其中 field-read 返回 1，按普通非零返回判断，
+没有重写成返回 0。原整数/Panic 测试和五个异常分类对照全部保持通过。
+
+19 个聚合程序包括这四项，以及普通按值传参/返回、嵌套字段复制/复合赋值、函数字段替换、
+callee/构造实参次数与顺序、enum 不同载荷/复制/返回、通配与遮蔽、多实例模式符号、
+switch 与 for 的嵌套跳转/步进/提前返回、scrutinee 一次求值、空结构/Unit/bool、
+f32/f64 位模式传递、switch 中的真实 Panic、有限函数字段。辅助检查实际观察到
+f32 最小 subnormal 位模式 `00000001`、f64 最小 subnormal `0000000000000001`，
+并验证版本不匹配及内部跳转异常分类。
+
+7 项未支持检查含 struct/enum string 字段、Vec 字段、字段 inout、嵌套变体模式、
+字段浮点算术与浮点取负。每项经正式 check/build，检查 E_CAPABILITY_UNAVAILABLE 的原文件及
+字节位置、无新输出，并确认失败 build 不改变已有 program.py/langrt.py/无关文件。
+原 scalar runner 的另 10 项拒绝检查保持 unsupported。
+
+初次 Debug 有一个新增补充测试失败：它使用 `wide:-0.0`，按现有规则属于未支持的浮点一元运算。
+唯一一次证据修正将这个自建传递测试改为不含运算的正 f64 subnormal 字面量，并另保留负号的拒绝
+检查；没有放开浮点运算，也未更改发布源码/预期。初次失败和最终结果均保留在 Debug JSON 中。
+
+完整原样 `baseline/samples/05_traits.lang` 在两套 sema.t07 中静态类型检查 passed。
+两种构建另用正式 Python CLI check/build，均因严格浮点运算返回 E_CAPABILITY_UNAVAILABLE，
+没有生成输出，执行状态为 not_run。
+
+### 结果文件与复现
+
+两套实际结果包含命令、源文件 SHA-256、生成文件 SHA-256、退出码、stdout/stderr、分类、
+诊断、构建与 CTest 日志，以及未执行项：
+
+- 外层 `checks/pod-results-debug.json`
+- 外层 `checks/pod-results-release.json`
+
+两套 program.py/langrt.py 的哈希、项目身份及 main 退出值已逐项比较，一致。
+helper 的 metadata/HIR 带不同构建临时目录的绝对源码位置，因此不比较它们的跨目录哈希。
+各 JSON 中的 `/tmp/lang-python-pod-{debug,release}` 目录保存生成程序和逐项原始结果。
+
+```sh
+PY312=/home/qin/Work/language-dev-20261103/toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12
+cmake -S . -B /tmp/lang-python-pod-debug -G Ninja -DCMAKE_BUILD_TYPE=Debug \
+  -DLANG_ENABLE_LLVM=OFF -DLANG_PYTHON312="$PY312" -DLANG_TEST_PYTHON="$PY312"
+cmake --build /tmp/lang-python-pod-debug -j4
+ctest --test-dir /tmp/lang-python-pod-debug --output-on-failure -R '^python\.'
+ctest --test-dir /tmp/lang-python-pod-debug --output-on-failure -E '^python\.'
+cmake -S . -B /tmp/lang-python-pod-release -G Ninja -DCMAKE_BUILD_TYPE=Release \
+  -DLANG_ENABLE_LLVM=OFF -DLANG_PYTHON312="$PY312" -DLANG_TEST_PYTHON="$PY312"
+cmake --build /tmp/lang-python-pod-release -j4
+ctest --test-dir /tmp/lang-python-pod-release --output-on-failure
+```
+
+依赖交接：root 取 Python 授权目录中的实现与测试，并单独合并 sharedcap-local.patch；
+Clang22 ASan/UBSan 由 root 统一验证，本次 not_run。native 生成/执行、ARC、Vec/string 值执行、
+foreign、throws/defer、严格浮点运算、复杂 inout 与泛型 inout/move 均未实现或未执行。
+没有 commit、push、stash、修改根 CMake/CLI/contracts/native/共享类型，或派子代理。
+
 ## T07 具体标量泛型实例接入（2026-11-04）
 
 operation_id：`language-python-t07-scalar-instances-20261104`；契约 `compiler-dev/1`。

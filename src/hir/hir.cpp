@@ -1983,8 +1983,6 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         return true;
       const auto t = *storage_types.find(id);
       if (t.kind == TypeKind::NominalStruct || t.kind == TypeKind::NominalEnum) {
-        if (m.config.backend != Backend::native)
-          return false;
         const auto d = std::find_if(m.nominals.begin(), m.nominals.end(),
                                    [&](const auto &d) { return d.symbol == t.declaration; });
         if (d == m.nominals.end())
@@ -2007,16 +2005,10 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
             return false;
         return true;
       }
-      if (m.config.backend == Backend::python && t.kind == TypeKind::Function) {
-        for (auto p : t.parameters)
-          if (!supported(p.type))
-            return false;
-        if (!supported(t.result))
-          return false;
-      }
-      // Function values occupy one pointer. Do not expand their signatures
-      // while inspecting storage (e.g. S[T].f: func() S[S[T]]).
-      return t.kind != TypeKind::TypeParameter && t.kind != TypeKind::Error &&
+      // Function fields are storage leaves. Do not expand their signatures
+      // here (e.g. S[T].f: func() S[S[T]]); functions/calls are checked below.
+      return !(m.config.backend == Backend::python && t.kind == TypeKind::String) &&
+             t.kind != TypeKind::TypeParameter && t.kind != TypeKind::Error &&
              t.kind != TypeKind::ForeignOpaque;
     };
     auto signature_supported = [&](TypeId id) {
@@ -2048,9 +2040,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         case NodeKind::field_read:
         case NodeKind::field_place:
         case NodeKind::switch_:
-          if (m.config.backend == Backend::native)
-            break;
-          [[fallthrough]];
+          break;
         case NodeKind::constraint_call:
           unavailable(n.source,
                       "backend has not implemented this aggregate operation");

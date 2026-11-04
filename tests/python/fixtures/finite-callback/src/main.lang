@@ -1,0 +1,5 @@
+package app;
+struct S[T]{f func() S[S[T]];}
+func bottom() S[S[i32]]{return bottom();}
+func pass(x S[i32]) S[i32]{return x;}
+func main() i32{let x=S[i32](f:bottom);let y=pass(x);return 0;}
