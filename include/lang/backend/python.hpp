@@ -3,7 +3,7 @@
 
 namespace lang::backend::python {
 inline constexpr std::string_view runtime_version =
-    "compiler-dev/1-python-values/1";
+    "compiler-dev/1-python-values/2";
 struct Options {
   // Without a runner, the output can be imported by an explicit test harness.
   bool entrypoint = true;
@@ -24,7 +24,7 @@ struct Output {
 };
 // Pure code generation: no filesystem access, subprocesses or Python imports.
 // Only a Python/64 VerifiedHirModule is accepted. Entry is a zero-argument
-// function returning Unit or i32. Unsupported profiles report the shared
+// function returning Unit or i32, with or without typed throws. Unsupported profiles report the shared
 // E_CAPABILITY_UNAVAILABLE diagnostic; no new shared types or error codes.
 PhaseResult<Output> emit(const hir::VerifiedHirModule &, SymbolId entry,
                          const Options & = {}, std::stop_token = {});

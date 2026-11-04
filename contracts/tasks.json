@@ -239,7 +239,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "Python标量、具体泛型、POD聚合、常量字符串及位置式enum已支持；三种完整构建各28/28，关闭LLVM22/22。每套17主项目、18补充、5分类对照、13公共泛型、20聚合程序和20字符串观察通过。运行库版本仍compiler-dev/1-python-values/1；ARC、foreign和严格浮点运算未实施。"
+      "notes": "Python标量、具体泛型、POD聚合、常量字符串、位置式enum及typed throws/catch/defer已支持；运行库版本compiler-dev/1-python-values/2。主代理GNU Debug/Release与Clang22 ASan/UBSan完整测试各31/31，关闭LLVM25/25；每套原19清理项中11项运行、8项源码拒绝，18项补充运行，新增52项中48项运行、4项生成深度超限拒绝。正式CLI每套89项目检查/构建、77项目实际运行；生成Python与已观察程序逐字节相同。ARC、foreign和严格浮点运算未实施。"
     },
     {
       "id": "T07",
@@ -311,7 +311,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态类型/效果/清理HIR已实施并接入sema.t08，主代理修复短路handler可达性漏项；三种构建各29/29、LLVM关闭23/23，210静态检查含60次坏HIR拒绝。此阶段不实现两个后端执行，整项保持in_progress；原19个清理输入和数值预期未改。"
+      "notes": "静态类型/效果/清理HIR及Python执行已实施，native唯一修正仍进行中，整项保持in_progress。Python同块defer按注册计数倒序执行；函数错误类型键保留返回/throws层级。主代理三种构建各31/31，LLVM关闭25/25；267次正式CLI项目检查与构建、231次实际Python运行通过。生成深度超限在build前拒绝，check可通过；原19清理输入和数值预期未改。native初版因重复展开和缺失清理验证问题退回，未合入。"
     },
     {
       "id": "T09",

@@ -113,6 +113,11 @@ void invalid(const HirModule &input, const std::string &name,
 void unavailable(const HirModule &m) {
   auto cap = check_backend_capabilities(m);
   auto token = verify(m);
+  if (m.config.backend == Backend::python) {
+    need(cap.success() && token.success(),
+         "Python T08 execution support: " + diagnostics(cap) + diagnostics(token));
+    return;
+  }
   need(!cap.success() && cap.failure == FailureKind::unsupported &&
            has(cap, "E_CAPABILITY_UNAVAILABLE"),
        diagnostics(cap));

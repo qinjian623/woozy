@@ -47,6 +47,17 @@ add_test(NAME python.strings COMMAND "${LANG_PYTHON312}"
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/strings"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.strings PROPERTIES TIMEOUT 180)
+add_test(NAME python.cleanup COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/run_cleanup.py"
+  --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_PYTHON_TEST_ROOT}"
+  --out "${CMAKE_CURRENT_BINARY_DIR}/cleanup" --python "${LANG_PYTHON312}")
+set_tests_properties(python.cleanup PROPERTIES TIMEOUT 180)
+add_test(NAME python.cleanup_regressions COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/run_cleanup_regressions.py"
+  --helper $<TARGET_FILE:lang_python_emit> --cli $<TARGET_FILE:langc>
+  --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/cleanup-regressions"
+  --python "${LANG_PYTHON312}")
+set_tests_properties(python.cleanup_regressions PROPERTIES TIMEOUT 180)
 add_test(NAME python.cli COMMAND ${CMAKE_COMMAND}
   -DLANGC=$<TARGET_FILE:langc> -DPYTHON=${LANG_PYTHON312}
   -DROOT=${LANG_PYTHON_TEST_ROOT} -DNATIVE_AVAILABLE=${LANG_ENABLE_LLVM}

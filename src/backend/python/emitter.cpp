@@ -100,6 +100,7 @@ class Emitter {
   };
   std::vector<Loop> loops;
   std::vector<HirNodeId> break_targets;
+  std::vector<HirNodeId> active_defers;
   Output output;
 
   const HirNode &node(HirNodeId id) const { return m.nodes.at(id.value); }
@@ -114,8 +115,6 @@ class Emitter {
   }
   void check_signature(TypeId id, SourceSpan source) const {
     const auto &t = type(id);
-    if (t.throws_type)
-      throw Rejected{"Python value profile does not support throws", source};
     for (const auto &p : t.parameters)
       if (p.mode == ParamMode::move ||
           (p.mode == ParamMode::inout && !integer(type(p.type)) &&
@@ -123,6 +122,65 @@ class Emitter {
            type(p.type).kind != TypeKind::Bool))
         throw Rejected{"Python value profile requires ordinary or "
                        "numeric/bool inout parameters", source};
+  }
+  std::string type_key(TypeId id) const {
+    const auto &t = type(id);
+    switch (t.kind) {
+    case TypeKind::Unit: return "Unit";
+    case TypeKind::Bool: return "bool";
+    case TypeKind::String: return "string";
+    case TypeKind::Isize: return "isize";
+    case TypeKind::Usize: return "usize";
+    case TypeKind::SignedInt: return "i" + std::to_string(t.bits);
+    case TypeKind::UnsignedInt: return "u" + std::to_string(t.bits);
+    case TypeKind::Float: return "f" + std::to_string(t.bits);
+    case TypeKind::NominalStruct:
+    case TypeKind::NominalEnum: {
+      const auto &s = m.resolved->symbols.at(t.declaration.value);
+      auto key = m.resolved->project->module(s.module).logical_path + "." + s.name;
+      if (!t.type_args.empty()) {
+        key += "[";
+        for (size_t i = 0; i < t.type_args.size(); ++i) {
+          if (i) key += ",";
+          key += type_key(t.type_args[i]);
+        }
+        key += "]";
+      }
+      return key;
+    }
+    case TypeKind::Function: {
+      std::string key = "func(";
+      for (size_t i = 0; i < t.parameters.size(); ++i) {
+        if (i) key += ",";
+        const auto &p = t.parameters[i];
+        if (p.mode == ParamMode::inout) key += "inout ";
+        if (p.mode == ParamMode::move) key += "move ";
+        key += type_key(p.type);
+      }
+      key += ")->(" + type_key(t.result) + ")";
+      if (t.throws_type) key += " throws(" + type_key(*t.throws_type) + ")";
+      return key;
+    }
+    default:
+      throw std::logic_error("non-concrete Python error type identity");
+    }
+  }
+  // The structured block cleanups implement the verified plans. Check the
+  // registrations in each plan against exactly those active at this point;
+  // never substitute a block-tail plan for an earlier return/call failure.
+  void exits(const HirNode &n, bool normal = false) const {
+    for (const auto &plan : n.exits) {
+      if ((plan.kind == ExitKind::normal) != normal) continue;
+      std::vector<HirNodeId> cleanups;
+      for (auto d = active_defers.rbegin(); d != active_defers.rend(); ++d) {
+        const auto scope = std::get<Defer>(node(*d).data).owner_scope;
+        if (std::find(plan.exited_scopes.begin(), plan.exited_scopes.end(), scope)
+            != plan.exited_scopes.end())
+          cleanups.push_back(*d);
+      }
+      if (cleanups != plan.defers)
+        throw std::logic_error("Python lexical cleanup differs from verified ExitPlan");
+    }
   }
   void pattern_names(const Pattern &p) {
     if (p.binding)
@@ -179,6 +237,7 @@ class Emitter {
   std::string expression(HirNodeId id, Suite &suite) {
     check_cancelled(stop);
     const auto &n = node(id);
+    exits(n);
     switch (n.kind()) {
     case NodeKind::unit_literal:
       return save(suite, "None", n);
@@ -281,13 +340,57 @@ class Emitter {
       throw std::logic_error("non-expression in verified expression position");
     }
   }
+  void block(const HirNode &n, Suite &suite) {
+    std::vector<HirNodeId> registrations;
+    for (auto id : n.children)
+      if (node(id).kind() == NodeKind::defer_)
+        registrations.push_back(id);
+    if (registrations.empty()) {
+      for (auto id : n.children)
+        statement(id, suite);
+      exits(n, true);
+      return;
+    }
+    // Direct registrations in a lexical block execute in source order, so
+    // their active set is a prefix. Nested blocks own separate counters.
+    // This records only reachability, never copies a referenced source value.
+    auto registered = save(suite, "0", n);
+    auto allow = save(suite, "True", n);
+    Statement body{"try", n.source.span, true, {}, {}};
+    size_t ordinal = 0;
+    for (auto id : n.children) {
+      if (node(id).kind() == NodeKind::defer_) {
+        active_defers.push_back(id);
+        line(body.body, registered + " = " + std::to_string(++ordinal), node(id));
+      } else {
+        statement(id, body.body);
+      }
+    }
+    exits(n, true);
+    suite.push_back(std::move(body));
+    suite.push_back({"except _rt.Panic", n.source.span, true,
+                     {{allow + " = False", n.source.span, false, {}, {}},
+                      {"raise", n.source.span, false, {}, {}}}, {}});
+    Statement cleanup{"if " + allow, n.source.span, true, {}, {}};
+    for (auto it = registrations.rbegin(); it != registrations.rend(); ++it) {
+      active_defers.pop_back();
+      const auto &d = node(*it);
+      Statement branch{"if " + registered + " >= " + std::to_string(ordinal--),
+                       d.source.span, true, {}, {}};
+      statement(d.children[0], branch.body);
+      cleanup.body.push_back(std::move(branch));
+    }
+    // A Panic in a cleanup aborts the remaining siblings naturally; enclosing
+    // blocks' Panic handlers also skip their cleanups.
+    suite.push_back({"finally", n.source.span, true, {std::move(cleanup)}, {}});
+  }
   void statement(HirNodeId id, Suite &suite) {
     check_cancelled(stop);
     const auto &n = node(id);
+    exits(n);
     switch (n.kind()) {
     case NodeKind::block:
-      for (auto child : n.children)
-        statement(child, suite);
+      block(n, suite);
       break;
     case NodeKind::binding: {
       const auto &b = std::get<Binding>(n.data);
@@ -341,7 +444,13 @@ class Emitter {
                            {}});
       loops.push_back({id, n.children[2]});
       break_targets.push_back(id);
-      statement(n.children[3], loop.body);
+      Statement body{"try", n.source.span, true, {}, {}};
+      statement(n.children[3], body.body);
+      loop.body.push_back(std::move(body));
+      loop.body.push_back({"except _rt.LoopContinue as _jump", n.source.span,
+                          true, {{"if _jump.target != " + std::to_string(id.value),
+                                  n.source.span, true,
+                                  {{"raise", n.source.span, false, {}, {}}}, {}}}, {}});
       break_targets.pop_back();
       loops.pop_back();
       statement(n.children[2], loop.body);
@@ -375,6 +484,34 @@ class Emitter {
       line(suite, "return " + std::string(value), n);
       break;
     }
+    case NodeKind::throw_: {
+      const auto value = expression(n.children[0], suite);
+      line(suite, "raise _rt.TypedError(" +
+                      string_literal(type_key(node(n.children[0]).type)) +
+                      ", " + value + ")", n);
+      break;
+    }
+    case NodeKind::try_: {
+      Statement body{"try", n.source.span, true, {}, {}};
+      statement(n.children[0], body.body);
+      suite.push_back(std::move(body));
+      auto error = "_error" + std::to_string(current.value) + "_" +
+                   std::to_string(serial++);
+      Suite handlers{{"raise", n.source.span, false, {}, {}}};
+      const auto &catches = std::get<Try>(n.data).catches;
+      for (auto c = catches.rbegin(); c != catches.rend(); ++c) {
+        Statement branch{"if " + error + ".type_key == " +
+                             string_literal(type_key(c->error_type)),
+                         c->source.span, true, {}, std::move(handlers)};
+        branch.body.push_back({name(c->binding) + " = " + error + ".value",
+                               c->source.span, false, {}, {}});
+        statement(c->body, branch.body);
+        handlers = {std::move(branch)};
+      }
+      suite.push_back({"except _rt.TypedError as " + error, n.source.span,
+                       true, std::move(handlers), {}});
+      break;
+    }
     case NodeKind::break_: {
       auto target = std::get<Break>(n.data).loop;
       if (break_targets.empty() || break_targets.back() != target)
@@ -389,9 +526,8 @@ class Emitter {
       if (loops.empty() || loops.back().id != std::get<Continue>(n.data).loop)
         throw std::logic_error(
             "verified continue target is not the enclosing loop");
-      auto step = loops.back().step;
-      statement(step, suite);
-      line(suite, "continue", n);
+      line(suite, "raise _rt.LoopContinue(" +
+                      std::to_string(loops.back().id.value) + ")", n);
       break;
     }
     case NodeKind::noop:
@@ -404,21 +540,37 @@ class Emitter {
   void print_line(const std::string &text, unsigned indent,
                   std::optional<SourceSpan> source) {
     check_cancelled(stop);
+    if (indent > 80)
+      throw Rejected{"generated Python indentation exceeds the supported profile (80)", source};
     output.code += std::string(indent * 4, ' ') + text + "\n";
     ++printed_lines;
     if (source)
       output.source_map.push_back({printed_lines, *source});
   }
-  void print(const Suite &suite, unsigned indent) {
+  void print(const Suite &suite, unsigned indent, unsigned control_depth = 0) {
     if (suite.empty())
       print_line("pass", indent, {});
     for (const auto &s : suite) {
       print_line(s.text + (s.suite ? ":" : ""), indent, s.source);
-      if (s.suite)
-        print(s.body, indent + 1);
+      if (s.suite) {
+        auto depth = control_depth;
+        if (s.text.starts_with("def "))
+          depth = 0; // Each generated function is a separate Python code object.
+        else if (s.text == "try" || s.text == "finally" || s.text.starts_with("except "))
+          depth += 3;
+        else if (s.text.starts_with("while "))
+          ++depth;
+        // CPython 3.12 permits 20 static control blocks. Charge each try arm
+        // conservatively for handler/finally bookkeeping and reserve two for
+        // transfers during cleanup. This is checked on generated structure,
+        // without importing or executing Python in the compiler.
+        if (depth > 18)
+          throw Rejected{"generated Python control blocks exceed the supported profile (18)", s.source};
+        print(s.body, indent + 1, depth);
+      }
       if (!s.otherwise.empty()) {
         print_line("else:", indent, s.source);
-        print(s.otherwise, indent + 1);
+        print(s.otherwise, indent + 1, control_depth);
       }
     }
   }
@@ -437,7 +589,7 @@ public:
       throw std::logic_error("entry SymbolId is not a verified function");
     const auto &signature = type(found->signature);
     const auto &result = type(signature.result);
-    if (!signature.parameters.empty() || signature.throws_type ||
+    if (!signature.parameters.empty() ||
         !(result.kind == TypeKind::Unit ||
           (result.kind == TypeKind::SignedInt && result.bits == 32)))
       throw Rejected{
@@ -466,6 +618,9 @@ public:
         if (auto s = std::get_if<Switch>(&n.data))
           for (const auto &arm : s->arms)
             pattern_names(arm.pattern);
+        if (auto t = std::get_if<Try>(&n.data))
+          for (const auto &c : t->catches)
+            named.insert(c.binding);
         if (const auto *b = std::get_if<Binding>(&n.data)) {
           named.insert(b->symbol);
           if (b->writable)

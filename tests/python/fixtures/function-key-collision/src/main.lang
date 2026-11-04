@@ -1,0 +1,16 @@
+package app;
+enum E { Bad; }
+enum Err[T] { Bad(value T); }
+func innerPlain() {}
+func innerThrows() throws E {}
+func outerPlain() (func() throws E) {return innerThrows;}
+func outerThrows() (func()) throws E {return innerPlain;}
+func fail() throws Err[func() (func() throws E)] {
+    throw Err[func() (func() throws E)].Bad(value:outerPlain);
+}
+func main() i32 {
+    try { fail(); }
+    catch wrong Err[func() (func()) throws E] { return 9; }
+    catch right Err[func() (func() throws E)] { return 0; }
+    return 7;
+}

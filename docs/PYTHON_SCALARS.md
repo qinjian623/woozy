@@ -1,8 +1,14 @@
 # Python 标量实现与验证
 
+Python 已支持 typed throws、精确类型 catch 和词法块 defer，见
+[错误与清理执行说明](PYTHON_T08_EXECUTION.md)。当前运行库版本为
+`compiler-dev/1-python-values/2`；旧版运行库会被生成程序的版本检查拒绝。
+同块平铺 defer 不增加 Python 控制块深度；超过生成深度限制的输入在 build 时
+返回 `E_CAPABILITY_UNAVAILABLE`，check 仍可通过。后文保留各阶段的验证记录。
+
 常量字符串已接入，见[字符串实现](CONSTANT_STRINGS.md)。主代理三种构建各28/28，
 关闭LLVM22/22；每套另观察20个实际Python字符串返回值的类型、UTF-8字节和长度。
-运行库接口及版本不变，动态字符串操作、拥有字段和ARC仍未实现。
+该字符串阶段未改运行库版本；动态字符串操作、拥有字段和ARC仍未实现。
 
 ## T07 平凡 struct/enum 值执行（2026-11-04）
 

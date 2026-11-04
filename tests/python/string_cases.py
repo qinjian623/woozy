@@ -68,6 +68,10 @@ def succeeded(row):
 def rejection_checks(cli, backend, out):
     rows = []
     for ident, (source, code) in REJECTED.items():
+        # These two old capability rejections became Python execution tests in
+        # run_cleanup.py. Keep the native profile's original expectations.
+        if backend == 'python' and ident in ('throws', 'defer'):
+            continue
         project = out / 'rejected' / ident
         (project / 'src').mkdir(parents=True, exist_ok=True)
         manifest = project / 'lang.toml'

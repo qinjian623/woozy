@@ -143,8 +143,6 @@ UNSUPPORTED_SOURCES = {
     'ordinary-parameter-rebinding': 'func f(x i32) {x=2;} func main() {}',
     'string': 'func main() {let x="hello";}',
     'vec': 'func main() {let x=[1,2];}',
-    'defer': 'func main() {defer {}}',
-    'throws': 'func main() throws i32 {}',
     'capturing-lambda': 'func main() {let x i32=1;let f=func() i32 {return x;};}',
 }
 
@@ -278,7 +276,7 @@ def main():
               'fixture_sha256': before, 'cases': [], 'extra': [], 'negative_controls': [],
               'unsupported': [], 'failures': [],
               'not_run': ['official build CLI integration (integrator)',
-                          'native backend comparison (T05)', 'typed throws/defer (T08)',
+                          'native backend comparison (T05)',
                           'ARC/leak checks (T09)', 'foreign NumPy/PyTorch (T10)']}
 
     def compile_case(ident, manifest, group, expected='return', status=0):

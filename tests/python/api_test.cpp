@@ -109,6 +109,18 @@ int main(int argc, char **argv) {
               require(named && mapped, "pattern SymbolId and exact SourceSpan");
             }
     require(saw_binding, "pattern mapping test exercised");
+    auto cleanup = checked(argv[1], "python", 64,
+                            "tests/cleanup/fixtures/case-08/lang.toml");
+    auto cleanup_output = backend::python::emit(cleanup, entry(cleanup));
+    require(cleanup_output.success(), "emit real typed call/catch/defer HIR");
+    for (const auto &n : cleanup.module().nodes)
+      if (const auto *t = std::get_if<hir::Try>(&n.data))
+        for (const auto &c : t->catches) {
+          bool mapped = false;
+          for (const auto &s : cleanup_output.value->symbols)
+            mapped |= s.symbol == c.binding;
+          require(mapped, "catch binding uses shared SymbolId map");
+        }
     auto finite = checked(argv[1], "python", 64,
                           "tests/python/fixtures/finite-callback/lang.toml");
     auto count = finite.module().types.size();

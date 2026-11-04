@@ -230,7 +230,7 @@ def main():
               'source_head': command(['git', '-C', args.root, 'rev-parse', 'HEAD'])['stdout'].strip(),
               'cases': [], 'controls': [], 'unsupported': [], 'failures': [],
               'not_run': ['native execution', 'Clang ASan/UBSan (integrator)',
-                          'ARC/Vec/string/foreign/throws/defer', 'strict FP arithmetic']}
+                          'ARC/Vec/foreign', 'strict FP arithmetic']}
 
     def compile(phase, manifest, directory):
         argv = [args.langc, phase, '--project', manifest, '--backend', 'python', '--format', 'json']

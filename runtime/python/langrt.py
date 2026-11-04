@@ -2,13 +2,31 @@
 import struct
 import sys
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/1'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/2'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
+TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
 
 
 class Panic(BaseException):
     pass
+
+
+class TypedError(Exception):
+    """Language error only. The key is logical, never a session TypeId."""
+    __slots__ = ('type_key', 'value')
+
+    def __init__(self, type_key, value):
+        super().__init__(type_key)
+        self.type_key, self.value = type_key, value
+
+
+class LoopContinue(BaseException):
+    """Unwind the iteration's lexical cleanups before running its step."""
+    __slots__ = ('target',)
+
+    def __init__(self, target):
+        self.target = target
 
 
 class Cell:
@@ -120,4 +138,7 @@ def run(main):
     except Panic as error:
         print(PANIC_MARKER + str(error), file=sys.stderr)
         raise SystemExit(PANIC_EXIT_CODE) from None
+    except TypedError as error:
+        print(TYPED_ERROR_MARKER + error.type_key, file=sys.stderr)
+        raise SystemExit(1) from None
     raise SystemExit(0 if result is None else result)
