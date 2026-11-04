@@ -75,3 +75,14 @@ add_test(NAME python.cli COMMAND ${CMAKE_COMMAND}
   -DLANGC=$<TARGET_FILE:langc> -DPYTHON=${LANG_PYTHON312}
   -DROOT=${LANG_PYTHON_TEST_ROOT} -DNATIVE_AVAILABLE=${LANG_ENABLE_LLVM}
   -P ${CMAKE_CURRENT_LIST_DIR}/cli.cmake)
+add_test(NAME python.ownership COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/run_ownership.py"
+  --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/ownership"
+  --python "${LANG_PYTHON312}" --allow-stage-rejection)
+set_tests_properties(python.ownership PROPERTIES TIMEOUT 180 SKIP_RETURN_CODE 77)
+add_test(NAME python.ownership_runtime COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/ownership_runtime_test.py")
+add_executable(lang_python_ownership_ir_test ownership_ir_test.cpp)
+target_link_libraries(lang_python_ownership_ir_test PRIVATE lang_sema lang_backend_python)
+add_test(NAME python.ownership_ir COMMAND lang_python_ownership_ir_test)

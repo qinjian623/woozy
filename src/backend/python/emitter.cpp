@@ -102,6 +102,116 @@ class Emitter {
   std::vector<HirNodeId> break_targets;
   std::vector<HirNodeId> active_defers;
   Output output;
+  std::set<uint64_t> temporary_ids;
+  std::set<SymbolId> owned_bindings;
+  std::set<uint64_t> value_types;
+  bool owned(TypeId id) const { return classify_value(m, id).needs_drop; }
+  std::string ops(TypeId id) const { return "_v" + std::to_string(id.value); }
+  std::string key(OwnerKind kind, uint64_t id) const {
+    return "(" + std::to_string(static_cast<unsigned>(kind)) + ", " +
+           std::to_string(id) + ")";
+  }
+  std::string take(HirNodeId id, const std::string &value) const {
+    return temporary_ids.contains(id.value)
+               ? "_frame.take(" + key(OwnerKind::temporary, id.value) + ")"
+               : value;
+  }
+  void steps(const std::vector<CleanupStep> &actions, Suite &suite,
+             const HirNode &n, bool temporaries_only = false) {
+    for (const auto &a : actions) {
+      if (a.kind == CleanupKind::end_borrow)
+        line(suite,
+             "_frame.end_borrow(" + key(a.owner.kind, a.owner.identity) + ")",
+             n);
+      if (a.kind == CleanupKind::destroy_if_live &&
+          (!temporaries_only || a.owner.kind == OwnerKind::temporary))
+        line(suite, "_frame.drop(" + key(a.owner.kind, a.owner.identity) + ")",
+             n);
+    }
+  }
+  void full(HirNodeId id, Suite &suite) {
+    for (const auto &f : m.ownership.full_expressions)
+      if (f.node == id)
+        steps(f.actions, suite, node(id));
+  }
+  void local_drops(ScopeId scope, Suite &suite, const HirNode &n) {
+    std::vector<LocalLifetime> locals;
+    for (auto l : m.ownership.locals)
+      if (l.scope == scope && l.mode == ParamMode::move && owned(l.type))
+        locals.push_back(l);
+    std::sort(locals.begin(), locals.end(),
+              [](auto a, auto b) { return a.order > b.order; });
+    for (auto l : locals)
+      line(suite,
+           "_frame.drop(" + key(OwnerKind::binding, l.symbol.value) + ")", n);
+  }
+  void scope_wrap(ScopeId scope, Suite body, Suite &suite, const HirNode &n) {
+    Suite cleanup;
+    local_drops(scope, cleanup, n);
+    if (cleanup.empty()) {
+      suite.insert(suite.end(), std::make_move_iterator(body.begin()),
+                   std::make_move_iterator(body.end()));
+      return;
+    }
+    auto allow = save(suite, "True", n);
+    suite.push_back({"try", n.source.span, true, std::move(body), {}});
+    suite.push_back({"except _rt.Panic",
+                     n.source.span,
+                     true,
+                     {{allow + " = False", n.source.span, false, {}, {}},
+                      {"raise", n.source.span, false, {}, {}}},
+                     {}});
+    suite.push_back(
+        {"finally",
+         n.source.span,
+         true,
+         {{"if " + allow, n.source.span, true, std::move(cleanup), {}}},
+         {}});
+  }
+  void collect_type(TypeId id) {
+    if (!value_types.insert(id.value).second)
+      return;
+    const auto &t = type(id);
+    if (t.kind == TypeKind::Vec)
+      collect_type(t.type_args[0]);
+    auto v = classify_value(m, id);
+    for (auto f : v.fields)
+      collect_type(f.type);
+  }
+  void emit_type(TypeId id, Suite &program, std::set<uint64_t> &done) {
+    if (!done.insert(id.value).second)
+      return;
+    auto v = classify_value(m, id);
+    const auto &t = type(id);
+    for (auto f : v.fields)
+      emit_type(f.type, program, done);
+    if (t.kind == TypeKind::Vec)
+      emit_type(t.type_args[0], program, done);
+    std::string desc = "_rt.ValueType()";
+    if (v.kind == ValueKind::vec)
+      desc = "_rt.ValueType('vec')";
+    if (v.kind == ValueKind::structure) {
+      std::vector<std::string> fields;
+      for (auto f : v.fields)
+        fields.push_back(ops(f.type));
+      desc = "_rt.ValueType('struct', " + tuple(fields) + ")";
+    }
+    if (v.kind == ValueKind::enumeration) {
+      std::vector<std::string> variants;
+      for (const auto &d : m.nominals)
+        if (d.symbol == t.declaration)
+          for (const auto &variant : d.variants) {
+            std::vector<std::string> fields;
+            for (auto f : v.fields)
+              if (f.variant == variant.symbol)
+                fields.push_back(ops(f.type));
+            variants.push_back(std::to_string(variant.symbol.value) + ": " +
+                               tuple(fields));
+          }
+      desc = "_rt.ValueType('enum', variants={" + join(variants) + "})";
+    }
+    program.push_back({ops(id) + " = " + desc, {}, false, {}, {}});
+  }
 
   const HirNode &node(HirNodeId id) const { return m.nodes.at(id.value); }
   const Type &type(TypeId id) const { return *m.types.find(id); }
@@ -116,49 +226,65 @@ class Emitter {
   void check_signature(TypeId id, SourceSpan source) const {
     const auto &t = type(id);
     for (const auto &p : t.parameters)
-      if (p.mode == ParamMode::move ||
-          (p.mode == ParamMode::inout && !integer(type(p.type)) &&
-           type(p.type).kind != TypeKind::Float &&
-           type(p.type).kind != TypeKind::Bool))
-        throw Rejected{"Python value profile requires ordinary or "
-                       "numeric/bool inout parameters", source};
+      if (p.mode == ParamMode::inout && !integer(type(p.type)) &&
+          type(p.type).kind != TypeKind::Float &&
+          type(p.type).kind != TypeKind::Bool)
+        throw Rejected{"Python value profile supports ordinary/move or "
+                       "numeric/bool inout parameters",
+                       source};
   }
   std::string type_key(TypeId id) const {
     const auto &t = type(id);
     switch (t.kind) {
-    case TypeKind::Unit: return "Unit";
-    case TypeKind::Bool: return "bool";
-    case TypeKind::String: return "string";
-    case TypeKind::Isize: return "isize";
-    case TypeKind::Usize: return "usize";
-    case TypeKind::SignedInt: return "i" + std::to_string(t.bits);
-    case TypeKind::UnsignedInt: return "u" + std::to_string(t.bits);
-    case TypeKind::Float: return "f" + std::to_string(t.bits);
+    case TypeKind::Unit:
+      return "Unit";
+    case TypeKind::Bool:
+      return "bool";
+    case TypeKind::String:
+      return "string";
+    case TypeKind::Isize:
+      return "isize";
+    case TypeKind::Usize:
+      return "usize";
+    case TypeKind::SignedInt:
+      return "i" + std::to_string(t.bits);
+    case TypeKind::UnsignedInt:
+      return "u" + std::to_string(t.bits);
+    case TypeKind::Float:
+      return "f" + std::to_string(t.bits);
     case TypeKind::NominalStruct:
     case TypeKind::NominalEnum: {
       const auto &s = m.resolved->symbols.at(t.declaration.value);
-      auto key = m.resolved->project->module(s.module).logical_path + "." + s.name;
+      auto key =
+          m.resolved->project->module(s.module).logical_path + "." + s.name;
       if (!t.type_args.empty()) {
         key += "[";
         for (size_t i = 0; i < t.type_args.size(); ++i) {
-          if (i) key += ",";
+          if (i)
+            key += ",";
           key += type_key(t.type_args[i]);
         }
         key += "]";
       }
       return key;
     }
+    case TypeKind::Vec:
+      return "Vec[" + type_key(t.type_args[0]) + "]";
     case TypeKind::Function: {
       std::string key = "func(";
       for (size_t i = 0; i < t.parameters.size(); ++i) {
-        if (i) key += ",";
+        if (i)
+          key += ",";
         const auto &p = t.parameters[i];
-        if (p.mode == ParamMode::inout) key += "inout ";
-        if (p.mode == ParamMode::move) key += "move ";
+        if (p.mode == ParamMode::inout)
+          key += "inout ";
+        if (p.mode == ParamMode::move)
+          key += "move ";
         key += type_key(p.type);
       }
       key += ")->(" + type_key(t.result) + ")";
-      if (t.throws_type) key += " throws(" + type_key(*t.throws_type) + ")";
+      if (t.throws_type)
+        key += " throws(" + type_key(*t.throws_type) + ")";
       return key;
     }
     default:
@@ -170,16 +296,18 @@ class Emitter {
   // never substitute a block-tail plan for an earlier return/call failure.
   void exits(const HirNode &n, bool normal = false) const {
     for (const auto &plan : n.exits) {
-      if ((plan.kind == ExitKind::normal) != normal) continue;
+      if ((plan.kind == ExitKind::normal) != normal)
+        continue;
       std::vector<HirNodeId> cleanups;
       for (auto d = active_defers.rbegin(); d != active_defers.rend(); ++d) {
         const auto scope = std::get<Defer>(node(*d).data).owner_scope;
-        if (std::find(plan.exited_scopes.begin(), plan.exited_scopes.end(), scope)
-            != plan.exited_scopes.end())
+        if (std::find(plan.exited_scopes.begin(), plan.exited_scopes.end(),
+                      scope) != plan.exited_scopes.end())
           cleanups.push_back(*d);
       }
       if (cleanups != plan.defers)
-        throw std::logic_error("Python lexical cleanup differs from verified ExitPlan");
+        throw std::logic_error(
+            "Python lexical cleanup differs from verified ExitPlan");
     }
   }
   void pattern_names(const Pattern &p) {
@@ -194,14 +322,31 @@ class Emitter {
     std::string test = value + "[0] == " + std::to_string(p.variant->value);
     for (size_t i = 0; i < p.payload.size(); ++i)
       if (p.payload[i].variant)
-        test += " and (" + pattern_test(p.payload[i], value + "[1][" +
-                         std::to_string(i) + "]") + ")";
+        test += " and (" +
+                pattern_test(p.payload[i],
+                             value + "[1][" + std::to_string(i) + "]") +
+                ")";
     return test;
   }
   void pattern_bind(const Pattern &p, const std::string &value, Suite &suite) {
     if (p.binding)
-      suite.push_back({name(*p.binding) + " = " + value, p.source.span,
-                       false, {}, {}});
+      suite.push_back(
+          {name(*p.binding) + " = " +
+               (owned(p.type) ? "_frame.slot(" +
+                                    key(OwnerKind::binding, p.binding->value) +
+                                    ", " + ops(p.type) + ")"
+                              : value),
+           p.source.span,
+           false,
+           {},
+           {}});
+    if (p.binding && owned(p.type))
+      suite.push_back({name(*p.binding) + ".install(" + ops(p.type) + ".copy(" +
+                           value + "))",
+                       p.source.span,
+                       false,
+                       {},
+                       {}});
     for (size_t i = 0; i < p.payload.size(); ++i)
       pattern_bind(p.payload[i], value + "[1][" + std::to_string(i) + "]",
                    suite);
@@ -226,8 +371,17 @@ class Emitter {
     line(suite, result + " = " + value, n);
     return result;
   }
+  std::string value_save(Suite &suite, const std::string &value, HirNodeId id) {
+    if (!temporary_ids.contains(id.value))
+      return save(suite, value, node(id));
+    return save(suite,
+                "_frame.put(" + key(OwnerKind::temporary, id.value) + ", " +
+                    ops(node(id).type) + ", " + value + ")",
+                node(id));
+  }
   std::string read(SymbolId s) const {
-    return name(s) + (cells.contains(s) ? ".value" : "");
+    return name(s) +
+           ((cells.contains(s) || owned_bindings.contains(s)) ? ".value" : "");
   }
   std::string binary(BinaryOp op, const std::string &a, const std::string &b,
                      TypeId operand) const {
@@ -256,9 +410,15 @@ class Emitter {
                       ", " + std::to_string(type(n.type).bits) + ")",
                   n);
     case NodeKind::string_literal:
-      return save(suite, string_literal(std::get<StringLiteral>(n.data).utf8), n);
+      return save(suite, string_literal(std::get<StringLiteral>(n.data).utf8),
+                  n);
     case NodeKind::read:
-      return save(suite, read(std::get<Read>(n.data).symbol), n);
+      return value_save(suite,
+                        temporary_ids.contains(id.value)
+                            ? ops(n.type) + ".copy(" +
+                                  read(std::get<Read>(n.data).symbol) + ")"
+                            : read(std::get<Read>(n.data).symbol),
+                        id);
     case NodeKind::place:
       return save(suite, name(std::get<Place>(n.data).symbol), n);
     case NodeKind::function_value:
@@ -267,17 +427,23 @@ class Emitter {
     case NodeKind::struct_init: {
       const auto &init = std::get<StructInit>(n.data);
       std::vector<std::string> values(init.fields.size());
-      for (const auto &arg : init.fields)
-        values.at(arg.parameter_index) = expression(arg.expression, suite);
-      return save(suite, tuple(values), n);
+      for (const auto &arg : init.fields) {
+        auto value = expression(arg.expression, suite);
+        values.at(arg.parameter_index) = take(arg.expression, value);
+      }
+      return value_save(suite, tuple(values), id);
     }
     case NodeKind::enum_init: {
       const auto &init = std::get<EnumInit>(n.data);
       std::vector<std::string> values(init.payload.size());
-      for (const auto &arg : init.payload)
-        values.at(arg.parameter_index) = expression(arg.expression, suite);
-      return save(suite, "(" + std::to_string(init.variant.value) + ", " +
-                         tuple(values) + ")", n);
+      for (const auto &arg : init.payload) {
+        auto value = expression(arg.expression, suite);
+        values.at(arg.parameter_index) = take(arg.expression, value);
+      }
+      return value_save(suite,
+                        "(" + std::to_string(init.variant.value) + ", " +
+                            tuple(values) + ")",
+                        id);
     }
     case NodeKind::field_read:
     case NodeKind::field_place: {
@@ -286,8 +452,49 @@ class Emitter {
       auto field = place ? std::get<FieldPlace>(n.data).field
                          : std::get<FieldRead>(n.data).field;
       auto index = std::to_string(field_index(node(n.children[0]).type, field));
-      return save(suite, place ? "_rt.Field(" + receiver + ", " + index + ")"
-                               : receiver + "[" + index + "]", n);
+      auto value = place ? "_rt.Field(" + receiver + ", " + index + ")"
+                         : receiver + "[" + index + "]";
+      if (!place && temporary_ids.contains(id.value))
+        value = ops(n.type) + ".copy(" + value + ")";
+      return value_save(suite, value, id);
+    }
+    case NodeKind::move: {
+      const auto &mv = std::get<Move>(n.data);
+      auto value = mv.binding
+                       ? (owned(n.type) ? name(*mv.binding) + ".take()"
+                                        : read(*mv.binding))
+                       : take(n.children[0], expression(n.children[0], suite));
+      return value_save(suite, value, id);
+    }
+    case NodeKind::vec_init: {
+      std::vector<std::string> values;
+      for (auto c : n.children) {
+        auto value = expression(c, suite);
+        values.push_back(take(c, value));
+      }
+      return value_save(suite,
+                        "_rt.Vec.create(" + ops(type(n.type).type_args[0]) +
+                            ", " + tuple(values) + ")",
+                        id);
+    }
+    case NodeKind::index_read:
+    case NodeKind::index_place: {
+      auto receiver = expression(n.children[0], suite);
+      auto index = expression(n.children[1], suite);
+      if (n.kind() == NodeKind::index_place)
+        return save(suite, "_rt.Index(" + receiver + ", " + index + ")", n);
+      auto value = receiver + ".get(" + index + ")";
+      if (owned(n.type))
+        value = ops(n.type) + ".copy(" + value + ")";
+      return value_save(suite, value, id);
+    }
+    case NodeKind::vec_slice: {
+      const auto &slice = std::get<VecSlice>(n.data);
+      auto receiver = expression(n.children[0], suite);
+      auto start = slice.start ? expression(*slice.start, suite) : "None";
+      auto end = slice.end ? expression(*slice.end, suite) : "None";
+      return value_save(suite, receiver + ".slice(" + start + ", " + end + ")",
+                        id);
     }
     case NodeKind::unary: {
       auto operand = expression(n.children[0], suite);
@@ -296,8 +503,10 @@ class Emitter {
                   : op == UnaryOp::logical_not ? "not"
                                                : "inv";
       if (type(node(n.children[0]).type).kind == TypeKind::Float)
-        return save(suite, "_rt.float_neg(" + operand + ", " +
-                               std::to_string(type(n.type).bits) + ")", n);
+        return save(suite,
+                    "_rt.float_neg(" + operand + ", " +
+                        std::to_string(type(n.type).bits) + ")",
+                    n);
       return save(suite,
                   "_rt.unary('" + std::string(text) + "', " + operand + ", " +
                       numeric(node(n.children[0]).type) + ")",
@@ -338,9 +547,45 @@ class Emitter {
                         : expression(*call.callee, suite);
       std::vector<std::string> args(call.args.size());
       // Evaluate the published source-order vector before arranging formals.
-      for (const auto &arg : call.args)
+      size_t operand = call.callee ? 1 : 0;
+      for (const auto &arg : call.args) {
         args.at(arg.parameter_index) = expression(arg.expression, suite);
-      return save(suite, callee + "(" + join(args) + ")", n);
+        for (const auto &u : m.ownership.uses)
+          if (u.consumer == id && u.operand == operand &&
+              u.kind == UseKind::borrow && !u.destination) {
+            auto k = u.root ? key(OwnerKind::binding, u.root->value)
+                            : key(OwnerKind::temporary, arg.expression.value);
+            line(suite, "_frame.borrow(" + k + ")", n);
+          }
+        ++operand;
+      }
+      for (const auto &arg : call.args)
+        if (arg.mode == ParamMode::move)
+          args.at(arg.parameter_index) =
+              take(arg.expression, args.at(arg.parameter_index));
+      Suite invoke;
+      auto value = value_save(invoke, callee + "(" + join(args) + ")", id);
+      bool error = false;
+      Suite failure;
+      for (const auto &plan : n.exits)
+        if (plan.kind == ExitKind::error) {
+          steps(plan.actions, failure, n, true);
+          error = true;
+        }
+      if (error) {
+        suite.push_back({"try", n.source.span, true, std::move(invoke), {}});
+        line(failure, "raise", n);
+        suite.push_back({"except _rt.TypedError",
+                         n.source.span,
+                         true,
+                         std::move(failure),
+                         {}});
+      } else
+        suite.insert(suite.end(), invoke.begin(), invoke.end());
+      for (const auto &c : m.ownership.calls)
+        if (c.node == id)
+          steps(c.on_return, suite, n);
+      return value;
     }
     default:
       throw std::logic_error("non-expression in verified expression position");
@@ -351,7 +596,11 @@ class Emitter {
     for (auto id : n.children)
       if (node(id).kind() == NodeKind::defer_)
         registrations.push_back(id);
-    if (registrations.empty()) {
+    bool has_locals = false;
+    for (auto l : m.ownership.locals)
+      has_locals |=
+          l.scope == n.scope && l.mode == ParamMode::move && owned(l.type);
+    if (registrations.empty() && !has_locals) {
       for (auto id : n.children)
         statement(id, suite);
       exits(n, true);
@@ -367,25 +616,33 @@ class Emitter {
     for (auto id : n.children) {
       if (node(id).kind() == NodeKind::defer_) {
         active_defers.push_back(id);
-        line(body.body, registered + " = " + std::to_string(++ordinal), node(id));
+        line(body.body, registered + " = " + std::to_string(++ordinal),
+             node(id));
       } else {
         statement(id, body.body);
       }
     }
     exits(n, true);
     suite.push_back(std::move(body));
-    suite.push_back({"except _rt.Panic", n.source.span, true,
+    suite.push_back({"except _rt.Panic",
+                     n.source.span,
+                     true,
                      {{allow + " = False", n.source.span, false, {}, {}},
-                      {"raise", n.source.span, false, {}, {}}}, {}});
+                      {"raise", n.source.span, false, {}, {}}},
+                     {}});
     Statement cleanup{"if " + allow, n.source.span, true, {}, {}};
     for (auto it = registrations.rbegin(); it != registrations.rend(); ++it) {
       active_defers.pop_back();
       const auto &d = node(*it);
       Statement branch{"if " + registered + " >= " + std::to_string(ordinal--),
-                       d.source.span, true, {}, {}};
+                       d.source.span,
+                       true,
+                       {},
+                       {}};
       statement(d.children[0], branch.body);
       cleanup.body.push_back(std::move(branch));
     }
+    local_drops(n.scope, cleanup.body, n);
     // A Panic in a cleanup aborts the remaining siblings naturally; enclosing
     // blocks' Panic handlers also skip their cleanups.
     suite.push_back({"finally", n.source.span, true, {std::move(cleanup)}, {}});
@@ -401,10 +658,21 @@ class Emitter {
     case NodeKind::binding: {
       const auto &b = std::get<Binding>(n.data);
       auto value = expression(n.children[0], suite);
-      line(suite,
-           name(b.symbol) + " = " +
-               (b.writable ? "_rt.Cell(" + value + ")" : value),
-           n);
+      if (owned(node(n.children[0]).type)) {
+        line(suite,
+             name(b.symbol) + " = _frame.slot(" +
+                 key(OwnerKind::binding, b.symbol.value) + ", " +
+                 ops(node(n.children[0]).type) + ")",
+             n);
+        line(suite,
+             name(b.symbol) + ".install(" + take(n.children[0], value) + ")",
+             n);
+      } else
+        line(suite,
+             name(b.symbol) + " = " +
+                 (b.writable ? "_rt.Cell(" + value + ")" : value),
+             n);
+      full(id, suite);
       break;
     }
     case NodeKind::assign: {
@@ -420,14 +688,28 @@ class Emitter {
             suite,
             binary(*assign.compound, before, value, node(n.children[0]).type),
             n);
-      line(suite, place + ".value = " + value, n);
+      auto installed = take(n.children[1], value);
+      if (owned(node(n.children[0]).type) &&
+          node(n.children[0]).kind() != NodeKind::index_place) {
+        // Field is a short-lived place and its old field owns exactly once.
+        if (node(n.children[0]).kind() == NodeKind::field_place)
+          line(suite,
+               ops(node(n.children[0]).type) + ".drop(" + place + ".value)", n);
+        else {
+          line(suite, place + ".drop()", n);
+        }
+      }
+      line(suite, place + ".value = " + installed, n);
+      full(id, suite);
       break;
     }
     case NodeKind::expression_statement:
       (void)expression(n.children[0], suite);
+      full(id, suite);
       break;
     case NodeKind::if_: {
       auto condition = expression(n.children[0], suite);
+      full(n.children[0], suite);
       Statement branch{"if " + condition, n.source.span, true, {}, {}};
       statement(n.children[1], branch.body);
       if (n.children.size() == 3) {
@@ -440,9 +722,11 @@ class Emitter {
       break;
     }
     case NodeKind::for_: {
-      statement(n.children[0], suite);
+      Suite for_scope;
+      statement(n.children[0], for_scope);
       Statement loop{"while True", n.source.span, true, {}, {}};
       auto condition = expression(n.children[1], loop.body);
+      full(n.children[1], loop.body);
       loop.body.push_back({"if not " + condition,
                            n.source.span,
                            true,
@@ -453,14 +737,84 @@ class Emitter {
       Statement body{"try", n.source.span, true, {}, {}};
       statement(n.children[3], body.body);
       loop.body.push_back(std::move(body));
-      loop.body.push_back({"except _rt.LoopContinue as _jump", n.source.span,
-                          true, {{"if _jump.target != " + std::to_string(id.value),
-                                  n.source.span, true,
-                                  {{"raise", n.source.span, false, {}, {}}}, {}}}, {}});
+      loop.body.push_back({"except _rt.LoopContinue as _jump",
+                           n.source.span,
+                           true,
+                           {{"if _jump.target != " + std::to_string(id.value),
+                             n.source.span,
+                             true,
+                             {{"raise", n.source.span, false, {}, {}}},
+                             {}}},
+                           {}});
       break_targets.pop_back();
       loops.pop_back();
       statement(n.children[2], loop.body);
-      suite.push_back(std::move(loop));
+      for_scope.push_back(std::move(loop));
+      scope_wrap(n.scope, std::move(for_scope), suite, n);
+      break;
+    }
+    case NodeKind::for_in: {
+      const auto &fi = std::get<ForIn>(n.data);
+      auto collection = expression(n.children[0], suite);
+      auto iteration_key = key(OwnerKind::iteration, id.value);
+      line(suite,
+           "_frame.put(" + iteration_key + ", " +
+               ops(node(n.children[0]).type) + ", " +
+               take(n.children[0], collection) + ")",
+           n);
+      full(id, suite);
+      auto length = save(suite, collection + ".begin()", n);
+      auto index = save(suite, "0", n);
+      auto allow = save(suite, "True", n);
+      Statement loop{
+          "while " + index + " < " + length, n.source.span, true, {}, {}};
+      auto element_type = type(node(n.children[0]).type).type_args[0];
+      if (owned(element_type)) {
+        line(loop.body,
+             name(fi.element) + " = _frame.slot(" +
+                 key(OwnerKind::binding, fi.element.value) + ", " +
+                 ops(element_type) + ")",
+             n);
+        line(loop.body,
+             name(fi.element) + ".install(" + ops(element_type) + ".copy(" +
+                 collection + ".get(" + index + ")))",
+             n);
+      } else
+        line(loop.body,
+             name(fi.element) + " = " + collection + ".get(" + index + ")", n);
+      loops.push_back({id, id});
+      break_targets.push_back(id);
+      Suite body;
+      statement(fi.body, body);
+      loop.body.push_back({"try", n.source.span, true, std::move(body), {}});
+      loop.body.push_back({"except _rt.LoopContinue as _jump",
+                           n.source.span,
+                           true,
+                           {{"if _jump.target != " + std::to_string(id.value),
+                             n.source.span,
+                             true,
+                             {{"raise", n.source.span, false, {}, {}}},
+                             {}}},
+                           {}});
+      loops.pop_back();
+      break_targets.pop_back();
+      line(loop.body, index + " += 1", n);
+      suite.push_back({"try", n.source.span, true, {std::move(loop)}, {}});
+      suite.push_back({"except _rt.Panic",
+                       n.source.span,
+                       true,
+                       {{allow + " = False", n.source.span, false, {}, {}},
+                        {"raise", n.source.span, false, {}, {}}},
+                       {}});
+      Suite cleanup;
+      line(cleanup, collection + ".end()", n);
+      line(cleanup, "_frame.drop(" + iteration_key + ")", n);
+      suite.push_back(
+          {"finally",
+           n.source.span,
+           true,
+           {{"if " + allow, n.source.span, true, std::move(cleanup), {}}},
+           {}});
       break;
     }
     case NodeKind::switch_: {
@@ -470,31 +824,47 @@ class Emitter {
       break_targets.push_back(id);
       for (auto arm = arms.rbegin(); arm != arms.rend(); ++arm) {
         Statement branch{"if " + pattern_test(arm->pattern, value),
-                         arm->pattern.source.span, true, {}, {}};
+                         arm->pattern.source.span,
+                         true,
+                         {},
+                         {}};
         pattern_bind(arm->pattern, value, branch.body);
+        full(id, branch.body);
         statement(arm->body, branch.body);
         branch.otherwise = std::move(branches);
         branches = {std::move(branch)};
       }
       break_targets.pop_back();
       suite.push_back({"try", n.source.span, true, std::move(branches), {}});
-      suite.push_back({"except _rt.SwitchBreak as _jump", n.source.span,
-                       true, {{"if _jump.target != " + std::to_string(id.value),
-                               n.source.span, true,
-                               {{"raise", n.source.span, false, {}, {}}}, {}}}, {}});
+      suite.push_back({"except _rt.SwitchBreak as _jump",
+                       n.source.span,
+                       true,
+                       {{"if _jump.target != " + std::to_string(id.value),
+                         n.source.span,
+                         true,
+                         {{"raise", n.source.span, false, {}, {}}},
+                         {}}},
+                       {}});
       break;
     }
     case NodeKind::return_: {
       auto value =
           n.children.empty() ? "None" : expression(n.children[0], suite);
+      if (!n.children.empty())
+        value = save(suite, take(n.children[0], value), n);
+      full(id, suite);
       line(suite, "return " + std::string(value), n);
       break;
     }
     case NodeKind::throw_: {
-      const auto value = expression(n.children[0], suite);
-      line(suite, "raise _rt.TypedError(" +
-                      string_literal(type_key(node(n.children[0]).type)) +
-                      ", " + value + ")", n);
+      auto value = expression(n.children[0], suite);
+      value = save(suite, take(n.children[0], value), n);
+      full(id, suite);
+      line(suite,
+           "raise _rt.TypedError(" +
+               string_literal(type_key(node(n.children[0]).type)) + ", " +
+               value + ", " + ops(node(n.children[0]).type) + ")",
+           n);
       break;
     }
     case NodeKind::try_: {
@@ -508,14 +878,38 @@ class Emitter {
       for (auto c = catches.rbegin(); c != catches.rend(); ++c) {
         Statement branch{"if " + error + ".type_key == " +
                              string_literal(type_key(c->error_type)),
-                         c->source.span, true, {}, std::move(handlers)};
-        branch.body.push_back({name(c->binding) + " = " + error + ".value",
-                               c->source.span, false, {}, {}});
+                         c->source.span,
+                         true,
+                         {},
+                         std::move(handlers)};
+        if (owned(c->error_type)) {
+          branch.body.push_back({name(c->binding) + " = _frame.slot(" +
+                                     key(OwnerKind::binding, c->binding.value) +
+                                     ", " + ops(c->error_type) + ")",
+                                 c->source.span,
+                                 false,
+                                 {},
+                                 {}});
+          branch.body.push_back(
+              {name(c->binding) + ".install(" + error + ".take())",
+               c->source.span,
+               false,
+               {},
+               {}});
+        } else
+          branch.body.push_back({name(c->binding) + " = " + error + ".take()",
+                                 c->source.span,
+                                 false,
+                                 {},
+                                 {}});
         statement(c->body, branch.body);
         handlers = {std::move(branch)};
       }
-      suite.push_back({"except _rt.TypedError as " + error, n.source.span,
-                       true, std::move(handlers), {}});
+      suite.push_back({"except _rt.TypedError as " + error,
+                       n.source.span,
+                       true,
+                       std::move(handlers),
+                       {}});
       break;
     }
     case NodeKind::break_: {
@@ -523,17 +917,21 @@ class Emitter {
       if (break_targets.empty() || break_targets.back() != target)
         throw std::logic_error(
             "verified break target is not the enclosing loop/switch");
-      line(suite, node(target).kind() == NodeKind::switch_
-                      ? "raise _rt.SwitchBreak(" + std::to_string(target.value) + ")"
-                      : "break", n);
+      line(suite,
+           node(target).kind() == NodeKind::switch_
+               ? "raise _rt.SwitchBreak(" + std::to_string(target.value) + ")"
+               : "break",
+           n);
       break;
     }
     case NodeKind::continue_: {
       if (loops.empty() || loops.back().id != std::get<Continue>(n.data).loop)
         throw std::logic_error(
             "verified continue target is not the enclosing loop");
-      line(suite, "raise _rt.LoopContinue(" +
-                      std::to_string(loops.back().id.value) + ")", n);
+      line(suite,
+           "raise _rt.LoopContinue(" + std::to_string(loops.back().id.value) +
+               ")",
+           n);
       break;
     }
     case NodeKind::noop:
@@ -547,7 +945,9 @@ class Emitter {
                   std::optional<SourceSpan> source) {
     check_cancelled(stop);
     if (indent > 80)
-      throw Rejected{"generated Python indentation exceeds the supported profile (80)", source};
+      throw Rejected{
+          "generated Python indentation exceeds the supported profile (80)",
+          source};
     output.code += std::string(indent * 4, ' ') + text + "\n";
     ++printed_lines;
     if (source)
@@ -561,8 +961,10 @@ class Emitter {
       if (s.suite) {
         auto depth = control_depth;
         if (s.text.starts_with("def "))
-          depth = 0; // Each generated function is a separate Python code object.
-        else if (s.text == "try" || s.text == "finally" || s.text.starts_with("except "))
+          depth =
+              0; // Each generated function is a separate Python code object.
+        else if (s.text == "try" || s.text == "finally" ||
+                 s.text.starts_with("except "))
           depth += 3;
         else if (s.text.starts_with("while "))
           ++depth;
@@ -571,7 +973,9 @@ class Emitter {
         // transfers during cleanup. This is checked on generated structure,
         // without importing or executing Python in the compiler.
         if (depth > 18)
-          throw Rejected{"generated Python control blocks exceed the supported profile (18)", s.source};
+          throw Rejected{"generated Python control blocks exceed the supported "
+                         "profile (18)",
+                         s.source};
         print(s.body, indent + 1, depth);
       }
       if (!s.otherwise.empty()) {
@@ -601,9 +1005,19 @@ public:
       throw Rejected{
           "Python entry must have no parameters and return Unit or i32",
           found->source.span};
+    for (const auto &t : m.ownership.temporaries)
+      temporary_ids.insert(t.producer.value);
+    for (const auto &l : m.ownership.locals)
+      if (l.mode == ParamMode::move && owned(l.type))
+        owned_bindings.insert(l.symbol);
     for (const auto &f : m.functions) {
       check_cancelled(stop);
       check_signature(f.signature, f.source.span);
+      collect_type(type(f.signature).result);
+      if (type(f.signature).throws_type)
+        collect_type(*type(f.signature).throws_type);
+      for (auto p : type(f.signature).parameters)
+        collect_type(p.type);
       output.symbols.push_back({f.symbol, function_name(f.symbol)});
       for (size_t i = 0; i < f.parameters.size(); ++i) {
         auto symbol = f.parameters[i].symbol;
@@ -619,6 +1033,9 @@ public:
         auto id = pending.back();
         pending.pop_back();
         const auto &n = node(id);
+        collect_type(n.type);
+        if (auto fi = std::get_if<ForIn>(&n.data))
+          named.insert(fi->element);
         if (auto c = std::get_if<Call>(&n.data))
           check_signature(c->signature, n.source.span);
         if (auto s = std::get_if<Switch>(&n.data))
@@ -640,15 +1057,25 @@ public:
     }
     for (auto s : named)
       output.symbols.push_back({s, name(s)});
-    Suite program{{"# Generated from verified HIR; compiler-dev/1; Python/64",
-                   {},
-                   false,
-                   {},
-                   {}},
-                  {"import langrt as _rt", {}, false, {}, {}},
-                  {"if _rt.RUNTIME_VERSION != '" + std::string(runtime_version) + "'",
-                   {}, true, {{"raise RuntimeError('incompatible langrt version')",
-                               {}, false, {}, {}}}, {}}};
+    Suite program{
+        {"# Generated from verified HIR; compiler-dev/1; Python/64",
+         {},
+         false,
+         {},
+         {}},
+        {"import langrt as _rt", {}, false, {}, {}},
+        {"if _rt.RUNTIME_VERSION != '" + std::string(runtime_version) + "'",
+         {},
+         true,
+         {{"raise RuntimeError('incompatible langrt version')",
+           {},
+           false,
+           {},
+           {}}},
+         {}}};
+    std::set<uint64_t> emitted_types;
+    for (auto t : value_types)
+      emit_type(TypeId{t}, program, emitted_types);
     for (const auto &f : m.functions) {
       current = f.symbol;
       serial = 0;
@@ -661,6 +1088,22 @@ public:
                          true,
                          {},
                          {}};
+      line(function.body, "_frame = _rt.Frame()", node(f.body));
+      for (size_t i = 0; i < f.parameters.size(); ++i) {
+        const auto &p = f.parameters[i];
+        const auto &pt = type(f.signature).parameters[i];
+        if (pt.mode == ParamMode::move && owned(pt.type)) {
+          line(function.body,
+               "_frame.put(" + key(OwnerKind::binding, p.symbol.value) + ", " +
+                   ops(pt.type) + ", " + name(p.symbol) + ")",
+               node(f.body));
+          line(function.body,
+               name(p.symbol) + " = _frame.slot(" +
+                   key(OwnerKind::binding, p.symbol.value) + ", " +
+                   ops(pt.type) + ")",
+               node(f.body));
+        }
+      }
       statement(f.body, function.body);
       program.push_back(std::move(function));
     }

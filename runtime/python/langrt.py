@@ -3,7 +3,7 @@ import math
 import struct
 import sys
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/3'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/4'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
@@ -15,11 +15,25 @@ class Panic(BaseException):
 
 class TypedError(Exception):
     """Language error only. The key is logical, never a session TypeId."""
-    __slots__ = ('type_key', 'value')
+    __slots__ = ('type_key', 'value', 'ops')
 
-    def __init__(self, type_key, value):
+    def __init__(self, type_key, value, ops=None):
         super().__init__(type_key)
-        self.type_key, self.value = type_key, value
+        self.type_key, self.value, self.ops = type_key, value, ops
+
+
+    def take(self):
+        if self.value is _DEAD:
+            raise RuntimeError('typed error payload already transferred')
+        value, self.value = self.value, _DEAD
+        self.ops = None
+        return value
+
+    def drop(self):
+        if self.value is not _DEAD and self.ops is not None:
+            value, self.value = self.value, _DEAD
+            self.ops.drop(value)
+            self.ops = None
 
 
 class LoopContinue(BaseException):
@@ -42,7 +56,7 @@ class Field:
     __slots__ = ('root', 'path')
 
     def __init__(self, base, index):
-        if isinstance(base, Cell):
+        if isinstance(base, (Cell, Owner)):
             self.root, self.path = base, (index,)
         else:
             self.root, self.path = base.root, base.path + (index,)
@@ -232,5 +246,212 @@ def run(main):
         raise SystemExit(PANIC_EXIT_CODE) from None
     except TypedError as error:
         print(TYPED_ERROR_MARKER + error.type_key, file=sys.stderr)
+        error.drop()
         raise SystemExit(1) from None
     raise SystemExit(0 if result is None else result)
+
+
+# These are language owners. Python references and garbage collection do not
+# increment/decrement the language count, and no __del__ performs language work.
+_DEAD = object()
+_MAX_COUNT = (1 << 64) - 1
+
+
+class ValueType:
+    __slots__ = ('kind', 'fields', 'variants', 'stride')
+
+    def __init__(self, kind='trivial', fields=(), variants=None, stride=8):
+        self.kind, self.fields = kind, fields
+        self.variants, self.stride = variants or {}, stride
+
+    def copy(self, value):
+        if self.kind == 'vec':
+            value.retain()
+            return value
+        if self.kind == 'struct':
+            return tuple(t.copy(v) for t, v in zip(self.fields, value))
+        if self.kind == 'enum':
+            return (value[0], tuple(t.copy(v) for t, v in
+                                   zip(self.variants[value[0]], value[1])))
+        return value
+
+    def drop(self, value):
+        if self.kind == 'vec':
+            value.release()
+        elif self.kind in ('struct', 'enum'):
+            fields, values = (self.fields, value) if self.kind == 'struct' else (
+                self.variants[value[0]], value[1])
+            for t, v in reversed(tuple(zip(fields, values))):
+                t.drop(v)
+
+
+class Owner:
+    __slots__ = ('ops', 'value')
+
+    def __init__(self, ops, value=_DEAD):
+        self.ops, self.value = ops, value
+
+    def take(self):
+        if self.value is _DEAD:
+            raise RuntimeError('read of inactive language owner')
+        value, self.value = self.value, _DEAD
+        return value
+
+    def drop(self):
+        if self.value is not _DEAD:
+            value = self.take()
+            self.ops.drop(value)
+
+    def install(self, value):
+        self.drop()
+        self.value = value
+
+
+class Frame:
+    __slots__ = ('owners', 'borrows')
+
+    def __init__(self):
+        self.owners, self.borrows = {}, []
+
+    def slot(self, key, ops):
+        if key not in self.owners:
+            self.owners[key] = Owner(ops)
+        return self.owners[key]
+
+    def put(self, key, ops, value):
+        slot = self.slot(key, ops)
+        if slot.value is not _DEAD:
+            raise RuntimeError('overwriting live temporary')
+        slot.value = value
+        return value
+
+    def take(self, key):
+        return self.owners[key].take()
+
+    def drop(self, key):
+        slot = self.owners.get(key)
+        if slot is not None:
+            slot.drop()
+
+    def borrow(self, key):
+        self.borrows.append(key)
+
+    def end_borrow(self, key):
+        # Branches may never start some candidate borrow in an error plan.
+        for i in range(len(self.borrows) - 1, -1, -1):
+            if self.borrows[i] == key:
+                del self.borrows[i]
+                break
+
+
+def _allocation_size(count, stride):
+    if count < 0 or stride < 0 or (stride and count > _MAX_COUNT // stride):
+        raise Panic('Vec allocation size overflow')
+    size = count * stride
+    if size > sys.maxsize:
+        raise Panic('Vec allocation size overflow')
+    return size
+
+
+def _allocate_elements(values):
+    return list(values)
+
+
+def _allocate_vec():
+    return object.__new__(Vec)
+
+
+class Vec:
+    __slots__ = ('element', 'items', 'refs', 'iterations')
+
+    @staticmethod
+    def create(element, values):
+        _allocation_size(len(values), element.stride)
+        try:
+            result = _allocate_vec()
+            result.items = _allocate_elements(values)
+            result.element, result.refs, result.iterations = element, 1, 0
+            return result
+        except (MemoryError, OverflowError):
+            raise Panic('Vec allocation failed') from None
+
+    def retain(self):
+        if not 0 < self.refs < _MAX_COUNT:
+            raise Panic('Vec reference count overflow or inactive object')
+        self.refs += 1
+
+    def release(self):
+        if self.refs <= 0:
+            raise RuntimeError('duplicate Vec release')
+        self.refs -= 1
+        if self.refs == 0:
+            for value in reversed(self.items):
+                self.element.drop(value)
+            self.items.clear()
+
+    def index(self, index):
+        if not 0 <= index < len(self.items):
+            raise Panic('Vec index out of bounds')
+        return index
+
+    def get(self, index):
+        return self.items[self.index(index)]
+
+    def set(self, index, value):
+        index = self.index(index)
+        old, self.items[index] = self.items[index], value
+        self.element.drop(old)
+
+    def slice(self, start, end):
+        start = 0 if start is None else start
+        end = len(self.items) if end is None else end
+        if not 0 <= start <= end <= len(self.items):
+            raise Panic('Vec slice out of bounds')
+        # The new object exists before any element is copied. Allocation
+        # failure is Panic; it does not promise cleanup of initialized values.
+        try:
+            result = Vec.create(self.element, self.items[start:end])
+            result.items.clear()
+            for index in range(start, end):
+                result.items.append(self.element.copy(self.items[index]))
+            return result
+        except (MemoryError, OverflowError):
+            raise Panic('Vec allocation failed') from None
+
+    def begin(self):
+        self.iterations += 1
+        return len(self.items)
+
+    def end(self):
+        if self.iterations <= 0:
+            raise RuntimeError('inactive Vec iteration')
+        self.iterations -= 1
+
+    def _replace_length(self, values):
+        # Private runtime test entry. No source-language length API exists.
+        if self.iterations:
+            raise Panic('Vec length changes during iteration')
+        _allocation_size(len(values), self.element.stride)
+        try:
+            replacement = _allocate_elements(values)
+        except (MemoryError, OverflowError):
+            raise Panic('Vec allocation failed') from None
+        old, self.items = self.items, replacement
+        for value in reversed(old):
+            self.element.drop(value)
+
+
+class Index:
+    """Receiver and mathematical index, never an element address."""
+    __slots__ = ('receiver', 'index')
+
+    def __init__(self, receiver, index):
+        self.receiver, self.index = receiver, receiver.index(index)
+
+    @property
+    def value(self):
+        return self.receiver.get(self.index)
+
+    @value.setter
+    def value(self, replacement):
+        self.receiver.set(self.index, replacement)
