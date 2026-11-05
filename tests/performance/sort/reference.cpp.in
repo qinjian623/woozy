@@ -1,0 +1,109 @@
+// In-place max-heap sort reference, generated from the same fixed inputs.
+// PERF-SORT n={{N}} seed={{SEED}} rounds={{ROUNDS}}
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+static void fill_lcg(std::vector<uint32_t>& a, uint32_t seed, std::size_t n) {
+    uint32_t state = seed;
+    for (std::size_t i = 0; i < n; ++i) {
+        state = state * UINT32_C(1664525) + UINT32_C(1013904223);
+        a[i] = state;
+    }
+}
+
+static void sift_down(std::vector<uint32_t>& a, std::size_t root_value, std::size_t end) {
+    std::size_t root = root_value;
+    while (root < end) {
+        std::size_t child = root * 2 + 1;
+        if (child >= end) { return; }
+        if (child + 1 < end && a[child] < a[child + 1]) { ++child; }
+        if (a[root] >= a[child]) { return; }
+        const uint32_t saved = a[root];
+        a[root] = a[child];
+        a[child] = saved;
+        root = child;
+    }
+}
+
+static void heapsort(std::vector<uint32_t>& a, std::size_t n) {
+    if (n < 2) { return; }
+    std::size_t start = n / 2;
+    while (start > 0) {
+        --start;
+        sift_down(a, start, n);
+    }
+    std::size_t end = n;
+    while (end > 1) {
+        --end;
+        const uint32_t saved = a[0];
+        a[0] = a[end];
+        a[end] = saved;
+        sift_down(a, 0, end);
+    }
+}
+
+static bool all_equal(const std::vector<uint32_t>& a,
+                      const std::vector<uint32_t>& expected,
+                      std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i) {
+        if (a[i] != expected[i]) { return false; }
+    }
+    return true;
+}
+
+int main() {
+    std::vector<uint32_t> empty = {};
+    std::vector<uint32_t> empty_expected = {};
+    heapsort(empty, 0);
+    if (!all_equal(empty, empty_expected, 0)) { return 2; }
+
+    std::vector<uint32_t> one = {13};
+    std::vector<uint32_t> one_expected = {13};
+    heapsort(one, 1);
+    if (!all_equal(one, one_expected, 1)) { return 3; }
+
+    std::vector<uint32_t> two = {2, 1};
+    std::vector<uint32_t> two_expected = {1, 2};
+    heapsort(two, 2);
+    if (!all_equal(two, two_expected, 2)) { return 4; }
+
+    std::vector<uint32_t> duplicates = {7, 2, 7, 0, UINT32_C(4294967295), 2, 1, 9};
+    std::vector<uint32_t> duplicates_expected =
+        {0, 1, 2, 2, 7, 7, 9, UINT32_C(4294967295)};
+    heapsort(duplicates, 8);
+    if (!all_equal(duplicates, duplicates_expected, 8)) { return 5; }
+
+    std::vector<uint32_t> equal_values = {5, 5, 5, 5};
+    std::vector<uint32_t> equal_expected = {5, 5, 5, 5};
+    heapsort(equal_values, 4);
+    if (!all_equal(equal_values, equal_expected, 4)) { return 6; }
+
+    std::vector<uint32_t> sorted =
+        {0, 1, 1, 17, UINT32_C(2147483648), UINT32_C(4294967295)};
+    std::vector<uint32_t> sorted_expected =
+        {0, 1, 1, 17, UINT32_C(2147483648), UINT32_C(4294967295)};
+    heapsort(sorted, 6);
+    if (!all_equal(sorted, sorted_expected, 6)) { return 7; }
+
+    std::vector<uint32_t> reverse = {9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
+    std::vector<uint32_t> reverse_expected = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    heapsort(reverse, 10);
+    if (!all_equal(reverse, reverse_expected, 10)) { return 8; }
+
+    std::vector<uint32_t> values = {
+{{ARRAY}}
+    };
+    std::vector<uint32_t> golden = {
+{{EXPECTED}}
+    };
+    const std::size_t n = {{N}};
+    const uint32_t seed = UINT32_C({{SEED}});
+    const std::size_t rounds = {{ROUNDS}};
+    for (std::size_t round = 0; round < rounds; ++round) {
+        fill_lcg(values, seed, n);
+        heapsort(values, n);
+        if (!all_equal(values, golden, n)) { return 1; }
+    }
+    return 0;
+}
