@@ -171,7 +171,9 @@ T11 首批只承诺标准输出和同步字节写入，后续再增加文件打�
 
 `os.File` 是不透明平台句柄包装；不能将 Windows HANDLE 简化为 Linux fd。`os.Error` 至少提供稳定类别、平台原始错误码以及本次高级操作已完成字节数，避免 write_all 部分成功后报错时丢失进度。源级错误通过 typed throws 传播。
 
-空缓冲区成功返回 0；write_all 的空缓冲区直接成功。非空 write 返回 0 不代表写入完毕，由 write_all 转成 NoProgress。WouldBlock 不进行无界重试，交给调用者处理；平台 EINTR 等可重试条件在未完成本次写入的前提下按平台约定处理。不能无条件重试所有失败或对有副作用的调用从头重放。
+空缓冲区成功返回 0；write_all 的空缓冲区直接成功。非空 write 返回 0 不代表写入完毕，由 write_all 转成 NoProgress。WouldBlock 立即返回，交给调用者处理。
+
+write 遇到 EINTR 且本次尚未写出字节时，返回 Interrupted，不自动重试。write_all 遇到这种 Interrupted 时，在同一位置重试，不设固定重试次数；此前已经写出的字节不得重写。平台调用已经成功写出字节时，按本次成功写出的数量推进，不能因遗留错误码再次报告中断。其他错误立即返回，并保留本次高级操作累计完成的字节数。
 
 Linux 平台实现可以选择直接 syscall；Windows 第一版调用稳定的系统 API；两者均可不经 C 源码转换。原始 syscall 数字、寄存器约定、Windows 内核内部服务编号不暴露为可移植 os.write 合约。外部调用遵守目标 ABI，标准库不假定 LLVM 会替它决定系统接口。
 
