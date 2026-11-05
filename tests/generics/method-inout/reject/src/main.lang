@@ -1,0 +1,24 @@
+package app;
+
+trait V {
+}
+
+impl V for i32 {
+}
+
+struct Box[T] {
+    value T;
+}
+
+impl[T] Box[T] {
+    func bump[U V](self Self, slot inout U) {
+        slot = slot;
+    }
+}
+
+func main() i32 {
+    let b = Box[i32](value: 1);
+    var x i32 = 1;
+    b.bump(inout x);
+    return 0;
+}

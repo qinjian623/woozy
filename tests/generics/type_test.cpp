@@ -867,17 +867,24 @@ void generic_inout(const fs::path &root) {
               "func main(){var x i32=1;var y i32=2;"
               "let f=swap[i32];f(inout x,inout y);}",
               "E_CAPABILITY_UNAVAILABLE");
-  unsupported("impl i32{func swap[T](a inout T,b inout T){} } "
-              "func main(){var x i32=1;var y i32=2;"
-              "i32.swap(inout x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported("struct Box[T]{value T;} impl[T] Box[T]{"
-              "func swap[U](a inout U,b inout U){} } "
-              "func main(){var x i32=1;var y i32=2;"
-              "Box[i32].swap(inout x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported("impl i32{func bump(self Self,x inout i32){x+=1;}} "
+  good("impl i32{func swap[T](a inout T,b inout T){} } "
+       "func main(){var x i32=1;var y i32=2;"
+       "i32.swap(inout x,inout y);}");
+  good("struct Box[T]{value T;} impl[T] Box[T]{"
+       "func swap[U](a inout U,b inout U){} } "
+       "func main(){var x i32=1;var y i32=2;"
+       "Box[i32].swap(inout x,inout y);}");
+  good("impl i32{func bump(self Self,x inout i32){x+=1;}} "
+       "func main()i32{var x i32=1;var y i32=1;x.bump(inout y);"
+       "return y-2;}");
+  bad("impl i32{func bump(self Self,x inout i32){x+=1;}} "
+      "func main(){var x i32=1;x.bump(inout x);}",
+      "E_CALL_ARGUMENT");
+  unsupported("impl i32{func bump(self inout i32,x inout i32){x+=1;}} "
               "func main(){var x i32=1;x.bump(inout x);}",
+              "E_CAPABILITY_UNAVAILABLE");
+  unsupported("impl i32{func bump(self inout i32,x inout i32){x+=1;}} "
+              "func main(){var x i32=1;i32.bump(inout x,inout x);}",
               "E_CAPABILITY_UNAVAILABLE");
 
   auto unsupported_span = [&](const std::string &text) {
@@ -1048,6 +1055,499 @@ void generic_inout(const fs::path &root) {
                 }
             throw std::runtime_error("generic inout instance missing");
           });
+}
+
+
+void method_inout(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(), "method inout HIR rejected");
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+
+  const std::string positive = R"(
+struct Box[T]{value T;items Vec[i32];marker i32;}
+struct Pair[A,B]{first A;second B;items Vec[i32];}
+enum Maybe[T]{None;Some(value T);}
+func swap[T](a inout T,b inout T){let tmp=a;a=b;b=tmp;}
+impl[T] Box[T]{
+func replace[U](self Self,slot inout U,value U)U{let old=slot;slot=value;return old;}
+func replace_static[U](slot inout U,value U)U{let old=slot;slot=value;return old;}
+func forward[U](self Self,slot inout U,value U)U{return self.replace(inout slot,value);}
+func static_self[U](self U,slot inout i32,value i32)i32{let old=slot;slot=value;return old;}
+}
+impl[A,B] Pair[A,B]{
+func replace_pair[U,V](self Self,first inout U,value U,second inout V,other V)i32{first=value;second=other;return 1;}
+}
+impl[T] Maybe[T]{
+func replace_static[U](slot inout U,value U)U{let old=slot;slot=value;return old;}
+}
+func main()i32{
+let b=Box[i32](value:1,items:[1],marker:2);
+var x i64=3;let old=b.replace(inout x,4);
+var y i64=5;let old2=Box[i32].replace_static[i64](inout y,6);
+var z i64=7;let old3=b.forward(inout z,8);
+var w i32=9;let old4=Box[i32].static_self(b,inout w,10);
+let p=Pair[i32,Vec[i32]](first:1,second:[1],items:[2]);
+var pf u32=11;var ps bool=false;let pv u32=12;let po bool=true;
+let r=p.replace_pair(value:pv,other:po,second:inout ps,first:inout pf);
+var mb bool=false;let old5=Maybe[i32].replace_static[bool](inout mb,true);
+let total=i32(old)+i32(old2)+i32(old3)+old4+r+i32(pf);
+if !old5 || total!=37{return 1;}
+return 0;}
+)";
+  auto m = good(positive);
+
+  auto type_named = [&](TypeId id, const std::string &name) {
+    auto t = m.types.find(id);
+    return t && (t->kind == hir::TypeKind::NominalStruct ||
+                 t->kind == hir::TypeKind::NominalEnum) &&
+           m.resolved->symbols.at(t->declaration.value).name == name;
+  };
+  auto is_i32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 32;
+  };
+  auto is_i64 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 64;
+  };
+  auto is_u32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::UnsignedInt && t->bits == 32;
+  };
+  auto is_bool = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::Bool;
+  };
+  auto is_vec_i32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::Vec && t->type_args.size() == 1 &&
+           is_i32(t->type_args[0]);
+  };
+  auto is_box_i32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return type_named(id, "Box") && t->type_args.size() == 1 &&
+           is_i32(t->type_args[0]);
+  };
+  auto is_pair_i32_vec = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return type_named(id, "Pair") && t->type_args.size() == 2 &&
+           is_i32(t->type_args[0]) && is_vec_i32(t->type_args[1]);
+  };
+  auto has_parameter = [&](TypeId root) {
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      auto t = m.types.find(id);
+      if (!t)
+        return false;
+      if (t->kind == hir::TypeKind::TypeParameter)
+        return true;
+      for (auto a : t->type_args)
+        if (visit(a))
+          return true;
+      for (const auto &p : t->parameters)
+        if (visit(p.type))
+          return true;
+      if (visit(t->result))
+        return true;
+      return t->throws_type && visit(*t->throws_type);
+    };
+    return visit(root);
+  };
+  auto find_impl = [&](const std::string &name) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (!im.trait && type_named(im.self_type, name))
+        return &im;
+    return nullptr;
+  };
+  auto template_for = [&](SymbolId method) -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (t.function.symbol == method)
+        return &t;
+    return nullptr;
+  };
+  auto method_template = [&](const hir::ImplDecl &im,
+                             const std::string &name)
+      -> const hir::FunctionTemplate * {
+    for (auto method : im.methods)
+      if (m.resolved->symbols[method.value].name == name)
+        return template_for(method);
+    return nullptr;
+  };
+  auto function_for = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto instances_of = [&](const hir::FunctionTemplate *t) {
+    std::vector<const hir::FunctionInstance *> result;
+    for (const auto &i : m.instances)
+      if (i.origin == t->function.symbol)
+        result.push_back(&i);
+    return result;
+  };
+  auto same_prefix = [&](const hir::FunctionTemplate *t,
+                         const hir::ImplDecl &im, size_t suffix) {
+    if (!t || t->params.size() != im.params.size() + suffix)
+      return false;
+    for (size_t i = 0; i < im.params.size(); ++i) {
+      const auto &p = t->params[i];
+      if (p.symbol != im.params[i].symbol ||
+          p.source.span.snapshot != t->function.source.span.snapshot ||
+          p.source.span.begin_byte >= t->function.source.span.begin_byte)
+        return false;
+    }
+    for (size_t i = im.params.size(); i < t->params.size(); ++i) {
+      const auto &p = t->params[i];
+      if (p.source.span.snapshot != t->function.source.span.snapshot ||
+          p.source.span.begin_byte < t->function.source.span.begin_byte ||
+          p.source.span.end_byte > t->function.source.span.end_byte)
+        return false;
+      if (std::any_of(im.params.begin(), im.params.end(),
+                      [&](const hir::GenericParam &q) {
+                        return q.symbol == p.symbol;
+                      }))
+        return false;
+    }
+    return true;
+  };
+
+  const auto *box_impl = find_impl("Box");
+  const auto *pair_impl = find_impl("Pair");
+  const auto *maybe_impl = find_impl("Maybe");
+  need(box_impl && pair_impl && maybe_impl, "method inout impls missing");
+  const auto *box_replace = method_template(*box_impl, "replace");
+  const auto *box_static = method_template(*box_impl, "replace_static");
+  const auto *box_forward = method_template(*box_impl, "forward");
+  const auto *box_static_self = method_template(*box_impl, "static_self");
+  const auto *pair_replace = method_template(*pair_impl, "replace_pair");
+  const auto *maybe_static = method_template(*maybe_impl, "replace_static");
+  need(box_replace && box_static && box_forward && box_static_self &&
+           pair_replace && maybe_static,
+       "method inout templates missing");
+  need(same_prefix(box_replace, *box_impl, 1) &&
+           same_prefix(box_static, *box_impl, 1) &&
+           same_prefix(box_forward, *box_impl, 1) &&
+           same_prefix(box_static_self, *box_impl, 1) &&
+           same_prefix(pair_replace, *pair_impl, 2) &&
+           same_prefix(maybe_static, *maybe_impl, 1),
+       "method inout template impl/method parameter split changed");
+  need(box_replace->params.size() == 2 &&
+           box_replace->params[0].symbol == box_impl->params[0].symbol &&
+           box_replace->params[1].symbol != box_impl->params[0].symbol,
+       "Box replace template lost real impl/own symbols");
+  need(pair_replace->params.size() == 4 &&
+           pair_replace->params[0].symbol == pair_impl->params[0].symbol &&
+           pair_replace->params[1].symbol == pair_impl->params[1].symbol &&
+           pair_replace->params[2].symbol != pair_replace->params[0].symbol &&
+           pair_replace->params[3].symbol != pair_replace->params[1].symbol,
+       "Pair replace_pair template argument order changed");
+
+  const auto replace_instances = instances_of(box_replace);
+  const auto static_instances = instances_of(box_static);
+  const auto forward_instances = instances_of(box_forward);
+  const auto static_self_instances = instances_of(box_static_self);
+  const auto pair_instances = instances_of(pair_replace);
+  const auto maybe_instances = instances_of(maybe_static);
+  need(replace_instances.size() == 1 && static_instances.size() == 1 &&
+           forward_instances.size() == 1 &&
+           static_self_instances.size() == 1 &&
+           pair_instances.size() == 1 && maybe_instances.size() == 1,
+       "method inout instance full keys collapsed or duplicated");
+  const auto *replace_instance = replace_instances[0];
+  const auto *static_instance = static_instances[0];
+  const auto *forward_instance = forward_instances[0];
+  const auto *static_self_instance = static_self_instances[0];
+  const auto *pair_instance = pair_instances[0];
+  const auto *maybe_instance = maybe_instances[0];
+  need(replace_instance->type_args.size() == 2 &&
+           is_i32(replace_instance->type_args[0]) &&
+           is_i64(replace_instance->type_args[1]),
+       "Box replace [i32,i64] full key changed");
+  need(static_instance->type_args.size() == 2 &&
+           is_i32(static_instance->type_args[0]) &&
+           is_i64(static_instance->type_args[1]),
+       "Box static [i32,i64] full key changed");
+  need(static_self_instance->type_args.size() == 2 &&
+           is_i32(static_self_instance->type_args[0]) &&
+           is_box_i32(static_self_instance->type_args[1]),
+       "static self U=Self changed the impl/own key");
+  need(pair_instance->type_args.size() == 4 &&
+           is_i32(pair_instance->type_args[0]) &&
+           is_vec_i32(pair_instance->type_args[1]) &&
+           is_u32(pair_instance->type_args[2]) &&
+           is_bool(pair_instance->type_args[3]),
+       "Pair replace_pair [A,B,U,V] key order changed");
+  need(maybe_instance->type_args.size() == 2 &&
+           is_i32(maybe_instance->type_args[0]) &&
+           is_bool(maybe_instance->type_args[1]),
+       "Maybe static [i32,bool] key changed");
+
+  const auto *replace_function = function_for(replace_instance->symbol);
+  const auto *static_function = function_for(static_instance->symbol);
+  const auto *forward_function = function_for(forward_instance->symbol);
+  const auto *static_self_function = function_for(static_self_instance->symbol);
+  const auto *pair_function = function_for(pair_instance->symbol);
+  const auto *maybe_function = function_for(maybe_instance->symbol);
+  need(replace_function && static_function && forward_function &&
+           static_self_function && pair_function && maybe_function,
+       "method inout concrete functions missing");
+  auto replace_sig = m.types.find(replace_function->signature);
+  auto static_sig = m.types.find(static_function->signature);
+  auto self_sig = m.types.find(static_self_function->signature);
+  auto pair_sig = m.types.find(pair_function->signature);
+  auto maybe_sig = m.types.find(maybe_function->signature);
+  need(replace_sig && static_sig && self_sig && pair_sig && maybe_sig,
+       "method inout concrete signatures missing");
+  need(replace_sig->parameters.size() == 3 &&
+           is_box_i32(replace_sig->parameters[0].type) &&
+           replace_sig->parameters[0].mode == hir::ParamMode::ordinary &&
+           is_i64(replace_sig->parameters[1].type) &&
+           replace_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_i64(replace_sig->parameters[2].type) &&
+           replace_sig->parameters[2].mode == hir::ParamMode::ordinary &&
+           is_i64(replace_sig->result),
+       "Box replace Self/inout/mode signature mismatch");
+  need(static_sig->parameters.size() == 2 &&
+           is_i64(static_sig->parameters[0].type) &&
+           static_sig->parameters[0].mode == hir::ParamMode::inout &&
+           is_i64(static_sig->parameters[1].type) &&
+           static_sig->parameters[1].mode == hir::ParamMode::ordinary,
+       "Box static inout signature gained a receiver");
+  need(self_sig->parameters.size() == 3 &&
+           is_box_i32(self_sig->parameters[0].type) &&
+           self_sig->parameters[0].mode == hir::ParamMode::ordinary &&
+           is_i32(self_sig->parameters[1].type) &&
+           self_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_i32(self_sig->parameters[2].type) &&
+           self_sig->parameters[2].mode == hir::ParamMode::ordinary,
+       "static ordinary self U=Self was classified as a receiver");
+  need(pair_sig->parameters.size() == 5 &&
+           is_pair_i32_vec(pair_sig->parameters[0].type) &&
+           is_u32(pair_sig->parameters[1].type) &&
+           pair_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_u32(pair_sig->parameters[2].type) &&
+           is_bool(pair_sig->parameters[3].type) &&
+           pair_sig->parameters[3].mode == hir::ParamMode::inout &&
+           is_bool(pair_sig->parameters[4].type) &&
+           is_i32(pair_sig->result),
+       "Pair replace_pair inout order or Self mismatch");
+  need(maybe_sig->parameters.size() == 2 &&
+           is_bool(maybe_sig->parameters[0].type) &&
+           maybe_sig->parameters[0].mode == hir::ParamMode::inout &&
+           is_bool(maybe_sig->parameters[1].type),
+       "Maybe static inout signature mismatch");
+
+  std::set<uint64_t> template_symbols;
+  for (const auto &t : m.templates)
+    template_symbols.insert(t.function.symbol.value);
+  for (const auto &f : m.functions) {
+    need(!has_parameter(f.signature),
+         "concrete method inout signature retained a parameter");
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != f.symbol)
+        continue;
+      need(!has_parameter(n.type),
+           "concrete method inout node retained a parameter");
+      if (auto c = std::get_if<hir::Call>(&n.data)) {
+        need(c->type_args.empty(),
+             "concrete method inout call retained type arguments");
+        if (c->direct_symbol)
+          need(!template_symbols.count(c->direct_symbol->value),
+               "concrete method inout call targets a template");
+        for (const auto &a : c->args)
+          if (a.mode == hir::ParamMode::inout)
+            need(m.nodes[a.expression.value].kind() == hir::NodeKind::place,
+                 "method inout argument is not a Place");
+      }
+    }
+  }
+  bool forward_call = false;
+  for (const auto &n : m.nodes) {
+    if (m.scopes[n.scope.value].function != forward_function->symbol)
+      continue;
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol ||
+        m.resolved->symbols[c->direct_symbol->value].name != "replace")
+      continue;
+    need(c->direct_symbol->value == replace_instance->symbol.value,
+         "method-to-method inout call missed the concrete instance");
+    need(c->args.size() == 3 &&
+             c->args[1].mode == hir::ParamMode::inout,
+         "method-to-method inout call lost its mode");
+    const auto &place = std::get<hir::Place>(
+        m.nodes[c->args[1].expression.value].data);
+    need(place.symbol == forward_function->parameters[1].symbol,
+         "method-to-method inout Place kept a template parameter");
+    forward_call = true;
+  }
+  need(forward_call, "method-to-method inout forwarding call missing");
+
+  std::map<uint64_t, SymbolId> replace_renamed;
+  for (auto [from, to] : replace_instance->renamed)
+    replace_renamed[from.value] = to;
+  auto template_sig = m.types.find(box_replace->function.signature);
+  need(template_sig && template_sig->parameters.size() == 3 &&
+           template_sig->parameters[1].mode == hir::ParamMode::inout &&
+           m.types.find(template_sig->parameters[1].type)->kind ==
+               hir::TypeKind::TypeParameter &&
+           m.types.find(template_sig->parameters[1].type)->declaration ==
+               box_replace->params[1].symbol,
+       "method inout template lost its real inout type parameter");
+  SymbolId template_local{0}, instance_local{0};
+  for (const auto &n : m.nodes) {
+    if (m.scopes[n.scope.value].function == box_replace->function.symbol)
+      if (auto b = std::get_if<hir::Binding>(&n.data); b)
+        template_local = b->symbol;
+    if (m.scopes[n.scope.value].function == replace_function->symbol)
+      if (auto b = std::get_if<hir::Binding>(&n.data); b)
+        instance_local = b->symbol;
+  }
+  need(template_local.value && instance_local.value &&
+           template_local != instance_local,
+       "method inout instance local was not renamed");
+  need(replace_renamed.at(box_replace->function.symbol.value) ==
+               replace_function->symbol &&
+           replace_renamed.at(
+               box_replace->function.parameters[0].symbol.value) ==
+               replace_function->parameters[0].symbol &&
+           replace_renamed.at(
+               box_replace->function.parameters[1].symbol.value) ==
+               replace_function->parameters[1].symbol &&
+           replace_renamed.at(
+               box_replace->function.parameters[2].symbol.value) ==
+               replace_function->parameters[2].symbol &&
+           replace_renamed.at(template_local.value) == instance_local,
+       "Box replace renamed map lost Self, an inout parameter, or a local");
+  bool concrete_place = false;
+  for (const auto &n : m.nodes) {
+    if (m.scopes[n.scope.value].function != replace_function->symbol)
+      continue;
+    if (auto p = std::get_if<hir::Place>(&n.data); p) {
+      need(p->symbol == replace_function->parameters[1].symbol,
+           "replace body Place kept a template parameter");
+      concrete_place = true;
+    }
+  }
+  need(concrete_place, "replace body concrete inout Place missing");
+
+  invalid_recomputed(m, "method inout instance origin", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == replace_instance->symbol) {
+        i.origin = box_static->function.symbol;
+        return;
+      }
+    throw std::runtime_error("method inout replace instance missing");
+  });
+  invalid_recomputed(m, "method inout full key order", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == pair_instance->symbol) {
+        std::swap(i.type_args[2], i.type_args[3]);
+        return;
+      }
+    throw std::runtime_error("method inout pair instance missing");
+  });
+  invalid_recomputed(m, "method inout Self substitution", [&](auto &x) {
+    auto template_sig = *x.types.find(box_replace->function.signature);
+    for (auto &f : x.functions)
+      if (f.symbol == replace_function->symbol) {
+        auto sig = *x.types.find(f.signature);
+        sig.parameters[0].type = template_sig.parameters[1].type;
+        f.signature = x.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("method inout replace function missing");
+  });
+  invalid_recomputed(m, "method inout Place rename", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == forward_function->symbol)
+        if (auto c = std::get_if<hir::Call>(&n.data);
+            c && c->direct_symbol &&
+            x.resolved->symbols[c->direct_symbol->value].name == "replace") {
+          auto &place = std::get<hir::Place>(
+              x.nodes[c->args[1].expression.value].data);
+          place.symbol = box_forward->function.parameters[1].symbol;
+          return;
+        }
+    throw std::runtime_error("method inout forwarding call missing");
+  });
+
+  const std::string method_prefix =
+      "struct Box[T]{value T;items Vec[i32];marker i32;} ";
+  unsupported("trait V{} impl V for i32{} " + method_prefix +
+              "impl[T V] Box[T]{func replace[U](self Self,slot inout U){"
+              "slot=slot;}} "
+              "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+              "var x i32=1;b.replace(inout x);}");
+  unsupported("trait V{} impl V for i32{} " + method_prefix +
+              "impl[T] Box[T]{func replace[U V](self Self,slot inout U){"
+              "slot=slot;}} "
+              "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+              "var x i32=1;b.replace(inout x);}");
+  unsupported("trait V{func replace(self Self,slot inout i32);} "
+              "struct H{marker i32;} impl V for H{"
+              "func replace(self Self,slot inout i32){slot=slot;}} "
+              "func main(){let h=H(marker:0);var x i32=1;"
+              "h.replace(inout x);}");
+  unsupported(method_prefix +
+              "impl[T] Box[T]{func replace[U](self Self,slot inout U,value U)U{"
+              "let old=slot;slot=value;return old;}} "
+              "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+              "var v Vec[i32]=[1];b.replace(inout v,[2]);}");
+  bad(method_prefix +
+          "impl[T] Box[T]{func replace[U](self Self,slot inout U,value U)U{"
+          "let old=slot;slot=value;return old;}} "
+          "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+          "let x i32=1;b.replace(inout x,3);}",
+      "E_CALL_ARGUMENT");
+  bad(method_prefix +
+          "impl[T] Box[T]{func replace[U](self Self,slot inout U,value U)U{"
+          "let old=slot;slot=value;return old;}} "
+          "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+          "var x i32=1;b.replace(inout x,inout x);}",
+      "E_CALL_ARGUMENT");
+  bad("impl i32{func swap[T](a inout T,b inout T){}} "
+      "func main(){var x i32=1;i32.swap(inout x,x);}",
+      "E_CALL_ARGUMENT");
+  bad("impl i32{func swap[T](a inout T,b inout T){}} "
+      "func g(x i32)i32{return x;} "
+      "func main(){var x i32=1;i32.swap(inout x,g(x));}",
+      "E_CALL_ARGUMENT");
+  unsupported("impl i32{func bump(self Self,slot inout i32){slot+=1;}} "
+              "func main(){var x i32=1;x.bump(inout 1);}");
+  unsupported("struct H{marker i32;} impl H{"
+              "func bump(self Self,slot inout i32){slot+=1;}} "
+              "func main(){let h=H(marker:1);h.bump(inout h.marker);}");
+  unsupported("struct H{items Vec[i32];} impl H{"
+              "func bump(self Self,slot inout i32){slot+=1;}} "
+              "func main(){let h=H(items:[1]);h.bump(inout h.items[0]);}");
+  bad("struct H{marker i32;} impl H{"
+      "func bump(self Self,slot inout i32){slot+=1;}} "
+      "func use(h H,x i32){h.bump(inout x);} "
+      "func main(){let h=H(marker:1);use(h,2);}",
+      "E_CALL_ARGUMENT");
+  good("impl i32{func swap[T](a inout T,b inout T){}} "
+       "func main()i32{var x i32=1;var y i32=2;"
+       "i32.swap(inout x,inout y);return x-2;}");
+  good("struct Box[T]{value T;} impl[T] Box[T]{"
+       "func swap[U](a inout U,b inout U){let tmp=a;a=b;b=tmp;}} "
+       "func main()i32{var x f64=1.0;var y f64=2.0;"
+       "Box[bool].swap(inout x,inout y);return 0;}");
+  unsupported("impl i32{func bump(self inout i32,x inout i32){x=x;}} "
+              "func main(){var x i32=1;var y i32=2;x.bump(inout y);}");
 }
 
 void extra(const fs::path &root) {
@@ -1602,12 +2102,12 @@ void method_move(const fs::path &root) {
       "func take(self move Self)Self{return move self;}} "
       "func use[T V](x T)T{return x.take();} "
       "func main()i32{let h=H(marker:0);let r=use(h);return r.marker;}");
-  unsupported(
+  good(
       "struct H{marker i32;} impl H{"
       "func swap(a inout i32,b inout i32){let t=a;a=b;b=t;}} "
       "func main()i32{var x i32=1;var y i32=2;"
       "H.swap(inout x,inout y);return x-2;}");
-  unsupported(
+  good(
       "struct H{marker i32;} impl H{"
       "func bump(self Self,a inout i32){a+=1;}} "
       "func main()i32{let h=H(marker:0);var x i32=1;"
@@ -1713,7 +2213,7 @@ void method_move(const fs::path &root) {
       "impl V for E{func take(value move Vec[i32])Vec[i32]{"
       "return move value;}} "
       "func main()i32{var v Vec[i32]=[1];let r=E.take(move v);return r[0];}");
-  unsupported(
+  good(
       "enum E{A;} impl E{func bump(x inout i32){x+=1;}} "
       "func main()i32{var x i32=1;E.bump(inout x);return x-2;}");
   unsupported(
@@ -2541,14 +3041,14 @@ return 0;}
               "return move value;}} "
               "func main()i32{let b=Box[i32](value:1,items:[1]);"
               "var v Vec[i32]=[2];let r=b.take(move v);return r[0];}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func bump(self Self,x inout i32){x+=1;}} "
-                    "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-                    "var x i32=1;b.bump(inout x);return x-2;}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func bump(x inout i32){x+=1;}} "
-                    "func main()i32{var x i32=1;"
-                    "Box[i32].bump(inout x);return x-2;}");
+  good(box + "impl[T] Box[T]{"
+       "func bump(self Self,x inout i32){x+=1;}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+       "var x i32=1;b.bump(inout x);return x-2;}");
+  good(box + "impl[T] Box[T]{"
+       "func bump(x inout i32){x+=1;}} "
+       "func main()i32{var x i32=1;"
+       "Box[i32].bump(inout x);return x-2;}");
   unsupported(box + "impl[T] Box[T]{"
                     "func take(self move Self,value move T)T{return move value;}} "
                     "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
@@ -3170,10 +3670,15 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
               "return move value;}} "
               "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
               "var v Vec[i32]=[2];let r=b.take(move v);return r[0]-2;}");
+  good(box + "impl[T] Box[T]{"
+       "func bump[U](x inout i32){x+=1;}} "
+       "func main()i32{var x i32=1;"
+       "Box[i32].bump[i32](inout x);return x-2;}");
   unsupported(box + "impl[T] Box[T]{"
-                    "func bump[U](x inout i32){x+=1;}} "
-                    "func main()i32{var x i32=1;"
-                    "Box[i32].bump(inout x);return x-2;}");
+                    "func bump[U](self Self,x inout U){x=x;}} "
+                    "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+                    "var x i32=1;"
+                    "Box[i32].bump[i32](b,inout x);return x-2;}");
   unsupported(box + "impl[T] Box[T]{"
                     "func take[U](self move Self,value move U)U{"
                     "return move value;}} "
@@ -3347,6 +3852,7 @@ int main(int argc, char **argv) {
     extra(root);
     generic_move(root);
     generic_inout(root);
+    method_inout(root);
     method_move(root);
     generic_method_move(root);
     generic_impl_move();

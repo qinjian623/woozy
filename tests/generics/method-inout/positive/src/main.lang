@@ -1,0 +1,299 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+enum Maybe[T] {
+    None;
+    Some(value T);
+}
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+    marker i32;
+}
+
+struct Pair[A, B] {
+    first A;
+    second B;
+    items Vec[i32];
+}
+
+struct Plain {
+    items Vec[i32];
+    marker i32;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func swap[T](a inout T, b inout T) {
+    let tmp = a;
+    a = b;
+    b = tmp;
+}
+
+func relay[T](a inout T, b inout T) {
+    swap(inout a, inout b);
+}
+
+func make_box(log inout i64) Box[i32] {
+    mark(inout log, 9);
+    return Box[i32](value: 1, items: [90], marker: 0);
+}
+
+impl Plain {
+    func replace_plain(self Self, slot inout i32, value i32) i32 {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func replace_plain_static(slot inout i32, value i32) i32 {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func keep_plain[U](self Self, slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func keep_plain_static[U](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+impl[T] Box[T] {
+    func bump_self(self Self, slot inout T, value T) T {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func bump_static(slot inout T, value T) T {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func replace[U](self Self, slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func replace_static[U](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func ordered[U](self Self, slot inout U, value U, second i32) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func forward[U](self Self, slot inout U, value U) U {
+        return self.replace(inout slot, value);
+    }
+
+    func forward_static[U](slot inout U, value U) U {
+        return Box[i32].replace_static(inout slot, value);
+    }
+
+    func forward_free[U](self Self, a inout U, b inout U) {
+        swap(inout a, inout b);
+    }
+
+    func relay_free[U](self Self, a inout U, b inout U) {
+        relay(inout a, inout b);
+    }
+
+    func static_self[U](self U, slot inout i32, value i32) i32 {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func mixed[U](self Self, slot inout U, value U, owned move Vec[i32]) U {
+        let local Vec[i32] = [70];
+        defer {
+            let read = local[0];
+        }
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+impl[A, B] Pair[A, B] {
+    func replace_pair[U, V](self Self, first inout U, value U,
+                            second inout V, other V) i32 {
+        first = value;
+        second = other;
+        return 1;
+    }
+}
+
+impl[T] Maybe[T] {
+    func replace_static[U](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func Some[U](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+func main() i32 {
+    let p = Plain(items: [1], marker: 2);
+    var a i32 = 1;
+    let olda = p.replace_plain(inout a, 3);
+    var b i32 = 4;
+    let oldb = Plain.replace_plain_static(inout b, 5);
+    var c i64 = 6;
+    let oldc = p.keep_plain[i64](inout c, 7);
+    var d bool = false;
+    let oldd = Plain.keep_plain_static[bool](inout d, true);
+
+    let bi = Box[i32](value: 1, items: [2], marker: 3);
+    var e i32 = 8;
+    let olde = bi.bump_self(inout e, 9);
+    var f i64 = 10;
+    let oldf = Box[i64].bump_static(inout f, 11);
+    let bg = Box[bool](value: false, items: [3], marker: 4);
+    var g bool = false;
+    let oldg = bg.bump_self(inout g, true);
+
+    var h i32 = 12;
+    let oldh = bi.replace(inout h, 13);
+    var i i64 = 14;
+    let oldi = Box[i32].replace_static[i64](inout i, 15);
+    var j u32 = 16;
+    let oldj = bi.replace[u32](inout j, 17);
+    var k u64 = 18;
+    let oldk = Box[i32].replace_static(inout k, 19);
+    var l f32 = 1.5;
+    let oldl = bi.replace(inout l, 2.5);
+    var m f64 = 3.5;
+    let oldm = Box[i32].replace_static[f64](inout m, 4.5);
+    var n bool = false;
+    let oldn = bi.replace(inout n, true);
+
+    var o i32 = 20;
+    let oldo = bi.forward(inout o, 21);
+    var q f32 = 5.5;
+    let oldq = Box[bool].forward_static[f32](inout q, 6.5);
+    var r i32 = 22;
+    var s i32 = 23;
+    bi.forward_free(inout r, inout s);
+    var t i64 = 24;
+    var u i64 = 25;
+    bi.relay_free(inout t, inout u);
+
+    var log i64 = 0;
+    var v i32 = 26;
+    let oldv = make_box(inout log).ordered(
+        second: mark_value(inout log, 3),
+        value: mark_value(inout log, 5),
+        slot: inout v);
+    if log != 935 || oldv != 26 || v != 5 {
+        return 1;
+    }
+
+    let pair = Pair[i32, Vec[i32]](first: 1, second: [30], items: [31]);
+    var w u32 = 32;
+    var x bool = false;
+    let wv u32 = 33;
+    let xv bool = true;
+    let paired = pair.replace_pair(value: wv, other: xv,
+                                   second: inout x, first: inout w);
+
+    var y bool = false;
+    let oldy = Maybe[i32].replace_static[bool](inout y, true);
+    var z i32 = 34;
+    let oldz = Maybe[bool].replace_static(inout z, 35);
+    let some = Maybe[i32].Some(value: 7);
+    switch some {
+    case Maybe.Some(value):
+        if value != 7 {
+            return 2;
+        }
+    case Maybe.None:
+        return 3;
+    }
+
+    var aa i32 = 36;
+    let oldaa = Box[i32].static_self(bi, inout aa, 37);
+    var ab i32 = 38;
+    let oldab = Box[i32].static_self[Box[i32]](bi, inout ab, 39);
+
+    var ac i32 = 40;
+    let oldac = bi.mixed(inout ac, 41, [55]);
+    ac = 99;
+    if oldac != 40 {
+        return 4;
+    }
+
+    var ad i32 = 42;
+    bi.replace(inout ad, 43);
+    bi.replace(inout ad, 44);
+    if ad != 44 {
+        return 5;
+    }
+
+    if a != 3 || olda != 1 || b != 5 || oldb != 4 || c != 7 || oldc != 6 ||
+       !d || oldd {
+        return 10;
+    }
+    if e != 9 || olde != 8 || f != 11 || oldf != 10 || !g || oldg {
+        return 11;
+    }
+    if h != 13 || oldh != 12 || i != 15 || oldi != 14 ||
+       j != 17 || oldj != 16 || k != 19 || oldk != 18 {
+        return 12;
+    }
+    if l < 2.0 || oldl > 2.0 || m < 4.0 || oldm > 4.0 || !n || oldn {
+        return 13;
+    }
+    if o != 21 || oldo != 20 || q < 6.0 || oldq > 6.0 {
+        return 14;
+    }
+    if r != 23 || s != 22 || t != 25 || u != 24 {
+        return 15;
+    }
+    if oldv != 26 || v != 5 {
+        return 16;
+    }
+    if w != 33 || !x || paired != 1 {
+        return 17;
+    }
+    if !y || oldy || z != 35 || oldz != 34 {
+        return 18;
+    }
+    if aa != 37 || oldaa != 36 || ab != 39 || oldab != 38 {
+        return 19;
+    }
+    if ac != 99 {
+        return 20;
+    }
+    return 0;
+}

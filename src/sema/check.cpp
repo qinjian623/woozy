@@ -240,18 +240,15 @@ class Checker {
     const auto &params = type(sig).parameters;
     return !params.empty() && params.front().type == im->self_type;
   }
-  // This route covers an inherent method in a non-generic impl, plus a method
-  // in a generic impl whether or not its declaration adds generic parameters
-  // of its own. register_function records the merged list in declaration
-  // order: the impl parameters first, then the method's own parameters. The
-  // impl prefix must use the real ordered SymbolIds, and every parameter on
-  // both layers must be unconstrained. No trait constraints are accepted on
-  // either route. An instance call needs a declared ordinary self; a
-  // type-qualified call needs a method whose declaration has no self at all.
-  // Receiver presence alone is not a declaration and cannot open move through
-  // a static call.
-  bool inherent_method_move(SymbolId target, bool receiver,
-                            TypeId signature) const {
+  // This source route covers an inherent method in a non-generic impl, plus a
+  // method in a generic impl whether or not its declaration adds generic
+  // parameters of its own. register_function records the merged list in
+  // declaration order: the impl parameters first, then the method's own
+  // parameters. The impl prefix must use the real ordered SymbolIds, and every
+  // parameter on both layers must be unconstrained. No trait constraints are
+  // accepted on either layer. Concrete move and non-self scalar inout share
+  // this source eligibility; neither adds a public representation.
+  bool inherent_method_source(SymbolId target) const {
     const auto *im = impl_of(target);
     if (!im || im->trait)
       return false;
@@ -266,6 +263,17 @@ class Checker {
     for (size_t i = 0; i < im->params.size(); ++i)
       if (generics->second[i].symbol != im->params[i].symbol)
         return false;
+    return true;
+  }
+  // An instance call needs a declared ordinary self; a type-qualified call
+  // needs a method whose declaration has no self at all. Receiver presence
+  // alone is not a declaration and cannot open this route through a static
+  // call. The call form is checked separately from inherent_method_source so
+  // instantiation can validate the declaration prefix/suffix without a use.
+  bool inherent_method_route(SymbolId target, bool receiver,
+                             TypeId signature) const {
+    if (!inherent_method_source(target))
+      return false;
     const auto &params = type(signature).parameters;
     const bool self = declared_self(target);
     if (receiver)
@@ -1617,16 +1625,17 @@ class Checker {
       seen[pi] = true;
       indices[i] = pi;
     }
-    // Concrete move is available on unconstrained generic free functions and
-    // on non-generic inherent methods. Keep inout on its old free-function
-    // route: adding method move must not open method or static-method inout.
+    // Concrete move and non-self scalar inout are available on unconstrained
+    // generic free functions and on the inherent-method route above. The
+    // route still requires an ordinary-self receiver or a no-self static call;
+    // actual self move/inout and trait or constrained sources stay rejected.
     const bool free_move_inout =
         !receiver && !constraint && free_unconstrained_template(target);
-    const bool allow_move =
-        free_move_inout ||
-        (!constraint &&
-         inherent_method_move(target, receiver.has_value(), original));
-    const bool allow_inout = free_move_inout;
+    const bool inherent =
+        !constraint &&
+        inherent_method_route(target, receiver.has_value(), original);
+    const bool allow_move = free_move_inout || inherent;
+    const bool allow_inout = free_move_inout || inherent;
     // Any instance route whose declared first parameter is move/inout is an
     // unsupported self mode, including a trait method reached through a
     // constraint. A type-qualified static call to an impl method with a
@@ -2911,11 +2920,15 @@ class Checker {
     f.symbol = result;
     f.signature = substitute(f.signature, sub, m.types);
     // A generic declaration defers direct mode/type restrictions until the
-    // concrete type is known; reject them before publishing invalid HIR.
+    // concrete type is known; reject them before publishing invalid HIR. Free
+    // unconstrained templates and eligible inherent methods may carry scalar
+    // inout into the instance; every other source keeps the old refusal after
+    // check_inout_graph has checked the concrete types unconditionally.
     const bool inout_source =
-        !impl_method(origin) && !temp.params.empty() &&
+        !temp.params.empty() &&
         std::all_of(temp.params.begin(), temp.params.end(),
-                    [](const GenericParam &p) { return !p.trait; });
+                    [](const GenericParam &p) { return !p.trait; }) &&
+        (!impl_method(origin) || inherent_method_source(origin));
     for (const auto &p : type(f.signature).parameters) {
       if (p.mode != ParamMode::ordinary &&
           type(p.type).kind == TypeKind::ForeignOpaque)

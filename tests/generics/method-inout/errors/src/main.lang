@@ -1,0 +1,145 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+    marker i32;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func later(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func produce(log inout i64) Box[Vec[i32]] {
+    mark(inout log, 9);
+    return Box[Vec[i32]](value: [7], items: [8], marker: 0);
+}
+
+impl[T] Box[T] {
+    func assign[U](self Self, slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func ordered[U](self Self, slot inout U, value U, second i32) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func fail_after[U](self Self, slot inout U, value U,
+                       log inout i64) i32 throws E {
+        slot = value;
+        mark(inout log, 4);
+        throw E.Bad;
+    }
+
+    func cleanup_fail[U](self Self, slot inout U, value U,
+                         owned move Vec[i32], log inout i64) i32 throws E {
+        let local Vec[i32] = [11];
+        defer {
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        slot = value;
+        mark(inout log, 4);
+        throw E.Bad;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var rlog i64 = 0;
+
+    var first i32 = 1;
+    try {
+        let ignored = produce(inout log).ordered(
+            second: bad(inout log),
+            value: mark_value(inout log, 5),
+            slot: inout first);
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+        if first != 1 {
+            return 1;
+        }
+    }
+
+    var second i32 = 2;
+    try {
+        let ignored = produce(inout log).ordered(
+            second: later(inout log, 8),
+            value: bad(inout log),
+            slot: inout second);
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+        if second != 2 {
+            return 2;
+        }
+    }
+
+    var third i32 = 3;
+    try {
+        let ignored = produce(inout rlog).fail_after(
+            inout third, 30, inout log);
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+        if third != 30 {
+            return 3;
+        }
+    }
+
+    var fourth i32 = 4;
+    var owned Vec[i32] = [20];
+    try {
+        let ignored = produce(inout rlog).cleanup_fail(
+            inout fourth, 40, move owned, inout log);
+        mark(inout log, 7);
+    } catch err E {
+        mark(inout log, 3);
+        if fourth != 40 {
+            return 4;
+        }
+    }
+
+    var fifth i32 = 5;
+    let old = produce(inout log).assign(inout fifth, 55);
+    if old != 5 || fifth != 55 {
+        return 5;
+    }
+
+    let holder = Box[i32](value: 1, items: [12], marker: 0);
+    var sixth i32 = 6;
+    let old1 = holder.assign(inout sixth, mark_value(inout log, 5));
+    let old2 = holder.assign(inout sixth, mark_value(inout log, 6));
+    if old1 != 6 || old2 != 5 || sixth != 6 {
+        return 6;
+    }
+
+    if log != 923982343463956 {
+        return 7;
+    }
+    return 0;
+}
