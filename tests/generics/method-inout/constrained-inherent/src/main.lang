@@ -1,0 +1,372 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+trait Value {
+    func get(self Self) i32;
+}
+
+trait Left {
+    func pick(self Self) i32;
+}
+
+trait Right {
+    func pick(self Self) i32;
+}
+
+struct Item {
+    items Vec[i32];
+}
+
+struct Crate[T] {
+    value T;
+    items Vec[i32];
+}
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+    marker i32;
+}
+
+enum Maybe[T] {
+    None;
+    Some(value T);
+}
+
+impl Value for i32 { func get(self Self) i32 { return self; } }
+impl Value for i64 { func get(self Self) i32 { return 1; } }
+impl Value for u32 { func get(self Self) i32 { return 2; } }
+impl Value for u64 { func get(self Self) i32 { return 3; } }
+impl Value for f32 { func get(self Self) i32 { return 4; } }
+impl Value for f64 { func get(self Self) i32 { return 5; } }
+impl Value for bool { func get(self Self) i32 { return 6; } }
+impl Value for Item { func get(self Self) i32 { return self.items[0]; } }
+impl Value for Box[Item] { func get(self Self) i32 { return self.marker; } }
+
+impl Left for Item { func pick(self Self) i32 { return self.items[0] + 20; } }
+impl Right for Item { func pick(self Self) i32 { return self.items[0] + 10; } }
+impl Left for i32 { func pick(self Self) i32 { return 3; } }
+impl Right for i32 { func pick(self Self) i32 { return 7; } }
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func make_item(value i32) Item {
+    return Item(items: [value]);
+}
+
+func make_box(log inout i64) i32 {
+    mark(inout log, 9);
+    return 1;
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func bump_free[T Value](slot inout T, value T) T {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func swap_free[T Value](a inout T, b inout T) {
+    let tmp = a;
+    a = b;
+    b = tmp;
+}
+
+impl[T Value] Box[T] {
+    func bump(self Self, slot inout T, value T) T {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func bump_static(slot inout T, value T) T {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func replace[U Value](self Self, slot inout U, value U) U {
+        let old = slot;
+        let observed = self.value.get();
+        slot = value;
+        return old;
+    }
+
+    func replace_static[U Value](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func pair_replace[U Value, V Value](self Self, first inout U, value U,
+                                        second inout V, other V) i32 {
+        first = value;
+        second = other;
+        return 1;
+    }
+
+    func ordered[U Value](self Self, slot inout U, value U, second i32) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func forward[U Value](self Self, slot inout U, value U) U {
+        return self.replace(inout slot, value);
+    }
+
+    func forward_free[U Value](self Self, a inout U, b inout U) {
+        swap_free(inout a, inout b);
+    }
+
+    func apply[U Value](self Self, f func(inout U, U) U,
+                        slot inout U, value U) U {
+        return f(inout slot, value);
+    }
+
+    func later_write[U Value](self Self, slot inout U, value U) U {
+        let old = slot;
+        defer {
+            slot = value;
+        }
+        return old;
+    }
+
+    func pick_left[U Left](self Self, slot inout i32, value U,
+                           log inout i64) i32 {
+        let p = value.pick();
+        slot = slot + 1;
+        mark(inout log, i64(p));
+        return p;
+    }
+
+    func pick_right[U Right](self Self, slot inout i32, value U,
+                             log inout i64) i32 {
+        let p = value.pick();
+        slot = slot + 1;
+        mark(inout log, i64(p));
+        return p;
+    }
+
+    func same_name[T Value](self Self, slot inout T, value T) T {
+        let observed = self.value.get();
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func static_self[U Value](self U, slot inout i32, value i32) i32 {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func fail_after[U Value](self Self, slot inout U, value U,
+                             log inout i64) i32 throws E {
+        slot = value;
+        mark(inout log, 4);
+        throw E.Bad;
+    }
+
+    func cleanup_fail[U Value](self Self, slot inout U, value U,
+                               owned move Vec[i32], log inout i64) i32 throws E {
+        let local Vec[i32] = [11];
+        defer {
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        slot = value;
+        mark(inout log, 4);
+        throw E.Bad;
+    }
+}
+
+impl[T] Crate[T] {
+    func replace_own[U Value](self Self, slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func replace_own_static[U Value](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+impl[T Value] Maybe[T] {
+    func take_static[U Value](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func Some[U Value](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func bump_static(slot inout T, value T) T {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var plog i64 = 0;
+
+    let bi = Box[Item](value: make_item(7), items: [90], marker: 3);
+    let b32 = Box[i32](value: 1, items: [91], marker: 4);
+    let crate = Crate[i32](value: 2, items: [92]);
+
+    var a i32 = 1;
+    let olda = b32.bump(inout a, 3);
+    var b i64 = 4;
+    let oldb = Box[i64].bump_static(inout b, 5);
+
+    var c i32 = 6;
+    let oldc = bi.replace(inout c, 7);
+    var d i64 = 8;
+    let oldd = bi.replace[i64](inout d, 9);
+    var e bool = false;
+    let olde = Box[bool].replace_static[bool](inout e, true);
+    var f f32 = 1.5;
+    let oldf = Box[i32].replace_static[f32](inout f, 2.5);
+    var g f64 = 3.5;
+    let oldg = bi.replace[f64](inout g, 4.5);
+    var h u32 = 10;
+    let oldh = bi.replace[u32](inout h, 11);
+    var i u64 = 12;
+    let oldi = Box[i64].replace_static[u64](inout i, 13);
+
+    var j i32 = 14;
+    var k bool = false;
+    let paired = bi.pair_replace[i32, bool](inout j, 15, inout k, true);
+
+    var l i32 = 16;
+    let oldl = crate.replace_own(inout l, 17);
+    var m i64 = 18;
+    let oldm = Crate[i32].replace_own_static[i64](inout m, 19);
+
+    var n i32 = 20;
+    let oldn = bi.forward(inout n, 21);
+    var o i32 = 22;
+    var p i32 = 23;
+    bi.forward_free(inout o, inout p);
+    var q i32 = 24;
+    let cb = bump_free[i32];
+    let oldq = bi.apply(cb, inout q, 25);
+
+    var r i32 = 26;
+    let left_pick = bi.pick_left(inout r, make_item(3), inout plog);
+    var s i32 = 28;
+    let right_pick = bi.pick_right(inout s, make_item(4), inout plog);
+
+    var t i32 = 28;
+    let oldt = bi.same_name[i32](inout t, 29);
+
+    var u i32 = 30;
+    let oldu = Box[Item].static_self[Box[Item]](bi, inout u, 31);
+
+    var ub bool = false;
+    let oldub = Maybe[i32].take_static[bool](inout ub, true);
+    var v i64 = 34;
+    let oldv = Maybe[i64].bump_static(inout v, 35);
+
+    let some = Maybe[i32].Some(value: 7);
+    switch some {
+    case Maybe.Some(value):
+        if value != 7 {
+            return 1;
+        }
+    case Maybe.None:
+        return 2;
+    }
+
+    var w i32 = 36;
+    let oldw = bi.ordered(second: mark_value(inout log, 3),
+                          value: mark_value(inout log, 5),
+                          slot: inout w);
+
+    var x i32 = 40;
+    let oldx = bi.later_write(inout x, 41);
+
+    var y i32 = 42;
+    try {
+        let ignored = bi.fail_after(inout y, 43, inout log);
+        return 3;
+    } catch err E {
+        mark(inout log, 3);
+        if y != 43 {
+            return 4;
+        }
+    }
+
+    var z i32 = 44;
+    var owned Vec[i32] = [20];
+    try {
+        let ignored = bi.cleanup_fail(inout z, 45, move owned, inout log);
+        return 5;
+    } catch err E {
+        mark(inout log, 3);
+        if z != 45 {
+            return 6;
+        }
+    }
+
+    if a != 3 || olda != 1 || b != 5 || oldb != 4 {
+        return 7;
+    }
+    if c != 7 || oldc != 6 || d != 9 || oldd != 8 || !e || olde {
+        return 8;
+    }
+    if f < 2.0 || oldf > 2.0 || g < 4.0 || oldg > 4.0 {
+        return 9;
+    }
+    if h != 11 || oldh != 10 || i != 13 || oldi != 12 {
+        return 10;
+    }
+    if j != 15 || !k || paired != 1 || l != 17 || oldl != 16 {
+        return 11;
+    }
+    if m != 19 || oldm != 18 || n != 21 || oldn != 20 {
+        return 12;
+    }
+    if o != 23 || p != 22 || q != 25 || oldq != 24 {
+        return 13;
+    }
+    if left_pick != 23 || right_pick != 14 || r != 27 || s != 29 {
+        return 14;
+    }
+    if oldt != 28 || t != 29 || oldu != 30 || u != 31 {
+        return 15;
+    }
+    if !ub || oldub || v != 35 || oldv != 34 {
+        return 16;
+    }
+    if oldw != 36 || w != 5 || oldx != 40 || x != 41 {
+        return 17;
+    }
+    if log != 3543463 {
+        return 18;
+    }
+    return 0;
+}

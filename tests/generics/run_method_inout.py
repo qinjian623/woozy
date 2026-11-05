@@ -5,17 +5,20 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
 sys.dont_write_bytecode = True
 
-CASES = ('positive', 'errors')
+CASES = ('positive', 'errors', 'constrained-inherent')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 5],
     'errors': [9, 2, 3, 9, 8, 2, 3, 9, 4, 3, 9, 4, 6, 3, 9, 5, 6],
+    'constrained-inherent': [23, 14, 3, 5, 4, 3, 4, 6, 3],
 }
-EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13}
+EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13,
+                        'constrained-inherent': 8}
 
 
 def digest(path):
@@ -79,6 +82,14 @@ def assert_native(case, observations, allocations):
     assert len(set(frees)) == len(frees), observations
     if case == 'positive':
         assert logs == [9, 93, 935], logs
+    elif case == 'constrained-inherent':
+        # The trait-constrained receiver and both constrained own parameters
+        # use the ordinary scalar inout path. Named arguments are evaluated in
+        # source order, typed throw keeps the written scalar, and the deferred
+        # write in cleanup_fail runs after the return value is saved.
+        assert logs == [23, 244, 3, 35, 354, 3543, 35434, 354346,
+                        3543463], logs
+        assert frees == [4, 5, 7, 6, 3, 2, 1, 0], frees
     else:
         # Receiver temporaries are released before their catch events. The
         # throwing callee releases its deferred local and moved argument before
@@ -110,6 +121,40 @@ def assert_python(case, data):
         assert snapshots['ad'] == 44 and snapshots['oldac'] == 40, data
         assert snapshots['w'] == 33 and snapshots['x'] is True, data
         assert snapshots['aa'] == 37 and snapshots['ab'] == 39, data
+    elif case == 'constrained-inherent':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['a'] == 3 and snapshots['olda'] == 1, data
+        assert snapshots['b'] == 5 and snapshots['oldb'] == 4, data
+        assert snapshots['c'] == 7 and snapshots['oldc'] == 6, data
+        assert snapshots['d'] == 9 and snapshots['oldd'] == 8, data
+        assert snapshots['e'] is True and snapshots['olde'] is False, data
+        assert snapshots['f'] == 2.5 and snapshots['oldf'] == 1.5, data
+        assert snapshots['g'] == 4.5 and snapshots['oldg'] == 3.5, data
+        assert snapshots['h'] == 11 and snapshots['oldh'] == 10, data
+        assert snapshots['i'] == 13 and snapshots['oldi'] == 12, data
+        assert snapshots['j'] == 15 and snapshots['k'] is True, data
+        assert snapshots['paired'] == 1, data
+        assert snapshots['l'] == 17 and snapshots['oldl'] == 16, data
+        assert snapshots['m'] == 19 and snapshots['oldm'] == 18, data
+        assert snapshots['n'] == 21 and snapshots['oldn'] == 20, data
+        assert snapshots['o'] == 23 and snapshots['p'] == 22, data
+        assert snapshots['q'] == 25 and snapshots['oldq'] == 24, data
+        assert snapshots['left_pick'] == 23, data
+        assert snapshots['right_pick'] == 14, data
+        assert snapshots['r'] == 27 and snapshots['s'] == 29, data
+        assert snapshots['oldt'] == 28 and snapshots['t'] == 29, data
+        assert snapshots['oldu'] == 30 and snapshots['u'] == 31, data
+        assert snapshots['ub'] is True and snapshots['oldub'] is False, data
+        assert snapshots['v'] == 35 and snapshots['oldv'] == 34, data
+        assert snapshots['oldw'] == 36 and snapshots['w'] == 5, data
+        assert snapshots['oldx'] == 40 and snapshots['x'] == 41, data
+        assert snapshots['y'] == 43 and snapshots['z'] == 45, data
+        assert snapshots['log'] == 3543463, data
+        assert snapshots['plog'] == 244, data
+        errors = {(item['function'], item['type'])
+                  for item in data['errors']}
+        assert ('fail_after', 'app.E') in errors, data
+        assert ('cleanup_fail', 'app.E') in errors, data
     else:
         snapshots = data.get('snapshots', {})
         assert snapshots, data
@@ -243,6 +288,7 @@ def main():
                        for path in sorted(manifest.parent.rglob('*'))
                        if path.is_file()}
             fresh = args.out / 'reject-new'
+            shutil.rmtree(fresh, ignore_errors=True)
             before = run([args.cli, 'build', '--project', manifest,
                           '--backend', 'native', '--opt', 0,
                           '--out-dir', fresh, '--format', 'json'], library=library)

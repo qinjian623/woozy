@@ -1,0 +1,270 @@
+package app;
+
+trait Value {
+    func get(self Self) i32;
+}
+
+trait Left {
+    func pick(self Self) i32;
+}
+
+trait Right {
+    func pick(self Self) i32;
+}
+
+struct Item {
+    items Vec[i32];
+}
+
+enum Bag {
+    Full(items Vec[i32]);
+}
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+    marker i32;
+}
+
+enum Maybe[T] {
+    None;
+    Some(value T);
+}
+
+impl Value for Item {
+    func get(self Self) i32 {
+        return self.items[0];
+    }
+}
+
+impl Value for Bag {
+    func get(self Self) i32 {
+        switch self {
+        case Bag.Full(items):
+            return items[0];
+        }
+    }
+}
+
+impl Value for i32 {
+    func get(self Self) i32 {
+        return self;
+    }
+}
+
+impl Value for bool {
+    func get(self Self) i32 {
+        if self {
+            return 1;
+        }
+        return 0;
+    }
+}
+
+impl Left for Item {
+    func pick(self Self) i32 {
+        return self.items[0] + 20;
+    }
+}
+
+impl Right for Item {
+    func pick(self Self) i32 {
+        return self.items[0] + 10;
+    }
+}
+
+impl Value for Box[Item] {
+    func get(self Self) i32 {
+        return self.marker;
+    }
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func make_item(log inout i64, value i32) Item {
+    mark(inout log, i64(value));
+    return Item(items: [value]);
+}
+
+func bag_get(bag Bag) i32 {
+    switch bag {
+    case Bag.Full(items):
+        return items[0];
+    }
+}
+
+func bag_set(bag Bag, value i32) {
+    switch bag {
+    case Bag.Full(items):
+        items[0] = value;
+    }
+}
+
+func make_bag(log inout i64, value i32) Bag {
+    mark(inout log, i64(value));
+    return Bag.Full(items: [value]);
+}
+
+impl[T Value] Box[T] {
+    func take[U Value](self Self, value move U) U {
+        let observed = self.value.get();
+        return move value;
+    }
+
+    func take_static[U Value](value move U) U {
+        return move value;
+    }
+
+    func mix[U Value](self Self, left move T, right move U) U {
+        return move right;
+    }
+
+    func phantom[U Value, V Value](self Self, value move U) U {
+        return move value;
+    }
+
+    func pick_left[U Left](self Self, value move U) i32 {
+        return value.pick() + self.value.get();
+    }
+
+    func pick_right[U Right](self Self, value move U) i32 {
+        return value.pick() + self.value.get();
+    }
+
+    func same_name[T Value](self Self, value move T) i32 {
+        return self.value.get() + value.get();
+    }
+
+    func keep_self[U Value](self Self, value move U) Self {
+        let observed = self.value.get();
+        return self;
+    }
+
+    func static_self[U Value](self U, value move U) i32 {
+        return 1;
+    }
+
+    func ordered[U Value](self Self, first i32, value move U, second i32) U {
+        return move value;
+    }
+}
+
+impl[T Value] Maybe[T] {
+    func take[U Value](value move U) U {
+        return move value;
+    }
+
+    func Some[U Value](value move U) U {
+        return move value;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    let bi = Box[Item](value: make_item(inout log, 1), items: [91],
+                       marker: 3);
+    let bb = Box[Bag](value: make_bag(inout log, 2), items: [92], marker: 4);
+
+    var i1 Item = make_item(inout log, 5);
+    let a = bi.take(move i1);
+
+    var b1 Bag = make_bag(inout log, 6);
+    let b_alias = b1;
+    let b = bi.take[Bag](move b1);
+    bag_set(b, 16);
+    if bag_get(b_alias) != 16 {
+        return 1;
+    }
+    var b2 Bag = Bag.Full(items: [20]);
+    let b2r = bi.take[Bag](move b2);
+
+    var i2 Item = make_item(inout log, 7);
+    let i2_alias = i2;
+    let c = bb.take[Item](move i2);
+    c.items[0] = 17;
+    if i2_alias.items[0] != 17 {
+        return 2;
+    }
+
+    var t1 Item = make_item(inout log, 8);
+    var u1 Bag = make_bag(inout log, 9);
+    let u1_alias = u1;
+    let d = bi.mix(move t1, move u1);
+    bag_set(d, 19);
+    if bag_get(u1_alias) != 19 {
+        return 3;
+    }
+
+    var p1 Bag = Bag.Full(items: [10]);
+    let e = bi.phantom[Bag, Item](move p1);
+    var p2 Bag = Bag.Full(items: [11]);
+    let f = bi.phantom[Bag, Bag](move p2);
+
+    let l = Item(items: [12]);
+    let g = bi.pick_left(move l);
+    let r = Item(items: [13]);
+    let h = bi.pick_right(move r);
+
+    var s1 Bag = Bag.Full(items: [14]);
+    let k = bi.same_name[Bag](move s1);
+
+    let bi_alias = bi;
+    var q1 Bag = Bag.Full(items: [15]);
+    let n = bi.keep_self[Bag](move q1);
+    n.items[0] = 18;
+    if bi_alias.items[0] != 18 {
+        return 4;
+    }
+
+    let copy = bi;
+    let m = Box[Item].static_self[Box[Item]](bi, move copy);
+
+    let e1 = Item(items: [16]);
+    let z = Maybe[i32].take[Item](move e1);
+
+    var st1 Bag = Bag.Full(items: [18]);
+    let st = Box[Item].take_static[Bag](move st1);
+    var st2 Item = Item(items: [19]);
+    let sti = Box[Item].take_static(move st2);
+
+    var ordered_bag = Bag.Full(items: [17]);
+    var order i64 = 0;
+    let ordered = bi.ordered(second: mark_value(inout order, 3),
+                             value: move ordered_bag,
+                             first: mark_value(inout order, 2));
+    if order != 32 {
+        return 5;
+    }
+
+    let some = Maybe[i32].Some(value: 7);
+    switch some {
+    case Maybe.Some(value):
+        if value != 7 {
+            return 6;
+        }
+    case Maybe.None:
+        return 7;
+    }
+
+    if log != 1256789 {
+        return 8;
+    }
+    if a.items[0] != 5 || bag_get(b) != 16 || bag_get(b2r) != 20 ||
+       c.items[0] != 17 || bag_get(d) != 19 || bag_get(e) != 10 ||
+       bag_get(f) != 11 {
+        return 9;
+    }
+    if g != 33 || h != 24 || k != 15 || n.marker != 3 || m != 1 ||
+       z.items[0] != 16 || bag_get(st) != 18 || sti.items[0] != 19 ||
+       bag_get(ordered) != 17 {
+        return 10;
+    }
+    return 0;
+}

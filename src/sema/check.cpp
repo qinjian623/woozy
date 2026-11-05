@@ -244,21 +244,20 @@ class Checker {
   // method in a generic impl whether or not its declaration adds generic
   // parameters of its own. register_function records the merged list in
   // declaration order: the impl parameters first, then the method's own
-  // parameters. The impl prefix must use the real ordered SymbolIds, and every
-  // parameter on both layers must be unconstrained. No trait constraints are
-  // accepted on either layer. Concrete move and non-self scalar inout share
-  // this source eligibility; neither adds a public representation.
+  // parameters. The impl prefix must use the real ordered SymbolIds; the own
+  // suffix comes from that registration and its source declaration. A type
+  // parameter on either layer may carry an existing single-trait constraint;
+  // select_method, finish_arguments, and instantiate check the actual concrete
+  // arguments, so a declaration with a constraint is not treated as satisfied.
+  // Concrete move and non-self scalar inout share this source eligibility;
+  // neither adds a public representation.
   bool inherent_method_source(SymbolId target) const {
     const auto *im = impl_of(target);
     if (!im || im->trait)
       return false;
     auto generics = generic_params.find(target.value);
     if (generics == generic_params.end() ||
-        !std::all_of(generics->second.begin(), generics->second.end(),
-                     [](const GenericParam &p) { return !p.trait; }) ||
-        generics->second.size() < im->params.size() ||
-        std::any_of(im->params.begin(), im->params.end(),
-                    [](const GenericParam &p) { return p.trait; }))
+        generics->second.size() < im->params.size())
       return false;
     for (size_t i = 0; i < im->params.size(); ++i)
       if (generics->second[i].symbol != im->params[i].symbol)
@@ -1626,9 +1625,11 @@ class Checker {
     }
     // Concrete move and non-self scalar inout on a generic free function are
     // independent of its trait constraints; finish_arguments below still
-    // requires the explicit impl. The inherent-method route keeps its existing
-    // unconstrained condition. Receiver and constraint calls stay excluded, so
-    // actual self modes and trait/constrained methods are rejected.
+    // requires the explicit impl. The inherent-method route accepts declared
+    // constraints on either layer for the same reason: finish_arguments checks
+    // the actual merged impl/own arguments, not merely the declarations.
+    // Receiver and constraint calls stay excluded, so actual self modes and
+    // trait methods are rejected.
     const bool free_template =
         !receiver && !constraint && free_generic_template(target);
     const bool free_move = free_template;
@@ -2923,16 +2924,13 @@ class Checker {
     f.signature = substitute(f.signature, sub, m.types);
     // A generic declaration defers direct mode/type restrictions until the
     // concrete type is known; reject them before publishing invalid HIR. Free
-    // generic templates, including trait-constrained ones, and eligible
-    // unconstrained inherent methods may carry scalar inout into the instance;
+    // generic templates and eligible inherent methods may carry scalar inout
+    // into the instance whether or not either layer has a trait constraint;
     // every other source keeps the old refusal after check_inout_graph has
     // checked the concrete types unconditionally.
     const bool inout_source =
         !temp.params.empty() &&
-        (free_generic_template(origin) ||
-         (std::all_of(temp.params.begin(), temp.params.end(),
-                      [](const GenericParam &p) { return !p.trait; }) &&
-          inherent_method_source(origin)));
+        (free_generic_template(origin) || inherent_method_source(origin));
     for (const auto &p : type(f.signature).parameters) {
       if (p.mode != ParamMode::ordinary &&
           type(p.type).kind == TypeKind::ForeignOpaque)

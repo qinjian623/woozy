@@ -1069,10 +1069,10 @@ void constrained_free_move(const fs::path &root) {
               "return move value;}} "
               "func main()i32{let s=S(x:1);var v Vec[i32]=[1];"
               "let r=s.take(move v);return r[0]-1;}");
-  unsupported("trait V{} impl V for i32{} struct S{x i32;} impl S{"
-              "func take[T V](self Self,value move T)T{return move value;}} "
-              "func main()i32{let s=S(x:1);var x i32=1;"
-              "let r=s.take(move x);return r-1;}");
+  good("trait V{} impl V for i32{} struct S{x i32;} impl S{"
+       "func take[T V](self Self,value move T)T{return move value;}} "
+       "func main()i32{let s=S(x:1);var x i32=1;"
+       "let r=s.take(move x);return r-1;}");
 }
 
 void constrained_free_inout(const fs::path &root) {
@@ -1468,12 +1468,12 @@ void constrained_free_inout(const fs::path &root) {
               "func swap[T V](a inout T,b inout T){} "
               "func main(){var x S=S(x:1);var y S=S(x:2);"
               "swap(inout x,inout y);}");
-  unsupported("trait V{func get(self Self)i32;} "
-              "impl V for i32{func get(self Self)i32{return self;}} "
-              "struct B[T]{x T;} impl[T] B[T]{"
-              "func swap[X V](self Self,a inout X,b inout X){}} "
-              "func main(){let b=B[i32](x:1);var x i32=1;var y i32=2;"
-              "b.swap(inout x,inout y);}");
+  good("trait V{func get(self Self)i32;} "
+       "impl V for i32{func get(self Self)i32{return self;}} "
+       "struct B[T]{x T;} impl[T] B[T]{"
+       "func swap[X V](self Self,a inout X,b inout X){}} "
+       "func main(){let b=B[i32](x:1);var x i32=1;var y i32=2;"
+       "b.swap(inout x,inout y);}");
   unsupported("trait V{func bump(self Self,slot inout i32);} "
               "struct S{x i32;} impl V for S{"
               "func bump(self Self,slot inout i32){}} "
@@ -2282,16 +2282,16 @@ return 0;}
 
   const std::string method_prefix =
       "struct Box[T]{value T;items Vec[i32];marker i32;} ";
-  unsupported("trait V{} impl V for i32{} " + method_prefix +
-              "impl[T V] Box[T]{func replace[U](self Self,slot inout U){"
-              "slot=slot;}} "
-              "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
-              "var x i32=1;b.replace(inout x);}");
-  unsupported("trait V{} impl V for i32{} " + method_prefix +
-              "impl[T] Box[T]{func replace[U V](self Self,slot inout U){"
-              "slot=slot;}} "
-              "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
-              "var x i32=1;b.replace(inout x);}");
+  good("trait V{} impl V for i32{} " + method_prefix +
+       "impl[T V] Box[T]{func replace[U](self Self,slot inout U){"
+       "slot=slot;}} "
+       "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+       "var x i32=1;b.replace(inout x);}");
+  good("trait V{} impl V for i32{} " + method_prefix +
+       "impl[T] Box[T]{func replace[U V](self Self,slot inout U){"
+       "slot=slot;}} "
+       "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
+       "var x i32=1;b.replace(inout x);}");
   unsupported("trait V{func replace(self Self,slot inout i32);} "
               "struct H{marker i32;} impl V for H{"
               "func replace(self Self,slot inout i32){slot=slot;}} "
@@ -2880,7 +2880,7 @@ void method_move(const fs::path &root) {
       "func take[U](self Self,value move U)U{return move value;}} "
       "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
       "let r=h.take(move v);return r[0];}");
-  unsupported(
+  good(
       "trait V{} impl V for i32{} struct H{marker i32;} impl H{"
       "func take[U V](self Self,value move U)U{return move value;}} "
       "func main()i32{let h=H(marker:0);var v i32=1;"
@@ -3825,10 +3825,10 @@ return 0;}
             "func take[U](value move U)U{return move value;}} "
             "func main()i32{var x i32=1;"
             "let r=Box[i32].take(move x);return r-1;}");
-  unsupported("trait V{} impl V for i32{} struct Box[T]{value T;} "
-              "impl[T V] Box[T]{func take(value move T)T{return move value;}} "
-              "func main()i32{var x i32=1;"
-              "let r=Box[i32].take(move x);return r-1;}");
+  good("trait V{} impl V for i32{} struct Box[T]{value T;} "
+       "impl[T V] Box[T]{func take(value move T)T{return move value;}} "
+       "func main()i32{var x i32=1;"
+       "let r=Box[i32].take(move x);return r-1;}");
   unsupported("trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
               "struct Box[T]{value T;items Vec[i32];} "
               "impl[T] V for Box[T]{"
@@ -4448,16 +4448,16 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
 
   const std::string box =
       "struct Box[T]{value T;items Vec[i32];marker i32;} ";
-  unsupported("trait V{} impl V for i32{} " + box +
-              "impl[T] Box[T]{"
-              "func take[U V](self Self,value move U)U{return move value;}} "
-              "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-              "var x i32=1;let r=b.take(move x);return r-1;}");
-  unsupported("trait V{} impl V for i32{} " + box +
-              "impl[T V] Box[T]{"
-              "func take[U](self Self,value move U)U{return move value;}} "
-              "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-              "var x i32=1;let r=b.take(move x);return r-1;}");
+  good("trait V{} impl V for i32{} " + box +
+       "impl[T] Box[T]{"
+       "func take[U V](self Self,value move U)U{return move value;}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+       "var x i32=1;let r=b.take(move x);return r-1;}");
+  good("trait V{} impl V for i32{} " + box +
+       "impl[T V] Box[T]{"
+       "func take[U](self Self,value move U)U{return move value;}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+       "var x i32=1;let r=b.take(move x);return r-1;}");
   unsupported("trait V{func take(self Self,value move Vec[i32])Vec[i32];} " +
               box +
               "impl[T] V for Box[T]{"
@@ -4596,6 +4596,1194 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
            messages(foreign));
 }
 
+void constrained_inherent_move(const fs::path &root) {
+  auto positive =
+      check(root /
+            "tests/generics/method-move/constrained-inherent/lang.toml");
+  need(positive.success(), messages(positive));
+  need(hir::verify(*positive.value).success(),
+       "constrained inherent move HIR rejected");
+  const auto &m = *positive.value;
+
+  auto symbol_name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  auto nominal_name = [&](TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return symbol_name(t->declaration);
+  };
+  auto is_nominal = [&](TypeId id, const std::string &name) {
+    return !nominal_name(id).empty() && nominal_name(id) == name;
+  };
+  auto is_item = [&](TypeId id) { return is_nominal(id, "Item"); };
+  auto is_bag = [&](TypeId id) { return is_nominal(id, "Bag"); };
+  auto is_i32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 32;
+  };
+  auto is_box_of = [&](TypeId id, const auto &element) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::NominalStruct &&
+           nominal_name(id) == "Box" && t->type_args.size() == 1 &&
+           element(t->type_args[0]);
+  };
+  auto has_parameter = [&](TypeId root_id) {
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      auto t = m.types.find(id);
+      if (!t)
+        return false;
+      if (t->kind == hir::TypeKind::TypeParameter)
+        return true;
+      for (auto a : t->type_args)
+        if (visit(a))
+          return true;
+      for (const auto &p : t->parameters)
+        if (visit(p.type))
+          return true;
+      if (visit(t->result))
+        return true;
+      return t->throws_type && visit(*t->throws_type);
+    };
+    return visit(root_id);
+  };
+  auto find_impl = [&](const std::string &name) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (!im.trait && nominal_name(im.self_type) == name)
+        return &im;
+    return nullptr;
+  };
+  auto template_for = [&](SymbolId method) -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (t.function.symbol == method)
+        return &t;
+    return nullptr;
+  };
+  auto method_template = [&](const hir::ImplDecl &im,
+                             const std::string &name)
+      -> const hir::FunctionTemplate * {
+    for (auto method : im.methods)
+      if (symbol_name(method) == name)
+        return template_for(method);
+    return nullptr;
+  };
+  auto function_for = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto signature_for = [&](const hir::FunctionInstance *i)
+      -> const hir::Type * {
+    auto f = function_for(i->symbol);
+    return f ? m.types.find(f->signature) : nullptr;
+  };
+  auto instances_of = [&](const hir::FunctionTemplate *t) {
+    std::vector<const hir::FunctionInstance *> result;
+    for (const auto &i : m.instances)
+      if (i.origin == t->function.symbol)
+        result.push_back(&i);
+    return result;
+  };
+  auto find_trait = [&](const std::string &name) -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (symbol_name(t.symbol) == name)
+        return &t;
+    return nullptr;
+  };
+  auto trait_method = [&](const hir::TraitDecl &trait,
+                          const std::string &type,
+                          const std::string &method) -> SymbolId {
+    for (const auto &im : m.impls)
+      if (im.trait == trait.symbol && nominal_name(im.self_type) == type)
+        for (auto candidate : im.methods)
+          if (symbol_name(candidate) == method)
+            return candidate;
+    throw std::runtime_error("trait impl method missing: " + type + "." +
+                             method);
+  };
+  auto prefix_ok = [&](const hir::FunctionTemplate *t,
+                       const hir::ImplDecl &im, size_t suffix) {
+    if (!t || t->params.size() != im.params.size() + suffix)
+      return false;
+    for (size_t i = 0; i < im.params.size(); ++i) {
+      const auto &p = t->params[i];
+      if (p.symbol != im.params[i].symbol ||
+          p.source.span.snapshot != t->function.source.span.snapshot ||
+          p.source.span.begin_byte >= t->function.source.span.begin_byte)
+        return false;
+    }
+    for (size_t i = im.params.size(); i < t->params.size(); ++i) {
+      const auto &p = t->params[i];
+      if (p.source.span.snapshot != t->function.source.span.snapshot ||
+          p.source.span.begin_byte < t->function.source.span.begin_byte ||
+          p.source.span.end_byte > t->function.source.span.end_byte)
+        return false;
+    }
+    return true;
+  };
+
+  const auto *box_impl = find_impl("Box");
+  const auto *maybe_impl = find_impl("Maybe");
+  need(box_impl && maybe_impl,
+       "constrained inherent move impl declarations missing");
+  need(box_impl->params.size() == 1 && box_impl->params[0].trait &&
+           symbol_name(*box_impl->params[0].trait) == "Value",
+       "Box impl layer lost its Value constraint");
+  const auto *box_take = method_template(*box_impl, "take");
+  const auto *box_static = method_template(*box_impl, "take_static");
+  const auto *box_mix = method_template(*box_impl, "mix");
+  const auto *box_phantom = method_template(*box_impl, "phantom");
+  const auto *box_left = method_template(*box_impl, "pick_left");
+  const auto *box_right = method_template(*box_impl, "pick_right");
+  const auto *box_same = method_template(*box_impl, "same_name");
+  const auto *box_keep = method_template(*box_impl, "keep_self");
+  const auto *box_static_self = method_template(*box_impl, "static_self");
+  const auto *box_ordered = method_template(*box_impl, "ordered");
+  const auto *maybe_take = method_template(*maybe_impl, "take");
+  need(box_take && box_static && box_mix && box_phantom && box_left &&
+           box_right && box_same && box_keep && box_static_self &&
+           box_ordered && maybe_take,
+       "constrained inherent move templates missing");
+  need(prefix_ok(box_take, *box_impl, 1) &&
+           prefix_ok(box_static, *box_impl, 1) &&
+           prefix_ok(box_mix, *box_impl, 1) &&
+           prefix_ok(box_phantom, *box_impl, 2) &&
+           prefix_ok(box_left, *box_impl, 1) &&
+           prefix_ok(box_right, *box_impl, 1) &&
+           prefix_ok(box_same, *box_impl, 1) &&
+           prefix_ok(box_keep, *box_impl, 1) &&
+           prefix_ok(box_static_self, *box_impl, 1) &&
+           prefix_ok(box_ordered, *box_impl, 1) &&
+           prefix_ok(maybe_take, *maybe_impl, 1),
+       "constrained inherent move impl prefix or own suffix changed");
+  need(box_take->params[1].trait &&
+           symbol_name(*box_take->params[1].trait) == "Value" &&
+           box_phantom->params[1].trait && box_phantom->params[2].trait &&
+           box_left->params[1].trait && box_right->params[1].trait,
+       "method own layer lost a declared constraint");
+  need(box_same->params.size() == 2 &&
+           box_same->params[0].symbol == box_impl->params[0].symbol &&
+           box_same->params[1].symbol != box_same->params[0].symbol &&
+           symbol_name(box_same->params[0].symbol) == "T" &&
+           symbol_name(box_same->params[1].symbol) == "T",
+       "same-named method T was merged with the impl T");
+
+  const auto take_instances = instances_of(box_take);
+  need(take_instances.size() == 3,
+       "constrained Box take instance combinations were not exact");
+  const hir::FunctionInstance *take_item_item = nullptr,
+                             *take_item_bag = nullptr,
+                             *take_bag_item = nullptr;
+  for (const auto *i : take_instances) {
+    need(i->type_args.size() == 2, "Box take instance arity");
+    if (is_item(i->type_args[0]) && is_item(i->type_args[1]))
+      take_item_item = i;
+    else if (is_item(i->type_args[0]) && is_bag(i->type_args[1]))
+      take_item_bag = i;
+    else if (is_bag(i->type_args[0]) && is_item(i->type_args[1]))
+      take_bag_item = i;
+    else
+      throw std::runtime_error("unexpected Box take type combination");
+  }
+  need(take_item_item && take_item_bag && take_bag_item &&
+           take_item_item->symbol != take_item_bag->symbol &&
+           take_item_item->symbol != take_bag_item->symbol &&
+           take_item_bag->symbol != take_bag_item->symbol,
+       "Box take impl/own layer changes shared an instance");
+
+  const auto static_instances = instances_of(box_static);
+  need(static_instances.size() == 2,
+       "constrained take_static combinations were not deduplicated");
+  const hir::FunctionInstance *static_item_bag = nullptr,
+                             *static_item_item = nullptr;
+  for (const auto *i : static_instances) {
+    need(i->type_args.size() == 2, "Box take_static instance arity");
+    if (is_item(i->type_args[0]) && is_bag(i->type_args[1]))
+      static_item_bag = i;
+    else if (is_item(i->type_args[0]) && is_item(i->type_args[1]))
+      static_item_item = i;
+    else
+      throw std::runtime_error("unexpected take_static combination");
+  }
+  need(static_item_bag && static_item_item,
+       "constrained take_static explicit/inferred instances missing");
+
+  const auto phantom_instances = instances_of(box_phantom);
+  need(phantom_instances.size() == 2,
+       "phantom params were merged by identical concrete signatures");
+  const hir::FunctionInstance *phantom_item = nullptr,
+                             *phantom_bag = nullptr;
+  for (const auto *i : phantom_instances) {
+    need(i->type_args.size() == 3 && is_item(i->type_args[0]) &&
+             is_bag(i->type_args[1]),
+         "phantom instance complete key changed");
+    if (is_item(i->type_args[2]))
+      phantom_item = i;
+    else if (is_bag(i->type_args[2]))
+      phantom_bag = i;
+  }
+  need(phantom_item && phantom_bag &&
+           phantom_item->symbol != phantom_bag->symbol &&
+           phantom_item->type_args != phantom_bag->type_args,
+       "same-signature phantom combinations collapsed");
+
+  const auto mix_instances = instances_of(box_mix);
+  const auto keep_instances = instances_of(box_keep);
+  const auto same_instances = instances_of(box_same);
+  const auto static_self_instances = instances_of(box_static_self);
+  const auto left_instances = instances_of(box_left);
+  const auto right_instances = instances_of(box_right);
+  const auto ordered_instances = instances_of(box_ordered);
+  const auto maybe_instances = instances_of(maybe_take);
+  need(mix_instances.size() == 1 && keep_instances.size() == 1 &&
+           same_instances.size() == 1 &&
+           static_self_instances.size() == 1 &&
+           left_instances.size() == 1 && right_instances.size() == 1 &&
+           ordered_instances.size() == 1 && maybe_instances.size() == 1,
+       "constrained inherent move instance counts changed");
+  need(mix_instances[0]->type_args.size() == 2 &&
+           is_item(mix_instances[0]->type_args[0]) &&
+           is_bag(mix_instances[0]->type_args[1]),
+       "Box mix impl/own key order changed");
+  need(keep_instances[0]->type_args.size() == 2 &&
+           is_item(keep_instances[0]->type_args[0]) &&
+           is_bag(keep_instances[0]->type_args[1]),
+       "Box keep_self impl/own key order changed");
+  need(same_instances[0]->type_args.size() == 2 &&
+           is_item(same_instances[0]->type_args[0]) &&
+           is_bag(same_instances[0]->type_args[1]),
+       "same-named own T replaced or reordered the impl key");
+  need(static_self_instances[0]->type_args.size() == 2 &&
+           is_item(static_self_instances[0]->type_args[0]) &&
+           is_box_of(static_self_instances[0]->type_args[1], is_item),
+       "static own U=Self changed the impl/own key");
+  need(maybe_instances[0]->type_args.size() == 2 &&
+           is_i32(maybe_instances[0]->type_args[0]) &&
+           is_item(maybe_instances[0]->type_args[1]),
+       "generic enum Maybe take key changed");
+
+  auto take_item_bag_sig = signature_for(take_item_bag);
+  auto take_bag_item_sig = signature_for(take_bag_item);
+  auto static_bag_sig = signature_for(static_item_bag);
+  auto static_item_sig = signature_for(static_item_item);
+  auto phantom_item_sig = signature_for(phantom_item);
+  auto phantom_bag_sig = signature_for(phantom_bag);
+  auto mix_sig = signature_for(mix_instances[0]);
+  auto keep_sig = signature_for(keep_instances[0]);
+  auto same_sig = signature_for(same_instances[0]);
+  auto static_self_sig = signature_for(static_self_instances[0]);
+  auto ordered_sig = signature_for(ordered_instances[0]);
+  need(take_item_bag_sig && take_bag_item_sig && static_bag_sig &&
+           static_item_sig && phantom_item_sig && phantom_bag_sig &&
+           mix_sig && keep_sig && same_sig && static_self_sig &&
+           ordered_sig,
+       "constrained inherent move signatures missing");
+  need(take_item_bag_sig->parameters.size() == 2 &&
+           is_box_of(take_item_bag_sig->parameters[0].type, is_item) &&
+           take_item_bag_sig->parameters[0].mode ==
+               hir::ParamMode::ordinary &&
+           is_bag(take_item_bag_sig->parameters[1].type) &&
+           take_item_bag_sig->parameters[1].mode == hir::ParamMode::move &&
+           is_bag(take_item_bag_sig->result),
+       "Box take [Item,Bag] Self/own signature mismatch");
+  need(take_bag_item_sig->parameters.size() == 2 &&
+           is_box_of(take_bag_item_sig->parameters[0].type, is_bag) &&
+           is_item(take_bag_item_sig->parameters[1].type) &&
+           take_bag_item_sig->parameters[1].mode == hir::ParamMode::move &&
+           is_item(take_bag_item_sig->result),
+       "Self followed the own U instead of the impl T");
+  need(static_bag_sig->parameters.size() == 1 &&
+           is_bag(static_bag_sig->parameters[0].type) &&
+           static_bag_sig->parameters[0].mode == hir::ParamMode::move &&
+           is_bag(static_bag_sig->result) &&
+           static_item_sig->parameters.size() == 1 &&
+           is_item(static_item_sig->parameters[0].type) &&
+           static_item_sig->parameters[0].mode == hir::ParamMode::move &&
+           is_item(static_item_sig->result),
+       "constrained static signatures lost their concrete move types");
+  need(phantom_item_sig->parameters.size() == 2 &&
+           phantom_item_sig->parameters[0].type ==
+               phantom_bag_sig->parameters[0].type &&
+           phantom_item_sig->parameters[1].type ==
+               phantom_bag_sig->parameters[1].type &&
+           phantom_item_sig->result == phantom_bag_sig->result,
+       "phantom instances did not have the same concrete signature");
+  need(mix_sig->parameters.size() == 3 &&
+           is_box_of(mix_sig->parameters[0].type, is_item) &&
+           is_item(mix_sig->parameters[1].type) &&
+           mix_sig->parameters[1].mode == hir::ParamMode::move &&
+           is_bag(mix_sig->parameters[2].type) &&
+           is_bag(mix_sig->result),
+       "Box mix T/U owning signature changed");
+  need(keep_sig->parameters.size() == 2 &&
+           is_box_of(keep_sig->parameters[0].type, is_item) &&
+           is_bag(keep_sig->parameters[1].type) &&
+           is_box_of(keep_sig->result, is_item),
+       "keep_self result Self did not follow only the impl type");
+  need(same_sig->parameters.size() == 2 &&
+           is_box_of(same_sig->parameters[0].type, is_item) &&
+           is_bag(same_sig->parameters[1].type) &&
+           is_i32(same_sig->result),
+       "same-named own T changed Self or the move data type");
+  need(static_self_sig->parameters.size() == 2 &&
+           is_box_of(static_self_sig->parameters[0].type, is_item) &&
+           static_self_sig->parameters[0].mode == hir::ParamMode::ordinary &&
+           is_box_of(static_self_sig->parameters[1].type, is_item) &&
+           static_self_sig->parameters[1].mode == hir::ParamMode::move &&
+           is_i32(static_self_sig->result),
+       "static own U=Self was reclassified as a receiver");
+  need(ordered_sig->parameters.size() == 4 &&
+           is_box_of(ordered_sig->parameters[0].type, is_item) &&
+           is_i32(ordered_sig->parameters[1].type) &&
+           is_bag(ordered_sig->parameters[2].type) &&
+           ordered_sig->parameters[2].mode == hir::ParamMode::move &&
+           is_i32(ordered_sig->parameters[3].type) &&
+           is_bag(ordered_sig->result),
+       "ordered source-order signature changed");
+
+  std::set<uint64_t> template_symbols;
+  for (const auto &t : m.templates)
+    template_symbols.insert(t.function.symbol.value);
+  for (const auto &f : m.functions) {
+    auto sig = m.types.find(f.signature);
+    need(sig && !has_parameter(f.signature),
+         "concrete constrained move signature retained a parameter");
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != f.symbol)
+        continue;
+      need(!has_parameter(n.type),
+           "concrete constrained move node retained a parameter");
+      need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+           "concrete constrained move retained ConstraintCall");
+      if (auto c = std::get_if<hir::Call>(&n.data)) {
+        need(c->type_args.empty(),
+             "concrete constrained move call retained type arguments");
+        if (c->direct_symbol)
+          need(!template_symbols.count(c->direct_symbol->value),
+               "concrete constrained move call targets a template");
+      }
+    }
+  }
+
+  const auto *value_trait = find_trait("Value");
+  const auto *left_trait = find_trait("Left");
+  const auto *right_trait = find_trait("Right");
+  need(value_trait && left_trait && right_trait,
+       "constrained inherent move traits missing");
+  auto item_value_get = trait_method(*value_trait, "Item", "get");
+  auto bag_value_get = trait_method(*value_trait, "Bag", "get");
+  auto item_left_pick = trait_method(*left_trait, "Item", "pick");
+  auto item_right_pick = trait_method(*right_trait, "Item", "pick");
+  need(item_value_get != bag_value_get &&
+           item_left_pick != item_right_pick,
+       "same-named trait methods shared a symbol");
+
+  auto calls_named = [&](SymbolId function, SymbolId target) {
+    size_t count = 0;
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != function)
+        continue;
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol && *c->direct_symbol == target)
+        ++count;
+    }
+    return count;
+  };
+  const auto *take_item_bag_function = function_for(take_item_bag->symbol);
+  const auto *same_function = function_for(same_instances[0]->symbol);
+  const auto *left_function = function_for(left_instances[0]->symbol);
+  const auto *right_function = function_for(right_instances[0]->symbol);
+  need(take_item_bag_function && same_function && left_function &&
+           right_function,
+       "constrained move concrete functions missing");
+  need(calls_named(take_item_bag_function->symbol, item_value_get) == 1,
+       "take did not resolve the impl-layer Value constraint to Item.get");
+  need(calls_named(same_function->symbol, item_value_get) == 1 &&
+           calls_named(same_function->symbol, bag_value_get) == 1,
+       "same-named T did not resolve both distinct get implementations");
+  need(calls_named(left_function->symbol, item_left_pick) == 1 &&
+           calls_named(left_function->symbol, item_right_pick) == 0,
+       "Left constraint did not select Item.Left.pick");
+  need(calls_named(right_function->symbol, item_right_pick) == 1 &&
+           calls_named(right_function->symbol, item_left_pick) == 0,
+       "Right constraint did not select Item.Right.pick");
+
+  size_t take_template_constraints = 0, same_template_constraints = 0;
+  for (const auto &n : m.nodes) {
+    if (m.scopes[n.scope.value].function == box_take->function.symbol)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(c->trait == value_trait->symbol,
+             "take template constraint trait changed");
+        ++take_template_constraints;
+      }
+    if (m.scopes[n.scope.value].function == box_same->function.symbol)
+      if (std::holds_alternative<hir::ConstraintCall>(n.data))
+        ++same_template_constraints;
+  }
+  need(take_template_constraints == 1 && same_template_constraints == 2,
+       "constrained method templates lost ordinary ConstraintCall nodes");
+
+  auto only_move_binding = [&](const hir::HirFunction *f, SymbolId expected) {
+    size_t count = 0;
+    for (const auto &n : m.nodes)
+      if (m.scopes[n.scope.value].function == f->symbol)
+        if (auto mv = std::get_if<hir::Move>(&n.data); mv && mv->binding) {
+          need(*mv->binding == expected,
+               "concrete Move kept a template or wrong binding");
+          ++count;
+        }
+    return count;
+  };
+  need(only_move_binding(take_item_bag_function,
+                         take_item_bag_function->parameters[1].symbol) == 1,
+       "take concrete Move binding missing");
+
+  std::map<uint64_t, SymbolId> take_renamed;
+  for (auto [from, to] : take_item_bag->renamed)
+    take_renamed[from.value] = to;
+  need(take_renamed.at(box_take->function.symbol.value) ==
+               take_item_bag_function->symbol &&
+           take_renamed.at(box_take->function.parameters[0].symbol.value) ==
+               take_item_bag_function->parameters[0].symbol &&
+           take_renamed.at(box_take->function.parameters[1].symbol.value) ==
+               take_item_bag_function->parameters[1].symbol,
+       "take renamed map lost Self or its own move parameter");
+  std::optional<SymbolId> template_local;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == box_take->function.symbol)
+      if (auto b = std::get_if<hir::Binding>(&n.data)) {
+        template_local = b->symbol;
+        break;
+      }
+  need(template_local && take_renamed.count(template_local->value),
+       "take template local was not renamed in its instance");
+  need(take_renamed.at(template_local->value) !=
+               *template_local,
+       "take instance local kept the template SymbolId");
+
+  auto count_instance_calls = [&](SymbolId target) {
+    size_t count = 0;
+    for (const auto &n : m.nodes) {
+      auto c = std::get_if<hir::Call>(&n.data);
+      if (c && c->direct_symbol && *c->direct_symbol == target)
+        ++count;
+    }
+    return count;
+  };
+  need(count_instance_calls(take_item_bag->symbol) == 2,
+       "same impl/own combination did not reuse one take instance");
+  need(count_instance_calls(take_item_item->symbol) == 1 &&
+           count_instance_calls(take_bag_item->symbol) == 1,
+       "take call-to-instance mapping changed");
+
+  invalid_recomputed(m, "constrained move instance origin", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == take_item_bag->symbol) {
+        i.origin = maybe_take->function.symbol;
+        return;
+      }
+    throw std::runtime_error("constrained move instance missing");
+  });
+  invalid_recomputed(m, "constrained move full key order", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == take_item_bag->symbol) {
+        std::swap(i.type_args[0], i.type_args[1]);
+        return;
+      }
+    throw std::runtime_error("constrained move instance missing");
+  });
+  invalid_recomputed(m, "constrained move Self substitution", [&](auto &x) {
+    auto template_sig = *x.types.find(box_take->function.signature);
+    for (auto &f : x.functions)
+      if (f.symbol == take_item_bag_function->symbol) {
+        auto sig = *x.types.find(f.signature);
+        sig.parameters[0].type = template_sig.parameters[1].type;
+        f.signature = x.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("constrained move take instance missing");
+  });
+  invalid(m, "constrained move Move rename", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == take_item_bag_function->symbol)
+        if (auto mv = std::get_if<hir::Move>(&n.data); mv && mv->binding) {
+          *mv->binding = box_take->function.parameters[1].symbol;
+          return;
+        }
+    throw std::runtime_error("constrained move concrete Move missing");
+  });
+  invalid(m, "constrained move local rename", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == take_item_bag_function->symbol)
+        if (auto b = std::get_if<hir::Binding>(&n.data); b && template_local) {
+          b->symbol = *template_local;
+          return;
+        }
+    throw std::runtime_error("constrained move concrete local missing");
+  });
+
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "constrained inherent move source HIR rejected");
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  const std::string box = "struct Box[T]{value T;items Vec[i32];marker i32;} ";
+  bad("trait V{} struct S{x i32;} " + box +
+          "impl[T V] Box[T]{func take[U V](self Self,value move U)U{"
+          "return move value;}} "
+          "func main()i32{let b=Box[S](value:S(x:1),items:[1],marker:0);"
+          "var x S=S(x:2);let r=b.take(move x);return r.x;}",
+      "E_TYPE_MISMATCH");
+  bad("trait V{} impl V for i32{} struct S{x i32;} " + box +
+          "impl[T V] Box[T]{func take[U V](self Self,value move U)U{"
+          "return move value;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "var x S=S(x:2);let r=b.take(move x);return r.x;}",
+      "E_TYPE_MISMATCH");
+  unsupported("trait V{} impl V for i32{} " + box +
+              "impl[T V] Box[T]{func take[U V](self move Self,value move U)U{"
+              "return move value;}} "
+              "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
+              "var x i32=1;let r=b.take(move x);return r-1;}");
+  unsupported("trait V{} impl V for i32{} " + box +
+              "impl[T V] Box[T]{func take[U V](self inout Self,value move U)U{"
+              "return move value;}} "
+              "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
+              "var x i32=1;let r=Box[i32].take(inout b,move x);return r-1;}");
+  bad("trait V{} impl V for i32{} " + box +
+          "impl[T V] Box[T]{func take[U V](self Self,value move U)U{"
+          "return move value;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "var x i32=1;let f=b.take;return 0;}",
+      "E_TYPE_MISMATCH");
+  bad("trait V{} impl V for i32{} " + box +
+          "impl[T V] Box[T]{func take[U V](self Self,value move U)U{"
+          "return move value;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "var x i32=1;let r=b.take(x);return r-1;}",
+      "E_CALL_ARGUMENT");
+  bad("trait V{} impl V for i32{} " + box +
+          "impl[T V] Box[T]{func take[U V](self Self,value move U)U{"
+          "return move value;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "var x i32=1;let r=b.take(move x);return x-1;}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  unsupported("trait V{} impl V for i32{} " + box +
+              "impl[T V] Box[T]{func take_items(self Self,"
+              "value move Vec[i32])i32{return value[0];}} "
+              "func main()i32{let b=Box[i32](value:1,items:[2],"
+              "marker:0);let r=b.take_items(move b.items);return r;}");
+  good(std::string("func bump(x inout i32){x+=1;} trait V{} "
+                    "struct Item{items Vec[i32];} impl V for Item{} ") +
+       "struct H{items Vec[i32];} impl H{"
+       "func keep[U V](self Self,value move U,cb func(inout i32))U{"
+       "return move value;}} "
+       "func main()i32{let h=H(items:[1]);var v Item=Item(items:[2]);"
+       "let r=h.keep(move v,bump);return r.items[0]-2;}");
+  unsupported(std::string("func bump(x inout Vec[i32]){} trait V{} "
+                           "struct Item{items Vec[i32];} impl V for Item{} ") +
+              "struct H{items Vec[i32];} impl H{"
+              "func keep[U V](self Self,value move U,"
+              "cb func(inout Vec[i32]))U{return move value;}} "
+              "func main()i32{let h=H(items:[1]);var v Item=Item(items:[2]);"
+              "let r=h.keep(move v,bump);return r.items[0]-2;}");
+}
+
+void constrained_inherent_inout(const fs::path &root) {
+  auto positive =
+      check(root /
+            "tests/generics/method-inout/constrained-inherent/lang.toml");
+  need(positive.success(), messages(positive));
+  need(hir::verify(*positive.value).success(),
+       "constrained inherent inout HIR rejected");
+  const auto &m = *positive.value;
+
+  auto symbol_name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  auto nominal_name = [&](TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return symbol_name(t->declaration);
+  };
+  auto is_nominal = [&](TypeId id, const std::string &name) {
+    return !nominal_name(id).empty() && nominal_name(id) == name;
+  };
+  auto is_item = [&](TypeId id) { return is_nominal(id, "Item"); };
+  auto is_i32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 32;
+  };
+  auto is_i64 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 64;
+  };
+  auto is_u32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::UnsignedInt && t->bits == 32;
+  };
+  auto is_u64 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::UnsignedInt && t->bits == 64;
+  };
+  auto is_f32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::Float && t->bits == 32;
+  };
+  auto is_f64 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::Float && t->bits == 64;
+  };
+  auto is_bool = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::Bool;
+  };
+  auto is_box_of = [&](TypeId id, const auto &element) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::NominalStruct &&
+           nominal_name(id) == "Box" && t->type_args.size() == 1 &&
+           element(t->type_args[0]);
+  };
+  auto has_parameter = [&](TypeId root_id) {
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      auto t = m.types.find(id);
+      if (!t)
+        return false;
+      if (t->kind == hir::TypeKind::TypeParameter)
+        return true;
+      for (auto a : t->type_args)
+        if (visit(a))
+          return true;
+      for (const auto &p : t->parameters)
+        if (visit(p.type))
+          return true;
+      if (visit(t->result))
+        return true;
+      return t->throws_type && visit(*t->throws_type);
+    };
+    return visit(root_id);
+  };
+  auto find_impl = [&](const std::string &name) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (!im.trait && nominal_name(im.self_type) == name)
+        return &im;
+    return nullptr;
+  };
+  auto template_for = [&](SymbolId method) -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (t.function.symbol == method)
+        return &t;
+    return nullptr;
+  };
+  auto method_template = [&](const hir::ImplDecl &im,
+                             const std::string &name)
+      -> const hir::FunctionTemplate * {
+    for (auto method : im.methods)
+      if (symbol_name(method) == name)
+        return template_for(method);
+    return nullptr;
+  };
+  auto function_for = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto signature_for = [&](const hir::FunctionInstance *i)
+      -> const hir::Type * {
+    auto f = function_for(i->symbol);
+    return f ? m.types.find(f->signature) : nullptr;
+  };
+  auto instances_of = [&](const hir::FunctionTemplate *t) {
+    std::vector<const hir::FunctionInstance *> result;
+    for (const auto &i : m.instances)
+      if (i.origin == t->function.symbol)
+        result.push_back(&i);
+    return result;
+  };
+  auto find_trait = [&](const std::string &name) -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (symbol_name(t.symbol) == name)
+        return &t;
+    return nullptr;
+  };
+  auto trait_method = [&](const hir::TraitDecl &trait,
+                          const std::string &type,
+                          const std::string &method) -> SymbolId {
+    for (const auto &im : m.impls)
+      if (im.trait == trait.symbol && nominal_name(im.self_type) == type)
+        for (auto candidate : im.methods)
+          if (symbol_name(candidate) == method)
+            return candidate;
+    throw std::runtime_error("trait impl method missing: " + type + "." +
+                             method);
+  };
+
+  const auto *box_impl = find_impl("Box");
+  const auto *crate_impl = find_impl("Crate");
+  const auto *maybe_impl = find_impl("Maybe");
+  need(box_impl && crate_impl && maybe_impl,
+       "constrained inherent inout impl declarations missing");
+  need(box_impl->params.size() == 1 && box_impl->params[0].trait &&
+           symbol_name(*box_impl->params[0].trait) == "Value",
+       "Box impl layer lost its Value constraint");
+  need(!crate_impl->params.empty() && !crate_impl->params[0].trait,
+       "Crate impl unexpectedly gained a constraint");
+  const auto *box_bump = method_template(*box_impl, "bump");
+  const auto *box_bump_static = method_template(*box_impl, "bump_static");
+  const auto *box_replace = method_template(*box_impl, "replace");
+  const auto *box_replace_static = method_template(*box_impl, "replace_static");
+  const auto *box_pair = method_template(*box_impl, "pair_replace");
+  const auto *box_ordered = method_template(*box_impl, "ordered");
+  const auto *box_forward = method_template(*box_impl, "forward");
+  const auto *box_forward_free = method_template(*box_impl, "forward_free");
+  const auto *box_apply = method_template(*box_impl, "apply");
+  const auto *box_later = method_template(*box_impl, "later_write");
+  const auto *box_left = method_template(*box_impl, "pick_left");
+  const auto *box_right = method_template(*box_impl, "pick_right");
+  const auto *box_same = method_template(*box_impl, "same_name");
+  const auto *box_static_self = method_template(*box_impl, "static_self");
+  const auto *box_fail = method_template(*box_impl, "fail_after");
+  const auto *box_cleanup = method_template(*box_impl, "cleanup_fail");
+  const auto *crate_own = method_template(*crate_impl, "replace_own");
+  const auto *crate_own_static =
+      method_template(*crate_impl, "replace_own_static");
+  const auto *maybe_take = method_template(*maybe_impl, "take_static");
+  const auto *maybe_some = method_template(*maybe_impl, "Some");
+  const auto *maybe_bump = method_template(*maybe_impl, "bump_static");
+  need(box_bump && box_bump_static && box_replace && box_replace_static &&
+           box_pair && box_ordered && box_forward && box_forward_free &&
+           box_apply && box_later && box_left && box_right && box_same &&
+           box_static_self && box_fail && box_cleanup && crate_own &&
+           crate_own_static && maybe_take && maybe_some && maybe_bump,
+       "constrained inherent inout templates missing");
+  need(box_replace->params.size() == 2 && box_replace->params[0].symbol ==
+               box_impl->params[0].symbol &&
+           box_replace->params[1].symbol != box_replace->params[0].symbol &&
+           box_replace->params[1].trait &&
+           symbol_name(*box_replace->params[1].trait) == "Value" &&
+           box_bump->params.size() == 1 &&
+           box_bump->params[0].symbol == box_impl->params[0].symbol &&
+           crate_own->params.size() == 2 && crate_own->params[1].trait,
+       "constrained inout impl prefix or own suffix changed");
+  need(box_same->params.size() == 2 &&
+           box_same->params[0].symbol == box_impl->params[0].symbol &&
+           box_same->params[1].symbol != box_same->params[0].symbol &&
+           symbol_name(box_same->params[0].symbol) == "T" &&
+           symbol_name(box_same->params[1].symbol) == "T",
+       "same-named method T was merged with the impl T");
+
+  const auto replace_instances = instances_of(box_replace);
+  need(replace_instances.size() == 4,
+       "constrained Box replace instance combinations were not exact");
+  auto replace_prefix = [&](const hir::FunctionInstance *i) {
+    return i->type_args.size() == 2 && is_item(i->type_args[0]);
+  };
+  const hir::FunctionInstance *replace_i32 = nullptr, *replace_i64 = nullptr,
+                             *replace_u32 = nullptr, *replace_f64 = nullptr;
+  for (const auto *i : replace_instances) {
+    need(replace_prefix(i), "replace instance lost its impl key");
+    if (is_i32(i->type_args[1]))
+      replace_i32 = i;
+    else if (is_i64(i->type_args[1]))
+      replace_i64 = i;
+    else if (is_u32(i->type_args[1]))
+      replace_u32 = i;
+    else if (is_f64(i->type_args[1]))
+      replace_f64 = i;
+    else
+      throw std::runtime_error("unexpected replace own type");
+  }
+  need(replace_i32 && replace_i64 && replace_u32 && replace_f64,
+       "replace scalar own combinations missing");
+  const auto static_instances = instances_of(box_replace_static);
+  need(static_instances.size() == 3,
+       "replace_static combinations were not deduplicated");
+  const hir::FunctionInstance *static_bool = nullptr, *static_f32 = nullptr,
+                             *static_u64 = nullptr;
+  for (const auto *i : static_instances) {
+    need(i->type_args.size() == 2, "replace_static instance arity");
+    if (is_bool(i->type_args[0]) && is_bool(i->type_args[1]))
+      static_bool = i;
+    else if (is_i32(i->type_args[0]) && is_f32(i->type_args[1]))
+      static_f32 = i;
+    else if (is_i64(i->type_args[0]) && is_u64(i->type_args[1]))
+      static_u64 = i;
+    else
+      throw std::runtime_error("unexpected replace_static combination");
+  }
+  need(static_bool && static_f32 && static_u64,
+       "replace_static explicit/inferred combinations missing");
+
+  const auto bump_instances = instances_of(box_bump);
+  const auto bump_static_instances = instances_of(box_bump_static);
+  const auto pair_instances = instances_of(box_pair);
+  const auto ordered_instances = instances_of(box_ordered);
+  const auto forward_instances = instances_of(box_forward);
+  const auto forward_free_instances = instances_of(box_forward_free);
+  const auto apply_instances = instances_of(box_apply);
+  const auto later_instances = instances_of(box_later);
+  const auto left_instances = instances_of(box_left);
+  const auto right_instances = instances_of(box_right);
+  const auto same_instances = instances_of(box_same);
+  const auto static_self_instances = instances_of(box_static_self);
+  const auto fail_instances = instances_of(box_fail);
+  const auto cleanup_instances = instances_of(box_cleanup);
+  const auto crate_instances = instances_of(crate_own);
+  const auto crate_static_instances = instances_of(crate_own_static);
+  const auto maybe_take_instances = instances_of(maybe_take);
+  const auto maybe_bump_instances = instances_of(maybe_bump);
+  need(bump_instances.size() == 1 && bump_static_instances.size() == 1 &&
+           pair_instances.size() == 1 && ordered_instances.size() == 1 &&
+           forward_instances.size() == 1 &&
+           forward_free_instances.size() == 1 && apply_instances.size() == 1 &&
+           later_instances.size() == 1 && left_instances.size() == 1 &&
+           right_instances.size() == 1 && same_instances.size() == 1 &&
+           static_self_instances.size() == 1 && fail_instances.size() == 1 &&
+           cleanup_instances.size() == 1 && crate_instances.size() == 1 &&
+           crate_static_instances.size() == 1 &&
+           maybe_take_instances.size() == 1 &&
+           maybe_bump_instances.size() == 1,
+       "constrained inherent inout instance counts changed");
+  need(bump_instances[0]->type_args.size() == 1 &&
+           is_i32(bump_instances[0]->type_args[0]) &&
+           bump_static_instances[0]->type_args.size() == 1 &&
+           is_i64(bump_static_instances[0]->type_args[0]),
+       "impl-only constrained inout keys changed");
+  need(pair_instances[0]->type_args.size() == 3 &&
+           is_item(pair_instances[0]->type_args[0]) &&
+           is_i32(pair_instances[0]->type_args[1]) &&
+           is_bool(pair_instances[0]->type_args[2]),
+       "pair_replace impl/own key order changed");
+  need(same_instances[0]->type_args.size() == 2 &&
+           is_item(same_instances[0]->type_args[0]) &&
+           is_i32(same_instances[0]->type_args[1]),
+       "same-named own T replaced or reordered the impl key");
+  need(static_self_instances[0]->type_args.size() == 2 &&
+           is_item(static_self_instances[0]->type_args[0]) &&
+           is_box_of(static_self_instances[0]->type_args[1], is_item),
+       "static own U=Self changed the impl/own key");
+  need(crate_instances[0]->type_args.size() == 2 &&
+           is_i32(crate_instances[0]->type_args[0]) &&
+           is_i32(crate_instances[0]->type_args[1]) &&
+           crate_static_instances[0]->type_args.size() == 2 &&
+           is_i32(crate_static_instances[0]->type_args[0]) &&
+           is_i64(crate_static_instances[0]->type_args[1]),
+       "own-only constrained Crate inout keys changed");
+  need(maybe_take_instances[0]->type_args.size() == 2 &&
+           is_i32(maybe_take_instances[0]->type_args[0]) &&
+           is_bool(maybe_take_instances[0]->type_args[1]) &&
+           maybe_bump_instances[0]->type_args.size() == 1 &&
+           is_i64(maybe_bump_instances[0]->type_args[0]),
+       "generic enum static inout keys changed");
+
+  auto replace_sig = signature_for(replace_i32);
+  auto static_bool_sig = signature_for(static_bool);
+  auto pair_sig = signature_for(pair_instances[0]);
+  auto same_sig = signature_for(same_instances[0]);
+  auto static_self_sig = signature_for(static_self_instances[0]);
+  auto bump_sig = signature_for(bump_instances[0]);
+  need(replace_sig && static_bool_sig && pair_sig && same_sig &&
+           static_self_sig && bump_sig,
+       "constrained inherent inout signatures missing");
+  need(replace_sig->parameters.size() == 3 &&
+           is_box_of(replace_sig->parameters[0].type, is_item) &&
+           replace_sig->parameters[0].mode == hir::ParamMode::ordinary &&
+           is_i32(replace_sig->parameters[1].type) &&
+           replace_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_i32(replace_sig->parameters[2].type) &&
+           replace_sig->parameters[2].mode == hir::ParamMode::ordinary &&
+           is_i32(replace_sig->result),
+       "Box replace Self/own inout signature mismatch");
+  need(static_bool_sig->parameters.size() == 2 &&
+           is_bool(static_bool_sig->parameters[0].type) &&
+           static_bool_sig->parameters[0].mode == hir::ParamMode::inout &&
+           is_bool(static_bool_sig->parameters[1].type) &&
+           is_bool(static_bool_sig->result),
+       "static replace_static constrained signature changed");
+  need(pair_sig->parameters.size() == 5 &&
+           is_box_of(pair_sig->parameters[0].type, is_item) &&
+           is_i32(pair_sig->parameters[1].type) &&
+           pair_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_i32(pair_sig->parameters[2].type) &&
+           is_bool(pair_sig->parameters[3].type) &&
+           pair_sig->parameters[3].mode == hir::ParamMode::inout &&
+           is_bool(pair_sig->parameters[4].type),
+       "pair_replace impl/own inout order changed");
+  need(same_sig->parameters.size() == 3 &&
+           is_box_of(same_sig->parameters[0].type, is_item) &&
+           is_i32(same_sig->parameters[1].type) &&
+           same_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_i32(same_sig->parameters[2].type) &&
+           is_i32(same_sig->result),
+       "same-named own T changed Self or the inout data type");
+  need(static_self_sig->parameters.size() == 3 &&
+           is_box_of(static_self_sig->parameters[0].type, is_item) &&
+           static_self_sig->parameters[0].mode == hir::ParamMode::ordinary &&
+           is_i32(static_self_sig->parameters[1].type) &&
+           static_self_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_i32(static_self_sig->parameters[2].type),
+       "static own U=Self was reclassified as a receiver");
+  need(bump_sig->parameters.size() == 3 &&
+           is_box_of(bump_sig->parameters[0].type, is_i32) &&
+           is_i32(bump_sig->parameters[1].type) &&
+           bump_sig->parameters[1].mode == hir::ParamMode::inout &&
+           is_i32(bump_sig->parameters[2].type) &&
+           bump_sig->parameters[2].mode == hir::ParamMode::ordinary,
+       "impl-only constrained inout signature changed");
+
+  std::set<uint64_t> template_symbols;
+  for (const auto &t : m.templates)
+    template_symbols.insert(t.function.symbol.value);
+  for (const auto &f : m.functions) {
+    auto sig = m.types.find(f.signature);
+    need(sig && !has_parameter(f.signature),
+         "concrete constrained inout signature retained a parameter");
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != f.symbol)
+        continue;
+      need(!has_parameter(n.type),
+           "concrete constrained inout node retained a parameter");
+      need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+           "concrete constrained inout retained ConstraintCall");
+      if (auto c = std::get_if<hir::Call>(&n.data)) {
+        need(c->type_args.empty(),
+             "concrete constrained inout call retained type arguments");
+        if (c->direct_symbol)
+          need(!template_symbols.count(c->direct_symbol->value),
+               "concrete constrained inout call targets a template");
+      }
+    }
+  }
+
+  const auto *value_trait = find_trait("Value");
+  const auto *left_trait = find_trait("Left");
+  const auto *right_trait = find_trait("Right");
+  need(value_trait && left_trait && right_trait,
+       "constrained inherent inout traits missing");
+  auto item_value_get = trait_method(*value_trait, "Item", "get");
+  auto item_left_pick = trait_method(*left_trait, "Item", "pick");
+  auto item_right_pick = trait_method(*right_trait, "Item", "pick");
+  need(item_value_get != item_left_pick && item_left_pick != item_right_pick,
+       "same-named inout trait methods shared a symbol");
+  auto calls_named = [&](SymbolId function, SymbolId target) {
+    size_t count = 0;
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != function)
+        continue;
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol && *c->direct_symbol == target)
+        ++count;
+    }
+    return count;
+  };
+  const auto *replace_function = function_for(replace_i32->symbol);
+  const auto *left_function = function_for(left_instances[0]->symbol);
+  const auto *right_function = function_for(right_instances[0]->symbol);
+  need(replace_function && left_function && right_function,
+       "constrained inout concrete functions missing");
+  need(calls_named(replace_function->symbol, item_value_get) == 1,
+       "replace did not resolve its impl constraint to Item.get");
+  need(calls_named(left_function->symbol, item_left_pick) == 1 &&
+           calls_named(left_function->symbol, item_right_pick) == 0,
+       "Left constraint did not select Item.Left.pick");
+  need(calls_named(right_function->symbol, item_right_pick) == 1 &&
+           calls_named(right_function->symbol, item_left_pick) == 0,
+       "Right constraint did not select Item.Right.pick");
+  size_t replace_template_constraints = 0;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == box_replace->function.symbol)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(c->trait == value_trait->symbol,
+             "replace template constraint trait changed");
+        ++replace_template_constraints;
+      }
+  need(replace_template_constraints == 1,
+       "replace template lost its ordinary ConstraintCall");
+
+  std::map<uint64_t, SymbolId> replace_renamed;
+  for (auto [from, to] : replace_i32->renamed)
+    replace_renamed[from.value] = to;
+  need(replace_renamed.at(box_replace->function.symbol.value) ==
+               replace_function->symbol &&
+           replace_renamed.at(box_replace->function.parameters[0].symbol.value) ==
+               replace_function->parameters[0].symbol &&
+           replace_renamed.at(box_replace->function.parameters[1].symbol.value) ==
+               replace_function->parameters[1].symbol,
+       "replace renamed map lost Self or its inout parameter");
+  std::optional<SymbolId> replace_local;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == box_replace->function.symbol)
+      if (auto b = std::get_if<hir::Binding>(&n.data)) {
+        replace_local = b->symbol;
+        break;
+      }
+  need(replace_local && replace_renamed.count(replace_local->value),
+       "replace template local was not renamed in its instance");
+  bool concrete_place = false;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == replace_function->symbol)
+      if (auto p = std::get_if<hir::Place>(&n.data); p) {
+        need(p->symbol == replace_function->parameters[1].symbol,
+             "replace concrete Place kept a template parameter");
+        need(p->symbol != box_replace->function.parameters[1].symbol,
+             "replace concrete Place impersonated its template parameter");
+        concrete_place = true;
+      }
+  need(concrete_place, "replace concrete inout Place missing");
+  std::set<uint64_t> template_locals;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == box_replace->function.symbol)
+      if (auto b = std::get_if<hir::Binding>(&n.data))
+        template_locals.insert(b->symbol.value);
+  bool concrete_local = false;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == replace_function->symbol)
+      if (auto b = std::get_if<hir::Binding>(&n.data); b && replace_local) {
+        need(!template_locals.count(b->symbol.value),
+             "replace concrete local kept a template SymbolId");
+        if (b->symbol == replace_renamed.at(replace_local->value))
+          concrete_local = true;
+      }
+  need(concrete_local, "replace concrete local binding missing");
+
+  invalid_recomputed(m, "constrained inout instance origin", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == replace_i32->symbol) {
+        i.origin = box_replace_static->function.symbol;
+        return;
+      }
+    throw std::runtime_error("constrained inout replace instance missing");
+  });
+  invalid_recomputed(m, "constrained inout full key order", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == pair_instances[0]->symbol) {
+        std::swap(i.type_args[1], i.type_args[2]);
+        return;
+      }
+    throw std::runtime_error("constrained inout pair instance missing");
+  });
+  invalid_recomputed(m, "constrained inout Self substitution", [&](auto &x) {
+    auto template_sig = *x.types.find(box_replace->function.signature);
+    for (auto &f : x.functions)
+      if (f.symbol == replace_function->symbol) {
+        auto sig = *x.types.find(f.signature);
+        sig.parameters[0].type = template_sig.parameters[1].type;
+        f.signature = x.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("constrained inout replace function missing");
+  });
+  invalid(m, "constrained inout Place rename", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == replace_function->symbol)
+        if (auto p = std::get_if<hir::Place>(&n.data); p) {
+          p->symbol = box_replace->function.parameters[1].symbol;
+          return;
+        }
+    throw std::runtime_error("constrained inout concrete Place missing");
+  });
+  invalid(m, "constrained inout local rename", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == replace_function->symbol)
+        if (auto b = std::get_if<hir::Binding>(&n.data); b && replace_local) {
+          b->symbol = *replace_local;
+          return;
+        }
+    throw std::runtime_error("constrained inout concrete local missing");
+  });
+
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "constrained inherent inout source HIR rejected");
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  const std::string box = "struct Box[T]{value T;items Vec[i32];marker i32;} ";
+  bad("trait V{} struct S{x i32;} " + box +
+          "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+          "value U)U{let old=slot;slot=value;return old;}} "
+          "func main()i32{let b=Box[S](value:S(x:0),items:[1],marker:0);"
+          "var x i32=1;b.replace(inout x,2);return 0;}",
+      "E_TYPE_MISMATCH");
+  bad("trait V{} impl V for i32{} " + box +
+          "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+          "value U)U{let old=slot;slot=value;return old;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "var x i64=1;b.replace(inout x,2);return 0;}",
+      "E_TYPE_MISMATCH");
+  unsupported("trait V{} impl V for i32{} " + box +
+              "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+              "value U)U{let old=slot;slot=value;return old;}} "
+              "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+              "var v Vec[i32]=[1];b.replace(inout v,[2]);return 0;}");
+  unsupported("trait V{} impl V for i32{} " + box +
+              "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+              "value U)U{let old=slot;slot=value;return old;}} "
+              "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+              "var x i32=1;b.replace(inout b.items[0],2);return 0;}");
+  bad("trait V{} impl V for i32{} " + box +
+          "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+          "value U)U{let old=slot;slot=value;return old;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "let x i32=1;b.replace(inout x,2);return 0;}",
+      "E_CALL_ARGUMENT");
+  unsupported("trait V{} impl V for i32{} " + box +
+              "impl[T V] Box[T]{func replace[U V](self inout Self,"
+              "slot inout U,value U)U{let old=slot;slot=value;return old;}} "
+              "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
+              "var x i32=1;b.replace(inout x,2);return 0;}");
+  bad("trait V{} impl V for i32{} " + box +
+          "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+          "value U)U{let old=slot;slot=value;return old;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "let f=b.replace[i32];return 0;}",
+      "E_TYPE_MISMATCH");
+  good("func bump[T V](slot inout T,value T)T{let old=slot;slot=value;"
+       "return old;} trait V{} impl V for i32{} " + box +
+       "impl[T V] Box[T]{func use[U V](self Self,f func(inout U,U)U,"
+       "slot inout U,value U)U{return f(inout slot,value);}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+       "var x i32=1;let r=b.use(bump[i32],inout x,2);return r+x-3;}");
+  unsupported("trait V{} impl V for i32{} struct S{"
+              "cb func(inout Vec[i32]);} struct H[T]{value T;} "
+              "impl[T V] H[T]{func keep[U V](self Self,cb func() S)i32{"
+              "return 0;}} func make()S{return S(cb:bump);}"
+              "func bump(x inout Vec[i32]){} "
+              "func main()i32{let h=H[i32](value:1);"
+              "return h.keep[i32](make);}");
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -4654,6 +5842,8 @@ int main(int argc, char **argv) {
     generic_method_move(root);
     generic_impl_move();
     generic_impl_own_method_move(root);
+    constrained_inherent_move(root);
+    constrained_inherent_inout(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

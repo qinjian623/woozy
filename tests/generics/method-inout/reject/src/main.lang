@@ -18,7 +18,7 @@ impl[T] Box[T] {
 
 func main() i32 {
     let b = Box[i32](value: 1);
-    var x i32 = 1;
+    var x Vec[i32] = [1];
     b.bump(inout x);
     return 0;
 }

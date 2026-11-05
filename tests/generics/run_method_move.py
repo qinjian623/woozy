@@ -5,6 +5,7 @@ import hashlib
 import json
 import os
 from pathlib import Path
+import shutil
 import subprocess
 import sys
 
@@ -13,7 +14,7 @@ sys.dont_write_bytecode = True
 CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
          'callee-throws', 'enum-static', 'generic-explicit', 'generic-impl',
          'generic-impl-errors', 'generic-impl-own',
-         'generic-impl-own-errors')
+         'generic-impl-own-errors', 'constrained-inherent')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -26,6 +27,7 @@ EXPECTED_EVENTS = {
     'generic-impl-errors': [9, 2, 3, 9, 2, 3, 2, 3, 3],
     'generic-impl-own': [9, 3, 2],
     'generic-impl-own-errors': [9, 2, 3, 9, 2, 3, 2, 3, 3],
+    'constrained-inherent': [1, 2, 5, 6, 7, 8, 9, 3, 2],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -39,6 +41,7 @@ EXPECTED_ALLOCATIONS = {
     'generic-impl-errors': 16,
     'generic-impl-own': 23,
     'generic-impl-own-errors': 16,
+    'constrained-inherent': 20,
 }
 
 
@@ -239,6 +242,32 @@ def assert_python(case, data):
                    error['type'] == 'app.E' for error in data['errors']), data
         assert any(error['function'] == 'fail' and error['type'] == 'app.E'
                    for error in data['errors']), data
+    elif case == 'constrained-inherent':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['a'][0]['items'] == [5], data
+        assert snapshots['b'][1][0]['items'] == [16], data
+        assert snapshots['b_alias'][1][0]['object'] == \
+            snapshots['b'][1][0]['object'], data
+        assert snapshots['c'][0]['items'] == [17], data
+        assert snapshots['i2_alias'][0]['object'] == \
+            snapshots['c'][0]['object'], data
+        assert snapshots['d'][1][0]['items'] == [19], data
+        assert snapshots['u1_alias'][1][0]['object'] == \
+            snapshots['d'][1][0]['object'], data
+        assert snapshots['e'][1][0]['items'] == [10], data
+        assert snapshots['f'][1][0]['items'] == [11], data
+        assert snapshots['g'] == 33 and snapshots['h'] == 24, data
+        assert snapshots['k'] == 15, data
+        assert snapshots['n'][1]['items'] == [18], data
+        assert snapshots['bi_alias'][1]['object'] == \
+            snapshots['n'][1]['object'], data
+        assert snapshots['m'] == 1, data
+        assert snapshots['z'][0]['items'] == [16], data
+        assert snapshots['st'][1][0]['items'] == [18], data
+        assert snapshots['sti'][0]['items'] == [19], data
+        assert snapshots['ordered'][1][0]['items'] == [17], data
+        assert snapshots['log'] == 1256789, data
+        assert snapshots['order'] == 32, data
     elif case == 'generic-impl-errors':
         assert sequence == [
             ['event', 9], ['event', 2], ['free', 2], ['free', 1],
@@ -379,6 +408,7 @@ def main():
                        for path in sorted(manifest.parent.rglob('*'))
                        if path.is_file()}
             fresh = args.out / 'reject-new'
+            shutil.rmtree(fresh, ignore_errors=True)
             before = run([args.cli, 'build', '--project', manifest,
                           '--backend', 'native', '--opt', 0,
                           '--out-dir', fresh, '--format', 'json'], library=library)
