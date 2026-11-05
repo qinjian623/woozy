@@ -1,0 +1,127 @@
+package app;
+
+enum Bit {
+    A;
+    B;
+}
+
+enum Inner {
+    None;
+    Some(value i32);
+}
+
+enum Holder[T] {
+    Nothing;
+    Item(value T);
+}
+
+enum Outer {
+    Empty;
+    Wrap(item Inner);
+    Pair(first Bit, second Bit);
+    Held(item Holder[Inner]);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func choose(log inout i64, value Outer) i32 {
+    switch value {
+    case Outer.Empty:
+        mark(inout log, 1);
+        return 1;
+    case Outer.Wrap(Inner.None):
+        mark(inout log, 2);
+        return 2;
+    case Outer.Wrap(Inner.Some(number)):
+        mark(inout log, 3);
+        return number + 3;
+    case Outer.Pair(Bit.A, Bit.A):
+        mark(inout log, 4);
+        return 4;
+    case Outer.Pair(Bit.A, Bit.B):
+        mark(inout log, 5);
+        return 5;
+    case Outer.Pair(Bit.B, Bit.A):
+        mark(inout log, 6);
+        return 6;
+    case Outer.Pair(Bit.B, Bit.B):
+        mark(inout log, 7);
+        return 7;
+    case Outer.Held(Holder[Inner].Nothing):
+        mark(inout log, 8);
+        return 8;
+    case Outer.Held(Holder[Inner].Item(Inner.None)):
+        mark(inout log, 9);
+        return 9;
+    case Outer.Held(Holder[Inner].Item(Inner.Some(number))):
+        mark(inout log, 0);
+        return number + 10;
+    }
+}
+
+func make(log inout i64) Outer {
+    mark(inout log, 8);
+    return Outer.Wrap(item: Inner.Some(value: 4));
+}
+
+func computed(log inout i64) i32 {
+    switch make(inout log) {
+    case Outer.Empty:
+        return 11;
+    case Outer.Wrap(Inner.None):
+        return 12;
+    case Outer.Wrap(Inner.Some(number)):
+        mark(inout log, 9);
+        if number != 4 {
+            return 13;
+        }
+        return 0;
+    case Outer.Pair(_, _):
+        return 14;
+    case Outer.Held(_):
+        return 15;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    if choose(inout log, Outer.Empty) != 1 {
+        return 1;
+    }
+    if choose(inout log, Outer.Wrap(item: Inner.None)) != 2 {
+        return 2;
+    }
+    if choose(inout log, Outer.Wrap(item: Inner.Some(value: 5))) != 8 {
+        return 3;
+    }
+    if choose(inout log, Outer.Pair(first: Bit.A, second: Bit.A)) != 4 {
+        return 4;
+    }
+    if choose(inout log, Outer.Pair(first: Bit.A, second: Bit.B)) != 5 {
+        return 5;
+    }
+    if choose(inout log, Outer.Pair(first: Bit.B, second: Bit.A)) != 6 {
+        return 6;
+    }
+    if choose(inout log, Outer.Pair(first: Bit.B, second: Bit.B)) != 7 {
+        return 7;
+    }
+    if choose(inout log, Outer.Held(item: Holder[Inner].Nothing)) != 8 {
+        return 8;
+    }
+    if choose(inout log, Outer.Held(item: Holder[Inner].Item(value: Inner.None))) != 9 {
+        return 9;
+    }
+    if choose(inout log, Outer.Held(item: Holder[Inner].Item(value: Inner.Some(value: 4)))) != 14 {
+        return 10;
+    }
+    if computed(inout log) != 0 {
+        return 11;
+    }
+    if log != 123456789089 {
+        return 12;
+    }
+    return 0;
+}

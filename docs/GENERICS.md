@@ -189,4 +189,14 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型 trait 及 trait 泛型方法、trait 静态调用、嵌套变体模式、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型 trait 及 trait 泛型方法、trait 静态调用、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+
+## 递归枚举模式
+
+枚举载荷可以继续使用限定变体模式，也可绑定或写通配符；支持多层、多载荷、泛型及跨包公开枚举。分支按源码顺序匹配，所有内部标签匹配成功后才建立该分支绑定，没有 fallthrough。两个后端均支持已有 POD 值和有限拥有聚合；计算产生的 POD switch 值只求值一次，拥有值仍要求已有命名整体绑定或已有合法 ordinary 参数。
+
+覆盖检查同时考虑所有载荷列。同一外层变体可由多个不同内部组合覆盖；部分重叠但仍匹配新值的后续分支合法，被前面多个分支联合覆盖的分支拒绝。缺少任何内部组合均报不穷尽。普通值或 Vec 位于前面的载荷列时，继续检查后面的枚举列；原空枚举规则保持。共享分析有工作量与深度限制，无法完成时拒绝编译，不将未知结果当成穷尽。
+
+HIR 验证每层的源码、真实枚举/变体、类型、载荷顺序和绑定作用域，再重算覆盖。显式模式类型实参按所属函数实例替换，包括泛型非捕获 lambda；不直接将模板 T 与具体 i32 比较。Native 只在父标签匹配后读取活动载荷，所有测试成功后才复制拥有绑定；Python 使用递归短路判断。退出计划包括同一外层变体的后续内部组合，以及其 return、throw、break、continue 和 defer。
+
+这项支持不包含计算产生的拥有临时、部分字段 move、literal/guard/or/range 模式或 switch 表达式。失败分支没有绑定 copy/store 的检查来自生成 CFG 和源码，零存活观察不能单独证明平衡 copy/release 从未发生。T07/T09 仍为 in_progress。

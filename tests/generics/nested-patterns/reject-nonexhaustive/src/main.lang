@@ -1,0 +1,24 @@
+package app;
+
+enum Inner {
+    None;
+    Some(value i32);
+}
+
+enum Outer {
+    Empty;
+    Wrap(item Inner);
+}
+
+func choose(value Outer) i32 {
+    switch value {
+    case Outer.Empty:
+        return 1;
+    case Outer.Wrap(Inner.None):
+        return 2;
+    }
+}
+
+func main() i32 {
+    return choose(Outer.Empty) - 1;
+}

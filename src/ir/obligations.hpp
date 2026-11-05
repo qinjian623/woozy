@@ -1,5 +1,6 @@
 #pragma once
 #include "lang/ir/native.hpp"
+#include "../hir/pattern_analysis.hpp"
 #include <map>
 #include <set>
 #include <tuple>
@@ -138,21 +139,27 @@ class RequiredExits {
     case hir::NodeKind::switch_: {
       flow.merge(expr(n.children[0]));
       flow.falls = false;
-      size_t variant_count = 0;
-      const auto &type = *h.types.find(node(n.children[0]).type);
-      for (const auto &d : h.nominals)
-        if (d.symbol == type.declaration)
-          variant_count = d.variants.size();
-      std::set<SymbolId> covered;
+      hir::TypeContext types = h.types;
+      hir::PatternCoverage coverage(
+          node(n.children[0]).type,
+          [&](TypeId t) {
+            return hir::pattern_constructors(h, t, types);
+          },
+          [&](TypeId t) {
+            const auto *found = types.find(t);
+            return found && found->kind == hir::TypeKind::NominalEnum;
+          },
+          std::stop_token{});
       for (const auto &arm : std::get<hir::Switch>(n.data).arms) {
+        // Recompute nested arm reachability with the same constructor-column
+        // analysis as semantic checking and HIR verification. A flat
+        // outer-variant set cannot decide when the same outer variant has
+        // several payload combinations.
+        if (!coverage.add(arm.pattern))
+          break;
         auto branch = stmt(arm.body);
         flow.merge(branch);
         flow.falls = flow.falls || branch.falls;
-        if (!arm.pattern.variant)
-          break;
-        covered.insert(*arm.pattern.variant);
-        if (variant_count && covered.size() == variant_count)
-          break;
       }
       if (flow.breaks.erase(id))
         flow.falls = true;

@@ -19,7 +19,8 @@ find_package(json-c CONFIG REQUIRED)
 add_library(lang_modules STATIC src/modules/resolve.cpp src/modules/project.cpp)
 target_link_libraries(lang_modules PUBLIC lang_frontend
   PRIVATE tomlplusplus::tomlplusplus json-c::json-c)
-add_library(lang_hir STATIC src/hir/hir.cpp src/hir/ownership.cpp)
+add_library(lang_hir STATIC src/hir/hir.cpp src/hir/ownership.cpp
+  src/hir/pattern_analysis.cpp)
 target_link_libraries(lang_hir PUBLIC lang_modules)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GMPXX REQUIRED IMPORTED_TARGET gmpxx>=6.3.0)

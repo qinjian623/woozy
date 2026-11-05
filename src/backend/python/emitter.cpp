@@ -396,7 +396,13 @@ class Emitter {
     for (const auto &child : p.payload)
       pattern_names(child);
   }
-  std::string pattern_test(const Pattern &p, const std::string &value) const {
+  static constexpr size_t pattern_depth_limit = 128;
+  std::string pattern_test(const Pattern &p, const std::string &value,
+                           size_t depth = 0) const {
+    if (depth > pattern_depth_limit)
+      throw Rejected{
+          "Python pattern generation exceeds its safe nesting depth",
+          p.source.span};
     if (!p.variant)
       return "True";
     std::string test = value + "[0] == " + std::to_string(p.variant->value);
@@ -404,11 +410,17 @@ class Emitter {
       if (p.payload[i].variant)
         test += " and (" +
                 pattern_test(p.payload[i],
-                             value + "[1][" + std::to_string(i) + "]") +
+                             value + "[1][" + std::to_string(i) + "]",
+                             depth + 1) +
                 ")";
     return test;
   }
-  void pattern_bind(const Pattern &p, const std::string &value, Suite &suite) {
+  void pattern_bind(const Pattern &p, const std::string &value, Suite &suite,
+                    size_t depth = 0) {
+    if (depth > pattern_depth_limit)
+      throw Rejected{
+          "Python pattern generation exceeds its safe nesting depth",
+          p.source.span};
     if (p.binding)
       suite.push_back(
           {name(*p.binding) + " = " +
@@ -429,7 +441,7 @@ class Emitter {
                        {}});
     for (size_t i = 0; i < p.payload.size(); ++i)
       pattern_bind(p.payload[i], value + "[1][" + std::to_string(i) + "]",
-                   suite);
+                   suite, depth + 1);
   }
   std::string numeric(TypeId id) const {
     const auto &t = type(id);

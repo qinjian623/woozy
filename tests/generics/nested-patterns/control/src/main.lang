@@ -1,0 +1,110 @@
+package app;
+
+enum Inner {
+    None;
+    Some(value i32);
+}
+
+enum Outer {
+    Empty;
+    Wrap(item Inner);
+}
+
+enum Failed {
+    Stop;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func run(log inout i64) i32 {
+    var total i32 = 0;
+    var i i32 = 0;
+    for i < 4 {
+        i += 1;
+        var value Outer = Outer.Wrap(item: Inner.None);
+        if i == 2 {
+            value = Outer.Wrap(item: Inner.Some(value: i));
+        }
+        if i == 3 {
+            value = Outer.Empty;
+        }
+        defer {
+            mark(inout log, 7);
+        }
+        switch value {
+        case Outer.Empty:
+            mark(inout log, 3);
+            return total + 30;
+        case Outer.Wrap(Inner.None):
+            mark(inout log, 1);
+            continue;
+        case Outer.Wrap(Inner.Some(number)):
+            mark(inout log, i64(number));
+            total = total + number;
+            break;
+        }
+    }
+    return total;
+}
+
+func fail(log inout i64, value Outer) i32 throws Failed {
+    switch value {
+    case Outer.Empty:
+        defer {
+            mark(inout log, 0);
+        }
+        mark(inout log, 4);
+        throw Failed.Stop;
+    case Outer.Wrap(Inner.None):
+        mark(inout log, 5);
+        return 5;
+    case Outer.Wrap(Inner.Some(number)):
+        mark(inout log, 6);
+        return number;
+    }
+}
+
+func outer(log inout i64) i32 {
+    defer {
+        mark(inout log, 8);
+    }
+    var result i32 = 0;
+    try {
+        result = fail(inout log, Outer.Empty);
+    } catch err Failed {
+        mark(inout log, 9);
+        result = 40;
+    }
+    return result;
+}
+
+func main() i32 {
+    var log i64 = 0;
+    if run(inout log) != 32 {
+        return 1;
+    }
+    var some i32 = 0;
+    try {
+        some = fail(inout log, Outer.Wrap(item: Inner.Some(value: 6)));
+    } catch err Failed {
+        return 2;
+    }
+    if some != 6 {
+        return 3;
+    }
+    try {
+        let ignored = fail(inout log, Outer.Empty);
+        return ignored;
+    } catch err Failed {
+        mark(inout log, 9);
+    }
+    if outer(inout log) != 40 {
+        return 4;
+    }
+    if log != 17273764094098 {
+        return 5;
+    }
+    return 0;
+}

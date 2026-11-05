@@ -1,5 +1,6 @@
 #include "lang/sema/check.hpp"
 #include "../hir/ownership.hpp"
+#include "../hir/pattern_analysis.hpp"
 #include "../hir/foreign.hpp"
 #include <algorithm>
 #include <functional>
@@ -2244,43 +2245,31 @@ class Checker {
     if (type(value.value.type).kind != TypeKind::NominalEnum)
       unavailable(r, "only enum switch is implemented in T07");
     auto id = node(r, unit, Switch{});
+    PatternCoverage coverage(
+        value.value.type,
+        [this](TypeId t) { return pattern_constructors(m, t, m.types); },
+        [this](TypeId t) { return type(t).kind == TypeKind::NominalEnum; },
+        stop);
     break_targets.push_back(id);
     std::vector<HirNodeId> children{value.id};
     std::vector<Arm> arms;
-    std::set<uint64_t> covered;
-    bool wildcard = false, falls = false;
+    bool falls = false;
     for (size_t i = 1; i < ast(r).children.size(); ++i) {
       auto cr = child(r, i);
       auto saved = scope;
       scope = new_scope(cr, saved);
-      if (wildcard)
-        reject(cr, "unreachable switch arm after exhaustive pattern");
       bool def = token(cr) == "default";
       Pattern p = def ? Pattern{value.value.type, source(cr), {}, {}, {}}
                       : pattern(child(cr, 0), value.value.type);
-      for (auto c : ast(cr).children) {
-        if (ast(at(cr, c)).kind == AstKind::VariantPattern)
-          for (auto payload : ast(at(cr, c)).children)
-            if (ast(at(cr, payload)).kind == AstKind::VariantPattern)
-              unavailable(at(cr, payload),
-                          "nested enum variant patterns are not implemented");
+      bool useful = false;
+      try {
+        useful = coverage.add(p);
+      } catch (const PatternAnalysisLimit &e) {
+        unavailable(cr, std::string("cannot complete enum pattern coverage: ") +
+                            e.what());
       }
-      bool total_payload = true;
-      std::function<void(const Pattern &)> total = [&](const Pattern &pat) {
-        if (pat.variant)
-          total_payload = false;
-        for (const auto &c : pat.payload)
-          total(c);
-      };
-      for (const auto &c : p.payload)
-        total(c);
-      if (p.variant) {
-        if (covered.count(p.variant->value))
-          reject(cr, "unreachable repeated enum variant");
-        if (total_payload)
-          covered.insert(p.variant->value);
-      } else
-        wildcard = true;
+      if (!useful)
+        reject(cr, "unreachable switch arm");
       std::vector<HirNodeId> statements;
       bool arm_falls = true, arm_breaks = false;
       for (size_t j = def ? 0 : 1; j < ast(cr).children.size(); ++j) {
@@ -2297,8 +2286,13 @@ class Checker {
       scope = saved;
       falls |= arm_falls || arm_breaks;
     }
-    bool exhaustive =
-        wildcard || covered.size() == nominal(value.value.type).variants.size();
+    bool exhaustive = false;
+    try {
+      exhaustive = coverage.exhaustive();
+    } catch (const PatternAnalysisLimit &e) {
+      unavailable(r, std::string("cannot complete enum pattern coverage: ") +
+                          e.what());
+    }
     if (!exhaustive)
       reject(r, "enum switch is not exhaustive");
     m.nodes[id.value].children = std::move(children);

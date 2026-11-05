@@ -7560,6 +7560,371 @@ func main() i32 { return 0; }
   });
 }
 
+
+void nested_patterns() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto v = hir::verify_types(*r.value);
+    need(v.success(), text + "\n" + messages(v));
+    auto published = hir::verify(*r.value);
+    need(published.success(), text + "\n" + messages(published));
+    return *r.value;
+  };
+  auto bad = [](const std::string &text, const std::string &code = "E_TYPE_MISMATCH") {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+    need(!has(r, "E_IR_INVALID"), "source rejection became E_IR_INVALID: " + text +
+                                      "\n" + messages(r));
+  };
+  auto packages = [](const std::string &lib, const std::string &app) {
+    Temp t;
+    fs::create_directories(t.path / "src/lib");
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
+    write(t.path / "src/main.lang",
+          "package app; import \"app/lib\" as lib; " + app);
+    return check(t.path / "lang.toml");
+  };
+  auto invalid_nested = [&](hir::HirModule m, const std::string &name,
+                            const auto &change, bool recompute = false) {
+    change(m);
+    if (recompute) {
+      auto derived = hir::detail::produce_ownership(m, {});
+      need(derived.success(),
+           "recomputed ownership failed before verification: " + name + "\n" +
+               messages(derived));
+    }
+    auto r = hir::verify_types(m);
+    need(!r.success() && !r.value && r.failure == FailureKind::internal &&
+             has(r, "E_IR_INVALID") && !r.diagnostics.empty(),
+         "corruption accepted: " + name + "\n" + messages(r));
+    std::cout << "nested-hir-rejected: " << name << "\n";
+    std::cout << "nested-hir-diagnostic: " << name << ": "
+              << r.diagnostics.front().code << ": "
+              << r.diagnostics.front().message << "\n";
+    auto published = hir::verify(m);
+    need(!published.success() && has(published, "E_IR_INVALID"),
+         "corrupt module published: " + name);
+  };
+  const std::string declarations =
+      "enum Inner{None;Some(value i32);} enum Bit{A;B;} "
+      "enum Outer{Empty;Wrap(item Inner);Pair(first Bit,second Bit);} ";
+  const std::string exhaustive =
+      "switch v{"
+      "case Outer.Empty:return 1;"
+      "case Outer.Wrap(Inner.None):return 2;"
+      "case Outer.Wrap(Inner.Some(number)):return number+3;"
+      "case Outer.Pair(Bit.A,Bit.A):return 4;"
+      "case Outer.Pair(Bit.A,Bit.B):return 5;"
+      "case Outer.Pair(Bit.B,Bit.A):return 6;"
+      "case Outer.Pair(Bit.B,Bit.B):return 7;}";
+  auto nested = good(declarations + "func pick(v Outer)i32{" + exhaustive +
+                     "} func main()i32{return 0;}");
+  need(nested.nodes.size() > 10, "nested switch missing HIR");
+
+  good(declarations +
+       "func pick(v Outer)i32{switch v{"
+       "case Outer.Empty:return 0;"
+       "case Outer.Wrap(Inner.None):return 1;"
+       "case Outer.Wrap(_):return 2;"
+       "case Outer.Pair(_,_):return 3;}} func main()i32{return 0;}");
+  good(declarations +
+       "func pick(v Outer)i32{switch v{"
+       "case Outer.Empty:return 0;"
+       "case Outer.Wrap(inner):return 1;"
+       "case Outer.Pair(first,second):return 2;}} func main()i32{return 0;}");
+  good("enum Never{} func use(v Never)i32{switch v{}} func main()i32{return 0;}");
+  good("enum Never{} func use(v Never)i32{switch v{default:return 0;}} "
+       "func main()i32{return 0;}");
+  good("enum Inner{None;Some(value i32);} enum Box[T]{Empty;Value(item T);} "
+       "enum Outer{Empty;Wrap(item Box[Inner]);} func pick(v Outer)i32{switch v{"
+       "case Outer.Empty:return 0;"
+       "case Outer.Wrap(Box[Inner].Empty):return 1;"
+       "case Outer.Wrap(Box[Inner].Value(Inner.None)):return 2;"
+       "case Outer.Wrap(Box[Inner].Value(Inner.Some(number))):return number;}} "
+       "func main()i32{return 0;}");
+  auto r = packages(
+      "pub enum Inner{None;Some(value i32);} "
+      "pub enum Outer{Empty;Wrap(item Inner);}",
+      "func pick(v lib.Outer)i32{switch v{"
+      "case lib.Outer.Empty:return 0;"
+      "case lib.Outer.Wrap(lib.Inner.None):return 1;"
+      "case lib.Outer.Wrap(lib.Inner.Some(number)):return number;}} "
+      "func main()i32{return 0;}");
+  need(r.success(), messages(r));
+
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Empty:return 0;"
+      "case Outer.Wrap(Inner.None):return 1;}} func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Empty:return 0;"
+      "case Outer.Wrap(Inner.None):return 1;"
+      "case Outer.Wrap(Inner.Some(number)):return number;"
+      "case Outer.Wrap(_):return 2;"
+      "case Outer.Pair(_,_):return 3;}} func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Empty:return 0;"
+      "case Outer.Wrap(Inner.None):return 1;"
+      "case Outer.Wrap(Inner.Some(number)):return number;"
+      "case Outer.Pair(Bit.A,Bit.A):return 4;"
+      "case Outer.Pair(Bit.A,Bit.B):return 5;"
+      "case Outer.Pair(Bit.B,Bit.A):return 6;"
+      "case Outer.Pair(Bit.B,Bit.B):return 7;"
+      "case Outer.Pair(_,_):return 8;}} func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Inner.None:return 0;}} func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Wrap(Inner.Missing):return 0;"
+      "case Outer.Empty:return 1;}} func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Wrap():return 0;"
+      "case Outer.Empty:return 1;}} func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Wrap(Inner.None,Inner.None):return 0;"
+      "case Outer.Empty:return 1;}} func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Wrap(Inner.Some):return 0;"
+      "case Outer.Empty:return 1;}} func main()i32{return 0;}");
+  bad("enum Inner{None;Some(value i32);} enum Box[T]{Empty;Value(item T);} "
+      "enum Outer{Empty;Wrap(item Box[Inner]);} func pick(v Outer)i32{switch v{"
+      "case Outer.Empty:return 0;"
+      "case Outer.Wrap(Box[i32].Empty):return 1;"
+      "case Outer.Wrap(Box[Inner].Value(Inner.None)):return 2;"
+      "case Outer.Wrap(Box[Inner].Value(Inner.Some(number))):return number;}} "
+      "func main()i32{return 0;}");
+  bad(declarations + "func pick(v Outer)i32{switch v{"
+      "case Outer.Empty:let inner=1;"
+      "case Outer.Wrap(value):return 0;"
+      "case Outer.Pair(first,second):return 0;} return value;} "
+      "func main()i32{return 0;}", "E_NAME_NOT_FOUND");
+
+  {
+    std::string deep;
+    for (size_t i = 0; i < 40; ++i)
+      deep += "enum D" + std::to_string(i) + "{A(item " +
+              (i == 39 ? "i32" : "D" + std::to_string(i + 1)) +
+              ");B;} ";
+    deep += "func pick(v D0)i32{switch v{"
+            "case D0.A(inner):return 0;case D0.B:return 1;}} "
+            "func main()i32{return 0;}";
+    good(deep);
+  }
+
+  // F1: a non-enum prefix column must not discard later enum columns.
+  const std::string prefix_decls =
+      "enum Bit{A;B;} enum Pair{P(number i32,bit Bit);} ";
+  good(prefix_decls +
+       "func pick(v Pair)i32{switch v{"
+       "case Pair.P(_,Bit.A):return 1;"
+       "case Pair.P(_,Bit.B):return 2;}} func main()i32{return 0;}");
+  bad(prefix_decls +
+      "func pick(v Pair)i32{switch v{"
+      "case Pair.P(_,Bit.A):return 1;}} func main()i32{return 0;}");
+  bad(prefix_decls +
+      "func pick(v Pair)i32{switch v{"
+      "case Pair.P(_,Bit.A):return 1;"
+      "case Pair.P(_,Bit.B):return 2;"
+      "case Pair.P(_,_):return 3;}} func main()i32{return 0;}");
+  bad(prefix_decls +
+      "func pick(v Pair)i32{switch v{"
+      "case Pair.P(_,Bit.A):return 1;"
+      "case Pair.P(_,Bit.A):return 2;"
+      "case Pair.P(_,Bit.B):return 3;}} func main()i32{return 0;}");
+  good("enum Bit{A;B;} enum Pair2{P(bit Bit,number i32);} "
+       "func pick(v Pair2)i32{switch v{"
+       "case Pair2.P(Bit.A,_):return 1;"
+       "case Pair2.P(Bit.B,_):return 2;}} func main()i32{return 0;}");
+  const std::string vec_prefix =
+      "enum Bit{A;B;} enum Pair{P(items Vec[i32],bit Bit);} ";
+  good(vec_prefix +
+       "func pick(v Pair)i32{switch v{"
+       "case Pair.P(_,Bit.A):return 1;"
+       "case Pair.P(_,Bit.B):return 2;}} func main()i32{return 0;}");
+  bad(vec_prefix +
+      "func pick(v Pair)i32{switch v{"
+      "case Pair.P(_,Bit.A):return 1;}} func main()i32{return 0;}");
+  bad(vec_prefix +
+      "func pick(v Pair)i32{switch v{"
+      "case Pair.P(_,Bit.A):return 1;"
+      "case Pair.P(_,Bit.B):return 2;"
+      "case Pair.P(_,_):return 3;}} func main()i32{return 0;}");
+  const std::string parameter_prefix =
+      "enum Bit{A;B;} enum Pair[T]{P(value T,bit Bit);} ";
+  good(parameter_prefix +
+       "func pick[T](v Pair[T])i32{switch v{"
+       "case Pair[T].P(_,Bit.A):return 1;"
+       "case Pair[T].P(_,Bit.B):return 2;}} "
+       "func main()i32{let v=Pair[i32].P(value:7,bit:Bit.A);"
+       "return pick[i32](v)-1;}");
+  bad(parameter_prefix +
+      "func pick[T](v Pair[T])i32{switch v{"
+      "case Pair[T].P(_,Bit.A):return 1;}} func main()i32{return 0;}");
+
+  // F2: explicit source type arguments in a template are compared after the
+  // actual function/instance substitution, including a noncapturing lambda.
+  const std::string generic_pattern =
+      "enum Inner[T]{A(value T);B;} enum Outer[T]{One(value Inner[T]);} ";
+  good(generic_pattern +
+       "func pick[T](v Outer[T],fallback T)T{switch v{"
+       "case Outer[T].One(Inner[T].A(x)):return x;"
+       "case Outer[T].One(Inner[T].B):return fallback;}} "
+       "func main()i32{let v=Outer[i32].One(value:Inner[i32].A(value:7));"
+       "let z i32=0;return pick[i32](v,z)-7;}");
+  good("enum Pair2[A,B]{P(left A,right B);} "
+       "func pick[T,U](v Pair2[T,U])i32{switch v{"
+       "case Pair2[T,U].P(left,right):return 0;}} "
+       "func main()i32{let v=Pair2[i32,bool].P(left:1,right:true);"
+       "return pick[i32,bool](v);}");
+  good(generic_pattern +
+       "func make[T]() (func(Outer[T]) i32) {"
+       "return func(value Outer[T]) i32 {"
+       "switch value {"
+       "case Outer[T].One(Inner[T].A(_)):return 1;"
+       "case Outer[T].One(Inner[T].B):return 0;}};} "
+       "func main()i32{let f=make[i32]();"
+       "let value=Outer[i32].One(value:Inner[i32].A(value:7));"
+       "return f(value)-1;}");
+  good("enum E[T]{A(value T);B;} "
+       "func pick[T](e E[T])i32{switch e{"
+       "case E[T].A(_):return 1;case E[T].B:return 0;}} "
+       "func main()i32{let e=E[i32].A(value:7);return pick[i32](e)-1;}");
+  bad(generic_pattern +
+      "func pick[T](v Outer[T],fallback T)T{switch v{"
+      "case Outer[bool].One(Inner[T].A(x)):return x;"
+      "case Outer[T].One(Inner[T].B):return fallback;}} "
+      "func main()i32{return 0;}");
+  auto cross = packages(
+      "pub enum Inner[T]{A(value T);B;} "
+      "pub enum Outer[T]{One(value Inner[T]);}",
+      "func pick[T](v lib.Outer[T],fallback T)T{switch v{"
+      "case lib.Outer[T].One(lib.Inner[T].A(x)):return x;"
+      "case lib.Outer[T].One(lib.Inner[T].B):return fallback;}} "
+      "func main()i32{let n i32=7;let z i32=0;"
+      "let v=lib.Outer[i32].One(value:lib.Inner[i32].A(value:n));"
+      "return pick[i32](v,z)-7;}");
+  need(cross.success(), messages(cross));
+  auto cross_hir = hir::verify_types(*cross.value);
+  need(cross_hir.success(), messages(cross_hir));
+  auto cross_published = hir::verify(*cross.value);
+  need(cross_published.success(), messages(cross_published));
+
+  // Independent HIR corruption: type/variant/order/source/scope/exhaustive and
+  // generic-instance pattern renaming must not be rescued by recomputation.
+  auto shaped = good(
+      "enum Inner{A(x i32);B(x i32);} enum Outer{Empty;Wrap(item Inner);} "
+      "func pick(v Outer)i32{switch v{case Outer.Empty:return 0;"
+      "case Outer.Wrap(Inner.A(x)):return x;"
+      "case Outer.Wrap(Inner.B(y)):return y;}} func main()i32{return 0;}");
+  auto &shaped_switch = [](hir::HirModule &x) -> hir::Switch & {
+    for (auto &n : x.nodes)
+      if (auto s = std::get_if<hir::Switch>(&n.data))
+        return *s;
+    throw std::runtime_error("switch missing");
+  }(shaped);
+  need(shaped_switch.arms.size() == 3, "shaped switch arm count");
+  invalid_nested(shaped, "nested inner variant", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto s = std::get_if<hir::Switch>(&n.data))
+        for (auto &a : s->arms)
+          if (a.pattern.variant && !a.pattern.payload.empty()) {
+            auto &inner = a.pattern.payload[0];
+            if (inner.variant) {
+              for (const auto &d : x.nominals)
+                for (const auto &v : d.variants)
+                  if (v.symbol == *inner.variant)
+                    for (const auto &other : d.variants)
+                      if (other.symbol != *inner.variant &&
+                          other.payload.size() == inner.payload.size()) {
+                        inner.variant = other.symbol;
+                        return;
+                      }
+            }
+          }
+    throw std::runtime_error("nested pattern missing");
+  });
+  invalid_nested(shaped, "nested pattern type", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto s = std::get_if<hir::Switch>(&n.data))
+        for (auto &a : s->arms)
+          if (a.pattern.variant && !a.pattern.payload.empty()) {
+            a.pattern.payload[0].type = a.pattern.type;
+            return;
+          }
+    throw std::runtime_error("nested pattern missing");
+  });
+  invalid_nested(shaped, "nested pattern source span", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto s = std::get_if<hir::Switch>(&n.data))
+        for (auto &a : s->arms)
+          if (a.pattern.variant && !a.pattern.payload.empty()) {
+            a.pattern.payload[0].source.span.begin_byte =
+                a.pattern.source.span.end_byte;
+            return;
+          }
+    throw std::runtime_error("nested pattern missing");
+  });
+  invalid_nested(shaped, "switch exhaustive flag", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto s = std::get_if<hir::Switch>(&n.data)) {
+        s->exhaustive = false;
+        return;
+      }
+    throw std::runtime_error("switch missing");
+  }, true);
+  invalid_nested(shaped, "nested binding scope", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto s = std::get_if<hir::Switch>(&n.data)) {
+        s->arms[1].scope = s->arms[0].scope;
+        return;
+      }
+    throw std::runtime_error("switch missing");
+  });
+
+  auto ordered = good(
+      "enum Inner{A;B;} enum Outer{Pair(first Inner,second Inner);} "
+      "func pick(v Outer)i32{switch v{"
+      "case Outer.Pair(Inner.A,Inner.B):return 1;"
+      "case Outer.Pair(Inner.B,Inner.A):return 2;"
+      "case Outer.Pair(Inner.A,Inner.A):return 3;"
+      "case Outer.Pair(Inner.B,Inner.B):return 4;}} func main()i32{return 0;}");
+  invalid_nested(ordered, "nested payload order", [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto s = std::get_if<hir::Switch>(&n.data)) {
+        auto &payload = s->arms[0].pattern.payload;
+        std::swap(payload[0], payload[1]);
+        return;
+      }
+    throw std::runtime_error("switch missing");
+  });
+
+  auto generic = good(
+      "enum E[T]{A(x T);} enum W[T]{A(x E[T]);} "
+      "func unwrap[T](w W[T])T{switch w{case W.A(E.A(x)):return x;}} "
+      "func main()i32{let a=unwrap(W[i32].A(x:E[i32].A(x:1)));"
+      "let b=unwrap(W[i64].A(x:E[i64].A(x:2)));return a;}");
+  invalid_nested(generic, "nested generic instance pattern rename", [](auto &x) {
+    need(x.instances.size() >= 2, "generic instances missing");
+    auto &a = x.instances[0];
+    const auto &b = x.instances[1];
+    for (auto &entry : a.renamed) {
+      auto original = x.resolved->symbols[entry.first.value].definition;
+      if (original && x.resolved->project->module(original->module)
+                          .files[original->file]->node(original->node).kind ==
+                          AstKind::BindPattern)
+        for (auto [from, to] : b.renamed)
+          if (from == entry.first) {
+            entry.first = to;
+            return;
+          }
+    }
+    throw std::runtime_error("nested pattern rename target missing");
+  });
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -7623,6 +7988,7 @@ int main(int argc, char **argv) {
     trait_method_modes(root);
     trait_self_inout(root);
     trait_self_callback(root);
+    nested_patterns();
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

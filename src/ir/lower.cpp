@@ -207,7 +207,40 @@ class Lower {
     i.source = s;
     return emit(i);
   }
-  void bind_pattern(const hir::Pattern &p, ValueId value) {
+  using Extracted = std::map<const hir::Pattern *, ValueId>;
+  void match_pattern(const hir::Pattern &p, ValueId value, BlockId failure,
+                     Extracted &extracted) {
+    if (!p.variant)
+      return;
+    auto matched = block();
+    Instruction test;
+    test.op = Op::enum_test;
+    test.type = boolean;
+    test.variant = *p.variant;
+    test.inputs = {value};
+    test.source = p.source.span;
+    end(Exit::conditional, {emit(test)}, {matched, failure}, p.source.span);
+    current = matched;
+    auto fields = aggregates.fields(p.type, *p.variant);
+    for (size_t a = 0; a < p.payload.size(); ++a) {
+      const auto &child = p.payload[a];
+      // A wildcard payload with no descendant binding needs no active read.
+      if (!child.variant && !child.binding)
+        continue;
+      Instruction payload;
+      payload.op = Op::enum_payload;
+      payload.type = child.type;
+      payload.variant = *p.variant;
+      payload.field = fields[a].symbol;
+      payload.inputs = {value};
+      payload.source = child.source.span;
+      const auto child_value = emit(payload);
+      extracted[&child] = child_value;
+      match_pattern(child, child_value, failure, extracted);
+    }
+  }
+  void bind_pattern(const hir::Pattern &p, ValueId value,
+                    const Extracted &extracted) {
     if (p.binding) {
       auto local = slot(p.type);
       slots.emplace(*p.binding, local);
@@ -220,21 +253,19 @@ class Lower {
       }
       store(local, value, p.source.span);
     }
-    if (p.variant) {
-      auto fields = aggregates.fields(p.type, p.variant);
-      for (size_t a = 0; a < p.payload.size(); ++a) {
-        // Wildcards need no payload read.
-        if (!p.payload[a].binding)
-          continue;
-        Instruction i;
-        i.op = Op::enum_payload;
-        i.type = p.payload[a].type;
-        i.variant = *p.variant;
-        i.field = fields[a].symbol;
-        i.inputs = {value};
-        i.source = p.payload[a].source.span;
-        bind_pattern(p.payload[a], emit(i));
-      }
+    if (!p.variant)
+      return;
+    for (const auto &child : p.payload) {
+      // A wildcard payload needs no deeper read. A binding or nested variant
+      // uses the exact active-payload value already tested by match_pattern;
+      // re-reading here would create a different SSA value without the
+      // matching-variant fact required by the Native IR verifier.
+      if (!child.variant && !child.binding)
+        continue;
+      auto found = extracted.find(&child);
+      if (found == extracted.end())
+        throw std::logic_error("pattern payload was not extracted");
+      bind_pattern(child, found->second, extracted);
     }
   }
   ValueId expr(HirNodeId id) {
@@ -571,19 +602,10 @@ class Lower {
       auto after = block();
       loops.emplace(id, std::pair{after, after});
       for (const auto &arm : std::get<hir::Switch>(n.data).arms) {
-        auto body = block(), next = block();
-        if (arm.pattern.variant) {
-          Instruction test;
-          test.op = Op::enum_test;
-          test.type = boolean;
-          test.variant = *arm.pattern.variant;
-          test.inputs = {value};
-          test.source = arm.source.span;
-          end(Exit::conditional, {emit(test)}, {body, next}, s);
-        } else
-          jump(body, s);
-        current = body;
-        bind_pattern(arm.pattern, value);
+        auto next = block();
+        Extracted extracted;
+        match_pattern(arm.pattern, value, next, extracted);
+        bind_pattern(arm.pattern, value, extracted);
         full(id);
         stmt(arm.body);
         if (live())

@@ -1,0 +1,68 @@
+package app;
+
+enum Inner {
+    None;
+    Some(value Vec[i32]);
+}
+
+enum Outer {
+    Empty;
+    Wrap(item Inner);
+    Pair(inner Inner, tag i32);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func choose(log inout i64, value Outer) i32 {
+    switch value {
+    case Outer.Empty:
+        mark(inout log, 1);
+        return 1;
+    case Outer.Wrap(Inner.None):
+        mark(inout log, 2);
+        return 2;
+    case Outer.Wrap(Inner.Some(items)):
+        mark(inout log, 3);
+        items[0] = items[0] + 1;
+        return items[0] + 10;
+    case Outer.Pair(Inner.Some(items), tag):
+        mark(inout log, 4);
+        items[0] = items[0] + tag;
+        return items[0] + 20;
+    case Outer.Pair(Inner.None, tag):
+        mark(inout log, 5);
+        return tag;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    let values Vec[i32] = [5];
+    let data = Outer.Wrap(item: Inner.Some(value: values));
+    if choose(inout log, data) != 16 {
+        return 1;
+    }
+    if values[0] != 6 {
+        return 2;
+    }
+
+    let pair_values Vec[i32] = [7];
+    let pair = Outer.Pair(inner: Inner.Some(value: pair_values), tag: 2);
+    if choose(inout log, pair) != 29 {
+        return 3;
+    }
+    if pair_values[0] != 9 {
+        return 4;
+    }
+
+    let none = Outer.Pair(inner: Inner.None, tag: 7);
+    if choose(inout log, none) != 7 {
+        return 5;
+    }
+    if log != 345 {
+        return 6;
+    }
+    return 0;
+}

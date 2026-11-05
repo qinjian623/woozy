@@ -196,13 +196,29 @@ func main() i32 {let p=probe();return 0;}
 enum E {A;B;}
 func main() i32 {switch E.A {case E.A:var zero i32=0;let n=1/zero;case E.B:break;}return 0;}
 ''',
+    'nested-variant-pattern-original': 'enum E {A;B(x i32);} enum O {A(e E);} func main() {switch O.A(e:E.A) {case O.A(E.A):return;default:return;}}',
+    'nested-variant-pattern': '''
+enum E {A(x i32);B;}
+enum O {A(e E);B(e E);}
+func pick(o O) i32 {
+    switch o {
+    case O.A(E.A(x)):return x;
+    case O.A(E.B):return 1;
+    case O.B(E.A(x)):return x+10;
+    case O.B(E.B):return 2;
+    }
+}
+func main() i32 {
+    if pick(O.A(e:E.A(x:5)))!=5 || pick(O.B(e:E.A(x:6)))!=16 {return 1;}
+    if pick(O.A(e:E.B))!=1 || pick(O.B(e:E.B))!=2 {return 2;}
+    return 0;
+}''',
 }
 REJECTED = {
     'struct-owned-string': 'struct S {s string;} func main() {let s=S(s:"x");}',
     'enum-owned-string': 'enum E {A;B(s string);} func main() {let e=E.B(s:"x");}',
     'struct-owned-vec': 'struct S {v Vec[i32];} func main() {let s=S(v:[1,2]);}',
     'field-inout': 'struct S {x i32;} func f(x inout i32) {x+=1;} func main() {var s=S(x:1);f(inout s.x);}',
-    'nested-variant-pattern': 'enum E {A;B(x i32);} enum O {A(e E);} func main() {switch O.A(e:E.A) {case O.A(E.A):return;default:return;}}',
     'aggregate-float-operation': 'struct P {x f32;} func main() {let p=P(x:1.0);let x=p.x+p.x;}',
     'float-negation': 'struct P {x f64;} func main() {let p=P(x:-0.0);}',
 }

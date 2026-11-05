@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态泛型、POD/有限拥有聚合、原05_traits和位置式enum已通过。自由泛型、固有方法及ordinary self trait方法支持已实现范围的move/inout；trait顶层Self及参数/返回函数类型中inout Self支持具体数字/bool、直接及ConstraintCall、传入/返回free函数值后实际调用。保留真实Self/trait/impl/实例及函数值来源检查，callback内inout不改变外围模式，旧owner和fixedscalar+拥有receiver不倒退。未调用nonScalar依赖Self实现源码E_CAP。trait静态/泛型/方法泛型、实际self模式、方法值/捕获闭包、非数字/bool inout、嵌套变体模式和完整ARC仍未完成。T07/T09仍in_progress，执行与限制见docs/GENERICS.md。"
+      "notes": "静态泛型、POD/有限拥有聚合、原05_traits和位置式enum已通过。自由泛型、固有方法及ordinary self trait方法支持已实现范围的move/inout；trait顶层Self及参数/返回函数类型中inout Self支持具体数字/bool、直接及ConstraintCall、传入/返回free函数值后实际调用。保留真实Self/trait/impl/实例及函数值来源检查，callback内inout不改变外围模式，旧owner和fixedscalar+拥有receiver不倒退。未调用nonScalar依赖Self实现源码E_CAP。递归变体模式支持多层/多载荷/泛型/跨包、逐列覆盖和不可达检查、HIR独立重算、两端匹配与绑定清理；非enum前列继续检查后列，显式类型实参按所属实例替换。trait静态/泛型/方法泛型、实际self模式、方法值/捕获闭包、非数字/bool inout和完整ARC仍未完成。T07/T09仍in_progress，执行与限制见docs/GENERICS.md。"
     },
     {
       "id": "T08",

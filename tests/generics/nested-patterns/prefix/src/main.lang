@@ -1,0 +1,66 @@
+package app;
+
+enum Bit {
+    A;
+    B;
+}
+
+enum Packet {
+    Prim(number i32, bit Bit);
+    Owned(number i32, items Vec[i32], bit Bit);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func choose(log inout i64, value Packet) i32 {
+    switch value {
+    case Packet.Prim(_, Bit.A):
+        mark(inout log, 1);
+        return 1;
+    case Packet.Prim(_, Bit.B):
+        mark(inout log, 2);
+        return 2;
+    case Packet.Owned(_, items, Bit.A):
+        mark(inout log, 3);
+        items[0] = items[0] + 1;
+        return items[0] + 10;
+    case Packet.Owned(_, items, Bit.B):
+        mark(inout log, 4);
+        items[0] = items[0] + 2;
+        return items[0] + 20;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    if choose(inout log, Packet.Prim(number: 9, bit: Bit.A)) != 1 {
+        return 1;
+    }
+    if choose(inout log, Packet.Prim(number: 9, bit: Bit.B)) != 2 {
+        return 2;
+    }
+
+    let base Vec[i32] = [5];
+    let owned = Packet.Owned(number: 9, items: base, bit: Bit.A);
+    if choose(inout log, owned) != 16 {
+        return 3;
+    }
+    if base[0] != 6 {
+        return 4;
+    }
+
+    let base_b Vec[i32] = [7];
+    let owned_b = Packet.Owned(number: 9, items: base_b, bit: Bit.B);
+    if choose(inout log, owned_b) != 29 {
+        return 5;
+    }
+    if base_b[0] != 9 {
+        return 6;
+    }
+    if log != 1234 {
+        return 7;
+    }
+    return 0;
+}
