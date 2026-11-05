@@ -160,13 +160,23 @@ receiver 求值一次，命名实参按源码顺序执行；throws 后的写回�
 
 HIR 对 Call 和 ConstraintCall 使用相同的嵌套存储冲突检查，并检查 receiver0、标签、参数模式和索引、inout Place 及实例目标。初次实现误把新模式的首参名称限制用于所有 ConstraintCall，导致旧 `ordinary(owner Self)` 调用报内部错误；修正后，已调用和未实例化的旧普通模板都保留合法行为，新模式的窄来源检查仍保留。
 
-trait 静态调用、泛型 trait、方法自身泛型、方法值、实际 self move/inout 和 trait 声明 `slot inout Self` 仍未支持。缺 move、重复或移动后读取、同绑定 receiver 与 move/inout、重复或嵌套 inout、非数字/bool 或非整体绑定 inout 继续拒绝。未修改公共 HIR 表示、后端或运行库。
+trait 静态调用、泛型 trait、方法自身泛型、方法值、实际 self move/inout 仍未支持；顶层 `slot inout Self` 的后续支持见下文。缺 move、重复或移动后读取、同绑定 receiver 与 move/inout、重复或嵌套 inout、非数字/bool 或非整体绑定 inout 继续拒绝。未修改公共 HIR 表示、后端或运行库。
 
 修正后主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭 LLVM 为33/33，共180项，无跳过，包含两项T10。两份新增项目每个配置合计4次check、6次正式执行和6次观察；原两份before与F1原样源码另完成6次check、9次正式执行，源码SHA未改。49个原保护文件保持原字节。旧ordinary调用和未调用模板已补回归测试；初次失败及修正记录保留。生成Native和预编译LLVM未声称全部经过sanitizer插桩。
+
+## trait 顶层参数 inout Self
+
+trait 方法现在可声明非 self 的顶层参数 `slot inout Self`，具体 Self 仍限已支持的数字/bool。实例方法、`[T Trait]` 内的 ConstraintCall、显式或推断类型及同约束转交都使用原有调用和实例化过程。actual self 仍为普通借用；receiver 与 slot 引用同一存储时拒绝，不同绑定即使数值相等也可传入。
+
+声明检查以参数显式传入所属 trait 的真实 Self SymbolId，只在该 prototype 的非 self 顶层 inout 位置接受它。Self 不冒充方法泛型，不进入实例键或 active_params；原有 signature_parameters 保存和恢复。嵌套 Self callback 仍在源码阶段拒绝。具体 impl 即使未调用，也必须通过完整类型图检查；POD struct/enum、Vec、string、foreign、函数、Unit 和 Box[T] 等非数字/bool Self 继续报 `E_CAPABILITY_UNAVAILABLE`。
+
+HIR 只增加一种依赖 Place：原 prototype 形参确为该 trait Self，替换后正好等于当前真实约束 receiver T。receiver0、标签、模式和索引、重复/嵌套存储冲突、真实 trait/impl 目标、Move/Place/局部重命名继续检查，具体 Call 仍只收数字/bool inout。旧普通 owner 首参和固定数字/bool trait 方法保留原行为，未改公共 HIR 表示、后端或运行库。
+
+本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭 LLVM 为33/33，共180项，无跳过，包含两项T10。新trait-self例每套LLVM配置为2次check、3次正式执行、3次观察；完整方法inout runner共5份源码均通过。原两份before及旧F1另有6次check、9次正式执行，原源码SHA保持，49个保护文件未改。生成Native和预编译LLVM未声称全部经过sanitizer插桩。
 
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型 trait 及 trait 泛型方法、trait 静态调用、trait 声明中的 `slot inout Self`、嵌套变体模式、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型 trait 及 trait 泛型方法、trait 静态调用、嵌套变体模式、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。

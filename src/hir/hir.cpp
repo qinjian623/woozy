@@ -1845,11 +1845,21 @@ class Verifier {
       need(a.mode == p.mode && argument.type == p.type,
            "constraint argument type/mode");
       if (p.mode == ParamMode::inout) {
-        // Trait prototypes have no method-own type parameters. Requiring a
-        // concrete scalar here also keeps `slot inout Self` unavailable even
-        // if a concrete impl would otherwise make its data scalar.
+        // Trait prototypes have no method-own type parameters. A scalar is
+        // always accepted. The only dependent form is a top-level `slot
+        // inout Self` parameter whose substituted type is exactly the current
+        // real [T Trait] receiver T; any other type parameter, nested graph,
+        // or mismatched source is still rejected. Concrete Calls remain
+        // scalar-only.
+        const auto &raw =
+            type(method->signature).parameters[a.parameter_index];
+        const bool trait_self_slot =
+            i > 0 && raw.mode == ParamMode::inout &&
+            type(raw.type).kind == TypeKind::TypeParameter &&
+            type(raw.type).declaration == tr->self &&
+            p.type == c.receiver;
         need(argument.kind() == NodeKind::place &&
-                 inout_scalar(type(p.type).kind),
+                 (inout_scalar(type(p.type).kind) || trait_self_slot),
              "constraint inout requires a whole trivial scalar place");
         need(borrowed
                  .insert(std::get<Place>(argument.data).symbol.value)

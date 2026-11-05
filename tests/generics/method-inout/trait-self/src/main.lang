@@ -1,0 +1,175 @@
+package app;
+enum Failure { Bad; }
+trait SelfFlow {
+    func ordered(self Self, slot inout Self, value Self, owned move Vec[i32],
+                  first i32, second i32) Self;
+    func fail(self Self, slot inout Self, value Self, owned move Vec[i32],
+               log inout i64) Self throws Failure;
+    func saved(self Self, slot inout Self, value Self, owned move Vec[i32],
+                log inout i64) Self;
+}
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit); return i32(digit);
+}
+func make(log inout i64) i32 { mark(inout log, 9); return 1; }
+func bad_make(log inout i64) i32 throws Failure {
+    let local Vec[i32] = [92];
+    mark(inout log, 2);
+    throw Failure.Bad;
+}
+func bad(log inout i64) i32 throws Failure {
+    mark(inout log, 2); throw Failure.Bad;
+}
+func replace(slot inout i32, value i32) i32 {
+    let old = slot; slot = value; return old;
+}
+func reset(slot inout bool, value bool) bool {
+    let old = slot; slot = value; return old;
+}
+impl SelfFlow for i32 {
+    func ordered(self Self, slot inout Self, value Self, owned move Vec[i32],
+                  first i32, second i32) Self {
+        let old = slot;
+        slot = value + first * 10 + second + self + owned[0];
+        return old;
+    }
+    func fail(self Self, slot inout Self, value Self, owned move Vec[i32],
+               log inout i64) Self throws Failure {
+        let local Vec[i32] = [60];
+        defer { slot = slot + 1; mark(inout log, 6); let read = local[0]; }
+        slot = value;
+        mark(inout log, 4);
+        throw Failure.Bad;
+    }
+    func saved(self Self, slot inout Self, value Self, owned move Vec[i32],
+                log inout i64) Self {
+        let local Vec[i32] = [61];
+        defer { slot = slot + 1; mark(inout log, 6); let read = local[0]; }
+        slot = value;
+        mark(inout log, 5);
+        return slot;
+    }
+}
+impl SelfFlow for bool {
+    func ordered(self Self, slot inout Self, value Self, owned move Vec[i32],
+                  first i32, second i32) Self {
+        let old = slot; slot = value; return old;
+    }
+    func fail(self Self, slot inout Self, value Self, owned move Vec[i32],
+               log inout i64) Self throws Failure {
+        let local Vec[i32] = [62];
+        defer { slot = !slot; mark(inout log, 6); let read = local[0]; }
+        slot = value;
+        mark(inout log, 4);
+        throw Failure.Bad;
+    }
+    func saved(self Self, slot inout Self, value Self, owned move Vec[i32],
+                log inout i64) Self {
+        let local Vec[i32] = [61];
+        defer { slot = !slot; mark(inout log, 6); let read = local[0]; }
+        slot = value;
+        mark(inout log, 5);
+        return slot;
+    }
+}
+func relay_fail[T SelfFlow](receiver T, slot inout T, value T,
+                          owned move Vec[i32], log inout i64) T throws Failure {
+    return receiver.fail(inout slot, value, move owned, inout log);
+}
+func relay_saved[T SelfFlow](receiver T, slot inout T, value T,
+                           owned move Vec[i32], log inout i64) T {
+    return receiver.saved(inout slot, value, move owned, inout log);
+}
+func main() i32 {
+    {
+        var log i64 = 0;
+        var owned Vec[i32] = [1];
+        var slot i32 = 10;
+        let value i32 = 5;
+        try {
+            let ignored = make(inout log).ordered(
+                second: bad(inout log), owned: move owned, slot: inout slot,
+                value: value, first: mark_value(inout log, 8));
+            return 1;
+        } catch err Failure {
+            mark(inout log, 3);
+            if slot != 10 || owned[0] != 1 { return 2; }
+        }
+        if log != 923 { return 3; }
+    }
+    {
+        var log i64 = 0;
+        var owned Vec[i32] = [2];
+        var slot i32 = 20;
+        let value i32 = 5;
+        try {
+            let ignored = bad_make(inout log).ordered(
+                owned: move owned, first: mark_value(inout log, 8),
+                slot: inout slot, value: value, second: 0);
+            return 4;
+        } catch err Failure {
+            mark(inout log, 3);
+            if slot != 20 || owned[0] != 2 { return 5; }
+        }
+        if log != 23 { return 6; }
+    }
+    {
+        var log i64 = 0;
+        var owned Vec[i32] = [3];
+        var slot i32 = 30;
+        let value i32 = 5;
+        try {
+            let ignored = make(inout log).ordered(
+                owned: move owned, slot: inout slot, value: value,
+                second: bad(inout log), first: mark_value(inout log, 8));
+            return 7;
+        } catch err Failure {
+            mark(inout log, 3);
+            if slot != 30 { return 8; }
+        }
+        if log != 923 { return 9; }
+    }
+    {
+        var log i64 = 0;
+        var owned Vec[i32] = [4];
+        var slot i32 = 10;
+        let value i32 = 5;
+        let old = make(inout log).ordered(
+            second: mark_value(inout log, 3), owned: move owned,
+            first: mark_value(inout log, 2), slot: inout slot, value: value);
+        mark(inout log, 4);
+        if old != 10 || slot != 33 || log != 9324 { return 10; }
+    }
+    {
+        var log i64 = 0;
+        let receiver i32 = 7;
+        var slot i32 = 30;
+        let value i32 = 40;
+        var owned Vec[i32] = [5];
+        try {
+            let ignored = relay_fail(receiver, inout slot, value,
+                                       move owned, inout log);
+            return 11;
+        } catch err Failure {
+            mark(inout log, 3);
+            if slot != 41 { return 12; }
+        }
+        let old = replace(inout slot, 42);
+        if old != 41 || slot != 42 || log != 463 { return 13; }
+    }
+    {
+        var log i64 = 0;
+        let receiver bool = false;
+        var slot bool = true;
+        let value bool = true;
+        var owned Vec[i32] = [6];
+        let saved = relay_saved[bool](receiver, inout slot, value,
+                                        move owned, inout log);
+        mark(inout log, 4);
+        let next bool = true;
+        let old = reset(inout slot, next);
+        if !saved || old || !slot || log != 564 { return 14; }
+    }
+    return 0;
+}

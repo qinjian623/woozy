@@ -6318,6 +6318,654 @@ func main()i32{return invoke(S(x:1))-1;}
   });
 }
 
+
+void trait_self_inout(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "trait Self inout HIR rejected: " + text + "\n" + messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  auto source_name = [](const hir::HirModule &m, SymbolId s)
+      -> const std::string & { return m.resolved->symbols.at(s.value).name; };
+  auto nominal_name = [&](const hir::HirModule &m, TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return source_name(m, t->declaration);
+  };
+  auto is_i32 = [](const hir::HirModule &m, TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 32;
+  };
+  auto is_bool = [](const hir::HirModule &m, TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::Bool;
+  };
+  auto trait_for = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (source_name(m, t.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto prototype_for = [&](const hir::HirModule &m, const hir::TraitDecl &tr,
+                           const std::string &n)
+      -> const hir::MethodPrototype * {
+    for (const auto &p : tr.methods)
+      if (source_name(m, p.symbol) == n)
+        return &p;
+    return nullptr;
+  };
+  auto template_for = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (source_name(m, t.function.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto function_for = [&](const hir::HirModule &m, SymbolId id)
+      -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto type_name = [&](const hir::HirModule &m, TypeId id) -> std::string {
+    auto nominal = nominal_name(m, id);
+    if (!nominal.empty())
+      return nominal;
+    auto t = m.types.find(id);
+    if (!t)
+      return {};
+    switch (t->kind) {
+    case hir::TypeKind::Bool:
+      return "bool";
+    case hir::TypeKind::String:
+      return "string";
+    case hir::TypeKind::Unit:
+      return "Unit";
+    case hir::TypeKind::Float:
+      return t->bits == 32 ? "f32" : "f64";
+    case hir::TypeKind::SignedInt:
+    case hir::TypeKind::UnsignedInt:
+      return std::string(t->kind == hir::TypeKind::SignedInt ? "i" : "u") +
+             std::to_string(t->bits);
+    default:
+      return {};
+    }
+  };
+  auto impl_for = [&](const hir::HirModule &m, SymbolId trait,
+                      const std::string &type) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (im.trait == trait && type_name(m, im.self_type) == type)
+        return &im;
+    return nullptr;
+  };
+  auto impl_method = [&](const hir::HirModule &m, const hir::ImplDecl &im,
+                         const std::string &method) -> SymbolId {
+    for (auto s : im.methods)
+      if (source_name(m, s) == method)
+        return s;
+    throw std::runtime_error("trait impl method missing: " + method);
+  };
+  auto origin_of = [&](const hir::HirModule &m, SymbolId s) {
+    for (const auto &i : m.instances)
+      if (i.symbol == s)
+        return i.origin;
+    return s;
+  };
+  auto constraint_in = [&](const hir::HirModule &m, SymbolId function)
+      -> std::pair<size_t, const hir::ConstraintCall *> {
+    std::pair<size_t, const hir::ConstraintCall *> result;
+    result.first = static_cast<size_t>(-1);
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      const auto &n = m.nodes[i];
+      if (m.scopes[n.scope.value].function != function)
+        continue;
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(result.first == static_cast<size_t>(-1),
+             "multiple ConstraintCall nodes");
+        result = {i, c};
+      }
+    }
+    need(result.second, "missing ConstraintCall node");
+    return result;
+  };
+  auto instance_for = [&](const hir::HirModule &m,
+                          const hir::FunctionTemplate &t, TypeId arg)
+      -> const hir::FunctionInstance * {
+    for (const auto &i : m.instances)
+      if (i.origin == t.function.symbol && i.type_args.size() == 1 &&
+          i.type_args[0] == arg)
+        return &i;
+    return nullptr;
+  };
+  auto has_parameter = [](const hir::HirModule &m, TypeId root) {
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      auto t = m.types.find(id);
+      if (!t)
+        return false;
+      if (t->kind == hir::TypeKind::TypeParameter)
+        return true;
+      for (auto a : t->type_args)
+        if (visit(a))
+          return true;
+      for (const auto &p : t->parameters)
+        if (visit(p.type))
+          return true;
+      if (visit(t->result))
+        return true;
+      return t->throws_type && visit(*t->throws_type);
+    };
+    return visit(root);
+  };
+
+  auto fixture = check(root /
+                       "tests/generics/method-inout/trait-self/lang.toml");
+  need(fixture.success(), messages(fixture));
+  need(hir::verify(*fixture.value).success(),
+       "trait Self inout fixture HIR rejected");
+  const auto &fm = *fixture.value;
+  const auto *flow = trait_for(fm, "SelfFlow");
+  const auto *through_fail = template_for(fm, "relay_fail");
+  const auto *through_saved = template_for(fm, "relay_saved");
+  need(flow && through_fail && through_saved,
+       "trait Self inout fixture declarations missing");
+  need(through_fail->params.size() == 1 &&
+           through_saved->params.size() == 1 &&
+           source_name(fm, through_fail->params[0].symbol) == "T" &&
+           source_name(fm, through_saved->params[0].symbol) == "T",
+       "trait Self was registered as a method generic parameter");
+  const auto *fail_proto = prototype_for(fm, *flow, "fail");
+  const auto *saved_proto = prototype_for(fm, *flow, "saved");
+  need(fail_proto && saved_proto, "trait Self prototypes missing");
+  const auto *fail_sig = fm.types.find(fail_proto->signature);
+  need(fail_sig && fail_sig->parameters.size() == 5,
+       "trait Self prototype signature shape changed");
+  need(fail_sig->parameters[1].mode == hir::ParamMode::inout &&
+           fail_sig->parameters[2].mode == hir::ParamMode::ordinary,
+       "trait Self slot mode or neighbour changed");
+  {
+    auto t = fm.types.find(fail_sig->parameters[1].type);
+    need(t && t->kind == hir::TypeKind::TypeParameter &&
+             t->declaration == flow->self,
+         "trait Self slot lost the real trait Self type");
+    need(fail_proto->parameters[1].label == "slot" &&
+             fail_sig->parameters[0].mode == hir::ParamMode::ordinary,
+         "trait Self prototype label/receiver changed");
+  }
+  need(function_for(fm, fail_proto->symbol) == nullptr,
+       "trait prototype gained a fake body");
+  auto [fail_cc_id, fail_cc] =
+      constraint_in(fm, through_fail->function.symbol);
+  (void)fail_cc_id;
+  need(fail_cc->trait == flow->symbol &&
+           source_name(fm, fail_cc->method) == "fail" &&
+           fail_cc->args.size() == 5 &&
+           fail_cc->args[1].mode == hir::ParamMode::inout &&
+           fail_cc->args[1].parameter_index == 1 &&
+           !fail_cc->args[1].label &&
+           fail_cc->args[3].mode == hir::ParamMode::move,
+       "trait Self ConstraintCall modes/indices/labels changed");
+  {
+    const auto &place = std::get<hir::Place>(
+        fm.nodes[fail_cc->args[1].expression.value].data);
+    need(place.symbol == through_fail->function.parameters[1].symbol,
+         "trait Self ConstraintCall lost its template Place binding");
+    need(has_parameter(fm, fail_cc->receiver),
+         "trait Self ConstraintCall receiver is not the template type");
+    const auto *sig = fm.types.find(fail_cc->signature);
+    need(sig && sig->parameters[1].mode == hir::ParamMode::inout &&
+             sig->parameters[1].type == fail_cc->receiver,
+         "trait Self ConstraintCall signature did not substitute Self to T");
+    const auto &mv = std::get<hir::Move>(
+        fm.nodes[fail_cc->args[3].expression.value].data);
+    need(mv.binding == through_fail->function.parameters[3].symbol,
+         "trait Self ConstraintCall lost its template Move binding");
+  }
+
+  const auto *flow_i32 = impl_for(fm, flow->symbol, "i32");
+  const auto *flow_bool = impl_for(fm, flow->symbol, "bool");
+  need(flow_i32 && flow_bool, "trait Self scalar impls missing");
+  const auto ordered_i32 = impl_method(fm, *flow_i32, "ordered");
+  const auto saved_i32 = impl_method(fm, *flow_i32, "saved");
+  const auto saved_bool = impl_method(fm, *flow_bool, "saved");
+  size_t direct_i32 = 0;
+  for (const auto &n : fm.nodes) {
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol)
+      continue;
+    auto target = origin_of(fm, *c->direct_symbol);
+    if (target != ordered_i32 && target != saved_i32)
+      continue;
+    const auto *sig = fm.types.find(c->signature);
+    need(sig && sig->parameters.size() >= 2 &&
+             sig->parameters[1].mode == hir::ParamMode::inout &&
+             is_i32(fm, sig->parameters[1].type),
+         "concrete trait Self call lost its i32 inout signature");
+    bool slot = false;
+    for (const auto &a : c->args)
+      if (a.parameter_index == 1 && a.mode == hir::ParamMode::inout) {
+        need(fm.nodes[a.expression.value].kind() == hir::NodeKind::place,
+             "concrete trait Self call lost its i32 inout Place");
+        slot = true;
+      }
+    need(slot, "concrete trait Self inout argument missing");
+    ++direct_i32;
+  }
+  need(direct_i32 >= 2,
+       "concrete receiver trait Self inout calls missing");
+
+  const auto *saved_instance =
+      instance_for(fm, *through_saved, [&] {
+        for (size_t i = 1; i <= fm.types.size(); ++i)
+          if (is_bool(fm, TypeId{i}))
+            return TypeId{i};
+        throw std::runtime_error("bool TypeId missing");
+      }());
+  need(saved_instance, "relay_saved[bool] instance missing");
+  const auto *saved_fn = function_for(fm, saved_instance->symbol);
+  need(saved_fn, "relay_saved[bool] function missing");
+  {
+    const auto *sig = fm.types.find(saved_fn->signature);
+    need(sig && sig->parameters.size() == 5 &&
+             sig->parameters[1].mode == hir::ParamMode::inout &&
+             is_bool(fm, sig->parameters[1].type) &&
+             !has_parameter(fm, saved_fn->signature),
+         "trait Self instance retained T or lost inout bool");
+  }
+  size_t saved_calls = 0;
+  for (const auto &n : fm.nodes) {
+    if (fm.scopes[n.scope.value].function != saved_fn->symbol)
+      continue;
+    need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+         "concrete trait Self instance retained ConstraintCall");
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol ||
+        origin_of(fm, *c->direct_symbol) != saved_bool)
+      continue;
+    const auto *sig = fm.types.find(c->signature);
+    need(sig && sig->parameters[1].mode == hir::ParamMode::inout &&
+             is_bool(fm, sig->parameters[1].type),
+         "concrete trait Self bool call lost its inout type");
+    const auto &place = std::get<hir::Place>(
+        fm.nodes[c->args[1].expression.value].data);
+    need(place.symbol == saved_fn->parameters[1].symbol,
+         "concrete trait Self Place was not renamed to the instance");
+    ++saved_calls;
+  }
+  need(saved_calls == 1,
+       "concrete trait Self bool call missing or duplicated");
+
+  auto mixed = good(R"(
+trait Exchange {
+    func replace(self Self, slot inout Self, value Self) Self;
+    func swap(self Self, first inout Self, second inout Self);
+}
+impl Exchange for u32 {
+    func replace(self Self, slot inout Self, value Self) Self {
+        let old = slot; slot = value; return old;
+    }
+    func swap(self Self, first inout Self, second inout Self) {
+        let old = first; first = second; second = old;
+    }
+}
+impl Exchange for f32 {
+    func replace(self Self, slot inout Self, value Self) Self {
+        let old = slot; slot = value; return old;
+    }
+    func swap(self Self, first inout Self, second inout Self) {
+        let old = first; first = second; second = old;
+    }
+}
+func relay[T Exchange](receiver T, slot inout T, value T) T {
+    return receiver.replace(inout slot, value);
+}
+func outer[T Exchange](receiver T, slot inout T, value T) T {
+    return relay(receiver, inout slot, value);
+}
+trait Legacy { func ordinary(owner Self) i32; }
+struct LegacyItem { x i32; }
+impl Legacy for LegacyItem {
+    func ordinary(owner Self) i32 { return owner.x; }
+}
+func legacy_invoke[T Legacy](value T) i32 { return value.ordinary(); }
+func legacy_unused[T Legacy](value T) i32 { return value.ordinary(); }
+func main() i32 {
+    let r u32 = 5;
+    var x u32 = 5;
+    let old = r.replace(inout x, 8);
+    let f f32 = 1.5;
+    var y f32 = 1.5;
+    let forwarded = outer[f32](f, inout y, 2.5);
+    var first u32 = 7;
+    var second u32 = 7;
+    r.swap(second: inout second, first: inout first);
+    if old != 5 || x != 8 || forwarded != 1.5 || y != 2.5 ||
+       first != 7 || second != 7 {
+        return 1;
+    }
+    let legacy = LegacyItem(x: 1);
+    if legacy_invoke(legacy) != 1 { return 2; }
+    return 0;
+}
+)");
+  {
+    const auto *relay = template_for(mixed, "relay");
+    const auto *outer = template_for(mixed, "outer");
+    const auto *legacy_invoke = template_for(mixed, "legacy_invoke");
+    const auto *legacy_unused = template_for(mixed, "legacy_unused");
+    need(relay && outer && legacy_invoke && legacy_unused,
+         "explicit/inferred/same-constraint or legacy templates missing");
+    size_t relay_f32 = 0, legacy_invoke_instances = 0,
+           legacy_unused_instances = 0;
+    for (const auto &i : mixed.instances) {
+      if (i.origin == relay->function.symbol && i.type_args.size() == 1) {
+        auto t = mixed.types.find(i.type_args[0]);
+        if (t && t->kind == hir::TypeKind::Float && t->bits == 32)
+          ++relay_f32;
+      }
+      if (i.origin == legacy_invoke->function.symbol)
+        ++legacy_invoke_instances;
+      if (i.origin == legacy_unused->function.symbol)
+        ++legacy_unused_instances;
+    }
+    need(relay_f32 == 1 && legacy_invoke_instances == 1 &&
+             legacy_unused_instances == 0,
+         "explicit forwarding or ordinary owner legacy template changed");
+    auto [outer_cc_id, outer_cc] =
+        constraint_in(mixed, legacy_invoke->function.symbol);
+    (void)outer_cc_id;
+    need(outer_cc->args.size() == 1 &&
+             outer_cc->args[0].mode == hir::ParamMode::ordinary,
+         "ordinary owner ConstraintCall shape changed");
+  }
+
+  const std::string exchange = R"(
+trait Exchange {
+    func replace(self Self, slot inout Self, value Self) Self;
+    func swap(self Self, first inout Self, second inout Self);
+}
+impl Exchange for i32 {
+    func replace(self Self, slot inout Self, value Self) Self {
+        let old = slot; slot = value; return old;
+    }
+    func swap(self Self, first inout Self, second inout Self) {
+        let old = first; first = second; second = old;
+    }
+}
+)";
+  bad(exchange + "func main(){var x i32=1;let r i32=0;"
+                 "r.replace(inout x,inout x);}", "E_CALL_ARGUMENT");
+  bad(exchange + "func main(){var x i32=1;let r i32=0;"
+                 "r.replace(inout x,x);}", "E_CALL_ARGUMENT");
+  bad(exchange + "func read(slot inout i32)i32{return slot;} "
+                 "func main(){var x i32=1;let r i32=0;"
+                 "r.replace(inout x,read(inout x));}", "E_CALL_ARGUMENT");
+  bad(exchange + "func main(){var x i32=1;let r i32=0;"
+                 "r.swap(inout x,inout x);}", "E_CALL_ARGUMENT");
+  bad(exchange + "func main(){let x i32=1;let r i32=0;"
+                 "r.replace(inout x,2);}", "E_CALL_ARGUMENT");
+  bad(exchange + "func f(x i32){let r i32=0;r.replace(inout x,2);} "
+                 "func main(){f(1);}", "E_CALL_ARGUMENT");
+  unsupported(exchange + "struct S{x i32;} func main(){let r i32=0;"
+              "var s S=S(x:1);r.replace(inout s.x,2);}");
+  unsupported(exchange + "func main(){let r i32=0;var v Vec[i32]=[1];"
+              "r.replace(inout v[0],2);}");
+  unsupported(exchange + "func main(){let r i32=0;r.replace(inout 1,2);}");
+  bad(exchange + "struct S{x i32;} func main(){let s S=S(x:1);"
+                 "var x i32=1;s.replace(inout x,2);}", "E_TYPE_MISMATCH");
+  bad(exchange + "struct S{x i32;} "
+                 "func forward[T Exchange](receiver T,slot inout T,value T)T{"
+                 "return receiver.replace(inout slot,value);} "
+                 "func main(){let s S=S(x:1);var x i32=1;"
+                 "forward(s,inout x,2);}", "E_TYPE_MISMATCH");
+
+  unsupported("trait V{func bad(self Self,cb func(inout Self));} "
+              "struct S{x i32;} impl V for S{"
+              "func bad(self Self,cb func(inout Self)){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad(self inout Self);} struct S{x i32;} "
+              "impl V for S{func bad(self inout Self){}} "
+              "func main()i32{var s S=S(x:1);s.bad(inout s);return 0;}");
+  unsupported("trait V{func bad(self Self,slot inout Vec[Self]);} "
+              "struct S{x i32;} impl V for S{"
+              "func bad(self Self,slot inout Vec[Self]){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func set(self Self,slot inout Self);} "
+              "struct S{x i32;} impl V for S{"
+              "func set(self Self,slot inout Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func set(self Self,slot inout Self);} "
+              "enum E{One;} impl V for E{"
+              "func set(self Self,slot inout Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func set(self Self,slot inout Self);} "
+              "struct Box[T]{value T;} impl[T] V for Box[T]{"
+              "func set(self Self,slot inout Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func set(self Self,slot inout Self);} "
+              "impl V for Vec[i32]{func set(self Self,slot inout Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func set(self Self,slot inout Self);} "
+              "impl V for string{func set(self Self,slot inout Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func set(self Self,slot inout Self);} "
+              "impl V for Unit{func set(self Self,slot inout Self){}} "
+              "func main()i32{return 0;}");
+  good("trait W{func bump(self Self,slot inout i32);} "
+       "struct Box[T]{value T;} impl[T] W for Box[T]{"
+       "func bump(self Self,slot inout i32){}} "
+       "func main()i32{return 0;}");
+
+  auto hirs = good(R"(
+trait Exchange {
+    func replace(self Self, slot inout Self, value Self) Self;
+}
+trait Other {
+    func replace(self Self, slot inout Self, value Self) Self;
+}
+struct S { x i32; }
+impl Exchange for i32 {
+    func replace(self Self, slot inout Self, value Self) Self {
+        let old = slot; slot = value; return old;
+    }
+}
+impl Other for i32 {
+    func replace(self Self, slot inout Self, value Self) Self {
+        let old = slot; slot = value; return old;
+    }
+}
+func through[T Exchange](receiver T, slot inout T, value T) T {
+    let observed = slot;
+    return receiver.replace(inout slot, value);
+}
+func main() i32 {
+    let s = S(x:1);
+    var x i32 = 1;
+    let a = through[i32](1, inout x, 2);
+    return a - 1;
+}
+)");
+  const auto *exchange_trait = trait_for(hirs, "Exchange");
+  const auto *other_trait = trait_for(hirs, "Other");
+  const auto *through = template_for(hirs, "through");
+  need(exchange_trait && other_trait && through,
+       "corruption fixture declarations missing");
+  const auto *exchange_i32 =
+      impl_for(hirs, exchange_trait->symbol, "i32");
+  const auto *other_i32 = impl_for(hirs, other_trait->symbol, "i32");
+  need(exchange_i32 && other_i32, "corruption fixture impls missing");
+  const auto exchange_replace = impl_method(hirs, *exchange_i32, "replace");
+  const auto other_replace = impl_method(hirs, *other_i32, "replace");
+  auto [cc_id, cc] = constraint_in(hirs, through->function.symbol);
+  size_t read_slot = static_cast<size_t>(-1);
+  for (size_t i = 0; i < hirs.nodes.size(); ++i) {
+    const auto &n = hirs.nodes[i];
+    if (hirs.scopes[n.scope.value].function != through->function.symbol)
+      continue;
+    if (auto r = std::get_if<hir::Read>(&n.data);
+        r && r->symbol == through->function.parameters[1].symbol)
+      read_slot = i;
+  }
+  need(read_slot != static_cast<size_t>(-1),
+       "corruption fixture slot read missing");
+  TypeId i32_type{};
+  for (size_t i = 1; i <= hirs.types.size(); ++i)
+    if (is_i32(hirs, TypeId{i}))
+      i32_type = TypeId{i};
+  need(i32_type.value, "corruption fixture i32 type missing");
+  const auto *through_instance = instance_for(hirs, *through, i32_type);
+  need(through_instance, "corruption fixture through[i32] instance missing");
+  const auto *through_fn = function_for(hirs, through_instance->symbol);
+  need(through_fn, "corruption fixture through function missing");
+  SymbolId observed_template{};
+  for (const auto &n : hirs.nodes) {
+    if (hirs.scopes[n.scope.value].function != through->function.symbol)
+      continue;
+    if (auto b = std::get_if<hir::Binding>(&n.data);
+        b && source_name(hirs, b->symbol) == "observed")
+      observed_template = b->symbol;
+  }
+  need(observed_template.value, "corruption fixture observed local missing");
+  SymbolId observed_instance{};
+  for (const auto &i : hirs.instances)
+    if (i.symbol == through_instance->symbol)
+      for (const auto &[from, to] : i.renamed)
+        if (from == observed_template)
+          observed_instance = to;
+  need(observed_instance.value,
+       "corruption fixture renamed observed local missing");
+  auto concrete_call = [&](hir::HirModule &x) -> std::optional<size_t> {
+    for (size_t i = 0; i < x.nodes.size(); ++i) {
+      const auto &n = x.nodes[i];
+      if (x.scopes[n.scope.value].function != through_fn->symbol)
+        continue;
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          origin_of(x, *c->direct_symbol) == exchange_replace)
+        return i;
+    }
+    return std::nullopt;
+  };
+
+  invalid(hirs, "trait Self inout Place replaced by Read", [&](auto &x) {
+    auto &n = x.nodes[cc_id];
+    auto &c = std::get<hir::ConstraintCall>(n.data);
+    c.args[1].expression = HirNodeId{read_slot};
+    n.children[1] = HirNodeId{read_slot};
+  });
+  invalid(hirs, "trait Self inout mode erased", [&](auto &x) {
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data).args[1].mode =
+        hir::ParamMode::ordinary;
+  });
+  invalid(hirs, "trait Self receiver0 mode changed", [&](auto &x) {
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data).args[0].mode =
+        hir::ParamMode::inout;
+  });
+  invalid(hirs, "trait Self receiver0 index changed", [&](auto &x) {
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data).args[0].source_index =
+        1;
+  });
+  invalid(hirs, "trait Self slot source index changed", [&](auto &x) {
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data).args[1].source_index =
+        3;
+  });
+  invalid(hirs, "trait Self slot parameter index changed", [&](auto &x) {
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data)
+        .args[1].parameter_index = 2;
+  });
+  invalid(hirs, "trait Self slot label changed", [&](auto &x) {
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data).args[1].label =
+        std::string("value");
+  });
+  invalid(hirs, "trait Self receiver changed", [&](auto &x) {
+    hir::Type t;
+    t.kind = hir::TypeKind::SignedInt;
+    t.bits = 64;
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data).receiver =
+        x.types.intern(t);
+  });
+  invalid(hirs, "trait Self method moved to another trait", [&](auto &x) {
+    auto &c = std::get<hir::ConstraintCall>(x.nodes[cc_id].data);
+    c.trait = other_trait->symbol;
+    c.method = other_trait->methods.front().symbol;
+  });
+  invalid(hirs, "trait Self concrete instance type argument changed",
+          [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == through_instance->symbol) {
+        hir::Type t;
+        t.kind = hir::TypeKind::Bool;
+        i.type_args[0] = x.types.intern(t);
+        return;
+      }
+    throw std::runtime_error("through instance missing");
+  });
+  invalid(hirs, "trait Self concrete Place binding changed", [&](auto &x) {
+    auto id = concrete_call(x);
+    need(id.has_value(), "concrete trait Self call missing");
+    auto &n = x.nodes[*id];
+    auto &c = std::get<hir::Call>(n.data);
+    auto &place = std::get<hir::Place>(x.nodes[c.args[1].expression.value].data);
+    place.symbol = observed_instance;
+  });
+  invalid(hirs, "trait Self concrete target moved to other trait", [&](auto &x) {
+    auto id = concrete_call(x);
+    need(id.has_value(), "concrete trait Self call missing");
+    std::get<hir::Call>(x.nodes[*id].data).direct_symbol = other_replace;
+  });
+  invalid(hirs, "trait Self concrete inout made non-scalar", [&](auto &x) {
+    auto id = concrete_call(x);
+    need(id.has_value(), "concrete trait Self call missing");
+    TypeId s_type{};
+    for (size_t i = 1; i <= x.types.size(); ++i)
+      if (nominal_name(x, TypeId{i}) == "S")
+        s_type = TypeId{i};
+    need(s_type.value, "corruption fixture S type missing");
+    auto &n = x.nodes[*id];
+    auto &c = std::get<hir::Call>(n.data);
+    auto sig = *x.types.find(c.signature);
+    sig.parameters[1].type = s_type;
+    c.signature = x.types.intern(sig);
+    x.nodes[c.args[1].expression.value].type = s_type;
+  });
+  invalid_recomputed(hirs, "trait Self label corruption recomputed",
+                     [&](auto &x) {
+    std::get<hir::ConstraintCall>(x.nodes[cc_id].data).args[1].label =
+        std::string("value");
+  });
+  invalid_recomputed(hirs, "trait Self target corruption recomputed",
+                     [&](auto &x) {
+    auto id = concrete_call(x);
+    need(id.has_value(), "concrete trait Self call missing");
+    std::get<hir::Call>(x.nodes[*id].data).direct_symbol = other_replace;
+  });
+  invalid_recomputed(hirs, "trait Self Place corruption recomputed",
+                     [&](auto &x) {
+    auto id = concrete_call(x);
+    need(id.has_value(), "concrete trait Self call missing");
+    auto &c = std::get<hir::Call>(x.nodes[*id].data);
+    auto &place =
+        std::get<hir::Place>(x.nodes[c.args[1].expression.value].data);
+    place.symbol = observed_instance;
+  });
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -6379,6 +7027,7 @@ int main(int argc, char **argv) {
     constrained_inherent_move(root);
     constrained_inherent_inout(root);
     trait_method_modes(root);
+    trait_self_inout(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

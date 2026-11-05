@@ -11,15 +11,18 @@ import sys
 
 sys.dont_write_bytecode = True
 
-CASES = ('positive', 'errors', 'constrained-inherent', 'trait-modes')
+CASES = ('positive', 'errors', 'constrained-inherent', 'trait-modes',
+         'trait-self')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 5],
     'errors': [9, 2, 3, 9, 8, 2, 3, 9, 4, 3, 9, 4, 6, 3, 9, 5, 6],
     'constrained-inherent': [23, 14, 3, 5, 4, 3, 4, 6, 3],
     'trait-modes': [1, 5, 1, 3, 7, 3, 3, 9, 2, 8, 4, 2],
+    'trait-self': [9, 2, 3, 2, 3, 9, 2, 3, 9, 3, 2, 4, 4, 6, 3, 5, 6, 4],
 }
 EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13,
-                        'constrained-inherent': 8, 'trait-modes': 2}
+                        'constrained-inherent': 8, 'trait-modes': 2,
+                        'trait-self': 9}
 
 
 def digest(path):
@@ -99,6 +102,17 @@ def assert_native(case, observations, allocations):
         assert logs == [1, 5, 11, 3, 7, 33, 113, 1139, 11392, 113928, 4,
                         1139282], logs
         assert frees == [1, 0], frees
+    elif case == 'trait-self':
+        # `slot inout Self` writes back through concrete and constrained
+        # calls. The receiver factory marker appears once per invocation, so
+        # the receiver is evaluated once. Named arguments follow source order
+        # (second=3 before first=2). A throwing callee and a throwing later
+        # argument preserve the documented write rules; defer runs after the
+        # returned scalar is saved. Vec moves and locals are each freed once
+        # in the observed cleanup order.
+        assert logs == [9, 92, 923, 2, 23, 9, 92, 923, 9, 93, 932, 9324,
+                        4, 46, 463, 5, 56, 564], logs
+        assert frees == [0, 2, 1, 3, 4, 6, 5, 8, 7], frees
     else:
         # Receiver temporaries are released before their catch events. The
         # throwing callee releases its deferred local and moved argument before
@@ -178,6 +192,27 @@ def assert_python(case, data):
                   for item in data['errors']}
         assert ('fail_after', 'app.E') in errors, data
         assert ('cleanup_fail', 'app.E') in errors, data
+    elif case == 'trait-self':
+        # The final block keeps the bool ConstraintCall result, its deferred
+        # write, and the later ordinary inout. The i32 block's moved Vec was
+        # released and never restored to the moved binding. Python records the
+        # typed failures from the throwing argument, receiver, and callee; the
+        # scalar inout path leaves the frame borrow list empty.
+        snapshots = data.get('snapshots', {})
+        assert snapshots['log'] == 564, data
+        assert snapshots['slot'] is True and snapshots['value'] is True, data
+        assert snapshots['receiver'] is False and snapshots['saved'] is True, data
+        assert snapshots['old'] is False and snapshots['next'] is True, data
+        assert snapshots['owned']['items'] == [6], data
+        assert snapshots['local']['items'] == [61], data
+        assert snapshots['read'] == 61, data
+        assert snapshots['first'] == 2 and snapshots['second'] == 3, data
+        errors = {(item['function'], item['type'])
+                  for item in data['errors']}
+        assert ('bad', 'app.Failure') in errors, data
+        assert ('bad_make', 'app.Failure') in errors, data
+        assert ('fail', 'app.Failure') in errors, data
+        assert ('relay_fail', 'app.Failure') in errors, data
     else:
         snapshots = data.get('snapshots', {})
         assert snapshots, data

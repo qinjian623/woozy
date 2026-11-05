@@ -220,6 +220,14 @@ class Checker {
     return integer(t) || type(t).kind == TypeKind::Bool ||
            type(t).kind == TypeKind::Float;
   }
+  // The trait prototype registers its real Self SymbolId only while checking
+  // that declaration. This is not a method generic parameter: it never enters
+  // generic_params, the instance key, or active_params.
+  bool trait_self_type(TypeId t, SymbolId self) const {
+    return type(t).kind == TypeKind::TypeParameter &&
+           type(t).declaration == self &&
+           symbol(self).kind == modules::SymbolKind::type_parameter;
+  }
   const ImplDecl *impl_of(SymbolId target) const {
     for (const auto &im : m.impls)
       if (std::find(im.methods.begin(), im.methods.end(), target) !=
@@ -349,12 +357,13 @@ class Checker {
   }
   // A constraint call is limited to a real prototype of the required trait,
   // reached through a bounded template receiver with a real ordinary self.
-  // Only concrete numeric/bool non-self inout types are admitted; a trait
-  // declared `slot inout Self` remains unavailable. Method-own generics are
-  // also excluded because the trait's methods must not have their own list.
+  // Only concrete numeric/bool non-self inout types and the exact trait
+  // `slot inout Self` whose substitution is the constrained receiver T are
+  // admitted. Method-own generics are also excluded because the trait's
+  // methods must not have their own list.
   const MethodPrototype *constraint_method_source(SymbolId target,
                                                   SymbolId trait,
-                                                  TypeId receiver) const {
+                                                  TypeId receiver) {
     const TraitDecl *tr = nullptr;
     for (const auto &t : m.traits)
       if (t.symbol == trait)
@@ -393,10 +402,19 @@ class Checker {
     if (raw_self.kind != TypeKind::TypeParameter ||
         raw_self.declaration != tr->self)
       return nullptr;
-    for (size_t i = 1; i < sig.parameters.size(); ++i)
-      if (sig.parameters[i].mode == ParamMode::inout &&
-          !scalar_inout_type(sig.parameters[i].type))
+    for (size_t i = 1; i < sig.parameters.size(); ++i) {
+      if (sig.parameters[i].mode != ParamMode::inout ||
+          scalar_inout_type(sig.parameters[i].type))
+        continue;
+      // The only non-scalar non-self inout prototype form is `slot inout
+      // Self`. Its substitution must be exactly the current constrained
+      // receiver T; arbitrary trait Self occurrences or other type parameters
+      // do not open this route.
+      const auto pt = sig.parameters[i].type;
+      if (!trait_self_type(pt, tr->self) ||
+          substitute(pt, {{tr->self, receiver}}, m.types) != receiver)
         return nullptr;
+    }
     return prototype;
   }
   // A direct call to a generic free function. Trait constraints do not change
@@ -406,7 +424,8 @@ class Checker {
     return found != generic_params.end() && !found->second.empty() &&
            !impl_method(target);
   }
-  bool check_inout_graph(Ref r, TypeId root, bool allow_template) {
+  bool check_inout_graph(Ref r, TypeId root, bool allow_template,
+                         std::optional<SymbolId> trait_self = std::nullopt) {
     std::set<uint64_t> visited_args, expanded_nominals, nominal_path;
     bool direct_inout = false;
     std::function<void(TypeId, size_t)> visit = [&](TypeId id, size_t depth) {
@@ -448,13 +467,21 @@ class Checker {
       if (t.kind != TypeKind::Function ||
           !visited_args.insert(id.value).second)
         return;
-      for (const auto &p : t.parameters) {
+      for (size_t i = 0; i < t.parameters.size(); ++i) {
+        const auto &p = t.parameters[i];
         if (p.mode == ParamMode::inout) {
           // Callback modes do not change the enclosing function's modes.
-          if (id == root)
+          if (depth == 0)
             direct_inout = true;
+          // Only a non-self top-level parameter of the trait prototype may be
+          // `inout Self`. A nested callback or the receiver keeps the old
+          // rejection; this registration does not open all type parameters.
+          const bool trait_self_slot =
+              depth == 0 && i > 0 && trait_self &&
+              trait_self_type(p.type, *trait_self);
           if (!scalar_inout_type(p.type) &&
-              !(allow_template && template_inout_type(p.type)))
+              !(allow_template && template_inout_type(p.type)) &&
+              !trait_self_slot)
             unavailable(
                 r,
                 "inout accepts only trivial numeric/bool whole bindings");
@@ -599,13 +626,14 @@ class Checker {
     }
     unavailable(r, "type is not implemented");
   }
-  TypeId signature(Ref r) {
+  TypeId signature(Ref r,
+                   std::optional<SymbolId> trait_self = std::nullopt) {
     Type t;
     t.kind = TypeKind::Function;
     t.result = unit;
     const auto parts = split_signature(file(r), r.node);
-    for (auto c : parts.parameters) {
-      auto cr = at(r, c);
+    for (size_t i = 0; i < parts.parameters.size(); ++i) {
+      auto cr = at(r, parts.parameters[i]);
       auto pm = mode(cr);
       auto pt = parse_type(child(cr, 0));
 
@@ -613,8 +641,13 @@ class Checker {
         unavailable(cr, "external move/inout parameters are not supported");
       if (pm == ParamMode::move && type(pt).kind == TypeKind::String)
         unavailable(cr, "owned string parameter is not supported");
+      // A trait prototype may declare its non-self top-level slot `inout
+      // Self`. The receiver position and nested function types are excluded
+      // here; parse_type checks nested signatures without this allowance.
+      const bool trait_self_slot =
+          trait_self && i > 0 && trait_self_type(pt, *trait_self);
       if (pm == ParamMode::inout && !scalar_inout_type(pt) &&
-          !template_inout_type(pt))
+          !template_inout_type(pt) && !trait_self_slot)
         unavailable(cr,
                     "inout accepts only trivial numeric/bool whole bindings");
       t.parameters.push_back({pm, pt});
@@ -2525,17 +2558,24 @@ class Checker {
     throw std::invalid_argument("missing resolver Self owner");
   }
   void register_function(Ref r, std::vector<GenericParam> inherited,
-                         bool prototype = false) {
+                         bool prototype = false,
+                         std::optional<SymbolId> trait_self = std::nullopt) {
     auto id = definition(r);
     auto own = generics(r);
     inherited.insert(inherited.end(), own.begin(), own.end());
     generic_params[id.value] = inherited;
+    if (trait_self) {
+      auto self = self_types.find(trait_self->value);
+      if (self == self_types.end() ||
+          !trait_self_type(self->second, *trait_self))
+        throw std::invalid_argument("invalid trait Self registration");
+    }
     auto saved_signature_parameters = signature_parameters;
     signature_parameters.clear();
     for (const auto &p : inherited)
       signature_parameters.insert(p.symbol.value);
-    signatures[id.value] = signature(r);
-    check_inout_graph(r, signatures[id.value], true);
+    signatures[id.value] = signature(r, trait_self);
+    check_inout_graph(r, signatures[id.value], true, trait_self);
     signature_parameters = std::move(saved_signature_parameters);
     for (auto c : ast(r).children)
       if (ast(at(r, c)).kind == AstKind::Parameter) {
@@ -2615,7 +2655,7 @@ class Checker {
         for (auto id : ast(r).children)
           if (ast(at(r, id)).kind == AstKind::Function) {
             auto cr = at(r, id);
-            register_function(cr, {}, true);
+            register_function(cr, {}, true, self);
             auto method = definition(cr);
             if (!generic_params[method.value].empty())
               unavailable(cr, "generic trait methods are not implemented");
