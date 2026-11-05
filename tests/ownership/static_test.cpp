@@ -866,6 +866,131 @@ void correction_constraint() {
          "ConstraintCall later-argument failure borrow prefix missing");
   }
 }
+void trait_static_calls() {
+  const std::string zero =
+      "trait Factory{func make()Self;}"
+      "struct Box{items Vec[i32];}"
+      "impl Factory for Box{func make()Self{return Box(items:[7]);}}"
+      "func build[T Factory]()T{return T.make();}"
+      "func main()i32{let b=build[Box]();return b.items[0]-7;}";
+  const std::string ordinary =
+      "trait Echo{func copy(owner Self,value Vec[i32])Self;}"
+      "struct Box{items Vec[i32];}"
+      "impl Echo for Box{func copy(owner Self,value Vec[i32])Self{"
+      "return owner;}}"
+      "func copy_value[T Echo](owner T,value Vec[i32])T{"
+      "return T.copy(value:value,owner:owner);}"
+      "func main()i32{let b=Box(items:[1]);let v Vec[i32]=[2];"
+      "let r=copy_value[Box](b,v);return 0;}";
+  const std::string move_entry =
+      "trait Take{func take(value move Self)Self;}"
+      "func f[T Take](x T)T{return T.take(move x);}";
+  const std::string inout_entry =
+      "trait Bump{func bump(slot inout Self);}"
+      "func f[T Bump](x T){T.bump(inout x);}";
+  rejected(move_entry, "E_CAPABILITY_UNAVAILABLE");
+  rejected(inout_entry, "E_CAPABILITY_UNAVAILABLE");
+  for (auto b : {Backend::native, Backend::python}) {
+    auto empty = accepted(zero, b);
+    facts(empty);
+    auto empty_id = find(empty, NodeKind::constraint_call);
+    const auto &ec =
+        std::get<ConstraintCall>(empty.nodes[empty_id.value].data);
+    need(ec.args.empty() && empty.nodes[empty_id.value].children.empty(),
+         "zero-argument ConstraintCall fabricated args/children");
+    need(empty.types.find(ec.receiver) &&
+             empty.types.find(ec.receiver)->kind == TypeKind::TypeParameter,
+         "zero-argument ConstraintCall lost its type receiver");
+    need(!std::any_of(empty.ownership.uses.begin(),
+                      empty.ownership.uses.end(),
+                      [&](const auto &u) { return u.consumer == empty_id; }),
+         "zero-argument ConstraintCall invented a receiver use");
+    invalid(empty, "trait-static fabricated receiver", [&](auto &m) {
+      auto &c = std::get<ConstraintCall>(
+          m.nodes[empty_id.value].data);
+      c.args.push_back({0, 0, {}, ParamMode::ordinary, empty_id});
+    });
+
+    auto borrowed = accepted(ordinary, b);
+    facts(borrowed);
+    auto cid = find(borrowed, NodeKind::constraint_call);
+    const auto &call =
+        std::get<ConstraintCall>(borrowed.nodes[cid.value].data);
+    need(call.args.size() == 2 &&
+             borrowed.nodes[cid.value].children.size() == 2,
+         "static ConstraintCall retained a synthetic receiver");
+    need(call.args[0].source_index == 0 &&
+             call.args[0].parameter_index == 1 &&
+             call.args[0].label == std::string("value") &&
+             call.args[1].source_index == 1 &&
+             call.args[1].parameter_index == 0 &&
+             call.args[1].label == std::string("owner") &&
+             call.args[0].mode == ParamMode::ordinary &&
+             call.args[1].mode == ParamMode::ordinary,
+         "static ConstraintCall source order/labels/modes changed");
+    auto value_root =
+        std::get<Read>(borrowed.nodes[call.args[0].expression.value].data)
+            .symbol;
+    need(std::any_of(borrowed.ownership.uses.begin(),
+                     borrowed.ownership.uses.end(), [&](const auto &u) {
+                       return u.consumer == cid && u.root == value_root &&
+                              u.kind == UseKind::borrow;
+                     }),
+         "static ConstraintCall lost its ordinary Vec borrow");
+    need(std::none_of(borrowed.ownership.temporaries.begin(),
+                      borrowed.ownership.temporaries.end(),
+                      [&](const auto &t) {
+                        return t.producer == call.args[0].expression;
+                      }),
+         "static ConstraintCall silently moved/copied its borrowed Vec");
+    need(std::any_of(borrowed.ownership.calls.begin(),
+                     borrowed.ownership.calls.end(),
+                     [&](const auto &c) {
+                       return c.node == cid &&
+                              std::any_of(
+                                  c.on_return.begin(), c.on_return.end(),
+                                  [&](const auto &a) {
+                                    return a.kind == CleanupKind::end_borrow &&
+                                           a.owner.kind ==
+                                               OwnerKind::binding &&
+                                           a.owner.identity ==
+                                               value_root.value;
+                                  });
+                     }),
+         "static ConstraintCall completion missing");
+    invalid(borrowed, "trait-static argument index", [&](auto &m) {
+      auto &c =
+          std::get<ConstraintCall>(m.nodes[cid.value].data);
+      c.args[0].parameter_index = 7;
+    });
+    invalid(borrowed, "trait-static argument source index", [&](auto &m) {
+      auto &c =
+          std::get<ConstraintCall>(m.nodes[cid.value].data);
+      c.args[0].source_index = 3;
+    });
+    invalid(borrowed, "trait-static argument label", [&](auto &m) {
+      auto &c =
+          std::get<ConstraintCall>(m.nodes[cid.value].data);
+      c.args[0].label = std::string("wrong");
+    });
+    invalid(borrowed, "trait-static argument mode", [&](auto &m) {
+      auto &c =
+          std::get<ConstraintCall>(m.nodes[cid.value].data);
+      c.args[0].mode = ParamMode::inout;
+    });
+    invalid(borrowed, "trait-static fabricated receiver", [&](auto &m) {
+      auto &c =
+          std::get<ConstraintCall>(m.nodes[cid.value].data);
+      c.args.insert(c.args.begin(),
+                    {0, 0, {}, ParamMode::ordinary,
+                     c.args[0].expression});
+    });
+    invalid(borrowed, "trait-static completion removed", [&](auto &m) {
+      std::erase_if(m.ownership.calls,
+                    [&](const auto &c) { return c.node == cid; });
+    });
+  }
+}
 void corrections(std::string_view group) {
   if (group == "all" || group == "move")
     correction_move();
@@ -899,6 +1024,7 @@ int main(int argc, char **argv) {
       facts(*r.value);
       ++probes;
     }
+    trait_static_calls();
     corrections("all");
     std::cout << "T09 probes " << probes << " passed\n";
   } catch (const std::exception &e) {

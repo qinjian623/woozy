@@ -418,6 +418,100 @@ class Checker {
     }
     return prototype;
   }
+  bool contains_trait_self_inout(TypeId root, SymbolId self) const {
+    std::function<bool(TypeId)> contains_self = [&](TypeId id) {
+      std::set<uint64_t> seen;
+      std::vector<TypeId> pending{id};
+      while (!pending.empty()) {
+        auto current = pending.back();
+        pending.pop_back();
+        if (!seen.insert(current.value).second)
+          continue;
+        const auto &t = type(current);
+        if (t.kind == TypeKind::TypeParameter) {
+          if (t.declaration == self)
+            return true;
+          continue;
+        }
+        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+        for (const auto &p : t.parameters)
+          pending.push_back(p.type);
+        if (t.kind == TypeKind::Function) {
+          pending.push_back(t.result);
+          if (t.throws_type)
+            pending.push_back(*t.throws_type);
+        }
+      }
+      return false;
+    };
+    std::set<uint64_t> visited;
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      if (!visited.insert(id.value).second)
+        return false;
+      const auto &t = type(id);
+      if (t.kind == TypeKind::Function) {
+        for (const auto &p : t.parameters) {
+          if (p.mode == ParamMode::inout && contains_self(p.type))
+            return true;
+          if (visit(p.type))
+            return true;
+        }
+        if (visit(t.result))
+          return true;
+        if (t.throws_type && visit(*t.throws_type))
+          return true;
+        return false;
+      }
+      for (auto a : t.type_args)
+        if (visit(a))
+          return true;
+      return false;
+    };
+    return visit(root);
+  }
+  // A type-qualified T.method(...) has no runtime receiver. This batch opens
+  // only all-ordinary top-level parameters; Self-dependent inout/callback
+  // forms remain a capability limit, not a permanent language rule. Trait
+  // method generics and the required trait bound are checked by the caller
+  // and the existing trait registration.
+  const MethodPrototype *constraint_static_method_source(SymbolId target,
+                                                          SymbolId trait,
+                                                          TypeId receiver) {
+    const TraitDecl *tr = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == trait)
+        tr = &t;
+    if (!tr || type(receiver).kind != TypeKind::TypeParameter)
+      return nullptr;
+    auto bounded = bounds.find(type(receiver).declaration.value);
+    if (bounded == bounds.end() || !bounded->second ||
+        *bounded->second != trait)
+      return nullptr;
+    if (std::none_of(active_params.begin(), active_params.end(),
+                     [&](const GenericParam &p) {
+                       return p.symbol == type(receiver).declaration;
+                     }))
+      return nullptr;
+    auto generics = generic_params.find(target.value);
+    if (generics == generic_params.end() || !generics->second.empty())
+      return nullptr;
+    const MethodPrototype *prototype = nullptr;
+    for (const auto &p : tr->methods)
+      if (p.symbol == target) {
+        if (prototype)
+          return nullptr;
+        prototype = &p;
+      }
+    if (!prototype)
+      return nullptr;
+    const auto &sig = type(prototype->signature);
+    for (const auto &p : sig.parameters) {
+      if (p.mode != ParamMode::ordinary ||
+          contains_trait_self_inout(p.type, tr->self))
+        return nullptr;
+    }
+    return prototype;
+  }
   // A direct call to a generic free function. Trait constraints do not change
   // this source identity; they are checked from the finished type arguments.
   bool free_generic_template(SymbolId target) const {
@@ -1626,6 +1720,28 @@ class Checker {
         return selected;
       };
       if (auto t = type_expression(base)) {
+        if (type(*t).kind == TypeKind::TypeParameter) {
+          if (method_explicit)
+            unavailable(r, "generic trait methods are not implemented");
+          auto bound = bounds.find(type(*t).declaration.value);
+          if (bound == bounds.end() || !bound->second)
+            reject(r, "method requires a declared trait constraint");
+          for (const auto &tr : m.traits)
+            if (tr.symbol == *bound->second)
+              for (const auto &method : tr.methods)
+                if (symbol(method.symbol).name == name) {
+                  if (!constraint_static_method_source(
+                          method.symbol, *bound->second, *t))
+                    unavailable(
+                        r, "trait-static move/inout or Self callback parameters "
+                           "are not implemented");
+                  auto sig =
+                      substitute(method.signature, {{tr.self, *t}}, m.types);
+                  return typed_call(r, method.symbol, sig, {}, {}, expected,
+                                    *bound->second, *t);
+                }
+          reject(r, "method is not declared by the constraint");
+        }
         if (type(*t).kind == TypeKind::NominalEnum) {
           // A real variant keeps constructor priority. If no variant has this
           // name, the type-qualified member may still be an inherent method;
@@ -1752,7 +1868,8 @@ class Checker {
   Expr typed_call(Ref r, SymbolId target,
                   std::optional<TypeId> signature_override, Substitutions sub,
                   std::optional<Expr> receiver, std::optional<TypeId> expected,
-                  std::optional<SymbolId> constraint = {}) {
+                  std::optional<SymbolId> constraint = {},
+                  std::optional<TypeId> constraint_type = {}) {
     auto original = signature_override.value_or(signatures.at(target.value));
     auto original_type = type(original);
     if (expected)
@@ -1806,9 +1923,19 @@ class Checker {
         inherent_method_route(target, receiver.has_value(), original);
     const bool trait_impl =
         !constraint && receiver && trait_impl_method_source(target).has_value();
+    std::optional<TypeId> constraint_receiver;
+    if (constraint) {
+      if (constraint_type)
+        constraint_receiver = *constraint_type;
+      else if (receiver)
+        constraint_receiver = receiver->value.type;
+    }
     const bool trait_constraint =
-        constraint && receiver &&
-        constraint_method_source(target, *constraint, receiver->value.type);
+        constraint && constraint_receiver &&
+        (receiver ? constraint_method_source(target, *constraint,
+                                             *constraint_receiver)
+                  : constraint_static_method_source(target, *constraint,
+                                                    *constraint_receiver));
     const bool allow_move =
         free_move || inherent || trait_impl || trait_constraint;
     const bool allow_inout =
@@ -1885,7 +2012,7 @@ class Checker {
     check_call_borrows(r, args, children);
     if (constraint)
       return {node(r, ft.result,
-                   ConstraintCall{*constraint, target, receiver->value.type,
+                   ConstraintCall{*constraint, target, *constraint_receiver,
                                   sig, args},
                    children),
               {ft.result, {}, {}}};

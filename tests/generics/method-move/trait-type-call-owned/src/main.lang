@@ -1,0 +1,102 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+trait Make {
+    func make() Self;
+}
+
+trait Take {
+    func take(owner Self, value Vec[i32], extra i32) Self;
+}
+
+trait Checked {
+    func check(owner Self, value Vec[i32]) Self throws E;
+}
+
+struct Box {
+    items Vec[i32];
+    tag i32;
+}
+
+impl Make for Box {
+    func make() Self {
+        return Box(items: [7], tag: 1);
+    }
+}
+
+impl Take for Box {
+    func take(owner Self, value Vec[i32], extra i32) Self {
+        let local Vec[i32] = [9];
+        defer {
+            let read = local[0];
+        }
+        return Box(items: value, tag: owner.tag + extra);
+    }
+}
+
+impl Checked for Box {
+    func check(owner Self, value Vec[i32]) Self throws E {
+        let local Vec[i32] = [8];
+        if value[0] == 6 {
+            throw E.Bad;
+        }
+        return Box(items: value, tag: owner.tag + value[0]);
+    }
+}
+
+func make[T Make]() T {
+    return T.make();
+}
+
+func take[T Take](owner T, value Vec[i32], extra i32) T {
+    return T.take(extra: extra, value: value, owner: owner);
+}
+
+func check[T Checked](owner T, value Vec[i32]) T throws E {
+    return T.check(value: value, owner: owner);
+}
+
+func main() i32 {
+    let base = make[Box]();
+    let base_alias = base;
+    var values Vec[i32] = [5];
+    let values_alias = values;
+
+    let r = take[Box](make[Box](), values, 5);
+    r.items[0] = 11;
+    if values_alias[0] != 11 || base_alias.items[0] != 7 {
+        return 1;
+    }
+
+    let r2 = take[Box](base, values, 2);
+    if r2.tag != 3 || r2.items[0] != 11 {
+        return 2;
+    }
+
+    try {
+        let ok = check[Box](base, values);
+        if ok.tag != 12 {
+            return 3;
+        }
+    } catch e E {
+        return 4;
+    }
+
+    var bad_values Vec[i32] = [6];
+    let bad_alias = bad_values;
+    try {
+        let bad = check[Box](base, bad_values);
+        return 5;
+    } catch e E {
+        if bad_alias[0] != 6 {
+            return 6;
+        }
+    }
+    if values[0] != 11 {
+        return 7;
+    }
+    return 0;
+}

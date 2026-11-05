@@ -7561,6 +7561,521 @@ func main() i32 { return 0; }
 }
 
 
+void trait_static_calls() {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "trait-static HIR rejected: " + messages(published));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  auto packages = [&](const std::string &lib, const std::string &app) {
+    Temp t;
+    fs::create_directories(t.path / "src/lib");
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
+    write(t.path / "src/main.lang",
+          "package app; import \"app/lib\" as lib; " + app);
+    return check(t.path / "lang.toml");
+  };
+
+  const std::string maker =
+      "trait Maker{func make(seed i32)Self;func zero()Self;}"
+      "struct Box[T]{value i32;}"
+      "impl[U] Maker for Box[U]{func make(seed i32)Self{return Box[U](value:seed);}"
+      "func zero()Self{return Box[U](value:0);}} ";
+  const std::string echo =
+      "trait Echo{func copy(owner Self,delta i32)Self;}"
+      "impl[U] Echo for Box[U]{func copy(owner Self,delta i32)Self{"
+      "return Box[U](value:owner.value+delta);}} ";
+  const std::string build =
+      "func build[T Maker](seed i32)T{return T.make(seed);}"
+      "func zero[T Maker]()T{return T.zero();}"
+      "func relay[T Maker](seed i32)T{return build[T](seed);}"
+      "func copy_value[T Echo](value T,delta i32)T{"
+      "return T.copy(delta:delta,owner:value);} ";
+  auto generic = good(
+      maker + echo + build +
+      "func main()i32{let a=Box[i32].make(3);let b=build[Box[i64]](4);"
+      "let c=relay[Box[i32]](5);let d=zero[Box[i32]]();"
+      "let e=copy_value[Box[i32]](a,4);"
+      "return a.value+b.value+c.value+d.value+e.value-23;}");
+  need(generic.instances.size() >= 5,
+       "trait-static generic impl did not instantiate every concrete key");
+  std::set<std::vector<uint64_t>> keys;
+  for (const auto &instance : generic.instances) {
+    std::vector<uint64_t> key;
+    for (auto t : instance.type_args)
+      key.push_back(t.value);
+    need(!key.empty(), "trait-static instance lost its type arguments");
+    keys.insert(key);
+  }
+  need(keys.size() >= 3, "phantom impl type arguments were not kept distinct");
+
+  auto ordered = good(
+      "trait Ordered{func pick(first i32,second i32)i32;}"
+      "impl Ordered for i32{func pick(first i32,second i32)i32{"
+      "return first*10+second;}} "
+      "func order_test[T Ordered](log inout i64)i32{"
+      "return T.pick(second:markv(inout log,3),first:markv(inout log,2));}"
+      "func markv(log inout i64,digit i64)i32{log=log*10+digit;return i32(digit);}"
+      "func main()i32{var log i64=0;let x=order_test[i32](inout log);"
+      "if log!=32{return 1;}return x-23;}");
+  need(!ordered.instances.empty(), "named reorder template did not instantiate");
+  bool saw_static = false;
+  for (const auto &n : ordered.nodes)
+    if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+      saw_static = true;
+      need(n.children.size() == c->args.size(),
+           "trait-static ConstraintCall retained a synthetic receiver");
+      need(c->args.size() == 2 && !n.children.empty(),
+           "trait-static named arguments were lost");
+      need(c->args[0].source_index == 0 &&
+               c->args[0].parameter_index == 1 &&
+               c->args[0].label == std::string("second") &&
+               c->args[1].source_index == 1 &&
+               c->args[1].parameter_index == 0 &&
+               c->args[1].label == std::string("first"),
+           "named trait-static arguments were sorted by parameter");
+    }
+  need(saw_static, "trait-static named ConstraintCall missing");
+
+  auto same_name = good(
+      "trait Left{func pick(self Self)i32;func zero()i32;}"
+      "trait Right{func pick(self Self)i32;func zero()i32;}"
+      "struct Box{} impl Left for Box{func pick(self Self)i32{return 1;}"
+      "func zero()i32{return 1;}}"
+      "impl Right for Box{func pick(self Self)i32{return 2;}"
+      "func zero()i32{return 2;}}"
+      "func left[T Left]()i32{return T.zero();}"
+      "func both[T Left](x T)i32{let a=T.zero();let b=x.pick();return a+b;}"
+      "func main()i32{return left[Box]();}");
+  const hir::ConstraintCall *zero_call = nullptr;
+  const hir::ConstraintCall *value_call = nullptr;
+  for (const auto &n : same_name.nodes)
+    if (auto c = std::get_if<hir::ConstraintCall>(&n.data))
+      if (c->args.empty())
+        zero_call = c;
+      else
+        value_call = c;
+  need(zero_call && value_call, "zero/value trait-static calls missing");
+  auto zero_receiver = same_name.types.find(zero_call->receiver);
+  need(zero_call->args.empty() && zero_receiver &&
+           zero_receiver->kind == hir::TypeKind::TypeParameter,
+       "zero-argument trait-static receiver/args changed");
+  need(!zero_call->args.size(), "zero-argument static call fabricated a receiver");
+
+  auto concrete = [&](const hir::HirModule &h, const std::string &name) {
+    for (const auto &n : h.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data); c && c->direct_symbol) {
+        auto target = *c->direct_symbol;
+        for (const auto &i : h.instances)
+          if (i.symbol == target) {
+            target = i.origin;
+            break;
+          }
+        if (h.resolved->symbols[target.value].name == name)
+          return &n;
+      }
+    return static_cast<const hir::HirNode *>(nullptr);
+  };
+  need(concrete(same_name, "zero"), "trait-static concrete call missing");
+  for (const auto &n : same_name.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data); c && c->direct_symbol) {
+      auto target = *c->direct_symbol;
+      for (const auto &i : same_name.instances)
+        if (i.symbol == target) {
+          target = i.origin;
+          break;
+        }
+      const auto *impl = [&]() -> const hir::ImplDecl * {
+        for (const auto &im : same_name.impls)
+          if (std::find(im.methods.begin(), im.methods.end(), target) !=
+              im.methods.end())
+            return &im;
+        return nullptr;
+      }();
+      if (impl && impl->trait)
+        need(same_name.resolved->symbols[impl->trait->value].name == "Left",
+             "Left-bound call selected Right.pick");
+    }
+
+  auto enum_pick = good(
+      "enum E{A(x i32);} trait Pick{func A(seed i32)Self;}"
+      "impl Pick for E{func A(seed i32)Self{return E.A(x:seed);}}"
+      "func build[T Pick](seed i32)T{return T.A(seed);}"
+      "func main()i32{switch build[E](7){case E.A(x):return x;}}");
+  bool enum_call = false;
+  for (const auto &n : enum_pick.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data); c && c->direct_symbol) {
+      auto target = *c->direct_symbol;
+      for (const auto &i : enum_pick.instances)
+        if (i.symbol == target) {
+          target = i.origin;
+          break;
+        }
+      if (enum_pick.resolved->symbols[target.value].name == "A")
+        enum_call = true;
+    }
+  need(enum_call, "T.bound enum method was not a concrete Call");
+
+  good(maker + echo +
+       "func main()i32{let T=Box[i32](value:3);let v=T.copy(delta:4);"
+       "return v.value-7;}");
+
+  good(
+      "trait Apply{func apply(cb func(Self)Self,value Self)Self;}"
+      "impl Apply for i32{func apply(cb func(i32)i32,value i32)i32{"
+      "return cb(value);}}"
+      "func use[T Apply](value T)T{let cb func(T)T=func(x T)T{return x;};"
+      "return T.apply(cb,value);}"
+      "func main()i32{return use[i32](7)-7;}");
+
+  auto cross = packages(
+      "pub trait Maker{func make(seed i32)Self;}"
+      "pub struct Box{pub value i32;}"
+      "impl Maker for Box{func make(seed i32)Self{return Box(value:seed);}}"
+      "pub func build[T Maker](seed i32)T{return T.make(seed);}",
+      "func main()i32{return lib.build[lib.Box](7).value;}");
+  need(cross.success(), messages(cross));
+  need(hir::verify(*cross.value).success(), "cross-package trait-static HIR rejected");
+
+  auto direct = good(
+      "trait Maker{func make(seed i32)Self;}"
+      "struct A{value i32;} struct B{value i32;}"
+      "impl Maker for A{func make(seed i32)Self{return A(value:seed);}}"
+      "impl Maker for B{func make(seed i32)Self{return B(value:seed);}}"
+      "func main()i32{return A.make(3).value-3;}");
+  invalid(direct, "concrete Type.method target from another impl", [&](auto &h) {
+    SymbolId other{};
+    for (const auto &im : h.impls)
+      if (im.trait) {
+        const auto t = h.types.find(im.self_type);
+        if (t && t->kind == hir::TypeKind::NominalStruct &&
+            h.resolved->symbols[t->declaration.value].name == "B")
+          other = im.methods[0];
+      }
+    need(other.value, "other impl method missing");
+    for (auto &n : h.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data); c && c->direct_symbol) {
+        auto target = *c->direct_symbol;
+        for (const auto &i : h.instances)
+          if (i.symbol == target) {
+            target = i.origin;
+            break;
+          }
+        if (h.resolved->symbols[target.value].name == "make") {
+          c->direct_symbol = other;
+          return;
+        }
+      }
+    throw std::runtime_error("concrete Type.method target missing");
+  });
+  invalid(generic, "trait-static instance type arguments", [&](auto &h) {
+    for (auto &i : h.instances)
+      if (!i.type_args.empty()) {
+        i.type_args[0] = TypeId{1};
+        return;
+      }
+    throw std::runtime_error("trait-static instance missing");
+  });
+  invalid(generic, "trait-static instance origin", [&](auto &h) {
+    SymbolId other{};
+    for (const auto &t : h.templates)
+      if (h.resolved->symbols[t.function.symbol.value].name == "zero")
+        other = t.function.symbol;
+    need(other.value, "zero template missing");
+    for (auto &i : h.instances) {
+      const auto &origin = h.resolved->symbols[i.origin.value].name;
+      if (origin == "build") {
+        i.origin = other;
+        return;
+      }
+    }
+    throw std::runtime_error("build instance missing");
+  });
+
+  bad("trait Maker{func make(seed i32)Self;} func f[T](x T){T.make(1);}",
+      "E_TYPE_MISMATCH");
+  bad("trait A{func get(self Self)i32;} trait B{} func f[T B](x T){T.get();}",
+      "E_TYPE_MISMATCH");
+  bad("trait Maker{func make(seed i32)Self;} struct Box{value i32;}"
+      "func build[T Maker](seed i32)T{return T.make(seed);}"
+      "func main()i32{let b=build[Box](1);return 0;}",
+      "E_TYPE_MISMATCH");
+  bad("trait Maker{func make(seed i32)Self;} struct Box{value i32;}"
+      "func main(){T.make(1);}", "E_NAME_NOT_FOUND");
+  bad("trait Maker{func make(seed i32)Self;}"
+      "func build[T Maker](seed i32)T{return T.other(seed);}", "E_TYPE_MISMATCH");
+  bad(maker + echo + build +
+          "func main()i32{return build[Box[i32]](nope:1).value;}",
+      "E_CALL_ARGUMENT");
+  unsupported(
+      maker + "func build[T Maker](seed i32)T{return T.make[i32](seed);}");
+  bad("trait Left{func pick()i32;} trait Right{func pick()i32;}"
+      "struct Box{} impl Left for Box{func pick()i32{return 1;}}"
+      "impl Right for Box{func pick()i32{return 2;}}"
+      "func main()i32{return Box.pick();}", "E_TYPE_MISMATCH");
+  bad("enum E{A(x i32);} impl E{func A(seed i32)E{return E.A(x:seed);}} "
+      "func main()i32{let e=E.A();return 0;}", "E_CALL_ARGUMENT");
+  bad("enum E{Bad;} trait Checked{func make(seed i32)Self throws E;}"
+      "struct Box{value i32;}"
+      "impl Checked for Box{func make(seed i32)Self throws E{return Box(value:seed);}}"
+      "func build[T Checked](seed i32)T{return T.make(seed);}"
+      "func main()i32{return 0;}", "E_EFFECT_UNHANDLED");
+  unsupported("trait Take{func take(value move Self)Self;}"
+              "func f[T Take](x T)T{return T.take(move x);}");
+  unsupported("trait Bump{func bump(slot inout Self);}"
+              "func f[T Bump](x T){T.bump(inout x);}");
+  unsupported("trait Callback{func apply(cb func(inout Self)Self)Self;}"
+              "func f[T Callback](cb func(inout T)T)T{return T.apply(cb);}");
+
+  auto damaged = good(
+      "trait Maker{func make(seed i32)i32;}"
+      "impl Maker for i32{func make(seed i32)i32{return seed;}}"
+      "func build[T Maker](seed i32)i32{return T.make(seed);}"
+      "func main()i32{return 0;}");
+  auto constraint = [&](hir::HirModule &h) -> HirNodeId {
+    for (size_t i = 0; i < h.nodes.size(); ++i)
+      if (std::holds_alternative<hir::ConstraintCall>(h.nodes[i].data))
+        return HirNodeId{i};
+    throw std::runtime_error("trait-static corruption ConstraintCall missing");
+  };
+  auto cid = constraint(damaged);
+  invalid(damaged, "trait-static fabricated receiver", [&](auto &h) {
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[cid.value].data);
+    c.args.push_back({0, 0, {}, hir::ParamMode::ordinary, cid});
+  });
+  invalid(damaged, "trait-static call index", [&](auto &h) {
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[cid.value].data);
+    c.args[0].parameter_index = 3;
+  });
+  invalid_recomputed(damaged, "trait-static call label", [&](auto &h) {
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[cid.value].data);
+    c.args[0].label = std::string("wrong");
+  });
+  invalid(damaged, "trait-static call source order", [&](auto &h) {
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[cid.value].data);
+    c.args[0].source_index = 4;
+  });
+  invalid(damaged, "trait-static call mode", [&](auto &h) {
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[cid.value].data);
+    c.args[0].mode = hir::ParamMode::inout;
+  });
+  invalid(damaged, "trait-static receiver type", [&](auto &h) {
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[cid.value].data);
+    c.receiver = c.signature;
+  });
+  invalid(damaged, "trait-static signature substitution", [&](auto &h) {
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[cid.value].data);
+    auto sig = *h.types.find(c.signature);
+    sig.result = TypeId{1};
+    c.signature = h.types.intern(sig);
+  });
+  auto damaged_same = good(
+      "trait Left{func pick(self Self)i32;func zero()i32;}"
+      "trait Right{func pick(self Self)i32;func zero()i32;}"
+      "struct Box{} impl Left for Box{func pick(self Self)i32{return 1;}"
+      "func zero()i32{return 1;}}"
+      "impl Right for Box{func pick(self Self)i32{return 2;}"
+      "func zero()i32{return 2;}}"
+      "func both[T Left](x T)i32{let a=T.zero();let b=x.pick();"
+      "return a+b;} func main()i32{return both[Box](Box());}");
+  auto static_id = constraint(damaged_same);
+  HirNodeId value_id{};
+  for (size_t i = 0; i < damaged_same.nodes.size(); ++i)
+    if (auto c = std::get_if<hir::ConstraintCall>(
+            &damaged_same.nodes[i].data);
+        c && !c->args.empty())
+      value_id = HirNodeId{i};
+  need(value_id.value, "value ConstraintCall missing for source-form damage");
+  invalid(damaged_same, "constraint source form changed", [&](auto &h) {
+    h.nodes[static_id.value].source.node =
+        h.nodes[value_id.value].source.node;
+  });
+  invalid(damaged_same, "value ConstraintCall receiver deleted", [&](auto &h) {
+    auto &n = h.nodes[value_id.value];
+    auto &c = std::get<hir::ConstraintCall>(n.data);
+    c.args.erase(c.args.begin());
+    n.children.erase(n.children.begin());
+  });
+  invalid(damaged_same, "constraint trait substitution", [&](auto &h) {
+    const auto *right = [&]() -> const hir::TraitDecl * {
+      for (const auto &t : h.traits)
+        if (h.resolved->symbols[t.symbol.value].name == "Right")
+          return &t;
+      return nullptr;
+    }();
+    need(right != nullptr, "Right trait missing");
+    auto &c = std::get<hir::ConstraintCall>(h.nodes[static_id.value].data);
+    c.trait = right->symbol;
+    c.method = right->methods[0].symbol;
+  });
+}
+void trait_static_self_qualification() {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "Self-qualified HIR rejected: " + messages(published));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto call_target = [&](const hir::HirModule &h, const std::string &name)
+      -> const hir::Call * {
+    for (const auto &n : h.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data); c && c->direct_symbol) {
+        auto target = *c->direct_symbol;
+        for (const auto &i : h.instances)
+          if (i.symbol == target) {
+            target = i.origin;
+            break;
+          }
+        if (h.resolved->symbols[target.value].name == name)
+          return c;
+      }
+    return nullptr;
+  };
+
+  auto root_f1 = good(
+      "struct Box{value i32;}"
+      "impl Box{func helper(value i32)Self{return Box(value:value);}"
+      "func make(value i32)Self{return Self.helper(value);}}"
+      "func main()i32{return Box.make(7).value-7;}");
+  need(call_target(root_f1, "helper"),
+       "root Self.helper regression call missing");
+  for (const auto &n : root_f1.nodes)
+    need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+         "Self.helper became a ConstraintCall");
+
+  auto generic = good(
+      "struct Box[T]{value i32;}"
+      "impl[U] Box[U]{func helper(value i32)Self{return Box[U](value:value);}"
+      "func make(value i32)Self{return Self.helper(value);}"
+      "func paren(value i32)Self{return (Self).helper(value);}}"
+      "func main()i32{return Box[i32].make(7).value+"
+      "Box[i64].paren(8).value-15;}");
+  need(call_target(generic, "helper"),
+       "generic impl Self.helper regression call missing");
+  std::set<uint64_t> helper_keys;
+  for (const auto &i : generic.instances)
+    for (auto t : i.type_args)
+      helper_keys.insert(t.value);
+  need(helper_keys.size() >= 2,
+       "generic Self.helper did not retain distinct impl type arguments");
+
+  auto trait_self = good(
+      "trait Maker{func make(value i32)Self;}"
+      "struct Item{value i32;}"
+      "impl Item{func helper(value i32)Self{return Item(value:value);}}"
+      "impl Maker for Item{func make(value i32)Self{"
+      "return Self.helper(value);}}"
+      "func main()i32{return Item.make(9).value-9;}");
+  need(call_target(trait_self, "helper"),
+       "trait impl Self alias did not reach its inherent helper");
+
+  auto guarded = good(
+      "trait Value{func pick(self Self)i32;}"
+      "struct Box{value i32;}"
+      "impl Value for Box{func pick(self Self)i32{return 1;}}"
+      "impl Box{func pick(self Self)i32{return 2;}}"
+      "func use[T Value](x T)i32{return T.pick(x);}"
+      "func main()i32{return use[Box](Box(value:0))-1;}");
+  auto pick = call_target(guarded, "pick");
+  need(pick && pick->direct_symbol, "bounded T.pick call missing");
+  SymbolId inherent_pick{};
+  for (const auto &im : guarded.impls)
+    if (!im.trait) {
+      const auto t = guarded.types.find(im.self_type);
+      if (t && t->kind == hir::TypeKind::NominalStruct &&
+          guarded.resolved->symbols[t->declaration.value].name == "Box")
+        for (auto method : im.methods)
+          if (guarded.resolved->symbols[method.value].name == "pick")
+            inherent_pick = method;
+    }
+  need(inherent_pick.value, "inherent pick guard target missing");
+  invalid(guarded, "bounded T.pick replaced by inherent method", [&](auto &h) {
+    for (auto &n : h.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol && c->direct_symbol->value ==
+                                       pick->direct_symbol->value) {
+        c->direct_symbol = inherent_pick;
+        return;
+      }
+    throw std::runtime_error("bounded T.pick target missing");
+  });
+
+  auto self_targets = good(
+      "struct Box{value i32;} struct Other{value i32;}"
+      "impl Box{func helper(value i32)Self{return Box(value:value);}"
+      "func alias(value i32)Self{return Box(value:value);}"
+      "func make(value i32)Self{return Self.helper(value);}}"
+      "impl Other{func helper(value i32)Self{return Other(value:value);}}"
+      "func main()i32{return Box.make(7).value-7;}");
+  auto self_helper = call_target(self_targets, "helper");
+  need(self_helper && self_helper->direct_symbol,
+       "Self alias helper target missing");
+  SymbolId other_helper{};
+  SymbolId box_alias{};
+  for (const auto &im : self_targets.impls) {
+    const auto t = self_targets.types.find(im.self_type);
+    if (!t || t->kind != hir::TypeKind::NominalStruct)
+      continue;
+    const auto &name = self_targets.resolved->symbols[t->declaration.value].name;
+    for (auto method : im.methods) {
+      const auto &mn = self_targets.resolved->symbols[method.value].name;
+      if (name == "Other" && mn == "helper")
+        other_helper = method;
+      if (name == "Box" && mn == "alias")
+        box_alias = method;
+    }
+  }
+  need(other_helper.value && box_alias.value,
+       "Self alias corruption targets missing");
+  invalid_recomputed(self_targets, "Self alias target from another impl",
+                     [&](auto &h) {
+    for (auto &n : h.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          c->direct_symbol->value == self_helper->direct_symbol->value) {
+        c->direct_symbol = other_helper;
+        return;
+      }
+    throw std::runtime_error("Self alias helper call missing");
+  });
+  invalid(self_targets, "Self alias target name replaced", [&](auto &h) {
+    for (auto &n : h.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          c->direct_symbol->value == self_helper->direct_symbol->value) {
+        c->direct_symbol = box_alias;
+        return;
+      }
+    throw std::runtime_error("Self alias helper call missing");
+  });
+
+  bad("trait Value{} struct Box{value i32;}"
+      "impl Box{func helper(value i32)Self{return Box(value:value);}}"
+      "func use[T Value](x T)T{return T.helper(1);}",
+      "E_TYPE_MISMATCH");
+}
 void nested_patterns() {
   auto good = [](const std::string &text) {
     auto r = source(text);
@@ -7988,6 +8503,8 @@ int main(int argc, char **argv) {
     trait_method_modes(root);
     trait_self_inout(root);
     trait_self_callback(root);
+    trait_static_calls();
+    trait_static_self_qualification();
     nested_patterns();
     repairs(root);
   } catch (const std::exception &e) {

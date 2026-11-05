@@ -189,7 +189,7 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型 trait 及 trait 泛型方法、trait 静态调用、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型 trait 及 trait 泛型方法、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
 
 ## 递归枚举模式
 
@@ -200,3 +200,13 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 HIR 验证每层的源码、真实枚举/变体、类型、载荷顺序和绑定作用域，再重算覆盖。显式模式类型实参按所属函数实例替换，包括泛型非捕获 lambda；不直接将模板 T 与具体 i32 比较。Native 只在父标签匹配后读取活动载荷，所有测试成功后才复制拥有绑定；Python 使用递归短路判断。退出计划包括同一外层变体的后续内部组合，以及其 return、throw、break、continue 和 defer。
 
 这项支持不包含计算产生的拥有临时、部分字段 move、literal/guard/or/range 模式或 switch 表达式。失败分支没有绑定 copy/store 的检查来自生成 CFG 和源码，零存活观察不能单独证明平衡 copy/release 从未发生。T07/T09 仍为 in_progress。
+
+## trait 类型名调用
+
+非泛型 trait、方法自身无类型参数时，`Type.method(...)` 和 `[T Trait]` 下的 `T.method(...)` 显式提供全部声明参数，包括普通首参 Self；也支持零参数工厂。类型限定符只用于选择方法，不产生运行时接收者。旧 `value.method(...)` 保留既有接收者规则，具体类型和值调用中已有的 move/inout 支持保持。
+
+新 T 入口支持顶层 ordinary 参数、Self 参数和返回、现有泛型 impl、跨包公开 trait、泛型间调用和非捕获泛型 lambda，以及已有普通 callback、typed throws 和有限拥有值。命名实参按书写顺序求值，首个实参抛错后不执行后续实参；复制、返回共享和清理仍采用原规则。泛型调用依据 T 实际声明的 trait 选择 prototype 和 impl，不按同名或相同签名替换目标。具体枚举的真实变体仍优先构造；从 T 的 trait 方法具体化时保持原 trait 选择。
+
+HIR 由真实源码的调用形式检查有无值接收者，核对显式参数 0、标签、类型、参数顺序、实例来源与完整类型实参；没有参数时仍验证真实约束、目标和返回/错误类型。impl 内的 Self 按实现类型解析，保留 `Self.helper(...)` 和括号形式；它不会因此变成有 trait bound 的模板参数。后端只接收具体普通 Call，不保留 ConstraintCall 或未替换的 T。
+
+新 T 入口尚未支持顶层 move/inout 和依赖 Self 的 inout callback；已有固定数字/bool callback 内的 inout 不算外围参数模式。泛型 trait、trait 方法自身泛型、trait 名直接调用、方法值、捕获闭包和实际 self move/inout 仍未支持。这些实施限制不改变已经确认的显式传参规则；T07/T09 仍为 in_progress。

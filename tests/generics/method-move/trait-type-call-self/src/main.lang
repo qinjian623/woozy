@@ -1,0 +1,52 @@
+package app;
+
+trait Maker {
+    func make(value i32) Self;
+}
+
+struct Box[T] {
+    value i32;
+}
+
+impl[U] Box[U] {
+    func helper(value i32) Self {
+        return Box[U](value: value);
+    }
+    func make(value i32) Self {
+        return Self.helper(value);
+    }
+    func paren(value i32) Self {
+        return (Self).helper(value);
+    }
+}
+
+struct Item {
+    value i32;
+}
+
+impl Item {
+    func helper(value i32) Self {
+        return Item(value: value);
+    }
+}
+
+impl Maker for Item {
+    func make(value i32) Self {
+        return Self.helper(value);
+    }
+}
+
+func generic_make_via_bound[T Maker](value i32) T {
+    return T.make(value);
+}
+
+func main() i32 {
+    let a = Box[i32].make(7);
+    let b = Box[i64].paren(8);
+    let c = Item.make(9);
+    let d = generic_make_via_bound[Item](10);
+    if a.value != 7 || b.value != 8 || c.value != 9 || d.value != 10 {
+        return 1;
+    }
+    return 0;
+}

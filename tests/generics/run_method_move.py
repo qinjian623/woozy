@@ -14,7 +14,9 @@ sys.dont_write_bytecode = True
 CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
          'callee-throws', 'enum-static', 'generic-explicit', 'generic-impl',
          'generic-impl-errors', 'generic-impl-own',
-         'generic-impl-own-errors', 'constrained-inherent', 'trait-modes')
+         'generic-impl-own-errors', 'constrained-inherent', 'trait-modes',
+         'trait-type-call-factory', 'trait-type-call-owned',
+         'trait-type-call-self')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -29,6 +31,9 @@ EXPECTED_EVENTS = {
     'generic-impl-own-errors': [9, 2, 3, 9, 2, 3, 2, 3, 3],
     'constrained-inherent': [1, 2, 5, 6, 7, 8, 9, 3, 2],
     'trait-modes': [7, 1, 3, 2, 7, 1, 3, 2, 7, 1, 3, 2],
+    'trait-type-call-factory': [3, 2, 4, 9],
+    'trait-type-call-owned': [],
+    'trait-type-call-self': [],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -44,6 +49,9 @@ EXPECTED_ALLOCATIONS = {
     'generic-impl-own-errors': 16,
     'constrained-inherent': 20,
     'trait-modes': 6,
+    'trait-type-call-factory': 0,
+    'trait-type-call-owned': 8,
+    'trait-type-call-self': 0,
 }
 
 
@@ -313,6 +321,25 @@ def assert_python(case, data):
                    for error in data['errors']), data
         assert any(error['function'] == 'fail' and error['type'] == 'app.E'
                    for error in data['errors']), data
+    elif case == 'trait-type-call-factory':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['log'] == 32 and snapshots['ok_log'] == 4, data
+        assert snapshots['ordered_value'] == [23], data
+        assert any(error['function'] == 'checked_bad' and
+                   error['type'] == 'app.E' for error in data['errors']), data
+    elif case == 'trait-type-call-owned':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['values_alias']['items'] == [11], data
+        assert snapshots['base_alias'][0]['items'] == [7], data
+        assert snapshots['r2'][1] == 3, data
+        assert snapshots['ok'][1] == 12, data
+        assert any(error['function'] == 'check' and
+                   error['type'] == 'app.E' for error in data['errors']), data
+    elif case == 'trait-type-call-self':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['a'] == [7] and snapshots['b'] == [8], data
+        assert snapshots['c'] == [9] and snapshots['d'] == [10], data
+        assert not data['errors'], data
     else:
         assert any(error['function'] == 'consume' and
                    error['type'] == 'app.E' for error in data['errors']), data

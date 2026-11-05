@@ -625,6 +625,57 @@ class Verifier {
       if (same_ref(o.source, ref)) return o.symbol;
     return {};
   }
+  struct SourceMethodCall {
+    modules::NodeRef base;
+    std::optional<SymbolId> base_symbol;
+    std::string name;
+    bool explicit_type_arguments = false;
+  };
+  // Rebuild the written call form from the owning Source. A Member with its
+  // own resolved occurrence is a module/qualified-name call, not a method.
+  // Transparent parentheses and the optional explicit method type suffix do
+  // not change the base. The base's real occurrence decides value vs type.
+  std::optional<SourceMethodCall> source_method_call(const HirNode &n) const {
+    const auto &file =
+        *m.resolved->project->module(n.source.node.module)
+             .files.at(n.source.node.file);
+    auto ref = n.source.node;
+    const auto &call = file.node(ref.node);
+    if (call.kind != AstKind::Call || call.children.empty())
+      return {};
+    ref.node = call.children.front();
+    ref = unwrapped(ref);
+    bool explicit_type_arguments = false;
+    if (file.node(ref.node).kind == AstKind::NeutralBracket) {
+      need(!file.node(ref.node).children.empty(),
+           "method type suffix has no target");
+      explicit_type_arguments = true;
+      ref.node = file.node(ref.node).children.front();
+      ref = unwrapped(ref);
+    }
+    const auto &member = file.node(ref.node);
+    if (member.kind != AstKind::Member || resolved_source(ref))
+      return {};
+    need(!member.children.empty(), "method call member has no base");
+    auto base = ref;
+    base.node = member.children.front();
+    auto symbolized = base;
+    for (;;) {
+      symbolized = unwrapped(symbolized);
+      const auto &a = file.node(symbolized.node);
+      if (a.kind != AstKind::NeutralBracket)
+        break;
+      need(!a.children.empty(), "type qualifier has no base");
+      symbolized.node = a.children.front();
+    }
+    auto base_symbol = resolved_source(symbolized);
+    need(member.token_end > member.token_begin,
+         "method call member token range");
+    return SourceMethodCall{base, base_symbol,
+                            std::string(file.tokens[member.token_end - 1]
+                                            .spelling),
+                            explicit_type_arguments};
+  }
   const ForeignBinding &foreign_binding(ForeignBindingId id) const {
     need(id.value < m.foreign_bindings.size(), "foreign binding index");
     return m.foreign_bindings[id.value];
@@ -791,6 +842,122 @@ class Verifier {
       }
     }
   }
+  // A type parameter spelling is only a real bounded template `T` when it is
+  // an actual parameter of the enclosing template (or that template's
+  // instance origin) and that declaration carries a trait bound. `Self` in
+  // an impl is registered as a type_parameter symbol too, but it belongs to
+  // an ImplDecl self parameter and source_type restores it to impl.self_type.
+  // It therefore follows the ordinary concrete Type.method rules, while a
+  // real bounded T keeps the required trait/prototype/impl guard.
+  bool template_trait_parameter(const SourceMethodCall &source,
+                                SymbolId owner) const {
+    if (!source.base_symbol) return false;
+    auto id = *source.base_symbol;
+    if (symbol(id).kind != modules::SymbolKind::type_parameter)
+      return false;
+    auto origin = owner;
+    for (const auto &i : m.instances)
+      if (i.symbol == owner) {
+        origin = i.origin;
+        break;
+      }
+    auto t = templates.find(origin.value);
+    if (t == templates.end()) return false;
+    for (const auto &p : t->second->params)
+      if (p.symbol == id)
+        return p.trait.has_value();
+    return false;
+  }
+  // Concrete Type.method(...) and the concrete form of a T.method(...)
+  // instance both become ordinary direct Calls. Re-derive the qualifier's
+  // real source type and require the selected method to belong to the impl
+  // for that type. For a concrete qualifier, the same source selection must
+  // still have exactly one candidate; a template qualifier is matched by the
+  // required trait in instance_body instead, so same-named methods from other
+  // traits cannot replace it there.
+  void check_qualified_method_source(const HirNode &n, const Call &c) const {
+    auto source = source_method_call(n);
+    if (!source || !source->base_symbol)
+      return;
+    const auto kind = symbol(*source->base_symbol).kind;
+    const bool template_qualifier =
+        template_trait_parameter(*source, scope(n.scope).function);
+    if (!template_qualifier && kind != modules::SymbolKind::type &&
+        kind != modules::SymbolKind::builtin_type &&
+        kind != modules::SymbolKind::type_parameter)
+      return;
+    need(c.kind == CalleeKind::direct && c.direct_symbol.has_value(),
+         "type-qualified method source is not a direct call");
+    auto origin = *c.direct_symbol;
+    const FunctionInstance *instance = nullptr;
+    for (const auto &i : m.instances)
+      if (i.symbol == origin) {
+        instance = &i;
+        origin = i.origin;
+        break;
+      }
+    need(symbol(origin).name == source->name,
+         "type-qualified call target name differs from source");
+    const ImplDecl *impl = nullptr;
+    for (const auto &candidate : m.impls)
+      if (std::find(candidate.methods.begin(), candidate.methods.end(),
+                    origin) != candidate.methods.end()) {
+        need(!impl, "type-qualified call target belongs to two impls");
+        impl = &candidate;
+      }
+    need(impl, "type-qualified call target is not an impl method");
+    std::vector<TypeId> args;
+    if (instance)
+      args = instance->type_args;
+    else if (templates.count(origin.value))
+      args = c.type_args;
+    need(impl->params.size() <= args.size(),
+         "type-qualified call lost impl type arguments");
+    Substitutions sub;
+    for (size_t i = 0; i < impl->params.size(); ++i)
+      sub.push_back({impl->params[i].symbol, args[i]});
+    const auto source_type =
+        source_type_in_function(source->base, scope(n.scope).function);
+    need(substitute(impl->self_type, sub, substituted) == source_type,
+         "type-qualified call source type differs from impl Self");
+    if (template_qualifier) {
+      need(impl->trait.has_value(),
+           "T-qualified call selected an inherent method");
+      const TraitDecl *trait = nullptr;
+      for (const auto &t : m.traits)
+        if (t.symbol == *impl->trait)
+          trait = &t;
+      need(trait, "T-qualified call impl has no real trait");
+      bool declared = false;
+      for (const auto &p : trait->methods)
+        declared |= symbol(p.symbol).name == source->name;
+      need(declared, "T-qualified call has no source trait prototype");
+    } else {
+      size_t candidates = 0;
+      for (const auto &candidate : m.impls) {
+        Substitutions match;
+        if (!matches(candidate.self_type, source_type, match))
+          continue;
+        bool valid = true;
+        for (const auto &p : candidate.params) {
+          auto it = std::find_if(match.begin(), match.end(),
+                                 [&](auto x) { return x.first == p.symbol; });
+          if (it == match.end() ||
+              (p.trait && !satisfies(it->second, *p.trait))) {
+            valid = false;
+            break;
+          }
+        }
+        if (!valid)
+          continue;
+        for (auto method : candidate.methods)
+          if (symbol(method).name == source->name)
+            ++candidates;
+      }
+      need(candidates == 1,
+           "type-qualified method source selection is not unique");
+    }
+  }
   void check_call(const HirNode &n, const Call &c) const {
     if (c.kind == CalleeKind::foreign) {
       foreign_call(n, c);
@@ -869,6 +1036,8 @@ class Verifier {
       }
     }
     check_call_aliases(c.args, borrowed);
+    if (c.kind == CalleeKind::direct)
+      check_qualified_method_source(n, c);
   }
   void shape(HirNodeId id) const {
     check_cancelled(stop);
@@ -1131,19 +1300,40 @@ class Verifier {
       c.node = id;
       return c;
     };
-    if (n.kind == AstKind::ParenthesizedType)
+    if (n.kind == AstKind::ParenthesizedType ||
+        n.kind == AstKind::Parenthesized ||
+        n.kind == AstKind::BracketItem)
       return source_type(cr(n.children.at(0)));
     if (n.kind == AstKind::FunctionType)
       return source_signature(r);
-    need(n.kind == AstKind::NamedType, "invalid type syntax source");
+    // A type-qualified method call writes its qualifier as an expression
+    // Name/Member rather than a NamedType. Accept those source forms too so
+    // the verifier can reconstruct the same TypeId without guessing from the
+    // call's argument count or spelling.
     std::optional<SymbolId> sid;
-    for (const auto &o : m.resolved->occurrences)
-      if (same_ref(o.source, r))
-        sid = o.symbol;
+    auto last_source_symbol = [&](modules::NodeRef ref) {
+      ref = unwrapped(ref);
+      std::optional<SymbolId> result;
+      for (const auto &o : m.resolved->occurrences)
+        if (same_ref(o.source, ref))
+          result = o.symbol;
+      return result;
+    };
+    if (n.kind == AstKind::NeutralBracket) {
+      need(!n.children.empty(), "type qualifier has no base");
+      sid = last_source_symbol(cr(n.children.front()));
+    } else {
+      need(n.kind == AstKind::NamedType || n.kind == AstKind::Name ||
+               n.kind == AstKind::Member,
+           "invalid type syntax source");
+      sid = last_source_symbol(r);
+    }
     need(sid.has_value(), "type syntax has no resolved symbol");
     const auto &s = symbol(*sid);
     Type t;
     if (s.kind == modules::SymbolKind::type_parameter) {
+      need(n.kind != AstKind::NeutralBracket,
+           "type parameter arguments differ from source");
       for (const auto &im : m.impls)
         if (im.self_parameter == *sid)
           return im.self_type;
@@ -1160,15 +1350,25 @@ class Verifier {
       need(it != nominals.end(), "type syntax nominal declaration");
       t.kind = it->second->kind;
       t.declaration = *sid;
-      for (auto c : n.children)
-        t.type_args.push_back(source_type(cr(c)));
+      if (n.kind == AstKind::NeutralBracket)
+        for (size_t i = 1; i < n.children.size(); ++i)
+          t.type_args.push_back(source_type(cr(n.children[i])));
+      else
+        for (auto c : n.children)
+          if (n.kind == AstKind::NamedType)
+            t.type_args.push_back(source_type(cr(c)));
     } else {
       need(s.kind == modules::SymbolKind::builtin_type,
            "type syntax symbol kind");
       if (s.name == "Vec") {
         t.kind = TypeKind::Vec;
-        for (auto c : n.children)
-          t.type_args.push_back(source_type(cr(c)));
+        if (n.kind == AstKind::NeutralBracket)
+          for (size_t i = 1; i < n.children.size(); ++i)
+            t.type_args.push_back(source_type(cr(n.children[i])));
+        else
+          for (auto c : n.children)
+            if (n.kind == AstKind::NamedType)
+              t.type_args.push_back(source_type(cr(c)));
       } else if (s.name == "Unit")
         t.kind = TypeKind::Unit;
       else if (s.name == "bool")
@@ -1870,6 +2070,69 @@ class Verifier {
       if (p.symbol == c.method)
         method = &p;
     need(method, "missing constraint method");
+    auto written = source_method_call(n);
+    need(written.has_value(), "constraint call lost its source method");
+    need(written->name == symbol(c.method).name,
+         "constraint call source method differs from target");
+    need(!written->explicit_type_arguments,
+         "constraint call has an explicit method type suffix");
+    const bool template_qualifier =
+        template_trait_parameter(*written, owner);
+    need(c.signature == substitute(method->signature, {{tr->self, c.receiver}},
+                                   substituted),
+         "constraint method substitution");
+    const auto &sig = type(c.signature);
+    if (template_qualifier) {
+      // T.method(...) has no synthetic receiver. Every declared parameter is
+      // written explicitly from index 0, including a first ordinary Self.
+      // This batch admits ordinary top-level declarations only.
+      need(type(c.receiver).kind == TypeKind::TypeParameter,
+           "T-qualified constraint receiver is not a type parameter");
+      need(source_type_in_function(written->base, owner) == c.receiver,
+           "T-qualified constraint source type differs from receiver");
+      const auto &raw = type(method->signature);
+      for (const auto &p : raw.parameters)
+        need(p.mode == ParamMode::ordinary,
+             "trait-static non-ordinary parameter is unsupported");
+      need(n.type == sig.result && c.args.size() == sig.parameters.size() &&
+               n.children.size() == c.args.size(),
+           "trait-static call arity/children");
+      std::set<uint32_t> seen;
+      std::set<uint64_t> borrowed;
+      bool named = false;
+      for (size_t i = 0; i < c.args.size(); ++i) {
+        const auto &a = c.args[i];
+        need(a.source_index == i &&
+                 a.parameter_index < sig.parameters.size() &&
+                 seen.insert(a.parameter_index).second,
+             "trait-static argument mapping");
+        need(n.children[i] == a.expression,
+             "trait-static children must preserve source order");
+        const auto p = sig.parameters[a.parameter_index];
+        const auto &argument = node(a.expression);
+        need(p.mode == ParamMode::ordinary &&
+                 a.mode == ParamMode::ordinary && argument.type == p.type,
+             "trait-static argument type/mode");
+        expr(a.expression);
+        if (a.label) {
+          named = true;
+          need(*a.label == method->parameters[a.parameter_index].label,
+               "trait-static label differs from trait prototype");
+        } else {
+          need(!named && a.parameter_index == i,
+               "trait-static positional argument index/order");
+        }
+      }
+      check_call_aliases(c.args, borrowed);
+      return;
+    }
+    if (written->base_symbol) {
+      const auto kind = symbol(*written->base_symbol).kind;
+      need(kind != modules::SymbolKind::type &&
+               kind != modules::SymbolKind::builtin_type &&
+               kind != modules::SymbolKind::type_parameter,
+           "value-form constraint call has a type qualifier");
+    }
     const auto &prototype = type(method->signature);
     need(!method->parameters.empty() && !prototype.parameters.empty() &&
              prototype.parameters.front().mode == ParamMode::ordinary,
@@ -1890,10 +2153,6 @@ class Verifier {
     need(raw_self.kind == TypeKind::TypeParameter &&
              raw_self.declaration == tr->self,
          "constraint method self type must be the trait Self");
-    need(c.signature == substitute(method->signature, {{tr->self, c.receiver}},
-                                   substituted),
-         "constraint method substitution");
-    const auto &sig = type(c.signature);
     need(n.type == sig.result && c.args.size() == sig.parameters.size() &&
              n.children.size() == c.args.size() && !c.args.empty(),
          "constraint call shape");
@@ -1906,6 +2165,9 @@ class Verifier {
              receiver.expression == n.children[0] &&
              expr(receiver.expression).type == c.receiver,
          "constraint receiver order/mode/type");
+    need(same_ref(unwrapped(node(receiver.expression).source.node),
+                  unwrapped(written->base)),
+         "constraint receiver differs from its source base");
     std::set<uint32_t> seen{0};
     std::set<uint64_t> borrowed;
     bool named = false;
