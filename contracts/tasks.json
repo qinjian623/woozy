@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态泛型、POD/有限拥有聚合、原05_traits和位置式enum已通过。自由泛型move支持已满足的trait约束；数字/bool自由泛型inout支持直接调用及既有具体函数值。无trait/无约束固有方法的move和非self scalar inout支持非泛型、方法泛型、impl泛型及两层组合，保留完整实例键、Self/Place/Move重命名与callback检查。trait/约束方法自身move/inout、self move/inout、非scalar inout、泛型trait及嵌套变体模式仍未实施。四配置48/48/48/33共177无跳过，含T10/LSan；新runtime每LLVM配置4check/6执行/6观察/2拒绝。旧Native在try成功return后的不可达拥有调用报内部错，已同源复现，待单独修复。T07/T09仍in_progress，见docs/GENERICS.md。"
+      "notes": "静态泛型、POD/有限拥有聚合、原05_traits和位置式enum已通过。自由泛型move支持已满足的trait约束；数字/bool自由泛型inout支持直接调用及既有具体函数值。无trait/无约束固有方法的move和非self scalar inout支持非泛型、方法泛型、impl泛型及两层组合，保留完整实例键、Self/Place/Move重命名与callback检查。trait/约束方法自身move/inout、self move/inout、非scalar inout、泛型trait及嵌套变体模式仍未实施。四配置49/49/49/33共180无跳过，含T10/LSan。Native不可达块遗留局部槽已修复，原同源Native O0/O2及Python均返回7、尾部零Vec分配；验证器保持，可达初始化/清理坏IR仍拒绝。T07/T09仍in_progress，见docs/GENERICS.md。"
     },
     {
       "id": "T08",

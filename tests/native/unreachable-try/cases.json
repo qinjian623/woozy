@@ -1,0 +1,37 @@
+{
+  "cases": [
+    {
+      "id": "return-tail-owning",
+      "main_return": 7,
+      "allocations": []
+    },
+    {
+      "id": "catch-throws-tail",
+      "main_return": 7,
+      "allocations": [
+        1,
+        2
+      ]
+    },
+    {
+      "id": "dead-catch-nontail",
+      "main_return": 9,
+      "allocations": [
+        1
+      ]
+    },
+    {
+      "id": "both-return-join",
+      "main_return": 3,
+      "allocations": [
+        1,
+        1
+      ]
+    },
+    {
+      "id": "zero-locals-dead-tail",
+      "main_return": 3,
+      "allocations": []
+    }
+  ]
+}

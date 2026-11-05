@@ -1,0 +1,17 @@
+package app;
+func consume(v move Vec[i32]) i32 {
+    return v[0];
+}
+func branch(flag bool) i32 {
+    if flag {
+        let yes Vec[i32] = [1];
+        return yes[0];
+    } else {
+        let no Vec[i32] = [2];
+        return no[0];
+    }
+    return consume([3]);
+}
+func main() i32 {
+    return branch(true) + branch(false);
+}

@@ -87,3 +87,16 @@ if(LANG_TEST_PYTHON)
     --out ${CMAKE_CURRENT_BINARY_DIR}/ownership-results)
   set_tests_properties(native.ownership PROPERTIES TIMEOUT 240)
 endif()
+add_executable(lang_native_unreachable_try_test unreachable_try_test.cpp)
+target_include_directories(lang_native_unreachable_try_test SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_options(lang_native_unreachable_try_test PRIVATE -fno-rtti)
+target_link_libraries(lang_native_unreachable_try_test PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.unreachable_try COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_unreachable_try.py --cli $<TARGET_FILE:langc>
+    --probe $<TARGET_FILE:lang_native_unreachable_try_test> --root ${LANG_SOURCE_ROOT}
+    --python ${LANG_TEST_PYTHON} --cxx ${LLVM_TOOLS_BINARY_DIR}/clang++
+    --runtime $<TARGET_FILE:lang_native_runtime>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/unreachable-try-results)
+  set_tests_properties(native.unreachable_try PROPERTIES TIMEOUT 300)
+endif()

@@ -5,6 +5,25 @@
 
 namespace lang::ir {
 namespace {
+bool uses_slot(Op op) {
+  switch (op) {
+  case Op::load:
+  case Op::address:
+  case Op::store:
+  case Op::move:
+  case Op::take:
+  case Op::destroy:
+  case Op::begin_borrow:
+  case Op::iteration_begin:
+  case Op::iteration_end:
+  case Op::iteration_test:
+  case Op::iteration_read:
+  case Op::iteration_next:
+    return true;
+  default:
+    return false;
+  }
+}
 class Lower {
   const hir::HirModule &h;
   detail::AggregateTypes aggregates;
@@ -737,13 +756,61 @@ public:
       for (auto &target : b.terminator.targets)
         target = remap[target.value];
     std::vector<Handler> kept_handlers;
-    for (auto handler : f.handlers)
-      if (reachable[handler.block.value]) {
-        handler.block = remap[handler.block.value];
-        handler.protected_entry = remap[handler.protected_entry.value];
-        kept_handlers.push_back(handler);
+    std::vector<bool> removed_handler_slot(f.slots.size(), false);
+    for (const auto &handler : f.handlers) {
+      if (!reachable[handler.block.value]) {
+        if (handler.slot.value < removed_handler_slot.size())
+          removed_handler_slot[handler.slot.value] = true;
+        continue;
       }
+      auto kept_handler = handler;
+      kept_handler.block = remap[handler.block.value];
+      kept_handler.protected_entry = remap[handler.protected_entry.value];
+      kept_handlers.push_back(kept_handler);
+    }
+    // Slots are created while lowering. A slot whose only actual uses were in
+    // blocks or handlers removed above belongs to that dead control flow, even
+    // though moving kept blocks leaves its LocalSlotId dangling. Keep every
+    // parameter slot and every slot that surviving IR still actually uses.
+    std::vector<bool> removed_use(f.slots.size(), false);
+    std::vector<bool> kept_use(f.slots.size(), false);
+    for (size_t b = 0; b < f.blocks.size(); ++b) {
+      if (reachable[b])
+        continue;
+      for (const auto &i : f.blocks[b].instructions)
+        if (uses_slot(i.op) && i.slot.value < removed_use.size())
+          removed_use[i.slot.value] = true;
+    }
+    for (const auto &b : kept)
+      for (const auto &i : b.instructions)
+        if (uses_slot(i.op) && i.slot.value < kept_use.size())
+          kept_use[i.slot.value] = true;
+    for (const auto &handler : kept_handlers)
+      if (handler.slot.value < kept_use.size())
+        kept_use[handler.slot.value] = true;
+    std::vector<std::optional<LocalSlotId>> slot_remap(f.slots.size());
+    std::vector<Slot> kept_slots;
+    for (size_t s = 0; s < f.slots.size(); ++s) {
+      bool dead_only = !f.slots[s].parameter && !kept_use[s] &&
+                       (removed_use[s] || removed_handler_slot[s]);
+      if (dead_only)
+        continue;
+      slot_remap[s] = LocalSlotId{kept_slots.size()};
+      kept_slots.push_back(std::move(f.slots[s]));
+    }
+    auto mapped_slot = [&](LocalSlotId old) {
+      if (old.value >= slot_remap.size() || !slot_remap[old.value])
+        throw std::logic_error("slot reference belongs to removed control flow");
+      return *slot_remap[old.value];
+    };
+    for (auto &b : kept)
+      for (auto &i : b.instructions)
+        if (uses_slot(i.op))
+          i.slot = mapped_slot(i.slot);
+    for (auto &handler : kept_handlers)
+      handler.slot = mapped_slot(handler.slot);
     f.handlers = std::move(kept_handlers);
+    f.slots = std::move(kept_slots);
     f.blocks = std::move(kept);
     return std::move(f);
   }

@@ -130,9 +130,17 @@ inout 实参必须是整体可写绑定，数据类型具体化后只能是已�
 
 写回、typed throw、返回先保存再 defer、后参失败不进入 callee、命名实参源码顺序及同存储冲突沿用现有规则。旧 free move 的拒绝构建例原先使用受约束标量 inout，现已合法，因此换成满足 trait 的非 scalar inout；原始标量拒绝记录保留在前一阶段资料中。
 
-Native 另有一个已确认的旧错误：try 成功路径 return 后的不可达调用若含拥有临时值，lowering 报 E_IR_INVALID。旧版本与本版同源复现，Python 同源正常；此项待单独修复。
+Native 曾在 try 成功 return 后的不可达拥有调用处报内部错误；该旧错误已修复，见下节。
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各48/48，关闭 LLVM 为33/33，共177项，无跳过，包含两项T10。新runtime每个 LLVM 配置有4次check、6次正式 Native O0/O2/Python 执行、6次私有观察和2次拒绝构建；另在主目录原2份before源码上完成4次check、6次正式执行，源码SHA保持。独立14输入/4HIR检查及2个新程序的6次执行、6次观察、8次拒绝检查通过。未将空borrow列表算作动态登记，生成Native和预编译LLVM未声称全部有sanitizer插桩。
+
+## Native 不可达块与局部槽
+
+`Lower::take` 删除无可达前驱的块和 handler 后，现在一并清理只属于这些被删控制流、没有存活引用的非参数局部槽，再重排保留的 Native LocalSlotId。参数、存活 handler 和真实指令引用全部保留；constant、call、end_borrow 等默认 slot0 不当作实际引用。HIR 的 OwnerRef、SymbolId、ValueId 和参数位置不重排。
+
+原 before 源码未改，Native O0/O2 和 Python 均实际返回规定的7，不可达的 mix/[55] 没有执行或分配Vec。死catch、双return join、非尾部删槽、零活槽和真实throws后继续尾部调用均有检查。没有删掉或放宽验证器：可达拥有槽的initializer、清理或槽身份被破坏时仍报E_IR_INVALID。
+
+本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭LLVM为33/33，共180项，无跳过，包含两项T10。每LLVM配置新增5个源码项目的15次正式执行、10次Native私有观察及3个坏IR拒绝控制；原样before另以正式CLI构建并执行Native O0/O2/Python，均返回7。独立6组Source/API检查和23次坏IR修改通过，另4个自有案例的12次正式执行/12次观察通过。47个原保护文件及2个验证器保持原字节；生成Native与预编译LLVM未声称全部有sanitizer插桩。
 
 ## 尚未实施
 

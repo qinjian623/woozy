@@ -1,0 +1,18 @@
+package app;
+enum E { Bad; }
+func keep() i32 {
+    return 3;
+}
+func run() i32 {
+    try {
+        let x = keep();
+    } catch err E {
+        let dead Vec[i32] = [9];
+        return dead[0];
+    }
+    let live Vec[i32] = [4];
+    return live[0] + 5;
+}
+func main() i32 {
+    return run();
+}

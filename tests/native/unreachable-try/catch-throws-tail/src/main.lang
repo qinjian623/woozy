@@ -1,0 +1,26 @@
+package app;
+enum E { Bad(value Vec[i32]); }
+func checked(x i32) i32 throws E {
+    if x < 0 { throw E.Bad(value: [9]); }
+    return x;
+}
+func take(v move Vec[i32]) i32 {
+    return v[0];
+}
+func run() i32 {
+    var seen i32 = 0;
+    try {
+        let x = checked(-1);
+        return x;
+    } catch err E {
+        switch err {
+        case E.Bad(value):
+            seen = value[0];
+        }
+    }
+    let v Vec[i32] = [7, 8];
+    return take(move v) + seen - 9;
+}
+func main() i32 {
+    return run();
+}
