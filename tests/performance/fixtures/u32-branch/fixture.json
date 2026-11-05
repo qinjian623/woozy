@@ -1,0 +1,14 @@
+{
+  "schema": "compiler-dev/native-performance-fixture/1",
+  "id": "u32-branch",
+  "description": "u32 recurrence with a data-dependent if/else and wrapping arithmetic; fixed seed and iteration count",
+  "width": 32,
+  "seed": "0x6d2b79f5",
+  "iterations": 30000000,
+  "expected": "468995906",
+  "entry": "accumulate",
+  "oracle": "u32-branch-mix-v1",
+  "manifest": "lang.toml",
+  "source": "src/main.lang",
+  "reference": "reference.cpp"
+}

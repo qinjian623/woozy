@@ -1,0 +1,36 @@
+// PERF-META width=32 seed=0x6d2b79f5 iterations=30000000 expected=468995906
+package app;
+
+func mix32(x u32) u32 {
+    var y u32 = x * 1664525 + 1013904223;
+    y = y ^ (y >> 13);
+    y = y * 2654435761;
+    y = y ^ (y << 7);
+    return y;
+}
+
+func accumulate(seed u32, count u32) u32 {
+    var state u32 = seed;
+    var acc u32 = 0;
+    for var i u32 = 0; i < count; i += 1 {
+        state = mix32(state);
+        if (state & 65535) < 32768 {
+            acc = acc + state;
+        } else {
+            acc = acc ^ state;
+        }
+        if (state & 7) == 0 {
+            acc = acc + i;
+        }
+    }
+    return acc ^ state;
+}
+
+func main() i32 {
+    let actual = accumulate(0x6d2b79f5, 30000000);
+    let expected u32 = 468995906;
+    if actual != expected {
+        return 1;
+    }
+    return 0;
+}

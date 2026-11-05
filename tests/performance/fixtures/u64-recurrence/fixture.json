@@ -1,0 +1,14 @@
+{
+  "schema": "compiler-dev/native-performance-fixture/1",
+  "id": "u64-recurrence",
+  "description": "u64 xorshift/multiply recurrence with wrapping arithmetic; fixed seed and iteration count",
+  "width": 64,
+  "seed": "0x123456789abcdef0",
+  "iterations": 30000000,
+  "expected": "16012610758795272003",
+  "entry": "advance",
+  "oracle": "u64-xorshift-multiply-v1",
+  "manifest": "lang.toml",
+  "source": "src/main.lang",
+  "reference": "reference.cpp"
+}
