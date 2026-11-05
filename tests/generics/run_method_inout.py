@@ -12,7 +12,12 @@ import sys
 sys.dont_write_bytecode = True
 
 CASES = ('positive', 'errors', 'constrained-inherent', 'trait-modes',
-         'trait-self', 'trait-self-callback')
+         'trait-self', 'trait-self-callback', 'trait-generic-inout',
+         'trait-qualified-inout', 'trait-qualified-own',
+         'trait-ordinary-holder-control', 'trait-ordinary-return-control')
+REJECT_CASES = ('reject', 'trait-generic-nonscalar-reject',
+                'trait-function-cycle-reject',
+                'trait-type-inout-return-reject')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 5],
     'errors': [9, 2, 3, 9, 8, 2, 3, 9, 4, 3, 9, 4, 6, 3, 9, 5, 6],
@@ -21,10 +26,31 @@ EXPECTED_EVENTS = {
     'trait-self': [9, 2, 3, 2, 3, 9, 2, 3, 9, 3, 2, 4, 4, 6, 3, 5, 6, 4],
     'trait-self-callback': [2, 1, 2, 3, 1, 2, 4, 2, 1, 2, 3, 1, 2, 4,
                             5, 4, 6, 9, 3, 4, 6, 9],
+    'trait-generic-inout': [1, 1, 2, 3, 4, 1, 1, 4, 9, 4, 6, 9, 5, 6, 9],
+    'trait-qualified-inout': [1, 1, 3, 3, 4, 2, 5, 5, 7, 3],
+    'trait-qualified-own': [],
+    'trait-ordinary-holder-control': [],
+    'trait-ordinary-return-control': [],
+}
+EXPECTED_LOGS = {
+    'trait-generic-inout': [1, 11, 112, 1123, 11234, 112341, 1123411,
+                            11234114, 112341149, 1123411494, 11234114946,
+                            112341149469, 1123411494695, 11234114946956,
+                            112341149469569],
+    'trait-qualified-inout': [1, 11, 113, 1133, 11334, 113342, 1133425,
+                              11334255, 7, 113342553],
+    'trait-qualified-own': [],
+    'trait-ordinary-holder-control': [],
+    'trait-ordinary-return-control': [],
 }
 EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13,
                         'constrained-inherent': 8, 'trait-modes': 2,
-                        'trait-self': 9, 'trait-self-callback': 4}
+                        'trait-self': 9, 'trait-self-callback': 4,
+                        'trait-generic-inout': 4,
+                        'trait-qualified-inout': 2,
+                        'trait-qualified-own': 0,
+                        'trait-ordinary-holder-control': 0,
+                        'trait-ordinary-return-control': 0}
 
 
 def digest(path):
@@ -115,6 +141,31 @@ def assert_native(case, observations, allocations):
         assert logs == [9, 92, 923, 2, 23, 9, 92, 923, 9, 93, 932, 9324,
                         4, 46, 463, 5, 56, 564], logs
         assert frees == [0, 2, 1, 3, 4, 6, 5, 8, 7], frees
+    elif case == 'trait-generic-inout':
+        # Method-own U/V and trait Self inout use the ordinary scalar
+        # writeback path. A later throwing argument never enters the callee;
+        # the callee's own throw keeps its write and runs defer; the saved
+        # call returns before its deferred write. Two owned Vec arguments and
+        # the two deferred locals are each freed once.
+        assert logs == EXPECTED_LOGS[case], logs
+        assert frees == [1, 0, 3, 2], frees
+    elif case == 'trait-qualified-inout':
+        # Concrete Type and bounded T entries pass every declared parameter
+        # explicitly; no synthetic receiver is created. Non-method-generic
+        # inout and generic method inout coexist with move owned arguments.
+        assert logs == EXPECTED_LOGS[case], logs
+        assert frees == [0, 1], frees
+    elif case == 'trait-qualified-own':
+        # A method-own first parameter named self stays static even when its
+        # concrete type equals the impl type. No receiver is fabricated.
+        assert logs == EXPECTED_LOGS[case], logs
+        assert frees == [], frees
+    elif case in ('trait-ordinary-holder-control',
+                  'trait-ordinary-return-control'):
+        # Legacy ordinary-only Type/T calls keep their Self callbacks and
+        # allocate no language-owned heap objects.
+        assert logs == EXPECTED_LOGS[case], logs
+        assert frees == [], frees
     elif case == 'trait-self-callback':
         # The i32 and bool blocks each invoke a callback returned by the
         # factory, a concrete receiver method with a free function value, and
@@ -226,6 +277,35 @@ def assert_python(case, data):
         assert ('bad_make', 'app.Failure') in errors, data
         assert ('fail', 'app.Failure') in errors, data
         assert ('relay_fail', 'app.Failure') in errors, data
+    elif case == 'trait-generic-inout':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['log'] == 112341149469569, data
+        assert snapshots['x'] == 2 and snapshots['p'] == 20, data
+        assert snapshots['q'] is False and snapshots['s'] == 41, data
+        assert snapshots['saved_slot'] == 101, data
+        errors = {(item['function'], item['type'])
+                  for item in data['errors']}
+        assert ('bad', 'app.Failure') in errors, data
+        assert ('failed', 'app.Failure') in errors, data
+    elif case == 'trait-qualified-inout':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['log'] == 113342553, data
+        assert snapshots['a'] == 2 and snapshots['b'] == 4, data
+        assert snapshots['c'] == 6 and snapshots['d'] == 8, data
+        assert snapshots['e'] is True and snapshots['h'] == 14, data
+        assert snapshots['receiver_log'] == 7, data
+    elif case == 'trait-qualified-own':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['log'] == 77788, data
+        assert snapshots['x'] == 2 and snapshots['a'] == 1, data
+        assert snapshots['y'] == 4 and snapshots['b'] == 3, data
+        assert snapshots['w'] == 6 and snapshots['c'] == 5, data
+        assert snapshots['p'] == 7 and snapshots['q'] is False, data
+        assert snapshots['r'] == 8 and snapshots['s'] is True, data
+    elif case in ('trait-ordinary-holder-control',
+                  'trait-ordinary-return-control'):
+        assert not data['allocations'], data
+        assert data['main_return'] == 0, data
     elif case == 'trait-self-callback':
         # Factory-returned and directly passed free functions both write the
         # slot; the constrained forwarding path returns the old scalar in both
@@ -368,45 +448,49 @@ def main():
             row['status'] = 'passed'
 
         if not args.only:
-            manifest = args.root / 'tests/generics/method-inout/reject/lang.toml'
-            sources = {str(path.relative_to(manifest.parent)): digest(path)
-                       for path in sorted(manifest.parent.rglob('*'))
-                       if path.is_file()}
-            fresh = args.out / 'reject-new'
-            shutil.rmtree(fresh, ignore_errors=True)
-            before = run([args.cli, 'build', '--project', manifest,
-                          '--backend', 'native', '--opt', 0,
-                          '--out-dir', fresh, '--format', 'json'], library=library)
-            row = dict(case='reject-new', source_sha256=sources, build=before,
-                       status='failed')
-            report['runs'].append(row)
-            assert before['exit'] != 0, before
-            assert json.loads(before['stdout'])['status'] == 'error', before
-            assert not (fresh / 'program').exists(), 'rejected build wrote program'
-            assert not (fresh / 'program.o').exists(), 'rejected build wrote object'
-            row['outputs'] = sorted(str(path.relative_to(fresh))
-                                    for path in fresh.rglob('*') if path.is_file())
-            row['status'] = 'passed'
+            for reject_case in REJECT_CASES:
+                manifest = (args.root / 'tests/generics/method-inout' /
+                            reject_case / 'lang.toml')
+                sources = {str(path.relative_to(manifest.parent)): digest(path)
+                           for path in sorted(manifest.parent.rglob('*'))
+                           if path.is_file()}
+                fresh = args.out / f'{reject_case}-new'
+                shutil.rmtree(fresh, ignore_errors=True)
+                before = run([args.cli, 'build', '--project', manifest,
+                              '--backend', 'native', '--opt', 0,
+                              '--out-dir', fresh, '--format', 'json'],
+                             library=library)
+                row = dict(case=f'{reject_case}-new', source_sha256=sources,
+                           build=before, status='failed')
+                report['runs'].append(row)
+                assert before['exit'] != 0, before
+                assert json.loads(before['stdout'])['status'] == 'error', before
+                assert not (fresh / 'program').exists(), 'rejected build wrote program'
+                assert not (fresh / 'program.o').exists(), 'rejected build wrote object'
+                row['outputs'] = sorted(str(path.relative_to(fresh))
+                                        for path in fresh.rglob('*') if path.is_file())
+                row['status'] = 'passed'
 
-            stale = args.out / 'reject-old'
-            stale.mkdir(parents=True, exist_ok=True)
-            sentinels = {name: b'previous output ' + name.encode()
-                         for name in ('program', 'program.o')}
-            for name, content in sentinels.items():
-                (stale / name).write_bytes(content)
-            old_hashes = {name: digest(stale / name) for name in sentinels}
-            after = run([args.cli, 'build', '--project', manifest,
-                         '--backend', 'native', '--opt', 0,
-                         '--out-dir', stale, '--format', 'json'], library=library)
-            row = dict(case='reject-old', source_sha256=sources, build=after,
-                       before_sha256=old_hashes, status='failed')
-            report['runs'].append(row)
-            assert after['exit'] != 0, after
-            assert json.loads(after['stdout'])['status'] == 'error', after
-            row['after_sha256'] = {name: digest(stale / name)
-                                   for name in sentinels}
-            assert row['after_sha256'] == old_hashes, row
-            row['status'] = 'passed'
+                stale = args.out / f'{reject_case}-old'
+                stale.mkdir(parents=True, exist_ok=True)
+                sentinels = {name: b'previous output ' + name.encode()
+                             for name in ('program', 'program.o')}
+                for name, content in sentinels.items():
+                    (stale / name).write_bytes(content)
+                old_hashes = {name: digest(stale / name) for name in sentinels}
+                after = run([args.cli, 'build', '--project', manifest,
+                             '--backend', 'native', '--opt', 0,
+                             '--out-dir', stale, '--format', 'json'],
+                            library=library)
+                row = dict(case=f'{reject_case}-old', source_sha256=sources,
+                           build=after, before_sha256=old_hashes, status='failed')
+                report['runs'].append(row)
+                assert after['exit'] != 0, after
+                assert json.loads(after['stdout'])['status'] == 'error', after
+                row['after_sha256'] = {name: digest(stale / name)
+                                       for name in sentinels}
+                assert row['after_sha256'] == old_hashes, row
+                row['status'] = 'passed'
         report['status'] = 'passed'
     finally:
         (args.out / 'results.json').write_text(

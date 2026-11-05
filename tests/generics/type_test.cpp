@@ -8143,11 +8143,11 @@ void trait_method_generics(const fs::path &root) {
        "struct S{}"
        "impl Move for S{func take[U](owner Self,value move U)U{"
        "return move value;}} func main()i32{return 0;}");
-  unsupported(values +
-              "trait Slot{func set[U](owner Self,slot inout U);}"
-              "struct S{}"
-              "impl Slot for S{func set[U](owner Self,slot inout U){}}"
-              "func main()i32{return 0;}");
+  good(values +
+       "trait Slot{func set[U](owner Self,slot inout U);}"
+       "struct S{}"
+       "impl Slot for S{func set[U](owner Self,slot inout U){}}"
+       "func main()i32{return 0;}");
   unsupported(values +
               "trait Callback{func run[U](owner Self,cb func(inout U));}"
               "struct S{}"
@@ -9037,11 +9037,12 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
     throw std::runtime_error("phantom direct call missing");
   });
 
-  // New inout, actual self modes, and dependent callbacks keep the old
-  // capability limit. Fixed scalar callbacks remain legal.
-  unsupported("trait V{func set[U](owner Self, slot inout U);}"
-              "struct S{} impl V for S{func set[U](owner Self, slot inout U){}}"
-              "func main()i32{return 0;}");
+  // Top-level method-parameter inout is now legal; actual self modes and
+  // dependent callbacks keep the old capability limit. Fixed scalar
+  // callbacks remain legal.
+  good("trait V{func set[U](owner Self, slot inout U);}"
+       "struct S{} impl V for S{func set[U](owner Self, slot inout U){}}"
+       "func main()i32{return 0;}");
   unsupported("trait V{func take[U](self move Self, value U)U;}"
               "struct S{} impl V for S{func take[U](self move Self, value U)U{"
               "return value;}} func main()i32{return 0;}");
@@ -9129,12 +9130,12 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
                "func main()i32{let s=S();"
                "let r=s.pick[S](move s);return 0;}",
       "E_CALL_ARGUMENT");
-  unsupported(values +
-              "trait Pick{func pick[U](owner Self,slot inout U);}"
-              "struct S{} impl Pick for S{func pick[U](owner Self,"
-              "slot inout U){}}"
-              "func main()i32{let s=S();var x i32=1;"
-              "S.pick[i32](s,inout x);return 0;}");
+  good(values +
+       "trait Pick{func pick[U](owner Self,slot inout U);}"
+       "struct S{} impl Pick for S{func pick[U](owner Self,"
+       "slot inout U){}}"
+       "func main()i32{let s=S();var x i32=1;"
+       "S.pick[i32](s,inout x);return 0;}");
 
   // A real cross-package public trait and generic impl, with value, Type and
   // bounded T move calls, and a noncapturing generic lambda.
@@ -9175,7 +9176,703 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
             << hir_bad_graphs << "\n";
 }
 
+void trait_method_scalar_inout(const fs::path &root) {
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+    need(!has(r, "E_IR_INVALID"), "source rejection became E_IR_INVALID");
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  auto unsupported_both = [&](const std::string &text) {
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(text, backend);
+      need(!r.success() && r.failure == FailureKind::unsupported &&
+               has(r, "E_CAPABILITY_UNAVAILABLE"),
+           std::string(backend) + " backend accepted: " + text + "\n" +
+               messages(r));
+    }
+  };
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "inout control HIR rejected: " + text);
+    need(hir::verify(*r.value).success(),
+         "inout control did not publish: " + text);
+    return *r.value;
+  };
+  auto fixture = [&](const char *relative) {
+    auto r = check(root / relative);
+    need(r.success(), std::string("fixture rejected: ") + relative + "\n" +
+                          messages(r));
+    need(hir::verify_types(*r.value).success(),
+         std::string("fixture HIR rejected: ") + relative);
+    need(hir::verify(*r.value).success(),
+         std::string("fixture did not publish: ") + relative);
+    return *r.value;
+  };
 
+  auto generic = fixture(
+      "tests/generics/method-inout/trait-generic-inout/lang.toml");
+  auto own = fixture(
+      "tests/generics/method-inout/trait-qualified-own/lang.toml");
+  auto qualified = fixture(
+      "tests/generics/method-inout/trait-qualified-inout/lang.toml");
+  (void)fixture(
+      "tests/generics/method-inout/trait-ordinary-holder-control/lang.toml");
+  (void)fixture(
+      "tests/generics/method-inout/trait-ordinary-return-control/lang.toml");
+
+  auto source_name = [](const hir::HirModule &m, SymbolId s)
+      -> const std::string & { return m.resolved->symbols.at(s.value).name; };
+  auto nominal_name = [&](const hir::HirModule &m, TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return source_name(m, t->declaration);
+  };
+  auto is_i32 = [](const hir::HirModule &m, TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 32;
+  };
+  auto trait_for = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (source_name(m, t.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto template_for = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (source_name(m, t.function.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto proto_named = [&](const hir::HirModule &m, const hir::TraitDecl &tr,
+                         const std::string &n)
+      -> const hir::MethodPrototype * {
+    for (const auto &p : tr.methods)
+      if (source_name(m, p.symbol) == n)
+        return &p;
+    return nullptr;
+  };
+  auto impl_for = [&](const hir::HirModule &m, const hir::TraitDecl &tr,
+                      const std::string &n) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (im.trait == tr.symbol && nominal_name(m, im.self_type) == n)
+        return &im;
+    return nullptr;
+  };
+  auto impl_method = [&](const hir::HirModule &m, const hir::ImplDecl &im,
+                         const std::string &n) -> SymbolId {
+    for (auto s : im.methods)
+      if (source_name(m, s) == n)
+        return s;
+    throw std::runtime_error("trait inout impl method missing: " + n);
+  };
+  auto origin_of = [&](const hir::HirModule &m, SymbolId s) {
+    for (const auto &i : m.instances)
+      if (i.symbol == s)
+        return i.origin;
+    return s;
+  };
+  auto constraint_in = [&](const hir::HirModule &m, SymbolId function)
+      -> std::pair<size_t, const hir::ConstraintCall *> {
+    std::pair<size_t, const hir::ConstraintCall *> result{
+        static_cast<size_t>(-1), nullptr};
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      const auto &n = m.nodes[i];
+      if (m.scopes[n.scope.value].function != function)
+        continue;
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(!result.second, "multiple trait inout ConstraintCalls");
+        result = {i, c};
+      }
+    }
+    need(result.second, "missing trait inout ConstraintCall");
+    return result;
+  };
+
+  const auto *flow = trait_for(generic, "GenericFlow");
+  const auto *replace_proto = flow ? proto_named(generic, *flow, "replace")
+                                   : nullptr;
+  need(flow && replace_proto, "generic trait inout declarations missing");
+  const auto &replace_sig = *generic.types.find(replace_proto->signature);
+  need(replace_sig.parameters.size() == 4 &&
+           replace_sig.parameters[1].mode == hir::ParamMode::inout,
+       "generic trait inout slot mode changed");
+  {
+    auto t = generic.types.find(replace_sig.parameters[1].type);
+    need(t && t->kind == hir::TypeKind::TypeParameter &&
+             t->declaration != flow->self &&
+             source_name(generic, t->declaration) == "U",
+         "generic trait inout slot is not the real method parameter");
+  }
+  const auto *via = template_for(generic, "via");
+  need(via, "generic trait inout via template missing");
+  auto [via_cc_id, via_cc] = constraint_in(generic, via->function.symbol);
+  (void)via_cc_id;
+  need(via_cc->trait == flow->symbol && via_cc->args.size() == 4 &&
+           via_cc->args[0].parameter_index == 0 &&
+           via_cc->args[0].mode == hir::ParamMode::ordinary &&
+           via_cc->args[1].parameter_index == 1 &&
+           via_cc->args[1].mode == hir::ParamMode::inout &&
+           via_cc->args[2].parameter_index == 2 &&
+           via_cc->args[3].parameter_index == 3 &&
+           via_cc->args[3].mode == hir::ParamMode::inout,
+       "generic trait inout ConstraintCall order/modes changed");
+  {
+    const auto &place = std::get<hir::Place>(
+        generic.nodes[via_cc->args[1].expression.value].data);
+    need(place.symbol == via->function.parameters[1].symbol,
+         "generic trait inout ConstraintCall lost its template Place");
+    const auto &sig = *generic.types.find(via_cc->signature);
+    auto u = generic.types.find(sig.parameters[1].type);
+    need(sig.parameters[1].mode == hir::ParamMode::inout && u &&
+             u->kind == hir::TypeKind::TypeParameter &&
+             source_name(generic, u->declaration) == "U",
+         "generic trait inout signature did not substitute the method U");
+  }
+
+  const auto *box_impl = impl_for(generic, *flow, "Box");
+  need(box_impl, "generic trait inout Box impl missing");
+  const auto replace_impl = impl_method(generic, *box_impl, "replace");
+  size_t concrete_replace = 0;
+  SymbolId main_symbol{};
+  for (const auto &s : generic.resolved->symbols)
+    if (s.name == "main" && s.kind == modules::SymbolKind::function)
+      main_symbol = s.id;
+  need(main_symbol.value, "generic trait inout main missing");
+  for (const auto &n : generic.nodes) {
+    if (generic.scopes[n.scope.value].function != main_symbol)
+      continue;
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol ||
+        origin_of(generic, *c->direct_symbol) != replace_impl)
+      continue;
+    const auto &sig = *generic.types.find(c->signature);
+    need(c->args.size() == 4 &&
+             sig.parameters[1].mode == hir::ParamMode::inout &&
+             is_i32(generic, sig.parameters[1].type) &&
+             generic.nodes[c->args[1].expression.value].kind() ==
+                 hir::NodeKind::place,
+         "concrete generic trait inout call lost scalar Place");
+    ++concrete_replace;
+  }
+  need(concrete_replace >= 2,
+       "direct generic trait inout calls were not instantiated");
+
+  // A method with no own type parameters still gets the same explicit Type/T
+  // inout entry. Its first ordinary Self is written at index zero.
+  const auto *plain_trait = trait_for(qualified, "Plain");
+  const auto *bump = plain_trait ? proto_named(qualified, *plain_trait, "bump")
+                                 : nullptr;
+  need(plain_trait && bump, "non-own trait inout declarations missing");
+  const auto *via_plain = template_for(qualified, "via_plain");
+  need(via_plain, "non-own trait inout forwarding template missing");
+  auto [plain_cc_id, plain_cc] =
+      constraint_in(qualified, via_plain->function.symbol);
+  (void)plain_cc_id;
+  {
+    const auto &sig = *qualified.types.find(plain_cc->signature);
+    need(plain_cc->args.size() == 4 &&
+             plain_cc->args[0].parameter_index == 0 &&
+             plain_cc->args[0].mode == hir::ParamMode::ordinary &&
+             plain_cc->args[1].parameter_index == 1 &&
+             plain_cc->args[1].mode == hir::ParamMode::inout &&
+             is_i32(qualified, sig.parameters[1].type),
+         "non-own trait inout static call gained a receiver or lost its place");
+  }
+
+  // A non-generic trait method with top-level inout now also has an explicit
+  // Type/T entry. The first ordinary Self is argument zero, not a hidden
+  // receiver, and the ordinary owner spelling is not special.
+  const auto *plain = trait_for(generic, "SelfFlow");
+  const auto *selfslot = plain ? proto_named(generic, *plain, "selfslot")
+                                : nullptr;
+  need(plain && selfslot, "trait Self inout declarations missing");
+  const auto &self_sig = *generic.types.find(selfslot->signature);
+  {
+    auto t = generic.types.find(self_sig.parameters[1].type);
+    need(self_sig.parameters[1].mode == hir::ParamMode::inout &&
+             t && t->kind == hir::TypeKind::TypeParameter &&
+             t->declaration == plain->self,
+         "trait Self inout slot lost the real Self or became a method type");
+  }
+  const auto *via_self = template_for(generic, "via_self");
+  need(via_self, "trait Self inout forwarding template missing");
+  auto [self_cc_id, self_cc] =
+      constraint_in(generic, via_self->function.symbol);
+  (void)self_cc_id;
+  need(self_cc->args[1].mode == hir::ParamMode::inout &&
+           generic.nodes[self_cc->args[1].expression.value].kind() ==
+               hir::NodeKind::place,
+       "trait Self inout forwarding lost its Place");
+  {
+    const auto &sig = *generic.types.find(self_cc->signature);
+    need(sig.parameters[1].mode == hir::ParamMode::inout &&
+             sig.parameters[1].type == self_cc->receiver,
+         "trait Self inout forwarding did not substitute Self to T");
+  }
+
+  // Method-own first position named `self` stays a static parameter through
+  // Type and T even when its concrete argument equals the impl type.
+  const auto *own_trait = trait_for(own, "Own");
+  const auto *shift = own_trait ? proto_named(own, *own_trait, "shift")
+                                 : nullptr;
+  need(own_trait && shift, "trait own-first inout declarations missing");
+  const auto &shift_sig = *own.types.find(shift->signature);
+  {
+    auto t = own.types.find(shift_sig.parameters[0].type);
+    need(shift_sig.parameters[0].mode == hir::ParamMode::inout &&
+             t && t->kind == hir::TypeKind::TypeParameter &&
+             t->declaration != own_trait->self &&
+             source_name(own, t->declaration) == "U",
+         "own first inout was mistaken for the trait receiver");
+  }
+  const auto *own_via = template_for(own, "via");
+  need(own_via, "own first inout via template missing");
+  auto [own_cc_id, own_cc] = constraint_in(own, own_via->function.symbol);
+  (void)own_cc_id;
+  need(own_cc->args.size() == 3 && own_cc->args[0].parameter_index == 0 &&
+           own_cc->args[0].mode == hir::ParamMode::inout,
+       "T-qualified own first inout gained a synthetic receiver");
+  {
+    size_t children = 0;
+    for (const auto &n : own.nodes)
+      if (n.source.node.module == own.nodes[own_cc_id].source.node.module &&
+          n.source.node.file == own.nodes[own_cc_id].source.node.file &&
+          n.source.node.node == own.nodes[own_cc_id].source.node.node)
+        children = n.children.size();
+    need(children == own_cc->args.size(),
+         "T-qualified own inout ConstraintCall children differ from args");
+  }
+
+  // Same-signature phantom method-own instances keep their complete key.
+  const std::string phantom = R"(
+trait Left { func slot[U, V](owner Self, slot inout U, value U) U; }
+trait Right { func slot[U, V](owner Self, slot inout U, value U) U; }
+struct One { n i32; }
+struct Two { n i32; }
+impl Left for i32 {
+    func slot[U, V](owner Self, slot inout U, value U) U {
+        let old = slot; slot = value; return old;
+    }
+}
+impl Right for i32 {
+    func slot[U, V](owner Self, slot inout U, value U) U {
+        let old = slot; slot = value; return old;
+    }
+}
+func via[T Left, U, V](receiver T, slot inout U, value U) U {
+    return T.slot[U, V](receiver, inout slot, value);
+}
+func main() i32 {
+    var a i32 = 1;
+    let x = via[i32, i32, One](0, inout a, 2);
+    var b i32 = 3;
+    let y = via[i32, i32, Two](0, inout b, 4);
+    return x + y - 4;
+}
+)";
+  auto ph = source(phantom);
+  need(ph.success(), messages(ph));
+  need(hir::verify_types(*ph.value).success(),
+       "phantom inout HIR rejected");
+  need(hir::verify(*ph.value).success(),
+       "phantom inout did not publish");
+  auto ph_trait = [&](const std::string &n) -> const hir::TraitDecl * {
+    for (const auto &t : ph.value->traits)
+      if (source_name(*ph.value, t.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  const auto *left = ph_trait("Left");
+  const auto *right = ph_trait("Right");
+  need(left && right, "phantom inout traits missing");
+  SymbolId left_impl_method{};
+  for (const auto &im : ph.value->impls)
+    if (im.trait == left->symbol)
+      for (auto method : im.methods)
+        if (source_name(*ph.value, method) == "slot")
+          left_impl_method = method;
+  need(left_impl_method.value, "phantom inout impl method missing");
+  const auto *ph_via = [&]() -> const hir::FunctionTemplate * {
+    for (const auto &t : ph.value->templates)
+      if (source_name(*ph.value, t.function.symbol) == "via")
+        return &t;
+    return nullptr;
+  }();
+  need(ph_via, "phantom inout via template missing");
+  const hir::FunctionInstance *ph_one = nullptr, *ph_two = nullptr;
+  for (const auto &i : ph.value->instances) {
+    if (i.origin != ph_via->function.symbol || i.type_args.size() != 3)
+      continue;
+    auto n = nominal_name(*ph.value, i.type_args[2]);
+    if (n == "One")
+      ph_one = &i;
+    if (n == "Two")
+      ph_two = &i;
+  }
+  need(ph_one && ph_two, "phantom inout via instances missing");
+  auto ph_target = [&](SymbolId function) -> std::optional<SymbolId> {
+    for (const auto &n : ph.value->nodes) {
+      if (ph.value->scopes[n.scope.value].function != function)
+        continue;
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          origin_of(*ph.value, *c->direct_symbol) == left_impl_method)
+        return c->direct_symbol;
+    }
+    return std::nullopt;
+  };
+  auto one_target = ph_target(ph_one->symbol);
+  auto two_target = ph_target(ph_two->symbol);
+  need(one_target && two_target, "phantom inout concrete targets missing");
+  auto [ph_cc_id, ph_cc] = constraint_in(*ph.value, ph_via->function.symbol);
+  (void)ph_cc_id;
+
+  invalid(generic, "trait generic inout ConstraintCall mode erased",
+          [&](auto &x) {
+            auto &c = std::get<hir::ConstraintCall>(x.nodes[via_cc_id].data);
+            c.args[1].mode = hir::ParamMode::ordinary;
+          });
+  invalid(generic, "trait generic inout ConstraintCall Place became read",
+          [&](auto &x) {
+            auto &c = std::get<hir::ConstraintCall>(x.nodes[via_cc_id].data);
+            auto &node = x.nodes[c.args[1].expression.value];
+            auto place = std::get<hir::Place>(node.data);
+            node.data = hir::Read{place.symbol};
+          });
+  invalid_recomputed(generic, "trait generic inout label recomputed",
+                     [&](auto &x) {
+                       auto &c =
+                           std::get<hir::ConstraintCall>(x.nodes[via_cc_id].data);
+                       c.args[1].label = std::string("value");
+                     });
+  invalid_recomputed(generic, "trait generic inout source index recomputed",
+                     [&](auto &x) {
+                       auto &c =
+                           std::get<hir::ConstraintCall>(x.nodes[via_cc_id].data);
+                       c.args[1].source_index = 2;
+                     });
+  invalid(generic, "trait generic inout receiver changed", [&](auto &x) {
+    auto &c = std::get<hir::ConstraintCall>(x.nodes[via_cc_id].data);
+    hir::Type t;
+    t.kind = hir::TypeKind::Bool;
+    c.receiver = x.types.intern(t);
+  });
+  invalid(*ph.value, "phantom inout target swapped",
+          [&](auto &x) {
+            for (auto &n : x.nodes)
+              if (x.scopes[n.scope.value].function == ph_one->symbol)
+                if (auto c = std::get_if<hir::Call>(&n.data);
+                    c && c->direct_symbol == *one_target) {
+                  c->direct_symbol = *two_target;
+                  return;
+                }
+            throw std::runtime_error("phantom inout One call missing");
+          });
+  invalid(*ph.value, "phantom inout trait swapped",
+          [&](auto &x) {
+            auto &c = std::get<hir::ConstraintCall>(x.nodes[ph_cc_id].data);
+            c.trait = right->symbol;
+            c.method = right->methods.front().symbol;
+          });
+  invalid_recomputed(*ph.value, "phantom inout instance arguments",
+                     [&](auto &x) {
+                       for (auto &i : x.instances)
+                         if (i.symbol == ph_one->symbol)
+                           for (auto &j : x.instances)
+                             if (j.symbol == ph_two->symbol) {
+                               std::swap(i.type_args[2], j.type_args[2]);
+                               return;
+                             }
+                       throw std::runtime_error("phantom inout instance missing");
+                     });
+
+  // Legal new-entry controls with a fixed callback. They also provide HIR
+  // for rejecting mutations that introduce a method-own/Self dependency.
+  auto fixed_visit = good(R"(
+struct C[S, T] {
+    f func(S, inout i32, C[S, T]) Unit;
+}
+func noop(owner i32, slot inout i32, node C[i32, i32]) Unit {}
+trait Visit2 {
+    func visit2[U](owner Self, slot inout U, node C[Self, U]) Unit;
+}
+impl Visit2 for i32 {
+    func visit2[V](owner Self, slot inout V, node C[Self, V]) Unit {}
+}
+func via2[T Visit2, U](receiver T, slot inout U, node C[T, U]) Unit {
+    T.visit2[U](receiver, inout slot, node);
+}
+func main() i32 {
+    let node = C[i32, i32](f: noop);
+    var slot i32 = 0;
+    via2[i32, i32](7, inout slot, node);
+    return 0;
+}
+)");
+  const std::string fixed_factory = R"(
+trait FixedFactory {
+    func make(self Self, slot inout i32) (func(inout i32, i32) i32);
+}
+func fixed_change(slot inout i32, value i32) i32 {
+    let old = slot;
+    slot = value;
+    return old;
+}
+impl FixedFactory for i32 {
+    func make(self Self, slot inout i32) (func(inout i32, i32) i32) {
+        slot = 2;
+        return fixed_change;
+    }
+}
+)";
+  auto fixed_entry = good(fixed_factory + R"(
+func fixed_route[T FixedFactory](owner T, slot inout i32)
+        (func(inout i32, i32) i32) {
+    return T.make(owner, inout slot);
+}
+func main() i32 {
+    var made i32 = 0;
+    let callback = fixed_route[i32](7, inout made);
+    var slot i32 = 1;
+    if callback(inout slot, 8) != 1 || slot != 8 || made != 2 { return 1; }
+    return 0;
+}
+)");
+
+  invalid(fixed_visit, "function-cycle field made method-dependent",
+          [&](auto &x) {
+            const hir::NominalDecl *c = nullptr;
+            for (const auto &n : x.nominals)
+              if (source_name(x, n.symbol) == "C")
+                c = &n;
+            need(c && c->params.size() == 2,
+                 "function-cycle nominal missing");
+            hir::Type parameter;
+            parameter.kind = hir::TypeKind::TypeParameter;
+            parameter.declaration = c->params[1].symbol;
+            auto dependency = x.types.intern(parameter);
+            hir::Type function;
+            function.kind = hir::TypeKind::Function;
+            function.parameters.push_back(
+                {hir::ParamMode::inout, dependency});
+            function.parameters.push_back(
+                {hir::ParamMode::ordinary, dependency});
+            function.result = dependency;
+            auto dependent = x.types.intern(function);
+            for (auto &n : x.nominals)
+              if (n.symbol == c->symbol)
+                n.fields.front().type = dependent;
+          });
+  invalid_recomputed(fixed_visit,
+                     "function-cycle field dependency recomputed",
+                     [&](auto &x) {
+                       const hir::NominalDecl *c = nullptr;
+                       for (const auto &n : x.nominals)
+                         if (source_name(x, n.symbol) == "C")
+                           c = &n;
+                       need(c && c->params.size() == 2,
+                            "function-cycle nominal missing");
+                       hir::Type parameter;
+                       parameter.kind = hir::TypeKind::TypeParameter;
+                       parameter.declaration = c->params[1].symbol;
+                       auto dependency = x.types.intern(parameter);
+                       hir::Type function;
+                       function.kind = hir::TypeKind::Function;
+                       function.parameters.push_back(
+                           {hir::ParamMode::inout, dependency});
+                       function.parameters.push_back(
+                           {hir::ParamMode::ordinary, dependency});
+                       function.result = dependency;
+                       auto dependent = x.types.intern(function);
+                       for (auto &n : x.nominals)
+                         if (n.symbol == c->symbol)
+                           n.fields.front().type = dependent;
+                     });
+  invalid(fixed_entry, "fixed Type inout return made Self-dependent",
+          [&](auto &x) {
+            hir::TraitDecl *trait = nullptr;
+            for (auto &t : x.traits)
+              if (source_name(x, t.symbol) == "FixedFactory")
+                trait = &t;
+            need(trait && !trait->methods.empty(),
+                 "fixed Type inout trait missing");
+            auto &prototype = trait->methods.front();
+            hir::Type parameter;
+            parameter.kind = hir::TypeKind::TypeParameter;
+            parameter.declaration = trait->self;
+            auto self = x.types.intern(parameter);
+            hir::Type callback;
+            callback.kind = hir::TypeKind::Function;
+            callback.parameters.push_back({hir::ParamMode::inout, self});
+            callback.parameters.push_back({hir::ParamMode::ordinary, self});
+            callback.result = self;
+            auto dependent = x.types.intern(callback);
+            auto signature = *x.types.find(prototype.signature);
+            signature.result = dependent;
+            prototype.signature = x.types.intern(signature);
+          });
+  invalid_recomputed(fixed_entry,
+                     "fixed Type inout return dependency recomputed",
+                     [&](auto &x) {
+                       hir::TraitDecl *trait = nullptr;
+                       for (auto &t : x.traits)
+                         if (source_name(x, t.symbol) == "FixedFactory")
+                           trait = &t;
+                       need(trait && !trait->methods.empty(),
+                            "fixed Type inout trait missing");
+                       auto &prototype = trait->methods.front();
+                       hir::Type parameter;
+                       parameter.kind = hir::TypeKind::TypeParameter;
+                       parameter.declaration = trait->self;
+                       auto self = x.types.intern(parameter);
+                       hir::Type callback;
+                       callback.kind = hir::TypeKind::Function;
+                       callback.parameters.push_back(
+                           {hir::ParamMode::inout, self});
+                       callback.parameters.push_back(
+                           {hir::ParamMode::ordinary, self});
+                       callback.result = self;
+                       auto dependent = x.types.intern(callback);
+                       auto signature = *x.types.find(prototype.signature);
+                       signature.result = dependent;
+                       prototype.signature = x.types.intern(signature);
+                     });
+
+  bad("trait Set{func set[U](owner Self,slot inout U,value U)U;} "
+      "func f[T](x T,slot inout i32){T.set[i32](x,inout slot,1);} "
+      "func main()i32{return 0;}",
+      "E_TYPE_MISMATCH");
+  unsupported("trait V{func bad[U](owner move Self,slot inout U);} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad[U](owner inout Self,slot inout U);} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad[U](owner Self,cb func(inout U));} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad[U](owner Self,cb func(inout Self));} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad[U](owner Self,slot inout U);} "
+              "struct S{x i32;} impl V for S{"
+              "func bad[U](owner Self,slot inout U){}} "
+              "func main()i32{let s=S(x:1);var v Vec[i32]=[1];"
+              "s.bad[Vec[i32]](inout v);return 0;}");
+  // Ordinary-only Type/T calls keep the pre-existing support for a nominal
+  // Holder[Self] callback parameter. The new strict top-level-inout check is
+  // not applied to this old entry.
+  good("struct Holder[Q]{cb func(inout Q,Q)Q;} "
+       "trait V{func bad(self Self,value Holder[Self])Self;} "
+       "impl V for i32{func bad(self Self,value Holder[i32])Self{"
+       "return self;}} "
+       "func replace(slot inout i32,value i32)i32{"
+       "let old=slot;slot=value;return old;} "
+       "func main()i32{let f func(inout i32,i32)i32=replace;"
+       "let h=Holder[i32](cb:f);let r i32=0;"
+       "i32.bad(r,h);return 0;}");
+  good("struct Holder[Q]{cb func(inout Q,Q)Q;} "
+       "trait V{func bad(self Self,value Holder[Self])Self;} "
+       "impl V for i32{func bad(self Self,value Holder[i32])Self{"
+       "return self;}} "
+       "func via[T V](receiver T,value Holder[T])T{"
+       "return T.bad(receiver,value);} "
+       "func replace(slot inout i32,value i32)i32{"
+       "let old=slot;slot=value;return old;} "
+       "func main()i32{let f func(inout i32,i32)i32=replace;"
+       "let h=Holder[i32](cb:f);via[i32](0,h);return 0;}");
+
+  // F1: a recursive nominal function field reuses the top-level method
+  // signature TypeId. It is still a callback and may not depend on method U.
+  unsupported_both(R"(
+struct C[S, T] {
+    f func(S, inout T, C[S, T]) Unit;
+}
+func noop(owner i32, slot inout i32, node C[i32, i32]) Unit {}
+trait Visit {
+    func visit[U](owner Self, slot inout U, node C[Self, U]) Unit;
+}
+impl Visit for i32 {
+    func visit[V](owner Self, slot inout V, node C[Self, V]) Unit {}
+}
+func main() i32 {
+    let node = C[i32, i32](f: noop);
+    var slot i32 = 0;
+    i32.visit[i32](7, inout slot, node);
+    return 0;
+}
+)");
+  // The finite recursive function-field control stays legal.
+  good(R"(
+struct C[S, T] {
+    f func(S, inout T, C[S, T]) Unit;
+}
+func noop(owner i32, slot inout i32, node C[i32, i32]) Unit {}
+func main() i32 {
+    let node = C[i32, i32](f: noop);
+    var slot i32 = 0;
+    node.f(7, inout slot, node);
+    return 0;
+}
+)");
+
+  // F2: the new Type/T top-level-inout entry does not authorize a returned
+  // Self-dependent callback. The value-form control is old legal behavior.
+  const std::string factory_callback = R"(
+trait Factory {
+    func make(self Self, slot inout i32) (func(inout Self, Self) Self);
+}
+func change(slot inout i32, value i32) i32 {
+    let old = slot;
+    slot = value;
+    return old;
+}
+impl Factory for i32 {
+    func make(self Self, slot inout i32) (func(inout Self, Self) Self) {
+        slot = 2;
+        return change;
+    }
+}
+)";
+  unsupported_both(factory_callback + R"(
+func route[T Factory](owner T, slot inout i32) (func(inout T, T) T) {
+    return T.make(owner, inout slot);
+}
+func main() i32 {
+    var made i32 = 0;
+    let callback = route[i32](7, inout made);
+    var slot i32 = 1;
+    if callback(inout slot, 8) != 1 || slot != 8 || made != 2 { return 1; }
+    return 0;
+}
+)");
+  good(factory_callback + R"(
+func route[T Factory](owner T, slot inout i32) (func(inout T, T) T) {
+    return owner.make(inout slot);
+}
+func main() i32 {
+    var made i32 = 0;
+    let callback = route[i32](7, inout made);
+    var slot i32 = 1;
+    if callback(inout slot, 8) != 1 || slot != 8 || made != 2 { return 1; }
+    return 0;
+}
+)");
+  unsupported("trait V{func bad[U](owner Self,slot inout Self,tag U)Self;} "
+              "struct S{x i32;} impl V for S{"
+              "func bad[U](owner Self,slot inout Self,tag U)Self{return slot;}} "
+              "func main()i32{return 0;}");
+  std::cout << "trait-method-scalar-inout HIR checks passed\n";
+}
 
 void inherent_static_self_identity() {
   auto good = [&](const std::string &text) {
@@ -9893,6 +10590,7 @@ int main(int argc, char **argv) {
     trait_static_calls();
     trait_method_generics(root);
     trait_generic_move(root);
+    trait_method_scalar_inout(root);
     inherent_static_self_identity();
     trait_static_self_qualification();
     nested_patterns();

@@ -1,0 +1,158 @@
+package app;
+
+trait Plain {
+    func bump(owner Self, slot inout i32, value i32, log inout i64) i32;
+    func flags(owner Self, first inout bool, second inout f64,
+               log inout i64) i32;
+}
+
+trait Relay {
+    func set[U](owner Self, slot inout U, value U, log inout i64) U;
+    func static_set[U](slot inout U, value U, log inout i64) U;
+    func mixed[U](owner Self, owned move Vec[i32], slot inout U, next U,
+                  log inout i64) U;
+}
+
+struct Box[I] {
+    value I;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func make_box(log inout i64, digit i64) Box[i32] {
+    mark(inout log, digit);
+    return Box[i32](value: 0);
+}
+
+impl Plain for i32 {
+    func bump(owner Self, slot inout i32, value i32, log inout i64) i32 {
+        let old = slot;
+        slot = value;
+        mark(inout log, 1);
+        return old;
+    }
+
+    func flags(owner Self, first inout bool, second inout f64,
+               log inout i64) i32 {
+        first = !first;
+        second = second + 1.5;
+        mark(inout log, 2);
+        return 1;
+    }
+}
+
+impl[I] Relay for Box[I] {
+    func set[A](owner Self, slot inout A, value A, log inout i64) A {
+        let old = slot;
+        slot = value;
+        mark(inout log, 3);
+        return old;
+    }
+
+    func static_set[A](slot inout A, value A, log inout i64) A {
+        let old = slot;
+        slot = value;
+        mark(inout log, 4);
+        return old;
+    }
+
+    func mixed[A](owner Self, owned move Vec[i32], slot inout A, next A,
+                  log inout i64) A {
+        let old = slot;
+        slot = next;
+        mark(inout log, 5);
+        return old;
+    }
+}
+
+func via_plain[T Plain](receiver T, slot inout i32, value i32,
+                        log inout i64) i32 {
+    return T.bump(receiver, inout slot, value, inout log);
+}
+
+func via_relay[T Relay, U](receiver T, slot inout U, value U,
+                           log inout i64) U {
+    return T.set[U](receiver, inout slot, value, inout log);
+}
+
+func via_static[T Relay, U](slot inout U, value U, log inout i64) U {
+    return T.static_set[U](inout slot, value, inout log);
+}
+
+func via_mixed[T Relay, U](receiver T, owned move Vec[i32], slot inout U,
+                           value U, log inout i64) U {
+    return T.mixed[U](receiver, move owned, inout slot, value, inout log);
+}
+
+func main() i32 {
+    var log i64 = 0;
+
+    var a i32 = 1;
+    let olda = i32.bump(0, inout a, 2, inout log);
+    if olda != 1 || a != 2 {
+        return 1;
+    }
+
+    var b i32 = 3;
+    let oldb = via_plain[i32](0, inout b, 4, inout log);
+    if oldb != 3 || b != 4 {
+        return 2;
+    }
+
+    let box = Box[i32](value: 0);
+    var c i32 = 5;
+    let oldc = Box[i32].set[i32](box, inout c, 6, inout log);
+    if oldc != 5 || c != 6 {
+        return 3;
+    }
+
+    var d i32 = 7;
+    let oldd = via_relay[Box[i32], i32](box, inout d, 8, inout log);
+    if oldd != 7 || d != 8 {
+        return 4;
+    }
+
+    var e bool = false;
+    let olde = via_static[Box[i32], bool](inout e, true, inout log);
+    if olde || !e {
+        return 5;
+    }
+
+    var flag bool = false;
+    var ratio f64 = 1.5;
+    let oldflags = i32.flags(0, inout flag, inout ratio, inout log);
+    if oldflags != 1 || !flag || ratio != 3.0 {
+        return 6;
+    }
+
+    var f i32 = 9;
+    var first_owned Vec[i32] = [10];
+    let oldf = Box[i32].mixed[i32](box, move first_owned, inout f, 10,
+                                   inout log);
+    if oldf != 9 || f != 10 {
+        return 7;
+    }
+
+    var g i32 = 11;
+    var second_owned Vec[i32] = [11];
+    let oldg = via_mixed[Box[i32], i32](box, move second_owned, inout g, 12,
+                                        inout log);
+    if oldg != 11 || g != 12 {
+        return 8;
+    }
+
+    var h i32 = 13;
+    var receiver_log i64 = 0;
+    let oldh = Box[i32].set[i32](slot: inout h,
+                                  owner: make_box(inout receiver_log, 7),
+                                  value: 14, log: inout log);
+    if oldh != 13 || h != 14 || receiver_log != 7 {
+        return 9;
+    }
+    if log != 113342553 {
+        return 10;
+    }
+    return 0;
+}

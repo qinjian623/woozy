@@ -1,0 +1,202 @@
+package app;
+
+enum Failure {
+    Bad;
+}
+
+trait GenericFlow {
+    func replace[U](owner Self, slot inout U, value U, log inout i64) U;
+    func pair[U, V](owner Self, first inout U, second inout V, log inout i64) U;
+    func fixed(owner Self, slot inout i32, value i32, log inout i64) i32;
+    func saved[U](owner Self, slot inout U, value U, log inout i64,
+                  owned move Vec[i32]) U;
+    func failed[U](owner Self, slot inout U, value U, log inout i64,
+                   owned move Vec[i32]) U throws Failure;
+}
+
+trait SelfFlow {
+    func selfslot[U](owner Self, slot inout Self, value Self, tag U,
+                     log inout i64) Self;
+}
+
+struct Box[I] {
+    value I;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func make_box(log inout i64, digit i64) Box[i32] {
+    mark(inout log, digit);
+    return Box[i32](value: 0);
+}
+
+func bad() i32 throws Failure {
+    throw Failure.Bad;
+}
+
+impl[I] GenericFlow for Box[I] {
+    func replace[A](owner Self, slot inout A, value A, log inout i64) A {
+        let old = slot;
+        slot = value;
+        mark(inout log, 1);
+        return old;
+    }
+
+    func pair[A, B](owner Self, first inout A, second inout B,
+                    log inout i64) A {
+        let old = first;
+        first = first;
+        second = second;
+        mark(inout log, 2);
+        return old;
+    }
+
+    func fixed(owner Self, slot inout i32, value i32, log inout i64) i32 {
+        let old = slot;
+        slot = value;
+        mark(inout log, 3);
+        return old;
+    }
+
+    func saved[A](owner Self, slot inout A, value A, log inout i64,
+                  owned move Vec[i32]) A {
+        let local Vec[i32] = [1];
+        let old = slot;
+        defer {
+            slot = value;
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        mark(inout log, 5);
+        return old;
+    }
+
+    func failed[A](owner Self, slot inout A, value A, log inout i64,
+                   owned move Vec[i32]) A throws Failure {
+        let local Vec[i32] = [2];
+        defer {
+            slot = slot;
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        slot = value;
+        mark(inout log, 4);
+        throw Failure.Bad;
+    }
+}
+
+impl SelfFlow for i32 {
+    func selfslot[A](owner Self, slot inout Self, value Self, tag A,
+                     log inout i64) Self {
+        let old = slot;
+        slot = value;
+        mark(inout log, 4);
+        return old;
+    }
+}
+
+func via[T GenericFlow, U](receiver T, slot inout U, value U,
+                           log inout i64) U {
+    return T.replace[U](receiver, inout slot, value, inout log);
+}
+
+func via_value[T GenericFlow, U](receiver T, slot inout U, value U,
+                                 log inout i64) U {
+    return receiver.replace[U](inout slot, value, inout log);
+}
+
+func via_self[T SelfFlow, U](receiver T, slot inout T, value T, tag U,
+                             log inout i64) T {
+    return receiver.selfslot[U](inout slot, value, tag, inout log);
+}
+
+func main() i32 {
+    var log i64 = 0;
+    let b = make_box(inout log, 1);
+    var x i32 = 10;
+    let old = b.replace[i32](slot: inout x,
+                             value: 2,
+                             log: inout log);
+    if old != 10 || x != 2 {
+        return 1;
+    }
+
+    var p i32 = 20;
+    var q bool = false;
+    let oldp = b.pair[i32, bool](second: inout q, first: inout p,
+                                 log: inout log);
+    if oldp != 20 || p != 20 || q {
+        return 2;
+    }
+
+    var f i32 = 30;
+    let oldf = b.fixed(inout f, 31, inout log);
+    if oldf != 30 || f != 31 {
+        return 3;
+    }
+
+    let r i32 = 5;
+    var s i32 = 40;
+    let olds = r.selfslot[bool](inout s, 41, true, inout log);
+    if olds != 40 || s != 41 {
+        return 4;
+    }
+
+    var u i32 = 50;
+    let oldu = via[Box[i32], i32](b, inout u, 51, inout log);
+    if oldu != 50 || u != 51 {
+        return 5;
+    }
+
+    var v i32 = 60;
+    let oldv = via_value[Box[i32], i32](b, inout v, 61, inout log);
+    if oldv != 60 || v != 61 {
+        return 6;
+    }
+
+    var t i32 = 70;
+    let oldt = via_self[i32, bool](r, inout t, 71, false, inout log);
+    if oldt != 70 || t != 71 {
+        return 7;
+    }
+
+    var early i32 = 80;
+    try {
+        let ignored = b.replace[i32](slot: inout early,
+                                     value: bad(),
+                                     log: inout log);
+        return 8;
+    } catch err Failure {
+        mark(inout log, 9);
+    }
+    if early != 80 {
+        return 9;
+    }
+
+    var failing i32 = 90;
+    var owned Vec[i32] = [3];
+    try {
+        let ignored = b.failed[i32](inout failing, 91, inout log,
+                                    move owned);
+        return 10;
+    } catch err Failure {
+        mark(inout log, 9);
+    }
+    if failing != 91 {
+        return 11;
+    }
+
+    var saved_slot i32 = 100;
+    var owned2 Vec[i32] = [4];
+    let saved = b.saved[i32](inout saved_slot, 101, inout log, move owned2);
+    mark(inout log, 9);
+    if saved != 100 || saved_slot != 101 {
+        return 12;
+    }
+    if log != 112341149469569 {
+        return 13;
+    }
+    return 0;
+}

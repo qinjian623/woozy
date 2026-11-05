@@ -1,0 +1,6 @@
+package app;
+struct Holder[Q] { cb func(inout Q,Q)Q; }
+trait V { func bad(self Self,value Holder[Self]) Self; }
+impl V for i32 { func bad(self Self,value Holder[i32]) Self { return self; } }
+func replace(slot inout i32,value i32)i32 { let old=slot;slot=value;return old; }
+func main()i32 { let f func(inout i32,i32)i32=replace; let h=Holder[i32](cb:f); let r i32=0; i32.bad(r,h); return 0; }

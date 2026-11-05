@@ -1,0 +1,24 @@
+package app;
+
+trait Replace {
+    func replace[U](owner Self, slot inout U, value U) U;
+}
+
+struct Box[I] {
+    value I;
+}
+
+impl[I] Replace for Box[I] {
+    func replace[A](owner Self, slot inout A, value A) A {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+func main() i32 {
+    let b = Box[i32](value: 0);
+    var v Vec[i32] = [1];
+    let old = b.replace[Vec[i32]](inout v, [2]);
+    return old[0] - 1;
+}

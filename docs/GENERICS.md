@@ -209,7 +209,7 @@ HIR 验证每层的源码、真实枚举/变体、类型、载荷顺序和绑定
 
 HIR 由真实源码的调用形式检查有无值接收者，核对显式参数 0、标签、类型、参数顺序、实例来源与完整类型实参；没有参数时仍验证真实约束、目标和返回/错误类型。impl 内的 Self 按实现类型解析，保留 `Self.helper(...)` 和括号形式；它不会因此变成有 trait bound 的模板参数。后端只接收具体普通 Call，不保留 ConstraintCall 或未替换的 T。
 
-新 T 入口尚未支持顶层 inout 和依赖 Self 的 inout callback；非 self move 见下文；已有固定数字/bool callback 内的 inout 不算外围参数模式。泛型 trait、trait 名直接调用、方法值、捕获闭包和实际 self move/inout 仍未支持；trait 方法自身泛型见下节。这些实施限制不改变已经确认的显式传参规则；T07/T09 仍为 in_progress。
+Type/T 入口现支持普通参数、非 self move 和非 self 顶层数字/bool inout；具体限制见末尾一节。已有固定数字/bool callback 内的 inout 不改变外围参数模式。泛型 trait、trait 名直接调用、方法值、捕获闭包和实际 self move/inout 仍未支持；trait 方法自身泛型见下节。T07/T09 仍为 in_progress。
 
 ## trait 方法自身的泛型参数
 
@@ -219,7 +219,7 @@ HIR 由真实源码的调用形式检查有无值接收者，核对显式参数 
 
 方法实例按真实 impl 方法 SymbolId 及完整 `[impl 类型实参..., 方法类型实参...]` 保存。签名中没有出现的类型参数必须显式填写；HIR 从该调用的真实源码及所属实例还原它，不能用相同签名猜测。One/Two 等签名相同、完整实参不同的实例分别保存，调换显式调用或具体化 ConstraintCall 的目标会被拒绝。trait 原型只有声明，没有虚构的可执行模板体；公共 HIR 和后端接口保持原样。
 
-泛型 trait 方法的顶层参数现支持 ordinary 和非 self move；新 inout 和依赖方法类型参数或 Self 的 inout callback 报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的 move/inout、数字/bool Self callback、固定数字/bool callback 和 `Self.helper` 保持原规则。泛型 trait 本身、方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
+泛型 trait 方法的顶层参数支持 ordinary、非 self move 和非 self 数字/bool inout。依赖方法类型参数或 Self 的 inout callback 仍报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的数字/bool Self callback、固定 callback 和 `Self.helper` 保持原规则。泛型 trait 本身、方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
 
 ## trait 非 self move 与类型名调用
 
@@ -229,4 +229,20 @@ HIR 由真实源码的调用形式检查有无值接收者，核对显式参数 
 
 已有绑定仍须显式 move；临时值、按书写顺序求值的命名实参、普通共享副本、typed error、return 和 defer 沿用原规则。后续实参失败时，已经 move 的临时按逆序销毁，原绑定不会恢复可读；若更早的实参失败，尚未求值的 move 不发生。catch 同时接收 move 前的实参错误和 callee 接管后的同型错误时，所有权状态会合并，不能据此假定源绑定仍可读。实例仍按真实方法及完整 impl/方法实参保存，phantom 参数、真实 Source、Move.binding 与清理记录继续验证。
 
-本批没有新增 inout 支持，泛型 trait 方法和 Type/T 的新 inout 继续拒绝；旧数字/bool inout、固定 callback、Self.helper 等行为保持。依赖方法类型参数或 Self 的 inout callback 仍检查整个函数签名、替换后的 struct 字段及 enum 载荷。没有修改公共 HIR、NodeKind、后端接口或运行库；泛型 trait 本身、方法值、捕获闭包、实际 self move/inout、部分字段 move、foreign/动态 string move 和完整 ARC 仍未完成。T07/T09 保持 in_progress。
+非 self 顶层数字/bool inout 见下节。依赖方法类型参数或 Self 的 inout callback 继续检查整个函数签名、替换后的 struct 字段及 enum 载荷；旧 ordinary-only Type/T 调用保留原行为。公共 HIR、NodeKind、后端接口和运行库未变。泛型 trait 本身、方法值、捕获闭包、实际 self move/inout、部分字段 move、foreign/动态 string move 和完整 ARC 仍未完成。T07/T09 保持 in_progress。
+
+## trait 方法的非 self 顶层数字/bool inout
+
+非泛型 trait 的方法支持非 self 的顶层数字/bool inout，包括固定标量、方法自身的类型参数 U/V，以及非首位的原型 Self。方法可以属于泛型 impl；实际调用时，inout 的数据必须替换为数字/bool。值调用、具体 `Type.method(...)` 和受约束的 `T.method(...)` 均支持这些形式，方法没有自身类型参数时也一样。
+
+普通首参的真实 Self 可以命名为 self 或 owner，按声明类型判断。Type/T 调用须显式提供全部声明参数，包括普通首参 Self，不生成值接收者。原型首位直接为 trait Self 的 move/inout 仍不支持，即使标签为 owner；首位为方法 U 且名称为 self 时仍是静态参数，即使实例中的 U 恰好等于 Self。
+
+inout 必须传入可写的整体绑定；let、普通参数、临时值、字段、索引，以及同存储冲突、重复或嵌套借用继续拒绝。值接收者先求值一次，命名实参按书写顺序求值。后续实参抛错时不进入 callee；callee 抛错前的写回仍可见；返回值先保存，再执行 defer。move 实参及局部拥有值沿用原释放顺序。
+
+方法自身泛型中的 inout callback 如果依赖方法类型参数或 trait Self，继续报 `E_CAPABILITY_UNAVAILABLE`。新开放的 Type/T 顶层 inout 调用还检查完整嵌套签名，包括参数、返回、throws 和替换后的 struct/enum 字段及载荷。已有值调用，以及旧 ordinary-only Type/T 调用中的 Self callback 返回和 Holder 参数保持原行为；原先拒绝的直接 callback 参数仍拒绝。固定数字/bool callback 不受此限制。
+
+HIR 沿用 Call/ConstraintCall、Place、Move、实例和 Source 记录。验证器核对真实 trait/impl、调用形式、参数顺序/标签/模式、整体 Place 及完整实例类型实参；方法类型参数保留为真实 TypeParameter，不替换成 Any。递归函数字段即使与外围签名使用同一 Function TypeId，也须检查其 callback 参数。
+
+测试包含 Native O0/O2 与 Python3.12.15 实际执行、写回和求值顺序、throw/defer、move 清理、同签名 phantom 实例、坏 HIR 及重算所有权后的拒绝。`tests/generics/run_method_inout.py` 还检查拒绝构建不会产生新程序或覆盖旧文件。旧合法控制与两个原始漏检源码分别保存在 `trait-ordinary-*-control`、`trait-function-cycle-reject` 和 `trait-type-inout-return-reject` 项目中。
+
+方法值、捕获闭包、实际 self move/inout、非数字/bool inout、字段/索引 inout、foreign 和动态 string 仍未开放。T07/T09 保持 in_progress。

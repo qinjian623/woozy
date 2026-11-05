@@ -343,14 +343,20 @@ class Checker {
         return false;
     return true;
   }
-  // A concrete receiver may use a method from a real trait impl only when the
-  // impl names a trait whose prototype has the same source name, labels and
-  // alpha-substituted signature, and whose first parameter is a real ordinary
-  // self. Method-own generics are matched by position; this is still only a
-  // source check, while finish_arguments, select_method and instantiate
-  // verify the actual implementation and complete instance key.
+  // A concrete receiver or type qualifier may use a method from a real trait
+  // impl only when the impl names a trait whose prototype has the same source
+  // name, labels and alpha-substituted signature. A value-form call needs the
+  // prototype's first parameter to be the real ordinary Self; ordinary is not
+  // inferred from the spelling `self`. A type-qualified call supplies every
+  // declared parameter explicitly, so it has no synthetic receiver. New
+  // top-level inout is permitted at non-self positions and at position zero
+  // only when the raw first type is a method parameter, not the trait Self.
+  // Ordinary Self callbacks keep their value-form support; a static entry does
+  // not gain dependent Self callbacks. Method-own generics are matched by
+  // position; this is still only a source check, while finish_arguments,
+  // select_method and instantiate verify the actual implementation and key.
   std::optional<TraitMethodSource>
-  trait_impl_method_source(SymbolId target) {
+  trait_impl_inout_source(SymbolId target, bool receiver) {
     const auto *im = impl_of(target);
     if (!im || !im->trait)
       return {};
@@ -375,16 +381,34 @@ class Checker {
       return {};
     const auto proto_sig = type(prototype->signature);
     const auto method_sig = type(found->second);
-    if (prototype->parameters.empty() || proto_sig.parameters.empty() ||
-        method_sig.parameters.empty() ||
-        prototype->parameters.front().label != "self" ||
-        proto_sig.parameters.front().mode != ParamMode::ordinary ||
-        method_sig.parameters.front().mode != ParamMode::ordinary ||
-        !declared_self(target))
+    if (prototype->parameters.empty() || proto_sig.parameters.empty()) {
+      if (receiver)
+        return {};
+      return TraitMethodSource{im, tr, prototype};
+    }
+    if (method_sig.parameters.empty())
       return {};
-    const auto &raw_self = type(proto_sig.parameters.front().type);
-    if (raw_self.kind != TypeKind::TypeParameter ||
-        raw_self.declaration != tr->self)
+    if (receiver) {
+      const auto &raw_self = type(proto_sig.parameters.front().type);
+      if (raw_self.kind != TypeKind::TypeParameter ||
+          raw_self.declaration != tr->self ||
+          proto_sig.parameters.front().mode != ParamMode::ordinary ||
+          method_sig.parameters.front().mode != ParamMode::ordinary ||
+          method_sig.parameters.front().type != im->self_type)
+        return {};
+      return TraitMethodSource{im, tr, prototype};
+    }
+    // Type/T.method(...) starts at declaration index zero. A move/inout
+    // whose raw first type is the real trait Self remains an unsupported
+    // actual-self mode, even when the parameter is labelled owner. A method
+    // own U named `self` is a static parameter and stays one.
+    if (proto_sig.parameters.front().mode != ParamMode::ordinary &&
+        trait_self_type(proto_sig.parameters.front().type, tr->self))
+      return {};
+    // Only the new top-level-inout entry gets the complete nested-signature
+    // check. Ordinary-only Type calls keep their pre-existing support for
+    // returned/held Self callbacks.
+    if (new_trait_entry_dependency(*prototype, *tr))
       return {};
     return TraitMethodSource{im, tr, prototype};
   }
@@ -439,10 +463,11 @@ class Checker {
   }
   // A constraint call is limited to a real prototype of the required trait,
   // reached through a bounded template receiver with a real ordinary self.
-  // Only concrete numeric/bool non-self inout types and the exact trait
-  // `slot inout Self` whose substitution is the constrained receiver T are
-  // admitted. Method-own generics are part of the prototype now; their actual
-  // arguments are completed by typed_call before the ConstraintCall is made.
+  // Ordinary is decided from the real trait Self type, not the label. Later
+  // top-level inout may be a fixed scalar, a method-own parameter, or the
+  // trait Self; the substituted call and instance still check the concrete
+  // data type. Method-own generics are completed by typed_call before the
+  // ConstraintCall is made.
   const MethodPrototype *constraint_method_source(SymbolId target,
                                                   SymbolId trait,
                                                   TypeId receiver) {
@@ -473,8 +498,7 @@ class Checker {
       }
     if (!prototype)
       return nullptr;
-    if (prototype->parameters.empty() ||
-        prototype->parameters.front().label != "self")
+    if (prototype->parameters.empty())
       return nullptr;
     const auto &sig = type(prototype->signature);
     if (sig.parameters.empty() ||
@@ -484,22 +508,14 @@ class Checker {
     if (raw_self.kind != TypeKind::TypeParameter ||
         raw_self.declaration != tr->self)
       return nullptr;
-    for (size_t i = 1; i < sig.parameters.size(); ++i) {
-      if (sig.parameters[i].mode != ParamMode::inout ||
-          scalar_inout_type(sig.parameters[i].type))
-        continue;
-      // The only non-scalar non-self inout prototype form is `slot inout
-      // Self`. Its substitution must be exactly the current constrained
-      // receiver T; arbitrary trait Self occurrences or other type parameters
-      // do not open this route.
-      const auto pt = sig.parameters[i].type;
-      if (!trait_self_type(pt, tr->self) ||
-          substitute(pt, {{tr->self, receiver}}, m.types) != receiver)
-        return nullptr;
-    }
     return prototype;
   }
-  bool contains_trait_self_inout(TypeId root, SymbolId self) const {
+  // Legacy type-qualified T entry used this shallow graph: it saw direct
+  // function parameters but did not expand nominal fields. Keep that exact
+  // behaviour for old ordinary/move-only calls so previously accepted
+  // Holder[Self] parameters stay accepted, while a direct callback parameter
+  // that was already rejected is not opened.
+  bool contains_trait_self_inout_shallow(TypeId root, SymbolId self) {
     std::function<bool(TypeId)> contains_self = [&](TypeId id) {
       std::set<uint64_t> seen;
       std::vector<TypeId> pending{id};
@@ -550,6 +566,105 @@ class Checker {
     };
     return visit(root);
   }
+  // Walk a type graph looking for a nested FunctionType whose inout data
+  // depends on a method-own parameter or the real trait Self. The caller
+  // invokes this on the top-level signature components, never on the method
+  // signature itself, so the new top-level inout is not mistaken for a
+  // callback. Checking every encountered FunctionType (without a root-depth
+  // exemption) makes the TypeId-only visited set safe even when a recursive
+  // nominal field holds the same Function TypeId.
+  bool dependent_inout_graph(TypeId root,
+                             const std::set<uint64_t> &dependent,
+                             bool expand_nominal) {
+    std::function<bool(TypeId)> contains_dependent = [&](TypeId id) {
+      std::set<uint64_t> seen;
+      std::vector<TypeId> pending{id};
+      while (!pending.empty()) {
+        auto current = pending.back();
+        pending.pop_back();
+        if (!seen.insert(current.value).second)
+          continue;
+        const auto &t = type(current);
+        if (t.kind == TypeKind::TypeParameter) {
+          if (dependent.count(t.declaration.value))
+            return true;
+          continue;
+        }
+        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+        for (const auto &p : t.parameters)
+          pending.push_back(p.type);
+        if (t.kind == TypeKind::Function) {
+          pending.push_back(t.result);
+          if (t.throws_type)
+            pending.push_back(*t.throws_type);
+        }
+      }
+      return false;
+    };
+    std::set<uint64_t> visited, nominal_path;
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      if (!visited.insert(id.value).second)
+        return false;
+      // Copy: recursive nominal expansion interns substituted field types and
+      // may grow the TypeContext.
+      const auto t = type(id);
+      if (t.kind == TypeKind::Function) {
+        for (const auto &p : t.parameters) {
+          if (p.mode == ParamMode::inout && contains_dependent(p.type))
+            return true;
+          if (visit(p.type))
+            return true;
+        }
+        if (visit(t.result))
+          return true;
+        if (t.throws_type && visit(*t.throws_type))
+          return true;
+        return false;
+      }
+      for (auto a : t.type_args)
+        if (visit(a))
+          return true;
+      if (expand_nominal &&
+          (t.kind == TypeKind::NominalStruct ||
+           t.kind == TypeKind::NominalEnum)) {
+        const auto &d = nominal(id);
+        if (!nominal_path.insert(d.symbol.value).second)
+          return false;
+        for (const auto &f : d.fields)
+          if (visit(field_type(id, f)))
+            return true;
+        for (const auto &v : d.variants)
+          for (const auto &f : v.payload)
+            if (visit(field_type(id, f)))
+              return true;
+        nominal_path.erase(d.symbol.value);
+      }
+      return false;
+    };
+    return visit(root);
+  }
+  // The new Type/T entry is authorized only when the complete nested
+  // signature is free of Self/method-own dependent inout callbacks. Legacy
+  // ordinary-only calls do not run this stricter check.
+  bool new_trait_entry_dependency(const MethodPrototype &prototype,
+                                  const TraitDecl &tr) {
+    const auto sig = type(prototype.signature);
+    const bool top_level_inout =
+        std::any_of(sig.parameters.begin(), sig.parameters.end(),
+                    [](const auto &p) { return p.mode == ParamMode::inout; });
+    if (!top_level_inout)
+      return false;
+    std::set<uint64_t> dependent{tr.self.value};
+    for (const auto &p : method_own_parameters(prototype.symbol))
+      dependent.insert(p.symbol.value);
+    for (const auto &p : sig.parameters)
+      if (dependent_inout_graph(p.type, dependent, true))
+        return true;
+    if (dependent_inout_graph(sig.result, dependent, true))
+      return true;
+    return sig.throws_type &&
+           dependent_inout_graph(*sig.throws_type, dependent, true);
+  }
   // Move eligibility for a value-form bounded T call. This uses the same
   // real trait/bound/prototype relation as the older inout source, but it
   // accepts either ordinary receiver label and does not inspect the old
@@ -597,9 +712,10 @@ class Checker {
     return prototype;
   }
   // Move eligibility for a type-qualified T.method(...) call. It has no
-  // runtime receiver, so every declared parameter is explicit. Only ordinary
-  // and move top-level modes are admitted here; all new inout forms and
-  // dependent Self callbacks keep the old capability limit.
+  // runtime receiver, so every declared parameter is explicit. Move and the
+  // new top-level inout forms can coexist; dependent Self callbacks still
+  // keep the old capability limit. Actual first-position Self is classified
+  // from the raw prototype by typed_call.
   const MethodPrototype *constraint_static_method_move_source(
       SymbolId target, SymbolId trait, TypeId receiver) {
     const TraitDecl *tr = nullptr;
@@ -630,19 +746,34 @@ class Checker {
     if (!prototype)
       return nullptr;
     const auto &sig = type(prototype->signature);
+    const bool top_level_inout =
+        std::any_of(sig.parameters.begin(), sig.parameters.end(),
+                    [](const auto &p) { return p.mode == ParamMode::inout; });
+    if (top_level_inout) {
+      for (const auto &p : sig.parameters)
+        if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move &&
+            p.mode != ParamMode::inout)
+          return nullptr;
+      if (new_trait_entry_dependency(*prototype, *tr))
+        return nullptr;
+      return prototype;
+    }
     for (const auto &p : sig.parameters) {
       if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move)
         return nullptr;
-      if (contains_trait_self_inout(p.type, tr->self))
+      // This is the legacy ordinary/move-only route. It keeps the old
+      // shallow parameter check, not the new complete-signature check.
+      if (contains_trait_self_inout_shallow(p.type, tr->self))
         return nullptr;
     }
     return prototype;
   }
-  // A type-qualified T.method(...) has no runtime receiver. This batch opens
-  // only all-ordinary top-level parameters; Self-dependent inout/callback
-  // forms remain a capability limit, not a permanent language rule. Method
-  // own generics are completed by typed_call; the required trait bound is
-  // checked by the caller and the existing trait registration.
+  // A type-qualified T.method(...) has no runtime receiver. All declared
+  // parameters are explicit, including an ordinary Self at index zero. New
+  // top-level inout at non-self positions is admitted together with existing
+  // move; a raw actual-self move/inout in first position and any dependent
+  // Self callback remain closed. Method-own generics are completed by
+  // typed_call; the required trait bound is checked by the caller.
   const MethodPrototype *constraint_static_method_source(SymbolId target,
                                                           SymbolId trait,
                                                           TypeId receiver) {
@@ -674,11 +805,30 @@ class Checker {
     if (!prototype)
       return nullptr;
     const auto &sig = type(prototype->signature);
-    for (const auto &p : sig.parameters) {
-      if (p.mode != ParamMode::ordinary ||
-          contains_trait_self_inout(p.type, tr->self))
+    const bool top_level_inout =
+        std::any_of(sig.parameters.begin(), sig.parameters.end(),
+                    [](const auto &p) { return p.mode == ParamMode::inout; });
+    for (size_t i = 0; i < sig.parameters.size(); ++i) {
+      const auto &p = sig.parameters[i];
+      if (i == 0 && p.mode != ParamMode::ordinary &&
+          trait_self_type(p.type, tr->self))
         return nullptr;
+      if (top_level_inout) {
+        if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move &&
+            p.mode != ParamMode::inout)
+          return nullptr;
+      } else {
+        if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move)
+          return nullptr;
+        // Legacy ordinary/move-only entry: preserve the old shallow parameter
+        // check. Nominal callback fields were not expanded here, and returned
+        // callbacks were not inspected.
+        if (contains_trait_self_inout_shallow(p.type, tr->self))
+          return nullptr;
+      }
     }
+    if (top_level_inout && new_trait_entry_dependency(*prototype, *tr))
+      return nullptr;
     return prototype;
   }
   // A direct call to a generic free function. Trait constraints do not change
@@ -780,84 +930,36 @@ class Checker {
       declarations.insert(p.symbol.value);
     if (trait_self)
       declarations.insert(trait_self->value);
-    std::function<bool(TypeId)> contains_own = [&](TypeId root) {
-      std::set<uint64_t> seen;
-      std::vector<TypeId> pending{root};
-      while (!pending.empty()) {
-        auto id = pending.back();
-        pending.pop_back();
-        if (!seen.insert(id.value).second)
-          continue;
-        const auto &t = type(id);
-        if (t.kind == TypeKind::TypeParameter) {
-          if (declarations.count(t.declaration.value))
-            return true;
-          continue;
-        }
-        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
-        for (const auto &p : t.parameters)
-          pending.push_back(p.type);
-        if (t.kind == TypeKind::Function) {
-          pending.push_back(t.result);
-          if (t.throws_type)
-            pending.push_back(*t.throws_type);
-        }
-      }
-      return false;
-    };
-    std::set<uint64_t> visited, nominal_path;
-    std::function<bool(TypeId)> dependent_inout = [&](TypeId id) {
-      if (!visited.insert(id.value).second)
-        return false;
-      const auto t = type(id);
-      if (t.kind == TypeKind::Function) {
-        for (const auto &p : t.parameters) {
-          if (p.mode == ParamMode::inout && contains_own(p.type))
-            return true;
-          if (dependent_inout(p.type))
-            return true;
-        }
-        if (dependent_inout(t.result))
-          return true;
-        if (t.throws_type && dependent_inout(*t.throws_type))
-          return true;
-        return false;
-      }
-      for (auto a : t.type_args)
-        if (dependent_inout(a))
-          return true;
-      if (t.kind == TypeKind::NominalStruct ||
-          t.kind == TypeKind::NominalEnum) {
-        const auto &d = nominal(id);
-        if (!nominal_path.insert(d.symbol.value).second)
-          return false;
-        for (const auto &f : d.fields)
-          if (dependent_inout(field_type(id, f)))
-            return true;
-        for (const auto &v : d.variants)
-          for (const auto &f : v.payload)
-            if (dependent_inout(field_type(id, f)))
-              return true;
-        nominal_path.erase(d.symbol.value);
-      }
-      return false;
-    };
-    // This batch opens top-level non-self move on a generic trait method.
-    // The original prototype's first parameter is classified as the actual
-    // self only when it is the real trait Self; an own type parameter named
-    // `self` remains a static parameter. Any first-position actual-self
-    // move/inout, and every new generic-method inout, stays unavailable.
-    const auto &parameters = type(signature).parameters;
+    // This batch opens top-level non-self move and inout on a generic trait
+    // method. The original prototype's first parameter is classified as the
+    // actual self only when it is the real trait Self; an own type parameter
+    // named `self` remains a static parameter. Any first-position actual-self
+    // move/inout stays unavailable. The concrete data type of an own or Self
+    // inout is checked when the template is used, never replaced with Any.
+    const auto top = type(signature);
+    const auto parameters = top.parameters;
     for (size_t i = 0; i < parameters.size(); ++i) {
       const auto &p = parameters[i];
       if (p.mode == ParamMode::ordinary)
         continue;
-      if (p.mode != ParamMode::move ||
-          (i == 0 && trait_self &&
-           trait_self_type(p.type, *trait_self)))
+      if (i == 0 && trait_self &&
+          trait_self_type(p.type, *trait_self))
+        unavailable(r, "generic trait method move/inout is not implemented");
+      if (p.mode != ParamMode::move && p.mode != ParamMode::inout)
         unavailable(r, "generic trait method move/inout is not implemented");
     }
-    if (dependent_inout(signature))
+    // Check each top-level component separately. Starting at the method
+    // signature itself would make a nested FunctionType with the same TypeId
+    // look like the allowed root inout. Every FunctionType reached here is a
+    // callback, including one held by a recursive nominal field.
+    for (const auto &p : parameters)
+      if (dependent_inout_graph(p.type, declarations, true))
+        unavailable(r,
+                    "generic trait method dependent inout callback is not "
+                    "implemented");
+    if (dependent_inout_graph(top.result, declarations, true) ||
+        (top.throws_type &&
+         dependent_inout_graph(*top.throws_type, declarations, true)))
       unavailable(r,
                   "generic trait method dependent inout callback is not "
                   "implemented");
@@ -2033,6 +2135,11 @@ class Checker {
             }
         }
         auto selected = method_subs(select_method(r, *t, name));
+        if (const auto *im = impl_of(selected.method);
+            im && im->trait &&
+            !trait_impl_inout_source(selected.method, false))
+          unavailable(r, "trait-static actual self or dependent Self inout is "
+                         "not implemented");
         return typed_call(r, selected.method, {}, selected.substitutions, {},
                           expected);
       }
@@ -2198,12 +2305,13 @@ class Checker {
     const bool inherent =
         !constraint &&
         inherent_method_route(target, receiver.has_value(), original);
-    // Move and inout eligibility are deliberately separate. The old inout
-    // route keeps its literal-self and receiver requirements; the new move
-    // route admits an ordinary owner-labelled receiver and an explicit
-    // type-qualified static parameter list.
+    // Move and inout eligibility use separate source helpers. Both admit an
+    // ordinary receiver named self or owner and an explicit Type/T parameter
+    // list. The inout helper also checks the new top-level-inout route's
+    // dependent callback restriction.
     const bool trait_impl_inout =
-        !constraint && receiver && trait_impl_method_source(target).has_value();
+        !constraint &&
+        trait_impl_inout_source(target, receiver.has_value()).has_value();
     const bool trait_impl_move =
         !constraint &&
         trait_impl_move_source(target, receiver.has_value()).has_value();
@@ -3684,7 +3792,8 @@ class Checker {
     const bool inout_source =
         !temp.params.empty() &&
         (free_generic_template(origin) || inherent_method_source(origin) ||
-         trait_impl_method_source(origin).has_value());
+         trait_impl_inout_source(origin, true).has_value() ||
+         trait_impl_inout_source(origin, false).has_value());
     for (const auto &p : type(f.signature).parameters) {
       if (p.mode != ParamMode::ordinary &&
           type(p.type).kind == TypeKind::ForeignOpaque)

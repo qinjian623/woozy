@@ -879,6 +879,116 @@ class Verifier {
     std::vector<GenericParam> parameters;
     std::vector<TypeId> values;
   };
+  // Walk a type graph for nested FunctionTypes whose inout data depends on a
+  // method-own parameter or the real trait Self. Callers start at individual
+  // signature components so the new top-level inout is not mistaken for a
+  // callback. Every FunctionType reached is checked; the TypeId-only visited
+  // set is therefore safe even for recursive nominal function fields whose
+  // field type is the same TypeId as the enclosing method signature.
+  bool dependent_inout_graph(TypeId root,
+                             const std::set<uint64_t> &dependent,
+                             bool expand_nominal) const {
+    auto graph_type = [&](TypeId id) -> const Type & {
+      if (auto t = substituted.find(id))
+        return *t;
+      return type(id);
+    };
+    auto contains_dependent = [&](TypeId id) {
+      std::set<uint64_t> seen;
+      std::vector<TypeId> pending{id};
+      while (!pending.empty()) {
+        auto current = pending.back();
+        pending.pop_back();
+        if (!seen.insert(current.value).second)
+          continue;
+        const auto &t = graph_type(current);
+        if (t.kind == TypeKind::TypeParameter) {
+          if (dependent.count(t.declaration.value))
+            return true;
+          continue;
+        }
+        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+        for (const auto &p : t.parameters)
+          pending.push_back(p.type);
+        if (t.kind == TypeKind::Function) {
+          pending.push_back(t.result);
+          if (t.throws_type)
+            pending.push_back(*t.throws_type);
+        }
+      }
+      return false;
+    };
+    std::set<uint64_t> visited, nominal_path;
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      if (!visited.insert(id.value).second)
+        return false;
+      // Copy: nominal field substitution can reallocate the substituted
+      // TypeContext while this function continues to inspect the current type.
+      const auto t = graph_type(id);
+      if (t.kind == TypeKind::Function) {
+        for (const auto &p : t.parameters) {
+          if (p.mode == ParamMode::inout && contains_dependent(p.type))
+            return true;
+          if (visit(p.type))
+            return true;
+        }
+        if (visit(t.result))
+          return true;
+        if (t.throws_type && visit(*t.throws_type))
+          return true;
+        return false;
+      }
+      for (auto a : t.type_args)
+        if (visit(a))
+          return true;
+      if (expand_nominal &&
+          (t.kind == TypeKind::NominalStruct ||
+           t.kind == TypeKind::NominalEnum)) {
+        auto found = nominals.find(t.declaration.value);
+        need(found != nominals.end(), "missing callback nominal");
+        const auto &d = *found->second;
+        if (!nominal_path.insert(d.symbol.value).second)
+          return false;
+        need(d.params.size() == t.type_args.size(),
+             "callback nominal argument count");
+        Substitutions sub;
+        for (size_t i = 0; i < d.params.size(); ++i)
+          sub.push_back({d.params[i].symbol, t.type_args[i]});
+        for (const auto &f : d.fields)
+          if (visit(substitute(f.type, sub, substituted)))
+            return true;
+        for (const auto &v : d.variants)
+          for (const auto &f : v.payload)
+            if (visit(substitute(f.type, sub, substituted)))
+              return true;
+        nominal_path.erase(d.symbol.value);
+      }
+      return false;
+    };
+    return visit(root);
+  }
+  // The new Type/T top-level-inout entry must check the complete nested
+  // signature. The legacy ordinary-only entry keeps its earlier behavior and
+  // never calls this restriction.
+  bool new_trait_entry_dependency(const MethodPrototype &prototype,
+                                  const TraitDecl &tr) const {
+    const auto sig = type(prototype.signature);
+    const bool top_level_inout =
+        std::any_of(sig.parameters.begin(), sig.parameters.end(),
+                    [](const auto &p) { return p.mode == ParamMode::inout; });
+    if (!top_level_inout)
+      return false;
+    std::set<uint64_t> dependent{tr.self.value};
+    for (const auto &p : source_parameters(prototype.source))
+      dependent.insert(p.symbol.value);
+    for (const auto &p : sig.parameters)
+      if (dependent_inout_graph(p.type, dependent, true))
+        return true;
+    if (dependent_inout_graph(sig.result, dependent, true))
+      return true;
+    return sig.throws_type &&
+           dependent_inout_graph(*sig.throws_type, dependent, true);
+  }
   // Recover the complete method-own actual arguments for a ConstraintCall.
   // An explicit suffix comes from the real Source and is substituted through
   // the owning function instance; without a suffix the already determined
@@ -962,6 +1072,22 @@ class Verifier {
         impl = &candidate;
       }
     need(impl, "type-qualified call target is not an impl method");
+    if (impl->trait) {
+      const TraitDecl *trait = nullptr;
+      for (const auto &t : m.traits)
+        if (t.symbol == *impl->trait)
+          trait = &t;
+      need(trait, "type-qualified call impl has no real trait");
+      const MethodPrototype *prototype = nullptr;
+      for (const auto &p : trait->methods)
+        if (symbol(p.symbol).name == source->name) {
+          need(!prototype, "type-qualified call has duplicate trait prototype");
+          prototype = &p;
+        }
+      need(prototype, "type-qualified call has no source trait prototype");
+      need(!new_trait_entry_dependency(*prototype, *trait),
+           "type-qualified inout call opens a dependent callback");
+    }
     std::vector<TypeId> args;
     if (instance)
       args = instance->type_args;
@@ -1816,97 +1942,27 @@ class Verifier {
           std::set<uint64_t> own_ids{tr.self.value};
           for (const auto &p : own)
             own_ids.insert(p.symbol.value);
-          auto graph_type = [&](TypeId id) -> const Type & {
-            auto t = substituted.find(id);
-            need(t, "missing callback graph type");
-            return *t;
-          };
-          std::function<bool(TypeId)> contains_own = [&](TypeId root) {
-            std::set<uint64_t> seen;
-            std::vector<TypeId> pending{root};
-            while (!pending.empty()) {
-              auto id = pending.back();
-              pending.pop_back();
-              if (!seen.insert(id.value).second)
-                continue;
-              const auto &t = graph_type(id);
-              if (t.kind == TypeKind::TypeParameter) {
-                if (own_ids.count(t.declaration.value))
-                  return true;
-                continue;
-              }
-              pending.insert(pending.end(), t.type_args.begin(),
-                             t.type_args.end());
-              for (const auto &p : t.parameters)
-                pending.push_back(p.type);
-              if (t.kind == TypeKind::Function) {
-                pending.push_back(t.result);
-                if (t.throws_type)
-                  pending.push_back(*t.throws_type);
-              }
-            }
-            return false;
-          };
-          std::set<uint64_t> visited, nominal_path;
-          std::function<bool(TypeId)> dependent_inout = [&](TypeId id) {
-            if (!visited.insert(id.value).second)
-              return false;
-            const auto t = graph_type(id);
-            if (t.kind == TypeKind::Function) {
-              for (const auto &p : t.parameters) {
-                if (p.mode == ParamMode::inout && contains_own(p.type))
-                  return true;
-                if (dependent_inout(p.type))
-                  return true;
-              }
-              if (dependent_inout(t.result))
-                return true;
-              if (t.throws_type && dependent_inout(*t.throws_type))
-                return true;
-              return false;
-            }
-            for (auto a : t.type_args)
-              if (dependent_inout(a))
-                return true;
-            if (t.kind == TypeKind::NominalStruct ||
-                t.kind == TypeKind::NominalEnum) {
-              auto found = nominals.find(t.declaration.value);
-              need(found != nominals.end(), "missing callback nominal");
-              const auto &d = *found->second;
-              if (!nominal_path.insert(d.symbol.value).second)
-                return false;
-              need(d.params.size() == t.type_args.size(),
-                   "callback nominal argument count");
-              Substitutions sub;
-              for (size_t i = 0; i < d.params.size(); ++i)
-                sub.push_back({d.params[i].symbol, t.type_args[i]});
-              for (const auto &f : d.fields)
-                if (dependent_inout(substitute(f.type, sub, substituted)))
-                  return true;
-              for (const auto &v : d.variants)
-                for (const auto &f : v.payload)
-                  if (dependent_inout(substitute(f.type, sub, substituted)))
-                    return true;
-              nominal_path.erase(d.symbol.value);
-            }
-            return false;
-          };
-          // Top-level non-self move is the one new mode this batch opens.
+          // Top-level non-self move and inout are the modes this batch opens.
           // The actual self is the real trait Self in first position, not an
-          // own type parameter merely labelled self. New generic-method
-          // inout and any first-position actual-self mode stay rejected.
+          // own type parameter merely labelled self. Inout data is checked at
+          // the concrete use; dependent callback graphs stay rejected.
           for (size_t i = 0; i < sig.parameters.size(); ++i) {
             const auto &p = sig.parameters[i];
             if (p.mode == ParamMode::ordinary)
               continue;
-            need(p.mode == ParamMode::move,
+            need(p.mode == ParamMode::move || p.mode == ParamMode::inout,
                  "generic trait method move/inout is unsupported");
             const auto &raw = type(p.type);
             need(!(i == 0 && raw.kind == TypeKind::TypeParameter &&
                    raw.declaration == tr.self),
-                 "generic trait method actual self move is unsupported");
+                 "generic trait method actual self move/inout is unsupported");
           }
-          need(!dependent_inout(method.signature),
+          for (const auto &p : sig.parameters)
+            need(!dependent_inout_graph(p.type, own_ids, true),
+                 "generic trait method dependent inout callback is unsupported");
+          need(!dependent_inout_graph(sig.result, own_ids, true) &&
+                   (!sig.throws_type ||
+                    !dependent_inout_graph(*sig.throws_type, own_ids, true)),
                "generic trait method dependent inout callback is unsupported");
         }
         for (const auto &f : m.functions)
@@ -2311,32 +2367,36 @@ class Verifier {
          "constraint call source method differs from target");
     const bool template_qualifier =
         template_trait_parameter(*written, owner);
-    valid_type(c.signature, allowed(owner));
+    const auto owner_allowed = allowed(owner);
+    valid_type(c.signature, owner_allowed);
     (void)constraint_method_arguments(n, c, *tr, *method);
     const auto &sig = type(c.signature);
     if (template_qualifier) {
       // T.method(...) has no synthetic receiver. Every declared parameter is
       // written explicitly from index 0, including a first ordinary Self.
-      // This batch admits ordinary top-level declarations only.
       need(type(c.receiver).kind == TypeKind::TypeParameter,
            "T-qualified constraint receiver is not a type parameter");
       need(source_type_in_function(written->base, owner) == c.receiver,
            "T-qualified constraint source type differs from receiver");
       // A type-qualified call supplies every declared parameter explicitly.
-      // It may therefore use a static method with no Self, an ordinary first
-      // Self passed at index zero, or a non-self move. New inout and a raw
-      // actual-self mode in first position remain rejected.
+      // It may use a static method with no Self, an ordinary first Self at
+      // index zero, top-level move/inout, or a method-own first parameter
+      // even when its concrete type equals Self. A raw actual-self move/inout
+      // and dependent Self callbacks remain unsupported.
       const auto &raw = type(method->signature);
       for (size_t i = 0; i < raw.parameters.size(); ++i) {
         const auto &p = raw.parameters[i];
-        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
-             "trait-static non-ordinary parameter is unsupported");
+        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
+                 p.mode == ParamMode::inout,
+             "trait-static parameter mode is unsupported");
         const auto &raw_type = type(p.type);
         need(!(i == 0 && p.mode != ParamMode::ordinary &&
                raw_type.kind == TypeKind::TypeParameter &&
                raw_type.declaration == tr->self),
              "trait-static actual self mode is unsupported");
       }
+      need(!new_trait_entry_dependency(*method, *tr),
+           "trait-static inout opens a dependent callback");
       need(n.type == sig.result && c.args.size() == sig.parameters.size() &&
                n.children.size() == c.args.size(),
            "trait-static call arity/children");
@@ -2353,10 +2413,24 @@ class Verifier {
              "trait-static children must preserve source order");
         const auto p = sig.parameters[a.parameter_index];
         const auto &argument = node(a.expression);
-        need((p.mode == ParamMode::ordinary || p.mode == ParamMode::move) &&
-                 a.mode == p.mode && argument.type == p.type,
+        need(a.mode == p.mode && argument.type == p.type,
              "trait-static argument type/mode");
-        expr(a.expression);
+        if (p.mode == ParamMode::inout) {
+          const bool dependent =
+              type(p.type).kind == TypeKind::TypeParameter &&
+              owner_allowed.count(type(p.type).declaration.value);
+          need(argument.kind() == NodeKind::place &&
+                   (inout_scalar(type(p.type).kind) || dependent),
+               "trait-static inout requires a whole scalar place");
+          need(borrowed
+                   .insert(std::get<Place>(argument.data).symbol.value)
+                   .second,
+               "duplicate trait-static inout storage");
+        } else {
+          need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
+               "unsupported trait-static argument mode");
+          expr(a.expression);
+        }
         if (a.label) {
           named = true;
           need(*a.label == method->parameters[a.parameter_index].label,
@@ -2380,23 +2454,15 @@ class Verifier {
     need(!method->parameters.empty() && !prototype.parameters.empty() &&
              prototype.parameters.front().mode == ParamMode::ordinary,
          "constraint method must declare ordinary self");
-    // The literal name `self` is a restriction of the older inout mode, not
-    // of the newly opened non-self move. Existing all-ordinary prototypes may
-    // name their first Self parameter `owner`; an ordinary owner receiver is
-    // the same receiver, and this batch explicitly lets a move prototype use
-    // it too. Actual self classification stays based on the raw trait Self.
-    const bool non_self_inout =
-        std::any_of(prototype.parameters.begin() + 1,
-                    prototype.parameters.end(), [](const auto &p) {
-                      return p.mode == ParamMode::inout;
-                    });
-    if (non_self_inout)
-      need(method->parameters.front().label == "self",
-           "constraint inout mode requires ordinary self");
-    if (!source_parameters(method->source).empty())
-      for (const auto &p : prototype.parameters)
-        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
-             "generic trait method inout is unsupported");
+    // Ordinary receiver is decided from the real trait Self type, not from
+    // the name `self`; `owner` is the same receiver. Top-level non-self move
+    // and inout are admitted, while a first-position actual-self mode is
+    // already excluded by the ordinary-first check above and the actual-mode
+    // classification in check_call/typed call sources.
+    for (const auto &p : prototype.parameters)
+      need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
+               p.mode == ParamMode::inout,
+           "unsupported constraint method parameter mode");
     const auto &raw_self = type(prototype.parameters.front().type);
     need(raw_self.kind == TypeKind::TypeParameter &&
              raw_self.declaration == tr->self,
@@ -2431,12 +2497,11 @@ class Verifier {
       need(a.mode == p.mode && argument.type == p.type,
            "constraint argument type/mode");
       if (p.mode == ParamMode::inout) {
-        // Trait prototypes have no method-own type parameters. A scalar is
-        // always accepted. The only dependent form is a top-level `slot
-        // inout Self` parameter whose substituted type is exactly the current
-        // real [T Trait] receiver T; any other type parameter, nested graph,
-        // or mismatched source is still rejected. Concrete Calls remain
-        // scalar-only.
+        // A concrete numeric/bool place is accepted. In a template the
+        // substituted data type may remain the current constrained receiver
+        // T or another enclosing template parameter; concrete instances and
+        // calls still reject non-scalar data. Neither method-own nor Self
+        // inout is replaced with Any or reduced to a name-only check.
         const auto &raw =
             type(method->signature).parameters[a.parameter_index];
         const bool trait_self_slot =
@@ -2444,9 +2509,13 @@ class Verifier {
             type(raw.type).kind == TypeKind::TypeParameter &&
             type(raw.type).declaration == tr->self &&
             p.type == c.receiver;
+        const bool dependent =
+            type(p.type).kind == TypeKind::TypeParameter &&
+            owner_allowed.count(type(p.type).declaration.value);
         need(argument.kind() == NodeKind::place &&
-                 (inout_scalar(type(p.type).kind) || trait_self_slot),
-             "constraint inout requires a whole trivial scalar place");
+                 (inout_scalar(type(p.type).kind) || trait_self_slot ||
+                  dependent),
+             "constraint inout requires a whole scalar place");
         need(borrowed
                  .insert(std::get<Place>(argument.data).symbol.value)
                  .second,

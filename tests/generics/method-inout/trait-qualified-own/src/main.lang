@@ -1,0 +1,73 @@
+package app;
+
+trait Own {
+    func shift[U](self inout U, next U, log inout i64) U;
+    func two[U, V](first inout U, second inout V, log inout i64) U;
+}
+
+impl Own for i32 {
+    func shift[A](self inout A, next A, log inout i64) A {
+        let old = self;
+        self = next;
+        log = log * 10 + 7;
+        return old;
+    }
+
+    func two[A, B](first inout A, second inout B, log inout i64) A {
+        let old = first;
+        first = first;
+        second = second;
+        log = log * 10 + 8;
+        return old;
+    }
+}
+
+func via[T Own, U](slot inout U, next U, log inout i64) U {
+    return T.shift[U](inout slot, next, inout log);
+}
+
+func via_two[T Own, U, V](first inout U, second inout V,
+                          log inout i64) U {
+    return T.two[U, V](inout first, inout second, inout log);
+}
+
+func main() i32 {
+    var log i64 = 0;
+
+    var x i32 = 1;
+    let a = i32.shift[i32](inout x, 2, inout log);
+    if a != 1 || x != 2 {
+        return 1;
+    }
+
+    var y i32 = 3;
+    let b = via[i32, i32](inout y, 4, inout log);
+    if b != 3 || y != 4 {
+        return 2;
+    }
+
+    var w i64 = 5;
+    let c = i32.shift[i64](inout w, 6, inout log);
+    if c != 5 || w != 6 {
+        return 3;
+    }
+
+    var p i32 = 7;
+    var q bool = false;
+    let d = i32.two[i32, bool](inout p, inout q, inout log);
+    if d != 7 || p != 7 || q {
+        return 4;
+    }
+
+    var r i32 = 8;
+    var s bool = true;
+    let e = via_two[i32, i32, bool](inout r, inout s, inout log);
+    if e != 8 || r != 8 || !s {
+        return 5;
+    }
+
+    if log != 77788 {
+        return 6;
+    }
+    return 0;
+}

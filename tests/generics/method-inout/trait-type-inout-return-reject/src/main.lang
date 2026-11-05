@@ -1,0 +1,25 @@
+package app;
+trait Factory {
+    func make(self Self, slot inout i32) (func(inout Self, Self) Self);
+}
+func change(slot inout i32, value i32) i32 {
+    let old = slot;
+    slot = value;
+    return old;
+}
+impl Factory for i32 {
+    func make(self Self, slot inout i32) (func(inout Self, Self) Self) {
+        slot = 2;
+        return change;
+    }
+}
+func route[T Factory](owner T, slot inout i32) (func(inout T, T) T) {
+    return T.make(owner, inout slot);
+}
+func main() i32 {
+    var made i32 = 0;
+    let callback = route[i32](7, inout made);
+    var slot i32 = 1;
+    if callback(inout slot, 8) != 1 || slot != 8 || made != 2 { return 1; }
+    return 0;
+}

@@ -1,0 +1,17 @@
+package app;
+struct C[S, T] {
+    f func(S, inout T, C[S, T]) Unit;
+}
+func noop(owner i32, slot inout i32, node C[i32, i32]) Unit {}
+trait Visit {
+    func visit[U](owner Self, slot inout U, node C[Self, U]) Unit;
+}
+impl Visit for i32 {
+    func visit[V](owner Self, slot inout V, node C[Self, V]) Unit {}
+}
+func main() i32 {
+    let node = C[i32, i32](f: noop);
+    var slot i32 = 0;
+    i32.visit[i32](7, inout slot, node);
+    return 0;
+}
