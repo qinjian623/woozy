@@ -4,9 +4,13 @@ trait Value {
     func get(self Self) i32;
 }
 
-impl Value for i32 {
+struct Item {
+    value i32;
+}
+
+impl Value for Item {
     func get(self Self) i32 {
-        return self;
+        return self.value;
     }
 }
 
@@ -17,8 +21,8 @@ func swap[T Value](a inout T, b inout T) {
 }
 
 func main() i32 {
-    var x i32 = 1;
-    var y i32 = 2;
-    swap(inout x, inout y);
+    var first Item = Item(value: 1);
+    var second Item = Item(value: 2);
+    swap(inout first, inout second);
     return 0;
 }

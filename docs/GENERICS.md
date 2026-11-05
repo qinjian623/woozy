@@ -56,7 +56,7 @@ switch/for补充程序。主代理GNU Debug、GNU Release、Clang22 ASan/UBSan
 
 let/const、普通参数、临时值、字段和索引不能经此入口作为可写整体绑定。重复借用同一槽、另一实参读取/移动该槽、嵌套调用再次访问同一槽均拒绝，不因命名参数重排而改变。不同绑定即使值相等仍接受。
 
-有 trait 约束的泛型函数自身的 inout 参数仍未开放；固有方法数字/bool inout 见下文。普通参数只是接收或返回带 inout 的 callback 时，不按目标函数自身的 inout 处理，保留原有合法调用。嵌套 FunctionType、struct/enum callback 字段具体化后也检查 inout 数据类型：合法模板中的真实 T 可以保留，具体非 scalar 数据报源级 `E_CAPABILITY_UNAVAILABLE`，不能落成内部 HIR 错误。具体函数与实例不能残留 T，Place、模板来源和重复存储检查仍保留。
+自由泛型函数现在也支持满足 trait 约束的数字/bool inout 及既有具体函数值，见下文；固有方法数字/bool inout 同样单列说明。普通参数只是接收或返回带 inout 的 callback 时，不按目标函数自身的 inout 处理，保留原有合法调用。嵌套 FunctionType、struct/enum callback 字段具体化后也检查 inout 数据类型：合法模板中的真实 T 可以保留，具体非 scalar 数据报源级 `E_CAPABILITY_UNAVAILABLE`，不能落成内部 HIR 错误。具体函数与实例不能残留 T，Place、模板来源和重复存储检查仍保留。
 
 主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 的 LLVM 构建各45/45，关闭 LLVM 为33/33，共168项，无跳过。每个 LLVM 构建的新测试有5条记录，其中2条为check，3条为Native O0/O2和Python3.12.15实际执行。独立组合程序另验证先取得inout后的后参抛错、callee自身抛错与defer恢复、return先复制再清理、循环continue/break，以及不同事件值区分的命名实参源码顺序；Python23个Frame无残留。scalar inout没有动态begin/end-borrow调用，空borrow列表不被记成观察到借用登记次数。
 
@@ -118,13 +118,25 @@ inout 实参必须是整体可写绑定，数据类型具体化后只能是已�
 
 模板内的 ordinary trait receiver 调用保留 ConstraintCall，具体化时按所需 trait 和真实 impl 选择方法，再转成具体直接调用。同名方法属于不同 trait 时分别选择；实例仍按 origin 和完整类型实参缓存，Move、参数与局部使用重命名后的符号，具体签名、节点及调用不保留类型参数或 ConstraintCall。
 
-此次只增加自由泛型直接 move 调用，保留旧受约束 move 函数值。带约束自由函数自身 inout、trait/约束方法自身 move/inout、实际 self move/inout 仍拒绝；ordinary trait 方法借用拥有参数是原有合法操作。后参抛错、callee throws/defer、返回先保存和共享副本继续使用原有清理。没有改 HIR、后端、运行库或数据类型限制。
+此次只增加自由泛型直接 move 调用，保留旧受约束 move 函数值。trait/约束方法自身 move/inout、实际 self move/inout 仍拒绝；自由泛型 inout 的后续支持见下文。ordinary trait 方法借用拥有参数是原有合法操作。后参抛错、callee throws/defer、返回先保存和共享副本继续使用原有清理。没有改 HIR、后端、运行库或数据类型限制。
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各47/47，关闭 LLVM 为33/33，共174项，无跳过，包含两项T10。每个 LLVM 配置的自由泛型 move 测试执行5个源码项目的 Native O0/O2/Python，共15次正式执行及15次私有观察；另有4次check和2次拒绝构建。结果文件的17条runs不含单列的4条checks。旧方法move与数字/bool inout测试保持；生成 Native 程序和预编译 LLVM 未声称全部有sanitizer插桩。
+
+## 带 trait 约束的自由泛型数字/bool inout
+
+自由泛型函数的实际类型满足既有 trait 约束时，数字/bool 整体绑定 inout 现在支持直接调用和具体函数值。显式后缀如 `swap[i32]`、已有 Name 期望函数类型、函数值参数/返回值及间接调用沿用原有入口；没有新增推断规则。参数仍必须是可写整体绑定，具体类型受原有数字/bool 检查限制。
+
+三处来源判断使用同一 free generic 身份：直接调用、具体函数值检查及实例化。实际 trait 约束和完整嵌套类型图均继续检查，ordinary callback 内的 inout 不改变外围函数自身模式。具体 FunctionValue 指向已实例化函数；Place、参数与局部使用重命名后的符号，同类型组合复用实例，ConstraintCall 按真实 trait/impl 转成具体调用。满足 trait 的 struct/enum、Vec、string、foreign 自身 inout 仍拒绝，trait/约束方法和真实 self 的 move/inout 仍未开放。
+
+写回、typed throw、返回先保存再 defer、后参失败不进入 callee、命名实参源码顺序及同存储冲突沿用现有规则。旧 free move 的拒绝构建例原先使用受约束标量 inout，现已合法，因此换成满足 trait 的非 scalar inout；原始标量拒绝记录保留在前一阶段资料中。
+
+Native 另有一个已确认的旧错误：try 成功路径 return 后的不可达调用若含拥有临时值，lowering 报 E_IR_INVALID。旧版本与本版同源复现，Python 同源正常；此项待单独修复。
+
+本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各48/48，关闭 LLVM 为33/33，共177项，无跳过，包含两项T10。新runtime每个 LLVM 配置有4次check、6次正式 Native O0/O2/Python 执行、6次私有观察和2次拒绝构建；另在主目录原2份before源码上完成4次check、6次正式执行，源码SHA保持。独立14输入/4HIR检查及2个新程序的6次执行、6次观察、8次拒绝检查通过。未将空borrow列表算作动态登记，生成Native和预编译LLVM未声称全部有sanitizer插桩。
 
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型trait及trait泛型方法、嵌套变体模式、带trait约束的泛型方法及trait方法move、trait/约束方法inout，以及非scalar数据或有trait约束的泛型函数自身inout仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型trait及trait泛型方法、嵌套变体模式、带trait约束的泛型方法及trait方法move、trait/约束方法inout，以及非scalar数据的inout仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。

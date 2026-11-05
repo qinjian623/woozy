@@ -1,0 +1,110 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+trait Value {
+    func get(self Self) i32;
+}
+
+impl Value for i32 {
+    func get(self Self) i32 {
+        return self;
+    }
+}
+
+func mark(log inout i64, digit i32) {
+    log = log * 10 + i64(digit);
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func later(log inout i64, digit i32) i32 {
+    mark(inout log, digit);
+    return digit;
+}
+
+func fail_after[T Value](slot inout T, value T, log inout i64) i32 throws E {
+    slot = value;
+    mark(inout log, 4);
+    throw E.Bad;
+}
+
+func cleanup_fail[T Value](slot inout T, value T, owned move Vec[i32],
+                           log inout i64) i32 throws E {
+    let local Vec[i32] = [11];
+    defer {
+        mark(inout log, 6);
+        let read = local[0];
+    }
+    slot = value;
+    mark(inout log, 4);
+    throw E.Bad;
+}
+
+func late[T Value](slot inout T, value T) T {
+    let old = slot;
+    defer {
+        slot = value;
+    }
+    return old;
+}
+
+func use3[T Value](slot inout T, value T, first i32, second i32) i32 {
+    slot = value;
+    return first + second;
+}
+
+func main() i32 {
+    var log i64 = 0;
+
+    var first i32 = 1;
+    try {
+        let ignored = cleanup_fail(inout first, 7, [55], inout log);
+        mark(inout log, 9);
+    } catch err E {
+        mark(inout log, 3);
+        if first != 7 {
+            return 1;
+        }
+    }
+
+    var second i32 = 2;
+    try {
+        let ignored = fail_after(inout second, 8, inout log);
+        mark(inout log, 9);
+    } catch err E {
+        mark(inout log, 3);
+        if second != 8 {
+            return 2;
+        }
+    }
+
+    var third i32 = 3;
+    try {
+        let ignored = use3(slot: inout third, value: 99,
+                           first: later(inout log, 8),
+                           second: bad(inout log));
+        mark(inout log, 9);
+    } catch err E {
+        mark(inout log, 3);
+        if third != 3 {
+            return 3;
+        }
+    }
+
+    var fourth i32 = 4;
+    let old = late(inout fourth, 5);
+    if old != 4 || fourth != 5 {
+        return 4;
+    }
+
+    if log != 46343823 {
+        return 5;
+    }
+    return 0;
+}

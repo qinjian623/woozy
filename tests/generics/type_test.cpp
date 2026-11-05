@@ -1060,9 +1060,9 @@ void constrained_free_move(const fs::path &root) {
       "func pair[T V](first T,second move T)i32{return 0;} "
       "func main()i32{var x i32=1;return pair(x,move x);}",
       "E_CALL_ARGUMENT");
-  unsupported("trait V{} impl V for i32{} "
-              "func bump[T V](x inout T){} "
-              "func main()i32{var x i32=1;bump(inout x);return x-1;}");
+  good("trait V{} impl V for i32{} "
+       "func bump[T V](x inout T){} "
+       "func main()i32{var x i32=1;bump(inout x);return x-1;}");
   unsupported("trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
               "struct S{x i32;} impl V for S{"
               "func take(self Self,value move Vec[i32])Vec[i32]{"
@@ -1073,6 +1073,465 @@ void constrained_free_move(const fs::path &root) {
               "func take[T V](self Self,value move T)T{return move value;}} "
               "func main()i32{let s=S(x:1);var x i32=1;"
               "let r=s.take(move x);return r-1;}");
+}
+
+void constrained_free_inout(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "constrained free inout HIR rejected: " + messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+
+  const auto positive =
+      check(root / "tests/generics/inout/constrained/positive/lang.toml");
+  need(positive.success(), messages(positive));
+  need(hir::verify(*positive.value).success(),
+       "constrained free inout fixture HIR rejected");
+  const auto &m = *positive.value;
+
+  auto symbol_name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  auto find_template = [&](const std::string &name)
+      -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (symbol_name(t.function.symbol) == name)
+        return &t;
+    return nullptr;
+  };
+  auto instances_of = [&](const hir::FunctionTemplate *t) {
+    std::vector<const hir::FunctionInstance *> result;
+    for (const auto &i : m.instances)
+      if (i.origin == t->function.symbol)
+        result.push_back(&i);
+    return result;
+  };
+  auto function_for = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto is_i32 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 32;
+  };
+  auto is_i64 = [&](TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 64;
+  };
+  auto type_label = [&](TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t)
+      return {};
+    switch (t->kind) {
+    case hir::TypeKind::SignedInt:
+      return "i" + std::to_string(t->bits);
+    case hir::TypeKind::UnsignedInt:
+      return "u" + std::to_string(t->bits);
+    case hir::TypeKind::Float:
+      return "f" + std::to_string(t->bits);
+    case hir::TypeKind::Bool:
+      return "bool";
+    default:
+      return {};
+    }
+  };
+  auto has_parameter = [&](TypeId root_id) {
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      auto t = m.types.find(id);
+      if (!t)
+        return false;
+      if (t->kind == hir::TypeKind::TypeParameter)
+        return true;
+      for (auto a : t->type_args)
+        if (visit(a))
+          return true;
+      for (const auto &p : t->parameters)
+        if (visit(p.type))
+          return true;
+      if (visit(t->result))
+        return true;
+      return t->throws_type && visit(*t->throws_type);
+    };
+    return visit(root_id);
+  };
+  auto find_trait = [&](const std::string &name) -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (symbol_name(t.symbol) == name)
+        return &t;
+    return nullptr;
+  };
+  auto trait_method_for = [&](const hir::TraitDecl &trait,
+                              const std::string &type,
+                              const std::string &method) -> SymbolId {
+    for (const auto &im : m.impls) {
+      if (im.trait != trait.symbol)
+        continue;
+      auto t = m.types.find(im.self_type);
+      if (t && t->kind == hir::TypeKind::SignedInt && type == "i32" &&
+          t->bits == 32)
+        for (auto candidate : im.methods)
+          if (symbol_name(candidate) == method)
+            return candidate;
+    }
+    throw std::runtime_error("trait impl method missing: " + type + "." +
+                             method);
+  };
+
+  const auto *swap = find_template("swap");
+  const auto *replace = find_template("replace");
+  const auto *pair = find_template("pair");
+  const auto *left = find_template("left");
+  const auto *right = find_template("right");
+  const auto *mix = find_template("mix");
+  const auto *value_trait = find_trait("Value");
+  const auto *left_trait = find_trait("Left");
+  const auto *right_trait = find_trait("Right");
+  need(swap && replace && pair && left && right && mix && value_trait &&
+           left_trait && right_trait,
+       "constrained free inout templates or traits missing");
+
+  const auto swap_instances = instances_of(swap);
+  const auto replace_instances = instances_of(replace);
+  const auto pair_instances = instances_of(pair);
+  const auto left_instances = instances_of(left);
+  const auto right_instances = instances_of(right);
+  const auto mix_instances = instances_of(mix);
+  need(swap_instances.size() == 7 && replace_instances.size() == 1 &&
+           pair_instances.size() == 1 && left_instances.size() == 1 &&
+           right_instances.size() == 1 && mix_instances.size() == 1,
+       "constrained free inout instance counts changed");
+
+  std::set<std::string> swap_types;
+  for (const auto *instance : swap_instances) {
+    need(instance->type_args.size() == 1,
+         "swap instance lacks its complete type key");
+    auto label = type_label(instance->type_args[0]);
+    need(!label.empty(), "swap instance has an unexpected type");
+    need(swap_types.insert(label).second, "swap type combination duplicated");
+    auto f = function_for(instance->symbol);
+    need(f, "swap concrete function missing");
+    auto sig = m.types.find(f->signature);
+    need(sig && sig->parameters.size() == 2 &&
+             sig->parameters[0].mode == hir::ParamMode::inout &&
+             sig->parameters[1].mode == hir::ParamMode::inout &&
+             sig->parameters[0].type == instance->type_args[0] &&
+             sig->parameters[1].type == instance->type_args[0] &&
+             !has_parameter(f->signature),
+         "swap concrete signature retained a template or wrong mode");
+  }
+  need(swap_types.size() == 7 && swap_types.count("i32") &&
+           swap_types.count("i64") && swap_types.count("u32") &&
+           swap_types.count("u64") && swap_types.count("f32") &&
+           swap_types.count("f64") && swap_types.count("bool"),
+       "swap concrete data types changed");
+
+  need(pair_instances[0]->type_args.size() == 2 &&
+           is_i32(pair_instances[0]->type_args[0]) &&
+           is_i32(pair_instances[0]->type_args[1]),
+       "pair full type key changed");
+  const auto *pair_function = function_for(pair_instances[0]->symbol);
+  need(pair_function, "pair concrete function missing");
+  auto pair_sig = m.types.find(pair_function->signature);
+  need(pair_sig && pair_sig->parameters.size() == 5 &&
+           pair_sig->parameters[0].mode == hir::ParamMode::inout &&
+           pair_sig->parameters[1].mode == hir::ParamMode::inout &&
+           pair_sig->parameters[2].type == pair_instances[0]->type_args[0] &&
+           pair_sig->parameters[3].type == pair_instances[0]->type_args[1] &&
+           pair_sig->parameters[4].mode == hir::ParamMode::inout &&
+           is_i64(pair_sig->parameters[4].type),
+       "pair constraint/mode signature changed");
+
+  const auto *replace_instance = replace_instances[0];
+  const auto *replace_function = function_for(replace_instance->symbol);
+  need(replace_instance->type_args.size() == 1 &&
+           is_i32(replace_instance->type_args[0]) && replace_function,
+       "replace [i32] instance missing");
+  auto replace_sig = m.types.find(replace_function->signature);
+  need(replace_sig && replace_sig->parameters.size() == 2 &&
+           replace_sig->parameters[0].mode == hir::ParamMode::inout &&
+           is_i32(replace_sig->parameters[0].type) &&
+           replace_sig->parameters[1].mode == hir::ParamMode::ordinary &&
+           is_i32(replace_sig->parameters[1].type) &&
+           is_i32(replace_sig->result) &&
+           !has_parameter(replace_function->signature),
+       "replace concrete signature retained T or lost its mode");
+
+  size_t template_constraints = 0;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == replace->function.symbol)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(c->trait == value_trait->symbol,
+             "replace template constraint trait changed");
+        need(symbol_name(c->method) == "get",
+             "replace template constraint method changed");
+        ++template_constraints;
+      }
+  need(template_constraints == 1,
+       "replace template did not retain its ordinary trait ConstraintCall");
+
+  std::set<uint64_t> template_symbols;
+  for (const auto &t : m.templates)
+    template_symbols.insert(t.function.symbol.value);
+  size_t function_values = 0, swap_values = 0, replace_values = 0;
+  std::set<uint64_t> swap_instance_symbols;
+  for (const auto *i : swap_instances)
+    swap_instance_symbols.insert(i->symbol.value);
+  for (const auto &f : m.functions) {
+    need(!has_parameter(f.signature),
+         "concrete constrained free inout signature retained a parameter");
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != f.symbol)
+        continue;
+      need(!has_parameter(n.type),
+           "concrete constrained free inout node retained a parameter");
+      need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+           "concrete constrained free inout retained ConstraintCall");
+      if (auto c = std::get_if<hir::Call>(&n.data)) {
+        need(c->type_args.empty(),
+             "concrete constrained free inout call retained type arguments");
+        if (c->direct_symbol)
+          need(!template_symbols.count(c->direct_symbol->value),
+               "concrete constrained free inout call targets a template");
+      }
+      if (auto v = std::get_if<hir::FunctionValue>(&n.data)) {
+        need(v->type_args.empty(),
+             "concrete function value retained type arguments");
+        need(!template_symbols.count(v->symbol.value),
+             "concrete function value targets a template");
+        ++function_values;
+        if (symbol_name(v->symbol) == "swap") {
+          need(swap_instance_symbols.count(v->symbol.value),
+               "swap function value targets a foreign instance");
+          ++swap_values;
+        }
+        if (symbol_name(v->symbol) == "replace")
+          ++replace_values;
+      }
+    }
+  }
+  need(function_values >= 4 && swap_values >= 1 && replace_values >= 3,
+       "constrained free inout function values changed");
+
+  size_t inout_arguments = 0;
+  for (const auto &n : m.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data))
+      for (const auto &a : c->args)
+        if (a.mode == hir::ParamMode::inout) {
+          auto &value = m.nodes[a.expression.value];
+          need(value.kind() == hir::NodeKind::place,
+               "constrained inout argument is not a Place");
+          auto owner = m.scopes[n.scope.value].function;
+          auto f = function_for(owner);
+          if (f) {
+            auto place = std::get<hir::Place>(value.data);
+            auto sig = m.types.find(f->signature);
+            for (size_t i = 0; i < f->parameters.size(); ++i)
+              if (f->parameters[i].symbol == place.symbol) {
+                need(sig && i < sig->parameters.size() &&
+                         m.types.find(sig->parameters[i].type)->kind !=
+                             hir::TypeKind::TypeParameter,
+                     "constrained inout Place kept a template parameter");
+                break;
+              }
+          }
+          ++inout_arguments;
+        }
+  need(inout_arguments >= 20, "constrained free inout calls missing");
+
+  auto calls_named = [&](const hir::HirFunction &f, const std::string &name) {
+    std::vector<SymbolId> result;
+    for (const auto &n : m.nodes)
+      if (m.scopes[n.scope.value].function == f.symbol)
+        if (auto c = std::get_if<hir::Call>(&n.data);
+            c && c->direct_symbol && symbol_name(*c->direct_symbol) == name)
+          result.push_back(*c->direct_symbol);
+    return result;
+  };
+  auto left_pick = trait_method_for(*left_trait, "i32", "pick");
+  auto right_pick = trait_method_for(*right_trait, "i32", "pick");
+  need(left_pick != right_pick,
+       "same-named methods from different traits shared a symbol");
+  const auto *left_function = function_for(left_instances[0]->symbol);
+  const auto *right_function = function_for(right_instances[0]->symbol);
+  need(left_function && right_function, "left/right concrete function missing");
+  auto left_selected = calls_named(*left_function, "pick");
+  auto right_selected = calls_named(*right_function, "pick");
+  need(left_selected.size() == 1 && left_selected[0] == left_pick,
+       "Left constraint did not select Left.pick");
+  need(right_selected.size() == 1 && right_selected[0] == right_pick,
+       "Right constraint did not select Right.pick");
+
+  std::map<uint64_t, SymbolId> renamed;
+  for (auto [from, to] : replace_instance->renamed)
+    renamed[from.value] = to;
+  need(renamed.at(replace->function.symbol.value) ==
+               replace_function->symbol &&
+           renamed.at(replace->function.parameters[0].symbol.value) ==
+               replace_function->parameters[0].symbol &&
+           renamed.at(replace->function.parameters[1].symbol.value) ==
+               replace_function->parameters[1].symbol,
+       "replace renamed map lost the function or an inout/ordinary parameter");
+  size_t template_locals = 0, concrete_locals = 0;
+  for (const auto &n : m.nodes) {
+    if (m.scopes[n.scope.value].function == replace->function.symbol)
+      if (auto b = std::get_if<hir::Binding>(&n.data)) {
+        need(renamed.count(b->symbol.value),
+             "replace renamed map lost a template local");
+        ++template_locals;
+      }
+    if (m.scopes[n.scope.value].function == replace_function->symbol)
+      if (std::holds_alternative<hir::Binding>(n.data))
+        ++concrete_locals;
+  }
+  need(template_locals == 2 && concrete_locals == 2,
+       "replace template/instance locals changed");
+  bool concrete_place = false;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == replace_function->symbol)
+      if (auto p = std::get_if<hir::Place>(&n.data); p) {
+        need(p->symbol == replace_function->parameters[0].symbol,
+             "replace concrete Place kept a template parameter");
+        concrete_place = true;
+      }
+  need(concrete_place, "replace concrete inout Place missing");
+
+  invalid(m, "constrained inout call mode", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          x.resolved->symbols[c->direct_symbol->value].name == "swap")
+        for (auto &a : c->args)
+          if (a.mode == hir::ParamMode::inout) {
+            a.mode = hir::ParamMode::ordinary;
+            return;
+          }
+    throw std::runtime_error("constrained inout call missing");
+  });
+  invalid(m, "constrained inout place read", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          x.resolved->symbols[c->direct_symbol->value].name == "swap")
+        for (auto &a : c->args)
+          if (a.mode == hir::ParamMode::inout) {
+            auto &value = x.nodes[a.expression.value];
+            value.data = hir::Read{std::get<hir::Place>(value.data).symbol};
+            return;
+          }
+    throw std::runtime_error("constrained inout Place missing");
+  });
+  invalid(m, "constrained function value target", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto v = std::get_if<hir::FunctionValue>(&n.data);
+          v && x.resolved->symbols[v->symbol.value].name == "replace") {
+        v->symbol = replace->function.symbol;
+        return;
+      }
+    throw std::runtime_error("constrained function value missing");
+  });
+  invalid_recomputed(m, "constrained instance parameter mode", [&](auto &x) {
+    for (auto &f : x.functions)
+      if (f.symbol == replace_instance->symbol) {
+        auto sig = *x.types.find(f.signature);
+        sig.parameters[0].mode = hir::ParamMode::ordinary;
+        f.signature = x.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("constrained replace instance missing");
+  });
+
+  bad("trait V{func get(self Self)i32;} "
+      "func swap[T V](a inout T,b inout T){} "
+      "func main(){var x i32=1;var y i32=2;swap(inout x,inout y);}",
+      "E_TYPE_MISMATCH");
+  bad("trait A{func get(self Self)i32;} trait B{} impl B for i32{} "
+      "func swap[T A](a inout T,b inout T){} "
+      "func main(){var x i32=1;var y i32=2;swap(inout x,inout y);}",
+      "E_TYPE_MISMATCH");
+  unsupported("trait V{func get(self Self)i32;} struct S{x i32;} "
+              "impl V for S{func get(self Self)i32{return self.x;}} "
+              "func swap[T V](a inout T,b inout T){} "
+              "func main(){var x S=S(x:1);var y S=S(x:2);"
+              "swap(inout x,inout y);}");
+  unsupported("trait V{func get(self Self)i32;} "
+              "impl V for i32{func get(self Self)i32{return self;}} "
+              "struct B[T]{x T;} impl[T] B[T]{"
+              "func swap[X V](self Self,a inout X,b inout X){}} "
+              "func main(){let b=B[i32](x:1);var x i32=1;var y i32=2;"
+              "b.swap(inout x,inout y);}");
+  unsupported("trait V{func bump(self Self,slot inout i32);} "
+              "struct S{x i32;} impl V for S{"
+              "func bump(self Self,slot inout i32){}} "
+              "func main(){let s=S(x:1);var x i32=1;s.bump(inout x);}");
+  unsupported("trait V{} impl V for i32{} "
+              "impl i32{func bump(self inout i32,slot inout i32){}} "
+              "func main(){var x i32=1;x.bump(inout x);}");
+  bad("trait V{func get(self Self)i32;} "
+      "func swap[T V](a inout T,b inout T){} "
+      "func main(){var x i32=1;var y i32=2;let f=swap[i32];"
+      "f(inout x,inout y);}",
+      "E_TYPE_MISMATCH");
+  unsupported("trait V{func get(self Self)i32;} struct S{x i32;} "
+              "impl V for S{func get(self Self)i32{return self.x;}} "
+              "func swap[T V](a inout T,b inout T){} "
+              "func main(){var x S=S(x:1);var y S=S(x:2);let f=swap[S];"
+              "f(inout x,inout y);}");
+  bad("trait V{} impl V for i32{} "
+      "func swap[T V](a inout T,b inout T){} "
+      "func main(){var x i32=1;swap(inout x,inout x);}",
+      "E_CALL_ARGUMENT");
+  bad("trait V{} impl V for i32{} "
+      "func swap[T V](a inout T,b inout T){} "
+      "func main(){var x i32=1;let f=swap[i32];f(inout x,inout x);}",
+      "E_CALL_ARGUMENT");
+  unsupported("trait V{} impl V for i32{} struct S{x i32;} "
+              "func swap[T V](a inout T,b inout T){} "
+              "func main(){var s S=S(x:1);var y i32=2;"
+              "swap(inout s.x,inout y);}");
+  unsupported("trait V{} impl V for i32{} "
+              "func swap[T V](a inout T,b inout T){} "
+              "func main(){var v Vec[i32]=[1];var y i32=2;"
+              "swap(inout v[0],inout y);}");
+  bad("trait V{} impl V for i32{} "
+      "func swap[T V](a inout T,b inout T){} "
+      "func main(x i32){var y i32=2;swap(inout x,inout y);}",
+      "E_CALL_ARGUMENT");
+  bad("trait V{} impl V for i32{} func g(x i32)i32{return x;} "
+      "func use[T V](a inout T,b T){} "
+      "func main(){var x i32=1;use(inout x,g(x));}",
+      "E_CALL_ARGUMENT");
+  bad("trait V{} impl V for i32{} func g(x inout i32)i32{x+=1;return x;} "
+      "func use[T V](a inout T,b T){} "
+      "func main(){var x i32=1;use(inout x,g(inout x));}",
+      "E_CALL_ARGUMENT");
+  unsupported("trait V{} impl V for i32{} "
+              "struct Box[T]{cb func(inout T);} "
+              "func keep[T V](cb func() Box[Vec[i32]])i32{return 0;} "
+              "func main()i32{let f=keep[i32];return 0;}");
+  auto name_expected = good("trait V{func get(self Self)i32;} "
+      "impl V for i32{func get(self Self)i32{return self;}} "
+      "func replace[T V](slot inout T,value T)T{"
+      "let old=slot;slot=value;return old;} "
+      "func main()i32{var x i32=1;"
+      "let f func(inout i32,i32)i32=replace;"
+      "let old=f(inout x,2);return old+i32(x)-3;}");
+  need(hir::verify(name_expected).success(),
+       "Name expected function type constrained inout HIR rejected");
 }
 
 void generic_inout(const fs::path &root) {
@@ -1191,16 +1650,18 @@ void generic_inout(const fs::path &root) {
               "func main(){var v Vec[i32]=[1];var y i32=2;"
               "swap(inout v[0],inout y);}",
               "E_CAPABILITY_UNAVAILABLE");
-  unsupported("trait V{} impl V for i32{} "
-              "func swap[T V](a inout T,b inout T){} "
-              "func main(){var x i32=1;var y i32=2;"
-              "swap(inout x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported("trait V{} impl V for i32{} "
-              "func swap[T V](a inout T,b inout T){} "
-              "func main(){var x i32=1;var y i32=2;"
-              "let f=swap[i32];f(inout x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
+  auto constrained_direct = good("trait V{} impl V for i32{} "
+       "func swap[T V](a inout T,b inout T){} "
+       "func main(){var x i32=1;var y i32=2;"
+       "swap(inout x,inout y);}");
+  need(hir::verify(constrained_direct).success(),
+       "constrained free inout HIR rejected");
+  auto constrained_fv = good("trait V{} impl V for i32{} "
+       "func swap[T V](a inout T,b inout T){} "
+       "func main(){var x i32=1;var y i32=2;"
+       "let f=swap[i32];f(inout x,inout y);}");
+  need(hir::verify(constrained_fv).success(),
+       "constrained free inout function-value HIR rejected");
   good("impl i32{func swap[T](a inout T,b inout T){} } "
        "func main(){var x i32=1;var y i32=2;"
        "i32.swap(inout x,inout y);}");
@@ -4186,6 +4647,7 @@ int main(int argc, char **argv) {
     extra(root);
     generic_move(root);
     constrained_free_move(root);
+    constrained_free_inout(root);
     generic_inout(root);
     method_inout(root);
     method_move(root);

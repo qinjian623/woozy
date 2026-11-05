@@ -1,0 +1,309 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+trait Value {
+    func get(self Self) i32;
+}
+
+trait Left {
+    func pick(self Self) i32;
+}
+
+trait Right {
+    func pick(self Self) i32;
+}
+
+impl Value for i32 { func get(self Self) i32 { return self; } }
+impl Value for i64 { func get(self Self) i32 { return 1; } }
+impl Value for u32 { func get(self Self) i32 { return 2; } }
+impl Value for u64 { func get(self Self) i32 { return 3; } }
+impl Value for f32 { func get(self Self) i32 { return 4; } }
+impl Value for f64 { func get(self Self) i32 { return 5; } }
+impl Value for bool { func get(self Self) i32 { return 6; } }
+
+impl Left for i32 { func pick(self Self) i32 { return 3; } }
+impl Right for i32 { func pick(self Self) i32 { return 7; } }
+
+func mark(log inout i64, digit i32) {
+    log = log * 10 + i64(digit);
+}
+
+func mark_value(log inout i64, digit i32) i32 {
+    mark(inout log, digit);
+    return digit;
+}
+
+func swap[T Value](a inout T, b inout T) {
+    let tmp = a;
+    a = b;
+    b = tmp;
+}
+
+func replace[T Value](slot inout T, value T) T {
+    let old = slot;
+    let observed = slot.get();
+    slot = value;
+    return old;
+}
+
+func relay[T Value](a inout T, b inout T) {
+    swap(inout a, inout b);
+}
+
+func forward[T Value](slot inout T, value T) T {
+    return replace(inout slot, value);
+}
+
+func late[T Value](slot inout T, value T) T {
+    let old = slot;
+    defer {
+        slot = value;
+    }
+    return old;
+}
+
+func pair[T Value, U Right](first inout T, second inout U,
+                            first_value T, second_value U, log inout i64) {
+    let f = first.get();
+    let s = second.pick();
+    first = first_value;
+    second = second_value;
+    mark(inout log, f + s);
+}
+
+func left[T Left](slot inout T, value T, log inout i64) {
+    let p = slot.pick();
+    slot = value;
+    mark(inout log, p);
+}
+
+func right[T Right](slot inout T, value T, log inout i64) {
+    let p = slot.pick();
+    slot = value;
+    mark(inout log, p);
+}
+
+func ordered[T Value](slot inout T, value T, second i32) T {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func use3[T Value](slot inout T, value T, first i32, second i32) i32 {
+    slot = value;
+    return first + second;
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func fail[T Value](slot inout T, value T, log inout i64) i32 throws E {
+    slot = value;
+    mark(inout log, 4);
+    throw E.Bad;
+}
+
+func mix[T Value](slot inout T, value T, owned move Vec[i32]) T {
+    let local Vec[i32] = [70];
+    defer {
+        let read = local[0];
+    }
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func apply(f func(inout i32, i32) i32, slot inout i32, value i32) i32 {
+    return f(inout slot, value);
+}
+
+func choose() (func(inout i32, i32) i32) {
+    return replace;
+}
+
+func main() i32 {
+    var log i64 = 0;
+
+    var ax i32 = 1;
+    var ay i32 = 2;
+    swap(inout ax, inout ay);
+    if ax != 2 || ay != 1 {
+        return 1;
+    }
+
+    var bx i64 = 3;
+    var by i64 = 4;
+    swap[i64](inout bx, inout by);
+    if bx != 4 || by != 3 {
+        return 2;
+    }
+
+    var cx u32 = 5;
+    var cy u32 = 6;
+    swap(inout cx, inout cy);
+    if cx != 6 || cy != 5 {
+        return 3;
+    }
+
+    var dx u64 = 7;
+    var dy u64 = 8;
+    swap(inout dx, inout dy);
+    if dx != 8 || dy != 7 {
+        return 4;
+    }
+
+    var ex f32 = 1.5;
+    var ey f32 = 2.5;
+    swap(inout ex, inout ey);
+    if ex < 2.0 || ey > 2.0 {
+        return 5;
+    }
+
+    var fx f64 = 3.5;
+    var fy f64 = 4.5;
+    swap(inout fx, inout fy);
+    if fx < 4.0 || fy > 4.0 {
+        return 6;
+    }
+
+    var gx bool = true;
+    var gy bool = false;
+    swap(inout gx, inout gy);
+    if gx || !gy {
+        return 7;
+    }
+
+    var hx i32 = 8;
+    let old = replace(inout hx, 9);
+    if old != 8 || hx != 9 {
+        return 8;
+    }
+
+    var ix i32 = 10;
+    var iy i32 = 20;
+    relay(inout ix, inout iy);
+    if ix != 20 || iy != 10 {
+        return 9;
+    }
+
+    var jx i32 = 11;
+    let jold = forward(inout jx, 12);
+    if jold != 11 || jx != 12 {
+        return 10;
+    }
+
+    var kx i32 = 13;
+    let kold = late(inout kx, 14);
+    if kold != 13 || kx != 14 {
+        return 11;
+    }
+
+    var lx i32 = 1;
+    var ly i32 = 2;
+    pair(inout lx, inout ly, 30, 40, inout log);
+    if lx != 30 || ly != 40 || log != 8 {
+        return 12;
+    }
+
+    var mx i32 = 3;
+    left(inout mx, 50, inout log);
+    var nx i32 = 7;
+    right(inout nx, 60, inout log);
+    if mx != 50 || nx != 60 || log != 837 {
+        return 13;
+    }
+
+    var ox i32 = 1;
+    let oold = ordered(second: mark_value(inout log, 3),
+                       value: mark_value(inout log, 5),
+                       slot: inout ox);
+    if oold != 1 || ox != 5 || log != 83735 {
+        return 14;
+    }
+
+    var px i32 = 2;
+    try {
+        let ignored = use3(slot: inout px, value: 99,
+                           first: mark_value(inout log, 8),
+                           second: bad(inout log));
+        return 15;
+    } catch err E {
+        mark(inout log, 1);
+        if px != 2 {
+            return 16;
+        }
+    }
+    if log != 83735821 {
+        return 17;
+    }
+
+    var qx i32 = 2;
+    try {
+        let ignored = fail(inout qx, 99, inout log);
+        return 18;
+    } catch err E {
+        mark(inout log, 1);
+        if qx != 99 {
+            return 19;
+        }
+    }
+    if log != 8373582141 {
+        return 20;
+    }
+
+    var rx i32 = 1;
+    let rold = mix(inout rx, 2, [55]);
+    if rold != 1 || rx != 2 {
+        return 21;
+    }
+
+    var sx i32 = 1;
+    let f = replace[i32];
+    let sf = f(inout sx, 2);
+    if sf != 1 || sx != 2 {
+        return 22;
+    }
+
+    var tx i32 = 3;
+    let g func(inout i32, i32) i32 = replace[i32];
+    let tg = g(inout tx, 4);
+    if tg != 3 || tx != 4 {
+        return 23;
+    }
+
+    var ux i32 = 5;
+    let h func(inout i32, i32) i32 = replace;
+    let uh = h(inout ux, 6);
+    if uh != 5 || ux != 6 {
+        return 24;
+    }
+
+    var vx i32 = 7;
+    let vi = apply(replace[i32], inout vx, 8);
+    if vi != 7 || vx != 8 {
+        return 25;
+    }
+
+    var wx i32 = 9;
+    let ch = choose();
+    let wold = ch(inout wx, 10);
+    if wold != 9 || wx != 10 {
+        return 26;
+    }
+
+    var xx i32 = 10;
+    var xy i32 = 20;
+    let sw = swap[i32];
+    sw(inout xx, inout xy);
+    sw(inout xx, inout xy);
+    if xx != 10 || xy != 20 {
+        return 27;
+    }
+
+    return 0;
+}

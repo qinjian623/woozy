@@ -78,3 +78,19 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
 else()
   message(STATUS "generics.method_inout_runtime: not_run (LLVM/3.12 helper unavailable)")
 endif()
+if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
+   TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
+  add_test(NAME generics.constrained_inout_runtime COMMAND "${LANG_TEST_PYTHON}"
+    "${CMAKE_CURRENT_LIST_DIR}/run_constrained_inout.py"
+    --cli $<TARGET_FILE:langc>
+    --probe $<TARGET_FILE:lang_native_ownership_probe>
+    --helper $<TARGET_FILE:lang_python_emit>
+    --root "${LANG_T07_ROOT}"
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --runtime $<TARGET_FILE:lang_native_runtime>
+    --python "${LANG_PYTHON312}"
+    --out "${CMAKE_CURRENT_BINARY_DIR}/constrained-inout-runtime")
+  set_tests_properties(generics.constrained_inout_runtime PROPERTIES TIMEOUT 300)
+else()
+  message(STATUS "generics.constrained_inout_runtime: not_run (LLVM/3.12 helper unavailable)")
+endif()

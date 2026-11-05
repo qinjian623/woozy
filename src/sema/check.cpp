@@ -288,12 +288,6 @@ class Checker {
     return found != generic_params.end() && !found->second.empty() &&
            !impl_method(target);
   }
-  bool free_unconstrained_template(SymbolId target) const {
-    return free_generic_template(target) &&
-           std::all_of(generic_params.at(target.value).begin(),
-                       generic_params.at(target.value).end(),
-                       [](const GenericParam &p) { return !p.trait; });
-  }
   bool check_inout_graph(Ref r, TypeId root, bool allow_template) {
     std::set<uint64_t> visited_args, expanded_nominals, nominal_path;
     bool direct_inout = false;
@@ -361,7 +355,7 @@ class Checker {
       return;
     auto found = generic_params.find(target.value);
     if (found != generic_params.end() && !found->second.empty() &&
-        !free_unconstrained_template(target))
+        !free_generic_template(target))
       unavailable(r, "generic/method inout is not implemented");
   }
   std::vector<GenericParam> generics(Ref r) {
@@ -1630,16 +1624,15 @@ class Checker {
       seen[pi] = true;
       indices[i] = pi;
     }
-    // Concrete move on a generic free function is independent of its trait
-    // constraints; finish_arguments below still requires the explicit impl.
-    // Non-self scalar inout keeps the unconstrained free route, and both modes
-    // keep the inherent-method route above. Receiver and constraint calls stay
-    // excluded, so actual self modes and trait/constrained methods are rejected.
+    // Concrete move and non-self scalar inout on a generic free function are
+    // independent of its trait constraints; finish_arguments below still
+    // requires the explicit impl. The inherent-method route keeps its existing
+    // unconstrained condition. Receiver and constraint calls stay excluded, so
+    // actual self modes and trait/constrained methods are rejected.
     const bool free_template =
         !receiver && !constraint && free_generic_template(target);
     const bool free_move = free_template;
-    const bool free_inout =
-        free_template && free_unconstrained_template(target);
+    const bool free_inout = free_template;
     const bool inherent =
         !constraint &&
         inherent_method_route(target, receiver.has_value(), original);
@@ -2930,14 +2923,16 @@ class Checker {
     f.signature = substitute(f.signature, sub, m.types);
     // A generic declaration defers direct mode/type restrictions until the
     // concrete type is known; reject them before publishing invalid HIR. Free
-    // unconstrained templates and eligible inherent methods may carry scalar
-    // inout into the instance; every other source keeps the old refusal after
-    // check_inout_graph has checked the concrete types unconditionally.
+    // generic templates, including trait-constrained ones, and eligible
+    // unconstrained inherent methods may carry scalar inout into the instance;
+    // every other source keeps the old refusal after check_inout_graph has
+    // checked the concrete types unconditionally.
     const bool inout_source =
         !temp.params.empty() &&
-        std::all_of(temp.params.begin(), temp.params.end(),
-                    [](const GenericParam &p) { return !p.trait; }) &&
-        (!impl_method(origin) || inherent_method_source(origin));
+        (free_generic_template(origin) ||
+         (std::all_of(temp.params.begin(), temp.params.end(),
+                      [](const GenericParam &p) { return !p.trait; }) &&
+          inherent_method_source(origin)));
     for (const auto &p : type(f.signature).parameters) {
       if (p.mode != ParamMode::ordinary &&
           type(p.type).kind == TypeKind::ForeignOpaque)
