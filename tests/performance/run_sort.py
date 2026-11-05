@@ -1,11 +1,14 @@
 #!/usr/bin/env python3
-"""Prepare and measure the fixed in-place u32 heap-sort comparison.
+"""Prepare and measure one fixed in-place u32 sort comparison.
 
-One Source program and one hand-written C++ program are generated from the same
-templates, LCG sequence, Python sorted golden array, round count, and per-element
-check.  ``--prepare-only`` builds/runs the primary program at O0/O2, verifies
-exported LLVM IR and objects, and rejects a deliberate high-bit-wrong golden.
-The default stage reuses a passed prepare report and records only whole-process
+``--algorithm heap`` (the default) uses the max-heap sift-down fixture;
+``--algorithm quick`` uses the three-way quicksort fixture.  Each selection has
+its own templates, task, operation ID, report schemas, and metadata.  One Source
+program and one hand-written C++ program are generated from the same templates,
+LCG sequence, Python sorted golden array, round count, and per-element check.
+``--prepare-only`` builds/runs the primary program at O0/O2, verifies exported
+LLVM IR and objects, and rejects a deliberate high-bit-wrong golden.  The
+default stage reuses a passed prepare report and records only whole-process
 wall-clock samples; it never calls the result a pure sort-function time.
 """
 
@@ -24,14 +27,41 @@ from pathlib import Path
 sys.path.insert(0, str(Path(__file__).resolve().parent))
 import run_native as common  # noqa: E402
 
-TASK = "native-heapsort-benchmark"
 CONTRACT = "compiler-dev/1"
-OPERATION_ID = "language-heapsort-benchmark-20261105"
-PREPARE_SCHEMA = "compiler-dev/native-heapsort-preparation/1"
-MEASURE_SCHEMA = "compiler-dev/native-heapsort-measurement/1"
-SELF_TEST_SCHEMA = "compiler-dev/native-heapsort-self-test/1"
-SORT_DIR = Path(__file__).resolve().parent / "sort"
-TEMPLATES = ("heap.lang.in", "reference.cpp.in")
+PERFORMANCE_DIR = Path(__file__).resolve().parent
+ALGORITHMS = {
+    "heap": {
+        "task": "native-heapsort-benchmark",
+        "operation_id": "language-heapsort-benchmark-20261105",
+        "prepare_schema": "compiler-dev/native-heapsort-preparation/1",
+        "measure_schema": "compiler-dev/native-heapsort-measurement/1",
+        "self_test_schema": "compiler-dev/native-heapsort-self-test/1",
+        "arrays_schema": "compiler-dev/native-heapsort-arrays/1",
+        "directory": PERFORMANCE_DIR / "sort",
+        "source_template": "heap.lang.in",
+        "reference_template": "reference.cpp.in",
+        "manifest_name": "perf_sort_heap",
+        "display": "heap-sort",
+        "description": "max-heap sift-down heapsort",
+        "sort_symbol": "heapsort",
+    },
+    "quick": {
+        "task": "native-quicksort-benchmark",
+        "operation_id": "language-quicksort-benchmark-20261105",
+        "prepare_schema": "compiler-dev/native-quicksort-preparation/1",
+        "measure_schema": "compiler-dev/native-quicksort-measurement/1",
+        "self_test_schema": "compiler-dev/native-quicksort-self-test/1",
+        "arrays_schema": "compiler-dev/native-quicksort-arrays/1",
+        "directory": PERFORMANCE_DIR / "quicksort",
+        "source_template": "quick.lang.in",
+        "reference_template": "reference.cpp.in",
+        "manifest_name": "perf_sort_quick",
+        "display": "quicksort",
+        "description": "in-place three-way quicksort",
+        "sort_symbol": "quicksort",
+    },
+}
+DEFAULT_ALGORITHM = "heap"
 DEFAULT_N = 65536
 DEFAULT_SEED = 0x6D2B79F5
 DEFAULT_ROUNDS = 16
@@ -73,12 +103,25 @@ def common_rec():
     return file_rec(Path(common.__file__).resolve())
 
 
-def template_recs():
-    return {name: file_rec(SORT_DIR / name) for name in TEMPLATES}
+def algorithm_config(algorithm):
+    need(algorithm in ALGORITHMS, f"unknown sort algorithm: {algorithm}")
+    return ALGORITHMS[algorithm]
 
 
-def templates():
-    return {name: (SORT_DIR / name).read_text(encoding="utf-8") for name in TEMPLATES}
+def template_names(config):
+    return (config["source_template"], config["reference_template"])
+
+
+def template_recs(algorithm):
+    config = algorithm_config(algorithm)
+    return {name: file_rec(config["directory"] / name)
+            for name in template_names(config)}
+
+
+def templates(algorithm):
+    config = algorithm_config(algorithm)
+    return {name: (config["directory"] / name).read_text(encoding="utf-8")
+            for name in template_names(config)}
 
 
 def lcg_values(n, seed):
@@ -119,8 +162,8 @@ def manifest_text(name):
 
 
 def parameters(args):
-    return {"n": args.n, "seed": args.seed, "seed_hex": hex(args.seed),
-            "rounds": args.rounds}
+    return {"algorithm": args.algorithm, "n": args.n, "seed": args.seed,
+            "seed_hex": hex(args.seed), "rounds": args.rounds}
 
 
 def new_out(path):
@@ -137,14 +180,32 @@ def target_record(args):
             "fast_math": False, "lto": False}
 
 
-def base_report(mode, args, env):
+def base_report(mode, args, env, config):
     report = common.base_report(mode, args, env)
-    report.update({"schema": PREPARE_SCHEMA if mode == "prepare" else MEASURE_SCHEMA,
-                   "task": TASK, "contract": CONTRACT, "operation_id": OPERATION_ID,
-                   "script": script_rec(), "common": common_rec(),
-                   "templates": template_recs(), "parameters": parameters(args),
-                   "target": target_record(args)})
+    report.update({
+        "schema": config["prepare_schema"] if mode == "prepare" else
+                  config["measure_schema"],
+        "task": config["task"], "contract": CONTRACT,
+        "operation_id": config["operation_id"], "algorithm": args.algorithm,
+        "script": script_rec(), "common": common_rec(),
+        "templates": template_recs(args.algorithm), "parameters": parameters(args),
+        "target": target_record(args)})
     return report
+
+
+def require_report_algorithm(report, path, algorithm):
+    config = algorithm_config(algorithm)
+    need(report.get("algorithm") == algorithm,
+         f"{path}: prepare algorithm {report.get('algorithm')!r} does not match "
+         f"requested {algorithm!r}")
+    need(report.get("schema") == config["prepare_schema"],
+         f"{path}: unexpected {algorithm} prepare schema")
+    need(report.get("task") == config["task"] and report.get("contract") == CONTRACT,
+         f"{path}: {algorithm} task/contract mismatch")
+    need(report.get("operation_id") == config["operation_id"],
+         f"{path}: {algorithm} operation_id mismatch")
+    return config
+
 
 def tool(argv, args, env):
     return common.command(argv, timeout=args.timeout, env=env, cpu=args.cpu)
@@ -192,10 +253,12 @@ def require_work(info, label):
          f"{label}: optimized IR lacks sorting loops/accesses: loops={info['loop_count']} {counts}")
 
 
-def write_arrays(out, name, raw, golden, params):
+def write_arrays(out, name, raw, golden, params, algorithm):
+    config = algorithm_config(algorithm)
     path = out / "arrays" / name
     path.parent.mkdir(parents=True, exist_ok=True)
-    data = {"schema": "compiler-dev/native-heapsort-arrays/1", "parameters": params,
+    data = {"schema": config["arrays_schema"], "algorithm": algorithm,
+            "parameters": params,
             "lcg": {"multiplier": 1664525, "increment": 1013904223, "mask": "0xffffffff"},
             "raw": raw, "golden": golden, "raw_sequence_sha256": seq_sha(raw),
             "golden_sequence_sha256": seq_sha(golden)}
@@ -209,16 +272,18 @@ def write_arrays(out, name, raw, golden, params):
     return record
 
 
-def generate_sources(out, template_map, raw, golden, params, name):
+def generate_sources(out, template_map, raw, golden, params, name, algorithm):
+    config = algorithm_config(algorithm)
     directory = out / name
     (directory / "src").mkdir(parents=True, exist_ok=False)
     (directory / "src" / "main.lang").write_text(
-        render(template_map["heap.lang.in"], raw, golden, params["n"], params["seed"],
-               params["rounds"]), encoding="utf-8")
+        render(template_map[config["source_template"]], raw, golden, params["n"],
+               params["seed"], params["rounds"]), encoding="utf-8")
     (directory / "reference.cpp").write_text(
-        render(template_map["reference.cpp.in"], raw, golden, params["n"], params["seed"],
-               params["rounds"]), encoding="utf-8")
-    (directory / "lang.toml").write_text(manifest_text("perf_sort_heap"), encoding="utf-8")
+        render(template_map[config["reference_template"]], raw, golden, params["n"],
+               params["seed"], params["rounds"]), encoding="utf-8")
+    (directory / "lang.toml").write_text(manifest_text(config["manifest_name"]),
+                                         encoding="utf-8")
     return {"directory": str(directory),
             "manifest": file_rec(directory / "lang.toml", out),
             "source": file_rec(directory / "src" / "main.lang", out),
@@ -226,19 +291,23 @@ def generate_sources(out, template_map, raw, golden, params, name):
 
 
 def prepare(args):
+    config = algorithm_config(args.algorithm)
     env, out, report = common.make_env(args), new_out(args.out), None
-    report = {"schema": PREPARE_SCHEMA, "task": TASK, "contract": CONTRACT,
-              "operation_id": OPERATION_ID, "mode": "prepare", "status": "running",
+    report = {"schema": config["prepare_schema"], "task": config["task"],
+              "contract": CONTRACT, "operation_id": config["operation_id"],
+              "algorithm": args.algorithm, "mode": "prepare", "status": "running",
               "commands": [], "verifies": [], "loop_analyses": []}
     common._COMMAND_LOG = report["commands"]
     try:
-        report.update(base_report("prepare", args, env))
-        template_map = templates()
+        report.update(base_report("prepare", args, env, config))
+        template_map = templates(args.algorithm)
         params = parameters(args)
         raw, golden = lcg_values(args.n, args.seed), None
         golden = sorted(raw)
-        report["arrays"] = write_arrays(out, "primary.json", raw, golden, params)
-        source = generate_sources(out, template_map, raw, golden, params, "source")
+        report["arrays"] = write_arrays(out, "primary.json", raw, golden, params,
+                                        args.algorithm)
+        source = generate_sources(out, template_map, raw, golden, params, "source",
+                                  args.algorithm)
         manifest = out / source["manifest"]["rel"]
         primary = {"source": source, "builds": [], "executions": [], "helper": [],
                    "work": {}, "cpp_ir_o2": None}
@@ -352,11 +421,15 @@ def prepare(args):
         need(wrong[flip_index] != control_golden[flip_index], "wrong-golden value did not change")
         need((wrong[flip_index] & 0xFF) == (control_golden[flip_index] & 0xFF),
              "wrong-golden control changed low 8 bits")
-        control_params = {"n": n, "seed": args.seed, "seed_hex": hex(args.seed), "rounds": 1}
-        control_arrays = write_arrays(out, "wrong-golden.json", control_raw, wrong, control_params)
-        control_source = generate_sources(out, template_map, control_raw, wrong, control_params,
-                                          "wrong-golden")
-        control = {"parameters": control_params, "arrays": control_arrays,
+        control_params = {"algorithm": args.algorithm, "n": n, "seed": args.seed,
+                          "seed_hex": hex(args.seed), "rounds": 1}
+        control_arrays = write_arrays(out, "wrong-golden.json", control_raw, wrong,
+                                      control_params, args.algorithm)
+        control_source = generate_sources(out, template_map, control_raw, wrong,
+                                          control_params, "wrong-golden",
+                                          args.algorithm)
+        control = {"algorithm": args.algorithm, "parameters": control_params,
+                   "arrays": control_arrays,
                    "source": control_source, "correct_value": control_golden[flip_index],
                    "wrong_value": wrong[flip_index], "flip_index": flip_index,
                    "high_bit_flipped": 1 << 31, "low8_preserved": True,
@@ -416,15 +489,15 @@ def prepare(args):
             "wrong_golden_rejections": control["summary"]["rejections"],
             "wrong_golden_failure_commands": control["summary"]["failure_commands_preserved"],
         }
-        report["limitations"] = limitations()
-        report["not_run"] = not_run_items(formal=False)
+        report["limitations"] = limitations(args.algorithm)
+        report["not_run"] = not_run_items(args.algorithm, formal=False)
         report["status"] = "passed"
     except Exception as error:
         report["status"] = "failed"
         report["failure"] = {"type": type(error).__name__, "message": str(error),
                              "traceback": traceback.format_exc()}
-        report.setdefault("limitations", limitations())
-        report.setdefault("not_run", not_run_items(formal=False))
+        report.setdefault("limitations", limitations(args.algorithm))
+        report.setdefault("not_run", not_run_items(args.algorithm, formal=False))
     finally:
         report["finished_at"] = now()
         report["loadavg_after"] = common.host_info()["loadavg"]
@@ -442,17 +515,16 @@ def load_prepare_report(path, args, current_build_tree, current_host):
     path = Path(path).resolve()
     need(path.is_file(), f"missing prepare report: {path}")
     report = json.loads(path.read_text(encoding="utf-8"))
-    need(report.get("schema") == PREPARE_SCHEMA, f"{path}: unexpected prepare schema")
+    require_report_algorithm(report, path, args.algorithm)
     need(report.get("status") == "passed", f"{path}: prepare status is not passed")
-    need(report.get("task") == TASK and report.get("contract") == CONTRACT,
-         f"{path}: task/contract mismatch")
-    need(report.get("operation_id") == OPERATION_ID, f"{path}: operation_id mismatch")
     need(report.get("script", {}).get("sha256") == script_rec()["sha256"],
          f"{path}: prepare used a different script version")
     need(report.get("common", {}).get("sha256") == common_rec()["sha256"],
          f"{path}: common run_native.py changed since prepare")
-    need(report.get("templates") == template_recs(), f"{path}: sort templates changed")
-    need(report.get("parameters") == parameters(args), f"{path}: N/seed/rounds changed")
+    need(report.get("templates") == template_recs(args.algorithm),
+         f"{path}: {args.algorithm} templates changed")
+    need(report.get("parameters") == parameters(args),
+         f"{path}: algorithm/N/seed/rounds changed")
     need(report.get("target") == target_record(args), f"{path}: target flags changed")
     need(report.get("host", {}).get("cpu_model") == current_host.get("cpu_model"),
          f"{path}: CPU model differs from prepare")
@@ -533,13 +605,15 @@ def load_prepare_report(path, args, current_build_tree, current_host):
 
 
 def measure(args):
+    config = algorithm_config(args.algorithm)
     env, out = common.make_env(args), new_out(args.out)
-    report = {"schema": MEASURE_SCHEMA, "task": TASK, "contract": CONTRACT,
-              "operation_id": OPERATION_ID, "mode": "measure", "status": "running",
+    report = {"schema": config["measure_schema"], "task": config["task"],
+              "contract": CONTRACT, "operation_id": config["operation_id"],
+              "algorithm": args.algorithm, "mode": "measure", "status": "running",
               "commands": []}
     common._COMMAND_LOG = report["commands"]
     try:
-        report.update(base_report("measure", args, env))
+        report.update(base_report("measure", args, env, config))
         prepared, prepared_path = load_prepare_report(
             args.prepare_report, args, report["build_tree"], report["host"])
         report["prepare"] = {"path": str(prepared_path),
@@ -596,15 +670,15 @@ def measure(args):
             "warnings": sum(len(row["warnings"]) for row in report["runs"]),
             "threshold_applied": False,
         }
-        report["limitations"] = limitations()
-        report["not_run"] = not_run_items(formal=True)
+        report["limitations"] = limitations(args.algorithm)
+        report["not_run"] = not_run_items(args.algorithm, formal=True)
         report["status"] = "passed"
     except Exception as error:
         report["status"] = "failed"
         report["failure"] = {"type": type(error).__name__, "message": str(error),
                              "traceback": traceback.format_exc()}
-        report.setdefault("limitations", limitations())
-        report.setdefault("not_run", not_run_items(formal=True))
+        report.setdefault("limitations", limitations(args.algorithm))
+        report.setdefault("not_run", not_run_items(args.algorithm, formal=True))
     finally:
         report["finished_at"] = now()
         report["loadavg_after"] = common.host_info()["loadavg"]
@@ -618,23 +692,25 @@ def measure(args):
     return 0 if report["status"] == "passed" else 1
 
 
-def limitations():
+def limitations(algorithm):
+    config = algorithm_config(algorithm)
     return [
-        "Timing is whole-process wall time: process startup, loader, input generation, heap sort, and full per-element verification are included; there is no source-level clock or pure sort-function timing.",
+        f"Timing is whole-process wall time: process startup, loader, input generation, {config['display']}, and full per-element verification are included; there is no source-level clock or pure sort-function timing.",
         "The Source and C++ programs generate each round's input from the same fixed LCG seed and verify every element against an independent Python sorted golden array; the sorted previous round is overwritten before each sort.",
         "No LTO, fast-math, -march=native, CPU governor change, cache flush, process killing, or performance counter is used.",
         "C++ is compiled with the fixed generic x86_64 target and the same LLVM ld.lld; language build time and C++ compile time are not timing samples.",
-        "Only the fixed x86_64 heap-sort fixture is covered; results do not generalize to other targets, compilers, kernels, or input sizes.",
+        f"Only the fixed x86_64 {config['display']} fixture ({config['description']}) is covered; results do not generalize to other algorithms, targets, compilers, kernels, or input sizes.",
         "Warmups do not control cold file-cache behavior. A minimum below 50 ms is reported as startup/loader-sensitive, not as a pure sorting result.",
     ]
 
 
-def not_run_items(*, formal):
+def not_run_items(algorithm, *, formal):
+    config = algorithm_config(algorithm)
     items = [
         {"item": "cold_file_cache", "reason": "no controlled cache-drop/flush entry"},
         {"item": "perf_counters", "reason": "no hardware/software performance counters were collected"},
         {"item": "governor_or_cpu_isolation", "reason": "the harness does not change the governor or isolate CPUs"},
-        {"item": "other_kernels_targets_platforms", "reason": "only the fixed x86_64 heap-sort fixture is covered"},
+        {"item": "other_algorithms_kernels_targets_platforms", "reason": f"only the fixed x86_64 {config['display']} fixture is covered"},
     ]
     if not formal:
         items.append({"item": "formal_timing",
@@ -642,7 +718,8 @@ def not_run_items(*, formal):
     return items
 
 
-def self_test():
+def self_test(algorithm):
+    config = algorithm_config(algorithm)
     checks, old_log, log = [], common._COMMAND_LOG, []
     common._COMMAND_LOG = log
     try:
@@ -653,9 +730,53 @@ def self_test():
         checks.append({"name": "golden-sorted", "status": "passed" if golden == sorted(raw) else "failed"})
         checks.append({"name": "wrong-golden-differs", "status": "passed" if
                        wrong != golden and (wrong[4] & 0xFF) == (golden[4] & 0xFF) else "failed"})
-        rendered = render(templates()["heap.lang.in"], raw, golden, 8, DEFAULT_SEED, 1)
+        template_map = templates(algorithm)
+        rendered = render(template_map[config["source_template"]], raw, golden,
+                          8, DEFAULT_SEED, 1)
         checks.append({"name": "source-render-complete",
                        "status": "passed" if "{{" not in rendered else "failed"})
+        rendered_reference = render(template_map[config["reference_template"]],
+                                    raw, golden, 8, DEFAULT_SEED, 1)
+        checks.append({"name": "reference-render-complete",
+                       "status": "passed" if "{{" not in rendered_reference else "failed"})
+        records = template_recs(algorithm)
+        checks.append({
+            "name": "algorithm-template-identity",
+            "status": "passed" if
+            set(records) == set(template_names(config)) and
+            all(Path(record["path"]).parent == config["directory"].resolve()
+                for record in records.values()) and
+            f"func {config['sort_symbol']}(" in rendered and
+            f"{config['sort_symbol']}(" in rendered_reference and
+            config["manifest_name"] in manifest_text(config["manifest_name"])
+            else "failed",
+        })
+        checks.append({"name": "default-algorithm-is-heap",
+                       "status": "passed" if parse_args([]).algorithm == "heap" else "failed"})
+        checks.append({"name": "explicit-algorithm-selected",
+                       "status": "passed" if
+                       parse_args(["--self-test", "--algorithm", algorithm]).algorithm == algorithm
+                       else "failed"})
+        fake = {"algorithm": algorithm, "schema": config["prepare_schema"],
+                "task": config["task"], "contract": CONTRACT,
+                "operation_id": config["operation_id"]}
+        try:
+            require_report_algorithm(fake, "self-test", algorithm)
+            accepted = True
+        except PerfError:
+            accepted = False
+        checks.append({"name": "matching-algorithm-report-accepted",
+                       "status": "passed" if accepted else "failed"})
+        other = next(name for name in ALGORITHMS if name != algorithm)
+        try:
+            require_report_algorithm(fake, "self-test", other)
+            rejection = None
+        except PerfError as error:
+            rejection = str(error)
+        checks.append({"name": "cross-algorithm-report-rejected",
+                       "status": "passed" if rejection is not None and
+                       "algorithm" in rejection and algorithm in rejection and
+                       other in rejection else "failed"})
         failed = common.command(
             [sys.executable, "-c", "import sys; print('expected-failure'); sys.exit(7)"],
             timeout=10, env=os.environ.copy())
@@ -670,8 +791,9 @@ def self_test():
                        and len(log) == 2 else "failed"})
     finally:
         common._COMMAND_LOG = old_log
-    result = {"schema": SELF_TEST_SCHEMA, "task": TASK, "contract": CONTRACT,
-              "operation_id": OPERATION_ID, "status": "passed" if all(
+    result = {"schema": config["self_test_schema"], "task": config["task"],
+              "contract": CONTRACT, "operation_id": config["operation_id"],
+              "algorithm": algorithm, "status": "passed" if all(
                   row["status"] == "passed" for row in checks) else "failed",
               "checks": checks, "command_records": len(log)}
     print(json.dumps(result, indent=2, ensure_ascii=False))
@@ -680,6 +802,8 @@ def self_test():
 
 def parse_args(argv=None):
     parser = argparse.ArgumentParser(description=__doc__)
+    parser.add_argument("--algorithm", choices=tuple(ALGORITHMS), default=DEFAULT_ALGORITHM,
+                        help="sort fixture to prepare/measure (default: heap)")
     parser.add_argument("--prepare-only", action="store_true")
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--out", type=Path)
@@ -724,7 +848,7 @@ def validate_args(args):
 def main(argv=None):
     args = parse_args(argv)
     if args.self_test:
-        return self_test()
+        return self_test(args.algorithm)
     try:
         validate_args(args)
         return prepare(args) if args.prepare_only else measure(args)

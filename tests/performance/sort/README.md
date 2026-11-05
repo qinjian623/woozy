@@ -1,7 +1,7 @@
-# Native u32 heap-sort comparison
+# Native u32 sort comparisons
 
-`tests/performance/run_sort.py` generates and validates one Source program and
-one hand-written C++ program that both:
+`tests/performance/run_sort.py --algorithm heap` (the default) generates and
+validates one Source program and one hand-written C++ program that both:
 
 1. fill the same `Vec[u32]` / `std::vector<uint32_t>` from the fixed 32-bit LCG
    `state = state * 1664525 + 1013904223` (wrapping) with seed `0x6d2b79f5`;
@@ -9,22 +9,33 @@ one hand-written C++ program that both:
 3. compare every element with an independently generated Python `sorted` golden
    array.
 
-The fixed default is `N=65536`, `16` rounds. Each round refills all `N`
-elements from the same seed before sorting, so an already sorted array from the
-previous round is never used as the next input. The previous array is never
-re-used as the golden array.
+The fixed default is `N=65536`, `16` rounds.  `--algorithm quick` selects the
+separate in-place three-way quicksort fixture in
+`tests/performance/quicksort/`; it uses the same LCG inputs, golden array,
+round count, target flags, and prepare/report checks.  The two selections have
+distinct task names, operation IDs, report schemas, templates, and manifests,
+and measurement refuses a prepare report made for the other algorithm. Each
+round refills all `N` elements from the same seed before sorting, so an already
+sorted array from the previous round is never used as the next input. The
+previous array is never re-used as the golden array.
 
-The Source program uses only the existing literal `Vec` allocation and plain
-`Vec` parameters whose elements are mutated. It does not use `inout Vec`,
-`len`, `push`, indexing `inout`, recursion, FFI, or a source-level clock.
+Both Source programs use only the existing literal `Vec` allocation and plain
+`Vec` parameters whose elements are mutated. They do not use `inout Vec`,
+`len`, `push`, indexing `inout`, FFI, or a source-level clock. The heap fixture
+uses no recursion; the quicksort fixture uses ordinary function recursion for
+the smaller partition and loops on the larger partition.
 
 ## Files
 
-- `heap.lang.in`: Source template (`{{ARRAY}}`, `{{EXPECTED}}`, `{{N}}`,
-  `{{SEED}}`, `{{ROUNDS}}`).
-- `reference.cpp.in`: C++20 reference template with the same placeholders.
-- `run_sort.py`: generator, prepare/verification harness, and measurement
-  harness.
+- `heap.lang.in`: Source heap-sort template (`{{ARRAY}}`, `{{EXPECTED}}`,
+  `{{N}}`, `{{SEED}}`, `{{ROUNDS}}`).
+- `reference.cpp.in`: C++20 heap-sort reference template with the same
+  placeholders.
+- `../quicksort/quick.lang.in`: Source quicksort template with the same
+  placeholders.
+- `../quicksort/reference.cpp.in`: C++20 quicksort reference template.
+- `run_sort.py`: algorithm selector, generator, prepare/verification harness,
+  and measurement harness.
 
 The generated source, arrays, IR, objects, binaries, and reports go under
 `build/sort-prepare/**` and are not committed.
@@ -79,15 +90,20 @@ and C++ at O0/O2 must exit exactly 1 with empty stdout/stderr. A crash, Panic,
 or unexpected successful exit fails prepare. These four deliberately failing
 commands and their full argv/exit/output records remain in `prepare.json`.
 
-`run_sort.py --self-test` checks the LCG/golden/wrong-bit helpers and verifies
-that a failed command and a timed-out command are retained in the command log.
+`run_sort.py --self-test` checks the LCG/golden/wrong-bit helpers, renders the
+selected algorithm templates, verifies the default/heap and explicit algorithm
+selection, checks that a matching prepare report is accepted and a
+cross-algorithm report is rejected, and verifies that a failed command and a
+timed-out command are retained in the command log.  Run it once with the
+default (heap) selection and once with `--algorithm quick`.
 
 ## Formal measurement
 
 Run the measurement stage only after preparation has stopped and the host is
-otherwise idle. It refuses to run unless the prepare report is `passed` and the
-script, common `run_native.py`, templates, generated source/golden arrays, tool
-paths/SHA-256, build-tree definitions, objects, and binaries still match.
+otherwise idle. It refuses to run unless the prepare report is `passed`, belongs to the same
+`--algorithm`, and the script, common `run_native.py`, templates, generated
+source/golden arrays, tool paths/SHA-256, build-tree definitions, objects, and
+binaries still match.
 
 ```sh
 "$PY" tests/performance/run_sort.py \
@@ -110,8 +126,8 @@ stage; missing samples are never counted as zero. A minimum below 50 ms is
 flagged as startup/loader-sensitive.
 
 The measured duration is the whole ELF process: process startup, loader,
-container allocations, fixed-input generation, heap sort, full per-element
-verification, and cleanup. It includes all 16 rounds. It is **not** a pure
+container allocations, fixed-input generation, the selected sort, full
+per-element verification, and cleanup. It includes all 16 rounds. It is **not** a pure
 sort-function time and no source-level clock is inserted. An optional
 `whole_process_ns_per_round` is the whole-process median divided by the round
 count, not a pure sorting cost.
@@ -121,5 +137,6 @@ count, not a pure sorting cost.
 - Cold file-cache behavior, cache flushing, governor changes, CPU isolation, or
   killing other processes.
 - Hardware/software performance counters.
-- Targets, CPU models, input sizes, or algorithms other than this fixed fixture.
+- Targets, CPU models, input sizes, or algorithms other than the selected fixed
+  heap or quicksort fixture.
 - In-process sort-only timing or a separate exported sort kernel.
