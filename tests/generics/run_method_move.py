@@ -16,7 +16,8 @@ CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
          'generic-impl-errors', 'generic-impl-own',
          'generic-impl-own-errors', 'constrained-inherent', 'trait-modes',
          'trait-type-call-factory', 'trait-type-call-owned',
-         'trait-type-call-self')
+         'trait-type-call-self', 'trait-generic-phantom',
+         'trait-generic-multi')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -34,6 +35,8 @@ EXPECTED_EVENTS = {
     'trait-type-call-factory': [3, 2, 4, 9],
     'trait-type-call-owned': [],
     'trait-type-call-self': [],
+    'trait-generic-phantom': [],
+    'trait-generic-multi': [9, 3],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -52,6 +55,8 @@ EXPECTED_ALLOCATIONS = {
     'trait-type-call-factory': 0,
     'trait-type-call-owned': 8,
     'trait-type-call-self': 0,
+    'trait-generic-phantom': 0,
+    'trait-generic-multi': 16,
 }
 
 
@@ -340,6 +345,30 @@ def assert_python(case, data):
         assert snapshots['a'] == [7] and snapshots['b'] == [8], data
         assert snapshots['c'] == [9] and snapshots['d'] == [10], data
         assert not data['errors'], data
+    elif case == 'trait-generic-phantom':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['forwarded'] == 66, data
+        assert snapshots['direct'] == 66, data
+        assert not data['errors'], data
+        assert data['events'] == [], data
+        assert data['allocations'] == [] and data['frees'] == [], data
+    elif case == 'trait-generic-multi':
+        snapshots = data.get('snapshots', {})
+        for alias, result in (('relayed', 'va'), ('made', 'ma'),
+                              ('ordered', 'ordered_alias'),
+                              ('saved', 'saved_alias')):
+            assert snapshots[alias]['object'] == snapshots[result]['object'], data
+        assert snapshots['relayed']['items'] == [17], data
+        assert snapshots['made']['items'] == [18], data
+        assert snapshots['ordered']['items'] == [19], data
+        assert snapshots['saved']['items'] == [21], data
+        assert snapshots['picked'] == 3 and snapshots['log'] == 93, data
+        assert snapshots['early_alias']['items'] == [10], data
+        assert data['events'] == [9, 3], data
+        assert [(error['function'], error['value'][1][0])
+                for error in data['errors']] == [
+                    ('failing_vec', 4), ('failing_one', 3), ('relay', 7),
+                    ('make', 8), ('relay', 7), ('via', 7)], data
     else:
         assert any(error['function'] == 'consume' and
                    error['type'] == 'app.E' for error in data['errors']), data

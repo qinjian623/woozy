@@ -7104,11 +7104,24 @@ func main() i32 {
               "impl V[i32] for i32{func bad(self Self,"
               "f func(inout Self,Self)Self){}} "
               "func main()i32{return 0;}");
+  // This old source has a method-own parameter on the prototype but not on
+  // the impl. It is now a precise source signature error, not a capability
+  // limit. The own-consistent counterpart below still rejects the unsupported
+  // Self-dependent inout callback even when actually called.
+  bad("trait V{func bad[U](self Self,"
+      "f func(inout Self,Self)Self);}"
+      "impl V for i32{func bad(self Self,"
+      "f func(inout Self,Self)Self){}} "
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
   unsupported("trait V{func bad[U](self Self,"
               "f func(inout Self,Self)Self);}"
-              "impl V for i32{func bad(self Self,"
+              "impl V for i32{func bad[U](self Self,"
               "f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
+              "func bump(slot inout i32,value i32)i32{"
+              "let old=slot;slot=value;return old;} "
+              "func main()i32{let o i32=1;"
+              "let f func(inout i32,i32)i32=bump;"
+              "return o.bad[i32](f);}");
   // A trait-static prototype has no Self-typed first parameter, so the new
   // callback context does not open `inout Self` in its callback.
   unsupported("trait V{func bad(f func(inout Self,Self)Self);}"
@@ -7823,8 +7836,12 @@ void trait_static_calls() {
   bad(maker + echo + build +
           "func main()i32{return build[Box[i32]](nope:1).value;}",
       "E_CALL_ARGUMENT");
-  unsupported(
-      maker + "func build[T Maker](seed i32)T{return T.make[i32](seed);}");
+  // `make` has no method-own generic parameter. The explicit suffix is now a
+  // precise wrong-arity source error instead of the old blanket capability
+  // message that covered all method generics.
+  bad(maker +
+          "func build[T Maker](seed i32)T{return T.make[i32](seed);}",
+      "E_TYPE_MISMATCH");
   bad("trait Left{func pick()i32;} trait Right{func pick()i32;}"
       "struct Box{} impl Left for Box{func pick()i32{return 1;}}"
       "impl Right for Box{func pick()i32{return 2;}}"
@@ -7925,6 +7942,484 @@ void trait_static_calls() {
     c.method = right->methods[0].symbol;
   });
 }
+void trait_method_generics(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto verified = hir::verify_types(*r.value);
+    need(verified.success(), "trait method generics HIR rejected: " + text +
+                                 "\n" + messages(verified));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "trait method generics did not publish: " + text +
+                                  "\n" + messages(published));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+
+  const std::string values =
+      "trait V{func get(owner Self)i32;}"
+      "struct One{n i32;} struct Two{n i32;}"
+      "impl V for One{func get(owner Self)i32{return 1;}}"
+      "impl V for Two{func get(owner Self)i32{return 2;}}";
+
+  // Multiple own parameters, positional alpha renaming, a real bound on one
+  // own parameter, both inferred and explicit calls, and an uncalled template.
+  good(values +
+       "trait Mix{func mix[A,B V](owner Self,first A,second B)i32;}"
+       "struct Box[T]{value T;}"
+       "impl[T] Mix for Box[T]{"
+       "func mix[U,W V](owner Self,first U,second W)i32{"
+       "return second.get()+1;}}"
+       "func never[T Mix,A,B V](x T,a A,b B)i32{return T.mix[A,B](x,a,b);}"
+       "func main()i32{let b=Box[i32](value:0);"
+       "let a=b.mix(1,One(n:0));"
+       "let c i32=Box[i32].mix[i32,Two](b,1,Two(n:0));"
+       "let d=b.mix[bool,One](true,One(n:0));"
+       "return a+c+d-7;}");
+
+  // A generic, noncapturing lambda carries the enclosing template's real
+  // instance substitution into the method-own argument.
+  good(values +
+       "trait Pick{func pick[U V](owner Self)i32;}"
+       "struct Box[T]{value T;}"
+       "impl[T] Pick for Box[T]{func pick[U V](owner Self)i32{return 1;}}"
+       "func factory[T Pick]()(func(T) i32){"
+       "return func(x T)i32{return T.pick[One](x);};}"
+       "func main()i32{let b=Box[i32](value:0);"
+       "return factory[Box[i32]]()(b)-1;}");
+
+  // A fixed-scalar callback remains ordinary inside a generic trait method;
+  // only a callback inout that depends on the method-own or Self parameter is
+  // a new capability limit.
+  good(values +
+       "trait CB{func run[U V](owner Self,cb func(inout i32,i32)i32,tag U)i32;}"
+       "struct H{}"
+       "impl CB for H{func run[W V](owner Self,"
+       "cb func(inout i32,i32)i32,tag W)i32{"
+       "var slot i32=1;return cb(inout slot,2);}}"
+       "func bump(slot inout i32,value i32)i32{"
+       "let old=slot;slot=value;return old;}"
+       "func main()i32{let h=H();"
+       "let f func(inout i32,i32)i32=bump;"
+       "return h.run[One](f,One(n:0))-1;}");
+
+  // A zero-argument generic trait method (besides the receiver) keeps its
+  // phantom own parameter through value, Type, and bounded T entries.
+  good(values +
+       "trait Pick{func pick[U V](owner Self)i32;}"
+       "struct S{}"
+       "impl Pick for S{func pick[U V](owner Self)i32{return 1;}}"
+       "func via[T Pick,U V](x T)i32{return T.pick[U](x);}"
+       "func main()i32{let s=S();"
+       "return s.pick[(One)]()+S.pick[Two](s)+via[S,One](s)-3;}");
+
+  // Ordinary owned struct/enum parameters and returns use method-own types.
+  good("enum E{V(value i32);} struct S{value i32;}"
+       "trait Id{func id[U](owner Self,value U)U;}"
+       "struct H{}"
+       "impl Id for H{func id[U](owner Self,value U)U{return value;}}"
+       "func main()i32{let h=H();let e=h.id[E](E.V(value:7));"
+       "let s=h.id[S](S(value:8));"
+       "switch e{case E.V(x):return x+s.value-15;}}");
+
+  // A type parameter may itself be used as the method-own value type.
+  good(values +
+       "trait Wrap{func keep[U,W V](owner Self,value U,tag W)U;}"
+       "struct Box[T]{value T;}"
+       "impl[T] Wrap for Box[T]{"
+       "func keep[U,X V](owner Self,value U,tag X)U{return value;}}"
+       "func via[X Wrap,A,B V](x X,value A,tag B)A{"
+       "return X.keep[A,B](x,value,tag);}"
+       "func main()i32{let b=Box[i32](value:0);"
+       "return via[Box[i32],i32,One](b,7,One(n:0))-7;}");
+
+  // A real cross-package public trait and generic impl method.
+  {
+    Temp t;
+    fs::create_directories(t.path / "src/lib");
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write(t.path / "src/lib/lib.lang",
+          "package lib; "
+          "pub trait Echo{func echo[U](owner Self,value U)U;}"
+          "pub struct Box[T]{pub value i32;}"
+          "impl[T] Echo for Box[T]{"
+          "func echo[U](owner Self,value U)U{return value;}}");
+    write(t.path / "src/main.lang",
+          "package app; import \"app/lib\" as lib; "
+          "func via[T lib.Echo,U](x T,value U)U{return T.echo[U](x,value);}"
+          "func main()i32{let b=lib.Box[i32](value:0);"
+          "let a=via[lib.Box[i32],i32](b,7);"
+          "let c=lib.Box[i32].echo[i32](b,8);"
+          "return a+c-15;}");
+    auto r = check(t.path / "lang.toml");
+    need(r.success(), messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "cross-package generic trait method HIR rejected");
+    need(hir::verify(*r.value).success(),
+         "cross-package generic trait method did not publish");
+  }
+
+  // Explicit/inferred/context conflicts and missing phantom parameters are
+  // source errors, not internal HIR failures.
+  bad(values +
+          "trait Pick{func pick[U V](owner Self)i32;}"
+          "struct S{}"
+          "impl Pick for S{func pick[U V](owner Self)i32{return 1;}}"
+          "func main()i32{let s=S();return s.pick();}",
+      "E_TYPE_MISMATCH");
+  bad(values +
+          "trait Pick{func pick[U V](owner Self)i32;}"
+          "struct S{}"
+          "impl Pick for S{func pick[U V](owner Self)i32{return 1;}}"
+          "func main()i32{let s=S();return s.pick[One,Two]();}",
+      "E_TYPE_MISMATCH");
+  bad(values +
+          "trait Echo{func echo[U](owner Self,value U)U;}"
+          "struct S{}"
+          "impl Echo for S{func echo[U](owner Self,value U)U{return value;}}"
+          "func main()i32{let s=S();let n i32=7;"
+          "return s.echo[One](n);}",
+      "E_TYPE_MISMATCH");
+
+  // Declaration shape is checked even when no call instantiates the method.
+  bad(values +
+          "trait Pair{func pair[A,B V](owner Self,first A,second B)i32;}"
+          "struct S{}"
+          "impl Pair for S{func pair[A](owner Self,first A,second A)i32{"
+          "return 1;}} func main()i32{return 0;}",
+      "E_TYPE_MISMATCH");
+  bad(values +
+          "trait Pair{func pair[A,B V](owner Self,first A,second B)i32;}"
+          "struct S{}"
+          "impl Pair for S{func pair[A,W](owner Self,first A,second W)i32{"
+          "return 1;}} func main()i32{return 0;}",
+      "E_TYPE_MISMATCH");
+  bad(values +
+          "trait Pair{func pair[A](owner Self,first A)i32;}"
+          "struct S{}"
+          "impl Pair for S{func pair[A](owner Self,second A)i32{return 1;}}"
+          "func main()i32{return 0;}",
+      "E_TYPE_MISMATCH");
+  bad("enum E{A;} " + values +
+          "trait Pair{func pair[A](owner Self,first A)i32 throws E;}"
+          "struct S{}"
+          "impl Pair for S{func pair[A](owner Self,first A)i32{return 1;}}"
+          "func main()i32{return 0;}",
+      "E_TYPE_MISMATCH");
+
+  // New generic trait methods stay ordinary at their top-level boundary and
+  // do not add a dependent inout callback mode. Existing non-generic trait
+  // move/inout is covered by the earlier trait-modes fixtures.
+  unsupported(values +
+              "trait Move{func take[U](owner Self,value move U)U;}"
+              "struct S{}"
+              "impl Move for S{func take[U](owner Self,value move U)U{"
+              "return move value;}} func main()i32{return 0;}");
+  unsupported(values +
+              "trait Slot{func set[U](owner Self,slot inout U);}"
+              "struct S{}"
+              "impl Slot for S{func set[U](owner Self,slot inout U){}}"
+              "func main()i32{return 0;}");
+  unsupported(values +
+              "trait Callback{func run[U](owner Self,cb func(inout U));}"
+              "struct S{}"
+              "impl Callback for S{func run[U](owner Self,cb func(inout U)){}}"
+              "func main()i32{return 0;}");
+  unsupported(values +
+              "trait Move{func take[U](self move Self,value U)U;}"
+              "struct S{}"
+              "impl Move for S{func take[U](self move Self,value U)U{"
+              "return value;}} func main()i32{return 0;}");
+
+  // Published HIR: the prototype's own parameter is a real type parameter,
+  // while its runtime parameter list stays the declared owner Self.
+  // The same restriction covers returned callbacks and nominal fields or
+  // payloads, including declarations that are never instantiated.
+  unsupported("trait M{func make[U](owner Self) (func(inout U,U)U);}"
+              "func main()i32{return 0;}");
+  unsupported("trait M{func make[U](owner Self) (func(inout Self,Self)Self);}"
+              "func main()i32{return 0;}");
+  unsupported("struct Holder[Q]{cb func(inout Q,Q)Q;}"
+              "trait M{func use[U](owner Self,value Holder[U])i32;}"
+              "func main()i32{return 0;}");
+  unsupported("enum Envelope[Q]{Hidden(cb func(inout Q,Q)Q);}"
+              "trait M{func use[U](owner Self,value Envelope[U])i32;}"
+              "func main()i32{return 0;}");
+  good("struct Holder[Q]{cb func(inout i32,i32)i32;}"
+       "struct Loop[Q]{cb func(Loop[Q]);}"
+       "trait M{func fixed[U](owner Self,value Holder[U])"
+       "(func(inout i32,i32)i32);"
+       "func ordinary[U](owner Self,value Loop[U]) (func(U)U);}"
+       "func main()i32{return 0;}");
+
+  auto phantom_result =
+      check(root /
+            "tests/generics/method-move/trait-generic-phantom/lang.toml");
+  need(phantom_result.success(), messages(phantom_result));
+  need(hir::verify_types(*phantom_result.value).success(),
+       "phantom trait method fixture HIR rejected");
+  need(hir::verify(*phantom_result.value).success(),
+       "phantom trait method fixture did not publish");
+  const auto &pm = *phantom_result.value;
+  auto name = [&](SymbolId s) -> const std::string & {
+    return pm.resolved->symbols.at(s.value).name;
+  };
+  auto nominal_name = [&](TypeId id) -> std::string {
+    auto t = pm.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return name(t->declaration);
+  };
+  auto type_argument_name = [&](TypeId id) -> std::string {
+    auto t = pm.types.find(id);
+    if (!t)
+      return {};
+    if (t->kind == hir::TypeKind::TypeParameter)
+      return name(t->declaration);
+    auto nominal = nominal_name(id);
+    if (!nominal.empty())
+      return nominal;
+    if (t->kind == hir::TypeKind::Bool)
+      return "bool";
+    if (t->kind == hir::TypeKind::SignedInt)
+      return "i" + std::to_string(t->bits);
+    return {};
+  };
+  const hir::TraitDecl *stamp = nullptr;
+  for (const auto &t : pm.traits)
+    if (name(t.symbol) == "Stamp")
+      stamp = &t;
+  need(stamp && stamp->methods.size() == 1, "Stamp trait missing");
+  const auto &stamp_prototype = stamp->methods.front();
+  need(stamp_prototype.parameters.size() == 1 &&
+           stamp_prototype.parameters.front().label == "owner",
+       "prototype runtime parameters were confused with own type parameters");
+  const auto &prototype_sig = *pm.types.find(stamp_prototype.signature);
+  need(prototype_sig.parameters.size() == 1,
+       "prototype signature lost its owner Self parameter");
+  const modules::Symbol *own_u = nullptr;
+  for (const auto &s : pm.resolved->symbols)
+    if (s.name == "U" &&
+        s.kind == modules::SymbolKind::type_parameter && s.definition &&
+        s.declaration &&
+        s.declaration->snapshot == stamp_prototype.source.span.snapshot &&
+        s.declaration->begin_byte >=
+            stamp_prototype.source.span.begin_byte &&
+        s.declaration->end_byte <= stamp_prototype.source.span.end_byte)
+      own_u = &s;
+  need(own_u, "prototype own type parameter has no real source symbol");
+  std::function<bool(TypeId)> contains_declaration = [&](TypeId id) {
+    auto t = pm.types.find(id);
+    if (!t)
+      return false;
+    if (t->kind == hir::TypeKind::TypeParameter &&
+        t->declaration == own_u->id)
+      return true;
+    for (auto a : t->type_args)
+      if (contains_declaration(a))
+        return true;
+    for (const auto &p : t->parameters)
+      if (contains_declaration(p.type))
+        return true;
+    if (contains_declaration(t->result))
+      return true;
+    return t->throws_type && contains_declaration(*t->throws_type);
+  };
+  need(!contains_declaration(stamp_prototype.signature),
+       "phantom own parameter was mixed into the runtime signature");
+
+  const hir::ImplDecl *stamp_impl = nullptr;
+  for (const auto &im : pm.impls)
+    if (im.trait == stamp->symbol)
+      stamp_impl = &im;
+  need(stamp_impl, "Stamp impl missing");
+  SymbolId stamp_impl_method{0};
+  for (auto m : stamp_impl->methods)
+    if (name(m) == "stamp")
+      stamp_impl_method = m;
+  need(stamp_impl_method.value != 0, "Stamp impl method missing");
+  const hir::FunctionTemplate *stamp_template = nullptr;
+  for (const auto &t : pm.templates)
+    if (t.function.symbol == stamp_impl_method)
+      stamp_template = &t;
+  need(stamp_template && stamp_template->params.size() == 2,
+       "generic impl prefix plus method-own template parameters missing");
+  need(stamp_template->params[0].symbol == stamp_impl->params[0].symbol &&
+           stamp_template->params[1].trait ==
+               [&] {
+                 for (const auto &tr : pm.traits)
+                   if (name(tr.symbol) == "Tag")
+                     return std::optional(tr.symbol);
+                 return std::optional<SymbolId>{};
+               }(),
+       "method own bound or impl prefix was lost");
+
+  std::map<std::string, const hir::FunctionInstance *> stamp_instances;
+  for (const auto &i : pm.instances)
+    if (i.origin == stamp_impl_method) {
+      need(i.type_args.size() == 2, "Stamp instance lost complete type args");
+      auto element = type_argument_name(i.type_args[0]);
+      auto tag = type_argument_name(i.type_args[1]);
+      need((element == "i32" || element == "bool") &&
+               (tag == "One" || tag == "Two"),
+           "Stamp instance key category changed: " + element + ":" + tag);
+      auto key = element + ":" + tag;
+      need(stamp_instances.emplace(key, &i).second,
+           "Stamp instance combination was not unique");
+    }
+  need(stamp_instances.size() == 4 && stamp_instances.count("i32:One") &&
+           stamp_instances.count("i32:Two") &&
+           stamp_instances.count("bool:One") &&
+           stamp_instances.count("bool:Two"),
+       "Stamp phantom instance combinations missing");
+
+  size_t via_instances = 0;
+  for (const auto &i : pm.instances)
+    if (name(i.origin) == "via")
+      ++via_instances;
+  need(via_instances == 4, "outer Stamp forwarding instances changed");
+
+  // Same-signature phantom instances must not be interchangeable. Swapping
+  // either a concrete call target or an instance's second type argument is
+  // rejected by the independent verifier.
+  const hir::FunctionInstance *one_instance = stamp_instances.at("i32:One");
+  const hir::FunctionInstance *two_instance = stamp_instances.at("i32:Two");
+  const auto *one_function = [&]() -> const hir::HirFunction * {
+    for (const auto &f : pm.functions)
+      if (f.symbol == one_instance->symbol)
+        return &f;
+    return nullptr;
+  }();
+  need(one_function, "One Stamp instance function missing");
+  SymbolId main_symbol{0};
+  for (const auto &s : pm.resolved->symbols)
+    if (s.name == "main" && s.kind == modules::SymbolKind::function)
+      main_symbol = s.id;
+  need(main_symbol.value != 0, "main symbol missing");
+  invalid(pm, "same-signature phantom direct instance target", [&](auto &x) {
+    bool done = false;
+    for (auto &n : x.nodes) {
+      if (x.scopes[n.scope.value].function != main_symbol)
+        continue;
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol == one_instance->symbol) {
+        c->direct_symbol = two_instance->symbol;
+        done = true;
+        break;
+      }
+    }
+    need(done, "explicit phantom One call target missing");
+  });
+  invalid_recomputed(pm, "same-signature phantom instance arguments",
+                     [&](auto &x) {
+                       for (auto &i : x.instances)
+                         if (i.symbol == one_instance->symbol) {
+                           for (auto &j : x.instances)
+                             if (j.symbol == two_instance->symbol)
+                               std::swap(i.type_args[1], j.type_args[1]);
+                           return;
+                         }
+                       throw std::runtime_error("phantom instance missing");
+                     });
+
+  // The ConstraintCall inside the outer via instance is completed to the
+  // actual impl method instance. Changing that concrete target to the other
+  // same-signature phantom instance must fail the full-key check.
+  auto box_element_name = [&](TypeId id) -> std::string {
+    auto t = pm.types.find(id);
+    if (!t || t->kind != hir::TypeKind::NominalStruct ||
+        t->type_args.size() != 1)
+      return {};
+    return type_argument_name(t->type_args[0]);
+  };
+  const hir::FunctionInstance *via_one = nullptr;
+  for (const auto &i : pm.instances)
+    if (name(i.origin) == "via" && i.type_args.size() == 2 &&
+        box_element_name(i.type_args[0]) == "i32" &&
+        type_argument_name(i.type_args[1]) == "One")
+      via_one = &i;
+  need(via_one, "via[Box[i32],One] instance missing");
+  const auto *via_function = [&]() -> const hir::HirFunction * {
+    for (const auto &f : pm.functions)
+      if (f.symbol == via_one->symbol)
+        return &f;
+    return nullptr;
+  }();
+  need(via_function, "via One function missing");
+  invalid_recomputed(pm, "constraint phantom completion target",
+                     [&](auto &x) {
+                       bool done = false;
+                       for (auto &n : x.nodes)
+                         if (x.scopes[n.scope.value].function ==
+                             via_function->symbol)
+                           if (auto c = std::get_if<hir::Call>(&n.data);
+                               c && c->direct_symbol == one_instance->symbol) {
+                             c->direct_symbol = two_instance->symbol;
+                             done = true;
+                             break;
+                           }
+                       need(done, "completed phantom ConstraintCall missing");
+                     });
+
+  // The published prototype itself and the impl method remain structurally
+  // checked even without a call.
+  invalid(pm, "trait generic prototype signature", [&](auto &x) {
+    std::optional<TypeId> other;
+    for (size_t i = 1; i <= x.types.size(); ++i) {
+      auto t = x.types.find(TypeId{i});
+      if (t && t->kind == hir::TypeKind::Function &&
+          t->parameters.empty() && i != stamp_prototype.signature.value) {
+        other = TypeId{i};
+        break;
+      }
+    }
+    need(other.has_value(), "different function signature missing");
+    for (auto &tr : x.traits)
+      if (tr.methods.front().symbol == stamp_prototype.symbol) {
+        tr.methods.front().signature = *other;
+        return;
+      }
+    throw std::runtime_error("Stamp prototype missing");
+  });
+  invalid(pm, "trait generic impl method signature", [&](auto &x) {
+    for (auto &t : x.templates)
+      if (t.function.symbol == stamp_impl_method) {
+        t.function.signature = stamp_prototype.signature;
+        return;
+      }
+    throw std::runtime_error("Stamp impl template missing");
+  });
+  invalid(pm, "trait method own bound identity", [&](auto &x) {
+    for (auto &t : x.templates)
+      if (t.function.symbol == stamp_impl_method) {
+        t.params[1].trait.reset();
+        return;
+      }
+    throw std::runtime_error("Stamp impl template missing");
+  });
+  invalid(pm, "trait method own source order", [&](auto &x) {
+    for (auto &t : x.templates)
+      if (t.function.symbol == stamp_impl_method) {
+        std::swap(t.params[0], t.params[1]);
+        return;
+      }
+    throw std::runtime_error("Stamp impl template missing");
+  });
+}
+
 void trait_static_self_qualification() {
   auto good = [&](const std::string &text) {
     auto r = source(text);
@@ -8504,6 +8999,7 @@ int main(int argc, char **argv) {
     trait_self_inout(root);
     trait_self_callback(root);
     trait_static_calls();
+    trait_method_generics(root);
     trait_static_self_qualification();
     nested_patterns();
     repairs(root);

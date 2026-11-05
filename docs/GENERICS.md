@@ -180,7 +180,7 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 
 真实 trait Self 上下文经 parse_type 递归传入括号和函数类型，只在有普通 Self receiver 的 prototype 中生效，不使用全局开关，不把 Self 加进方法泛型。普通 owner 首参保留合法行为；callback 内的 inout 不改变外围方法自身模式。已有固定数字/bool callback 即使使用拥有 struct receiver，也保持可用；只有实际依赖 Self 的 inout 数据要求具体化为数字/bool，未调用的非数字/bool impl 也报源码 E_CAP。
 
-函数值的类型与签名相同，不代表实现函数可以互换。HIR 对解析为函数声明的名称引用和函数字面量增加源码身份检查，要求目标是名称解析时确定的函数或其实例；原有 trait/impl 选择、参数顺序、Place、存储冲突和实例检查保持。 同一 origin 下，类型/签名相同且记录合法的实例互换仍可能被接受；验证器不逐处证明 HIR 与源码类型实参等价。未增加公共 HIR 字段、后端或运行库接口。方法值、捕获闭包、actual self move/inout、trait-static 的 Self callback、泛型 trait/方法泛型和非数字/bool inout 仍未开放。
+函数值的类型与签名相同，不代表实现函数可以互换。HIR 对解析为函数声明的名称引用和函数字面量增加源码身份检查，要求目标是名称解析时确定的函数或其实例；原有 trait/impl 选择、参数顺序、Place、存储冲突和实例检查保持。 同一 origin 下，类型/签名相同且记录合法的实例互换仍可能被接受；验证器不逐处证明 HIR 与源码类型实参等价。未增加公共 HIR 字段、后端或运行库接口。方法值、捕获闭包、actual self move/inout、trait-static 的 Self callback、泛型 trait 和非数字/bool inout 仍未开放；trait 方法自身泛型见下文。
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭 LLVM 为33/33，共180项，无跳过，包含两项T10。新callback项目每套LLVM配置为2次check、3次正式执行、3次观察；方法inout runner全部6份源码通过。原两before与旧F1另6次check、9次正式执行，源码SHA未改，49个保护文件保持原字节。生成Native和预编译LLVM未声称全部经过sanitizer插桩。
 
@@ -189,7 +189,7 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型 trait 及 trait 泛型方法、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型 trait、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
 
 ## 递归枚举模式
 
@@ -203,10 +203,20 @@ HIR 验证每层的源码、真实枚举/变体、类型、载荷顺序和绑定
 
 ## trait 类型名调用
 
-非泛型 trait、方法自身无类型参数时，`Type.method(...)` 和 `[T Trait]` 下的 `T.method(...)` 显式提供全部声明参数，包括普通首参 Self；也支持零参数工厂。类型限定符只用于选择方法，不产生运行时接收者。旧 `value.method(...)` 保留既有接收者规则，具体类型和值调用中已有的 move/inout 支持保持。
+非泛型 trait 的 `Type.method(...)` 和 `[T Trait]` 下的 `T.method(...)` 显式提供全部声明参数，包括普通首参 Self；也支持零参数工厂。类型限定符只用于选择方法，不产生运行时接收者。旧 `value.method(...)` 保留既有接收者规则，具体类型和值调用中已有的 move/inout 支持保持。
 
 新 T 入口支持顶层 ordinary 参数、Self 参数和返回、现有泛型 impl、跨包公开 trait、泛型间调用和非捕获泛型 lambda，以及已有普通 callback、typed throws 和有限拥有值。命名实参按书写顺序求值，首个实参抛错后不执行后续实参；复制、返回共享和清理仍采用原规则。泛型调用依据 T 实际声明的 trait 选择 prototype 和 impl，不按同名或相同签名替换目标。具体枚举的真实变体仍优先构造；从 T 的 trait 方法具体化时保持原 trait 选择。
 
 HIR 由真实源码的调用形式检查有无值接收者，核对显式参数 0、标签、类型、参数顺序、实例来源与完整类型实参；没有参数时仍验证真实约束、目标和返回/错误类型。impl 内的 Self 按实现类型解析，保留 `Self.helper(...)` 和括号形式；它不会因此变成有 trait bound 的模板参数。后端只接收具体普通 Call，不保留 ConstraintCall 或未替换的 T。
 
-新 T 入口尚未支持顶层 move/inout 和依赖 Self 的 inout callback；已有固定数字/bool callback 内的 inout 不算外围参数模式。泛型 trait、trait 方法自身泛型、trait 名直接调用、方法值、捕获闭包和实际 self move/inout 仍未支持。这些实施限制不改变已经确认的显式传参规则；T07/T09 仍为 in_progress。
+新 T 入口尚未支持顶层 move/inout 和依赖 Self 的 inout callback；已有固定数字/bool callback 内的 inout 不算外围参数模式。泛型 trait、trait 名直接调用、方法值、捕获闭包和实际 self move/inout 仍未支持；trait 方法自身泛型见下节。这些实施限制不改变已经确认的显式传参规则；T07/T09 仍为 in_progress。
+
+## trait 方法自身的泛型参数
+
+非泛型 trait 的方法现在可以声明多个类型参数，每个参数可无约束或带一个已有 trait 约束。例如 `trait Echo { func echo[U](owner Self, value U) U; }`，impl 可把 U 改名为 V；参数位置、数量、约束、普通参数标签、返回和 throws 类型必须对应。impl 不能增加、删除或改变约束，未调用的声明也检查。
+
+支持 `value.echo[i32](7)`、`Type.echo[i32](value, 7)` 和 `[T Echo]` 下的 `T.echo[i32](value, 7)`，也沿用已有的参数和返回类型推断。Type/T 调用仍显式提供全部普通参数，包括首参 Self；值调用仍使用原有接收者规则。跨包公开声明、泛型转交、非捕获泛型 lambda、普通 callback、typed throws、Vec 和有限拥有聚合沿用已有执行与清理规则。
+
+方法实例按真实 impl 方法 SymbolId 及完整 `[impl 类型实参..., 方法类型实参...]` 保存。签名中没有出现的类型参数必须显式填写；HIR 从该调用的真实源码及所属实例还原它，不能用相同签名猜测。One/Two 等签名相同、完整实参不同的实例分别保存，调换显式调用或具体化 ConstraintCall 的目标会被拒绝。trait 原型只有声明，没有虚构的可执行模板体；公共 HIR 和后端接口保持原样。
+
+这批泛型 trait 方法的顶层参数限 ordinary，move/inout 和依赖方法类型参数或 Self 的 inout callback 报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的 move/inout、数字/bool Self callback、固定数字/bool callback 和 `Self.helper` 保持原规则。泛型 trait 本身、方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。

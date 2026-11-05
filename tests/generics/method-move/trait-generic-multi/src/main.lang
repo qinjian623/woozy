@@ -1,0 +1,214 @@
+package app;
+
+enum Fail {
+    Bad(code i32);
+}
+
+trait Value {
+    func get(owner Self) i32;
+}
+
+struct One {
+    n i32;
+}
+
+struct Two {
+    n i32;
+}
+
+struct Three {
+    n i32;
+}
+
+impl Value for One {
+    func get(owner Self) i32 {
+        return 1;
+    }
+}
+
+impl Value for Two {
+    func get(owner Self) i32 {
+        return 2;
+    }
+}
+
+impl Value for Three {
+    func get(owner Self) i32 {
+        return 3;
+    }
+}
+
+impl Value for i32 {
+    func get(owner Self) i32 {
+        return owner;
+    }
+}
+
+trait Relay {
+    func relay[A, B Value](owner Self, first A, second B) A throws Fail;
+    func make[U, V Value](value U, tag V) U throws Fail;
+    func pick[U Value](owner Self) i32;
+}
+
+struct Box[I] {
+    value I;
+    items Vec[i32];
+}
+
+impl[I] Relay for Box[I] {
+    func relay[U, W Value](owner Self, first U, second W) U throws Fail {
+        let local Vec[i32] = [40 + second.get()];
+        defer {
+            let read = local[0];
+        }
+        if second.get() == 2 {
+            throw Fail.Bad(code: 7);
+        }
+        return first;
+    }
+
+    func make[U, W Value](value U, tag W) U throws Fail {
+        let local Vec[i32] = [50 + tag.get()];
+        defer {
+            let read = local[0];
+        }
+        if tag.get() == 2 {
+            throw Fail.Bad(code: 8);
+        }
+        return value;
+    }
+
+    func pick[U Value](owner Self) i32 {
+        return 1;
+    }
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func make_box(log inout i64) Box[i32] {
+    mark(inout log, 9);
+    return Box[i32](value: 0, items: [91]);
+}
+
+func failing_one() One throws Fail {
+    let local Vec[i32] = [55];
+    throw Fail.Bad(code: 3);
+}
+
+func failing_vec() Vec[i32] throws Fail {
+    let local Vec[i32] = [66];
+    throw Fail.Bad(code: 4);
+}
+
+func fail_code(err Fail) i32 {
+    switch err {
+    case Fail.Bad(code):
+        return code;
+    }
+}
+
+func via[T Relay, A, B Value](x T, first A, second B) A throws Fail {
+    return T.relay[A, B](x, first, second);
+}
+
+func pick_via[T Relay, U Value](x T) i32 {
+    return T.pick[U](x);
+}
+
+func main() i32 throws Fail {
+    let p = Box[i32](value: 0, items: [1]);
+
+    var v Vec[i32] = [7];
+    let va = v;
+    let relayed = p.relay[Vec[i32], One](v, One(n: 0));
+    relayed[0] = 17;
+    if va[0] != 17 {
+        return 1;
+    }
+
+    var m Vec[i32] = [8];
+    let ma = m;
+    let made = Box[i32].make[Vec[i32], Three](m, Three(n: 0));
+    made[0] = 18;
+    if ma[0] != 18 {
+        return 2;
+    }
+
+    let picked = p.pick[Three]() + Box[i32].pick[One](p) +
+                 pick_via[Box[i32], Two](p);
+    if picked != 3 {
+        return 3;
+    }
+
+    var log i64 = 0;
+    var ordered_values Vec[i32] = [9];
+    let ordered_alias = ordered_values;
+    let ordered = make_box(inout log).relay(
+        second: mark_value(inout log, 3),
+        first: ordered_values);
+    if log != 93 {
+        return 4;
+    }
+    ordered[0] = 19;
+    if ordered_alias[0] != 19 {
+        return 5;
+    }
+
+    var early Vec[i32] = [10];
+    let early_alias = early;
+    try {
+        let ignored = p.relay(first: failing_vec(), second: One(n: 0));
+    } catch err Fail {
+        if fail_code(err) != 4 || early_alias[0] != 10 {
+            return 6;
+        }
+    }
+
+    try {
+        let ignored = p.relay(first: early, second: failing_one());
+    } catch err Fail {
+        if fail_code(err) != 3 || early_alias[0] != 10 {
+            return 7;
+        }
+    }
+
+    try {
+        let ignored = p.relay[Vec[i32], Two](early, Two(n: 0));
+    } catch err Fail {
+        if fail_code(err) != 7 || early_alias[0] != 10 {
+            return 8;
+        }
+    }
+
+    try {
+        let ignored = Box[i32].make[Vec[i32], Two](early, Two(n: 0));
+    } catch err Fail {
+        if fail_code(err) != 8 || early_alias[0] != 10 {
+            return 9;
+        }
+    }
+
+    try {
+        let ignored = via[Box[i32], Vec[i32], Two](p, early, Two(n: 0));
+    } catch err Fail {
+        if fail_code(err) != 7 || early_alias[0] != 10 {
+            return 10;
+        }
+    }
+
+    var saved Vec[i32] = [11];
+    let saved_alias = saved;
+    let returned = p.relay[Vec[i32], One](saved, One(n: 0));
+    returned[0] = 21;
+    if saved_alias[0] != 21 {
+        return 11;
+    }
+    return 0;
+}

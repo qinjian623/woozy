@@ -294,12 +294,61 @@ class Checker {
     const TraitDecl *trait;
     const MethodPrototype *prototype;
   };
+  // The merged generic list of an impl method is the impl prefix followed by
+  // the method's own parameters. A trait prototype has only its own list.
+  std::vector<GenericParam> method_own_parameters(SymbolId method) const {
+    auto generics = generic_params.find(method.value);
+    if (generics == generic_params.end())
+      return {};
+    size_t prefix = 0;
+    if (const auto *im = impl_of(method))
+      prefix = im->params.size();
+    if (generics->second.size() < prefix)
+      return {};
+    return {generics->second.begin() + prefix, generics->second.end()};
+  }
+  // Compare a trait prototype with its implementation by position, alpha
+  // renaming only the method's own suffix. The impl prefix is excluded from
+  // that renaming. Names may differ; every real SymbolId and bound must match.
+  bool trait_impl_signature_matches(const TraitDecl &tr, const ImplDecl &im,
+                                    const MethodPrototype &prototype,
+                                    SymbolId method) {
+    auto generics = generic_params.find(method.value);
+    if (generics == generic_params.end() ||
+        generics->second.size() < im.params.size())
+      return false;
+    for (size_t i = 0; i < im.params.size(); ++i)
+      if (generics->second[i].symbol != im.params[i].symbol)
+        return false;
+    auto own = method_own_parameters(method);
+    auto prototype_own = method_own_parameters(prototype.symbol);
+    if (own.size() != prototype_own.size())
+      return false;
+    Substitutions sub{{tr.self, im.self_type}};
+    for (size_t i = 0; i < own.size(); ++i) {
+      if (prototype_own[i].trait != own[i].trait)
+        return false;
+      sub.push_back({prototype_own[i].symbol, parameter_type(own[i].symbol)});
+    }
+    auto found = signatures.find(method.value);
+    if (found == signatures.end() ||
+        found->second != substitute(prototype.signature, sub, m.types))
+      return false;
+    auto declared = parameters.find(method.value);
+    if (declared == parameters.end() ||
+        declared->second.size() != prototype.parameters.size())
+      return false;
+    for (size_t i = 0; i < declared->second.size(); ++i)
+      if (declared->second[i].label != prototype.parameters[i].label)
+        return false;
+    return true;
+  }
   // A concrete receiver may use a method from a real trait impl only when the
   // impl names a trait whose prototype has the same source name, labels and
-  // substituted signature, and whose first parameter is a real ordinary self.
-  // The merged generic list must be exactly the impl prefix: method-own type
-  // parameters stay rejected. This is a source check only; finish_arguments,
-  // select_method and instantiate still verify the actual implementation.
+  // alpha-substituted signature, and whose first parameter is a real ordinary
+  // self. Method-own generics are matched by position; this is still only a
+  // source check, while finish_arguments, select_method and instantiate
+  // verify the actual implementation and complete instance key.
   std::optional<TraitMethodSource>
   trait_impl_method_source(SymbolId target) {
     const auto *im = impl_of(target);
@@ -311,13 +360,6 @@ class Checker {
         tr = &t;
     if (!tr)
       return {};
-    auto generics = generic_params.find(target.value);
-    if (generics == generic_params.end() ||
-        generics->second.size() != im->params.size())
-      return {};
-    for (size_t i = 0; i < im->params.size(); ++i)
-      if (generics->second[i].symbol != im->params[i].symbol)
-        return {};
     const MethodPrototype *prototype = nullptr;
     for (const auto &p : tr->methods)
       if (symbol(p.symbol).name == symbol(target).name) {
@@ -325,21 +367,11 @@ class Checker {
           return {};
         prototype = &p;
       }
-    if (!prototype)
+    if (!prototype ||
+        !trait_impl_signature_matches(*tr, *im, *prototype, target))
       return {};
-    auto declared = parameters.find(target.value);
-    if (declared == parameters.end() ||
-        declared->second.size() != prototype->parameters.size())
-      return {};
-    for (size_t i = 0; i < declared->second.size(); ++i)
-      if (declared->second[i].label != prototype->parameters[i].label)
-        return {};
     auto found = signatures.find(target.value);
     if (found == signatures.end())
-      return {};
-    if (found->second !=
-        substitute(prototype->signature, {{tr->self, im->self_type}},
-                   m.types))
       return {};
     const auto proto_sig = type(prototype->signature);
     const auto method_sig = type(found->second);
@@ -360,8 +392,8 @@ class Checker {
   // reached through a bounded template receiver with a real ordinary self.
   // Only concrete numeric/bool non-self inout types and the exact trait
   // `slot inout Self` whose substitution is the constrained receiver T are
-  // admitted. Method-own generics are also excluded because the trait's
-  // methods must not have their own list.
+  // admitted. Method-own generics are part of the prototype now; their actual
+  // arguments are completed by typed_call before the ConstraintCall is made.
   const MethodPrototype *constraint_method_source(SymbolId target,
                                                   SymbolId trait,
                                                   TypeId receiver) {
@@ -381,7 +413,7 @@ class Checker {
                      }))
       return nullptr;
     auto generics = generic_params.find(target.value);
-    if (generics == generic_params.end() || !generics->second.empty())
+    if (generics == generic_params.end())
       return nullptr;
     const MethodPrototype *prototype = nullptr;
     for (const auto &p : tr->methods)
@@ -471,9 +503,9 @@ class Checker {
   }
   // A type-qualified T.method(...) has no runtime receiver. This batch opens
   // only all-ordinary top-level parameters; Self-dependent inout/callback
-  // forms remain a capability limit, not a permanent language rule. Trait
-  // method generics and the required trait bound are checked by the caller
-  // and the existing trait registration.
+  // forms remain a capability limit, not a permanent language rule. Method
+  // own generics are completed by typed_call; the required trait bound is
+  // checked by the caller and the existing trait registration.
   const MethodPrototype *constraint_static_method_source(SymbolId target,
                                                           SymbolId trait,
                                                           TypeId receiver) {
@@ -493,7 +525,7 @@ class Checker {
                      }))
       return nullptr;
     auto generics = generic_params.find(target.value);
-    if (generics == generic_params.end() || !generics->second.empty())
+    if (generics == generic_params.end())
       return nullptr;
     const MethodPrototype *prototype = nullptr;
     for (const auto &p : tr->methods)
@@ -595,6 +627,91 @@ class Checker {
     };
     visit(root, 0);
     return direct_inout;
+  }
+  // A generic trait method in this batch is ordinary at the method boundary.
+  // Existing non-generic trait move/inout and fixed-scalar callbacks stay on
+  // their old paths. A callback inout whose data type depends on a method-own
+  // parameter or the trait Self would be a new dependent mode, so it is
+  // rejected explicitly.
+  void check_generic_trait_method_modes(
+      Ref r, const std::vector<GenericParam> &own, TypeId signature,
+      std::optional<SymbolId> trait_self) {
+    if (own.empty())
+      return;
+    std::set<uint64_t> declarations;
+    for (const auto &p : own)
+      declarations.insert(p.symbol.value);
+    if (trait_self)
+      declarations.insert(trait_self->value);
+    std::function<bool(TypeId)> contains_own = [&](TypeId root) {
+      std::set<uint64_t> seen;
+      std::vector<TypeId> pending{root};
+      while (!pending.empty()) {
+        auto id = pending.back();
+        pending.pop_back();
+        if (!seen.insert(id.value).second)
+          continue;
+        const auto &t = type(id);
+        if (t.kind == TypeKind::TypeParameter) {
+          if (declarations.count(t.declaration.value))
+            return true;
+          continue;
+        }
+        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+        for (const auto &p : t.parameters)
+          pending.push_back(p.type);
+        if (t.kind == TypeKind::Function) {
+          pending.push_back(t.result);
+          if (t.throws_type)
+            pending.push_back(*t.throws_type);
+        }
+      }
+      return false;
+    };
+    std::set<uint64_t> visited, nominal_path;
+    std::function<bool(TypeId)> dependent_inout = [&](TypeId id) {
+      if (!visited.insert(id.value).second)
+        return false;
+      const auto t = type(id);
+      if (t.kind == TypeKind::Function) {
+        for (const auto &p : t.parameters) {
+          if (p.mode == ParamMode::inout && contains_own(p.type))
+            return true;
+          if (dependent_inout(p.type))
+            return true;
+        }
+        if (dependent_inout(t.result))
+          return true;
+        if (t.throws_type && dependent_inout(*t.throws_type))
+          return true;
+        return false;
+      }
+      for (auto a : t.type_args)
+        if (dependent_inout(a))
+          return true;
+      if (t.kind == TypeKind::NominalStruct ||
+          t.kind == TypeKind::NominalEnum) {
+        const auto &d = nominal(id);
+        if (!nominal_path.insert(d.symbol.value).second)
+          return false;
+        for (const auto &f : d.fields)
+          if (dependent_inout(field_type(id, f)))
+            return true;
+        for (const auto &v : d.variants)
+          for (const auto &f : v.payload)
+            if (dependent_inout(field_type(id, f)))
+              return true;
+        nominal_path.erase(d.symbol.value);
+      }
+      return false;
+    };
+    for (const auto &p : type(signature).parameters)
+      if (p.mode != ParamMode::ordinary)
+        unavailable(r, "generic trait method move/inout is not implemented");
+    if (dependent_inout(signature))
+      unavailable(r,
+                  "generic trait method dependent inout callback is not "
+                  "implemented");
   }
   void check_function_value_inout(Ref r, SymbolId target, TypeId sig) {
     if (!check_inout_graph(r, sig, true))
@@ -1719,10 +1836,19 @@ class Checker {
         }
         return selected;
       };
+      auto explicit_method_sub = [&](SymbolId method) {
+        Substitutions sub;
+        if (!method_explicit)
+          return sub;
+        auto ps = generic_params[method.value];
+        if (method_args.size() != ps.size())
+          reject(r, "wrong number of method type arguments");
+        for (size_t i = 0; i < ps.size(); ++i)
+          sub.push_back({ps[i].symbol, method_args[i]});
+        return sub;
+      };
       if (auto t = type_expression(base)) {
         if (type(*t).kind == TypeKind::TypeParameter) {
-          if (method_explicit)
-            unavailable(r, "generic trait methods are not implemented");
           auto bound = bounds.find(type(*t).declaration.value);
           if (bound == bounds.end() || !bound->second)
             reject(r, "method requires a declared trait constraint");
@@ -1737,8 +1863,9 @@ class Checker {
                            "are not implemented");
                   auto sig =
                       substitute(method.signature, {{tr.self, *t}}, m.types);
-                  return typed_call(r, method.symbol, sig, {}, {}, expected,
-                                    *bound->second, *t);
+                  return typed_call(r, method.symbol, sig,
+                                    explicit_method_sub(method.symbol), {},
+                                    expected, *bound->second, *t);
                 }
           reject(r, "method is not declared by the constraint");
         }
@@ -1779,8 +1906,6 @@ class Checker {
             return scalar_call(r, callee);
           }
       if (type(receiver.value.type).kind == TypeKind::TypeParameter) {
-        if (method_explicit)
-          unavailable(r, "generic trait methods are not implemented");
         auto bound = bounds[type(receiver.value.type).declaration.value];
         if (!bound)
           reject(r, "method requires a declared trait constraint");
@@ -1791,8 +1916,9 @@ class Checker {
                 auto sig =
                     substitute(method.signature,
                                {{tr.self, receiver.value.type}}, m.types);
-                return typed_call(r, method.symbol, sig, {}, receiver, expected,
-                                  *bound);
+                return typed_call(r, method.symbol, sig,
+                                  explicit_method_sub(method.symbol), receiver,
+                                  expected, *bound);
               }
         reject(r, "method is not declared by the constraint");
       }
@@ -1929,6 +2055,13 @@ class Checker {
         constraint_receiver = *constraint_type;
       else if (receiver)
         constraint_receiver = receiver->value.type;
+      // The constrained receiver T is fixed by the enclosing template, not a
+      // variable to infer from an argument. Pre-seeding makes a concrete
+      // argument conflict at source instead of silently substituting T.
+      if (constraint_receiver &&
+          type(*constraint_receiver).kind == TypeKind::TypeParameter)
+        sub.push_back({type(*constraint_receiver).declaration,
+                       *constraint_receiver});
     }
     const bool trait_constraint =
         constraint && constraint_receiver &&
@@ -1997,7 +2130,9 @@ class Checker {
         values[i] = e;
       }
     std::vector<TypeId> type_args;
-    if (!constraint)
+    if (constraint)
+      (void)finish_arguments(r, generic_params[target.value], sub);
+    else
       type_args = finish_arguments(r, generic_params[target.value], sub);
     auto sig = substitute(original, sub, m.types);
     check_inout_graph(r, sig, true);
@@ -2810,8 +2945,6 @@ class Checker {
             auto cr = at(r, id);
             register_function(cr, {}, true, self);
             auto method = definition(cr);
-            if (!generic_params[method.value].empty())
-              unavailable(cr, "generic trait methods are not implemented");
             tr.methods.push_back({method, signatures.at(method.value),
                                   parameters.at(method.value), source(cr)});
           }
@@ -2901,17 +3034,19 @@ class Checker {
               method = id;
           if (!method)
             reject(im.source.node, "impl is missing a trait method");
-          auto expected =
-              substitute(proto.signature, {{tr->self, im.self_type}}, m.types);
-          if (signatures.at(method->value) != expected)
+          if (!trait_impl_signature_matches(*tr, im, proto, *method))
             reject(im.source.node,
                    "impl method signature does not match trait");
-          auto ps = parameters.at(method->value);
-          for (size_t i = 0; i < ps.size(); ++i)
-            if (ps[i].label != proto.parameters[i].label)
-              reject(im.source.node, "impl method labels do not match trait");
         }
       }
+    // Method-own mode restrictions are checked after every trait/impl
+    // signature has been matched, so an own arity/bound mismatch keeps its
+    // precise source diagnostic instead of being hidden by a capability check.
+    for (const auto &tr : m.traits)
+      for (const auto &proto : tr.methods)
+        check_generic_trait_method_modes(
+            proto.source.node, method_own_parameters(proto.symbol),
+            proto.signature, tr.self);
     for (auto r : top)
       if (ast(r).kind == AstKind::Function)
         register_function(r, {});
@@ -3172,7 +3307,87 @@ class Checker {
     owned->symbols.push_back(s);
     return s.id;
   }
-  void transform_node(HirNodeId id, size_t depth) {
+  std::optional<std::vector<Ref>> explicit_method_type_refs(
+      const HirNode &n) const {
+    auto r = n.source.node;
+    const auto &call = ast(r);
+    if (call.kind != AstKind::Call || call.children.empty())
+      return std::nullopt;
+    auto transparent = [&](Ref value) {
+      while (ast(value).kind == AstKind::Parenthesized)
+        value = child(value, 0);
+      return value;
+    };
+    auto target = transparent(child(r, 0));
+    if (ast(target).kind != AstKind::NeutralBracket)
+      return std::nullopt;
+    auto inner = transparent(child(target, 0));
+    if (ast(inner).kind != AstKind::Member || occurrence(inner))
+      return std::nullopt;
+    std::vector<Ref> refs;
+    for (size_t i = 1; i < ast(target).children.size(); ++i)
+      refs.push_back(child(target, i));
+    return refs;
+  }
+  // Complete the method-own actual arguments from the prototype. An explicit
+  // suffix is read from the real Source and mapped through the current
+  // instance replacement; without a suffix only the already determined
+  // ConstraintCall signature can solve own parameters. A parameter absent from
+  // the signature (phantom) therefore must have been written explicitly.
+  std::vector<TypeId> constraint_method_arguments(
+      const HirNode &n, const ConstraintCall &c,
+      const Substitutions *instance_sub) {
+    const TraitDecl *tr = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == c.trait)
+        tr = &t;
+    const MethodPrototype *prototype = nullptr;
+    if (tr)
+      for (const auto &p : tr->methods)
+        if (p.symbol == c.method)
+          prototype = &p;
+    if (!tr || !prototype)
+      throw std::invalid_argument("constraint method has no real prototype");
+    const auto ps = generic_params[c.method.value];
+    Substitutions sub{{tr->self, c.receiver}};
+    std::vector<TypeId> result;
+    auto refs = explicit_method_type_refs(n);
+    if (refs) {
+      if (refs->size() != ps.size())
+        reject(n.source.node, "wrong number of method type arguments");
+      for (size_t i = 0; i < ps.size(); ++i) {
+        auto t = parse_type((*refs)[i]);
+        if (instance_sub)
+          t = substitute(t, *instance_sub, m.types);
+        result.push_back(t);
+        sub.push_back({ps[i].symbol, t});
+      }
+      if (substitute(prototype->signature, sub, m.types) != c.signature)
+        reject(n.source.node,
+               "method type arguments differ from the checked signature");
+    } else {
+      Substitutions match{{tr->self, c.receiver}};
+      infer(n.source.node, prototype->signature, c.signature, match);
+      for (const auto &p : ps) {
+        auto it = std::find_if(match.begin(), match.end(),
+                               [&](auto entry) {
+                                 return entry.first == p.symbol;
+                               });
+        if (it == match.end())
+          reject(n.source.node,
+                 "cannot infer method type argument; provide explicit type "
+                 "arguments");
+        result.push_back(it->second);
+      }
+    }
+    for (size_t i = 0; i < ps.size(); ++i)
+      if (ps[i].trait && !satisfies(n.source.node, result[i], *ps[i].trait))
+        reject(n.source.node,
+               "method type argument does not satisfy its trait constraint");
+    return result;
+  }
+  void transform_node(HirNodeId id, size_t depth,
+                      const Substitutions *instance_sub = nullptr) {
     if (depth > 512)
       throw std::invalid_argument("HIR transform nesting limit");
     auto n = m.nodes.at(id.value);
@@ -3191,6 +3406,12 @@ class Checker {
     if (auto c = std::get_if<ConstraintCall>(&n.data)) {
       auto name = symbol(c->method).name;
       auto selected = select_method(n.source.node, c->receiver, name, c->trait);
+      auto method_args = constraint_method_arguments(n, *c, instance_sub);
+      auto own = method_own_parameters(selected.method);
+      if (own.size() != method_args.size())
+        throw std::invalid_argument("constraint method own parameter count");
+      for (size_t i = 0; i < own.size(); ++i)
+        selected.substitutions.push_back({own[i].symbol, method_args[i]});
       auto args =
           finish_arguments(n.source.node, generic_params[selected.method.value],
                            selected.substitutions);
@@ -3206,7 +3427,7 @@ class Checker {
     }
     m.nodes.at(id.value) = n;
     for (auto ch : n.children)
-      transform_node(ch, depth + 1);
+      transform_node(ch, depth + 1, instance_sub);
   }
   SymbolId instantiate(SymbolId origin, const std::vector<TypeId> &args,
                        Ref use) {
@@ -3393,7 +3614,7 @@ class Checker {
     m.instances.push_back(std::move(instance));
     m.functions.push_back(f);
     // Identity and signature are present before resolving recursive uses.
-    transform_node(f.body, 0);
+    transform_node(f.body, 0, &sub);
     annotate(f);
     if (type(f.signature).result != unit && flow(f.body).falls)
       reject(use,

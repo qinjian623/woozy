@@ -630,6 +630,7 @@ class Verifier {
     std::optional<SymbolId> base_symbol;
     std::string name;
     bool explicit_type_arguments = false;
+    std::vector<modules::NodeRef> explicit_arguments;
   };
   // Rebuild the written call form from the owning Source. A Member with its
   // own resolved occurrence is a module/qualified-name call, not a method.
@@ -646,10 +647,16 @@ class Verifier {
     ref.node = call.children.front();
     ref = unwrapped(ref);
     bool explicit_type_arguments = false;
+    std::vector<modules::NodeRef> explicit_arguments;
     if (file.node(ref.node).kind == AstKind::NeutralBracket) {
       need(!file.node(ref.node).children.empty(),
            "method type suffix has no target");
       explicit_type_arguments = true;
+      for (size_t i = 1; i < file.node(ref.node).children.size(); ++i) {
+        auto argument = ref;
+        argument.node = file.node(ref.node).children[i];
+        explicit_arguments.push_back(argument);
+      }
       ref.node = file.node(ref.node).children.front();
       ref = unwrapped(ref);
     }
@@ -674,7 +681,7 @@ class Verifier {
     return SourceMethodCall{base, base_symbol,
                             std::string(file.tokens[member.token_end - 1]
                                             .spelling),
-                            explicit_type_arguments};
+                            explicit_type_arguments, explicit_arguments};
   }
   const ForeignBinding &foreign_binding(ForeignBindingId id) const {
     need(id.value < m.foreign_bindings.size(), "foreign binding index");
@@ -868,6 +875,55 @@ class Verifier {
         return p.trait.has_value();
     return false;
   }
+  struct ConstraintMethodArguments {
+    std::vector<GenericParam> parameters;
+    std::vector<TypeId> values;
+  };
+  // Recover the complete method-own actual arguments for a ConstraintCall.
+  // An explicit suffix comes from the real Source and is substituted through
+  // the owning function instance; without a suffix the already determined
+  // signature must determine every own parameter. Phantom parameters cannot
+  // be inferred and therefore require the explicit spelling.
+  ConstraintMethodArguments
+  constraint_method_arguments(const HirNode &n, const ConstraintCall &c,
+                              const TraitDecl &tr,
+                              const MethodPrototype &prototype) const {
+    auto written = source_method_call(n);
+    need(written.has_value(), "constraint call lost its source method");
+    auto parameters = source_parameters(prototype.source);
+    auto owner = scope(n.scope).function;
+    Substitutions sub;
+    sub.push_back({tr.self, c.receiver});
+    std::vector<TypeId> values;
+    if (written->explicit_type_arguments) {
+      need(written->explicit_arguments.size() == parameters.size(),
+           "constraint method type argument count");
+      for (size_t i = 0; i < parameters.size(); ++i) {
+        auto t =
+            source_type_in_function(written->explicit_arguments[i], owner);
+        valid_type(t, allowed(owner));
+        values.push_back(t);
+        sub.push_back({parameters[i].symbol, t});
+      }
+      need(c.signature == substitute(prototype.signature, sub, substituted),
+           "constraint method type arguments differ from signature");
+    } else {
+      Substitutions match;
+      match.push_back({tr.self, c.receiver});
+      need(matches(prototype.signature, c.signature, match),
+           "constraint method signature does not determine type arguments");
+      for (const auto &p : parameters) {
+        auto it = std::find_if(match.begin(), match.end(), [&](auto entry) {
+          return entry.first == p.symbol;
+        });
+        need(it != match.end(),
+             "constraint method type argument is missing from source");
+        values.push_back(it->second);
+      }
+    }
+    constraints(parameters, values);
+    return {std::move(parameters), std::move(values)};
+  }
   // Concrete Type.method(...) and the concrete form of a T.method(...)
   // instance both become ordinary direct Calls. Re-derive the qualifier's
   // real source type and require the selected method to belong to the impl
@@ -958,6 +1014,57 @@ class Verifier {
            "type-qualified method source selection is not unique");
     }
   }
+  // Explicit method type arguments are source data, not a signature cache.
+  // Compare them with the complete instance key after the impl prefix. This
+  // keeps same-signature phantom instances (for example Tag One vs Two)
+  // distinguishable even though their checked signatures are identical.
+  void check_explicit_method_arguments(const HirNode &n,
+                                       const Call &c) const {
+    auto written = source_method_call(n);
+    if (!written || !written->explicit_type_arguments)
+      return;
+    need(c.kind == CalleeKind::direct && c.direct_symbol.has_value(),
+         "explicit method type arguments require a direct call");
+    auto origin = *c.direct_symbol;
+    const FunctionInstance *instance = nullptr;
+    for (const auto &i : m.instances)
+      if (i.symbol == origin) {
+        instance = &i;
+        origin = i.origin;
+        break;
+      }
+    const ImplDecl *impl = nullptr;
+    for (const auto &candidate : m.impls)
+      if (std::find(candidate.methods.begin(), candidate.methods.end(),
+                    origin) != candidate.methods.end()) {
+        need(!impl, "explicit method target belongs to two impls");
+        impl = &candidate;
+      }
+    need(impl, "explicit method target is not an impl method");
+    auto all = source_parameters(function(origin).source);
+    need(all.size() >= impl->params.size(),
+         "explicit method source lost its impl prefix");
+    for (size_t i = 0; i < impl->params.size(); ++i)
+      need(all[i].symbol == impl->params[i].symbol,
+           "explicit method impl prefix differs from source");
+    const size_t own = all.size() - impl->params.size();
+    need(written->explicit_arguments.size() == own,
+         "explicit method type argument count differs from declaration");
+    std::vector<TypeId> actual;
+    if (instance)
+      actual = instance->type_args;
+    else
+      actual = c.type_args;
+    need(actual.size() == all.size(),
+         "explicit method call lost complete type arguments");
+    auto owner = scope(n.scope).function;
+    for (size_t i = 0; i < own; ++i) {
+      auto t = source_type_in_function(written->explicit_arguments[i], owner);
+      valid_type(t, allowed(owner));
+      need(t == actual[impl->params.size() + i],
+           "explicit method type argument differs from complete instance key");
+    }
+  }
   void check_call(const HirNode &n, const Call &c) const {
     if (c.kind == CalleeKind::foreign) {
       foreign_call(n, c);
@@ -1036,8 +1143,10 @@ class Verifier {
       }
     }
     check_call_aliases(c.args, borrowed);
-    if (c.kind == CalleeKind::direct)
+    if (c.kind == CalleeKind::direct) {
       check_qualified_method_source(n, c);
+      check_explicit_method_arguments(n, c);
+    }
   }
   void shape(HirNodeId id) const {
     check_cancelled(stop);
@@ -1462,6 +1571,32 @@ class Verifier {
     return result;
   }
 
+  // Read the ordered generic parameters belonging to a source declaration,
+  // including the real SymbolId, its single declared bound and the parameter
+  // Source. This is used for trait prototypes whose public TraitDecl has no
+  // parameter field, and for the own suffix of an impl method.
+  std::vector<GenericParam> source_parameters(const Source &f) const {
+    std::vector<GenericParam> result;
+    const auto &file =
+        *m.resolved->project->module(f.node.module).files.at(f.node.file);
+    for (auto sid : source_generics(f)) {
+      const auto &s = symbol(sid);
+      need(s.definition && s.declaration,
+           "source generic parameter lacks a real declaration");
+      Source src{*s.definition, *s.declaration};
+      std::optional<SymbolId> bound;
+      const auto &syntax = file.node(s.definition->node);
+      if (!syntax.children.empty()) {
+        auto ref = *s.definition;
+        ref.node = syntax.children.front();
+        bound = resolved_source(ref);
+        need(bound.has_value(),
+             "generic parameter bound has no resolved trait");
+      }
+      result.push_back({sid, bound, src});
+    }
+    return result;
+  }
   bool matches(TypeId pattern, TypeId actual, Substitutions &sub) const {
     const auto &p = type(pattern), &a = type(actual);
     if (p.kind == TypeKind::TypeParameter) {
@@ -1661,12 +1796,15 @@ class Verifier {
                   AstKind::Trait);
       need(traits.insert(tr.symbol.value).second, "duplicate trait identity");
       self_owner(tr.source, tr.self);
-      std::set<uint64_t> ps{tr.self.value}, methods;
+      std::set<uint64_t> methods;
       for (const auto &method : tr.methods) {
         declaration(method.symbol, method.source, modules::SymbolKind::function,
                     AstKind::Function);
         need(methods.insert(method.symbol.value).second,
              "duplicate trait method");
+        auto own = source_parameters(method.source);
+        auto ps = parameter_set(own);
+        ps.insert(tr.self.value);
         valid_type(method.signature, ps);
         need(method.signature == source_signature(method.source.node),
              "trait signature differs from source prototype");
@@ -1674,6 +1812,91 @@ class Verifier {
         need(sig.kind == TypeKind::Function &&
                  sig.parameters.size() == method.parameters.size(),
              "trait prototype signature");
+        if (!own.empty()) {
+          std::set<uint64_t> own_ids{tr.self.value};
+          for (const auto &p : own)
+            own_ids.insert(p.symbol.value);
+          auto graph_type = [&](TypeId id) -> const Type & {
+            auto t = substituted.find(id);
+            need(t, "missing callback graph type");
+            return *t;
+          };
+          std::function<bool(TypeId)> contains_own = [&](TypeId root) {
+            std::set<uint64_t> seen;
+            std::vector<TypeId> pending{root};
+            while (!pending.empty()) {
+              auto id = pending.back();
+              pending.pop_back();
+              if (!seen.insert(id.value).second)
+                continue;
+              const auto &t = graph_type(id);
+              if (t.kind == TypeKind::TypeParameter) {
+                if (own_ids.count(t.declaration.value))
+                  return true;
+                continue;
+              }
+              pending.insert(pending.end(), t.type_args.begin(),
+                             t.type_args.end());
+              for (const auto &p : t.parameters)
+                pending.push_back(p.type);
+              if (t.kind == TypeKind::Function) {
+                pending.push_back(t.result);
+                if (t.throws_type)
+                  pending.push_back(*t.throws_type);
+              }
+            }
+            return false;
+          };
+          std::set<uint64_t> visited, nominal_path;
+          std::function<bool(TypeId)> dependent_inout = [&](TypeId id) {
+            if (!visited.insert(id.value).second)
+              return false;
+            const auto t = graph_type(id);
+            if (t.kind == TypeKind::Function) {
+              for (const auto &p : t.parameters) {
+                if (p.mode == ParamMode::inout && contains_own(p.type))
+                  return true;
+                if (dependent_inout(p.type))
+                  return true;
+              }
+              if (dependent_inout(t.result))
+                return true;
+              if (t.throws_type && dependent_inout(*t.throws_type))
+                return true;
+              return false;
+            }
+            for (auto a : t.type_args)
+              if (dependent_inout(a))
+                return true;
+            if (t.kind == TypeKind::NominalStruct ||
+                t.kind == TypeKind::NominalEnum) {
+              auto found = nominals.find(t.declaration.value);
+              need(found != nominals.end(), "missing callback nominal");
+              const auto &d = *found->second;
+              if (!nominal_path.insert(d.symbol.value).second)
+                return false;
+              need(d.params.size() == t.type_args.size(),
+                   "callback nominal argument count");
+              Substitutions sub;
+              for (size_t i = 0; i < d.params.size(); ++i)
+                sub.push_back({d.params[i].symbol, t.type_args[i]});
+              for (const auto &f : d.fields)
+                if (dependent_inout(substitute(f.type, sub, substituted)))
+                  return true;
+              for (const auto &v : d.variants)
+                for (const auto &f : v.payload)
+                  if (dependent_inout(substitute(f.type, sub, substituted)))
+                    return true;
+              nominal_path.erase(d.symbol.value);
+            }
+            return false;
+          };
+          for (const auto &p : sig.parameters)
+            need(p.mode == ParamMode::ordinary,
+                 "generic trait method move/inout is unsupported");
+          need(!dependent_inout(method.signature),
+               "generic trait method dependent inout callback is unsupported");
+        }
         for (const auto &f : m.functions)
           need(f.symbol != method.symbol,
                "trait prototype has fake executable body");
@@ -2074,13 +2297,10 @@ class Verifier {
     need(written.has_value(), "constraint call lost its source method");
     need(written->name == symbol(c.method).name,
          "constraint call source method differs from target");
-    need(!written->explicit_type_arguments,
-         "constraint call has an explicit method type suffix");
     const bool template_qualifier =
         template_trait_parameter(*written, owner);
-    need(c.signature == substitute(method->signature, {{tr->self, c.receiver}},
-                                   substituted),
-         "constraint method substitution");
+    valid_type(c.signature, allowed(owner));
+    (void)constraint_method_arguments(n, c, *tr, *method);
     const auto &sig = type(c.signature);
     if (template_qualifier) {
       // T.method(...) has no synthetic receiver. Every declared parameter is
@@ -2324,15 +2544,18 @@ class Verifier {
           impl = &im;
         }
         need(impl, "instance constraint call has no impl");
+        const TraitDecl *trait = nullptr;
         const MethodPrototype *prototype = nullptr;
         for (const auto &tr : m.traits)
-          if (tr.symbol == cc->trait)
+          if (tr.symbol == cc->trait) {
+            trait = &tr;
             for (const auto &p : tr.methods)
               if (p.symbol == cc->method) {
                 need(!prototype, "duplicate instance constraint method");
                 prototype = &p;
               }
-        need(prototype, "instance constraint prototype missing");
+          }
+        need(trait && prototype, "instance constraint prototype missing");
         std::optional<SymbolId> expected;
         for (auto method : impl->methods)
           if (symbol(method).name == symbol(prototype->symbol).name) {
@@ -2340,14 +2563,40 @@ class Verifier {
             expected = method;
           }
         need(expected.has_value(), "instance constraint impl method missing");
-        auto target = *actual->direct_symbol;
+        auto method_args =
+            constraint_method_arguments(x, *cc, *trait, *prototype);
+        Substitutions impl_sub;
+        need(matches(impl->self_type, receiver, impl_sub),
+             "instance constraint impl receiver mismatch");
+        std::vector<TypeId> complete;
+        for (const auto &p : impl->params) {
+          auto it = std::find_if(impl_sub.begin(), impl_sub.end(),
+                                 [&](auto entry) {
+                                   return entry.first == p.symbol;
+                                 });
+          need(it != impl_sub.end(),
+               "instance constraint impl argument is not determined");
+          complete.push_back(it->second);
+        }
+        for (auto t : method_args.values)
+          complete.push_back(substitute(t, sub, substituted));
+        const FunctionInstance *target_instance = nullptr;
         for (const auto &i : m.instances)
-          if (i.symbol == target) {
-            target = i.origin;
-            break;
-          }
-        need(target == *expected,
-             "instance constraint target differs from selected trait impl");
+          if (i.symbol == *actual->direct_symbol)
+            target_instance = &i;
+        if (target_instance) {
+          need(target_instance->origin == *expected,
+               "instance constraint target differs from selected trait impl");
+          need(target_instance->type_args == complete,
+               "instance constraint complete type arguments mismatch");
+        } else {
+          need(!templates.count(actual->direct_symbol->value),
+               "instance constraint target retained a template");
+          need(complete.empty(),
+               "instance constraint generic method has no instance key");
+          need(*actual->direct_symbol == *expected,
+               "instance constraint target differs from selected trait impl");
+        }
         for (size_t a = 0; a < cc->args.size(); ++a) {
           const auto &before = cc->args[a], &after = actual->args[a];
           need(before.source_index == after.source_index &&
@@ -2562,10 +2811,35 @@ class Verifier {
               need(!f, "duplicate impl method");
               f = &function(id);
             }
-          need(f && f->signature == substitute(p.signature,
-                                               {{tr->self, im.self_type}},
-                                               substituted),
+          need(f, "impl method missing");
+          auto all = source_parameters(f->source);
+          need(all.size() >= im.params.size(),
+               "impl method source lost its impl generic prefix");
+          for (size_t i = 0; i < im.params.size(); ++i)
+            need(all[i].symbol == im.params[i].symbol,
+                 "impl method prefix differs from impl parameters");
+          std::vector<GenericParam> own(all.begin() + im.params.size(),
+                                        all.end());
+          auto prototype_own = source_parameters(p.source);
+          need(own.size() == prototype_own.size(),
+               "impl method own generic count mismatch");
+          Substitutions alpha{{tr->self, im.self_type}};
+          for (size_t i = 0; i < own.size(); ++i) {
+            need(own[i].trait == prototype_own[i].trait,
+                 "impl method generic bound mismatch");
+            Type parameter;
+            parameter.kind = TypeKind::TypeParameter;
+            parameter.declaration = own[i].symbol;
+            alpha.push_back({prototype_own[i].symbol,
+                             substituted.intern(parameter)});
+          }
+          need(f->signature == substitute(p.signature, alpha, substituted),
                "impl method signature mismatch");
+          need(f->parameters.size() == p.parameters.size(),
+               "impl method parameter count mismatch");
+          for (size_t i = 0; i < f->parameters.size(); ++i)
+            need(f->parameters[i].label == p.parameters[i].label,
+                 "impl method parameter labels mismatch");
         }
       }
   }

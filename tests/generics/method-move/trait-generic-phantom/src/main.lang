@@ -1,0 +1,48 @@
+package app;
+
+trait Tag {
+    func code() i32;
+}
+
+struct One {}
+struct Two {}
+
+impl Tag for One {
+    func code() i32 {
+        return 11;
+    }
+}
+
+impl Tag for Two {
+    func code() i32 {
+        return 22;
+    }
+}
+
+trait Stamp {
+    func stamp[U Tag](owner Self) i32;
+}
+
+struct Box[I] {
+    value i32;
+}
+
+impl[I] Stamp for Box[I] {
+    func stamp[W Tag](owner Self) i32 {
+        return W.code();
+    }
+}
+
+func via[T Stamp, V Tag](x T) i32 {
+    return T.stamp[V](x);
+}
+
+func main() i32 {
+    let a = Box[i32](value: 0);
+    let b = Box[bool](value: 0);
+    let forwarded = via[Box[i32], One](a) + via[Box[i32], Two](a) +
+                    via[Box[bool], One](b) + via[Box[bool], Two](b);
+    let direct = a.stamp[One]() + a.stamp[Two]() +
+                 Box[i32].stamp[One](a) + Box[bool].stamp[Two](b);
+    return forwarded + direct - 132;
+}
