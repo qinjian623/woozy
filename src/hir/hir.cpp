@@ -754,6 +754,42 @@ class Verifier {
            "foreign argument parameter index/type");
     }
   }
+  // Whole local scalar bindings cannot alias each other. An inout parameter
+  // is also unique because every caller is checked by this same rule. Scan
+  // nested argument expressions too: f(inout x, g(x)) must not read x while
+  // f's exclusive access is active, and g(inout x) must not borrow it again.
+  // Call and ConstraintCall share this check after collecting their own
+  // top-level inout storage; no other argument condition is relaxed here.
+  void check_call_aliases(const std::vector<CallArg> &args,
+                          const std::set<uint64_t> &borrowed) const {
+    for (const auto &a : args) {
+      if (a.mode == ParamMode::inout)
+        continue;
+      std::vector<HirNodeId> pending{a.expression};
+      std::set<uint64_t> visited;
+      while (!pending.empty()) {
+        check_cancelled(stop);
+        auto id = pending.back();
+        pending.pop_back();
+        need(visited.insert(id.value).second,
+             "cycle/shared child in call argument");
+        const auto &part = node(id);
+        if (part.kind() == NodeKind::read || part.kind() == NodeKind::place ||
+            (part.kind() == NodeKind::move &&
+             std::get<Move>(part.data).binding)) {
+          auto storage = part.kind() == NodeKind::read
+                             ? std::get<Read>(part.data).symbol
+                         : part.kind() == NodeKind::place
+                             ? std::get<Place>(part.data).symbol
+                             : *std::get<Move>(part.data).binding;
+          need(!borrowed.contains(storage.value),
+               "inout storage is also accessed by another argument");
+        }
+        pending.insert(pending.end(), part.children.begin(),
+                       part.children.end());
+      }
+    }
+  }
   void check_call(const HirNode &n, const Call &c) const {
     if (c.kind == CalleeKind::foreign) {
       foreign_call(n, c);
@@ -831,37 +867,7 @@ class Verifier {
              "positional argument index/order");
       }
     }
-    // Whole local scalar bindings cannot alias each other. An inout parameter
-    // is also unique because every caller is checked by this same rule. Scan
-    // nested argument expressions too: f(inout x, g(x)) must not read x while
-    // f's exclusive access is active, and g(inout x) must not borrow it again.
-    for (const auto &a : c.args) {
-      if (a.mode == ParamMode::inout)
-        continue;
-      std::vector<HirNodeId> pending{a.expression};
-      std::set<uint64_t> visited;
-      while (!pending.empty()) {
-        check_cancelled(stop);
-        auto id = pending.back();
-        pending.pop_back();
-        need(visited.insert(id.value).second,
-             "cycle/shared child in call argument");
-        const auto &part = node(id);
-        if (part.kind() == NodeKind::read || part.kind() == NodeKind::place ||
-            (part.kind() == NodeKind::move &&
-             std::get<Move>(part.data).binding)) {
-          auto storage = part.kind() == NodeKind::read
-                             ? std::get<Read>(part.data).symbol
-                         : part.kind() == NodeKind::place
-                             ? std::get<Place>(part.data).symbol
-                             : *std::get<Move>(part.data).binding;
-          need(!borrowed.contains(storage.value),
-               "inout storage is also accessed by another argument");
-        }
-        pending.insert(pending.end(), part.children.begin(),
-                       part.children.end());
-      }
-    }
+    check_call_aliases(c.args, borrowed);
   }
   void shape(HirNodeId id) const {
     check_cancelled(stop);
@@ -1788,25 +1794,82 @@ class Verifier {
       if (p.symbol == c.method)
         method = &p;
     need(method, "missing constraint method");
+    const auto &prototype = type(method->signature);
+    need(!method->parameters.empty() && !prototype.parameters.empty() &&
+             prototype.parameters.front().mode == ParamMode::ordinary,
+         "constraint method must declare ordinary self");
+    // The literal name `self` is a restriction of the newly opened non-self
+    // move/inout mode, not of ordinary trait calls. Existing all-ordinary
+    // prototypes may name their first Self parameter `owner` (or any other
+    // legal label) and must keep their old behavior.
+    const bool non_self_modes =
+        std::any_of(prototype.parameters.begin() + 1,
+                    prototype.parameters.end(), [](const auto &p) {
+                      return p.mode != ParamMode::ordinary;
+                    });
+    if (non_self_modes)
+      need(method->parameters.front().label == "self",
+           "constraint move/inout mode requires ordinary self");
+    const auto &raw_self = type(prototype.parameters.front().type);
+    need(raw_self.kind == TypeKind::TypeParameter &&
+             raw_self.declaration == tr->self,
+         "constraint method self type must be the trait Self");
     need(c.signature == substitute(method->signature, {{tr->self, c.receiver}},
                                    substituted),
          "constraint method substitution");
     const auto &sig = type(c.signature);
     need(n.type == sig.result && c.args.size() == sig.parameters.size() &&
-             n.children.size() == c.args.size(),
+             n.children.size() == c.args.size() && !c.args.empty(),
          "constraint call shape");
-    std::set<uint32_t> seen;
-    for (size_t i = 0; i < c.args.size(); ++i) {
+    // The receiver is a synthetic first argument. It must be evaluated first,
+    // once, as an ordinary read; only explicit arguments follow in source
+    // order. Labels come from the real trait prototype, not a name match.
+    const auto &receiver = c.args[0];
+    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+             !receiver.label && receiver.mode == ParamMode::ordinary &&
+             receiver.expression == n.children[0] &&
+             expr(receiver.expression).type == c.receiver,
+         "constraint receiver order/mode/type");
+    std::set<uint32_t> seen{0};
+    std::set<uint64_t> borrowed;
+    bool named = false;
+    for (size_t i = 1; i < c.args.size(); ++i) {
       const auto &a = c.args[i];
       need(a.source_index == i && a.parameter_index < sig.parameters.size() &&
                seen.insert(a.parameter_index).second,
            "constraint call argument mapping");
-      need(n.children[i] == a.expression &&
-               expr(a.expression).type ==
-                   sig.parameters[a.parameter_index].type &&
-               a.mode == sig.parameters[a.parameter_index].mode,
-           "constraint argument type/order");
+      need(n.children[i] == a.expression,
+           "constraint call children must preserve source order");
+      const auto p = sig.parameters[a.parameter_index];
+      const auto &argument = node(a.expression);
+      need(a.mode == p.mode && argument.type == p.type,
+           "constraint argument type/mode");
+      if (p.mode == ParamMode::inout) {
+        // Trait prototypes have no method-own type parameters. Requiring a
+        // concrete scalar here also keeps `slot inout Self` unavailable even
+        // if a concrete impl would otherwise make its data scalar.
+        need(argument.kind() == NodeKind::place &&
+                 inout_scalar(type(p.type).kind),
+             "constraint inout requires a whole trivial scalar place");
+        need(borrowed
+                 .insert(std::get<Place>(argument.data).symbol.value)
+                 .second,
+             "duplicate inout storage in constraint call");
+      } else {
+        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
+             "unsupported constraint argument mode");
+        expr(a.expression);
+      }
+      if (a.label) {
+        named = true;
+        need(*a.label == method->parameters[a.parameter_index].label,
+             "constraint call label differs from trait prototype");
+      } else {
+        need(!named && a.parameter_index == i,
+             "constraint positional argument index/order");
+      }
     }
+    check_call_aliases(c.args, borrowed);
   }
   void instance_body(const HirFunction &origin, const HirFunction &f,
                      const Substitutions &sub,
@@ -1887,6 +1950,63 @@ class Verifier {
                    v.body == nodes.at(c.body.value) &&
                    same_ref(v.source.node, c.source.node),
                "instance handler metadata was not substituted/renamed");
+        }
+      }
+      // A constraint call may only become a direct call to the unique method
+      // of the impl selected by its required trait and concrete receiver. A
+      // same-signature method from another trait/impl is not interchangeable.
+      if (auto cc = std::get_if<ConstraintCall>(&x.data)) {
+        const auto *actual = std::get_if<Call>(&y.data);
+        need(actual && actual->kind == CalleeKind::direct &&
+                 actual->direct_symbol && actual->type_args.empty() &&
+                 actual->signature ==
+                     substitute(cc->signature, sub, substituted) &&
+                 actual->args.size() == cc->args.size() &&
+                 y.children.size() == cc->args.size(),
+             "instance constraint call metadata");
+        const auto receiver = substitute(cc->receiver, sub, substituted);
+        const ImplDecl *impl = nullptr;
+        for (const auto &im : m.impls) {
+          if (im.trait != cc->trait)
+            continue;
+          Substitutions match;
+          if (!matches(im.self_type, receiver, match))
+            continue;
+          need(!impl, "ambiguous instance constraint impl");
+          impl = &im;
+        }
+        need(impl, "instance constraint call has no impl");
+        const MethodPrototype *prototype = nullptr;
+        for (const auto &tr : m.traits)
+          if (tr.symbol == cc->trait)
+            for (const auto &p : tr.methods)
+              if (p.symbol == cc->method) {
+                need(!prototype, "duplicate instance constraint method");
+                prototype = &p;
+              }
+        need(prototype, "instance constraint prototype missing");
+        std::optional<SymbolId> expected;
+        for (auto method : impl->methods)
+          if (symbol(method).name == symbol(prototype->symbol).name) {
+            need(!expected, "duplicate instance impl method");
+            expected = method;
+          }
+        need(expected.has_value(), "instance constraint impl method missing");
+        auto target = *actual->direct_symbol;
+        for (const auto &i : m.instances)
+          if (i.symbol == target) {
+            target = i.origin;
+            break;
+          }
+        need(target == *expected,
+             "instance constraint target differs from selected trait impl");
+        for (size_t a = 0; a < cc->args.size(); ++a) {
+          const auto &before = cc->args[a], &after = actual->args[a];
+          need(before.source_index == after.source_index &&
+                   before.parameter_index == after.parameter_index &&
+                   before.label == after.label && before.mode == after.mode &&
+                   after.expression == y.children[a],
+               "instance constraint argument mapping/mode/order");
         }
       }
       if (auto r = std::get_if<Read>(&x.data))
@@ -2138,10 +2258,15 @@ class Verifier {
         if (n.kind() == NodeKind::place || n.kind() == NodeKind::field_place ||
             n.kind() == NodeKind::index_place) {
           bool allowed = p.kind() == NodeKind::assign && p.children[0] == id;
-          if (p.kind() == NodeKind::call)
-            for (const auto &a : std::get<Call>(p.data).args)
+          if (p.kind() == NodeKind::call ||
+              p.kind() == NodeKind::constraint_call) {
+            const auto &args = p.kind() == NodeKind::call
+                                   ? std::get<Call>(p.data).args
+                                   : std::get<ConstraintCall>(p.data).args;
+            for (const auto &a : args)
               allowed =
                   allowed || (a.mode == ParamMode::inout && a.expression == id);
+          }
           allowed = allowed ||
                     (p.kind() == NodeKind::field_place && p.children[0] == id);
           need(allowed, "place used outside assignment or inout argument");

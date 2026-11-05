@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态泛型、POD/有限拥有聚合、原05_traits和位置式enum已通过。自由泛型move及数字/bool inout支持已满足的trait约束，保留既有具体函数值。非trait固有方法的非self move及数字/bool inout支持非泛型、方法泛型、impl泛型和两层组合，允许任一层带既有trait约束，仍检查实际impl、完整实例键、Self/Place/Move来源及callback类型。trait方法自身move/inout、实际self move/inout、方法值、非数字/bool inout、泛型trait和嵌套变体模式仍未实施。Native不可达块遗留局部槽已修复，参数和存活引用保持，验证器未放宽。T07/T09仍in_progress，执行记录见docs/GENERICS.md。"
+      "notes": "静态泛型、POD/有限拥有聚合、原05_traits和位置式enum已通过。自由泛型及非trait固有方法支持既有trait约束下的move和数字/bool inout。非泛型trait、方法无自身类型参数、ordinary self的非self move与具体数字/bool inout支持具体receiver及ConstraintCall，保留真实trait/impl选择、完整实例键与Self/Move/Place来源。旧ordinary方法首参owner的HIR回退已修复，并保留未调用模板检查。trait静态/泛型/方法泛型、slot inout Self、实际self模式、方法值、非数字/bool inout、嵌套变体模式和完整ARC仍未实施。T07/T09仍in_progress，实际执行与限制见docs/GENERICS.md。"
     },
     {
       "id": "T08",

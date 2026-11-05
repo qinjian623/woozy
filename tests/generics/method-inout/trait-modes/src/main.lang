@@ -1,0 +1,161 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+trait Adjust {
+    func set(self Self, slot inout i32, value i32, log inout i64) i32;
+    func fail(self Self, slot inout i32, value i32, log inout i64) i32 throws E;
+    func delayed(self Self, slot inout i32, value i32, log inout i64) i32;
+}
+
+struct Holder {
+    marker i32;
+    items Vec[i32];
+}
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func make_holder(log inout i64, digit i64) Holder {
+    mark(inout log, digit);
+    return Holder(marker: i32(digit), items: [i32(digit)]);
+}
+
+func bad(log inout i64, digit i64) i32 throws E {
+    mark(inout log, digit);
+    throw E.Bad;
+}
+
+func make_box(log inout i64, digit i64) Box[i32] {
+    mark(inout log, digit);
+    return Box[i32](value: i32(digit), items: [i32(digit)]);
+}
+
+impl Adjust for Holder {
+    func set(self Self, slot inout i32, value i32, log inout i64) i32 {
+        let old = slot;
+        slot = value;
+        mark(inout log, i64(self.items[0]));
+        return old;
+    }
+
+    func fail(self Self, slot inout i32, value i32, log inout i64) i32 throws E {
+        slot = value;
+        mark(inout log, 9);
+        throw E.Bad;
+    }
+
+    func delayed(self Self, slot inout i32, value i32, log inout i64) i32 {
+        let old = slot;
+        defer {
+            slot = value;
+            mark(inout log, 8);
+        }
+        return old;
+    }
+}
+
+impl[T] Adjust for Box[T] {
+    func set(self Self, slot inout i32, value i32, log inout i64) i32 {
+        let old = slot;
+        slot = value;
+        mark(inout log, i64(self.items[0]));
+        return old;
+    }
+
+    func fail(self Self, slot inout i32, value i32, log inout i64) i32 throws E {
+        slot = value;
+        mark(inout log, 9);
+        throw E.Bad;
+    }
+
+    func delayed(self Self, slot inout i32, value i32, log inout i64) i32 {
+        let old = slot;
+        defer {
+            slot = value;
+            mark(inout log, 8);
+        }
+        return old;
+    }
+}
+
+func forward[T Adjust](owner T, slot inout i32, value i32, log inout i64,
+                       order inout i64) i32 {
+    let observed = slot;
+    return owner.set(log: inout log, value: mark_value(inout order, 7),
+                     slot: inout slot);
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var order i64 = 0;
+    let h = make_holder(inout log, 1);
+    var x i32 = 2;
+    let r = h.set(log: inout log, slot: inout x,
+                  value: mark_value(inout order, 5));
+    if r != 2 || x != 5 || log != 11 || order != 5 {
+        return 1;
+    }
+
+    var flog i64 = 0;
+    var forder i64 = 0;
+    let b = make_box(inout flog, 3);
+    var y i32 = 4;
+    let br = forward(b, inout y, 7, inout flog, inout forder);
+    if br != 4 || y != 7 || flog != 33 || forder != 7 {
+        return 2;
+    }
+
+    var z i32 = 8;
+    let oldb = b.set(slot: inout z, log: inout log, value: 9);
+    if oldb != 8 || z != 9 || log != 113 {
+        return 3;
+    }
+
+    var t i32 = 10;
+    try {
+        let ignored = h.fail(slot: inout t, value: 11, log: inout log);
+        return 4;
+    } catch err E {
+        if t != 11 {
+            return 5;
+        }
+        mark(inout log, 2);
+    }
+    if log != 11392 {
+        return 9;
+    }
+
+    var d i32 = 20;
+    let delayed = h.delayed(slot: inout d, value: 21, log: inout log);
+    if delayed != 20 || d != 21 || log != 113928 {
+        return 6;
+    }
+
+    var u i32 = 30;
+    var order2 i64 = 0;
+    try {
+        let ignored = h.set(slot: inout u, value: bad(inout order2, 4),
+                            log: inout log);
+        return 7;
+    } catch err E {
+        mark(inout log, 2);
+    }
+    if u != 30 || order2 != 4 || log != 1139282 {
+        return 8;
+    }
+    return 0;
+}

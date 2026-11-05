@@ -14,7 +14,7 @@ sys.dont_write_bytecode = True
 CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
          'callee-throws', 'enum-static', 'generic-explicit', 'generic-impl',
          'generic-impl-errors', 'generic-impl-own',
-         'generic-impl-own-errors', 'constrained-inherent')
+         'generic-impl-own-errors', 'constrained-inherent', 'trait-modes')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -28,6 +28,7 @@ EXPECTED_EVENTS = {
     'generic-impl-own': [9, 3, 2],
     'generic-impl-own-errors': [9, 2, 3, 9, 2, 3, 2, 3, 3],
     'constrained-inherent': [1, 2, 5, 6, 7, 8, 9, 3, 2],
+    'trait-modes': [7, 1, 3, 2, 7, 1, 3, 2, 7, 1, 3, 2],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -42,6 +43,7 @@ EXPECTED_ALLOCATIONS = {
     'generic-impl-own': 23,
     'generic-impl-own-errors': 16,
     'constrained-inherent': 20,
+    'trait-modes': 6,
 }
 
 
@@ -156,6 +158,23 @@ def assert_native(case, observations, allocations):
             observations.index(('free', 12)) < \
             observations.index(('free', 11)) < \
             observations.index(('obs', 3, 923923233)), observations
+    elif case == 'trait-modes':
+        # Each receiver temporary frees before the following section. The
+        # generic trait impl receiver/moved arguments then free before the
+        # earlier Box moved argument and the caller's shared aliases.
+        assert frees == [1, 3, 5, 4, 2, 0], observations
+        assert observations.index(('obs', 2, 7132)) < \
+            observations.index(('free', 1)) < \
+            observations.index(('obs', 1, 1)), observations
+        second_end = observations.index(('obs', 2, 732))
+        free_second = observations.index(('free', 3))
+        third_start = observations.index(('obs', 1, 1), free_second)
+        assert second_end < free_second < third_start, observations
+        third_end = observations.index(('obs', 2, 732), third_start)
+        assert third_end < observations.index(('free', 5)) < \
+            observations.index(('free', 4)) < \
+            observations.index(('free', 2)) < \
+            observations.index(('free', 0)), observations
 
 
 def assert_python(case, data):
@@ -242,6 +261,17 @@ def assert_python(case, data):
                    error['type'] == 'app.E' for error in data['errors']), data
         assert any(error['function'] == 'fail' and error['type'] == 'app.E'
                    for error in data['errors']), data
+    elif case == 'trait-modes':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['log'] == 7132 and snapshots['flog'] == 732, data
+        assert snapshots['rlog'] == 1, data
+        assert snapshots['r'] == 32 and snapshots['br'] == 32, data
+        assert snapshots['alias'] == [{'object': 0, 'items': [8]}], data
+        assert snapshots['balias'] == [7, {'object': 2, 'items': [8]}], data
+        assert snapshots['qlog'] == 732 and snapshots['qrlog'] == 1, data
+        assert snapshots['q'] == -30, data
+        assert snapshots['qalias'] == [{'object': 4, 'items': [8]}], data
+        assert data['frees'] == [1, 3, 5, 4, 2, 0], data
     elif case == 'constrained-inherent':
         snapshots = data.get('snapshots', {})
         assert snapshots['a'][0]['items'] == [5], data

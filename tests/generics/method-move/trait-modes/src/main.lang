@@ -1,0 +1,137 @@
+package app;
+
+trait Take {
+    func take(self Self, value move Self, first i32, second i32) i32;
+}
+
+trait Boost {
+    func take(self Self, value move Self, first i32, second i32) i32;
+}
+
+trait Legacy {
+    func ordinary(owner Self) i32;
+}
+
+struct Item {
+    items Vec[i32];
+}
+
+struct Box[T] {
+    value T;
+    items Vec[i32];
+}
+
+struct BoostItem {
+    items Vec[i32];
+}
+
+struct LegacyItem {
+    x i32;
+}
+
+impl Take for Item {
+    func take(self Self, value move Self, first i32, second i32) i32 {
+        value.items[0] = value.items[0] + 1;
+        return self.items[0] + value.items[0] + first * 10 + second;
+    }
+}
+
+impl[T] Take for Box[T] {
+    func take(self Self, value move Self, first i32, second i32) i32 {
+        value.items[0] = value.items[0] + 1;
+        return self.items[0] + value.items[0] + first * 10 + second;
+    }
+}
+
+impl Boost for BoostItem {
+    func take(self Self, value move Self, first i32, second i32) i32 {
+        value.items[0] = value.items[0] + 1;
+        return self.items[0] - value.items[0] - first * 10 - second;
+    }
+}
+
+impl Legacy for LegacyItem {
+    func ordinary(owner Self) i32 {
+        return owner.x;
+    }
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func mark_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func make_item(log inout i64, digit i64) Item {
+    mark(inout log, digit);
+    return Item(items: [i32(digit)]);
+}
+
+func make_box(log inout i64, digit i64) Box[i32] {
+    mark(inout log, digit);
+    return Box[i32](value: i32(digit), items: [i32(digit)]);
+}
+
+func make_boost(log inout i64, digit i64) BoostItem {
+    mark(inout log, digit);
+    return BoostItem(items: [i32(digit)]);
+}
+
+func forward[T Take](owner T, value move T, log inout i64) i32 {
+    return owner.take(second: mark_value(inout log, 3),
+                      value: move value,
+                      first: mark_value(inout log, 2));
+}
+
+func forward_boost[T Boost](owner T, value move T, log inout i64) i32 {
+    return owner.take(second: mark_value(inout log, 3),
+                      value: move value,
+                      first: mark_value(inout log, 2));
+}
+
+func legacy_invoke[T Legacy](x T) i32 {
+    return x.ordinary();
+}
+
+func legacy_unused[T Legacy](x T) i32 {
+    return x.ordinary();
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var value Item = make_item(inout log, 7);
+    let alias = value;
+    let r = make_item(inout log, 1).take(
+        second: mark_value(inout log, 3),
+        value: move value,
+        first: mark_value(inout log, 2));
+    if r != 32 || log != 7132 || alias.items[0] != 8 {
+        return 1;
+    }
+
+    var flog i64 = 0;
+    var rlog i64 = 0;
+    var bv Box[i32] = make_box(inout flog, 7);
+    let balias = bv;
+    let br = forward(make_box(inout rlog, 1), move bv, inout flog);
+    if br != 32 || flog != 732 || rlog != 1 || balias.items[0] != 8 {
+        return 2;
+    }
+
+    var qlog i64 = 0;
+    var qrlog i64 = 0;
+    var qv BoostItem = make_boost(inout qlog, 7);
+    let qalias = qv;
+    let q = forward_boost(make_boost(inout qrlog, 1), move qv, inout qlog);
+    if q != (1 - 8 - 20 - 3) || qlog != 732 || qrlog != 1 ||
+       qalias.items[0] != 8 {
+        return 3;
+    }
+    if legacy_invoke(LegacyItem(x: 1)) != 1 {
+        return 4;
+    }
+    return 0;
+}

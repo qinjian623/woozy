@@ -280,6 +280,125 @@ class Checker {
              params.front().mode == ParamMode::ordinary;
     return !self;
   }
+  struct TraitMethodSource {
+    const ImplDecl *impl;
+    const TraitDecl *trait;
+    const MethodPrototype *prototype;
+  };
+  // A concrete receiver may use a method from a real trait impl only when the
+  // impl names a trait whose prototype has the same source name, labels and
+  // substituted signature, and whose first parameter is a real ordinary self.
+  // The merged generic list must be exactly the impl prefix: method-own type
+  // parameters stay rejected. This is a source check only; finish_arguments,
+  // select_method and instantiate still verify the actual implementation.
+  std::optional<TraitMethodSource>
+  trait_impl_method_source(SymbolId target) {
+    const auto *im = impl_of(target);
+    if (!im || !im->trait)
+      return {};
+    const TraitDecl *tr = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == *im->trait)
+        tr = &t;
+    if (!tr)
+      return {};
+    auto generics = generic_params.find(target.value);
+    if (generics == generic_params.end() ||
+        generics->second.size() != im->params.size())
+      return {};
+    for (size_t i = 0; i < im->params.size(); ++i)
+      if (generics->second[i].symbol != im->params[i].symbol)
+        return {};
+    const MethodPrototype *prototype = nullptr;
+    for (const auto &p : tr->methods)
+      if (symbol(p.symbol).name == symbol(target).name) {
+        if (prototype)
+          return {};
+        prototype = &p;
+      }
+    if (!prototype)
+      return {};
+    auto declared = parameters.find(target.value);
+    if (declared == parameters.end() ||
+        declared->second.size() != prototype->parameters.size())
+      return {};
+    for (size_t i = 0; i < declared->second.size(); ++i)
+      if (declared->second[i].label != prototype->parameters[i].label)
+        return {};
+    auto found = signatures.find(target.value);
+    if (found == signatures.end())
+      return {};
+    if (found->second !=
+        substitute(prototype->signature, {{tr->self, im->self_type}},
+                   m.types))
+      return {};
+    const auto proto_sig = type(prototype->signature);
+    const auto method_sig = type(found->second);
+    if (prototype->parameters.empty() || proto_sig.parameters.empty() ||
+        method_sig.parameters.empty() ||
+        prototype->parameters.front().label != "self" ||
+        proto_sig.parameters.front().mode != ParamMode::ordinary ||
+        method_sig.parameters.front().mode != ParamMode::ordinary ||
+        !declared_self(target))
+      return {};
+    const auto &raw_self = type(proto_sig.parameters.front().type);
+    if (raw_self.kind != TypeKind::TypeParameter ||
+        raw_self.declaration != tr->self)
+      return {};
+    return TraitMethodSource{im, tr, prototype};
+  }
+  // A constraint call is limited to a real prototype of the required trait,
+  // reached through a bounded template receiver with a real ordinary self.
+  // Only concrete numeric/bool non-self inout types are admitted; a trait
+  // declared `slot inout Self` remains unavailable. Method-own generics are
+  // also excluded because the trait's methods must not have their own list.
+  const MethodPrototype *constraint_method_source(SymbolId target,
+                                                  SymbolId trait,
+                                                  TypeId receiver) const {
+    const TraitDecl *tr = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == trait)
+        tr = &t;
+    if (!tr || type(receiver).kind != TypeKind::TypeParameter)
+      return nullptr;
+    auto bounded = bounds.find(type(receiver).declaration.value);
+    if (bounded == bounds.end() || !bounded->second ||
+        *bounded->second != trait)
+      return nullptr;
+    if (std::none_of(active_params.begin(), active_params.end(),
+                     [&](const GenericParam &p) {
+                       return p.symbol == type(receiver).declaration;
+                     }))
+      return nullptr;
+    auto generics = generic_params.find(target.value);
+    if (generics == generic_params.end() || !generics->second.empty())
+      return nullptr;
+    const MethodPrototype *prototype = nullptr;
+    for (const auto &p : tr->methods)
+      if (p.symbol == target) {
+        if (prototype)
+          return nullptr;
+        prototype = &p;
+      }
+    if (!prototype)
+      return nullptr;
+    if (prototype->parameters.empty() ||
+        prototype->parameters.front().label != "self")
+      return nullptr;
+    const auto &sig = type(prototype->signature);
+    if (sig.parameters.empty() ||
+        sig.parameters.front().mode != ParamMode::ordinary)
+      return nullptr;
+    const auto &raw_self = type(sig.parameters.front().type);
+    if (raw_self.kind != TypeKind::TypeParameter ||
+        raw_self.declaration != tr->self)
+      return nullptr;
+    for (size_t i = 1; i < sig.parameters.size(); ++i)
+      if (sig.parameters[i].mode == ParamMode::inout &&
+          !scalar_inout_type(sig.parameters[i].type))
+        return nullptr;
+    return prototype;
+  }
   // A direct call to a generic free function. Trait constraints do not change
   // this source identity; they are checked from the finished type arguments.
   bool free_generic_template(SymbolId target) const {
@@ -1628,8 +1747,10 @@ class Checker {
     // requires the explicit impl. The inherent-method route accepts declared
     // constraints on either layer for the same reason: finish_arguments checks
     // the actual merged impl/own arguments, not merely the declarations.
-    // Receiver and constraint calls stay excluded, so actual self modes and
-    // trait methods are rejected.
+    // A concrete receiver may likewise use a real trait impl method, and a
+    // bounded template receiver may use a real trait prototype, but only when
+    // the source helper above has proved the actual prototype/self relation.
+    // Actual self modes remain rejected by the separate check below.
     const bool free_template =
         !receiver && !constraint && free_generic_template(target);
     const bool free_move = free_template;
@@ -1637,8 +1758,15 @@ class Checker {
     const bool inherent =
         !constraint &&
         inherent_method_route(target, receiver.has_value(), original);
-    const bool allow_move = free_move || inherent;
-    const bool allow_inout = free_inout || inherent;
+    const bool trait_impl =
+        !constraint && receiver && trait_impl_method_source(target).has_value();
+    const bool trait_constraint =
+        constraint && receiver &&
+        constraint_method_source(target, *constraint, receiver->value.type);
+    const bool allow_move =
+        free_move || inherent || trait_impl || trait_constraint;
+    const bool allow_inout =
+        free_inout || inherent || trait_impl || trait_constraint;
     // Any instance route whose declared first parameter is move/inout is an
     // unsupported self mode, including a trait method reached through a
     // constraint. A type-qualified static call to an impl method with a
@@ -2925,12 +3053,15 @@ class Checker {
     // A generic declaration defers direct mode/type restrictions until the
     // concrete type is known; reject them before publishing invalid HIR. Free
     // generic templates and eligible inherent methods may carry scalar inout
-    // into the instance whether or not either layer has a trait constraint;
-    // every other source keeps the old refusal after check_inout_graph has
-    // checked the concrete types unconditionally.
+    // into the instance whether or not either layer has a trait constraint; a
+    // generic trait impl method is eligible only through the same real
+    // prototype/self relation used by its direct call. Every other source
+    // keeps the old refusal after check_inout_graph has checked the concrete
+    // types unconditionally.
     const bool inout_source =
         !temp.params.empty() &&
-        (free_generic_template(origin) || inherent_method_source(origin));
+        (free_generic_template(origin) || inherent_method_source(origin) ||
+         trait_impl_method_source(origin).has_value());
     for (const auto &p : type(f.signature).parameters) {
       if (p.mode != ParamMode::ordinary &&
           type(p.type).kind == TypeKind::ForeignOpaque)

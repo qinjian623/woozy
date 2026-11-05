@@ -1063,12 +1063,12 @@ void constrained_free_move(const fs::path &root) {
   good("trait V{} impl V for i32{} "
        "func bump[T V](x inout T){} "
        "func main()i32{var x i32=1;bump(inout x);return x-1;}");
-  unsupported("trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
-              "struct S{x i32;} impl V for S{"
-              "func take(self Self,value move Vec[i32])Vec[i32]{"
-              "return move value;}} "
-              "func main()i32{let s=S(x:1);var v Vec[i32]=[1];"
-              "let r=s.take(move v);return r[0]-1;}");
+  good("trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
+       "struct S{x i32;} impl V for S{"
+       "func take(self Self,value move Vec[i32])Vec[i32]{"
+       "return move value;}} "
+       "func main()i32{let s=S(x:1);var v Vec[i32]=[1];"
+       "let r=s.take(move v);return r[0]-1;}");
   good("trait V{} impl V for i32{} struct S{x i32;} impl S{"
        "func take[T V](self Self,value move T)T{return move value;}} "
        "func main()i32{let s=S(x:1);var x i32=1;"
@@ -1474,10 +1474,10 @@ void constrained_free_inout(const fs::path &root) {
        "func swap[X V](self Self,a inout X,b inout X){}} "
        "func main(){let b=B[i32](x:1);var x i32=1;var y i32=2;"
        "b.swap(inout x,inout y);}");
-  unsupported("trait V{func bump(self Self,slot inout i32);} "
-              "struct S{x i32;} impl V for S{"
-              "func bump(self Self,slot inout i32){}} "
-              "func main(){let s=S(x:1);var x i32=1;s.bump(inout x);}");
+  good("trait V{func bump(self Self,slot inout i32);} "
+       "struct S{x i32;} impl V for S{"
+       "func bump(self Self,slot inout i32){}} "
+       "func main(){let s=S(x:1);var x i32=1;s.bump(inout x);}");
   unsupported("trait V{} impl V for i32{} "
               "impl i32{func bump(self inout i32,slot inout i32){}} "
               "func main(){var x i32=1;x.bump(inout x);}");
@@ -2292,11 +2292,11 @@ return 0;}
        "slot=slot;}} "
        "func main(){let b=Box[i32](value:1,items:[1],marker:0);"
        "var x i32=1;b.replace(inout x);}");
-  unsupported("trait V{func replace(self Self,slot inout i32);} "
-              "struct H{marker i32;} impl V for H{"
-              "func replace(self Self,slot inout i32){slot=slot;}} "
-              "func main(){let h=H(marker:0);var x i32=1;"
-              "h.replace(inout x);}");
+  good("trait V{func replace(self Self,slot inout i32);} "
+       "struct H{marker i32;} impl V for H{"
+       "func replace(self Self,slot inout i32){slot=slot;}} "
+       "func main(){let h=H(marker:0);var x i32=1;"
+       "h.replace(inout x);}");
   unsupported(method_prefix +
               "impl[T] Box[T]{func replace[U](self Self,slot inout U,value U)U{"
               "let old=slot;slot=value;return old;}} "
@@ -2885,7 +2885,7 @@ void method_move(const fs::path &root) {
       "func take[U V](self Self,value move U)U{return move value;}} "
       "func main()i32{let h=H(marker:0);var v i32=1;"
       "let r=h.take(move v);return r-1;}");
-  unsupported(
+  good(
       "trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
       "struct H{items Vec[i32];marker i32;} impl V for H{"
       "func take(self Self,value move Vec[i32])Vec[i32]{return move value;}} "
@@ -3829,13 +3829,13 @@ return 0;}
        "impl[T V] Box[T]{func take(value move T)T{return move value;}} "
        "func main()i32{var x i32=1;"
        "let r=Box[i32].take(move x);return r-1;}");
-  unsupported("trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
-              "struct Box[T]{value T;items Vec[i32];} "
-              "impl[T] V for Box[T]{"
-              "func take(self Self,value move Vec[i32])Vec[i32]{"
-              "return move value;}} "
-              "func main()i32{let b=Box[i32](value:1,items:[1]);"
-              "var v Vec[i32]=[2];let r=b.take(move v);return r[0];}");
+  good("trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
+       "struct Box[T]{value T;items Vec[i32];} "
+       "impl[T] V for Box[T]{"
+       "func take(self Self,value move Vec[i32])Vec[i32]{"
+       "return move value;}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1]);"
+       "var v Vec[i32]=[2];let r=b.take(move v);return r[0];}");
   good(box + "impl[T] Box[T]{"
        "func bump(self Self,x inout i32){x+=1;}} "
        "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
@@ -4458,13 +4458,13 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
        "func take[U](self Self,value move U)U{return move value;}} "
        "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
        "var x i32=1;let r=b.take(move x);return r-1;}");
-  unsupported("trait V{func take(self Self,value move Vec[i32])Vec[i32];} " +
-              box +
-              "impl[T] V for Box[T]{"
-              "func take(self Self,value move Vec[i32])Vec[i32]{"
-              "return move value;}} "
-              "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-              "var v Vec[i32]=[2];let r=b.take(move v);return r[0]-2;}");
+  good("trait V{func take(self Self,value move Vec[i32])Vec[i32];} " +
+       box +
+       "impl[T] V for Box[T]{"
+       "func take(self Self,value move Vec[i32])Vec[i32]{"
+       "return move value;}} "
+       "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+       "var v Vec[i32]=[2];let r=b.take(move v);return r[0]-2;}");
   good(box + "impl[T] Box[T]{"
        "func bump[U](x inout i32){x+=1;}} "
        "func main()i32{var x i32=1;"
@@ -5784,6 +5784,540 @@ void constrained_inherent_inout(const fs::path &root) {
               "return h.keep[i32](make);}");
 }
 
+
+void trait_method_modes(const fs::path &root) {
+  auto move_result = check(root /
+      "tests/generics/method-move/trait-modes/lang.toml");
+  need(move_result.success(), messages(move_result));
+  need(hir::verify(*move_result.value).success(),
+       "trait method move fixture HIR rejected");
+  const auto &move = *move_result.value;
+
+  auto inout_result = check(root /
+      "tests/generics/method-inout/trait-modes/lang.toml");
+  need(inout_result.success(), messages(inout_result));
+  need(hir::verify(*inout_result.value).success(),
+       "trait method inout fixture HIR rejected");
+  const auto &inout = *inout_result.value;
+
+  auto name = [](const hir::HirModule &m, SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  auto nominal_name = [&](const hir::HirModule &m, TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return name(m, t->declaration);
+  };
+  auto trait_named = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (name(m, t.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto template_named = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (name(m, t.function.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto function_for = [&](const hir::HirModule &m, SymbolId id)
+      -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto impl_for = [&](const hir::HirModule &m, SymbolId trait,
+                      const std::string &type) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (im.trait == trait && nominal_name(m, im.self_type) == type)
+        return &im;
+    return nullptr;
+  };
+  auto impl_method = [&](const hir::HirModule &m, const hir::ImplDecl &im,
+                         const std::string &method) -> SymbolId {
+    for (auto s : im.methods)
+      if (name(m, s) == method)
+        return s;
+    throw std::runtime_error("trait impl method missing: " + method);
+  };
+  auto instances_of = [&](const hir::HirModule &m,
+                          const hir::FunctionTemplate &t) {
+    std::vector<const hir::FunctionInstance *> result;
+    for (const auto &i : m.instances)
+      if (i.origin == t.function.symbol)
+        result.push_back(&i);
+    return result;
+  };
+  auto origin_of = [&](const hir::HirModule &m, SymbolId s) {
+    for (const auto &i : m.instances)
+      if (i.symbol == s)
+        return i.origin;
+    return s;
+  };
+  auto constraint_in = [&](const hir::HirModule &m, SymbolId function)
+      -> std::pair<HirNodeId, const hir::ConstraintCall *> {
+    std::pair<HirNodeId, const hir::ConstraintCall *> result;
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      const auto &n = m.nodes[i];
+      if (m.scopes[n.scope.value].function != function)
+        continue;
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(!result.second, "multiple ConstraintCall nodes");
+        result = {HirNodeId{i}, c};
+      }
+    }
+    need(result.second, "missing ConstraintCall node");
+    return result;
+  };
+
+  const auto *take = trait_named(move, "Take");
+  const auto *forward_move = template_named(move, "forward");
+  const auto *item_impl = take ? impl_for(move, take->symbol, "Item") : nullptr;
+  const auto *box_impl = take ? impl_for(move, take->symbol, "Box") : nullptr;
+  need(take && forward_move && item_impl && box_impl,
+       "trait move declarations missing");
+  const auto item_take = impl_method(move, *item_impl, "take");
+  const auto box_take = impl_method(move, *box_impl, "take");
+  auto [move_cc_id, move_cc] =
+      constraint_in(move, forward_move->function.symbol);
+  const hir::MethodPrototype *take_prototype = nullptr;
+  for (const auto &p : take->methods)
+    if (name(move, p.symbol) == "take")
+      take_prototype = &p;
+  need(take_prototype && move_cc->trait == take->symbol &&
+           move_cc->method == take_prototype->symbol &&
+           move_cc->method != item_take,
+       "constraint call must target the trait prototype");
+  need(name(move, move_cc->method) == "take" &&
+           move_cc->args.size() == 4 &&
+           move_cc->args[1].label == std::optional<std::string>("second") &&
+           move_cc->args[2].label == std::optional<std::string>("value") &&
+           move_cc->args[3].label == std::optional<std::string>("first") &&
+           move_cc->args[1].parameter_index == 3 &&
+           move_cc->args[2].parameter_index == 1 &&
+           move_cc->args[3].parameter_index == 2 &&
+           move_cc->args[0].mode == hir::ParamMode::ordinary &&
+           move_cc->args[1].mode == hir::ParamMode::ordinary &&
+           move_cc->args[2].mode == hir::ParamMode::move &&
+           move_cc->args[3].mode == hir::ParamMode::ordinary,
+       "trait move ConstraintCall order/labels/modes changed");
+  const auto &template_move =
+      std::get<hir::Move>(move.nodes[move_cc->args[2].expression.value].data);
+  need(template_move.binding ==
+           forward_move->function.parameters[1].symbol,
+       "trait move ConstraintCall lost its template Move binding");
+
+  auto move_instances = instances_of(move, *forward_move);
+  need(move_instances.size() == 1 &&
+           nominal_name(move, move_instances[0]->type_args[0]) == "Box",
+       "trait generic impl forward instance missing");
+  const auto *move_instance_function =
+      function_for(move, move_instances[0]->symbol);
+  need(move_instance_function, "trait move instance function missing");
+  size_t move_concrete_calls = 0;
+  for (const auto &n : move.nodes) {
+    if (move.scopes[n.scope.value].function !=
+        move_instance_function->symbol)
+      continue;
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol ||
+        origin_of(move, *c->direct_symbol) != box_take)
+      continue;
+    need(c->type_args.empty() && c->args.size() == 4 &&
+             c->args[2].mode == hir::ParamMode::move,
+         "concrete trait impl move call lost its mode");
+    auto mv = std::get_if<hir::Move>(
+        &move.nodes[c->args[2].expression.value].data);
+    need(mv && mv->binding ==
+                    move_instance_function->parameters[1].symbol,
+         "concrete trait impl Move was not renamed to the instance");
+    ++move_concrete_calls;
+  }
+  need(move_concrete_calls == 1,
+       "trait impl ConstraintCall did not become one concrete Call");
+  size_t direct_item_calls = 0;
+  for (const auto &n : move.nodes) {
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol ||
+        origin_of(move, *c->direct_symbol) != item_take)
+      continue;
+    need(c->args.size() == 4 &&
+             c->args[2].mode == hir::ParamMode::move &&
+             std::get<hir::Move>(
+                 move.nodes[c->args[2].expression.value].data)
+                 .binding.has_value(),
+         "concrete receiver trait move call lost its Move");
+    ++direct_item_calls;
+  }
+  need(direct_item_calls == 1,
+       "concrete receiver trait impl method call missing");
+  (void)move_cc_id;
+
+  invalid(move, "trait move Move binding erased", [&](auto &x) {
+    bool done = false;
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function ==
+          move_instance_function->symbol)
+        if (auto mv = std::get_if<hir::Move>(&n.data);
+            mv && mv->binding) {
+          mv->binding.reset();
+          done = true;
+          break;
+        }
+    need(done, "trait move concrete Move missing");
+  });
+  invalid(move, "trait move instance origin", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == move_instances[0]->symbol) {
+        i.origin = box_take;
+        return;
+      }
+    throw std::runtime_error("trait move instance missing");
+  });
+  invalid(move, "trait move instance type arguments", [&](auto &x) {
+    hir::Type i64;
+    i64.kind = hir::TypeKind::SignedInt;
+    i64.bits = 64;
+    for (auto &i : x.instances)
+      if (i.symbol == move_instances[0]->symbol) {
+        i.type_args[0] = x.types.intern(i64);
+        return;
+      }
+    throw std::runtime_error("trait move instance missing");
+  });
+
+  const auto *adjust = trait_named(inout, "Adjust");
+  const auto *forward_inout = template_named(inout, "forward");
+  const auto *holder_impl =
+      adjust ? impl_for(inout, adjust->symbol, "Holder") : nullptr;
+  const auto *box_adjust =
+      adjust ? impl_for(inout, adjust->symbol, "Box") : nullptr;
+  need(adjust && forward_inout && holder_impl && box_adjust,
+       "trait inout declarations missing");
+  const auto holder_set = impl_method(inout, *holder_impl, "set");
+  const auto box_set = impl_method(inout, *box_adjust, "set");
+  auto [inout_cc_id, inout_cc] =
+      constraint_in(inout, forward_inout->function.symbol);
+  (void)inout_cc_id;
+  need(inout_cc->trait == adjust->symbol &&
+           name(inout, inout_cc->method) == "set" &&
+           inout_cc->args.size() == 4 &&
+           inout_cc->args[1].label == std::optional<std::string>("log") &&
+           inout_cc->args[2].label == std::optional<std::string>("value") &&
+           inout_cc->args[3].label == std::optional<std::string>("slot") &&
+           inout_cc->args[1].parameter_index == 3 &&
+           inout_cc->args[2].parameter_index == 2 &&
+           inout_cc->args[3].parameter_index == 1 &&
+           inout_cc->args[1].mode == hir::ParamMode::inout &&
+           inout_cc->args[2].mode == hir::ParamMode::ordinary &&
+           inout_cc->args[3].mode == hir::ParamMode::inout &&
+           inout.nodes[inout_cc->args[1].expression.value].kind() ==
+               hir::NodeKind::place &&
+           inout.nodes[inout_cc->args[3].expression.value].kind() ==
+               hir::NodeKind::place,
+       "trait inout ConstraintCall order/labels/modes/places changed");
+  HirNodeId read_slot{};
+  for (size_t i = 0; i < inout.nodes.size(); ++i) {
+    const auto &n = inout.nodes[i];
+    if (inout.scopes[n.scope.value].function !=
+        forward_inout->function.symbol)
+      continue;
+    if (auto r = std::get_if<hir::Read>(&n.data);
+        r && r->symbol == forward_inout->function.parameters[1].symbol)
+      read_slot = HirNodeId{i};
+  }
+  need(read_slot.value != 0, "trait inout slot Read node missing");
+  auto inout_instances = instances_of(inout, *forward_inout);
+  need(inout_instances.size() == 1,
+       "trait inout forward instance missing");
+  const auto *inout_instance_function =
+      function_for(inout, inout_instances[0]->symbol);
+  need(inout_instance_function, "trait inout instance function missing");
+  size_t inout_concrete_calls = 0, holder_direct_calls = 0;
+  for (const auto &n : inout.nodes) {
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol)
+      continue;
+    auto target = origin_of(inout, *c->direct_symbol);
+    if (inout.scopes[n.scope.value].function ==
+        inout_instance_function->symbol) {
+      if (target != box_set)
+        continue;
+      need(c->args.size() == 4 && c->args[1].mode == hir::ParamMode::inout &&
+               c->args[3].mode == hir::ParamMode::inout &&
+               inout.nodes[c->args[1].expression.value].kind() ==
+                   hir::NodeKind::place &&
+               inout.nodes[c->args[3].expression.value].kind() ==
+                   hir::NodeKind::place,
+           "concrete generic trait impl inout call lost its Places");
+      ++inout_concrete_calls;
+    } else if (target == holder_set) {
+      ++holder_direct_calls;
+    }
+  }
+  need(inout_concrete_calls == 1 && holder_direct_calls == 2,
+       "concrete receiver or generic trait impl inout call missing");
+
+  invalid(inout, "trait inout Place replaced by Read", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function ==
+          forward_inout->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[3].expression = read_slot;
+          n.children[3] = read_slot;
+          return;
+        }
+    throw std::runtime_error("trait inout ConstraintCall missing");
+  });
+  invalid(inout, "trait inout ordinary alias of borrowed storage",
+          [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function ==
+          forward_inout->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[2].expression = read_slot;
+          n.children[2] = read_slot;
+          return;
+        }
+    throw std::runtime_error("trait inout ConstraintCall missing");
+  });
+  invalid(inout, "trait inout mode erased from Place", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function ==
+          forward_inout->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[3].mode = hir::ParamMode::ordinary;
+          return;
+        }
+    throw std::runtime_error("trait inout ConstraintCall missing");
+  });
+  invalid(inout, "trait inout label changed", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function ==
+          forward_inout->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[1].label = std::string("value");
+          return;
+        }
+    throw std::runtime_error("trait inout ConstraintCall missing");
+  });
+  invalid(inout, "trait inout parameter index changed", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function ==
+          forward_inout->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[3].parameter_index = 2;
+          return;
+        }
+    throw std::runtime_error("trait inout ConstraintCall missing");
+  });
+
+  auto two_traits = source(R"(
+trait Left{func pick(self Self,slot inout i32)i32;}
+trait Right{func pick(self Self,slot inout i32)i32;}
+struct S{items Vec[i32];}
+impl Left for S{func pick(self Self,slot inout i32)i32{slot=slot+1;return 1;}}
+impl Right for S{func pick(self Self,slot inout i32)i32{slot=slot+2;return 2;}}
+func forward[T Left](owner T,slot inout i32)i32{return owner.pick(inout slot);}
+func main()i32{let s=S(items:[1]);var x i32=0;let r=forward(s,inout x);return r-1;}
+)");
+  need(two_traits.success(), messages(two_traits));
+  need(hir::verify(*two_traits.value).success(),
+       "same-signature distinct-trait source HIR rejected");
+  const auto &tw = *two_traits.value;
+  const auto *left = trait_named(tw, "Left");
+  const auto *right = trait_named(tw, "Right");
+  const auto *tw_forward = template_named(tw, "forward");
+  need(left && right && tw_forward, "same-signature traits missing");
+  const auto *left_impl = impl_for(tw, left->symbol, "S");
+  const auto *right_impl = impl_for(tw, right->symbol, "S");
+  need(left_impl && right_impl, "same-signature impls missing");
+  const auto left_pick = impl_method(tw, *left_impl, "pick");
+  const auto right_pick = impl_method(tw, *right_impl, "pick");
+  auto tw_instances = instances_of(tw, *tw_forward);
+  need(tw_instances.size() == 1, "same-signature forward instance missing");
+  const auto *tw_function = function_for(tw, tw_instances[0]->symbol);
+  need(tw_function, "same-signature forward function missing");
+  size_t tw_calls = 0;
+  for (const auto &n : tw.nodes) {
+    if (tw.scopes[n.scope.value].function != tw_function->symbol)
+      continue;
+    if (auto c = std::get_if<hir::Call>(&n.data);
+        c && c->direct_symbol && origin_of(tw, *c->direct_symbol) == left_pick)
+      ++tw_calls;
+  }
+  need(tw_calls == 1, "same-signature forward selected the wrong trait impl");
+  invalid(tw, "trait target changed to other same-signature trait",
+          [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == tw_function->symbol)
+        if (auto c = std::get_if<hir::Call>(&n.data);
+            c && c->direct_symbol) {
+          c->direct_symbol = right_pick;
+          return;
+        }
+    throw std::runtime_error("same-signature concrete Call missing");
+  });
+  invalid(tw, "trait ConstraintCall changed to other same-signature trait",
+          [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == tw_forward->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->trait = right->symbol;
+          c->method = right->methods.front().symbol;
+          return;
+        }
+    throw std::runtime_error("same-signature ConstraintCall missing");
+  });
+
+  auto duplicate = source(R"(
+trait Pair{func swap(self Self,a inout i32,b inout i32);}
+struct S{items Vec[i32];}
+impl Pair for S{func swap(self Self,a inout i32,b inout i32){let t=a;a=b;b=t;}}
+func forward[T Pair](owner T,a inout i32,b inout i32){owner.swap(inout a,inout b);}
+func main(){let s=S(items:[1]);var x i32=0;var y i32=0;forward(s,inout x,inout y);}
+)");
+  need(duplicate.success(), messages(duplicate));
+  need(hir::verify(*duplicate.value).success(),
+       "two scalar trait inout source HIR rejected");
+  const auto &dup = *duplicate.value;
+  const auto *dup_forward = template_named(dup, "forward");
+  need(dup_forward, "two scalar trait inout forward missing");
+  auto [dup_id, dup_cc] = constraint_in(dup, dup_forward->function.symbol);
+  (void)dup_id;
+  need(dup_cc->args.size() == 3 &&
+           dup_cc->args[1].mode == hir::ParamMode::inout &&
+           dup_cc->args[2].mode == hir::ParamMode::inout,
+       "two scalar trait inout arguments missing");
+  invalid(dup, "duplicate trait inout storage", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == dup_forward->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[2].expression = c->args[1].expression;
+          n.children[2] = c->args[2].expression;
+          return;
+        }
+    throw std::runtime_error("two scalar trait inout ConstraintCall missing");
+  });
+
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  unsupported("trait V{func bump(self Self,slot inout Vec[i32]);}"
+              "struct S{items Vec[i32];} impl V for S{"
+              "func bump(self Self,slot inout Vec[i32]){}}"
+              "func main(){let s=S(items:[1]);var v Vec[i32]=[2];"
+              "s.bump(inout v);}");
+  unsupported("trait V{func take(self move Self)Self;}"
+              "struct S{items Vec[i32];} impl V for S{"
+              "func take(self move Self)Self{return move self;}}"
+              "func main(){var s=S(items:[1]);let r=s.take();}");
+  unsupported("trait V{func bump(self inout Self);}"
+              "struct S{items Vec[i32];} impl V for S{"
+              "func bump(self inout Self){}}"
+              "func main(){var s=S(items:[1]);s.bump(inout s);}");
+  unsupported("trait V{func take[U](self Self,value move U)U;}"
+              "struct S{items Vec[i32];} impl V for S{"
+              "func take[U](self Self,value move U)U{return move value;}}"
+              "func main(){let s=S(items:[1]);var x i32=2;"
+              "let r=s.take(move x);}");
+  unsupported("trait V{func make(value move i32)i32;}"
+              "struct S{items Vec[i32];} impl V for S{"
+              "func make(value move i32)i32{return value;}}"
+              "func main(){var x i32=1;let r=S.make(move x);}");
+  bad("trait V{func set(self Self,slot inout i32);}"
+      "struct S{items Vec[i32];} impl V for S{"
+      "func set(self Self,other inout i32){}}"
+      "func main(){let s=S(items:[1]);var x i32=2;s.set(inout x);}",
+      "E_TYPE_MISMATCH");
+  bad("trait Left{func pick(self Self)i32;}"
+      "trait Right{func pick(self Self)i32;}"
+      "struct S{items Vec[i32];} "
+      "impl Left for S{func pick(self Self)i32{return 1;}} "
+      "impl Right for S{func pick(self Self)i32{return 2;}} "
+      "func main(){let s=S(items:[1]);return s.pick();}",
+      "E_TYPE_MISMATCH");
+
+  // Ordinary trait methods predate the new move/inout source restriction. A
+  // first Self parameter named owner is still legal both when the bounded
+  // template is called and when it is merely checked but never instantiated.
+  auto legacy = source(R"(
+trait V{func ordinary(owner Self)i32;}
+struct S{x i32;}
+impl V for S{func ordinary(owner Self)i32{return owner.x;}}
+func invoke[T V](x T)i32{return x.ordinary();}
+func unused[T V](x T)i32{return x.ordinary();}
+func main()i32{return invoke(S(x:1))-1;}
+)");
+  need(legacy.success(), messages(legacy));
+  need(hir::verify(*legacy.value).success(),
+       "ordinary owner-named Self receiver HIR rejected");
+  const auto &lg = *legacy.value;
+  const auto *lg_trait = trait_named(lg, "V");
+  const auto *lg_invoke = template_named(lg, "invoke");
+  const auto *lg_unused = template_named(lg, "unused");
+  need(lg_trait && lg_invoke && lg_unused &&
+           lg_trait->methods.size() == 1 &&
+           lg_trait->methods.front().parameters.front().label == "owner",
+       "ordinary owner-named prototype was not preserved");
+  for (const auto *t : {lg_invoke, lg_unused}) {
+    auto [id, cc] = constraint_in(lg, t->function.symbol);
+    (void)id;
+    need(cc->trait == lg_trait->symbol &&
+             name(lg, cc->method) == "ordinary" && cc->args.size() == 1 &&
+             cc->args[0].mode == hir::ParamMode::ordinary,
+         "ordinary owner-named ConstraintCall shape changed");
+  }
+  size_t invoke_instances = 0, unused_instances = 0;
+  for (const auto &i : lg.instances) {
+    if (i.origin == lg_invoke->function.symbol)
+      ++invoke_instances;
+    if (i.origin == lg_unused->function.symbol)
+      ++unused_instances;
+  }
+  need(invoke_instances == 1 && unused_instances == 0,
+       "ordinary owner-named template instance counts changed");
+
+  // The narrow new-mode rule still rejects a non-self move/inout prototype
+  // whose first Self parameter is named owner instead of self.
+  auto owner_new_mode = source(
+      "trait V{func ordinary(owner Self,value move Vec[i32])Vec[i32];}"
+      "struct S{x i32;} impl V for S{"
+      "func ordinary(owner Self,value move Vec[i32])Vec[i32]{"
+      "return move value;}} "
+      "func invoke[T V](x T,value move Vec[i32])Vec[i32]{"
+      "return x.ordinary(move value);} "
+      "func main()i32{var v Vec[i32]=[1];let r=invoke(S(x:1),move v);"
+      "return r[0]-1;}");
+  need(!owner_new_mode.success() &&
+           owner_new_mode.failure == FailureKind::unsupported &&
+           has(owner_new_mode, "E_CAPABILITY_UNAVAILABLE"),
+       "owner-named new move mode was accepted");
+  invalid(inout, "trait move/inout owner label rejected", [&](auto &x) {
+    for (auto &tr : x.traits)
+      if (name(x, tr.symbol) == "Adjust")
+        for (auto &method : tr.methods)
+          if (name(x, method.symbol) == "set") {
+            method.parameters.front().label = "owner";
+            return;
+          }
+    throw std::runtime_error("Adjust set prototype missing");
+  });
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -5844,6 +6378,7 @@ int main(int argc, char **argv) {
     generic_impl_own_method_move(root);
     constrained_inherent_move(root);
     constrained_inherent_inout(root);
+    trait_method_modes(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

@@ -11,14 +11,15 @@ import sys
 
 sys.dont_write_bytecode = True
 
-CASES = ('positive', 'errors', 'constrained-inherent')
+CASES = ('positive', 'errors', 'constrained-inherent', 'trait-modes')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 5],
     'errors': [9, 2, 3, 9, 8, 2, 3, 9, 4, 3, 9, 4, 6, 3, 9, 5, 6],
     'constrained-inherent': [23, 14, 3, 5, 4, 3, 4, 6, 3],
+    'trait-modes': [1, 5, 1, 3, 7, 3, 3, 9, 2, 8, 4, 2],
 }
 EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13,
-                        'constrained-inherent': 8}
+                        'constrained-inherent': 8, 'trait-modes': 2}
 
 
 def digest(path):
@@ -90,6 +91,14 @@ def assert_native(case, observations, allocations):
         assert logs == [23, 244, 3, 35, 354, 3543, 35434, 354346,
                         3543463], logs
         assert frees == [4, 5, 7, 6, 3, 2, 1, 0], frees
+    elif case == 'trait-modes':
+        # Concrete and generic trait impl calls use ordinary self and concrete
+        # scalar inout places. Named arguments are evaluated in written order;
+        # the typed throw preserves the callee's write, and the deferred write
+        # happens after the old scalar result has been saved.
+        assert logs == [1, 5, 11, 3, 7, 33, 113, 1139, 11392, 113928, 4,
+                        1139282], logs
+        assert frees == [1, 0], frees
     else:
         # Receiver temporaries are released before their catch events. The
         # throwing callee releases its deferred local and moved argument before
@@ -121,6 +130,20 @@ def assert_python(case, data):
         assert snapshots['ad'] == 44 and snapshots['oldac'] == 40, data
         assert snapshots['w'] == 33 and snapshots['x'] is True, data
         assert snapshots['aa'] == 37 and snapshots['ab'] == 39, data
+    elif case == 'trait-modes':
+        snapshots = data.get('snapshots', {})
+        assert snapshots['log'] == 1139282 and snapshots['order'] == 5, data
+        assert snapshots['flog'] == 33 and snapshots['forder'] == 7, data
+        assert snapshots['r'] == 2 and snapshots['x'] == 5, data
+        assert snapshots['y'] == 7 and snapshots['br'] == 4, data
+        assert snapshots['oldb'] == 8 and snapshots['z'] == 9, data
+        assert snapshots['t'] == 11, data
+        assert snapshots['delayed'] == 20 and snapshots['d'] == 21, data
+        assert snapshots['u'] == 30 and snapshots['order2'] == 4, data
+        errors = {(item['function'], item['type'])
+                  for item in data['errors']}
+        assert ('fail', 'app.E') in errors, data
+        assert ('bad', 'app.E') in errors, data
     elif case == 'constrained-inherent':
         snapshots = data.get('snapshots', {})
         assert snapshots['a'] == 3 and snapshots['olda'] == 1, data
