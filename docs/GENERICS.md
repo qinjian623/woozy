@@ -209,7 +209,7 @@ HIR 验证每层的源码、真实枚举/变体、类型、载荷顺序和绑定
 
 HIR 由真实源码的调用形式检查有无值接收者，核对显式参数 0、标签、类型、参数顺序、实例来源与完整类型实参；没有参数时仍验证真实约束、目标和返回/错误类型。impl 内的 Self 按实现类型解析，保留 `Self.helper(...)` 和括号形式；它不会因此变成有 trait bound 的模板参数。后端只接收具体普通 Call，不保留 ConstraintCall 或未替换的 T。
 
-新 T 入口尚未支持顶层 move/inout 和依赖 Self 的 inout callback；已有固定数字/bool callback 内的 inout 不算外围参数模式。泛型 trait、trait 名直接调用、方法值、捕获闭包和实际 self move/inout 仍未支持；trait 方法自身泛型见下节。这些实施限制不改变已经确认的显式传参规则；T07/T09 仍为 in_progress。
+新 T 入口尚未支持顶层 inout 和依赖 Self 的 inout callback；非 self move 见下文；已有固定数字/bool callback 内的 inout 不算外围参数模式。泛型 trait、trait 名直接调用、方法值、捕获闭包和实际 self move/inout 仍未支持；trait 方法自身泛型见下节。这些实施限制不改变已经确认的显式传参规则；T07/T09 仍为 in_progress。
 
 ## trait 方法自身的泛型参数
 
@@ -219,4 +219,14 @@ HIR 由真实源码的调用形式检查有无值接收者，核对显式参数 
 
 方法实例按真实 impl 方法 SymbolId 及完整 `[impl 类型实参..., 方法类型实参...]` 保存。签名中没有出现的类型参数必须显式填写；HIR 从该调用的真实源码及所属实例还原它，不能用相同签名猜测。One/Two 等签名相同、完整实参不同的实例分别保存，调换显式调用或具体化 ConstraintCall 的目标会被拒绝。trait 原型只有声明，没有虚构的可执行模板体；公共 HIR 和后端接口保持原样。
 
-这批泛型 trait 方法的顶层参数限 ordinary，move/inout 和依赖方法类型参数或 Self 的 inout callback 报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的 move/inout、数字/bool Self callback、固定数字/bool callback 和 `Self.helper` 保持原规则。泛型 trait 本身、方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
+泛型 trait 方法的顶层参数现支持 ordinary 和非 self move；新 inout 和依赖方法类型参数或 Self 的 inout callback 报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的 move/inout、数字/bool Self callback、固定数字/bool callback 和 `Self.helper` 保持原规则。泛型 trait 本身、方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
+
+## trait 非 self move 与类型名调用
+
+非泛型 trait 的非 self move 现在支持无方法类型参数、多方法类型参数、已有单个 trait 约束和泛型 impl，覆盖值调用、具体 Type 调用和受约束的 T 调用。例如 `func take[U](owner Self, value move U) U` 可通过 `x.take[Vec[i32]](move v)` 或 `T.take[Vec[i32]](x, move v)` 调用。普通首参 Self 可命名为 self 或 owner，仍按原规则借用；Type/T 显式提供全部声明参数，不生成运行时接收者。
+
+无接收者的静态方法也可声明 move 参数。若原型是 `func echo[U](self move U) U`，首参仍是方法类型参数 U；即使调用为 `Host.echo[Host](move h)`，也不因 U 的具体类型等于 Self 而增加接收者。原型首参直接为 trait Self 且采用 move/inout 的情况，包括 owner 标签，本批继续报 `E_CAPABILITY_UNAVAILABLE`。固有静态方法保持已有声明判断，合法的 `Host.consume(value move Host)` 和 `i32.adjust(slot inout i32)` 不会因首参类型与实现类型相同而被改判。
+
+已有绑定仍须显式 move；临时值、按书写顺序求值的命名实参、普通共享副本、typed error、return 和 defer 沿用原规则。后续实参失败时，已经 move 的临时按逆序销毁，原绑定不会恢复可读；若更早的实参失败，尚未求值的 move 不发生。catch 同时接收 move 前的实参错误和 callee 接管后的同型错误时，所有权状态会合并，不能据此假定源绑定仍可读。实例仍按真实方法及完整 impl/方法实参保存，phantom 参数、真实 Source、Move.binding 与清理记录继续验证。
+
+本批没有新增 inout 支持，泛型 trait 方法和 Type/T 的新 inout 继续拒绝；旧数字/bool inout、固定 callback、Self.helper 等行为保持。依赖方法类型参数或 Self 的 inout callback 仍检查整个函数签名、替换后的 struct 字段及 enum 载荷。没有修改公共 HIR、NodeKind、后端接口或运行库；泛型 trait 本身、方法值、捕获闭包、实际 self move/inout、部分字段 move、foreign/动态 string move 和完整 ARC 仍未完成。T07/T09 保持 in_progress。

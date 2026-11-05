@@ -3003,7 +3003,11 @@ void method_move(const fs::path &root) {
       "func take(value move Vec[i32])Vec[i32]{return move value;}} "
       "func main()i32{var v Vec[i32]=[1];let r=E[i32].take(move v);"
       "return r[0];}");
-  unsupported(
+  // Reclassified after opening non-self move on a type-qualified trait
+  // method: the same complete Source now names a real trait impl and passes
+  // the move at explicit parameter zero. A genuine call and its execution are
+  // covered by the trait-generic-move fixture below.
+  good(
       "trait V{func take(value move Vec[i32])Vec[i32];} enum E{A;} "
       "impl V for E{func take(value move Vec[i32])Vec[i32]{"
       "return move value;}} "
@@ -6216,6 +6220,14 @@ func main(){let s=S(items:[1]);var x i32=0;var y i32=0;forward(s,inout x,inout y
              has(r, "E_CAPABILITY_UNAVAILABLE"),
          text + "\n" + messages(r));
   };
+  auto accept = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "new trait move source HIR rejected: " + text + "\n" +
+             messages(r));
+    return *r.value;
+  };
   unsupported("trait V{func bump(self Self,slot inout Vec[i32]);}"
               "struct S{items Vec[i32];} impl V for S{"
               "func bump(self Self,slot inout Vec[i32]){}}"
@@ -6229,15 +6241,20 @@ func main(){let s=S(items:[1]);var x i32=0;var y i32=0;forward(s,inout x,inout y
               "struct S{items Vec[i32];} impl V for S{"
               "func bump(self inout Self){}}"
               "func main(){var s=S(items:[1]);s.bump(inout s);}");
-  unsupported("trait V{func take[U](self Self,value move U)U;}"
-              "struct S{items Vec[i32];} impl V for S{"
-              "func take[U](self Self,value move U)U{return move value;}}"
-              "func main(){let s=S(items:[1]);var x i32=2;"
-              "let r=s.take(move x);}");
-  unsupported("trait V{func make(value move i32)i32;}"
-              "struct S{items Vec[i32];} impl V for S{"
-              "func make(value move i32)i32{return value;}}"
-              "func main(){var x i32=1;let r=S.make(move x);}");
+  // Reclassified: non-self move on a generic trait method is now accepted;
+  // the original Source bytes are unchanged and runtime coverage is in the
+  // trait-generic-move fixture. New inout below remains unavailable.
+  accept("trait V{func take[U](self Self,value move U)U;}"
+         "struct S{items Vec[i32];} impl V for S{"
+         "func take[U](self Self,value move U)U{return move value;}}"
+         "func main(){let s=S(items:[1]);var x i32=2;"
+         "let r=s.take(move x);}");
+  // Reclassified: a type-qualified call now passes every declared parameter
+  // from index zero, including a receiverless static move method.
+  accept("trait V{func make(value move i32)i32;}"
+         "struct S{items Vec[i32];} impl V for S{"
+         "func make(value move i32)i32{return value;}}"
+         "func main(){var x i32=1;let r=S.make(move x);}");
   bad("trait V{func set(self Self,slot inout i32);}"
       "struct S{items Vec[i32];} impl V for S{"
       "func set(self Self,other inout i32){}}"
@@ -6291,8 +6308,9 @@ func main()i32{return invoke(S(x:1))-1;}
   need(invoke_instances == 1 && unused_instances == 0,
        "ordinary owner-named template instance counts changed");
 
-  // The narrow new-mode rule still rejects a non-self move/inout prototype
-  // whose first Self parameter is named owner instead of self.
+  // Reclassified: an ordinary owner-labelled receiver is the same receiver,
+  // and only the literal-label restriction on the new move mode is removed.
+  // The older inout route still requires its literal self label below.
   auto owner_new_mode = source(
       "trait V{func ordinary(owner Self,value move Vec[i32])Vec[i32];}"
       "struct S{x i32;} impl V for S{"
@@ -6302,10 +6320,7 @@ func main()i32{return invoke(S(x:1))-1;}
       "return x.ordinary(move value);} "
       "func main()i32{var v Vec[i32]=[1];let r=invoke(S(x:1),move v);"
       "return r[0]-1;}");
-  need(!owner_new_mode.success() &&
-           owner_new_mode.failure == FailureKind::unsupported &&
-           has(owner_new_mode, "E_CAPABILITY_UNAVAILABLE"),
-       "owner-named new move mode was accepted");
+  need(owner_new_mode.success(), messages(owner_new_mode));
   invalid(inout, "trait move/inout owner label rejected", [&](auto &x) {
     for (auto &tr : x.traits)
       if (name(x, tr.symbol) == "Adjust")
@@ -8119,14 +8134,15 @@ void trait_method_generics(const fs::path &root) {
           "func main()i32{return 0;}",
       "E_TYPE_MISMATCH");
 
-  // New generic trait methods stay ordinary at their top-level boundary and
-  // do not add a dependent inout callback mode. Existing non-generic trait
-  // move/inout is covered by the earlier trait-modes fixtures.
-  unsupported(values +
-              "trait Move{func take[U](owner Self,value move U)U;}"
-              "struct S{}"
-              "impl Move for S{func take[U](owner Self,value move U)U{"
-              "return move value;}} func main()i32{return 0;}");
+  // New generic trait methods now open top-level non-self move while still
+  // rejecting new inout and dependent callback modes. The exact former
+  // unsupported Source is retained and reclassified; the trait-generic-move
+  // fixture supplies real calls and executions.
+  good(values +
+       "trait Move{func take[U](owner Self,value move U)U;}"
+       "struct S{}"
+       "impl Move for S{func take[U](owner Self,value move U)U{"
+       "return move value;}} func main()i32{return 0;}");
   unsupported(values +
               "trait Slot{func set[U](owner Self,slot inout U);}"
               "struct S{}"
@@ -8418,6 +8434,882 @@ void trait_method_generics(const fs::path &root) {
       }
     throw std::runtime_error("Stamp impl template missing");
   });
+}
+
+
+void trait_generic_move(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "trait generic move HIR rejected: " + text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "trait generic move did not publish: " + text + "\n" +
+             messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+    need(!has(r, "E_IR_INVALID"), "source rejection became E_IR_INVALID");
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+
+  const std::string source_text = R"(
+trait Tag { func code(owner Self) i32; }
+struct One { n i32; }
+struct Two { n i32; }
+impl Tag for One { func code(owner Self) i32 { return 1; } }
+impl Tag for Two { func code(owner Self) i32 { return 2; } }
+trait Take {
+    func take[U, V Tag](owner Self, value move U, tag V) U;
+    func multi[A, B, C](owner Self, first move A, second move B, third C) A;
+    func static_take[U](value move U) U;
+    func echo[U](self move U) U;
+    func phantom[U, V](owner Self) i32;
+}
+struct Box[I] { value I; }
+impl[I] Take for Box[I] {
+    func take[A, W Tag](owner Self, value move A, tag W) A {
+        let local Vec[i32] = [1];
+        defer {
+            let read = local[0];
+        }
+        return move value;
+    }
+    func multi[A, B, C](owner Self, first move A, second move B, third C) A {
+        return move first;
+    }
+    func static_take[U](value move U) U { return move value; }
+    func echo[U](self move U) U { return move self; }
+    func phantom[U, V](owner Self) i32 { return 1; }
+}
+func via[T Take, U, V Tag](owner T, value move U, tag V) U {
+    return T.take[U, V](owner: owner, value: move value, tag: tag);
+}
+func via_static[T Take, U](value move U) U {
+    return T.static_take[U](move value);
+}
+func never[T Take, U](x T, value move U) U {
+    return T.take[U, One](x, move value, One(n: 0));
+}
+func factory[T Take]() (func(T) Vec[i32]) {
+    return func(x T) Vec[i32] {
+        let local Vec[i32] = [9];
+        return T.take[Vec[i32], One](x, move local, One(n: 0));
+    };
+}
+func main() i32 {
+    let b = Box[i32](value: 0);
+    var v1 Vec[i32] = [1];
+    let a = b.take[Vec[i32], One](move v1, One(n: 0));
+    var v2 Vec[i32] = [2];
+    let c = Box[i32].take[Vec[i32], One](b, move v2, One(n: 0));
+    let d = via[Box[i32], Vec[i32], One](b, [3], One(n: 0));
+    var v3 Vec[i32] = [4];
+    let e = b.multi[Vec[i32], Vec[i32], One](move v3, [5], One(n: 0));
+    var v4 Vec[i32] = [6];
+    let f = Box[i32].static_take[Vec[i32]](move v4);
+    let g = via_static[Box[i32], Vec[i32]]([7]);
+    let h = b.phantom[One, Two]();
+    let i = Box[i32].phantom[One, Two](b);
+    let b2 = Box[bool](value: false);
+    let h2 = b.phantom[Two, One]();
+    let i2 = Box[i32].phantom[Two, One](b);
+    let h3 = b2.phantom[One, Two]();
+    let i3 = Box[bool].phantom[Two, One](b2);
+    let j = factory[Box[i32]]()(b);
+    let eb = Box[i32](value: 0);
+    let er = Box[i32].echo[Box[i32]](move eb);
+    return a[0] + c[0] + d[0] + e[0] + f[0] + g[0] + h + i + h2 + i2 +
+           h3 + i3 + j[0] + er.value - 15;
+}
+)";
+  auto m = good(source_text);
+
+  auto name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  auto nominal_name = [&](TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return name(t->declaration);
+  };
+  std::function<std::string(TypeId)> type_argument_name = [&](TypeId id)
+      -> std::string {
+    auto t = m.types.find(id);
+    if (!t)
+      return {};
+    if (t->kind == hir::TypeKind::TypeParameter)
+      return name(t->declaration);
+    auto nominal = nominal_name(id);
+    if (!nominal.empty())
+      return nominal;
+    if (t->kind == hir::TypeKind::Bool)
+      return "bool";
+    if (t->kind == hir::TypeKind::SignedInt)
+      return "i" + std::to_string(t->bits);
+    if (t->kind == hir::TypeKind::Vec)
+      return "Vec[" +
+             (t->type_args.empty() ? std::string{}
+                                   : type_argument_name(t->type_args[0])) +
+             "]";
+    return {};
+  };
+  auto trait_named = [&](const std::string &n)
+      -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (name(t.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto template_named = [&](const std::string &n)
+      -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (name(t.function.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto function_for = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto impl_for = [&](const hir::TraitDecl &tr,
+                      const std::string &type) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (im.trait == tr.symbol && nominal_name(im.self_type) == type)
+        return &im;
+    return nullptr;
+  };
+  auto impl_method = [&](const hir::ImplDecl &im,
+                         const std::string &method) -> SymbolId {
+    for (auto s : im.methods)
+      if (name(s) == method)
+        return s;
+    throw std::runtime_error("trait generic move impl method missing");
+  };
+  auto instances_of = [&](SymbolId origin) {
+    std::vector<const hir::FunctionInstance *> result;
+    for (const auto &i : m.instances)
+      if (i.origin == origin)
+        result.push_back(&i);
+    return result;
+  };
+  auto origin_of = [&](SymbolId s) {
+    for (const auto &i : m.instances)
+      if (i.symbol == s)
+        return i.origin;
+    return s;
+  };
+  auto constraint_in = [&](SymbolId function)
+      -> std::pair<HirNodeId, const hir::ConstraintCall *> {
+    std::pair<HirNodeId, const hir::ConstraintCall *> result;
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      const auto &n = m.nodes[i];
+      if (m.scopes[n.scope.value].function != function)
+        continue;
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(!result.second, "multiple trait generic move ConstraintCalls");
+        result = {HirNodeId{i}, c};
+      }
+    }
+    need(result.second, "missing trait generic move ConstraintCall");
+    return result;
+  };
+  auto main_symbol = [&] {
+    for (const auto &s : m.resolved->symbols)
+      if (s.name == "main" && s.kind == modules::SymbolKind::function)
+        return s.id;
+    throw std::runtime_error("main symbol missing");
+  }();
+  auto calls_in = [&](SymbolId function) {
+    std::vector<const hir::Call *> result;
+    for (const auto &n : m.nodes)
+      if (m.scopes[n.scope.value].function == function)
+        if (auto c = std::get_if<hir::Call>(&n.data))
+          result.push_back(c);
+    return result;
+  };
+
+  const auto *take = trait_named("Take");
+  const auto *box_impl = take ? impl_for(*take, "Box") : nullptr;
+  const auto *via = template_named("via");
+  const auto *via_static = template_named("via_static");
+  const auto *never = template_named("never");
+  const auto *factory = template_named("factory");
+  need(take && box_impl && via && via_static && never && factory,
+       "trait generic move declarations missing");
+  const auto take_method = impl_method(*box_impl, "take");
+  const auto multi_method = impl_method(*box_impl, "multi");
+  const auto static_method = impl_method(*box_impl, "static_take");
+  const auto echo_method = impl_method(*box_impl, "echo");
+  const auto phantom_method = impl_method(*box_impl, "phantom");
+
+  // The template source keeps a real ConstraintCall to the trait prototype.
+  // The T-qualified entry passes the ordinary owner explicitly at index 0;
+  // there is no synthetic receiver argument or receiver child.
+  auto [cc_id, cc] = constraint_in(via->function.symbol);
+  (void)cc_id;
+  const hir::MethodPrototype *take_prototype = nullptr;
+  for (const auto &p : take->methods)
+    if (name(p.symbol) == "take")
+      take_prototype = &p;
+  need(take_prototype && cc->trait == take->symbol &&
+           cc->method == take_prototype->symbol &&
+           cc->method != take_method,
+       "generic move ConstraintCall target changed");
+  need(cc->args.size() == 3 && cc->args[0].parameter_index == 0 &&
+           cc->args[0].label == std::optional<std::string>("owner") &&
+           cc->args[0].mode == hir::ParamMode::ordinary &&
+           cc->args[1].parameter_index == 1 &&
+           cc->args[1].label == std::optional<std::string>("value") &&
+           cc->args[1].mode == hir::ParamMode::move &&
+           cc->args[2].parameter_index == 2 &&
+           cc->args[2].label == std::optional<std::string>("tag") &&
+           cc->args[2].mode == hir::ParamMode::ordinary,
+       "T-qualified generic move argument order/labels/modes changed");
+  auto template_move = std::get_if<hir::Move>(
+      &m.nodes[cc->args[1].expression.value].data);
+  need(template_move &&
+           template_move->binding == via->function.parameters[1].symbol,
+       "template generic move lost its Move binding");
+
+  auto [cc_static_id, cc_static] = constraint_in(via_static->function.symbol);
+  (void)cc_static_id;
+  need(cc_static->args.size() == 1 &&
+           cc_static->args[0].parameter_index == 0 &&
+           !cc_static->args[0].label &&
+           cc_static->args[0].mode == hir::ParamMode::move,
+       "T-qualified static generic move shape changed");
+
+  // The instance completes the prototype call to the real impl method,
+  // renames the parameter/local/Move binding, and keeps the full instance
+  // key [impl arg, method arg...].
+  auto via_instances = instances_of(via->function.symbol);
+  need(via_instances.size() == 1,
+       "via should have one Box[i32] instance for this source");
+  for (const auto *inst : via_instances) {
+    need(inst->type_args.size() == 3,
+         "via instance lost its complete type arguments");
+    const auto *f = function_for(inst->symbol);
+    need(f, "via instance function missing");
+    bool saw_move = false;
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != f->symbol)
+        continue;
+      if (auto mv = std::get_if<hir::Move>(&n.data); mv) {
+        need(mv->binding &&
+                 (mv->binding == f->parameters[1].symbol ||
+                  mv->binding == f->parameters[2].symbol),
+             "via instance Move was not renamed to its parameter");
+        saw_move = true;
+      }
+      if (auto c = std::get_if<hir::Call>(&n.data); c) {
+        need(c->kind == hir::CalleeKind::direct && c->direct_symbol &&
+                 c->type_args.empty(),
+             "completed generic move call kept template metadata");
+        need(origin_of(*c->direct_symbol) == take_method ||
+                 origin_of(*c->direct_symbol) == multi_method ||
+                 origin_of(*c->direct_symbol) == static_method,
+             "completed generic move call selected the wrong impl method");
+        need(c->args.size() == 3 || c->args.size() == 1,
+             "completed generic move call arity changed");
+        need(c->args[1].mode == hir::ParamMode::move ||
+                 (c->args.size() == 1 &&
+                  c->args[0].mode == hir::ParamMode::move),
+             "completed generic move call lost its move mode");
+      }
+    }
+    need(saw_move, "via instance has no Move node");
+  }
+
+  auto take_instances = instances_of(take_method);
+  need(take_instances.size() >= 1, "impl generic move instances missing");
+  auto binding_symbols = [&](SymbolId function) {
+    std::set<uint64_t> result;
+    for (const auto &n : m.nodes)
+      if (m.scopes[n.scope.value].function == function)
+        if (auto b = std::get_if<hir::Binding>(&n.data))
+          result.insert(b->symbol.value);
+    return result;
+  };
+  std::set<uint64_t> all_instance_bindings, all_instance_parameters;
+  for (const auto *inst : take_instances) {
+    need(inst->type_args.size() == 3,
+         "take instance key is not [impl arg, own args...]");
+    const auto *f = function_for(inst->symbol);
+    need(f, "take instance function missing");
+    auto instance_bindings = binding_symbols(inst->symbol);
+    need(!instance_bindings.empty(), "take instance has no local binding");
+    for (auto id : instance_bindings)
+      need(all_instance_bindings.insert(id).second,
+           "take instance local binding was not renamed uniquely");
+    for (const auto &p : f->parameters)
+      need(all_instance_parameters.insert(p.symbol.value).second,
+           "take instance parameter was not renamed uniquely");
+    need(!inst->renamed.empty(), "take instance rename map is empty");
+  }
+  for (const auto *inst : instances_of(multi_method))
+    need(inst->type_args.size() == 4,
+         "multi instance key is not [impl arg, own args...]");
+  for (const auto *inst : instances_of(static_method))
+    need(inst->type_args.size() == 2,
+         "static_take instance key is not [impl arg, own arg]");
+
+  // Value, concrete Type and bounded T all complete one real take target;
+  // the value receiver is argument zero and the explicit Type/T forms start
+  // their written arguments at index zero.
+  size_t main_take_calls = 0, main_static_calls = 0;
+  for (const auto *c : calls_in(main_symbol)) {
+    if (!c->direct_symbol)
+      continue;
+    auto origin = origin_of(*c->direct_symbol);
+    if (origin == take_method) {
+      ++main_take_calls;
+      need(c->args.size() == 3 &&
+               c->args[0].parameter_index == 0 &&
+               c->args[0].mode == hir::ParamMode::ordinary,
+           "value/Type generic move take shape changed");
+    }
+    if (origin == static_method) {
+      ++main_static_calls;
+      need(c->args.size() == 1 && c->args[0].parameter_index == 0 &&
+               c->args[0].mode == hir::ParamMode::move,
+           "static Type generic move starts at index zero");
+    }
+    if (origin == echo_method) {
+      need(c->args.size() == 1 && c->args[0].parameter_index == 0 &&
+               c->args[0].mode == hir::ParamMode::move,
+           "static own-named-self does not start at index zero");
+      const auto *inst = [&]() -> const hir::FunctionInstance * {
+        for (const auto &i : m.instances)
+          if (i.symbol == *c->direct_symbol)
+            return &i;
+        return nullptr;
+      }();
+      need(inst && inst->type_args.size() == 2 &&
+               type_argument_name(inst->type_args[1]) == "Box",
+           "echo own argument did not concretize to the impl Self");
+    }
+  }
+  need(main_take_calls == 2,
+       "value and concrete Type take calls were not both present");
+  need(main_static_calls == 1,
+       "concrete Type static take call missing");
+
+  // The static own parameter named self and concretized to Self keeps its
+  // instance Move bound to the concrete parameter, never to a receiver.
+  for (const auto *inst : instances_of(echo_method)) {
+    const auto *f = function_for(inst->symbol);
+    need(f, "echo instance missing");
+    for (const auto &n : m.nodes)
+      if (m.scopes[n.scope.value].function == f->symbol)
+        if (auto mv = std::get_if<hir::Move>(&n.data); mv)
+          need(mv->binding == f->parameters[0].symbol,
+               "echo static move was mistaken for a receiver move");
+  }
+
+  // Four phantom method-own combinations keep four separate full keys even
+  // though their runtime signatures are identical.
+  std::map<std::string, const hir::FunctionInstance *> phantom_instances;
+  for (const auto *inst : instances_of(phantom_method)) {
+    need(inst->type_args.size() == 3,
+         "phantom instance key is not [impl arg, own args...]");
+    auto key = type_argument_name(inst->type_args[0]) + ":" +
+               type_argument_name(inst->type_args[1]) + ":" +
+               type_argument_name(inst->type_args[2]);
+    need(phantom_instances.emplace(key, inst).second,
+         "phantom generic move key was not unique");
+  }
+  need(phantom_instances.size() == 4 &&
+           phantom_instances.count("i32:One:Two") &&
+           phantom_instances.count("i32:Two:One") &&
+           phantom_instances.count("bool:One:Two") &&
+           phantom_instances.count("bool:Two:One"),
+       "phantom generic move 2x2 full keys missing");
+
+  // Uncalled templates are still checked, including position alpha-renaming
+  // and a real single bound; a moved ordinary parameter inside the template
+  // keeps its renamed symbol in each instance.
+  for (const auto *inst : instances_of(factory->function.symbol))
+    for (const auto &n : m.nodes)
+      if (m.scopes[n.scope.value].function == inst->symbol)
+        if (auto mv = std::get_if<hir::Move>(&n.data); mv)
+          need(mv->binding.has_value(),
+               "generic lambda move lost its binding");
+
+  size_t hir_bad_graphs = 0;
+  auto reject_hir = [&](hir::HirModule copy, const std::string &label,
+                        const auto &change) {
+    ++hir_bad_graphs;
+    invalid(std::move(copy), label, change);
+  };
+  auto reject_hir_recomputed = [&](hir::HirModule copy,
+                                   const std::string &label,
+                                   const auto &change) {
+    ++hir_bad_graphs;
+    invalid_recomputed(std::move(copy), label, change);
+  };
+
+  // Same-signature methods from different traits are not interchangeable.
+  // The target and the raw source trait identity are both checked.
+  const std::string two_traits = R"(
+trait Left { func take[U](owner Self, value move U) U; }
+trait Right { func take[U](owner Self, value move U) U; }
+struct S { items Vec[i32]; }
+impl Left for S { func take[U](owner Self, value move U) U { return move value; } }
+impl Right for S { func take[U](owner Self, value move U) U { return move value; } }
+func via[T Left, U](x T, value move U) U { return T.take[U](x, move value); }
+func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), move v)[0] - 1; }
+)";
+  auto tw = good(two_traits);
+  auto tw_name = [&](SymbolId s) -> const std::string & {
+    return tw.resolved->symbols.at(s.value).name;
+  };
+  auto tw_trait = [&](const std::string &n) -> const hir::TraitDecl * {
+    for (const auto &t : tw.traits)
+      if (tw_name(t.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  const auto *left = tw_trait("Left");
+  const auto *right = tw_trait("Right");
+  need(left && right, "same-signature move traits missing");
+  const hir::ImplDecl *left_impl = nullptr, *right_impl = nullptr;
+  for (const auto &im : tw.impls) {
+    if (im.trait == left->symbol)
+      left_impl = &im;
+    if (im.trait == right->symbol)
+      right_impl = &im;
+  }
+  need(left_impl && right_impl, "same-signature move impls missing");
+  SymbolId left_take = left_impl->methods.front();
+  SymbolId right_take = right_impl->methods.front();
+  const hir::FunctionTemplate *tw_via = nullptr;
+  for (const auto &t : tw.templates)
+    if (tw_name(t.function.symbol) == "via")
+      tw_via = &t;
+  need(tw_via, "same-signature move via template missing");
+  auto tw_origin = [&](SymbolId s) {
+    for (const auto &i : tw.instances)
+      if (i.symbol == s)
+        return i.origin;
+    return s;
+  };
+  const auto *tw_call = [&]() -> const hir::Call * {
+    for (const auto &n : tw.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol && tw_origin(*c->direct_symbol) == left_take)
+        return c;
+    return nullptr;
+  }();
+  need(tw_call, "same-signature move selected the wrong trait");
+  SymbolId tw_via_instance{0};
+  for (const auto &i : tw.instances)
+    if (i.origin == tw_via->function.symbol)
+      tw_via_instance = i.symbol;
+  need(tw_via_instance.value != 0, "same-signature move via instance missing");
+  reject_hir(tw, "generic move concrete target changed to other trait",
+          [&](auto &x) {
+            for (auto &n : x.nodes)
+              if (x.scopes[n.scope.value].function == tw_via_instance)
+                if (auto c = std::get_if<hir::Call>(&n.data);
+                    c && c->direct_symbol) {
+                  c->direct_symbol = right_take;
+                  return;
+                }
+            throw std::runtime_error("generic move concrete Call missing");
+          });
+  reject_hir(tw, "generic move ConstraintCall changed to other trait",
+          [&](auto &x) {
+            for (auto &n : x.nodes)
+              if (x.scopes[n.scope.value].function ==
+                  tw_via->function.symbol)
+                if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+                  c->trait = right->symbol;
+                  c->method = right->methods.front().symbol;
+                  return;
+                }
+            throw std::runtime_error("generic move ConstraintCall missing");
+          });
+
+  // Corruptions of the real source arguments, labels, modes, receiver and
+  // Move binding are rejected by the independent HIR verifier.
+  reject_hir(m, "generic move ConstraintCall argument label", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == via->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[1].label = std::string("tag");
+          return;
+        }
+    throw std::runtime_error("generic move ConstraintCall missing");
+  });
+  reject_hir(m, "generic move ConstraintCall parameter index", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == via->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[1].parameter_index = 2;
+          return;
+        }
+    throw std::runtime_error("generic move ConstraintCall missing");
+  });
+  reject_hir(m, "generic move ConstraintCall move mode", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == via->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[1].mode = hir::ParamMode::ordinary;
+          return;
+        }
+    throw std::runtime_error("generic move ConstraintCall missing");
+  });
+  reject_hir(m, "generic move ConstraintCall receiver argument", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == via->function.symbol)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          c->args[0].expression = c->args[1].expression;
+          n.children[0] = c->args[1].expression;
+          return;
+        }
+    throw std::runtime_error("generic move ConstraintCall missing");
+  });
+  reject_hir(m, "generic move Move binding erased", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (x.scopes[n.scope.value].function == via->function.symbol)
+        if (auto mv = std::get_if<hir::Move>(&n.data); mv && mv->binding) {
+          mv->binding.reset();
+          return;
+        }
+    throw std::runtime_error("template generic move Move missing");
+  });
+  reject_hir(m, "generic move Move binding points at another parameter",
+          [&](auto &x) {
+            for (auto &n : x.nodes)
+              if (x.scopes[n.scope.value].function ==
+                  via->function.symbol)
+                if (auto mv = std::get_if<hir::Move>(&n.data);
+                    mv && mv->binding) {
+                  mv->binding = via->function.parameters[0].symbol;
+                  return;
+                }
+            throw std::runtime_error("template generic move Move missing");
+          });
+
+  // Phantom own/impl prefix and complete-key separation.
+  const auto *phantom_one = phantom_instances.at("i32:One:Two");
+  const auto *phantom_two = phantom_instances.at("i32:Two:One");
+  reject_hir_recomputed(m, "phantom generic move instance arguments",
+                     [&](auto &x) {
+                       for (auto &i : x.instances)
+                         if (i.symbol == phantom_one->symbol)
+                           for (auto &j : x.instances)
+                             if (j.symbol == phantom_two->symbol)
+                               std::swap(i.type_args[1], j.type_args[1]);
+                     });
+  reject_hir_recomputed(m, "phantom generic move impl prefix", [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == phantom_one->symbol) {
+        i.type_args[0] = i.type_args[1];
+        return;
+      }
+    throw std::runtime_error("phantom instance missing");
+  });
+  reject_hir(m, "same-signature phantom direct target", [&](auto &x) {
+    for (auto &n : x.nodes) {
+      if (x.scopes[n.scope.value].function != main_symbol)
+        continue;
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          origin_of(*c->direct_symbol) == phantom_method) {
+        c->direct_symbol = phantom_two->symbol;
+        return;
+      }
+    }
+    throw std::runtime_error("phantom direct call missing");
+  });
+
+  // New inout, actual self modes, and dependent callbacks keep the old
+  // capability limit. Fixed scalar callbacks remain legal.
+  unsupported("trait V{func set[U](owner Self, slot inout U);}"
+              "struct S{} impl V for S{func set[U](owner Self, slot inout U){}}"
+              "func main()i32{return 0;}");
+  unsupported("trait V{func take[U](self move Self, value U)U;}"
+              "struct S{} impl V for S{func take[U](self move Self, value U)U{"
+              "return value;}} func main()i32{return 0;}");
+  unsupported("trait V{func take[U](owner move Self, value U)U;}"
+              "struct S{} impl V for S{func take[U](owner move Self, value U)U{"
+              "return value;}} func main()i32{return 0;}");
+  unsupported("trait V{func run[U](owner Self, cb func(inout U));}"
+              "struct S{} impl V for S{func run[U](owner Self, cb func(inout U)){}}"
+              "func main()i32{return 0;}");
+  good("trait V{func run[U](owner Self, cb func(inout i32,i32)i32, tag U)i32;}"
+       "struct S{} impl V for S{func run[U](owner Self,"
+       "cb func(inout i32,i32)i32, tag U)i32{"
+       "var slot i32=1;return cb(inout slot,2);}}"
+       "func main()i32{return 0;}");
+  // A later `value move Self` is a non-self parameter even though its type is
+  // the impl Self. Only the raw first parameter participates in actual-self
+  // classification.
+  good("trait Keep{func take[U](owner Self,value move Self,tag U)Self;}"
+       "struct S{items Vec[i32];}"
+       "impl Keep for S{func take[U](owner Self,value move Self,tag U)Self{"
+       "return move value;}}"
+       "func main()i32{let a=S(items:[1]);let b=S(items:[2]);"
+       "let alias=b;let c=a.take[bool](move b,true);c.items[0]=3;"
+       "return alias.items[0]-3;}");
+
+  // Explicit/inferred conflicts, an own bound mismatch, a positional alpha
+  // mismatch, and a missing phantom argument are source errors rather than
+  // internal HIR failures.
+  const std::string values =
+      "trait Tag{func code(owner Self)i32;}"
+      "struct One{} struct Two{}"
+      "impl Tag for One{func code(owner Self)i32{return 1;}}"
+      "impl Tag for Two{func code(owner Self)i32{return 2;}}";
+  bad(values + "trait Pick{func pick[U,V Tag](owner Self,value move U)i32;}"
+               "struct S{} impl Pick for S{func pick[U,V Tag](owner Self,"
+               "value move U)i32{return 1;}}"
+               "func main()i32{var v Vec[i32]=[1];"
+               "let s=S();return s.pick(move v);}",
+      "E_TYPE_MISMATCH");
+  bad(values + "trait Pick{func pick[U,V Tag](owner Self,value move U)i32;}"
+               "struct S{} impl Pick for S{func pick[U,W](owner Self,"
+               "value move U)i32{return 1;}}"
+               "func main()i32{return 0;}",
+      "E_TYPE_MISMATCH");
+  bad(values + "trait Pair{func pair[A,B Tag](owner Self,first move A,"
+               "second B)i32;}"
+               "struct S{} impl Pair for S{func pair[A,B Tag](owner Self,"
+               "second B,first move A)i32{return 1;}}"
+               "func main()i32{return 0;}",
+      "E_TYPE_MISMATCH");
+  bad(values + "trait Pick{func pick[U,V Tag](owner Self)i32;}"
+               "struct S{} impl Pick for S{func pick[U,V Tag](owner Self)i32{"
+               "return 1;}}"
+               "func main()i32{let s=S();return s.pick[One]();}",
+      "E_TYPE_MISMATCH");
+  bad(values + "trait Pick{func pick[U,V Tag](owner Self,value move U)U;}"
+               "struct S{} impl Pick for S{func pick[U,V Tag](owner Self,"
+               "value move U)U{return move value;}}"
+               "func main()i32{let s=S();var v Vec[i32]=[1];"
+               "let r=s.pick[Vec[i32],One](v);return r[0];}",
+      "E_CALL_ARGUMENT");
+  bad(values + "trait Pick{func pick[U,V Tag](owner Self,value move U)U;}"
+               "struct S{} impl Pick for S{func pick[U,V Tag](owner Self,"
+               "value move U)U{return move value;}}"
+               "func main()i32{let s=S();var v Vec[i32]=[1];"
+               "let r=s.pick[Vec[i32],One](move v);return v[0];}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad(values + "trait Pick{func pick[U,V Tag](owner Self,value move U)U;}"
+               "struct S{} impl Pick for S{func pick[U,V Tag](owner Self,"
+               "value move U)U{return move value;}}"
+               "func main()i32{let s=S();var v Vec[i32]=[1];"
+               "let r=s.pick[Vec[i32],One](move v);"
+               "let q=s.pick[Vec[i32],One](move v);return r[0];}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad(values + "trait Pick{func pick[U,V Tag](owner Self,value move U)U;}"
+               "struct S{} impl Pick for S{func pick[U,V Tag](owner Self,"
+               "value move U)U{return move value;}}"
+               "func main()i32{let s=S();"
+               "let r=S.pick[Vec[i32],One](s,move s,One(n:0));"
+               "return 0;}",
+      "E_CALL_ARGUMENT");
+  bad(values + "trait Pick{func pick[U](owner Self,value move U)U;}"
+               "struct S{} impl Pick for S{func pick[U](owner Self,"
+               "value move U)U{return move value;}}"
+               "func main()i32{let s=S();"
+               "let r=s.pick[S](move s);return 0;}",
+      "E_CALL_ARGUMENT");
+  unsupported(values +
+              "trait Pick{func pick[U](owner Self,slot inout U);}"
+              "struct S{} impl Pick for S{func pick[U](owner Self,"
+              "slot inout U){}}"
+              "func main()i32{let s=S();var x i32=1;"
+              "S.pick[i32](s,inout x);return 0;}");
+
+  // A real cross-package public trait and generic impl, with value, Type and
+  // bounded T move calls, and a noncapturing generic lambda.
+  {
+    Temp t;
+    fs::create_directories(t.path / "src/lib");
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write(t.path / "src/lib/lib.lang",
+          "package lib; "
+          "pub trait Take{func take[U](owner Self,value move U)U;}"
+          "pub struct Box[T]{pub value i32;}"
+          "impl[T] Take for Box[T]{"
+          "func take[U](owner Self,value move U)U{return move value;}}");
+    write(t.path / "src/main.lang",
+          "package app; import \"app/lib\" as lib; "
+          "func via[T lib.Take,U](x T,value move U)U{"
+          "return T.take[U](x,move value);}"
+          "func factory[T lib.Take]()(func(T)Vec[i32]){"
+          "return func(x T)Vec[i32]{let local Vec[i32]=[3];"
+          "return T.take[Vec[i32]](x,move local);};}"
+          "func main()i32{let b=lib.Box[i32](value:0);"
+          "var a Vec[i32]=[1];var c Vec[i32]=[2];"
+          "let x=b.take[Vec[i32]](move a);"
+          "let y=lib.Box[i32].take[Vec[i32]](b,move c);"
+          "let z=via[lib.Box[i32],Vec[i32]](b,[4]);"
+          "let w=factory[lib.Box[i32]]()(b);"
+          "return x[0]+y[0]+z[0]+w[0]-10;}");
+    auto r = check(t.path / "lang.toml");
+    need(r.success(), messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "cross-package generic move HIR rejected");
+    need(hir::verify(*r.value).success(),
+         "cross-package generic move did not publish");
+  }
+  std::cout << "trait-generic-move HIR bad graphs rejected: "
+            << hir_bad_graphs << "\n";
+}
+
+
+
+void inherent_static_self_identity() {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "inherent static identity HIR rejected: " + text + "\n" +
+             messages(r));
+    need(hir::verify(*r.value).success(),
+         "inherent static identity did not publish: " + text + "\n" +
+             messages(r));
+    return *r.value;
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+  // The F1 regressions must use the frozen source bytes verbatim, including
+  // the original `package app;` line rather than the usual helper prefix.
+  auto exact = [&](const std::string &text) {
+    Temp t;
+    write(t.path / "lang.toml",
+          "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
+          "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write(t.path / "src/main.lang", text);
+    auto r = check(t.path / "lang.toml");
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "F1 exact source HIR rejected: " + text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "F1 exact source did not publish: " + text + "\n" + messages(r));
+    return *r.value;
+  };
+  auto call_to = [&](const hir::HirModule &m, const std::string &name)
+      -> const hir::Call * {
+    for (const auto &n : m.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          m.resolved->symbols[c->direct_symbol->value].name == name)
+        return c;
+    return nullptr;
+  };
+
+  // F1 A and B are the exact frozen Sources. The first parameter of an
+  // inherent impl method is an explicit static parameter unless the original
+  // declaration is literal `self` of the impl type. No completed signature
+  // comparison may turn it into a receiver.
+  auto a = exact(R"(package app;
+struct Host{items Vec[i32];}
+impl Host{func consume(value move Host)i32{return value.items[0];}}
+func main()i32{let x=Host(items:[7]);return Host.consume(move x);}
+)");
+  const auto *consume = call_to(a, "consume");
+  need(consume && consume->args.size() == 1 &&
+           consume->args[0].source_index == 0 &&
+           consume->args[0].parameter_index == 0 &&
+           !consume->args[0].label &&
+           consume->args[0].mode == hir::ParamMode::move,
+       "F1 A inherent static move was mistaken for a receiver");
+
+  auto b = exact(R"(package app;
+impl i32{func adjust(slot inout i32){slot=slot+1;}}
+func main()i32{var slot i32=6;i32.adjust(inout slot);return slot;}
+)");
+  const auto *adjust = call_to(b, "adjust");
+  need(adjust && adjust->args.size() == 1 &&
+           adjust->args[0].source_index == 0 &&
+           adjust->args[0].parameter_index == 0 &&
+           !adjust->args[0].label &&
+           adjust->args[0].mode == hir::ParamMode::inout &&
+           b.nodes[adjust->args[0].expression.value].kind() ==
+               hir::NodeKind::place,
+       "F1 B inherent static inout was mistaken for a receiver");
+
+  // Other non-literal labels and both generic forms stay static. In
+  // particular an own type parameter named self that equals the impl type is
+  // still an explicit parameter.
+  auto other = good(
+      "struct H{items Vec[i32];}"
+      "impl H{func take(other move H)i32{return other.items[0];}}"
+      "func main()i32{let h=H(items:[8]);return H.take(move h);}");
+  const auto *other_call = call_to(other, "take");
+  need(other_call && other_call->args.size() == 1 &&
+           other_call->args[0].parameter_index == 0 &&
+           other_call->args[0].mode == hir::ParamMode::move,
+       "non-literal inherent static move parameter became a receiver");
+  good(
+      "struct H{marker i32;}"
+      "impl H{func take[T](value move T)T{return move value;}}"
+      "func main()i32{var v Vec[i32]=[7];"
+      "let r=H.take[Vec[i32]](move v);return r[0]-7;}");
+  good(
+      "struct H{items Vec[i32];}"
+      "impl H{func echo[U](self move U)U{return move self;}}"
+      "func main()i32{let h=H(items:[9]);"
+      "let r=H.echo[H](move h);return r.items[0]-9;}");
+  good(
+      "struct H{marker i32;}"
+      "impl H{func bump[T](slot inout T,value T){slot=value;}}"
+      "func main()i32{var x i32=1;H.bump[i32](inout x,2);return x-2;}");
+
+  // The old literal-self inherent checks remain. A trait method whose raw
+  // first parameter is the real trait Self is also still unavailable.
+  unsupported(
+      "struct H{items Vec[i32];}"
+      "impl H{func take(self move Self)Self{return move self;}}"
+      "func main()i32{let h=H(items:[1]);let r=H.take(move h);return 0;}");
+  unsupported(
+      "struct H{items Vec[i32];}"
+      "impl H{func bump(self inout Self){}}"
+      "func main()i32{var h=H(items:[1]);H.bump(inout h);}");
+  unsupported(
+      "trait T{func take[U](self move Self,value U)U;}"
+      "struct H{} impl T for H{func take[U](self move Self,value U)U{"
+      "return value;}} func main()i32{return 0;}");
+  unsupported(
+      "trait T{func take[U](owner move Self,value U)U;}"
+      "struct H{} impl T for H{func take[U](owner move Self,value U)U{"
+      "return value;}} func main()i32{return 0;}");
+  // Non-generic trait actual-self calls reach the new no-receiver move
+  // route, so exercise the call rather than relying only on a declaration
+  // diagnostic.
+  unsupported(
+      "trait T{func take(self move Self)Self;}"
+      "struct H{items Vec[i32];}"
+      "impl T for H{func take(self move Self)Self{return move self;}}"
+      "func main()i32{let h=H(items:[1]);let r=H.take(move h);return 0;}");
+  unsupported(
+      "trait T{func take(owner move Self)Self;}"
+      "struct H{items Vec[i32];}"
+      "impl T for H{func take(owner move Self)Self{return move owner;}}"
+      "func main()i32{let h=H(items:[1]);let r=H.take(move h);return 0;}");
 }
 
 void trait_static_self_qualification() {
@@ -9000,6 +9892,8 @@ int main(int argc, char **argv) {
     trait_self_callback(root);
     trait_static_calls();
     trait_method_generics(root);
+    trait_generic_move(root);
+    inherent_static_self_identity();
     trait_static_self_qualification();
     nested_patterns();
     repairs(root);

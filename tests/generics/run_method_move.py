@@ -17,7 +17,8 @@ CASES = ('positive', 'error-before', 'error-after', 'receiver-fails',
          'generic-impl-own-errors', 'constrained-inherent', 'trait-modes',
          'trait-type-call-factory', 'trait-type-call-owned',
          'trait-type-call-self', 'trait-generic-phantom',
-         'trait-generic-multi')
+         'trait-generic-multi', 'trait-generic-move',
+         'trait-generic-move-errors')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 2],
     'error-before': [9, 2, 3],
@@ -37,6 +38,8 @@ EXPECTED_EVENTS = {
     'trait-type-call-self': [],
     'trait-generic-phantom': [],
     'trait-generic-multi': [9, 3],
+    'trait-generic-move': [3],
+    'trait-generic-move-errors': [2, 4, 4],
 }
 EXPECTED_ALLOCATIONS = {
     'positive': 11,
@@ -57,6 +60,8 @@ EXPECTED_ALLOCATIONS = {
     'trait-type-call-self': 0,
     'trait-generic-phantom': 0,
     'trait-generic-multi': 16,
+    'trait-generic-move': 16,
+    'trait-generic-move-errors': 11,
 }
 
 
@@ -171,6 +176,25 @@ def assert_native(case, observations, allocations):
             observations.index(('free', 12)) < \
             observations.index(('free', 11)) < \
             observations.index(('obs', 3, 923923233)), observations
+    elif case == 'trait-generic-move':
+        # The first five frees belong to callee-local Vecs. Shared arguments
+        # and receivers remain live until their final owners leave scope.
+        # The explicit move/Self echo is included.
+        assert observations == [
+            ('free', 2), ('free', 4), ('free', 6), ('free', 8),
+            ('free', 10), ('obs', 3, 3), ('free', 13), ('free', 15),
+            ('free', 14), ('free', 12), ('free', 11), ('free', 9),
+            ('free', 7), ('free', 5), ('free', 3), ('free', 1),
+            ('free', 0)], observations
+    elif case == 'trait-generic-move-errors':
+        # The receiver logs before its local Vec is freed. Argument and callee
+        # failures release transferred owners; aliases keep their Vecs alive
+        # until scope exit. Callee locals unwind before the remaining owners.
+        assert observations == [
+            ('obs', 2, 2), ('free', 2), ('obs', 4, 4),
+            ('obs', 4, 4), ('free', 6), ('free', 8), ('free', 10),
+            ('free', 9), ('free', 7), ('free', 5), ('free', 4),
+            ('free', 3), ('free', 1), ('free', 0)], observations
     elif case == 'trait-modes':
         # Each receiver temporary frees before the following section. The
         # generic trait impl receiver/moved arguments then free before the
@@ -274,6 +298,25 @@ def assert_python(case, data):
                    error['type'] == 'app.E' for error in data['errors']), data
         assert any(error['function'] == 'fail' and error['type'] == 'app.E'
                    for error in data['errors']), data
+    elif case == 'trait-generic-move':
+        assert sequence == [
+            ['free', 2], ['free', 4], ['free', 6], ['free', 8],
+            ['free', 10], ['event', 3], ['free', 13], ['free', 15],
+            ['free', 14], ['free', 12], ['free', 11], ['free', 9],
+            ['free', 7], ['free', 5], ['free', 3], ['free', 1],
+            ['free', 0]], sequence
+        assert not data['errors'], data
+    elif case == 'trait-generic-move-errors':
+        assert sequence == [
+            ['event', 2], ['free', 2], ['event', 4], ['event', 4],
+            ['free', 6], ['free', 8], ['free', 10], ['free', 9],
+            ['free', 7], ['free', 5], ['free', 4], ['free', 3],
+            ['free', 1], ['free', 0]], sequence
+        assert [(error['function'], error['type'])
+                for error in data['errors']] == [
+                    ('bad_box', 'app.Fail'), ('failing_code', 'app.Fail'),
+                    ('failing_code', 'app.Fail'), ('take', 'app.Fail'),
+                    ('fail_static', 'app.Fail')], data
     elif case == 'trait-modes':
         snapshots = data.get('snapshots', {})
         assert snapshots['log'] == 7132 and snapshots['flog'] == 732, data
@@ -527,6 +570,61 @@ def main():
             row['after_sha256'] = {name: digest(stale / name)
                                    for name in sentinels}
             assert row['after_sha256'] == old_hashes, row
+            row['status'] = 'passed'
+
+            generic_reject = (args.root /
+                              'tests/generics/method-move/'
+                              'trait-generic-move-reject/lang.toml')
+            generic_sources = {
+                str(path.relative_to(generic_reject.parent)): digest(path)
+                for path in sorted(generic_reject.parent.rglob('*'))
+                if path.is_file()}
+            generic_fresh = args.out / 'trait-generic-move-reject-new'
+            shutil.rmtree(generic_fresh, ignore_errors=True)
+            generic_before = run(
+                [args.cli, 'build', '--project', generic_reject,
+                 '--backend', 'native', '--opt', 0,
+                 '--out-dir', generic_fresh, '--format', 'json'],
+                library=library)
+            row = dict(case='trait-generic-move-reject-new',
+                       source_sha256=generic_sources, build=generic_before,
+                       status='failed')
+            report['runs'].append(row)
+            assert generic_before['exit'] != 0, generic_before
+            assert json.loads(generic_before['stdout'])['status'] == 'error', \
+                generic_before
+            assert not (generic_fresh / 'program').exists(), \
+                'rejected generic move build wrote program'
+            assert not (generic_fresh / 'program.o').exists(), \
+                'rejected generic move build wrote object'
+            row['outputs'] = sorted(str(path.relative_to(generic_fresh))
+                                    for path in generic_fresh.rglob('*')
+                                    if path.is_file())
+            row['status'] = 'passed'
+
+            generic_stale = args.out / 'trait-generic-move-reject-old'
+            generic_stale.mkdir(parents=True, exist_ok=True)
+            generic_sentinels = {name: b'previous generic output ' + name.encode()
+                                 for name in ('program', 'program.o')}
+            for name, content in generic_sentinels.items():
+                (generic_stale / name).write_bytes(content)
+            generic_hashes = {name: digest(generic_stale / name)
+                              for name in generic_sentinels}
+            generic_after = run(
+                [args.cli, 'build', '--project', generic_reject,
+                 '--backend', 'native', '--opt', 0,
+                 '--out-dir', generic_stale, '--format', 'json'],
+                library=library)
+            row = dict(case='trait-generic-move-reject-old',
+                       source_sha256=generic_sources, build=generic_after,
+                       before_sha256=generic_hashes, status='failed')
+            report['runs'].append(row)
+            assert generic_after['exit'] != 0, generic_after
+            assert json.loads(generic_after['stdout'])['status'] == 'error', \
+                generic_after
+            row['after_sha256'] = {name: digest(generic_stale / name)
+                                   for name in generic_sentinels}
+            assert row['after_sha256'] == generic_hashes, row
             row['status'] = 'passed'
         report['status'] = 'passed'
     finally:

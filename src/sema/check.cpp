@@ -388,6 +388,55 @@ class Checker {
       return {};
     return TraitMethodSource{im, tr, prototype};
   }
+  // Move eligibility is separate from the older inout route. A value-form
+  // call requires a real ordinary trait-Self first parameter, but this batch
+  // no longer requires its label to be literally `self`; an owner-labelled
+  // ordinary receiver is already the same receiver. A type-qualified call
+  // supplies every declared parameter explicitly, so it starts at index zero
+  // and also admits a static method with no Self or a first move parameter
+  // whose own type parameter happens to be named `self`. Actual self modes
+  // are classified from the raw declaration in typed_call, not from the
+  // substituted signature where an own parameter may already equal Self.
+  std::optional<TraitMethodSource>
+  trait_impl_move_source(SymbolId target, bool receiver) {
+    const auto *im = impl_of(target);
+    if (!im || !im->trait)
+      return {};
+    const TraitDecl *tr = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == *im->trait)
+        tr = &t;
+    if (!tr)
+      return {};
+    const MethodPrototype *prototype = nullptr;
+    for (const auto &p : tr->methods)
+      if (symbol(p.symbol).name == symbol(target).name) {
+        if (prototype)
+          return {};
+        prototype = &p;
+      }
+    if (!prototype ||
+        !trait_impl_signature_matches(*tr, *im, *prototype, target))
+      return {};
+    auto found = signatures.find(target.value);
+    if (found == signatures.end())
+      return {};
+    const auto proto_sig = type(prototype->signature);
+    const auto method_sig = type(found->second);
+    if (prototype->parameters.empty() || proto_sig.parameters.empty() ||
+        method_sig.parameters.empty())
+      return {};
+    if (receiver) {
+      const auto &raw_self = type(proto_sig.parameters.front().type);
+      if (raw_self.kind != TypeKind::TypeParameter ||
+          raw_self.declaration != tr->self ||
+          proto_sig.parameters.front().mode != ParamMode::ordinary ||
+          method_sig.parameters.front().mode != ParamMode::ordinary ||
+          method_sig.parameters.front().type != im->self_type)
+        return {};
+    }
+    return TraitMethodSource{im, tr, prototype};
+  }
   // A constraint call is limited to a real prototype of the required trait,
   // reached through a bounded template receiver with a real ordinary self.
   // Only concrete numeric/bool non-self inout types and the exact trait
@@ -500,6 +549,94 @@ class Checker {
       return false;
     };
     return visit(root);
+  }
+  // Move eligibility for a value-form bounded T call. This uses the same
+  // real trait/bound/prototype relation as the older inout source, but it
+  // accepts either ordinary receiver label and does not inspect the old
+  // inout restrictions: move qualification is a separate decision.
+  const MethodPrototype *constraint_method_move_source(SymbolId target,
+                                                       SymbolId trait,
+                                                       TypeId receiver) {
+    const TraitDecl *tr = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == trait)
+        tr = &t;
+    if (!tr || type(receiver).kind != TypeKind::TypeParameter)
+      return nullptr;
+    auto bounded = bounds.find(type(receiver).declaration.value);
+    if (bounded == bounds.end() || !bounded->second ||
+        *bounded->second != trait)
+      return nullptr;
+    if (std::none_of(active_params.begin(), active_params.end(),
+                     [&](const GenericParam &p) {
+                       return p.symbol == type(receiver).declaration;
+                     }))
+      return nullptr;
+    auto generics = generic_params.find(target.value);
+    if (generics == generic_params.end())
+      return nullptr;
+    const MethodPrototype *prototype = nullptr;
+    for (const auto &p : tr->methods)
+      if (p.symbol == target) {
+        if (prototype)
+          return nullptr;
+        prototype = &p;
+      }
+    if (!prototype)
+      return nullptr;
+    if (prototype->parameters.empty())
+      return nullptr;
+    const auto &sig = type(prototype->signature);
+    if (sig.parameters.empty() ||
+        sig.parameters.front().mode != ParamMode::ordinary)
+      return nullptr;
+    const auto &raw_self = type(sig.parameters.front().type);
+    if (raw_self.kind != TypeKind::TypeParameter ||
+        raw_self.declaration != tr->self)
+      return nullptr;
+    return prototype;
+  }
+  // Move eligibility for a type-qualified T.method(...) call. It has no
+  // runtime receiver, so every declared parameter is explicit. Only ordinary
+  // and move top-level modes are admitted here; all new inout forms and
+  // dependent Self callbacks keep the old capability limit.
+  const MethodPrototype *constraint_static_method_move_source(
+      SymbolId target, SymbolId trait, TypeId receiver) {
+    const TraitDecl *tr = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == trait)
+        tr = &t;
+    if (!tr || type(receiver).kind != TypeKind::TypeParameter)
+      return nullptr;
+    auto bounded = bounds.find(type(receiver).declaration.value);
+    if (bounded == bounds.end() || !bounded->second ||
+        *bounded->second != trait)
+      return nullptr;
+    if (std::none_of(active_params.begin(), active_params.end(),
+                     [&](const GenericParam &p) {
+                       return p.symbol == type(receiver).declaration;
+                     }))
+      return nullptr;
+    auto generics = generic_params.find(target.value);
+    if (generics == generic_params.end())
+      return nullptr;
+    const MethodPrototype *prototype = nullptr;
+    for (const auto &p : tr->methods)
+      if (p.symbol == target) {
+        if (prototype)
+          return nullptr;
+        prototype = &p;
+      }
+    if (!prototype)
+      return nullptr;
+    const auto &sig = type(prototype->signature);
+    for (const auto &p : sig.parameters) {
+      if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move)
+        return nullptr;
+      if (contains_trait_self_inout(p.type, tr->self))
+        return nullptr;
+    }
+    return prototype;
   }
   // A type-qualified T.method(...) has no runtime receiver. This batch opens
   // only all-ordinary top-level parameters; Self-dependent inout/callback
@@ -705,9 +842,21 @@ class Checker {
       }
       return false;
     };
-    for (const auto &p : type(signature).parameters)
-      if (p.mode != ParamMode::ordinary)
+    // This batch opens top-level non-self move on a generic trait method.
+    // The original prototype's first parameter is classified as the actual
+    // self only when it is the real trait Self; an own type parameter named
+    // `self` remains a static parameter. Any first-position actual-self
+    // move/inout, and every new generic-method inout, stays unavailable.
+    const auto &parameters = type(signature).parameters;
+    for (size_t i = 0; i < parameters.size(); ++i) {
+      const auto &p = parameters[i];
+      if (p.mode == ParamMode::ordinary)
+        continue;
+      if (p.mode != ParamMode::move ||
+          (i == 0 && trait_self &&
+           trait_self_type(p.type, *trait_self)))
         unavailable(r, "generic trait method move/inout is not implemented");
+    }
     if (dependent_inout(signature))
       unavailable(r,
                   "generic trait method dependent inout callback is not "
@@ -1857,6 +2006,8 @@ class Checker {
               for (const auto &method : tr.methods)
                 if (symbol(method.symbol).name == name) {
                   if (!constraint_static_method_source(
+                          method.symbol, *bound->second, *t) &&
+                      !constraint_static_method_move_source(
                           method.symbol, *bound->second, *t))
                     unavailable(
                         r, "trait-static move/inout or Self callback parameters "
@@ -2047,8 +2198,15 @@ class Checker {
     const bool inherent =
         !constraint &&
         inherent_method_route(target, receiver.has_value(), original);
-    const bool trait_impl =
+    // Move and inout eligibility are deliberately separate. The old inout
+    // route keeps its literal-self and receiver requirements; the new move
+    // route admits an ordinary owner-labelled receiver and an explicit
+    // type-qualified static parameter list.
+    const bool trait_impl_inout =
         !constraint && receiver && trait_impl_method_source(target).has_value();
+    const bool trait_impl_move =
+        !constraint &&
+        trait_impl_move_source(target, receiver.has_value()).has_value();
     std::optional<TypeId> constraint_receiver;
     if (constraint) {
       if (constraint_type)
@@ -2063,23 +2221,74 @@ class Checker {
         sub.push_back({type(*constraint_receiver).declaration,
                        *constraint_receiver});
     }
-    const bool trait_constraint =
+    const bool trait_constraint_inout =
         constraint && constraint_receiver &&
         (receiver ? constraint_method_source(target, *constraint,
                                              *constraint_receiver)
                   : constraint_static_method_source(target, *constraint,
                                                     *constraint_receiver));
+    const bool trait_constraint_move =
+        constraint && constraint_receiver &&
+        (receiver ? constraint_method_move_source(target, *constraint,
+                                                  *constraint_receiver)
+                  : constraint_static_method_move_source(
+                        target, *constraint, *constraint_receiver));
     const bool allow_move =
-        free_move || inherent || trait_impl || trait_constraint;
+        free_move || inherent || trait_impl_move || trait_constraint_move;
     const bool allow_inout =
-        free_inout || inherent || trait_impl || trait_constraint;
-    // Any instance route whose declared first parameter is move/inout is an
-    // unsupported self mode, including a trait method reached through a
-    // constraint. A type-qualified static call to an impl method with a
-    // declared self is rejected by the same rule below.
-    if ((receiver || (impl_method(target) && declared_self(target))) &&
-        !original_type.parameters.empty() &&
-        original_type.parameters.front().mode != ParamMode::ordinary)
+        free_inout || inherent || trait_impl_inout ||
+        trait_constraint_inout;
+    // Actual self is classified from the raw declaration. A receiver call
+    // always takes parameter zero, so any non-ordinary raw first mode is an
+    // unsupported self mode; a type-qualified static call can pass a first
+    // parameter explicitly, but only when the raw first parameter is not the
+    // trait Self or the impl's own type. An own type parameter that happens
+    // to be named self, or later concretizes to Self, is not an actual self.
+    bool actual_self_nonordinary = false;
+    if (!receiver) {
+      if (constraint) {
+        for (const auto &tr : m.traits)
+          if (tr.symbol == *constraint)
+            for (const auto &p : tr.methods)
+              if (p.symbol == target) {
+                const auto &raw = type(p.signature);
+                if (!raw.parameters.empty() &&
+                    raw.parameters.front().mode != ParamMode::ordinary &&
+                    trait_self_type(raw.parameters.front().type, tr.self))
+                  actual_self_nonordinary = true;
+              }
+      } else if (const auto *im = impl_of(target)) {
+        if (im->trait) {
+          // A trait impl follows the raw trait prototype: only its actual
+          // trait Self in first position is an unsupported self mode. An own
+          // type parameter named self that later equals the impl Self is a
+          // static parameter, and a concrete non-Self first parameter with
+          // the same type as the impl is not a receiver.
+          auto source = trait_impl_move_source(target, false);
+          if (source && !source->prototype->parameters.empty()) {
+            const auto &raw = type(source->prototype->signature);
+            if (!raw.parameters.empty() &&
+                raw.parameters.front().mode != ParamMode::ordinary &&
+                trait_self_type(raw.parameters.front().type,
+                                source->trait->self))
+              actual_self_nonordinary = true;
+          }
+        } else if (declared_self(target) &&
+                   !original_type.parameters.empty() &&
+                   original_type.parameters.front().mode !=
+                       ParamMode::ordinary) {
+          // Inherent methods keep the pre-existing declared_self rule:
+          // literal `self` plus the original first parameter type equal to
+          // the impl Self. A non-literal label stays an explicit static
+          // parameter, including a completed signature that happens to equal
+          // the impl type.
+          actual_self_nonordinary = true;
+        }
+      }
+    }
+    if (actual_self_nonordinary ||
+        (receiver && !original_type.parameters.empty() &&
+         original_type.parameters.front().mode != ParamMode::ordinary))
       unavailable(r, "move/inout self is not implemented");
     for (size_t pass = 0; pass < 2; ++pass)
       for (size_t i = 0; i < values.size(); ++i) {

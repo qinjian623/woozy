@@ -1891,9 +1891,21 @@ class Verifier {
             }
             return false;
           };
-          for (const auto &p : sig.parameters)
-            need(p.mode == ParamMode::ordinary,
+          // Top-level non-self move is the one new mode this batch opens.
+          // The actual self is the real trait Self in first position, not an
+          // own type parameter merely labelled self. New generic-method
+          // inout and any first-position actual-self mode stay rejected.
+          for (size_t i = 0; i < sig.parameters.size(); ++i) {
+            const auto &p = sig.parameters[i];
+            if (p.mode == ParamMode::ordinary)
+              continue;
+            need(p.mode == ParamMode::move,
                  "generic trait method move/inout is unsupported");
+            const auto &raw = type(p.type);
+            need(!(i == 0 && raw.kind == TypeKind::TypeParameter &&
+                   raw.declaration == tr.self),
+                 "generic trait method actual self move is unsupported");
+          }
           need(!dependent_inout(method.signature),
                "generic trait method dependent inout callback is unsupported");
         }
@@ -2310,10 +2322,21 @@ class Verifier {
            "T-qualified constraint receiver is not a type parameter");
       need(source_type_in_function(written->base, owner) == c.receiver,
            "T-qualified constraint source type differs from receiver");
+      // A type-qualified call supplies every declared parameter explicitly.
+      // It may therefore use a static method with no Self, an ordinary first
+      // Self passed at index zero, or a non-self move. New inout and a raw
+      // actual-self mode in first position remain rejected.
       const auto &raw = type(method->signature);
-      for (const auto &p : raw.parameters)
-        need(p.mode == ParamMode::ordinary,
+      for (size_t i = 0; i < raw.parameters.size(); ++i) {
+        const auto &p = raw.parameters[i];
+        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
              "trait-static non-ordinary parameter is unsupported");
+        const auto &raw_type = type(p.type);
+        need(!(i == 0 && p.mode != ParamMode::ordinary &&
+               raw_type.kind == TypeKind::TypeParameter &&
+               raw_type.declaration == tr->self),
+             "trait-static actual self mode is unsupported");
+      }
       need(n.type == sig.result && c.args.size() == sig.parameters.size() &&
                n.children.size() == c.args.size(),
            "trait-static call arity/children");
@@ -2330,8 +2353,8 @@ class Verifier {
              "trait-static children must preserve source order");
         const auto p = sig.parameters[a.parameter_index];
         const auto &argument = node(a.expression);
-        need(p.mode == ParamMode::ordinary &&
-                 a.mode == ParamMode::ordinary && argument.type == p.type,
+        need((p.mode == ParamMode::ordinary || p.mode == ParamMode::move) &&
+                 a.mode == p.mode && argument.type == p.type,
              "trait-static argument type/mode");
         expr(a.expression);
         if (a.label) {
@@ -2357,18 +2380,23 @@ class Verifier {
     need(!method->parameters.empty() && !prototype.parameters.empty() &&
              prototype.parameters.front().mode == ParamMode::ordinary,
          "constraint method must declare ordinary self");
-    // The literal name `self` is a restriction of the newly opened non-self
-    // move/inout mode, not of ordinary trait calls. Existing all-ordinary
-    // prototypes may name their first Self parameter `owner` (or any other
-    // legal label) and must keep their old behavior.
-    const bool non_self_modes =
+    // The literal name `self` is a restriction of the older inout mode, not
+    // of the newly opened non-self move. Existing all-ordinary prototypes may
+    // name their first Self parameter `owner`; an ordinary owner receiver is
+    // the same receiver, and this batch explicitly lets a move prototype use
+    // it too. Actual self classification stays based on the raw trait Self.
+    const bool non_self_inout =
         std::any_of(prototype.parameters.begin() + 1,
                     prototype.parameters.end(), [](const auto &p) {
-                      return p.mode != ParamMode::ordinary;
+                      return p.mode == ParamMode::inout;
                     });
-    if (non_self_modes)
+    if (non_self_inout)
       need(method->parameters.front().label == "self",
-           "constraint move/inout mode requires ordinary self");
+           "constraint inout mode requires ordinary self");
+    if (!source_parameters(method->source).empty())
+      for (const auto &p : prototype.parameters)
+        need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
+             "generic trait method inout is unsupported");
     const auto &raw_self = type(prototype.parameters.front().type);
     need(raw_self.kind == TypeKind::TypeParameter &&
              raw_self.declaration == tr->self,

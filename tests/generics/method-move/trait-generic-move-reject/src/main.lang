@@ -1,0 +1,19 @@
+package app;
+
+trait Take {
+    func take[U](self move Self, value U) U;
+}
+
+struct S {
+    value i32;
+}
+
+impl Take for S {
+    func take[U](self move Self, value U) U {
+        return value;
+    }
+}
+
+func main() i32 {
+    return 0;
+}

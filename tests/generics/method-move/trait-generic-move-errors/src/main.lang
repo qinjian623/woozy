@@ -1,0 +1,138 @@
+package app;
+
+enum Fail {
+    Bad(code i32);
+}
+
+trait Relay {
+    func take[U](owner Self, value move U, code i32) U throws Fail;
+    func fail_static[U](value move U) U throws Fail;
+}
+
+struct Box[I] {
+    items Vec[i32];
+}
+
+impl[I] Relay for Box[I] {
+    func take[A](owner Self, value move A, code i32) A throws Fail {
+        let local Vec[i32] = [40];
+        defer {
+            let read = local[0];
+        }
+        if code == 2 {
+            throw Fail.Bad(code: 7);
+        }
+        return move value;
+    }
+
+    func fail_static[U](value move U) U throws Fail {
+        let local Vec[i32] = [50];
+        defer {
+            let read = local[0];
+        }
+        throw Fail.Bad(code: 8);
+    }
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func bad_box(log inout i64) Box[i32] throws Fail {
+    mark(inout log, 2);
+    let local Vec[i32] = [2];
+    throw Fail.Bad(code: 2);
+}
+
+func failing_code(log inout i64) i32 throws Fail {
+    mark(inout log, 4);
+    throw Fail.Bad(code: 4);
+}
+
+func fail_code(err Fail) i32 {
+    switch err {
+    case Fail.Bad(code):
+        return code;
+    }
+}
+
+func main() i32 throws Fail {
+    let h = Box[i32](items: [1]);
+
+    var log i64 = 0;
+    var early Vec[i32] = [10];
+    let ea = early;
+    try {
+        let r = bad_box(inout log).take[Vec[i32]]([10], 0);
+        if r[0] != 0 {
+            return 1;
+        }
+    } catch err Fail {
+        if fail_code(err) != 2 || log != 2 || ea[0] != 10 {
+            return 1;
+        }
+    }
+
+    var log2 i64 = 0;
+    var moved Vec[i32] = [11];
+    let ma = moved;
+    try {
+        let r = h.take[Vec[i32]](move moved, failing_code(inout log2));
+        if r[0] != 0 {
+            return 2;
+        }
+    } catch err Fail {
+        if fail_code(err) != 4 || log2 != 4 || ma[0] != 11 {
+            return 2;
+        }
+    }
+
+    var log3 i64 = 0;
+    var moved_temp Vec[i32] = [12];
+    let mta = moved_temp;
+    try {
+        let r = h.take[Vec[i32]](move moved_temp, failing_code(inout log3));
+        if r[0] != 0 {
+            return 3;
+        }
+    } catch err Fail {
+        if fail_code(err) != 4 || log3 != 4 || mta[0] != 12 {
+            return 3;
+        }
+    }
+
+    var callee Vec[i32] = [13];
+    let ca = callee;
+    try {
+        let r = h.take[Vec[i32]](move callee, 2);
+        if r[0] != 0 {
+            return 4;
+        }
+    } catch err Fail {
+        if fail_code(err) != 7 || ca[0] != 13 {
+            return 4;
+        }
+    }
+
+    var kept Vec[i32] = [14];
+    let ka = kept;
+    let saved = h.take[Vec[i32]](move kept, 0);
+    saved[0] = 24;
+    if ka[0] != 24 {
+        return 5;
+    }
+
+    var stat Vec[i32] = [15];
+    let sta = stat;
+    try {
+        let r = Box[i32].fail_static[Vec[i32]](move stat);
+        if r[0] != 0 {
+            return 6;
+        }
+    } catch err Fail {
+        if fail_code(err) != 8 || sta[0] != 15 {
+            return 6;
+        }
+    }
+    return 0;
+}

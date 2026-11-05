@@ -1,0 +1,165 @@
+package app;
+
+trait Tag {
+    func code(owner Self) i32;
+}
+
+struct One {
+    n i32;
+}
+
+struct Two {
+    n i32;
+}
+
+impl Tag for One {
+    func code(owner Self) i32 {
+        return 1;
+    }
+}
+
+impl Tag for Two {
+    func code(owner Self) i32 {
+        return 2;
+    }
+}
+
+trait Relay {
+    func take[U, V Tag](owner Self, value move U, tag V) U;
+    func static_take[U](value move U) U;
+    func echo[U](self move U) U;
+}
+
+// Non-generic methods with no own parameters keep the same move rules:
+// `bump` uses an ordinary owner-labelled receiver, `make` has no receiver.
+trait Plain {
+    func bump(owner Self, value move i32) i32;
+    func make(value move i32) i32;
+}
+
+struct Box[I] {
+    value I;
+    items Vec[i32];
+}
+
+impl[I] Plain for Box[I] {
+    func bump(owner Self, value move i32) i32 {
+        return value + 1;
+    }
+
+    func make(value move i32) i32 {
+        return value;
+    }
+}
+
+impl[I] Relay for Box[I] {
+    func take[A, W Tag](owner Self, value move A, tag W) A {
+        let local Vec[i32] = [40 + tag.code()];
+        defer {
+            let read = local[0];
+        }
+        return move value;
+    }
+
+    func static_take[U](value move U) U {
+        let local Vec[i32] = [50];
+        defer {
+            let read = local[0];
+        }
+        return move value;
+    }
+
+    func echo[U](self move U) U {
+        return move self;
+    }
+}
+
+func via[T Relay, U, V Tag](owner T, value move U, tag V) U {
+    return T.take[U, V](tag: tag, value: move value, owner: owner);
+}
+
+func via_static[T Relay, U](value move U) U {
+    return T.static_take[U](move value);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func tag_one(log inout i64, digit i64) One {
+    mark(inout log, digit);
+    return One(n: 0);
+}
+
+func main() i32 {
+    let b = Box[i32](value: 0, items: [1]);
+
+    var v Vec[i32] = [7];
+    let va = v;
+    let x = b.take[Vec[i32], One](move v, One(n: 0));
+    x[0] = 17;
+    if va[0] != 17 {
+        return 1;
+    }
+
+    var bv Vec[i32] = [8];
+    let ba = bv;
+    let y = Box[i32].take[Vec[i32], One](b, move bv, One(n: 0));
+    y[0] = 18;
+    if ba[0] != 18 {
+        return 2;
+    }
+
+    var cv Vec[i32] = [9];
+    let ca = cv;
+    let z = via[Box[i32], Vec[i32], One](b, move cv, One(n: 0));
+    z[0] = 19;
+    if ca[0] != 19 {
+        return 3;
+    }
+
+    var sv Vec[i32] = [10];
+    let sa = sv;
+    let s = Box[i32].static_take[Vec[i32]](move sv);
+    s[0] = 20;
+    if sa[0] != 20 {
+        return 4;
+    }
+
+    var tv Vec[i32] = [11];
+    let ta = tv;
+    let t = via_static[Box[i32], Vec[i32]](move tv);
+    t[0] = 21;
+    if ta[0] != 21 {
+        return 5;
+    }
+
+    let eb = Box[i32](value: 0, items: [12]);
+    let er = Box[i32].echo[Box[i32]](move eb);
+    if er.items[0] != 12 {
+        return 6;
+    }
+
+    var log i64 = 0;
+    var ov Vec[i32] = [13];
+    let oa = ov;
+    let ordered = b.take(tag: tag_one(inout log, 3), value: move ov);
+    ordered[0] = 22;
+    if log != 3 || oa[0] != 22 {
+        return 7;
+    }
+
+    let temporary = via[Box[i32], Vec[i32], Two](b, [14], Two(n: 0));
+    if temporary[0] != 14 {
+        return 8;
+    }
+
+    var scalar i32 = 40;
+    if b.bump(move scalar) != 41 {
+        return 9;
+    }
+    if Box[i32].make(41) != 41 {
+        return 10;
+    }
+    return 0;
+}
