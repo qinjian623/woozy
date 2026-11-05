@@ -185,7 +185,16 @@ int main(int argc, char **argv) {
         if (!fs::is_regular_file(dependency))
           throw std::system_error(ENOENT, std::generic_category(), dependency);
       write(object.string(), out.object.data(), out.object.size());
+      if (out.triple != "x86_64-unknown-linux-gnu" &&
+          (out.triple.rfind("x86_64-", 0) != 0 || out.triple.find("linux") == std::string::npos)) {
+        PhaseResult<int> failed;
+        failed.failure = FailureKind::unsupported;
+        failed.diagnostics.push_back({"E_TARGET_UNSUPPORTED", "codegen", "error",
+                                     "native executable target only supports Linux x86_64: " + out.triple});
+        return report(failed);
+      }
       auto link = run_process({LANG_NATIVE_CLANG, "--target=" + out.triple,
+                               "-nostdlib", "-static",
                                "--ld-path=" LANG_NATIVE_LLD, object.string(),
                                LANG_NATIVE_RUNTIME, "-o", program.string()});
       if (link.exit_code != 0) {

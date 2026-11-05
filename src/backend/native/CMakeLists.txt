@@ -15,10 +15,15 @@ target_include_directories(lang_native SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_options(lang_native PRIVATE -fno-rtti)
 llvm_map_components_to_libnames(LANG_NATIVE_LLVM_LIBS Core Support nativecodegen Passes)
 target_link_libraries(lang_native PRIVATE ${LANG_NATIVE_LLVM_LIBS})
-add_library(lang_native_runtime STATIC ${LANG_NATIVE_ROOT}/runtime/native/panic.cpp)
+add_library(lang_native_runtime STATIC
+  ${LANG_NATIVE_ROOT}/runtime/native/alloc.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/panic.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/start.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/freestanding.cpp)
 target_compile_features(lang_native_runtime PRIVATE cxx_std_20)
 # This archive is linked into generated programs, independently of compiler instrumentation.
-target_compile_options(lang_native_runtime PRIVATE -fno-exceptions -fno-rtti -fno-sanitize=all)
+target_compile_options(lang_native_runtime PRIVATE -fno-exceptions -fno-rtti -fno-sanitize=all -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove
+  $<$<CXX_COMPILER_ID:GNU>:-fno-tree-loop-distribute-patterns>)
 set_target_properties(lang_native_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_executable(lang_native_helper helper.cpp)
 target_link_libraries(lang_native_helper PRIVATE lang_sema lang_native lang_driver_process json-c::json-c)

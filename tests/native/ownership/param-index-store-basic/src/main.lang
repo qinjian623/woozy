@@ -1,0 +1,10 @@
+package app;
+
+func store(values Vec[i32]) Unit { values[0] = 2; }
+
+func main() i32 {
+    let values Vec[i32] = [1];
+    store(values);
+    if values[0] != 2 { return 1; }
+    return 0;
+}

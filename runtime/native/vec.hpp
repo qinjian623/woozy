@@ -21,4 +21,6 @@ void lang_vec_end_v1(LangVec *) noexcept;
 uint64_t lang_vec_length_v1(LangVec *) noexcept;
 // Private runtime operation, not a source-language length-changing API.
 void lang_vec_check_resize_v1(LangVec *) noexcept;
+void *lang_alloc_v1(uint64_t, uint64_t) noexcept;
+void lang_free_v1(void *) noexcept;
 }

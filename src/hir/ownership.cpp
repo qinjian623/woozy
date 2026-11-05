@@ -268,6 +268,40 @@ class Analysis {
     if (it != live.end())
       live.erase(it);
   }
+  std::set<uint32_t> safe_borrow_receivers;
+  std::set<uint64_t> parameter_symbols;
+
+  bool is_borrowed_param(SymbolId sym) const {
+    if (!parameter_symbols.count(sym.value))
+      return false;
+    auto it = locals.find(sym.value);
+    if (it == locals.end())
+      return false;
+    return it->second.mode != ParamMode::move;
+  }
+
+  bool expr_consumes_symbol(HirNodeId expr_id, SymbolId sym) const {
+    const auto &x = n(expr_id);
+    if (auto r = std::get_if<Move>(&x.data); r && r->binding && *r->binding == sym)
+      return true;
+    if (x.kind() == NodeKind::assign) {
+      if (auto p = std::get_if<Place>(&n(x.children[0]).data); p && p->symbol == sym)
+        return true;
+    }
+    if (auto args = call_args(x)) {
+      for (const auto &a : *args) {
+        if (a.mode == ParamMode::move || a.mode == ParamMode::inout) {
+          if (borrow_root(a.expression) == sym)
+            return true;
+        }
+      }
+    }
+    for (auto c : x.children)
+      if (expr_consumes_symbol(c, sym))
+        return true;
+    return false;
+  }
+
   std::optional<SymbolId> borrow_root(HirNodeId id) const {
     const auto &x = n(id);
     if (auto r = std::get_if<Read>(&x.data))
@@ -364,6 +398,19 @@ class Analysis {
           consume(live, a.expression);
       failure_prefix[id.value] = prefix_cleanup(live);
       active_borrows.resize(floor);
+    } else if (x.kind() == NodeKind::index_read) {
+      auto receiver = x.children[0];
+      auto index = x.children[1];
+      auto root = borrow_root(receiver);
+      bool can_borrow = root && is_borrowed_param(*root) && !expr_consumes_symbol(index, *root);
+      expr_records(receiver, fe, live, can_borrow);
+      expr_records(index, fe, live, false);
+    } else if (x.kind() == NodeKind::index_place) {
+      auto receiver = x.children[0];
+      auto index = x.children[1];
+      bool can_borrow = safe_borrow_receivers.count(receiver.value) > 0;
+      expr_records(receiver, fe, live, can_borrow);
+      expr_records(index, fe, live, false);
     } else {
       for (auto c : x.children)
         expr_records(c, fe, live,
@@ -428,6 +475,14 @@ class Analysis {
     case NodeKind::assign: {
       std::vector<HirNodeId> live;
       active_borrows.clear();
+      if (n(x.children[0]).kind() == NodeKind::index_place) {
+        auto receiver = n(x.children[0]).children[0];
+        auto index = n(x.children[0]).children[1];
+        auto root = borrow_root(receiver);
+        if (root && is_borrowed_param(*root) && !expr_consumes_symbol(index, *root) &&
+            !expr_consumes_symbol(x.children[1], *root))
+          safe_borrow_receivers.insert(receiver.value);
+      }
       expr_records(x.children[0], id, live);
       if (n(x.children[0]).kind() == NodeKind::field_place) {
         auto root = borrow_root(x.children[0]);
@@ -1024,6 +1079,7 @@ public:
         auto p = sig.parameters[i];
         supported(p.type);
         local(f->parameters[i].symbol, f->scope, p.type, p.mode);
+        parameter_symbols.insert(f->parameters[i].symbol.value);
         if (p.mode == ParamMode::move || owned(p.type))
           enabled.insert(f->symbol.value);
       }

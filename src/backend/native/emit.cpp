@@ -62,6 +62,16 @@ class Emitter {
   std::map<ValueId, llvm::Value *> values;
   std::map<ValueId, TypeId> value_types;
   std::vector<llvm::Value *> slots;
+  llvm::StructType *vec_type = llvm::StructType::get(
+      context,
+      {builder.getInt64Ty(),
+       builder.getInt64Ty(),
+       builder.getInt64Ty(),
+       builder.getInt64Ty(),
+       builder.getInt64Ty(),
+       builder.getPtrTy(),
+       builder.getPtrTy(),
+       builder.getPtrTy()});
   hir::Type type(TypeId id) const { return *aggregates.types.find(id); }
   llvm::Type *lower_type(TypeId id) {
     if (auto found = layouts.find(id); found != layouts.end())
@@ -333,6 +343,15 @@ class Emitter {
     return builder.CreateIntCast(v, lower_type(i.type), signed_(from));
   }
 #include "value_ops.inc"
+  void emit_vec_check(llvm::Value *vec, llvm::Value *index, SourceSpan source) {
+    auto *len_ptr = builder.CreateStructGEP(vec_type, vec, 1);
+    auto *init_ptr = builder.CreateStructGEP(vec_type, vec, 2);
+    auto *length = builder.CreateLoad(builder.getInt64Ty(), len_ptr);
+    auto *init = builder.CreateLoad(builder.getInt64Ty(), init_ptr);
+    auto *bad = builder.CreateOr(builder.CreateICmpUGE(index, length),
+                                 builder.CreateICmpUGE(index, init));
+    guard(bad, 4, source);
+  }
   void instruction(const ir::Instruction &i) {
     std::vector<llvm::Value *> args;
     for (auto v : i.inputs)
@@ -373,8 +392,11 @@ class Emitter {
       auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {vec, index});
       v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address)); break;
     }
-    case ir::Op::vec_length:
-      v = runtime("lang_vec_length_v1", builder.getInt64Ty(), {args[0]}); break;
+    case ir::Op::vec_length: {
+      auto *len_ptr = builder.CreateStructGEP(vec_type, args[0], 1);
+      v = builder.CreateLoad(builder.getInt64Ty(), len_ptr);
+      break;
+    }
     case ir::Op::vec_init: {
       auto element = type(i.type).type_args[0];
       v = runtime("lang_vec_new_v1", builder.getPtrTy(),
@@ -389,17 +411,38 @@ class Emitter {
     }
     case ir::Op::vec_check: {
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
-      runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index}); break;
+      emit_vec_check(args[0], index, i.source);
+      break;
     }
     case ir::Op::vec_read: {
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
-      auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
-      v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address)); break;
+      auto element_type = type(value_types.at(i.inputs[0])).type_args[0];
+      if (!owning(element_type)) {
+        emit_vec_check(args[0], index, i.source);
+        auto *data_ptr = builder.CreateStructGEP(vec_type, args[0], 5);
+        auto *data = builder.CreateLoad(builder.getPtrTy(), data_ptr);
+        auto *elem_addr = builder.CreateGEP(lower_type(element_type), data, index);
+        v = builder.CreateLoad(lower_type(element_type), elem_addr);
+      } else {
+        auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
+        v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));
+      }
+      break;
     }
     case ir::Op::vec_set: {
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
-      auto *address = element_storage(value_types.at(i.inputs[2]), args[2]);
-      runtime("lang_vec_set_v1", builder.getVoidTy(), {args[0], index, address}); break;
+      auto element_type = type(value_types.at(i.inputs[0])).type_args[0];
+      if (!owning(element_type)) {
+        emit_vec_check(args[0], index, i.source);
+        auto *data_ptr = builder.CreateStructGEP(vec_type, args[0], 5);
+        auto *data = builder.CreateLoad(builder.getPtrTy(), data_ptr);
+        auto *elem_addr = builder.CreateGEP(lower_type(element_type), data, index);
+        builder.CreateStore(args[2], elem_addr);
+      } else {
+        auto *address = element_storage(value_types.at(i.inputs[2]), args[2]);
+        runtime("lang_vec_set_v1", builder.getVoidTy(), {args[0], index, address});
+      }
+      break;
     }
     case ir::Op::vec_slice: {
       size_t p = 1;
