@@ -6966,6 +6966,600 @@ func main() i32 {
   });
 }
 
+void trait_self_callback(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "trait Self callback HIR rejected: " + text + "\n" + messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+
+  // The old fixed-scalar callback remains legal even when the actual receiver
+  // is a struct. The callback itself has no Self in its inout position.
+  good(R"(
+struct Holder { x i32; }
+trait Sink {
+    func use(self Self, f func(inout i32, i32) i32, slot inout i32) i32;
+}
+func replace(slot inout i32, value i32) i32 {
+    let old = slot; slot = value; return old;
+}
+impl Sink for Holder {
+    func use(self Self, f func(inout i32, i32) i32,
+             slot inout i32) i32 { return f(inout slot, 3); }
+}
+func main() i32 {
+    let h = Holder(x:1);
+    var v i32 = 2;
+    let old = h.use(replace, inout v);
+    return old + v - 5;
+}
+)");
+
+  // i32/bool are covered by the runtime fixture; this adds both implemented
+  // floating widths, callback factories, concrete calls and constrained
+  // forwarding without introducing a new type rule.
+  good(R"(
+trait FloatFlow {
+    func apply(self Self, f func(inout Self, Self) Self,
+               slot inout Self, value Self) Self;
+    func factory(self Self) (func(inout Self, Self) Self);
+}
+func bump32(slot inout f32, value f32) f32 {
+    let old = slot; slot = value; return old;
+}
+func bump64(slot inout f64, value f64) f64 {
+    let old = slot; slot = value; return old;
+}
+impl FloatFlow for f32 {
+    func apply(self Self, f func(inout Self, Self) Self,
+               slot inout Self, value Self) Self {
+        return f(inout slot, value);
+    }
+    func factory(self Self) (func(inout Self, Self) Self) { return bump32; }
+}
+impl FloatFlow for f64 {
+    func apply(self Self, f func(inout Self, Self) Self,
+               slot inout Self, value Self) Self {
+        return f(inout slot, value);
+    }
+    func factory(self Self) (func(inout Self, Self) Self) { return bump64; }
+}
+func relay[T FloatFlow](receiver T, f func(inout T, T) T,
+                        slot inout T, value T) T {
+    return receiver.apply(f, inout slot, value);
+}
+func main() i32 {
+    let o32 f32 = 1.5;
+    var s32 f32 = 2.5;
+    let g32 = o32.factory();
+    let a = g32(inout s32, 4.5);
+    let b = o32.apply(bump32, inout s32, 6.5);
+    let c = relay(o32, bump32, inout s32, 8.5);
+    if a != 2.5 || b != 4.5 || c != 6.5 || s32 != 8.5 { return 1; }
+    let o64 f64 = 1.5;
+    var s64 f64 = 2.5;
+    let g64 = o64.factory();
+    let d = g64(inout s64, 4.5);
+    let e = o64.apply(bump64, inout s64, 6.5);
+    let g = relay(o64, bump64, inout s64, 8.5);
+    if d != 2.5 || e != 4.5 || g != 6.5 || s64 != 8.5 { return 2; }
+    return 0;
+}
+)");
+
+  // A concrete impl whose Self is not an already supported inout scalar still
+  // fails at the source boundary even when no method is called. Function
+  // values may only appear through an already expressible nominal target.
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "struct S{x i32;} impl V for S{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "enum E{One;} impl V for E{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "impl V for Vec[i32]{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "impl V for string{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "impl V for Unit{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "struct Box[U]{value U;} impl[U] V for Box[U]{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "struct Box[U]{value U;} impl V for Box[func() i32]{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+
+  // The new callback context does not open actual self modes or a callback
+  // that accesses the same slot twice.
+  unsupported("trait V{func bad(self inout Self,"
+              "f func(inout Self,Self)Self);}"
+              "impl V for i32{func bad(self inout Self,"
+              "f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V[U]{func bad(self Self,"
+              "f func(inout Self,Self)Self);}"
+              "impl V[i32] for i32{func bad(self Self,"
+              "f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  unsupported("trait V{func bad[U](self Self,"
+              "f func(inout Self,Self)Self);}"
+              "impl V for i32{func bad(self Self,"
+              "f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
+  // A trait-static prototype has no Self-typed first parameter, so the new
+  // callback context does not open `inout Self` in its callback.
+  unsupported("trait V{func bad(f func(inout Self,Self)Self);}"
+              "func replace(slot inout i32,value i32)i32{"
+              "let old=slot;slot=value;return old;}"
+              "impl V for i32{func bad(f func(inout Self,Self)Self){}} "
+              "func main()i32{let f func(inout i32,i32)i32=replace;"
+              "i32.bad(f);return 0;}");
+  bad("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+      "impl V for i32{func bad(self Self,"
+      "f func(inout Self,Self)Self){}} "
+      "func main()i32{let o i32=1;let m=o.bad;return 0;}",
+      "E_TYPE_MISMATCH");
+  bad("func main()i32{var x i32=1;"
+      "let f func(inout i32,i32)i32="
+      "func(slot inout i32,value i32)i32{slot=x;return slot;};"
+      "return 0;}", "E_CAPABILITY_UNAVAILABLE");
+  bad("trait V{func bad(self Self,f func(inout Self,Self)Self,"
+      "slot inout Self)Self;}"
+      "impl V for i32{func bad(self Self,f func(inout Self,Self)Self,"
+      "slot inout Self)Self{return f(inout slot,slot);}} "
+      "func main()i32{return 0;}", "E_CALL_ARGUMENT");
+
+  auto fixture = check(root /
+                       "tests/generics/method-inout/trait-self-callback/lang.toml");
+  need(fixture.success(), messages(fixture));
+  need(hir::verify(*fixture.value).success(),
+       "trait Self callback fixture HIR rejected");
+  const auto &fm = *fixture.value;
+  auto source_name = [](const hir::HirModule &m, SymbolId s)
+      -> const std::string & { return m.resolved->symbols.at(s.value).name; };
+  auto is_i32 = [](const hir::HirModule &m, TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::SignedInt && t->bits == 32;
+  };
+  auto is_bool = [](const hir::HirModule &m, TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::Bool;
+  };
+  auto trait_for = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (source_name(m, t.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto prototype_for = [&](const hir::HirModule &m, const hir::TraitDecl &tr,
+                           const std::string &n)
+      -> const hir::MethodPrototype * {
+    for (const auto &p : tr.methods)
+      if (source_name(m, p.symbol) == n)
+        return &p;
+    return nullptr;
+  };
+  auto template_for = [&](const hir::HirModule &m, const std::string &n)
+      -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (source_name(m, t.function.symbol) == n)
+        return &t;
+    return nullptr;
+  };
+  auto function_for = [&](const hir::HirModule &m, SymbolId id)
+      -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto type_name = [&](const hir::HirModule &m, TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t)
+      return {};
+    switch (t->kind) {
+    case hir::TypeKind::Bool:
+      return "bool";
+    case hir::TypeKind::Float:
+      return t->bits == 32 ? "f32" : "f64";
+    case hir::TypeKind::SignedInt:
+    case hir::TypeKind::UnsignedInt:
+      return std::string(t->kind == hir::TypeKind::SignedInt ? "i" : "u") +
+             std::to_string(t->bits);
+    default:
+      return {};
+    }
+  };
+  auto impl_for = [&](const hir::HirModule &m, SymbolId trait,
+                      const std::string &type) -> const hir::ImplDecl * {
+    for (const auto &im : m.impls)
+      if (im.trait == trait && type_name(m, im.self_type) == type)
+        return &im;
+    return nullptr;
+  };
+  auto impl_method = [&](const hir::HirModule &m, const hir::ImplDecl &im,
+                         const std::string &method) -> SymbolId {
+    for (auto s : im.methods)
+      if (source_name(m, s) == method)
+        return s;
+    throw std::runtime_error("trait callback impl method missing: " + method);
+  };
+  auto origin_of = [&](const hir::HirModule &m, SymbolId s) {
+    for (const auto &i : m.instances)
+      if (i.symbol == s)
+        return i.origin;
+    return s;
+  };
+  auto instance_for = [&](const hir::HirModule &m,
+                          const hir::FunctionTemplate &t, TypeId arg)
+      -> const hir::FunctionInstance * {
+    for (const auto &i : m.instances)
+      if (i.origin == t.function.symbol && i.type_args.size() == 1 &&
+          i.type_args[0] == arg)
+        return &i;
+    return nullptr;
+  };
+  auto has_parameter = [](const hir::HirModule &m, TypeId root) {
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      auto t = m.types.find(id);
+      if (!t)
+        return false;
+      if (t->kind == hir::TypeKind::TypeParameter)
+        return true;
+      for (auto a : t->type_args)
+        if (visit(a))
+          return true;
+      for (const auto &p : t->parameters)
+        if (visit(p.type))
+          return true;
+      if (visit(t->result))
+        return true;
+      return t->throws_type && visit(*t->throws_type);
+    };
+    return visit(root);
+  };
+  auto type_id = [&](const auto &predicate) {
+    for (size_t i = 1; i <= fm.types.size(); ++i)
+      if (predicate(fm, TypeId{i}))
+        return TypeId{i};
+    throw std::runtime_error("fixture scalar type missing");
+  };
+  const TypeId i32_type = type_id(is_i32);
+  const TypeId bool_type = type_id(is_bool);
+
+  const auto *flow = trait_for(fm, "CallbackFlow");
+  need(flow, "trait callback fixture trait missing");
+  auto is_self = [&](const hir::HirModule &m, TypeId id) {
+    auto t = m.types.find(id);
+    return t && t->kind == hir::TypeKind::TypeParameter &&
+           t->declaration == flow->self;
+  };
+  const auto *apply_proto = prototype_for(fm, *flow, "apply");
+  const auto *factory_proto = prototype_for(fm, *flow, "factory");
+  need(apply_proto && factory_proto, "trait callback prototypes missing");
+  need(apply_proto->parameters.front().label == "self",
+       "trait callback receiver label changed");
+  {
+    const auto *sig = fm.types.find(apply_proto->signature);
+    need(sig && sig->kind == hir::TypeKind::Function &&
+             sig->parameters.size() == 5,
+         "trait callback apply signature shape changed");
+    need(sig->parameters[0].mode == hir::ParamMode::ordinary &&
+             is_self(fm, sig->parameters[0].type),
+         "trait callback actual self is not ordinary Self");
+    need(sig->parameters[2].mode == hir::ParamMode::inout &&
+             is_self(fm, sig->parameters[2].type),
+         "trait callback top-level inout Self changed");
+    const auto *cb = fm.types.find(sig->parameters[1].type);
+    need(cb && cb->kind == hir::TypeKind::Function &&
+             cb->parameters.size() == 2 &&
+             cb->parameters[0].mode == hir::ParamMode::inout &&
+             is_self(fm, cb->parameters[0].type) &&
+             is_self(fm, cb->parameters[1].type) &&
+             is_self(fm, cb->result),
+         "callback parameter did not preserve inout Self at position zero");
+  }
+  {
+    const auto *sig = fm.types.find(factory_proto->signature);
+    need(sig && sig->kind == hir::TypeKind::Function &&
+             sig->result.value,
+         "trait callback factory signature missing");
+    const auto *cb = fm.types.find(sig->result);
+    need(cb && cb->kind == hir::TypeKind::Function &&
+             cb->parameters.size() == 2 &&
+             cb->parameters[0].mode == hir::ParamMode::inout &&
+             is_self(fm, cb->parameters[0].type) &&
+             is_self(fm, cb->parameters[1].type) &&
+             is_self(fm, cb->result),
+         "returned function type lost inout Self at position zero");
+  }
+
+  const auto *i32_impl = impl_for(fm, flow->symbol, "i32");
+  const auto *bool_impl = impl_for(fm, flow->symbol, "bool");
+  need(i32_impl && bool_impl, "trait callback scalar impls missing");
+  const SymbolId apply_i32 = impl_method(fm, *i32_impl, "apply");
+  const SymbolId apply_bool = impl_method(fm, *bool_impl, "apply");
+  {
+    const auto *fn = function_for(fm, apply_i32);
+    need(fn, "trait callback i32 apply function missing");
+    const auto *sig = fm.types.find(fn->signature);
+    need(sig && sig->parameters.size() == 5 &&
+             sig->parameters[0].mode == hir::ParamMode::ordinary &&
+             is_i32(fm, sig->parameters[0].type),
+         "concrete callback method lost ordinary i32 self");
+    const auto *cb = fm.types.find(sig->parameters[1].type);
+    need(cb && cb->kind == hir::TypeKind::Function &&
+             cb->parameters.size() == 2 &&
+             cb->parameters[0].mode == hir::ParamMode::inout &&
+             is_i32(fm, cb->parameters[0].type) &&
+             is_i32(fm, cb->parameters[1].type) &&
+             is_i32(fm, cb->result),
+         "concrete callback parameter did not substitute Self to i32");
+  }
+
+  SymbolId replace_symbol{}, reset_symbol{};
+  for (const auto &fn : fm.functions) {
+    if (source_name(fm, fn.symbol) == "replace")
+      replace_symbol = fn.symbol;
+    if (source_name(fm, fn.symbol) == "reset")
+      reset_symbol = fn.symbol;
+  }
+  need(replace_symbol.value && reset_symbol.value,
+       "trait callback free function values missing");
+  size_t replace_values = 0, reset_values = 0, indirect_calls = 0;
+  for (const auto &n : fm.nodes) {
+    if (auto v = std::get_if<hir::FunctionValue>(&n.data)) {
+      for (const auto &p : flow->methods)
+        need(v->symbol != p.symbol, "trait method value escaped as a callback");
+      if (v->symbol == replace_symbol) {
+        ++replace_values;
+        auto t = fm.types.find(n.type);
+        need(t && t->kind == hir::TypeKind::Function &&
+                 t->parameters.size() == 2 &&
+                 t->parameters[0].mode == hir::ParamMode::inout &&
+                 is_i32(fm, t->parameters[0].type) &&
+                 is_i32(fm, t->parameters[1].type) &&
+                 is_i32(fm, t->result),
+             "replace function value lost its concrete callback type");
+      }
+      if (v->symbol == reset_symbol) {
+        ++reset_values;
+        auto t = fm.types.find(n.type);
+        need(t && t->kind == hir::TypeKind::Function &&
+                 t->parameters.size() == 2 &&
+                 t->parameters[0].mode == hir::ParamMode::inout &&
+                 is_bool(fm, t->parameters[0].type) &&
+                 is_bool(fm, t->parameters[1].type) &&
+                 is_bool(fm, t->result),
+             "reset function value lost its concrete callback type");
+      }
+    }
+    if (auto c = std::get_if<hir::Call>(&n.data);
+        c && c->kind == hir::CalleeKind::function_value)
+      ++indirect_calls;
+  }
+  need(replace_values >= 1 && reset_values >= 1 && indirect_calls >= 1,
+       "callback free function value or indirect call missing");
+
+  const auto *through = template_for(fm, "through");
+  const auto *outer = template_for(fm, "outer");
+  const auto *make = template_for(fm, "make");
+  need(through && outer && make, "callback forwarding templates missing");
+  const auto *through_i32 = instance_for(fm, *through, i32_type);
+  const auto *outer_i32 = instance_for(fm, *outer, i32_type);
+  const auto *make_bool = instance_for(fm, *make, bool_type);
+  need(through_i32 && outer_i32 && make_bool,
+       "callback template instances missing");
+  const auto *through_fn = function_for(fm, through_i32->symbol);
+  const auto *outer_fn = function_for(fm, outer_i32->symbol);
+  const auto *make_fn = function_for(fm, make_bool->symbol);
+  need(through_fn && outer_fn && make_fn,
+       "callback instance functions missing");
+  need(!has_parameter(fm, through_fn->signature) &&
+           !has_parameter(fm, outer_fn->signature) &&
+           !has_parameter(fm, make_fn->signature),
+       "callback instance retained template type parameters");
+  {
+    const auto *sig = fm.types.find(through_fn->signature);
+    need(sig && sig->parameters.size() == 5 &&
+             sig->parameters[1].type.value &&
+             is_i32(fm, sig->parameters[2].type),
+         "through[i32] signature did not substitute its callback/slot");
+    const auto *cb = fm.types.find(sig->parameters[1].type);
+    need(cb && cb->kind == hir::TypeKind::Function &&
+             cb->parameters[0].mode == hir::ParamMode::inout &&
+             is_i32(fm, cb->parameters[0].type),
+         "through[i32] callback type is not concrete");
+  }
+  {
+    const auto *sig = fm.types.find(make_fn->signature);
+    const auto *cb = sig ? fm.types.find(sig->result) : nullptr;
+    need(cb && cb->kind == hir::TypeKind::Function &&
+             cb->parameters[0].mode == hir::ParamMode::inout &&
+             is_bool(fm, cb->parameters[0].type) &&
+             is_bool(fm, cb->result),
+         "factory-returning instance lost its concrete callback result");
+  }
+  size_t through_apply = 0, outer_forward = 0;
+  for (const auto &n : fm.nodes) {
+    if (fm.scopes[n.scope.value].function == through_fn->symbol) {
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          origin_of(fm, *c->direct_symbol) == apply_i32) {
+        const auto *sig = fm.types.find(c->signature);
+        need(sig && sig->parameters.size() == 5 &&
+                 sig->parameters[2].mode == hir::ParamMode::inout &&
+                 is_i32(fm, sig->parameters[2].type) &&
+                 c->args[2].mode == hir::ParamMode::inout &&
+                 fm.nodes[c->args[2].expression.value].kind() ==
+                     hir::NodeKind::place,
+             "through instance did not call the concrete callback method");
+        ++through_apply;
+      }
+    }
+    if (fm.scopes[n.scope.value].function == outer_fn->symbol) {
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          origin_of(fm, *c->direct_symbol) == through->function.symbol) {
+        const auto *sig = fm.types.find(c->signature);
+        const auto *cb = sig ? fm.types.find(sig->parameters[1].type) : nullptr;
+        need(cb && cb->kind == hir::TypeKind::Function &&
+                 cb->parameters[0].mode == hir::ParamMode::inout &&
+                 is_i32(fm, cb->parameters[0].type),
+             "same-constraint forwarding did not preserve the callback");
+        ++outer_forward;
+      }
+    }
+  }
+  need(through_apply == 1 && outer_forward == 1,
+       "callback concrete call or same-constraint forwarding missing");
+
+  // A separate source gives two same-signature free functions so a corrupted
+  // FunctionValue can keep its type while naming the other implementation.
+  auto value_hir = good(R"(
+trait FactoryFlow {
+    func factory(self Self) (func(inout Self, Self) Self);
+}
+func replace(slot inout i32, value i32) i32 {
+    let old = slot; slot = value; return old;
+}
+func duplicate(slot inout i32, value i32) i32 {
+    let old = slot; slot = value + 1; return old;
+}
+impl FactoryFlow for i32 {
+    func factory(self Self) (func(inout Self, Self) Self) { return replace; }
+}
+func main() i32 { return 0; }
+)");
+  SymbolId duplicate_symbol{};
+  for (const auto &fn : value_hir.functions)
+    if (source_name(value_hir, fn.symbol) == "duplicate")
+      duplicate_symbol = fn.symbol;
+  need(duplicate_symbol.value, "same-signature callback helper missing");
+
+  // Nested callback mode/type, a foreign owner type parameter, an
+  // unsubstituted Self, the concrete target/instance key, and the top-level
+  // inout Place are checked from real HIR, not only by the producer.
+  const hir::HirModule fixture_hir = *fixture.value;
+  const TypeId self_type =
+      fm.types.find(apply_proto->signature)->parameters[0].type;
+  const TypeId through_t =
+      fm.types.find(through->function.signature)->parameters[0].type;
+
+  invalid(fixture_hir, "trait callback nested mode changed", [&](auto &x) {
+    for (auto &tr : x.traits)
+      if (tr.symbol == flow->symbol)
+        for (auto &p : tr.methods)
+          if (p.symbol == apply_proto->symbol) {
+            auto sig = *x.types.find(p.signature);
+            auto cb = *x.types.find(sig.parameters[1].type);
+            cb.parameters[0].mode = hir::ParamMode::ordinary;
+            sig.parameters[1].type = x.types.intern(cb);
+            p.signature = x.types.intern(sig);
+            return;
+          }
+    throw std::runtime_error("trait callback prototype missing");
+  });
+  invalid(fixture_hir, "trait callback wrong owner type", [&](auto &x) {
+    for (auto &tr : x.traits)
+      if (tr.symbol == flow->symbol)
+        for (auto &p : tr.methods)
+          if (p.symbol == apply_proto->symbol) {
+            auto sig = *x.types.find(p.signature);
+            auto cb = *x.types.find(sig.parameters[1].type);
+            cb.parameters[0].type = through_t;
+            sig.parameters[1].type = x.types.intern(cb);
+            p.signature = x.types.intern(sig);
+            return;
+          }
+    throw std::runtime_error("trait callback prototype missing");
+  });
+  invalid(fixture_hir, "trait callback instance retained Self",
+          [&](auto &x) {
+    for (auto &f : x.functions)
+      if (f.symbol == through_i32->symbol) {
+        auto sig = *x.types.find(f.signature);
+        auto cb = *x.types.find(sig.parameters[1].type);
+        cb.parameters[0].type = self_type;
+        sig.parameters[1].type = x.types.intern(cb);
+        f.signature = x.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("through[i32] instance missing");
+  });
+  auto concrete_apply_call = [&](hir::HirModule &x)
+      -> std::optional<size_t> {
+    for (size_t i = 0; i < x.nodes.size(); ++i) {
+      const auto &n = x.nodes[i];
+      if (x.scopes[n.scope.value].function != through_i32->symbol)
+        continue;
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          origin_of(x, *c->direct_symbol) == apply_i32)
+        return i;
+    }
+    return std::nullopt;
+  };
+  invalid_recomputed(fixture_hir, "trait callback concrete target changed",
+                     [&](auto &x) {
+    auto id = concrete_apply_call(x);
+    need(id.has_value(), "concrete callback call missing");
+    std::get<hir::Call>(x.nodes[*id].data).direct_symbol = apply_bool;
+  });
+  invalid(fixture_hir, "trait callback instance args changed",
+          [&](auto &x) {
+    for (auto &i : x.instances)
+      if (i.symbol == through_i32->symbol) {
+        i.type_args[0] = bool_type;
+        return;
+      }
+    throw std::runtime_error("through[i32] instance missing");
+  });
+  invalid_recomputed(fixture_hir, "trait callback inout Place aliased",
+                     [&](auto &x) {
+    auto id = concrete_apply_call(x);
+    need(id.has_value(), "concrete callback call missing");
+    auto &c = std::get<hir::Call>(x.nodes[*id].data);
+    auto &place =
+        std::get<hir::Place>(x.nodes[c.args[2].expression.value].data);
+    place.symbol = through_fn->parameters[3].symbol;
+  });
+  invalid(value_hir, "trait callback function value source changed",
+          [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto v = std::get_if<hir::FunctionValue>(&n.data);
+          v && source_name(x, v->symbol) == "replace") {
+        v->symbol = duplicate_symbol;
+        return;
+      }
+    throw std::runtime_error("replace function value missing");
+  });
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -7028,6 +7622,7 @@ int main(int argc, char **argv) {
     constrained_inherent_inout(root);
     trait_method_modes(root);
     trait_self_inout(root);
+    trait_self_callback(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

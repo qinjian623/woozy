@@ -1,0 +1,167 @@
+package app;
+enum Failure { Bad; }
+trait CallbackFlow {
+    func apply(self Self, f func(inout Self, Self) Self, slot inout Self,
+               value Self, log inout i64) Self;
+    func factory(self Self) (func(inout Self, Self) Self);
+    func saved(self Self, f func(inout Self, Self) Self, slot inout Self,
+               value Self, log inout i64, owned move Vec[i32]) Self;
+    func failed(self Self, f func(inout Self, Self) Self, slot inout Self,
+                value Self, log inout i64, owned move Vec[i32]) Self
+        throws Failure;
+}
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func replace(slot inout i32, value i32) i32 {
+    let old = slot; slot = value; return old;
+}
+func reset(slot inout bool, value bool) bool {
+    let old = slot; slot = value; return old;
+}
+impl CallbackFlow for i32 {
+    func apply(self Self, f func(inout Self, Self) Self, slot inout Self,
+               value Self, log inout i64) Self {
+        mark(inout log, 1);
+        let old = f(inout slot, value);
+        mark(inout log, 2);
+        return old;
+    }
+    func factory(self Self) (func(inout Self, Self) Self) { return replace; }
+    func saved(self Self, f func(inout Self, Self) Self, slot inout Self,
+               value Self, log inout i64, owned move Vec[i32]) Self {
+        let local Vec[i32] = [7];
+        defer {
+            slot = slot + 1;
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        mark(inout log, 5);
+        let old = f(inout slot, value);
+        mark(inout log, 4);
+        return old;
+    }
+    func failed(self Self, f func(inout Self, Self) Self, slot inout Self,
+                value Self, log inout i64, owned move Vec[i32]) Self
+        throws Failure {
+        let local Vec[i32] = [8];
+        defer {
+            slot = slot + 1;
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        mark(inout log, 3);
+        let old = f(inout slot, value);
+        mark(inout log, 4);
+        throw Failure.Bad;
+    }
+}
+impl CallbackFlow for bool {
+    func apply(self Self, f func(inout Self, Self) Self, slot inout Self,
+               value Self, log inout i64) Self {
+        mark(inout log, 1);
+        let old = f(inout slot, value);
+        mark(inout log, 2);
+        return old;
+    }
+    func factory(self Self) (func(inout Self, Self) Self) { return reset; }
+    func saved(self Self, f func(inout Self, Self) Self, slot inout Self,
+               value Self, log inout i64, owned move Vec[i32]) Self {
+        let local Vec[i32] = [17];
+        defer {
+            slot = !slot;
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        mark(inout log, 5);
+        let old = f(inout slot, value);
+        mark(inout log, 4);
+        return old;
+    }
+    func failed(self Self, f func(inout Self, Self) Self, slot inout Self,
+                value Self, log inout i64, owned move Vec[i32]) Self
+        throws Failure {
+        let local Vec[i32] = [18];
+        defer {
+            slot = !slot;
+            mark(inout log, 6);
+            let read = local[0];
+        }
+        mark(inout log, 3);
+        let old = f(inout slot, value);
+        mark(inout log, 4);
+        throw Failure.Bad;
+    }
+}
+func through[T CallbackFlow](receiver T, f func(inout T, T) T,
+                             slot inout T, value T, log inout i64) T {
+    return receiver.apply(f, inout slot, value, inout log);
+}
+func outer[T CallbackFlow](receiver T, f func(inout T, T) T, slot inout T,
+                           value T, log inout i64) T {
+    return through(receiver, f, inout slot, value, inout log);
+}
+func make[T CallbackFlow](receiver T) (func(inout T, T) T) {
+    return receiver.factory();
+}
+func main() i32 {
+    {
+        var log i64 = 0;
+        let owner i32 = 1;
+        var slot i32 = 10;
+        let value i32 = 5;
+        let f = make(owner);
+        let old = f(inout slot, value);
+        mark(inout log, 2);
+        if old != 10 || slot != 5 { return 1; }
+        let direct = owner.apply(replace, inout slot, 7, inout log);
+        mark(inout log, 3);
+        if direct != 5 || slot != 7 { return 2; }
+        let forwarded = outer(owner, replace, inout slot, 9, inout log);
+        mark(inout log, 4);
+        if forwarded != 7 || slot != 9 { return 3; }
+        if log != 2123124 { return 4; }
+    }
+    {
+        var log i64 = 0;
+        let owner bool = false;
+        var slot bool = false;
+        let value bool = true;
+        let f = make(owner);
+        let old = f(inout slot, value);
+        mark(inout log, 2);
+        if old || !slot { return 5; }
+        let direct = owner.apply(reset, inout slot, false, inout log);
+        mark(inout log, 3);
+        if !direct || slot { return 6; }
+        let forwarded = outer(owner, reset, inout slot, true, inout log);
+        mark(inout log, 4);
+        if forwarded || !slot { return 7; }
+        if log != 2123124 { return 8; }
+    }
+    {
+        var log i64 = 0;
+        let owner i32 = 0;
+        var slot i32 = 20;
+        var owned Vec[i32] = [3];
+        let saved = owner.saved(replace, inout slot, 30, inout log,
+                                 move owned);
+        mark(inout log, 9);
+        if saved != 20 || slot != 31 { return 9; }
+        if log != 5469 { return 10; }
+    }
+    {
+        var log i64 = 0;
+        let owner i32 = 0;
+        var slot i32 = 40;
+        var owned Vec[i32] = [4];
+        try {
+            let ignored = owner.failed(replace, inout slot, 50, inout log,
+                                        move owned);
+            return 11;
+        } catch err Failure {
+            mark(inout log, 9);
+            if slot != 51 { return 12; }
+        }
+        if log != 3469 { return 13; }
+    }
+    return 0;
+}

@@ -12,17 +12,19 @@ import sys
 sys.dont_write_bytecode = True
 
 CASES = ('positive', 'errors', 'constrained-inherent', 'trait-modes',
-         'trait-self')
+         'trait-self', 'trait-self-callback')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 5],
     'errors': [9, 2, 3, 9, 8, 2, 3, 9, 4, 3, 9, 4, 6, 3, 9, 5, 6],
     'constrained-inherent': [23, 14, 3, 5, 4, 3, 4, 6, 3],
     'trait-modes': [1, 5, 1, 3, 7, 3, 3, 9, 2, 8, 4, 2],
     'trait-self': [9, 2, 3, 2, 3, 9, 2, 3, 9, 3, 2, 4, 4, 6, 3, 5, 6, 4],
+    'trait-self-callback': [2, 1, 2, 3, 1, 2, 4, 2, 1, 2, 3, 1, 2, 4,
+                            5, 4, 6, 9, 3, 4, 6, 9],
 }
 EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13,
                         'constrained-inherent': 8, 'trait-modes': 2,
-                        'trait-self': 9}
+                        'trait-self': 9, 'trait-self-callback': 4}
 
 
 def digest(path):
@@ -113,6 +115,17 @@ def assert_native(case, observations, allocations):
         assert logs == [9, 92, 923, 2, 23, 9, 92, 923, 9, 93, 932, 9324,
                         4, 46, 463, 5, 56, 564], logs
         assert frees == [0, 2, 1, 3, 4, 6, 5, 8, 7], frees
+    elif case == 'trait-self-callback':
+        # The i32 and bool blocks each invoke a callback returned by the
+        # factory, a concrete receiver method with a free function value, and
+        # the same constraint forwarded through two generic templates. The
+        # saved/failed methods show the callback write, return-before-defer,
+        # and moved-owned/local cleanup. The callback itself is proven by the
+        # changed slot and returned old values, not only by the marks around it.
+        assert logs == [2, 21, 212, 2123, 21231, 212312, 2123124,
+                        2, 21, 212, 2123, 21231, 212312, 2123124,
+                        5, 54, 546, 5469, 3, 34, 346, 3469], logs
+        assert frees == [1, 0, 3, 2], frees
     else:
         # Receiver temporaries are released before their catch events. The
         # throwing callee releases its deferred local and moved argument before
@@ -213,6 +226,20 @@ def assert_python(case, data):
         assert ('bad_make', 'app.Failure') in errors, data
         assert ('fail', 'app.Failure') in errors, data
         assert ('relay_fail', 'app.Failure') in errors, data
+    elif case == 'trait-self-callback':
+        # Factory-returned and directly passed free functions both write the
+        # slot; the constrained forwarding path returns the old scalar in both
+        # impls. The final throwing call preserves its deferred slot update but
+        # frees the moved Vec and local Vec once each. Python metadata names the
+        # final saved/failed locals, which are the last observed bindings.
+        snapshots = data.get('snapshots', {})
+        assert snapshots['saved'] == 20, data
+        assert snapshots['slot'] == 51, data
+        assert snapshots['log'] == 3469, data
+        assert snapshots['direct'] is True and snapshots['forwarded'] is False, data
+        errors = {(item['function'], item['type'])
+                  for item in data['errors']}
+        assert ('failed', 'app.Failure') in errors, data
     else:
         snapshots = data.get('snapshots', {})
         assert snapshots, data

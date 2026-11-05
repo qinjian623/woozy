@@ -425,7 +425,8 @@ class Checker {
            !impl_method(target);
   }
   bool check_inout_graph(Ref r, TypeId root, bool allow_template,
-                         std::optional<SymbolId> trait_self = std::nullopt) {
+                         std::optional<SymbolId> trait_self = std::nullopt,
+                         bool trait_self_callback = false) {
     std::set<uint64_t> visited_args, expanded_nominals, nominal_path;
     bool direct_inout = false;
     std::function<void(TypeId, size_t)> visit = [&](TypeId id, size_t depth) {
@@ -473,12 +474,17 @@ class Checker {
           // Callback modes do not change the enclosing function's modes.
           if (depth == 0)
             direct_inout = true;
-          // Only a non-self top-level parameter of the trait prototype may be
-          // `inout Self`. A nested callback or the receiver keeps the old
-          // rejection; this registration does not open all type parameters.
+          // Only this trait prototype's real Self may appear in `inout`
+          // position. The receiver at depth 0 stays ordinary and a non-self
+          // top-level slot keeps the old allowance. A nested FunctionType has
+          // no receiver of its own, but its first position is opened only for
+          // a prototype whose first parameter is ordinary Self (including the
+          // existing F1 owner spelling); this keeps trait-static prototypes
+          // rejected. Concrete impls are checked without this allowance, so a
+          // non-scalar Self still fails before HIR publication.
           const bool trait_self_slot =
-              depth == 0 && i > 0 && trait_self &&
-              trait_self_type(p.type, *trait_self);
+              trait_self && trait_self_type(p.type, *trait_self) &&
+              (depth > 0 ? trait_self_callback : i > 0);
           if (!scalar_inout_type(p.type) &&
               !(allow_template && template_inout_type(p.type)) &&
               !trait_self_slot)
@@ -537,14 +543,15 @@ class Checker {
   TypeId field_type(TypeId id, const FieldDecl &f) {
     return substitute(f.type, nominal_subs(id), m.types);
   }
-  TypeId parse_type(Ref r) {
+  TypeId parse_type(Ref r, std::optional<SymbolId> trait_self = std::nullopt,
+                    bool trait_self_callback = false) {
     check_cancelled(stop);
     const auto &n = ast(r);
     if (n.kind == AstKind::ParenthesizedType ||
         n.kind == AstKind::Parenthesized || n.kind == AstKind::BracketItem)
-      return parse_type(child(r, 0));
+      return parse_type(child(r, 0), trait_self, trait_self_callback);
     if (n.kind == AstKind::FunctionType)
-      return signature(r);
+      return signature(r, trait_self, true, trait_self_callback);
     std::optional<SymbolId> s;
     std::vector<TypeId> args;
     if (n.kind == AstKind::NeutralBracket) {
@@ -626,8 +633,8 @@ class Checker {
     }
     unavailable(r, "type is not implemented");
   }
-  TypeId signature(Ref r,
-                   std::optional<SymbolId> trait_self = std::nullopt) {
+  TypeId signature(Ref r, std::optional<SymbolId> trait_self = std::nullopt,
+                   bool callback = false, bool trait_self_callback = false) {
     Type t;
     t.kind = TypeKind::Function;
     t.result = unit;
@@ -635,17 +642,20 @@ class Checker {
     for (size_t i = 0; i < parts.parameters.size(); ++i) {
       auto cr = at(r, parts.parameters[i]);
       auto pm = mode(cr);
-      auto pt = parse_type(child(cr, 0));
+      auto pt = parse_type(child(cr, 0), trait_self, trait_self_callback);
 
       if (pm != ParamMode::ordinary && type(pt).kind == TypeKind::ForeignOpaque)
         unavailable(cr, "external move/inout parameters are not supported");
       if (pm == ParamMode::move && type(pt).kind == TypeKind::String)
         unavailable(cr, "owned string parameter is not supported");
       // A trait prototype may declare its non-self top-level slot `inout
-      // Self`. The receiver position and nested function types are excluded
-      // here; parse_type checks nested signatures without this allowance.
+      // Self`. A nested FunctionType has no receiver, so its first parameter
+      // is an ordinary callback parameter and may also be `inout Self`, but
+      // only when registration proved the first parameter is ordinary Self.
+      // The root method prototype always excludes position 0.
       const bool trait_self_slot =
-          trait_self && i > 0 && trait_self_type(pt, *trait_self);
+          trait_self && trait_self_type(pt, *trait_self) &&
+          (callback ? trait_self_callback : i > 0);
       if (pm == ParamMode::inout && !scalar_inout_type(pt) &&
           !template_inout_type(pt) && !trait_self_slot)
         unavailable(cr,
@@ -653,9 +663,11 @@ class Checker {
       t.parameters.push_back({pm, pt});
     }
     if (parts.result)
-      t.result = parse_type(at(r, *parts.result));
+      t.result =
+          parse_type(at(r, *parts.result), trait_self, trait_self_callback);
     if (parts.throws_type)
-      t.throws_type = parse_type(at(r, *parts.throws_type));
+      t.throws_type = parse_type(at(r, *parts.throws_type), trait_self,
+                                 trait_self_callback);
     return m.types.intern(t);
   }
   std::optional<mpz_class> literal_integer(Ref r) const {
@@ -2570,12 +2582,32 @@ class Checker {
           !trait_self_type(self->second, *trait_self))
         throw std::invalid_argument("invalid trait Self registration");
     }
+    bool trait_self_callback = false;
+    if (trait_self)
+      for (auto c : ast(r).children) {
+        if (ast(at(r, c)).kind != AstKind::Parameter)
+          continue;
+        auto first = at(r, c);
+        if (mode(first) == ParamMode::ordinary) {
+          // The existing F1 ordinary owner parameter is also Self even when
+          // its label is not `self`; the callback context follows the real
+          // Self type, not the spelling. A trait-static prototype whose first
+          // parameter is a callback type has no such receiver and stays
+          // rejected.
+          auto first_type = parse_type(child(first, 0), trait_self);
+          trait_self_callback =
+              trait_self_type(first_type, *trait_self);
+        }
+        break;
+      }
     auto saved_signature_parameters = signature_parameters;
     signature_parameters.clear();
     for (const auto &p : inherited)
       signature_parameters.insert(p.symbol.value);
-    signatures[id.value] = signature(r, trait_self);
-    check_inout_graph(r, signatures[id.value], true, trait_self);
+    signatures[id.value] =
+        signature(r, trait_self, false, trait_self_callback);
+    check_inout_graph(r, signatures[id.value], true, trait_self,
+                      trait_self_callback);
     signature_parameters = std::move(saved_signature_parameters);
     for (auto c : ast(r).children)
       if (ast(at(r, c)).kind == AstKind::Parameter) {

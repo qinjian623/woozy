@@ -168,11 +168,21 @@ trait 静态调用、泛型 trait、方法自身泛型、方法值、实际 self
 
 trait 方法现在可声明非 self 的顶层参数 `slot inout Self`，具体 Self 仍限已支持的数字/bool。实例方法、`[T Trait]` 内的 ConstraintCall、显式或推断类型及同约束转交都使用原有调用和实例化过程。actual self 仍为普通借用；receiver 与 slot 引用同一存储时拒绝，不同绑定即使数值相等也可传入。
 
-声明检查以参数显式传入所属 trait 的真实 Self SymbolId，只在该 prototype 的非 self 顶层 inout 位置接受它。Self 不冒充方法泛型，不进入实例键或 active_params；原有 signature_parameters 保存和恢复。嵌套 Self callback 仍在源码阶段拒绝。具体 impl 即使未调用，也必须通过完整类型图检查；POD struct/enum、Vec、string、foreign、函数、Unit 和 Box[T] 等非数字/bool Self 继续报 `E_CAPABILITY_UNAVAILABLE`。
+声明检查以参数显式传入所属 trait 的真实 Self SymbolId，只在该 prototype 的非 self 顶层 inout 位置接受它。Self 不冒充方法泛型，不进入实例键或 active_params；原有 signature_parameters 保存和恢复。嵌套 Self callback 的后续支持见下节。具体 impl 即使未调用，也必须通过完整类型图检查；POD struct/enum、Vec、string、foreign、函数、Unit 和 Box[T] 等非数字/bool Self 继续报 `E_CAPABILITY_UNAVAILABLE`。
 
 HIR 只增加一种依赖 Place：原 prototype 形参确为该 trait Self，替换后正好等于当前真实约束 receiver T。receiver0、标签、模式和索引、重复/嵌套存储冲突、真实 trait/impl 目标、Move/Place/局部重命名继续检查，具体 Call 仍只收数字/bool inout。旧普通 owner 首参和固定数字/bool trait 方法保留原行为，未改公共 HIR 表示、后端或运行库。
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭 LLVM 为33/33，共180项，无跳过，包含两项T10。新trait-self例每套LLVM配置为2次check、3次正式执行、3次观察；完整方法inout runner共5份源码均通过。原两份before及旧F1另有6次check、9次正式执行，原源码SHA保持，49个保护文件未改。生成Native和预编译LLVM未声称全部经过sanitizer插桩。
+
+## trait 参数和返回类型中的 Self callback
+
+trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self) Self`。callback 没有 receiver，第0位参数也可为 inout Self；外围方法的实际 self 仍是 ordinary。具体 Self 限已有数字/bool，支持传入已有 free 函数值、实际调用，以及 factory 返回函数值后间接调用。函数返回函数类型继续按语法加括号，内部 callback throws 与外围方法 throws 分开声明。
+
+真实 trait Self 上下文经 parse_type 递归传入括号和函数类型，只在有普通 Self receiver 的 prototype 中生效，不使用全局开关，不把 Self 加进方法泛型。普通 owner 首参保留合法行为；callback 内的 inout 不改变外围方法自身模式。已有固定数字/bool callback 即使使用拥有 struct receiver，也保持可用；只有实际依赖 Self 的 inout 数据要求具体化为数字/bool，未调用的非数字/bool impl 也报源码 E_CAP。
+
+函数值的类型与签名相同，不代表实现函数可以互换。HIR 对解析为函数声明的名称引用和函数字面量增加源码身份检查，要求目标是名称解析时确定的函数或其实例；原有 trait/impl 选择、参数顺序、Place、存储冲突和实例检查保持。 同一 origin 下，类型/签名相同且记录合法的实例互换仍可能被接受；验证器不逐处证明 HIR 与源码类型实参等价。未增加公共 HIR 字段、后端或运行库接口。方法值、捕获闭包、actual self move/inout、trait-static 的 Self callback、泛型 trait/方法泛型和非数字/bool inout 仍未开放。
+
+本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭 LLVM 为33/33，共180项，无跳过，包含两项T10。新callback项目每套LLVM配置为2次check、3次正式执行、3次观察；方法inout runner全部6份源码通过。原两before与旧F1另6次check、9次正式执行，源码SHA未改，49个保护文件保持原字节。生成Native和预编译LLVM未声称全部经过sanitizer插桩。
 
 ## 尚未实施
 

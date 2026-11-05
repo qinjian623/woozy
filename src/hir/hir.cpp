@@ -2817,6 +2817,55 @@ class Verifier {
     }
   }
 
+  // A function value is a source-level reference to an executable function,
+  // not an arbitrary value of a matching function type. Keep the existing
+  // constant routes separate, but require a Name/Member source that really
+  // resolves to a function to keep its original symbol (or that symbol's
+  // instance origin). This rejects a corrupted FunctionValue whose type and
+  // signature are unchanged but whose callback implementation was replaced.
+  void function_value_sources() const {
+    auto origin = [&](SymbolId id) {
+      for (const auto &i : m.instances)
+        if (i.symbol == id)
+          return i.origin;
+      return id;
+    };
+    for (const auto &n : m.nodes) {
+      auto value = std::get_if<FunctionValue>(&n.data);
+      if (!value)
+        continue;
+      const auto &file = *m.resolved->project->module(n.source.node.module)
+                              .files.at(n.source.node.file);
+      auto r = n.source.node;
+      auto ast = file.node(r.node);
+      while (ast.kind == AstKind::Parenthesized ||
+             ast.kind == AstKind::BracketItem ||
+             ast.kind == AstKind::NeutralBracket) {
+        need(!ast.children.empty(), "function value source wrapper");
+        r.node = ast.children.at(0);
+        ast = file.node(r.node);
+      }
+      if (ast.kind == AstKind::FunctionLiteral) {
+        const auto expected = origin(value->symbol);
+        need(symbol(expected).definition &&
+                 same_ref(*symbol(expected).definition, r),
+             "function literal value source identity differs from its symbol");
+        continue;
+      }
+      std::optional<SymbolId> source_symbol;
+      for (const auto &o : m.resolved->occurrences)
+        if (same_ref(o.source, r))
+          source_symbol = o.symbol;
+      // Constants and other supported value producers retain their existing
+      // source checks; this rule only decides the function-name route.
+      if (!source_symbol ||
+          symbol(*source_symbol).kind != modules::SymbolKind::function)
+        continue;
+      need(origin(value->symbol) == *source_symbol,
+           "function value source identity differs from resolver");
+    }
+  }
+
   void ownership_sources() const {
     std::set<uint64_t> owning_functions;
     for (const auto &n : m.nodes)
@@ -3559,6 +3608,7 @@ public:
       source_effect_nodes(*f);
     }
     instance_records();
+    function_value_sources();
     finite_layouts();
     for (auto owner : owners)
       need(owner.has_value(), "orphan executable node");
