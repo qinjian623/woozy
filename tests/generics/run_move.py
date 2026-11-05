@@ -10,11 +10,18 @@ import sys
 
 sys.dont_write_bytecode = True
 
-CASES = ('positive', 'error-before', 'error-after')
+CASES = ('positive', 'error-before', 'error-after',
+         'constrained-positive', 'constrained-errors')
 EXPECTED_EVENTS = {
     'positive': None,
     'error-before': [2, 3],
     'error-after': [9, 2, 3],
+    'constrained-positive': [1, 2],
+    'constrained-errors': [2, 3, 9, 2, 3, 5, 3, 7, 9, 7],
+}
+EXPECTED_ALLOCATIONS = {
+    'constrained-positive': 12,
+    'constrained-errors': 7,
 }
 
 
@@ -37,10 +44,14 @@ def check_ok(row):
 
 
 def native_observations(text):
-    """Return ordered OBS values and Vec free identities from observer stderr."""
+    """Return ordered observations and allocation tokens from stderr.
+
+    An address may be reused after its allocation is freed, so a free is
+    identified by the allocation token it ended, not by the raw pointer.
+    """
     seen = []
-    allocations = set()
-    live = set()
+    allocations = []
+    live = {}
     for line in text.splitlines():
         fields = line.split(':')
         if fields[0] == 'OBS':
@@ -49,23 +60,46 @@ def native_observations(text):
             event = int(fields[1])
             identity = fields[2]
             if event == 1:
-                assert identity not in allocations, line
-                allocations.add(identity)
-                live.add(identity)
+                assert identity not in live, line
+                token = len(allocations)
+                allocations.append(token)
+                live[identity] = token
             elif event == 5:
                 assert identity in live, line
-                live.remove(identity)
-                seen.append(('free', identity))
+                seen.append(('free', live.pop(identity)))
             else:
-                assert identity in allocations, line
+                assert identity in live, line
     assert not live, ('still live', live)
     return seen, allocations
 
 
-def assert_native_order(case, observations):
+def constrained_shape(observations):
+    return [('event', item[1]) if item[0] == 'obs' else ('free', None)
+            for item in observations]
+
+
+def assert_native_order(case, observations, allocations):
     events = [item for item in observations if item[0] == 'obs']
     assert [item[1] for item in events] == (EXPECTED_EVENTS[case] or []), events
     frees = [item for item in observations if item[0] == 'free']
+    if case.startswith('constrained-'):
+        shape = constrained_shape(observations)
+        if case == 'constrained-positive':
+            prefix = [('event', 1), ('free', None), ('event', 2)]
+        else:
+            prefix = [
+                ('event', 2), ('event', 3), ('event', 9),
+                ('event', 2), ('free', None), ('event', 3),
+                ('event', 5), ('free', None), ('free', None),
+                ('event', 3), ('event', 7), ('event', 9),
+                ('free', None), ('event', 7),
+            ]
+        assert shape[:len(prefix)] == prefix, observations
+        assert all(item == ('free', None) for item in shape[len(prefix):]), \
+            observations
+        assert len(allocations) == EXPECTED_ALLOCATIONS[case], allocations
+        assert len(frees) == len(allocations), observations
+        return
     if case == 'positive':
         assert not events and frees, observations
         return
@@ -85,6 +119,25 @@ def python_observation(case, data):
     assert not data['alive'], data
     assert data.get('frames_clean', 0) >= 1, data
     assert data['events'] == (EXPECTED_EVENTS[case] or []), data
+    if case.startswith('constrained-'):
+        assert len(data['allocations']) == EXPECTED_ALLOCATIONS[case], data
+        assert len(data['frees']) == len(data['allocations']), data
+        shape = [('event', item[1]) if item[0] == 'event' else ('free', None)
+                 for item in data['operations']
+                 if item[0] in ('event', 'free')]
+        if case == 'constrained-positive':
+            prefix = [('event', 1), ('free', None), ('event', 2)]
+        else:
+            prefix = [
+                ('event', 2), ('event', 3), ('event', 9),
+                ('event', 2), ('free', None), ('event', 3),
+                ('event', 5), ('free', None), ('free', None),
+                ('event', 3), ('event', 7), ('event', 9),
+                ('free', None), ('event', 7),
+            ]
+        assert shape[:len(prefix)] == prefix, data
+        assert all(item == ('free', None) for item in shape[len(prefix):]), data
+        return
     if case == 'positive':
         assert data['frees'] and len(data['frees']) == len(data['allocations']), data
         snapshots = data.get('snapshots', {})
@@ -112,14 +165,24 @@ def main():
     args.out.mkdir(parents=True, exist_ok=True)
     observer = args.root / 'tests/python/observe_ownership.py'
     vec_observer = args.root / 'tests/native/vec_observer.cpp'
-    report = dict(task='T07 unconstrained generic move', status='failed',
-                  python=run([args.python, '--version']), runs=[])
+    report = dict(task='T07 generic move', status='failed',
+                  python=run([args.python, '--version']), runs=[], checks=[])
     try:
         for case in CASES:
             manifest = args.root / f'tests/generics/move/{case}/lang.toml'
             sources = {str(path.relative_to(manifest.parent)): digest(path)
                        for path in sorted(manifest.parent.rglob('*'))
                        if path.is_file()}
+            if case.startswith('constrained-'):
+                for backend in ('native', 'python'):
+                    checked = run([args.cli, 'check', '--project', manifest,
+                                   '--backend', backend, '--format', 'json'])
+                    row = dict(case=case, backend=backend, check=checked,
+                               source_sha256=sources, status='failed')
+                    report['checks'].append(row)
+                    check_ok(checked)
+                    assert json.loads(checked['stdout'])['status'] == 'ok', checked
+                    row['status'] = 'passed'
             for opt in (0, 2):
                 row = dict(case=case, opt=opt, source_sha256=sources,
                            status='failed')
@@ -146,12 +209,12 @@ def main():
                 row['observe'] = observed = run([native / 'observe'])
                 check_ok(observed)
                 ordered, allocations = native_observations(observed['stderr'])
-                assert_native_order(case, ordered)
+                assert_native_order(case, ordered, allocations)
                 row['native_allocations'] = len(allocations)
                 row['native_order'] = ordered
                 if case == 'positive':
                     assert len(allocations) == 3, allocations
-                else:
+                elif not case.startswith('constrained-'):
                     assert len(allocations) == 1, allocations
                 row['program_sha256'] = digest(native / 'cli/program')
                 row['object_sha256'] = digest(native / 'cli/program.o')
@@ -192,12 +255,52 @@ def main():
                 for name in ('program.py', 'langrt.py', 'metadata.json')
             }
             row['status'] = 'passed'
+
+        manifest = args.root / 'tests/generics/move/constrained-reject/lang.toml'
+        sources = {str(path.relative_to(manifest.parent)): digest(path)
+                   for path in sorted(manifest.parent.rglob('*'))
+                   if path.is_file()}
+        fresh = args.out / 'constrained-reject-new'
+        rejected = run([args.cli, 'build', '--project', manifest,
+                        '--backend', 'native', '--opt', 0,
+                        '--out-dir', fresh, '--format', 'json'])
+        row = dict(case='constrained-reject-new', source_sha256=sources,
+                   build=rejected, status='failed')
+        report['runs'].append(row)
+        assert rejected['exit'] != 0, rejected
+        assert json.loads(rejected['stdout'])['status'] == 'error', rejected
+        assert not (fresh / 'program').exists(), 'rejected build wrote program'
+        assert not (fresh / 'program.o').exists(), 'rejected build wrote object'
+        row['outputs'] = sorted(str(path.relative_to(fresh))
+                                for path in fresh.rglob('*') if path.is_file())
+        row['status'] = 'passed'
+
+        stale = args.out / 'constrained-reject-old'
+        stale.mkdir(parents=True, exist_ok=True)
+        sentinels = {name: b'previous output ' + name.encode()
+                     for name in ('program', 'program.o')}
+        for name, content in sentinels.items():
+            (stale / name).write_bytes(content)
+        old_hashes = {name: digest(stale / name) for name in sentinels}
+        rejected = run([args.cli, 'build', '--project', manifest,
+                        '--backend', 'native', '--opt', 0,
+                        '--out-dir', stale, '--format', 'json'])
+        row = dict(case='constrained-reject-old', source_sha256=sources,
+                   build=rejected, before_sha256=old_hashes, status='failed')
+        report['runs'].append(row)
+        assert rejected['exit'] != 0, rejected
+        assert json.loads(rejected['stdout'])['status'] == 'error', rejected
+        row['after_sha256'] = {name: digest(stale / name)
+                               for name in sentinels}
+        assert row['after_sha256'] == old_hashes, row
+        row['status'] = 'passed'
         report['status'] = 'passed'
     finally:
         (args.out / 'results.json').write_text(
             json.dumps(report, ensure_ascii=False, indent=2) + '\n')
     print(json.dumps(dict(
         status=report['status'], runs=len(report['runs']),
+        checks=len(report['checks']),
         failed=[(row['case'], row.get('opt'), row.get('failure'))
                 for row in report['runs'] if row['status'] != 'passed'],
         report=str(args.out / 'results.json'))))

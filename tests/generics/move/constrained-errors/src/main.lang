@@ -1,0 +1,117 @@
+package app;
+
+enum E {
+    Bad;
+}
+
+trait Value {
+    func get(self Self) i32;
+    func bump(self Self) i32;
+}
+
+struct Item {
+    items Vec[i32];
+}
+
+impl Value for Item {
+    func get(self Self) i32 {
+        return self.items[0];
+    }
+    func bump(self Self) i32 {
+        self.items[0] = self.items[0] + 1;
+        return self.items[0];
+    }
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func bad(log inout i64) i32 throws E {
+    mark(inout log, 2);
+    throw E.Bad;
+}
+
+func later(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func consume[T Value](value move T, first i32, second i32) i32 {
+    return value.get() + first + second;
+}
+
+func fail[T Value](value move T, log Vec[i32]) i32 throws E {
+    let local Vec[i32] = [9];
+    defer {
+        log[0] = log[0] * 10 + 6;
+        let read = local[0];
+    }
+    log[0] = log[0] * 10 + 4;
+    throw E.Bad;
+}
+
+func keep[T Value](value move T, log Vec[i32]) i32 {
+    defer {
+        log[0] = value.bump();
+    }
+    return value.get();
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var untouched Item = Item(items: [1]);
+    try {
+        let result = consume(second: bad(inout log),
+                             first: later(inout log, 9),
+                             value: move untouched);
+        mark(inout log, 8);
+    } catch err E {
+        mark(inout log, 3);
+        if untouched.items[0] != 1 {
+            return 1;
+        }
+    }
+    if log != 23 {
+        return 2;
+    }
+
+    var log2 i64 = 0;
+    var moved Item = Item(items: [2]);
+    try {
+        let result = consume(first: later(inout log2, 9),
+                             value: move moved,
+                             second: bad(inout log2));
+        mark(inout log2, 8);
+    } catch err E {
+        mark(inout log2, 3);
+    }
+    if log2 != 923 {
+        return 3;
+    }
+
+    var log3 Vec[i32] = [0];
+    var marks i64 = 0;
+    var failed Item = Item(items: [3]);
+    mark(inout marks, 5);
+    try {
+        let result = fail(move failed, log3);
+        mark(inout marks, 8);
+    } catch err E {
+        mark(inout marks, 3);
+    }
+    mark(inout marks, 7);
+    if log3[0] != 46 || marks != 537 {
+        return 4;
+    }
+
+    var log4 Vec[i32] = [0];
+    var kept Item = Item(items: [4]);
+    mark(inout marks, 9);
+    let saved = keep(move kept, log4);
+    mark(inout marks, 7);
+    if saved != 4 || log4[0] != 5 || marks != 53797 {
+        return 5;
+    }
+    return 0;
+}

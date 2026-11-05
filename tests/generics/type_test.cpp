@@ -672,10 +672,9 @@ void generic_move(const fs::path &root) {
   good("func swap[T](a inout T,b inout T){} "
        "func main() i32{var x i32=1;var y i32=2;"
        "swap(inout x,inout y);return x;}");
-  unsupported("trait V{} impl V for i32{} "
-              "func take[T V](value move T)T{return move value;} "
-              "func main() i32{var x i32=1;let r=take(move x);return r;}",
-              "E_CAPABILITY_UNAVAILABLE");
+  good("trait V{} impl V for i32{} "
+       "func take[T V](value move T)T{return move value;} "
+       "func main() i32{var x i32=1;let r=take(move x);return r-1;}");
   unsupported("func relay[T](value move T)T{return move value;} "
               "func main(){let r=relay[string](move \"x\");}",
               "E_CAPABILITY_UNAVAILABLE");
@@ -740,6 +739,341 @@ void generic_move(const fs::path &root) {
   });
 }
 
+
+void constrained_free_move(const fs::path &root) {
+  auto good = [&](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "constrained free move HIR rejected: " + messages(r));
+    return *r.value;
+  };
+  auto bad = [&](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+  };
+
+  auto positive =
+      check(root / "tests/generics/move/constrained-positive/lang.toml");
+  need(positive.success(), messages(positive));
+  need(hir::verify(*positive.value).success(),
+       "constrained free move HIR rejected");
+  const auto &m = *positive.value;
+
+  auto symbol_name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  auto nominal_name = [&](TypeId id) -> std::string {
+    auto t = m.types.find(id);
+    if (!t || (t->kind != hir::TypeKind::NominalStruct &&
+               t->kind != hir::TypeKind::NominalEnum))
+      return {};
+    return symbol_name(t->declaration);
+  };
+  auto find_template = [&](const std::string &name)
+      -> const hir::FunctionTemplate * {
+    for (const auto &t : m.templates)
+      if (symbol_name(t.function.symbol) == name)
+        return &t;
+    return nullptr;
+  };
+  auto instances_of = [&](const hir::FunctionTemplate *t) {
+    std::vector<const hir::FunctionInstance *> result;
+    for (const auto &i : m.instances)
+      if (i.origin == t->function.symbol)
+        result.push_back(&i);
+    return result;
+  };
+  auto function_for = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : m.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  auto has_parameter = [&](TypeId root_id) {
+    std::function<bool(TypeId)> visit = [&](TypeId id) {
+      auto t = m.types.find(id);
+      if (!t)
+        return false;
+      if (t->kind == hir::TypeKind::TypeParameter)
+        return true;
+      for (auto a : t->type_args)
+        if (visit(a))
+          return true;
+      for (const auto &p : t->parameters)
+        if (visit(p.type))
+          return true;
+      if (visit(t->result))
+        return true;
+      return t->throws_type && visit(*t->throws_type);
+    };
+    return visit(root_id);
+  };
+  auto find_trait = [&](const std::string &name) -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (symbol_name(t.symbol) == name)
+        return &t;
+    return nullptr;
+  };
+  auto item_trait_method = [&](const hir::TraitDecl &trait,
+                               const std::string &name) -> SymbolId {
+    for (const auto &im : m.impls)
+      if (im.trait == trait.symbol && nominal_name(im.self_type) == "Item")
+        for (auto method : im.methods)
+          if (symbol_name(method) == name)
+            return method;
+    throw std::runtime_error("Item trait method missing: " + name);
+  };
+
+  const auto *read = find_template("read");
+  const auto *pair = find_template("pair");
+  const auto *forward = find_template("forward");
+  const auto *right = find_template("right");
+  const auto *left = find_template("left");
+  const auto *value_trait = find_trait("Value");
+  const auto *right_trait = find_trait("Right");
+  const auto *left_trait = find_trait("Left");
+  need(read && pair && forward && right && left && value_trait &&
+           right_trait && left_trait,
+       "constrained free move templates or traits missing");
+
+  const auto read_instances = instances_of(read);
+  const auto pair_instances = instances_of(pair);
+  const auto forward_instances = instances_of(forward);
+  const auto right_instances = instances_of(right);
+  const auto left_instances = instances_of(left);
+  need(read_instances.size() == 3 && pair_instances.size() == 1 &&
+           forward_instances.size() == 1 && right_instances.size() == 1 &&
+           left_instances.size() == 1,
+       "constrained free move instance counts changed");
+  need(right_instances[0]->symbol != left_instances[0]->symbol &&
+           right_instances[0]->origin != left_instances[0]->origin,
+       "same-named methods from different traits shared an instance");
+  need(pair_instances[0]->type_args.size() == 2 &&
+           nominal_name(pair_instances[0]->type_args[0]) == "Item" &&
+           nominal_name(pair_instances[0]->type_args[1]) == "Item",
+       "pair complete type argument key changed");
+
+  auto instance_category = [&](const hir::FunctionInstance *i)
+      -> std::string {
+    if (i->type_args.size() != 1)
+      return {};
+    auto t = m.types.find(i->type_args[0]);
+    if (!t)
+      return {};
+    if (t->kind == hir::TypeKind::NominalStruct &&
+        symbol_name(t->declaration) == "Item")
+      return "Item";
+    if (t->kind == hir::TypeKind::SignedInt && t->bits == 32)
+      return "i32";
+    if (t->kind == hir::TypeKind::Bool)
+      return "bool";
+    return {};
+  };
+  std::map<std::string, SymbolId> read_by_type;
+  for (const auto *i : read_instances) {
+    auto category = instance_category(i);
+    need(!category.empty(), "unexpected read instance type");
+    need(read_by_type.emplace(category, i->symbol).second,
+         "read instance type combination was not unique");
+  }
+  need(read_by_type.size() == 3 && read_by_type.count("Item") &&
+           read_by_type.count("i32") && read_by_type.count("bool"),
+       "read concrete type combinations missing");
+
+  auto pairs_for_read = [&](SymbolId target) -> bool {
+    for (const auto *i : read_instances)
+      if (i->symbol == target)
+        return true;
+    return false;
+  };
+
+  std::set<uint64_t> template_symbols;
+  for (const auto &t : m.templates)
+    template_symbols.insert(t.function.symbol.value);
+  std::map<uint64_t, size_t> read_calls;
+  std::map<uint64_t, size_t> pair_calls;
+  std::map<uint64_t, size_t> right_calls;
+  std::map<uint64_t, size_t> left_calls;
+  for (const auto &n : m.nodes) {
+    if (template_symbols.count(m.scopes[n.scope.value].function.value))
+      continue;
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c || !c->direct_symbol)
+      continue;
+    auto name = symbol_name(*c->direct_symbol);
+    if (name == "read") {
+      need(pairs_for_read(*c->direct_symbol),
+           "concrete read call still targets its template");
+      need(c->type_args.empty(), "concrete read call retained type arguments");
+      need(c->args.size() == 1 &&
+               c->args[0].mode == hir::ParamMode::move,
+           "concrete read call lost its move argument");
+      ++read_calls[c->direct_symbol->value];
+    } else if (name == "pair") {
+      need(pair_instances[0]->symbol == *c->direct_symbol,
+           "pair call selected a wrong instance");
+      need(c->type_args.empty(), "concrete pair call retained type arguments");
+      need(c->args.size() == 2 &&
+               c->args[0].mode == hir::ParamMode::move &&
+               c->args[1].mode == hir::ParamMode::move,
+           "concrete pair call lost a move argument");
+      ++pair_calls[c->direct_symbol->value];
+    } else if (name == "right") {
+      need(right_instances[0]->symbol == *c->direct_symbol,
+           "right call selected a wrong instance");
+      ++right_calls[c->direct_symbol->value];
+    } else if (name == "left") {
+      need(left_instances[0]->symbol == *c->direct_symbol,
+           "left call selected a wrong instance");
+      ++left_calls[c->direct_symbol->value];
+    }
+  }
+  need(read_calls.size() == 3 && pair_calls.size() == 1 &&
+           right_calls.size() == 1 && left_calls.size() == 1 &&
+           pair_calls.begin()->second == 2 &&
+           right_calls.begin()->second == 2 &&
+           left_calls.begin()->second == 1,
+       "constrained free move call reuse changed");
+  need(read_calls[read_by_type["Item"].value] == 4 &&
+           read_calls[read_by_type["i32"].value] == 1 &&
+           read_calls[read_by_type["bool"].value] == 1,
+       "read same-combination reuse changed");
+
+  size_t template_constraints = 0;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == read->function.symbol)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        need(c->trait == value_trait->symbol, "read template trait changed");
+        need(symbol_name(c->method) == "get",
+             "read template method changed");
+        ++template_constraints;
+      }
+  need(template_constraints == 1,
+       "read template did not retain its ordinary trait ConstraintCall");
+
+  for (const auto &f : m.functions) {
+    auto sig = m.types.find(f.signature);
+    need(sig && !has_parameter(f.signature),
+         "concrete constrained free move signature retained T");
+    for (const auto &n : m.nodes) {
+      if (m.scopes[n.scope.value].function != f.symbol)
+        continue;
+      need(!has_parameter(n.type),
+           "concrete constrained free move node retained T");
+      need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+           "concrete constrained free move retained ConstraintCall");
+      if (auto c = std::get_if<hir::Call>(&n.data)) {
+        need(c->type_args.empty(),
+             "concrete constrained free move retained type arguments");
+        if (c->direct_symbol)
+          need(!template_symbols.count(c->direct_symbol->value),
+               "concrete constrained free move call targets a template");
+      }
+    }
+  }
+
+  auto right_pick = item_trait_method(*right_trait, "pick");
+  auto left_pick = item_trait_method(*left_trait, "pick");
+  need(right_pick != left_pick,
+       "same-named methods from different traits shared a symbol");
+  auto concrete_function = [&](const hir::FunctionInstance *i) {
+    auto f = function_for(i->symbol);
+    need(f, "constrained free move instance function missing");
+    return f;
+  };
+  auto method_calls = [&](const hir::HirFunction *f) {
+    std::vector<SymbolId> result;
+    for (const auto &n : m.nodes)
+      if (m.scopes[n.scope.value].function == f->symbol)
+        if (auto c = std::get_if<hir::Call>(&n.data);
+            c && c->direct_symbol && symbol_name(*c->direct_symbol) == "pick")
+          result.push_back(*c->direct_symbol);
+    return result;
+  };
+  const auto *right_function = concrete_function(right_instances[0]);
+  const auto *left_function = concrete_function(left_instances[0]);
+  auto right_selected = method_calls(right_function);
+  auto left_selected = method_calls(left_function);
+  need(right_selected.size() == 1 && right_selected[0] == right_pick,
+       "Right constraint did not select Right.pick");
+  need(left_selected.size() == 1 && left_selected[0] == left_pick,
+       "Left constraint did not select Left.pick");
+
+  const auto *forward_function = concrete_function(forward_instances[0]);
+  std::map<uint64_t, SymbolId> renamed;
+  for (auto [from, to] : forward_instances[0]->renamed)
+    renamed[from.value] = to;
+  need(renamed.at(forward->function.parameters[0].symbol.value) ==
+               forward_function->parameters[0].symbol,
+       "forward instance lost its renamed move parameter");
+  size_t forward_moves = 0;
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == forward_function->symbol) {
+      if (auto move = std::get_if<hir::Move>(&n.data);
+          move && move->binding) {
+        need(*move->binding == forward_function->parameters[0].symbol,
+             "forward concrete Move kept a template binding");
+        ++forward_moves;
+      }
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol && symbol_name(*c->direct_symbol) == "read") {
+        need(*c->direct_symbol == read_by_type["Item"],
+             "forward forwarding call did not reuse read[Item]");
+        need(c->args.size() == 1 &&
+                 c->args[0].mode == hir::ParamMode::move &&
+                 c->type_args.empty(),
+             "forward forwarding call lost its concrete move argument");
+      }
+    }
+  need(forward_moves == 1,
+       "forward concrete instance lost its renamed Move");
+
+  good("trait V{} impl V for i32{} "
+       "func take[T V](value move T)T{return move value;} "
+       "func main()i32{var x i32=1;let f=take[i32];"
+       "let r=f(move x);return r-1;}");
+  bad("trait V{func get(self Self)i32;} struct S{x i32;} "
+      "func read[T V](value move T)i32{return value.get();} "
+      "func main()i32{var s S=S(x:1);let r=read(move s);return r;}",
+      "E_TYPE_MISMATCH");
+  bad("trait A{} trait B{} impl B for i32{} "
+      "func take[T A](value move T)T{return move value;} "
+      "func main()i32{var x i32=1;let r=take(move x);return r-1;}",
+      "E_TYPE_MISMATCH");
+  bad("trait V{} impl V for i32{} "
+      "func take[T V](value move T)T{return move value;} "
+      "func main()i32{let x i32=1;let r=take(x);return i32(r)-1;}",
+      "E_CALL_ARGUMENT");
+  bad("trait V{} impl V for i32{} "
+      "func take[T V](value move T)T{return move value;} "
+      "func main()i32{var x i32=1;let r=take(move x);return r+x;}",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad("trait V{} impl V for i32{} "
+      "func pair[T V](first T,second move T)i32{return 0;} "
+      "func main()i32{var x i32=1;return pair(x,move x);}",
+      "E_CALL_ARGUMENT");
+  unsupported("trait V{} impl V for i32{} "
+              "func bump[T V](x inout T){} "
+              "func main()i32{var x i32=1;bump(inout x);return x-1;}");
+  unsupported("trait V{func take(self Self,value move Vec[i32])Vec[i32];} "
+              "struct S{x i32;} impl V for S{"
+              "func take(self Self,value move Vec[i32])Vec[i32]{"
+              "return move value;}} "
+              "func main()i32{let s=S(x:1);var v Vec[i32]=[1];"
+              "let r=s.take(move v);return r[0]-1;}");
+  unsupported("trait V{} impl V for i32{} struct S{x i32;} impl S{"
+              "func take[T V](self Self,value move T)T{return move value;}} "
+              "func main()i32{let s=S(x:1);var x i32=1;"
+              "let r=s.take(move x);return r-1;}");
+}
 
 void generic_inout(const fs::path &root) {
   auto good = [&](const std::string &text) {
@@ -3851,6 +4185,7 @@ int main(int argc, char **argv) {
     std::cout << "27 T07 static source fixtures passed\n";
     extra(root);
     generic_move(root);
+    constrained_free_move(root);
     generic_inout(root);
     method_inout(root);
     method_move(root);

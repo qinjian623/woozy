@@ -1,0 +1,24 @@
+package app;
+
+trait Value {
+    func get(self Self) i32;
+}
+
+impl Value for i32 {
+    func get(self Self) i32 {
+        return self;
+    }
+}
+
+func swap[T Value](a inout T, b inout T) {
+    let tmp = a;
+    a = b;
+    b = tmp;
+}
+
+func main() i32 {
+    var x i32 = 1;
+    var y i32 = 2;
+    swap(inout x, inout y);
+    return 0;
+}

@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态、标量泛型、POD/有限拥有聚合、原05_traits、位置式enum及混合参数已通过。自由泛型move、数字/bool泛型inout和ordinary callback兼容保持。无trait、无约束固有方法move已支持非泛型impl、方法自身泛型、泛型impl，以及impl与方法各带类型参数的组合。实例保留真实impl参数前缀和方法参数后缀，Self只替换impl参数，按origin与完整类型实参缓存；Move绑定使用具体实例符号。enum静态目标及variant优先保持。无trait/无约束固有方法还支持非self数字/bool整体绑定inout，四种泛型组合、实例/静态、写回及throws/defer清理沿用现有检查；方法值不开放。trait/约束方法move和inout、self move/inout、非scalar或约束泛型自身inout、泛型trait及嵌套变体模式仍未实施。主目录四配置47/47/47/33共174无跳过，含T10且Clang开启LSan；每LLVM配置新增2方法inout项目6次正式执行，旧方法move11项目33次执行保持。整项仍in_progress，见docs/GENERICS.md。"
+      "notes": "静态、标量泛型、POD/有限拥有聚合、原05_traits、位置式enum及混合参数已通过。自由泛型直接move现支持已满足的trait约束，保留旧受约束move函数值；ConstraintCall按实际trait/impl具体化，完整键及Move重命名保持。数字/bool无约束泛型inout和ordinary callback兼容保持。无trait、无约束固有方法move已支持非泛型impl、方法自身泛型、泛型impl，以及impl与方法各带类型参数的组合。实例保留真实impl参数前缀和方法参数后缀，Self只替换impl参数，按origin与完整类型实参缓存；Move绑定使用具体实例符号。enum静态目标及variant优先保持。无trait/无约束固有方法还支持非self数字/bool整体绑定inout，四种泛型组合、实例/静态、写回及throws/defer清理沿用现有检查；方法值不开放。trait/约束方法move和inout、self move/inout、非scalar或约束泛型自身inout、泛型trait及嵌套变体模式仍未实施。主目录四配置47/47/47/33共174无跳过，含T10且Clang开启LSan；每LLVM配置free move5项目15次正式执行和15次观察，另有4check/2拒绝构建；旧方法inout/move执行保持。整项仍in_progress，见docs/GENERICS.md。"
     },
     {
       "id": "T08",

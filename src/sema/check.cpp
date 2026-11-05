@@ -281,12 +281,17 @@ class Checker {
              params.front().mode == ParamMode::ordinary;
     return !self;
   }
-  bool free_unconstrained_template(SymbolId target) const {
+  // A direct call to a generic free function. Trait constraints do not change
+  // this source identity; they are checked from the finished type arguments.
+  bool free_generic_template(SymbolId target) const {
     auto found = generic_params.find(target.value);
-    if (found == generic_params.end() || found->second.empty() ||
-        impl_method(target))
-      return false;
-    return std::all_of(found->second.begin(), found->second.end(),
+    return found != generic_params.end() && !found->second.empty() &&
+           !impl_method(target);
+  }
+  bool free_unconstrained_template(SymbolId target) const {
+    return free_generic_template(target) &&
+           std::all_of(generic_params.at(target.value).begin(),
+                       generic_params.at(target.value).end(),
                        [](const GenericParam &p) { return !p.trait; });
   }
   bool check_inout_graph(Ref r, TypeId root, bool allow_template) {
@@ -1625,17 +1630,21 @@ class Checker {
       seen[pi] = true;
       indices[i] = pi;
     }
-    // Concrete move and non-self scalar inout are available on unconstrained
-    // generic free functions and on the inherent-method route above. The
-    // route still requires an ordinary-self receiver or a no-self static call;
-    // actual self move/inout and trait or constrained sources stay rejected.
-    const bool free_move_inout =
-        !receiver && !constraint && free_unconstrained_template(target);
+    // Concrete move on a generic free function is independent of its trait
+    // constraints; finish_arguments below still requires the explicit impl.
+    // Non-self scalar inout keeps the unconstrained free route, and both modes
+    // keep the inherent-method route above. Receiver and constraint calls stay
+    // excluded, so actual self modes and trait/constrained methods are rejected.
+    const bool free_template =
+        !receiver && !constraint && free_generic_template(target);
+    const bool free_move = free_template;
+    const bool free_inout =
+        free_template && free_unconstrained_template(target);
     const bool inherent =
         !constraint &&
         inherent_method_route(target, receiver.has_value(), original);
-    const bool allow_move = free_move_inout || inherent;
-    const bool allow_inout = free_move_inout || inherent;
+    const bool allow_move = free_move || inherent;
+    const bool allow_inout = free_inout || inherent;
     // Any instance route whose declared first parameter is move/inout is an
     // unsupported self mode, including a trait method reached through a
     // constraint. A type-qualified static call to an impl method with a

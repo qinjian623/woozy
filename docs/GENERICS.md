@@ -46,7 +46,7 @@ switch/for补充程序。主代理GNU Debug、GNU Release、Clang22 ASan/UBSan
 
 这里新增的是直接调用；具体泛型函数值仍使用既有的标量调用处理。独立对比旧、新编译器确认，带 trait 约束的 move 泛型函数值有一条原先就接受的入口，本次保留其原行为，不把它记为新增或完整受约束调用支持。
 
-这一批只增加自由泛型函数的直接 move 调用；后续固有方法和数字/bool 泛型 inout 的支持见下文。trait 约束泛型的直接 move 调用仍未开放。foreign 和动态 string 的 move 实例给出 `E_CAPABILITY_UNAVAILABLE`，损坏的参数模式、源码 Move、模板/实例关系仍由既有 HIR 检查拒绝。
+这一批增加无约束自由泛型函数的直接 move 调用；满足 trait 约束的直接调用、固有方法和数字/bool 泛型 inout 的后续支持见下文。foreign 和动态 string 的 move 实例给出 `E_CAPABILITY_UNAVAILABLE`，损坏的参数模式、源码 Move、模板/实例关系仍由既有 HIR 检查拒绝。
 
 合入 move 调用这一批时，主目录 GNU Debug/Release 和 Clang22 ASan+UBSan+LSan 的 LLVM 构建各44/44，关闭 LLVM 为33/33，共165项，无跳过。三个 LLVM 构建每套实际运行三份同源项目的 Native O0/O2 与 Python3.12.15，共9项；关闭 LLVM 不执行这9项。独立新增的嵌套泛型聚合抛错例在两端验证两个 Vec 按逆序各释放一次，Python Frame 无残留。泄漏检测覆盖本项目检查程序，不声称预编译 LLVM 或生成程序也全部经过 sanitizer 插桩。
 
@@ -111,6 +111,16 @@ inout 实参必须是整体可写绑定，数据类型具体化后只能是已�
 来源合格也必须检查完整嵌套类型图。ordinary callback 内的合法 inout 不算外围函数自身的 inout；具体非数字/bool 的 callback、返回类型及名义字段内 inout 仍报源级 `E_CAPABILITY_UNAVAILABLE`。trait 或任一层约束、实际 move/inout self、绑定或静态未绑定方法值继续拒绝；`check_function_value_inout` 保持原样，没有新增 HIR 字段、后端接口或运行库。
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各47/47，关闭 LLVM 为33/33，共174项，无跳过，包含T10绑定和CLI测试。每个 LLVM 配置的新增2个方法 inout 项目有6次正式 Native O0/O2/Python 执行、6次私有观察、4次check及2次拒绝构建；旧方法 move 的11个项目仍有33次正式执行。独立2个新项目另有6次执行、6次观察和8次别名反例检查。标量 inout 没有动态 borrow 登记；生成 Native 程序和预编译 LLVM 未声称全部经过 sanitizer 插桩。
+
+## 带 trait 约束的自由泛型直接 move
+
+自由泛型函数的实际类型参数满足既有 trait 约束时，现在可以直接传递 move 参数，例如 `func read[T Value](value move T)i32{return value.get();}`。显式与推断类型参数、多个参数各自带单个 trait 约束、外层同约束泛型转交均沿用现有约束检查。缺少或错误的 impl 继续报类型错误；不会因声明带约束就认定实际类型满足。
+
+模板内的 ordinary trait receiver 调用保留 ConstraintCall，具体化时按所需 trait 和真实 impl 选择方法，再转成具体直接调用。同名方法属于不同 trait 时分别选择；实例仍按 origin 和完整类型实参缓存，Move、参数与局部使用重命名后的符号，具体签名、节点及调用不保留类型参数或 ConstraintCall。
+
+此次只增加自由泛型直接 move 调用，保留旧受约束 move 函数值。带约束自由函数自身 inout、trait/约束方法自身 move/inout、实际 self move/inout 仍拒绝；ordinary trait 方法借用拥有参数是原有合法操作。后参抛错、callee throws/defer、返回先保存和共享副本继续使用原有清理。没有改 HIR、后端、运行库或数据类型限制。
+
+本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各47/47，关闭 LLVM 为33/33，共174项，无跳过，包含两项T10。每个 LLVM 配置的自由泛型 move 测试执行5个源码项目的 Native O0/O2/Python，共15次正式执行及15次私有观察；另有4次check和2次拒绝构建。结果文件的17条runs不含单列的4条checks。旧方法move与数字/bool inout测试保持；生成 Native 程序和预编译 LLVM 未声称全部有sanitizer插桩。
 
 ## 尚未实施
 

@@ -29,7 +29,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
     --runtime $<TARGET_FILE:lang_native_runtime>
     --python "${LANG_PYTHON312}"
     --out "${CMAKE_CURRENT_BINARY_DIR}/move-runtime")
-  set_tests_properties(generics.move_runtime PROPERTIES TIMEOUT 240)
+  set_tests_properties(generics.move_runtime PROPERTIES TIMEOUT 420)
 else()
   message(STATUS "generics.move_runtime: not_run (LLVM/3.12 helper unavailable)")
 endif()
