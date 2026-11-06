@@ -40,7 +40,7 @@ REJECTED = {
     'inout': ('func f(x inout string) {} func main() {}', CAP),
     'move': ('func f(x move string) {} func main() {}', CAP),
     'foreign': ('import "py" as p;func main() {p.run();}', CAP),
-    'parameter-reassign': ('func f(x string) {x="y";} func main() {}', CAP),
+    'parameter-reassign': ('func f(x string) {x="y";} func main() {}', TYPE),
     'let-reassign': ('func main() {let x="x";x="y";}', TYPE),
     'string-as-integer': ('func main() {let x i32="x";}', TYPE),
     'integer-as-string': ('func f() string {return 1;} func main() {}', TYPE),

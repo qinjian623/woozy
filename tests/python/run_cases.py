@@ -140,10 +140,14 @@ func main() i32 {
 UNSUPPORTED_SOURCES = {
     'float-arithmetic': 'func main() i32 {var x f32=1.0;let y=x+x;return 0;}',
     'float-comparison': 'func main() i32 {var x f64=1.0;let y=x==x;return 0;}',
-    'ordinary-parameter-rebinding': 'func f(x i32) {x=2;} func main() {}',
     'string': 'func main() {let x="hello";}',
     'vec': 'func main() {let x=[1,2];}',
     'capturing-lambda': 'func main() {let x i32=1;let f=func() i32 {return x;};}',
+}
+
+SOURCE_REJECTIONS = {
+    'ordinary-parameter-rebinding': (
+        'func f(x i32) {x=2;} func main() {}', 'E_TYPE_MISMATCH'),
 }
 
 
@@ -278,7 +282,7 @@ def main():
               'python': version, 'platform': platform.platform(),
               'source_head': command(['git', '-C', args.root, 'rev-parse', 'HEAD'])['stdout'].strip(),
               'fixture_sha256': before, 'cases': [], 'extra': [], 'negative_controls': [],
-              'unsupported': [], 'failures': [],
+              'unsupported': [], 'source_rejections': [], 'failures': [],
               'not_run': ['official build CLI integration (integrator)',
                           'native backend comparison (T05)',
                           'ARC/leak checks (T09)', 'foreign NumPy/PyTorch (T10)']}
@@ -416,6 +420,24 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
                                       'status': 'unsupported' if passed else 'failed'})
         if not passed: report['failures'].append('unsupported diagnostic: ' + ident)
 
+    for ident, (body, expected_code) in SOURCE_REJECTIONS.items():
+        manifest = source_project(args.out, 'rejected-' + ident, body)
+        directory = args.out / 'generated' / ('rejected-' + ident)
+        result = command([args.helper, '--project', manifest,
+                          '--out-dir', directory])
+        parsed = json.loads(result['stdout'])
+        source = manifest.parent / 'src/main.lang'
+        passed = (result['returncode'] == 1 and parsed['status'] == 'error' and
+                  any(d['code'] == expected_code and d['primary'] is not None and
+                      Path(d['primary']['path']).resolve() == source.resolve() and
+                      0 <= d['primary']['start_byte'] < d['primary']['end_byte'] <=
+                      source.stat().st_size for d in parsed['diagnostics']) and
+                  not directory.exists())
+        report['source_rejections'].append(
+            {'id': ident, 'expected_code': expected_code, 'compile': result,
+             'status': 'rejected' if passed else 'failed'})
+        if not passed: report['failures'].append('source rejection: ' + ident)
+
     # The checker supports Python/32, but this emitter's first profile is 64.
     width32 = source_project(args.out, 'profile32', 'func main() {}', bits=32)
     rejected = command([args.helper, '--project', width32, '--out-dir', args.out / 'generated/profile32'])
@@ -429,10 +451,11 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
         report['failures'].append('published fixture changed')
     report['status'] = 'failed' if report['failures'] else 'passed'
     report['summary'] = {group: {status: sum(row['status'] == status for row in report[group])
-                                  for status in ('passed', 'failed', 'unsupported')}
-                         for group in ('cases', 'extra', 'negative_controls', 'unsupported')}
+                                  for status in ('passed', 'failed', 'unsupported', 'rejected')}
+                         for group in ('cases', 'extra', 'negative_controls', 'unsupported',
+                                       'source_rejections')}
     (args.out / 'results.json').write_text(json.dumps(report, ensure_ascii=False, indent=2) + '\n')
-    for group in ('cases', 'extra', 'negative_controls', 'unsupported'):
+    for group in ('cases', 'extra', 'negative_controls', 'unsupported', 'source_rejections'):
         for row in report[group]: print(f"{group}/{row['id']}: {row['status']}")
     print(json.dumps({'status': report['status'], 'summary': report['summary'],
                       'failures': report['failures'], 'report': str(args.out / 'results.json')}, ensure_ascii=False))

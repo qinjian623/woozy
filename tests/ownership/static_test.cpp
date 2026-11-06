@@ -237,7 +237,7 @@ void flow_tests() {
   rejected("func f() {let x=[];}", "E_TYPE_MISMATCH");
   rejected("func f() {let x i32=[1];}", "E_TYPE_MISMATCH");
   rejected("func f() {let x i32=1;let y=x[0];}", "E_TYPE_MISMATCH");
-  rejected("func f(v Vec[i32]) {v=[2];}", "E_CAPABILITY_UNAVAILABLE");
+  rejected("func f(v Vec[i32]) {v=[2];}", "E_TYPE_MISMATCH");
   rejected("func f(v inout Vec[i32]) {}", "E_CAPABILITY_UNAVAILABLE");
   rejected("func f() {let x Vec[string]=[\"x\"];}", "E_CAPABILITY_UNAVAILABLE");
   rejected("struct S {v Vec[S];} func f(v S) {}", "E_CAPABILITY_UNAVAILABLE");

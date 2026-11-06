@@ -72,5 +72,11 @@ func mark(log inout i64, n i64) {log = n;}
 func main() i32 {var log i64 = 0; if test([1]) {mark(inout log, 7);}
 if log != 7 {return 1;} return 0;}''', {'sequence': [['free', 0], ['event', 7]]}),
     'defer-infinite-build-only': ('''func main() i32 {let v Vec[i32] = [1]; defer {for ;; {}} return v[0];}''', {'build_only': True}),
+    'ordinary-param-readonly-positive': ('''func bump(slot inout i32) {slot += 1;}
+func edit(values Vec[i32]) {values[0] = 7; let alias = values; alias[1] = 8;}
+func main() i32 {var local i32 = 1; local = local + 2; local += 3;
+if local != 6 {return 1;} bump(inout local); if local != 7 {return 2;}
+let values Vec[i32] = [1, 2]; edit(values);
+if values[0] != 7 || values[1] != 8 {return 3;} return 0;}''', {}),
     'owned-callbacks': ('struct S {v Vec[i32];}\nfunc read_vec(v Vec[i32]) i32 {let saved=v;return saved[0];}\nfunc read_struct(s S) i32 {let saved=s;return saved.v[0];}\nfunc apply_vec(cb func(Vec[i32]) i32,v Vec[i32]) i32 {return cb(v);}\nfunc apply_struct(cb func(S) i32,s S) i32 {return cb(s);}\nfunc main() i32 {if apply_vec(read_vec,[5])!=5 || apply_struct(read_struct,S(v:[6]))!=6 {return 1;}return 0;}\n', {}),
 }

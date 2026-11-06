@@ -142,13 +142,19 @@ def main():
         ])
         report["rejections"] = []
         rejects = [
-            ("native32", "func main() i32 {return 0;}", 32),
-            ("ordinary-parameter-write", "func f(x i32) i32 {x=1;return x;} func main() i32{return 0;}", 64),
-            ("strict-float", "func f(x f32) f32 {return x+x;} func main() i32{return 0;}", 64),
-            ("string", 'func main() i32 {let text = "hello";return 0;}', 64),
-            ("defer", "func f() {} func main() i32 {defer {f();} return 0;}", 64),
+            ("native32", "func main() i32 {return 0;}", 32,
+             "E_CAPABILITY_UNAVAILABLE", "unsupported"),
+            ("ordinary-parameter-write",
+             "func f(x i32) i32 {x=1;return x;} func main() i32{return 0;}", 64,
+             "E_TYPE_MISMATCH", "rejected"),
+            ("strict-float", "func f(x f32) f32 {return x+x;} func main() i32{return 0;}", 64,
+             "E_CAPABILITY_UNAVAILABLE", "unsupported"),
+            ("string", 'func main() i32 {let text = "hello";return 0;}', 64,
+             "E_CAPABILITY_UNAVAILABLE", "unsupported"),
+            ("defer", "func f() {} func main() i32 {defer {f();} return 0;}", 64,
+             "E_CAPABILITY_UNAVAILABLE", "unsupported"),
         ]
-        for name, source, width in rejects:
+        for name, source, width, expected_code, category in rejects:
             d = out / "rejections" / name
             (d / "src").mkdir(parents=True, exist_ok=True)
             manifest = d / "lang.toml"
@@ -159,8 +165,11 @@ def main():
                 codes = [x["code"] for x in json.loads(r["stderr"])["diagnostics"]]
             except (ValueError, KeyError):
                 codes = []
-            passed = r["exit"] == 1 and "E_CAPABILITY_UNAVAILABLE" in codes and not (d / "must-not-exist.o").exists()
-            report["rejections"].append({"id": name, "result": "unsupported" if passed else "failed", "command": r})
+            passed = (r["exit"] == 1 and expected_code in codes and
+                      not (d / "must-not-exist.o").exists())
+            report["rejections"].append({"id": name, "expected_code": expected_code,
+                                         "result": category if passed else "failed",
+                                         "command": r})
             if not passed: failed.append(name + ": rejection")
         invalid = out / "invalid-llvm.ll"
         invalid.write_text("""define i32 @broken(i1 %c) {

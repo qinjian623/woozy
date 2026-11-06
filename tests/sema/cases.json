@@ -1,7 +1,7 @@
 {
   "schema": "compiler-dev/sema-fixtures/1",
   "contract": "compiler-dev/1",
-  "case_count": 21,
+  "case_count": 22,
   "stage_policy": {
     "syntax": "All fixtures must be accepted by `langc check --syntax-only --format json`.",
     "names": "All fixtures must be accepted by `lang_module_check` on their lang.toml; reject cases must fail for a type/effect reason, not a misspelled name or import.",
@@ -89,6 +89,15 @@
         "clause": "`if/for` 条件必须是 bool。赋值不是表达式，没有隐式真假转换。"
       },
       "reason": "The if condition is an integer literal, not bool; there is no implicit truthiness conversion."
+    },
+    "ordinary_parameter_readonly": {
+      "expected": "reject",
+      "source": {
+        "path": "docs/SEMANTICS.md",
+        "section": "7.2 参数模式和移动",
+        "clause": "普通参数绑定只读，不能给参数名重新赋值；需要改值时显式创建 var 局部变量。对象内容能否修改继续按其类型和已声明操作的规则判断。"
+      },
+      "reason": "Assigning to an ordinary parameter name is a source type error; a var local is required to change a value."
     },
     "let_not_reassignable": {
       "expected": "reject",
@@ -245,14 +254,7 @@
       "reason": "A source constant i8(300) must be rejected before constructing typed HIR; the dynamic IntegerConvert operation retains runtime range checks."
     }
   },
-  "unresolved_semantics": [
-    {
-      "id": "ordinary-parameter-assignment",
-      "example": "func bump(x i32) i32 { x = x + 1; return x; }",
-      "current_text": "SEMANTICS §2 fixes parameter scope but does not state whether an ordinary (non-inout) parameter is reassignable; §7.2 only defines inout and move access.",
-      "status": "not_used_in_expected_cases"
-    }
-  ],
+  "unresolved_semantics": [],
   "cases": [
     {
       "id": "numeric-boundaries-accept",
@@ -340,6 +342,18 @@
           "let_not_reassignable"
         ],
         "reason": "A let binding cannot be reassigned, regardless of whether the new value has the same type."
+      }
+    },
+    {
+      "id": "ordinary-parameter-assignment-reject",
+      "manifest": "tests/sema/fixtures/ordinary-parameter-assignment-reject/lang.toml",
+      "available_in": "T04",
+      "expected": {
+        "status": "reject",
+        "rules": [
+          "ordinary_parameter_readonly"
+        ],
+        "reason": "The increment function assigns to its ordinary value parameter. SEMANTICS §7.2 makes that binding read-only; the checker reports E_TYPE_MISMATCH and requires a var local instead."
       }
     },
     {

@@ -1781,8 +1781,10 @@ class Checker {
             r,
             "an ordinary parameter is not a var or an exclusive inout binding",
             "E_CALL_ARGUMENT");
-      unavailable(r, "ordinary parameter reassignment has no specified "
-                     "source-language rule");
+      reject(r,
+             "ordinary parameters are read-only; declare a var local to "
+             "change the value",
+             "E_TYPE_MISMATCH");
     }
     if (!l.writable)
       reject(r, "let/const bindings are not writable",

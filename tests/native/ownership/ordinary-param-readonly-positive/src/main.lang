@@ -1,0 +1,26 @@
+package app;
+
+func bump(slot inout i32) {
+    slot += 1;
+}
+
+func edit(values Vec[i32]) {
+    values[0] = 7;
+    let alias = values;
+    alias[1] = 8;
+}
+
+func main() i32 {
+    var local i32 = 1;
+    local = local + 2;
+    local += 3;
+    if local != 6 { return 1; }
+
+    bump(inout local);
+    if local != 7 { return 2; }
+
+    let values Vec[i32] = [1, 2];
+    edit(values);
+    if values[0] != 7 || values[1] != 8 { return 3; }
+    return 0;
+}

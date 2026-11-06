@@ -225,7 +225,7 @@ trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source �
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
 泛型 trait 的方法自身泛型/move/inout 组合、实际 self move/inout，以及
-Vec/string/foreign 及含拥有字段聚合的 inout 仍未实施；有限平凡聚合整体 inout 已支持。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案，针对重赋值的诊断实现另批进行；初始化表达式读取同名外层绑定的规则已定案并保留。
+Vec/string/foreign 及含拥有字段聚合的 inout 仍未实施；有限平凡聚合整体 inout 已支持。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案；对普通参数名重新赋值按源码类型错误 `E_TYPE_MISMATCH` 拒绝，需改值时建立 var 局部变量。初始化表达式读取同名外层绑定的规则已定案并保留。
 
 ## 递归枚举模式
 

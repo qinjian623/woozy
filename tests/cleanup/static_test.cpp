@@ -285,7 +285,7 @@ void source_probes() {
   rejected(e + "func f() {defer {return;}}", "E_CLEANUP_ESCAPE");
   rejected(e + "func f() {defer {break;}}", "E_CLEANUP_ESCAPE");
   rejected(e + "func f() {defer {continue;}}", "E_CLEANUP_ESCAPE");
-  rejected("func f(x i32) {x=1;}", "E_CAPABILITY_UNAVAILABLE");
+  rejected("func f(x i32) {x=1;}", "E_TYPE_MISMATCH");
   rejected("func f[X,Y](x X,y Y) {try {throw x;}catch a X {}catch b Y {}} func "
            "main() {f(1,2);}",
            "E_CAPABILITY_UNAVAILABLE");

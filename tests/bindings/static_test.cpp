@@ -231,7 +231,7 @@ int main(int argc, char **argv) try {
   rejected(imports+"func f() Unit { let v=np.linspace; }","foreign-function-escape","E_CAPABILITY_UNAVAILABLE");
   rejected(imports+"func f(x torch.Tensor) Unit { x[0]; }","foreign-index","E_CAPABILITY_UNAVAILABLE");
   rejected(imports+"func f(x torch.Tensor) Unit { x.device; }","foreign-data-member","E_CAPABILITY_UNAVAILABLE");
-  rejected(imports+"func f(x torch.Tensor) Unit { x = x; }","ordinary-parameter-reassign","E_CAPABILITY_UNAVAILABLE");
+  rejected(imports+"func f(x torch.Tensor) Unit { x = x; }","ordinary-parameter-reassign","E_TYPE_MISMATCH");
   auto native=sema::check_types(resolve(read(repo/"baseline/samples/04_numpy_torch.lang"),"native-original", "", "native"));
   need(!native.success()&&has(native,"E_CAPABILITY_UNAVAILABLE"),"native external source");
   auto resolved=resolve(read(repo/"baseline/samples/04_numpy_torch.lang"),"project-api");

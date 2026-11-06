@@ -283,7 +283,15 @@ void suite(const fs::path &published) {
   source("func f() { for ; 1; {} }", "E_TYPE_MISMATCH");
   source("func f() { let x i32=1; { let x=x+1; } }");
   source("func f() { const x i32=1; x=2; }", "E_TYPE_MISMATCH");
-  source("func f(a i32) { a=2; }", "E_CAPABILITY_UNAVAILABLE");
+  source("func f(a i32) { a=2; }", "E_TYPE_MISMATCH");
+  source("func f(a i32) { a+=2; }", "E_TYPE_MISMATCH");
+  source("func f(a i32) { (a)=2; }", "E_TYPE_MISMATCH");
+  source("func f(a Vec[i32]) { a=[2]; }", "E_TYPE_MISMATCH");
+  source("func f[T](a T) { a=a; }", "E_TYPE_MISMATCH");
+  source("func f(a Vec[i32]) { a[0]=2; }");
+  source("func f(a i32) i32 { var local=a; local=2; return local; }");
+  source("struct S { x i32; } func f(a S) { a.x=2; }",
+         "E_TYPE_MISMATCH");
   source("func f() { var x i32=1; x=true; }", "E_TYPE_MISMATCH");
   source("func f() { var x i32=1; let y u8=2; x<<=y; x>>=y; }");
   source("func f() { let x i32=1; let y u8=2; let z=x<<y; }");
