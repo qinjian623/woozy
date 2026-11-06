@@ -200,8 +200,18 @@ struct Switch {
   std::vector<Arm> arms;
   bool exhaustive = false;
 };
+// Complete static trait application identity: the real declaration plus the
+// ordered type arguments. An unparameterized trait uses an empty argument
+// list; it is still one bound/application, not a multi-constraint list.
+struct TraitRef {
+  SymbolId declaration;
+  std::vector<TypeId> args; // declaration order
+  bool operator==(const TraitRef &) const = default;
+};
+
 struct ConstraintCall {
-  SymbolId trait, method;
+  TraitRef trait;
+  SymbolId method;
   TypeId receiver, signature;
   std::vector<CallArg>
       args; // receiver first, then explicit args in source order
@@ -427,7 +437,7 @@ struct HirFunction {
 };
 struct GenericParam {
   SymbolId symbol;
-  std::optional<SymbolId> trait;
+  std::optional<TraitRef> trait;
   Source source;
 };
 struct FieldDecl {
@@ -457,12 +467,14 @@ struct MethodPrototype {
 };
 struct TraitDecl {
   SymbolId symbol, self;
+  std::vector<GenericParam> params; // real declared parameters, declaration
+                                   // order; unconstrained in this batch
   std::vector<MethodPrototype> methods;
   Source source;
 };
 struct ImplDecl {
   std::vector<GenericParam> params;
-  std::optional<SymbolId> trait;
+  std::optional<TraitRef> trait;
   SymbolId self_parameter;
   TypeId self_type;
   std::vector<SymbolId> methods;

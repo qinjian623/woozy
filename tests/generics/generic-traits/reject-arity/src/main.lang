@@ -1,0 +1,5 @@
+package app;
+trait Convert[A, B] { func code(owner Self) i32; }
+struct Key {}
+impl Convert[i32] for Key { func code(owner Self) i32 { return 11; } }
+func main() i32 { return 0; }

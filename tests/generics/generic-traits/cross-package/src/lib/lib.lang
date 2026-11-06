@@ -1,0 +1,5 @@
+package lib;
+pub trait Carry[A, B] { func choose(owner Self, left A, right B) B; }
+pub struct Box[T] { pub value T; }
+impl[T] Carry[i32, T] for Box[T] { func choose(owner Self, left i32, right T) T { return right; } }
+pub func relay[A, B, T Carry[A, B]](owner T, left A, right B) B { return T.choose(owner, left, right); }

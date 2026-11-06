@@ -149,6 +149,33 @@ TypeParameter 是已绑定类型；具体执行函数中不得残留它或模板
 VerifiedHirModule。后端支持检查只遍历具体函数及其可达节点、实际使用的类型；
 未实例化模板及类型池中未使用的条目不作为拒绝生成的理由。
 
+## 5.1 trait 应用身份
+
+泛型 trait 的绑定、实现和约束调用都显式保存完整应用身份，不新增 TypeKind 或 NodeKind：
+
+```cpp
+struct TraitRef {
+    SymbolId declaration;      // 真实 trait 声明
+    Vector<TypeId> args;       // 按声明顺序的类型实参，空表示无参 trait
+};
+
+struct GenericParam { SymbolId symbol; Optional<TraitRef> trait; ... };
+struct TraitDecl { SymbolId symbol, self; Vector<GenericParam> params; ... };
+struct ImplDecl { Vector<GenericParam> params; Optional<TraitRef> trait; ... };
+struct ConstraintCall { TraitRef trait; SymbolId method; ... };
+```
+
+无参 trait 使用空 `args`，它仍是一项 bound，不是多约束列表。`TraitDecl.params`
+保存真实声明参数；本批这些参数无约束。`ImplDecl.trait` 的实参可以引用 impl
+自身参数，包括只出现在 trait 应用中、不出现在 Self 或方法签名中的 phantom
+参数；这些参数仍进入方法实例键。`ConstraintCall.trait` 随所属模板实例替换。
+
+约束缓存、递归检测和 overlap 判断使用 `(实际类型, trait 声明, 完整有序实参)`，
+不能只按 trait `SymbolId`。同一声明的 impl 重叠必须联合求解 Self 与全部实参，
+共享同一个替换表。具体实例最终仍是普通 `Call`，不保留 `ConstraintCall` 或未
+替换的 `TypeParameter`；后端不接触 trait 分派。验证器从真实 Source 重建声明、
+实参顺序、bound、impl 与方法签名，不能只信 producer 记录或可改缓存。
+
 ## 6 调用和求值计划
 
 ```cpp

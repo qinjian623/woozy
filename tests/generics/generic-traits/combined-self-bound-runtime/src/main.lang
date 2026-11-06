@@ -1,0 +1,7 @@
+package app;
+trait Link[A] { func code(owner Self) i32; }
+struct Key {}
+impl Link[Key] for i32 { func code(owner Self) i32 { return owner; } }
+trait Consumer { func use[U Link[Self]](owner Self, value U) i32; }
+impl Consumer for Key { func use[V Link[Self]](owner Self, value V) i32 { return value.code(); } }
+func main() i32 { let key=Key(); return key.use[i32](7)-7; }

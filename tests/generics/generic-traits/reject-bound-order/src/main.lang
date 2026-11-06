@@ -1,0 +1,6 @@
+package app;
+trait Convert[A, B] { func code(owner Self) i32; }
+struct Key {}
+impl Convert[i32, bool] for Key { func code(owner Self) i32 { return 11; } }
+func need[T Convert[bool, i32]](owner T) i32 { return T.code(owner); }
+func main() i32 { return need(Key()); }

@@ -1,0 +1,7 @@
+package app;
+trait Mark[T] { func get(owner Self) i32; }
+struct Holder[U Mark[Later]] { value U; }
+struct Later {}
+impl Mark[Later] for i32 { func get(owner Self) i32 { return owner; } }
+func read[T Mark[Later]](value T) i32 { return value.get(); }
+func main() i32 { let h=Holder[i32](value:7); return read(h.value)-7; }

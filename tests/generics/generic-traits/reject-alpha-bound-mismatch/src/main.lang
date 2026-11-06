@@ -1,0 +1,6 @@
+package app;
+trait Link[A] { func code(owner Self) i32; }
+trait Other[A] { func code(owner Self) i32; }
+trait Consumer { func use[A, U Link[A]](owner Self, key A, value U) i32; }
+impl Consumer for i32 { func use[B, V Other[B]](owner Self, key B, value V) i32 { return value.code(); } }
+func main() i32 { return 0; }

@@ -825,7 +825,7 @@ void constrained_free_move(const fs::path &root) {
   auto item_trait_method = [&](const hir::TraitDecl &trait,
                                const std::string &name) -> SymbolId {
     for (const auto &im : m.impls)
-      if (im.trait == trait.symbol && nominal_name(im.self_type) == "Item")
+      if (im.trait && im.trait->declaration == trait.symbol && nominal_name(im.self_type) == "Item")
         for (auto method : im.methods)
           if (symbol_name(method) == name)
             return method;
@@ -951,7 +951,7 @@ void constrained_free_move(const fs::path &root) {
   for (const auto &n : m.nodes)
     if (m.scopes[n.scope.value].function == read->function.symbol)
       if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
-        need(c->trait == value_trait->symbol, "read template trait changed");
+        need(c->trait.declaration == value_trait->symbol, "read template trait changed");
         need(symbol_name(c->method) == "get",
              "read template method changed");
         ++template_constraints;
@@ -1179,7 +1179,7 @@ void constrained_free_inout(const fs::path &root) {
                               const std::string &type,
                               const std::string &method) -> SymbolId {
     for (const auto &im : m.impls) {
-      if (im.trait != trait.symbol)
+      if (!im.trait || im.trait->declaration != trait.symbol)
         continue;
       auto t = m.types.find(im.self_type);
       if (t && t->kind == hir::TypeKind::SignedInt && type == "i32" &&
@@ -1275,7 +1275,7 @@ void constrained_free_inout(const fs::path &root) {
   for (const auto &n : m.nodes)
     if (m.scopes[n.scope.value].function == replace->function.symbol)
       if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
-        need(c->trait == value_trait->symbol,
+        need(c->trait.declaration == value_trait->symbol,
              "replace template constraint trait changed");
         need(symbol_name(c->method) == "get",
              "replace template constraint method changed");
@@ -4711,7 +4711,7 @@ void constrained_inherent_move(const fs::path &root) {
                           const std::string &type,
                           const std::string &method) -> SymbolId {
     for (const auto &im : m.impls)
-      if (im.trait == trait.symbol && nominal_name(im.self_type) == type)
+      if (im.trait && im.trait->declaration == trait.symbol && nominal_name(im.self_type) == type)
         for (auto candidate : im.methods)
           if (symbol_name(candidate) == method)
             return candidate;
@@ -4744,7 +4744,7 @@ void constrained_inherent_move(const fs::path &root) {
   need(box_impl && maybe_impl,
        "constrained inherent move impl declarations missing");
   need(box_impl->params.size() == 1 && box_impl->params[0].trait &&
-           symbol_name(*box_impl->params[0].trait) == "Value",
+           symbol_name(box_impl->params[0].trait->declaration) == "Value",
        "Box impl layer lost its Value constraint");
   const auto *box_take = method_template(*box_impl, "take");
   const auto *box_static = method_template(*box_impl, "take_static");
@@ -4774,7 +4774,7 @@ void constrained_inherent_move(const fs::path &root) {
            prefix_ok(maybe_take, *maybe_impl, 1),
        "constrained inherent move impl prefix or own suffix changed");
   need(box_take->params[1].trait &&
-           symbol_name(*box_take->params[1].trait) == "Value" &&
+           symbol_name(box_take->params[1].trait->declaration) == "Value" &&
            box_phantom->params[1].trait && box_phantom->params[2].trait &&
            box_left->params[1].trait && box_right->params[1].trait,
        "method own layer lost a declared constraint");
@@ -5029,7 +5029,7 @@ void constrained_inherent_move(const fs::path &root) {
   for (const auto &n : m.nodes) {
     if (m.scopes[n.scope.value].function == box_take->function.symbol)
       if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
-        need(c->trait == value_trait->symbol,
+        need(c->trait.declaration == value_trait->symbol,
              "take template constraint trait changed");
         ++take_template_constraints;
       }
@@ -5343,7 +5343,7 @@ void constrained_inherent_inout(const fs::path &root) {
                           const std::string &type,
                           const std::string &method) -> SymbolId {
     for (const auto &im : m.impls)
-      if (im.trait == trait.symbol && nominal_name(im.self_type) == type)
+      if (im.trait && im.trait->declaration == trait.symbol && nominal_name(im.self_type) == type)
         for (auto candidate : im.methods)
           if (symbol_name(candidate) == method)
             return candidate;
@@ -5357,7 +5357,7 @@ void constrained_inherent_inout(const fs::path &root) {
   need(box_impl && crate_impl && maybe_impl,
        "constrained inherent inout impl declarations missing");
   need(box_impl->params.size() == 1 && box_impl->params[0].trait &&
-           symbol_name(*box_impl->params[0].trait) == "Value",
+           symbol_name(box_impl->params[0].trait->declaration) == "Value",
        "Box impl layer lost its Value constraint");
   need(!crate_impl->params.empty() && !crate_impl->params[0].trait,
        "Crate impl unexpectedly gained a constraint");
@@ -5393,7 +5393,7 @@ void constrained_inherent_inout(const fs::path &root) {
                box_impl->params[0].symbol &&
            box_replace->params[1].symbol != box_replace->params[0].symbol &&
            box_replace->params[1].trait &&
-           symbol_name(*box_replace->params[1].trait) == "Value" &&
+           symbol_name(box_replace->params[1].trait->declaration) == "Value" &&
            box_bump->params.size() == 1 &&
            box_bump->params[0].symbol == box_impl->params[0].symbol &&
            crate_own->params.size() == 2 && crate_own->params[1].trait,
@@ -5626,7 +5626,7 @@ void constrained_inherent_inout(const fs::path &root) {
   for (const auto &n : m.nodes)
     if (m.scopes[n.scope.value].function == box_replace->function.symbol)
       if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
-        need(c->trait == value_trait->symbol,
+        need(c->trait.declaration == value_trait->symbol,
              "replace template constraint trait changed");
         ++replace_template_constraints;
       }
@@ -5848,7 +5848,7 @@ void trait_method_modes(const fs::path &root) {
   auto impl_for = [&](const hir::HirModule &m, SymbolId trait,
                       const std::string &type) -> const hir::ImplDecl * {
     for (const auto &im : m.impls)
-      if (im.trait == trait && nominal_name(m, im.self_type) == type)
+      if (im.trait && im.trait->declaration == trait && nominal_name(m, im.self_type) == type)
         return &im;
     return nullptr;
   };
@@ -5903,7 +5903,7 @@ void trait_method_modes(const fs::path &root) {
   for (const auto &p : take->methods)
     if (name(move, p.symbol) == "take")
       take_prototype = &p;
-  need(take_prototype && move_cc->trait == take->symbol &&
+  need(take_prototype && move_cc->trait.declaration == take->symbol &&
            move_cc->method == take_prototype->symbol &&
            move_cc->method != item_take,
        "constraint call must target the trait prototype");
@@ -6018,7 +6018,7 @@ void trait_method_modes(const fs::path &root) {
   auto [inout_cc_id, inout_cc] =
       constraint_in(inout, forward_inout->function.symbol);
   (void)inout_cc_id;
-  need(inout_cc->trait == adjust->symbol &&
+  need(inout_cc->trait.declaration == adjust->symbol &&
            name(inout, inout_cc->method) == "set" &&
            inout_cc->args.size() == 4 &&
            inout_cc->args[1].label == std::optional<std::string>("log") &&
@@ -6182,7 +6182,7 @@ func main()i32{let s=S(items:[1]);var x i32=0;let r=forward(s,inout x);return r-
     for (auto &n : x.nodes)
       if (x.scopes[n.scope.value].function == tw_forward->function.symbol)
         if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
-          c->trait = right->symbol;
+          c->trait = hir::TraitRef{right->symbol, {}};
           c->method = right->methods.front().symbol;
           return;
         }
@@ -6303,7 +6303,7 @@ func main()i32{return invoke(S(x:1))-1;}
   for (const auto *t : {lg_invoke, lg_unused}) {
     auto [id, cc] = constraint_in(lg, t->function.symbol);
     (void)id;
-    need(cc->trait == lg_trait->symbol &&
+    need(cc->trait.declaration == lg_trait->symbol &&
              name(lg, cc->method) == "ordinary" && cc->args.size() == 1 &&
              cc->args[0].mode == hir::ParamMode::ordinary,
          "ordinary owner-named ConstraintCall shape changed");
@@ -6436,7 +6436,7 @@ void trait_self_inout(const fs::path &root) {
   auto impl_for = [&](const hir::HirModule &m, SymbolId trait,
                       const std::string &type) -> const hir::ImplDecl * {
     for (const auto &im : m.impls)
-      if (im.trait == trait && type_name(m, im.self_type) == type)
+      if (im.trait && im.trait->declaration == trait && type_name(m, im.self_type) == type)
         return &im;
     return nullptr;
   };
@@ -6538,7 +6538,7 @@ void trait_self_inout(const fs::path &root) {
   auto [fail_cc_id, fail_cc] =
       constraint_in(fm, through_fail->function.symbol);
   (void)fail_cc_id;
-  need(fail_cc->trait == flow->symbol &&
+  need(fail_cc->trait.declaration == flow->symbol &&
            source_name(fm, fail_cc->method) == "fail" &&
            fail_cc->args.size() == 5 &&
            fail_cc->args[1].mode == hir::ParamMode::inout &&
@@ -6933,7 +6933,7 @@ func main() i32 {
   });
   invalid(hirs, "trait Self method moved to another trait", [&](auto &x) {
     auto &c = std::get<hir::ConstraintCall>(x.nodes[cc_id].data);
-    c.trait = other_trait->symbol;
+    c.trait = hir::TraitRef{other_trait->symbol, {}};
     c.method = other_trait->methods.front().symbol;
   });
   invalid(hirs, "trait Self concrete instance type argument changed",
@@ -7241,7 +7241,7 @@ func main() i32 {
   auto impl_for = [&](const hir::HirModule &m, SymbolId trait,
                       const std::string &type) -> const hir::ImplDecl * {
     for (const auto &im : m.impls)
-      if (im.trait == trait && type_name(m, im.self_type) == type)
+      if (im.trait && im.trait->declaration == trait && type_name(m, im.self_type) == type)
         return &im;
     return nullptr;
   };
@@ -7753,7 +7753,7 @@ void trait_static_calls() {
         return nullptr;
       }();
       if (impl && impl->trait)
-        need(same_name.resolved->symbols[impl->trait->value].name == "Left",
+        need(same_name.resolved->symbols[impl->trait->declaration.value].name == "Left",
              "Left-bound call selected Right.pick");
     }
 
@@ -7969,7 +7969,7 @@ void trait_static_calls() {
     }();
     need(right != nullptr, "Right trait missing");
     auto &c = std::get<hir::ConstraintCall>(h.nodes[static_id.value].data);
-    c.trait = right->symbol;
+    c.trait = hir::TraitRef{right->symbol, {}};
     c.method = right->methods[0].symbol;
   });
 }
@@ -8275,7 +8275,7 @@ void trait_method_generics(const fs::path &root) {
 
   const hir::ImplDecl *stamp_impl = nullptr;
   for (const auto &im : pm.impls)
-    if (im.trait == stamp->symbol)
+    if (im.trait && im.trait->declaration == stamp->symbol)
       stamp_impl = &im;
   need(stamp_impl, "Stamp impl missing");
   SymbolId stamp_impl_method{0};
@@ -8289,14 +8289,12 @@ void trait_method_generics(const fs::path &root) {
       stamp_template = &t;
   need(stamp_template && stamp_template->params.size() == 2,
        "generic impl prefix plus method-own template parameters missing");
+  std::optional<hir::TraitRef> stamp_bound;
+  for (const auto &tr : pm.traits)
+    if (name(tr.symbol) == "Tag")
+      stamp_bound = hir::TraitRef{tr.symbol, {}};
   need(stamp_template->params[0].symbol == stamp_impl->params[0].symbol &&
-           stamp_template->params[1].trait ==
-               [&] {
-                 for (const auto &tr : pm.traits)
-                   if (name(tr.symbol) == "Tag")
-                     return std::optional(tr.symbol);
-                 return std::optional<SymbolId>{};
-               }(),
+           stamp_template->params[1].trait == stamp_bound,
        "method own bound or impl prefix was lost");
 
   std::map<std::string, const hir::FunctionInstance *> stamp_instances;
@@ -8603,7 +8601,7 @@ func main() i32 {
   auto impl_for = [&](const hir::TraitDecl &tr,
                       const std::string &type) -> const hir::ImplDecl * {
     for (const auto &im : m.impls)
-      if (im.trait == tr.symbol && nominal_name(im.self_type) == type)
+      if (im.trait && im.trait->declaration == tr.symbol && nominal_name(im.self_type) == type)
         return &im;
     return nullptr;
   };
@@ -8680,7 +8678,7 @@ func main() i32 {
   for (const auto &p : take->methods)
     if (name(p.symbol) == "take")
       take_prototype = &p;
-  need(take_prototype && cc->trait == take->symbol &&
+  need(take_prototype && cc->trait.declaration == take->symbol &&
            cc->method == take_prototype->symbol &&
            cc->method != take_method,
        "generic move ConstraintCall target changed");
@@ -8903,9 +8901,9 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
   need(left && right, "same-signature move traits missing");
   const hir::ImplDecl *left_impl = nullptr, *right_impl = nullptr;
   for (const auto &im : tw.impls) {
-    if (im.trait == left->symbol)
+    if (im.trait && im.trait->declaration == left->symbol)
       left_impl = &im;
-    if (im.trait == right->symbol)
+    if (im.trait && im.trait->declaration == right->symbol)
       right_impl = &im;
   }
   need(left_impl && right_impl, "same-signature move impls missing");
@@ -8952,7 +8950,7 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
               if (x.scopes[n.scope.value].function ==
                   tw_via->function.symbol)
                 if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
-                  c->trait = right->symbol;
+                  c->trait = hir::TraitRef{right->symbol, {}};
                   c->method = right->methods.front().symbol;
                   return;
                 }
@@ -9283,7 +9281,7 @@ void trait_method_scalar_inout(const fs::path &root) {
   auto impl_for = [&](const hir::HirModule &m, const hir::TraitDecl &tr,
                       const std::string &n) -> const hir::ImplDecl * {
     for (const auto &im : m.impls)
-      if (im.trait == tr.symbol && nominal_name(m, im.self_type) == n)
+      if (im.trait && im.trait->declaration == tr.symbol && nominal_name(m, im.self_type) == n)
         return &im;
     return nullptr;
   };
@@ -9336,7 +9334,7 @@ void trait_method_scalar_inout(const fs::path &root) {
   need(via, "generic trait inout via template missing");
   auto [via_cc_id, via_cc] = constraint_in(generic, via->function.symbol);
   (void)via_cc_id;
-  need(via_cc->trait == flow->symbol && via_cc->args.size() == 4 &&
+  need(via_cc->trait.declaration == flow->symbol && via_cc->args.size() == 4 &&
            via_cc->args[0].parameter_index == 0 &&
            via_cc->args[0].mode == hir::ParamMode::ordinary &&
            via_cc->args[1].parameter_index == 1 &&
@@ -9516,7 +9514,7 @@ func main() i32 {
   need(left && right, "phantom inout traits missing");
   SymbolId left_impl_method{};
   for (const auto &im : ph.value->impls)
-    if (im.trait == left->symbol)
+    if (im.trait && im.trait->declaration == left->symbol)
       for (auto method : im.methods)
         if (source_name(*ph.value, method) == "slot")
           left_impl_method = method;
@@ -9600,7 +9598,7 @@ func main() i32 {
   invalid(*ph.value, "phantom inout trait swapped",
           [&](auto &x) {
             auto &c = std::get<hir::ConstraintCall>(x.nodes[ph_cc_id].data);
-            c.trait = right->symbol;
+            c.trait = hir::TraitRef{right->symbol, {}};
             c.method = right->methods.front().symbol;
           });
   invalid_recomputed(*ph.value, "phantom inout instance arguments",
@@ -10848,6 +10846,730 @@ void aggregate_inout_validation() {
            messages(forged));
 }
 
+
+void generic_trait_applications() {
+  auto good = [](const std::string &s) {
+    auto r = source(s);
+    need(r.success(), s + "\n" + messages(r));
+    auto verified = hir::verify(*r.value);
+    need(verified.success(), messages(verified));
+    return *r.value;
+  };
+  auto bad = [](const std::string &s, const std::string &code) {
+    auto r = source(s);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code) &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         s + "\n" + messages(r));
+  };
+  auto unsupported = [](const std::string &s) {
+    auto r = source(s);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE") &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         s + "\n" + messages(r));
+  };
+  auto scalar = [](const hir::HirModule &m, hir::TypeKind kind,
+                   unsigned bits) -> TypeId {
+    for (uint64_t id = 1; id <= m.types.size(); ++id) {
+      auto t = m.types.find(TypeId{id});
+      if (t && t->kind == kind && t->bits == bits)
+        return TypeId{id};
+    }
+    throw std::runtime_error("scalar type missing from HIR context");
+  };
+  auto same_trait = [](const hir::ImplDecl &im, SymbolId trait,
+                       std::vector<TypeId> args) {
+    return im.trait && im.trait->declaration == trait &&
+           im.trait->args == args;
+  };
+
+  // Same Self, two complete applications whose trait parameters do not occur
+  // in the method signature. Value/T/forwarded calls must each select by the
+  // full bound identity, and concrete instances must be ordinary Calls.
+  const std::string dual =
+      "trait Convert[A,B]{func code(owner Self)i32;}"
+      "struct Key{value i32;}"
+      "impl Convert[i32,bool] for Key{func code(owner Self)i32{"
+      "return owner.value+11;}}"
+      "impl Convert[bool,i32] for Key{func code(owner Self)i32{"
+      "return owner.value+22;}}"
+      "func first[T Convert[i32,bool]](owner T)i32{return owner.code();}"
+      "func second[T Convert[bool,i32]](owner T)i32{return T.code(owner);}"
+      "func main()i32{let key=Key(value:3);"
+      "if first(key)!=14||second(key)!=25{return 1;}return 0;}";
+  auto dual_module = good(dual);
+  const hir::TraitDecl *convert = nullptr;
+  for (const auto &t : dual_module.traits)
+    if (dual_module.resolved->symbols[t.symbol.value].name == "Convert")
+      convert = &t;
+  need(convert && convert->params.size() == 2,
+       "generic trait parameters were not published");
+  for (const auto &p : convert->params)
+    need(!p.trait, "generic trait parameter gained a bound");
+  auto i32 = scalar(dual_module, hir::TypeKind::SignedInt, 32);
+  auto bool_type = scalar(dual_module, hir::TypeKind::Bool, 0);
+  const hir::ImplDecl *first_impl = nullptr;
+  const hir::ImplDecl *second_impl = nullptr;
+  for (const auto &im : dual_module.impls)
+    if (same_trait(im, convert->symbol, {i32, bool_type}))
+      first_impl = &im;
+    else if (same_trait(im, convert->symbol, {bool_type, i32}))
+      second_impl = &im;
+  need(first_impl && second_impl,
+       "same-Self complete trait applications were merged or lost");
+  const hir::FunctionTemplate *first_template = nullptr;
+  const hir::FunctionTemplate *second_template = nullptr;
+  for (const auto &t : dual_module.templates) {
+    auto name = dual_module.resolved->symbols[t.function.symbol.value].name;
+    if (name == "first")
+      first_template = &t;
+    if (name == "second")
+      second_template = &t;
+  }
+  need(first_template && second_template &&
+           first_template->params.size() == 1 &&
+           first_template->params[0].trait &&
+           first_template->params[0].trait->declaration == convert->symbol &&
+           first_template->params[0].trait->args ==
+               std::vector<TypeId>{i32, bool_type} &&
+           second_template->params[0].trait->args ==
+               std::vector<TypeId>{bool_type, i32},
+       "template bounds did not retain ordered trait arguments");
+  size_t constraints = 0;
+  for (const auto &n : dual_module.nodes)
+    if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+      need(c->trait.declaration == convert->symbol &&
+               c->trait.args.size() == 2,
+           "ConstraintCall lost its complete trait application");
+      ++constraints;
+    }
+  need(constraints == 2,
+       "template bodies did not retain both phantom applications");
+  auto instance_of = [&](const hir::FunctionTemplate &t)
+      -> const hir::FunctionInstance * {
+    for (const auto &i : dual_module.instances)
+      if (i.origin == t.function.symbol)
+        return &i;
+    return nullptr;
+  };
+  auto first_instance = instance_of(*first_template);
+  auto second_instance = instance_of(*second_template);
+  need(first_instance && second_instance,
+       "phantom generic instances were not created");
+  auto concrete_code = [&](SymbolId owner) -> std::vector<SymbolId> {
+    std::vector<SymbolId> result;
+    for (const auto &n : dual_module.nodes)
+      if (dual_module.scopes[n.scope.value].function == owner)
+        if (auto c = std::get_if<hir::Call>(&n.data);
+            c && c->direct_symbol &&
+            dual_module.resolved->symbols[c->direct_symbol->value].name ==
+                "code") {
+          need(c->type_args.empty(),
+               "concrete phantom call retained type arguments");
+          result.push_back(*c->direct_symbol);
+        }
+    return result;
+  };
+  auto first_calls = concrete_code(first_instance->symbol);
+  auto second_calls = concrete_code(second_instance->symbol);
+  need(first_calls.size() == 1 && second_calls.size() == 1 &&
+           first_calls[0] != second_calls[0],
+       "same-signature phantom implementations shared a method target");
+  auto origin_is = [&](SymbolId instance, const hir::ImplDecl &impl) {
+    for (auto method : impl.methods)
+      if (method == instance)
+        return true;
+    for (const auto &i : dual_module.instances)
+      if (i.symbol == instance)
+        for (auto method : impl.methods)
+          if (i.origin == method)
+            return true;
+    return false;
+  };
+  need(origin_is(first_calls[0], *first_impl) &&
+           origin_is(second_calls[0], *second_impl),
+       "phantom value/T call selected the other complete application");
+
+  // Joint overlap: Box[bool] has two distinct applications; the same pair
+  // with Match[bool,Y] overlaps on Self and arguments together and must be
+  // rejected at declaration time.
+  good("trait Match[A,B]{func code(owner Self)i32;}"
+       "struct Box[T]{value T;}"
+       "impl[X] Match[X,bool] for Box[X]{func code(owner Self)i32{return 31;}}"
+       "impl[Y] Match[i32,Y] for Box[bool]{func code(owner Self)i32{return 42;}}"
+       "func left[T Match[bool,bool]](owner T)i32{return owner.code();}"
+       "func right[T Match[i32,bool]](owner T)i32{return T.code(owner);}"
+       "func main()i32{let x=Box[bool](value:true);"
+       "if left(x)!=31||right(x)!=42{return 1;}return 0;}");
+  bad("trait Match[A,B]{func code(owner Self)i32;}"
+      "struct Box[T]{value T;}"
+      "impl[X] Match[X,bool] for Box[X]{func code(owner Self)i32{return 31;}}"
+      "impl[Y] Match[bool,Y] for Box[bool]{func code(owner Self)i32{return 42;}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Convert[A,B]{func code(owner Self)i32;}"
+      "struct Key{}"
+      "impl Convert[i32] for Key{func code(owner Self)i32{return 11;}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Convert[A,B]{func code(owner Self)i32;}"
+      "struct Key{}"
+      "impl Convert[i32,bool] for Key{func code(owner Self)i32{return 11;}}"
+      "func need[T Convert[bool,i32]](owner T)i32{return T.code(owner);}"
+      "func main()i32{return need(Key());}", "E_TYPE_MISMATCH");
+  bad("trait Convert[A,B]{func code(owner Self)i32;}"
+      "struct Key{}"
+      "impl Convert[i32,bool] for Key{func code(owner Self)i32{return 11;}}"
+      "impl Convert[bool,i32] for Key{func code(owner Self)i32{return 22;}}"
+      "func main()i32{let key=Key();let result i32=key.code();return result;}",
+      "E_TYPE_MISMATCH");
+  bad("trait Convert[A,B]{func get(owner Self)A;}"
+      "struct Key{}"
+      "impl Convert[i32,bool] for Key{func get(owner Self)i32{return 11;}}"
+      "impl Convert[bool,i32] for Key{func get(owner Self)bool{return true;}}"
+      "func main()i32{let key=Key();let result i32=key.get();return result-11;}",
+      "E_TYPE_MISMATCH");
+  // A generic trait's own methods remain an explicit source capability gap.
+  unsupported("trait New[A]{func identity[U](owner Self,value U)U;}"
+              "func main()i32{return 0;}");
+  unsupported("trait New[A]{func take(owner Self,value move A)A;}"
+              "func main()i32{return 0;}");
+  unsupported("trait New[A]{func update(owner Self,slot inout i32)Unit;}"
+              "func main()i32{return 0;}");
+
+  // An impl parameter that occurs only in the trait application must enter
+  // the method instance key even though the checked signature never shows it.
+  const std::string phantom =
+      "trait Tag[A]{func mark(owner Self)i32;}"
+      "struct Mark{value i32;}"
+      "impl[U] Tag[U] for Mark{func mark(owner Self)i32{return owner.value+6;}}"
+      "func use[T Tag[i32]](owner T)i32{return T.mark(owner);}"
+      "func main()i32{let mark=Mark(value:1);"
+      "if use(mark)!=7{return 1;}return 0;}";
+  auto phantom_module = good(phantom);
+  auto phantom_i32 = scalar(phantom_module, hir::TypeKind::SignedInt, 32);
+  auto phantom_bool = scalar(phantom_module, hir::TypeKind::Bool, 0);
+  const hir::ImplDecl *tag_impl = nullptr;
+  const hir::TraitDecl *tag_trait = nullptr;
+  for (const auto &t : phantom_module.traits)
+    if (phantom_module.resolved->symbols[t.symbol.value].name == "Tag")
+      tag_trait = &t;
+  for (const auto &im : phantom_module.impls)
+    if (im.trait && tag_trait && im.trait->declaration == tag_trait->symbol)
+      tag_impl = &im;
+  need(tag_trait && tag_trait->params.size() == 1 && tag_impl &&
+           tag_impl->params.size() == 1 && tag_impl->trait->args.size() == 1 &&
+           tag_impl->trait->args[0] ==
+               [&] {
+                 for (uint64_t id = 1; id <= phantom_module.types.size(); ++id) {
+                   auto t = phantom_module.types.find(TypeId{id});
+                   if (t->kind == hir::TypeKind::TypeParameter &&
+                       t->declaration == tag_impl->params[0].symbol)
+                     return TypeId{id};
+                 }
+                 return TypeId{0};
+               }(),
+       "phantom impl parameter was not the only trait argument");
+  const hir::FunctionInstance *mark_instance = nullptr;
+  for (const auto &i : phantom_module.instances)
+    if (tag_impl && i.origin == tag_impl->methods[0])
+      mark_instance = &i;
+  need(mark_instance && mark_instance->type_args.size() == 1 &&
+           mark_instance->type_args[0] == phantom_i32,
+       "trait-application-only impl parameter was absent from the instance key");
+  auto mark_function = [&](SymbolId id) -> const hir::HirFunction * {
+    for (const auto &f : phantom_module.functions)
+      if (f.symbol == id)
+        return &f;
+    return nullptr;
+  };
+  need(mark_function(mark_instance->symbol) != nullptr,
+       "phantom method instance function missing");
+  bool saw_phantom_call = false;
+  for (const auto &n : phantom_module.nodes)
+    if (auto c = std::get_if<hir::Call>(&n.data);
+        c && c->direct_symbol == mark_instance->symbol) {
+      need(c->type_args.empty(), "concrete phantom call retained arguments");
+      saw_phantom_call = true;
+    }
+  need(saw_phantom_call, "concrete phantom call target missing");
+
+  // Corrupt each identity component independently. Recomputing ownership must
+  // not launder a bad trait application or a forged instance key.
+  invalid_recomputed(phantom_module, "swap impl trait argument", [&](auto &x) {
+    for (auto &im : x.impls)
+      if (im.trait && tag_trait && im.trait->declaration == tag_trait->symbol)
+        im.trait->args[0] = phantom_bool;
+  });
+  invalid_recomputed(phantom_module, "drop trait application argument",
+                     [&](auto &x) {
+    for (auto &im : x.impls)
+      if (im.trait && tag_trait &&
+          im.trait->declaration == tag_trait->symbol)
+        im.trait->args.clear();
+  });
+  invalid_recomputed(phantom_module, "swap template bound argument",
+                     [&](auto &x) {
+    for (auto &t : x.templates)
+      for (auto &p : t.params)
+        if (p.trait && tag_trait && p.trait->declaration == tag_trait->symbol)
+          p.trait->args[0] = phantom_bool;
+  });
+  invalid_recomputed(phantom_module, "swap constraint call argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        c->trait.args[0] = phantom_bool;
+        changed = true;
+      }
+    need(changed, "missing ConstraintCall corruption target");
+  });
+  invalid_recomputed(phantom_module, "forge phantom instance key",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &i : x.instances)
+      if (tag_impl && i.origin == tag_impl->methods[0]) {
+        i.type_args[0] = phantom_bool;
+        changed = true;
+      }
+    need(changed, "missing phantom instance corruption target");
+  });
+  invalid_recomputed(dual_module, "swap complete impl application",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &im : x.impls)
+      if (im.trait && convert && im.trait->declaration == convert->symbol &&
+          im.trait->args == std::vector<TypeId>{i32, bool_type}) {
+        im.trait->args = {bool_type, i32};
+        changed = true;
+      }
+    need(changed, "missing dual application corruption target");
+  });
+  invalid_recomputed(dual_module, "swap template bound application",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &t : x.templates)
+      for (auto &p : t.params)
+        if (p.trait && convert && p.trait->declaration == convert->symbol &&
+            p.trait->args == std::vector<TypeId>{i32, bool_type}) {
+          p.trait->args = {bool_type, i32};
+          changed = true;
+        }
+    need(changed, "missing dual bound corruption target");
+  });
+  invalid_recomputed(dual_module, "drop constraint call argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+        c->trait.args.pop_back();
+        changed = true;
+      }
+    need(changed, "missing constraint argument corruption target");
+  });
+
+  // Same-shaped phantom applications from two different declarations must not
+  // be interchangeable. Swapping either the impl header or the constraint
+  // call to the other real trait is rejected by the independent Source check.
+  const std::string twin =
+      "trait Left[A]{func pick(owner Self)i32;}"
+      "trait Right[A]{func pick(owner Self)i32;}"
+      "struct Key{}"
+      "impl Left[i32] for Key{func pick(owner Self)i32{return 1;}}"
+      "impl Right[i32] for Key{func pick(owner Self)i32{return 2;}}"
+      "func use[T Left[i32]](owner T)i32{return T.pick(owner);}"
+      "func main()i32{let k=Key();if use(k)!=1{return 1;}return 0;}";
+  auto twin_module = good(twin);
+  SymbolId left_trait{0}, right_trait{0};
+  for (const auto &t : twin_module.traits) {
+    auto name = twin_module.resolved->symbols[t.symbol.value].name;
+    if (name == "Left")
+      left_trait = t.symbol;
+    if (name == "Right")
+      right_trait = t.symbol;
+  }
+  need(left_trait.value && right_trait.value, "twin traits missing");
+  invalid_recomputed(twin_module, "swap constraint trait declaration",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data);
+          c && c->trait.declaration == left_trait) {
+        c->trait.declaration = right_trait;
+        changed = true;
+      }
+    need(changed, "missing twin constraint corruption target");
+  });
+  invalid_recomputed(twin_module, "swap impl trait declaration",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &im : x.impls)
+      if (im.trait && im.trait->declaration == left_trait) {
+        im.trait->declaration = right_trait;
+        changed = true;
+      }
+    need(changed, "missing twin impl corruption target");
+  });
+  invalid_recomputed(twin_module, "drop trait parameter list", [&](auto &x) {
+    bool changed = false;
+    for (auto &tr : x.traits)
+      if (tr.symbol == left_trait || tr.symbol == right_trait) {
+        tr.params.clear();
+        changed = true;
+      }
+    need(changed, "missing trait parameter corruption target");
+  });
+
+  // F1: a bound may name a nominal declared later in the same package. The
+  // real declaration/kind/arity pre-pass must make it visible without
+  // inventing a foreign type, and the bound must still select the real impl.
+  const std::string forward =
+      "trait Mark[T]{func get(owner Self)i32;}"
+      "struct Holder[U Mark[Later]]{value U;}"
+      "struct Later{}"
+      "impl Mark[Later] for i32{func get(owner Self)i32{return owner;}}"
+      "func read[T Mark[Later]](value T)i32{return value.get();}"
+      "func main()i32{let h=Holder[i32](value:7);"
+      "return read(h.value)-7;}";
+  auto forward_module = good(forward);
+  auto forward_i32 = scalar(forward_module, hir::TypeKind::SignedInt, 32);
+  SymbolId mark_symbol{0}, later_symbol{0}, forward_read{0};
+  const hir::NominalDecl *holder = nullptr;
+  const hir::ImplDecl *mark_impl = nullptr;
+  TypeId later_type{0};
+  for (const auto &t : forward_module.traits)
+    if (forward_module.resolved->symbols[t.symbol.value].name == "Mark")
+      mark_symbol = t.symbol;
+  for (uint64_t id = 1; id <= forward_module.types.size(); ++id) {
+    auto t = forward_module.types.find(TypeId{id});
+    if (t->kind == hir::TypeKind::NominalStruct &&
+        forward_module.resolved->symbols[t->declaration.value].name ==
+            "Later" &&
+        t->type_args.empty()) {
+      later_symbol = t->declaration;
+      later_type = TypeId{id};
+    }
+  }
+  for (const auto &d : forward_module.nominals)
+    if (forward_module.resolved->symbols[d.symbol.value].name == "Holder")
+      holder = &d;
+  for (const auto &im : forward_module.impls)
+    if (im.trait && im.trait->declaration == mark_symbol &&
+        im.trait->args == std::vector<TypeId>{later_type})
+      mark_impl = &im;
+  for (const auto &t : forward_module.templates)
+    if (forward_module.resolved->symbols[t.function.symbol.value].name ==
+        "read")
+      forward_read = t.function.symbol;
+  need(mark_symbol.value && later_symbol.value && later_type.value && holder &&
+           holder->params.size() == 1 && holder->params[0].trait &&
+           holder->params[0].trait->declaration == mark_symbol &&
+           holder->params[0].trait->args ==
+               std::vector<TypeId>{later_type} &&
+           mark_impl && forward_read.value,
+       "forward nominal bound was not registered with its real identity");
+  bool forward_call = false;
+  for (const auto &i : forward_module.instances)
+    if (i.origin == forward_read) {
+      for (const auto &n : forward_module.nodes)
+        if (forward_module.scopes[n.scope.value].function == i.symbol)
+          if (auto c = std::get_if<hir::Call>(&n.data);
+              c && c->direct_symbol &&
+              forward_module.resolved->symbols[c->direct_symbol->value].name ==
+                  "get") {
+            need(c->direct_symbol == mark_impl->methods[0],
+                 "forward bound selected the wrong impl method");
+            forward_call = true;
+          }
+    }
+  need(forward_call, "forward bound runtime call target missing");
+  invalid_recomputed(forward_module, "forward nominal bound argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &d : x.nominals)
+      if (holder && d.symbol == holder->symbol &&
+          d.params[0].trait) {
+        d.params[0].trait->args[0] = forward_i32;
+        changed = true;
+      }
+    need(changed, "missing forward nominal corruption target");
+  });
+  invalid_recomputed(forward_module, "forward impl application argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &im : x.impls)
+      if (im.trait && im.trait->declaration == mark_symbol &&
+          im.trait->args == std::vector<TypeId>{later_type}) {
+        im.trait->args[0] = forward_i32;
+        changed = true;
+      }
+    need(changed, "missing forward impl corruption target");
+  });
+
+  // F2/F3: prototype own bounds may name the real trait Self, and impl own
+  // bounds are compared only after the complete positional alpha map.
+  const std::string prototype_self =
+      "trait Link[A]{func code(owner Self)i32;}"
+      "trait Consumer{func use[U Link[Self]](owner Self,value U)i32;}"
+      "func main()i32{return 0;}";
+  good(prototype_self);
+  const std::string alpha_body =
+      "trait Link[A]{func code(owner Self)i32;}"
+      "struct Host{}"
+      "impl Link[bool] for i32{func code(owner Self)i32{return owner;}}"
+      "trait Consumer{func use[A,U Link[A]](owner Self,value U)i32;}"
+      "impl Consumer for Host{func use[B,V Link[B]](owner Self,value V)i32{"
+      "return value.code();}}"
+      "func main()i32{let host=Host();return host.use[bool,i32](9)-9;}";
+  auto alpha_module = good(alpha_body);
+  auto alpha_i32 = scalar(alpha_module, hir::TypeKind::SignedInt, 32);
+  auto alpha_bool = scalar(alpha_module, hir::TypeKind::Bool, 0);
+  SymbolId link_symbol{0};
+  for (const auto &t : alpha_module.traits)
+    if (alpha_module.resolved->symbols[t.symbol.value].name == "Link")
+      link_symbol = t.symbol;
+  SymbolId alpha_use{0}, alpha_code{0};
+  for (const auto &im : alpha_module.impls)
+    if (im.trait) {
+      auto self = alpha_module.types.find(im.self_type);
+      if (self &&
+          alpha_module.resolved->symbols[self->declaration.value].name ==
+              "Host")
+        alpha_use = im.methods[0];
+      if (im.trait->declaration == link_symbol &&
+          im.trait->args == std::vector<TypeId>{alpha_bool})
+        alpha_code = im.methods[0];
+    }
+  const hir::FunctionTemplate *alpha_template = nullptr;
+  for (const auto &t : alpha_module.templates)
+    if (t.function.symbol == alpha_use)
+      alpha_template = &t;
+  need(link_symbol.value && alpha_use.value && alpha_template &&
+           alpha_template->params.size() == 2 &&
+           alpha_template->params[1].trait &&
+           alpha_template->params[1].trait->declaration == link_symbol &&
+           alpha_template->params[1].trait->args.size() == 1,
+       "alpha own bound was not retained on the impl method template");
+  auto own_parameter = [&](const hir::HirModule &m, SymbolId declaration) {
+    for (uint64_t id = 1; id <= m.types.size(); ++id) {
+      auto t = m.types.find(TypeId{id});
+      if (t->kind == hir::TypeKind::TypeParameter &&
+          t->declaration == declaration)
+        return TypeId{id};
+    }
+    return TypeId{0};
+  };
+  auto first_own = own_parameter(
+      alpha_module, alpha_template->params[0].symbol);
+  need(first_own.value &&
+           alpha_template->params[1].trait->args[0] == first_own,
+       "alpha bound did not use the impl's own parameter identity");
+  const hir::FunctionInstance *alpha_instance = nullptr;
+  for (const auto &i : alpha_module.instances)
+    if (i.origin == alpha_use &&
+        i.type_args == std::vector<TypeId>{alpha_bool, alpha_i32})
+      alpha_instance = &i;
+  need(alpha_instance, "alpha runtime instance/key missing");
+  bool alpha_called = false;
+  for (const auto &n : alpha_module.nodes)
+    if (alpha_module.scopes[n.scope.value].function == alpha_instance->symbol)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol &&
+          alpha_module.resolved->symbols[c->direct_symbol->value].name ==
+              "code") {
+        need(c->type_args.empty(),
+             "alpha concrete call retained type arguments");
+        need(c->direct_symbol == alpha_code,
+             "alpha concrete call selected the wrong Link application");
+        alpha_called = true;
+      }
+  need(alpha_called, "alpha runtime call target missing");
+  invalid_recomputed(alpha_module, "alpha impl own bound argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &t : x.templates)
+      if (t.function.symbol == alpha_use && t.params.size() == 2 &&
+          t.params[1].trait) {
+        t.params[1].trait->args[0] = alpha_i32;
+        changed = true;
+      }
+    need(changed, "missing alpha bound corruption target");
+  });
+  invalid_recomputed(alpha_module, "alpha complete instance key",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &i : x.instances)
+      if (alpha_instance && i.symbol == alpha_instance->symbol) {
+        i.type_args[0] = alpha_i32;
+        changed = true;
+      }
+    need(changed, "missing alpha instance corruption target");
+  });
+
+  const std::string self_bound =
+      "trait Link[A]{func code(owner Self)i32;}"
+      "struct Key{}"
+      "impl Link[Key] for i32{func code(owner Self)i32{return owner;}}"
+      "trait Consumer{func use[U Link[Self]](owner Self,value U)i32;}"
+      "impl Consumer for Key{func use[V Link[Self]](owner Self,value V)i32{"
+      "return value.code();}}"
+      "func main()i32{let key=Key();return key.use[i32](7)-7;}";
+  auto self_module = good(self_bound);
+  auto self_i32 = scalar(self_module, hir::TypeKind::SignedInt, 32);
+  SymbolId self_link{0}, self_use{0}, self_code{0};
+  TypeId key_type{0};
+  for (const auto &t : self_module.traits)
+    if (self_module.resolved->symbols[t.symbol.value].name == "Link")
+      self_link = t.symbol;
+  for (uint64_t id = 1; id <= self_module.types.size(); ++id) {
+    auto t = self_module.types.find(TypeId{id});
+    if (t->kind == hir::TypeKind::NominalStruct &&
+        self_module.resolved->symbols[t->declaration.value].name == "Key")
+      key_type = TypeId{id};
+  }
+  for (const auto &im : self_module.impls)
+    if (im.trait) {
+      auto self = self_module.types.find(im.self_type);
+      if (self &&
+          self_module.resolved->symbols[self->declaration.value].name ==
+              "Key")
+        self_use = im.methods[0];
+      if (im.trait->declaration == self_link &&
+          im.trait->args == std::vector<TypeId>{key_type})
+        self_code = im.methods[0];
+    }
+  const hir::FunctionTemplate *self_template = nullptr;
+  for (const auto &t : self_module.templates)
+    if (t.function.symbol == self_use)
+      self_template = &t;
+  need(self_link.value && self_use.value && key_type.value && self_template &&
+           self_template->params.size() == 1 &&
+           self_template->params[0].trait &&
+           self_template->params[0].trait->declaration == self_link &&
+           self_template->params[0].trait->args ==
+               std::vector<TypeId>{key_type},
+       "impl own Self bound was not alpha/substituted to the real Self");
+  const hir::FunctionInstance *self_instance = nullptr;
+  for (const auto &i : self_module.instances)
+    if (i.origin == self_use &&
+        i.type_args == std::vector<TypeId>{self_i32})
+      self_instance = &i;
+  need(self_instance, "combined Self-bound instance/key missing");
+  bool self_called = false;
+  for (const auto &n : self_module.nodes)
+    if (self_module.scopes[n.scope.value].function == self_instance->symbol)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol) {
+        need(c->direct_symbol == self_code,
+             "combined Self-bound call selected the wrong impl method");
+        self_called = true;
+      }
+  need(self_called, "combined Self-bound runtime call target missing");
+  invalid_recomputed(self_module, "combined Self bound argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &t : x.templates)
+      if (t.function.symbol == self_use && !t.params.empty() &&
+          t.params[0].trait) {
+        t.params[0].trait->args[0] = self_i32;
+        changed = true;
+      }
+    need(changed, "missing combined bound corruption target");
+  });
+
+  const std::string mixed_bound =
+      "trait Link[A]{func code(owner Self)i32;}"
+      "trait Pair[A,B]{func pair(owner Self)i32;}"
+      "struct Key{}"
+      "impl Link[bool] for i32{func code(owner Self)i32{return owner;}}"
+      "impl Pair[Key,bool] for i32{func pair(owner Self)i32{return owner;}}"
+      "trait Consumer{func use[A,U Link[A],V Pair[Self,A]]"
+      "(owner Self,key A,u U,v V)i32;}"
+      "impl Consumer for Key{func use[B,X Link[B],Y Pair[Self,B]]"
+      "(owner Self,key B,u X,v Y)i32{return u.code()+v.pair();}}"
+      "func main()i32{let key=Key();"
+      "return key.use[bool,i32,i32](true,9,8)-17;}";
+  auto mixed_module = good(mixed_bound);
+  auto mixed_i32 = scalar(mixed_module, hir::TypeKind::SignedInt, 32);
+  auto mixed_bool = scalar(mixed_module, hir::TypeKind::Bool, 0);
+  SymbolId mixed_use{0};
+  TypeId mixed_key{0};
+  for (const auto &im : mixed_module.impls)
+    if (im.trait) {
+      auto self = mixed_module.types.find(im.self_type);
+      if (self &&
+          mixed_module.resolved->symbols[self->declaration.value].name ==
+              "Key")
+        mixed_use = im.methods[0];
+    }
+  for (uint64_t id = 1; id <= mixed_module.types.size(); ++id) {
+    auto t = mixed_module.types.find(TypeId{id});
+    if (t->kind == hir::TypeKind::NominalStruct &&
+        mixed_module.resolved->symbols[t->declaration.value].name == "Key")
+      mixed_key = TypeId{id};
+  }
+  const hir::FunctionTemplate *mixed_template = nullptr;
+  for (const auto &t : mixed_module.templates)
+    if (t.function.symbol == mixed_use)
+      mixed_template = &t;
+  need(mixed_use.value && mixed_key.value && mixed_template &&
+           mixed_template->params.size() == 3 &&
+           mixed_template->params[1].trait &&
+           mixed_template->params[2].trait,
+       "combined Self/sibling own-bound template is missing");
+  {
+    auto first_own =
+        own_parameter(mixed_module, mixed_template->params[0].symbol);
+    need(first_own.value &&
+             mixed_template->params[1].trait->args ==
+                 std::vector<TypeId>{first_own} &&
+             mixed_template->params[2].trait->args ==
+                 std::vector<TypeId>{mixed_key, first_own},
+         "combined Self/sibling bounds were not fully substituted");
+  }
+  const hir::FunctionInstance *mixed_instance = nullptr;
+  for (const auto &i : mixed_module.instances)
+    if (i.origin == mixed_use &&
+        i.type_args == std::vector<TypeId>{mixed_bool, mixed_i32, mixed_i32})
+      mixed_instance = &i;
+  need(mixed_instance, "combined Self/sibling instance/key missing");
+  invalid_recomputed(mixed_module, "combined Self/sibling bound argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &t : x.templates)
+      if (t.function.symbol == mixed_use && t.params.size() == 3 &&
+          t.params[2].trait) {
+        t.params[2].trait->args[0] = mixed_i32;
+        changed = true;
+      }
+    need(changed, "missing mixed bound corruption target");
+  });
+
+  // Real mismatches stay source errors: different trait declaration,
+  // different Self application, and wrong arity through the forward path.
+  bad("trait Link[A]{func code(owner Self)i32;}"
+      "trait Other[A]{func code(owner Self)i32;}"
+      "trait Consumer{func use[A,U Link[A]](owner Self,key A,value U)i32;}"
+      "impl Consumer for i32{func use[B,V Other[B]](owner Self,key B,"
+      "value V)i32{return value.code();}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Link[A]{func code(owner Self)i32;}"
+      "struct Host{} struct Key{}"
+      "trait Consumer{func use[U Link[Self]](owner Self,value U)i32;}"
+      "impl Consumer for Key{func use[V Link[Host]](owner Self,value V)i32{"
+      "return value.code();}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Mark[T]{}"
+      "struct Holder[U Mark[Later[i32]]]{value U;}"
+      "struct Later{}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  unsupported("trait Tag[T]{} struct Data{items Vec[i32];}"
+              "struct Holder[U Tag[func(inout Data)Unit]]{value U;}"
+              "func main()i32{return 0;}");
+  good("trait Tag[T]{} struct Data{items i32;}"
+       "struct Holder[U Tag[func(inout Data)Unit]]{value U;}"
+       "func main()i32{return 0;}");
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -10919,6 +11641,7 @@ int main(int argc, char **argv) {
     trait_static_self_qualification();
     nested_patterns();
     aggregate_inout_validation();
+    generic_trait_applications();
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

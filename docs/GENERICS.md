@@ -184,12 +184,48 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭 LLVM 为33/33，共180项，无跳过，包含两项T10。新callback项目每套LLVM配置为2次check、3次正式执行、3次观察；方法inout runner全部6份源码通过。原两before与旧F1另6次check、9次正式执行，源码SHA未改，49个保护文件保持原字节。生成Native和预编译LLVM未声称全部经过sanitizer插桩。
 
+## 泛型 trait 的完整应用身份
+
+泛型 trait 现支持多个无约束类型参数、显式 impl 和显式 bound，例如
+`trait Carry[A,B]{func choose(owner Self,left A,right B)B;}` 与
+`impl[T] Carry[i32,T] for Box[T]`。bound、impl 头与 ConstraintCall 都保存真实
+trait 声明加有序类型实参；同一个 Self 可以有 `Convert[i32,bool]` 与
+`Convert[bool,i32]` 两个不同完整应用，方法签名相同也不会合并。
+
+值调用、具体 `Type.method(...)` 和受约束 `T.method(...)` 均按完整应用选择
+prototype/impl；无足够限定的具体直接调用（同 Self 多个应用）仍报源级歧义，
+不按预期返回类型或实参猜另一项 trait。impl 参数即使只由 trait 应用确定
+（phantom，不在 Self 或方法签名中）也进入 `[impl 实参..., 方法实参...]` 实例键，
+具体调用仍是普通直接 `Call`。
+
+重叠判断联合求解 Self 与全部有序实参，共享同一替换表：`Match[X,bool] for
+Box[X]` 与 `Match[i32,Y] for Box[bool]` 不重叠，改第二项为 `Match[bool,Y]`
+后以 X=Y=bool 的实际见证拒绝。trait 实参次序是身份的一部分，错序 bound 不能
+满足 impl；impl 实参数量与 trait 声明不等在声明处拒绝。
+
+本批新泛型 trait 的方法仍限制在 ordinary 参数边界：方法自身类型参数、
+move/inout 以及依赖 trait 参数或 Self 的 inout callback 继续在 Source 报
+`E_CAPABILITY_UNAVAILABLE`，不落成内部 HIR 错误，也不改变非泛型 trait 的既有
+move/inout、Self callback 和 POD 整体 inout 行为。动态 trait 对象、特化、
+关联类型、隐式 trait 参数推断和多 bound 未实施。
+
+验证器从真实 Source 重建 trait 参数列表、bound/impl 的有序应用和方法签名；
+同包内后声明的 nominal 在 bound 中与前置声明等价，不按未登记名称猜测 foreign。
+非泛型 trait 原型的 own bound 可引用该 trait 的真实 Self；原型与 impl 方法
+own bound 先建立 Self、trait 实参和全部方法 own 参数的位置替换，再比较有序
+trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source 错误。
+伪造、删除、换序或互换 TraitRef（含两个同签名 phantom 应用）、伪造 phantom
+实例键，以及重算 ownership 后再验证的坏图都报 `E_IR_INVALID`。外层冻结的
+原样 Source 覆盖同 Self 双 phantom、联合重叠/非重叠、跨包 ordinary Vec 与
+仅由 trait 应用推断的 impl 参数；新 fixture 与 runner 在两后端实际执行。
+
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型 trait、实际 self move/inout，以及非数字/bool 数据的 inout 仍未实施。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数重新赋值继续等待用户选择；初始化表达式读取同名外层绑定的规则已定案并保留。
+泛型 trait 的方法自身泛型/move/inout 组合、实际 self move/inout，以及
+Vec/string/foreign 及含拥有字段聚合的 inout 仍未实施；有限平凡聚合整体 inout 已支持。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案，针对重赋值的诊断实现另批进行；初始化表达式读取同名外层绑定的规则已定案并保留。
 
 ## 递归枚举模式
 

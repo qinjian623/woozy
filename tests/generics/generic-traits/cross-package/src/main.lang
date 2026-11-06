@@ -1,0 +1,15 @@
+package app;
+import "app/lib" as lib;
+func main() i32 {
+    let scalar = lib.Box[bool](value: false);
+    let first = scalar.choose(7, true);
+    let second = lib.Box[bool].choose(scalar, 8, false);
+    let third = lib.relay[i32, bool, lib.Box[bool]](scalar, 9, true);
+    if !first || second || !third { return 1; }
+    let shared Vec[i32] = [40];
+    let owner = lib.Box[Vec[i32]](value: shared);
+    let copy = lib.relay[i32, Vec[i32], lib.Box[Vec[i32]]](owner, 1, shared);
+    copy[0] = 41;
+    if shared[0] != 41 || owner.value[0] != 41 { return 2; }
+    return 0;
+}

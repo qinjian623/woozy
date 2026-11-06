@@ -327,8 +327,11 @@ class Verifier {
   std::map<uint64_t, const FunctionInstance *> instances;
   std::vector<const HirFunction *> all_functions;
   mutable TypeContext substituted;
-  mutable std::map<std::pair<uint64_t, uint64_t>, bool> trait_results;
-  mutable std::set<std::pair<uint64_t, uint64_t>> active_constraints;
+  mutable std::map<std::tuple<uint64_t, uint64_t, std::vector<uint64_t>>,
+                   bool>
+      trait_results;
+  mutable std::set<std::tuple<uint64_t, uint64_t, std::vector<uint64_t>>>
+      active_constraints;
   mutable std::set<std::pair<uint64_t, std::set<uint64_t>>> validated_types;
 
   [[noreturn]] void fail(std::string message,
@@ -620,6 +623,70 @@ class Verifier {
     for (const auto &o : m.resolved->occurrences)
       if (same_ref(o.source, ref)) return o.symbol;
     return {};
+  }
+  const TraitDecl *trait_declaration(SymbolId id) const {
+    for (const auto &t : m.traits)
+      if (t.symbol == id)
+        return &t;
+    return nullptr;
+  }
+  // Rebuild one complete application from the real Source header: the actual
+  // trait declaration followed by the written type arguments in order. This
+  // never trusts a producer-provided TraitRef or a signature cache.
+  TraitRef source_trait_application(modules::NodeRef ref) const {
+    // A qualified application such as lib.Carry records the module alias and
+    // then the real trait on the same syntax node. The last occurrence is the
+    // declared member, matching source_type's qualified-name handling.
+    auto target = unwrapped(ref);
+    std::optional<SymbolId> declaration;
+    for (const auto &o : m.resolved->occurrences)
+      if (same_ref(o.source, target))
+        declaration = o.symbol;
+    need(declaration.has_value() &&
+             symbol(*declaration).kind == modules::SymbolKind::trait,
+         "trait application has no resolved trait declaration");
+    const auto &file =
+        *m.resolved->project->module(ref.module).files.at(ref.file);
+    const auto &syntax = file.node(ref.node);
+    need(syntax.kind == AstKind::NamedType ||
+             syntax.kind == AstKind::NeutralBracket ||
+             syntax.children.empty(),
+         "trait application source kind");
+    std::vector<TypeId> args;
+    if (syntax.kind == AstKind::NeutralBracket) {
+      for (size_t i = 1; i < syntax.children.size(); ++i) {
+        auto child = ref;
+        child.node = syntax.children[i];
+        args.push_back(source_type(child));
+      }
+    } else {
+      for (auto id : syntax.children) {
+        auto child = ref;
+        child.node = id;
+        args.push_back(source_type(child));
+      }
+    }
+    return {*declaration, std::move(args)};
+  }
+  TraitRef trait_self_application(const TraitDecl &tr) const {
+    std::vector<TypeId> args;
+    for (const auto &p : tr.params) {
+      Type t;
+      t.kind = TypeKind::TypeParameter;
+      t.declaration = p.symbol;
+      args.push_back(substituted.intern(std::move(t)));
+    }
+    return {tr.symbol, std::move(args)};
+  }
+  void check_trait_application(const TraitRef &r,
+                               const std::set<uint64_t> &allowed) const {
+    need(symbol(r.declaration).kind == modules::SymbolKind::trait,
+         "trait application declaration is not a trait");
+    const auto *tr = trait_declaration(r.declaration);
+    need(tr && tr->params.size() == r.args.size(),
+         "trait application has the wrong argument count");
+    for (auto a : r.args)
+      valid_type(a, allowed);
   }
   struct SourceMethodCall {
     modules::NodeRef base;
@@ -1000,6 +1067,10 @@ class Verifier {
     auto owner = scope(n.scope).function;
     Substitutions sub;
     sub.push_back({tr.self, c.receiver});
+    need(c.trait.args.size() == tr.params.size(),
+         "constraint call trait application arity");
+    for (size_t i = 0; i < tr.params.size(); ++i)
+      sub.push_back({tr.params[i].symbol, c.trait.args[i]});
     std::vector<TypeId> values;
     if (written->explicit_type_arguments) {
       need(written->explicit_arguments.size() == parameters.size(),
@@ -1014,8 +1085,7 @@ class Verifier {
       need(c.signature == substitute(prototype.signature, sub, substituted),
            "constraint method type arguments differ from signature");
     } else {
-      Substitutions match;
-      match.push_back({tr.self, c.receiver});
+      Substitutions match = sub;
       need(matches(prototype.signature, c.signature, match),
            "constraint method signature does not determine type arguments");
       for (const auto &p : parameters) {
@@ -1069,10 +1139,7 @@ class Verifier {
       }
     need(impl, "type-qualified call target is not an impl method");
     if (impl->trait) {
-      const TraitDecl *trait = nullptr;
-      for (const auto &t : m.traits)
-        if (t.symbol == *impl->trait)
-          trait = &t;
+      const TraitDecl *trait = trait_declaration(impl->trait->declaration);
       need(trait, "type-qualified call impl has no real trait");
       const MethodPrototype *prototype = nullptr;
       for (const auto &p : trait->methods)
@@ -1101,10 +1168,7 @@ class Verifier {
     if (template_qualifier) {
       need(impl->trait.has_value(),
            "T-qualified call selected an inherent method");
-      const TraitDecl *trait = nullptr;
-      for (const auto &t : m.traits)
-        if (t.symbol == *impl->trait)
-          trait = &t;
+      const TraitDecl *trait = trait_declaration(impl->trait->declaration);
       need(trait, "T-qualified call impl has no real trait");
       bool declared = false;
       for (const auto &p : trait->methods)
@@ -1120,10 +1184,18 @@ class Verifier {
         for (const auto &p : candidate.params) {
           auto it = std::find_if(match.begin(), match.end(),
                                  [&](auto x) { return x.first == p.symbol; });
-          if (it == match.end() ||
-              (p.trait && !satisfies(it->second, *p.trait))) {
+          if (it == match.end()) {
             valid = false;
             break;
+          }
+          if (p.trait) {
+            TraitRef bound = *p.trait;
+            for (auto &arg : bound.args)
+              arg = substitute(arg, match, substituted);
+            if (!satisfies(it->second, bound)) {
+              valid = false;
+              break;
+            }
           }
         }
         if (!valid)
@@ -1703,21 +1775,27 @@ class Verifier {
       need(s.definition && s.declaration,
            "source generic parameter lacks a real declaration");
       Source src{*s.definition, *s.declaration};
-      std::optional<SymbolId> bound;
+      std::optional<TraitRef> bound;
       const auto &syntax = file.node(s.definition->node);
       if (!syntax.children.empty()) {
         auto ref = *s.definition;
         ref.node = syntax.children.front();
-        bound = resolved_source(ref);
-        need(bound.has_value(),
-             "generic parameter bound has no resolved trait");
+        bound = source_trait_application(ref);
       }
       result.push_back({sid, bound, src});
     }
     return result;
   }
   bool matches(TypeId pattern, TypeId actual, Substitutions &sub) const {
-    const auto &p = type(pattern), &a = type(actual);
+    // Substituted bound arguments may live in the verifier's derived context,
+    // which is a superset of m.types. Resolve there first; producer TypeIds
+    // keep the same definitions.
+    auto resolve = [&](TypeId id) -> const Type & {
+      if (auto t = substituted.find(id))
+        return *t;
+      return type(id);
+    };
+    const auto &p = resolve(pattern), &a = resolve(actual);
     if (p.kind == TypeKind::TypeParameter) {
       for (auto [s, t] : sub)
         if (s == p.declaration)
@@ -1746,8 +1824,13 @@ class Verifier {
     }
     return true;
   }
-  bool satisfies(TypeId actual, SymbolId trait, size_t depth = 0) const {
-    auto key = std::make_pair(actual.value, trait.value);
+  bool satisfies(TypeId actual, const TraitRef &trait,
+                 size_t depth = 0) const {
+    std::vector<uint64_t> args;
+    for (auto a : trait.args)
+      args.push_back(a.value);
+    auto key = std::make_tuple(actual.value, trait.declaration.value,
+                               std::move(args));
     if (auto it = trait_results.find(key); it != trait_results.end())
       return it->second;
     if (depth >= 64 || !active_constraints.insert(key).second)
@@ -1757,7 +1840,7 @@ class Verifier {
     if (a.kind == TypeKind::TypeParameter) {
       auto contains = [&](const auto &ps) {
         for (auto p : ps)
-          if (p.symbol == a.declaration && p.trait == trait)
+          if (p.symbol == a.declaration && p.trait && *p.trait == trait)
             return true;
         return false;
       };
@@ -1771,66 +1854,101 @@ class Verifier {
         if (contains(im.params))
           count = 1;
       for (const auto &tr : m.traits)
-        if (tr.self == a.declaration && tr.symbol == trait)
+        if (tr.self == a.declaration &&
+            trait_self_application(tr) == trait)
           count = 1;
     } else
-      for (const auto &im : m.impls)
-        if (im.trait == trait) {
-          Substitutions sub;
-          if (!matches(im.self_type, actual, sub))
-            continue;
-          bool valid = true;
-          for (auto p : im.params) {
-            auto it = std::find_if(sub.begin(), sub.end(),
-                                   [&](auto x) { return x.first == p.symbol; });
-            if (it == sub.end() ||
-                (p.trait && !satisfies(it->second, *p.trait, depth + 1))) {
+      for (const auto &im : m.impls) {
+        if (!im.trait || im.trait->declaration != trait.declaration ||
+            im.trait->args.size() != trait.args.size())
+          continue;
+        Substitutions sub;
+        if (!matches(im.self_type, actual, sub))
+          continue;
+        bool matched_args = true;
+        for (size_t i = 0; i < trait.args.size(); ++i)
+          if (!matches(im.trait->args[i], trait.args[i], sub)) {
+            matched_args = false;
+            break;
+          }
+        if (!matched_args)
+          continue;
+        bool valid = true;
+        for (auto p : im.params) {
+          auto it = std::find_if(sub.begin(), sub.end(),
+                                 [&](auto x) { return x.first == p.symbol; });
+          if (it == sub.end()) {
+            valid = false;
+            break;
+          }
+          if (p.trait) {
+            TraitRef bound = *p.trait;
+            for (auto &arg : bound.args)
+              arg = substitute(arg, sub, substituted);
+            if (!satisfies(it->second, bound, depth + 1)) {
               valid = false;
               break;
             }
           }
-          if (valid)
-            ++count;
         }
+        if (valid)
+          ++count;
+      }
     active_constraints.erase(key);
     return trait_results[key] = count == 1;
   }
   void constraints(const std::vector<GenericParam> &ps,
                    const std::vector<TypeId> &args) const {
     need(ps.size() == args.size(), "constraint type argument count");
+    Substitutions sub;
     for (size_t i = 0; i < ps.size(); ++i)
-      if (ps[i].trait)
-        need(satisfies(args[i], *ps[i].trait),
-             "type arguments do not satisfy declared constraints");
+      sub.push_back({ps[i].symbol, args[i]});
+    for (size_t i = 0; i < ps.size(); ++i) {
+      if (!ps[i].trait)
+        continue;
+      TraitRef bound = *ps[i].trait;
+      const auto *tr = trait_declaration(bound.declaration);
+      need(symbol(bound.declaration).kind == modules::SymbolKind::trait && tr &&
+               tr->params.size() == bound.args.size(),
+           "declared constraint application identity/arity");
+      for (auto &arg : bound.args)
+        arg = substitute(arg, sub, substituted);
+      need(satisfies(args[i], bound),
+           "type arguments do not satisfy declared constraints");
+    }
   }
   void finite_layouts() const {
     need(!infinite_value_layout(m, stop), "infinite recursive value layout");
   }
 
-  std::set<uint64_t> parameter_set(const std::vector<GenericParam> &ps) const {
+  // outer_allowed supplies only the real surrounding type environment, such
+  // as a trait prototype's Self. It is never a blanket permission for any
+  // TypeParameter: each caller passes its own actual allowed identity set.
+  std::set<uint64_t> parameter_set(const std::vector<GenericParam> &ps,
+                                   const std::set<uint64_t> &outer_allowed =
+                                       {}) const {
     std::set<uint64_t> result;
     for (const auto &p : ps) {
       declaration(p.symbol, p.source, modules::SymbolKind::type_parameter,
                   AstKind::GenericParameter);
       need(result.insert(p.symbol.value).second, "duplicate generic parameter");
-      if (p.trait)
-        need(symbol(*p.trait).kind == modules::SymbolKind::trait,
-             "constraint trait identity");
       const auto &file = *m.resolved->project->module(p.source.node.module)
                               .files.at(p.source.node.file);
       const auto &syntax = file.node(p.source.node.node);
-      std::optional<SymbolId> declared;
+      std::optional<TraitRef> declared;
       if (!syntax.children.empty()) {
         auto ref = p.source.node;
         ref.node = syntax.children.at(0);
-        for (const auto &o : m.resolved->occurrences)
-          if (same_ref(o.source, ref))
-            declared = o.symbol;
-        need(declared.has_value(), "constraint source has no resolved trait");
+        declared = source_trait_application(ref);
       }
       need(declared == p.trait,
            "template constraint differs from source declaration");
     }
+    std::set<uint64_t> allowed = result;
+    allowed.insert(outer_allowed.begin(), outer_allowed.end());
+    for (const auto &p : ps)
+      if (p.trait)
+        check_trait_application(*p.trait, allowed);
     return result;
   }
   void self_owner(const Source &owner, SymbolId self) const {
@@ -1859,6 +1977,30 @@ class Verifier {
       need(same_ref(entries[i].source.node, ref),
            "declaration member owner/order differs from source");
     }
+  }
+  // Self and every ordered trait argument must admit one common substitution.
+  // Intern a synthetic function type in the verifier's own context so the
+  // shared unifier solves all columns with one binding table.
+  bool impl_patterns_overlap(const ImplDecl &a, const ImplDecl &b) const {
+    if (!a.trait || !b.trait)
+      return type_patterns_overlap(a.self_type, b.self_type, m.types);
+    if (a.trait->args.size() != b.trait->args.size())
+      return false;
+    Type unit_type;
+    unit_type.kind = TypeKind::Unit;
+    Type fa;
+    fa.kind = TypeKind::Function;
+    fa.result = substituted.intern(unit_type);
+    fa.parameters.push_back({ParamMode::ordinary, a.self_type});
+    for (auto t : a.trait->args)
+      fa.parameters.push_back({ParamMode::ordinary, t});
+    Type fb = fa;
+    fb.parameters[0].type = b.self_type;
+    for (size_t i = 0; i < b.trait->args.size(); ++i)
+      fb.parameters[i + 1].type = b.trait->args[i];
+    return type_patterns_overlap(substituted.intern(std::move(fa)),
+                                 substituted.intern(std::move(fb)),
+                                 substituted);
   }
   void declarations() {
     for (const auto &d : m.nominals) {
@@ -1915,6 +2057,11 @@ class Verifier {
                   AstKind::Trait);
       need(traits.insert(tr.symbol.value).second, "duplicate trait identity");
       self_owner(tr.source, tr.self);
+      source_entries(tr.source, AstKind::GenericParameter, tr.params);
+      auto declared_params = parameter_set(tr.params);
+      for (const auto &p : tr.params)
+        need(!p.trait,
+             "generic trait parameter constraints are unsupported");
       std::set<uint64_t> methods;
       for (const auto &method : tr.methods) {
         declaration(method.symbol, method.source, modules::SymbolKind::function,
@@ -1922,8 +2069,12 @@ class Verifier {
         need(methods.insert(method.symbol.value).second,
              "duplicate trait method");
         auto own = source_parameters(method.source);
-        auto ps = parameter_set(own);
+        // The prototype's own bounds may refer to the real trait Self. Put
+        // that exact Self identity into the bound environment before the
+        // bounds are validated; do not add it to the method-own parameters.
+        auto ps = parameter_set(own, {tr.self.value});
         ps.insert(tr.self.value);
+        ps.insert(declared_params.begin(), declared_params.end());
         valid_type(method.signature, ps);
         need(method.signature == source_signature(method.source.node),
              "trait signature differs from source prototype");
@@ -1958,6 +2109,26 @@ class Verifier {
                     !dependent_inout_graph(*sig.throws_type, own_ids, true)),
                "generic trait method dependent inout callback is unsupported");
         }
+        if (!tr.params.empty()) {
+          // This batch models applications of a generic trait but keeps that
+          // trait's methods at the old ordinary boundary. Recheck the real
+          // prototype, not a concrete impl that might coincidentally work.
+          need(own.empty(),
+               "generic trait method own type parameters are unsupported");
+          std::set<uint64_t> dependent{tr.self.value};
+          for (const auto &p : tr.params)
+            dependent.insert(p.symbol.value);
+          for (const auto &p : sig.parameters)
+            need(p.mode == ParamMode::ordinary,
+                 "generic trait method move/inout is unsupported");
+          for (const auto &p : sig.parameters)
+            need(!dependent_inout_graph(p.type, dependent, true),
+                 "generic trait method dependent inout callback is unsupported");
+          need(!dependent_inout_graph(sig.result, dependent, true) &&
+                   (!sig.throws_type ||
+                    !dependent_inout_graph(*sig.throws_type, dependent, true)),
+               "generic trait method dependent inout callback is unsupported");
+        }
         for (const auto &f : m.functions)
           need(f.symbol != method.symbol,
                "trait prototype has fake executable body");
@@ -1967,23 +2138,50 @@ class Verifier {
       }
     }
     for (size_t i = 0; i < m.impls.size(); ++i)
-      for (size_t j = 0; j < i; ++j)
-        need(m.impls[i].trait != m.impls[j].trait ||
-                 !type_patterns_overlap(m.impls[i].self_type,
-                                        m.impls[j].self_type, m.types),
+      for (size_t j = 0; j < i; ++j) {
+        const auto &a = m.impls[i], &b = m.impls[j];
+        const bool same_target = (!a.trait && !b.trait) ||
+                                 (a.trait && b.trait &&
+                                  a.trait->declaration == b.trait->declaration);
+        if (!same_target)
+          continue;
+        need(!impl_patterns_overlap(a, b),
              "duplicate or overlapping impl patterns");
+      }
     for (const auto &im : m.impls) {
       source(im.source);
       self_owner(im.source, im.self_parameter);
-      auto ps = parameter_set(im.params);
+      // An impl parameter bound may refer to the impl's real Self identity.
+      auto ps = parameter_set(im.params, {im.self_parameter.value});
       valid_type(im.self_type, ps);
       need(type(im.self_type).kind == TypeKind::NominalStruct ||
                type(im.self_type).kind == TypeKind::NominalEnum ||
                number(type(im.self_type).kind) ||
                type(im.self_type).kind == TypeKind::Bool,
            "impl self type is not an implemented value type");
-      if (im.trait)
-        need(traits.count(im.trait->value), "impl trait missing");
+      // Rebuild the impl header from the real Source: a trait application
+      // must match the actual declaration and the ordered written arguments,
+      // and the Self type must still be the one declared after `for`.
+      const auto &file = *m.resolved->project->module(im.source.node.module)
+                              .files.at(im.source.node.file);
+      const auto &syntax = file.node(im.source.node.node);
+      std::vector<modules::NodeRef> types;
+      for (auto id : syntax.children)
+        if (file.node(id).kind == AstKind::NamedType) {
+          auto ref = im.source.node;
+          ref.node = id;
+          types.push_back(ref);
+        }
+      need(types.size() == (im.trait ? 2u : 1u),
+           "impl source declaration arity");
+      need(source_type(types.back()) == im.self_type,
+           "impl self type differs from source");
+      if (im.trait) {
+        need(traits.count(im.trait->declaration.value), "impl trait missing");
+        need(source_trait_application(types.front()) == *im.trait,
+             "impl trait application differs from source declaration");
+        check_trait_application(*im.trait, ps);
+      }
     }
     // Independently recheck the stage restriction from the raw trait
     // prototype and real Self SymbolId. A concrete impl type that happens to
@@ -1991,10 +2189,7 @@ class Verifier {
     for (const auto &im : m.impls) {
       if (!im.trait)
         continue;
-      const TraitDecl *tr = nullptr;
-      for (const auto &t : m.traits)
-        if (t.symbol == *im.trait)
-          tr = &t;
+      const TraitDecl *tr = trait_declaration(im.trait->declaration);
       need(tr != nullptr, "impl trait declaration missing");
       for (const auto &proto : tr->methods) {
         SymbolId method{0};
@@ -2368,14 +2563,13 @@ class Verifier {
     auto owner = scope(n.scope).function;
     need(templates.count(owner.value),
          "constraint call survived into concrete execution");
-    const TraitDecl *tr = nullptr;
-    for (const auto &t : m.traits)
-      if (t.symbol == c.trait)
-        tr = &t;
+    const TraitDecl *tr = trait_declaration(c.trait.declaration);
     need(tr, "missing constraint trait");
+    auto owner_allowed_check = allowed(owner);
+    check_trait_application(c.trait, owner_allowed_check);
     bool bounded = false;
     for (auto p : templates.at(owner.value)->params)
-      if (p.trait == c.trait &&
+      if (p.trait && *p.trait == c.trait &&
           type(c.receiver).kind == TypeKind::TypeParameter &&
           type(c.receiver).declaration == p.symbol)
         bounded = true;
@@ -2648,28 +2842,42 @@ class Verifier {
                  y.children.size() == cc->args.size(),
              "instance constraint call metadata");
         const auto receiver = substitute(cc->receiver, sub, substituted);
+        std::vector<TypeId> required_args;
+        for (auto a : cc->trait.args)
+          required_args.push_back(substitute(a, sub, substituted));
         const ImplDecl *impl = nullptr;
+        Substitutions impl_sub;
         for (const auto &im : m.impls) {
-          if (im.trait != cc->trait)
+          if (!im.trait ||
+              im.trait->declaration != cc->trait.declaration ||
+              im.trait->args.size() != required_args.size())
             continue;
+          // Select by Self and every ordered trait argument jointly, sharing
+          // one substitution table so phantom-only impl parameters are bound.
           Substitutions match;
           if (!matches(im.self_type, receiver, match))
             continue;
+          bool matched = true;
+          for (size_t a = 0; a < required_args.size(); ++a)
+            if (!matches(im.trait->args[a], required_args[a], match)) {
+              matched = false;
+              break;
+            }
+          if (!matched)
+            continue;
           need(!impl, "ambiguous instance constraint impl");
           impl = &im;
+          impl_sub = std::move(match);
         }
         need(impl, "instance constraint call has no impl");
-        const TraitDecl *trait = nullptr;
+        const TraitDecl *trait = trait_declaration(cc->trait.declaration);
         const MethodPrototype *prototype = nullptr;
-        for (const auto &tr : m.traits)
-          if (tr.symbol == cc->trait) {
-            trait = &tr;
-            for (const auto &p : tr.methods)
-              if (p.symbol == cc->method) {
-                need(!prototype, "duplicate instance constraint method");
-                prototype = &p;
-              }
-          }
+        if (trait)
+          for (const auto &p : trait->methods)
+            if (p.symbol == cc->method) {
+              need(!prototype, "duplicate instance constraint method");
+              prototype = &p;
+            }
         need(trait && prototype, "instance constraint prototype missing");
         std::optional<SymbolId> expected;
         for (auto method : impl->methods)
@@ -2680,9 +2888,6 @@ class Verifier {
         need(expected.has_value(), "instance constraint impl method missing");
         auto method_args =
             constraint_method_arguments(x, *cc, *trait, *prototype);
-        Substitutions impl_sub;
-        need(matches(impl->self_type, receiver, impl_sub),
-             "instance constraint impl receiver mismatch");
         std::vector<TypeId> complete;
         for (const auto &p : impl->params) {
           auto it = std::find_if(impl_sub.begin(), impl_sub.end(),
@@ -2913,12 +3118,11 @@ class Verifier {
                "concrete template body has no instance origin record");
     for (const auto &im : m.impls)
       if (im.trait) {
-        const TraitDecl *tr = nullptr;
-        for (const auto &t : m.traits)
-          if (t.symbol == *im.trait)
-            tr = &t;
+        const TraitDecl *tr = trait_declaration(im.trait->declaration);
         need(tr && im.methods.size() == tr->methods.size(),
              "impl method count");
+        need(im.trait->args.size() == tr->params.size(),
+             "impl trait application arity");
         for (const auto &p : tr->methods) {
           const HirFunction *f = nullptr;
           for (auto id : im.methods)
@@ -2939,14 +3143,28 @@ class Verifier {
           need(own.size() == prototype_own.size(),
                "impl method own generic count mismatch");
           Substitutions alpha{{tr->self, im.self_type}};
+          for (size_t i = 0; i < tr->params.size(); ++i)
+            alpha.push_back({tr->params[i].symbol, im.trait->args[i]});
+          // Complete the positional own-parameter map first, then compare
+          // each bound after substituting its ordered trait arguments.
           for (size_t i = 0; i < own.size(); ++i) {
-            need(own[i].trait == prototype_own[i].trait,
-                 "impl method generic bound mismatch");
             Type parameter;
             parameter.kind = TypeKind::TypeParameter;
             parameter.declaration = own[i].symbol;
             alpha.push_back({prototype_own[i].symbol,
                              substituted.intern(parameter)});
+          }
+          for (size_t i = 0; i < own.size(); ++i) {
+            need(static_cast<bool>(own[i].trait) ==
+                     static_cast<bool>(prototype_own[i].trait),
+                 "impl method generic bound presence mismatch");
+            if (prototype_own[i].trait) {
+              TraitRef expected = *prototype_own[i].trait;
+              for (auto &arg : expected.args)
+                arg = substitute(arg, alpha, substituted);
+              need(expected == *own[i].trait,
+                   "impl method generic bound mismatch");
+            }
           }
           need(f->signature == substitute(p.signature, alpha, substituted),
                "impl method signature mismatch");
@@ -4711,11 +4929,20 @@ std::string dump(const HirModule &m) {
     if (b.owner) s << b.owner->value; else s << '-';
     s << " read_error=" << b.read_error.value << '\n';
   }
+  auto trait_ref = [&](const TraitRef &r) {
+    s << r.declaration.value << '[';
+    for (size_t i = 0; i < r.args.size(); ++i) {
+      if (i)
+        s << ',';
+      s << r.args[i].value;
+    }
+    s << ']';
+  };
   auto params = [&](const auto &ps) {
     for (const auto &p : ps) {
       s << " generic=" << p.symbol.value << ':';
       if (p.trait)
-        s << p.trait->value;
+        trait_ref(*p.trait);
       else
         s << '-';
     }
@@ -4741,6 +4968,7 @@ std::string dump(const HirModule &m) {
   }
   for (const auto &t : m.traits) {
     s << "trait " << t.symbol.value << " self=" << t.self.value;
+    params(t.params);
     print_source(s, t.source);
     s << '\n';
     for (const auto &p : t.methods) {
@@ -4755,7 +4983,7 @@ std::string dump(const HirModule &m) {
     s << "impl self=" << im.self_type.value
       << " self_parameter=" << im.self_parameter.value << " trait=";
     if (im.trait)
-      s << im.trait->value;
+      trait_ref(*im.trait);
     else
       s << '-';
     params(im.params);
@@ -4919,8 +5147,9 @@ std::string dump(const HirModule &m) {
             for (auto r : data.references)
               s << " reference=" << r.value;
           } else if constexpr (std::is_same_v<T, ConstraintCall>) {
-            s << " trait=" << data.trait.value
-              << " method=" << data.method.value
+            s << " trait=";
+            trait_ref(data.trait);
+            s << " method=" << data.method.value
               << " receiver=" << data.receiver.value
               << " signature=" << data.signature.value;
             for (const auto &a : data.args)

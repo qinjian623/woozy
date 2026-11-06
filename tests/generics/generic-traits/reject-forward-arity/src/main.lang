@@ -1,0 +1,5 @@
+package app;
+trait Mark[T] {}
+struct Holder[U Mark[Later[i32]]] { value U; }
+struct Later {}
+func main() i32 { return 0; }

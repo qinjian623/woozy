@@ -1,0 +1,6 @@
+package app;
+trait Match[A, B] { func code(owner Self) i32; }
+struct Box[T] { value T; }
+impl[X] Match[X, bool] for Box[X] { func code(owner Self) i32 { return 31; } }
+impl[Y] Match[bool, Y] for Box[bool] { func code(owner Self) i32 { return 42; } }
+func main() i32 { return 0; }
