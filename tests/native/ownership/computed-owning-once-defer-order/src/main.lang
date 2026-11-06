@@ -1,0 +1,23 @@
+package app;
+enum Data { Empty; Items(value Vec[i32]); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func make(log inout i64, digit i64, value i32) Data {
+    log = log * 10 + digit;
+    return Data.Items(value: [value]);
+}
+func probe(log inout i64) i32 {
+    switch make(inout log, 1, 7) {
+    case Data.Empty: return 1;
+    case Data.Items(items):
+        defer { mark(inout log, 2); }
+        if items[0] != 7 { return 2; }
+    }
+    mark(inout log, 3);
+    return 0;
+}
+func main() i32 {
+    var log i64 = 0;
+    if probe(inout log) != 0 { return 1; }
+    if log != 123 { return 2; }
+    return 0;
+}

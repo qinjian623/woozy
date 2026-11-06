@@ -593,20 +593,36 @@ class Lower {
       break;
     }
     case hir::NodeKind::switch_: {
+      const auto subject = n.children[0];
+      const bool computed_owning =
+          owning(node(subject).type) &&
+          node(subject).kind() != hir::NodeKind::read;
       ValueId value;
-      if (owning(node(n.children[0]).type)) {
-        auto symbol = std::get<hir::Read>(node(n.children[0]).data).symbol;
+      if (computed_owning) {
+        // Evaluate the subject once. expr() installs the real temporary
+        // slot; the switch full expression cleans only the other live
+        // temporaries of the subject expression, never the result.
+        value = expr(subject);
+        full(id);
+      } else if (owning(node(subject).type)) {
+        auto symbol = std::get<hir::Read>(node(subject).data).symbol;
         value = access(Op::load, slots.at(symbol), s);
         begin_borrow({hir::OwnerKind::binding, symbol.value}, value, s);
-      } else { value = expr(n.children[0]); full(n.children[0]); }
+      } else {
+        value = expr(subject);
+        full(subject);
+      }
       auto after = block();
       loops.emplace(id, std::pair{after, after});
       for (const auto &arm : std::get<hir::Switch>(n.data).arms) {
         auto next = block();
         Extracted extracted;
+        // A failed pattern keeps the same subject value and slot for the
+        // next arm; only a complete match copies payload bindings.
         match_pattern(arm.pattern, value, next, extracted);
         bind_pattern(arm.pattern, value, extracted);
-        full(id);
+        if (!computed_owning)
+          full(id);
         stmt(arm.body);
         if (live())
           jump(after, s);

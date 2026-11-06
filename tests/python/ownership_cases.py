@@ -79,4 +79,183 @@ if local != 6 {return 1;} bump(inout local); if local != 7 {return 2;}
 let values Vec[i32] = [1, 2]; edit(values);
 if values[0] != 7 || values[1] != 8 {return 3;} return 0;}''', {}),
     'owned-callbacks': ('struct S {v Vec[i32];}\nfunc read_vec(v Vec[i32]) i32 {let saved=v;return saved[0];}\nfunc read_struct(s S) i32 {let saved=s;return saved.v[0];}\nfunc apply_vec(cb func(Vec[i32]) i32,v Vec[i32]) i32 {return cb(v);}\nfunc apply_struct(cb func(S) i32,s S) i32 {return cb(s);}\nfunc main() i32 {if apply_vec(read_vec,[5])!=5 || apply_struct(read_struct,S(v:[6]))!=6 {return 1;}return 0;}\n', {}),
+    'computed-owning-once-defer-order': ('''enum Data { Empty; Items(value Vec[i32]); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func make(log inout i64, digit i64, value i32) Data {
+    log = log * 10 + digit;
+    return Data.Items(value: [value]);
+}
+func probe(log inout i64) i32 {
+    switch make(inout log, 1, 7) {
+    case Data.Empty: return 1;
+    case Data.Items(items):
+        defer { mark(inout log, 2); }
+        if items[0] != 7 { return 2; }
+    }
+    mark(inout log, 3);
+    return 0;
+}
+func main() i32 {
+    var log i64 = 0;
+    if probe(inout log) != 0 { return 1; }
+    if log != 123 { return 2; }
+    return 0;
+}''', {'sequence': [['event', 2], ['free', 0], ['event', 3]]}),
+    'computed-owning-construction-move-empty': ('''enum Data { Empty; Items(value Vec[i32]); }
+func main() i32 {
+    var x = Data.Items(value: [9]);
+    switch Data.Items(value: [7]) {
+    case Data.Empty: return 1;
+    case Data.Items(items):
+        if items[0] != 7 { return 2; }
+    }
+    switch move x {
+    case Data.Empty: return 3;
+    case Data.Items(items):
+        if items[0] != 9 { return 4; }
+    }
+    switch Data.Empty {
+    case Data.Empty:
+    case Data.Items(items): return 5;
+    }
+    return 0;
+}''', {'frees': [1, 0]}),
+    'computed-owning-loop-break-continue': ('''enum Data { Empty; Items(value Vec[i32]); }
+func make(calls inout i32, value i32) Data {
+    calls = calls + 1;
+    return Data.Items(value: [value]);
+}
+func main() i32 {
+    var calls i32 = 0;
+    var log i64 = 0;
+    var sum i32 = 0;
+    var after i32 = 0;
+    for var i i32 = 0; i < 3; i += 1 {
+        switch make(inout calls, i) {
+        case Data.Empty: return 1;
+        case Data.Items(items):
+            defer { sum += items[0]; log = log * 10 + i64(i + 1); }
+            if i == 0 { continue; }
+            if i == 1 { break; }
+            sum += 100;
+        }
+        after += 1;
+    }
+    if calls != 3 || log != 123 || sum != 103 || after != 2 { return 2; }
+    return 0;
+}''', {'frees': [0, 1, 2]}),
+    'computed-owning-catch-throw-nested': ('''enum Data { Empty; Items(value Vec[i32]); }
+enum Failure { Bad(value Vec[i32]); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func fail() i32 throws Failure { throw Failure.Bad(value: [3]); }
+func probe(log inout i64) i32 throws Failure {
+    switch Data.Items(value: [7]) {
+    case Data.Empty: return 1;
+    case Data.Items(items):
+        mark(inout log, 1);
+        try { let n = fail(); if n != 0 { return 2; } }
+        catch e Failure {
+            mark(inout log, 2);
+            switch e {
+            case Failure.Bad(p): if p[0] != 3 { return 3; }
+            }
+            if items[0] != 7 { return 4; }
+        }
+        switch Data.Items(value: [9]) {
+        case Data.Empty: return 5;
+        case Data.Items(inner):
+            mark(inout log, 5);
+            if inner[0] != 9 { return 6; }
+        }
+        mark(inout log, 6);
+        if items[0] != 7 { return 7; }
+        throw Failure.Bad(value: items);
+    }
+}
+func main() i32 {
+    var log i64 = 0;
+    try { probe(inout log); return 8; }
+    catch e Failure {
+        switch e {
+        case Failure.Bad(items):
+            mark(inout log, 7);
+            if items[0] != 7 { return 9; }
+        }
+    }
+    if log != 12567 { return 10; }
+    return 0;
+}''', {'sequence': [['event', 1], ['event', 2], ['free', 1], ['event', 5], ['free', 2], ['event', 6], ['event', 7], ['free', 0]]}),
+    'computed-owning-return-payload': ('''enum Data { Empty; Items(value Vec[i32]); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func make(log inout i64, digit i64, value i32) Data {
+    log = log * 10 + digit;
+    return Data.Items(value: [value]);
+}
+func take(log inout i64) Vec[i32] {
+    switch make(inout log, 1, 7) {
+    case Data.Empty: return [0];
+    case Data.Items(items):
+        defer { mark(inout log, 2); }
+        return items;
+    }
+}
+func probe(log inout i64) i32 {
+    let result = take(inout log);
+    if log != 12 || result[0] != 7 { return 1; }
+    result[0] = 8;
+    mark(inout log, 3);
+    return 0;
+}
+func main() i32 {
+    var log i64 = 0;
+    if probe(inout log) != 0 { return 2; }
+    if log != 123 { return 3; }
+    return 0;
+}''', {'sequence': [['event', 2], ['event', 3], ['free', 0]]}),
+    'computed-owning-error-escapes-arm': ('''enum Data { Empty; Items(value Vec[i32]); }
+enum Failure { Bad; }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func fail() i32 throws Failure { throw Failure.Bad; }
+func probe(log inout i64) i32 throws Failure {
+    switch Data.Items(value: [7]) {
+    case Data.Empty: return 1;
+    case Data.Items(items):
+        defer { mark(inout log, 2); }
+        let n = fail();
+        mark(inout log, 3);
+        return n;
+    }
+}
+func main() i32 {
+    var log i64 = 0;
+    try { probe(inout log); return 1; }
+    catch e Failure { mark(inout log, 4); }
+    if log != 24 { return 2; }
+    return 0;
+}''', {'sequence': [['event', 2], ['free', 0], ['event', 4]]}),
+    'computed-owning-recursive-pattern': ('''enum Inner { None; Some(value Vec[i32]); }
+enum Outer { Empty; Wrap(item Inner); Pair(inner Inner, tag i32); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func make(log inout i64) Outer {
+    log = log * 10 + 1;
+    return Outer.Wrap(item: Inner.Some(value: [7]));
+}
+func probe(log inout i64) i32 {
+    switch make(inout log) {
+    case Outer.Empty: return 1;
+    case Outer.Wrap(Inner.None): return 2;
+    case Outer.Wrap(Inner.Some(items)):
+        mark(inout log, 2);
+        if items[0] != 7 { return 3; }
+    case Outer.Pair(inner, tag): return 4;
+    }
+    mark(inout log, 3);
+    return 0;
+}
+func main() i32 {
+    var log i64 = 0;
+    if probe(inout log) != 0 { return 1; }
+    if log != 123 { return 2; }
+    return 0;
+}''', {'sequence': [['event', 2], ['free', 0], ['event', 3]]}),
 }

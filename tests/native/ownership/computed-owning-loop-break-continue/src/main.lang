@@ -1,0 +1,25 @@
+package app;
+enum Data { Empty; Items(value Vec[i32]); }
+func make(calls inout i32, value i32) Data {
+    calls = calls + 1;
+    return Data.Items(value: [value]);
+}
+func main() i32 {
+    var calls i32 = 0;
+    var log i64 = 0;
+    var sum i32 = 0;
+    var after i32 = 0;
+    for var i i32 = 0; i < 3; i += 1 {
+        switch make(inout calls, i) {
+        case Data.Empty: return 1;
+        case Data.Items(items):
+            defer { sum += items[0]; log = log * 10 + i64(i + 1); }
+            if i == 0 { continue; }
+            if i == 1 { break; }
+            sum += 100;
+        }
+        after += 1;
+    }
+    if calls != 3 || log != 123 || sum != 103 || after != 2 { return 2; }
+    return 0;
+}

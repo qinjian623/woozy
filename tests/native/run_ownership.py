@@ -50,9 +50,11 @@ def main():
        a.root/'tests/native/vec_observer.cpp','-o',out/'observe']);ok(r)
     row['observe']=r=command([out/'observe']);assert r['exit']==code,r
     live={};allocations=[];frees=[];events=[];obs=[];drops={};iterations={}
+    merged=[]
     for line in r['stderr'].splitlines():
      if line.startswith('VEC:'):
       _,event,identity,detail=line.split(':');event=int(event);detail=int(detail);events.append([event,identity,detail])
+      merged.append(('vec',event,identity))
       if event==1:
        assert identity not in live,('allocated live identity',line)
        live[identity]=detail;allocations.append([identity,detail]);drops[identity]=[];iterations[identity]=0
@@ -64,7 +66,9 @@ def main():
       elif event==4:assert identity in live;drops[identity].append(detail)
       elif event in (6,7):assert identity in live;iterations[identity]+=1 if event==6 else -1;assert iterations[identity]>=0
       else:assert identity in live,('operation on freed identity',line)
-     elif line.startswith('OBS:'):obs.append(list(map(int,line.split(':')[1:])))
+     elif line.startswith('OBS:'):
+      parts=list(map(int,line.split(':')[1:]));obs.append(parts)
+      merged.append(('obs',*parts))
      elif panic:assert line.startswith('LANG_NATIVE_PANIC:v1:'),line
      else:assert line=='LANG_TYPED_ERROR: app.E',line
     if not panic:assert not live,('still live',live)
@@ -74,6 +78,31 @@ def main():
     if ident=='argument-order-failure':assert [x[1] for x in obs if x[0]==1]==[1,2,3],obs
     if ident=='defer-before-destroy':assert [x[2] for x in obs if x[0]==2]==[17],obs
     if ident=='owned-return-error-defer':assert [x[1] for x in obs if x[0]==1]==[2,1,4,3],obs
+    if ident=='computed-owning-once-defer-order':
+     assert len(allocations)==1 and len(frees)==1,(allocations,frees)
+     assert merged.index(('obs',1,2,12))<merged.index(('vec',5,allocations[0][0]))<merged.index(('obs',2,0,123)),merged
+    if ident=='computed-owning-return-payload':
+     assert len(allocations)==1 and len(frees)==1,(allocations,frees)
+     assert merged.index(('obs',1,2,12))<merged.index(('vec',5,allocations[0][0]))<merged.index(('obs',2,0,123)),merged
+    if ident=='computed-owning-loop-break-continue':
+     assert [x for x in merged if x[0]=='vec' and x[1] in (1,5)]==[('vec',1,allocations[0][0]),('vec',5,allocations[0][0]),('vec',1,allocations[1][0]),('vec',5,allocations[1][0]),('vec',1,allocations[2][0]),('vec',5,allocations[2][0])],merged
+    if ident=='computed-owning-construction-move-empty':
+     assert len(allocations)==2 and len(frees)==2,(allocations,frees)
+     assert [x[0] for x in frees]==[allocations[1][0],allocations[0][0]],frees
+    if ident=='computed-owning-recursive-pattern':
+     assert len(allocations)==1 and len(frees)==1,(allocations,frees)
+     assert merged.index(('obs',1,2,12))<merged.index(('vec',5,allocations[0][0]))<merged.index(('obs',1,3,123)),merged
+    if ident=='computed-owning-error-escapes-arm':
+     assert len(allocations)==1 and len(frees)==1,(allocations,frees)
+     assert merged.index(('obs',1,2,2))<merged.index(('vec',5,allocations[0][0]))<merged.index(('obs',1,4,24)),merged
+    if ident=='computed-owning-catch-throw-nested':
+     assert len(allocations)==3 and len(frees)==3,(allocations,frees)
+     ida,idb,idc=[x[0] for x in allocations]
+     assert [x[0] for x in frees]==[idb,idc,ida],frees
+     freed=[p for p,x in enumerate(merged) if x[0]=='vec' and x[1]==5]
+     assert len(freed)==3,freed
+     def at(t): return merged.index(t)
+     assert at(('obs',1,1,1))<at(('obs',1,2,12))<freed[0]<at(('obs',1,5,125))<freed[1]<at(('obs',1,6,1256))<at(('obs',1,7,12567))<freed[2],merged
     row['observations']=dict(allocations=allocations,last_frees=frees,live=live,values=obs,events=events)
     if a.sanitize:
      row['sanitized_build']=r=command([a.clang,f'-O{opt}','-fsanitize=address,undefined','-fno-omit-frame-pointer','-fno-exceptions','-fno-rtti',

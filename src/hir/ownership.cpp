@@ -178,6 +178,11 @@ class Analysis {
   std::map<uint64_t, std::vector<CleanupStep>> failure_prefix;
   std::set<uint64_t> enabled;
   std::vector<CleanupStep> active_borrows;
+  // Computed owning switch subjects: arm scope -> the real subject result
+  // temporary. Exiting the arm scope drops it after the arm's defers and
+  // local/pattern bindings, before any outer scope cleanup. The subject is
+  // never a fabricated binding; only its genuine Temporary record is used.
+  std::map<uint64_t, HirNodeId> switch_subjects;
   const HirFunction *fun = nullptr;
   using State =
       std::map<uint64_t, unsigned>; // bit 1: live, bit 2: moved/uninitialized
@@ -237,14 +242,9 @@ class Analysis {
     if (auto fi = std::get_if<ForIn>(&x.data))
       local(fi->element, fi->body_scope,
             ty(m, n(x.children[0]).type).type_args[0], ParamMode::move);
-    if (auto sw = std::get_if<Switch>(&x.data)) {
-      if (owned(n(x.children[0]).type) &&
-          n(x.children[0]).kind() != NodeKind::read)
-        issue(id, "E_CAPABILITY_UNAVAILABLE",
-              "computed owning switch temporary lifetime is not specified");
+    if (auto sw = std::get_if<Switch>(&x.data))
       for (const auto &a : sw->arms)
         pattern(a.pattern, a.scope);
-    }
     if (auto tr = std::get_if<Try>(&x.data))
       for (const auto &c : tr->catches)
         local(c.binding, c.scope, c.error_type, ParamMode::move);
@@ -525,27 +525,52 @@ class Analysis {
       return;
     }
     case NodeKind::switch_: {
-      if (owned(n(x.children[0]).type)) {
-        auto root = std::get<Read>(n(x.children[0]).data).symbol;
-        out.records.uses.push_back(
-            {id, 0, UseKind::borrow, root, n(x.children[0]).type});
-        std::function<void(const Pattern &, HirNodeId)> copies =
-            [&](const Pattern &p, HirNodeId body) {
-              if (p.binding && owned(p.type))
-                out.records.uses.push_back(
-                    {body, 0, UseKind::copy, root, p.type, p.binding});
-              for (const auto &ch : p.payload)
-                copies(ch, body);
-            };
-        for (const auto &a : std::get<Switch>(x.data).arms)
-          copies(a.pattern, a.body);
-        out.records.full_expressions.push_back(
-            {id,
-             {{CleanupKind::end_borrow,
-               {OwnerKind::binding, root.value},
-               n(x.children[0]).type}}});
+      const auto subject = x.children[0];
+      if (owned(n(subject).type)) {
+        if (n(subject).kind() == NodeKind::read) {
+          auto root = std::get<Read>(n(subject).data).symbol;
+          out.records.uses.push_back(
+              {id, 0, UseKind::borrow, root, n(subject).type});
+          std::function<void(const Pattern &, HirNodeId)> copies =
+              [&](const Pattern &p, HirNodeId body) {
+                if (p.binding && owned(p.type))
+                  out.records.uses.push_back(
+                      {body, 0, UseKind::copy, root, p.type, p.binding});
+                for (const auto &ch : p.payload)
+                  copies(ch, body);
+              };
+          for (const auto &a : std::get<Switch>(x.data).arms)
+            copies(a.pattern, a.body);
+          out.records.full_expressions.push_back(
+              {id,
+               {{CleanupKind::end_borrow,
+                 {OwnerKind::binding, root.value},
+                 n(subject).type}}});
+        } else {
+          // Computed owning subject: evaluate it exactly once and register
+          // its real result temporary. The switch full expression cleans
+          // every other live temporary of the subject expression; the result
+          // itself is held per arm and dropped by the arm-scope exit plans.
+          std::vector<HirNodeId> live;
+          active_borrows.clear();
+          expr_records(subject, id, live);
+          consume(live, subject);
+          out.records.full_expressions.push_back({id, prefix_cleanup(live)});
+          std::function<void(const Pattern &, HirNodeId)> copies =
+              [&](const Pattern &p, HirNodeId body) {
+                if (p.binding && owned(p.type))
+                  out.records.uses.push_back(
+                      {body, 0, UseKind::copy, {}, p.type, p.binding});
+                for (const auto &ch : p.payload)
+                  copies(ch, body);
+              };
+          for (const auto &a : std::get<Switch>(x.data).arms)
+            copies(a.pattern, a.body);
+          for (const auto &a : std::get<Switch>(x.data).arms)
+            switch_subjects.emplace(a.scope.value, subject);
+        }
       } else
-        full(x.children[0], x.children[0], false);
+        full(subject, subject, false);
       for (size_t i = 1; i < x.children.size(); ++i)
         records(x.children[i]);
       return;
@@ -674,6 +699,15 @@ class Analysis {
                                {OwnerKind::iteration, construct.value},
                                n(block.children[0]).type});
         }
+        // A computed owning switch subject held by this arm is released
+        // after the arm's defers, pattern bindings and local values, and
+        // before any enclosing scope cleanup. Inner catches that stay in
+        // the arm never reach this walk, so they keep the result alive.
+        if (auto it = switch_subjects.find(scope->value);
+            it != switch_subjects.end())
+          p.actions.push_back({CleanupKind::destroy_if_live,
+                               {OwnerKind::temporary, it->second.value},
+                               n(it->second).type});
         scope = m.scopes.at(scope->value).parent;
       }
       if (e || !p.actions.empty())

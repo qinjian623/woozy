@@ -133,6 +133,93 @@ int main(int argc, char **argv) {
         if (s.parameter && s.owner && !s.owning_parameter) { s.owning_parameter = true; return true; }
       return false;
     });
+    // Computed owning switch subjects: the real result temporary, its single
+    // initialization and the ExitPlan-ordered destroy. Every corruption below
+    // must be rejected by the existing slot/live/action-order verification.
+    auto subject_owner = [&](const ir::Module &m) -> std::optional<hir::OwnerRef> {
+      const auto &h = m.hir.module();
+      for (const auto &n : h.nodes)
+        if (n.kind() == hir::NodeKind::switch_ &&
+            h.nodes[n.children[0].value].kind() != hir::NodeKind::read &&
+            hir::classify_value(h, h.nodes[n.children[0].value].type).needs_drop)
+          return hir::OwnerRef{hir::OwnerKind::temporary, n.children[0].value};
+      return {};
+    };
+    bad("switch-subject-destroy-deleted", [&](auto &m) {
+      auto subject = subject_owner(m); if (!subject) return false;
+      for (auto &f : m.functions) for (auto &b : f.blocks)
+        for (auto it = b.instructions.begin(); it != b.instructions.end(); ++it)
+          if (it->op == ir::Op::destroy && it->owner == subject) {
+            b.instructions.erase(it); return true;
+          }
+      return false;
+    });
+    for (bool with_owner : {true, false})
+      bad(with_owner ? "switch-subject-extra-drop-before-arm"
+                     : "switch-subject-extra-drop-without-owner", [&](auto &m) {
+        auto subject = subject_owner(m); if (!subject) return false;
+        for (auto &f : m.functions) for (auto &b : f.blocks)
+          for (size_t p = 0; p < b.instructions.size(); ++p) {
+            const auto store = b.instructions[p];
+            if (store.op != ir::Op::store ||
+                f.slots[store.slot.value].owner != subject) continue;
+            for (const auto &bb : f.blocks) for (const auto &i : bb.instructions)
+              if (i.op == ir::Op::destroy && i.slot == store.slot) {
+                auto extra = i;
+                if (!with_owner) extra.owner.reset();
+                b.instructions.insert(b.instructions.begin() + p + 1, extra);
+                return true;
+              }
+          }
+        return false;
+      });
+    bad("switch-subject-early-drop-before-arm", [&](auto &m) {
+      auto subject = subject_owner(m); if (!subject) return false;
+      for (auto &f : m.functions) for (auto &b : f.blocks)
+        for (size_t p = 0; p < b.instructions.size(); ++p)
+          if (b.instructions[p].op == ir::Op::store &&
+              f.slots[b.instructions[p].slot.value].owner == subject)
+            for (auto &bb : f.blocks)
+              for (auto it = bb.instructions.begin(); it != bb.instructions.end(); ++it)
+                if (it->op == ir::Op::destroy && it->slot == b.instructions[p].slot &&
+                    it->owner == subject) {
+                  auto d = *it; bb.instructions.erase(it);
+                  b.instructions.insert(b.instructions.begin() + p + 1, d);
+                  return true;
+                }
+      return false;
+    });
+    bad("switch-subject-destroy-wrong-owner", [&](auto &m) {
+      auto subject = subject_owner(m); if (!subject) return false;
+      for (auto &f : m.functions) for (auto &b : f.blocks) for (auto &i : b.instructions)
+        if (i.op == ir::Op::destroy && i.owner == subject) {
+          i.owner = hir::OwnerRef{hir::OwnerKind::temporary, i.owner->identity + 999999};
+          return true;
+        }
+      return false;
+    });
+    bad("switch-subject-drop-before-arm-binding", [&](auto &m) {
+      auto subject = subject_owner(m); if (!subject) return false;
+      for (auto &f : m.functions) for (auto &b : f.blocks)
+        for (size_t p = 1; p < b.instructions.size(); ++p)
+          if (b.instructions[p].op == ir::Op::destroy && b.instructions[p].owner == subject &&
+              b.instructions[p - 1].op == ir::Op::destroy &&
+              b.instructions[p - 1].owner &&
+              *b.instructions[p - 1].owner != subject) {
+            std::swap(b.instructions[p - 1], b.instructions[p]);
+            return true;
+          }
+      return false;
+    });
+    bad("switch-subject-store-erased", [&](auto &m) {
+      auto subject = subject_owner(m); if (!subject) return false;
+      for (auto &f : m.functions) for (auto &b : f.blocks)
+        for (auto it = b.instructions.begin(); it != b.instructions.end(); ++it)
+          if (it->op == ir::Op::store && f.slots[it->slot.value].owner == subject) {
+            b.instructions.erase(it); return true;
+          }
+      return false;
+    });
     write(out / "mutations.txt", mutations);
     backend::native::Options options; options.optimization = std::stoul(argv[3]);
     auto generated = backend::native::emit(*cfg.value, main, options);

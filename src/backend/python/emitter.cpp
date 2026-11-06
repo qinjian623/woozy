@@ -101,6 +101,11 @@ class Emitter {
   std::vector<Loop> loops;
   std::vector<HirNodeId> break_targets;
   std::vector<HirNodeId> active_defers;
+  // Computed owning switch subjects currently held by an enclosing
+  // structured try/finally. Their drops are emitted by that finally after
+  // the arm block cleanup, so an expression failure handler must never
+  // execute the same drop early from an ExitPlan's temporaries-only step.
+  std::vector<HirNodeId> held_subjects;
   Output output;
   std::set<uint64_t> temporary_ids;
   std::set<SymbolId> owned_bindings;
@@ -124,7 +129,10 @@ class Emitter {
              "_frame.end_borrow(" + key(a.owner.kind, a.owner.identity) + ")",
              n);
       if (a.kind == CleanupKind::destroy_if_live &&
-          (!temporaries_only || a.owner.kind == OwnerKind::temporary))
+          (!temporaries_only || a.owner.kind == OwnerKind::temporary) &&
+          !(temporaries_only && a.owner.kind == OwnerKind::temporary &&
+            std::find(held_subjects.begin(), held_subjects.end(),
+                      HirNodeId{a.owner.identity}) != held_subjects.end()))
         line(suite, "_frame.drop(" + key(a.owner.kind, a.owner.identity) + ")",
              n);
     }
@@ -1028,10 +1036,17 @@ class Emitter {
       break;
     }
     case NodeKind::switch_: {
+      const bool computed_owning =
+          owned(node(n.children[0]).type) &&
+          node(n.children[0]).kind() != NodeKind::read;
       auto value = expression(n.children[0], suite);
+      if (computed_owning)
+        full(id, suite);
       const auto &arms = std::get<Switch>(n.data).arms;
       Suite branches;
       break_targets.push_back(id);
+      if (computed_owning)
+        held_subjects.push_back(n.children[0]);
       for (auto arm = arms.rbegin(); arm != arms.rend(); ++arm) {
         Statement branch{"if " + pattern_test(arm->pattern, value),
                          arm->pattern.source.span,
@@ -1039,22 +1054,61 @@ class Emitter {
                          {},
                          {}};
         pattern_bind(arm->pattern, value, branch.body);
-        full(id, branch.body);
+        if (!computed_owning)
+          full(id, branch.body);
         statement(arm->body, branch.body);
         branch.otherwise = std::move(branches);
         branches = {std::move(branch)};
       }
       break_targets.pop_back();
-      suite.push_back({"try", n.source.span, true, std::move(branches), {}});
-      suite.push_back({"except _rt.SwitchBreak as _jump",
-                       n.source.span,
-                       true,
-                       {{"if _jump.target != " + std::to_string(id.value),
+      if (computed_owning) {
+        // The subject result is released by this structured finally after
+        // the selected arm's defer/local drops and before enclosing scopes.
+        // Panic skips the language cleanup, as in scope_wrap/block; a Panic
+        // inside the drop itself also aborts the remaining outer cleanups.
+        auto allow = save(suite, "True", n);
+        suite.push_back(
+            {"try", n.source.span, true, std::move(branches), {}});
+        suite.push_back({"except _rt.SwitchBreak as _jump",
                          n.source.span,
                          true,
-                         {{"raise", n.source.span, false, {}, {}}},
-                         {}}},
-                       {}});
+                         {{"if _jump.target != " + std::to_string(id.value),
+                           n.source.span,
+                           true,
+                           {{"raise", n.source.span, false, {}, {}}},
+                           {}}},
+                         {}});
+        suite.push_back({"except _rt.Panic",
+                         n.source.span,
+                         true,
+                         {{allow + " = False", n.source.span, false, {}, {}},
+                          {"raise", n.source.span, false, {}, {}}},
+                         {}});
+        Suite cleanup;
+        line(cleanup,
+             "_frame.drop(" + key(OwnerKind::temporary, n.children[0].value) +
+                 ")",
+             n);
+        suite.push_back(
+            {"finally",
+             n.source.span,
+             true,
+             {{"if " + allow, n.source.span, true, std::move(cleanup), {}}},
+             {}});
+        held_subjects.pop_back();
+      } else {
+        suite.push_back(
+            {"try", n.source.span, true, std::move(branches), {}});
+        suite.push_back({"except _rt.SwitchBreak as _jump",
+                         n.source.span,
+                         true,
+                         {{"if _jump.target != " + std::to_string(id.value),
+                           n.source.span,
+                           true,
+                           {{"raise", n.source.span, false, {}, {}}},
+                           {}}},
+                         {}});
+      }
       break;
     }
     case NodeKind::return_: {

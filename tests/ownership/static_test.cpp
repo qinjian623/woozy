@@ -241,9 +241,12 @@ void flow_tests() {
   rejected("func f(v inout Vec[i32]) {}", "E_CAPABILITY_UNAVAILABLE");
   rejected("func f() {let x Vec[string]=[\"x\"];}", "E_CAPABILITY_UNAVAILABLE");
   rejected("struct S {v Vec[S];} func f(v S) {}", "E_CAPABILITY_UNAVAILABLE");
-  rejected("enum E {A(v Vec[i32]);} func make() E {return E.A([1]);} func f() "
-           "{switch make() {case E.A(v):let x=v;}}",
-           "E_CAPABILITY_UNAVAILABLE");
+  // Computed owning enum switch is now supported: the subject is evaluated
+  // once and held to the end of the selected arm (SEMANTICS switch rule).
+  auto computed = accepted(
+      "enum E {A(v Vec[i32]);B;} func make() E {return E.A([1]);} func f() "
+      "{switch make() {case E.A(v):let x=v;case E.B:}}");
+  facts(computed);
   auto sl = accepted(
       "func f() {let x Vec[i32]=[1];let a=x[:];let b=x[:1];let c=x[0:];let "
       "d=x[0:1];let k=x[-1];let wide u64=18446744073709551615;let z=x[wide];}");
@@ -438,6 +441,374 @@ void extra_tests() {
                rp.actions.begin(), rp.actions.end(),
                [](auto a) { return a.kind == CleanupKind::end_iteration; }),
        "return iteration/output order");
+}
+void computed_owning_switch_tests() {
+  // The computed owning subject is a real Temporary of the switch full
+  // expression; the switch full expression itself must not destroy it.
+  auto m = accepted(
+      "enum Data {Empty; Items(v Vec[i32]);} func make() Data {return "
+      "Data.Items(v:[1]);} func f() i32 {switch make() {case "
+      "Data.Empty:return 0;case Data.Items(v):let x=v;return 1;}}");
+  facts(m);
+  auto sw = find(m, NodeKind::switch_);
+  auto subject = m.nodes[sw.value].children[0];
+  auto mf = m.functions.back().symbol;
+  HirNodeId f_return{0};
+  for (size_t i = 0; i < m.nodes.size() && !f_return.value; ++i)
+    if (m.nodes[i].kind() == NodeKind::return_ &&
+        m.scopes.at(m.nodes[i].scope.value).function == mf)
+      f_return = HirNodeId{i};
+  need(f_return.value != 0, "f return missing");
+  need(std::any_of(
+           m.ownership.temporaries.begin(), m.ownership.temporaries.end(),
+           [&](auto t) {
+             return t.producer == subject && t.full_expression == sw;
+           }),
+       "computed owning subject is not a real switch temporary");
+  need(std::any_of(m.ownership.uses.begin(), m.ownership.uses.end(),
+                   [](auto u) {
+                     return u.destination && u.kind == UseKind::copy &&
+                            !u.root;
+                   }),
+       "computed pattern copy destination missing");
+  for (const auto &fe : m.ownership.full_expressions)
+    if (fe.node == sw)
+      need(std::none_of(
+               fe.actions.begin(), fe.actions.end(),
+               [&](auto a) {
+                 return a.kind == CleanupKind::destroy_if_live &&
+                        a.owner.identity == subject.value;
+               }),
+           "switch full expression destroys the held subject");
+  {
+    bool checked_return = false;
+    for (size_t i = 0; i < m.nodes.size(); ++i)
+      if (m.nodes[i].kind() == NodeKind::return_ &&
+          m.scopes.at(m.nodes[i].scope.value).function == mf) {
+        const auto &rp = exit(m, HirNodeId{i}, ExitKind::return_);
+        auto found = std::find_if(
+            rp.actions.begin(), rp.actions.end(), [&](auto a) {
+              return a.kind == CleanupKind::destroy_if_live &&
+                     a.owner.kind == OwnerKind::temporary &&
+                     a.owner.identity == subject.value;
+            });
+        need(found != rp.actions.end(), "arm return lacks subject drop");
+        auto binding = std::find_if(rp.actions.begin(), found, [](auto a) {
+          return a.kind == CleanupKind::destroy_if_live &&
+                 a.owner.kind == OwnerKind::binding;
+        });
+        if (binding != found) {
+          need(binding != found, "pattern/local drop after subject drop");
+          checked_return = true;
+        }
+      }
+    need(checked_return, "no arm return with a pattern binding");
+  }
+  // Arm defers and pattern bindings run before the subject drop, which in
+  // turn runs before any enclosing scope cleanup, for every exit kind.
+  auto ordered = accepted(
+      "enum Data {Empty; Items(v Vec[i32]);} func mark(v i32) {} func f() i32 "
+      "throws Data {let outer Vec[i32]=[2]; switch Data.Items(v:[1]) {case "
+      "Data.Empty:return 0;case Data.Items(v):defer {mark(v[0]);} throw "
+      "Data.Items(v:v);} return 0;}");
+  facts(ordered);
+  auto os = find(ordered, NodeKind::switch_);
+  auto osubject = ordered.nodes[os.value].children[0];
+  auto f2_symbol = ordered.functions.back().symbol;
+  std::optional<SymbolId> outer_symbol;
+  for (const auto &l : ordered.ownership.locals)
+    if (l.scope == ordered.functions.back().scope)
+      outer_symbol = l.symbol;
+  need(outer_symbol.has_value(), "outer local missing");
+  for (auto kind : {ExitKind::normal, ExitKind::return_, ExitKind::break_,
+                    ExitKind::continue_, ExitKind::error}) {
+    bool saw_subject_drop = false;
+    for (size_t i = 0; i < ordered.nodes.size(); ++i)
+      if (ordered.scopes.at(ordered.nodes[i].scope.value).function ==
+          f2_symbol)
+        for (const auto &p : ordered.nodes[i].exits)
+          if (p.kind == kind) {
+            auto drop = std::find_if(
+                p.actions.begin(), p.actions.end(), [&](auto a) {
+                  return a.kind == CleanupKind::destroy_if_live &&
+                         a.owner.identity == osubject.value;
+                });
+            if (drop == p.actions.end())
+              continue;
+            saw_subject_drop = true;
+            for (auto d : p.defers) {
+              auto da = std::find_if(p.actions.begin(), drop, [&](auto a) {
+                return a.kind == CleanupKind::defer_ &&
+                       a.owner.identity == d.value;
+              });
+              need(da != drop, "arm defer runs after subject drop");
+            }
+            for (auto it = p.actions.begin(); it != drop; ++it)
+              need(!(it->kind == CleanupKind::destroy_if_live &&
+                     it->owner.kind == OwnerKind::binding &&
+                     it->owner.identity == outer_symbol->value),
+                   "outer local dropped before the arm subject");
+            for (auto it = std::next(drop); it != p.actions.end(); ++it)
+              need(!(it->kind == CleanupKind::destroy_if_live &&
+                     it->owner.kind == OwnerKind::binding &&
+                     it->owner.identity != outer_symbol->value),
+                   "arm binding dropped after the arm subject");
+          }
+    if (kind == ExitKind::normal || kind == ExitKind::error)
+      need(saw_subject_drop, "arm exit kind missing subject drop");
+  }
+  // A subject-evaluation failure never cleans the unproduced result, while
+  // an error leaving the arm does (after the arm's own cleanup).
+  const std::string err =
+      "enum E {Bad;} func bad() i32 throws E {throw E.Bad;} ";
+  auto fail = accepted(
+      err + "enum Data {Empty; Items(v Vec[i32]);} func make(n i32, v "
+      "Vec[i32]) Data throws E {let x=bad(); return Data.Empty;} func f() "
+      "i32 throws E {switch make(1,[9]) {case Data.Empty:return 0;case "
+      "Data.Items(v):let x=bad();return 1;}}");
+  facts(fail);
+  auto fs = find(fail, NodeKind::switch_);
+  auto fsubject = fail.nodes[fs.value].children[0];
+  auto inside = [&](HirNodeId node, HirNodeId container) {
+    std::function<bool(HirNodeId)> search = [&](HirNodeId current) {
+      if (current == node)
+        return true;
+      for (auto child : fail.nodes[current.value].children)
+        if (search(child))
+          return true;
+      return false;
+    };
+    return node != container && search(container);
+  };
+  auto f_symbol = fail.functions.back().symbol;
+  for (size_t i = 0; i < fail.nodes.size(); ++i)
+    if (fail.scopes.at(fail.nodes[i].scope.value).function == f_symbol)
+      for (const auto &e : fail.nodes[i].exits)
+        if (e.kind == ExitKind::error) {
+          bool in_subject = HirNodeId{i} == fsubject ||
+                            inside(HirNodeId{i}, fsubject);
+        bool drops_subject = std::any_of(
+            e.actions.begin(), e.actions.end(), [&](auto a) {
+              return a.kind == CleanupKind::destroy_if_live &&
+                     a.owner.identity == fsubject.value;
+            });
+        need(drops_subject != in_subject,
+             in_subject ? "subject failure cleans an unproduced result"
+                        : "arm error does not release the subject");
+      }
+  invalid(fail, "computed switch uninitialized subject cleanup",
+          [&](auto &x) {
+            for (auto &e : x.nodes[fsubject.value].exits)
+              if (e.kind == ExitKind::error) {
+                for (const auto &t : x.ownership.temporaries)
+                  if (t.producer == fsubject) {
+                    e.actions.insert(
+                        e.actions.begin(),
+                        {CleanupKind::destroy_if_live,
+                         {OwnerKind::temporary, fsubject.value}, t.type});
+                    return;
+                  }
+              }
+          });
+  // A caught error that stays inside the arm keeps the subject alive.
+  auto caught = accepted(
+      err + "enum Data {Empty; Items(v Vec[i32]);} func f() i32 {switch "
+      "Data.Items(v:[1]) {case Data.Empty:return 0;case Data.Items(v):try "
+      "{let n=bad();}catch e E {let y=v[0];}return 1;}}");
+  facts(caught);
+  auto cs = find(caught, NodeKind::switch_);
+  auto csubject = caught.nodes[cs.value].children[0];
+  for (size_t i = 0; i < caught.nodes.size(); ++i)
+    for (const auto &e : caught.nodes[i].exits)
+      if (e.kind == ExitKind::error)
+        need(std::none_of(e.actions.begin(), e.actions.end(), [&](auto a) {
+          return a.kind == CleanupKind::destroy_if_live &&
+                 a.owner.identity == csubject.value;
+        }),
+             "caught in-arm error released the held subject");
+  // Nested computed owning switches drop the inner subject first.
+  auto nested = accepted(
+      "enum Data {Empty; Items(v Vec[i32]);} func f() i32 {switch "
+      "Data.Items(v:[1]) {case Data.Empty:return 0;case Data.Items(v):switch "
+      "Data.Items(v:[2]) {case Data.Empty:return 1;case "
+      "Data.Items(w):return 2;}}}");
+  facts(nested);
+  HirNodeId outer_subject, inner_subject;
+  size_t switches = 0;
+  for (size_t i = 0; i < nested.nodes.size(); ++i)
+    if (nested.nodes[i].kind() == NodeKind::switch_) {
+      if (!switches++)
+        outer_subject = nested.nodes[i].children[0];
+      else
+        inner_subject = nested.nodes[i].children[0];
+    }
+  HirNodeId deep_return{0};
+  for (size_t i = 0; i < nested.nodes.size(); ++i)
+    if (nested.nodes[i].kind() == NodeKind::return_)
+      for (const auto &e : nested.nodes[i].exits)
+        if (e.kind == ExitKind::return_ &&
+            std::any_of(e.actions.begin(), e.actions.end(), [&](auto a) {
+              return a.owner.identity == inner_subject.value;
+            })) {
+          deep_return = HirNodeId{i};
+          break;
+        }
+  need(deep_return.value != 0, "nested arm return missing");
+  const auto &np = exit(nested, deep_return, ExitKind::return_);
+  auto inner_drop = std::find_if(np.actions.begin(), np.actions.end(),
+                                 [&](auto a) {
+                                   return a.owner.identity ==
+                                          inner_subject.value;
+                                 });
+  auto outer_drop2 = std::find_if(np.actions.begin(), np.actions.end(),
+                                  [&](auto a) {
+                                    return a.owner.identity ==
+                                           outer_subject.value;
+                                  });
+  need(inner_drop != np.actions.end() && outer_drop2 != np.actions.end() &&
+           inner_drop < outer_drop2,
+       "nested subject drops out of inner-to-outer order");
+  // Recursive pattern: a partially failing arm keeps the same single
+  // subject temporary until a later arm matches and binds.
+  auto recursive = accepted(
+      "enum Inner {None; Some(v Vec[i32]);} enum Outer {Empty; Wrap(i "
+      "Inner); Pair(i Inner, t i32);} func make() Outer {return Outer.Wrap(i: "
+      "Inner.Some(v: [7]));} func f() i32 {switch make() {case "
+      "Outer.Empty:return 0;case Outer.Wrap(Inner.None):return 1;case "
+      "Outer.Wrap(Inner.Some(v)):return v[0]-7;case "
+      "Outer.Pair(i,t):return 2;}}");
+  facts(recursive);
+  auto rs = find(recursive, NodeKind::switch_);
+  auto rsubject = recursive.nodes[rs.value].children[0];
+  need(std::count_if(recursive.ownership.temporaries.begin(),
+                     recursive.ownership.temporaries.end(),
+                     [&](auto t) { return t.producer == rsubject; }) == 1,
+       "recursive pattern duplicated the subject temporary");
+  HirNodeId recursive_return{0};
+  auto rf = recursive.functions.back().symbol;
+  for (size_t i = 0; i < recursive.nodes.size(); ++i)
+    if (recursive.nodes[i].kind() == NodeKind::return_ &&
+        recursive.scopes.at(recursive.nodes[i].scope.value).function == rf) {
+      recursive_return = HirNodeId{i};
+      break;
+    }
+  need(recursive_return.value != 0, "recursive f return missing");
+  const auto &rp2 = exit(recursive, recursive_return, ExitKind::return_);
+  need(std::any_of(rp2.actions.begin(), rp2.actions.end(), [&](auto a) {
+    return a.kind == CleanupKind::destroy_if_live &&
+           a.owner.kind == OwnerKind::temporary &&
+           a.owner.identity == rsubject.value;
+  }),
+       "recursive pattern arm return lacks subject drop");
+  // The named owning switch keeps its old borrowed behaviour.
+  auto named = accepted(
+      "enum Data {Empty; Items(v Vec[i32]);} func f() i32 {let d = "
+      "Data.Items(v:[1]); switch d {case Data.Empty:return 0;case "
+      "Data.Items(v):let x=v;return 1;}}");
+  facts(named);
+  auto ns = find(named, NodeKind::switch_);
+  auto nsubject = named.nodes[ns.value].children[0];
+  need(std::get_if<Read>(&named.nodes[nsubject.value].data),
+       "named owning switch subject changed shape");
+  need(std::none_of(named.ownership.temporaries.begin(),
+                    named.ownership.temporaries.end(),
+                    [&](auto t) { return t.producer == nsubject; }),
+       "named owning switch subject became a temporary");
+  // Real bad HIR: deleted, moved, wrong-owner, duplicated and fabricated
+  // subject drops must all be rejected by the independent recomputation.
+  auto damaged = m;
+  invalid(damaged, "computed switch subject temporary removed", [&](auto &x) {
+    std::erase_if(x.ownership.temporaries,
+                  [&](const auto &t) { return t.producer == subject; });
+  });
+  invalid(damaged, "computed switch subject drop deleted", [&](auto &x) {
+    for (auto &node : x.nodes)
+      for (auto &e : node.exits)
+        std::erase_if(e.actions, [&](const auto &a) {
+          return a.kind == CleanupKind::destroy_if_live &&
+                 a.owner.kind == OwnerKind::temporary &&
+                 a.owner.identity == subject.value;
+        });
+  });
+  invalid(damaged, "computed switch subject drop duplicated", [&](auto &x) {
+    for (auto &node : x.nodes)
+      for (auto &e : node.exits)
+        for (auto &a : e.actions)
+          if (a.kind == CleanupKind::destroy_if_live &&
+              a.owner.kind == OwnerKind::temporary &&
+              a.owner.identity == subject.value) {
+            e.actions.push_back(a);
+            return;
+          }
+  });
+  invalid(damaged, "computed switch wrong subject owner", [&](auto &x) {
+    for (auto &node : x.nodes)
+      for (auto &e : node.exits)
+        for (auto &a : e.actions)
+          if (a.kind == CleanupKind::destroy_if_live &&
+              a.owner.kind == OwnerKind::temporary &&
+              a.owner.identity == subject.value) {
+            a.owner.kind = OwnerKind::binding;
+            return;
+          }
+  });
+  invalid(damaged, "computed switch subject drop moved before bindings",
+          [&](auto &x) {
+            for (auto &node : x.nodes)
+              for (auto &e : node.exits) {
+                auto drop = std::find_if(
+                    e.actions.begin(), e.actions.end(), [&](auto &a) {
+                      return a.kind == CleanupKind::destroy_if_live &&
+                             a.owner.identity == subject.value;
+                    });
+                if (drop == e.actions.end() || drop == e.actions.begin())
+                  continue;
+                auto before = std::find_if(e.actions.begin(), drop,
+                                           [](auto &a) {
+                                             return a.kind ==
+                                                    CleanupKind::destroy_if_live;
+                                           });
+                if (before == drop)
+                  continue;
+                std::iter_swap(drop, before);
+                return;
+              }
+          });
+  invalid(damaged, "computed switch early drop in full expression",
+          [&](auto &x) {
+            for (auto &fe : x.ownership.full_expressions)
+              if (fe.node == sw) {
+                for (const auto &t : x.ownership.temporaries)
+                  if (t.producer == subject) {
+                    fe.actions.push_back(
+                        {CleanupKind::destroy_if_live,
+                         {OwnerKind::temporary, subject.value}, t.type});
+                    return;
+                  }
+              }
+          });
+  // Repeated loop iterations initialize a fresh subject each round.
+  auto loop_switch = accepted(
+      "enum Data {Empty; Items(v Vec[i32]);} func make(calls inout i32) Data "
+      "{calls+=1; return Data.Items(v:[1]);} func f() i32 {var calls i32=0; "
+      "var i i32=0; for i<2 {switch make(inout calls) {case "
+      "Data.Empty:continue;case Data.Items(v):break;} i+=1;} return calls;}");
+  facts(loop_switch);
+  auto lf = loop_switch.functions.back().symbol;
+  for (auto kind : {ExitKind::normal, ExitKind::break_, ExitKind::continue_}) {
+    bool found = false;
+    for (size_t i = 0; i < loop_switch.nodes.size() && !found; ++i)
+      if (loop_switch.scopes.at(loop_switch.nodes[i].scope.value).function ==
+          lf)
+        for (const auto &lp : loop_switch.nodes[i].exits)
+          if (lp.kind == kind &&
+              std::any_of(lp.actions.begin(), lp.actions.end(), [&](auto a) {
+                return a.kind == CleanupKind::destroy_if_live &&
+                       a.owner.kind == OwnerKind::temporary;
+              }))
+            found = true;
+    need(found, "loop switch exit lacks subject release");
+  }
 }
 void record_tests() {
   auto m = accepted(
@@ -1016,6 +1387,7 @@ int main(int argc, char **argv) {
     flow_tests();
     record_tests();
     extra_tests();
+    computed_owning_switch_tests();
     for (auto b : {Backend::native, Backend::python}) {
       auto r = project(fs::path(argv[1]) /
                            "tests/ownership/static-extra/independent/lang.toml",

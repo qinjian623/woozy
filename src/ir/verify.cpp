@@ -715,7 +715,14 @@ class Verifier {
       work.pop_back();
       auto state = *states[b];
       const auto &bb = f.blocks[b];
+      bool ownership_batch = false;
       for (const auto &i : bb.instructions) {
+        if (i.op == Op::ownership_begin || i.op == Op::ownership_end)
+          ownership_batch = i.op == Op::ownership_begin;
+        if (i.op == Op::destroy && f.slots.at(i.slot.value).owner &&
+            f.slots.at(i.slot.value).owner->kind == hir::OwnerKind::temporary)
+          need(ownership_batch || (!state.empty() && !state.back().active),
+               "temporary destroy outside a verified cleanup plan", i.source);
         if (i.op != Op::cleanup_begin && i.op != Op::cleanup_end) {
           for (const auto &frame : state)
             if (frame.active) {

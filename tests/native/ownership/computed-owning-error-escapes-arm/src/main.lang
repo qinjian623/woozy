@@ -1,0 +1,22 @@
+package app;
+enum Data { Empty; Items(value Vec[i32]); }
+enum Failure { Bad; }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func fail() i32 throws Failure { throw Failure.Bad; }
+func probe(log inout i64) i32 throws Failure {
+    switch Data.Items(value: [7]) {
+    case Data.Empty: return 1;
+    case Data.Items(items):
+        defer { mark(inout log, 2); }
+        let n = fail();
+        mark(inout log, 3);
+        return n;
+    }
+}
+func main() i32 {
+    var log i64 = 0;
+    try { probe(inout log); return 1; }
+    catch e Failure { mark(inout log, 4); }
+    if log != 24 { return 2; }
+    return 0;
+}
