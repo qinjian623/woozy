@@ -1,0 +1,5 @@
+package app;
+struct Inner { items Vec[i32]; }
+struct Outer { inner Inner; marker i32; }
+func replace(slot inout Outer) {}
+func main() i32 { return 0; }

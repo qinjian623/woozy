@@ -2,13 +2,21 @@
 
 native/64 Linux x86_64 与 python/64 CPython 3.12.15 已支持有限、无环的 Vec 和含 Vec 的 struct/enum：共享复制、整体 move、普通参数借用和返回复制、索引读写、切片、for-in，以及 return/typed-error/defer 的拥有值清理。Python runtime 为 `compiler-dev/1-python-values/4`；native 保留标量 ABI，新增私有 `lang-native-values/1`。
 
-仍不支持动态 string/Vec[string]、部分 move、非平凡 inout、索引 inout、索引字段写回、递归拥有图、捕获闭包、foreign 及原 T07 限制。普通参数重赋值和计算产生的拥有 switch 临时值仍未规定，不自行开放。没有新增公开 len/push/share API。完整 ARC 和外部对象支持尚未完成。
+仍不支持动态 string/Vec[string]、部分 move、拥有值或 foreign 的 inout、索引 inout、索引字段写回、递归拥有图、捕获闭包、foreign 及原 T07 限制。运行时对顶层数字/bool 和有限平凡 struct/enum 的整体 inout 分别用标量槽和聚合存储处理，详见下文。普通参数绑定只读、计算产生的拥有 switch 主体保留到分支结束，这两项规则已在 SEMANTICS 中确定，代码仍待补齐。没有新增公开 len/push/share API。完整 ARC 和外部对象支持尚未完成。
 
 Vec 别名共享写入；切片创建新容器并逻辑复制元素，引用元素继续共享。for-in 持有一次求值的旧集合，使用入口长度，每轮取得当前元素的逻辑副本。元素替换可见；活动迭代中的长度改变必须在修改前 Panic，此项目前只由私有 runtime 检查。
 
 分配失败、分配大小或引用计数溢出、非法索引和切片均 Panic，不能被 typed catch 捕获。Panic 不保证语言清理。普通和 typed-error 结束才检查零存活、最后释放及次序；Python 不依赖 `__del__` 或宿主 GC 完成语言释放。
 
 默认 Linux x86_64 原生程序使用自有入口和直接系统调用；无 libc 运行支持与索引优化见 [NATIVE_RUNTIME.md](NATIVE_RUNTIME.md)。下表保留 T09 首次开放时的检查记录，后续检查以项目外层最新报告为准。
+
+## 平凡聚合整体 inout 的执行范围
+
+修正版保留同一 nominal 声明下具体实参严格缩小的有限嵌套（如 `Box[Box[i32]]`），并把函数签名回指与值布局环分开；固定 POD callback 数据不再因与 impl Self 具体类型相同而被误判为 Self 依赖；`Wrap[Self]` 在真实 Self 为 POD 时按实际替换字段检查，拥有字段仍在 Source 拒绝。真实 Self callback 的数字/bool 阶段限制和 actual-self/generic 依赖 callback 的既有拒绝未放宽。
+
+有限平凡 struct/enum 的整体 inout 已在 native/64 和 Python/64 实际执行。聚合只含数字/bool、Unit、非捕获函数值、空 struct、无载荷 enum，或递归由这些组成的字段/载荷；Vec、string、foreign、拥有字段和无限布局继续拒绝。Native 的 inout ABI 是调用者存储指针，整体赋值、字段修改和 enum 变体替换都写回该地址；Python 用 Cell 包装 writable 绑定，普通读和返回仍取得不可变 tuple 的逻辑副本，不把 Cell 当值复制。
+
+调用方仍必须是整体可写绑定；let、普通参数、临时值、字段和索引被拒绝。重复/嵌套借用及同绑定的其他实参读取、move 或子字段访问继续拒绝。callee 可以整体替换、改活动 enum 变体、修改值字段、转交给已有 inout 参数；后参抛错不进入 callee，callee 的 typed throw 保留写回，return 在 defer 前保存。`tests/generics/aggregate-inout/` 和 `tests/generics/run_aggregate_inout.py` 覆盖这些行为、拒绝构建、Native O0/O2 和 Python 执行，完整 CTest 结果见本次交付日志。
 
 ## NativeIR 的两处修正
 

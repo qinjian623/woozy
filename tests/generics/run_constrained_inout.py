@@ -4,6 +4,7 @@ import argparse
 import hashlib
 import json
 import os
+import shutil
 from pathlib import Path
 import subprocess
 import sys
@@ -242,11 +243,12 @@ def main():
             row['status'] = 'passed'
 
         if not args.only:
-            manifest = args.root / 'tests/generics/inout/constrained/reject/lang.toml'
+            manifest = args.root / 'tests/generics/inout/constrained/reject-owning/lang.toml'
             sources = {str(path.relative_to(manifest.parent)): digest(path)
                        for path in sorted(manifest.parent.rglob('*'))
                        if path.is_file()}
             fresh = args.out / 'reject-new'
+            shutil.rmtree(fresh, ignore_errors=True)
             before = run([args.cli, 'build', '--project', manifest,
                           '--backend', 'native', '--opt', 0,
                           '--out-dir', fresh, '--format', 'json'], library=library)

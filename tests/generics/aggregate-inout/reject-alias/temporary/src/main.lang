@@ -1,0 +1,7 @@
+package app;
+struct S { x i32; }
+func replace(slot inout S) {}
+func main() i32 {
+    replace(inout S(x: 1));
+    return 0;
+}

@@ -43,6 +43,9 @@ class Checker {
   std::stop_token stop;
   std::map<Key, SymbolId> occurrences, definitions;
   std::map<uint64_t, TypeId> signatures;
+  // Trait prototypes are registered before their nominal field bodies are
+  // populated. Recheck their complete inout graphs after fields exist.
+  std::map<uint64_t, std::pair<SymbolId, bool>> trait_signature_context;
   std::map<uint64_t, std::vector<Parameter>> parameters;
   std::map<uint64_t, Local> locals;
   std::map<uint64_t, Constant> constants;
@@ -220,6 +223,21 @@ class Checker {
   bool scalar_inout_type(TypeId t) const {
     return integer(t) || type(t).kind == TypeKind::Bool ||
            type(t).kind == TypeKind::Float;
+  }
+  // Numeric/bool plus finite nominal aggregates whose fields are trivial copy
+  // data. Top-level Unit/Function stay closed; they are permitted only inside
+  // an aggregate by hir::inout_data_type. The helper re-reads the real
+  // declaration and substituted field types at every check.
+  bool aggregate_inout_type(TypeId t,
+                            std::optional<SymbolId> trait_self = {}) const {
+    if (scalar_inout_type(t))
+      return true;
+    std::set<uint64_t> parameters = signature_parameters;
+    for (const auto &p : active_params)
+      parameters.insert(p.symbol.value);
+    if (trait_self)
+      parameters.insert(trait_self->value);
+    return inout_data_type(m, t, parameters);
   }
   // The trait prototype registers its real Self SymbolId only while checking
   // that declaration. This is not a method generic parameter: it never enters
@@ -899,7 +917,11 @@ class Checker {
           const bool trait_self_slot =
               trait_self && trait_self_type(p.type, *trait_self) &&
               (depth > 0 ? trait_self_callback : i > 0);
-          if (!scalar_inout_type(p.type) &&
+          const auto data_self =
+              trait_self && (depth > 0 ? trait_self_callback : i > 0)
+                  ? trait_self
+                  : std::nullopt;
+          if (!aggregate_inout_type(p.type, data_self) &&
               !(allow_template && template_inout_type(p.type)) &&
               !trait_self_slot)
             unavailable(
@@ -1119,10 +1141,21 @@ class Checker {
       const bool trait_self_slot =
           trait_self && trait_self_type(pt, *trait_self) &&
           (callback ? trait_self_callback : i > 0);
-      if (pm == ParamMode::inout && !scalar_inout_type(pt) &&
+      // The actual first-position trait Self keeps its old move/inout limit;
+      // it is not opened by the aggregate data rule. A non-self later slot of
+      // the same raw Self type remains covered by trait_self_slot.
+      if (!callback && i == 0 && pm != ParamMode::ordinary && trait_self &&
+          trait_self_type(pt, *trait_self))
+        unavailable(cr, "move/inout self is not implemented");
+      const auto data_self =
+          trait_self && (callback ? trait_self_callback : i > 0)
+              ? trait_self
+              : std::nullopt;
+      if (pm == ParamMode::inout && !aggregate_inout_type(pt, data_self) &&
           !template_inout_type(pt) && !trait_self_slot)
         unavailable(cr,
-                    "inout accepts only trivial numeric/bool whole bindings");
+                    "inout accepts only trivial numeric/bool or POD aggregate "
+                    "whole bindings");
       t.parameters.push_back({pm, pt});
     }
     if (parts.result)
@@ -1720,8 +1753,10 @@ class Checker {
     if (!l.writable)
       reject(r, "let/const bindings are not writable",
              inout ? "E_CALL_ARGUMENT" : "E_TYPE_MISMATCH");
-    if (inout && !scalar_inout_type(l.type) && !template_inout_type(l.type))
-      unavailable(r, "inout requires a trivial numeric/bool binding");
+    if (inout && !aggregate_inout_type(l.type) &&
+        !template_inout_type(l.type))
+      unavailable(r, "inout requires a whole trivial numeric/bool or POD "
+                     "aggregate binding");
     return {node(r, l.type, Place{*s}), {l.type, {}, {}}};
   }
   bool contains_parameter(TypeId id) const {
@@ -3181,6 +3216,8 @@ class Checker {
         signature(r, trait_self, false, trait_self_callback);
     check_inout_graph(r, signatures[id.value], true, trait_self,
                       trait_self_callback);
+    if (trait_self)
+      trait_signature_context[id.value] = {*trait_self, trait_self_callback};
     signature_parameters = std::move(saved_signature_parameters);
     for (auto c : ast(r).children)
       if (ast(at(r, c)).kind == AstKind::Parameter) {
@@ -3356,6 +3393,42 @@ class Checker {
                    "impl method signature does not match trait");
         }
       }
+    // A nested callback whose inout data depends on the real trait Self still
+    // keeps its numeric/bool stage. The decision comes from the raw trait
+    // prototype and Self SymbolId, never from an impl type that happens to
+    // equal the callback's fixed data type. Nominal fields are populated now,
+    // so this also checks wrapped Self data and stored callback fields.
+    for (const auto &im : m.impls) {
+      if (!im.trait)
+        continue;
+      const TraitDecl *tr = nullptr;
+      for (const auto &t : m.traits)
+        if (t.symbol == *im.trait)
+          tr = &t;
+      if (!tr)
+        continue;
+      for (const auto &proto : tr->methods) {
+        SymbolId method{0};
+        for (auto id : im.methods)
+          if (symbol(id).name == symbol(proto.symbol).name)
+            method = id;
+        if (!method.value)
+          continue;
+        const auto &sig = type(proto.signature);
+        auto check = [&](TypeId component) {
+          if (trait_self_callback_non_scalar(m, component, tr->self,
+                                             im.self_type))
+            unavailable(proto.source.node,
+                        "Self-dependent inout callbacks remain limited to "
+                        "numeric/bool");
+        };
+        for (const auto &p : sig.parameters)
+          check(p.type);
+        check(sig.result);
+        if (sig.throws_type)
+          check(*sig.throws_type);
+      }
+    }
     // Method-own mode restrictions are checked after every trait/impl
     // signature has been matched, so an own arity/bound mismatch keeps its
     // precise source diagnostic instead of being hidden by a capability check.
@@ -3364,6 +3437,22 @@ class Checker {
         check_generic_trait_method_modes(
             proto.source.node, method_own_parameters(proto.symbol),
             proto.signature, tr.self);
+    // Trait method signatures were parsed while nominal field lists were
+    // still empty. With all declarations and substitutions now available,
+    // recheck the complete graph so a struct/enum with an owning field is a
+    // source capability error rather than a later HIR error.
+    for (const auto &[method, context] : trait_signature_context) {
+      auto found = symbol(SymbolId{method}).definition;
+      if (!found)
+        throw std::invalid_argument("trait method has no source definition");
+      auto saved_signature_parameters = signature_parameters;
+      signature_parameters.clear();
+      for (const auto &p : method_own_parameters(SymbolId{method}))
+        signature_parameters.insert(p.symbol.value);
+      check_inout_graph(*found, signatures.at(method), true, context.first,
+                        context.second);
+      signature_parameters = std::move(saved_signature_parameters);
+    }
     for (auto r : top)
       if (ast(r).kind == AstKind::Function)
         register_function(r, {});

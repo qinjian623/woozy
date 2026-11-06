@@ -1,0 +1,8 @@
+package app;
+struct S { x i32; }
+func replace(first inout S, second inout S) {}
+func main() i32 {
+    var value = S(x: 1);
+    replace(inout value, inout value);
+    return 0;
+}

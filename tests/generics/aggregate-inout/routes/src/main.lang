@@ -1,0 +1,259 @@
+package app;
+
+struct Pair {
+    x i32;
+    y i32;
+}
+
+struct Holder {
+    marker i32;
+}
+
+struct Box[I] {
+    value I;
+}
+
+trait Replace {
+    func treplace[U](owner Self, slot inout U, value U) U;
+}
+
+impl Replace for Holder {
+    func treplace[U](owner Self, slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+impl Holder {
+    func ireplace[U](self Self, slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+
+    func istatic[U](slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+
+trait SelfReplace {
+    func sreplace(self Self, slot inout Self, value Self) Self;
+}
+
+trait BoxSelf {
+    func bsetself(self Self, slot inout Self) Self;
+}
+
+impl SelfReplace for Pair {
+    func sreplace(self Self, slot inout Self, value Self) Self {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+impl[I] Box[I] {
+    func breplace[U](self Self, slot inout U, value U) U {
+        let old = slot;
+        slot = value;
+        return old;
+    }
+}
+
+impl[I] BoxSelf for Box[I] {
+    func bsetself(self Self, slot inout Self) Self {
+        let old = slot;
+        slot = Box[I](value: self.value);
+        return old;
+    }
+}
+
+func swap[T](a inout T, b inout T) {
+    let temporary = a;
+    a = b;
+    b = temporary;
+}
+
+func relay[T](a inout T, b inout T) {
+    swap(inout a, inout b);
+}
+
+
+func assign_pair(slot inout Pair, value Pair) Pair {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func apply_pair(callback func(inout Pair, Pair) Pair,
+                slot inout Pair, value Pair) Pair {
+    return callback(inout slot, value);
+}
+
+func ordered(slot inout Pair, value Pair, second i32) Pair {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func choose() (func(inout Pair, Pair, i32) Pair) {
+    return ordered;
+}
+
+
+func via_self_trait[T SelfReplace](receiver T, slot inout T, value T) T {
+    return T.sreplace(receiver, inout slot, value);
+}
+
+func via_trait[T Replace](holder T, slot inout Pair, value Pair) Pair {
+    return T.treplace(holder, inout slot, value);
+}
+
+func via_free[U](slot inout U, value U) U {
+    return ordered_free(inout slot, value);
+}
+
+func ordered_free[U](slot inout U, value U) U {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func main() i32 {
+    // Explicit and inferred free generic calls.
+    var a = Pair(x: 1, y: 2);
+    var b = Pair(x: 3, y: 4);
+    swap(inout a, inout b);
+    if a.x != 3 || b.x != 1 {
+        return 1;
+    }
+    swap[Pair](inout a, inout b);
+    if a.x != 1 || b.x != 3 {
+        return 2;
+    }
+
+    // Existing generic forwarding, including a template-to-template relay.
+    relay(inout a, inout b);
+    if a.x != 3 || b.x != 1 {
+        return 3;
+    }
+    let free_old = via_free(inout a, Pair(x: 10, y: 11));
+    if free_old.x != 3 || a.x != 10 {
+        return 4;
+    }
+
+    // A concrete function value has the same inout data rules.
+    let swap_value = swap[Pair];
+    swap_value(inout a, inout b);
+    if a.x != 1 || b.x != 10 {
+        return 5;
+    }
+    let ordered_value func(inout Pair, Pair, i32) Pair = ordered;
+    let old_ordered = ordered_value(inout a, Pair(x: 20, y: 21), 1);
+    if old_ordered.x != 1 || a.x != 20 {
+        return 6;
+    }
+    let factory = choose();
+    let old_factory = factory(inout a, Pair(x: 30, y: 31), 2);
+    if old_factory.x != 20 || a.x != 30 {
+        return 7;
+    }
+
+
+    // Inherent instance and static methods, including a generic impl method.
+    let holder = Holder(marker: 0);
+    let old_inherent = holder.ireplace(inout a, Pair(x: 40, y: 41));
+    if old_inherent.x != 30 || a.x != 40 {
+        return 8;
+    }
+    let old_static = Holder.istatic(inout a, Pair(x: 50, y: 51));
+    if old_static.x != 40 || a.x != 50 {
+        return 9;
+    }
+    let box = Box[i32](value: 0);
+    let old_box = box.breplace(inout a, Pair(x: 60, y: 61));
+    if old_box.x != 50 || a.x != 60 {
+        return 10;
+    }
+
+    // Trait methods through a value receiver, a concrete Type call and a
+    // constrained T call all keep explicit non-self inout arguments.
+    let old_trait = holder.treplace(inout a, Pair(x: 70, y: 71));
+    if old_trait.x != 60 || a.x != 70 {
+        return 11;
+    }
+    let old_type = Holder.treplace(holder, inout a,
+                                   Pair(x: 80, y: 81));
+    if old_type.x != 70 || a.x != 80 {
+        return 12;
+    }
+    let old_t = via_trait(holder, inout a, Pair(x: 90, y: 91));
+    if old_t.x != 80 || a.x != 90 {
+        return 13;
+    }
+
+
+    // A trait's non-receiver `slot inout Self` now follows the same POD data
+    // rules for a concrete struct. The receiver itself stays ordinary.
+    let self_receiver = Pair(x: 0, y: 0);
+    var self_slot = Pair(x: 100, y: 101);
+    let old_self = self_receiver.sreplace(
+        inout self_slot, Pair(x: 200, y: 201));
+    if old_self.x != 100 || self_slot.x != 200 {
+        return 17;
+    }
+    let old_self_type = Pair.sreplace(
+        self_receiver, inout self_slot, Pair(x: 300, y: 301));
+    if old_self_type.x != 200 || self_slot.x != 300 {
+        return 18;
+    }
+    let old_self_t = via_self_trait(
+        self_receiver, inout self_slot, Pair(x: 400, y: 401));
+    if old_self_t.x != 300 || self_slot.x != 400 {
+        return 19;
+    }
+    // An ordinary callback parameter whose own inout data is a POD aggregate
+    // remains a normal borrowed callback; it does not change either function's
+    // own parameter mode.
+    let old_callback = apply_pair(assign_pair, inout a,
+                                  Pair(x: 95, y: 96));
+    if old_callback.x != 90 || a.x != 95 {
+        return 20;
+    }
+    // A generic impl's Self slot remains a real non-self parameter and is
+    // checked after replacing I with the concrete type argument.
+    var box_slot = Box[i32](value: 1);
+    let box_receiver = Box[i32](value: 6);
+    let old_box_self = box_receiver.bsetself(inout box_slot);
+    if old_box_self.value != 1 || box_slot.value != 6 {
+        return 21;
+    }
+    // Generic enum and struct instantiations share the same path.
+    var enum_a = Choice.None;
+    var enum_b = Choice.Value(value: 5);
+    swap(inout enum_a, inout enum_b);
+    switch enum_a {
+    case Choice.Value(value):
+        if value != 5 {
+            return 14;
+        }
+    default:
+        return 15;
+    }
+    switch enum_b {
+    case Choice.None:
+        break;
+    default:
+        return 16;
+    }
+    return 0;
+}
+
+enum Choice {
+    None;
+    Value(value i32);
+}

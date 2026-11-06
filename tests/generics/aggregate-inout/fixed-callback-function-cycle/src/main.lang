@@ -1,0 +1,15 @@
+package app;
+struct Wrap[T] { apply func(Wrap[T]) T; value T; }
+struct Owner { token i32; }
+trait Edit { func apply(self Self, slot inout Wrap[i32], callback func(inout Wrap[i32]) Unit) Unit; }
+impl Edit for Owner {
+ func apply(self Self, slot inout Wrap[i32], callback func(inout Wrap[i32]) Unit) Unit { callback(inout slot); }
+}
+func read(value Wrap[i32]) i32 { return value.value; }
+func bump(slot inout Wrap[i32]) Unit { slot.value=slot.value+5; }
+func main() i32 {
+ let owner=Owner(token:100); var slot=Wrap[i32](apply:read,value:7);
+ owner.apply(inout slot,bump);
+ if slot.apply(slot)!=12 {return 1;}
+ return 0;
+}

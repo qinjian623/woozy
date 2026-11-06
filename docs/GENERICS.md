@@ -245,4 +245,18 @@ HIR 沿用 Call/ConstraintCall、Place、Move、实例和 Source 记录。验证
 
 测试包含 Native O0/O2 与 Python3.12.15 实际执行、写回和求值顺序、throw/defer、move 清理、同签名 phantom 实例、坏 HIR 及重算所有权后的拒绝。`tests/generics/run_method_inout.py` 还检查拒绝构建不会产生新程序或覆盖旧文件。旧合法控制与两个原始漏检源码分别保存在 `trait-ordinary-*-control`、`trait-function-cycle-reject` 和 `trait-type-inout-return-reject` 项目中。
 
-方法值、捕获闭包、实际 self move/inout、非数字/bool inout、字段/索引 inout、foreign 和动态 string 仍未开放。T07/T09 保持 in_progress。
+方法值、捕获闭包、实际 self move/inout、字段/索引 inout、foreign 和动态 string 仍未开放。平凡聚合整体 inout 见下节。T07/T09 保持 in_progress。
+
+## 平凡 struct/enum 的整体 inout
+
+数字/bool 之外的有限平凡聚合现在可以作为整体可写绑定传入 `inout`。顶层数据仍只接受数字/bool 或 `NominalStruct`/`NominalEnum`；struct 字段和所有 enum 变体载荷递归允许数字/bool、`Unit`、非捕获函数值、空 struct 和无载荷 enum。顶层 `Unit`/函数值、`Vec`、`string`、foreign/未知类型、含拥有字段的聚合和无限值布局继续拒绝。该判断读取实际实例、声明字段及替换后的字段类型，不按名称或仅按 `needs_drop` 猜测；`ValueOps.pod_inout` 同步表示同一顶层规则，但 HIR 独立验证不依赖它。
+
+自由/泛型函数、固有方法、trait 非 self 参数、值/具体 Type/T 调用、函数值和既有泛型转交共用该数据规则。`slot inout Self` 在具体或泛型 impl 中按替换后的聚合检查；trait 原型首位真实 Self 的 move/inout 仍不支持。依赖方法自身类型参数或 trait Self 的 callback inout 数据继续限制为数字/bool，普通 callback 中与 Self 无关的平凡聚合参数合法。捕获闭包、方法值、非平凡拥有值 inout 和字段/索引 inout 未开放。
+
+被调用方可以整体替换 struct、改变 enum 活动变体、修改值字段或把同一整体绑定继续转交给另一个 inout 参数。调用仍要求整体可写 `var` 绑定；let、普通参数、临时值、字段和索引不能作为 inout。重复或嵌套借用、另一实参读取/移动同一绑定或其子字段继续拒绝；不同平坦 POD 绑定各自复制。receiver 只求值一次，命名实参按源码顺序，后续实参抛错不进入 callee，callee 的 typed throw 写回可见，return 先保存返回值再执行 defer。
+
+Native 以 LLVM 聚合值和调用者存储指针降低；Python 的 writable `Cell` 只承载可写绑定，普通读取和返回仍复制逻辑值。零尺寸/空 struct、Unit 字段和固定函数值字段都进入真实执行检查，函数字段被替换后实际调用；测试不比较 padding，只检查有效字段和活动变体。
+
+新增 `tests/generics/aggregate-inout/` 覆盖嵌套 POD、padding、enum 活动变体、显式/推断泛型、函数值、固有和 trait 方法、ConcreteType/T 调用、整体替换、字段修改、copy/return、throw/defer/求值顺序，以及 owning 聚合和别名拒绝。`tests/generics/run_aggregate_inout.py` 在两后端检查和执行，并对拒绝项目验证 fresh 构建不产物、已有目录不被覆盖。C++ 静态检查另覆盖 `ValueOps.pod_inout`、顶层 Unit/Function 拒绝、坏 HIR 字段和把 Place 改成 Read 后重算 ownership 仍拒绝。旧 constrained move/inout 拒绝项目因聚合 inout 变为合法，保留原输入未改，测试改用新增的含 Vec 字段版本作为拒绝控制。四配置的最终数量以本次交付日志为准。
+
+修正版进一步区分了三个来源问题：同一个泛型 nominal 声明的有限嵌套（如 `Box[Box[i32]]`）按具体类型实参的严格缩小判断值存储循环，不再仅因声明相同就当作无限布局；函数签名中的 nominal 回指不参与值布局环判断。trait callback 的 Self 依赖只从真实原型中的 trait Self SymbolId 判断，固定 `Pair` callback 即使 impl Self 也是 `Pair` 或 `i32` 也不被当作 Self 依赖；真正的 Self callback 仍保留既有数字/bool 限制。`slot inout Wrap[Self]` 在原型检查时把真实 Self 放入类型环境，具体 impl 仍按实际替换后的聚合检查，拥有字段的 Self 继续报 Source `E_CAPABILITY_UNAVAILABLE`。这些限制同时由独立 HIR 验证器按同一 raw prototype/Self 关系重查。

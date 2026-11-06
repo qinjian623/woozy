@@ -1463,11 +1463,14 @@ void constrained_free_inout(const fs::path &root) {
       "func swap[T A](a inout T,b inout T){} "
       "func main(){var x i32=1;var y i32=2;swap(inout x,inout y);}",
       "E_TYPE_MISMATCH");
-  unsupported("trait V{func get(self Self)i32;} struct S{x i32;} "
-              "impl V for S{func get(self Self)i32{return self.x;}} "
-              "func swap[T V](a inout T,b inout T){} "
-              "func main(){var x S=S(x:1);var y S=S(x:2);"
-              "swap(inout x,inout y);}");
+  auto constrained_aggregate = good(
+      "trait V{func get(self Self)i32;} struct S{x i32;} "
+      "impl V for S{func get(self Self)i32{return self.x;}} "
+      "func swap[T V](a inout T,b inout T){} "
+      "func main(){var x S=S(x:1);var y S=S(x:2);"
+      "swap(inout x,inout y);}");
+  need(hir::verify(constrained_aggregate).success(),
+       "constrained POD aggregate inout did not publish");
   good("trait V{func get(self Self)i32;} "
        "impl V for i32{func get(self Self)i32{return self;}} "
        "struct B[T]{x T;} impl[T] B[T]{"
@@ -1486,11 +1489,14 @@ void constrained_free_inout(const fs::path &root) {
       "func main(){var x i32=1;var y i32=2;let f=swap[i32];"
       "f(inout x,inout y);}",
       "E_TYPE_MISMATCH");
-  unsupported("trait V{func get(self Self)i32;} struct S{x i32;} "
-              "impl V for S{func get(self Self)i32{return self.x;}} "
-              "func swap[T V](a inout T,b inout T){} "
-              "func main(){var x S=S(x:1);var y S=S(x:2);let f=swap[S];"
-              "f(inout x,inout y);}");
+  auto constrained_aggregate_value = good(
+      "trait V{func get(self Self)i32;} struct S{x i32;} "
+      "impl V for S{func get(self Self)i32{return self.x;}} "
+      "func swap[T V](a inout T,b inout T){} "
+      "func main(){var x S=S(x:1);var y S=S(x:2);let f=swap[S];"
+      "f(inout x,inout y);}");
+  need(hir::verify(constrained_aggregate_value).success(),
+       "constrained POD aggregate function value did not publish");
   bad("trait V{} impl V for i32{} "
       "func swap[T V](a inout T,b inout T){} "
       "func main(){var x i32=1;swap(inout x,inout x);}",
@@ -1620,14 +1626,16 @@ void generic_inout(const fs::path &root) {
 
   unsupported(swap + "func main(){swap(inout 1,inout 2);}",
               "E_CAPABILITY_UNAVAILABLE");
-  unsupported("struct S { x i32; } " + swap +
+  auto aggregate_struct = good("struct S { x i32; } " + swap +
                   "func main(){var s S=S(x:1);var t S=S(x:2);"
-                  "swap(inout s,inout t);}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported("enum E { A; } " + swap +
+                  "swap(inout s,inout t);}");
+  need(hir::verify(aggregate_struct).success(),
+       "POD struct inout did not publish");
+  auto aggregate_enum = good("enum E { A; } " + swap +
                   "func main(){var x E=E.A;var y E=E.A;"
-                  "swap(inout x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
+                  "swap(inout x,inout y);}");
+  need(hir::verify(aggregate_enum).success(),
+       "empty-enum inout did not publish");
   unsupported(swap + "func main(){var x Vec[i32]=[1];var y Vec[i32]=[2];"
               "swap(inout x,inout y);}",
               "E_CAPABILITY_UNAVAILABLE");
@@ -1712,9 +1720,11 @@ void generic_inout(const fs::path &root) {
   unsupported_span("enum E[T]{A(cb func(inout T));} "
                    "func keep(value E[Vec[i32]])i32{return 0;} "
                    "func main()i32{return 0;}");
-  unsupported_span("struct S[T]{f func() S[S[T]];cb func(inout T);} "
-                   "func take(value S[S[i32]])i32{return 0;} "
-                   "func main()i32{return 0;}");
+  // A concrete callback field whose inout data is now a trivial aggregate
+  // follows the same data rule as a top-level inout slot.
+  good("struct S[T]{f func() S[S[T]];cb func(inout T);} "
+       "func take(value S[S[i32]])i32{return 0;} "
+       "func main()i32{return 0;}");
   unsupported_span("struct A[T]{b B[T];} "
                    "struct B[T]{f func() A[T];cb func(inout T);} "
                    "func take(value A[Vec[i32]])i32{return 0;} "
@@ -6761,18 +6771,24 @@ impl Exchange for i32 {
               "struct S{x i32;} impl V for S{"
               "func bad(self Self,slot inout Vec[Self]){}} "
               "func main()i32{return 0;}");
-  unsupported("trait V{func set(self Self,slot inout Self);} "
-              "struct S{x i32;} impl V for S{"
-              "func set(self Self,slot inout Self){}} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func set(self Self,slot inout Self);} "
-              "enum E{One;} impl V for E{"
-              "func set(self Self,slot inout Self){}} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func set(self Self,slot inout Self);} "
-              "struct Box[T]{value T;} impl[T] V for Box[T]{"
-              "func set(self Self,slot inout Self){}} "
-              "func main()i32{return 0;}");
+  auto trait_self_struct = good("trait V{func set(self Self,slot inout Self);} "
+      "struct S{x i32;} impl V for S{"
+      "func set(self Self,slot inout Self){}} "
+      "func main()i32{return 0;}");
+  need(hir::verify(trait_self_struct).success(),
+       "trait POD struct Self inout did not publish");
+  auto trait_self_enum = good("trait V{func set(self Self,slot inout Self);} "
+      "enum E{One;} impl V for E{"
+      "func set(self Self,slot inout Self){}} "
+      "func main()i32{return 0;}");
+  need(hir::verify(trait_self_enum).success(),
+       "trait POD enum Self inout did not publish");
+  auto trait_self_generic = good("trait V{func set(self Self,slot inout Self);} "
+      "struct Box[T]{value T;} impl[T] V for Box[T]{"
+      "func set(self Self,slot inout Self){}} "
+      "func main()i32{return 0;}");
+  need(hir::verify(trait_self_generic).success(),
+       "trait generic POD Self inout did not publish");
   unsupported("trait V{func set(self Self,slot inout Self);} "
               "impl V for Vec[i32]{func set(self Self,slot inout Self){}} "
               "func main()i32{return 0;}");
@@ -9867,10 +9883,13 @@ func main() i32 {
     return 0;
 }
 )");
-  unsupported("trait V{func bad[U](owner Self,slot inout Self,tag U)Self;} "
-              "struct S{x i32;} impl V for S{"
-              "func bad[U](owner Self,slot inout Self,tag U)Self{return slot;}} "
-              "func main()i32{return 0;}");
+  auto generic_trait_self_slot = good(
+      "trait V{func bad[U](owner Self,slot inout Self,tag U)Self;} "
+      "struct S{x i32;} impl V for S{"
+      "func bad[U](owner Self,slot inout Self,tag U)Self{return slot;}} "
+      "func main()i32{return 0;}");
+  need(hir::verify(generic_trait_self_slot).success(),
+       "generic trait POD Self inout did not publish");
   std::cout << "trait-method-scalar-inout HIR checks passed\n";
 }
 
@@ -10524,6 +10543,311 @@ void nested_patterns() {
   });
 }
 
+
+void aggregate_inout_validation() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    return *r.value;
+  };
+  auto bad = [](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code),
+         text + "\n" + messages(r));
+    need(!has(r, "E_IR_INVALID"), "source rejection became E_IR_INVALID");
+  };
+  auto unavailable = [](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE"),
+         text + "\n" + messages(r));
+    need(!has(r, "E_IR_INVALID"), "source E_CAP became E_IR_INVALID");
+  };
+  auto named_type = [](const hir::HirModule &m, const std::string &name) {
+    for (auto &d : m.nominals)
+      if (m.resolved->symbols.at(d.symbol.value).name == name)
+        for (uint64_t i = 1; i <= m.types.size(); ++i)
+          if (auto t = m.types.find(TypeId{i});
+              t && t->kind == d.kind && t->declaration == d.symbol)
+            return TypeId{i};
+    throw std::runtime_error("named aggregate type missing: " + name);
+  };
+
+  const std::string types =
+      "struct Empty{} struct Pair{x i32;y i32;}"
+      "struct Leaf{empty Empty;unit Unit;callback func(i32)i32;pad u64;}"
+      "enum Choice{None;Value(v i32);Group(pair Pair,tag i32);} ";
+  auto aggregate = good(types +
+      "func noop(){} func inc(x i32)i32{return x+1;}"
+      "func swap[T](a inout T,b inout T){let t=a;a=b;b=t;}"
+      "func replace(slot inout Leaf,value Leaf)i32{let old=slot.pad;"
+      "slot=value;return i32(old);}"
+      "func main()i32{var a=Leaf(empty:Empty(),unit:noop(),"
+      "callback:inc,pad:1);var b=a;swap(inout a,inout b);"
+      "var c=Choice.None;var d=Choice.Value(v:2);"
+      "swap(inout c,inout d);return 0;}");
+  need(hir::verify_types(aggregate).success(),
+       "aggregate inout HIR rejected: " + messages(hir::verify_types(aggregate)));
+  need(hir::verify(aggregate).success(), "aggregate inout did not publish");
+  auto leaf = named_type(aggregate, "Leaf");
+  auto pair = named_type(aggregate, "Pair");
+  auto choice = named_type(aggregate, "Choice");
+  need(hir::inout_data_type(aggregate, leaf),
+       "Unit/empty/function fields were not accepted inside a POD aggregate");
+  need(hir::classify_value(aggregate, leaf).pod_inout,
+       "aggregate ValueOps.pod_inout was not updated");
+  need(hir::classify_value(aggregate, pair).pod_inout &&
+           hir::classify_value(aggregate, choice).pod_inout,
+       "nested struct/enum POD classification missing");
+  bool saw_unit = false, saw_function = false;
+  for (uint64_t i = 1; i <= aggregate.types.size(); ++i) {
+    auto t = aggregate.types.find(TypeId{i});
+    if (t->kind == hir::TypeKind::Unit) {
+      saw_unit = true;
+      need(!hir::inout_data_type(aggregate, TypeId{i}),
+           "top-level Unit opened as inout data");
+      need(!hir::classify_value(aggregate, TypeId{i}).pod_inout,
+           "Unit leaf ValueOps.pod_inout opened");
+    }
+    if (t->kind == hir::TypeKind::Function) {
+      saw_function = true;
+      need(!hir::inout_data_type(aggregate, TypeId{i}),
+           "top-level Function opened as inout data");
+      need(!hir::classify_value(aggregate, TypeId{i}).pod_inout,
+           "Function leaf ValueOps.pod_inout opened");
+    }
+  }
+  need(saw_unit && saw_function, "Unit/Function types missing from probe");
+
+  unavailable("struct Own{items Vec[i32];} func f(slot inout Own){} "
+              "func main()i32{return 0;}");
+  unavailable("enum Owned{Empty;Value(items Vec[i32]);} "
+              "func f(slot inout Owned){} func main()i32{return 0;}");
+  unavailable("func f(slot inout Vec[i32]){} func main()i32{return 0;}");
+  unavailable("func f(slot inout string){} func main()i32{return 0;}");
+  unavailable("func f(slot inout Unit){} func main()i32{return 0;}");
+  unavailable("func f(slot inout func(i32)i32){} func main()i32{return 0;}");
+  unavailable("func f[T](slot inout T){} func main()i32{"
+              "var v Vec[i32]=[1];f(inout v);return 0;}");
+  unavailable("struct F{callback func(inout Vec[i32]);} "
+              "func f(slot inout F){} func main()i32{return 0;}");
+
+  bad("struct S{x i32;} func f(slot inout S){} func main()i32{"
+      "let s=S(x:1);f(inout s);return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("struct S{x i32;} func f(slot inout S){} func outer(s S){"
+      "f(inout s);} func main()i32{return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("struct S{x i32;} func f(a inout S,b inout S){} func main()i32{"
+      "var s=S(x:1);f(inout s,inout s);return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("struct S{x i32;} func g(slot inout S,other i32){} func main()i32{"
+      "var s=S(x:1);g(inout s,s.x);return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("struct S{x i32;} func inner(slot inout S)i32{return 0;}"
+      "func outer(slot inout S,other i32){} func main()i32{"
+      "var s=S(x:1);outer(inout s,inner(inout s));return 0;}",
+      "E_CALL_ARGUMENT");
+  bad("struct S{x i32;} func g(slot inout S,other S){} func main()i32{"
+      "var s=S(x:1);g(inout s,move s);return 0;}",
+      "E_CALL_ARGUMENT");
+
+  auto mutable_hir = good(
+      "struct Inner{x i32;} struct Outer{inner Inner;}"
+      "struct Holder{items Vec[i32];}"
+      "func replace(slot inout Outer){} func main()i32{"
+      "var o=Outer(inner:Inner(x:1));replace(inout o);return 0;}");
+  // A forged nominal field turns the transitive inout data into an owning
+  // Vec. Recomputing ownership must not be enough to publish it.
+  invalid_recomputed(mutable_hir, "aggregate inout owning forged field",
+                     [&](auto &x) {
+    TypeId vector{0};
+    for (uint64_t i = 1; i <= x.types.size(); ++i)
+      if (x.types.find(TypeId{i})->kind == hir::TypeKind::Vec)
+        vector = TypeId{i};
+    need(vector.value, "Vec type missing from forged field source");
+    for (auto &d : x.nominals)
+      if (x.resolved->symbols.at(d.symbol.value).name == "Inner") {
+        need(d.fields.size() == 1, "Inner field changed");
+        d.fields[0].type = vector;
+        return;
+      }
+    throw std::runtime_error("Inner declaration missing");
+  });
+
+  auto place_hir = good(
+      "struct S{x i32;} func replace(slot inout S){} func main()i32{"
+      "var s=S(x:1);replace(inout s);return 0;}");
+  // The call still carries the right type/mode, but its argument is no longer
+  // the required whole Place. Recomputing ownership must not hide this.
+  invalid_recomputed(place_hir, "aggregate inout argument replaced by read",
+                     [](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data))
+        for (auto &a : c->args)
+          if (a.mode == hir::ParamMode::inout) {
+            auto &argument = x.nodes[a.expression.value];
+            auto symbol = std::get<hir::Place>(argument.data).symbol;
+            argument.data = hir::Read{symbol};
+            return;
+          }
+    throw std::runtime_error("aggregate inout Place missing");
+  });
+
+  // Correction regressions: same nominal with a strictly smaller concrete
+  // argument is finite; fixed callback data is not Self-dependent; and a real
+  // Self wrapped in a generic aggregate follows the concrete Self data rule.
+  auto same_nominal = good(
+      "struct Box[T]{value T;} "
+      "func replace[T](slot inout T,next T)T{"
+      "let old=slot;slot=next;return old;} "
+      "func main()i32{var slot=Box[Box[i32]](value:Box[i32](value:3));"
+      "let next=Box[Box[i32]](value:Box[i32](value:8));"
+      "let old=replace[Box[Box[i32]]](inout slot,next);"
+      "if old.value.value!=3||slot.value.value!=8{return 1;}return 0;}");
+  need(hir::verify(same_nominal).success(),
+       "same-nominal finite aggregate was rejected");
+
+  auto fixed_callback = good(
+      "struct Pair{value i32;} struct Owner{token i32;} "
+      "trait Edit{func apply(self Self,slot inout Pair,"
+      "callback func(inout Pair)Unit)Unit;} "
+      "impl Edit for Pair{func apply(self Self,slot inout Pair,"
+      "callback func(inout Pair)Unit)Unit{callback(inout slot);}} "
+      "impl Edit for Owner{func apply(self Self,slot inout Pair,"
+      "callback func(inout Pair)Unit)Unit{callback(inout slot);}} "
+      "impl Edit for i32{func apply(self Self,slot inout Pair,"
+      "callback func(inout Pair)Unit)Unit{callback(inout slot);}} "
+      "func bump(slot inout Pair)Unit{slot.value=slot.value+5;} "
+      "func main()i32{let a=Pair(value:100);var p=Pair(value:7);"
+      "a.apply(inout p,bump);let b=Owner(token:1);"
+      "b.apply(inout p,bump);let c i32=1;c.apply(inout p,bump);return 0;}");
+  need(hir::verify(fixed_callback).success(),
+       "fixed POD callback with coincident Self was rejected");
+  auto pair_type = named_type(fixed_callback, "Pair");
+  const hir::TraitDecl *edit = nullptr;
+  for (const auto &tr : fixed_callback.traits)
+    if (fixed_callback.resolved->symbols.at(tr.symbol.value).name == "Edit")
+      edit = &tr;
+  need(edit != nullptr, "fixed callback trait missing");
+  const hir::MethodPrototype *apply = nullptr;
+  for (const auto &p : edit->methods)
+    if (fixed_callback.resolved->symbols.at(p.symbol.value).name == "apply")
+      apply = &p;
+  need(apply != nullptr, "fixed callback prototype missing");
+  auto callback_type = [](const hir::HirModule &m, const hir::MethodPrototype &p) {
+    const auto &sig = *m.types.find(p.signature);
+    for (const auto &param : sig.parameters)
+      if (m.types.find(param.type)->kind == hir::TypeKind::Function)
+        return param.type;
+    throw std::runtime_error("callback parameter missing");
+  };
+  need(!hir::trait_self_callback_non_scalar(
+           fixed_callback, callback_type(fixed_callback, *apply), edit->self,
+           pair_type),
+       "fixed Pair callback was classified as Self-dependent");
+
+  const std::string function_cycle =
+      "struct Wrap[T]{apply func(Wrap[T])T;value T;}"
+      "struct Owner{token i32;} ";
+  auto fixed_cycle = good(function_cycle +
+      "trait Edit{func apply(self Self,slot inout Wrap[i32],"
+      "callback func(inout Wrap[i32])Unit)Unit;}"
+      "impl Edit for Owner{func apply(self Self,slot inout Wrap[i32],"
+      "callback func(inout Wrap[i32])Unit)Unit{callback(inout slot);}}"
+      "func read(value Wrap[i32])i32{return value.value;}"
+      "func bump(slot inout Wrap[i32])Unit{slot.value=slot.value+5;}"
+      "func main()i32{let owner=Owner(token:100);"
+      "var slot=Wrap[i32](apply:read,value:7);owner.apply(inout slot,bump);"
+      "if slot.apply(slot)!=12{return 1;}return 0;}");
+  need(hir::verify(fixed_cycle).success(),
+       "fixed callback function cycle was classified as Self-dependent");
+  auto growing_signature = good(
+      "struct Wrap[T]{factory func()Wrap[Wrap[T]];}"
+      "struct Owner{token i32;}"
+      "trait Edit{func apply(self Self,slot inout Wrap[i32],"
+      "callback func(inout Wrap[i32])Unit)Unit;}"
+      "impl Edit for Owner{func apply(self Self,slot inout Wrap[i32],"
+      "callback func(inout Wrap[i32])Unit)Unit{}}"
+      "func main()i32{return 0;}");
+  need(hir::verify(growing_signature).success(),
+       "growing fixed function signature was classified as Self-dependent");
+  unavailable(function_cycle +
+      "trait Edit{func apply(self Self,"
+      "callback func(inout Wrap[i32],inout Self)Unit)Unit;}"
+      "impl Edit for Owner{func apply(self Self,"
+      "callback func(inout Wrap[i32],inout Self)Unit)Unit{}}"
+      "func main()i32{return 0;}");
+
+  auto wrapped_self = good(
+      "struct Wrap[T]{value T;} struct Pair{value i32;} "
+      "trait Edit{func edit(self Self,slot inout Wrap[Self],"
+      "next Wrap[Self])Wrap[Self];} "
+      "impl Edit for Pair{func edit(self Self,slot inout Wrap[Self],"
+      "next Wrap[Self])Wrap[Self]{let old=slot;slot=next;return old;}} "
+      "func main()i32{let o=Pair(value:1);var s=Wrap[Pair](value:Pair(value:3));"
+      "let old=o.edit(inout s,Wrap[Pair](value:Pair(value:8)));"
+      "if old.value.value!=3||s.value.value!=8{return 1;}return 0;}");
+  need(hir::verify(wrapped_self).success(),
+       "wrapped Self was not accepted as a concrete POD aggregate");
+  unavailable("struct Wrap[T]{value T;} struct Own{items Vec[i32];} "
+              "trait Edit{func edit(self Self,slot inout Wrap[Self])Unit;} "
+              "impl Edit for Own{func edit(self Self,slot inout Wrap[Self])"
+              "Unit{}} func main()i32{return 0;}");
+  bad("struct Pair{value i32;} impl Pair{func bad(self inout Pair){}} "
+      "func main()i32{var p=Pair(value:1);p.bad(inout p);return 0;}",
+      "E_CALL_ARGUMENT");
+  unavailable("struct Pair{value i32;} "
+              "trait Apply{func run[U](owner Self,"
+              "callback func(inout U))Unit;} "
+              "impl Apply for Pair{func run[U](owner Self,"
+              "callback func(inout U))Unit{}} "
+              "func main()i32{return 0;}");
+
+  auto self_callback = good(
+      "struct Pair{value i32;} "
+      "trait V{func bad(self Self,callback func(inout Self))Unit;} "
+      "impl V for i32{func bad(self Self,callback func(inout Self))Unit{}} "
+      "func main()i32{let p=Pair(value:1);return p.value-1;}");
+  need(hir::verify(self_callback).success(),
+       "numeric Self callback did not publish");
+  auto self_pair_type = named_type(self_callback, "Pair");
+  const hir::TraitDecl *v = nullptr;
+  for (const auto &tr : self_callback.traits)
+    if (self_callback.resolved->symbols.at(tr.symbol.value).name == "V")
+      v = &tr;
+  need(v != nullptr, "Self callback trait missing");
+  const hir::MethodPrototype *bad_callback = nullptr;
+  for (const auto &p : v->methods)
+    if (self_callback.resolved->symbols.at(p.symbol.value).name == "bad")
+      bad_callback = &p;
+  need(bad_callback != nullptr, "Self callback prototype missing");
+  auto i32_type = TypeId{0};
+  for (uint64_t i = 1; i <= self_callback.types.size(); ++i) {
+    auto t = self_callback.types.find(TypeId{i});
+    if (t->kind == hir::TypeKind::SignedInt && t->bits == 32) {
+      i32_type = TypeId{i};
+      break;
+    }
+  }
+  need(i32_type.value, "i32 type missing");
+  auto self_component = callback_type(self_callback, *bad_callback);
+  need(!hir::trait_self_callback_non_scalar(
+           self_callback, self_component, v->self, i32_type),
+       "numeric Self callback was rejected by independent policy");
+  need(hir::trait_self_callback_non_scalar(
+           self_callback, self_component, v->self, self_pair_type),
+       "aggregate Self callback was not rejected by independent policy");
+  auto forged_self = self_callback;
+  for (auto &im : forged_self.impls)
+    if (im.trait)
+      im.self_type = self_pair_type;
+  auto forged = hir::verify_types(forged_self);
+  need(!forged.success() && has(forged, "E_IR_INVALID"),
+       "HIR verifier accepted an aggregate Self-dependent callback: " +
+           messages(forged));
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -10594,6 +10918,7 @@ int main(int argc, char **argv) {
     inherent_static_self_identity();
     trait_static_self_qualification();
     nested_patterns();
+    aggregate_inout_validation();
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

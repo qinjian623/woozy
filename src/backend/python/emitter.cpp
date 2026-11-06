@@ -296,11 +296,10 @@ class Emitter {
   void check_signature(TypeId id, SourceSpan source) const {
     const auto &t = type(id);
     for (const auto &p : t.parameters)
-      if (p.mode == ParamMode::inout && !integer(type(p.type)) &&
-          type(p.type).kind != TypeKind::Float &&
-          type(p.type).kind != TypeKind::Bool)
+      if (p.mode == ParamMode::inout &&
+          !classify_value(m, p.type).pod_inout)
         throw Rejected{"Python value profile supports ordinary/move or "
-                       "numeric/bool inout parameters",
+                       "trivial numeric/bool/POD aggregate inout parameters",
                        source};
   }
   std::string type_key(TypeId id) const {

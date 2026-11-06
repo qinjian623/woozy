@@ -1,0 +1,276 @@
+package app;
+
+enum Failure {
+    Bad;
+}
+
+enum Choice {
+    None;
+    One(value i32);
+    Group(pair Pair, tag i32);
+}
+
+struct Empty {}
+
+struct Pair {
+    x i32;
+    y i32;
+}
+
+// Unit, an empty struct, a function value and a padding-capable u64 are all
+// trivial copy data. Only Choice's active payload and the named fields are
+// observed; padding is never compared or read.
+struct Nested {
+    pair Pair;
+    choice Choice;
+    unit Unit;
+    callback func(i32) i32;
+    empty Empty;
+    pad u64;
+}
+
+func noop() {}
+
+func inc(x i32) i32 {
+    return x + 1;
+}
+
+func dec(x i32) i32 {
+    return x - 1;
+}
+
+func mark(log inout i64, digit i32) {
+    log = log * 10 + i64(digit);
+}
+
+func mark_value(log inout i64, digit i32) i32 {
+    mark(inout log, digit);
+    return digit;
+}
+
+func mutate(slot inout Pair, x i32, y i32) {
+    slot.x = x;
+    slot.y = y;
+}
+
+func relay(slot inout Pair, x i32, y i32) {
+    mutate(inout slot, x, y);
+}
+
+func replace_nested(slot inout Nested, callback func(i32) i32) i32 {
+    let old = slot.pair.x;
+    slot = Nested(pair: Pair(x: old + 10, y: old + 20),
+                  choice: Choice.Group(pair: Pair(x: 7, y: 8), tag: 9),
+                  unit: noop(),
+                  callback: callback,
+                  empty: Empty(),
+                  pad: 18446744073709551615);
+    return old;
+}
+
+func swap_choice(slot inout Choice, value Choice) Choice {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func late_choice(slot inout Choice) Choice {
+    let old = slot;
+    defer {
+        slot = Choice.One(value: 99);
+    }
+    return old;
+}
+
+func fail_choice(slot inout Choice) i32 throws Failure {
+    slot = Choice.Group(pair: Pair(x: 7, y: 8), tag: 9);
+    throw Failure.Bad;
+}
+
+func ordered_choice(slot inout Choice, value Choice, second i32) Choice {
+    let old = slot;
+    slot = value;
+    return old;
+}
+
+func ordered_log(slot inout Choice, value Choice, second i32,
+                 callog inout i64) Choice {
+    let old = slot;
+    mark(inout callog, 9);
+    slot = value;
+    return old;
+}
+
+func bad(log inout i64) i32 throws Failure {
+    mark(inout log, 2);
+    throw Failure.Bad;
+}
+
+func main() i32 {
+    // A whole writable pair can be mutated directly and through a callee that
+    // forwards the same inout slot. Logical copies of two POD bindings stay
+    // independent.
+    var a = Pair(x: 1, y: 2);
+    var b = a;
+    b.x = 8;
+    if a.x != 1 || b.x != 8 {
+        return 1;
+    }
+    relay(inout a, 20, 21);
+    if a.x != 20 || a.y != 21 || b.x != 8 {
+        return 2;
+    }
+
+    // Whole-struct replacement changes every value field, including an empty
+    // struct, Unit field, fixed function value and a wide padding field.
+    var nested = Nested(pair: Pair(x: 3, y: 4),
+                        choice: Choice.None,
+                        unit: noop(),
+                        callback: inc,
+                        empty: Empty(),
+                        pad: 42);
+    let old_nested = replace_nested(inout nested, dec);
+    if old_nested != 3 || nested.pair.x != 13 || nested.pair.y != 23 {
+        return 3;
+    }
+    if nested.callback(10) != 9 {  // the fixed function value was replaced
+        return 4;
+    }
+    if nested.pad != 18446744073709551615 {
+        return 5;
+    }
+    switch nested.choice {
+    case Choice.Group(pair, tag):
+        if pair.x != 7 || pair.y != 8 || tag != 9 {
+            return 6;
+        }
+    default:
+        return 7;
+    }
+
+    // A callee can replace the whole enum and change its active variant. The
+    // returned value is the old active value, saved before the caller sees the
+    // writeback.
+    var choice = Choice.None;
+    let old_choice = swap_choice(inout choice,
+                                 Choice.One(value: 5));
+    switch old_choice {
+    case Choice.None:
+        break;
+    default:
+        return 8;
+    }
+    switch choice {
+    case Choice.One(value):
+        if value != 5 {
+            return 9;
+        }
+    default:
+        return 10;
+    }
+    let old_group = swap_choice(inout choice,
+                                Choice.Group(pair: Pair(x: 1, y: 2),
+                                             tag: 3));
+    switch old_group {
+    case Choice.One(value):
+        if value != 5 {
+            return 11;
+        }
+    default:
+        return 12;
+    }
+    switch choice {
+    case Choice.Group(pair, tag):
+        if pair.x != 1 || pair.y != 2 || tag != 3 {
+            return 13;
+        }
+    default:
+        return 14;
+    }
+
+    // Return saves the POD value before defer updates the same binding.
+    var deferred = Choice.One(value: 6);
+    let old_deferred = late_choice(inout deferred);
+    switch old_deferred {
+    case Choice.One(value):
+        if value != 6 {
+            return 15;
+        }
+    default:
+        return 16;
+    }
+    switch deferred {
+    case Choice.One(value):
+        if value != 99 {
+            return 17;
+        }
+    default:
+        return 18;
+    }
+
+    // A typed throw keeps the callee's whole-enum replacement visible.
+    var failed = Choice.None;
+    try {
+        let ignored = fail_choice(inout failed);
+        return 19;
+    } catch err Failure {
+        switch failed {
+        case Choice.Group(pair, tag):
+            if pair.x != 7 || pair.y != 8 || tag != 9 {
+                return 20;
+            }
+        default:
+            return 21;
+        }
+    }
+
+    // Named arguments are evaluated in source order even though the callee
+    // receives them by parameter position.
+    var log i64 = 0;
+    var ordered = Choice.None;
+    let old_ordered = ordered_choice(
+        second: mark_value(inout log, 3),
+        value: Choice.One(value: mark_value(inout log, 5)),
+        slot: inout ordered);
+    if log != 35 {
+        return 22;
+    }
+    switch old_ordered {
+    case Choice.None:
+        break;
+    default:
+        return 23;
+    }
+    switch ordered {
+    case Choice.One(value):
+        if value != 5 {
+            return 24;
+        }
+    default:
+        return 25;
+    }
+
+    // A later argument that throws never enters the callee: its callee-only
+    // mark stays zero and the whole-binding argument remains untouched.
+    log = 0;
+    var callog i64 = 0;
+    var not_entered = Choice.None;
+    try {
+        let ignored = ordered_log(second: bad(inout log),
+                                  value: Choice.One(value: 9),
+                                  slot: inout not_entered,
+                                  callog: inout callog);
+        return 26;
+    } catch err Failure {
+        if log != 2 || callog != 0 {
+            return 27;
+        }
+        switch not_entered {
+        case Choice.None:
+            break;
+        default:
+            return 28;
+        }
+    }
+    return 0;
+}

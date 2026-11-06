@@ -1,0 +1,7 @@
+package app;
+func replace[T](slot inout T) {}
+func main() i32 {
+    var values Vec[i32] = [1];
+    replace(inout values);
+    return 0;
+}

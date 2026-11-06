@@ -494,13 +494,9 @@ class Verifier {
         need(type(p.type).kind != TypeKind::ForeignCallable &&
                  (type(p.type).kind != TypeKind::ForeignOpaque || p.mode == ParamMode::ordinary),
              "internal callable/external move parameter");
-        const auto parameter_kind = type(p.type).kind;
-        const bool dependent_inout =
-            parameter_kind == TypeKind::TypeParameter &&
-            allowed.count(type(p.type).declaration.value);
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
                  (p.mode == ParamMode::inout &&
-                  (inout_scalar(parameter_kind) || dependent_inout)),
+                  inout_data_type(m, p.type, allowed)),
              "unsupported move/nontrivial inout");
         valid_type(p.type, allowed, depth + 1);
       }
@@ -1244,12 +1240,9 @@ class Verifier {
       need(a.mode == p.mode && argument.type == p.type,
            "call argument mode/type");
       if (p.mode == ParamMode::inout) {
-        const bool dependent =
-            type(p.type).kind == TypeKind::TypeParameter &&
-            owner_allowed.count(type(p.type).declaration.value);
         need(argument.kind() == NodeKind::place &&
-                 (inout_scalar(type(p.type).kind) || dependent),
-             "inout requires a whole trivial scalar place");
+                 inout_data_type(m, p.type, owner_allowed),
+             "inout requires a whole trivial place");
         need(
             borrowed.insert(std::get<Place>(argument.data).symbol.value).second,
             "duplicate inout storage in call");
@@ -1992,6 +1985,37 @@ class Verifier {
       if (im.trait)
         need(traits.count(im.trait->value), "impl trait missing");
     }
+    // Independently recheck the stage restriction from the raw trait
+    // prototype and real Self SymbolId. A concrete impl type that happens to
+    // equal fixed callback data must not be treated as a Self dependency.
+    for (const auto &im : m.impls) {
+      if (!im.trait)
+        continue;
+      const TraitDecl *tr = nullptr;
+      for (const auto &t : m.traits)
+        if (t.symbol == *im.trait)
+          tr = &t;
+      need(tr != nullptr, "impl trait declaration missing");
+      for (const auto &proto : tr->methods) {
+        SymbolId method{0};
+        for (auto id : im.methods)
+          if (symbol(id).name == symbol(proto.symbol).name)
+            method = id;
+        if (!method.value)
+          continue;
+        const auto &sig = type(proto.signature);
+        auto check = [&](TypeId component) {
+          need(!trait_self_callback_non_scalar(m, component, tr->self,
+                                               im.self_type),
+               "trait Self-dependent inout callback must remain numeric/bool");
+        };
+        for (const auto &p : sig.parameters)
+          check(p.type);
+        check(sig.result);
+        if (sig.throws_type)
+          check(*sig.throws_type);
+      }
+    }
   }
   TypeId source_type_in_function(modules::NodeRef ref, SymbolId owner) const {
     auto t = source_type(ref);
@@ -2416,12 +2440,9 @@ class Verifier {
         need(a.mode == p.mode && argument.type == p.type,
              "trait-static argument type/mode");
         if (p.mode == ParamMode::inout) {
-          const bool dependent =
-              type(p.type).kind == TypeKind::TypeParameter &&
-              owner_allowed.count(type(p.type).declaration.value);
           need(argument.kind() == NodeKind::place &&
-                   (inout_scalar(type(p.type).kind) || dependent),
-               "trait-static inout requires a whole scalar place");
+                   inout_data_type(m, p.type, owner_allowed),
+               "trait-static inout requires a whole trivial place");
           need(borrowed
                    .insert(std::get<Place>(argument.data).symbol.value)
                    .second,
@@ -2509,13 +2530,10 @@ class Verifier {
             type(raw.type).kind == TypeKind::TypeParameter &&
             type(raw.type).declaration == tr->self &&
             p.type == c.receiver;
-        const bool dependent =
-            type(p.type).kind == TypeKind::TypeParameter &&
-            owner_allowed.count(type(p.type).declaration.value);
         need(argument.kind() == NodeKind::place &&
-                 (inout_scalar(type(p.type).kind) || trait_self_slot ||
-                  dependent),
-             "constraint inout requires a whole scalar place");
+                 (inout_data_type(m, p.type, owner_allowed) ||
+                  trait_self_slot),
+             "constraint inout requires a whole trivial place");
         need(borrowed
                  .insert(std::get<Place>(argument.data).symbol.value)
                  .second,

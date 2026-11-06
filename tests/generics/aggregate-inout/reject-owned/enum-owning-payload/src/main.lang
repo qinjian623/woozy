@@ -1,0 +1,4 @@
+package app;
+enum Owned { Empty; Value(items Vec[i32]); }
+func replace(slot inout Owned) {}
+func main() i32 { return 0; }

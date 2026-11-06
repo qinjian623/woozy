@@ -95,6 +95,19 @@ else()
   message(STATUS "generics.constrained_inout_runtime: not_run (LLVM/3.12 helper unavailable)")
 endif()
 if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
+   TARGET lang_python_emit)
+  add_test(NAME generics.aggregate_inout_runtime COMMAND "${LANG_TEST_PYTHON}"
+    "${CMAKE_CURRENT_LIST_DIR}/run_aggregate_inout.py"
+    --cli $<TARGET_FILE:langc>
+    --helper $<TARGET_FILE:lang_python_emit>
+    --root "${LANG_T07_ROOT}"
+    --python "${LANG_PYTHON312}"
+    --out "${CMAKE_CURRENT_BINARY_DIR}/aggregate-inout-runtime")
+  set_tests_properties(generics.aggregate_inout_runtime PROPERTIES TIMEOUT 420)
+else()
+  message(STATUS "generics.aggregate_inout_runtime: not_run (LLVM/3.12 helper unavailable)")
+endif()
+if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.nested_patterns_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_nested_patterns.py"

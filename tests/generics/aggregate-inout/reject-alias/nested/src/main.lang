@@ -1,0 +1,9 @@
+package app;
+struct S { x i32; }
+func inner(slot inout S) i32 { return 0; }
+func outer(slot inout S, other i32) {}
+func main() i32 {
+    var value = S(x: 1);
+    outer(inout value, inner(inout value));
+    return 0;
+}

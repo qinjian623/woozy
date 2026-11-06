@@ -7,6 +7,8 @@
 #include <tuple>
 
 namespace lang::hir {
+bool inout_data_type(const HirModule &, TypeId,
+                     const std::set<uint64_t> &);
 namespace {
 struct Problem {
   Source source;
@@ -99,7 +101,6 @@ ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
       sub.push_back({d.params[i].symbol, t.type_args.at(i)});
     out.kind = t.kind == TypeKind::NominalStruct ? ValueKind::structure
                                                  : ValueKind::enumeration;
-    out.pod_inout = true;
     auto fields = [&](const auto &fs, std::optional<SymbolId> v) {
       for (const auto &f : fs) {
         auto ft = substitute(f.type, sub, ctx);
@@ -110,7 +111,6 @@ ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
         auto ops = classify(m, ft, active);
         out.fields.push_back({v, f.symbol, ft});
         out.needs_drop |= ops.needs_drop;
-        out.pod_inout &= ops.pod_inout;
         if (ops.kind == ValueKind::unsupported || ops.kind == ValueKind::foreign_reference ||
             ops.kind == ValueKind::foreign_callable || ops.kind == ValueKind::foreign_error) {
           out.kind = ValueKind::unsupported;
@@ -121,6 +121,7 @@ ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
     fields(d.fields, {});
     for (const auto &v : d.variants)
       fields(v.payload, v.symbol);
+    out.pod_inout = inout_data_type(m, id);
   }
   active.erase(key);
   return out;
@@ -1122,6 +1123,205 @@ PhaseResult<std::monostate> result(const std::function<void()> &fn,
   return r;
 }
 } // namespace
+bool inout_data_type(const HirModule &m, TypeId root,
+                     const std::set<uint64_t> &parameters) {
+  // Substitution may intern storage-only member types. Keep a private copy so
+  // no local TypeId escapes and no reference into m.types is held across a
+  // possible growth of the context.
+  TypeContext types = m.types;
+  struct ActiveNominal {
+    uint64_t declaration;
+    size_t function_depth;
+    size_t weight;
+  };
+  std::vector<ActiveNominal> active;
+  std::set<uint64_t> functions;
+  std::function<size_t(TypeId, size_t)> type_weight =
+      [&](TypeId id, size_t depth) -> size_t {
+        if (depth > 128)
+          return SIZE_MAX;
+        const auto *found = types.find(id);
+        if (!found)
+          return SIZE_MAX;
+        const Type t = *found;
+        size_t result = 1;
+        for (auto a : t.type_args) {
+          auto w = type_weight(a, depth + 1);
+          if (w == SIZE_MAX || result > SIZE_MAX - w)
+            return SIZE_MAX;
+          result += w;
+        }
+        return result;
+      };
+  std::function<bool(TypeId, bool, size_t, size_t)> visit =
+      [&](TypeId id, bool member, size_t depth, size_t function_depth) {
+        if (depth > 128)
+          return false;
+        const auto *found = types.find(id);
+        if (!found)
+          return false;
+        const Type t = *found;
+        if (t.kind == TypeKind::Unit)
+          return member;
+        if (t.kind == TypeKind::Function) {
+          // A non-capturing function value is trivial data only as a member.
+          // Its own inout parameters still follow the same data rule. The
+          // TypeId backedge is checked once, including recursive signatures.
+          if (!member || !functions.insert(id.value).second)
+            return member;
+          for (const auto &p : t.parameters)
+            if (p.mode == ParamMode::inout &&
+                !visit(p.type, false, depth + 1, function_depth + 1))
+              return false;
+          return true;
+        }
+        if (t.kind == TypeKind::Bool || t.kind == TypeKind::SignedInt ||
+            t.kind == TypeKind::UnsignedInt || t.kind == TypeKind::Isize ||
+            t.kind == TypeKind::Usize || t.kind == TypeKind::Float)
+          return true;
+        if (t.kind == TypeKind::TypeParameter)
+          return parameters.count(t.declaration.value) != 0;
+        if (t.kind != TypeKind::NominalStruct &&
+            t.kind != TypeKind::NominalEnum)
+          return false;
+        const NominalDecl *decl = nullptr;
+        for (const auto &d : m.nominals)
+          if (d.symbol == t.declaration) {
+            decl = &d;
+            break;
+          }
+        if (!decl || t.type_args.size() != decl->params.size())
+          return false;
+        // A nominal that contains itself through value storage has infinite
+        // layout and cannot be a finite POD. Vec/foreign recursion is already
+        // rejected by the kind checks above.
+        const size_t current_weight = type_weight(id, depth);
+        for (const auto &prior : active)
+          if (prior.declaration == t.declaration.value &&
+              prior.function_depth == function_depth &&
+              current_weight >= prior.weight)
+            return false;
+        active.push_back({t.declaration.value, function_depth,
+                          current_weight});
+        Substitutions sub;
+        for (size_t i = 0; i < decl->params.size(); ++i)
+          sub.push_back({decl->params[i].symbol, t.type_args[i]});
+        auto check = [&](const auto &fields) {
+          for (const auto &f : fields) {
+            auto field = substitute(f.type, sub, types);
+            if (!visit(field, true, depth + 1, function_depth))
+              return false;
+          }
+          return true;
+        };
+        bool ok = check(decl->fields);
+        for (const auto &v : decl->variants)
+          ok = ok && check(v.payload);
+        active.pop_back();
+        return ok;
+      };
+  return visit(root, false, 0, 0);
+}
+
+bool trait_self_callback_non_scalar(const HirModule &m, TypeId root,
+                                    SymbolId self, TypeId concrete_self) {
+  TypeContext types = m.types;
+  auto scalar = [](TypeKind kind) {
+    return kind == TypeKind::Bool || kind == TypeKind::SignedInt ||
+           kind == TypeKind::UnsignedInt || kind == TypeKind::Isize ||
+           kind == TypeKind::Usize || kind == TypeKind::Float;
+  };
+  auto nominal = [&](TypeId id) -> const NominalDecl * {
+    const auto *found = types.find(id);
+    if (!found)
+      return nullptr;
+    for (const auto &d : m.nominals)
+      if (d.symbol == found->declaration)
+        return &d;
+    return nullptr;
+  };
+  auto contains_self = [&](TypeId root) {
+    std::vector<TypeId> pending{root};
+    std::set<uint64_t> seen;
+    while (!pending.empty()) {
+      auto id = pending.back();
+      pending.pop_back();
+      if (!seen.insert(id.value).second)
+        continue;
+      const auto *found = types.find(id);
+      if (!found)
+        return true;
+      const Type t = *found;
+      if (t.kind == TypeKind::TypeParameter && t.declaration == self)
+        return true;
+      // A trait Self reaches nominal fields through this application's
+      // type arguments; expanding the fields can grow function signatures forever.
+      pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+      if (t.kind == TypeKind::Function) {
+        for (const auto &p : t.parameters)
+          pending.push_back(p.type);
+        pending.push_back(t.result);
+        if (t.throws_type)
+          pending.push_back(*t.throws_type);
+      }
+    }
+    return false;
+  };
+  std::set<uint64_t> visited;
+  std::function<bool(TypeId, size_t)> visit = [&](TypeId id,
+                                                  size_t depth) -> bool {
+    if (depth > 128)
+      return false;
+    const auto *found = types.find(id);
+    if (!found)
+      return false;
+    const Type t = *found;
+    if (!visited.insert(id.value).second)
+      return false;
+    for (auto a : t.type_args)
+      if (visit(a, depth + 1))
+        return true;
+    if (t.kind == TypeKind::Function) {
+      for (const auto &p : t.parameters) {
+        if (p.mode == ParamMode::inout && contains_self(p.type)) {
+          auto concrete = substitute(p.type, {{self, concrete_self}}, types);
+          const auto *c = types.find(concrete);
+          if (!c || !scalar(c->kind))
+            return true;
+        }
+        if (visit(p.type, depth + 1))
+          return true;
+      }
+      if (visit(t.result, depth + 1))
+        return true;
+      if (t.throws_type && visit(*t.throws_type, depth + 1))
+        return true;
+      return false;
+    }
+    if (t.kind == TypeKind::NominalStruct ||
+        t.kind == TypeKind::NominalEnum) {
+      const auto *d = nominal(id);
+      if (!d || d->params.size() != t.type_args.size())
+        return true;
+      Substitutions sub;
+      for (size_t i = 0; i < d->params.size(); ++i)
+        sub.push_back({d->params[i].symbol, t.type_args[i]});
+      auto field = [&](const FieldDecl &f) {
+        return visit(substitute(f.type, sub, types), depth + 1);
+      };
+      for (const auto &f : d->fields)
+        if (field(f))
+          return true;
+      for (const auto &v : d->variants)
+        for (const auto &f : v.payload)
+          if (field(f))
+            return true;
+    }
+    return false;
+  };
+  return visit(root, 0);
+}
+
 ValueOps classify_value(const HirModule &m, TypeId id) {
   std::set<uint64_t> active;
   return classify(m, id, active);

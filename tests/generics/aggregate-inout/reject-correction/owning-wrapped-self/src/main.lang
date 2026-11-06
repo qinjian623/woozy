@@ -1,0 +1,8 @@
+package app;
+struct Wrap[T] { value T; }
+struct Own { items Vec[i32]; }
+trait Edit { func edit(self Self, slot inout Wrap[Self]) Unit; }
+impl Edit for Own {
+    func edit(self Self, slot inout Wrap[Self]) Unit {}
+}
+func main() i32 { return 0; }

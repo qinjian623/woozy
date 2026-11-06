@@ -1,0 +1,10 @@
+package app;
+struct Pair { value i32; }
+impl Pair {
+    func bad(self inout Pair) {}
+}
+func main() i32 {
+    var value = Pair(value: 1);
+    value.bad(inout value);
+    return 0;
+}

@@ -1,0 +1,116 @@
+package app;
+
+struct Box[T] { value T; }
+struct Pair { value i32; }
+struct Owner { token i32; }
+struct Wrap[T] { value T; }
+
+trait Edit {
+    func apply(self Self, slot inout Pair,
+               callback func(inout Pair) Unit) Unit;
+}
+
+impl Edit for Pair {
+    func apply(self Self, slot inout Pair,
+               callback func(inout Pair) Unit) Unit {
+        callback(inout slot);
+    }
+}
+
+impl Edit for Owner {
+    func apply(self Self, slot inout Pair,
+               callback func(inout Pair) Unit) Unit {
+        callback(inout slot);
+    }
+}
+
+impl Edit for i32 {
+    func apply(self Self, slot inout Pair,
+               callback func(inout Pair) Unit) Unit {
+        callback(inout slot);
+    }
+}
+
+trait WrapEdit {
+    func edit(self Self, slot inout Wrap[Self],
+              next Wrap[Self]) Wrap[Self];
+}
+
+impl WrapEdit for Pair {
+    func edit(self Self, slot inout Wrap[Self],
+              next Wrap[Self]) Wrap[Self] {
+        let old = slot;
+        slot = next;
+        return old;
+    }
+}
+
+func replace[T](slot inout T, next T) T {
+    let old = slot;
+    slot = next;
+    return old;
+}
+
+func via_wrap[T WrapEdit](owner T, slot inout Wrap[T],
+                          next Wrap[T]) Wrap[T] {
+    return T.edit(owner, inout slot, next);
+}
+
+func bump(slot inout Pair) Unit {
+    slot.value = slot.value + 5;
+}
+
+func main() i32 {
+    // F1: same nominal declaration with a strictly smaller concrete argument
+    // is a finite value layout, not a declaration-level recursion.
+    var nested = Box[Box[i32]](value: Box[i32](value: 3));
+    let next_nested = Box[Box[i32]](value: Box[i32](value: 8));
+    let old_nested = replace[Box[Box[i32]]](inout nested, next_nested);
+    if old_nested.value.value != 3 || nested.value.value != 8 {
+        return 1;
+    }
+
+    // F2: fixed Pair callback data is not a Self dependency, whether the impl
+    // Self is the same nominal type, a distinct type, or a numeric type.
+    var pair_self = Pair(value: 7);
+    let pair_owner = Pair(value: 100);
+    pair_owner.apply(inout pair_self, bump);
+    if pair_self.value != 12 {
+        return 2;
+    }
+
+    var owner_slot = Pair(value: 7);
+    let other_owner = Owner(token: 100);
+    other_owner.apply(inout owner_slot, bump);
+    if owner_slot.value != 12 {
+        return 3;
+    }
+
+    var numeric_slot = Pair(value: 7);
+    let numeric_owner i32 = 100;
+    numeric_owner.apply(inout numeric_slot, bump);
+    if numeric_slot.value != 12 {
+        return 4;
+    }
+
+    // F3: real Self nested inside a generic wrapper is accepted when that
+    // concrete Self is a finite POD aggregate.
+    let wrap_owner = Pair(value: 100);
+    var wrapped = Wrap[Pair](value: Pair(value: 3));
+    let old_wrapped = wrap_owner.edit(
+        inout wrapped, Wrap[Pair](value: Pair(value: 8)));
+    if old_wrapped.value.value != 3 || wrapped.value.value != 8 {
+        return 5;
+    }
+    let old_type = Pair.edit(wrap_owner, inout wrapped,
+                             Wrap[Pair](value: Pair(value: 9)));
+    if old_type.value.value != 8 || wrapped.value.value != 9 {
+        return 6;
+    }
+    let old_constrained = via_wrap(
+        wrap_owner, inout wrapped, Wrap[Pair](value: Pair(value: 10)));
+    if old_constrained.value.value != 9 || wrapped.value.value != 10 {
+        return 7;
+    }
+    return 0;
+}
