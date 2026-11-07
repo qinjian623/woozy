@@ -1,0 +1,8 @@
+package app;
+trait Tag[A] {func code(owner Self)i32;}
+impl Tag[bool] for i32 {func code(owner Self)i32{return owner;}}
+trait Use[A] {func read[U Tag[A]](owner Self,x U)i32;}
+struct Key {}
+impl Use[bool] for Key {func read[V Tag[bool]](owner Self,x V)i32{return x.code();}}
+func run[T Use[bool]](owner T)i32{return T.read[i32](owner,14);}
+func main()i32 {return run(Key())-14;}

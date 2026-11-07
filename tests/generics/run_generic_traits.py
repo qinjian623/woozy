@@ -20,10 +20,15 @@ sys.dont_write_bytecode = True
 POSITIVE = ('dual-phantom', 'joint-nonoverlap', 'cross-package',
             'phantom-impl-key', 'forward-nominal-runtime',
             'alpha-bound-runtime', 'combined-self-bound-runtime',
-            'combined-self-sibling-bound-runtime')
+            'combined-self-sibling-bound-runtime', 'own-alpha-runtime',
+            'own-trait-bound-runtime', 'own-phantom-key-runtime',
+            'own-ordinary-errors', 'own-cross-package-lambda')
 # Declaration-only controls: both backends must accept, but their main does not
 # exercise the bound, so they are not reported as runtime coverage.
-STATIC_POSITIVE = ('prototype-bound-self', 'bound-pod-callback-control')
+# `reject-own-generic` keeps its original bytes; that ordinary combination is
+# now legal and is executed by the own-* positive projects.
+STATIC_POSITIVE = ('prototype-bound-self', 'bound-pod-callback-control',
+                   'reject-own-generic', 'hidden-fixed-callback-control')
 SOURCE_ERROR = {
     'reject-ambiguous': {'E_TYPE_MISMATCH'},
     'reject-bound-order': {'E_TYPE_MISMATCH'},
@@ -36,7 +41,18 @@ SOURCE_ERROR = {
 }
 UNSUPPORTED = {
     'reject-bound-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-own-generic': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-own-generic-move': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-own-generic-inout': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-own-dependent-callback': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-own-callback': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-own-callback-return': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-own-callback-enum': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-own-callback-throws': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-own-callback-function-return': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-trait-callback': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-trait-callback-legacy': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-self-callback': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-hidden-self-callback-legacy': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-move': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-inout': {'E_CAPABILITY_UNAVAILABLE'},
 }

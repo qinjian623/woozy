@@ -1,0 +1,3 @@
+package app;
+trait New[A] { func update[U](owner Self, slot inout U) Unit; }
+func main() i32 { return 0; }

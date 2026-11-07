@@ -1,0 +1,1 @@
+package app; enum Err[T]{Fault(cb func(inout T));} trait Work[A]{func run[U](owner Self) throws Err[U];} func main()i32{return 0;}

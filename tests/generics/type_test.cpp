@@ -10847,6 +10847,350 @@ void aggregate_inout_validation() {
 }
 
 
+void generic_trait_method_generics() {
+  auto good = [](const std::string &s) {
+    auto r = source(s);
+    need(r.success(), s + "\n" + messages(r));
+    auto verified = hir::verify_types(*r.value);
+    need(verified.success(), "generic trait own method HIR rejected: " + s +
+                                 "\n" + messages(verified));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "generic trait own method did not publish: " + s +
+                                  "\n" + messages(published));
+    return *r.value;
+  };
+  auto bad = [](const std::string &s) {
+    auto r = source(s);
+    need(!r.success() && r.failure == FailureKind::source &&
+             (has(r, "E_TYPE_MISMATCH") || has(r, "E_CALL_ARGUMENT")) &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         s + "\n" + messages(r));
+  };
+  auto unsupported = [](const std::string &s) {
+    auto r = source(s);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE") &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         s + "\n" + messages(r));
+  };
+  auto unsupported_both = [&](const std::string &s) {
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(s, backend);
+      need(!r.success() && r.failure == FailureKind::unsupported &&
+               has(r, "E_CAPABILITY_UNAVAILABLE") &&
+               !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+           std::string(backend) + ": " + s + "\n" + messages(r));
+    }
+  };
+
+  // A generic trait's ordinary method can carry several own parameters with
+  // one existing bound. The bound may name the ordered trait argument or the
+  // real Self, and the impl may alpha-rename both positions. Value, concrete
+  // Type and bounded T entries share the complete application.
+  const std::string alpha_bounds = R"(
+trait Tag[A] { func code(owner Self) i32; }
+struct One { n i32; }
+struct Two { n i32; }
+struct Key {}
+impl Tag[bool] for i32 { func code(owner Self) i32 { return 14; } }
+impl Tag[Key] for One { func code(owner Self) i32 { return 21; } }
+trait Use[A] {
+    func read[U Tag[A]](owner Self, x U) i32;
+    func pair[P,Q](owner Self, first P, second Q) Q;
+}
+impl[I] Use[I] for Key {
+    func read[V Tag[I]](owner Self, x V) i32 { return x.code(); }
+    func pair[X,Y](owner Self, first X, second Y) Y { return second; }
+}
+trait SelfUse[A] { func own[U Tag[Self]](owner Self, x U) i32; }
+impl SelfUse[bool] for Key {
+    func own[W Tag[Key]](owner Self, x W) i32 { return x.code(); }
+}
+func via[T Use[bool],P,Q](owner T, first P, second Q) i32 {
+    let a = T.read[i32](owner, 14);
+    let b = owner.read(i32(14));
+    let c i32 = T.pair[P,i32](owner, first, 7);
+    return a + b + c - 35;
+}
+func main() i32 {
+    let k = Key();
+    if via[Key,i32,i32](k, 1, 7) != 0 { return 1; }
+    if k.own[One](One(n: 0)) != 21 { return 3; }
+    if k.own(One(n: 0)) != 21 { return 4; }
+    return 0;
+}
+)";
+  auto alpha = good(alpha_bounds);
+
+  invalid_recomputed(alpha, "generic trait own Source suffix signature",
+                     [&](auto &h) {
+                       TypeId bool_id{};
+                       for (uint64_t id = 1; id <= h.types.size(); ++id) {
+                         auto t = h.types.find(TypeId{id});
+                         if (t && t->kind == hir::TypeKind::Bool) {
+                           bool_id = TypeId{id};
+                           break;
+                         }
+                       }
+                       need(bool_id.value, "bool type missing");
+                       for (auto &n : h.nodes)
+                         if (auto c =
+                                 std::get_if<hir::ConstraintCall>(&n.data)) {
+                           auto sig = *h.types.find(c->signature);
+                           sig.result = bool_id;
+                           c->signature = h.types.intern(sig);
+                           return;
+                         }
+                       throw std::runtime_error("alpha ConstraintCall missing");
+                     });
+
+  // Synthetic declarations and bad alpha/bound relationships remain source
+  // errors even when the method is never called.
+  bad("trait Tag[A]{func code(owner Self)i32;}"
+      "trait Use[A]{func read[U Tag[A]](owner Self,x U)i32;}"
+      "struct Key{} impl[I] Use[I] for Key{"
+      "func read[V Tag[bool]](owner Self,x V)i32{return 1;}}"
+      "func main()i32{return 0;}");
+  bad("trait Tag[A]{func code(owner Self)i32;}"
+      "trait Use[A]{func own[U Tag[Self]](owner Self,x U)i32;}"
+      "struct Key{} struct Other{} "
+      "impl Tag[Key] for Key{func code(owner Self)i32{return 1;}}"
+      "impl Use[bool] for Key{func own[V Tag[Other]](owner Self,x V)i32{"
+      "return 1;}} func main()i32{return 0;}");
+  bad("trait Convert[A]{func get[U](owner Self,x U)U;}"
+      "struct Key{} impl Convert[i32] for Key{"
+      "func get[U](owner Self,x U)U{return x;}}"
+      "impl Convert[bool] for Key{func get[U](owner Self,x U)U{return x;}}"
+      "func main()i32{let k=Key();return k.get(1);}");
+
+  // This batch opens only the ordinary combination. The new own suffix does
+  // not relax top-level move/inout or a dependent inout callback.
+  unsupported("trait New[A]{func take[U](owner Self,value move U)U;}"
+              "func main()i32{return 0;}");
+  unsupported("trait New[A]{func update[U](owner Self,slot inout U)Unit;}"
+              "func main()i32{return 0;}");
+  unsupported("trait New[A]{func run[U](owner Self,cb func(inout U));}"
+              "func main()i32{return 0;}");
+
+  // The complete graph must be rechecked after nominal fields exist. These
+  // hidden callbacks are legal source syntax but depend on a method-own, trait
+  // or Self parameter, so both backends must return a source capability error
+  // rather than the verifier's internal E_IR_INVALID.
+  const std::string holder =
+      "struct Holder[T]{cb func(inout T);}";
+  const std::string main_zero = "func main()i32{return 0;}";
+  unsupported_both(holder +
+                   "trait Work[A]{func run[U](owner Self,holder Holder[U]);}" +
+                   main_zero);
+  unsupported_both(holder +
+                   "trait Work[A]{func run[U](owner Self)Holder[U];}" +
+                   main_zero);
+  unsupported_both(
+      "enum Holder[T]{Item(cb func(inout T));}"
+      "trait Work[A]{func run[U](owner Self,holder Holder[U]);}" +
+      main_zero);
+  unsupported_both(
+      "enum Err[T]{Fault(cb func(inout T));}"
+      "trait Work[A]{func run[U](owner Self) throws Err[U];}" + main_zero);
+  unsupported_both(holder +
+                   "trait Work[A]{func run[U](owner Self)(func()Holder[U]);}" +
+                   main_zero);
+  unsupported_both(holder +
+                   "trait Work[A]{func run[U](owner Self,holder Holder[A]);}" +
+                   main_zero);
+  unsupported_both(holder +
+                   "trait Work[A]{func run[U](owner Self,holder Holder[Self]);}" +
+                   main_zero);
+  unsupported_both(holder +
+                   "trait Work[A]{func run(owner Self,holder Holder[Self]);}" +
+                   main_zero);
+  unsupported_both(holder +
+                   "trait Work[A]{func run(owner Self,holder Holder[A]);}" +
+                   main_zero);
+
+  // Fixed callback data stays legal for generic and non-generic traits, and
+  // the old ordinary non-generic path remains accepted.
+  for (const char *backend : {"native", "python"}) {
+    auto fixed = source(
+        holder +
+            "trait Work[A]{func run[U](owner Self,holder Holder[i32]);}" +
+            "trait Plain{func run(owner Self,holder Holder[i32]);}" +
+            main_zero,
+        backend);
+    need(fixed.success(),
+         std::string(backend) + ": fixed hidden callback was rejected\n" +
+             messages(fixed));
+    need(hir::verify(*fixed.value).success(),
+         std::string(backend) + ": fixed hidden callback HIR rejected");
+    need(hir::verify_types(*fixed.value).success(),
+         std::string(backend) + ": fixed hidden callback types rejected");
+  }
+
+
+  // Four complete [P,V] phantom instances share one Flag.stamp origin. A
+  // repeated combination is deduplicated, while equal method signatures do
+  // not merge different P or V.
+  const std::string phantom = R"(
+trait Code { func code() i32; }
+struct One {} struct Two {} struct Flag {}
+impl Code for One { func code() i32 { return 14; } }
+impl Code for Two { func code() i32 { return 25; } }
+trait Mark[A] { func stamp[U Code](owner Self) i32; }
+impl[P] Mark[P] for Flag {
+    func stamp[V Code](owner Self) i32 { return V.code(); }
+}
+func drive[A,U Code,T Mark[A]](owner T) i32 { return T.stamp[U](owner); }
+func main() i32 {
+    let f = Flag();
+    if drive[i32,One,Flag](f) != 14 || drive[i32,Two,Flag](f) != 25 ||
+       drive[bool,One,Flag](f) != 14 || drive[bool,Two,Flag](f) != 25 ||
+       drive[i32,One,Flag](f) != 14 { return 1; }
+    return 0;
+}
+)";
+  auto m = good(phantom);
+  auto name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  auto type_named = [&](const std::string &n) -> TypeId {
+    for (uint64_t id = 1; id <= m.types.size(); ++id) {
+      auto t = m.types.find(TypeId{id});
+      if (!t)
+        continue;
+      if ((t->kind == hir::TypeKind::NominalStruct ||
+           t->kind == hir::TypeKind::NominalEnum) &&
+          name(t->declaration) == n)
+        return TypeId{id};
+      if (n == "bool" && t->kind == hir::TypeKind::Bool)
+        return TypeId{id};
+      if (n == "i32" && t->kind == hir::TypeKind::SignedInt &&
+          t->bits == 32)
+        return TypeId{id};
+    }
+    throw std::runtime_error("test type missing: " + n);
+  };
+  const hir::TraitDecl *mark_trait = nullptr;
+  for (const auto &t : m.traits)
+    if (name(t.symbol) == "Mark")
+      mark_trait = &t;
+  need(mark_trait && mark_trait->params.size() == 1 &&
+           mark_trait->methods.size() == 1,
+       "generic trait own method declaration missing");
+  const hir::ImplDecl *mark_impl = nullptr;
+  for (const auto &im : m.impls)
+    if (im.trait && mark_trait && im.trait->declaration == mark_trait->symbol)
+      mark_impl = &im;
+  need(mark_impl && mark_impl->params.size() == 1 &&
+           mark_impl->methods.size() == 1,
+       "generic trait own method impl missing");
+  const auto stamp = mark_impl->methods.front();
+  std::vector<const hir::FunctionInstance *> stamp_instances;
+  for (const auto &i : m.instances)
+    if (i.origin == stamp)
+      stamp_instances.push_back(&i);
+  need(stamp_instances.size() == 4,
+       "phantom own method instances were not four complete keys");
+  std::set<std::pair<uint64_t, uint64_t>> keys;
+  const auto i32 = type_named("i32");
+  const auto bool_type = type_named("bool");
+  const auto one = type_named("One");
+  const auto two = type_named("Two");
+  for (const auto *i : stamp_instances) {
+    need(i->type_args.size() == 2, "phantom own instance key arity");
+    keys.insert({i->type_args[0].value, i->type_args[1].value});
+  }
+  need(keys == std::set<std::pair<uint64_t, uint64_t>>{
+                   {i32.value, one.value}, {i32.value, two.value},
+                   {bool_type.value, one.value}, {bool_type.value, two.value}},
+       "phantom own method complete instance keys were merged or lost");
+  size_t drive_instances = 0;
+  for (const auto &i : m.instances)
+    if (name(i.origin) == "drive")
+      ++drive_instances;
+  need(drive_instances == 4,
+       "duplicate phantom drive combination was not deduplicated");
+  size_t mark_constraints = 0;
+  for (const auto &n : m.nodes)
+    if (auto c = std::get_if<hir::ConstraintCall>(&n.data);
+        c && c->trait.declaration == mark_trait->symbol) {
+      need(c->trait.args.size() == 1 && c->args.size() == 1,
+           "phantom constraint call lost its complete trait application");
+      ++mark_constraints;
+    }
+  need(mark_constraints == 1,
+       "phantom constraint call count changed");
+
+  invalid(m, "generic trait own bound trait application swapped",
+          [&](auto &h) {
+            for (auto &n : h.nodes)
+              if (auto c = std::get_if<hir::ConstraintCall>(&n.data))
+                if (c->trait.declaration == mark_trait->symbol) {
+                  c->trait.args[0] = bool_type;
+                  return;
+                }
+            throw std::runtime_error("phantom ConstraintCall missing");
+          });
+  invalid_recomputed(m, "generic trait own instance key changed",
+                     [&](auto &h) {
+                       for (auto &i : h.instances)
+                         if (i.origin == stamp && i.type_args.size() == 2 &&
+                             i.type_args[0] == i32) {
+                           i.type_args[1] = two;
+                           return;
+                         }
+                       throw std::runtime_error("phantom instance missing");
+                     });
+  invalid_recomputed(m, "generic trait own bound-violating instance key",
+                     [&](auto &h) {
+                       for (auto &i : h.instances)
+                         if (i.origin == stamp && i.type_args.size() == 2) {
+                           i.type_args[1] = i32;
+                           return;
+                         }
+                       throw std::runtime_error("phantom instance missing");
+                     });
+  invalid_recomputed(m, "generic trait own clone rename",
+                     [&](auto &h) {
+                       auto first = std::find_if(
+                           h.instances.begin(), h.instances.end(),
+                           [&](const auto &i) { return i.origin == stamp; });
+                       auto second = std::find_if(
+                           first + 1, h.instances.end(),
+                           [&](const auto &i) { return i.origin == stamp; });
+                       need(first != h.instances.end() &&
+                                second != h.instances.end() &&
+                                !first->renamed.empty() &&
+                                !second->renamed.empty(),
+                            "phantom renamed maps missing");
+                       first->renamed.front().second =
+                           second->renamed.front().second;
+                     });
+  invalid_recomputed(m, "generic trait own call target same-signature swap",
+                     [&](auto &h) {
+                       const hir::FunctionInstance *owner = nullptr;
+                       for (const auto &i : h.instances)
+                         if (name(i.origin) == "drive" &&
+                             i.type_args.size() == 3 &&
+                             i.type_args[1] == one)
+                           owner = &i;
+                       need(owner, "drive instance missing");
+                       SymbolId replacement{};
+                       for (const auto &i : h.instances)
+                         if (i.origin == stamp && i.type_args.size() == 2 &&
+                             i.type_args[1] == two)
+                           replacement = i.symbol;
+                       need(replacement.value, "replacement stamp instance missing");
+                       for (auto &n : h.nodes)
+                         if (h.scopes[n.scope.value].function == owner->symbol)
+                           if (auto c = std::get_if<hir::Call>(&n.data);
+                               c && c->direct_symbol) {
+                             c->direct_symbol = replacement;
+                             return;
+                           }
+                       throw std::runtime_error("concrete stamp call missing");
+                     });
+}
+
 void generic_trait_applications() {
   auto good = [](const std::string &s) {
     auto r = source(s);
@@ -11027,8 +11371,13 @@ void generic_trait_applications() {
       "impl Convert[bool,i32] for Key{func get(owner Self)bool{return true;}}"
       "func main()i32{let key=Key();let result i32=key.get();return result-11;}",
       "E_TYPE_MISMATCH");
-  // A generic trait's own methods remain an explicit source capability gap.
-  unsupported("trait New[A]{func identity[U](owner Self,value U)U;}"
+  // A generic trait's ordinary method may now carry its own type parameter;
+  // top-level move/inout on that same generic trait remains unsupported.
+  good("trait New[A]{func identity[U](owner Self,value U)U;}"
+       "func main()i32{return 0;}");
+  unsupported("trait New[A]{func take[U](owner Self,value move U)U;}"
+              "func main()i32{return 0;}");
+  unsupported("trait New[A]{func update[U](owner Self,slot inout U)Unit;}"
               "func main()i32{return 0;}");
   unsupported("trait New[A]{func take(owner Self,value move A)A;}"
               "func main()i32{return 0;}");
@@ -11641,6 +11990,7 @@ int main(int argc, char **argv) {
     trait_static_self_qualification();
     nested_patterns();
     aggregate_inout_validation();
+    generic_trait_method_generics();
     generic_trait_applications();
     repairs(root);
   } catch (const std::exception &e) {

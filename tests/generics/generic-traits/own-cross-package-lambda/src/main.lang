@@ -1,0 +1,27 @@
+package app;
+import "app/lib" as lib;
+
+func forward[T lib.Echo[i32],U](owner T, value U) U {
+    return T.read[U](owner, value);
+}
+
+func factory[T lib.Echo[i32]]()(func(T,i32)i32) {
+    return func(x T, value i32)i32 {
+        return forward[T,i32](x, value + 1);
+    };
+}
+
+func main() i32 {
+    let b = lib.Box[i32](value: 0);
+    let f = factory[lib.Box[i32]]();
+    if f(b, 14) != 15 {
+        return 1;
+    }
+    if b.read[i32](20) != 20 {
+        return 2;
+    }
+    if lib.Box[i32].read[i32](b, 25) != 25 {
+        return 3;
+    }
+    return 0;
+}

@@ -1097,7 +1097,7 @@ class Verifier {
         values.push_back(it->second);
       }
     }
-    constraints(parameters, values);
+    constraints(parameters, values, &sub);
     return {std::move(parameters), std::move(values)};
   }
   // Concrete Type.method(...) and the concrete form of a T.method(...)
@@ -1905,11 +1905,21 @@ class Verifier {
     return trait_results[key] = count == 1;
   }
   void constraints(const std::vector<GenericParam> &ps,
-                   const std::vector<TypeId> &args) const {
+                   const std::vector<TypeId> &args,
+                   const Substitutions *outer = nullptr) const {
     need(ps.size() == args.size(), "constraint type argument count");
-    Substitutions sub;
+    Substitutions sub = outer ? *outer : Substitutions{};
+    auto bind = [&](SymbolId symbol, TypeId value) {
+      auto it = std::find_if(sub.begin(), sub.end(), [&](auto entry) {
+        return entry.first == symbol;
+      });
+      if (it == sub.end())
+        sub.push_back({symbol, value});
+      else
+        it->second = value;
+    };
     for (size_t i = 0; i < ps.size(); ++i)
-      sub.push_back({ps[i].symbol, args[i]});
+      bind(ps[i].symbol, args[i]);
     for (size_t i = 0; i < ps.size(); ++i) {
       if (!ps[i].trait)
         continue;
@@ -2065,7 +2075,7 @@ class Verifier {
       need(traits.insert(tr.symbol.value).second, "duplicate trait identity");
       self_owner(tr.source, tr.self);
       source_entries(tr.source, AstKind::GenericParameter, tr.params);
-      auto declared_params = parameter_set(tr.params);
+      parameter_set(tr.params);
       for (const auto &p : tr.params)
         need(!p.trait,
              "generic trait parameter constraints are unsupported");
@@ -2076,12 +2086,15 @@ class Verifier {
         need(methods.insert(method.symbol.value).second,
              "duplicate trait method");
         auto own = source_parameters(method.source);
-        // The prototype's own bounds may refer to the real trait Self. Put
-        // that exact Self identity into the bound environment before the
-        // bounds are validated; do not add it to the method-own parameters.
-        auto ps = parameter_set(own, {tr.self.value});
-        ps.insert(tr.self.value);
-        ps.insert(declared_params.begin(), declared_params.end());
+        // The prototype's own bounds may refer to the real trait Self and any
+        // ordered trait parameter. Put those exact identities into the bound
+        // environment before validating the own list; none of them joins the
+        // method-own parameters or the instance key.
+        std::set<uint64_t> trait_environment{tr.self.value};
+        for (const auto &p : tr.params)
+          trait_environment.insert(p.symbol.value);
+        auto ps = parameter_set(own, trait_environment);
+        ps.insert(trait_environment.begin(), trait_environment.end());
         valid_type(method.signature, ps);
         need(method.signature == source_signature(method.source.node),
              "trait signature differs from source prototype");
@@ -2117,13 +2130,14 @@ class Verifier {
                "generic trait method dependent inout callback is unsupported");
         }
         if (!tr.params.empty()) {
-          // This batch models applications of a generic trait but keeps that
-          // trait's methods at the old ordinary boundary. Recheck the real
-          // prototype, not a concrete impl that might coincidentally work.
-          need(own.empty(),
-               "generic trait method own type parameters are unsupported");
+          // This batch opens ordinary method-own type parameters on a generic
+          // trait. Its methods still do not open top-level move/inout or a
+          // callback inout depending on Self, a trait parameter or an own
+          // parameter. Recheck the real prototype, not a concrete impl.
           std::set<uint64_t> dependent{tr.self.value};
           for (const auto &p : tr.params)
+            dependent.insert(p.symbol.value);
+          for (const auto &p : own)
             dependent.insert(p.symbol.value);
           for (const auto &p : sig.parameters)
             need(p.mode == ParamMode::ordinary,

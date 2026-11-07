@@ -1,0 +1,3 @@
+package app;
+trait New[A] { func take[U](owner Self, value move U) U; }
+func main() i32 { return 0; }

@@ -968,35 +968,45 @@ class Checker {
   // A generic trait method in this batch is ordinary at the method boundary.
   // Existing non-generic trait move/inout and fixed-scalar callbacks stay on
   // their old paths. A callback inout whose data type depends on a method-own
-  // parameter or the trait Self would be a new dependent mode, so it is
-  // rejected explicitly.
+  // parameter, a trait parameter or the trait Self would be a new dependent
+  // mode, so it is rejected explicitly. The same helper is used before and
+  // after nominal fields are filled; only the later call can see hidden
+  // callbacks stored in struct fields, enum payloads or returned functions.
   void check_generic_trait_method_modes(
       Ref r, const std::vector<GenericParam> &own, TypeId signature,
-      std::optional<SymbolId> trait_self) {
-    if (own.empty())
+      std::optional<SymbolId> trait_self, bool generic_trait,
+      const std::vector<GenericParam> *trait_params = nullptr) {
+    if (!generic_trait && own.empty())
       return;
     std::set<uint64_t> declarations;
     for (const auto &p : own)
       declarations.insert(p.symbol.value);
     if (trait_self)
       declarations.insert(trait_self->value);
-    // This batch opens top-level non-self move and inout on a generic trait
-    // method. The original prototype's first parameter is classified as the
-    // actual self only when it is the real trait Self; an own type parameter
-    // named `self` remains a static parameter. Any first-position actual-self
-    // move/inout stays unavailable. The concrete data type of an own or Self
-    // inout is checked when the template is used, never replaced with Any.
+    if (trait_params)
+      for (const auto &p : *trait_params)
+        declarations.insert(p.symbol.value);
+    // A generic trait keeps every top-level method parameter ordinary in this
+    // batch. Existing non-generic traits retain their prior move/inout paths,
+    // where the first actual-self mode is classified from the real Self.
     const auto top = type(signature);
     const auto parameters = top.parameters;
-    for (size_t i = 0; i < parameters.size(); ++i) {
-      const auto &p = parameters[i];
-      if (p.mode == ParamMode::ordinary)
-        continue;
-      if (i == 0 && trait_self &&
-          trait_self_type(p.type, *trait_self))
-        unavailable(r, "generic trait method move/inout is not implemented");
-      if (p.mode != ParamMode::move && p.mode != ParamMode::inout)
-        unavailable(r, "generic trait method move/inout is not implemented");
+    if (generic_trait) {
+      for (const auto &p : parameters)
+        if (p.mode != ParamMode::ordinary)
+          unavailable(r,
+                      "generic trait method move/inout is not implemented");
+    } else {
+      for (size_t i = 0; i < parameters.size(); ++i) {
+        const auto &p = parameters[i];
+        if (p.mode == ParamMode::ordinary)
+          continue;
+        if (i == 0 && trait_self &&
+            trait_self_type(p.type, *trait_self))
+          unavailable(r, "generic trait method move/inout is not implemented");
+        if (p.mode != ParamMode::move && p.mode != ParamMode::inout)
+          unavailable(r, "generic trait method move/inout is not implemented");
+      }
     }
     // Check each top-level component separately. Starting at the method
     // signature itself would make a nested FunctionType with the same TypeId
@@ -2743,6 +2753,26 @@ class Checker {
         infer(ar, original_type.parameters[indices[i]].type, e.value.type, sub);
         values[i] = e;
       }
+    // The constrained receiver, Self and every ordered trait argument belong
+    // to the environment in which method-own bounds are satisfied. Seed them
+    // before inference completes the own suffix, including phantom parameters.
+    if (constraint) {
+      const auto *tr = trait_decl(constraint->declaration);
+      if (tr && constraint_receiver) {
+        auto bind = [&](SymbolId symbol, TypeId value) {
+          auto it = std::find_if(sub.begin(), sub.end(), [&](auto entry) {
+            return entry.first == symbol;
+          });
+          if (it == sub.end())
+            sub.push_back({symbol, value});
+          else
+            it->second = value;
+        };
+        bind(tr->self, *constraint_receiver);
+        for (size_t i = 0; i < tr->params.size(); ++i)
+          bind(tr->params[i].symbol, constraint->args.at(i));
+      }
+    }
     std::vector<TypeId> type_args;
     if (constraint)
       (void)finish_arguments(r, generic_params[target.value], sub);
@@ -3483,10 +3513,18 @@ class Checker {
         return s;
     throw std::invalid_argument("missing resolver Self owner");
   }
-  void register_function(Ref r, std::vector<GenericParam> inherited,
-                         bool prototype = false,
-                         std::optional<SymbolId> trait_self = std::nullopt) {
+  void register_function(
+      Ref r, std::vector<GenericParam> inherited, bool prototype = false,
+      std::optional<SymbolId> trait_self = std::nullopt,
+      const std::vector<GenericParam> *environment = nullptr) {
     auto id = definition(r);
+    // A trait prototype's own bound may name that trait's ordered parameters.
+    // They belong to the surrounding trait, not to the method's own list or
+    // the instance key, so expose them only while parsing the declaration.
+    auto saved_environment = signature_parameters;
+    if (environment)
+      for (const auto &p : *environment)
+        signature_parameters.insert(p.symbol.value);
     auto own = generics(r);
     inherited.insert(inherited.end(), own.begin(), own.end());
     generic_params[id.value] = inherited;
@@ -3514,17 +3552,19 @@ class Checker {
         }
         break;
       }
-    auto saved_signature_parameters = signature_parameters;
     signature_parameters.clear();
     for (const auto &p : inherited)
       signature_parameters.insert(p.symbol.value);
+    if (environment)
+      for (const auto &p : *environment)
+        signature_parameters.insert(p.symbol.value);
     signatures[id.value] =
         signature(r, trait_self, false, trait_self_callback);
     check_inout_graph(r, signatures[id.value], true, trait_self,
                       trait_self_callback);
     if (trait_self)
       trait_signature_context[id.value] = {*trait_self, trait_self_callback};
-    signature_parameters = std::move(saved_signature_parameters);
+    signature_parameters = std::move(saved_environment);
     for (auto c : ast(r).children)
       if (ast(at(r, c)).kind == AstKind::Parameter) {
         auto p = definition(at(r, c));
@@ -3678,46 +3718,22 @@ class Checker {
         for (auto id : ast(r).children)
           if (ast(at(r, id)).kind == AstKind::Function) {
             auto cr = at(r, id);
-            register_function(cr, {}, true, self);
+            register_function(cr, {}, true, self, &tr.params);
             auto method = definition(cr);
             tr.methods.push_back({method, signatures.at(method.value),
                                   parameters.at(method.value), source(cr)});
           }
-        // A generic trait's own methods remain this batch's declared
-        // capability boundary: own type parameters, move/inout and
-        // Self/trait-parameter dependent inout callbacks are unavailable.
-        // The three forms are checked separately so the first one does not
-        // hide the others' real source diagnostic.
-        if (!tr.params.empty()) {
-          std::set<uint64_t> dependent{tr.self.value};
-          for (const auto &p : tr.params)
-            dependent.insert(p.symbol.value);
-          for (const auto &proto : tr.methods) {
-            if (!method_own_parameters(proto.symbol).empty())
-              unavailable(proto.source.node,
-                          "generic trait method own type parameters are not "
-                          "implemented");
-            // Copy: dependent_inout_graph substitutes nominal field types and
-            // may reallocate the TypeContext while this signature is used.
-            const auto sig = type(proto.signature);
-            for (const auto &p : sig.parameters)
-              if (p.mode != ParamMode::ordinary)
-                unavailable(proto.source.node,
-                            "generic trait method move/inout is not "
-                            "implemented");
-            for (const auto &p : sig.parameters)
-              if (dependent_inout_graph(p.type, dependent, true))
-                unavailable(proto.source.node,
-                            "generic trait method dependent inout callback is "
-                            "not implemented");
-            if (dependent_inout_graph(sig.result, dependent, true) ||
-                (sig.throws_type &&
-                 dependent_inout_graph(*sig.throws_type, dependent, true)))
-              unavailable(proto.source.node,
-                          "generic trait method dependent inout callback is "
-                          "not implemented");
-          }
-        }
+        // A generic trait's ordinary methods may declare their own type
+        // parameters, but the new combination stays ordinary at the method
+        // boundary: no top-level move/inout and no callback inout that depends
+        // on Self, a trait parameter or a method-own parameter. This early call
+        // keeps the existing diagnostic before complete nominal fields exist;
+        // the post-field pass below repeats the same helper graph check.
+        if (!tr.params.empty())
+          for (const auto &proto : tr.methods)
+            check_generic_trait_method_modes(
+                proto.source.node, method_own_parameters(proto.symbol),
+                proto.signature, tr.self, true, &tr.params);
         m.traits.push_back(std::move(tr));
       }
     auto field_value_type = [&](Ref field) {
@@ -3853,11 +3869,17 @@ class Checker {
     // Method-own mode restrictions are checked after every trait/impl
     // signature has been matched, so an own arity/bound mismatch keeps its
     // precise source diagnostic instead of being hidden by a capability check.
-    for (const auto &tr : m.traits)
+    // Nominal fields are now populated, so generic traits repeat the full graph
+    // check with real Self, ordered trait parameters and every own parameter.
+    // The same helper covers uncalled declarations and hidden callbacks in
+    // struct/enum fields, return types, throws and nested function types.
+    for (const auto &tr : m.traits) {
+      const bool generic_trait = !tr.params.empty();
       for (const auto &proto : tr.methods)
         check_generic_trait_method_modes(
             proto.source.node, method_own_parameters(proto.symbol),
-            proto.signature, tr.self);
+            proto.signature, tr.self, generic_trait, &tr.params);
+    }
     // Trait method signatures were parsed while nominal field lists were
     // still empty. With all declarations and substitutions now available,
     // recheck the complete graph so a struct/enum with an owning field is a
@@ -4206,10 +4228,28 @@ class Checker {
         result.push_back(it->second);
       }
     }
-    for (size_t i = 0; i < ps.size(); ++i)
-      if (ps[i].trait && !satisfies(n.source.node, result[i], *ps[i].trait))
+    // Bounds may name the trait Self, any ordered trait argument or a sibling
+    // method-own parameter. Finish the same positional substitution before
+    // asking for an implementation; a raw bound would leave those symbolic.
+    for (size_t i = 0; i < ps.size(); ++i) {
+      auto it = std::find_if(sub.begin(), sub.end(), [&](auto entry) {
+        return entry.first == ps[i].symbol;
+      });
+      if (it == sub.end())
+        sub.push_back({ps[i].symbol, result[i]});
+      else
+        it->second = result[i];
+    }
+    for (size_t i = 0; i < ps.size(); ++i) {
+      if (!ps[i].trait)
+        continue;
+      TraitRef bound = *ps[i].trait;
+      for (auto &arg : bound.args)
+        arg = substitute(arg, sub, m.types);
+      if (!satisfies(n.source.node, result[i], bound))
         reject(n.source.node,
                "method type argument does not satisfy its trait constraint");
+    }
     return result;
   }
   void transform_node(HirNodeId id, size_t depth,
@@ -4474,13 +4514,16 @@ public:
     // Bound function types may have been parsed before nominal fields existed.
     // Recheck them with complete fields and their real declaration environment.
     auto check_bounds = [&](const std::vector<GenericParam> &ps,
-                            std::optional<SymbolId> self = std::nullopt) {
+                            std::optional<SymbolId> self = std::nullopt,
+                            const std::set<uint64_t> *environment = nullptr) {
       auto saved = std::move(signature_parameters);
       signature_parameters.clear();
       for (const auto &p : ps)
         signature_parameters.insert(p.symbol.value);
       if (self)
         signature_parameters.insert(self->value);
+      if (environment)
+        signature_parameters.insert(environment->begin(), environment->end());
       for (const auto &p : ps)
         if (p.trait)
           for (auto arg : p.trait->args)
@@ -4493,9 +4536,19 @@ public:
       check_bounds(im.params, im.self_parameter);
     for (const auto &[owner, ps] : generic_params) {
       auto context = trait_signature_context.find(owner);
-      check_bounds(ps, context == trait_signature_context.end()
-                           ? std::nullopt
-                           : std::optional(context->second.first));
+      std::set<uint64_t> environment;
+      for (const auto &tr : m.traits)
+        for (const auto &method : tr.methods)
+          if (method.symbol.value == owner) {
+            for (const auto &p : tr.params)
+              environment.insert(p.symbol.value);
+            break;
+          }
+      check_bounds(ps,
+                   context == trait_signature_context.end()
+                       ? std::nullopt
+                       : std::optional(context->second.first),
+                   &environment);
     }
     for (const auto &mod : m.resolved->project->modules)
       for (size_t f = 0; f < mod.files.size(); ++f)

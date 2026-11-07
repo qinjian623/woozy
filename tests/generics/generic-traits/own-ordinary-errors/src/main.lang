@@ -1,0 +1,104 @@
+package app;
+
+enum E { Bad; }
+
+struct Box[T] {
+    items Vec[i32];
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func logger(log inout i64, digit i64) {
+    mark(inout log, digit);
+}
+
+func tagged(log inout i64, digit i64) Vec[i32] {
+    mark(inout log, digit);
+    return [i32(digit)];
+}
+
+func tag_value(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+trait Calc[A] {
+    func take[U](owner Self, value U, tag i32,
+                 cb func(inout i64,i64)) i64 throws E;
+    func keep[U](owner Self, value U) U;
+}
+
+impl[T] Calc[T] for Box[T] {
+    func take[V](owner Self, value V, tag i32,
+                 cb func(inout i64,i64)) i64 throws E {
+        var log i64 = 0;
+        try {
+            defer {
+                cb(inout log, 9);
+            }
+            cb(inout log, 1);
+            if tag != 2 {
+                return 7;
+            }
+            throw E.Bad;
+        } catch err E {
+            cb(inout log, 3);
+        }
+        return log;
+    }
+
+    func keep[X](owner Self, value X) X {
+        let local Vec[i32] = [4];
+        defer {
+            let observed = local[0];
+        }
+        return value;
+    }
+}
+
+func main() i32 {
+    let b = Box[i32](items: [1]);
+    var log i64 = 0;
+    var events i64 = 0;
+    try {
+        events = b.take[Vec[i32]](
+            cb: logger,
+            tag: 2,
+            value: tagged(inout log, 1));
+    } catch err E {
+        return 5;
+    }
+    if log != 1 || events != 193 {
+        return 1;
+    }
+
+    var copy Vec[i32] = [5];
+    let alias = copy;
+    let kept = b.keep[Vec[i32]](value: copy);
+    kept[0] = 6;
+    if alias[0] != 6 {
+        return 2;
+    }
+
+    let direct = Box[i32].keep[Vec[i32]](owner: b, value: [8]);
+    if direct[0] != 8 {
+        return 3;
+    }
+
+    var outer i64 = 0;
+    try {
+        defer {
+            logger(inout outer, 9);
+        }
+        mark(inout outer, 1);
+        throw E.Bad;
+    } catch err E {
+        logger(inout outer, 3);
+    }
+    if outer != 193 {
+        return 4;
+    }
+    return 0;
+}

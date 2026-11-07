@@ -1,0 +1,15 @@
+package lib;
+
+pub trait Echo[A] {
+    func read[U](owner Self, value U) U;
+}
+
+pub struct Box[T] {
+    pub value i32;
+}
+
+impl[T] Echo[T] for Box[T] {
+    func read[U](owner Self, value U) U {
+        return value;
+    }
+}

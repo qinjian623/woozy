@@ -1,0 +1,5 @@
+package app;
+trait Carry[A] {func pick[U,V](owner Self,value A,left U,right V)V;}
+struct Box[T] {value T;}
+impl[T] Carry[T] for Box[T] {func pick[X,Y](owner Self,value T,left X,right Y)Y{return right;}}
+func main()i32 {let b=Box[i32](value:3); if b.pick[bool,i32](3,true,7)!=7 || Box[i32].pick[bool,i32](b,3,false,8)!=8{return 1;} return 0;}

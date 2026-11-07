@@ -1,0 +1,3 @@
+package app;
+trait New[A] { func run[U](owner Self, cb func(inout U)); }
+func main() i32 { return 0; }
