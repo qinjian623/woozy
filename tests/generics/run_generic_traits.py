@@ -2,8 +2,8 @@
 """Run complete generic-trait applications on both backends.
 
 Each positive program encodes its observations in its exit status. Negative
-projects are split into source errors and the explicit generic-trait method
-capability gap. A rejected build must leave a fresh directory empty and must
+projects distinguish source errors from unsupported combinations.
+A rejected build must leave a fresh directory empty and must
 not overwrite old output bytes.
 """
 import argparse
@@ -22,13 +22,24 @@ POSITIVE = ('dual-phantom', 'joint-nonoverlap', 'cross-package',
             'alpha-bound-runtime', 'combined-self-bound-runtime',
             'combined-self-sibling-bound-runtime', 'own-alpha-runtime',
             'own-trait-bound-runtime', 'own-phantom-key-runtime',
-            'own-ordinary-errors', 'own-cross-package-lambda')
+            'own-ordinary-errors', 'own-cross-package-lambda',
+            'modes-before-move-three-entries',
+            'modes-before-pod-inout-writeback',
+            'modes-before-static-own-named-self',
+            'modes-combinations', 'modes-lifetime')
 # Declaration-only controls: both backends must accept, but their main does not
 # exercise the bound, so they are not reported as runtime coverage.
-# `reject-own-generic` keeps its original bytes; that ordinary combination is
-# now legal and is executed by the own-* positive projects.
+# Old reject-* sources keep their bytes. Their declarations are now legal;
+# the modes-* projects exercise the newly accepted calls.
 STATIC_POSITIVE = ('prototype-bound-self', 'bound-pod-callback-control',
-                   'reject-own-generic', 'hidden-fixed-callback-control')
+                   'reject-own-generic', 'hidden-fixed-callback-control',
+                   'reject-own-generic-move', 'reject-own-generic-inout',
+                   'reject-move', 'reject-inout')
+OBSERVED = ('modes-combinations', 'modes-lifetime')
+EXPECTED_EVENTS = {
+    'modes-combinations': [],
+    'modes-lifetime': [2, 1, 4, 3, 3, 7, 9, 7, 9, 3],
+}
 SOURCE_ERROR = {
     'reject-ambiguous': {'E_TYPE_MISMATCH'},
     'reject-bound-order': {'E_TYPE_MISMATCH'},
@@ -38,11 +49,12 @@ SOURCE_ERROR = {
     'reject-alpha-bound-mismatch': {'E_TYPE_MISMATCH'},
     'reject-self-bound-mismatch': {'E_TYPE_MISMATCH'},
     'reject-forward-arity': {'E_TYPE_MISMATCH'},
+    'modes-reject-move-marker': {'E_CALL_ARGUMENT'},
+    'modes-reject-after-move': {'E_OWNERSHIP_USE_AFTER_MOVE'},
+    'modes-reject-inout-alias': {'E_CALL_ARGUMENT'},
 }
 UNSUPPORTED = {
     'reject-bound-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-own-generic-move': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-own-generic-inout': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-own-dependent-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-hidden-own-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-hidden-own-callback-return': {'E_CAPABILITY_UNAVAILABLE'},
@@ -53,8 +65,9 @@ UNSUPPORTED = {
     'reject-hidden-trait-callback-legacy': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-hidden-self-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-hidden-self-callback-legacy': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-move': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-inout': {'E_CAPABILITY_UNAVAILABLE'},
+    'modes-reject-inout-owning': {'E_CAPABILITY_UNAVAILABLE'},
+    'modes-reject-actual-self-move': {'E_CAPABILITY_UNAVAILABLE'},
+    'modes-reject-actual-self-inout': {'E_CAPABILITY_UNAVAILABLE'},
 }
 FORBIDDEN = {'E_IR_INVALID', 'E_INTERNAL_ERROR'}
 
@@ -129,8 +142,8 @@ def main():
                         if 'libxml2-legacy' in entry and Path(entry).is_dir()),
                        None)
     report = dict(
-        task='generic-trait-applications',
-        operation_id='language-generic-trait-applications-20261106',
+        task='generic-trait-applications-and-method-modes',
+        operation_id='language-generic-trait-method-modes-20261107',
         status='failed',
         tools={
             'cli': {'path': str(args.cli), 'sha256': digest(args.cli)},
@@ -210,6 +223,31 @@ def main():
                 assert row['generated_sha256'][name] == digest(metadata / name), \
                     'helper differs from CLI output: ' + name
             row['helper_metadata_sha256'] = digest(metadata / 'metadata.json')
+            if case in OBSERVED:
+                (destination / 'metadata.json').write_bytes(
+                    (metadata / 'metadata.json').read_bytes())
+                row['observe'] = observed = run(
+                    [args.python, '-s',
+                     args.root / 'tests/python/observe_ownership.py', destination],
+                    library=library)
+                require_ok(observed, 'python ownership observer')
+                data = json.loads(observed['stdout'])
+                assert data['main_return'] == 0 and not data['alive'], data
+                assert data['allocations'] and data['frames_clean'] > 0, data
+                assert data['events'] == EXPECTED_EVENTS[case], data
+                assert sorted(data['frees']) == sorted(
+                    item['object'] for item in data['allocations']), data
+                assert len(set(data['frees'])) == len(data['frees']), data
+                if case == 'modes-lifetime':
+                    snapshots = data['snapshots']
+                    assert snapshots['alias']['items'] == [3], data
+                    assert snapshots['owned'] == snapshots['copied'], data
+                    assert snapshots['packet'] == snapshots['moved_packet'], data
+                    assert snapshots['pair'] == [3, False], data
+                    assert snapshots['log'] == 2143379793, data
+                    assert {'fail', 'pass', 'write'} <= {
+                        item['function'] for item in data['errors']}, data
+                row['python_observation'] = data
             row['status'] = 'passed'
 
         for case in STATIC_POSITIVE:

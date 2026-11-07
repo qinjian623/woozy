@@ -1042,6 +1042,8 @@ class Verifier {
     if (!top_level_inout)
       return false;
     std::set<uint64_t> dependent{tr.self.value};
+    for (const auto &p : tr.params)
+      dependent.insert(p.symbol.value);
     for (const auto &p : source_parameters(prototype.source))
       dependent.insert(p.symbol.value);
     for (const auto &p : sig.parameters)
@@ -2102,8 +2104,10 @@ class Verifier {
         need(sig.kind == TypeKind::Function &&
                  sig.parameters.size() == method.parameters.size(),
              "trait prototype signature");
-        if (!own.empty()) {
+        if (!own.empty() || !tr.params.empty()) {
           std::set<uint64_t> own_ids{tr.self.value};
+          for (const auto &p : tr.params)
+            own_ids.insert(p.symbol.value);
           for (const auto &p : own)
             own_ids.insert(p.symbol.value);
           // Top-level non-self move and inout are the modes this batch opens.
@@ -2127,27 +2131,6 @@ class Verifier {
           need(!dependent_inout_graph(sig.result, own_ids, true) &&
                    (!sig.throws_type ||
                     !dependent_inout_graph(*sig.throws_type, own_ids, true)),
-               "generic trait method dependent inout callback is unsupported");
-        }
-        if (!tr.params.empty()) {
-          // This batch opens ordinary method-own type parameters on a generic
-          // trait. Its methods still do not open top-level move/inout or a
-          // callback inout depending on Self, a trait parameter or an own
-          // parameter. Recheck the real prototype, not a concrete impl.
-          std::set<uint64_t> dependent{tr.self.value};
-          for (const auto &p : tr.params)
-            dependent.insert(p.symbol.value);
-          for (const auto &p : own)
-            dependent.insert(p.symbol.value);
-          for (const auto &p : sig.parameters)
-            need(p.mode == ParamMode::ordinary,
-                 "generic trait method move/inout is unsupported");
-          for (const auto &p : sig.parameters)
-            need(!dependent_inout_graph(p.type, dependent, true),
-                 "generic trait method dependent inout callback is unsupported");
-          need(!dependent_inout_graph(sig.result, dependent, true) &&
-                   (!sig.throws_type ||
-                    !dependent_inout_graph(*sig.throws_type, dependent, true)),
                "generic trait method dependent inout callback is unsupported");
         }
         for (const auto &f : m.functions)

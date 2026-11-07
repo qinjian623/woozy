@@ -1,0 +1,4 @@
+package app;
+trait Take[A]{func take[U](owner Self,value move U)U;}
+struct Host{} impl Take[i32] for Host{func take[V](owner Self,value move V)V{return move value;}}
+func main()i32{let h=Host();let v Vec[i32]=[1];let r=h.take[Vec[i32]](v);return r[0];}

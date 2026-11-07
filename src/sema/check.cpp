@@ -710,6 +710,8 @@ class Checker {
     if (!top_level_inout)
       return false;
     std::set<uint64_t> dependent{tr.self.value};
+    for (const auto &p : tr.params)
+      dependent.insert(p.symbol.value);
     for (const auto &p : method_own_parameters(prototype.symbol))
       dependent.insert(p.symbol.value);
     for (const auto &p : sig.parameters)
@@ -965,13 +967,8 @@ class Checker {
     visit(root, 0);
     return direct_inout;
   }
-  // A generic trait method in this batch is ordinary at the method boundary.
-  // Existing non-generic trait move/inout and fixed-scalar callbacks stay on
-  // their old paths. A callback inout whose data type depends on a method-own
-  // parameter, a trait parameter or the trait Self would be a new dependent
-  // mode, so it is rejected explicitly. The same helper is used before and
-  // after nominal fields are filled; only the later call can see hidden
-  // callbacks stored in struct fields, enum payloads or returned functions.
+  // Trait methods share the existing non-self move/inout rules. Dependent
+  // callbacks stay unsupported; repeat this check after nominal fields exist.
   void check_generic_trait_method_modes(
       Ref r, const std::vector<GenericParam> &own, TypeId signature,
       std::optional<SymbolId> trait_self, bool generic_trait,
@@ -986,27 +983,16 @@ class Checker {
     if (trait_params)
       for (const auto &p : *trait_params)
         declarations.insert(p.symbol.value);
-    // A generic trait keeps every top-level method parameter ordinary in this
-    // batch. Existing non-generic traits retain their prior move/inout paths,
-    // where the first actual-self mode is classified from the real Self.
     const auto top = type(signature);
     const auto parameters = top.parameters;
-    if (generic_trait) {
-      for (const auto &p : parameters)
-        if (p.mode != ParamMode::ordinary)
-          unavailable(r,
-                      "generic trait method move/inout is not implemented");
-    } else {
-      for (size_t i = 0; i < parameters.size(); ++i) {
-        const auto &p = parameters[i];
-        if (p.mode == ParamMode::ordinary)
-          continue;
-        if (i == 0 && trait_self &&
-            trait_self_type(p.type, *trait_self))
-          unavailable(r, "generic trait method move/inout is not implemented");
-        if (p.mode != ParamMode::move && p.mode != ParamMode::inout)
-          unavailable(r, "generic trait method move/inout is not implemented");
-      }
+    for (size_t i = 0; i < parameters.size(); ++i) {
+      const auto &p = parameters[i];
+      if (p.mode == ParamMode::ordinary)
+        continue;
+      if (i == 0 && trait_self && trait_self_type(p.type, *trait_self))
+        unavailable(r, "move/inout self is not implemented");
+      if (p.mode != ParamMode::move && p.mode != ParamMode::inout)
+        unavailable(r, "trait method parameter mode is not implemented");
     }
     // Check each top-level component separately. Starting at the method
     // signature itself would make a nested FunctionType with the same TypeId
@@ -3723,12 +3709,7 @@ class Checker {
             tr.methods.push_back({method, signatures.at(method.value),
                                   parameters.at(method.value), source(cr)});
           }
-        // A generic trait's ordinary methods may declare their own type
-        // parameters, but the new combination stays ordinary at the method
-        // boundary: no top-level move/inout and no callback inout that depends
-        // on Self, a trait parameter or a method-own parameter. This early call
-        // keeps the existing diagnostic before complete nominal fields exist;
-        // the post-field pass below repeats the same helper graph check.
+        // Check the real prototype now and again after nominal fields exist.
         if (!tr.params.empty())
           for (const auto &proto : tr.methods)
             check_generic_trait_method_modes(
@@ -3892,6 +3873,10 @@ class Checker {
       signature_parameters.clear();
       for (const auto &p : method_own_parameters(SymbolId{method}))
         signature_parameters.insert(p.symbol.value);
+      for (const auto &tr : m.traits)
+        if (tr.self == context.first)
+          for (const auto &p : tr.params)
+            signature_parameters.insert(p.symbol.value);
       check_inout_graph(*found, signatures.at(method), true, context.first,
                         context.second);
       signature_parameters = std::move(saved_signature_parameters);

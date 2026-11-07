@@ -1,0 +1,23 @@
+package lib;
+pub trait Tag[A] { func code(owner Self) i32; }
+pub struct Token {}
+impl Tag[i32] for Token { func code(owner Self) i32 { return 1; } }
+pub trait Pack[A] {
+    func relay[U,V Tag[A]](owner Self, key A, value move U, tag V) U;
+    func fixed(owner Self, value move Vec[i32]) Vec[i32];
+    func edit[U,V](owner Self, slot inout U, next U, flag inout bool, tag V) U;
+}
+pub struct Box[P] { pub key P; }
+impl[P] Pack[P] for Box[P] {
+    func relay[X,Y Tag[P]](owner Self, key P, value move X, tag Y) X {
+        let code = tag.code();
+        return move value;
+    }
+    func fixed(owner Self, value move Vec[i32]) Vec[i32] { return move value; }
+    func edit[X,Y](owner Self, slot inout X, next X, flag inout bool, tag Y) X {
+        let old = slot;
+        slot = next;
+        flag = !flag;
+        return old;
+    }
+}

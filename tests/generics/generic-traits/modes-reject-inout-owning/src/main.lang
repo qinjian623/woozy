@@ -1,0 +1,5 @@
+package app;
+trait Edit[A]{func edit[U](owner Self,slot inout U);}
+struct Owned{items Vec[i32];} struct Host{}
+impl Edit[i32] for Host{func edit[V](owner Self,slot inout V){}}
+func main()i32{let h=Host();var x=Owned(items:[1]);h.edit[Owned](inout x);return 0;}

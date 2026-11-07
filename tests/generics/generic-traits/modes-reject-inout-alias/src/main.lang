@@ -1,0 +1,4 @@
+package app;
+trait Edit[A]{func edit[U](owner Self,first inout U,second inout U);}
+struct Host{} impl Edit[i32] for Host{func edit[V](owner Self,first inout V,second inout V){}}
+func main()i32{let h=Host();var x i32=1;Host.edit[i32](h,inout x,inout x);return 0;}

@@ -1,0 +1,86 @@
+package app;
+enum E { Bad; }
+struct Pair { value i32; flag bool; }
+struct Owned { items Vec[i32]; }
+enum Packet { Items(items Vec[i32]); Empty; }
+struct Host { items Vec[i32]; }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func tag(log inout i64, digit i64) i32 { mark(inout log, digit); return i32(digit); }
+func fail(log inout i64) i32 throws E { mark(inout log, 4); throw E.Bad; }
+trait Run[A] {
+    func pass[U](owner Self, value move U, first i32, second i32) U throws E;
+    func keep[U](owner Self, value U) U;
+    func write[U](owner Self, slot inout U, next U, log inout i64,
+                  cb func(inout i64,i64), throws_now bool) U throws E;
+}
+impl Run[i32] for Host {
+    func pass[V](owner Self, value move V, first i32, second i32) V throws E {
+        let local Vec[i32] = [9];
+        if second == 9 { throw E.Bad; }
+        return move value;
+    }
+    func keep[V](owner Self, value V) V { return value; }
+    func write[V](owner Self, slot inout V, next V, log inout i64,
+                  cb func(inout i64,i64), throws_now bool) V throws E {
+        let old = slot;
+        slot = next;
+        defer { cb(inout log, 9); }
+        cb(inout log, 7);
+        if throws_now { throw E.Bad; }
+        return old;
+    }
+}
+func main() i32 {
+    let host = Host(items: [0]);
+    var log i64 = 0;
+    let v Vec[i32] = [1];
+    let alias = v;
+    try {
+        let moved = Host.pass[Vec[i32]](second: tag(inout log, 2),
+            value: move v, first: tag(inout log, 1), owner: host);
+        moved[0] = 3;
+        if alias[0] != 3 || log != 21 { return 1; }
+    } catch err E { return 2; }
+    let doomed Vec[i32] = [4];
+    try {
+        let never = host.pass[Vec[i32]](move doomed, 0, fail(inout log));
+        return 3;
+    } catch err E { mark(inout log, 3); }
+    if log != 2143 { return 4; }
+    try {
+        let never = Host.pass[Vec[i32]](host, [5], 0, 9);
+        return 5;
+    } catch err E { mark(inout log, 3); }
+    let owned = Owned(items: [6]);
+    let kept = host.keep(owned);
+    let copied = Host.keep[Owned](host, kept);
+    copied.items[0] = 8;
+    if owned.items[0] != 8 { return 6; }
+    try {
+        let moved_owned = host.pass[Owned](move kept, 0, 0);
+        moved_owned.items[0] = 10;
+        if owned.items[0] != 10 { return 14; }
+    } catch err E { return 15; }
+    let packet = Packet.Items(items: [7]);
+    let same = host.keep[Packet](packet);
+    switch same { case Packet.Items(items): items[0] = 9; case Packet.Empty: return 7; }
+    switch packet { case Packet.Items(items): if items[0] != 9 { return 8; } case Packet.Empty: return 9; }
+    try {
+        let moved_packet = host.pass[Packet](move same, 0, 0);
+        switch moved_packet { case Packet.Items(items): items[0] = 11; case Packet.Empty: return 16; }
+    } catch err E { return 17; }
+    switch packet { case Packet.Items(items): if items[0] != 11 { return 18; } case Packet.Empty: return 19; }
+    var pair = Pair(value: 1, flag: false);
+    try {
+        let old = host.write[Pair](inout pair, Pair(value: 2, flag: true),
+            inout log, mark, false);
+        if old.value != 1 || pair.value != 2 || !pair.flag { return 10; }
+    } catch err E { return 11; }
+    try {
+        let never = Host.write[Pair](host, inout pair, Pair(value: 3, flag: false),
+            inout log, mark, true);
+        return 12;
+    } catch err E { mark(inout log, 3); }
+    if pair.value != 3 || pair.flag || log != 2143379793 { return 13; }
+    return 0;
+}

@@ -10963,12 +10963,12 @@ func main() i32 {
       "impl Convert[bool] for Key{func get[U](owner Self,x U)U{return x;}}"
       "func main()i32{let k=Key();return k.get(1);}");
 
-  // This batch opens only the ordinary combination. The new own suffix does
-  // not relax top-level move/inout or a dependent inout callback.
-  unsupported("trait New[A]{func take[U](owner Self,value move U)U;}"
-              "func main()i32{return 0;}");
-  unsupported("trait New[A]{func update[U](owner Self,slot inout U)Unit;}"
-              "func main()i32{return 0;}");
+  // Top-level non-self modes now combine with own parameters; dependent
+  // inout callbacks keep their existing restriction.
+  good("trait New[A]{func take[U](owner Self,value move U)U;}"
+       "func main()i32{return 0;}");
+  good("trait New[A]{func update[U](owner Self,slot inout U)Unit;}"
+       "func main()i32{return 0;}");
   unsupported("trait New[A]{func run[U](owner Self,cb func(inout U));}"
               "func main()i32{return 0;}");
 
@@ -11371,18 +11371,18 @@ void generic_trait_applications() {
       "impl Convert[bool,i32] for Key{func get(owner Self)bool{return true;}}"
       "func main()i32{let key=Key();let result i32=key.get();return result-11;}",
       "E_TYPE_MISMATCH");
-  // A generic trait's ordinary method may now carry its own type parameter;
-  // top-level move/inout on that same generic trait remains unsupported.
+  // The old declaration-only rejections now accept; execution is covered by
+  // the modes-* projects without changing these original Source strings.
   good("trait New[A]{func identity[U](owner Self,value U)U;}"
        "func main()i32{return 0;}");
-  unsupported("trait New[A]{func take[U](owner Self,value move U)U;}"
-              "func main()i32{return 0;}");
-  unsupported("trait New[A]{func update[U](owner Self,slot inout U)Unit;}"
-              "func main()i32{return 0;}");
-  unsupported("trait New[A]{func take(owner Self,value move A)A;}"
-              "func main()i32{return 0;}");
-  unsupported("trait New[A]{func update(owner Self,slot inout i32)Unit;}"
-              "func main()i32{return 0;}");
+  good("trait New[A]{func take[U](owner Self,value move U)U;}"
+       "func main()i32{return 0;}");
+  good("trait New[A]{func update[U](owner Self,slot inout U)Unit;}"
+       "func main()i32{return 0;}");
+  good("trait New[A]{func take(owner Self,value move A)A;}"
+       "func main()i32{return 0;}");
+  good("trait New[A]{func update(owner Self,slot inout i32)Unit;}"
+       "func main()i32{return 0;}");
 
   // An impl parameter that occurs only in the trait application must enter
   // the method instance key even though the checked signature never shows it.
@@ -11919,6 +11919,205 @@ void generic_trait_applications() {
        "func main()i32{return 0;}");
 }
 
+void generic_trait_method_modes(const fs::path &root) {
+  auto fixture = [&](const std::string &name) {
+    auto r = check(root / "tests/generics/generic-traits" / name / "lang.toml");
+    need(r.success(), name + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success() && hir::verify(*r.value).success(),
+         "generic trait mode fixture HIR rejected: " + name);
+    auto rederived = *r.value;
+    auto ownership = hir::detail::produce_ownership(rederived, {});
+    need(ownership.success() && hir::verify_types(rederived).success() &&
+             hir::verify(rederived).success(),
+         "legal recomputed generic trait mode control rejected: " + name +
+             "\n" + messages(ownership));
+    return *r.value;
+  };
+  for (const char *name : {"modes-before-move-three-entries",
+                           "modes-before-pod-inout-writeback",
+                           "modes-before-static-own-named-self",
+                           "modes-lifetime"})
+    (void)fixture(name);
+  auto m = fixture("modes-combinations");
+
+  auto reject = [](const std::string &text, const std::string &code,
+                   FailureKind failure = FailureKind::source) {
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(text, backend);
+      need(!r.success() && r.failure == failure && has(r, code) &&
+               !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+           std::string(backend) + ": " + text + "\n" + messages(r));
+    }
+  };
+  const std::string take =
+      "trait Take[A]{func take[U](owner Self,value move U)U;}"
+      "struct Host{items Vec[i32];}"
+      "impl Take[bool] for Host{func take[V](owner Self,value move V)V{"
+      "return move value;}}";
+  reject(take + "func main()i32{let h=Host(items:[1]);let v Vec[i32]=[2];"
+                "let r=h.take[Vec[i32]](v);return 0;}",
+         "E_CALL_ARGUMENT");
+  reject(take + "func main()i32{let h=Host(items:[1]);let v Vec[i32]=[2];"
+                "let r=h.take[Vec[i32]](move v);return v[0];}",
+         "E_OWNERSHIP_USE_AFTER_MOVE");
+  reject(take + "func main()i32{let h=Host(items:[1]);let v Vec[i32]=[2];"
+                "let r=h.take[Vec[i32]](move v);"
+                "let q=Host.take[Vec[i32]](h,move v);return 0;}",
+         "E_OWNERSHIP_USE_AFTER_MOVE");
+  reject(take + "func main()i32{let h=Host(items:[1]);"
+                "let r=h.take[Host](move h);return 0;}",
+         "E_CALL_ARGUMENT");
+
+  const std::string edit =
+      "trait Edit[A]{func edit[U](owner Self,slot inout U,value U)U;}"
+      "struct Pair{value i32;}"
+      "impl Edit[bool] for Pair{func edit[V](owner Self,slot inout V,value V)V{"
+      "let old=slot;slot=value;return old;}}";
+  reject(edit + "func main()i32{var h=Pair(value:1);"
+                "let r=h.edit[Pair](inout h,Pair(value:2));return 0;}",
+         "E_CALL_ARGUMENT");
+  reject(edit + "func main()i32{let h=Pair(value:0);var x i32=1;"
+                "let r=Pair.edit[i32](h,inout x,x);return 0;}",
+         "E_CALL_ARGUMENT");
+  reject(edit + "func read(x inout i32)i32{return x;}"
+                "func main()i32{let h=Pair(value:0);var x i32=1;"
+                "let r=h.edit[i32](inout x,read(inout x));return 0;}",
+         "E_CALL_ARGUMENT");
+  reject(edit + "func main()i32{let h=Pair(value:0);let x i32=1;"
+                "let r=h.edit[i32](inout x,2);return 0;}",
+         "E_CALL_ARGUMENT");
+  reject(edit + "func main()i32{let h=Pair(value:0);var x=Pair(value:1);"
+                "let r=h.edit[i32](inout x.value,2);return 0;}",
+         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+  reject("trait Edit[A]{func edit[U](owner Self,a inout U,b inout U);}"
+         "struct Host{} impl Edit[bool] for Host{"
+         "func edit[V](owner Self,a inout V,b inout V){}}"
+         "func main()i32{let h=Host();var x i32=1;"
+         "h.edit[i32](inout x,inout x);return 0;}", "E_CALL_ARGUMENT");
+  reject(edit + "func main()i32{let h=Pair(value:0);var x Vec[i32]=[1];"
+                "let r=h.edit[Vec[i32]](inout x,[2]);return 0;}",
+         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+  reject(edit + "struct Owned{items Vec[i32];}"
+                "func main()i32{let h=Pair(value:0);var x=Owned(items:[1]);"
+                "let r=h.edit[Owned](inout x,Owned(items:[2]));return 0;}",
+         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+
+  // The raw prototype determines actual Self, regardless of its label.
+  for (const char *mode : {"move", "inout"})
+    reject(std::string("trait Closed[A]{func run[U](owner ") + mode +
+               " Self,value U)U;}func main()i32{return 0;}",
+           "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+  // Adding a legal top-level mode cannot hide a callback dependency in a
+  // nominal field, nested function return, or typed error.
+  for (const char *argument : {"U", "A", "Self"})
+    reject(std::string("struct Holder[T]{cb func(inout T);}") +
+               "trait Closed[A]{func run[U](owner Self,slot inout i32,"
+               "holder Holder[" + argument + "]);}func main()i32{return 0;}",
+           "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+  reject("struct Holder[T]{cb func(inout T);}"
+         "trait Closed[A]{func run[U](owner Self,value move U)"
+         "(func()Holder[A]);}func main()i32{return 0;}",
+         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+  reject("enum E[T]{Bad(cb func(inout T));}"
+         "trait Closed[A]{func run[U](owner Self,value move U) throws E[A];}"
+         "func main()i32{return 0;}",
+         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+
+  auto name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  SymbolId forward{}, edit_template{}, relay{};
+  for (const auto &t : m.templates) {
+    if (name(t.function.symbol) == "forward")
+      forward = t.function.symbol;
+    if (name(t.function.symbol) == "edit" && t.params.size() == 1)
+      edit_template = t.function.symbol;
+    if (name(t.function.symbol) == "relay")
+      relay = t.function.symbol;
+  }
+  need(forward.value && edit_template.value && relay.value,
+       "generic trait mode templates missing");
+  SymbolId forward_instance{};
+  for (const auto &i : m.instances)
+    if (i.origin == forward)
+      forward_instance = i.symbol;
+  need(forward_instance.value, "generic trait mode forward instance missing");
+  for (const auto &n : m.nodes)
+    if (m.scopes[n.scope.value].function == forward_instance)
+      need(!std::holds_alternative<hir::ConstraintCall>(n.data),
+           "concrete generic trait mode call retained ConstraintCall");
+
+  size_t corruptions = 0;
+  auto damaged = [&](const std::string &label, const auto &change) {
+    // Each mutation locates a concrete target and asserts a changed value.
+    // Both entry points must reject after ownership was rebuilt successfully.
+    invalid(m, label, change);
+    invalid_recomputed(m, label + " recomputed", change);
+    ++corruptions;
+  };
+  damaged("generic trait mode Move binding erased", [&](auto &h) {
+    for (auto &n : h.nodes)
+      if (h.scopes[n.scope.value].function == forward_instance)
+        if (auto mv = std::get_if<hir::Move>(&n.data); mv && mv->binding) {
+          mv->binding.reset();
+          return;
+        }
+    throw std::runtime_error("concrete forward Move mutation target missing");
+  });
+  damaged("generic trait mode Place replaced by Read", [&](auto &h) {
+    for (auto &n : h.nodes)
+      if (h.scopes[n.scope.value].function == edit_template)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          need(c->args.size() > 1 && c->args[1].mode == hir::ParamMode::inout,
+               "edit ConstraintCall has no inout argument");
+          auto &node = h.nodes[c->args[1].expression.value];
+          auto place = std::get<hir::Place>(node.data);
+          node.data = hir::Read{place.symbol};
+          return;
+        }
+    throw std::runtime_error("edit Place mutation target missing");
+  });
+  damaged("generic trait mode clone parameter renamed", [&](auto &h) {
+    for (auto &i : h.instances)
+      if (i.symbol == forward_instance) {
+        need(i.renamed.size() > 1 &&
+                 i.renamed[0].second != i.renamed[1].second,
+             "forward clone mutation would be empty or unchanged");
+        i.renamed[1].second = i.renamed[0].second;
+        return;
+      }
+    throw std::runtime_error("forward clone mutation target missing");
+  });
+  damaged("generic trait mode complete TraitRef changed", [&](auto &h) {
+    TypeId boolean{};
+    for (uint64_t id = 1; id <= h.types.size(); ++id)
+      if (h.types.find(TypeId{id})->kind == hir::TypeKind::Bool)
+        boolean = TypeId{id};
+    need(boolean.value, "bool type missing for trait mutation");
+    for (auto &n : h.nodes)
+      if (h.scopes[n.scope.value].function == forward)
+        if (auto c = std::get_if<hir::ConstraintCall>(&n.data)) {
+          need(c->trait.args.size() == 1 && c->trait.args[0] != boolean,
+               "complete trait mutation would be unchanged");
+          c->trait.args[0] = boolean;
+          return;
+        }
+    throw std::runtime_error("forward TraitRef mutation target missing");
+  });
+  damaged("generic trait mode full impl-own key changed", [&](auto &h) {
+    for (auto &i : h.instances)
+      if (i.origin == relay && i.type_args.size() == 3) {
+        need(i.type_args[0] != i.type_args[2],
+             "full key mutation would be unchanged");
+        i.type_args[2] = i.type_args[0];
+        return;
+      }
+    throw std::runtime_error("relay full key mutation target missing");
+  });
+  std::cout << "generic-trait-method-modes: " << corruptions
+            << " changed HIR graphs rejected directly and after ownership\n";
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -11992,6 +12191,7 @@ int main(int argc, char **argv) {
     aggregate_inout_validation();
     generic_trait_method_generics();
     generic_trait_applications();
+    generic_trait_method_modes(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

@@ -211,11 +211,11 @@ Box[X]` 与 `Match[i32,Y] for Box[bool]` 不重叠，改第二项为 `Match[bool
 
 实例仍按真实 impl 方法 SymbolId 与完整 `[impl 实参..., 方法实参...]` 缓存。仅由 trait 应用确定的 impl 参数和签名中未出现的 phantom own 参数都进入键；同一组合重复调用去重，不同组合即使签名相同也不合并。具体 `ConstraintCall` 从真实 Source 后缀和所属实例恢复方法实参，替换 Self、trait 实参及全部 own 参数后再验证 bound，最终仍是普通直接 `Call`。
 
-本批只开放 ordinary 组合：方法自身泛型与顶层 move/inout、依赖 Self/trait 参数/own 参数的 inout callback、实际 self move/inout、方法值及捕获闭包仍报源级 `E_CAPABILITY_UNAVAILABLE`。泛型 trait 的参数自身仍不加 bound；非泛型 trait 与固有方法已有的泛型、move/inout、Self callback 和 POD 整体 inout 行为不变。验证器从真实 Source 重建 trait 参数、own 参数、bound、调用后缀与实例键；伪造或换序 trait 应用、改写完整实例键、换用同签名 phantom 实例、破坏 clone 重命名，以及成功重算 ownership 后的坏图都报 `E_IR_INVALID`。
+顶层 move/inout 的支持范围见下节。依赖 Self/trait 参数/own 参数的 inout callback、实际 self move/inout、方法值及捕获闭包仍报源级 `E_CAPABILITY_UNAVAILABLE`。泛型 trait 的参数自身仍不加 bound；非泛型 trait 与固有方法的已有行为不变。验证器从真实 Source 重建 trait 参数、own 参数、bound、调用后缀与实例键；错误的 trait 应用、完整实例键、phantom 调用目标或 clone 重命名，以及成功重算 ownership 后的坏图都报 `E_IR_INVALID`。
 
 本批新 fixture 与 `run_generic_traits.py` 在两后端执行原三个 before 组合、参数 bound、Self bound、四组完整 phantom 实例和去重、显式/推断、跨包、转交、非捕获 lambda、Vec copy/返回、命名参数顺序及 typed-error/defer 事件；拒绝组合验证 fresh 构建不产物且 stale 旧字节保持。未新增公共 HIR/NodeKind、ABI、schema 或后端接口。
 
-修正版在 nominal 字段、enum 载荷、返回函数类型和 `throws` 类型完成后，用同一 helper 再次以真实 Self、全部 trait 参数和全部 own 参数检查完整 callback 图（含递归 nominal 与嵌套函数）。因此 `Holder[U]`、`Holder[A]`、`Holder[Self]` 及无 own 的旧 `Holder[Self]` 隐藏回调均在 Source 报 `E_CAPABILITY_UNAVAILABLE`，不再落到验证器的内部 `E_IR_INVALID`；固定 `Holder[i32]` 与非泛型 trait 的既有固定 callback/ordinary 模式保持接受。
+结构体字段、枚举载荷和方法签名补全后，检查真实 Self、trait 参数和方法类型参数所依赖的完整回调类型，包括返回值、`throws`、递归类型和嵌套函数。`Holder[U]`、`Holder[A]` 和 `Holder[Self]` 中的依赖 inout 回调均在源码检查时报 `E_CAPABILITY_UNAVAILABLE`；固定 `Holder[i32]` 与非泛型 trait 已有的合法回调仍接受。
 
 验证器从真实 Source 重建 trait 参数列表、bound/impl 的有序应用和方法签名；
 同包内后声明的 nominal 在 bound 中与前置声明等价，不按未登记名称猜测 foreign。
@@ -227,12 +227,20 @@ trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source �
 原样 Source 覆盖同 Self 双 phantom、联合重叠/非重叠、跨包 ordinary Vec 与
 仅由 trait 应用推断的 impl 参数；新 fixture 与 runner 在两后端实际执行。
 
+## 泛型 trait 非 self 参数的 move 和 inout
+
+泛型 trait 方法的非接收者参数可以使用已有的 move，以及数值、bool、平凡 struct/enum 整体变量的 inout。方法可以没有自身类型参数，也可以有多个参数和已有的单个 trait bound；值调用、具体 Type 调用、受约束 T 调用和泛型 impl 沿用原有参数规则。已有拥有绑定仍需写 `move x`，inout 仍需可写的整体 var，不能与同一调用中的其他访问重叠。
+
+实际接收者由原型首参是否为该 trait 的真实 Self 决定，标签可以是 self 或 owner。首位真实 Self 的 move/inout 仍不支持。静态方法的首参若声明为 trait 参数 A 或方法参数 U，即使名称是 self、具体化后类型等于 Self，也仍是显式传入的静态参数；Type/T 调用始终提供全部声明参数。
+
+字段补全后的 inout 检查使用真实 trait 参数环境，但不会把 trait 参数加入方法自身参数或实例键。实例仍按真实方法和完整 `[impl 实参..., 方法实参...]` 区分；借用、移动、克隆符号、清理和两个后端的处理保持原有表示。依赖 Self、trait 参数或方法类型参数的嵌套 inout 回调继续拒绝，固定类型回调仍按已有规则处理。
+
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-泛型 trait 的 move/inout 方法组合、实际 self move/inout，以及
+实际 self move/inout，以及
 Vec/string/foreign 及含拥有字段聚合的 inout 仍未实施；有限平凡聚合整体 inout 已支持。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案；对普通参数名重新赋值按源码类型错误 `E_TYPE_MISMATCH` 拒绝，需改值时建立 var 局部变量。初始化表达式读取同名外层绑定的规则已定案并保留。
 
 ## 递归枚举模式

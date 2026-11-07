@@ -1,0 +1,78 @@
+package app;
+import "app/lib" as lib;
+
+struct Pair { value i32; flag bool; }
+struct Host { items Vec[i32]; }
+trait StaticEdit[A] { func replace(self inout A, next A) A; }
+impl StaticEdit[Pair] for Pair {
+    func replace(self inout Pair, next Pair) Pair {
+        let old = self;
+        self = next;
+        return old;
+    }
+}
+func trait_edit[T StaticEdit[Pair]](slot inout Pair) Pair {
+    return T.replace(inout slot, Pair(value: 12, flag: true));
+}
+trait Static[A] {
+    func take(self move A) A;
+    func update[U](self inout U, next U) U;
+}
+impl Static[Host] for Host {
+    func take(self move Host) Host { return move self; }
+    func update[V](self inout V, next V) V {
+        let old = self;
+        self = next;
+        return old;
+    }
+}
+func trait_static[T Static[Host]](value move Host) Host {
+    return T.take(move value);
+}
+func own_static[T Static[Host]](slot inout Pair) Pair {
+    return T.update[Pair](inout slot, Pair(value: 9, flag: true));
+}
+func forward[T lib.Pack[i32],U](owner T, value move U) U {
+    return T.relay[U,lib.Token](owner, 1, move value, lib.Token());
+}
+func factory[T lib.Pack[i32]]() (func(T)Vec[i32]) {
+    return func(owner T)Vec[i32] {
+        let local Vec[i32] = [6];
+        return T.relay[Vec[i32],lib.Token](owner, 1, move local, lib.Token());
+    };
+}
+func edit[T lib.Pack[i32]](owner T, slot inout Pair, flag inout bool) Pair {
+    return T.edit[Pair,lib.Token](owner, inout slot,
+        Pair(value: 5, flag: true), inout flag, lib.Token());
+}
+func main() i32 {
+    let b = lib.Box[i32](key: 0);
+    let first Vec[i32] = [1];
+    let a = b.relay[Vec[i32],lib.Token](1, move first, lib.Token());
+    let c = lib.Box[i32].relay[Vec[i32],lib.Token](b, 1, [2], lib.Token());
+    let d = forward(b, [i32(3)]);
+    let e = factory[lib.Box[i32]]()(b);
+    let f = b.fixed([7]);
+    let g = lib.Box[i32].fixed(b, [8]);
+    if a[0]+c[0]+d[0]+e[0]+f[0]+g[0] != 27 { return 1; }
+    var p = Pair(value: 2, flag: false);
+    var flag = false;
+    let old = edit(b, inout p, inout flag);
+    if old.value != 2 || p.value != 5 || !p.flag || !flag { return 2; }
+    let next = lib.Box[i32].edit[Pair,lib.Token](b, inout p,
+        Pair(value: 8, flag: false), inout flag, lib.Token());
+    if next.value != 5 || p.value != 8 || p.flag || flag { return 3; }
+    let last = b.edit(inout p, Pair(value: 4, flag: true), inout flag, lib.Token());
+    if last.value != 8 || p.value != 4 || !flag { return 4; }
+    let h = Host(items: [11]);
+    let h2 = Host.take(move h);
+    let h3 = trait_static[Host](move h2);
+    if h3.items[0] != 11 { return 5; }
+    let oldp = own_static[Host](inout p);
+    let oldh = Host.update[Pair](inout p, Pair(value: 10, flag: false));
+    if oldp.value != 4 || oldh.value != 9 || p.value != 10 { return 6; }
+    let old_pair = Pair.replace(inout p, Pair(value: 11, flag: false));
+    let last_pair = trait_edit[Pair](inout p);
+    if old_pair.value != 10 || last_pair.value != 11 || p.value != 12 { return 7; }
+    return 0;
+}

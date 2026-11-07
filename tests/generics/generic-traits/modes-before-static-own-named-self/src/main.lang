@@ -1,0 +1,6 @@
+package app;
+trait Static[A] {func take[U](self move U)U;}
+struct Host {items Vec[i32];}
+impl Static[bool] for Host {func take[V](self move V)V{return move self;}}
+func call[T Static[bool]](value move T)T{return T.take[T](move value);}
+func main()i32 {let a=Host(items:[11]);let b=Host.take[Host](move a);let c=call(move b);if c.items[0]!=11{return 1;}return 0;}

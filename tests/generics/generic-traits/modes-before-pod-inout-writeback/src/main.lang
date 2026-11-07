@@ -1,0 +1,7 @@
+package app;
+struct Pair {value i32;flag bool;}
+trait Edit[A] {func replace[U](owner Self,slot inout U,value U,key A)U;}
+struct Key {}
+impl Edit[bool] for Key {func replace[V](owner Self,slot inout V,value V,key bool)V{let old=slot;slot=value;return old;}}
+func run[T Edit[bool]](owner T,slot inout Pair,value Pair)Pair{return T.replace[Pair](owner,inout slot,value,true);}
+func main()i32 {var p=Pair(value:3,flag:false);let old=run(Key(),inout p,Pair(value:9,flag:true));if old.value!=3 || p.value!=9 || !p.flag{return 1;}return 0;}
