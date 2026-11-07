@@ -454,11 +454,15 @@ class Verifier {
                "invalid binary types/op", i.source);
           break;
         }
-        case Op::convert:
+        case Op::convert: {
           arity(1);
-          need(integer(value(0).kind) && integer(t.kind),
-               "invalid integer conversion", i.source);
+          const auto source = value(0).kind, destination = t.kind;
+          need((integer(source) && integer(destination)) ||
+                   (source == hir::TypeKind::Float && integer(destination)) ||
+                   (integer(source) && destination == hir::TypeKind::Float),
+               "invalid numeric conversion", i.source);
           break;
+        }
         case Op::call: {
           need(i.origin && i.origin->value < m.hir.module().nodes.size(),
                "call without HIR origin", i.source);

@@ -300,6 +300,12 @@ Native IR 采用块参数形式表达跨块值，局部可变绑定先表示为�
 
 词法允许但原生目标不支持的外部 Python 操作应在目标能力检查时拒绝，不得在 Native IR 中放一个未定义地址的 Python 调用占位符。
 
+显式数值转换沿用原有 `integer_convert` / `Op::convert` 记录与全部字段：子节点类型
+是源类型，结果类型是目标类型。只允许 integer→integer（范围检查）、float→integer
+（先按源 IEEE 值向零截断，再检查截断后的数学整数范围；NaN、无穷和越界是 Panic）与
+integer→float（直接按目标 f32/f64 精度做一次 RNE）三类。float→float、bool 参与以及
+非数值源/目标仍是无效 IR；转换嵌套沿用同一记录。不新增 NodeKind、字段或 Native ABI。
+
 当前平凡值实现追加 `struct_init`、`enum_init`、`field_read`、`field_address`、
 `load_indirect`、`store_indirect`、`enum_test`、`enum_payload`，保留原操作编号。
 字段与变体使用已解析的 SymbolId；地址结果的 TypeId 表示所指值类型，地址不能

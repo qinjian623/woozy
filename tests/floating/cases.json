@@ -2,15 +2,15 @@
   "schema": "compiler-dev/floating-fixtures/1",
   "contract": "compiler-dev/1",
   "case_count": 18,
-  "positive_count": 12,
-  "reject_count": 6,
+  "positive_count": 13,
+  "reject_count": 5,
   "probe_count": 76,
   "original_probe_count": 62,
   "added_probe_count": 14,
   "stage_policy": {
     "syntax": "全部 18 个项目的源码必须通过现有 C++ `langc check --syntax-only --format json`，退出 0、status=ok 且无诊断。",
     "current_full_check": "基线 aacd448 的现有 `langc check --project` 对 12 个正例全部返回 E_CAPABILITY_UNAVAILABLE；这些只是当前能力拒绝，不是未来 expected_static 结果。六个反例的当前 code 见 README。",
-    "future_static": "expected_static 是严格浮点实现完成后的目标；正例 accept，六个反例 reject。",
+    "future_static": "expected_static 是严格浮点实现完成后的目标；正例 accept，五个反例 reject。",
     "runtime": "native/Python 执行均为 not_run。main_return 0 只表示项目 main 的未来整数返回，不证明调用了 probe 或观察了浮点结果。",
     "future_observation": "未来 runner 必须按实际生成的函数类型调用每个 probe，使用下方 arguments 位模式，比较 f32/f64/bool 返回值；NaN 只比较 class=nan，零同时比较 class=zero 和 sign；其余结果比较固定宽度 hex 位模式。"
   },
@@ -1144,13 +1144,17 @@
       "id": "reject-dynamic-float-int-conversion",
       "manifest": "tests/floating/fixtures/reject-dynamic-float-int-conversion/lang.toml",
       "source": "tests/floating/fixtures/reject-dynamic-float-int-conversion/src/main.lang",
-      "purpose": "动态 f64 到 i32 转换按 §3 保持未支持，直到舍入、NaN、溢出规则和两端测试补齐。",
+      "purpose": "动态 f64 到 i32 转换现按 §3 实施：先向零截断，再检查截断后的数学整数范围；NaN、无穷和越界只在动态时 Panic。本源只声明转换函数，main 返回 0。",
       "specification": "docs/SEMANTICS.md §3 基础类型与推断",
       "source_sha256": "5120b65b6fb50f984e321c5054f78900e56586969b1b285e3c8bdc59a59e7db9",
       "manifest_sha256": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
       "expected_static": {
-        "status": "reject",
-        "reason": "动态浮点到整数转换应报告未支持能力，不得把未知类型变成 Any 或静默执行宿主转换。"
+        "status": "accept",
+        "reason": "显式 float->int 转换由共享 IntegerConvert 记录表达，两者后端均实现；该项目的函数形参在检查阶段未知，因此 check 接受，运行不触发转换。"
+      },
+      "runtime_expected": {
+        "main_return": 0,
+        "probes": []
       }
     }
   ]

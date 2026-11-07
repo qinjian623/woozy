@@ -496,9 +496,67 @@ void simple_flow_tests() {
     }
   }
 }
+void numeric_conversion_tests() {
+  Fixture f(1);
+  Type t;
+  t.kind = TypeKind::Float;
+  t.bits = 64;
+  const auto f64 = f.m.types.intern(t);
+  t.bits = 32;
+  const auto f32 = f.m.types.intern(t);
+  // Nodes are appended to the module under test, not to the fixture arena.
+  auto add = [&](HirModule &m, TypeId type, NodeData data,
+                 std::vector<HirNodeId> children = {}) {
+    HirNodeId id{m.nodes.size()};
+    m.nodes.push_back({type, f.main_src, f.main_scope, std::move(children),
+                       std::move(data)});
+    return id;
+  };
+  auto float_literal = [&](HirModule &m, float ignored = 0) {
+    (void)ignored;
+    return add(m, f64, FloatLiteral{0x3ff0000000000000ULL});
+  };
+  // A discarded expression statement constrains no result type, so these nodes
+  // exercise the conversion rule itself rather than a consumer's expectation.
+  auto add_convert = [&](HirModule &m, TypeId type, HirNodeId source) {
+    auto convert = add(m, type, IntegerConvert{}, {source});
+    auto statement =
+        add(m, f.unit, ExpressionStatement{}, {convert});
+    auto &children = m.nodes[f.root.value].children;
+    children.insert(children.end() - 1, statement);
+    return convert;
+  };
+  auto read_x = [&](HirModule &m) { return add(m, f.i32, Read{f.x}); };
+  {
+    auto m = f.m;
+    add_convert(m, f64, read_x(m)); // integer -> float
+    auto r = verify(m);
+    if (!r.success())
+      for (const auto &d : r.diagnostics)
+        std::cerr << "int->float: " << d.message << '\n';
+    require(r.success(), "integer to float conversion rejected");
+  }
+  {
+    auto m = f.m;
+    add_convert(m, f.i32, float_literal(m)); // float -> integer
+    require(verify(m).success(), "float to integer conversion rejected");
+  }
+  invalid(f, "float to float conversion", [&](HirModule &m) {
+    auto convert = add_convert(m, f64, float_literal(m));
+    m.nodes[convert.value].type = f32;
+  });
+  invalid(f, "bool conversion destination", [&](HirModule &m) {
+    add_convert(m, f.boolean, read_x(m));
+  });
+  invalid(f, "bool conversion source", [&](HirModule &m) {
+    auto source = add(m, f.boolean, BoolLiteral{true});
+    add_convert(m, f.i32, source);
+  });
+}
 } // namespace
 int main() {
   try {
+    numeric_conversion_tests();
     inout_tests();
     simple_flow_tests();
     {

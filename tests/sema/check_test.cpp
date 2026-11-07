@@ -475,8 +475,62 @@ void suite(const fs::path &published) {
   source("func f() { let x=~true; }", "E_TYPE_MISMATCH");
   source("func f() { let x=+true; }", "E_TYPE_MISMATCH");
   source("func f() { let x=u64(18446744073709551615); }");
-  source("func f() { let x=i32(true); }", "E_CAPABILITY_UNAVAILABLE");
-  source("func f() { let x=f32(1); }", "E_CAPABILITY_UNAVAILABLE");
+  // Explicit numeric conversions. bool is not a numeric operand, so it is a
+  // source type error; integer -> float is supported; float -> float stays
+  // closed and keeps the capability diagnostic.
+  source("func f() { let x=i32(true); }", "E_TYPE_MISMATCH");
+  source("func f() { let x=f32(1); }");
+  source("func f() { let x=f32(1.0); }", "E_CAPABILITY_UNAVAILABLE");
+  for (const char *body : {
+           "func f() { let x=i8(-128.9); }",
+           "func f() { let x=u8(-0.9); }",
+           "func f() { let x=i32(1.9999999999999999999); }",
+           "func f(a f32) i8 { return i8(a); }",
+           "func f(a f64) u64 { return u64(a); }",
+           "func f(a u64) f32 { return f32(a); }",
+           "func f(a i8) f64 { return f64(a); }",
+           "func f(a usize) f64 { return f64(a); }",
+           "const c f64 = 1.0 / 2.0; func f() { let x=i32(c); }",
+           "const n f64 = -0.9; func f() { let x=u8(n); }"})
+    source(body);
+  for (const char *body : {
+           "func f() { let x=i8(128.5); }",
+           "func f() { let x=i8(-129.0); }",
+           "func f() { let x=u8(-1.0); }",
+           "func f() { let x=i64(9223372036854775807.0); }",
+           "func f() { let x=u64(18446744073709551615.0); }",
+           "func f() { let x=i32(0.0 / 0.0); }",
+           "func f() { let x=i32(1.0 / 0.0); }",
+           "func f() { let x=i32(0.0 / 0.0 + 1.0); }",
+           "func f() { let x=i8(i64(0.0 / 0.0)); }",
+           "func f() { let x=i8(f64(256)); }",
+           "const c f64 = 0.0 / 0.0; func f() { let x=i32(c); }",
+           "const c f32 = 1e38 * 10.0; func f() { let x=i32(c); }"})
+    source(body, "E_TYPE_MISMATCH");
+  source("func f() { let x=bool(1); }", "E_CAPABILITY_UNAVAILABLE");
+  {
+    // The shared record keeps the source type in the child and the destination
+    // in node.type for all three allowed pairs.
+    auto r = source("func f(a f64) i32 { return i32(a); } "
+                    "func g(b i32) f64 { return f64(b); } "
+                    "func h(c i8) f32 { return f32(c); }");
+    const auto &m = r.value->module();
+    size_t converts = 0;
+    for (const auto &n : m.nodes)
+      if (n.kind() == hir::NodeKind::integer_convert) {
+        auto source_type = m.types.find(m.nodes[n.children.at(0).value].type);
+        auto target = m.types.find(n.type);
+        require(source_type && target, "conversion type missing");
+        bool numeric_pair =
+            (source_type->kind == hir::TypeKind::Float &&
+             target->kind == hir::TypeKind::SignedInt) ||
+            (source_type->kind == hir::TypeKind::SignedInt &&
+             target->kind == hir::TypeKind::Float);
+        require(numeric_pair, "conversion record source/target pair");
+        ++converts;
+      }
+    require(converts == 3, "conversion nodes missing");
+  }
   source("func f() { let x=[1]; }");
   source("func f() { switch 1 { default: break; } }",
          "E_CAPABILITY_UNAVAILABLE");

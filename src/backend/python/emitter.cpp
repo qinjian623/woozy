@@ -621,6 +621,16 @@ class Emitter {
     }
     case NodeKind::integer_convert: {
       auto value = expression(n.children[0], suite);
+      if (type(n.type).kind == TypeKind::Float)
+        return save(suite,
+                    "_rt.int_to_float(" + value + ", " +
+                        std::to_string(type(n.type).bits) + ")",
+                    n);
+      if (type(node(n.children[0]).type).kind == TypeKind::Float)
+        return save(suite,
+                    "_rt.float_to_int(" + value + ", " + numeric(n.type) +
+                        ")",
+                    n);
       return save(suite, "_rt.convert(" + value + ", " + numeric(n.type) + ")",
                   n);
     }

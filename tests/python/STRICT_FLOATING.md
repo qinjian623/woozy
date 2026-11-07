@@ -7,7 +7,9 @@ Linux x86_64、Python/64、CPython 3.12.15。旧运行库在导入生成模块�
 支持 f32/f64 的 `+ - * /`、取负、六种比较、四种复合赋值；每次运算独立
 round-to-nearest ties-to-even，保留 subnormal、符号零、Inf 和 NaN 分类。
 不承诺 NaN payload/sign 和浮点异常标志。整数、tuple、Cell/Field、字符串、
-typed throws/catch/defer 使用原实现。浮点与整数转换、ARC/Vec、move、foreign
+typed throws/catch/defer 使用原实现。显式 float->int/int->float 转换由
+`tests/numeric` 覆盖（运行库新增私有 `float_to_int`/`int_to_float` helper 与版本 /6）；
+ARC/Vec、move、foreign
 仍按现有检查拒绝。没有新增共享类型或语言关键字。
 
 ## 舍入依据

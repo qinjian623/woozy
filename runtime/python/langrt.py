@@ -5,7 +5,7 @@ import struct
 import sys
 import traceback
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/5'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/6'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
@@ -150,6 +150,25 @@ def convert(value, bits, signed):
     if not lower <= value <= upper:
         raise Panic('integer conversion overflow')
     return value
+
+
+def float_to_int(value, bits, signed):
+    """Truncate a finite f32/f64 value towards zero, then range-check it."""
+    if not math.isfinite(value):
+        raise Panic('float to integer conversion of NaN or infinity')
+    # The source value is an exact IEEE value; math.trunc returns its exact
+    # mathematical integer (arbitrary precision), never a second rounding.
+    truncated = math.trunc(value)
+    lower = -(1 << (bits - 1)) if signed else 0
+    upper = (1 << (bits - int(signed))) - 1
+    if not lower <= truncated <= upper:
+        raise Panic('float to integer conversion overflow')
+    return truncated
+
+
+def int_to_float(value, bits):
+    """Round one exact integer directly to the destination IEEE precision."""
+    return _float_round(abs(value), 1, bits, value < 0)
 
 
 def unary(op, value, bits, signed):

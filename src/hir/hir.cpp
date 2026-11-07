@@ -1457,11 +1457,18 @@ class Verifier {
            "short circuit types");
       break;
     }
-    case NodeKind::integer_convert:
+    case NodeKind::integer_convert: {
       arity(1);
-      need(integer(type(n.type).kind) && integer(type(expr(ch[0]).type).kind),
+      // One shared record covers the three allowed numeric pairs; float->float,
+      // bool and non-numeric sources/destinations stay invalid.
+      const auto source = type(expr(ch[0]).type).kind;
+      const auto destination = type(n.type).kind;
+      need((integer(source) && integer(destination)) ||
+               (source == TypeKind::Float && integer(destination)) ||
+               (integer(source) && destination == TypeKind::Float),
            "integer conversion types");
       break;
+    }
     case NodeKind::call:
       check_call(n, std::get<Call>(n.data));
       break;

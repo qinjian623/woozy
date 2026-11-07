@@ -21,10 +21,11 @@ tests/floating/
   oracle/vectors.tsv                 # 该工具的实际输出
 ```
 
-18 个项目 = 12 个正例（10 个新增浮点项目 + 2 个既有样例副本）+ 6 个反例；共 76 条探针（原 62 条 + 本修正追加 14 条）。每个项目有独立 `lang.toml`，源码位于 `src/main.lang`。
+18 个项目 = 13 个正例（11 个新增浮点项目 + 2 个既有样例副本）+ 5 个反例；共 76 条探针（原 62 条 + 本修正追加 14 条）。原准备时的分类是 12/6；显式数值转换实施后 `reject-dynamic-float-int-conversion` 的 `expected_static` 转为 accept，当前 13/5 见“当前预期分类”一节。每个项目有独立 `lang.toml`，源码位于 `src/main.lang`。
 
 - 正例覆盖：两种精度的 RNE ties-to-even（加法和十进制字面量）、两个只能直接按 f32 解析才正确的 double-rounding 陷阱、溢出到带符号 Inf、subnormal/下溢到带符号零、subnormal tie、`+0/-0` 的运算与符号、除零、`0/0` 和 `Inf-Inf` 的 NaN 分类、NaN 的有序比较、有限有序数与 `+0/-0` 的 true/false 对照、以及禁止隐式融合的 `a*b+c`。
-- 反例覆盖：浮点 `%`、已定 f32/f64 混合、浮点 bitwise、浮点 shift、浮点条件、动态 f64→i32 转换。
+- 反例覆盖：浮点 `%`、已定 f32/f64 混合、浮点 bitwise、浮点 shift、浮点条件。
+  动态 f64→i32 转换原为反例，显式数值转换实施后成为正例；其 `.lang` 源未改。
 - 不使用 NaN 字面量、bitcast、十六进制浮点或类型后缀。NaN 和 Inf 均由合法的 IEEE 运算产生。
 - 每个 probe 都有显式参数/返回类型。`cases.json` 记录未来静态结果、探针签名、参数位模式、返回分类/固定宽度 hex 位模式和零符号。NaN 的 `bits` 和 `sign` 写为 `null`，明确表示不比较 payload 或符号；只比较 `class=nan`。
 - `baseline-01-basics` 和 `baseline-05-traits` 的源码与 `baseline/samples/01_basics.lang`、`05_traits.lang` 逐字节相同，仅作为未来严格浮点/trait 执行的既有依赖；原样例没有被修改。
@@ -145,6 +146,23 @@ langc check --project tests/floating/fixtures/<id>/lang.toml --format json
 | `reject-float-shift` | 1 | `E_TYPE_MISMATCH`（shift 要求整数） |
 | `reject-float-condition` | 1 | `E_TYPE_MISMATCH` |
 | `reject-dynamic-float-int-conversion` | 1 | `E_CAPABILITY_UNAVAILABLE`（float/integer 转换未实现） |
+
+上表是基线 `aacd448` 的历史实测结果，本次不改写其中任何 code/退出码。
+
+## 当前预期分类（显式数值转换实施后）
+
+`language-explicit-numeric-conversions-20261106` 实施 float→int 与 int→float 显式转换后，
+`cases.json` 的静态分类为 accept 13 / reject 5（`case_count` 仍为 18，探针仍为 76 条）。
+唯一改变分类的是 `reject-dynamic-float-int-conversion`：它只声明一个参数为 f64 的转换函数，
+`main` 直接返回 0；check 接受，实际运行不做转换，因此 `runtime_expected.main_return = 0`、
+`probes` 为空。其源码/清单字节未改。其余 12 个正例和 5 个反例的 `expected_static`、探针
+签名和位值期待都不变；原 62 条探针与 `oracle/vectors.tsv` 原行未改。
+
+当前编译器的实际结果（本操作记录，不覆盖上面 aacd448 历史表）：11 个浮点正例与 2 个
+baseline 副本仍按后端能力各自检查/执行（`tests/native/run_floating.py`、
+`tests/python/run_floating.py` 的实际记录）；5 个反例仍为 Source 类型错误
+（`E_TYPE_MISMATCH`）或能力缺失（`E_CAPABILITY_UNAVAILABLE`）。本目录不重新声明
+T05 后续或 T07/T09 的整体完成。
 
 未来严格浮点（T05 后续）静态检查、native/Python 生成和执行均为 `not_run`。即使未来 `main` 返回 0，也不能证明观察了 probe 的浮点结果；必须按 `cases.json` 中的实际生成函数类型调用探针并读取返回值和位模式。
 

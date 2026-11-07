@@ -1,5 +1,6 @@
 #include "../../ir/layout.hpp"
 #include "lang/backend/native.hpp"
+#include <cmath>
 #include <functional>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/SmallVector.h>
@@ -328,6 +329,58 @@ class Emitter {
   }
   llvm::Value *convert(const ir::Instruction &i, llvm::Value *v) {
     const auto &from = type(value_types.at(i.inputs[0])), &to = type(i.type);
+    if (from.kind == hir::TypeKind::Float) {
+      // Truncate into an i64 first only under bounds that every f32/f64 can
+      // represent exactly; fptosi/fptoui are then never given a value whose
+      // truncation is unrepresentable. NaN is unordered, so ULE/UGE both fire.
+      const unsigned width = hir::bit_width(to, input.hir.config());
+      auto *float_type = builder.getFloatTy();
+      if (from.bits == 64)
+        float_type = builder.getDoubleTy();
+      auto limit = [&](long exponent) {
+        return llvm::ConstantFP::get(float_type,
+                                     std::ldexp(1.0, int(exponent)));
+      };
+      llvm::Value *bad = nullptr;
+      if (signed_(to)) {
+        auto *minus_two63 =
+            llvm::ConstantFP::get(float_type, -std::ldexp(1.0, 63));
+        bad = builder.CreateOr(builder.CreateFCmpULT(v, minus_two63),
+                               builder.CreateFCmpUGE(v, limit(63)));
+      } else {
+        // -1.0 itself truncates to -1, which cannot be unsigned; values in
+        // (-1,0) truncate to 0 and stay valid. 2^64 is exactly representable.
+        auto *minus_one = llvm::ConstantFP::get(float_type, -1.0);
+        bad = builder.CreateOr(builder.CreateFCmpULE(v, minus_one),
+                               builder.CreateFCmpUGE(v, limit(64)));
+      }
+      guard(bad, 3, i.source);
+      v = signed_(to) ? builder.CreateFPToSI(v, builder.getInt64Ty())
+                      : builder.CreateFPToUI(v, builder.getInt64Ty());
+      if (width < 64) {
+        llvm::Value *narrow = nullptr;
+        if (signed_(to)) {
+          auto lo = llvm::APInt::getSignedMinValue(width).sext(64);
+          auto hi = llvm::APInt::getSignedMaxValue(width).sext(64);
+          narrow = builder.CreateOr(
+              builder.CreateICmpSLT(v, llvm::ConstantInt::get(context, lo)),
+              builder.CreateICmpSGT(v, llvm::ConstantInt::get(context, hi)));
+        } else {
+          auto hi = llvm::APInt::getMaxValue(width).zext(64);
+          narrow = builder.CreateICmpUGT(v, llvm::ConstantInt::get(context, hi));
+        }
+        guard(narrow, 3, i.source);
+      }
+      return builder.CreateIntCast(v, lower_type(i.type), signed_(to));
+    }
+    if (to.kind == hir::TypeKind::Float) {
+      // One direct conversion to the destination width keeps the source
+      // integer exact; LLVM's default is round-to-nearest ties-to-even and no
+      // fast-math or contraction flag is attached.
+      auto *target = lower_type(i.type);
+      return signed_(from) ? builder.CreateSIToFP(v, target)
+                           : builder.CreateUIToFP(v, target);
+    }
     // i65 can represent every source integer and every destination bound.
     auto *wide_type = builder.getIntNTy(65);
     auto *wide = builder.CreateIntCast(v, wide_type, signed_(from));

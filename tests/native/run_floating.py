@@ -148,7 +148,23 @@ def main():
         report['tools']['python'] = dict(executable=sys.executable, version=sys.version)
         assert sys.version_info[:3] == (3, 12, 15), sys.version
         cases = [c for c in published['cases'] if c['expected_static']['status'] == 'accept']
-        assert len(cases) == 12 and sum(len(c['runtime_expected']['probes']) for c in cases) == 76
+        # reject-dynamic-float-int-conversion is now a supported dynamic
+        # conversion (truncate, then range-check); it joins the accepted set
+        # without changing its frozen source.
+        assert len(cases) == 13 and sum(len(c['runtime_expected']['probes']) for c in cases) == 76
+        # These two frozen projects used to be capability rejections. The
+        # explicit numeric conversion rule now makes them legal programs, so
+        # they are built and executed while their .lang inputs stay unchanged.
+        cases += [dict(id='reject-float-to-int',
+                       manifest='tests/native/floating/reject-float-to-int/lang.toml',
+                       runtime_expected=dict(main_return=0, probes=[])),
+                  dict(id='reject-int-to-float',
+                       manifest='tests/native/floating/reject-int-to-float/lang.toml',
+                       runtime_expected=dict(main_return=0, probes=[]))]
+        report['reclassified'] = dict(
+            cases=['reject-dynamic-float-int-conversion', 'reject-float-to-int',
+                   'reject-int-to-float'],
+            reason='explicit float->int truncation/range and int->float RNE are implemented; the frozen sources are built and run instead of rejected')
         cases += [dict(id='dynamic', manifest='tests/native/floating/dynamic/lang.toml', runtime_expected=dict(main_return=0, probes=additional()))]
         values = [('probe_values32', 32, 0x41280000), ('probe_values64', 64, 0x4008000000000000),
                   ('probe_order', 32, 0x42240000), ('probe_cleanup', 32, 0x40b80000),
@@ -196,11 +212,13 @@ def main():
                 row['observed_category'] = 'panic' if ident == 'panic' else 'typed_error' if ident == 'uncaught' else 'ordinary_return'
                 row['artifacts'] = {str(p.relative_to(out)): sha(p) for p in sorted(out.rglob('*')) if p.is_file()}
                 row['status'] = 'passed'
-        codes = {'reject-dynamic-float-int-conversion': 'E_CAPABILITY_UNAVAILABLE'}
+        codes = {}
         rejection_root = Path(tempfile.mkdtemp(prefix='rejected-', dir=args.out))
         rejects = [c for c in published['cases'] if c['expected_static']['status'] == 'reject']
+        reclassified = {'reject-move', 'reject-vec', 'reject-float-to-int',
+                        'reject-int-to-float'}
         for path in sorted((args.root / 'tests/native/floating').glob('reject-*/lang.toml')):
-            if path.parent.name in ('reject-move', 'reject-vec'):
+            if path.parent.name in reclassified:
                 continue
             rejects.append(dict(id=path.parent.name, manifest=str(path.relative_to(args.root))))
             codes[path.parent.name] = 'E_CAPABILITY_UNAVAILABLE'

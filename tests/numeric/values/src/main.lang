@@ -1,0 +1,156 @@
+package app;
+
+// Explicit numeric conversions, checked by real execution in both backends.
+//
+// float -> integer truncates the already-rounded source IEEE value towards
+// zero, then checks the mathematical integer range. Integer -> float performs
+// exactly one rounding, directly to the destination f32/f64 precision (RNE).
+//
+// Every expectation below is an exactly representable value written by hand
+// (powers of two, small integers and one exact 24-bit f32 significand), so no
+// comparison depends on the compiler's decimal-literal rounding.
+func f2i8(x f64) i8 { return i8(x); }
+func f2u8(x f64) u8 { return u8(x); }
+func f2i16(x f64) i16 { return i16(x); }
+func f2u16(x f64) u16 { return u16(x); }
+func f2i32(x f64) i32 { return i32(x); }
+func f2u32(x f64) u32 { return u32(x); }
+func f2i64(x f64) i64 { return i64(x); }
+func f2u64(x f64) u64 { return u64(x); }
+func s2i8(x f32) i8 { return i8(x); }
+func s2u8(x f32) u8 { return u8(x); }
+func s2i16(x f32) i16 { return i16(x); }
+func s2u16(x f32) u16 { return u16(x); }
+func s2i32(x f32) i32 { return i32(x); }
+func s2u32(x f32) u32 { return u32(x); }
+func s2i64(x f32) i64 { return i64(x); }
+func s2u64(x f32) u64 { return u64(x); }
+func i2f32(x i64) f32 { return f32(x); }
+func u2f32(x u64) f32 { return f32(x); }
+func i2f64(x i64) f64 { return f64(x); }
+func u2f64(x u64) f64 { return f64(x); }
+func b2f32(x i8) f32 { return f32(x); }
+func c2f32(x u8) f32 { return f32(x); }
+func b2f64(x i16) f64 { return f64(x); }
+func c2f64(x u16) f64 { return f64(x); }
+func d2f32(x i32) f32 { return f32(x); }
+func e2f64(x u32) f64 { return f64(x); }
+func f2signed(x f64) isize { return isize(x); }
+func f2usize(x f64) usize { return usize(x); }
+func signed2f32(x isize) f32 { return f32(x); }
+func usize2f64(x usize) f64 { return f64(x); }
+
+func id[T](x T) T { return x; }
+func round_after[T](tag T, x i64) f32 { let kept T = id(tag); return f32(x); }
+
+const half f64 = 1.0 / 2.0;
+const negative f64 = -0.9;
+const boundary f64 = 9223372036854774784.0;
+
+func main() i32 {
+    // f64 -> every fixed integer width, truncation rather than rounding.
+    if i8(-128.9) != -128 { return 1; }
+    if i8(127.9) != 127 { return 1; }
+    if f2i8(-128.9) != -128 { return 1; }
+    if f2i8(127.999) != 127 { return 1; }
+    if u8(-0.9) != 0 { return 2; }
+    if u8(-0.0000001) != 0 { return 2; }
+    if f2u8(-0.9) != 0 { return 2; }
+    if u8(255.9) != 255 { return 2; }
+    if i16(-32768.9) != -32768 { return 3; }
+    if i16(32767.9) != 32767 { return 3; }
+    if f2i16(32767.9) != 32767 { return 3; }
+    if u16(-0.9) != 0 { return 3; }
+    if u16(65535.9) != 65535 { return 3; }
+    if f2u16(65535.9) != 65535 { return 3; }
+    if i32(-2147483648.9) != -2147483648 { return 4; }
+    if i32(2147483647.9) != 2147483647 { return 4; }
+    if f2i32(-2147483648.9) != -2147483648 { return 4; }
+    if u32(-0.9) != 0 { return 4; }
+    if u32(4294967295.9) != 4294967295 { return 4; }
+    if f2u32(4294967295.9) != 4294967295 { return 4; }
+    if i64(-9223372036854775808.0) != -9223372036854775808 { return 5; }
+    if i64(9223372036854774784.0) != 9223372036854774784 { return 5; }
+    if f2i64(9223372036854774784.0) != 9223372036854774784 { return 5; }
+    if u64(-0.9) != 0 { return 5; }
+    if u64(18446744073709549568.0) != 18446744073709549568 { return 5; }
+    if f2u64(18446744073709549568.0) != 18446744073709549568 { return 5; }
+
+    // Truncation is towards zero, not floor.
+    if i32(2.5) != 2 { return 6; }
+    if i32(-2.5) != -2 { return 6; }
+    if i32(-0.5) != 0 { return 6; }
+    if i32(1.9999999999999999999) != 2 { return 6; }
+
+    // f32 sources keep their own value; nothing is widened through f64 first.
+    if s2i8(-128.9) != -128 { return 7; }
+    if s2u8(-0.9) != 0 { return 7; }
+    if s2i32(2147483520.0) != 2147483520 { return 7; }
+    if s2u32(4294967040.0) != 4294967040 { return 7; }
+    if s2i64(9223370937343148032.0) != 9223370937343148032 { return 7; }
+    if s2u64(18446742974197923840.0) != 18446742974197923840 { return 7; }
+
+    // Subnormals and both signed zeros truncate to integer zero.
+    if i32(5e-324) != 0 { return 8; }
+    if i64(1e-320) != 0 { return 8; }
+    if i8(-5e-324) != 0 { return 8; }
+    if u64(0.0) != 0 { return 8; }
+    if i64(-0.0) != 0 { return 8; }
+
+    // Integer -> f32: round to nearest, ties to even, in one step.
+    if f32(16777216) != 16777216.0 { return 9; }
+    if i2f32(16777217) != 16777216.0 { return 9; }
+    if i2f32(16777219) != 16777220.0 { return 9; }
+    if i2f32(-16777217) != -16777216.0 { return 9; }
+    if i2f32(-16777219) != -16777220.0 { return 9; }
+
+    // Integer -> f64 ties and the f64 upper bound.
+    if f64(9007199254740993) != 9007199254740992.0 { return 10; }
+    if i2f64(-9007199254740993) != -9007199254740992.0 { return 10; }
+    if u2f64(18446744073709551615) != 18446744073709551616.0 { return 10; }
+
+    // 2^63 + 2^39 + 1 is just above the f32 midpoint between 2^63 and
+    // 2^63 + 2^40. One direct rounding gives 2^63 + 2^40; a double rounding
+    // through f64 would first drop to 2^63 and then stay there.
+    let big u64 = 9223372586610589697;
+    if u2f32(big) != 9223372036854775808.0 + 1099511627776.0 { return 11; }
+    if u2f32(big) == 9223372036854775808.0 { return 11; }
+
+    // Narrow integer sources are exact in both float widths.
+    if b2f32(-128) != -128.0 { return 12; }
+    if c2f32(255) != 255.0 { return 12; }
+    if b2f64(-32768) != -32768.0 { return 12; }
+    if c2f64(65535) != 65535.0 { return 12; }
+    if d2f32(-2147483648) != -2147483648.0 { return 12; }
+    if e2f64(4294967295) != 4294967295.0 { return 12; }
+
+    // isize/usize follow the declared target word width. These values fit both
+    // the 32-bit and 64-bit frontend configurations.
+    if isize(-3.9) != -3 { return 13; }
+    if usize(-0.9) != 0 { return 13; }
+    if f2signed(-3.9) != -3 { return 13; }
+    if f2usize(-0.9) != 0 { return 13; }
+    let signed_value isize = -7;
+    let unsigned_value usize = 9;
+    if signed2f32(signed_value) != -7.0 { return 13; }
+    if usize2f64(unsigned_value) != 9.0 { return 13; }
+
+    // Nested conversions use the already-converted value.
+    if i16(i8(-128.9)) != -128 { return 14; }
+    if f32(i64(3.9)) != 3.0 { return 14; }
+    if i32(f64(-7)) != -7 { return 14; }
+    if u64(i32(7.9)) != 7 { return 14; }
+
+    // The same conversion inside two concrete template instances keeps its
+    // already-substituted source and destination types.
+    if round_after(1.5, 16777217) != 16777216.0 { return 16; }
+    if round_after(7, -16777219) != -16777220.0 { return 16; }
+
+    // const float values keep their already-rounded IEEE bits at every use.
+    if i32(half) != 0 { return 15; }
+    if u8(negative) != 0 { return 15; }
+    if i64(boundary) != 9223372036854774784 { return 15; }
+    if i8(-128.9) != f2i8(-128.9) { return 15; }
+
+    return 0;
+}

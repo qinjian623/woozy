@@ -23,6 +23,9 @@ struct Value {
   TypeId type{0};
   std::optional<mpz_class> integer;
   std::optional<bool> boolean;
+  // Already-rounded source IEEE value: low 32 bits for f32, all 64 for f64.
+  // It carries NaN/infinity/signed zero/subnormals without a host double.
+  std::optional<uint64_t> floating;
 };
 struct Expr {
   HirNodeId id;
@@ -1230,6 +1233,87 @@ class Checker {
       throw std::invalid_argument("invalid parsed integer");
     return negative ? mpz_class(-v) : v;
   }
+  // Round an exact rational to the target IEEE format with one integer RNE
+  // decision. Decimal literals and constant float arithmetic share it; neither
+  // a host double nor the LLVM frontend participates.
+  uint64_t round_ratio(bool negative, const mpz_class &numerator,
+                       const mpz_class &denominator, TypeId t) const {
+    const unsigned width = type(t).bits;
+    const uint64_t sign = uint64_t(negative) << (width - 1);
+    const uint64_t infinity =
+        width == 32 ? 0x7f800000ULL : 0x7ff0000000000000ULL;
+    const int precision = width == 32 ? 24 : 53;
+    const int bias = width == 32 ? 127 : 1023;
+    if (numerator == 0)
+      return sign; // the sign of an exact zero is determined by the operation
+    long e = long(mpz_sizeinbase(numerator.get_mpz_t(), 2)) -
+             long(mpz_sizeinbase(denominator.get_mpz_t(), 2));
+    if (e >= 0 ? numerator < (denominator << e)
+               : (numerator << -e) < denominator)
+      --e;
+    if (e > bias)
+      return sign | infinity;
+    long scale = precision - 1 - std::max(e, long(1 - bias));
+    mpz_class a = numerator, b = denominator, q, rem;
+    if (scale >= 0)
+      a <<= scale;
+    else
+      b <<= -scale;
+    mpz_fdiv_qr(q.get_mpz_t(), rem.get_mpz_t(), a.get_mpz_t(), b.get_mpz_t());
+    if (2 * rem > b || (2 * rem == b && mpz_odd_p(q.get_mpz_t())))
+      ++q;
+    if (q >= (mpz_class(1) << precision)) {
+      q >>= 1;
+      ++e;
+    }
+    if (e > bias)
+      return sign | infinity;
+    bool normal = q >= (mpz_class(1) << (precision - 1));
+    uint64_t fraction = q.get_ui();
+    if (normal)
+      fraction -= uint64_t(1) << (precision - 1);
+    return sign | fraction |
+           (normal ? uint64_t(std::max(e, long(1 - bias)) + bias)
+                         << (precision - 1)
+                   : 0);
+  }
+  // Round (numerator / denominator) * 2^shift for exact integer inputs.
+  uint64_t round_fraction(bool negative, const mpz_class &numerator,
+                          const mpz_class &denominator, long shift,
+                          TypeId t) const {
+    if (shift >= 0)
+      return round_ratio(negative, numerator << shift, denominator, t);
+    return round_ratio(negative, numerator, denominator << -shift, t);
+  }
+  // Decode an already-rounded source IEEE value into exact integer fields
+  // (magnitude = significand * 2^shift). NaN/Infinity are classified first.
+  struct Ieee {
+    enum class Kind { finite, infinite, nan } kind = Kind::finite;
+    bool negative = false;
+    mpz_class significand;
+    long shift = 0;
+  };
+  static Ieee decode_ieee(uint64_t bits, unsigned width) {
+    const unsigned fraction_bits = width == 32 ? 23 : 52;
+    const unsigned exponent_bits = width == 32 ? 8 : 11;
+    const long bias = width == 32 ? 127 : 1023;
+    Ieee v;
+    v.negative = (bits >> (width - 1)) != 0;
+    const uint64_t exponent =
+        (bits >> fraction_bits) & ((uint64_t(1) << exponent_bits) - 1);
+    const uint64_t fraction =
+        bits & ((uint64_t(1) << fraction_bits) - 1);
+    if (exponent == (uint64_t(1) << exponent_bits) - 1) {
+      v.kind = fraction ? Ieee::Kind::nan : Ieee::Kind::infinite;
+    } else if (exponent == 0) {
+      v.significand = fraction;
+      v.shift = long(1 - bias) - long(fraction_bits);
+    } else {
+      v.significand = (uint64_t(1) << fraction_bits) | fraction;
+      v.shift = long(exponent) - bias - long(fraction_bits);
+    }
+    return v;
+  }
   // Correctly round the decimal rational directly to IEEE precision. No host
   // double intermediate (in particular for f32 halfway and subnormal values).
   uint64_t float_bits(Ref r, TypeId t) const {
@@ -1274,37 +1358,7 @@ class Checker {
       numerator *= power;
     else
       denominator = power;
-    int precision = width(t) == 32 ? 24 : 53;
-    int bias = width(t) == 32 ? 127 : 1023;
-    long e = long(mpz_sizeinbase(numerator.get_mpz_t(), 2)) -
-             long(mpz_sizeinbase(denominator.get_mpz_t(), 2));
-    if (e >= 0 ? numerator < (denominator << e)
-               : (numerator << -e) < denominator)
-      --e;
-    if (e > bias)
-      return width(t) == 32 ? 0x7f800000ULL : 0x7ff0000000000000ULL;
-    long scale = precision - 1 - std::max(e, long(1 - bias));
-    mpz_class a = numerator, b = denominator, q, rem;
-    if (scale >= 0)
-      a <<= scale;
-    else
-      b <<= -scale;
-    mpz_fdiv_qr(q.get_mpz_t(), rem.get_mpz_t(), a.get_mpz_t(), b.get_mpz_t());
-    if (2 * rem > b || (2 * rem == b && mpz_odd_p(q.get_mpz_t())))
-      ++q;
-    if (q >= (mpz_class(1) << precision)) {
-      q >>= 1;
-      ++e;
-    }
-    if (e > bias)
-      return width(t) == 32 ? 0x7f800000ULL : 0x7ff0000000000000ULL;
-    bool normal = q >= (mpz_class(1) << (precision - 1));
-    uint64_t fraction = q.get_ui();
-    if (normal)
-      fraction -= uint64_t(1) << (precision - 1);
-    return fraction | (normal ? uint64_t(std::max(e, long(1 - bias)) + bias)
-                                    << (precision - 1)
-                              : 0);
+    return round_ratio(false, numerator, denominator, t);
   }
   std::string_view binary_token(Ref r) const {
     return file(r).tokens.at(ast(child(r, 0)).token_end).spelling;
@@ -1396,6 +1450,104 @@ class Checker {
     result.integer = wrap(std::move(z), a.type);
     return result;
   }
+  // Exact-ratio fold for the four float arithmetic operators. Every step rounds
+  // to the expression's own f32/f64 type, exactly as the runtime operation
+  // would, including NaN, infinity, signed zero and subnormal results.
+  Value float_fold(BinaryOp op, const Value &a, const Value &b) const {
+    Value result{a.type, {}, {}, {}};
+    if (!a.floating || !b.floating)
+      return result;
+    const unsigned width = type(a.type).bits;
+    const uint64_t infinity =
+        width == 32 ? 0x7f800000ULL : 0x7ff0000000000000ULL;
+    const uint64_t nan_bits =
+        width == 32 ? 0x7fc00000ULL : 0x7ff8000000000000ULL;
+    auto x = decode_ieee(*a.floating, width);
+    auto y = decode_ieee(*b.floating, width);
+    auto signed_infinity = [&](bool negative) {
+      return uint64_t(negative) << (width - 1) | infinity;
+    };
+    auto signed_zero = [&](bool negative) {
+      return uint64_t(negative) << (width - 1);
+    };
+    switch (op) {
+    case BinaryOp::add:
+    case BinaryOp::subtract: {
+      if (op == BinaryOp::subtract)
+        y.negative = !y.negative;
+      if (x.kind == Ieee::Kind::nan || y.kind == Ieee::Kind::nan) {
+        result.floating = nan_bits;
+      } else if (x.kind == Ieee::Kind::infinite &&
+                 y.kind == Ieee::Kind::infinite) {
+        result.floating =
+            x.negative == y.negative ? signed_infinity(x.negative) : nan_bits;
+      } else if (x.kind == Ieee::Kind::infinite) {
+        result.floating = signed_infinity(x.negative);
+      } else if (y.kind == Ieee::Kind::infinite) {
+        result.floating = signed_infinity(y.negative);
+      } else {
+        const long shift = std::min(x.shift, y.shift);
+        mpz_class sum = x.significand << (x.shift - shift);
+        if (x.negative)
+          sum = -sum;
+        mpz_class addend = y.significand << (y.shift - shift);
+        if (y.negative)
+          addend = -addend;
+        sum += addend;
+        mpz_class magnitude = sum < 0 ? mpz_class(-sum) : sum;
+        // An exact zero is +0 under RNE unless both addends are -0.
+        const bool negative_zero =
+            sum == 0 && x.significand == 0 && y.significand == 0 &&
+            x.negative && y.negative;
+        result.floating = round_fraction(sum < 0 || negative_zero, magnitude, 1,
+                                         shift, a.type);
+      }
+      break;
+    }
+    case BinaryOp::multiply: {
+      const bool negative = x.negative != y.negative;
+      if (x.kind == Ieee::Kind::nan || y.kind == Ieee::Kind::nan) {
+        result.floating = nan_bits;
+      } else if (x.kind == Ieee::Kind::infinite ||
+                 y.kind == Ieee::Kind::infinite) {
+        const Ieee &finite = x.kind == Ieee::Kind::infinite ? y : x;
+        result.floating = finite.kind == Ieee::Kind::finite &&
+                                  finite.significand == 0
+                              ? nan_bits
+                              : signed_infinity(negative);
+      } else {
+        result.floating =
+            round_fraction(negative, x.significand * y.significand, 1,
+                           x.shift + y.shift, a.type);
+      }
+      break;
+    }
+    case BinaryOp::divide: {
+      const bool negative = x.negative != y.negative;
+      if (x.kind == Ieee::Kind::nan || y.kind == Ieee::Kind::nan) {
+        result.floating = nan_bits;
+      } else if (x.kind == Ieee::Kind::infinite) {
+        result.floating = y.kind == Ieee::Kind::infinite
+                              ? nan_bits
+                              : signed_infinity(negative);
+      } else if (y.kind == Ieee::Kind::infinite) {
+        result.floating = signed_zero(negative);
+      } else if (y.significand == 0) {
+        result.floating = x.significand == 0 ? nan_bits
+                                            : signed_infinity(negative);
+      } else if (x.significand == 0) {
+        result.floating = signed_zero(negative);
+      } else {
+        result.floating = round_fraction(negative, x.significand, y.significand,
+                                         x.shift - y.shift, a.type);
+      }
+      break;
+    }
+    default:
+      break; // comparisons keep their previous non-folded treatment
+    }
+    return result;
+  }
   Expr expression(Ref r, std::optional<TypeId> expected = {}) {
     check_cancelled(stop);
     if (auto v = literal_integer(r))
@@ -1414,7 +1566,8 @@ class Checker {
         TypeId t = expected.value_or(scalar(TypeKind::Float, 64));
         if (type(t).kind != TypeKind::Float)
           reject(r, "float literal requires float context");
-        result = {node(r, t, FloatLiteral{float_bits(r, t)}), {t, {}, {}}};
+        const uint64_t bits = float_bits(r, t);
+        result = {node(r, t, FloatLiteral{bits}), {t, {}, {}, bits}};
       } else if (file(r).tokens[n.token_begin].kind ==
                  TokenKind::string_literal) {
         auto t = scalar(TypeKind::String);
@@ -1489,7 +1642,11 @@ class Checker {
           match(r, c.value.type, expected);
           return int_literal(r, *c.value.integer, c.value.type);
         }
-        if (c.value.boolean)
+        if (c.value.floating) {
+          match(r, c.value.type, expected);
+          result = {node(r, c.value.type, FloatLiteral{*c.value.floating}),
+                    c.value};
+        } else if (c.value.boolean)
           result = {node(r, boolean, BoolLiteral{*c.value.boolean}), c.value};
         else if (c.function) {
           check_function_value_inout(r, *c.function, c.value.type);
@@ -1569,6 +1726,10 @@ class Checker {
         result.value.integer = wrap(op == "~" ? mpz_class(~*a.value.integer)
                                               : mpz_class(-*a.value.integer),
                                     a.value.type);
+      if (a.value.floating && (op == "-" || op == "+"))
+        result.value.floating =
+            op == "-" ? *a.value.floating ^ (uint64_t(1) << (width(a.value.type) - 1))
+                       : *a.value.floating;
       if (a.value.boolean)
         result.value.boolean = !*a.value.boolean;
       break;
@@ -1620,8 +1781,10 @@ class Checker {
           !(k == TypeKind::Bool &&
             (bop == BinaryOp::equal || bop == BinaryOp::not_equal)))
         reject(r, "invalid scalar operator operands");
-      auto v = integer(a.value.type) ? fold(bop, a.value, b.value)
-                                     : Value{boolean, {}, {}};
+      auto v = integer(a.value.type)
+                   ? fold(bop, a.value, b.value)
+                   : k == TypeKind::Float ? float_fold(bop, a.value, b.value)
+                                          : Value{boolean, {}, {}, {}};
       if (k == TypeKind::Bool && a.value.boolean && b.value.boolean)
         v.boolean = bop == BinaryOp::equal
                         ? *a.value.boolean == *b.value.boolean
@@ -2616,23 +2779,65 @@ class Checker {
     auto s = occurrence(callee_ref);
     if (s && symbol(*s).kind == modules::SymbolKind::builtin_type) {
       auto target = parse_type(callee_ref);
-      if (!integer(target))
-        unavailable(
-            r, "only integer-to-integer scalar conversions are implemented");
+      const auto target_kind = type(target).kind;
+      if (!integer(target) && target_kind != TypeKind::Float)
+        unavailable(r,
+                    "only explicit integer/float numeric conversions are "
+                    "implemented");
       if (ast(r).children.size() != 2)
         reject(r, "conversion requires one argument", "E_CALL_ARGUMENT");
       auto arg = child(r, 1);
       if (ast(arg).token_begin + 1 < ast(arg).token_end && token(arg, 1) == ":")
         reject(arg, "conversion does not accept labels", "E_CALL_ARGUMENT");
       auto xr = child(arg, 0);
-      auto x = expression(xr, literal_integer(xr) ? std::optional(target)
-                                                  : std::nullopt);
-      if (!integer(x.value.type))
-        unavailable(r, "float/integer conversions are not implemented");
-      if (x.value.integer)
-        range(arg, *x.value.integer, target);
-      auto v = x.value;
+      // Only a pure integer literal may take an integer destination as its
+      // context. A floating operand is never parsed as an integer, and an
+      // integer source in an integer-to-float conversion keeps its own type.
+      auto x = expression(xr, integer(target) && literal_integer(xr)
+                                  ? std::optional(target)
+                                  : std::nullopt);
+      const bool source_integer = integer(x.value.type);
+      const bool source_float = type(x.value.type).kind == TypeKind::Float;
+      if (!source_integer && !source_float)
+        reject(arg, "conversion operand must be an integer or float");
+      if (source_float && target_kind == TypeKind::Float)
+        unavailable(r, "float-to-float conversions are not implemented");
+      Value v;
       v.type = target;
+      if (source_float) {
+        if (x.value.floating) {
+          // Truncate towards zero from the already-rounded IEEE value, then
+          // check the mathematical integer range. Only the magnitude is
+          // shifted; the sign is applied afterwards, so -0.9 -> u8 truncates
+          // to 0 instead of -1.
+          const auto ieee = decode_ieee(*x.value.floating, width(x.value.type));
+          if (ieee.kind != Ieee::Kind::finite)
+            reject(arg,
+                   "conversion of a NaN or infinity constant is a source "
+                   "error");
+          mpz_class truncated = ieee.significand;
+          if (ieee.shift >= 0)
+            truncated <<= ieee.shift;
+          else
+            truncated >>= -ieee.shift;
+          if (ieee.negative)
+            truncated = -truncated;
+          range(arg, truncated, target);
+          v.integer = std::move(truncated);
+        }
+      } else if (target_kind == TypeKind::Float) {
+        // The source integer is rounded once, directly to the destination
+        // precision. No decimal/host-double step is involved.
+        if (x.value.integer) {
+          mpz_class magnitude = *x.value.integer < 0 ? mpz_class(-*x.value.integer)
+                                                     : *x.value.integer;
+          v.floating = round_ratio(*x.value.integer < 0, magnitude,
+                                   mpz_class(1), target);
+        }
+      } else if (x.value.integer) {
+        range(arg, *x.value.integer, target);
+        v.integer = *x.value.integer;
+      }
       return {node(r, target, IntegerConvert{}, {x.id}), v};
     }
     Call c;
@@ -2731,7 +2936,8 @@ class Checker {
       c.function = f->symbol;
       c.type_args = f->type_args;
     }
-    if (!c.value.integer && !c.value.boolean && !c.function)
+    if (!c.value.integer && !c.value.floating && !c.value.boolean &&
+        !c.function)
       unavailable(
           r, "const initializer must be a non-Panic scalar compile-time value");
     m.nodes.resize(begin);
@@ -3028,7 +3234,8 @@ class Checker {
         expected = parse_type(child(r, 0));
       auto e = expression(child(r, n.children.size() - 1), expected);
       bool writable = first(r) == "var";
-      if (first(r) == "const" && !e.value.integer && !e.value.boolean &&
+      if (first(r) == "const" && !e.value.integer && !e.value.floating &&
+          !e.value.boolean &&
           !std::holds_alternative<FunctionValue>(m.nodes[e.id.value].data))
         unavailable(
             r,
