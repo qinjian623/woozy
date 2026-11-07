@@ -1102,8 +1102,8 @@ class Verifier {
     constraints(parameters, values, &sub);
     return {std::move(parameters), std::move(values)};
   }
-  // Concrete Type.method(...) and the concrete form of a T.method(...)
-  // instance both become ordinary direct Calls. Re-derive the qualifier's
+  // Concrete value/Type.method(...) and the concrete form of a T.method(...)
+  // instance become ordinary direct Calls. Re-derive the qualifier's
   // real source type and require the selected method to belong to the impl
   // for that type. For a concrete qualifier, the same source selection must
   // still have exactly one candidate; a template qualifier is matched by the
@@ -1111,15 +1111,15 @@ class Verifier {
   // traits cannot replace it there.
   void check_qualified_method_source(const HirNode &n, const Call &c) const {
     auto source = source_method_call(n);
-    if (!source || !source->base_symbol)
+    if (!source)
       return;
-    const auto kind = symbol(*source->base_symbol).kind;
     const bool template_qualifier =
         template_trait_parameter(*source, scope(n.scope).function);
-    if (!template_qualifier && kind != modules::SymbolKind::type &&
-        kind != modules::SymbolKind::builtin_type &&
-        kind != modules::SymbolKind::type_parameter)
-      return;
+    const bool type_qualifier = source->base_symbol &&
+        (template_qualifier ||
+         symbol(*source->base_symbol).kind == modules::SymbolKind::type ||
+         symbol(*source->base_symbol).kind == modules::SymbolKind::builtin_type ||
+         symbol(*source->base_symbol).kind == modules::SymbolKind::type_parameter);
     need(c.kind == CalleeKind::direct && c.direct_symbol.has_value(),
          "type-qualified method source is not a direct call");
     auto origin = *c.direct_symbol;
@@ -1139,6 +1139,8 @@ class Verifier {
         need(!impl, "type-qualified call target belongs to two impls");
         impl = &candidate;
       }
+    if (!type_qualifier && (!impl || !impl->trait))
+      return;
     need(impl, "type-qualified call target is not an impl method");
     if (impl->trait) {
       const TraitDecl *trait = trait_declaration(impl->trait->declaration);
@@ -1150,6 +1152,25 @@ class Verifier {
           prototype = &p;
         }
       need(prototype, "type-qualified call has no source trait prototype");
+      if (!type_qualifier) {
+        const auto &raw = type(prototype->signature);
+        need(!raw.parameters.empty() &&
+                 raw.parameters.front().mode == ParamMode::ordinary,
+             "value call requires an ordinary trait Self first parameter");
+        const auto &first = type(raw.parameters.front().type);
+        need(first.kind == TypeKind::TypeParameter &&
+                 first.declaration == trait->self,
+             "value call first parameter must be the real trait Self");
+        const auto &file = *m.resolved->project->module(n.source.node.module)
+                                .files.at(n.source.node.file);
+        need(c.args.size() == file.node(n.source.node.node).children.size() &&
+                 !c.args.empty() && c.args.front().parameter_index == 0 &&
+                 !c.args.front().label &&
+                 same_ref(unwrapped(node(c.args.front().expression).source.node),
+                          unwrapped(source->base)),
+             "value call receiver differs from source arguments");
+        return;
+      }
       need(!new_trait_entry_dependency(*prototype, *trait),
            "type-qualified inout call opens a dependent callback");
     }

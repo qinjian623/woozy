@@ -1,0 +1,5 @@
+package app;
+struct Host {value i32;}
+trait Static[A] {func get(first A)i32;}
+impl Static[Host] for Host {func get(first Host)i32 {return first.value;}}
+func main()i32 {let h=Host(value:7);return h.get()-7;}

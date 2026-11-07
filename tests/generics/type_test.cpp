@@ -12118,6 +12118,98 @@ void generic_trait_method_modes(const fs::path &root) {
             << " changed HIR graphs rejected directly and after ownership\n";
 }
 
+void ordinary_trait_receiver(const fs::path &root) {
+  const auto cases = root / "tests/generics/generic-traits";
+  auto control = check(cases / "ordinary-receiver-identity/lang.toml");
+  need(control.success(), messages(control));
+  auto legal = *control.value;
+  need(hir::detail::produce_ownership(legal, {}).success() &&
+           hir::verify_types(legal).success() && hir::verify(legal).success(),
+       "ordinary receiver legal recomputed control rejected");
+  for (const char *name : {"ordinary-receiver-reject-concrete",
+                           "ordinary-receiver-reject-constrained"}) {
+    auto r = check(cases / name / "lang.toml");
+    need(!r.success() && r.failure == FailureKind::source &&
+             has(r, "E_CALL_ARGUMENT") && !has(r, "E_IR_INVALID"),
+         std::string(name) + "\n" + messages(r));
+  }
+  const std::string own =
+      "struct Host{value i32;}"
+      "trait Static[A]{func get[U](self U)i32;}"
+      "impl Static[Host] for Host{func get[V](self V)i32{return 7;}}";
+  for (const char *backend : {"native", "python"})
+    for (const auto &body : {
+             "func main()i32{let h=Host(value:7);return h.get[Host]();}",
+             "func read[T Static[T]](owner T)i32{return owner.get[T]();}"
+             "func main()i32{let h=Host(value:7);return read(h);}"}) {
+      auto r = source(own + body, backend);
+      need(!r.success() && r.failure == FailureKind::source &&
+               has(r, "E_CALL_ARGUMENT") && !has(r, "E_IR_INVALID"),
+           std::string(backend) + ": ordinary own parameter became receiver\n" +
+               messages(r));
+    }
+
+  // A function field with the same name is legal. Reusing its value-call
+  // Source for a static trait Call must not invent a trait receiver.
+  for (const char *raw : {"A", "U", "Self"}) {
+    const bool own = std::string(raw) == "U";
+    const bool self = std::string(raw) == "Self";
+    const std::string callback = self ? "func(Host)i32" : "func()i32";
+    auto r = source(
+        "trait Static[A]{func get" + std::string(own ? "[U]" : "") +
+        "(first " + raw + ")i32;}"
+        "struct Host{value i32;get " + callback + ";}"
+        "impl Static[Host] for Host{func get" + (own ? "[V]" : "") +
+        "(first " + (own ? "V" : "Host") + ")i32{return 7;}}"
+        "func main()i32{let h=Host(value:7,get:" +
+        (self ? "func(value Host)i32{return value.value;}"
+              : "func()i32{return 7;}") +
+        ");return Host.get" + (own ? "[Host]" : "") + "(h)+h.get(" +
+        (self ? "h" : "") + ")-14;}");
+    need(r.success(), std::string(raw) + " function-field control\n" + messages(r));
+    auto m = *r.value;
+    auto rebuilt = m;
+    need(hir::detail::produce_ownership(rebuilt, {}).success() &&
+             hir::verify_types(rebuilt).success() && hir::verify(rebuilt).success(),
+         "function-field legal recomputed control rejected");
+    HirNodeId direct{}, field{}, base{};
+    for (size_t i = 0; i < m.nodes.size(); ++i)
+      if (auto c = std::get_if<hir::Call>(&m.nodes[i].data)) {
+        if (c->direct_symbol &&
+            m.resolved->symbols.at(c->direct_symbol->value).name == "get")
+          direct = HirNodeId{i};
+        if (c->callee &&
+            m.nodes[c->callee->value].kind() == hir::NodeKind::field_read) {
+          field = HirNodeId{i};
+          base = m.nodes[c->callee->value].children.at(0);
+        }
+      }
+    need(direct.value && field.value && base.value,
+         "ordinary receiver Source mutation targets missing");
+    auto change = [&](auto &h) {
+      auto &n = h.nodes[direct.value];
+      auto &c = std::get<hir::Call>(n.data);
+      need(n.source.node.node != h.nodes[field.value].source.node.node,
+           "ordinary receiver Source mutation would be unchanged");
+      n.source = h.nodes[field.value].source;
+      h.nodes[c.args.at(0).expression.value].source = h.nodes[base.value].source;
+    };
+    invalid(m, std::string(raw) + " static call gained value Source", change);
+    invalid_recomputed(m, std::string(raw) + " receiver Source recomputed", change);
+    change(m);
+    need(hir::detail::produce_ownership(m, {}).success(),
+         "ordinary receiver Source ownership recomputation failed");
+    auto rejected = hir::verify_types(m);
+    need(messages(rejected).find(self ? "receiver differs from source arguments"
+                                     : "first parameter must be the real trait Self") !=
+             std::string::npos,
+         "ordinary receiver Source rejected for the wrong reason\n" +
+             messages(rejected));
+  }
+  std::cout << "ordinary-trait-receiver: raw A/U source errors; 3 source-form "
+               "corruptions rejected after successful ownership recomputation\n";
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -12192,6 +12284,7 @@ int main(int argc, char **argv) {
     generic_trait_method_generics();
     generic_trait_applications();
     generic_trait_method_modes(root);
+    ordinary_trait_receiver(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

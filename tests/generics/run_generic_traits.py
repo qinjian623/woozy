@@ -26,7 +26,8 @@ POSITIVE = ('dual-phantom', 'joint-nonoverlap', 'cross-package',
             'modes-before-move-three-entries',
             'modes-before-pod-inout-writeback',
             'modes-before-static-own-named-self',
-            'modes-combinations', 'modes-lifetime')
+            'modes-combinations', 'modes-lifetime',
+            'ordinary-receiver-identity')
 # Declaration-only controls: both backends must accept, but their main does not
 # exercise the bound, so they are not reported as runtime coverage.
 # Old reject-* sources keep their bytes. Their declarations are now legal;
@@ -41,6 +42,8 @@ EXPECTED_EVENTS = {
     'modes-lifetime': [2, 1, 4, 3, 3, 7, 9, 7, 9, 3],
 }
 SOURCE_ERROR = {
+    'ordinary-receiver-reject-concrete': {'E_CALL_ARGUMENT'},
+    'ordinary-receiver-reject-constrained': {'E_CALL_ARGUMENT'},
     'reject-ambiguous': {'E_TYPE_MISMATCH'},
     'reject-bound-order': {'E_TYPE_MISMATCH'},
     'reject-arity': {'E_TYPE_MISMATCH'},

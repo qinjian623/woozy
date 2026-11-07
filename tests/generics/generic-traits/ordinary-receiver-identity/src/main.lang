@@ -1,0 +1,26 @@
+package app;
+struct Host {value i32;}
+trait Methods[A] {
+    func self_read(self Self)i32;
+    func owner_read(owner Self)i32;
+    func raw(first A)i32;
+    func own[U](self U)U;
+    func make()Self;
+}
+impl Methods[Host] for Host {
+    func self_read(self Host)i32 {return self.value;}
+    func owner_read(owner Host)i32 {return owner.value;}
+    func raw(first Host)i32 {return first.value;}
+    func own[V](self V)V {return self;}
+    func make()Host {return Host(value:7);}
+}
+func read[T Methods[T]](owner T)i32 {
+    let copied=T.own[T](owner);
+    let made=T.make();
+    return owner.self_read()+owner.owner_read()+T.raw(copied)+T.raw(made);
+}
+func main()i32 {
+    let h=Host.make();
+    let copied=Host.own[Host](h);
+    return h.self_read()+h.owner_read()+Host.raw(copied)+read(h)-49;
+}

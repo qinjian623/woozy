@@ -2550,6 +2550,17 @@ class Checker {
     // Copy: substitution below can intern new types and reallocate the
     // TypeContext while this signature is still inspected.
     auto original_type = type(original);
+    if (receiver && !original_type.parameters.empty() &&
+        original_type.parameters.front().mode == ParamMode::ordinary) {
+      const auto *im = impl_of(target);
+      if ((constraint &&
+           !constraint_method_move_source(target, *constraint,
+                                          receiver->value.type)) ||
+          (!constraint && im && im->trait &&
+           !trait_impl_move_source(target, true)))
+        reject(r, "value call requires an ordinary trait Self first parameter",
+               "E_CALL_ARGUMENT");
+    }
     if (expected)
       infer(r, original_type.result, *expected, sub);
     const auto ps = parameters.at(target.value);

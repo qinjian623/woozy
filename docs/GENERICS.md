@@ -192,6 +192,8 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 trait 声明加有序类型实参；同一个 Self 可以有 `Convert[i32,bool]` 与
 `Convert[bool,i32]` 两个不同完整应用，方法签名相同也不会合并。
 
+值调用只在真实 trait 原型首参为 ordinary 的真实 `Self` 时补入接收者，参数标签 `self` 和 `owner` 均可。原型的 ordinary 首参为 trait 参数 `A` 或方法自身参数 `U` 时，即使替换后等于 `Self`，也必须通过 Type/T 显式提供全部参数；这类值调用报 Source `E_CALL_ARGUMENT`。
+
 值调用、具体 `Type.method(...)` 和受约束 `T.method(...)` 均按完整应用选择
 prototype/impl；无足够限定的具体直接调用（同 Self 多个应用）仍报源级歧义，
 不按预期返回类型或实参猜另一项 trait。impl 参数即使只由 trait 应用确定
