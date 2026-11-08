@@ -26,6 +26,10 @@ struct Value {
   // Already-rounded source IEEE value: low 32 bits for f32, all 64 for f64.
   // It carries NaN/infinity/signed zero/subnormals without a host double.
   std::optional<uint64_t> floating;
+  // Complete literal byte sequence, including embedded NULs. This is only set
+  // for string literals and const values derived from them; runtime strings
+  // stay ordinary Read nodes and are never treated as constants.
+  std::optional<std::string> string;
 };
 struct Expr {
   HirNodeId id;
@@ -1491,9 +1495,10 @@ class Checker {
     result.integer = wrap(std::move(z), a.type);
     return result;
   }
-  // Exact-ratio fold for the four float arithmetic operators. Every step rounds
-  // to the expression's own f32/f64 type, exactly as the runtime operation
-  // would, including NaN, infinity, signed zero and subnormal results.
+  // Exact-ratio fold for the four float arithmetic operators and ordered
+  // comparisons. Every step rounds to the expression's own f32/f64 type,
+  // exactly as the runtime operation would, including NaN, infinity, signed
+  // zero and subnormal results.
   Value float_fold(BinaryOp op, const Value &a, const Value &b) const {
     Value result{a.type, {}, {}, {}};
     if (!a.floating || !b.floating)
@@ -1584,8 +1589,52 @@ class Checker {
       }
       break;
     }
+    case BinaryOp::equal:
+    case BinaryOp::not_equal:
+    case BinaryOp::less:
+    case BinaryOp::less_equal:
+    case BinaryOp::greater:
+    case BinaryOp::greater_equal: {
+      // Compare the exact decoded values, never a host double or a tolerance.
+      // NaN is unordered except for !=; every zero compares equal regardless
+      // of sign.
+      int comparison;
+      if (x.kind == Ieee::Kind::nan || y.kind == Ieee::Kind::nan) {
+        comparison = 2; // unordered
+      } else if (x.kind == Ieee::Kind::infinite ||
+                 y.kind == Ieee::Kind::infinite) {
+        if (x.kind == Ieee::Kind::infinite &&
+            y.kind == Ieee::Kind::infinite)
+          comparison = x.negative == y.negative ? 0 : x.negative ? -1 : 1;
+        else if (x.kind == Ieee::Kind::infinite)
+          comparison = x.negative ? -1 : 1;
+        else
+          comparison = y.negative ? 1 : -1;
+      } else if (x.significand == 0 && y.significand == 0) {
+        comparison = 0;
+      } else if (x.negative != y.negative) {
+        comparison = x.negative ? -1 : 1;
+      } else {
+        const long shift = std::min(x.shift, y.shift);
+        const mpz_class xs = x.significand << (x.shift - shift);
+        const mpz_class ys = y.significand << (y.shift - shift);
+        comparison = xs < ys ? -1 : xs > ys ? 1 : 0;
+        if (x.negative)
+          comparison = -comparison;
+      }
+      result.boolean =
+          comparison == 2
+              ? op == BinaryOp::not_equal
+              : op == BinaryOp::equal        ? comparison == 0
+              : op == BinaryOp::not_equal    ? comparison != 0
+              : op == BinaryOp::less         ? comparison < 0
+              : op == BinaryOp::less_equal   ? comparison <= 0
+              : op == BinaryOp::greater      ? comparison > 0
+                                             : comparison >= 0;
+      break;
+    }
     default:
-      break; // comparisons keep their previous non-folded treatment
+      break;
     }
     return result;
   }
@@ -1614,10 +1663,8 @@ class Checker {
         auto t = scalar(TypeKind::String);
         // The lexer already decoded escapes and normalized physical newlines.
         // Keep its complete byte sequence, including embedded NULs.
-        result = {node(r, t,
-                       StringLiteral{
-                           file(r).tokens[n.token_begin].string_value.value()}),
-                  {t, {}, {}}};
+        const auto text = file(r).tokens[n.token_begin].string_value.value();
+        result = {node(r, t, StringLiteral{text}), {t, {}, {}, {}, text}};
       } else
         unavailable(r, "string/owned literals require T09");
       break;
@@ -1689,6 +1736,9 @@ class Checker {
                     c.value};
         } else if (c.value.boolean)
           result = {node(r, boolean, BoolLiteral{*c.value.boolean}), c.value};
+        else if (c.value.string)
+          result = {node(r, c.value.type, StringLiteral{*c.value.string}),
+                    c.value};
         else if (c.function) {
           check_function_value_inout(r, *c.function, c.value.type);
           result = {
@@ -1705,6 +1755,9 @@ class Checker {
           result.value = c->second.value;
         if (result.value.boolean)
           m.nodes[result.id.value].data = BoolLiteral{*result.value.boolean};
+        if (result.value.string)
+          m.nodes[result.id.value].data =
+              StringLiteral{*result.value.string};
       }
       break;
     }
@@ -2382,24 +2435,38 @@ class Checker {
         value = child(value, 0);
       return value;
     };
-    auto method_ref = transparent(callee_ref);
+    auto suffix_ref = transparent(callee_ref);
+    auto method_ref = suffix_ref;
+    std::vector<Ref> method_arg_refs;
     std::vector<TypeId> method_args;
-    bool method_explicit = false;
-    if (ast(method_ref).kind == AstKind::NeutralBracket &&
-        !ast(method_ref).children.empty()) {
-      auto inner = transparent(child(method_ref, 0));
+    bool method_explicit = false, method_args_parsed = false;
+    if (ast(suffix_ref).kind == AstKind::NeutralBracket &&
+        !ast(suffix_ref).children.empty()) {
+      auto inner = transparent(child(suffix_ref, 0));
       if (ast(inner).kind == AstKind::Member && !occurrence(inner)) {
+        // The suffix may still be an element index: a value receiver can
+        // expose a Vec field with the same spelling as a method. Do not parse
+        // any bracket item as a type until the receiver's real type proves
+        // that this Member is a method rather than a field.
         method_explicit = true;
-        for (size_t i = 1; i < ast(method_ref).children.size(); ++i)
-          method_args.push_back(parse_type(child(method_ref, i)));
+        for (size_t i = 1; i < ast(suffix_ref).children.size(); ++i)
+          method_arg_refs.push_back(child(suffix_ref, i));
         method_ref = inner;
       }
     }
+    auto parse_method_args = [&] {
+      if (method_args_parsed)
+        return;
+      method_args_parsed = true;
+      for (auto arg : method_arg_refs)
+        method_args.push_back(parse_type(arg));
+    };
     if (ast(method_ref).kind == AstKind::Member && !occurrence(method_ref)) {
       auto base = child(method_ref, 0);
       auto name = file(r).tokens[ast(method_ref).token_end - 1].spelling;
       auto method_subs = [&](Selection selected) {
         if (method_explicit) {
+          parse_method_args();
           std::vector<GenericParam> unbound;
           for (auto p : generic_params[selected.method.value]) {
             bool bound = false;
@@ -2421,6 +2488,7 @@ class Checker {
         Substitutions sub;
         if (!method_explicit)
           return sub;
+        parse_method_args();
         auto ps = generic_params[method.value];
         if (method_args.size() != ps.size())
           reject(r, "wrong number of method type arguments");
@@ -2490,9 +2558,31 @@ class Checker {
       if (type(receiver.value.type).kind == TypeKind::NominalStruct)
         for (const auto &f : nominal(receiver.value.type).fields)
           if (symbol(f.symbol).name == name) {
-            if (method_explicit)
-              reject(r, "function fields do not take type arguments",
-                     "E_CALL_ARGUMENT");
+            if (method_explicit) {
+              auto field = find_field(method_ref, receiver.value.type);
+              auto t = field_type(receiver.value.type, field);
+              if (type(t).kind != TypeKind::Vec)
+                reject(method_ref,
+                       "function fields do not take type arguments",
+                       "E_CALL_ARGUMENT");
+              // A resolved field shadows same-named methods for value calls,
+              // so this bracket is the field Vec's element index. Build the
+              // callee from the already evaluated receiver and index once.
+              if (ast(suffix_ref).children.size() != 2)
+                reject(suffix_ref, "Vec requires one index");
+              auto index = expression(child(suffix_ref, 1));
+              if (!integer(index.value.type))
+                reject(suffix_ref, "Vec index must be integer");
+              auto element = type(t).type_args.at(0);
+              Expr field_value{
+                  node(method_ref, t, FieldRead{field.symbol}, {receiver.id}),
+                  {t, {}, {}}};
+              Expr callee{
+                  node(suffix_ref, element, IndexRead{},
+                       {field_value.id, index.id}),
+                  {element, {}, {}}};
+              return scalar_call(r, callee);
+            }
             auto field = find_field(method_ref, receiver.value.type);
             auto t = field_type(receiver.value.type, field);
             Expr callee{
@@ -2525,9 +2615,14 @@ class Checker {
     auto base = callee_ref;
     std::vector<TypeId> explicit_args;
     if (ast(base).kind == AstKind::NeutralBracket) {
+      auto target = child(base, 0);
+      auto target_symbol = occurrence(target);
+      if (!target_symbol ||
+          symbol(*target_symbol).kind != modules::SymbolKind::function)
+        return scalar_call(r);
       for (size_t i = 1; i < ast(base).children.size(); ++i)
         explicit_args.push_back(parse_type(child(base, i)));
-      base = child(base, 0);
+      base = target;
     }
     auto s = occurrence(base);
     if (s && symbol(*s).kind == modules::SymbolKind::function &&
@@ -3010,7 +3105,7 @@ class Checker {
       c.type_args = f->type_args;
     }
     if (!c.value.integer && !c.value.floating && !c.value.boolean &&
-        !c.function)
+        !c.value.string && !c.function)
       unavailable(
           r, "const initializer must be a non-Panic scalar compile-time value");
     m.nodes.resize(begin);
@@ -3308,7 +3403,7 @@ class Checker {
       auto e = expression(child(r, n.children.size() - 1), expected);
       bool writable = first(r) == "var";
       if (first(r) == "const" && !e.value.integer && !e.value.floating &&
-          !e.value.boolean &&
+          !e.value.boolean && !e.value.string &&
           !std::holds_alternative<FunctionValue>(m.nodes[e.id.value].data))
         unavailable(
             r,

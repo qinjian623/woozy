@@ -28,6 +28,25 @@ EXPECTED = {
     'probe_order': '第二'.encode('utf-8'),
     'probe_named_order': '第三'.encode('utf-8'),
 }
+CONST_EXPECTED = {
+    'probe_const_top': '顶层\0常量'.encode('utf-8'),
+    'probe_const_alias': '顶层\0常量'.encode('utf-8'),
+    'probe_const_raw': '常量原始\n第二行\\n\\0'.encode('utf-8'),
+    'probe_const_unicode': bytes.fromhex('00f48fbfbff09f9880'),
+    'probe_const_empty': b'',
+    'probe_const_local': '局部\0常量'.encode('utf-8'),
+    'probe_const_local_inferred': '推断常量'.encode('utf-8'),
+    'probe_const_alias_local': '别名\0链'.encode('utf-8'),
+    'probe_const_shadow': '外层常量'.encode('utf-8'),
+    'probe_const_module': '跨模块常量\0尾'.encode('utf-8'),
+    'probe_const_package': '跨包常量\0尾'.encode('utf-8'),
+}
+
+STRING_FIXTURES = {
+    "strings": EXPECTED,
+    "string-constants": CONST_EXPECTED,
+}
+
 CAP = 'E_CAPABILITY_UNAVAILABLE'
 TYPE = 'E_TYPE_MISMATCH'
 REJECTED = {
@@ -44,6 +63,11 @@ REJECTED = {
     'let-reassign': ('func main() {let x="x";x="y";}', TYPE),
     'string-as-integer': ('func main() {let x i32="x";}', TYPE),
     'integer-as-string': ('func f() string {return 1;} func main() {}', TYPE),
+    'const-runtime': ('func main() {let x="x";const C=x;}', CAP),
+    'const-call': ('func s() string {return "x";} const C=s(); func main() {}', CAP),
+    'const-concat': ('const C="x"+"y"; func main() {}', TYPE),
+    'const-type': ('const C i32="x"; func main() {}', TYPE),
+    'const-cycle': ('const A=B;const B=A;func main() {}', 'E_CONSTANT_CYCLE'),
 }
 
 

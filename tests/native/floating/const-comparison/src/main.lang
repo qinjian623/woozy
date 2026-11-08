@@ -1,0 +1,125 @@
+package app;
+
+const NAN32 f32=0.0/0.0;
+const INF32 f32=1.0/0.0;
+const NINF32 f32=-1.0/0.0;
+const ZERO32 f32=0.0;
+const NZERO32 f32=-0.0;
+const SUB32 f32=1e-45;
+const MIN32 f32=1.17549435e-38;
+const ONE32 f32=1.0;
+const NEG32 f32=-1.5;
+const ROUND32 f32=1.000000059604644775390625;
+
+const C32_NAN_EQ=NAN32==NAN32;
+const C32_NAN_NE=NAN32!=NAN32;
+const C32_NAN_LT=NAN32<ZERO32;
+const C32_NAN_LE=NAN32<=ZERO32;
+const C32_NAN_GT=NAN32>ZERO32;
+const C32_NAN_GE=NAN32>=ZERO32;
+const C32_ZERO_EQ=NZERO32==ZERO32;
+const C32_ZERO_LE=NZERO32<=ZERO32;
+const C32_ZERO_GE=NZERO32>=ZERO32;
+const C32_ZERO_LT=NZERO32<ZERO32;
+const C32_INF_EQ=INF32==INF32;
+const C32_INF_LT=INF32<INF32;
+const C32_NINF_EQ=NINF32==NINF32;
+const C32_NINF_GT=NINF32>NINF32;
+const C32_INF_GT=INF32>ONE32;
+const C32_NINF_LT=NINF32<NEG32;
+const C32_INF_NE_NINF=INF32!=NINF32;
+const C32_SUB_GT_ZERO=SUB32>ZERO32;
+const C32_SUB_EQ=SUB32==SUB32;
+const C32_SUB_LT_MIN=SUB32<MIN32;
+const C32_NEG_LT=NEG32<-1.0;
+const C32_NEG_EQ=NEG32==-1.5;
+const C32_ROUND_EQ=ROUND32==ONE32;
+const C32_ROUND_GT=ROUND32>ONE32;
+
+const NAN64 f64=0.0/0.0;
+const INF64 f64=1.0/0.0;
+const NINF64 f64=-1.0/0.0;
+const ZERO64 f64=0.0;
+const NZERO64 f64=-0.0;
+const SUB64 f64=5e-324;
+const MIN64 f64=2.2250738585072014e-308;
+const ONE64 f64=1.0;
+const NEG64 f64=-1.5;
+const ROUND64 f64=1.000000059604644775390625;
+
+const C64_NAN_EQ=NAN64==NAN64;
+const C64_NAN_NE=NAN64!=NAN64;
+const C64_NAN_LT=NAN64<ZERO64;
+const C64_NAN_LE=NAN64<=ZERO64;
+const C64_NAN_GT=NAN64>ZERO64;
+const C64_NAN_GE=NAN64>=ZERO64;
+const C64_ZERO_EQ=NZERO64==ZERO64;
+const C64_ZERO_LE=NZERO64<=ZERO64;
+const C64_ZERO_GE=NZERO64>=ZERO64;
+const C64_ZERO_LT=NZERO64<ZERO64;
+const C64_INF_EQ=INF64==INF64;
+const C64_INF_LT=INF64<INF64;
+const C64_NINF_EQ=NINF64==NINF64;
+const C64_NINF_GT=NINF64>NINF64;
+const C64_INF_GT=INF64>ONE64;
+const C64_NINF_LT=NINF64<NEG64;
+const C64_INF_NE_NINF=INF64!=NINF64;
+const C64_SUB_GT_ZERO=SUB64>ZERO64;
+const C64_SUB_EQ=SUB64==SUB64;
+const C64_SUB_LT_MIN=SUB64<MIN64;
+const C64_NEG_LT=NEG64<-1.0;
+const C64_NEG_EQ=NEG64==-1.5;
+const C64_ROUND_EQ=ROUND64==ONE64;
+const C64_ROUND_GT=ROUND64>ONE64;
+
+func main() i32 {
+    if C32_NAN_EQ { return 1; }
+    if !C32_NAN_NE { return 2; }
+    if C32_NAN_LT { return 3; }
+    if C32_NAN_LE { return 4; }
+    if C32_NAN_GT { return 5; }
+    if C32_NAN_GE { return 6; }
+    if !C32_ZERO_EQ { return 7; }
+    if !C32_ZERO_LE { return 8; }
+    if !C32_ZERO_GE { return 9; }
+    if C32_ZERO_LT { return 10; }
+    if !C32_INF_EQ { return 11; }
+    if C32_INF_LT { return 12; }
+    if !C32_NINF_EQ { return 13; }
+    if C32_NINF_GT { return 14; }
+    if !C32_INF_GT { return 15; }
+    if !C32_NINF_LT { return 16; }
+    if !C32_INF_NE_NINF { return 17; }
+    if !C32_SUB_GT_ZERO { return 18; }
+    if !C32_SUB_EQ { return 19; }
+    if !C32_SUB_LT_MIN { return 20; }
+    if !C32_NEG_LT { return 21; }
+    if !C32_NEG_EQ { return 22; }
+    if !C32_ROUND_EQ { return 23; }
+    if C32_ROUND_GT { return 24; }
+    if C64_NAN_EQ { return 25; }
+    if !C64_NAN_NE { return 26; }
+    if C64_NAN_LT { return 27; }
+    if C64_NAN_LE { return 28; }
+    if C64_NAN_GT { return 29; }
+    if C64_NAN_GE { return 30; }
+    if !C64_ZERO_EQ { return 31; }
+    if !C64_ZERO_LE { return 32; }
+    if !C64_ZERO_GE { return 33; }
+    if C64_ZERO_LT { return 34; }
+    if !C64_INF_EQ { return 35; }
+    if C64_INF_LT { return 36; }
+    if !C64_NINF_EQ { return 37; }
+    if C64_NINF_GT { return 38; }
+    if !C64_INF_GT { return 39; }
+    if !C64_NINF_LT { return 40; }
+    if !C64_INF_NE_NINF { return 41; }
+    if !C64_SUB_GT_ZERO { return 42; }
+    if !C64_SUB_EQ { return 43; }
+    if !C64_SUB_LT_MIN { return 44; }
+    if !C64_NEG_LT { return 45; }
+    if !C64_NEG_EQ { return 46; }
+    if C64_ROUND_EQ { return 47; }
+    if !C64_ROUND_GT { return 48; }
+    return 0;
+}

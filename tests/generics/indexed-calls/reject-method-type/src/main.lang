@@ -1,0 +1,4 @@
+package app;
+struct K{v i32;}
+impl K{func own[U](self Self,x i32)i32{return self.v+x;}}
+func main()i32{let k=K(v:1);return k.own[0](2);}

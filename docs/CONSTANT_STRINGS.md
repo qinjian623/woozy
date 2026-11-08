@@ -1,55 +1,32 @@
-# 字面量来源的字符串值
+# 字面量与常量字符串
 
-本阶段支持现有字符串字面量的 UTF-8 内容、局部 `let/var` 复制、`var`
-重新绑定、普通函数按值参数和返回。跨模块、泛型实例、非捕获函数值和递归
-使用同一套类型检查、HIR 验证和后端生成。初始化读取同名外层变量的规则不变；
-普通参数重新赋值仍报告 `E_CAPABILITY_UNAVAILABLE`。
+Native 和 Python 支持字符串字面量、顶层和局部 `const`、常量别名、`let/var` 复制、`var` 重新绑定，以及普通参数和返回。泛型、非捕获函数值、递归及跨模块、跨包的 `pub const` 使用相同规则。普通参数名只读，重新赋值报 `E_TYPE_MISMATCH`。
 
-字符串数据均由字面量提供。native使用只读存储，不做动态分配或retain/release；
-Python使用宿主管理的不可变str。本阶段未实现动态字符串运算或语言ARC。
-字符串字段和枚举载荷、Vec、动态拼接、索引、字符串 move/inout、typed throws、
-defer、foreign 和严格浮点运算仍被拒绝。本次也没有增加字符串 const 表达式折叠。
-既有语法和转义不变；`\0` 是值内的零字节，不能终止内容或长度计算。
+```lang
+const Greeting string = "你好\0😀";
+const Alias = Greeting;
+func text() string {
+    const local = Alias;
+    return local;
+}
+```
 
-`StringLiteral` 使用 lexer 已解码的完整字节，不重复解释转义。HIR 验证器检查
-UTF-8、字符串类型和源码签名。新增的 NativeIR `Op::string_literal` 追加在原操作
-之后；`Instruction::utf8` 保存完整字节。验证器检查操作的类型、结果、操作数、
-UTF-8 和位模式；其他操作不得附带字符串字节。文本 IR 打印字节数和十六进制内容。
-所有公开 TypeId 仍由同一个 TypeContext 提供。
+局部声明的初始化使用声明前的环境：`{ const x=x; }` 读取外层的 `x`。普通变量和函数调用结果仍不能作为本阶段的 `const` 初值。空串、原始多行字符串、转义、非 BMP Unicode 字符和内嵌 NUL 均保留完整 UTF-8 字节与长度；NUL 不表示字符串结束。
 
-主代理在GNU Debug、GNU Release、Clang22 ASan/UBSan各跑完整28/28项，关闭LLVM
-构建22/22项。三种构建共核对180次实际字符串字节/长度，其中120次逐项比较
-native O0/O2与Python；独立审查另观察12个UTF-8/NUL结果。
+当前字符串数据来自字面量。字符串字段、enum 载荷、`Vec[string]`、动态拼接、索引、切片及 string 的 move/inout 尚未实现。它们不能因支持 `const` 就自动使用。
 
-native 把值表示为 `{ptr, target_uintptr}`，长度类型取自 LLVM 模块的目标
-DataLayout。字节放入 private constant 全局数组，不添加 NUL 结尾；空串数组
-长度为零。局部复制和传参/返回复制这两个字段，数据在整个程序运行期间有效。
-函数间使用私有 LLVM 调用类型，没有承诺 C/C++ 聚合 ABI。目前 native 只运行
-既有的 Linux x86_64 目标；该目标的值大小为 16、对齐为 8、字段偏移为 0 和 8。
+## 表示与检查
 
-Python 把字面量的完整 UTF-8 字节写为转义 bytes 常量，再按 UTF-8 解码成
-不可变 `str`。复制、参数和返回保存同样文本；重新绑定不会修改原文本。
-没有增加运行库接口，运行库版本保持不变。
+Native 使用 `{ptr, target_uintptr}`，长度来自 LLVM 目标 DataLayout。数据保存在 private constant 数组中，不添加结尾 NUL；复制、传参和返回复制指针与长度，数据在整个程序运行期间有效。字符串本身不分配动态存储，也不执行 retain/release。函数使用私有 LLVM 调用类型，不承诺 C/C++ 聚合 ABI。当前 Linux x86_64 目标的字符串大小为 16、对齐为 8、字段偏移为 0 和 8。
 
-新增 `native.strings` 和 `python.strings` 两项 CTest。两项都用正式 CLI
-构建和独立执行，检查失败构建不会创建输出、也不会修改已有输出。
-20 个观察函数覆盖空串、中文、所有合法转义、Unicode 标量边缘值、内嵌零字节、
-原始多行文本、复制和重新绑定、局部返回、外层初始化、普通参数、泛型、函数值、
-非捕获函数、跨模块/包、递归和实参求值顺序。
+Python 将完整 UTF-8 bytes 解码成不可变 `str`。复制和重新绑定保留值规则，不修改原字符串。运行库接口未改变。
 
-native 测试辅助程序通过正式前端和后端生成目标文件，并与 CLI 的目标文件比较。
-它解析、验证生成的 LLVM，按实际函数类型增加测试 main，调用生成函数并输出
-返回值的目标长度和完整数据。观察程序分别用 LLVM 22.1.8 的 O0/O2 编译执行，
-没有手写字符串参考实现或把私有 ABI 转成 C++ 函数指针。测试同时检查只读全局
-数组的完整字节和目标布局，以及 11 种损坏 NativeIR 和 1 种损坏 HIR 的拒绝结果。
-Python 测试确认辅助程序与 CLI 生成代码相同，然后在独立 Python 3.12.15
-进程中检查实际返回类型、文本、UTF-8 字节和字节长度。
+`StringLiteral` 保留 lexer 已解码的字节。HIR 验证器检查类型、UTF-8，并从真实字面量或 resolver 确定的常量初始化表达式追踪别名，核对字节；不接受把普通运行期读取伪造成字面量。NativeIR 的 `Op::string_literal` 同样检查类型、结果、操作数和字节；其他操作不能附带字符串内容。
 
-内容观察从优化前LLVM增加测试main，随后交给Clang O0/O2；原程序中不影响main结果的
-私有探针函数可被编译器O2正确删除。CLI原始对象仍与辅助程序生成的对象逐字节比较。
-存储检查从实际NativeIR指令收集字符串，避免把未实例化模板误算为应生成的数据；
-源码已加入未使用字符串模板的检查。主代理记录在外层checks/constant-strings-root-verification.json。
+## 测试
 
-原 Python 单字面量拒绝样例的源码保持原样，现作为执行正例；原 13 个泛型/POD
-正例的源码和预期没有修改。每次运行的工具版本、命令、返回码、文件哈希、逐项
-实际值和预期值写入构建目录下的 `string-results.json`，不把本机报告放进源码。
+`native.strings`、`python.strings` 保留原 20 个观察函数。`native.string-constants`、`python.string-constants` 使用独立项目，新增 11 个常量观察函数，覆盖显式与推断类型、顶层/局部常量、别名、遮蔽、跨模块/包、空串、原始字符串、Unicode 与 NUL。旧 `.lang` 输入没有修改。
+
+Native 测试先用正式 CLI 构建并运行，再按生成 LLVM 的真实函数类型观察返回值。辅助程序与 CLI 的目标文件必须逐字节相同；观察程序输出目标长度和完整字节，分别以 Clang O0/O2 执行。Python 在独立 3.12.15 进程中核对实际返回类型、文本、UTF-8 字节与长度。两端采用同一组冻结预期。
+
+测试还检查常量环、运行期初值、类型错误、错误构建不产生新输出或改写旧输出，以及 HIR 字节篡改、非法 UTF-8、类型和来源损坏。每次命令、退出码、文件摘要和实际值保存在构建目录的 `string-results.json`。

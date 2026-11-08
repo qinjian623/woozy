@@ -1,0 +1,5 @@
+package app;
+trait T{}
+struct N{}
+func need[U T](x U)i32{return 1;}
+func main()i32{return need[N](N());}

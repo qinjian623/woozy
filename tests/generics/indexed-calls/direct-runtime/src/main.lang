@@ -1,0 +1,55 @@
+package app;
+func inc(x i32)i32{return x+1;}
+func add2(x i32)i32{return x+2;}
+func dec(x i32)i32{return x-1;}
+func fs(x i32)i32{return 99;}
+struct Holder { fs Vec[func(i32)i32]; cb func(i32)i32; }
+func makeHolder() Holder { return Holder(fs:[inc], cb:add2); }
+func makeVec(kind i32) Vec[func(i32)i32] { if kind==0 {return [inc];} return [dec]; }
+func id[T](x T)T{return x;}
+trait Pick { func pick[U](self Self,x i32)i32; }
+struct Key{value i32;}
+struct Shadow{fs Vec[func(i32)i32];}
+impl Shadow { func fs(self Self,x i32)i32{return 100+x;} }
+impl Pick for Key { func pick[V](self Self,x i32)i32{return self.value+x;} }
+impl Key { func own[U](self Self,x i32)i32{return self.value-x;} }
+func via_constraint[T Pick](k T)i32{return T.pick[i32](k,4);}
+func mark(log Vec[i64],d i64){log[0]=log[0]*10+d;}
+func seq(log Vec[i64],x i32)i32{mark(log,4);return x;}
+func orderBase(log Vec[i64]) Vec[func(Vec[i64],i32)i32] {mark(log,1);return [seq];}
+func orderIndex(log Vec[i64])i32 {mark(log,2);return 0;}
+func orderArg(log Vec[i64])i32 {mark(log,3);return 5;}
+func main()i32{
+  let vfs Vec[func(i32)i32]=[inc,add2];
+  if vfs[0](2)!=3{return 1;}
+  if (vfs[1])(4)!=6{return 2;}
+  if (vfs)[0](5)!=6{return 3;}
+  if ((vfs[1]))(6)!=8{return 4;}
+  let fs Vec[func(i32)i32]=[inc];
+  if fs[0](2)!=3{return 5;}
+  let h=makeHolder();
+  if h.fs[0](3)!=4{return 6;}
+  if h.cb(3)!=5{return 7;}
+  if makeHolder().fs[0](4)!=5{return 8;}
+  if (h.fs)[0](5)!=6{return 9;}
+  let grid Vec[Vec[func(i32)i32]]=[[inc],[add2]];
+  if grid[0][0](1)!=2{return 10;}
+  if (grid[1])[0](1)!=3{return 11;}
+  if makeVec(0)[0](7)!=8{return 12;}
+  let f=h.fs[0];
+  if f(8)!=9{return 13;}
+  if id[i32](7)!=7{return 14;}
+  let key=Key(value:10);
+  if key.pick[i32](5)!=15{return 15;}
+  if Key.pick[i32](key,3)!=13{return 16;}
+  if key.own[i32](2)!=8{return 17;}
+  if Key.own[i32](key,2)!=8{return 18;}
+  if via_constraint(key)!=14{return 19;}
+  let sh=Shadow(fs:[inc]);
+  if sh.fs[0](2)!=3{return 20;}
+  if Shadow.fs(sh,2)!=102{return 21;}
+  let log Vec[i64]=[0];
+  let got=orderBase(log)[orderIndex(log)](log,orderArg(log));
+  if got!=5||log[0]!=1234{return 22;}
+  return 0;
+}

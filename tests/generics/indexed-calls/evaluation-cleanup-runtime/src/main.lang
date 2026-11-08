@@ -1,0 +1,26 @@
+package app;
+enum E { Bad; }
+struct Holder { fs Vec[func(i32)i32 throws E]; }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func tick(x i32) i32 throws E { return x + 1; }
+func makeHolder(log inout i64) Holder {
+    mark(inout log, 1);
+    return Holder(fs: [tick]);
+}
+func index(log inout i64) i32 { mark(inout log, 2); return 0; }
+func fail3(log inout i64) i32 throws E { mark(inout log, 3); throw E.Bad; }
+func temp(log inout i64) Vec[i32] { mark(inout log, 5); return [9]; }
+func fail6(log inout i64) i32 throws E { mark(inout log, 6); throw E.Bad; }
+func sum(a Vec[i32], b i32) i32 throws E { return a[0] + b; }
+func main() i32 {
+    var log i64 = 0;
+    try {
+        let x = makeHolder(inout log).fs[index(inout log)](fail3(inout log));
+    } catch e E { mark(inout log, 4); }
+    let fs Vec[func(Vec[i32],i32)i32 throws E] = [sum];
+    try {
+        let y = fs[0](temp(inout log), fail6(inout log));
+    } catch e E { mark(inout log, 7); }
+    if log != 1234567 { return 1; }
+    return 0;
+}

@@ -12581,6 +12581,233 @@ void ordinary_trait_receiver(const fs::path &root) {
                "corruptions rejected after successful ownership recomputation\n";
 }
 
+void indexed_function_calls() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "indexed function call HIR rejected\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "published indexed function call HIR rejected");
+    auto recomputed = *r.value;
+    need(hir::detail::produce_ownership(recomputed, {}).success() &&
+             hir::verify_types(recomputed).success(),
+         "recomputed indexed function call ownership rejected");
+    return *r.value;
+  };
+  auto bad = [](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code) &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         text + "\n" + messages(r));
+  };
+  auto m = good(R"SRC(
+func inc(x i32)i32{return x+1;}
+func add2(x i32)i32{return x+2;}
+func plus(x i32,y i32)i32{return x+y;}
+struct Holder{fs Vec[func(i32)i32];cb func(i32)i32;}
+func makeHolder() Holder {return Holder(fs:[inc],cb:add2);}
+func makeVec() Vec[func(i32)i32]{return [inc];}
+func id[T](x T)T{return x;}
+trait Pick{func pick[U](self Self,x i32)i32;}
+struct Key{value i32;}
+impl Pick for Key{func pick[V](self Self,x i32)i32{return self.value+x;}}
+impl Key{func own[U](self Self,x i32)i32{return self.value-x;}}
+func main()i32{
+ let fs Vec[func(i32)i32]=[inc];
+ if fs[0](2)!=3{return 1;}
+ if (fs[0])(3)!=4{return 2;}
+ let h=makeHolder();
+ if h.fs[0](4)!=5{return 3;}
+ if h.cb(4)!=6{return 4;}
+ if makeHolder().fs[0](5)!=6{return 5;}
+ if makeVec()[0](6)!=7{return 6;}
+ let grid Vec[Vec[func(i32)i32]]=[[inc],[add2]];
+ if grid[1][0](7)!=9{return 7;}
+ let f=fs[0];
+ if f(8)!=9{return 8;}
+ let pair func(i32,i32)i32=plus;
+ if pair(2,3)!=5{return 9;}
+ if id[i32](9)!=9{return 10;}
+ let key=Key(value:10);
+ if key.pick[i32](5)!=15{return 11;}
+ if Key.pick[i32](key,3)!=13{return 12;}
+ if key.own[i32](2)!=8{return 13;}
+ if Key.own[i32](key,2)!=8{return 14;}
+ return 0;
+}
+)SRC");
+  size_t indirect = 0, indexed = 0, field_index = 0, nested_index = 0;
+  size_t result_field_index = 0, result_vec_index = 0, field_callee = 0;
+  size_t read_callee = 0, two_arg = SIZE_MAX;
+  std::set<std::string> explicit_free;
+  for (size_t i = 0; i < m.nodes.size(); ++i) {
+    const auto &n = m.nodes[i];
+    auto c = std::get_if<hir::Call>(&n.data);
+    if (!c)
+      continue;
+    if (c->kind == hir::CalleeKind::function_value) {
+      ++indirect;
+      need(c->callee && !c->direct_symbol && c->type_args.empty(),
+           "function value call metadata");
+      const auto &callee = m.nodes[c->callee->value];
+      need(callee.type == c->signature &&
+               n.children.size() == c->args.size() + 1 &&
+               n.children[0] == *c->callee,
+           "function value callee/arg order/type");
+      for (size_t j = 0; j < c->args.size(); ++j)
+        need(n.children[j + 1] == c->args[j].expression &&
+                 c->args[j].source_index == j,
+             "function value argument source order");
+      if (c->args.size() == 2)
+        two_arg = i;
+      if (callee.kind() == hir::NodeKind::read)
+        ++read_callee;
+      if (callee.kind() == hir::NodeKind::field_read)
+        ++field_callee;
+      if (callee.kind() == hir::NodeKind::index_read) {
+        ++indexed;
+        need(callee.children.size() == 2, "indexed callee arity");
+        const auto &base = m.nodes[callee.children[0].value];
+        if (base.kind() == hir::NodeKind::field_read) {
+          ++field_index;
+          const auto &root = m.nodes[base.children.at(0).value];
+          if (root.kind() == hir::NodeKind::call)
+            ++result_field_index;
+        }
+        if (base.kind() == hir::NodeKind::index_read)
+          ++nested_index;
+        if (base.kind() == hir::NodeKind::call)
+          ++result_vec_index;
+      }
+    } else if (c->direct_symbol) {
+      const auto &name = m.resolved->symbols.at(c->direct_symbol->value).name;
+      if (name == "id" || name == "pick" || name == "own") {
+        bool concrete_instance = false;
+        for (const auto &instance : m.instances)
+          if (instance.symbol == *c->direct_symbol &&
+              !instance.type_args.empty())
+            concrete_instance = true;
+        need(!c->callee && (!c->type_args.empty() || concrete_instance),
+             "explicit generic function/method lost its complete arguments");
+        explicit_free.insert(name);
+      }
+    }
+  }
+  need(indirect >= 9 && indexed >= 6 && field_index >= 2 &&
+           nested_index >= 1 && result_field_index >= 1 &&
+           result_vec_index >= 1 && field_callee >= 1 && read_callee >= 1 &&
+           two_arg != SIZE_MAX,
+       "indexed function call HIR coverage missing");
+  need(explicit_free == std::set<std::string>{"id", "own", "pick"},
+       "real explicit generic function/method suffix lost");
+
+  auto first_indexed = [](hir::HirModule &h, size_t &at) {
+    for (size_t i = 0; i < h.nodes.size(); ++i)
+      if (auto c = std::get_if<hir::Call>(&h.nodes[i].data);
+          c && c->kind == hir::CalleeKind::function_value && c->callee &&
+          h.nodes[c->callee->value].kind() == hir::NodeKind::index_read) {
+        at = i;
+        return;
+      }
+    throw std::runtime_error("indexed function value call missing");
+  };
+  size_t at = 0;
+  (void)first_indexed(m, at);
+  invalid(m, "indexed function value signature", [&](auto &h) {
+    size_t i = 0;
+    first_indexed(h, i);
+    std::get<hir::Call>(h.nodes[i].data).signature = TypeId{1};
+  });
+  invalid(m, "indexed function value callee type", [&](auto &h) {
+    size_t i = 0;
+    first_indexed(h, i);
+    auto &c = std::get<hir::Call>(h.nodes[i].data);
+    h.nodes[c.callee->value].type = TypeId{1};
+  });
+  auto callee_source = [&](auto &h) {
+    size_t i = 0;
+    first_indexed(h, i);
+    auto &n = h.nodes[i];
+    auto &c = std::get<hir::Call>(n.data);
+    need(!c.args.empty(), "indexed function value call lost argument");
+    n.children[0] = *c.callee;
+    h.nodes[c.callee->value].source =
+        h.nodes[c.args[0].expression.value].source;
+  };
+  invalid(m, "indexed function value callee source", callee_source);
+  invalid_recomputed(m, "recomputed indexed callee source", callee_source);
+  invalid(m, "indexed function value callee kind", [&](auto &h) {
+    size_t i = 0;
+    first_indexed(h, i);
+    auto &c = std::get<hir::Call>(h.nodes[i].data);
+    c.kind = hir::CalleeKind::direct;
+  });
+  invalid(m, "indexed function value argument source", [&](auto &h) {
+    auto &n = h.nodes[two_arg];
+    auto &c = std::get<hir::Call>(n.data);
+    need(c.args.size() == 2, "two-argument function value call missing");
+    std::swap(c.args[0].expression, c.args[1].expression);
+    std::swap(n.children[1], n.children[2]);
+  });
+
+  // A scalar-only function has no owning-call Source check to reject a
+  // forged non-Call node. The function-value check must reject it directly.
+  auto scalar = good("func sub(x i32,y i32)i32{return x-y;}"
+                     "func main()i32{let f func(i32,i32)i32=sub;"
+                     "return f(7,2)-5;}");
+  for (bool swap_arguments : {false, true}) {
+    auto noncall_source = [&](auto &h) {
+      for (auto &n : h.nodes)
+        if (auto c = std::get_if<hir::Call>(&n.data);
+            c && c->kind == hir::CalleeKind::function_value) {
+          need(c->args.size() == 2, "scalar function-value arguments missing");
+          n.source = h.nodes[c->args[0].expression.value].source;
+          const auto &file = *h.resolved->project->module(n.source.node.module)
+                                  .files.at(n.source.node.file);
+          need(file.node(n.source.node.node).kind != AstKind::Call,
+               "function-value Source mutation still names a Call");
+          if (swap_arguments) {
+            std::swap(c->args[0].expression, c->args[1].expression);
+            std::swap(n.children[1], n.children[2]);
+          }
+          return;
+        }
+      throw std::runtime_error("scalar function-value call missing");
+    };
+    const std::string label = swap_arguments
+                                 ? "non-Call Source hides swapped scalar args"
+                                 : "function-value non-Call Source";
+    invalid(scalar, label, noncall_source);
+    invalid_recomputed(scalar, label + " recomputed", noncall_source);
+  }
+
+  bad("func inc(x i32)i32{return x+1;}"
+      "func main()i32{let fs Vec[func(i32)i32]=[inc];"
+      "return fs[true](2);}", "E_TYPE_MISMATCH");
+  bad("func inc(x i32)i32{return x+1;}struct H{fs Vec[func(i32)i32];}"
+      "func main()i32{let h=H(fs:[inc]);return h.fs[true](2);}",
+      "E_TYPE_MISMATCH");
+  bad("func main()i32{let xs Vec[i32]=[1];return xs[0](2);}",
+      "E_CALL_ARGUMENT");
+  bad("struct H{fs Vec[i32];}func main()i32{let h=H(fs:[1]);"
+      "return h.fs[0](2);}", "E_CALL_ARGUMENT");
+  bad("func id[T](x T)T{return x;}func main()i32{return id[0](1);}",
+      "E_NAME_KIND");
+  bad("func id[T](x T)T{return x;}func main()i32{return id[i32,i64](1);}",
+      "E_TYPE_MISMATCH");
+  bad("trait T{}struct N{}func need[U T](x U)i32{return 1;}"
+      "func main()i32{return need[N](N());}", "E_TYPE_MISMATCH");
+  bad("struct K{v i32;}impl K{func own[U](self Self,x i32)i32{"
+      "return self.v+x;}}func main()i32{let k=K(v:1);"
+      "return k.own[0](2);}", "E_NAME_KIND");
+  bad("struct K{v i32;}impl K{func own[U](self Self,x i32)i32{"
+      "return self.v+x;}}func main()i32{let k=K(v:1);"
+      "return k.own[i32,i64](2);}", "E_TYPE_MISMATCH");
+  std::cout << "indexed-function-calls: direct/parenthesized/field/nested/"
+               "multi-step HIR and generic controls passed\n";
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -12656,6 +12883,7 @@ int main(int argc, char **argv) {
     generic_trait_applications();
     generic_trait_method_modes(root);
     ordinary_trait_receiver(root);
+    indexed_function_calls();
     trait_parameter_bounds(root);
     repairs(root);
   } catch (const std::exception &e) {

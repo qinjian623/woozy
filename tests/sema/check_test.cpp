@@ -1,10 +1,12 @@
 #include "lang/sema/check.hpp"
+#include "../../src/hir/ownership.hpp"
 #include <cstdlib>
 #include <filesystem>
 #include <fstream>
 #include <iostream>
 #include <json-c/json.h>
 #include <map>
+#include <set>
 #include <stdexcept>
 using namespace lang;
 namespace fs = std::filesystem;
@@ -457,6 +459,177 @@ void suite(const fs::path &published) {
           }
         require(floats == 1, "literal-left arithmetic nodes missing");
       }
+  // Float comparisons are compile-time values only when both operands are.
+  // Each top-level const is observed as a materialized BoolLiteral at its use;
+  // local const lookup takes the existing constant-backed local path.
+  for (const char *backend : {"native", "python"}) {
+    std::string body;
+    std::map<std::string, bool> expected;
+    auto add = [&](const std::string &name, const std::string &expression,
+                   bool value) {
+      body += "const " + name + " bool=" + expression + ";";
+      expected[name] = value;
+    };
+    for (unsigned width : {32u, 64u}) {
+      const auto w = std::to_string(width);
+      const auto t = "f" + w;
+      body += "const NAN" + w + " " + t + "=0.0/0.0;";
+      body += "const INF" + w + " " + t + "=1.0/0.0;";
+      body += "const NINF" + w + " " + t + "=-1.0/0.0;";
+      body += "const ZERO" + w + " " + t + "=0.0;";
+      body += "const NZERO" + w + " " + t + "=-0.0;";
+      body += "const SUB" + w + " " + t + "=" +
+              std::string(width == 32 ? "1e-45" : "5e-324") + ";";
+      body += "const MIN" + w + " " + t + "=" +
+              std::string(width == 32 ? "1.17549435e-38"
+                                      : "2.2250738585072014e-308") + ";";
+      body += "const ONE" + w + " " + t + "=1.0;";
+      body += "const NEG" + w + " " + t + "=-1.5;";
+      body += "const ROUND" + w + " " + t +
+              "=1.000000059604644775390625;";
+      add("NAN_EQ" + w, "NAN" + w + "==NAN" + w, false);
+      add("NAN_NE" + w, "NAN" + w + "!=NAN" + w, true);
+      add("NAN_LT" + w, "NAN" + w + "<ZERO" + w, false);
+      add("NAN_LE" + w, "NAN" + w + "<=ZERO" + w, false);
+      add("NAN_GT" + w, "NAN" + w + ">ZERO" + w, false);
+      add("NAN_GE" + w, "NAN" + w + ">=ZERO" + w, false);
+      add("ZERO_EQ" + w, "NZERO" + w + "==ZERO" + w, true);
+      add("ZERO_LE" + w, "NZERO" + w + "<=ZERO" + w, true);
+      add("ZERO_GE" + w, "NZERO" + w + ">=ZERO" + w, true);
+      add("ZERO_LT" + w, "NZERO" + w + "<ZERO" + w, false);
+      add("INF_EQ" + w, "INF" + w + "==INF" + w, true);
+      add("INF_LT" + w, "INF" + w + "<INF" + w, false);
+      add("NINF_EQ" + w, "NINF" + w + "==NINF" + w, true);
+      add("NINF_GT" + w, "NINF" + w + ">NINF" + w, false);
+      add("INF_GT" + w, "INF" + w + ">ONE" + w, true);
+      add("NINF_LT" + w, "NINF" + w + "<NEG" + w, true);
+      add("INF_NE_NINF" + w, "INF" + w + "!=NINF" + w, true);
+      add("SUB_GT_ZERO" + w, "SUB" + w + ">ZERO" + w, true);
+      add("SUB_EQ" + w, "SUB" + w + "==SUB" + w, true);
+      add("SUB_LT_MIN" + w, "SUB" + w + "<MIN" + w, true);
+      add("NEG_LT" + w, "NEG" + w + "<-1.0", true);
+      add("NEG_EQ" + w, "NEG" + w + "==-1.5", true);
+      add("ROUND_EQ" + w, "ROUND" + w + "==ONE" + w, width == 32);
+      add("ROUND_GT" + w, "ROUND" + w + ">ONE" + w, width == 64);
+    }
+    body += "func f(){";
+    for (const auto &[name, value] : expected)
+      body += "let v_" + name + "=" + name + ";";
+    body += "const LOCAL bool=NAN32!=NAN32;let v_LOCAL=LOCAL;}";
+    auto r = source(body, nullptr, backend);
+    const auto &m = r.value->module();
+    std::set<std::string> observed;
+    for (const auto &n : m.nodes)
+      if (auto b = std::get_if<hir::Binding>(&n.data)) {
+        const auto &name = m.resolved->symbols[b->symbol.value].name;
+        if (!name.starts_with("v_"))
+          continue;
+        auto literal = std::get_if<hir::BoolLiteral>(
+            &m.nodes[n.children[0].value].data);
+        require(literal, "float const use is not a BoolLiteral: " + name);
+        const bool value =
+            name == "v_LOCAL" ? true : expected.at(name.substr(2));
+        require(literal->value == value, "float const fold: " + name);
+        observed.insert(name);
+      }
+    require(observed.size() == expected.size() + 1,
+            "float const uses missing or duplicated");
+  }
+  // Strings follow the same const materialization path. Bytes, including an
+  // embedded NUL and a non-BMP scalar, must survive aliases and local shadowing.
+  for (const char *backend : {"native", "python"}) {
+    const std::string top =
+        std::string("\x00" "A", 2) + std::string("\xf0\x9f\x98\x80", 4);
+    auto r = source(
+        "const A string=\"\\0A\\u{1F600}\";const B=A;"
+        "const Empty string=\"\";func f(){let a=A;let b=B;let e=Empty;"
+        "const local=\"local\\0x\";let l=local;"
+        "const outer=\"outer\";{const outer=outer;let s=outer;}}",
+        nullptr, backend);
+    const auto &m = r.value->module();
+    const std::map<std::string, std::string> expected{
+        {"a", top},
+        {"b", top},
+        {"e", ""},
+        {"l", std::string("local\0x", 7)},
+        {"outer", "outer"},
+        {"s", "outer"}};
+    std::set<std::string> observed;
+    for (const auto &n : m.nodes)
+      if (auto b = std::get_if<hir::Binding>(&n.data)) {
+        const auto &name = m.resolved->symbols[b->symbol.value].name;
+        auto found = expected.find(name);
+        if (found == expected.end())
+          continue;
+        const auto &literal = m.nodes[n.children[0].value];
+        auto text = std::get_if<hir::StringLiteral>(&literal.data);
+        auto t = m.types.find(literal.type);
+        require(text && t && t->kind == hir::TypeKind::String,
+                "string const use is not a typed StringLiteral: " + name);
+        require(text->utf8 == found->second,
+                "string const bytes changed: " + name);
+        observed.insert(name);
+      }
+    require(observed.size() == expected.size(),
+            "string const uses missing or duplicated");
+  }
+  for (const char *backend : {"native", "python"}) {
+    source("const Text=\"top\\0\\u{1F600}\";"
+           "func copy[T](x T)string{const Alias=(Text);"
+           "{const Text=Alias;return Text;}}"
+           "func factory[T]()(func()string){return func()string{"
+           "const Local=(Text);return Local;};}"
+           "func f(){let a=copy[i32](1);let b=factory[bool]()();}",
+           nullptr, backend);
+    std::string aliases = "const A0=\"long\\0chain\";";
+    for (unsigned i = 1; i <= 256; ++i)
+      aliases += "const A" + std::to_string(i) + "=(A" +
+                 std::to_string(i - 1) + ");";
+    source(aliases + "func f()string{return A256;}", nullptr, backend);
+    for (const auto &[body, runtime_read] :
+         std::vector<std::pair<std::string, bool>>{
+             {"func f()string{return \"same\\0value\";}", false},
+             {"const A=\"original\";const B=(A);"
+              "func f()string{const Local=B;return Local;}", false},
+             {"func f(x string)string{return x;}", true},
+             {"func f()string{let x=\"same\";return x;}", true}}) {
+      auto r = source(body, nullptr, backend);
+      auto m = r.value->module();
+      bool changed = false;
+      for (auto &n : m.nodes) {
+        if (runtime_read && std::holds_alternative<hir::Read>(n.data) &&
+            m.types.find(n.type)->kind == hir::TypeKind::String) {
+          n.data = hir::StringLiteral{"forged"};
+          changed = true;
+          break;
+        }
+        if (!runtime_read)
+          if (auto text = std::get_if<hir::StringLiteral>(&n.data)) {
+            text->utf8 += "forged";
+            changed = true;
+            break;
+          }
+      }
+      require(changed, "string source corruption target missing");
+      auto rejected = [&] {
+        const auto types = hir::verify_types(m);
+        const auto published = hir::verify(m);
+        require(!types.success() && has(types, "E_IR_INVALID") &&
+                    !published.success() && has(published, "E_IR_INVALID"),
+                "forged string literal/const/runtime source accepted");
+      };
+      rejected();
+      auto ownership = hir::detail::produce_ownership(m, {});
+      require(ownership.success(), "string corruption ownership preparation failed");
+      rejected();
+    }
+  }
+  source("func f(x string){const C=x;}", "E_CAPABILITY_UNAVAILABLE");
+  source("func s() string{return \"x\";} const C=s(); func f(){}",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("const C=\"x\"+\"y\"; func f(){}", "E_TYPE_MISMATCH");
+  source("const C i32=\"x\"; func f(){}", "E_TYPE_MISMATCH");
+  source("func f(x f32){const C=1.0<x;}", "E_CAPABILITY_UNAVAILABLE");
   typed_source("func p(x f32, y f64) bool { return x < y; }",
                "E_TYPE_MISMATCH");
   typed_source("func p(x f32, y f64) { let z = x + y; }",

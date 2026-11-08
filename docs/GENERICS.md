@@ -323,3 +323,11 @@ Native 以 LLVM 聚合值和调用者存储指针降低；Python 的 writable `C
 新增 `tests/generics/aggregate-inout/` 覆盖嵌套 POD、padding、enum 活动变体、显式/推断泛型、函数值、固有和 trait 方法、ConcreteType/T 调用、整体替换、字段修改、copy/return、throw/defer/求值顺序，以及 owning 聚合和别名拒绝。`tests/generics/run_aggregate_inout.py` 在两后端检查和执行，并对拒绝项目验证 fresh 构建不产物、已有目录不被覆盖。C++ 静态检查另覆盖 `ValueOps.pod_inout`、顶层 Unit/Function 拒绝、坏 HIR 字段和把 Place 改成 Read 后重算 ownership 仍拒绝。旧 constrained move/inout 拒绝项目因聚合 inout 变为合法，保留原输入未改，测试改用新增的含 Vec 字段版本作为拒绝控制。四配置的最终数量以本次交付日志为准。
 
 修正版进一步区分了三个来源问题：同一个泛型 nominal 声明的有限嵌套（如 `Box[Box[i32]]`）按具体类型实参的严格缩小判断值存储循环，不再仅因声明相同就当作无限布局；函数签名中的 nominal 回指不参与值布局环判断。trait callback 的 Self 依赖只从真实原型中的 trait Self SymbolId 判断，固定 `Pair` callback 即使 impl Self 也是 `Pair` 或 `i32` 也不被当作 Self 依赖；真正的 Self callback 仍保留既有数字/bool 限制。`slot inout Wrap[Self]` 在原型检查时把真实 Self 放入类型环境，具体 impl 仍按实际替换后的聚合检查，拥有字段的 Self 继续报 Source `E_CAPABILITY_UNAVAILABLE`。这些限制同时由独立 HIR 验证器按同一 raw prototype/Self 关系重查。
+
+## 索引后调用函数值
+
+`fs[0](x)`、`holder.fs[0](x)`、嵌套索引和函数返回容器后的调用，按元素的真实函数类型处理。容器接收者、下标和调用实参按源码顺序各求值一次；字段存在时仍优先于同名方法。真正的 `f[i32](x)`、`value.method[i32](x)` 和 Type/T 方法调用保留原泛型规则，错误类型实参、数量或 bound 不会退回索引解释。
+
+索引取得的函数值沿用已有普通参数、inout 和 throws 检查。后续实参抛错时，已经创建的临时 Vec 按原规则清理；越界索引仍产生 Panic。函数值的 move 参数调用、方法值和捕获闭包仍未完成，不能把这一修复视为这些组合已经支持。
+
+`tests/generics/indexed-calls/` 和 `generics.indexed_calls_runtime` 覆盖两后端实际运行、求值顺序、临时值清理、越界 Panic 及错误构建的输出保护。HIR 验证器要求函数值调用具有真实 Call 来源，并核对 callee 与各实参来源；手写测试也使用真实 AST，不用“合成节点”跳过检查。

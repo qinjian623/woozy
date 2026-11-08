@@ -626,6 +626,52 @@ class Verifier {
       if (same_ref(o.source, ref)) return o.symbol;
     return {};
   }
+  const std::string &source_string(modules::NodeRef ref) const {
+    std::set<std::tuple<uint64_t, size_t, uint64_t>> visited;
+    for (;;) {
+      check_cancelled(stop);
+      need(visited.emplace(ref.module.value, ref.file, ref.node.value).second,
+           "string constant source cycle");
+      const auto &file =
+          *m.resolved->project->module(ref.module).files.at(ref.file);
+      const auto &ast = file.node(ref.node);
+      if (ast.kind == AstKind::Parenthesized ||
+          ast.kind == AstKind::BracketItem) {
+        need(ast.children.size() == 1, "string source wrapper");
+        ref.node = ast.children.front();
+        continue;
+      }
+      if (ast.kind == AstKind::Literal) {
+        const auto &token = file.tokens.at(ast.token_begin);
+        need(token.kind == TokenKind::string_literal && token.string_value,
+             "string literal source is not a decoded string");
+        return *token.string_value;
+      }
+      need(ast.kind == AstKind::Name || ast.kind == AstKind::Member,
+           "string literal source is not a literal or constant");
+      // A qualified member records its alias and declared member on the same
+      // AST node; the final occurrence is the actual constant declaration.
+      std::optional<SymbolId> target;
+      for (const auto &o : m.resolved->occurrences)
+        if (same_ref(o.source, ref))
+          target = o.symbol;
+      need(target && symbol(*target).kind == modules::SymbolKind::constant &&
+               symbol(*target).definition,
+           "string literal replaced a runtime value");
+      ref = *symbol(*target).definition;
+      const auto &declaration_file =
+          *m.resolved->project->module(ref.module).files.at(ref.file);
+      const auto &declaration = declaration_file.node(ref.node);
+      size_t token = declaration.token_begin;
+      if (declaration_file.tokens.at(token).spelling == "pub")
+        ++token;
+      need(declaration.kind == AstKind::Binding &&
+               declaration_file.tokens.at(token).spelling == "const" &&
+               !declaration.children.empty(),
+           "string constant source is not a const declaration");
+      ref.node = declaration.children.back();
+    }
+  }
   const TraitDecl *trait_declaration(SymbolId id) const {
     for (const auto &t : m.traits)
       if (t.symbol == id)
@@ -1356,6 +1402,32 @@ class Verifier {
          "call arity/children");
     if (offset)
       need(n.children[0] == *c.callee, "callee must be evaluated first");
+    if (c.kind == CalleeKind::function_value) {
+      const auto &file =
+          *m.resolved->project->module(n.source.node.module)
+               .files.at(n.source.node.file);
+      const auto &call = file.node(n.source.node.node);
+      need(call.kind == AstKind::Call && !call.children.empty() &&
+               call.children.size() == c.args.size() + 1,
+           "function value call lost source call/arity");
+      auto target = n.source.node;
+      target.node = call.children.front();
+      need(same_ref(unwrapped(node(*c.callee).source.node),
+                    unwrapped(target)),
+           "function value callee differs from source");
+      for (size_t i = 0; i < c.args.size(); ++i) {
+        const auto &syntax = file.node(call.children[i + 1]);
+        need(syntax.kind == AstKind::Argument && syntax.children.size() == 1,
+             "function value source argument kind");
+        const auto &original = file.node(syntax.children[0]);
+        const auto &value = node(c.args[i].expression).source;
+        need(value.node.module == n.source.node.module &&
+                 value.node.file == n.source.node.file &&
+                 value.span.begin_byte >= original.span.begin_byte &&
+                 value.span.end_byte <= original.span.end_byte,
+             "function value argument differs from source");
+      }
+    }
     std::vector<bool> seen(sig.parameters.size());
     std::set<uint64_t> borrowed;
     const auto owner_allowed = allowed(scope(n.scope).function);
@@ -1441,6 +1513,8 @@ class Verifier {
       } catch (const SourceError &) {
         fail("invalid UTF-8 string");
       }
+      need(std::get<StringLiteral>(n.data).utf8 == source_string(n.source.node),
+           "string literal bytes differ from real source");
       break;
     case NodeKind::read:
     case NodeKind::place:

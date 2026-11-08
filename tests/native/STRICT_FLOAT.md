@@ -62,3 +62,9 @@ Python运行库为/3。原19清理、27泛型、floating及baseline输入未改�
 
 ASan/UBSan仅检查编译器，不包含生成ELF、预编译LLVM或LeakSanitizer。
 编译和测试使用固定Python3.12.15，不修改系统解释器。
+
+## 浮点比较常量
+
+f32/f64 的 `== != < <= > >=` 现在可用于 `bool` 常量初值。两个操作数先按各自确定的目标精度舍入，再按精确 IEEE 值比较；NaN 只有 `!=` 为 true，正负零相等。无穷、subnormal、负数和 f32 舍入临界点采用相同规则，不使用宿主 double 或误差容忍值计算常量。
+
+普通变量、参数和函数调用不会因此变成常量。运行期比较仍生成原有操作，不改变转换或 Panic 规则。`tests/native/floating/const-comparison` 在 Native O0/O2 和 Python 实际执行；前端测试另核对常量使用处的 BoolLiteral 和两种精度的独立预期。

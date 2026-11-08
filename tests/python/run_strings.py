@@ -6,16 +6,18 @@ from pathlib import Path
 import sys
 
 sys.dont_write_bytecode = True
-from string_cases import EXPECTED, command, rejection_checks, sha, succeeded
+from string_cases import STRING_FIXTURES, command, rejection_checks, sha, succeeded
 
 
 def main():
     parser = argparse.ArgumentParser()
     for name in ('cli', 'helper', 'root', 'python', 'out'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--fixture', choices=STRING_FIXTURES, default='strings')
     args = parser.parse_args()
+    expected_values = STRING_FIXTURES[args.fixture]
     args.out.mkdir(parents=True, exist_ok=True)
-    manifest = args.root / 'tests/sema/strings/lang.toml'
+    manifest = args.root / 'tests/sema' / args.fixture / 'lang.toml'
     report = dict(operation_id='language-constant-strings-20261104', backend='python',
                   status='failed', values=[], rejections=[],
                   source_head=command(['git', '-C', args.root, 'rev-parse', 'HEAD']),
@@ -41,8 +43,8 @@ def main():
         metadata = json.loads((args.out / 'mapping/metadata.json').read_text())
         report['helper_code_identical'] = (out / 'program.py').read_bytes() == (args.out / 'mapping/program.py').read_bytes()
         assert report['helper_code_identical'], 'formal CLI and helper Python differ'
-        names = {s['source_name']: s['generated'] for s in metadata['symbols'] if s['source_name'] in EXPECTED}
-        assert set(names) == set(EXPECTED), names
+        names = {s['source_name']: s['generated'] for s in metadata['symbols'] if s['source_name'] in expected_values}
+        assert set(names) == set(expected_values), names
         code = ('import program,json\nresult={}\n'
                 f'for name,generated in {names!r}.items():\n'
                 ' value=getattr(program,generated)()\n'
@@ -53,7 +55,7 @@ def main():
         report['observation'] = result = command([args.python, '-B', '-s', '-c', code], cwd=out)
         succeeded(result)
         actual = json.loads(bytes.fromhex(result['stdout_hex']))
-        for name, expected in EXPECTED.items():
+        for name, expected in expected_values.items():
             observed = actual[name]
             row = dict(id=name, actual=observed, expected_hex=expected.hex(),
                        expected_byte_length=len(expected), status='failed')

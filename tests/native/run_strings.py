@@ -7,16 +7,18 @@ import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
-from string_cases import EXPECTED, command, rejection_checks, sha, succeeded
+from string_cases import STRING_FIXTURES, command, rejection_checks, sha, succeeded
 
 
 def main():
     parser = argparse.ArgumentParser()
     for name in ('cli', 'probe', 'root', 'clang', 'runtime', 'out'):
         parser.add_argument('--' + name, type=Path, required=True)
+    parser.add_argument('--fixture', choices=STRING_FIXTURES, default='strings')
     args = parser.parse_args()
+    expected_values = STRING_FIXTURES[args.fixture]
     args.out.mkdir(parents=True, exist_ok=True)
-    manifest = args.root / 'tests/sema/strings/lang.toml'
+    manifest = args.root / 'tests/sema' / args.fixture / 'lang.toml'
     report = dict(operation_id='language-constant-strings-20261104', backend='native',
                   status='failed', runs=[], rejections=[],
                   source_head=command(['git', '-C', args.root, 'rev-parse', 'HEAD']),
@@ -43,7 +45,7 @@ def main():
             succeeded(result)
             metadata = json.loads((out / 'probe/metadata.json').read_text())
             assert metadata['native_ir_rejected'] == 11 and metadata['hir_rejected'] == 1
-            assert set(metadata['probes']) == set(EXPECTED), metadata
+            assert set(metadata['probes']) == set(expected_values), metadata
             row['metadata'] = metadata
             row['object_identical_to_cli'] = (out / 'cli/program.o').read_bytes() == (out / 'probe/generated.o').read_bytes()
             assert row['object_identical_to_cli'], 'helper and formal CLI generated different objects'
@@ -62,8 +64,8 @@ def main():
                 actual = data[offset:offset + length]
                 offset += length
                 value = dict(id=name, actual_hex=actual.hex(), actual_byte_length=length,
-                             expected_hex=EXPECTED[name].hex(), expected_byte_length=len(EXPECTED[name]),
-                             status='passed' if actual == EXPECTED[name] and length == len(EXPECTED[name]) else 'failed')
+                             expected_hex=expected_values[name].hex(), expected_byte_length=len(expected_values[name]),
+                             status='passed' if actual == expected_values[name] and length == len(expected_values[name]) else 'failed')
                 row['values'].append(value)
                 assert value['status'] == 'passed', value
             assert offset == len(data), 'extra observation bytes'

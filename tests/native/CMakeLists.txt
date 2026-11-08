@@ -27,12 +27,14 @@ target_include_directories(lang_native_string_probe SYSTEM PRIVATE ${LLVM_INCLUD
 target_compile_options(lang_native_string_probe PRIVATE -fno-rtti)
 target_link_libraries(lang_native_string_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 if(LANG_TEST_PYTHON)
-  add_test(NAME native.strings COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_strings.py --cli $<TARGET_FILE:langc>
-    --probe $<TARGET_FILE:lang_native_string_probe> --root ${LANG_SOURCE_ROOT}
-    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
-    --out ${CMAKE_CURRENT_BINARY_DIR}/string-results)
-  set_tests_properties(native.strings PROPERTIES TIMEOUT 180)
+  foreach(fixture IN ITEMS strings string-constants)
+    add_test(NAME native.${fixture} COMMAND ${LANG_TEST_PYTHON}
+      ${CMAKE_CURRENT_LIST_DIR}/run_strings.py --cli $<TARGET_FILE:langc>
+      --probe $<TARGET_FILE:lang_native_string_probe> --root ${LANG_SOURCE_ROOT}
+      --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
+      --out ${CMAKE_CURRENT_BINARY_DIR}/${fixture}-results --fixture ${fixture})
+    set_tests_properties(native.${fixture} PROPERTIES TIMEOUT 180)
+  endforeach()
   add_test(NAME native.cli COMMAND ${LANG_TEST_PYTHON}
     ${CMAKE_CURRENT_LIST_DIR}/run_cli.py --cli $<TARGET_FILE:langc>
     --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang

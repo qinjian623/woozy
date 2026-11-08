@@ -2,7 +2,9 @@
 
 日期：2026-11-03。面向实现前端、LLVM 后端、Python 后端、运行库及开发工具的 agent。
 
-T00–T03 已完成：可构建独立 C++20 前端，并用 langc 检查完整 v0.1 表层语法、输出 JSON 诊断和恢复 AST。Debug/Release 各通过 80 个语法分类，以及源码、诊断、取消和 AST 测试。项目/模块与名称/作用域实现通过独立项目用例 20/20，Debug、Release、Clang22 ASan/UBSan 各 10 组 CTest 全部通过。T04 的普通标量 HIR 类型表和验证器已加入，三种构建各 12 组 CTest 通过；源码类型检查、代码生成和 ARC 仍待完成。
+`langc` 已能检查项目并生成 Native 与 Python 程序。现有实现包括整数、严格标量浮点、函数与非捕获函数值、已有泛型和 trait 组合、struct/enum、Vec、typed throws 与词法块 defer。具体支持的组合和限制见 [GENERICS.md](docs/GENERICS.md)、[值与清理执行说明](docs/T09_EXECUTION.md)、[字符串说明](docs/CONSTANT_STRINGS.md)。
+
+v0.1 核心仍未完整：字面量/非枚举 switch、字符串容器、部分参数模式和方法组合等还在开发。词法语法通过、HIR 验证通过或当前测试通过，都不能单独证明完整规范已经实现。
 
 ## 从哪里开始
 
@@ -51,4 +53,4 @@ ctest --preset frontend-debug
 build/frontend-debug/langc check --syntax-only --format json examples/core.lang
 ```
 
-不带 syntax-only 的语义检查、build、lsp 和 capabilities 命令仍明确报告未支持。语法接受不表示名称、类型、所有权或程序运行正确；LLVM 接入探针也没有生成本语言程序。
+项目语义检查使用 `langc check --project MANIFEST`；生成程序使用 `langc build --project MANIFEST --backend native|python --out-dir DIR`，构建命令不运行程序。原生生成需要开启 LLVM 22.1.8，Python 运行测试使用独立 3.12.15 解释器。构建方法与实际输出见 [BUILD.md](docs/BUILD.md)。LSP 和 capabilities 命令仍明确报告未支持。

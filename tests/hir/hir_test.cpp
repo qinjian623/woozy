@@ -62,6 +62,7 @@ struct Fixture {
 func add(a i32, b i32) i32 { return a + b; }
 func main() i32 {
  var x i32 = 0;
+ "中文\n";
  for var i i32 = 0; i < 4; i += 1 { if x > 1 { break; } continue; }
  add(b: 2, a: 1);
  add(1, 2);
@@ -216,11 +217,37 @@ func main() i32 {
     call = node(i32, main_scope, main_src, direct, {arg0, arg1});
     auto call_stmt =
         node(unit, main_scope, main_src, ExpressionStatement{}, {call});
-    auto callee = node(signature, main_scope, main_src, FunctionValue{add});
+    const auto &file = *project->modules[main_src.node.module.value]
+                            .files[main_src.node.file];
+    auto call_ref = main_src.node;
+    for (size_t i = 0; i < file.nodes.size(); ++i)
+      if (file.nodes[i].kind == AstKind::Call &&
+          file.nodes[i].span.begin_byte >= main_src.span.begin_byte &&
+          file.nodes[i].span.end_byte <= main_src.span.end_byte &&
+          file.nodes[i].span.begin_byte > file.node(call_ref.node).span.begin_byte)
+        call_ref.node = AstNodeId{i};
+    const auto &written = file.node(call_ref.node);
+    require(written.kind == AstKind::Call && written.children.size() == 3,
+            "fixture positional call source missing");
+    auto ast_source = [&](AstNodeId id) {
+      auto ref = main_src.node;
+      ref.node = id;
+      return Source{ref, file.node(id).span};
+    };
+    auto argument_source = [&](size_t index) {
+      auto id = file.node(written.children[index + 1]).children.at(0);
+      if (file.node(id).kind == AstKind::Unary)
+        id = file.node(id).children.at(0); // the inout marker is not the Place
+      return ast_source(id);
+    };
+    auto callee = node(signature, main_scope, ast_source(written.children[0]),
+                       FunctionValue{add});
     arg0 = inout_count ? node(i32, main_scope, main_src, Place{x})
                       : lit(1, main_scope);
     arg1 = inout_count == 2 ? node(i32, main_scope, main_src, Place{y})
                            : lit(2, main_scope);
+    m.nodes[arg0.value].source = argument_source(0);
+    m.nodes[arg1.value].source = argument_source(1);
     Call indirect;
     indirect.kind = CalleeKind::function_value;
     indirect.signature = signature;
@@ -230,7 +257,8 @@ func main() i32 {
                      {1, 1, {}, inout_count == 2 ? ParamMode::inout
                                                 : ParamMode::ordinary, arg1}};
     value_call =
-        node(i32, main_scope, main_src, indirect, {callee, arg0, arg1});
+        node(i32, main_scope, ast_source(call_ref.node), indirect,
+             {callee, arg0, arg1});
     auto value_stmt =
         node(unit, main_scope, main_src, ExpressionStatement{}, {value_call});
     read = rd(x, main_scope, main_src);
@@ -873,7 +901,21 @@ int main() {
       t.kind = TypeKind::String;
       t.bits = 0;
       auto string = m.types.intern(t);
-      add_stmt(add_node(string, StringLiteral{"中文\n"}));
+      auto text = add_node(string, StringLiteral{"中文\n"});
+      const auto &file = *f.project->modules[0].files[0];
+      bool text_source = false;
+      for (size_t i = 0; i < file.nodes.size(); ++i) {
+        const auto &ast = file.nodes[i];
+        if (ast.kind == AstKind::Literal &&
+            file.tokens.at(ast.token_begin).string_value ==
+                std::optional<std::string>{"中文\n"}) {
+          m.nodes[text.value].source = {{ModuleId{0}, 0, AstNodeId{i}}, ast.span};
+          text_source = true;
+          break;
+        }
+      }
+      require(text_source, "string shape real source missing");
+      add_stmt(text);
       add_stmt(add_node(f.unit, UnitLiteral{}));
       require(verify(m).success(), "additional scalar shapes rejected");
     }

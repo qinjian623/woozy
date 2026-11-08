@@ -1,0 +1,44 @@
+package app;
+import "app/helper";
+import "dep";
+
+pub const TopConstant string = "顶层\0常量";
+const TopAlias = TopConstant;
+const TopRaw = `常量原始
+第二行\n\0`;
+const TopUnicode = "\u{0}\u{10FFFF}\u{1F600}";
+const TopEmpty = "";
+const PackageAlias = dep.PackageText;
+
+func probe_const_top() string { return TopConstant; }
+func probe_const_alias() string { return TopAlias; }
+func probe_const_raw() string { return TopRaw; }
+func probe_const_unicode() string { return TopUnicode; }
+func probe_const_empty() string { return TopEmpty; }
+func probe_const_local() string { const local string="局部\0常量"; return local; }
+func probe_const_local_inferred() string { const local="推断常量"; return local; }
+func probe_const_alias_local() string {
+    const first="别名\0链";
+    const second=first;
+    return second;
+}
+func probe_const_shadow() string {
+    const x="外层常量";
+    { const x=x; return x; }
+}
+func probe_const_module() string { return helper.ModuleText; }
+func probe_const_package() string { return PackageAlias; }
+func main() i32 {
+    let v0=probe_const_top();
+    let v1=probe_const_alias();
+    let v2=probe_const_raw();
+    let v3=probe_const_unicode();
+    let v4=probe_const_empty();
+    let v5=probe_const_local();
+    let v6=probe_const_local_inferred();
+    let v7=probe_const_alias_local();
+    let v12=probe_const_shadow();
+    let v16=probe_const_module();
+    let v17=probe_const_package();
+    return 0;
+}

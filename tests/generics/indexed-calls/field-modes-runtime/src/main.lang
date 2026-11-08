@@ -1,0 +1,28 @@
+package app;
+enum E{Bad;}
+struct Holder { gs Vec[func(inout i32)]; ss Vec[func(i32)i32]; ts Vec[func(i32)i32 throws E]; }
+func bump(x inout i32){x+=1;}
+func fail(x i32)i32 throws E{throw E.Bad;}
+func succ(x i32)i32 throws E{return x+1;}
+func plain(x i32)i32{return x+1;}
+func main()i32{
+  let h=Holder(gs:[bump],ss:[plain],ts:[succ]);
+  var x i32=1;
+  h.gs[0](inout x);
+  if x!=2{return 1;}
+  let f=h.gs[0];
+  f(inout x);
+  if x!=3{return 2;}
+  if h.ss[0](3)!=4{return 3;}
+  let g=h.ss[0];
+  if g(4)!=5{return 4;}
+  try {
+    if h.ts[0](5)!=6{return 5;}
+    let t=h.ts[0];
+    if t(6)!=7{return 6;}
+    let bad=Holder(gs:[bump],ss:[plain],ts:[fail]);
+    let z=bad.ts[0](1);
+    if z==1{return 7;}
+  } catch e E { return 0; }
+  return 8;
+}

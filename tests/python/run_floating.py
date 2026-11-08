@@ -206,6 +206,14 @@ def main():
     for ident, body, expected, probes in supplemental():
         accepted(ident, source(ident, body), expected, probes)
 
+    const_fixture = args.root / 'tests/native/floating/const-comparison/src/main.lang'
+    const_body = const_fixture.read_text()
+    prefix = 'package app;\n'
+    assert const_body.startswith(prefix)
+    accepted('const-float-comparison',
+             source('const-float-comparison', const_body[len(prefix):]),
+             dict(main_return=0), [])
+
     vector_file = Path(__file__).with_name('floating_vectors.tsv')
     probes, oracle_input, oracle_expected = vector_probes(vector_file)
     report['dynamic_vectors_sha256'] = sha(vector_file)

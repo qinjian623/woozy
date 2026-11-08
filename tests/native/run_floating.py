@@ -171,6 +171,8 @@ def main():
                   ('probe_same_type', 64, 0x400e000000000000), ('probe_inout', 32, 0x40400000)]
         cases += [dict(id='values-cleanup', manifest='tests/native/floating/values-cleanup/lang.toml',
                        runtime_expected=dict(main_return=0, probes=[dict(function=n, result=result(raw, w), expected_source='independent source arithmetic and decimal event sequence assertions') for n, w, raw in values]))]
+        cases += [dict(id='const-comparison', manifest='tests/native/floating/const-comparison/lang.toml',
+                       runtime_expected=dict(main_return=0, probes=[]))]
         for case in cases:
             manifest = args.root / case['manifest']
             for opt in (0, 2):

@@ -1,0 +1,4 @@
+package app;
+func inc(x i32)i32{return x+1;}
+struct H{fs Vec[func(i32)i32];}
+func main()i32{let h=H(fs:[inc]);return h.fs[true](2);}

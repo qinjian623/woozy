@@ -1,0 +1,2 @@
+package app;
+func main()i32{let xs Vec[i32]=[1];return xs[0](2);}

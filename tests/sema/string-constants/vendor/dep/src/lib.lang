@@ -1,0 +1,2 @@
+package dep;
+pub const PackageText string = "跨包常量\0尾";

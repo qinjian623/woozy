@@ -1,0 +1,2 @@
+package helper;
+pub const ModuleText string = "跨模块常量\0尾";
