@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "静态泛型、POD/有限拥有聚合、原05_traits和位置式enum已通过。自由泛型、固有方法及ordinary self trait方法支持已实现范围的move/inout；trait顶层Self及参数/返回函数类型中inout Self支持具体数字/bool、直接及ConstraintCall、传入/返回free函数值后实际调用。保留真实Self/trait/impl/实例及函数值来源检查，callback内inout不改变外围模式，旧owner和fixedscalar+拥有receiver不倒退。未调用nonScalar依赖Self实现源码E_CAP。递归变体模式支持多层/多载荷/泛型/跨包、逐列覆盖和不可达检查、HIR独立重算、两端匹配与绑定清理；非enum前列继续检查后列，显式类型实参按所属实例替换。Type/T.method已支持全部ordinary参数显式传入、零参、首参Self、真实bound和泛型impl及两端普通调用；Type/T入口已支持非self顶层数字/bool inout和move；含顶层inout的新入口仍拒绝依赖Self或方法参数的inout callback，旧ordinary-only返回/Holder callback保留原行为。泛型trait、实际self模式、方法值/捕获闭包、非数字/bool inout和完整ARC仍未完成。非泛型trait方法自身现支持多类型参数、已有单约束、位置式改名、值/Type/T调用和普通参数；完整impl与method实参从真实Source还原，含phantom实例区分。trait非self move现支持无own/多own/genericimpl、value/Type/T及无receiver静态形式，普通owner借用和own U名self且U==Self的静态参数均按原声明判断；固有static原move/inout保持。generic方法非self顶层inout现支持固定数字/bool、方法U/V和非首位Self；value/Type/T及generic impl均已实际运行。方法U名self且具体化等于Self时仍按静态参数判断。依赖Self或own参数的inout callback仍受限制；递归函数字段和返回类型均由生产者与独立HIR验证器检查，旧合法方法调用保持。T07/T09仍in_progress，执行与限制见docs/GENERICS.md。"
+      "notes": "当前检查值 struct/enum、泛型函数/类型、名义 trait/显式 impl 和单态化实例；泛型 trait 支持多个无约束参数、完整有序应用身份、显式 impl 和使用处 bound、方法自身泛型及其引用 Self/trait 参数的 bound、phantom impl/方法实参键，以及值/Type/T、跨包和泛型 impl 调用。枚举支持位置式载荷构造；递归模式支持多层/多载荷、逐列覆盖和两端清理。自由泛型、固有方法、泛型 impl/方法、受约束方法和 trait（含泛型 trait）方法已支持非 self move；inout 支持数字/bool 及有限平凡（递归只含平凡字段或载荷）的 struct/enum 整体可写绑定，覆盖直接调用、ConstraintCall 和既有函数值入口。ordinary 接收者只由真实 trait 原型的 ordinary Self 首参补入，A/U 具体化等于 Self 不取得接收者；真实 Self 的 self/owner 标签、Type/T 显式参数和同名函数字段按现有规则。未完成：actual self move/inout、方法值/捕获闭包、泛型 trait 或方法自身泛型中依赖 Self/trait 参数/方法参数的 inout callback、trait 定义参数自身 bound、trait 名直接调用、Vec/string/foreign/含拥有字段聚合及字段/索引 inout、foreign/动态 string move 和完整 ARC。T07/T09 仍 in_progress；执行与限制见 docs/GENERICS.md。"
     },
     {
       "id": "T08",
@@ -348,7 +348,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "native/64 Linux x86_64与python/64 CPython3.12.15已支持有限无环Vec、拥有struct/enum、move、借用/返回复制、索引/切片/for-in及正常/typed-error清理。root修复复制结果重复转交验证漏项和字面量分支误报。三种LLVM构建各40/40，LLVM关闭30/30；80份同源输入240项比较、三个原样例27次执行通过。完整ARC、动态字符串、非平凡inout、递归拥有图、外部绑定和其他未支持组合仍未完成。见docs/T09_EXECUTION.md。"
+      "notes": "native/64 Linux x86_64 与 python/64 CPython3.12.15 已支持有限无环 Vec、拥有 struct/enum、整体 move、普通参数借用/返回复制、索引读写、切片、for-in，以及正常/typed-error/defer 的拥有值清理；Vec 别名共享写入，切片/for-in 按现有规则复制逻辑值。未完成：完整 ARC、动态 string/Vec[string]、部分字段 move、递归拥有图、非平凡 inout（Vec/string/foreign、含拥有字段聚合、字段/索引位置）和捕获闭包。T10 已支持的 Python 外部绑定包括声明式绑定、外部宿主对象的保存/传递/返回/丢弃和 py.Error，逻辑 copy 共享宿主对象身份；外部 move/inout、外部对象进入 Vec/聚合及动态 shape/device 类型推断等仍未支持；T10 的上述绑定支持也不等于拥有外部对象的跨语言 ARC 或完整 ARC。详见 docs/T09_EXECUTION.md、docs/T10_PYTHON.md。"
     },
     {
       "id": "T10",
