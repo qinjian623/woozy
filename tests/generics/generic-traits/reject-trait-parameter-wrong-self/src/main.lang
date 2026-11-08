@@ -1,0 +1,9 @@
+package app;
+trait Rel[A] {}
+struct Good {}
+struct Bad {}
+struct Proof {}
+impl Rel[Good] for Proof {}
+trait Need[A Rel[Self]] {}
+impl Need[Proof] for Bad {}
+func main() i32 { return 0; }

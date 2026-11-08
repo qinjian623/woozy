@@ -1,0 +1,7 @@
+package app;
+trait Code { func code(owner Self) i32; }
+impl Code for i32 { func code(owner Self) i32 { return owner; } }
+trait Use[A Code] { func use(owner Self) i32; }
+struct Key {}
+impl Use[bool] for Key { func use(owner Self) i32 { return 0; } }
+func main() i32 { return 0; }

@@ -273,7 +273,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "当前检查值 struct/enum、泛型函数/类型、名义 trait/显式 impl 和单态化实例；泛型 trait 支持多个无约束参数、完整有序应用身份、显式 impl 和使用处 bound、方法自身泛型及其引用 Self/trait 参数的 bound、phantom impl/方法实参键，以及值/Type/T、跨包和泛型 impl 调用。枚举支持位置式载荷构造；递归模式支持多层/多载荷、逐列覆盖和两端清理。自由泛型、固有方法、泛型 impl/方法、受约束方法和 trait（含泛型 trait）方法已支持非 self move；inout 支持数字/bool 及有限平凡（递归只含平凡字段或载荷）的 struct/enum 整体可写绑定，覆盖直接调用、ConstraintCall 和既有函数值入口。ordinary 接收者只由真实 trait 原型的 ordinary Self 首参补入，A/U 具体化等于 Self 不取得接收者；真实 Self 的 self/owner 标签、Type/T 显式参数和同名函数字段按现有规则。未完成：actual self move/inout、方法值/捕获闭包、泛型 trait 或方法自身泛型中依赖 Self/trait 参数/方法参数的 inout callback、trait 定义参数自身 bound、trait 名直接调用、Vec/string/foreign/含拥有字段聚合及字段/索引 inout、foreign/动态 string move 和完整 ARC。T07/T09 仍 in_progress；执行与限制见 docs/GENERICS.md。"
+      "notes": "当前检查值 struct/enum、泛型函数/类型、名义 trait/显式 impl 和单态化实例；泛型 trait 支持多个参数及已有单个 trait 约束、完整有序应用身份（参数 bound 可引用真实 Self/兄弟参数，未调用声明也检查）、显式 impl 和使用处 bound、方法自身泛型及其引用 Self/trait 参数的 bound、phantom impl/方法实参键，以及值/Type/T、跨包和泛型 impl 调用。枚举支持位置式载荷构造；递归模式支持多层/多载荷、逐列覆盖和两端清理。自由泛型、固有方法、泛型 impl/方法、受约束方法和 trait（含泛型 trait）方法已支持非 self move；inout 支持数字/bool 及有限平凡（递归只含平凡字段或载荷）的 struct/enum 整体可写绑定，覆盖直接调用、ConstraintCall 和既有函数值入口。ordinary 接收者只由真实 trait 原型的 ordinary Self 首参补入，A/U 具体化等于 Self 不取得接收者；真实 Self 的 self/owner 标签、Type/T 显式参数和同名函数字段按现有规则。未完成：actual self move/inout、方法值/捕获闭包、泛型 trait 或方法自身泛型中依赖 Self/trait 参数/方法参数的 inout callback、trait 名直接调用、Vec/string/foreign/含拥有字段聚合及字段/索引 inout、foreign/动态 string move 和完整 ARC。T07/T09 仍 in_progress；执行与限制见 docs/GENERICS.md。"
     },
     {
       "id": "T08",

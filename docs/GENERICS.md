@@ -180,13 +180,13 @@ trait 普通参数和返回函数类型现在可以包含 `func(inout Self, Self
 
 真实 trait Self 上下文经 parse_type 递归传入括号和函数类型，只在有普通 Self receiver 的 prototype 中生效，不使用全局开关，不把 Self 加进方法泛型。普通 owner 首参保留合法行为；callback 内的 inout 不改变外围方法自身模式。已有固定数字/bool callback 即使使用拥有 struct receiver，也保持可用；只有实际依赖 Self 的 inout 数据要求具体化为数字/bool，未调用的依赖 Self 的非数字/bool impl 也报源码 E_CAP。
 
-函数值的类型与签名相同，不代表实现函数可以互换。HIR 对解析为函数声明的名称引用和函数字面量增加源码身份检查，要求目标是名称解析时确定的函数或其实例；原有 trait/impl 选择、参数顺序、Place、存储冲突和实例检查保持。 同一 origin 下，类型/签名相同且记录合法的实例互换仍可能被接受；验证器不逐处证明 HIR 与源码类型实参等价。未增加公共 HIR 字段、后端或运行库接口。方法值、捕获闭包、actual self move/inout、trait-static 的 Self callback、非平凡拥有值 inout 仍未开放；泛型 trait 与方法自身泛型已由后续节开放，trait 定义参数自身 bound 仍不加，见下文。
+函数值的类型与签名相同，不代表实现函数可以互换。HIR 对解析为函数声明的名称引用和函数字面量增加源码身份检查，要求目标是名称解析时确定的函数或其实例；原有 trait/impl 选择、参数顺序、Place、存储冲突和实例检查保持。 同一 origin 下，类型/签名相同且记录合法的实例互换仍可能被接受；验证器不逐处证明 HIR 与源码类型实参等价。未增加公共 HIR 字段、后端或运行库接口。方法值、捕获闭包、actual self move/inout、trait-static 的 Self callback、非平凡拥有值 inout 仍未开放；泛型 trait 与方法自身泛型已由后续节开放，trait 定义参数自身的单个 bound 见下文。
 
 本批主目录 GNU Debug/Release、Clang22 ASan+UBSan+LSan 各49/49，关闭 LLVM 为33/33，共180项，无跳过，包含两项T10。新callback项目每套LLVM配置为2次check、3次正式执行、3次观察；方法inout runner全部6份源码通过。原两before与旧F1另6次check、9次正式执行，源码SHA未改，49个保护文件保持原字节。生成Native和预编译LLVM未声称全部经过sanitizer插桩。
 
 ## 泛型 trait 的完整应用身份
 
-泛型 trait 现支持多个无约束类型参数、显式 impl 和显式 bound，例如
+泛型 trait 现支持多个类型参数及已有的单个 trait 约束、显式 impl 和显式 bound，例如
 `trait Carry[A,B]{func choose(owner Self,left A,right B)B;}` 与
 `impl[T] Carry[i32,T] for Box[T]`。bound、impl 头与 ConstraintCall 都保存真实
 trait 声明加有序类型实参；同一个 Self 可以有 `Convert[i32,bool]` 与
@@ -205,6 +205,16 @@ Box[X]` 与 `Match[i32,Y] for Box[bool]` 不重叠，改第二项为 `Match[bool
 后以 X=Y=bool 的实际见证拒绝。trait 实参次序是身份的一部分，错序 bound 不能
 满足 impl；impl 实参数量与 trait 声明不等在声明处拒绝。
 
+## trait 定义参数的单个约束
+
+trait 定义的每个类型参数可以带一个已有 trait 约束，例如 `trait Use[A Code]`。约束的有序实参可以引用同一 trait 的兄弟参数和真实 `Self`，例如 `trait Use[A Rel[Self], B Rel[A]]`。trait/impl 的 `Self` 在解析参数约束前登记，所有引用仍指向当前声明的唯一符号。
+
+每次应用 trait 时，用同一替换表代入实际 Self 和全部有序参数，逐项检查声明的约束。检查包括没有调用的 impl 头、函数、类型及方法自身参数上的约束；所有声明收集完成后再检查，后声明的类型和 impl 不影响结果。字段补全后重新检查约束实参的完整类型，包含函数及名义类型字段中的 inout；不支持的数据类型在源码检查阶段报 `E_CAPABILITY_UNAVAILABLE`，不会推迟到内部 HIR 错误。约束实参具体化后才出现的嵌套 inout 也重新检查，模板中的合法占位参数使用其所属声明的真实类型环境。
+
+泛型转交使用已声明的证明。例如 `trait Use[A Code]` 对应的 `[A Code, T Use[A]]` 合法；省略 A 的 Code 约束时，不从 `T Use[A]`、方法体或预期返回类型反推。缺少实现、错误的有序实参或错误 Self 都报源码类型错误。已有完整 trait 身份、重叠 impl、phantom 实例键及 ordinary 接收者规则保持。
+
+两个后端仍执行具体普通 Call，无新增运行时分派。非 self move、平凡聚合整体 inout、throws/defer 沿用已有规则；依赖类型参数的受限 callback、实际 self move/inout、方法值及捕获闭包没有扩大。测试覆盖真实 Self/兄弟参数、泛型 impl/方法与跨包转交、未调用非法声明，以及直接和成功重算所有权后的坏 HIR。
+
 ## 泛型 trait 的 ordinary 方法自身泛型
 
 泛型 trait 的 ordinary 方法现在可以声明一个或多个自身类型参数，每个参数可无约束或带一个已有 trait bound。值调用、具体 `Type.method(...)`、受约束的 `T.method(...)`、显式与既有推断、泛型 impl、跨包公开 trait、泛型转交及非捕获 lambda 沿用同一实例化过程。impl 可按位置改名方法自身参数，声明与 impl 的参数个数、标签、返回/throws 以及完整 bound 必须对应；未调用的原型也检查。
@@ -213,7 +223,7 @@ Box[X]` 与 `Match[i32,Y] for Box[bool]` 不重叠，改第二项为 `Match[bool
 
 实例仍按真实 impl 方法 SymbolId 与完整 `[impl 实参..., 方法实参...]` 缓存。仅由 trait 应用确定的 impl 参数和签名中未出现的 phantom own 参数都进入键；同一组合重复调用去重，不同组合即使签名相同也不合并。具体 `ConstraintCall` 从真实 Source 后缀和所属实例恢复方法实参，替换 Self、trait 实参及全部 own 参数后再验证 bound，最终仍是普通直接 `Call`。
 
-顶层 move/inout 的支持范围见下节。依赖 Self/trait 参数/own 参数的 inout callback、实际 self move/inout、方法值及捕获闭包仍报源级 `E_CAPABILITY_UNAVAILABLE`。泛型 trait 的参数自身仍不加 bound；非泛型 trait 与固有方法的已有行为不变。验证器从真实 Source 重建 trait 参数、own 参数、bound、调用后缀与实例键；错误的 trait 应用、完整实例键、phantom 调用目标或 clone 重命名，以及成功重算 ownership 后的坏图都报 `E_IR_INVALID`。
+顶层 move/inout 的支持范围见下节。依赖 Self/trait 参数/own 参数的 inout callback、实际 self move/inout、方法值及捕获闭包仍报源级 `E_CAPABILITY_UNAVAILABLE`。泛型 trait 参数自身的 bound 见前节；非泛型 trait 与固有方法的已有行为不变。验证器从真实 Source 重建 trait 参数、own 参数、bound、调用后缀与实例键；错误的 trait 应用、完整实例键、phantom 调用目标或 clone 重命名，以及成功重算 ownership 后的坏图都报 `E_IR_INVALID`。
 
 本批新 fixture 与 `run_generic_traits.py` 在两后端执行原三个 before 组合、参数 bound、Self bound、四组完整 phantom 实例和去重、显式/推断、跨包、转交、非捕获 lambda、Vec copy/返回、命名参数顺序及 typed-error/defer 事件；拒绝组合验证 fresh 构建不产物且 stale 旧字节保持。未新增公共 HIR/NodeKind、ABI、schema 或后端接口。
 
@@ -242,7 +252,7 @@ trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source �
 标量泛型及两后端平凡值聚合生成执行已通过；泛型 trait、方法自身泛型及非 self move/inout 的当前范围见前文各节。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-实际 self move/inout、方法值/捕获闭包、泛型 trait 或方法自身泛型中依赖 Self/trait 参数/方法参数的 inout callback、trait 定义参数自身 bound、trait 名直接调用，以及 Vec/string/foreign/含拥有字段聚合和字段/索引位置的 inout 仍未实施；有限平凡聚合整体 inout 已支持。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案；对普通参数名重新赋值按源码类型错误 `E_TYPE_MISMATCH` 拒绝，需改值时建立 var 局部变量。初始化表达式读取同名外层绑定的规则已定案并保留。
+实际 self move/inout、方法值/捕获闭包、泛型 trait 或方法自身泛型中依赖 Self/trait 参数/方法参数的 inout callback、trait 名直接调用，以及 Vec/string/foreign/含拥有字段聚合和字段/索引位置的 inout 仍未实施；有限平凡聚合整体 inout 已支持。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案；对普通参数名重新赋值按源码类型错误 `E_TYPE_MISMATCH` 拒绝，需改值时建立 var 局部变量。初始化表达式读取同名外层绑定的规则已定案并保留。
 
 ## 递归枚举模式
 
@@ -272,7 +282,7 @@ Type/T 入口支持普通参数、非 self move，以及非 self 顶层数字/bo
 
 方法实例按真实 impl 方法 SymbolId 及完整 `[impl 类型实参..., 方法类型实参...]` 保存。签名中没有出现的类型参数必须显式填写；HIR 从该调用的真实源码及所属实例还原它，不能用相同签名猜测。One/Two 等签名相同、完整实参不同的实例分别保存，调换显式调用或具体化 ConstraintCall 的目标会被拒绝。trait 原型只有声明，没有虚构的可执行模板体；公共 HIR 和后端接口保持原样。
 
-泛型 trait 方法的顶层参数支持 ordinary、非 self move 和非 self 数字/bool 或有限平凡 struct/enum 整体 inout。依赖方法类型参数或 Self 的 inout callback 仍报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的数字/bool Self callback、固定 callback 和 `Self.helper` 保持原规则。泛型 trait 已在〈泛型 trait 的完整应用身份〉与〈泛型 trait 的 ordinary 方法自身泛型〉开放；方法值、捕获闭包、实际 self move/inout、trait 定义参数自身 bound 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
+泛型 trait 方法的顶层参数支持 ordinary、非 self move 和非 self 数字/bool 或有限平凡 struct/enum 整体 inout。依赖方法类型参数或 Self 的 inout callback 仍报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的数字/bool Self callback、固定 callback 和 `Self.helper` 保持原规则。泛型 trait 已在〈泛型 trait 的完整应用身份〉与〈泛型 trait 的 ordinary 方法自身泛型〉开放；方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
 
 ## trait 非 self move 与类型名调用
 
@@ -282,7 +292,7 @@ Type/T 入口支持普通参数、非 self move，以及非 self 顶层数字/bo
 
 已有绑定仍须显式 move；临时值、按书写顺序求值的命名实参、普通共享副本、typed error、return 和 defer 沿用原规则。后续实参失败时，已经 move 的临时按逆序销毁，原绑定不会恢复可读；若更早的实参失败，尚未求值的 move 不发生。catch 同时接收 move 前的实参错误和 callee 接管后的同型错误时，所有权状态会合并，不能据此假定源绑定仍可读。实例仍按真实方法及完整 impl/方法实参保存，phantom 参数、真实 Source、Move.binding 与清理记录继续验证。
 
-非 self 顶层数字/bool 或有限平凡 struct/enum 整体 inout 见下节。依赖方法类型参数或 Self 的 inout callback 继续检查整个函数签名、替换后的 struct 字段及 enum 载荷；旧 ordinary-only Type/T 调用保留原行为。公共 HIR、NodeKind、后端接口和运行库未变。泛型 trait 已由前文〈泛型 trait 的完整应用身份〉与〈泛型 trait 的 ordinary 方法自身泛型〉开放；方法值、捕获闭包、实际 self move/inout、部分字段 move、foreign/动态 string move、trait 定义参数自身 bound 和完整 ARC 仍未完成。T07/T09 保持 in_progress。
+非 self 顶层数字/bool 或有限平凡 struct/enum 整体 inout 见下节。依赖方法类型参数或 Self 的 inout callback 继续检查整个函数签名、替换后的 struct 字段及 enum 载荷；旧 ordinary-only Type/T 调用保留原行为。公共 HIR、NodeKind、后端接口和运行库未变。泛型 trait 已由前文〈泛型 trait 的完整应用身份〉与〈泛型 trait 的 ordinary 方法自身泛型〉开放；方法值、捕获闭包、实际 self move/inout、部分字段 move、foreign/动态 string move 和完整 ARC 仍未完成。T07/T09 保持 in_progress。
 
 ## trait 方法的非 self 顶层数字/bool inout
 

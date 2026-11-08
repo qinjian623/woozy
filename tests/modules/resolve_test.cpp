@@ -43,8 +43,63 @@ void example(const char *source, const char *error = nullptr) {
   for (const auto &d : r.diagnostics) if (d.primary)
     check(manager.get(d.primary->snapshot)->path == "0/0.lang", "wrong diagnostic file");
 }
+AstNodeId top_declaration(const AstFile &file, AstKind kind,
+                          std::string_view name = {}) {
+  for (auto id : file.node(file.root).children) {
+    const auto &node = file.node(id);
+    if (node.kind != kind) continue;
+    size_t p = node.token_begin + (file.tokens.at(node.token_begin).spelling == "pub");
+    if (name.empty() || file.tokens.at(p + 1).spelling == name) return id;
+  }
+  throw std::runtime_error("missing test declaration");
+}
+SymbolId self_of(const ResolvedProject &resolved, AstNodeId owner) {
+  for (auto [ref, symbol] : resolved.self_parameters)
+    if (ref.module == ModuleId(0) && ref.file == 0 && ref.node == owner)
+      return symbol;
+  throw std::runtime_error("missing test Self");
+}
+void self_occurrences(const ResolvedProject &resolved, const AstFile &file,
+                      AstNodeId owner, size_t expected) {
+  auto self = self_of(resolved, owner);
+  const auto &declaration = file.node(owner);
+  size_t found = 0;
+  for (const auto &occurrence : resolved.occurrences) {
+    if (occurrence.span.snapshot != file.source->id ||
+        occurrence.span.begin_byte < declaration.span.begin_byte ||
+        occurrence.span.end_byte > declaration.span.end_byte)
+      continue;
+    if (resolved.symbols.at(occurrence.symbol.value).name != "Self") continue;
+    check(occurrence.symbol == self, "Self occurrence bound to another declaration");
+    ++found;
+  }
+  check(found == expected, "missing or duplicate declaration Self occurrence");
+}
+void self_declarations() {
+  SourceManager manager;
+  auto p = project(manager, {{"package p; trait Rel[A] {} "
+      "trait Edit[A Rel[Self]] { func f(x Self); } "
+      "trait View[B Rel[Self]] {} struct Host {} "
+      "impl[P Rel[Self]] Rel[P] for Host { func g(x Self) {} }"}});
+  auto r = resolve_project(p);
+  for (const auto &d : r.diagnostics) std::cerr << d.code << ": " << d.message << '\n';
+  check(r.success(), "Self in declaration header bounds rejected");
+  const auto &file = *p->modules.at(0).files.at(0);
+  auto edit = top_declaration(file, AstKind::Trait, "Edit");
+  auto view = top_declaration(file, AstKind::Trait, "View");
+  auto impl = top_declaration(file, AstKind::Impl);
+  auto edit_self = self_of(*r.value, edit);
+  auto view_self = self_of(*r.value, view);
+  auto impl_self = self_of(*r.value, impl);
+  check(edit_self != view_self && edit_self != impl_self &&
+        view_self != impl_self, "different declarations share one Self");
+  self_occurrences(*r.value, file, edit, 2);
+  self_occurrences(*r.value, file, view, 1);
+  self_occurrences(*r.value, file, impl, 2);
+}
 }
 int main() {
+  self_declarations();
   example("package p; func f(x i32) i32 { { let x = 2; } return x; }");
   example("package p; func f() { let x = 1; { let x = x + 1; } }");
   example("package p; func f() { let x = x + 1; }", "E_NAME_NOT_FOUND");
@@ -59,8 +114,14 @@ int main() {
   example("package p; const _ = 1; func f() { const _ = 2; }");
   example("package p; const _ = missing;", "E_NAME_NOT_FOUND");
   example("package p; func f() { let x Self = 0; }", "E_NAME_NOT_FOUND");
+  example("package p; func f(x Self) {}", "E_NAME_NOT_FOUND");
+  example("package p; struct T { x Self; }", "E_NAME_NOT_FOUND");
+  example("package p; enum E { V(x Self); }", "E_NAME_NOT_FOUND");
+  example("package p; const X Self = 1;", "E_NAME_NOT_FOUND");
   example("package p; trait A { func f(x Self); }");
   example("package p; struct T {} impl T { func f(x Self) {} }");
+  example("package p; trait A[T, T] {}", "E_NAME_DUPLICATE");
+  example("package p; trait A[Self] {}", "E_NAME_DUPLICATE");
   example("package p; struct T {} pub func f(x T) {}", "E_PRIVATE_TYPE_LEAK");
   example("package p; struct Secret {} pub enum Reply { Value(value Secret); }", "E_PRIVATE_TYPE_LEAK");
   example("package p; func f() { let a = [1]; let i = 0; let x = a[(i)]; }");

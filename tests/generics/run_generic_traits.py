@@ -18,6 +18,10 @@ import sys
 sys.dont_write_bytecode = True
 
 POSITIVE = ('dual-phantom', 'joint-nonoverlap', 'cross-package',
+            'trait-parameter-bound-runtime',
+            'trait-parameter-self-modes-runtime',
+            'trait-parameter-generic-impl-runtime',
+            'trait-parameter-cross-package', 'bound-forward-nominal',
             'phantom-impl-key', 'forward-nominal-runtime',
             'alpha-bound-runtime', 'combined-self-bound-runtime',
             'combined-self-sibling-bound-runtime', 'own-alpha-runtime',
@@ -32,7 +36,8 @@ POSITIVE = ('dual-phantom', 'joint-nonoverlap', 'cross-package',
 # exercise the bound, so they are not reported as runtime coverage.
 # Old reject-* sources keep their bytes. Their declarations are now legal;
 # the modes-* projects exercise the newly accepted calls.
-STATIC_POSITIVE = ('prototype-bound-self', 'bound-pod-callback-control',
+STATIC_POSITIVE = ('prototype-bound-self', 'bound-nested-trait-parameter',
+                   'bound-pod-callback-control',
                    'reject-own-generic', 'hidden-fixed-callback-control',
                    'reject-own-generic-move', 'reject-own-generic-inout',
                    'reject-move', 'reject-inout')
@@ -52,11 +57,20 @@ SOURCE_ERROR = {
     'reject-alpha-bound-mismatch': {'E_TYPE_MISMATCH'},
     'reject-self-bound-mismatch': {'E_TYPE_MISMATCH'},
     'reject-forward-arity': {'E_TYPE_MISMATCH'},
+    'reject-trait-parameter-missing-impl': {'E_TYPE_MISMATCH'},
+    'reject-trait-parameter-wrong-argument': {'E_TYPE_MISMATCH'},
+    'reject-trait-parameter-wrong-self': {'E_TYPE_MISMATCH'},
+    'reject-trait-parameter-unused-impl': {'E_TYPE_MISMATCH'},
+    'reject-trait-parameter-undeclared-sibling': {'E_TYPE_MISMATCH'},
+    'reject-trait-parameter-nested-application': {'E_TYPE_MISMATCH'},
     'modes-reject-move-marker': {'E_CALL_ARGUMENT'},
     'modes-reject-after-move': {'E_OWNERSHIP_USE_AFTER_MOVE'},
     'modes-reject-inout-alias': {'E_CALL_ARGUMENT'},
 }
 UNSUPPORTED = {
+    'bound-direct-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
+    'bound-held-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
+    'bound-dependent-held-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-bound-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-own-dependent-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-hidden-own-callback': {'E_CAPABILITY_UNAVAILABLE'},

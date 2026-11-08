@@ -1,0 +1,53 @@
+package app;
+enum E { Bad; }
+trait Code { func code(owner Self) i32; }
+impl Code for i32 { func code(owner Self) i32 { return owner; } }
+trait Mark[A] { func mark(owner Self, x A) i32; }
+impl Mark[i32] for i32 { func mark(owner Self, x i32) i32 { return owner + x; } }
+trait Tag[A] { func tag(owner Self, x A) i32; }
+impl Tag[Key] for i32 { func tag(owner Self, x Key) i32 { return owner + x.base; } }
+struct Key { base i32; }
+trait Use[A Code, B Mark[A]] {
+  func plain(owner Self, a A, b B) i32;
+  func run[U Tag[Self]](owner Self, a A, b B, u U) i32;
+}
+impl Use[i32, i32] for Key {
+  func plain(owner Self, a i32, b i32) i32 {
+    return owner.base + a.code() + b.mark(a);
+  }
+  func run[V Tag[Self]](owner Self, a i32, b i32, u V) i32 {
+    return owner.base + a.code() + b.mark(a) + V.tag(u, owner);
+  }
+}
+func relay[T Use[i32, i32]](owner T, value move Vec[i32],
+                       slot inout i32) i32 throws E {
+  defer { slot += 1; }
+  let first = value[0];
+  if first < 0 { throw E.Bad; }
+  slot += first;
+  return T.plain(owner, 5, 1) + slot;
+}
+func main() i32 {
+  let key = Key(base: 3);
+  let direct = key.run[i32](5, 1, 7) - 24;
+  let typed = Key.plain(key, 5, 1) - 14;
+  var slot i32 = 6;
+  var forwarded i32 = 0;
+  let values Vec[i32] = [8];
+  try {
+    forwarded = relay(key, move values, inout slot);
+  } catch err E {
+    return 2;
+  }
+  if slot != 15 || forwarded != 28 { return 3; }
+  var badSlot i32 = 3;
+  var caught = 0;
+  let bad Vec[i32] = [-1];
+  try {
+    let never = relay(key, move bad, inout badSlot);
+  } catch err E {
+    caught = 1;
+  }
+  if caught != 1 || badSlot != 4 { return 4; }
+  return direct + typed;
+}

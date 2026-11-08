@@ -1,0 +1,6 @@
+package app;
+trait Tag[A] {}
+trait Use[U Tag[Holder[Data]]] {}
+struct Holder[T] { cb func(inout T) Unit; }
+struct Data { items Vec[i32]; }
+func main() i32 { return 0; }

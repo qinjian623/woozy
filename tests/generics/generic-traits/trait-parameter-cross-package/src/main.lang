@@ -1,0 +1,10 @@
+package app;
+import "app/lib" as lib;
+struct Key { base i32; }
+impl lib.Use[i32] for Key {
+  func use(owner Self, value i32) i32 { return owner.base + value.code(); }
+}
+func main() i32 {
+  let key = Key(base: 2);
+  return lib.relay(key) - 9;
+}

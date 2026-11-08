@@ -381,11 +381,13 @@ class Resolver {
       return;
     }
     Scope inner{&scope, {}};
-    generics(n, inner, exported);
+    // A trait/impl's real Self is visible in its own generic parameter
+    // bounds, but nowhere else outside that declaration.
     if (n.kind == AstKind::Trait || n.kind == AstKind::Impl) {
       auto self = add(inner, "Self", SymbolKind::type_parameter);
       out.self_parameters.push_back({ref(id), self});
     }
+    generics(n, inner, exported);
     Scope members;
     for (auto child : n.children) {
       const auto &c = node(child);

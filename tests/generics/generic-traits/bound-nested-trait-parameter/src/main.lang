@@ -1,0 +1,8 @@
+package app;
+trait Code { func code(owner Self) i32; }
+impl Code for i32 { func code(owner Self) i32 { return owner; } }
+trait Use[A Code] { func get(owner Self) i32; }
+trait Outer[B Code] {
+  func run[T Use[B]](owner Self, value T) i32;
+}
+func main() i32 { return 0; }

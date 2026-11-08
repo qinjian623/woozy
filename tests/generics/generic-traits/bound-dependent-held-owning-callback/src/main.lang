@@ -1,0 +1,10 @@
+package app;
+trait Tag[T] {}
+struct Holder[T] { cb func(inout T) Unit; }
+struct Data { items Vec[i32]; }
+trait Use[A, U Tag[Holder[A]]] {}
+struct Proof {}
+struct Host {}
+impl Tag[Holder[Data]] for Proof {}
+impl Use[Data, Proof] for Host {}
+func main() i32 { return 0; }

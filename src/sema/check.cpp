@@ -75,6 +75,11 @@ class Checker {
   using TraitKey = std::tuple<uint64_t, uint64_t, std::vector<uint64_t>>;
   std::map<TraitKey, bool> trait_results;
   std::set<TraitKey> active_constraints;
+  // Trait applications carry one declared bound per trait parameter. These
+  // are checked after every trait/impl declaration is complete, and again for
+  // concrete uses, so a partially registered declaration cannot cache a false
+  // negative.
+  std::set<TraitKey> active_trait_bounds;
   size_t instantiated_nodes = 0;
   std::vector<GenericParam> active_params;
   std::set<uint64_t> signature_parameters;
@@ -143,6 +148,46 @@ class Checker {
     if (args.size() != found->second.size())
       reject(r, "wrong number of trait type arguments", "E_TYPE_MISMATCH");
     return TraitRef{declaration, std::move(args)};
+  }
+  // Check the complete application [trait.params -> args, trait.Self -> self].
+  // Each declared parameter bound is substituted and applied to its actual
+  // argument. Nested applications are checked before asking whether the
+  // argument has exactly one implementation. This is deliberately separate
+  // from the parse-time arity check: declarations are only complete after all
+  // traits and impls have been registered.
+  void check_trait_parameter_bounds(Ref r, const TraitRef &trait,
+                                    TypeId application, size_t depth = 0) {
+    auto found = trait_parameters.find(trait.declaration.value);
+    const auto *tr = trait_decl(trait.declaration);
+    if (found == trait_parameters.end() || !tr)
+      reject(r, "trait application has no real declaration", "E_NAME_KIND");
+    if (trait.args.size() != found->second.size())
+      reject(r, "wrong number of trait type arguments", "E_TYPE_MISMATCH");
+    if (depth >= 48)
+      reject(r, "trait constraint graph exceeds checking budget",
+             "E_TYPE_MISMATCH");
+    auto key = trait_key(application, trait);
+    if (!active_trait_bounds.insert(key).second)
+      return;
+    for (auto arg : trait.args)
+      check_inout_graph(r, arg, true);
+    Substitutions sub{{tr->self, application}};
+    for (size_t i = 0; i < tr->params.size(); ++i)
+      sub.push_back({tr->params[i].symbol, trait.args[i]});
+    for (size_t i = 0; i < found->second.size(); ++i) {
+      const auto &p = found->second[i];
+      if (!p.trait)
+        continue;
+      TraitRef bound = *p.trait;
+      for (auto &arg : bound.args)
+        arg = substitute(arg, sub, m.types);
+      check_trait_parameter_bounds(r, bound, trait.args[i], depth + 1);
+      if (!satisfies(r, trait.args[i], bound))
+        reject(r,
+               "trait argument does not satisfy the trait declaration's "
+               "parameter constraint");
+    }
+    active_trait_bounds.erase(key);
   }
   bool integer(TypeId t) const {
     auto k = type(t).kind;
@@ -2130,6 +2175,7 @@ class Checker {
       if (sub)
         for (auto &arg : bound.args)
           arg = substitute(arg, *sub, m.types);
+      check_trait_parameter_bounds(r, bound, args.at(i));
       if (!satisfies(r, args.at(i), bound))
         reject(r, "generic constraint requires one applicable explicit trait "
                   "implementation");
@@ -3693,20 +3739,15 @@ class Checker {
     }
     for (auto r : top)
       if (ast(r).kind == AstKind::Trait) {
+        // The real Self identity must be visible while parsing the ordered
+        // trait parameter bounds, which may name this trait's Self.
+        auto self = self_parameter(r);
+        self_types[self.value] = parameter_type(self);
         auto ps = generics(r);
-        // Trait parameters are unconstrained in this batch. A bound here
-        // would require a nested application environment the current
-        // substitution/prototype identity does not represent.
-        for (const auto &p : ps)
-          if (p.trait)
-            unavailable(p.source.node,
-                        "constrained generic trait parameters are not "
-                        "implemented");
         auto found = trait_parameters.find(definition(r).value);
         if (found == trait_parameters.end() || found->second.size() != ps.size())
           throw std::invalid_argument("trait parameter registration mismatch");
-        auto self = self_parameter(r);
-        self_types[self.value] = parameter_type(self);
+        found->second = ps;
         std::vector<TypeId> self_args;
         for (const auto &p : ps)
           self_args.push_back(parameter_type(p.symbol));
@@ -4242,6 +4283,7 @@ class Checker {
       TraitRef bound = *ps[i].trait;
       for (auto &arg : bound.args)
         arg = substitute(arg, sub, m.types);
+      check_trait_parameter_bounds(n.source.node, bound, result[i]);
       if (!satisfies(n.source.node, result[i], bound))
         reject(n.source.node,
                "method type argument does not satisfy its trait constraint");
@@ -4508,10 +4550,12 @@ public:
   HirModule run() {
     declarations();
     // Bound function types may have been parsed before nominal fields existed.
-    // Recheck them with complete fields and their real declaration environment.
+    // Check each application and its substituted inout graph with complete
+    // fields and the real surrounding template parameter identities.
     auto check_bounds = [&](const std::vector<GenericParam> &ps,
                             std::optional<SymbolId> self = std::nullopt,
-                            const std::set<uint64_t> *environment = nullptr) {
+                            const std::set<uint64_t> *environment = nullptr,
+                            const ImplDecl *impl = nullptr) {
       auto saved = std::move(signature_parameters);
       signature_parameters.clear();
       for (const auto &p : ps)
@@ -4522,14 +4566,19 @@ public:
         signature_parameters.insert(environment->begin(), environment->end());
       for (const auto &p : ps)
         if (p.trait)
-          for (auto arg : p.trait->args)
-            check_inout_graph(p.source.node, arg, true);
+          check_trait_parameter_bounds(p.source.node, *p.trait,
+                                       parameter_type(p.symbol));
+      if (impl && impl->trait)
+        check_trait_parameter_bounds(impl->source.node, *impl->trait,
+                                     impl->self_type);
       signature_parameters = std::move(saved);
     };
+    for (const auto &tr : m.traits)
+      check_bounds(tr.params, tr.self);
     for (const auto &d : m.nominals)
       check_bounds(d.params);
     for (const auto &im : m.impls)
-      check_bounds(im.params, im.self_parameter);
+      check_bounds(im.params, im.self_parameter, nullptr, &im);
     for (const auto &[owner, ps] : generic_params) {
       auto context = trait_signature_context.find(owner);
       std::set<uint64_t> environment;

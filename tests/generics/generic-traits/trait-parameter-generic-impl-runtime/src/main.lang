@@ -1,0 +1,25 @@
+package app;
+trait Code { func code(owner Self) i32; }
+impl Code for i32 { func code(owner Self) i32 { return owner; } }
+trait Use[A Code, B] { func use(owner Self, value A) i32; }
+struct Box[T] { value T; }
+impl[T Code] Use[T, bool] for Box[T] {
+  func use(owner Self, value T) i32 { return value.code() + owner.value.code(); }
+}
+func relay[T Use[i32, bool]](owner T) i32 { return T.use(owner, 7); }
+struct Key {}
+impl Code for Key { func code(owner Self) i32 { return 1; } }
+trait Pick[A Code, B] { func pick(owner Self) i32; }
+impl Pick[i32, bool] for Key { func pick(owner Self) i32 { return 1; } }
+impl Pick[i32, u64] for Key { func pick(owner Self) i32 { return 2; } }
+func first[T Pick[i32, bool]](owner T) i32 { return owner.pick(); }
+func second[T Pick[i32, u64]](owner T) i32 { return T.pick(owner); }
+func main() i32 {
+  let box = Box[i32](value: 4);
+  let key = Key();
+  let a = relay(box) - 11;
+  let typed = Box[i32].use(box, 7) - 11;
+  let b = first(key) - 1;
+  let c = second(key) - 2;
+  return a + typed + b + c;
+}

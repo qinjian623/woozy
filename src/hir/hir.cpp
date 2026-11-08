@@ -332,6 +332,8 @@ class Verifier {
       trait_results;
   mutable std::set<std::tuple<uint64_t, uint64_t, std::vector<uint64_t>>>
       active_constraints;
+  mutable std::set<std::tuple<uint64_t, uint64_t, std::vector<uint64_t>>>
+      active_trait_bounds;
   mutable std::set<std::pair<uint64_t, std::set<uint64_t>>> validated_types;
 
   [[noreturn]] void fail(std::string message,
@@ -668,14 +670,16 @@ class Verifier {
     }
     return {*declaration, std::move(args)};
   }
+  TypeId parameter_type(SymbolId s) const {
+    Type t;
+    t.kind = TypeKind::TypeParameter;
+    t.declaration = s;
+    return substituted.intern(std::move(t));
+  }
   TraitRef trait_self_application(const TraitDecl &tr) const {
     std::vector<TypeId> args;
-    for (const auto &p : tr.params) {
-      Type t;
-      t.kind = TypeKind::TypeParameter;
-      t.declaration = p.symbol;
-      args.push_back(substituted.intern(std::move(t)));
-    }
+    for (const auto &p : tr.params)
+      args.push_back(parameter_type(p.symbol));
     return {tr.symbol, std::move(args)};
   }
   void check_trait_application(const TraitRef &r,
@@ -687,6 +691,41 @@ class Verifier {
          "trait application has the wrong argument count");
     for (auto a : r.args)
       valid_type(a, allowed);
+  }
+  // Independently apply a trait's real ordered parameter bounds. The
+  // substitution is exactly [trait.params -> args, trait.Self -> application
+  // Self], and each resulting bound is checked against its argument. Nested
+  // applications are visited before the one-impl relation, so a partly built
+  // producer cache cannot hide a missing or reordered constraint.
+  void check_trait_parameter_bounds(const TraitRef &r, TypeId application,
+                                    size_t depth = 0) const {
+    const auto *tr = trait_declaration(r.declaration);
+    need(tr != nullptr, "trait application has no real declaration");
+    need(tr->params.size() == r.args.size(),
+         "trait application has the wrong argument count");
+    need(depth < 64, "trait constraint graph exceeds verification budget");
+    std::vector<uint64_t> args;
+    for (auto a : r.args)
+      args.push_back(a.value);
+    auto key = std::make_tuple(application.value, r.declaration.value,
+                               std::move(args));
+    if (!active_trait_bounds.insert(key).second)
+      return;
+    Substitutions sub{{tr->self, application}};
+    for (size_t i = 0; i < tr->params.size(); ++i)
+      sub.push_back({tr->params[i].symbol, r.args[i]});
+    for (size_t i = 0; i < tr->params.size(); ++i) {
+      if (!tr->params[i].trait)
+        continue;
+      TraitRef bound = *tr->params[i].trait;
+      for (auto &arg : bound.args)
+        arg = substitute(arg, sub, substituted);
+      check_trait_parameter_bounds(bound, r.args[i], depth + 1);
+      need(satisfies(r.args[i], bound),
+           "trait argument does not satisfy the trait declaration's "
+           "parameter constraint");
+    }
+    active_trait_bounds.erase(key);
   }
   struct SourceMethodCall {
     modules::NodeRef base;
@@ -1865,7 +1904,8 @@ class Verifier {
       return it->second;
     if (depth >= 64 || !active_constraints.insert(key).second)
       return false;
-    const auto &a = type(actual);
+    const Type &a = substituted.find(actual) ? *substituted.find(actual)
+                                             : type(actual);
     size_t count = 0;
     if (a.kind == TypeKind::TypeParameter) {
       auto contains = [&](const auto &ps) {
@@ -1883,10 +1923,13 @@ class Verifier {
       for (const auto &im : m.impls)
         if (contains(im.params))
           count = 1;
-      for (const auto &tr : m.traits)
+      for (const auto &tr : m.traits) {
+        if (contains(tr.params))
+          count = 1;
         if (tr.self == a.declaration &&
             trait_self_application(tr) == trait)
           count = 1;
+      }
     } else
       for (const auto &im : m.impls) {
         if (!im.trait || im.trait->declaration != trait.declaration ||
@@ -1953,6 +1996,7 @@ class Verifier {
            "declared constraint application identity/arity");
       for (auto &arg : bound.args)
         arg = substitute(arg, sub, substituted);
+      check_trait_parameter_bounds(bound, args[i]);
       need(satisfies(args[i], bound),
            "type arguments do not satisfy declared constraints");
     }
@@ -1987,8 +2031,10 @@ class Verifier {
     std::set<uint64_t> allowed = result;
     allowed.insert(outer_allowed.begin(), outer_allowed.end());
     for (const auto &p : ps)
-      if (p.trait)
+      if (p.trait) {
         check_trait_application(*p.trait, allowed);
+        check_trait_parameter_bounds(*p.trait, parameter_type(p.symbol));
+      }
     return result;
   }
   void self_owner(const Source &owner, SymbolId self) const {
@@ -2098,10 +2144,9 @@ class Verifier {
       need(traits.insert(tr.symbol.value).second, "duplicate trait identity");
       self_owner(tr.source, tr.self);
       source_entries(tr.source, AstKind::GenericParameter, tr.params);
-      parameter_set(tr.params);
-      for (const auto &p : tr.params)
-        need(!p.trait,
-             "generic trait parameter constraints are unsupported");
+      parameter_set(tr.params, {tr.self.value});
+      check_trait_parameter_bounds(trait_self_application(tr),
+                                   parameter_type(tr.self));
       std::set<uint64_t> methods;
       for (const auto &method : tr.methods) {
         declaration(method.symbol, method.source, modules::SymbolKind::function,
@@ -2206,6 +2251,7 @@ class Verifier {
         need(source_trait_application(types.front()) == *im.trait,
              "impl trait application differs from source declaration");
         check_trait_application(*im.trait, ps);
+        check_trait_parameter_bounds(*im.trait, im.self_type);
       }
     }
     // Independently recheck the stage restriction from the raw trait
@@ -2592,6 +2638,7 @@ class Verifier {
     need(tr, "missing constraint trait");
     auto owner_allowed_check = allowed(owner);
     check_trait_application(c.trait, owner_allowed_check);
+    check_trait_parameter_bounds(c.trait, c.receiver);
     bool bounded = false;
     for (auto p : templates.at(owner.value)->params)
       if (p.trait && *p.trait == c.trait &&

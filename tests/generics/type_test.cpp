@@ -12118,6 +12118,377 @@ void generic_trait_method_modes(const fs::path &root) {
             << " changed HIR graphs rejected directly and after ownership\n";
 }
 
+void trait_parameter_bounds(const fs::path &root) {
+  const auto cases = root / "tests/generics/generic-traits";
+  auto good = [](const std::string &s) {
+    auto r = source(s);
+    need(r.success(), s + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "trait parameter bound HIR rejected\n" + messages(r));
+    auto published = hir::verify(*r.value);
+    need(published.success(), messages(published));
+    auto recomputed = *r.value;
+    need(hir::detail::produce_ownership(recomputed, {}).success() &&
+             hir::verify_types(recomputed).success(),
+         "recomputed trait parameter bound control rejected");
+    return *r.value;
+  };
+  auto bad = [](const std::string &s, const std::string &code) {
+    auto r = source(s);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code) &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         s + "\n" + messages(r));
+  };
+  auto unsupported = [](const std::string &s) {
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(s, backend);
+      need(!r.success() && r.failure == FailureKind::unsupported &&
+               has(r, "E_CAPABILITY_UNAVAILABLE") &&
+               !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR") &&
+               std::any_of(r.diagnostics.begin(), r.diagnostics.end(),
+                           [](const auto &d) {
+                             return d.code == "E_CAPABILITY_UNAVAILABLE" &&
+                                    d.primary &&
+                                    d.primary->begin_byte < d.primary->end_byte;
+                           }),
+           std::string(backend) + ": " + s + "\n" + messages(r));
+    }
+  };
+  // Data fields are declared after the trait bound. Recheck their completed
+  // types before publishing HIR, including callbacks hidden in Holder.
+  unsupported("trait Tag[A]{}"
+              "trait Use[U Tag[func(inout Data)Unit]]{}"
+              "struct Data{items Vec[i32];}func main()i32{return 0;}");
+  unsupported("trait Tag[A]{}trait Use[U Tag[Holder[Data]]]{}"
+              "struct Holder[T]{cb func(inout T)Unit;}"
+              "struct Data{items Vec[i32];}func main()i32{return 0;}");
+  good("trait Tag[A]{}trait Use[U Tag[func(inout Data)Unit]]{}"
+       "struct Data{value i32;}func main()i32{return 0;}");
+  good("trait Tag[A]{}trait Use[U Tag[Holder[Data]]]{}"
+       "struct Holder[T]{cb func(inout T)Unit;}"
+       "struct Data{value i32;}func main()i32{return 0;}");
+  // Holder[A] is a legal template; its inout data must be checked again when
+  // the trait application substitutes concrete Data for A.
+  unsupported("trait Tag[T]{}struct Holder[T]{cb func(inout T)Unit;}"
+              "struct Data{items Vec[i32];}trait Use[A,U Tag[Holder[A]]]{}"
+              "struct Proof{}struct Host{}"
+              "impl Tag[Holder[Data]] for Proof{}"
+              "impl Use[Data,Proof] for Host{}func main()i32{return 0;}");
+  good("trait Tag[T]{}struct Holder[T]{cb func(inout T)Unit;}"
+       "struct Data{value i32;}trait Use[A,U Tag[Holder[A]]]{}"
+       "struct Proof{}struct Host{}impl Tag[Holder[Data]] for Proof{}"
+       "impl Use[Data,Proof] for Host{}func main()i32{return 0;}");
+  auto scalar = [](const hir::HirModule &m, hir::TypeKind kind,
+                   unsigned bits) -> TypeId {
+    for (uint64_t id = 1; id <= m.types.size(); ++id) {
+      auto t = m.types.find(TypeId{id});
+      if (t && t->kind == kind && t->bits == bits)
+        return TypeId{id};
+    }
+    throw std::runtime_error("scalar type missing from bound module");
+  };
+
+  // A real trait declaration keeps both ordered parameters and their actual
+  // bounds. The second bound names the first sibling parameter; the method
+  // own bound names the real trait Self. The concrete impl and relay exercise
+  // alpha renaming, full application selection and an uncalled declaration.
+  auto first = check(cases / "trait-parameter-bound-runtime/lang.toml");
+  need(first.success(), messages(first));
+  const hir::TraitDecl *use = nullptr, *mark = nullptr, *tag = nullptr,
+                        *code = nullptr;
+  for (const auto &tr : first.value->traits) {
+    auto name = first.value->resolved->symbols[tr.symbol.value].name;
+    if (name == "Use")
+      use = &tr;
+    if (name == "Mark")
+      mark = &tr;
+    if (name == "Tag")
+      tag = &tr;
+    if (name == "Code")
+      code = &tr;
+  }
+  need(use && mark && tag && code && use->params.size() == 2 &&
+           use->params[0].trait &&
+           use->params[0].trait->declaration == code->symbol &&
+           use->params[1].trait &&
+           use->params[1].trait->declaration == mark->symbol &&
+           use->params[1].trait->args.size() == 1 &&
+           first.value->types.find(use->params[1].trait->args[0])->kind ==
+               hir::TypeKind::TypeParameter &&
+           first.value->types.find(use->params[1].trait->args[0])->declaration ==
+               use->params[0].symbol,
+       "trait parameter bounds lost their real sibling identity");
+  const hir::FunctionTemplate *run_template = nullptr;
+  const hir::ImplDecl *use_impl = nullptr;
+  for (const auto &im : first.value->impls)
+    if (im.trait && im.trait->declaration == use->symbol) {
+      use_impl = &im;
+      for (auto method : im.methods)
+        for (const auto &t : first.value->templates)
+          if (t.function.symbol == method)
+            run_template = &t;
+    }
+  need(use_impl && run_template && run_template->params.size() == 1 &&
+           run_template->params[0].trait &&
+           run_template->params[0].trait->declaration == tag->symbol &&
+           run_template->params[0].trait->args.size() == 1,
+       "impl method own bound lost the real trait Self application");
+  bool relay_constraint = false;
+  for (const auto &n : first.value->nodes)
+    if (auto c = std::get_if<hir::ConstraintCall>(&n.data))
+      if (c->trait.declaration == use->symbol && c->trait.args.size() == 2) {
+        need(c->trait.args[0] == scalar(*first.value, hir::TypeKind::SignedInt, 32) &&
+                 c->trait.args[1] ==
+                     scalar(*first.value, hir::TypeKind::SignedInt, 32),
+             "ConstraintCall lost its complete trait parameter application");
+        relay_constraint = true;
+      }
+  need(relay_constraint,
+       "relay did not retain a complete bounded ConstraintCall");
+  auto owned_first = *first.value;
+  need(hir::detail::produce_ownership(owned_first, {}).success() &&
+           hir::verify_types(owned_first).success() &&
+           hir::verify(owned_first).success(),
+       "legal trait parameter bound control rejected after ownership");
+
+  const auto i32 = scalar(*first.value, hir::TypeKind::SignedInt, 32);
+  const auto bool_type = scalar(*first.value, hir::TypeKind::Bool, 0);
+  auto both = [&](const hir::HirModule &m, const std::string &name,
+                  const auto &change) {
+    invalid(m, "direct " + name, change);
+    invalid_recomputed(m, "recomputed " + name, change);
+  };
+  // This Self belongs to the trait parameter bound, before any method-own
+  // parameter is declared. Another trait's identically named Self is distinct.
+  auto self = check(cases / "trait-parameter-self-modes-runtime/lang.toml");
+  need(self.success(), messages(self));
+  const hir::TraitDecl *edit = nullptr, *rel = nullptr;
+  for (const auto &tr : self.value->traits) {
+    const auto &name = self.value->resolved->symbols.at(tr.symbol.value).name;
+    if (name == "Edit")
+      edit = &tr;
+    if (name == "Rel")
+      rel = &tr;
+  }
+  need(edit && rel && edit->self != rel->self && edit->params.size() == 1 &&
+           edit->params[0].trait &&
+           edit->params[0].trait->declaration == rel->symbol &&
+           edit->params[0].trait->args.size() == 1,
+       "trait parameter Self bound declaration missing");
+  const auto self_type =
+      self.value->types.find(edit->params[0].trait->args[0]);
+  need(self_type && self_type->kind == hir::TypeKind::TypeParameter &&
+           self_type->declaration == edit->self,
+       "trait parameter bound did not retain its own trait's real Self");
+  auto owned_self = *self.value;
+  need(hir::verify_types(owned_self).success() &&
+           hir::verify(owned_self).success() &&
+           hir::detail::produce_ownership(owned_self, {}).success() &&
+           hir::verify_types(owned_self).success() &&
+           hir::verify(owned_self).success(),
+       "legal trait parameter Self bound rejected before/after ownership");
+  both(*self.value, "trait parameter bound uses another trait's Self",
+       [&](auto &x) {
+         hir::Type other;
+         other.kind = hir::TypeKind::TypeParameter;
+         other.declaration = rel->self;
+         const auto other_self = x.types.intern(other);
+         for (auto &tr : x.traits)
+           if (tr.symbol == edit->symbol) {
+             need(tr.params[0].trait->args[0] != other_self,
+                  "trait Self provenance mutation would be unchanged");
+             tr.params[0].trait->args[0] = other_self;
+             return;
+           }
+         throw std::runtime_error("trait Self provenance mutation target missing");
+       });
+  both(*self.value, "trait application violates parameter's Self bound",
+       [&](auto &x) {
+         for (auto &im : x.impls)
+           if (im.trait && im.trait->declaration == edit->symbol) {
+             const auto key = im.trait->args.at(0);
+             const auto key_type = x.types.find(key);
+             need(key_type && key_type->kind == hir::TypeKind::NominalStruct,
+                  "Self-bound impl Key type missing");
+             for (uint64_t id = 1; id <= x.types.size(); ++id) {
+               const auto candidate = x.types.find(TypeId{id});
+               if (candidate && candidate->kind == hir::TypeKind::NominalStruct &&
+                   candidate->declaration == key_type->declaration &&
+                   candidate->type_args == std::vector<TypeId>{key}) {
+                 need(TypeId{id} != key,
+                      "Self-bound application mutation would be unchanged");
+                 im.trait->args[0] = TypeId{id};
+                 return;
+               }
+             }
+             throw std::runtime_error("Key[Key[Owner]] mutation type missing");
+           }
+         throw std::runtime_error("Self-bound impl mutation target missing");
+       });
+  auto wrong_self =
+      check(cases / "reject-trait-parameter-wrong-self/lang.toml");
+  need(!wrong_self.success() && wrong_self.failure == FailureKind::source &&
+           has(wrong_self, "E_TYPE_MISMATCH") &&
+           !has(wrong_self, "E_IR_INVALID") &&
+           !has(wrong_self, "E_INTERNAL_ERROR"),
+       "wrong trait parameter Self application was not a source error\n" +
+           messages(wrong_self));
+  both(*first.value, "delete real trait parameter bound",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &tr : x.traits)
+      if (use && tr.symbol == use->symbol) {
+        tr.params[0].trait.reset();
+        changed = true;
+      }
+    need(changed, "missing trait parameter bound deletion target");
+  });
+  both(*first.value, "swap real trait parameter bound",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &tr : x.traits)
+      if (use && tr.symbol == use->symbol) {
+        tr.params[0].trait = hir::TraitRef{mark->symbol, {i32}};
+        changed = true;
+      }
+    need(changed, "missing trait parameter bound swap target");
+  });
+  both(*first.value, "swap sibling bound argument",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &tr : x.traits)
+      if (use && tr.symbol == use->symbol && tr.params[1].trait) {
+        tr.params[1].trait->args[0] = i32;
+        changed = true;
+      }
+    need(changed, "missing sibling bound corruption target");
+  });
+  both(*first.value, "swap impl trait application",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &im : x.impls)
+      if (use_impl && im.trait && im.trait->declaration == use->symbol &&
+          im.trait->args.size() == 2) {
+        im.trait->args[1] = bool_type;
+        changed = true;
+      }
+    need(changed, "missing bounded impl application target");
+  });
+  both(*first.value, "swap concrete method instance key",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &i : x.instances)
+      if (run_template && i.origin == run_template->function.symbol &&
+          !i.type_args.empty()) {
+        i.type_args[0] = bool_type;
+        changed = true;
+      }
+    need(changed, "missing bounded method instance key target");
+  });
+  both(*first.value, "swap ConstraintCall trait application",
+                     [&](auto &x) {
+    bool changed = false;
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data);
+          c && use && c->trait.declaration == use->symbol &&
+          c->trait.args.size() == 2) {
+        c->trait.args[0] = bool_type;
+        changed = true;
+      }
+    need(changed, "missing bounded ConstraintCall application target");
+  });
+
+  // Generic impl parameters satisfy a trait parameter's bound, and two
+  // phantom applications with the same Self stay distinct.
+  auto second =
+      check(cases / "trait-parameter-generic-impl-runtime/lang.toml");
+  need(second.success() && hir::verify_types(*second.value).success() &&
+           hir::verify(*second.value).success(),
+       "generic impl trait parameter bound rejected\n" + messages(second));
+  const hir::TraitDecl *pick = nullptr;
+  for (const auto &tr : second.value->traits)
+    if (second.value->resolved->symbols[tr.symbol.value].name == "Pick")
+      pick = &tr;
+  std::set<std::vector<uint64_t>> picks;
+  for (const auto &im : second.value->impls)
+    if (im.trait && pick && im.trait->declaration == pick->symbol) {
+      std::vector<uint64_t> args;
+      for (auto t : im.trait->args)
+        args.push_back(t.value);
+      picks.insert(std::move(args));
+    }
+  need(pick && pick->params.size() == 2 && pick->params[0].trait &&
+           picks.size() == 2,
+       "bounded phantom applications were merged or lost");
+
+  auto cross =
+      check(cases / "trait-parameter-cross-package/lang.toml");
+  need(cross.success() && hir::verify_types(*cross.value).success(),
+       "cross-package trait parameter bound rejected\n" + messages(cross));
+  auto forward = check(cases / "bound-forward-nominal/lang.toml");
+  need(forward.success() && hir::verify_types(*forward.value).success(),
+       "forward nominal trait parameter bound rejected\n" + messages(forward));
+  auto nested = check(cases / "bound-nested-trait-parameter/lang.toml");
+  need(nested.success() && hir::verify_types(*nested.value).success(),
+       "nested trait-parameter application was not proven from its real "
+       "bound\n" + messages(nested));
+
+  good("trait Code{func code(owner Self)i32;}"
+       "impl Code for i32{func code(owner Self)i32{return owner;}}"
+       "trait Use[A Code]{func use(owner Self,value A)i32;}"
+       "struct Key{}"
+       "impl Use[i32] for Key{func use(owner Self,value i32)i32{"
+       "return value.code();}}"
+       "func relay[A Code,T Use[A]](owner T,value A)i32{"
+       "return T.use(owner,value);}"
+       "func main()i32{let key=Key();return relay[i32,Key](key,7)-7;}");
+  good("trait Code{func code(owner Self)i32;}"
+       "impl Code for i32{func code(owner Self)i32{return owner;}}"
+       "trait Use[A Code]{func use(owner Self)i32;}"
+       "struct Holder[U Use[Later]]{value U;}"
+       "struct Later{}"
+       "impl Code for Later{func code(owner Self)i32{return 1;}}"
+       "impl Use[Later] for Later{func use(owner Self)i32{return 1;}}"
+       "func main()i32{let h=Holder[Later](value:Later());"
+       "return h.value.use()-1;}");
+  good("trait Code{func code(owner Self)i32;}"
+       "impl Code for i32{func code(owner Self)i32{return owner;}}"
+       "trait Use[A Code]{func get(owner Self)i32;}"
+       "trait Outer[B Code]{func run[T Use[B]](owner Self,value T)i32;}"
+       "func main()i32{return 0;}");
+
+  bad("trait Code{func code(owner Self)i32;}"
+      "trait Use[A Code]{func use(owner Self,value A)i32;}"
+      "struct Key{}"
+      "impl Use[i32] for Key{func use(owner Self,value i32)i32{return value;}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Code{func code(owner Self)i32;}"
+      "impl Code for i32{func code(owner Self)i32{return owner;}}"
+      "trait Use[A Code]{func use(owner Self)i32;}"
+      "struct Key{}"
+      "impl Use[bool] for Key{func use(owner Self)i32{return 0;}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Code{func code(owner Self)i32;}"
+      "impl Code for i32{func code(owner Self)i32{return owner;}}"
+      "trait Use[A Code]{func use(owner Self)i32;}"
+      "func relay[A,T Use[A]](owner T)i32{return T.use(owner);}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Code{func code(owner Self)i32;}"
+      "trait Inner[A Code]{func inner(owner Self,value A)i32;}"
+      "trait Outer[B Inner[i32]]{func outer(owner Self,value B)i32;}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  bad("trait Code{func code(owner Self)i32;}"
+      "impl Code for i32{func code(owner Self)i32{return owner;}}"
+      "trait Use[A Code,B]{func use(owner Self,value B)i32;}"
+      "struct Key{}"
+      "impl Use[i32,bool] for Key{func use(owner Self,value bool)i32{return 0;}}"
+      "impl Use[bool,i32] for Key{func use(owner Self,value i32)i32{return 1;}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+  std::cout << "trait-parameter-bounds: real Self/sibling/method bounds, "
+               "generic impl, forward, cross-package, phantom keys and "
+               "Source/HIR corruptions checked\n";
+}
+
 void ordinary_trait_receiver(const fs::path &root) {
   const auto cases = root / "tests/generics/generic-traits";
   auto control = check(cases / "ordinary-receiver-identity/lang.toml");
@@ -12285,6 +12656,7 @@ int main(int argc, char **argv) {
     generic_trait_applications();
     generic_trait_method_modes(root);
     ordinary_trait_receiver(root);
+    trait_parameter_bounds(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

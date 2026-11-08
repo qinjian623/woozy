@@ -1,0 +1,60 @@
+package app;
+trait Rel[A] { func witness(owner Self) i32; }
+struct Key[P] { value i32; }
+impl[P] Rel[P] for Key[P] {
+    func witness(owner Self) i32 { return owner.value; }
+}
+struct Owner { tag i32; }
+struct Pair { value i32; flag bool; }
+enum E { Bad(code i32); }
+trait Edit[A Rel[Self]] {
+    func update[U Rel[A]](owner Self, key A, proof U, slot inout Pair,
+        items move Vec[i32], trace Vec[i32], fail bool) Pair throws E;
+}
+impl Edit[Key[Owner]] for Owner {
+    func update[V Rel[Key[Owner]]](owner Self, key Key[Owner], proof V,
+        slot inout Pair, items move Vec[i32], trace Vec[i32], fail bool) Pair throws E {
+        let old = slot;
+        slot = Pair(value: items[0] + key.witness() + proof.witness() + owner.tag, flag: true);
+        items[0] += 1;
+        trace[0] = trace[0] * 10 + 1;
+        defer { slot.value += 100; trace[0] = trace[0] * 10 + 4; }
+        if fail { throw E.Bad(code: 9); }
+        return old;
+    }
+}
+func relay[T Edit[A], A Rel[T], U Rel[A]](owner T, key A, proof U,
+    slot inout Pair, items move Vec[i32], trace Vec[i32], fail bool) Pair throws E {
+    return T.update[U](owner, key, proof, inout slot, move items, trace, fail);
+}
+func main() i32 {
+    let owner = Owner(tag: 2);
+    let key = Key[Owner](value: 5);
+    let proof = Key[Key[Owner]](value: 7);
+    var slot = Pair(value: 4, flag: false);
+    let trace Vec[i32] = [0];
+    let items Vec[i32] = [3];
+    let alias = items;
+    try {
+        let old = owner.update[Key[Key[Owner]]](key, proof, inout slot, move items, trace, false);
+        if old.value != 4 || old.flag || slot.value != 117 || !slot.flag || alias[0] != 4 || trace[0] != 14 { return 1; }
+    } catch err E { return 2; }
+    trace[0] = 0;
+    slot = Pair(value: 6, flag: false);
+    let doomed Vec[i32] = [10];
+    let kept = doomed;
+    var caught i32 = 0;
+    try {
+        let never = relay[Owner, Key[Owner], Key[Key[Owner]]](owner, key, proof, inout slot, move doomed, trace, true);
+        return 3;
+    } catch err E {
+        switch err { case E.Bad(code): caught = code; }
+    }
+    if caught != 9 || slot.value != 124 || !slot.flag || kept[0] != 11 || trace[0] != 14 { return 4; }
+    trace[0] = 0;
+    try {
+        let old = Owner.update[Key[Key[Owner]]](owner, key, proof, inout slot, [i32(1)], trace, false);
+        if old.value != 124 || !old.flag || slot.value != 115 || !slot.flag || trace[0] != 14 { return 5; }
+    } catch err E { return 6; }
+    return 0;
+}

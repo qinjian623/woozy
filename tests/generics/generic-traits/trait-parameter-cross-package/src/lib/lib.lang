@@ -1,0 +1,5 @@
+package lib;
+pub trait Code { func code(owner Self) i32; }
+impl Code for i32 { func code(owner Self) i32 { return owner; } }
+pub trait Use[A Code] { func use(owner Self, value A) i32; }
+pub func relay[T Use[i32]](owner T) i32 { return T.use(owner, 7); }

@@ -1,0 +1,11 @@
+package app;
+trait Code { func code(owner Self) i32; }
+trait Use[A Code] { func use(owner Self) i32; }
+struct Holder[U Use[Later]] { value U; }
+struct Later {}
+impl Code for Later { func code(owner Self) i32 { return 1; } }
+impl Use[Later] for Later { func use(owner Self) i32 { return 1; } }
+func main() i32 {
+  let holder = Holder[Later](value: Later());
+  return holder.value.use() - 1;
+}

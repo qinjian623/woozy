@@ -1,0 +1,5 @@
+package app;
+trait Code { func code(owner Self) i32; }
+trait Inner[A Code] { func inner(owner Self, value A) i32; }
+trait Outer[B Inner[i32]] { func outer(owner Self, value B) i32; }
+func main() i32 { return 0; }
