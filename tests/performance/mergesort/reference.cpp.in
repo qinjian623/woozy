@@ -1,0 +1,116 @@
+// Stable bottom-up u32 merge sort reference, generated from the same fixed inputs.
+// PERF-SORT n={{N}} seed={{SEED}} rounds={{ROUNDS}}
+#include <cstddef>
+#include <cstdint>
+#include <vector>
+
+static void mergesort(std::vector<uint32_t>& values, std::vector<uint32_t>& buffer,
+                      std::size_t n) {
+    std::size_t width = 1;
+    while (width < n) {
+        std::size_t start = 0;
+        while (start < n) {
+            std::size_t mid = start + width;
+            if (mid > n) { mid = n; }
+            std::size_t end = start + width * 2;
+            if (end > n) { end = n; }
+            std::size_t left = start;
+            std::size_t right = mid;
+            for (std::size_t out = start; out < end; ++out) {
+                if (left < mid && (right >= end || values[left] <= values[right])) {
+                    buffer[out] = values[left];
+                    ++left;
+                } else {
+                    buffer[out] = values[right];
+                    ++right;
+                }
+            }
+            start = end;
+        }
+        for (std::size_t copy = 0; copy < n; ++copy) {
+            values[copy] = buffer[copy];
+        }
+        width = width * 2;
+    }
+}
+
+static void fill_lcg(std::vector<uint32_t>& a, uint32_t seed, std::size_t n) {
+    uint32_t state = seed;
+    for (std::size_t i = 0; i < n; ++i) {
+        state = state * UINT32_C(1664525) + UINT32_C(1013904223);
+        a[i] = state;
+    }
+}
+
+static bool all_equal(const std::vector<uint32_t>& a,
+                      const std::vector<uint32_t>& expected,
+                      std::size_t n) {
+    for (std::size_t i = 0; i < n; ++i) {
+        if (a[i] != expected[i]) { return false; }
+    }
+    return true;
+}
+
+int main() {
+    std::vector<uint32_t> empty = {};
+    std::vector<uint32_t> empty_buffer(empty);
+    std::vector<uint32_t> empty_expected = {};
+    mergesort(empty, empty_buffer, 0);
+    if (!all_equal(empty, empty_expected, 0)) { return 2; }
+
+    std::vector<uint32_t> one = {13};
+    std::vector<uint32_t> one_buffer(one);
+    std::vector<uint32_t> one_expected = {13};
+    mergesort(one, one_buffer, 1);
+    if (!all_equal(one, one_expected, 1)) { return 3; }
+
+    std::vector<uint32_t> two = {2, 1};
+    std::vector<uint32_t> two_buffer(two);
+    std::vector<uint32_t> two_expected = {1, 2};
+    mergesort(two, two_buffer, 2);
+    if (!all_equal(two, two_expected, 2)) { return 4; }
+
+    std::vector<uint32_t> duplicates = {7, 2, 7, 0, UINT32_C(4294967295), 2, 1, 9};
+    std::vector<uint32_t> duplicates_buffer(duplicates);
+    std::vector<uint32_t> duplicates_expected =
+        {0, 1, 2, 2, 7, 7, 9, UINT32_C(4294967295)};
+    mergesort(duplicates, duplicates_buffer, 8);
+    if (!all_equal(duplicates, duplicates_expected, 8)) { return 5; }
+
+    std::vector<uint32_t> equal_values = {5, 5, 5, 5};
+    std::vector<uint32_t> equal_values_buffer(equal_values);
+    std::vector<uint32_t> equal_expected = {5, 5, 5, 5};
+    mergesort(equal_values, equal_values_buffer, 4);
+    if (!all_equal(equal_values, equal_expected, 4)) { return 6; }
+
+    std::vector<uint32_t> sorted =
+        {0, 1, 1, 17, UINT32_C(2147483648), UINT32_C(4294967295)};
+    std::vector<uint32_t> sorted_buffer(sorted);
+    std::vector<uint32_t> sorted_expected =
+        {0, 1, 1, 17, UINT32_C(2147483648), UINT32_C(4294967295)};
+    mergesort(sorted, sorted_buffer, 6);
+    if (!all_equal(sorted, sorted_expected, 6)) { return 7; }
+
+    std::vector<uint32_t> reverse = {9, 8, 7, 6, 5, 4, 3, 2, 1, 0};
+    std::vector<uint32_t> reverse_buffer(reverse);
+    std::vector<uint32_t> reverse_expected = {0, 1, 2, 3, 4, 5, 6, 7, 8, 9};
+    mergesort(reverse, reverse_buffer, 10);
+    if (!all_equal(reverse, reverse_expected, 10)) { return 8; }
+
+    std::vector<uint32_t> values = {
+{{ARRAY}}
+    };
+    std::vector<uint32_t> buffer(values);
+    std::vector<uint32_t> golden = {
+{{EXPECTED}}
+    };
+    const std::size_t n = {{N}};
+    const uint32_t seed = UINT32_C({{SEED}});
+    const std::size_t rounds = {{ROUNDS}};
+    for (std::size_t round = 0; round < rounds; ++round) {
+        fill_lcg(values, seed, n);
+        mergesort(values, buffer, n);
+        if (!all_equal(values, golden, n)) { return 1; }
+    }
+    return 0;
+}

@@ -1,0 +1,107 @@
+// Stable bottom-up u32 merge sort benchmark, generated from a fixed seed.
+// PERF-SORT n={{N}} seed={{SEED}} rounds={{ROUNDS}}
+package app;
+
+func mergesort(values Vec[u32], buffer Vec[u32], n usize) {
+    var width usize = 1;
+    for width < n {
+        var start usize = 0;
+        for start < n {
+            var mid usize = start + width;
+            if mid > n { mid = n; }
+            var end usize = start + width * 2;
+            if end > n { end = n; }
+            var left usize = start;
+            var right usize = mid;
+            for var out usize = start; out < end; out += 1 {
+                if left < mid && (right >= end || values[left] <= values[right]) {
+                    buffer[out] = values[left];
+                    left += 1;
+                } else {
+                    buffer[out] = values[right];
+                    right += 1;
+                }
+            }
+            start = end;
+        }
+        for var copy usize = 0; copy < n; copy += 1 {
+            values[copy] = buffer[copy];
+        }
+        width = width * 2;
+    }
+}
+
+func fill_lcg(a Vec[u32], seed u32, n usize) {
+    var state u32 = seed;
+    for var i usize = 0; i < n; i += 1 {
+        state = state * 1664525 + 1013904223;
+        a[i] = state;
+    }
+}
+
+func equal(a Vec[u32], expected Vec[u32], n usize) bool {
+    for var i usize = 0; i < n; i += 1 {
+        if a[i] != expected[i] { return false; }
+    }
+    return true;
+}
+
+func main() i32 {
+    let empty Vec[u32] = [];
+    let empty_buffer Vec[u32] = empty[:];
+    let empty_expected Vec[u32] = [];
+    mergesort(empty, empty_buffer, 0);
+    if !equal(empty, empty_expected, 0) { return 2; }
+
+    let one Vec[u32] = [13];
+    let one_buffer Vec[u32] = one[:];
+    let one_expected Vec[u32] = [13];
+    mergesort(one, one_buffer, 1);
+    if !equal(one, one_expected, 1) { return 3; }
+
+    let two Vec[u32] = [2, 1];
+    let two_buffer Vec[u32] = two[:];
+    let two_expected Vec[u32] = [1, 2];
+    mergesort(two, two_buffer, 2);
+    if !equal(two, two_expected, 2) { return 4; }
+
+    let duplicates Vec[u32] = [7, 2, 7, 0, 4294967295, 2, 1, 9];
+    let duplicates_buffer Vec[u32] = duplicates[:];
+    let duplicates_expected Vec[u32] = [0, 1, 2, 2, 7, 7, 9, 4294967295];
+    mergesort(duplicates, duplicates_buffer, 8);
+    if !equal(duplicates, duplicates_expected, 8) { return 5; }
+
+    let equal_values Vec[u32] = [5, 5, 5, 5];
+    let equal_values_buffer Vec[u32] = equal_values[:];
+    let equal_expected Vec[u32] = [5, 5, 5, 5];
+    mergesort(equal_values, equal_values_buffer, 4);
+    if !equal(equal_values, equal_expected, 4) { return 6; }
+
+    let sorted Vec[u32] = [0, 1, 1, 17, 2147483648, 4294967295];
+    let sorted_buffer Vec[u32] = sorted[:];
+    let sorted_expected Vec[u32] = [0, 1, 1, 17, 2147483648, 4294967295];
+    mergesort(sorted, sorted_buffer, 6);
+    if !equal(sorted, sorted_expected, 6) { return 7; }
+
+    let reverse Vec[u32] = [9, 8, 7, 6, 5, 4, 3, 2, 1, 0];
+    let reverse_buffer Vec[u32] = reverse[:];
+    let reverse_expected Vec[u32] = [0, 1, 2, 3, 4, 5, 6, 7, 8, 9];
+    mergesort(reverse, reverse_buffer, 10);
+    if !equal(reverse, reverse_expected, 10) { return 8; }
+
+    let values Vec[u32] = [
+{{ARRAY}}
+    ];
+    let buffer Vec[u32] = values[:];
+    let golden Vec[u32] = [
+{{EXPECTED}}
+    ];
+    let n usize = {{N}};
+    let seed u32 = {{SEED}};
+    for var round usize = 0; round < {{ROUNDS}}; round += 1 {
+        fill_lcg(values, seed, n);
+        mergesort(values, buffer, n);
+        if !equal(values, golden, n) { return 1; }
+    }
+    return 0;
+}

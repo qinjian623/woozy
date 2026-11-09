@@ -1,8 +1,10 @@
 #!/usr/bin/env python3
-"""Prepare and measure one fixed in-place u32 sort comparison.
+"""Prepare and measure one fixed u32 sort comparison.
 
 ``--algorithm heap`` (the default) uses the max-heap sift-down fixture;
-``--algorithm quick`` uses the three-way quicksort fixture.  Each selection has
+``--algorithm quick`` uses the three-way quicksort fixture; ``--algorithm
+merge`` uses the stable bottom-up merge sort fixture with one full-size work
+buffer.  Each selection has
 its own templates, task, operation ID, report schemas, and metadata.  One Source
 program and one hand-written C++ program are generated from the same templates,
 LCG sequence, Python sorted golden array, round count, and per-element check.
@@ -59,6 +61,21 @@ ALGORITHMS = {
         "display": "quicksort",
         "description": "in-place three-way quicksort",
         "sort_symbol": "quicksort",
+    },
+    "merge": {
+        "task": "native-mergesort-benchmark",
+        "operation_id": "language-mergesort-benchmark-20261109",
+        "prepare_schema": "compiler-dev/native-mergesort-preparation/1",
+        "measure_schema": "compiler-dev/native-mergesort-measurement/1",
+        "self_test_schema": "compiler-dev/native-mergesort-self-test/1",
+        "arrays_schema": "compiler-dev/native-mergesort-arrays/1",
+        "directory": PERFORMANCE_DIR / "mergesort",
+        "source_template": "merge.lang.in",
+        "reference_template": "reference.cpp.in",
+        "manifest_name": "perf_sort_merge",
+        "display": "merge-sort",
+        "description": "stable bottom-up merge sort with one full-size work buffer",
+        "sort_symbol": "mergesort",
     },
 }
 DEFAULT_ALGORITHM = "heap"
