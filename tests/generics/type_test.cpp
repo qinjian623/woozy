@@ -14556,6 +14556,62 @@ func main() i32 {
                "callee identity and corrupt HIR passed\n";
 }
 
+void common_list_inference() {
+  const std::vector<std::string> accepted = {
+      "func use(v Vec[i32]){}func main(){let x i32=2;let v=[1,x];use(v);}",
+      "func use(v Vec[i32]){}func main(){let x i32=2;let v=[x,1];use(v);}",
+      "func use(v Vec[f32]){}func main(){let x f32=2.5;let v=[1.0,x];use(v);}",
+      "func use(v Vec[f32]){}func main(){let x f32=2.5;let v=[x,1.0];use(v);}",
+      "func use(v Vec[f64]){}func main(){let v=[1.0,2.5];use(v);}",
+      "func use(v Vec[f64]){}func main(){let v=[2.5,1.0];use(v);}",
+      "func use(v Vec[f64]){}func main(){let v=[1.0+2.5,3.0];use(v);}",
+      "func use(v Vec[bool]){}func main(){let v=[1<2,true];use(v);}",
+      "func use(v Vec[bool]){}func main(){let v=[true,1<2];use(v);}",
+      "func use(v Vec[Vec[i32]]){}func main(){let x i32=2;let v=[[1],[x]];use(v);}",
+      "func use(v Vec[Vec[i32]]){}func main(){let x i32=2;let v=[[x],[1]];use(v);}",
+      "func use(v Vec[Vec[i64]]){}func main(){let v=[[],[1]];use(v);}",
+      "func use(v Vec[Vec[i64]]){}func main(){let v=[[1],[]];use(v);}",
+      "func use(v Vec[Vec[f64]]){}func main(){let v=[[1.0],[2.5]];use(v);}",
+      "func use(v Vec[Vec[f64]]){}func main(){let v=[[2.5],[1.0]];use(v);}",
+      "func use(v Vec[Vec[Vec[i32]]]){}func main(){let x i32=2;let v=[[[]],[[x]]];use(v);}",
+      "func id[T](x T)T{return x;}func use(v Vec[i32]){}"
+      "func main(){let x=[1,id[i32](2)];use(x);}",
+      "func id[T](x T)T{return x;}func use(v Vec[f32]){}"
+      "func main(){let x=[1.0,id[f32](2.5)];use(x);}",
+      "func main(){let v Vec[Vec[i32]]=[[],[1]];}",
+  };
+  const std::vector<std::string> rejected = {
+      "let x i32=1;let y u32=2;let v=[x,y];",
+      "let x i32=1;let y u32=2;let v=[y,x];",
+      "let x i32=1;let y i64=2;let v=[x,y];",
+      "let x i32=1;let y i64=2;let v=[y,x];",
+      "let x f32=1.0;let y f64=2.0;let v=[x,y];",
+      "let x f32=1.0;let y f64=2.0;let v=[y,x];",
+      "let x i8=1;let v=[128,x];",
+      "let x i8=1;let v=[x,128];",
+      "let v=[1,2.5];",
+      "let v=[2.5,1];",
+      "let v=[[1],[2.5]];",
+      "let v=[[2.5],[1]];",
+      "let v=[[],[]];",
+      "let v=[[1],2];",
+      "let v=[2,[1]];",
+  };
+  for (const auto &backend : {"native", "python"}) {
+    for (const auto &text : accepted) {
+      auto checked = source(text, backend);
+      need(checked.success(), "list inference rejected: " + text + "\n" + messages(checked));
+      auto verified = hir::verify_types(*checked.value);
+      need(verified.success(), "list inference produced invalid HIR: " + text + "\n" + messages(verified));
+    }
+    for (const auto &text : rejected) {
+      auto checked = source("func main(){" + text + "}", backend);
+      need(!checked.success() && checked.failure == FailureKind::source,
+           "incompatible list accepted: " + text + "\n" + messages(checked));
+    }
+  }
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -14639,6 +14695,7 @@ int main(int argc, char **argv) {
     const_method_values();
     local_const_aliases();
     dependent_callback_completion(root);
+    common_list_inference();
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

@@ -1272,6 +1272,41 @@ class Checker {
       return contextual(child(r, 0)) && contextual(child(r, 1));
     return false;
   }
+  struct ListHint {
+    bool contextual;
+    bool floating;
+    std::optional<size_t> depth;
+  };
+  ListHint list_hint(Ref r) const {
+    check_cancelled(stop);
+    const auto &n = ast(r);
+    if (n.kind == AstKind::Parenthesized)
+      return list_hint(child(r, 0));
+    if (n.kind == AstKind::List) {
+      ListHint hint{true, false, {}};
+      for (auto c : n.children) {
+        auto inner = list_hint(at(r, c));
+        hint.contextual &= inner.contextual;
+        hint.floating |= inner.floating;
+        if (!hint.depth && inner.depth)
+          hint.depth = *inner.depth + 1;
+      }
+      return hint;
+    }
+    if (!contextual(r))
+      return {false, false, {}};
+    if (n.kind == AstKind::Binary) {
+      auto op = binary_token(r);
+      if (op == "&&" || op == "||" || binary_op(op) >= BinaryOp::equal)
+        return {false, false, {}};
+    }
+    ListHint hint{true, n.kind == AstKind::Literal &&
+                            file(r).tokens[n.token_begin].kind == TokenKind::floating,
+                  0};
+    for (auto c : n.children)
+      hint.floating |= list_hint(at(r, c)).floating;
+    return hint;
+  }
   Value fold(BinaryOp op, Value a, const Value &b) const {
     Value result{a.type, {}, {}};
     if (!a.integer || !b.integer)
@@ -1723,20 +1758,48 @@ class Checker {
       break;
     case AstKind::List: {
       std::optional<TypeId> element;
+      std::optional<std::pair<size_t, Expr>> checked;
       if (expected) {
         if (type(*expected).kind != TypeKind::Vec)
           reject(r, "list requires Vec context");
         element = type(*expected).type_args.at(0);
       }
-      std::vector<HirNodeId> values;
-      for (auto c : n.children) {
-        auto e = expression(at(r, c), element);
-        if (!element)
-          element = e.value.type;
-        values.push_back(e.id);
+      if (!element) {
+        bool floating = false;
+        std::optional<size_t> depth;
+        for (size_t i = 0; i < n.children.size(); ++i) {
+          auto ref = at(r, n.children[i]);
+          auto hint = list_hint(ref);
+          if (!hint.contextual) {
+            checked.emplace(i, expression(ref));
+            element = checked->second.value.type;
+            break;
+          }
+          floating |= hint.floating;
+          if (!depth && hint.depth)
+            depth = hint.depth;
+        }
+        if (!element && depth) {
+          element = floating ? scalar(TypeKind::Float, 64) : i64;
+          for (size_t i = 0; i < *depth; ++i) {
+            Type t;
+            t.kind = TypeKind::Vec;
+            t.type_args = {*element};
+            element = m.types.intern(t);
+          }
+        }
       }
       if (!element)
         reject(r, "empty list requires a Vec context");
+      std::vector<HirNodeId> values;
+      for (size_t i = 0; i < n.children.size(); ++i) {
+        // Type discovery can inspect a later element; HIR child order still
+        // determines left-to-right execution and temporary cleanup.
+        auto e = checked && checked->first == i
+                     ? checked->second
+                     : expression(at(r, n.children[i]), element);
+        values.push_back(e.id);
+      }
       Type t;
       t.kind = TypeKind::Vec;
       t.type_args = {*element};

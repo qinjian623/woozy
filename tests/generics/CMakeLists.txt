@@ -17,6 +17,15 @@ if(NOT TARGET lang_generics_type_test)
   get_filename_component(LANG_T07_ROOT "${CMAKE_CURRENT_SOURCE_DIR}/../.." ABSOLUTE)
   add_test(NAME sema.t07 COMMAND lang_generics_type_test "${LANG_T07_ROOT}")
 endif()
+if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312)
+  add_test(NAME generics.list_inference COMMAND "${LANG_TEST_PYTHON}"
+    "${CMAKE_CURRENT_LIST_DIR}/run_list_inference.py"
+    --cli $<TARGET_FILE:langc>
+    --root "${LANG_T07_ROOT}"
+    --python "${LANG_PYTHON312}"
+    --out "${CMAKE_CURRENT_BINARY_DIR}/list-inference")
+  set_tests_properties(generics.list_inference PROPERTIES TIMEOUT 120)
+endif()
 if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.move_runtime COMMAND "${LANG_TEST_PYTHON}"
