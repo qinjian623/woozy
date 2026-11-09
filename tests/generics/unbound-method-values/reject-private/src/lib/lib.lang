@@ -1,0 +1,3 @@
+package lib;
+pub struct Host { pub value i32; }
+impl Host { func secret(self Self) i32 { return self.value; } }

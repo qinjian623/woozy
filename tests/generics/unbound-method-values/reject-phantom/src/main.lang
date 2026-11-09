@@ -1,0 +1,8 @@
+package app;
+struct Box[T] { value T; }
+impl[T] Box[T] { func phantom[U](self Self) T { return self.value; } }
+func main() i32 {
+    let box = Box[i32](value: 7);
+    let f func(Box[i32]) i32 = Box[i32].phantom;
+    return f(box) - 7;
+}

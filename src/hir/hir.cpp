@@ -680,6 +680,14 @@ class Verifier {
         return &t;
     return nullptr;
   }
+  std::optional<std::pair<const TraitDecl *, const MethodPrototype *>>
+  trait_prototype(SymbolId method) const {
+    for (const auto &t : m.traits)
+      for (const auto &p : t.methods)
+        if (p.symbol == method)
+          return std::make_pair(&t, &p);
+    return {};
+  }
   // Rebuild one complete application from the real Source header: the actual
   // trait declaration followed by the written type arguments in order. This
   // never trusts a producer-provided TraitRef or a signature cache.
@@ -951,15 +959,14 @@ class Verifier {
   // own resolved occurrence is a module/qualified-name call, not a method.
   // Transparent parentheses and the optional explicit method type suffix do
   // not change the base. The base's real occurrence decides value vs type.
-  std::optional<SourceMethodCall> source_method_call(const HirNode &n) const {
+  // Rebuild a method member expression, with its optional method-own type
+  // suffix, independent of whether the surrounding Source is a Call or a
+  // function-value expression. Transparent parentheses and the suffix do not
+  // change the base; the base's real occurrence decides value vs type.
+  std::optional<SourceMethodCall>
+  source_method_member(modules::NodeRef ref) const {
     const auto &file =
-        *m.resolved->project->module(n.source.node.module)
-             .files.at(n.source.node.file);
-    auto ref = n.source.node;
-    const auto &call = file.node(ref.node);
-    if (call.kind != AstKind::Call || call.children.empty())
-      return {};
-    ref.node = call.children.front();
+        *m.resolved->project->module(ref.module).files.at(ref.file);
     ref = unwrapped(ref);
     bool explicit_type_arguments = false;
     std::vector<modules::NodeRef> explicit_arguments;
@@ -978,7 +985,7 @@ class Verifier {
     const auto &member = file.node(ref.node);
     if (member.kind != AstKind::Member || resolved_source(ref))
       return {};
-    need(!member.children.empty(), "method call member has no base");
+    need(!member.children.empty(), "method member has no base");
     auto base = ref;
     base.node = member.children.front();
     auto symbolized = base;
@@ -992,11 +999,22 @@ class Verifier {
     }
     auto base_symbol = resolved_source(symbolized);
     need(member.token_end > member.token_begin,
-         "method call member token range");
+         "method member token range");
     return SourceMethodCall{base, base_symbol,
                             std::string(file.tokens[member.token_end - 1]
                                             .spelling),
                             explicit_type_arguments, explicit_arguments};
+  }
+  std::optional<SourceMethodCall> source_method_call(const HirNode &n) const {
+    const auto &file =
+        *m.resolved->project->module(n.source.node.module)
+             .files.at(n.source.node.file);
+    auto ref = n.source.node;
+    const auto &call = file.node(ref.node);
+    if (call.kind != AstKind::Call || call.children.empty())
+      return {};
+    ref.node = call.children.front();
+    return source_method_member(ref);
   }
   const ForeignBinding &foreign_binding(ForeignBindingId id) const {
     need(id.value < m.foreign_bindings.size(), "foreign binding index");
@@ -1420,6 +1438,424 @@ class Verifier {
            "explicit method type argument differs from complete instance key");
     }
   }
+  // The real bound of a bounded template qualifier, rebuilt from the owning
+  // template's Source. An instance substitutes its actual type arguments.
+  // This does not trust a producer-provided bound on T or borrow another T's
+  // constraint.
+  std::optional<TraitRef>
+  source_template_bound(const SourceMethodCall &source, SymbolId owner,
+                        SymbolId *parameter = nullptr) const {
+    if (!source.base_symbol)
+      return {};
+    const auto id = *source.base_symbol;
+    if (symbol(id).kind != modules::SymbolKind::type_parameter)
+      return {};
+    auto origin = owner;
+    const FunctionInstance *instance = nullptr;
+    for (const auto &i : m.instances)
+      if (i.symbol == owner) {
+        instance = &i;
+        origin = i.origin;
+        break;
+      }
+    auto found = templates.find(origin.value);
+    if (found == templates.end())
+      return {};
+    auto real = source_parameters(found->second->function.source);
+    const GenericParam *declared = nullptr;
+    for (const auto &p : real)
+      if (p.symbol == id)
+        declared = &p;
+    if (!declared || !declared->trait)
+      return {};
+    TraitRef bound = *declared->trait;
+    if (instance) {
+      need(real.size() == instance->type_args.size(),
+           "template instance parameter count");
+      Substitutions sub;
+      for (size_t i = 0; i < real.size(); ++i)
+        sub.push_back({real[i].symbol, instance->type_args[i]});
+      for (auto &arg : bound.args)
+        arg = substitute(arg, sub, substituted);
+    }
+    if (parameter)
+      *parameter = id;
+    return bound;
+  }
+  TypeId source_declaration_signature(SymbolId origin) const {
+    auto template_ = templates.find(origin.value);
+    if (template_ != templates.end())
+      return template_->second->function.signature;
+    return function(origin).signature;
+  }
+  const Source &source_declaration(SymbolId origin) const {
+    auto template_ = templates.find(origin.value);
+    if (template_ != templates.end())
+      return template_->second->function.source;
+    return function(origin).source;
+  }
+  struct MethodValueTarget {
+    SymbolId origin;
+    const FunctionInstance *instance = nullptr;
+    std::vector<TypeId> complete_type_args;
+    TypeId signature;
+  };
+  MethodValueTarget method_value_target(const HirNode &n,
+                                        const FunctionValue &v) const {
+    MethodValueTarget target;
+    target.signature = n.type;
+    if (templates.count(v.symbol.value)) {
+      need(templates.count(scope(n.scope).function.value),
+           "template method value survived into concrete execution");
+      target.origin = v.symbol;
+      target.complete_type_args = v.type_args;
+      return target;
+    }
+    auto instance = instances.find(v.symbol.value);
+    if (instance != instances.end()) {
+      need(v.type_args.empty(), "instance method value has a type suffix");
+      target.instance = instance->second;
+      target.origin = target.instance->origin;
+      target.complete_type_args = target.instance->type_args;
+      return target;
+    }
+    need(v.type_args.empty(), "concrete method value has a type suffix");
+    target.origin = v.symbol;
+    return target;
+  }
+  const ImplDecl *method_impl(SymbolId origin) const {
+    const ImplDecl *result = nullptr;
+    for (const auto &im : m.impls)
+      if (std::find(im.methods.begin(), im.methods.end(), origin) !=
+          im.methods.end()) {
+        need(!result, "method value target belongs to two impls");
+        result = &im;
+      }
+    need(result, "method value target is not an impl method");
+    return result;
+  }
+  bool impl_method_exists(SymbolId method) const {
+    for (const auto &im : m.impls)
+      if (std::find(im.methods.begin(), im.methods.end(), method) !=
+          im.methods.end())
+        return true;
+    return false;
+  }
+  bool method_value_is_impl(const FunctionValue &v) const {
+    auto origin = v.symbol;
+    if (templates.count(v.symbol.value))
+      origin = v.symbol;
+    else if (auto i = instances.find(v.symbol.value); i != instances.end())
+      origin = i->second->origin;
+    return impl_method_exists(origin);
+  }
+  // A method value may be reached through one or more top-level constants.
+  // Follow the real binding initializer AST; no function body or synthetic
+  // symbol is created, and a cycle is rejected independently of sema's
+  // constant evaluator.
+  std::optional<SourceMethodCall>
+  constant_method_source(const HirNode &n) const {
+    auto constant = resolved_source(n.source.node);
+    if (!constant ||
+        symbol(*constant).kind != modules::SymbolKind::constant)
+      return {};
+    std::set<uint64_t> seen;
+    for (;;) {
+      need(seen.insert(constant->value).second,
+           "constant method value alias cycle");
+      const auto &s = symbol(*constant);
+      need(s.definition.has_value(),
+           "constant method value has no initializer");
+      const auto &file =
+          *m.resolved->project->module(s.definition->module)
+               .files.at(s.definition->file);
+      const auto &binding = file.node(s.definition->node);
+      need(binding.kind == AstKind::Binding && !binding.children.empty(),
+           "constant method value source is not a binding");
+      auto initializer = *s.definition;
+      initializer.node = binding.children.back();
+      auto next = resolved_source(initializer);
+      if (next && symbol(*next).kind == modules::SymbolKind::constant) {
+        constant = next;
+        continue;
+      }
+      return source_method_member(initializer);
+    }
+  }
+  std::optional<std::vector<TypeId>>
+  matched_impl_arguments(const ImplDecl &im,
+                         const Substitutions &match) const {
+    std::vector<TypeId> args;
+    for (const auto &p : im.params) {
+      auto it = std::find_if(match.begin(), match.end(), [&](auto entry) {
+        return entry.first == p.symbol;
+      });
+      if (it == match.end())
+        return std::nullopt;
+      if (p.trait) {
+        TraitRef bound = *p.trait;
+        for (auto &arg : bound.args)
+          arg = substitute(arg, match, substituted);
+        if (!satisfies(it->second, bound))
+          return std::nullopt;
+      }
+      args.push_back(it->second);
+    }
+    return args;
+  }
+  // The one source method candidate for a concrete qualifier. A required
+  // trait is matched by Self and every ordered argument together; both forms
+  // require a complete impl-parameter substitution.
+  const ImplDecl *
+  unique_source_method(TypeId receiver, const TraitRef *required,
+                       std::string_view name, Substitutions &selected_sub,
+                       std::vector<TypeId> &selected_args) const {
+    const ImplDecl *selected = nullptr;
+    for (const auto &im : m.impls) {
+      if (required &&
+          (!im.trait || im.trait->declaration != required->declaration))
+        continue;
+      Substitutions match;
+      if (!matches(im.self_type, receiver, match))
+        continue;
+      if (required) {
+        if (im.trait->args.size() != required->args.size())
+          continue;
+        bool matched = true;
+        for (size_t a = 0; a < required->args.size(); ++a)
+          if (!matches(im.trait->args[a], required->args[a], match)) {
+            matched = false;
+            break;
+          }
+        if (!matched)
+          continue;
+      }
+      bool has_method = false;
+      for (auto method : im.methods)
+        if (symbol(method).name == name)
+          has_method = true;
+      if (!has_method)
+        continue;
+      auto args = matched_impl_arguments(im, match);
+      if (!args)
+        continue;
+      need(!selected, "method value source selection is ambiguous");
+      selected = &im;
+      selected_sub = std::move(match);
+      selected_args = std::move(*args);
+    }
+    need(selected, "method value source selection has no impl");
+    return selected;
+  }
+  void check_method_visibility(SymbolId method, const ImplDecl &impl,
+                               ModuleId module) const {
+    if (symbol(method).module == module)
+      return;
+    need(impl.trait ? symbol(impl.trait->declaration).exported
+                    : symbol(method).exported,
+         "method value target is private");
+  }
+  // Verify one executable Type.method[U] value from its real Source and its
+  // complete target. This rejects another same-named impl, another complete
+  // trait application, a fabricated instance key, a changed signature/mode,
+  // a missing phantom suffix, or a target prototype in concrete execution.
+  void check_concrete_method_value_source(
+      const HirNode &n, const FunctionValue &v,
+      const SourceMethodCall &source,
+      std::optional<ModuleId> source_module = {},
+      std::optional<SymbolId> source_owner = {}) const {
+    // A const initializer has no function instance environment. Use an empty
+    // owner so source_type_in_function performs no template substitution;
+    // top-level const types are already concrete.
+    const auto owner = source_owner.value_or(scope(n.scope).function);
+    const auto module = source_module.value_or(n.source.node.module);
+    auto bounded = source_template_bound(source, owner);
+    const bool type_parameter = source.base_symbol &&
+        symbol(*source.base_symbol).kind ==
+            modules::SymbolKind::type_parameter;
+    need(source.base_symbol.has_value(), "method value lost its base symbol");
+    need(type_parameter ? bounded.has_value()
+                        : (symbol(*source.base_symbol).kind ==
+                               modules::SymbolKind::type ||
+                           symbol(*source.base_symbol).kind ==
+                               modules::SymbolKind::builtin_type),
+         "method value source is not a concrete Type or bounded T");
+    const auto receiver = source_type_in_function(source.base, owner);
+    if (bounded) {
+      check_trait_application(*bounded, allowed(owner));
+      check_trait_parameter_bounds(*bounded, receiver);
+    }
+    auto target = method_value_target(n, v);
+    const auto *impl = method_impl(target.origin);
+    need(symbol(target.origin).name == source.name,
+         "method value target name differs from source");
+    check_method_visibility(target.origin, *impl, module);
+    Substitutions selected_sub;
+    std::vector<TypeId> impl_args;
+    const auto *selected = unique_source_method(
+        receiver, bounded ? &*bounded : nullptr, source.name, selected_sub,
+        impl_args);
+    need(selected == impl,
+         "method value source selected another impl than its target");
+
+    auto declared = source_parameters(source_declaration(target.origin));
+    need(declared.size() >= impl->params.size(),
+         "method value source lost its impl generic prefix");
+    for (size_t i = 0; i < impl->params.size(); ++i)
+      need(declared[i].symbol == impl->params[i].symbol,
+           "method value impl prefix differs from source");
+    std::vector<GenericParam> own(declared.begin() + impl->params.size(),
+                                  declared.end());
+    const bool has_type_arguments =
+        templates.count(v.symbol.value) || target.instance;
+    if (has_type_arguments) {
+      need(target.complete_type_args.size() == declared.size(),
+           "method value complete type argument count");
+      for (size_t i = 0; i < impl->params.size(); ++i)
+        need(target.complete_type_args[i] == impl_args[i],
+             "method value impl type argument differs from qualifier");
+    } else {
+      need(impl->params.empty() && own.empty() &&
+               target.complete_type_args.empty(),
+           "generic method value has no instance target");
+    }
+    std::vector<TypeId> own_args;
+    if (has_type_arguments)
+      own_args.assign(target.complete_type_args.begin() +
+                          impl->params.size(),
+                      target.complete_type_args.end());
+    need(own_args.size() == own.size(),
+         "method value method-own argument count");
+    if (source.explicit_type_arguments) {
+      need(source.explicit_arguments.size() == own.size(),
+           "method value explicit type argument count");
+      for (size_t i = 0; i < own.size(); ++i) {
+        auto t = source_type_in_function(source.explicit_arguments[i], owner);
+        valid_type(t, allowed(owner));
+        need(t == own_args[i],
+             "method value explicit type argument differs from target");
+      }
+    } else {
+      Substitutions match;
+      for (size_t i = 0; i < impl->params.size(); ++i)
+        match.push_back({impl->params[i].symbol, impl_args[i]});
+      need(matches(source_declaration_signature(target.origin),
+                   target.signature, match),
+           "method value signature does not determine its own arguments");
+      for (size_t i = 0; i < own.size(); ++i) {
+        auto it = std::find_if(match.begin(), match.end(), [&](auto entry) {
+          return entry.first == own[i].symbol;
+        });
+        need(it != match.end(),
+             "method value phantom argument requires an explicit suffix");
+        need(it->second == own_args[i],
+             "method value inferred own argument differs from target");
+      }
+    }
+    Substitutions outer;
+    for (size_t i = 0; i < impl->params.size(); ++i)
+      outer.push_back({impl->params[i].symbol, impl_args[i]});
+    constraints(own, own_args, &outer);
+
+    if (impl->trait) {
+      const auto *trait = trait_declaration(impl->trait->declaration);
+      need(trait, "method value impl has no real trait");
+      const MethodPrototype *prototype = nullptr;
+      for (const auto &p : trait->methods)
+        if (symbol(p.symbol).name == source.name) {
+          need(!prototype, "method value has duplicate trait prototype");
+          prototype = &p;
+        }
+      need(prototype, "method value has no trait prototype");
+      TraitRef application = *impl->trait;
+      for (auto &arg : application.args)
+        arg = substitute(arg, selected_sub, substituted);
+      if (bounded)
+        need(application == *bounded,
+             "method value full trait application differs from its bound");
+      auto prototype_own = source_parameters(prototype->source);
+      need(prototype_own.size() == own.size(),
+           "method value prototype own count");
+      Substitutions alpha{{trait->self, receiver}};
+      for (size_t i = 0; i < trait->params.size(); ++i)
+        alpha.push_back({trait->params[i].symbol, application.args[i]});
+      for (size_t i = 0; i < prototype_own.size(); ++i)
+        alpha.push_back({prototype_own[i].symbol, own_args[i]});
+      need(substitute(prototype->signature, alpha, substituted) ==
+               target.signature,
+           "method value prototype signature differs from target");
+    } else
+      need(!bounded, "bounded T method value selected an inherent method");
+    need(n.type == target.signature, "method value type mismatch");
+  }
+  // The strict template exception: only a real bounded T method of this
+  // owning template may name a raw trait prototype. Its type_args are the
+  // ordered method-own arguments; the qualifier, complete bound and prototype
+  // are rebuilt from Source. No executable function is fabricated.
+  void check_template_method_value_source(
+      const HirNode &n, const FunctionValue &v,
+      const TraitDecl &trait, const MethodPrototype &prototype,
+      const SourceMethodCall &source) const {
+    const auto owner = scope(n.scope).function;
+    need(templates.count(owner.value),
+         "trait prototype method value is outside a template");
+    SymbolId parameter{};
+    auto bounded = source_template_bound(source, owner, &parameter);
+    need(bounded.has_value(), "trait prototype method value has no bound");
+    need(source.base_symbol && *source.base_symbol == parameter,
+         "trait prototype method value base differs from its parameter");
+    need(trait.symbol == bounded->declaration,
+         "trait prototype belongs to another bound");
+    need(v.symbol == prototype.symbol,
+         "trait prototype method value target differs from source");
+    need(symbol(prototype.symbol).name == source.name,
+         "trait prototype method value name differs from source");
+    const auto qualifier = source_type_in_function(source.base, owner);
+    const auto &q = type(qualifier);
+    need(q.kind == TypeKind::TypeParameter && q.declaration == parameter,
+         "trait prototype qualifier is not the bounded T");
+    check_trait_application(*bounded, allowed(owner));
+    check_trait_parameter_bounds(*bounded, qualifier);
+    auto own = source_parameters(prototype.source);
+    need(v.type_args.size() == own.size(),
+         "trait prototype method-own argument count");
+    if (source.explicit_type_arguments) {
+      need(source.explicit_arguments.size() == own.size(),
+           "trait prototype explicit type argument count");
+      for (size_t i = 0; i < own.size(); ++i) {
+        auto t = source_type_in_function(source.explicit_arguments[i], owner);
+        valid_type(t, allowed(owner));
+        need(t == v.type_args[i],
+             "trait prototype explicit type argument differs from target");
+      }
+    } else {
+      Substitutions match{{trait.self, qualifier}};
+      for (size_t i = 0; i < trait.params.size(); ++i)
+        match.push_back({trait.params[i].symbol, bounded->args[i]});
+      need(matches(prototype.signature, n.type, match),
+           "trait prototype signature does not determine its own arguments");
+      for (size_t i = 0; i < own.size(); ++i) {
+        auto it = std::find_if(match.begin(), match.end(), [&](auto entry) {
+          return entry.first == own[i].symbol;
+        });
+        need(it != match.end(),
+             "trait prototype phantom argument requires an explicit suffix");
+        need(it->second == v.type_args[i],
+             "trait prototype inferred argument differs from target");
+      }
+    }
+    Substitutions alpha{{trait.self, qualifier}};
+    for (size_t i = 0; i < trait.params.size(); ++i)
+      alpha.push_back({trait.params[i].symbol, bounded->args[i]});
+    for (size_t i = 0; i < own.size(); ++i)
+      alpha.push_back({own[i].symbol, v.type_args[i]});
+    constraints(own, v.type_args, &alpha);
+    need(n.type == substitute(prototype.signature, alpha, substituted),
+         "trait prototype method value signature mismatch");
+    need(!functions.count(v.symbol.value) &&
+             !templates.count(v.symbol.value),
+         "trait prototype method value has a fake executable body");
+  }
   void check_call(const HirNode &n, const Call &c) const {
     if (c.kind == CalleeKind::foreign) {
       foreign_call(n, c);
@@ -1578,11 +2014,16 @@ class Verifier {
       const auto &v = std::get<FunctionValue>(n.data);
       for (auto argument : v.type_args)
         valid_type(argument, allowed(scope(n.scope).function));
-      if (!templates.count(scope(n.scope).function.value))
-        need(!templates.count(v.symbol.value) && v.type_args.empty(),
-             "template function value survived into concrete execution");
-      need(n.type == instantiated_signature(v.symbol, v.type_args),
-           "function value type mismatch");
+      if (trait_prototype(v.symbol)) {
+        need(templates.count(scope(n.scope).function.value),
+             "trait prototype function value survived into concrete execution");
+      } else {
+        if (!templates.count(scope(n.scope).function.value))
+          need(!templates.count(v.symbol.value) && v.type_args.empty(),
+               "template function value survived into concrete execution");
+        need(n.type == instantiated_signature(v.symbol, v.type_args),
+             "function value type mismatch");
+      }
       break;
     }
     case NodeKind::binding: {
@@ -4135,6 +4576,28 @@ class Verifier {
         need(symbol(expected).definition &&
                  same_ref(*symbol(expected).definition, r),
              "function literal value source identity differs from its symbol");
+        continue;
+      }
+      if (auto method = source_method_member(n.source.node)) {
+        if (auto prototype = trait_prototype(value->symbol))
+          check_template_method_value_source(n, *value, *prototype->first,
+                                             *prototype->second, *method);
+        else
+          check_concrete_method_value_source(n, *value, *method);
+        continue;
+      }
+      // A FunctionValue whose target is an impl method or raw prototype can
+      // never fall through the generic non-function-source skip. Its legal
+      // non-Member Source is a constant alias; everything else is corrupt.
+      const auto prototype = trait_prototype(value->symbol);
+      if (prototype || method_value_is_impl(*value)) {
+        auto source = constant_method_source(n);
+        need(source.has_value(),
+             "method value source has no method or constant declaration");
+        need(!prototype,
+             "trait prototype method value source is not a bounded T method");
+        check_concrete_method_value_source(n, *value, *source,
+                                           source->base.module, SymbolId{});
         continue;
       }
       std::optional<SymbolId> source_symbol;

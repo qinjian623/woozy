@@ -1,0 +1,38 @@
+package app;
+
+struct Text { text string; }
+
+impl Text {
+    func value(self Self) string { return self.text; }
+    func pick(self Self, extra string) string { return extra; }
+}
+trait Echo { func echo(owner Self, value string) string; }
+impl Echo for Text {
+    func echo(owner Self, value string) string { return value; }
+}
+func relay[T Echo](owner T, value string) string {
+    let f func(T, string) string = T.echo;
+    return f(owner, value);
+}
+
+func probe_value() string {
+    let text = Text(text: "值\0😀");
+    let f func(Text) string = Text.value;
+    return f(text);
+}
+func probe_argument() string {
+    let text = Text(text: "unused");
+    let f func(Text, string) string = Text.pick;
+    return f(text, "替\0换😀");
+}
+func probe_generic() string {
+    let text = Text(text: "unused");
+    return relay[Text](text, "通\0用😀");
+}
+
+func main() i32 {
+    let first = probe_value();
+    let second = probe_argument();
+    let third = probe_generic();
+    return 0;
+}

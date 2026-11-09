@@ -1,0 +1,3 @@
+package app;
+import "app/lib" as lib;
+func main()i32{let f=lib.Export;let item=lib.Box[i32](value:7);return f(item)-7;}

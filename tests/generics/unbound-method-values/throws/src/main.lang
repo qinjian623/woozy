@@ -1,0 +1,58 @@
+package app;
+
+struct Host { value i32; }
+enum Err { Bad; }
+
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func later(log inout i64) i32 throws Err {
+    mark(inout log, 8);
+    throw Err.Bad;
+}
+
+trait Work { func run(owner Self, x i32, log inout i64) i32 throws Err; }
+impl Work for Host {
+    func run(owner Self, x i32, log inout i64) i32 throws Err {
+        let local Vec[i32] = [x];
+        defer {
+            let read = local[0];
+            mark(inout log, 6);
+        }
+        mark(inout log, 1);
+        if x == 0 { throw Err.Bad; }
+        return local[0] + x;
+    }
+}
+impl Host {
+    func fail(self Self, log inout i64) i32 throws Err {
+        let local Vec[i32] = [9];
+        defer {
+            let read = local[0];
+            mark(inout log, 4);
+        }
+        mark(inout log, 3);
+        throw Err.Bad;
+    }
+}
+
+func main() i32 {
+    let host = Host(value: 7);
+    let f func(Host, i32, inout i64) i32 throws Err = Host.run;
+    let bad func(Host, inout i64) i32 throws Err = Host.fail;
+    var log i64 = 0;
+    var failurelog i64 = 0;
+    try { let r = f(host, later(inout failurelog), inout log); return 1; }
+    catch error Err { mark(inout failurelog, 9); }
+    if log != 0 || failurelog != 89 { return 2; }
+    try { let r = f(host, 0, inout log); return 3; }
+    catch error Err { mark(inout log, 2); }
+    if log != 162 { return 4; }
+    try {
+        let ok = f(host, 5, inout log);
+        if ok != 10 || log != 16216 { return 5; }
+    }
+    catch error Err { return 6; }
+    try { let r = bad(host, inout log); return 7; }
+    catch error Err { mark(inout log, 7); }
+    if log != 16216347 { return 8; }
+    return 0;
+}

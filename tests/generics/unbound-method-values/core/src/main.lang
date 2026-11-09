@@ -1,0 +1,76 @@
+package app;
+
+struct Host { value i32; }
+struct Box[T] { value T; }
+struct Holder { callback func(Host) i32; many Vec[func(Host) i32]; }
+
+trait Pick[A, B] {
+    func tag(owner Self) i32;
+    func echo[U](owner Self, value U) U;
+}
+
+impl Pick[i32, bool] for Host {
+    func tag(owner Self) i32 { return 11; }
+    func echo[V](owner Self, value V) V { return value; }
+}
+
+impl Pick[bool, i32] for Host {
+    func tag(owner Self) i32 { return 22; }
+    func echo[V](owner Self, value V) V { return value; }
+}
+
+impl Host {
+    func get(self Self) i32 { return self.value; }
+    func make(value i32) Self { return Host(value: value); }
+    func zero() Self { return Host(value: 0); }
+}
+
+impl[T] Box[T] {
+    func echo[U](self Self, item U) U { return item; }
+    func phantom[U](self Self) T { return self.value; }
+}
+
+const GET func(Host) i32 = Host.get;
+const GET_ALIAS func(Host) i32 = GET;
+const ECHO func(Box[i32], bool) bool = Box[i32].echo[bool];
+
+func apply(f func(Host) i32, host Host) i32 { return f(host); }
+func choose(f func(Host) i32) (func(Host) i32) { return f; }
+
+func first[T Pick[i32, bool]](value T) i32 {
+    let tag func(T) i32 = T.tag;
+    let echo func(T, i32) i32 = T.echo;
+    return tag(value) + echo(value, 7);
+}
+
+func second[T Pick[bool, i32]](value T) i32 {
+    let tag func(T) i32 = T.tag;
+    return tag(value);
+}
+
+func main() i32 {
+    let host = Host(value: 7);
+    if Host.get(host) != 7 { return 1; }
+    let f func(Host) i32 = Host.get;
+    if f(host) != 7 { return 2; }
+    if apply(Host.get, host) != 7 { return 3; }
+    let g = choose(Host.get);
+    if g(host) != 7 { return 4; }
+    let make func(i32) Host = Host.make;
+    let zero func() Host = Host.zero;
+    let made = make(5);
+    let empty = zero();
+    if made.value + empty.value != 5 { return 5; }
+    let box = Box[i32](value: 9);
+    let e func(Box[i32], bool) bool = Box[i32].echo;
+    let ph func(Box[i32]) i32 = Box[i32].phantom[i64];
+    if !e(box, true) || ph(box) != 9 { return 6; }
+    let holder = Holder(callback: Host.get, many: [Host.get, Host.get]);
+    if holder.callback(host) != 7 { return 7; }
+    if holder.many[1](host) != 7 { return 8; }
+    let const_get func(Host) i32 = GET_ALIAS;
+    let const_echo func(Box[i32], bool) bool = ECHO;
+    if const_get(host) != 7 || !const_echo(box, true) { return 9; }
+    if first[Host](host) != 18 || second[Host](host) != 22 { return 10; }
+    return 0;
+}

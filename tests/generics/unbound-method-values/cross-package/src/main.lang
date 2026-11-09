@@ -1,0 +1,12 @@
+package app;
+
+import "app/lib" as lib;
+
+func main() i32 {
+    let host = lib.Host(value: 7);
+    let get func(lib.Host) i32 = lib.Host.get;
+    let code func(lib.Host) i32 = lib.Host.code;
+    if get(host) != 7 || code(host) != 8 { return 1; }
+    if lib.relay[lib.Host](host) != 8 { return 2; }
+    return 0;
+}

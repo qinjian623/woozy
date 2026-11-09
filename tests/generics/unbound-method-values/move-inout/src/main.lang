@@ -1,0 +1,76 @@
+package app;
+
+struct Owned { items Vec[i32]; }
+struct Pair { value i32; }
+
+trait Take { func take(owner move Self) Vec[i32]; }
+trait Step { func bump(owner inout Self, delta i32) i32; }
+trait Consume { func eat(owner move Self, extra move i32) i32; }
+
+impl Take for Owned { func take(owner move Self) Vec[i32] { return owner.items; } }
+impl Owned { func take_inherent(self move Self) Vec[i32] { return self.items; } }
+impl Step for Pair {
+    func bump(owner inout Self, delta i32) i32 {
+        let old = owner.value;
+        owner = Pair(value: old + delta);
+        return old;
+    }
+}
+impl Consume for Pair {
+    func eat(owner move Self, extra move i32) i32 {
+        return owner.value + extra;
+    }
+}
+impl Pair {
+    func adjust(self Self, slot inout i32, delta i32) i32 {
+        let old = slot;
+        slot = slot + delta;
+        return self.value + old;
+    }
+}
+
+func free_take(x move i32) i32 { return x; }
+func take_relay[T Take](x move T) Vec[i32] {
+    let f func(move T) Vec[i32] = T.take;
+    return f(move x);
+}
+func bump_relay[T Step](x inout T, delta i32) i32 {
+    let f func(inout T, i32) i32 = T.bump;
+    return f(inout x, delta);
+}
+func eat_relay[T Consume](x move T, extra move i32) i32 {
+    let f func(move T, move i32) i32 = T.eat;
+    return f(move x, move extra);
+}
+
+func main() i32 {
+    let first = Owned(items: [1]);
+    let inherent func(move Owned) Vec[i32] = Owned.take_inherent;
+    let a = inherent(move first);
+    if a[0] != 1 { return 1; }
+    let second = Owned(items: [2]);
+    let trait_take func(move Owned) Vec[i32] = Owned.take;
+    let b = trait_take(move second);
+    if b[0] != 2 { return 2; }
+    let third = Owned(items: [3]);
+    let c = take_relay[Owned](move third);
+    if c[0] != 3 { return 3; }
+    var p = Pair(value: 7);
+    let f func(inout Pair, i32) i32 = Pair.bump;
+    if f(inout p, 3) != 7 || p.value != 10 { return 4; }
+    if bump_relay[Pair](inout p, 5) != 10 || p.value != 15 { return 5; }
+    let t func(move Pair, move i32) i32 = Pair.eat;
+    if t(move p, move 2) != 17 { return 6; }
+    let e func(move Pair, move i32) i32 = Pair.eat;
+    let q = Pair(value: 20);
+    if e(move q, move 4) != 24 { return 7; }
+    let r = Pair(value: 30);
+    if eat_relay[Pair](move r, move 2) != 32 { return 8; }
+    let move_free func(move i32) i32 = free_take;
+    if move_free(move 9) != 9 { return 9; }
+    let pair = Pair(value: 40);
+    var slot i32 = 5;
+    let adjust func(Pair, inout i32, i32) i32 = Pair.adjust;
+    if adjust(pair, inout slot, 3) != 45 || slot != 8 { return 10; }
+    return 0;
+}

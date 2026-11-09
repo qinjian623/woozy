@@ -351,3 +351,17 @@ Native 以 LLVM 聚合值和调用者存储指针降低；Python 的 writable `C
 索引取得的函数值沿用已有普通参数、inout 和 throws 检查。后续实参抛错时，已经创建的临时 Vec 按原规则清理；越界索引仍产生 Panic。函数值的 move 参数调用、方法值和捕获闭包仍未完成，不能把这一修复视为这些组合已经支持。
 
 `tests/generics/indexed-calls/` 和 `generics.indexed_calls_runtime` 覆盖两后端实际运行、求值顺序、临时值清理、越界 Panic 及错误构建的输出保护。HIR 验证器要求函数值调用具有真实 Call 来源，并核对 callee 与各实参来源；手写测试也使用真实 AST，不用“合成节点”跳过检查。
+
+## 无捕获 Type/T 方法函数值
+
+`Type.method`、`Type.method[U]`、受约束模板中的 `T.method` 和 `T.method[U]` 现在可以取值、保存和间接调用。函数值没有运行时 receiver，也没有捕获环境：取值阶段不复制、retain 或借用接收者，调用者按声明顺序显式提供全部参数，包括普通、move 或 inout 的首位 Self。无 Self 的静态工厂保持原参数表，`zero()` 仍是零参数，不自动补 Self。`h.method` 需要保存 receiver，仍属于延后的捕获，本批未开放；函数字段读取、enum variant 优先、函数 Vec 索引和构造调用规则不变。
+
+限定类型先确定目标；impl 类型参数来自 qualifier，显式 `[U]` 只填写方法自身参数。目标唯一确定后，期望函数类型可以推断尚未确定的普通 own 参数；签名中不出现的 phantom 参数仍必须显式写出。具体 Type 有多个同名适用 impl 时仍报歧义。模板 `T` 按所属参数真实、完整、有序的 TraitRef 选择 impl，不按相同签名或预期返回类型换选另一项 trait 应用。函数类型不保存参数标签，因此间接调用仍拒绝命名实参。
+
+具体目标继续使用既有 `FunctionValue{symbol,type_args}` 和普通函数调用入口。模板中的真实受约束 `T.method` 是唯一允许 symbol 暂指 raw trait prototype 的例外：`type_args` 只保存有序 method-own 实参，Source 保留真实 `T.method[U]`。函数实例化用所属函数的替换表具体化 qualifier、完整 bound 和 own 实参，重选真实 impl，并为泛型目标建立普通实例；具体函数和后端不得残留 prototype、TypeParameter 或伪 `ConstraintCall`。HIR 从真实 Source、所属模板参数、prototype、impl 选择、完整 trait 实参、方法后缀、参数模式/顺序、返回和 throws 及完整实例键独立重建；同签名另一 impl、另一个 T bound、调换 phantom 参数、篡改 Source/后缀/模式/throws 或重算 ownership 后仍拒绝。
+
+FunctionValue 的目标本身是 impl 方法或 raw prototype 时，来源检查不再依赖 Source 能否解析为方法成员。真实 Source 必须是方法成员，或经一层或多层顶层 const 初始化器追到方法成员；非方法整数、自由函数或函数字面量 Source 不能跳过身份检查。const 别名按既有 Binding/AST 和常量符号恢复，不新增公共字段或伪函数体。raw prototype 例外始终还原所属 template、T 的真实完整有序 bound、prototype 归属、method-own 实参及完整函数模式/返回/throws，不能仅因 owner 是 template 就放行。普通 free function Name/FunctionLiteral、const 自由函数值和函数字段/Vec 读取保持原路由。
+
+`tests/generics/unbound-method-values/` 和 `generics.unbound_method_values_runtime` 覆盖两后端 check、Native O0/O2、Python3.12.15、局部/参数/返回/struct/Vec 保存、静态工厂、impl 与方法两层泛型、期望函数类型推断、phantom 显式、完整两种同签名 trait 应用、跨包 public/private、ordinary/move/inout Self、非 Self move/inout、throws/后参失败/defer、真实 Vec 分配与释放、string UTF-8 嵌入 NUL，以及拒绝构建不改写旧输出。原生观察使用 test-only allocator wrapper 核对真实 alloc/free，不以 Vec 的 event 5 代替物理释放；Python 另观察语言引用。捕获 `h.method`、字段/索引 inout、Vec/string/拥有聚合 inout、动态 trait 对象和完整 ARC 仍未开放；T07/T09 保持 in_progress。
+
+公开 const 方法值也检查最终函数类型：参数、返回或 throws 中的私有类型会报 `E_PRIVATE_TYPE_LEAK`；方法内部的 phantom 特化实参不算公开签名。持续测试包含跨包私有 phantom 方法值、96层别名，以及三种真实泄漏的拒绝构建。方法值运行测试复用 `tests/native/alloc_observer.cpp`，按真实指针核对分配/释放。

@@ -153,6 +153,13 @@ class Checker {
       args.push_back(a.value);
     return {actual.value, trait.declaration.value, std::move(args)};
   }
+  const MethodPrototype *trait_prototype(SymbolId method) const {
+    for (const auto &tr : m.traits)
+      for (const auto &p : tr.methods)
+        if (p.symbol == method)
+          return &p;
+    return nullptr;
+  }
   const TraitDecl *trait_decl(SymbolId s) const {
     for (const auto &t : m.traits)
       if (t.symbol == s)
@@ -968,6 +975,32 @@ class Checker {
         !free_generic_template(target))
       unavailable(r, "generic/method inout is not implemented");
   }
+  // A concrete Type/T method value and a bounded T method value keep the same
+  // declared top-level modes as the direct Type/T call. Source eligibility is
+  // still the existing inherent/trait/constraint relation; this does not open
+  // a value receiver or a new inout data type.
+  void check_method_value_modes(Ref r, SymbolId target, TypeId sig,
+                                std::optional<TraitRef> required = {},
+                                std::optional<TypeId> qualifier = {}) {
+    if (!check_inout_graph(r, sig, true))
+      return;
+    bool source = false;
+    if (required && qualifier) {
+      source =
+          constraint_static_method_source(target, *required, *qualifier) ||
+          constraint_static_method_move_source(target, *required,
+                                               *qualifier);
+    } else {
+      const auto *im = impl_of(target);
+      source = (im && !im->trait && inherent_method_source(target)) ||
+               trait_impl_inout_source(target, false).has_value() ||
+               trait_impl_move_source(target, false).has_value();
+    }
+    if (!source)
+      unavailable(r,
+                  "method function value move/inout source is not "
+                  "implemented");
+  }
   std::vector<GenericParam> generics(Ref r) {
     std::vector<GenericParam> ps;
     for (auto c : ast(r).children) {
@@ -1479,18 +1512,20 @@ class Checker {
           if (type(*bt).kind == TypeKind::NominalEnum) {
             const auto &d = nominal(*bt);
             auto name = token(r, n.token_end - n.token_begin - 1);
+            bool variant = false;
             for (const auto &v : d.variants)
               if (symbol(v.symbol).name == name) {
                 if (!v.payload.empty())
                   reject(r, "variant payload requires a constructor call");
                 result = {node(r, *bt, EnumInit{v.symbol, {}}), {*bt, {}, {}}};
+                variant = true;
                 break;
               }
-            if (result.value.type == unit)
-              reject(r, "unknown enum variant");
-            break;
+            if (variant)
+              break;
           }
-          reject(r, "type member is not a value");
+          result = method_value(r, r, {}, expected);
+          break;
         }
         auto base = expression(base_ref);
         if (type(base.value.type).kind == TypeKind::ForeignOpaque)
@@ -1744,6 +1779,31 @@ class Checker {
       auto base = child(r, 0);
       auto s = occurrence(base);
       if (!s || symbol(*s).kind != modules::SymbolKind::function) {
+        // A concrete Type/Bounded-T method suffix is parsed as types only
+        // after the base proves it is a type expression. A value field such
+        // as h.callbacks remains the existing Vec element index below.
+        auto candidate = base;
+        while (ast(candidate).kind == AstKind::Parenthesized)
+          candidate = child(candidate, 0);
+        if (ast(candidate).kind == AstKind::Member &&
+            !occurrence(candidate)) {
+          if (auto bt = type_expression(child(candidate, 0))) {
+            if (type(*bt).kind == TypeKind::NominalEnum) {
+              auto name = file(candidate)
+                              .tokens[ast(candidate).token_end - 1]
+                              .spelling;
+              for (const auto &variant : nominal(*bt).variants)
+                if (symbol(variant.symbol).name == name)
+                  reject(candidate,
+                         "enum variants do not take type arguments");
+            }
+            std::vector<Ref> explicit_refs;
+            for (size_t i = 1; i < n.children.size(); ++i)
+              explicit_refs.push_back(child(r, i));
+            result = method_value(r, candidate, explicit_refs, expected);
+            break;
+          }
+        }
         auto v = expression(base);
         if (type(v.value.type).kind == TypeKind::ForeignOpaque)
           unavailable(r, "external indexing is not supported");
@@ -2084,6 +2144,84 @@ class Checker {
     if (!result)
       reject(r, "no matching explicit method implementation");
     return *result;
+  }
+  // Build the static, noncapturing value of one method. The qualifier and
+  // the method name select the target first; impl parameters come from that
+  // qualifier, explicit suffix types fill only method-own parameters, and an
+  // expected function type may finish the remaining own parameters. No
+  // receiver child or capture environment is created.
+  Expr method_value(Ref r, Ref member_ref,
+                    const std::vector<Ref> &explicit_refs,
+                    std::optional<TypeId> expected) {
+    auto base = child(member_ref, 0);
+    auto qualifier = type_expression(base);
+    if (!qualifier)
+      throw std::invalid_argument("method value lacks a type qualifier");
+    const auto name =
+        std::string(file(member_ref)
+                        .tokens[ast(member_ref).token_end - 1]
+                        .spelling);
+    if (type(*qualifier).kind == TypeKind::TypeParameter) {
+      auto bounded = bounds.find(type(*qualifier).declaration.value);
+      if (bounded == bounds.end() || !bounded->second)
+        reject(member_ref, "method requires a declared trait constraint");
+      const auto application = *bounded->second;
+      const auto *tr = trait_decl(application.declaration);
+      const MethodPrototype *prototype = nullptr;
+      if (tr)
+        for (const auto &method : tr->methods)
+          if (symbol(method.symbol).name == name) {
+            if (prototype)
+              reject(member_ref, "ambiguous trait method value");
+            prototype = &method;
+          }
+      if (!prototype)
+        reject(member_ref, "method is not declared by the constraint");
+      auto own = method_own_parameters(prototype->symbol);
+      Substitutions sub{{tr->self, *qualifier}};
+      // T is fixed by the enclosing template. Infer must not solve it from a
+      // contextual function type; only the method-own suffix is inferred.
+      sub.push_back({type(*qualifier).declaration, *qualifier});
+      for (size_t i = 0; i < tr->params.size(); ++i)
+        sub.push_back({tr->params[i].symbol, application.args.at(i)});
+      if (!explicit_refs.empty()) {
+        if (explicit_refs.size() != own.size())
+          reject(r, "wrong number of method type arguments");
+        for (size_t i = 0; i < own.size(); ++i) {
+          auto t = parse_type(explicit_refs[i]);
+          sub.push_back({own[i].symbol, t});
+        }
+      }
+      if (expected)
+        infer(member_ref, prototype->signature, *expected, sub);
+      auto args =
+          finish_arguments(member_ref, generic_params[prototype->symbol.value], sub);
+      auto sig = substitute(prototype->signature, sub, m.types);
+      check_method_value_modes(member_ref, prototype->symbol, sig, application,
+                               *qualifier);
+      return {node(r, sig, FunctionValue{prototype->symbol, args}),
+              {sig, {}, {}}};
+    }
+    auto selected = select_method(member_ref, *qualifier, name);
+    auto own = method_own_parameters(selected.method);
+    if (!explicit_refs.empty()) {
+      if (explicit_refs.size() != own.size())
+        reject(r, "wrong number of method type arguments");
+      for (size_t i = 0; i < own.size(); ++i) {
+        auto t = parse_type(explicit_refs[i]);
+        selected.substitutions.push_back({own[i].symbol, t});
+      }
+    }
+    const auto original = signatures.at(selected.method.value);
+    if (expected)
+      infer(member_ref, original, *expected, selected.substitutions);
+    auto args = finish_arguments(member_ref,
+                                 generic_params[selected.method.value],
+                                 selected.substitutions);
+    auto sig = substitute(original, selected.substitutions, m.types);
+    check_method_value_modes(member_ref, selected.method, sig);
+    return {node(r, sig, FunctionValue{selected.method, args}),
+            {sig, {}, {}}};
   }
   Expr constructor(Ref r, TypeId target, std::optional<SymbolId> variant = {}) {
     const auto &d = nominal(target);
@@ -4155,6 +4293,62 @@ class Checker {
       auto target = instantiate(original, c->type_args, n.source.node);
       c->direct_symbol = target;
       c->type_args.clear();
+    }
+    if (auto v = std::get_if<FunctionValue>(&n.data);
+        v && trait_prototype(v->symbol)) {
+      // A bounded T.method value is still the raw trait prototype in a
+      // template. Substitute the real qualifier, its complete bound and the
+      // method-own suffix through the owning instance, select the one real
+      // impl by Self plus every ordered trait argument, and replace it with
+      // the ordinary executable method instance. No prototype or template
+      // target may survive into concrete execution.
+      if (!instance_sub)
+        throw std::invalid_argument("trait prototype value has no instance");
+      auto source = n.source.node;
+      auto source_member = source;
+      const auto &source_file = file(source);
+      while (source_file.node(source_member.node).kind == AstKind::Parenthesized)
+        source_member.node =
+            source_file.node(source_member.node).children.at(0);
+      if (source_file.node(source_member.node).kind ==
+          AstKind::NeutralBracket) {
+        const auto &suffix = source_file.node(source_member.node);
+        source_member.node = suffix.children.at(0);
+        while (source_file.node(source_member.node).kind ==
+               AstKind::Parenthesized)
+          source_member.node =
+              source_file.node(source_member.node).children.at(0);
+      }
+      const auto &member = source_file.node(source_member.node);
+      if (member.kind != AstKind::Member || member.children.empty())
+        throw std::invalid_argument("trait prototype value lost its method");
+      auto base = source_member;
+      base.node = member.children.front();
+      auto raw_qualifier = parse_type(base);
+      const auto qualifier = substitute(raw_qualifier, *instance_sub, m.types);
+      const auto name = std::string(
+          source_file.tokens[member.token_end - 1].spelling);
+      const auto &raw = type(raw_qualifier);
+      auto bounded = bounds.find(raw.declaration.value);
+      if (bounded == bounds.end() || !bounded->second)
+        throw std::invalid_argument("trait prototype value lost its bound");
+      TraitRef required = *bounded->second;
+      for (auto &arg : required.args)
+        arg = substitute(arg, *instance_sub, m.types);
+      auto selected = select_method(n.source.node, qualifier, name, required);
+      auto own = method_own_parameters(selected.method);
+      if (own.size() != v->type_args.size())
+        throw std::invalid_argument("trait prototype method argument count");
+      for (size_t i = 0; i < own.size(); ++i)
+        selected.substitutions.push_back({own[i].symbol, v->type_args[i]});
+      auto args = finish_arguments(n.source.node,
+                                   generic_params[selected.method.value],
+                                   selected.substitutions);
+      auto target = selected.method;
+      if (template_ids.count(target.value))
+        target = instantiate(target, args, n.source.node);
+      v->symbol = target;
+      v->type_args.clear();
     }
     if (auto v = std::get_if<FunctionValue>(&n.data);
         v && template_ids.count(v->symbol.value)) {

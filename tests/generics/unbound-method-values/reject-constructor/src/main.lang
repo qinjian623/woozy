@@ -1,0 +1,6 @@
+package app;
+enum E { A(value i32); B; }
+func main() i32 {
+    let f = E.A;
+    return 0;
+}

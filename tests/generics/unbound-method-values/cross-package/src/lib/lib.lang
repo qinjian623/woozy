@@ -1,0 +1,13 @@
+package lib;
+
+pub struct Host { pub value i32; }
+impl Host {
+    pub func get(self Self) i32 { return self.value; }
+    func secret(self Self) i32 { return 99; }
+}
+pub trait Code { func code(owner Self) i32; }
+impl Code for Host { func code(owner Self) i32 { return owner.value + 1; } }
+pub func relay[T Code](owner T) i32 {
+    let f func(T) i32 = T.code;
+    return f(owner);
+}

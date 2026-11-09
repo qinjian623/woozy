@@ -1,0 +1,6 @@
+package app;
+struct Secret{value i32;}
+pub struct Host{}
+impl Host{func make(owner Self,value Secret)i32{return value.value;}}
+pub const Make=Host.make;
+func main()i32{return 0;}

@@ -1,0 +1,8 @@
+package app;
+struct Host { value i32; }
+impl Host { func get(self Self) i32 { return self.value; } }
+func main() i32 {
+    let host = Host(value: 7);
+    let f func(Host) i32 = Host.get;
+    return f(self: host) - 7;
+}

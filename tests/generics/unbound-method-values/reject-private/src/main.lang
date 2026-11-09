@@ -1,0 +1,7 @@
+package app;
+import "app/lib" as lib;
+func main() i32 {
+    let host = lib.Host(value: 7);
+    let f func(lib.Host) i32 = lib.Host.secret;
+    return f(host) - 7;
+}

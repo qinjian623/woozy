@@ -13844,6 +13844,391 @@ func main() i32 {
                "trait/own arguments, controls and corrupt HIR passed\n";
 }
 
+void unbound_method_values() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto types = hir::verify_types(*r.value);
+    need(types.success(), "unbound method value HIR types rejected\n" +
+                              messages(types));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "unbound method value HIR did not publish\n" +
+                                  messages(published));
+    return *r.value;
+  };
+  const std::string base = R"(
+enum Err { Bad; }
+struct Box[T] { value T; }
+struct Host { value i32; }
+trait Pick[A, B] {
+    func tag(owner Self) i32;
+    func echo[U](owner Self, value U) U;
+}
+impl Pick[i32, bool] for Host {
+    func tag(owner Self) i32 { return 11; }
+    func echo[V](owner Self, value V) V { return value; }
+}
+impl Pick[bool, i32] for Host {
+    func tag(owner Self) i32 { return 22; }
+    func echo[V](owner Self, value V) V { return value; }
+}
+impl Host {
+    func get(self Self) i32 { return self.value; }
+    func make(value i32) Self { return Host(value: value); }
+    func fail(self Self) i32 throws Err { throw Err.Bad; }
+}
+impl[T] Box[T] {
+    func echo[U](self Self, item U) U { return item; }
+    func phantom[U](self Self) T { return self.value; }
+}
+func first[T Pick[i32, bool]](value T) i32 {
+    let tag func(T) i32 = T.tag;
+    let echo func(T, i32) i32 = T.echo;
+    return tag(value) + echo(value, 7);
+}
+func second[T Pick[bool, i32]](value T) i32 {
+    let tag func(T) i32 = T.tag;
+    return tag(value);
+}
+func main() i32 {
+    let host = Host(value: 7);
+    let get func(Host) i32 = Host.get;
+    let make func(i32) Host = Host.make;
+    let err func(Host) i32 throws Err = Host.fail;
+    let box = Box[i32](value: 9);
+    let echo_bool func(Box[i32], bool) bool = Box[i32].echo[bool];
+    let echo_i64 func(Box[i32], i64) i64 = Box[i32].echo[i64];
+    let phantom_i64 func(Box[i32]) i32 = Box[i32].phantom[i64];
+    let phantom_bool func(Box[i32]) i32 = Box[i32].phantom[bool];
+    let made = make(5);
+    if get(host) != 7 || made.value != 5 { return 1; }
+    if !echo_bool(box, true) || echo_i64(box, 8) != 8 { return 2; }
+    if phantom_i64(box) != 9 || phantom_bool(box) != 9 { return 3; }
+    if first[Host](host) != 18 || second[Host](host) != 22 { return 4; }
+    try { let ignored = err(host); return 5; }
+    catch error Err { }
+    return 0;
+}
+)";
+  auto m = good(base);
+  auto symbol_named = [&](hir::HirModule &h, std::string_view name) {
+    std::vector<SymbolId> result;
+    for (const auto &s : h.resolved->symbols)
+      if (s.name == name)
+        result.push_back(s.id);
+    return result;
+  };
+  auto node_owner = [&](hir::HirModule &h, const hir::HirNode &n) {
+    return h.scopes[n.scope.value].function;
+  };
+  auto owner_is = [&](hir::HirModule &h, SymbolId owner,
+                      std::string_view name) {
+    for (const auto &i : h.instances)
+      if (i.symbol == owner)
+        return h.resolved->symbols[i.origin.value].name == name;
+    return h.resolved->symbols[owner.value].name == name;
+  };
+  auto find_value = [&](hir::HirModule &h, std::string_view owner,
+                        std::string_view target) -> hir::FunctionValue & {
+    for (auto &n : h.nodes) {
+      auto value = std::get_if<hir::FunctionValue>(&n.data);
+      if (!value)
+        continue;
+      auto function = node_owner(h, n);
+      bool in_template = std::any_of(
+          h.templates.begin(), h.templates.end(), [&](const auto &t) {
+            return t.function.symbol == function;
+          });
+      if (!in_template && owner_is(h, function, owner) &&
+          h.resolved->symbols[value->symbol.value].name == target)
+        return *value;
+    }
+    throw std::runtime_error("method value missing: " + std::string(owner) +
+                             "." + std::string(target));
+  };
+  auto find_prototype_value = [&](hir::HirModule &h,
+                                  std::string_view target)
+      -> hir::FunctionValue & {
+    for (auto &n : h.nodes)
+      if (auto v = std::get_if<hir::FunctionValue>(&n.data);
+          v && std::any_of(h.templates.begin(), h.templates.end(),
+                            [&](const auto &t) {
+                              return t.function.symbol ==
+                                     node_owner(h, n);
+                            }) &&
+          h.resolved->symbols[v->symbol.value].name == target)
+        return *v;
+    throw std::runtime_error("prototype method value missing: " +
+                             std::string(target));
+  };
+  auto find_node = [&](hir::HirModule &h, const hir::FunctionValue &value)
+      -> hir::HirNode & {
+    for (auto &n : h.nodes)
+      if (auto v = std::get_if<hir::FunctionValue>(&n.data); v == &value)
+        return n;
+    throw std::runtime_error("method value node missing");
+  };
+  auto literal_source = [&](hir::HirModule &h, const hir::HirNode &value) {
+    const auto owner = node_owner(h, value);
+    for (const auto &n : h.nodes)
+      if (n.kind() == hir::NodeKind::integer_literal &&
+          node_owner(h, n) == owner)
+        return n.source;
+    throw std::runtime_error("same-function integer Source missing");
+  };
+  auto reject_module = [&](hir::HirModule &module, const std::string &name,
+                           const auto &change) {
+    invalid(module, name, change);
+    invalid_recomputed_published(module, name + " (recomputed ownership)",
+                                 change);
+  };
+  auto prototype = [&](hir::HirModule &h, std::string_view name) {
+    for (const auto &t : h.traits)
+      for (const auto &p : t.methods)
+        if (h.resolved->symbols[p.symbol.value].name == name)
+          return p.symbol;
+    throw std::runtime_error("trait prototype missing: " + std::string(name));
+  };
+  auto bool_type = [](hir::HirModule &h) {
+    for (uint64_t id = 1; id <= h.types.size(); ++id)
+      if (auto t = h.types.find(TypeId{id});
+          t && t->kind == hir::TypeKind::Bool)
+        return TypeId{id};
+    throw std::runtime_error("bool type missing");
+  };
+  auto reject_both = [&](const std::string &name, const auto &change) {
+    invalid(m, name, change);
+    invalid_recomputed_published(m, name + " (recomputed ownership)",
+                                 change);
+  };
+
+  reject_both("unbound prototype borrowed another method", [&](auto &h) {
+    find_prototype_value(h, "tag").symbol = prototype(h, "echo");
+  });
+  reject_both("unbound concrete target used the other same-name impl",
+              [&](auto &h) {
+                auto &value = find_value(h, "first", "tag");
+                auto current = value.symbol;
+                SymbolId replacement{};
+                for (const auto &s : h.resolved->symbols)
+                  if (s.name == "tag" && s.id != current)
+                    for (const auto &im : h.impls)
+                      if (std::find(im.methods.begin(), im.methods.end(),
+                                    s.id) != im.methods.end())
+                        replacement = s.id;
+                need(replacement.value, "other tag impl missing");
+                value.symbol = replacement;
+              });
+  reject_both("unbound template instance bound/self", [&](auto &h) {
+    for (auto &i : h.instances)
+      if (h.resolved->symbols[i.origin.value].name == "first") {
+        need(i.type_args.size() == 1, "first instance arity");
+        i.type_args[0] = bool_type(h);
+        return;
+      }
+    throw std::runtime_error("first instance missing");
+  });
+  reject_both("unbound impl qualifier argument in target instance",
+              [&](auto &h) {
+                for (auto &i : h.instances)
+                  if (h.resolved->symbols[i.origin.value].name == "echo" &&
+                      i.type_args.size() == 2) {
+                    i.type_args[0] = bool_type(h);
+                    return;
+                  }
+                throw std::runtime_error("echo instance missing");
+              });
+  reject_both("unbound explicit method suffix source identity",
+              [&](auto &h) {
+                hir::HirNode *first = nullptr;
+                for (auto &n : h.nodes) {
+                  auto value = std::get_if<hir::FunctionValue>(&n.data);
+                  if (!value ||
+                      h.resolved->symbols[value->symbol.value].name !=
+                          "echo" ||
+                      std::any_of(h.templates.begin(), h.templates.end(),
+                                  [&](const auto &t) {
+                                    return t.function.symbol ==
+                                           node_owner(h, n);
+                                  }))
+                    continue;
+                  if (!first) {
+                    first = &n;
+                    continue;
+                  }
+                  const auto source = first->source;
+                  first->source = n.source;
+                  n.source = source;
+                  return;
+                }
+                throw std::runtime_error("two echo method values missing");
+              });
+  reject_both("unbound phantom instances not merged by signature",
+              [&](auto &h) {
+                auto &i64 =
+                    find_node(h, find_value(h, "main", "phantom"));
+                auto *i64_value = std::get_if<hir::FunctionValue>(&i64.data);
+                need(i64_value, "phantom i64 value missing");
+                SymbolId bool_instance{};
+                for (const auto &n : h.nodes)
+                  if (auto v = std::get_if<hir::FunctionValue>(&n.data);
+                      v && h.resolved->symbols[v->symbol.value].name ==
+                               "phantom" &&
+                      v->symbol != i64_value->symbol) {
+                    bool_instance = v->symbol;
+                    break;
+                  }
+                need(bool_instance.value, "phantom bool instance missing");
+                i64_value->symbol = bool_instance;
+              });
+  reject_both("unbound method value signature mode", [&](auto &h) {
+    auto &node = find_node(h, find_value(h, "main", "get"));
+    auto t = *h.types.find(node.type);
+    t.parameters.front().mode = hir::ParamMode::move;
+    node.type = h.types.intern(t);
+  });
+  reject_both("unbound method value throws signature", [&](auto &h) {
+    auto &node = find_node(h, find_value(h, "main", "fail"));
+    auto t = *h.types.find(node.type);
+    need(t.throws_type.has_value(), "throws value type");
+    t.throws_type.reset();
+    node.type = h.types.intern(t);
+  });
+  reject_both("unbound prototype in concrete execution", [&](auto &h) {
+    find_value(h, "main", "get").symbol = prototype(h, "tag");
+  });
+  reject_both("unbound concrete method Source replaced by integer",
+              [&](auto &h) {
+                auto &node = find_node(h, find_value(h, "main", "get"));
+                node.source = literal_source(h, node);
+              });
+  reject_both("unbound concrete Source integer plus other same signature "
+              "method",
+              [&](auto &h) {
+                auto &node = find_node(h, find_value(h, "main", "get"));
+                auto &other = find_node(h, find_value(h, "first", "tag"));
+                need(node.type == other.type,
+                     "concrete integer bypass signature control");
+                auto *value = std::get_if<hir::FunctionValue>(&node.data);
+                auto *replacement =
+                    std::get_if<hir::FunctionValue>(&other.data);
+                need(value && replacement,
+                     "concrete integer bypass payload");
+                node.source = literal_source(h, node);
+                value->symbol = replacement->symbol;
+              });
+  reject_both("unbound source postfix belongs to another method",
+              [&](auto &h) {
+                auto &from = find_node(h, find_value(h, "main", "get"));
+                auto &to = find_node(h, find_value(h, "main", "make"));
+                from.source = to.source;
+              });
+  const std::string unused = R"(
+trait Choose[A, B] { func stamp[U](owner Self) i32; }
+trait Alien { func alien() bool; }
+func idle[T Choose[i32, bool]](owner T) i32 {
+    let f func(T) i32 = T.stamp[bool];
+    let marker i32 = 0;
+    return f(owner);
+}
+func main() i32 { return 0; }
+)";
+  auto u = good(unused);
+  reject_module(u, "unbound unused prototype Source replaced by integer",
+                [&](auto &h) {
+                  auto &node =
+                      find_node(h, find_prototype_value(h, "stamp"));
+                  node.source = literal_source(h, node);
+                });
+  reject_module(u, "unbound unused Source integer plus unrelated prototype",
+                [&](auto &h) {
+                  auto &node =
+                      find_node(h, find_prototype_value(h, "stamp"));
+                  node.source = literal_source(h, node);
+                  auto *value =
+                      std::get_if<hir::FunctionValue>(&node.data);
+                  need(value, "unused prototype payload");
+                  for (const auto &trait : h.traits)
+                    if (h.resolved->symbols[trait.symbol.value].name ==
+                        "Alien") {
+                      value->symbol = trait.methods.front().symbol;
+                      value->type_args.clear();
+                      return;
+                    }
+                  throw std::runtime_error("Alien prototype missing");
+                });
+  std::cout << "unbound-method-values: concrete Type/impl-own, bounded T, "
+               "storage identity and corrupt HIR passed\n";
+}
+
+void const_method_values() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto types = hir::verify_types(*r.value);
+    need(types.success(), "const method value HIR types rejected\n" +
+                              messages(types));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "const method value HIR did not publish\n" +
+                                  messages(published));
+    return *r.value;
+  };
+  const std::string base = R"(
+struct Host { value i32; }
+struct Box[T] { value T; }
+impl Host {
+    func get(self Self) i32 { return self.value; }
+    func other(self Self) i32 { return self.value + 1; }
+}
+impl[T] Box[T] {
+    func echo[U](self Self, item U) U { return item; }
+}
+func free(x i32) i32 { return x; }
+const GET func(Host) i32 = Host.get;
+const GET_ALIAS func(Host) i32 = GET;
+const ECHO func(Box[i32], bool) bool = Box[i32].echo[bool];
+const FREE func(i32) i32 = free;
+const FREE_ALIAS func(i32) i32 = FREE;
+func main() i32 {
+    let host = Host(value: 7);
+    let f func(Host) i32 = GET_ALIAS;
+    let g func(Box[i32], bool) bool = ECHO;
+    let h func(i32) i32 = FREE_ALIAS;
+    let box = Box[i32](value: 1);
+    if f(host) != 7 || !g(box, true) || h(3) != 3 { return 1; }
+    return 0;
+}
+)";
+  auto m = good(base);
+  size_t get_value = 0;
+  bool found_get = false;
+  for (size_t i = 0; i < m.nodes.size(); ++i)
+    if (auto v = std::get_if<hir::FunctionValue>(&m.nodes[i].data);
+        v && m.resolved->symbols[v->symbol.value].name == "get") {
+      get_value = i;
+      found_get = true;
+    }
+  need(found_get, "const method value use missing");
+  SymbolId other{};
+  for (const auto &s : m.resolved->symbols)
+    if (s.name == "other")
+      other = s.id;
+  need(other.value, "const mismatch target missing");
+  auto corrupt = [&](auto &h) {
+    auto *value = &h.nodes[get_value];
+    auto *fv = std::get_if<hir::FunctionValue>(&value->data);
+    need(fv, "const method value payload missing");
+    fv->symbol = other;
+  };
+  invalid(m, "const method value target differs from initializer",
+          corrupt);
+  invalid_recomputed_published(
+      m, "const method value target differs from initializer "
+         "(recomputed ownership)", corrupt);
+  std::cout << "const-method-values: initializer alias Source identity and "
+               "target corruption passed\n";
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -13923,6 +14308,8 @@ int main(int argc, char **argv) {
     trait_parameter_bounds(root);
     builtin_impl_targets();
     explicit_self_modes();
+    unbound_method_values();
+    const_method_values();
     dependent_callback_completion(root);
     repairs(root);
   } catch (const std::exception &e) {

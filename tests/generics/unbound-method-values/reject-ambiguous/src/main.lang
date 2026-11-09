@@ -1,0 +1,7 @@
+package app;
+struct Host {}
+trait P { func tag(owner Self) i32; }
+trait Q { func tag(owner Self) i32; }
+impl P for Host { func tag(owner Self) i32 { return 1; } }
+impl Q for Host { func tag(owner Self) i32 { return 2; } }
+func main() i32 { let f func(Host) i32 = Host.tag; return f(Host()); }
