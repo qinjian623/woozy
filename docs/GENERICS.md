@@ -255,12 +255,22 @@ trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source �
 
 同一 `Self` 可实现同一泛型 trait 的不同完整实参，直接值调用无法唯一选择时仍报源级歧义；`impl[T] ... for Vec[T]` 与 `Vec[i32]` 的同类重叠仍拒绝。HIR 验证器接受上述合法目标，并从真实 Source、完整 trait 实参和 impl `Self` 重新核对坏图。未新增标准库接口、方法值、捕获、foreign impl、实际 `self` move/inout 或公共 HIR/NodeKind/ABI。
 
+## Type/T 形式的首位实际 Self move/inout
+
+`Type.method(...)` 与受约束的 `T.method(...)` 现在把真实首位 `Self` 当作普通显式声明参数传入，不自动补 receiver。`move` 接受当前已支持的拥有值：Vec、含拥有字段的 struct/enum、临时值、已有显式 `move` 的绑定，以及标量和 string 等既有非拥有值；`inout` 仍只接受数字/bool 或递归只含平凡数据的完整 struct/enum 可写 `var` 绑定。实际类型为 owning aggregate 的 `Self` 仍按同一数据规则拒绝 inout，不因它是 receiver 而放宽。
+
+实际 Self 由 raw prototype 的真实 trait `Self` SymbolId（或固有方法的原 `declared_self`）和首位参数模式确定，不能只看替换后的类型是否等于 `Self`。方法自身的 `U` 即使命名为 `self`、实例化后恰好等于 `Self`，仍是显式静态参数；固有方法中非字面 `self` 的首参同样保持静态。trait 声明阶段允许 `inout Self` 依赖符号；每个完整 trait 应用按具体 `Self` 重新核对 POD 数据，未调用但已写出的 impl 也检查。`Type/T` 调用显式提供全部声明参数，因此实际 Self move/inout 以及同一方法后面的其他 move/inout 参数都使用既有参数模式、命名实参源码顺序、复制/移动、typed throw/defer 和清理规则。
+
+HIR 继续使用现有 `Call`/`ConstraintCall`、`CallArg.mode`、`Move`、`Place` 和函数实例键，没有新增公共字段、NodeKind、NativeIR 或 ABI。验证器从真实 Source 和 raw prototype 核对首位参数、声明模式、完整 trait 实参、impl Self、实例键与调用模式；把实际 Self 换成另一类型、改 prototype 模式、伪造参数来源、换序/替换完整 trait 实参或方法实例键、以及改调用参数模式，均在直接验证或成功重算 ownership 后被拒绝。
+
+`value.method(...)` 遇到真实首位 move/inout Self 仍明确报告 `E_CAPABILITY_UNAVAILABLE`，不会静默消费或借用 receiver。点调用 `(move x).take()` / `(inout x).change()` 的用户规则尚未确定，本批未实现；`move x.take()` 仍只移动方法返回值。方法值、捕获闭包、字段/索引 inout、Vec/string/foreign/含拥有字段聚合的 inout 限制不变。
+
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过；泛型 trait、方法自身泛型及非 self move/inout 的当前范围见前文各节。两个后端入口均调用共用检查，
 只扫描具体函数及其使用类型；未实例化模板不进入生成过程。
 
-实际 self move/inout、方法值/捕获闭包、泛型 trait 或方法自身泛型中依赖 Self/trait 参数/方法参数的 inout callback、trait 名直接调用，以及 Vec/string/foreign/含拥有字段聚合和字段/索引位置的 inout 仍未实施；有限平凡聚合整体 inout 已支持。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案；对普通参数名重新赋值按源码类型错误 `E_TYPE_MISMATCH` 拒绝，需改值时建立 var 局部变量。初始化表达式读取同名外层绑定的规则已定案并保留。
+Type/T 形式的实际首位 Self move/inout 已实施，范围见〈Type/T 形式的首位实际 Self move/inout〉；value 点调用的实际 Self move/inout、方法值/捕获闭包、trait 名直接调用，以及 Vec/string/foreign/含拥有字段聚合和字段/索引位置的 inout 仍未实施；有限平凡聚合整体 inout 已支持。依赖 Self、trait 参数或方法参数的 inout callback 已按完整实际应用检查，见前文对应说明。Vec与有限拥有聚合见[T09_EXECUTION.md](T09_EXECUTION.md)，完整ARC仍未完成；throws/defer见[T08_STATIC.md](T08_STATIC.md)，Python外部声明集见[T10_PYTHON.md](T10_PYTHON.md)。严格浮点执行已在两后端验证。普通参数的只读规则已在 SEMANTICS §7.2 定案；对普通参数名重新赋值按源码类型错误 `E_TYPE_MISMATCH` 拒绝，需改值时建立 var 局部变量。初始化表达式读取同名外层绑定的规则已定案并保留。
 
 ## 递归枚举模式
 

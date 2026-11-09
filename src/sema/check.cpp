@@ -513,16 +513,12 @@ class Checker {
         return {};
       return TraitMethodSource{im, tr, prototype};
     }
-    // Type/T.method(...) starts at declaration index zero. A move/inout
-    // whose raw first type is the real trait Self remains an unsupported
-    // actual-self mode, even when the parameter is labelled owner. A method
-    // own U named `self` is a static parameter and stays one.
-    if (proto_sig.parameters.front().mode != ParamMode::ordinary &&
-        trait_self_type(proto_sig.parameters.front().type, tr->self))
-      return {};
-    // Dependent callback data is validated from the complete substituted
-    // trait application and the concrete method signature; it is not a
-    // separate source-entitlement restriction.
+    // Type/T.method(...) starts at declaration index zero and supplies the
+    // actual first-position Self explicitly. Its move/inout mode is allowed
+    // here; typed_call and the substituted signature still distinguish it
+    // from an own U named `self` and from a value-form receiver. Dependent
+    // callback data is validated from the complete substituted trait
+    // application and the concrete method signature.
     return TraitMethodSource{im, tr, prototype};
   }
   // Move eligibility is separate from the older inout route. A value-form
@@ -708,11 +704,9 @@ class Checker {
     return prototype;
   }
   // A type-qualified T.method(...) has no runtime receiver. All declared
-  // parameters are explicit, including an ordinary Self at index zero. New
-  // top-level inout at non-self positions is admitted together with existing
-  // move; a raw actual-self move/inout in first position and any dependent
-  // Self callback remain closed. Method-own generics are completed by
-  // typed_call; the required trait bound is checked by the caller.
+  // parameters are explicit, including a first-position actual Self, which
+  // may now use move/inout. Method-own generics are completed by typed_call;
+  // the required trait bound and concrete data are checked by the caller.
   const MethodPrototype *constraint_static_method_source(SymbolId target,
                                                           const TraitRef &trait,
                                                           TypeId receiver) {
@@ -746,9 +740,6 @@ class Checker {
                     [](const auto &p) { return p.mode == ParamMode::inout; });
     for (size_t i = 0; i < sig.parameters.size(); ++i) {
       const auto &p = sig.parameters[i];
-      if (i == 0 && p.mode != ParamMode::ordinary &&
-          trait_self_type(p.type, tr->self))
-        return nullptr;
       if (top_level_inout) {
         if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move &&
             p.mode != ParamMode::inout)
@@ -862,16 +853,14 @@ class Checker {
           // Callback modes do not change the enclosing function's modes.
           if (depth == 0)
             direct_inout = true;
-          // Only this trait prototype's real Self may appear in `inout`
-          // position. The receiver at depth 0 stays ordinary and a non-self
-          // top-level slot keeps the old allowance. A nested FunctionType has
-          // no receiver of its own: its first slot is callback data, not the
-          // enclosing method's actual self, so it follows the same aggregate
-          // rule regardless of whether the prototype has a receiver. Concrete
-          // applications are checked again after real substitution.
+          // A trait prototype may name its real Self in any inout slot,
+          // including the actual first-position receiver. The declaration is
+          // only deferred symbolic data; every complete trait application is
+          // checked again after substituting Self and the ordered arguments.
+          // A nested FunctionType still has no receiver of its own, so its
+          // first slot is callback data and reaches the same concrete check.
           const bool trait_self_slot =
-              trait_self && trait_self_type(p.type, *trait_self) &&
-              (depth > 0 || i > 0);
+              trait_self && trait_self_type(p.type, *trait_self);
           const auto data_self =
               trait_self && (depth > 0 || i > 0) ? trait_self : std::nullopt;
           if (!aggregate_inout_type(p.type, data_self) &&
@@ -934,30 +923,28 @@ class Checker {
     }
     signature_parameters = std::move(saved);
   }
-  // Trait methods share the existing non-self move/inout rules. Dependent
-  // callbacks stay unsupported; repeat this check after nominal fields exist.
+  // Trait methods share the existing non-self and actual-self move/inout
+  // rules. A raw first-position Self is accepted at declaration; concrete
+  // applications recheck its data through the common inout graph. Nested
+  // callbacks are not rejected merely for depending on Self, a trait argument
+  // or a method-own parameter.
   void check_generic_trait_method_modes(
       Ref r, const std::vector<GenericParam> &own, TypeId signature,
       std::optional<SymbolId> trait_self, bool generic_trait,
       const std::vector<GenericParam> *trait_params = nullptr) {
     if (!generic_trait && own.empty())
       return;
+    (void)trait_self;
     (void)own;
     (void)trait_params;
     const auto top = type(signature);
     const auto parameters = top.parameters;
-    for (size_t i = 0; i < parameters.size(); ++i) {
-      const auto &p = parameters[i];
+    for (const auto &p : parameters) {
       if (p.mode == ParamMode::ordinary)
         continue;
-      if (i == 0 && trait_self && trait_self_type(p.type, *trait_self))
-        unavailable(r, "move/inout self is not implemented");
       if (p.mode != ParamMode::move && p.mode != ParamMode::inout)
         unavailable(r, "trait method parameter mode is not implemented");
     }
-    // Nested callback data is checked by check_inout_graph and again for
-    // every complete trait application. It is no longer rejected merely for
-    // depending on Self, a trait argument or a method-own parameter.
   }
   void check_function_value_inout(Ref r, SymbolId target, TypeId sig) {
     if (!check_inout_graph(r, sig, true))
@@ -1113,21 +1100,13 @@ class Checker {
 
       if (pm != ParamMode::ordinary && type(pt).kind == TypeKind::ForeignOpaque)
         unavailable(cr, "external move/inout parameters are not supported");
-      // A trait prototype may declare its non-self top-level slot `inout
-      // Self`. A nested FunctionType has no receiver, so its first parameter
-      // is an ordinary callback parameter and may also be `inout Self`, but
-      // only when registration proved the first parameter is ordinary Self.
-      // The root method prototype always excludes position 0.
+      // A trait prototype may declare its actual first-position receiver or
+      // any other slot `inout Self`. The raw Self is deferred here because no
+      // concrete type exists yet; every complete trait application substitutes
+      // Self and checks the resulting data with the common POD rule. A nested
+      // FunctionType has no receiver, so its first slot remains callback data.
       const bool trait_self_slot =
-          trait_self && trait_self_type(pt, *trait_self) &&
-          (callback || i > 0);
-      // The actual first-position trait Self keeps its old move/inout limit;
-      // it is not opened by the aggregate data rule. A non-self later slot of
-      // the same raw Self type, and the first slot of a nested callback, are
-      // callback data and follow the common aggregate rule.
-      if (!callback && i == 0 && pm != ParamMode::ordinary && trait_self &&
-          trait_self_type(pt, *trait_self))
-        unavailable(cr, "move/inout self is not implemented");
+          trait_self && trait_self_type(pt, *trait_self);
       const auto data_self =
           trait_self && (callback || i > 0) ? trait_self : std::nullopt;
       if (pm == ParamMode::inout && !aggregate_inout_type(pt, data_self) &&
@@ -2498,6 +2477,14 @@ class Checker {
     // Copy: substitution below can intern new types and reallocate the
     // TypeContext while this signature is still inspected.
     auto original_type = type(original);
+    // A value-form call always binds parameter zero as its synthetic
+    // receiver. Reject an actual move/inout Self before arity or mode
+    // processing, so it remains an explicit capability limit rather than a
+    // misleading argument-count/type diagnostic. Type/T.method(...) has no
+    // synthetic receiver and supplies this first parameter explicitly.
+    if (receiver && !original_type.parameters.empty() &&
+        original_type.parameters.front().mode != ParamMode::ordinary)
+      unavailable(r, "move/inout self is not implemented");
     if (receiver && !original_type.parameters.empty() &&
         original_type.parameters.front().mode == ParamMode::ordinary) {
       const auto *im = impl_of(target);
@@ -2550,7 +2537,8 @@ class Checker {
     // A concrete receiver may likewise use a real trait impl method, and a
     // bounded template receiver may use a real trait prototype, but only when
     // the source helper above has proved the actual prototype/self relation.
-    // Actual self modes remain rejected by the separate check below.
+    // Actual self modes are source-classified below; a type-qualified call
+    // supplies the first parameter explicitly and may use move/inout.
     const bool free_template =
         !receiver && !constraint && free_generic_template(target);
     const bool free_move = free_template;
@@ -2558,6 +2546,13 @@ class Checker {
     const bool inherent =
         !constraint &&
         inherent_method_route(target, receiver.has_value(), original);
+    // A type-qualified inherent call has no synthetic receiver and may pass
+    // the declared first self parameter explicitly. This also admits later
+    // move/inout parameters for that same source method; a literal declared
+    // self still follows declared_self, while a non-literal first parameter
+    // was already an explicit static parameter.
+    const bool inherent_static =
+        !constraint && !receiver && inherent_method_source(target);
     // Move and inout eligibility use separate source helpers. Both admit an
     // ordinary receiver named self or owner and an explicit Type/T parameter
     // list. Complete callback data is checked after type substitution.
@@ -2594,61 +2589,15 @@ class Checker {
                   : constraint_static_method_move_source(
                         target, *constraint, *constraint_receiver));
     const bool allow_move =
-        free_move || inherent || trait_impl_move || trait_constraint_move;
+        free_move || inherent || inherent_static || trait_impl_move ||
+        trait_constraint_move;
     const bool allow_inout =
-        free_inout || inherent || trait_impl_inout ||
+        free_inout || inherent || inherent_static || trait_impl_inout ||
         trait_constraint_inout;
-    // Actual self is classified from the raw declaration. A receiver call
-    // always takes parameter zero, so any non-ordinary raw first mode is an
-    // unsupported self mode; a type-qualified static call can pass a first
-    // parameter explicitly, but only when the raw first parameter is not the
-    // trait Self or the impl's own type. An own type parameter that happens
-    // to be named self, or later concretizes to Self, is not an actual self.
-    bool actual_self_nonordinary = false;
-    if (!receiver) {
-      if (constraint) {
-        if (const auto *tr = trait_decl(constraint->declaration))
-          for (const auto &p : tr->methods)
-            if (p.symbol == target) {
-              const auto &raw = type(p.signature);
-              if (!raw.parameters.empty() &&
-                  raw.parameters.front().mode != ParamMode::ordinary &&
-                  trait_self_type(raw.parameters.front().type, tr->self))
-                actual_self_nonordinary = true;
-            }
-      } else if (const auto *im = impl_of(target)) {
-        if (im->trait) {
-          // A trait impl follows the raw trait prototype: only its actual
-          // trait Self in first position is an unsupported self mode. An own
-          // type parameter named self that later equals the impl Self is a
-          // static parameter, and a concrete non-Self first parameter with
-          // the same type as the impl is not a receiver.
-          auto source = trait_impl_move_source(target, false);
-          if (source && !source->prototype->parameters.empty()) {
-            const auto &raw = type(source->prototype->signature);
-            if (!raw.parameters.empty() &&
-                raw.parameters.front().mode != ParamMode::ordinary &&
-                trait_self_type(raw.parameters.front().type,
-                                source->trait->self))
-              actual_self_nonordinary = true;
-          }
-        } else if (declared_self(target) &&
-                   !original_type.parameters.empty() &&
-                   original_type.parameters.front().mode !=
-                       ParamMode::ordinary) {
-          // Inherent methods keep the pre-existing declared_self rule:
-          // literal `self` plus the original first parameter type equal to
-          // the impl Self. A non-literal label stays an explicit static
-          // parameter, including a completed signature that happens to equal
-          // the impl type.
-          actual_self_nonordinary = true;
-        }
-      }
-    }
-    if (actual_self_nonordinary ||
-        (receiver && !original_type.parameters.empty() &&
-         original_type.parameters.front().mode != ParamMode::ordinary))
-      unavailable(r, "move/inout self is not implemented");
+    // A value-form actual-self mode was rejected above, before arity. An own
+    // type parameter that happens to be named self, or later concretizes to
+    // Self, is not an actual self; a type-qualified call passes parameter zero
+    // explicitly and uses the same ordinary/move/inout checks below.
     for (size_t pass = 0; pass < 2; ++pass)
       for (size_t i = 0; i < values.size(); ++i) {
         auto ar = child(r, i + 1), er = child(ar, 0);

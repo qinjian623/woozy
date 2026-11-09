@@ -52,7 +52,9 @@ STATIC_POSITIVE = ('prototype-bound-self', 'bound-nested-trait-parameter',
                    'reject-hidden-trait-callback-legacy',
                    'reject-hidden-self-callback',
                    'reject-hidden-self-callback-legacy',
-                   'recursive-wrap-same-application-control')
+                   'recursive-wrap-same-application-control',
+                   'modes-reject-actual-self-move',
+                   'modes-reject-actual-self-inout')
 OBSERVED = ('modes-combinations', 'modes-lifetime')
 EXPECTED_EVENTS = {
     'modes-combinations': [],
@@ -87,8 +89,6 @@ UNSUPPORTED = {
     'reject-concrete-self-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-concrete-trait-argument': {'E_CAPABILITY_UNAVAILABLE'},
     'modes-reject-inout-owning': {'E_CAPABILITY_UNAVAILABLE'},
-    'modes-reject-actual-self-move': {'E_CAPABILITY_UNAVAILABLE'},
-    'modes-reject-actual-self-inout': {'E_CAPABILITY_UNAVAILABLE'},
     'recursive-wrap-return-reject': {'E_CAPABILITY_UNAVAILABLE'},
     'recursive-wrap-mutual-return-reject': {'E_CAPABILITY_UNAVAILABLE'},
 }

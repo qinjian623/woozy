@@ -1,0 +1,4 @@
+package app;
+struct Owned { items Vec[i32]; }
+impl Owned { func bump(self inout Self) { } }
+func main() i32 { var o = Owned(items: [1]); Owned.bump(inout o); return 0; }

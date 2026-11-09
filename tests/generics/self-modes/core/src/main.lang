@@ -1,0 +1,149 @@
+package app;
+
+enum Fail {
+    Bad;
+}
+
+struct Owned {
+    items Vec[i32];
+    marker i32;
+}
+
+enum Payload {
+    Items(items Vec[i32]);
+    Empty;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func later(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func fail(log inout i64, digit i64) i32 throws Fail {
+    mark(inout log, digit);
+    throw Fail.Bad;
+}
+
+trait Take {
+    func take(owner move Self) Self;
+    func combine(owner move Self, first i32, second i32) i32;
+    func throwing(owner move Self, log inout i64) i32 throws Fail;
+}
+
+impl Take for Owned {
+    func take(owner move Self) Self {
+        let local Vec[i32] = [7];
+        defer {
+            let read = local[0];
+        }
+        return move owner;
+    }
+
+    func combine(owner move Self, first i32, second i32) i32 {
+        return owner.items[0] + first + second;
+    }
+
+    func throwing(owner move Self, log inout i64) i32 throws Fail {
+        let local Vec[i32] = [8];
+        defer {
+            let read = local[0];
+        }
+        mark(inout log, 4);
+        throw Fail.Bad;
+    }
+}
+
+impl Take for Payload {
+    func take(owner move Self) Self {
+        return move owner;
+    }
+
+    func combine(owner move Self, first i32, second i32) i32 {
+        return first + second;
+    }
+
+    func throwing(owner move Self, log inout i64) i32 throws Fail {
+        mark(inout log, 6);
+        throw Fail.Bad;
+    }
+}
+
+func relay[T Take](x move T) T {
+    return T.take(move x);
+}
+
+func main() i32 {
+    let o = Owned(items: [1], marker: 2);
+    let alias = o.items;
+    let r = Owned.take(move o);
+    r.items[0] = 7;
+    if alias[0] != 7 {
+        return 1;
+    }
+
+    let t = Owned.take(Owned(items: [3], marker: 4));
+    if t.items[0] != 3 {
+        return 2;
+    }
+
+    var p = Payload.Items(items: [5]);
+    let pa = p;
+    let pr = Payload.take(move p);
+    switch pr {
+    case Payload.Items(items):
+        items[0] = 6;
+    case Payload.Empty:
+        return 3;
+    }
+    switch pa {
+    case Payload.Items(items):
+        if items[0] != 6 {
+            return 4;
+        }
+    case Payload.Empty:
+        return 5;
+    }
+
+    let ro = Owned(items: [9], marker: 10);
+    let rr = relay(move ro);
+    if rr.items[0] != 9 {
+        return 6;
+    }
+
+    var log i64 = 0;
+    let combined = Owned.combine(owner: Owned(items: [11], marker: 12),
+                                 second: later(inout log, 2),
+                                 first: later(inout log, 3));
+    if combined != 16 || log != 23 {
+        return 7;
+    }
+
+    try {
+        let bad = Owned.combine(owner: Owned(items: [13], marker: 14),
+                                first: fail(inout log, 7),
+                                second: later(inout log, 8));
+        return 8;
+    } catch err Fail {
+        mark(inout log, 9);
+    }
+    if log != 2379 {
+        return 9;
+    }
+
+    var tlog i64 = 0;
+    try {
+        let bad = Owned.throwing(owner: Owned(items: [15], marker: 16),
+                                 log: inout tlog);
+        return 10;
+    } catch err Fail {
+        mark(inout tlog, 5);
+    }
+    if tlog != 45 {
+        return 11;
+    }
+    return 0;
+}

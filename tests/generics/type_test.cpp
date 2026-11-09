@@ -1699,9 +1699,11 @@ void generic_inout(const fs::path &root) {
   unsupported("impl i32{func bump(self inout i32,x inout i32){x+=1;}} "
               "func main(){var x i32=1;x.bump(inout x);}",
               "E_CAPABILITY_UNAVAILABLE");
-  unsupported("impl i32{func bump(self inout i32,x inout i32){x+=1;}} "
-              "func main(){var x i32=1;i32.bump(inout x,inout x);}",
-              "E_CAPABILITY_UNAVAILABLE");
+  // The explicit Type form now reaches the ordinary duplicate-storage
+  // source check instead of the old actual-self capability rejection.
+  bad("impl i32{func bump(self inout i32,x inout i32){x+=1;}} "
+      "func main(){var x i32=1;i32.bump(inout x,inout x);}",
+      "E_CALL_ARGUMENT");
 
   auto unsupported_span = [&](const std::string &text) {
     auto r = source(text);
@@ -2893,7 +2895,7 @@ void method_move(const fs::path &root) {
       "return move value;}} "
       "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
       "let r=h.take(move v);return r[0];}");
-  unsupported(
+  good(
       "struct H{marker i32;} impl H{"
       "func take(self move Self,value move Vec[i32])Vec[i32]{"
       "return move value;}} "
@@ -3373,9 +3375,11 @@ void generic_method_move(const fs::path &root) {
       "E_OWNERSHIP_USE_AFTER_MOVE");
   unsupported(prefix + "func main()i32{let h=H(items:[1],marker:0);"
                        "let r=h.take(move h.items);return r[0];}");
-  unsupported(prefix + "func main()i32{let h=H(items:[1],marker:0);"
-                       "var v Vec[i32]=[1];"
-                       "let r=H.take(h,move v);return r[0];}");
+  // Type.method supplies the declared ordinary Self explicitly; the later
+  // move parameter uses the same source method rules.
+  good(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+                "var v Vec[i32]=[1];"
+                "let r=H.take(h,move v);return r[0];}");
   unsupported(
       "struct H{marker i32;} impl H{"
       "func take[T](self move Self,value move T)T{return move value;}} "
@@ -3886,11 +3890,11 @@ return 0;}
                     "func take(self move Self,value move T)T{return move value;}} "
                     "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
                     "var x i32=1;let r=b.take(move x);return r-1;}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func take(self move Self,value move T)T{return move value;}} "
-                    "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
-                    "var x i32=1;let r=Box[i32].take(move b,move x);"
-                    "return r-1;}");
+  good(box + "impl[T] Box[T]{"
+            "func take(self move Self,value move T)T{return move value;}} "
+            "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
+            "var x i32=1;let r=Box[i32].take(move b,move x);"
+            "return r-1;}");
   unsupported(box + "impl[T] Box[T]{"
                     "func take(self inout Self,value move T)T{return move value;}} "
                     "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
@@ -4507,22 +4511,22 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
        "func bump[U](x inout i32){x+=1;}} "
        "func main()i32{var x i32=1;"
        "Box[i32].bump[i32](inout x);return x-2;}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func bump[U](self Self,x inout U){x=x;}} "
-                    "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-                    "var x i32=1;"
-                    "Box[i32].bump[i32](b,inout x);return x-2;}");
+  good(box + "impl[T] Box[T]{"
+            "func bump[U](self Self,x inout U){x=x;}} "
+            "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+            "var x i32=1;"
+            "Box[i32].bump[i32](b,inout x);return x-2;}");
   unsupported(box + "impl[T] Box[T]{"
                     "func take[U](self move Self,value move U)U{"
                     "return move value;}} "
                     "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
                     "var x i32=1;let r=b.take(move x);return r-1;}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func take[U](self move Self,value move U)U{"
-                    "return move value;}} "
-                    "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
-                    "var x i32=1;let r=Box[i32].take(move b,move x);"
-                    "return r-1;}");
+  good(box + "impl[T] Box[T]{"
+            "func take[U](self move Self,value move U)U{"
+            "return move value;}} "
+            "func main()i32{var b=Box[i32](value:1,items:[1],marker:0);"
+            "var x i32=1;let r=Box[i32].take(move b,move x);"
+            "return r-1;}");
   unsupported(box + "impl[T] Box[T]{"
                     "func take[U](self inout Self,value move U)U{"
                     "return move value;}} "
@@ -7147,13 +7151,14 @@ func main() i32 {
        "func bad(self Self,f func(inout Self,Self)Self){}} "
        "func main()i32{return 0;}");
 
-  // The new callback context does not open actual self modes or a callback
-  // that accesses the same slot twice.
-  unsupported("trait V{func bad(self inout Self,"
-              "f func(inout Self,Self)Self);}"
-              "impl V for i32{func bad(self inout Self,"
-              "f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
+  // Actual first-position inout Self is deferred at the trait declaration
+  // and checked with concrete POD data at this i32 application. A callback
+  // that accesses the same slot twice is a separate call-site rule.
+  good("trait V{func bad(self inout Self,"
+       "f func(inout Self,Self)Self);}"
+       "impl V for i32{func bad(self inout Self,"
+       "f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
   good("trait V[U]{func bad(self Self,"
        "f func(inout Self,Self)Self);}"
        "impl V[i32] for i32{func bad(self Self,"
@@ -7921,10 +7926,14 @@ void trait_static_calls() {
       "impl Checked for Box{func make(seed i32)Self throws E{return Box(value:seed);}}"
       "func build[T Checked](seed i32)T{return T.make(seed);}"
       "func main()i32{return 0;}", "E_EFFECT_UNHANDLED");
-  unsupported("trait Take{func take(value move Self)Self;}"
-              "func f[T Take](x T)T{return T.take(move x);}");
-  unsupported("trait Bump{func bump(slot inout Self);}"
-              "func f[T Bump](x T){T.bump(inout x);}");
+  // The Type/T actual-Self route is open; moving or borrowing an ordinary
+  // parameter is still the ordinary source argument error.
+  bad("trait Take{func take(value move Self)Self;}"
+      "func f[T Take](x T)T{return T.take(move x);}",
+      "E_CALL_ARGUMENT");
+  bad("trait Bump{func bump(slot inout Self);}"
+      "func f[T Bump](x T){T.bump(inout x);}",
+      "E_CALL_ARGUMENT");
   good("trait Callback{func apply(cb func(inout Self)Self)Self;}"
        "func f[T Callback](cb func(inout T)T)T{return T.apply(cb);}");
 
@@ -8205,11 +8214,11 @@ void trait_method_generics(const fs::path &root) {
        "struct S{}"
        "impl Callback for S{func run[U](owner Self,cb func(inout U)){}}"
        "func main()i32{return 0;}");
-  unsupported(values +
-              "trait Move{func take[U](self move Self,value U)U;}"
-              "struct S{}"
-              "impl Move for S{func take[U](self move Self,value U)U{"
-              "return value;}} func main()i32{return 0;}");
+  good(values +
+       "trait Move{func take[U](self move Self,value U)U;}"
+       "struct S{}"
+       "impl Move for S{func take[U](self move Self,value U)U{"
+       "return value;}} func main()i32{return 0;}");
 
   // Published HIR: the prototype's own parameter is a real type parameter,
   // while its runtime parameter list stays the declared owner Self. Returned
@@ -9087,18 +9096,17 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
     throw std::runtime_error("phantom direct call missing");
   });
 
-  // Top-level method-parameter inout and dependent callbacks are now legal;
-  // actual self modes keep the old capability limit. Fixed scalar callbacks
-  // remain legal.
+  // Top-level method-parameter inout, dependent callbacks and actual-self
+  // move declarations are now legal; concrete applications still check data.
   good("trait V{func set[U](owner Self, slot inout U);}"
        "struct S{} impl V for S{func set[U](owner Self, slot inout U){}}"
        "func main()i32{return 0;}");
-  unsupported("trait V{func take[U](self move Self, value U)U;}"
-              "struct S{} impl V for S{func take[U](self move Self, value U)U{"
-              "return value;}} func main()i32{return 0;}");
-  unsupported("trait V{func take[U](owner move Self, value U)U;}"
-              "struct S{} impl V for S{func take[U](owner move Self, value U)U{"
-              "return value;}} func main()i32{return 0;}");
+  good("trait V{func take[U](self move Self, value U)U;}"
+       "struct S{} impl V for S{func take[U](self move Self, value U)U{"
+       "return value;}} func main()i32{return 0;}");
+  good("trait V{func take[U](owner move Self, value U)U;}"
+       "struct S{} impl V for S{func take[U](owner move Self, value U)U{"
+       "return value;}} func main()i32{return 0;}");
   good("trait V{func run[U](owner Self, cb func(inout U));}"
        "struct S{} impl V for S{func run[U](owner Self, cb func(inout U)){}}"
        "func main()i32{return 0;}");
@@ -9805,10 +9813,12 @@ func main() i32 {
       "func f[T](x T,slot inout i32){T.set[i32](x,inout slot,1);} "
       "func main()i32{return 0;}",
       "E_TYPE_MISMATCH");
-  unsupported("trait V{func bad[U](owner move Self,slot inout U);} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func bad[U](owner inout Self,slot inout U);} "
-              "func main()i32{return 0;}");
+  // Actual-self move/inout declarations are deferred and legal without a
+  // concrete trait application.
+  good("trait V{func bad[U](owner move Self,slot inout U);} "
+       "func main()i32{return 0;}");
+  good("trait V{func bad[U](owner inout Self,slot inout U);} "
+       "func main()i32{return 0;}");
   good("trait V{func bad[U](owner Self,cb func(inout U));} "
        "func main()i32{return 0;}");
   good("trait V{func bad[U](owner Self,cb func(inout Self));} "
@@ -10047,9 +10057,9 @@ func main()i32{var slot i32=6;i32.adjust(inout slot);return slot;}
       "impl H{func bump[T](slot inout T,value T){slot=value;}}"
       "func main()i32{var x i32=1;H.bump[i32](inout x,2);return x-2;}");
 
-  // The old literal-self inherent checks remain. A trait method whose raw
-  // first parameter is the real trait Self is also still unavailable.
-  unsupported(
+  // Type-qualified actual Self is explicit parameter zero. Move accepts the
+  // existing owning values; inout still rejects an owning aggregate below.
+  good(
       "struct H{items Vec[i32];}"
       "impl H{func take(self move Self)Self{return move self;}}"
       "func main()i32{let h=H(items:[1]);let r=H.take(move h);return 0;}");
@@ -10057,23 +10067,22 @@ func main()i32{var slot i32=6;i32.adjust(inout slot);return slot;}
       "struct H{items Vec[i32];}"
       "impl H{func bump(self inout Self){}}"
       "func main()i32{var h=H(items:[1]);H.bump(inout h);}");
-  unsupported(
+  good(
       "trait T{func take[U](self move Self,value U)U;}"
       "struct H{} impl T for H{func take[U](self move Self,value U)U{"
       "return value;}} func main()i32{return 0;}");
-  unsupported(
+  good(
       "trait T{func take[U](owner move Self,value U)U;}"
       "struct H{} impl T for H{func take[U](owner move Self,value U)U{"
       "return value;}} func main()i32{return 0;}");
-  // Non-generic trait actual-self calls reach the new no-receiver move
-  // route, so exercise the call rather than relying only on a declaration
-  // diagnostic.
-  unsupported(
+  // Non-generic trait actual-self Type calls also use explicit parameter
+  // zero; value-form calls with a move/inout Self remain unsupported.
+  good(
       "trait T{func take(self move Self)Self;}"
       "struct H{items Vec[i32];}"
       "impl T for H{func take(self move Self)Self{return move self;}}"
       "func main()i32{let h=H(items:[1]);let r=H.take(move h);return 0;}");
-  unsupported(
+  good(
       "trait T{func take(owner move Self)Self;}"
       "struct H{items Vec[i32];}"
       "impl T for H{func take(owner move Self)Self{return move owner;}}"
@@ -11031,9 +11040,10 @@ void aggregate_inout_validation() {
               "trait Edit{func edit(self Self,slot inout Wrap[Self])Unit;} "
               "impl Edit for Own{func edit(self Self,slot inout Wrap[Self])"
               "Unit{}} func main()i32{return 0;}");
-  bad("struct Pair{value i32;} impl Pair{func bad(self inout Pair){}} "
-      "func main()i32{var p=Pair(value:1);p.bad(inout p);return 0;}",
-      "E_CALL_ARGUMENT");
+  // Value-form actual-self inout remains an explicit capability limit, even
+  // though the same explicit Type call would be a legal POD whole binding.
+  unavailable("struct Pair{value i32;} impl Pair{func bad(self inout Pair){}} "
+              "func main()i32{var p=Pair(value:1);p.bad(inout p);return 0;}");
   good("struct Pair{value i32;} "
        "trait Apply{func run[U](owner Self,"
        "callback func(inout U))Unit;} "
@@ -12243,10 +12253,19 @@ void generic_trait_method_modes(const fs::path &root) {
          "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
 
   // The raw prototype determines actual Self, regardless of its label.
+  // Actual-self move/inout is deferred at the declaration and checked for
+  // concrete data when the trait is applied.
   for (const char *mode : {"move", "inout"})
-    reject(std::string("trait Closed[A]{func run[U](owner ") + mode +
-               " Self,value U)U;}func main()i32{return 0;}",
-           "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+    for (const char *backend : {"native", "python"}) {
+      auto context = std::string("trait Closed[A]{func run[U](owner ") + mode +
+                     " Self,value U)U;}func main()i32{return 0;}";
+      auto r = source(context, backend);
+      need(r.success(), std::string(backend) + ": " + context + "\n" +
+                            messages(r));
+      need(hir::verify_types(*r.value).success() &&
+               hir::verify(*r.value).success(),
+           std::string(backend) + ": actual self declaration HIR rejected");
+    }
   // A legal top-level mode does not make a callback dependency illegal. The
   // same graphs are accepted as templates and rejected when a complete trait
   // application substitutes owning data.
@@ -13620,6 +13639,211 @@ func main() i32 { return 0; }
                "concrete owning rejects, identity and mode corruptions\n";
 }
 
+
+void explicit_self_modes() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto types = hir::verify_types(*r.value);
+    need(types.success(), "actual-self HIR types rejected\n" + messages(types));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "actual-self HIR did not publish\n" +
+                                  messages(published));
+    return *r.value;
+  };
+  auto bad = [](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code) &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         text + "\n" + messages(r));
+  };
+  auto unsupported = [](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE") &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         text + "\n" + messages(r));
+  };
+
+  const std::string base = R"(
+struct Box { items Vec[i32]; marker i32; }
+struct Pair { value i32; }
+trait Take { func take(owner move Self) Self; }
+trait MoveGeneric[A] { func move_own[U](owner move Self, tag U,
+                                        value move A) Self; }
+trait Step { func bump(owner inout Self, delta i32) i32; }
+trait StepGeneric[A] { func change[U](owner inout Self, delta A, tag U) i32; }
+impl Take for Box { func take(owner move Self) Self { return move owner; } }
+impl MoveGeneric[i32] for Box {
+    func move_own[U](owner move Self, tag U, value move i32) Self {
+        return move owner;
+    }
+}
+impl Step for Pair {
+    func bump(owner inout Self, delta i32) i32 {
+        let old = owner.value;
+        owner = Pair(value: old + delta);
+        return old;
+    }
+}
+impl StepGeneric[i32] for Pair {
+    func change[U](owner inout Self, delta i32, tag U) i32 {
+        let old = owner.value;
+        owner = Pair(value: old + delta);
+        return old;
+    }
+}
+func move_relay[T Take](x move T) T { return T.take(move x); }
+func step_relay[T Step](x inout T, delta i32) i32 {
+    return T.bump(inout x, delta);
+}
+func generic_relay[A, T StepGeneric[A], U](x inout T, delta A, tag U) i32 {
+    return T.change[U](inout x, delta, tag);
+}
+func main() i32 {
+    let first = Box(items: [1], marker: 2);
+    let moved = Box.take(move first);
+    let second = Box(items: [3], marker: 4);
+    let generic = Box.move_own[bool](move second, true, 5);
+    let third = Box(items: [6], marker: 7);
+    let relayed = move_relay(move third);
+    var p = Pair(value: 8);
+    let oldp = Pair.bump(inout p, 2);
+    var q = Pair(value: 10);
+    let oldq = generic_relay[i32, Pair, bool](inout q, 4, true);
+    if moved.items[0] != 1 || generic.items[0] != 3 ||
+       relayed.items[0] != 6 || oldp != 8 || p.value != 10 ||
+       oldq != 10 || q.value != 14 {
+        return 1;
+    }
+    return 0;
+}
+)";
+  auto m = good(base);
+  auto direct = [](hir::HirModule &h, const std::string &name) -> hir::Call & {
+    for (auto &n : h.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data); c && c->direct_symbol)
+        if (h.resolved->symbols[c->direct_symbol->value].name == name)
+          return *c;
+    throw std::runtime_error("actual-self call missing: " + name);
+  };
+  auto instance = [](hir::HirModule &h,
+                     const std::string &name) -> hir::FunctionInstance & {
+    for (auto &i : h.instances)
+      if (h.resolved->symbols[i.origin.value].name == name)
+        return i;
+    throw std::runtime_error("actual-self instance missing: " + name);
+  };
+  auto constraint = [](hir::HirModule &h) -> hir::ConstraintCall & {
+    for (auto &n : h.nodes)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data);
+          c && !c->trait.args.empty())
+        return *c;
+    throw std::runtime_error("actual-self ConstraintCall missing");
+  };
+  auto bool_type = [](hir::HirModule &h) -> TypeId {
+    for (uint64_t id = 1; id <= h.types.size(); ++id)
+      if (auto t = h.types.find(TypeId{id});
+          t && t->kind == hir::TypeKind::Bool)
+        return TypeId{id};
+    throw std::runtime_error("bool type missing");
+  };
+  auto pair_type = [](hir::HirModule &h) -> TypeId {
+    for (auto &d : h.nominals)
+      if (h.resolved->symbols[d.symbol.value].name == "Pair")
+        for (uint64_t id = 1; id <= h.types.size(); ++id)
+          if (auto t = h.types.find(TypeId{id});
+              t && t->kind == hir::TypeKind::NominalStruct &&
+              t->declaration == d.symbol)
+            return TypeId{id};
+    throw std::runtime_error("Pair type missing");
+  };
+
+  auto reject_both = [&](const std::string &name, const auto &change) {
+    invalid(m, name, change);
+    invalid_recomputed(m, name + " (recomputed ownership)", change);
+  };
+  reject_both("actual-self prototype type", [&](auto &h) {
+    for (auto &t : h.traits)
+      if (h.resolved->symbols[t.symbol.value].name == "Take") {
+        auto sig = *h.types.find(t.methods.front().signature);
+        sig.parameters.front().type = pair_type(h);
+        t.methods.front().signature = h.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("Take prototype missing");
+  });
+  reject_both("actual-self prototype mode", [&](auto &h) {
+    for (auto &t : h.traits)
+      if (h.resolved->symbols[t.symbol.value].name == "Take") {
+        auto sig = *h.types.find(t.methods.front().signature);
+        sig.parameters.front().mode = hir::ParamMode::ordinary;
+        t.methods.front().signature = h.types.intern(sig);
+        return;
+      }
+    throw std::runtime_error("Take prototype missing");
+  });
+  reject_both("actual-self call mode",
+              [&](auto &h) {
+                direct(h, "take").args.front().mode =
+                    hir::ParamMode::ordinary;
+              });
+  reject_both("actual-self source position", [&](auto &h) {
+    auto &call = direct(h, "bump");
+    need(call.args.size() == 2, "actual-self bump arity");
+    h.nodes[call.args[0].expression.value].source =
+        h.nodes[call.args[1].expression.value].source;
+  });
+  reject_both("actual-self full trait arguments", [&](auto &h) {
+    constraint(h).trait.args.front() = bool_type(h);
+  });
+  reject_both("actual-self method instance key", [&](auto &h) {
+    auto &i = instance(h, "move_own");
+    need(!i.type_args.empty(), "method instance key arity");
+    i.type_args.back() = pair_type(h);
+  });
+
+  bad("struct Box { items Vec[i32]; }"
+      "impl Box { func take(self move Self) Self { return move self; } }"
+      "func main() i32 { let b = Box(items: [1]);"
+      "let r = Box.take(b); return 0; }",
+      "E_CALL_ARGUMENT");
+  bad("struct Box { items Vec[i32]; }"
+      "impl Box { func take(self move Self) Self { return move self; } }"
+      "func main() i32 { let b = Box(items: [1]);"
+      "let r = Box.take(move b); return b.items[0]; }",
+      "E_OWNERSHIP_USE_AFTER_MOVE");
+  bad("struct Pair { value i32; }"
+      "impl Pair { func bump(self inout Self) { self.value += 1; } }"
+      "func main() i32 { let p = Pair(value: 1);"
+      "Pair.bump(inout p); return p.value - 2; }",
+      "E_CALL_ARGUMENT");
+  bad("struct Pair { value i32; }"
+      "impl Pair { func bump(self inout Self, other i32) {"
+      "self.value += other; } }"
+      "func main() i32 { var p = Pair(value: 1);"
+      "Pair.bump(inout p, p.value); return 0; }",
+      "E_CALL_ARGUMENT");
+  unsupported("struct Owned { items Vec[i32]; }"
+              "impl Owned { func bump(self inout Self) { } }"
+              "func main() i32 { var o = Owned(items: [1]);"
+              "Owned.bump(inout o); return 0; }");
+  unsupported("struct Owned { items Vec[i32]; }"
+              "trait Step { func change(owner inout Self); }"
+              "impl Step for Owned { func change(owner inout Self) { } }"
+              "func main() i32 { return 0; }");
+  unsupported("struct Box { items Vec[i32]; }"
+              "impl Box { func take(self move Self) Self { return move self; } }"
+              "func main() i32 { let b = Box(items: [1]);"
+              "let r = b.take(); return 0; }");
+  unsupported("struct Pair { value i32; }"
+              "impl Pair { func bump(self inout Self) { self.value += 1; } }"
+              "func main() i32 { var p = Pair(value: 1);"
+              "p.bump(); return 0; }");
+  std::cout << "explicit-self-modes: Type/T actual Self move/inout, full "
+               "trait/own arguments, controls and corrupt HIR passed\n";
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -13698,6 +13922,7 @@ int main(int argc, char **argv) {
     indexed_function_calls();
     trait_parameter_bounds(root);
     builtin_impl_targets();
+    explicit_self_modes();
     dependent_callback_completion(root);
     repairs(root);
   } catch (const std::exception &e) {

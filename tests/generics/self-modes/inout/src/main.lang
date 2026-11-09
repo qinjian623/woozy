@@ -1,0 +1,195 @@
+package app;
+
+enum Fail {
+    Bad;
+}
+
+struct Pair {
+    x i32;
+    y i32;
+}
+
+enum Flag {
+    Off;
+    On(value i32);
+}
+
+struct Owned {
+    items Vec[i32];
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func later(log inout i64, digit i64) i32 {
+    mark(inout log, digit);
+    return i32(digit);
+}
+
+func fail(log inout i64, digit i64) i32 throws Fail {
+    mark(inout log, digit);
+    throw Fail.Bad;
+}
+
+trait Step {
+    func change(owner inout Self, delta i32) i32;
+    func change_throwing(owner inout Self, log inout i64) i32 throws Fail;
+}
+
+trait Carry[A, B] {
+    func update[U](owner inout Self, delta A, tag U) i32;
+}
+
+impl Step for Pair {
+    func change(owner inout Self, delta i32) i32 {
+        let old = owner.x;
+        owner = Pair(x: owner.x + delta, y: owner.y + delta);
+        return old;
+    }
+
+    func change_throwing(owner inout Self, log inout i64) i32 throws Fail {
+        let local Vec[i32] = [9];
+        defer {
+            let read = local[0];
+        }
+        let old = owner.x;
+        owner = Pair(x: old + 4, y: owner.y + 5);
+        mark(inout log, 4);
+        throw Fail.Bad;
+    }
+}
+
+impl Step for Flag {
+    func change(owner inout Self, delta i32) i32 {
+        switch owner {
+        case Flag.On(value):
+            owner = Flag.On(value: value + delta);
+            return value;
+        case Flag.Off:
+            owner = Flag.On(value: delta);
+            return 0;
+        }
+    }
+
+    func change_throwing(owner inout Self, log inout i64) i32 throws Fail {
+        owner = Flag.On(value: 8);
+        mark(inout log, 6);
+        throw Fail.Bad;
+    }
+}
+
+impl Carry[i32, bool] for Pair {
+    func update[U](owner inout Self, delta i32, tag U) i32 {
+        let old = owner.y;
+        owner = Pair(x: owner.x + delta, y: old + 2);
+        return old;
+    }
+}
+
+func relay[T Step](x inout T, delta i32) i32 {
+    return T.change(inout x, delta);
+}
+
+func relay_carry[A, B, T Carry[A, B], U](x inout T, delta A, tag U) i32 {
+    return T.update[U](inout x, delta, tag);
+}
+
+func main() i32 {
+    var p = Pair(x: 1, y: 2);
+    let oldp = Pair.change(inout p, 6);
+    if oldp != 1 || p.x != 7 || p.y != 8 {
+        return 1;
+    }
+
+    var q = Pair(x: 10, y: 20);
+    let oldq = relay(inout q, 5);
+    if oldq != 10 || q.x != 15 || q.y != 25 {
+        return 2;
+    }
+
+    var f = Flag.Off;
+    let oldf = Flag.change(inout f, 3);
+    switch f {
+    case Flag.On(value):
+        if oldf != 0 || value != 3 {
+            return 3;
+        }
+    case Flag.Off:
+        return 4;
+    }
+    let oldf2 = relay(inout f, 4);
+    switch f {
+    case Flag.On(value):
+        if oldf2 != 3 || value != 7 {
+            return 5;
+        }
+    case Flag.Off:
+        return 6;
+    }
+
+    var r = Pair(x: 2, y: 3);
+    let oldr = Pair.update[bool](inout r, 8, true);
+    if oldr != 3 || r.x != 10 || r.y != 5 {
+        return 7;
+    }
+
+    var s = Pair(x: 4, y: 5);
+    let olds = relay_carry[i32, bool, Pair, bool](inout s, 6, false);
+    if olds != 5 || s.x != 10 || s.y != 7 {
+        return 8;
+    }
+
+    var order i64 = 0;
+    var n = Pair(x: 20, y: 21);
+    let oldn = Pair.update[bool](tag: true,
+                                 delta: later(inout order, 3),
+                                 owner: inout n);
+    if oldn != 21 || n.x != 23 || n.y != 23 || order != 3 {
+        return 9;
+    }
+
+    var e = Pair(x: 30, y: 31);
+    var elog i64 = 0;
+    try {
+        let ignored = Pair.update[bool](owner: inout e,
+                                        delta: fail(inout elog, 7),
+                                        tag: true);
+        return 10;
+    } catch err Fail {
+        mark(inout elog, 9);
+    }
+    if e.x != 30 || e.y != 31 || elog != 79 {
+        return 11;
+    }
+
+    var t = Pair(x: 40, y: 41);
+    var tlog i64 = 0;
+    try {
+        let ignored = Pair.change_throwing(owner: inout t, log: inout tlog);
+        return 12;
+    } catch err Fail {
+        mark(inout tlog, 5);
+    }
+    if t.x != 44 || t.y != 46 || tlog != 45 {
+        return 13;
+    }
+
+    var ff = Flag.Off;
+    var flog i64 = 0;
+    try {
+        let ignored = Flag.change_throwing(owner: inout ff, log: inout flog);
+        return 14;
+    } catch err Fail {
+        mark(inout flog, 5);
+    }
+    switch ff {
+    case Flag.On(value):
+        if value != 8 || flog != 65 {
+            return 15;
+        }
+    case Flag.Off:
+        return 16;
+    }
+    return 0;
+}

@@ -1,0 +1,4 @@
+package app;
+struct Pair { value i32; }
+func bump(slot inout i32) { slot += 1; }
+func main() i32 { var p = Pair(value: 1); bump(inout p.value); return 0; }

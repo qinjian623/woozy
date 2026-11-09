@@ -1,0 +1,55 @@
+package app;
+
+struct Host {
+    items Vec[i32];
+    marker i32;
+}
+
+impl Host {
+    func echo[U](self move U) U {
+        return move self;
+    }
+
+    func take(other move Host) i32 {
+        return other.items[0] + other.marker;
+    }
+
+    func ordinary(self Self) i32 {
+        return self.marker;
+    }
+
+    func identity(self Self) Self {
+        return self;
+    }
+}
+
+func main() i32 {
+    let own = Host(items: [1], marker: 2);
+    let own_alias = own.items;
+    let own_result = Host.echo[Host](move own);
+    own_result.items[0] = 9;
+    if own_alias[0] != 9 || own_result.marker != 2 {
+        return 1;
+    }
+
+    let other = Host(items: [3], marker: 4);
+    let other_result = Host.take(move other);
+    if other_result != 7 {
+        return 2;
+    }
+
+    let kept = Host(items: [5], marker: 6);
+    if kept.ordinary() != 6 || kept.items[0] != 5 {
+        return 3;
+    }
+
+    let source = Host(items: [11], marker: 12);
+    let source_alias = source.items;
+    let moved_result = move source.identity();
+    moved_result.items[0] = 13;
+    if source_alias[0] != 13 || source.marker != 12 ||
+       moved_result.marker != 12 {
+        return 4;
+    }
+    return 0;
+}

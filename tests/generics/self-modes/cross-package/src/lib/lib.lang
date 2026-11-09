@@ -1,0 +1,20 @@
+package lib;
+
+pub struct Box {
+    pub items Vec[i32];
+    pub marker i32;
+}
+
+pub trait Take {
+    func take(owner move Self) Self;
+}
+
+impl Take for Box {
+    func take(owner move Self) Self {
+        return move owner;
+    }
+}
+
+pub func relay[T Take](x move T) T {
+    return T.take(move x);
+}

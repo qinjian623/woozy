@@ -1,0 +1,4 @@
+package app;
+struct Pair { value i32; }
+impl Pair { func bump(self inout Self) { self.value += 1; } }
+func main() i32 { var p = Pair(value: 1); p.bump(); return 0; }

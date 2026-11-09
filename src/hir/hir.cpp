@@ -2304,22 +2304,16 @@ class Verifier {
                  sig.parameters.size() == method.parameters.size(),
              "trait prototype signature");
         if (!own.empty() || !tr.params.empty()) {
-          // Top-level non-self move and inout are the modes this batch
-          // opens. The actual self is the real trait Self in first position,
-          // not an own type parameter merely labelled self. Nested callback
-          // data is checked from each complete trait application and from the
-          // ordinary inout_data_type rule, not rejected for dependency alone.
-          for (size_t i = 0; i < sig.parameters.size(); ++i) {
-            const auto &p = sig.parameters[i];
-            if (p.mode == ParamMode::ordinary)
-              continue;
-            need(p.mode == ParamMode::move || p.mode == ParamMode::inout,
+          // Top-level move and inout, including the real first-position trait
+          // Self, are source modes. The actual self is the raw trait Self,
+          // not an own type parameter merely labelled self. Concrete
+          // applications are rechecked by the shared inout data rule; nested
+          // callback data is not rejected for dependency alone.
+          for (const auto &p : sig.parameters)
+            need(p.mode == ParamMode::ordinary ||
+                     p.mode == ParamMode::move ||
+                     p.mode == ParamMode::inout,
                  "generic trait method move/inout is unsupported");
-            const auto &raw = type(p.type);
-            need(!(i == 0 && raw.kind == TypeKind::TypeParameter &&
-                   raw.declaration == tr.self),
-                 "generic trait method actual self move/inout is unsupported");
-          }
         }
         for (const auto &f : m.functions)
           need(f.symbol != method.symbol,
@@ -2841,23 +2835,15 @@ class Verifier {
       need(source_type_in_function(written->base, owner) == c.receiver,
            "T-qualified constraint source type differs from receiver");
       // A type-qualified call supplies every declared parameter explicitly.
-      // It may use a static method with no Self, an ordinary first Self at
-      // index zero, top-level move/inout, or a method-own first parameter
-      // even when its concrete type equals Self. A raw actual-self move/inout
-      // remains unsupported; callback data is checked by the complete
-      // application substitution.
+      // It may use a static method with no Self, an actual first Self at
+      // index zero (ordinary/move/inout), top-level move/inout, or a
+      // method-own first parameter even when its concrete type equals Self.
+      // Callback data is checked by the complete application substitution.
       const auto &raw = type(method->signature);
-      for (size_t i = 0; i < raw.parameters.size(); ++i) {
-        const auto &p = raw.parameters[i];
+      for (const auto &p : raw.parameters)
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
                  p.mode == ParamMode::inout,
              "trait-static parameter mode is unsupported");
-        const auto &raw_type = type(p.type);
-        need(!(i == 0 && p.mode != ParamMode::ordinary &&
-               raw_type.kind == TypeKind::TypeParameter &&
-               raw_type.declaration == tr->self),
-             "trait-static actual self mode is unsupported");
-      }
       need(n.type == sig.result && c.args.size() == sig.parameters.size() &&
                n.children.size() == c.args.size(),
            "trait-static call arity/children");

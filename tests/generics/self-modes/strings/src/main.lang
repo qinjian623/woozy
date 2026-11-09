@@ -1,0 +1,47 @@
+package app;
+
+struct Text {
+    text string;
+}
+
+trait Take {
+    func take(owner move Self) string;
+}
+
+impl Text {
+    func inherent(self move Self) string {
+        return self.text;
+    }
+}
+
+impl Take for Text {
+    func take(owner move Self) string {
+        return owner.text;
+    }
+}
+
+func relay[T Take](x move T) string {
+    return T.take(move x);
+}
+
+func probe_inherent() string {
+    let value = Text(text: "值\0😀");
+    return Text.inherent(move value);
+}
+
+func probe_trait() string {
+    let value = Text(text: "替\0换😀");
+    return Text.take(move value);
+}
+
+func probe_generic() string {
+    let value = Text(text: "通\0用😀");
+    return relay(move value);
+}
+
+func main() i32 {
+    let first = probe_inherent();
+    let second = probe_trait();
+    let third = probe_generic();
+    return 0;
+}

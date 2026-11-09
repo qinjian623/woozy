@@ -1,0 +1,19 @@
+package app;
+
+import "app/lib" as lib;
+
+func main() i32 {
+    let first = lib.Box(items: [1], marker: 2);
+    let alias = first.items;
+    let result = lib.Box.take(move first);
+    result.items[0] = 7;
+    if alias[0] != 7 || result.marker != 2 {
+        return 1;
+    }
+    let second = lib.Box(items: [3], marker: 4);
+    let relayed = lib.relay(move second);
+    if relayed.items[0] != 3 {
+        return 2;
+    }
+    return 0;
+}

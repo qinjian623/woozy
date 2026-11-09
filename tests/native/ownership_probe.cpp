@@ -133,6 +133,29 @@ int main(int argc, char **argv) {
         if (s.parameter && s.owner && !s.owning_parameter) { s.owning_parameter = true; return true; }
       return false;
     });
+    // A real first-position Self with inout mode must remain an inout slot,
+    // not silently become an ordinary by-value parameter. Restrict the target
+    // to a nominal first parameter so scalar helper inout parameters are not
+    // mistaken for the actual self.
+    bad("actual-self-inout-parameter-slot-not-inout", [](auto &m) {
+      for (auto &f : m.functions) {
+        const auto *signature = m.hir.module().types.find(f.signature);
+        if (!signature || signature->parameters.empty() ||
+            signature->parameters[0].mode != hir::ParamMode::inout)
+          continue;
+        const auto kind = m.hir.module().types.find(
+            signature->parameters[0].type)->kind;
+        if (kind != hir::TypeKind::NominalStruct &&
+            kind != hir::TypeKind::NominalEnum)
+          continue;
+        for (auto &slot : f.slots)
+          if (slot.parameter && *slot.parameter == 0 && slot.inout) {
+            slot.inout = false;
+            return true;
+          }
+      }
+      return false;
+    });
     // Computed owning switch subjects: the real result temporary, its single
     // initialization and the ExitPlan-ordered destroy. Every corruption below
     // must be rejected by the existing slot/live/action-order verification.

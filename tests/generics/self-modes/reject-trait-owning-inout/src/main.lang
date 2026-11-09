@@ -1,0 +1,5 @@
+package app;
+struct Owned { items Vec[i32]; }
+trait Step { func change(owner inout Self); }
+impl Step for Owned { func change(owner inout Self) { } }
+func main() i32 { return 0; }

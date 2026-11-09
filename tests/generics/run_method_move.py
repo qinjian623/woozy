@@ -572,59 +572,61 @@ def main():
             assert row['after_sha256'] == old_hashes, row
             row['status'] = 'passed'
 
-            generic_reject = (args.root /
-                              'tests/generics/method-move/'
-                              'trait-generic-move-reject/lang.toml')
+            # The former declaration-only actual-Self reject source is now
+            # legal. Keep its bytes unchanged and exercise both backends and
+            # the real native executable as a reclassified control.
+            generic_control = (args.root /
+                               'tests/generics/method-move/'
+                               'trait-generic-move-reject/lang.toml')
             generic_sources = {
-                str(path.relative_to(generic_reject.parent)): digest(path)
-                for path in sorted(generic_reject.parent.rglob('*'))
+                str(path.relative_to(generic_control.parent)): digest(path)
+                for path in sorted(generic_control.parent.rglob('*'))
                 if path.is_file()}
-            generic_fresh = args.out / 'trait-generic-move-reject-new'
-            shutil.rmtree(generic_fresh, ignore_errors=True)
-            generic_before = run(
-                [args.cli, 'build', '--project', generic_reject,
-                 '--backend', 'native', '--opt', 0,
-                 '--out-dir', generic_fresh, '--format', 'json'],
-                library=library)
-            row = dict(case='trait-generic-move-reject-new',
-                       source_sha256=generic_sources, build=generic_before,
+            for backend in ('native', 'python'):
+                row = dict(case='trait-generic-move-reclassified',
+                           backend=backend, source_sha256=generic_sources,
+                           status='failed')
+                report['runs'].append(row)
+                row['check'] = checked = run(
+                    [args.cli, 'check', '--project', generic_control,
+                     '--backend', backend, '--format', 'json'],
+                    library=library)
+                check_ok(checked, 'reclassified actual-self check')
+                assert json.loads(checked['stdout'])['status'] == 'ok', checked
+                row['status'] = 'passed'
+            native = args.out / 'trait-generic-move-reclassified'
+            shutil.rmtree(native, ignore_errors=True)
+            row = dict(case='trait-generic-move-reclassified',
+                       kind='native', source_sha256=generic_sources,
                        status='failed')
             report['runs'].append(row)
-            assert generic_before['exit'] != 0, generic_before
-            assert json.loads(generic_before['stdout'])['status'] == 'error', \
-                generic_before
-            assert not (generic_fresh / 'program').exists(), \
-                'rejected generic move build wrote program'
-            assert not (generic_fresh / 'program.o').exists(), \
-                'rejected generic move build wrote object'
-            row['outputs'] = sorted(str(path.relative_to(generic_fresh))
-                                    for path in generic_fresh.rglob('*')
-                                    if path.is_file())
-            row['status'] = 'passed'
-
-            generic_stale = args.out / 'trait-generic-move-reject-old'
-            generic_stale.mkdir(parents=True, exist_ok=True)
-            generic_sentinels = {name: b'previous generic output ' + name.encode()
-                                 for name in ('program', 'program.o')}
-            for name, content in generic_sentinels.items():
-                (generic_stale / name).write_bytes(content)
-            generic_hashes = {name: digest(generic_stale / name)
-                              for name in generic_sentinels}
-            generic_after = run(
-                [args.cli, 'build', '--project', generic_reject,
+            row['build'] = built = run(
+                [args.cli, 'build', '--project', generic_control,
                  '--backend', 'native', '--opt', 0,
-                 '--out-dir', generic_stale, '--format', 'json'],
-                library=library)
-            row = dict(case='trait-generic-move-reject-old',
-                       source_sha256=generic_sources, build=generic_after,
-                       before_sha256=generic_hashes, status='failed')
+                 '--out-dir', native, '--format', 'json'], library=library)
+            check_ok(built, 'reclassified actual-self native build')
+            assert json.loads(built['stdout'])['status'] == 'ok', built
+            row['execute'] = executed = run([native / 'program'],
+                                            library=library)
+            check_ok(executed, 'reclassified actual-self native execute')
+            assert not executed['stdout'] and not executed['stderr'], executed
+            row['status'] = 'passed'
+            python = args.out / 'trait-generic-move-reclassified-python'
+            shutil.rmtree(python, ignore_errors=True)
+            row = dict(case='trait-generic-move-reclassified',
+                       kind='python', source_sha256=generic_sources,
+                       status='failed')
             report['runs'].append(row)
-            assert generic_after['exit'] != 0, generic_after
-            assert json.loads(generic_after['stdout'])['status'] == 'error', \
-                generic_after
-            row['after_sha256'] = {name: digest(generic_stale / name)
-                                   for name in generic_sentinels}
-            assert row['after_sha256'] == generic_hashes, row
+            row['build'] = built = run(
+                [args.cli, 'build', '--project', generic_control,
+                 '--backend', 'python', '--out-dir', python,
+                 '--format', 'json'], library=library)
+            check_ok(built, 'reclassified actual-self python build')
+            assert json.loads(built['stdout'])['status'] == 'ok', built
+            row['execute'] = executed = run(
+                [args.python, '-s', python / 'program.py'], library=library)
+            check_ok(executed, 'reclassified actual-self python execute')
+            assert not executed['stdout'] and not executed['stderr'], executed
             row['status'] = 'passed'
         report['status'] = 'passed'
     finally:

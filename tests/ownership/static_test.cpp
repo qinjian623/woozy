@@ -1296,8 +1296,10 @@ void trait_static_calls() {
   const std::string inout_entry =
       "trait Bump{func bump(slot inout Self);}"
       "func f[T Bump](x T){T.bump(inout x);}";
-  rejected(move_entry, "E_CAPABILITY_UNAVAILABLE");
-  rejected(inout_entry, "E_CAPABILITY_UNAVAILABLE");
+  // Actual Self Type/T modes are now open; moving or borrowing an ordinary
+  // parameter remains the ordinary source argument error.
+  rejected(move_entry, "E_CALL_ARGUMENT");
+  rejected(inout_entry, "E_CALL_ARGUMENT");
   for (auto b : {Backend::native, Backend::python}) {
     auto empty = accepted(zero, b);
     facts(empty);
