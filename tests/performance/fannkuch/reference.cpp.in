@@ -1,0 +1,110 @@
+// Fannkuch-redux C++20 reference using the same iterative count-array order,
+// prefix flips, element-wise copy/swap work, and alternating checksum.
+// PERF-FANNKUCH n={{N}} checksum={{CHECKSUM}} maximum={{MAXIMUM}}
+#include <cstdint>
+#include <vector>
+
+struct FannkuchResult {
+    int64_t checksum;
+    int32_t maximum;
+};
+
+// Preparation-only counterpart of the Source observation point.
+static void visit(uint64_t index, const std::vector<int32_t>& values,
+                  int32_t flips) {
+    (void)index;
+    (void)values;
+    (void)flips;
+}
+
+static FannkuchResult fannkuch(int32_t n) {
+    // The only three working-array allocations for one complete fannkuch call.
+    std::vector<int32_t> perm(static_cast<std::size_t>(n), 0);
+    std::vector<int32_t> perm1(static_cast<std::size_t>(n), 0);
+    std::vector<int32_t> count(static_cast<std::size_t>(n), 0);
+
+    int32_t max_flips = 0;
+    int64_t checksum = 0;
+    uint64_t permutation_index = 0;
+    int32_t r = n;
+
+    for (int32_t i = 0; i < n; ++i) {
+        perm1[static_cast<std::size_t>(i)] = i;
+    }
+
+    for (;;) {
+        while (r != 1) {
+            count[static_cast<std::size_t>(r - 1)] = r;
+            --r;
+        }
+
+        for (int32_t i = 0; i < n; ++i) {
+            perm[static_cast<std::size_t>(i)] = perm1[static_cast<std::size_t>(i)];
+        }
+
+        int32_t flips = 0;
+        while (perm[0] != 0) {
+            const int32_t k = perm[0] + 1;
+            int32_t left = 0;
+            int32_t right = k - 1;
+            while (left < right) {
+                const int32_t saved = perm[static_cast<std::size_t>(left)];
+                perm[static_cast<std::size_t>(left)] =
+                    perm[static_cast<std::size_t>(right)];
+                perm[static_cast<std::size_t>(right)] = saved;
+                ++left;
+                --right;
+            }
+            ++flips;
+        }
+
+        visit(permutation_index, {{VISIT_VALUES}}, {{VISIT_FLIPS}});
+        if (flips > max_flips) {
+            max_flips = flips;
+        }
+        if ((permutation_index % 2) == 0) {
+            checksum += static_cast<int64_t>(flips);
+        } else {
+            checksum -= static_cast<int64_t>(flips);
+        }
+        ++permutation_index;
+
+        for (;;) {
+            if (r == n) {
+                break;
+            }
+            const int32_t perm0 = perm1[0];
+            int32_t i = 0;
+            while (i < r) {
+                const int32_t j = i + 1;
+                perm1[static_cast<std::size_t>(i)] =
+                    perm1[static_cast<std::size_t>(j)];
+                i = j;
+            }
+            perm1[static_cast<std::size_t>(r)] = perm0;
+            --count[static_cast<std::size_t>(r)];
+            if (count[static_cast<std::size_t>(r)] > 0) {
+                break;
+            }
+            ++r;
+        }
+        if (r == n) {
+            break;
+        }
+    }
+
+    return FannkuchResult{checksum, max_flips};
+}
+
+int main() {
+    const FannkuchResult result = fannkuch({{N}});
+    const int64_t expected_checksum = INT64_C({{CHECKSUM}});
+    const int32_t expected_maximum = INT32_C({{MAXIMUM}});
+    if (result.checksum != expected_checksum) {
+        return 1;
+    }
+    if (result.maximum != expected_maximum) {
+        return 2;
+    }
+    return 0;
+}
