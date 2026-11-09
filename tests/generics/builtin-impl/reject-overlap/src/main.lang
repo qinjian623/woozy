@@ -1,0 +1,5 @@
+package app;
+trait Pick[T] { func pick(owner Self, index i32) T; }
+impl[T] Pick[T] for Vec[T] { func pick(owner Self, index i32) T { return owner[index]; } }
+impl Pick[i32] for Vec[i32] { func pick(owner Self, index i32) i32 { return owner[index] + 1; } }
+func main() i32 { return 0; }

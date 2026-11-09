@@ -12912,6 +12912,174 @@ func main()i32{
 }
 
 
+void builtin_impl_targets() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "built-in impl HIR rejected\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "published built-in impl HIR rejected");
+    auto recomputed = *r.value;
+    need(hir::detail::produce_ownership(recomputed, {}).success() &&
+             hir::verify_types(recomputed).success(),
+         "recomputed built-in impl ownership rejected");
+    return *r.value;
+  };
+  auto bad = [](const std::string &text, const std::string &code) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::source && has(r, code) &&
+             !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+         text + "\n" + messages(r));
+  };
+  auto m = good(R"SRC(
+trait First { func first(owner Self) i32; }
+trait Convert[A,B] { func convert(owner Self) i32; }
+trait Pick[T] { func pick(owner Self,index i32) T; }
+trait Text { func text(owner Self) string; }
+trait Code { func code(owner Self) i32; }
+impl First for Vec[i32] { func first(owner Self) i32 {return owner[0];} }
+impl Convert[i32,bool] for Vec[i32] { func convert(owner Self) i32 {return owner[0]+10;} }
+impl Convert[bool,i32] for Vec[i32] { func convert(owner Self) i32 {return owner[0]+20;} }
+impl[T] Pick[T] for Vec[T] { func pick(owner Self,index i32) T {return owner[index];} }
+impl[T] Vec[T] {
+  func read(self Self,index i32) T {return self[index];}
+  func echo[U](self Self,value U) U {return value;}
+}
+impl Text for string { func text(owner Self) string {return owner;} }
+impl string { func echo(self Self) string {return self;} }
+impl Code for Unit { func code(owner Self) i32 {return 3;} }
+impl Unit { func value(self Self) i32 {return 4;} }
+func make() {}
+func use[T Convert[i32,bool]](owner T) i32 {return T.convert(owner)+owner.convert();}
+func main() i32 {
+  let values Vec[i32]=[1];
+  let text="x";
+  let unit=make();
+  let a=values.first()+values.pick(0)+values.read(0)+use[Vec[i32]](values);
+  let b=text.text();
+  let d=text.echo();
+  let c=Unit.code(unit)+unit.value();
+  return 0;
+}
+)SRC");
+  auto symbol_name = [&](SymbolId s) -> const std::string & {
+    return m.resolved->symbols.at(s.value).name;
+  };
+  const hir::ImplDecl *vec_inherent = nullptr;
+  const hir::ImplDecl *unit_inherent = nullptr;
+  const hir::ImplDecl *string_inherent = nullptr;
+  const hir::ImplDecl *convert_impl = nullptr;
+  for (const auto &im : m.impls) {
+    auto t = m.types.find(im.self_type);
+    need(t, "built-in impl self type missing");
+    if (!im.trait && t->kind == hir::TypeKind::Vec && !im.params.empty())
+      vec_inherent = &im;
+    if (!im.trait && t->kind == hir::TypeKind::Unit)
+      unit_inherent = &im;
+    if (!im.trait && t->kind == hir::TypeKind::String)
+      string_inherent = &im;
+    if (im.trait && symbol_name(im.trait->declaration) == "Convert" &&
+        im.trait->args.size() == 2 && !convert_impl)
+      convert_impl = &im;
+  }
+  need(vec_inherent && unit_inherent && string_inherent && convert_impl,
+       "built-in Vec/string/Unit impl declarations missing");
+  need(!vec_inherent->params.empty() && !convert_impl->trait->args.empty(),
+       "built-in impl parameters missing");
+  const auto vec_parameter = vec_inherent->params.front().symbol;
+
+  TypeId i64 = TypeId{0};
+  for (uint64_t id = 1; id <= m.types.size(); ++id)
+    if (auto t = m.types.find(TypeId{id});
+        t && t->kind == hir::TypeKind::SignedInt && t->bits == 64)
+      i64 = TypeId{id};
+  need(i64.value, "i64 type missing");
+  hir::Type vec_i64_type;
+  vec_i64_type.kind = hir::TypeKind::Vec;
+  vec_i64_type.type_args = {i64};
+  const auto vec_i64 = m.types.intern(std::move(vec_i64_type));
+
+  invalid_recomputed(m, "Vec impl self element type swapped", [&](auto &x) {
+    for (auto &im : x.impls)
+      if (!im.trait && !im.params.empty() &&
+          x.types.find(im.self_type)->kind == hir::TypeKind::Vec) {
+        im.self_type = vec_i64;
+        return;
+      }
+    throw std::runtime_error("generic Vec inherent impl missing");
+  });
+  invalid_recomputed(m, "Vec impl complete trait arguments swapped",
+                     [&](auto &x) {
+    for (auto &im : x.impls)
+      if (im.trait && im.trait->args.size() == 2 &&
+          x.resolved->symbols[im.trait->declaration.value].name == "Convert") {
+        std::swap(im.trait->args[0], im.trait->args[1]);
+        return;
+      }
+    throw std::runtime_error("complete-argument Vec impl missing");
+  });
+  invalid_recomputed(m, "built-in impl real Self identity changed", [&](auto &x) {
+    for (auto &im : x.impls)
+      if (!im.trait &&
+          x.types.find(im.self_type)->kind == hir::TypeKind::Unit) {
+        im.self_parameter = vec_parameter;
+        return;
+      }
+    throw std::runtime_error("Unit inherent impl missing");
+  });
+
+  bad("trait Convert[A]{func convert(owner Self)i32;}"
+      "impl Convert[i32] for Vec[i32]{func convert(owner Self)i32{return 0;}}"
+      "impl Convert[bool] for Vec[i32]{func convert(owner Self)i32{return 1;}}"
+      "func main()i32{let v Vec[i32]=[1];return v.convert();}",
+      "E_TYPE_MISMATCH");
+  bad("trait Pick[T]{func pick(owner Self,index i32)T;}"
+      "impl[T] Pick[T] for Vec[T]{func pick(owner Self,index i32)T{return owner[index];}}"
+      "impl Pick[i32] for Vec[i32]{func pick(owner Self,index i32)i32{return owner[index];}}"
+      "func main()i32{return 0;}", "E_TYPE_MISMATCH");
+
+  auto same = good(R"SRC(
+trait Left { func pick(owner Self,index i32) i32; }
+trait Right { func pick(owner Self,index i32) i32; }
+impl Left for Vec[i32] { func pick(owner Self,index i32) i32 {return owner[index]+1;} }
+impl Right for Vec[i32] { func pick(owner Self,index i32) i32 {return owner[index]+2;} }
+func forward[T Left](owner T,index i32) i32 {return T.pick(owner,index);}
+func main() i32 {let values Vec[i32]=[1];return forward[Vec[i32]](values,0)-2;}
+)SRC");
+  auto same_name = [&](SymbolId s) -> const std::string & {
+    return same.resolved->symbols.at(s.value).name;
+  };
+  const hir::TraitDecl *left = nullptr, *right = nullptr;
+  for (const auto &tr : same.traits) {
+    if (same_name(tr.symbol) == "Left") left = &tr;
+    if (same_name(tr.symbol) == "Right") right = &tr;
+  }
+  need(left && right, "same-signature built-in traits missing");
+  auto impl_method_for = [&](const hir::TraitDecl &trait) -> SymbolId {
+    for (const auto &im : same.impls)
+      if (im.trait && im.trait->declaration == trait.symbol)
+        for (auto method : im.methods)
+          if (same_name(method) == "pick")
+            return method;
+    throw std::runtime_error("same-signature built-in impl method missing");
+  };
+  const auto left_pick = impl_method_for(*left);
+  const auto right_pick = impl_method_for(*right);
+  invalid_recomputed(same, "same-signature built-in method source changed", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol && same_name(*c->direct_symbol) == "pick") {
+        c->direct_symbol = right_pick;
+        return;
+      }
+    throw std::runtime_error("same-signature built-in concrete call missing");
+  });
+  (void)left_pick;
+  std::cout << "builtin-impl-targets: fixed/generic Vec, string, Unit, full "
+               "trait arguments, ambiguity/overlap, and bad-source HIR\n";
+}
+
 void dependent_callback_completion(const fs::path &root) {
   auto good = [](const std::string &text) {
     auto r = source(text);
@@ -13338,6 +13506,7 @@ int main(int argc, char **argv) {
     ordinary_trait_receiver(root);
     indexed_function_calls();
     trait_parameter_bounds(root);
+    builtin_impl_targets();
     dependent_callback_completion(root);
     repairs(root);
   } catch (const std::exception &e) {

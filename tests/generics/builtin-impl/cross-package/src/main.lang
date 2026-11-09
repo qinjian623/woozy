@@ -1,0 +1,19 @@
+package app;
+import "app/lib" as lib;
+
+func relay[T lib.VecOps[i32]](owner T) i32 {
+    return T.value(owner) + owner.tag();
+}
+
+func main() i32 {
+    let values Vec[i32] = [5];
+    if values.value() != 5 { return 1; }
+    if Vec[i32].tag(values) != 7 { return 2; }
+    if relay[Vec[i32]](values) != 12 { return 3; }
+    let text = "跨\0包";
+    let echoed = text.text();
+    let unit = lib.make_unit();
+    if unit.code() != 9 { return 4; }
+    if Unit.code(unit) != 9 { return 5; }
+    return 0;
+}

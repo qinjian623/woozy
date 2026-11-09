@@ -1,0 +1,37 @@
+package app;
+
+func mark(log inout i64, digit i32) { log = log * 10 + i64(digit); }
+func make() {}
+
+trait Code { func code(owner Self) i32; }
+impl Code for Unit { func code(owner Self) i32 { return 3; } }
+
+impl Unit {
+    func value(self Self) i32 { return 4; }
+    func combine(self Self, other Unit) i32 { return self.value() + other.value(); }
+    func echo[U](self Self, value U) U { return value; }
+    func static_value() i32 { return 5; }
+}
+
+func via[T Code](owner T) i32 { return T.code(owner) + owner.code(); }
+
+func probe(log inout i64) i32 {
+    let first = make();
+    let second = make();
+    mark(inout log, Unit.code(first));
+    mark(inout log, first.code());
+    mark(inout log, first.value());
+    mark(inout log, Unit.value(first));
+    mark(inout log, first.combine(second));
+    mark(inout log, Unit.echo[i32](first, 6));
+    mark(inout log, Unit.static_value());
+    mark(inout log, via[Unit](first));
+    return 0;
+}
+
+func main() i32 {
+    var log i64 = 0;
+    if probe(inout log) != 0 { return 1; }
+    if log != 33448656 { return 2; }
+    return 0;
+}

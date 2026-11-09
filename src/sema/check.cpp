@@ -3819,7 +3819,10 @@ class Checker {
         if (type(self).kind != TypeKind::NominalStruct &&
             type(self).kind != TypeKind::NominalEnum && !integer(self) &&
             type(self).kind != TypeKind::Float &&
-            type(self).kind != TypeKind::Bool)
+            type(self).kind != TypeKind::Bool &&
+            type(self).kind != TypeKind::Vec &&
+            type(self).kind != TypeKind::String &&
+            type(self).kind != TypeKind::Unit)
           unavailable(r, "impl target is not an implemented value type");
         ImplDecl im{ps, trait, sp, self, {}, source(r)};
         for (auto c : ast(r).children)

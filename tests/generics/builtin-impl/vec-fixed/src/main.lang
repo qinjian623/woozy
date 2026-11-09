@@ -1,0 +1,64 @@
+package app;
+
+enum E { Bad(code i32); }
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func make(log inout i64, base i32) Vec[i32] {
+    mark(inout log, 1);
+    return [base, base + 1, base + 2];
+}
+func fail(log inout i64, digit i64) i32 throws E {
+    mark(inout log, 6);
+    throw E.Bad(code: i32(digit));
+}
+
+trait First { func first(owner Self) i32; }
+impl First for Vec[i32] { func first(owner Self) i32 { return owner[0]; } }
+trait Pick[T] { func pick(owner Self, index i32) T; }
+impl[T] Pick[T] for Vec[T] { func pick(owner Self, index i32) T { return owner[index]; } }
+
+impl Vec[i32] {
+    func read(self Self, index i32) i32 { return self[index]; }
+    func replace(self Self, index i32, value i32) i32 {
+        let old = self[index];
+        self[index] = value;
+        return old;
+    }
+    func cut(self Self, start i32, end i32) Vec[i32] { return self[start:end]; }
+    func echo[U](self Self, value U) U { return value; }
+    func safe(self Self, log inout i64, fail_now bool) i32 throws E {
+        defer { mark(inout log, 9); }
+        mark(inout log, 2);
+        if fail_now { throw E.Bad(code: 7); }
+        return self[0];
+    }
+}
+
+func via[T First](owner T) i32 { return T.first(owner) + owner.first(); }
+
+func probe(log inout i64) i32 {
+    let base = make(inout log, 10);
+    let alias = base;
+    let old = base.replace(1, 99);
+    if old != 11 || alias[1] != 99 { return 1; }
+    mark(inout log, 4);
+    let part = base.cut(1, 3);
+    if part[0] != 99 || part[1] != 12 { return 2; }
+    if base.pick(0) != 10 { return 3; }
+    if Vec[i32].first(base) != 10 { return 4; }
+    if base.first() != 10 { return 5; }
+    if Vec[i32].read(base, 0) != 10 { return 6; }
+    if Vec[i32].echo[i32](base, 8) != 8 { return 7; }
+    if base.echo[i32](9) != 9 { return 8; }
+    if via[Vec[i32]](base) != 20 { return 9; }
+    mark(inout log, 5);
+    try { let never = base.safe(inout log, true); return 10; }
+    catch e E { switch e { case E.Bad(code): if code != 7 { return 11; } } }
+    try { if base.safe(inout log, false) != 10 { return 12; } }
+    catch e E { return 14; }
+    let local = make(inout log, 20);
+    let local_alias = local;
+    local.replace(2, 77);
+    if local_alias[2] != 77 { return 13; }
+    return 0;
+}
+func main() i32 { var log i64 = 0; if probe(inout log) != 0 { return 1; } if log != 14529291 { return 2; } return 0; }

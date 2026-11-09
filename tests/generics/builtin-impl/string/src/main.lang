@@ -1,0 +1,35 @@
+package app;
+
+trait Pass { func pass(owner Self) string; }
+impl Pass for string { func pass(owner Self) string { return owner; } }
+
+impl string {
+    func echo(self Self) string { return self; }
+    func choose(self Self, first bool) string {
+        if first { return self; }
+        return "替\0换😀";
+    }
+    func generic[U](self Self, value U) U { return value; }
+    func static_echo(value string) string { return value; }
+}
+
+func probe_echo() string { let value = "值\0😀"; return value.echo(); }
+func probe_choose_true() string { let value = "真\0值"; return value.choose(true); }
+func probe_choose_false() string { let value = "不\0用"; return value.choose(false); }
+func probe_generic() string { let value = "接\0收"; return value.generic[string]("通\0用😀"); }
+func probe_type() string { return string.echo("类\0型"); }
+func probe_trait() string { let value = "特\0征"; return value.pass(); }
+func probe_trait_type() string { return string.pass("显\0式"); }
+func probe_static() string { return string.static_echo("静\0态"); }
+
+func main() i32 {
+    let a = probe_echo();
+    let b = probe_choose_true();
+    let c = probe_choose_false();
+    let d = probe_generic();
+    let e = probe_type();
+    let f = probe_trait();
+    let g = probe_trait_type();
+    let h = probe_static();
+    return 0;
+}

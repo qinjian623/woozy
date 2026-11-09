@@ -1,0 +1,5 @@
+package app;
+trait Convert[A] { func convert(owner Self) i32; }
+impl Convert[i32] for Vec[i32] { func convert(owner Self) i32 { return owner[0] + 10; } }
+impl Convert[bool] for Vec[i32] { func convert(owner Self) i32 { return owner[0] + 20; } }
+func main() i32 { let values Vec[i32] = [1]; return values.convert() - 11; }

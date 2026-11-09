@@ -247,6 +247,14 @@ trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source �
 
 字段补全后的 inout 检查使用真实 trait 参数环境，但不会把 trait 参数加入方法自身参数或实例键。实例仍按真实方法和完整 `[impl 实参..., 方法实参...]` 区分；借用、移动、克隆符号、清理和两个后端的处理保持原有表示。依赖 Self、trait 参数或方法类型参数的嵌套 inout 回调继续拒绝，固定类型回调仍按已有规则处理。
 
+## 内置 Vec/string/Unit 的 impl 目标
+
+`NamedType` 形式的 impl 目标现在除 nominal struct/enum、数字和 bool 外，也接受 `Vec[T]`、`string` 与 `Unit`。固定 `Vec[i32]`、`impl[T] ... for Vec[T]`、其他具名 trait 的完整有序实参以及带约束的 impl 参数沿用现有声明、重叠和实例身份检查；`Self` 仍是 impl 的真实 `SymbolId`，不因目标为内置类型而变成方法泛型。
+
+值调用、具体 `Type.method(...)`、受约束的 `T.method(...)`、跨模块公开 trait、方法自身泛型及静态方法使用原有静态分派。ordinary receiver 由真实 prototype 首参决定；固有方法继续按原 `declared_self` 判定。`Vec` receiver 按普通借用传入，索引读写和切片保持共享容器语义；`string` 仍按不可变 UTF-8 值传递，不产生额外 retain；`Unit` 由已有的无返回函数产生。方法参数与返回、`throws`/`defer`、清理和两个后端均使用原有规则。
+
+同一 `Self` 可实现同一泛型 trait 的不同完整实参，直接值调用无法唯一选择时仍报源级歧义；`impl[T] ... for Vec[T]` 与 `Vec[i32]` 的同类重叠仍拒绝。HIR 验证器接受上述合法目标，并从真实 Source、完整 trait 实参和 impl `Self` 重新核对坏图。未新增标准库接口、方法值、捕获、foreign impl、实际 `self` move/inout 或公共 HIR/NodeKind/ABI。
+
 ## 尚未实施
 
 标量泛型及两后端平凡值聚合生成执行已通过；泛型 trait、方法自身泛型及非 self move/inout 的当前范围见前文各节。两个后端入口均调用共用检查，

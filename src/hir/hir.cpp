@@ -2341,7 +2341,10 @@ class Verifier {
       need(type(im.self_type).kind == TypeKind::NominalStruct ||
                type(im.self_type).kind == TypeKind::NominalEnum ||
                number(type(im.self_type).kind) ||
-               type(im.self_type).kind == TypeKind::Bool,
+               type(im.self_type).kind == TypeKind::Bool ||
+               type(im.self_type).kind == TypeKind::Vec ||
+               type(im.self_type).kind == TypeKind::String ||
+               type(im.self_type).kind == TypeKind::Unit,
            "impl self type is not an implemented value type");
       // Rebuild the impl header from the real Source: a trait application
       // must match the actual declaration and the ordered written arguments,

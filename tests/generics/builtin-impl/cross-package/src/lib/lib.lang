@@ -1,0 +1,12 @@
+package lib;
+
+pub trait VecOps[T] { func value(owner Self) T; func tag(owner Self) i32; }
+impl[T] VecOps[T] for Vec[T] {
+    func value(owner Self) T { return owner[0]; }
+    func tag(owner Self) i32 { return 7; }
+}
+pub trait Text { func text(owner Self) string; }
+impl Text for string { func text(owner Self) string { return owner; } }
+pub trait UnitCode { func code(owner Self) i32; }
+impl UnitCode for Unit { func code(owner Self) i32 { return 9; } }
+pub func make_unit() {}
