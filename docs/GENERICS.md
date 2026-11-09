@@ -6,7 +6,7 @@
 
 2026-11-09 核对：依赖 Self、trait 实参、impl 实参或方法自身参数的 inout callback，按替换后的实际数据类型检查，也接受有限平凡 struct/enum 整体绑定。固定 Pair、自由泛型 T、trait Self、trait 实参和方法自身 U 五种写法均已在 Native O0/O2 与 Python 实际写回；不把它们列为待实现功能。完整签名、嵌套字段、非法拥有值及坏 HIR 另由既有持续测试检查。
 
-下文保留分批实现和测试记录。Type/T 显式首位 Self move/inout 与无捕获 Type/T 方法函数值已实现；真实首位 Self 的 move/inout 接收者点调用写法仍待用户确定，源语言捕获闭包仍延后。
+下文保留分批实现和测试记录。Type/T 显式首位 Self move/inout 与无捕获 Type/T 方法函数值已实现。用户已确定接收者写法为 `(move x).take()`、`(inout x).change()`，对应实现正在独立目录检查；纯 struct/enum 聚合 const 规则也已确认，尚未合入。源语言捕获闭包仍延后。
 
 `sema::check_types`返回有类型的HirModule；`hir::verify_types`检查类型、声明、作用域、实例身份和控制流。这个结果不能直接交给后端。`sema::check_project`继续通过唯一的`hir::verify`发布只读VerifiedHirModule；发布前还检查当前后端已支持的操作。合法但后端尚未实现的操作返回E_CAPABILITY_UNAVAILABLE，损坏HIR返回E_IR_INVALID。
 
