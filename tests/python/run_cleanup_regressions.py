@@ -85,7 +85,7 @@ def main():
                 assert result['returncode'] == 1 and not result['stderr'], result
                 row['preserved_hashes'] = {p.name: sha(p) for p in output.iterdir()}
                 assert before == row['preserved_hashes'], 'failed build changed existing output'
-                row['status'], row['runtime'] = 'unsupported', 'not_run (documented generated-control profile)'
+                row['status'], row['runtime'] = 'unsupported', 'not_run (CPython static control stack limit)'
                 continue
             assert emitted['returncode'] == 0 and not emitted['stderr'] and data['status'] == 'ok', emitted
             row['generated_sha256'] = {name: sha(generated / name)

@@ -1271,6 +1271,20 @@ class Emitter {
     if (source)
       output.source_map.push_back({printed_lines, *source});
   }
+  // CPython 3.12.15's CO_MAXBLOCKS is 21. The compiler pushes one
+  // fblock for a while body, one for a try/except body, two for an except
+  // handler body (EXCEPTION_HANDLER and HANDLER_CLEANUP), one for a
+  // try/finally body, and one for the exceptional copy of a finally body.
+  // A try/except/finally combines those costs. These are the exact
+  // structures emitted below, checked without starting Python.
+  static constexpr unsigned python_control_block_limit = 21;
+  void check_control_depth(unsigned depth,
+                           const std::optional<SourceSpan> &source) {
+    if (depth > python_control_block_limit)
+      throw Rejected{"generated Python control blocks exceed the CPython "
+                     "3.12 static limit (21)",
+                     source};
+  }
   void print_if_chain(const Statement &s, unsigned indent,
                       unsigned control_depth, bool as_elif) {
     if (!s.suite || !s.text.starts_with("if "))
@@ -1281,6 +1295,7 @@ class Emitter {
     print_line(text + ":", indent, s.source);
     // An `if` does not create a CPython static control block; keep the same
     // depth accounting as the normal print body.
+    check_control_depth(control_depth, s.source);
     print(s.body, indent + 1, control_depth);
     if (s.otherwise.empty())
       return;
@@ -1289,32 +1304,68 @@ class Emitter {
       print_if_chain(s.otherwise[0], indent, control_depth, true);
     else {
       print_line("else:", indent, s.source);
+      check_control_depth(control_depth, s.source);
       print(s.otherwise, indent + 1, control_depth);
     }
   }
   void print(const Suite &suite, unsigned indent, unsigned control_depth = 0) {
     if (suite.empty())
       print_line("pass", indent, {});
-    for (const auto &s : suite) {
+    for (size_t i = 0; i < suite.size(); ++i) {
+      const auto &s = suite[i];
+      if (s.text == "try") {
+        // The emitter writes a try and its except/finally siblings as one
+        // contiguous group. Account for the fblocks CPython pushes for that
+        // group instead of charging every arm as if it nested all three.
+        size_t next = i + 1;
+        std::vector<const Statement *> handlers;
+        const Statement *finalizer = nullptr;
+        while (next < suite.size()) {
+          const auto &part = suite[next];
+          if (part.text == "finally") {
+            finalizer = &part;
+            ++next;
+            break;
+          }
+          if (!part.text.starts_with("except "))
+            break;
+          handlers.push_back(&part);
+          ++next;
+        }
+        const unsigned finally_cost = finalizer ? 1u : 0u;
+        const unsigned body_depth =
+            control_depth + finally_cost + (handlers.empty() ? 0u : 1u);
+        check_control_depth(body_depth, s.source);
+        print_line("try:", indent, s.source);
+        print(s.body, indent + 1, body_depth);
+        // Any handler body has EXCEPTION_HANDLER and HANDLER_CLEANUP active.
+        const unsigned handler_depth = control_depth + finally_cost + 2u;
+        for (const auto *handler : handlers) {
+          check_control_depth(handler_depth, handler->source);
+          print_line(handler->text + ":", indent, handler->source);
+          print(handler->body, indent + 1, handler_depth);
+        }
+        if (finalizer) {
+          // CPython compiles the finally body on the normal path after
+          // FINALLY_TRY is popped, then again with FINALLY_END active for
+          // the exceptional path; the latter is the deeper copy.
+          const unsigned finally_depth = control_depth + 1u;
+          check_control_depth(finally_depth, finalizer->source);
+          print_line("finally:", indent, finalizer->source);
+          print(finalizer->body, indent + 1, finally_depth);
+        }
+        i = next - 1;
+        continue;
+      }
       print_line(s.text + (s.suite ? ":" : ""), indent, s.source);
       if (s.suite) {
         auto depth = control_depth;
         if (s.text.starts_with("def "))
           depth =
               0; // Each generated function is a separate Python code object.
-        else if (s.text == "try" || s.text == "finally" ||
-                 s.text.starts_with("except "))
-          depth += 3;
         else if (s.text.starts_with("while "))
           ++depth;
-        // CPython 3.12 permits 20 static control blocks. Charge each try arm
-        // conservatively for handler/finally bookkeeping and reserve two for
-        // transfers during cleanup. This is checked on generated structure,
-        // without importing or executing Python in the compiler.
-        if (depth > 18)
-          throw Rejected{"generated Python control blocks exceed the supported "
-                         "profile (18)",
-                         s.source};
+        check_control_depth(depth, s.source);
         print(s.body, indent + 1, depth);
       }
       if (!s.otherwise.empty()) {
@@ -1323,6 +1374,7 @@ class Emitter {
           print_if_chain(s.otherwise[0], indent, control_depth, true);
         else {
           print_line("else:", indent, s.source);
+          check_control_depth(control_depth, s.source);
           print(s.otherwise, indent + 1, control_depth);
         }
       }

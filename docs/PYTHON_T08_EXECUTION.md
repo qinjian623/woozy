@@ -89,19 +89,22 @@ case-09 的 found、原错误样例 cleaned 的实际变化 1/2；case-10 另用
 ## 生成深度限制
 
 平铺注册数量不再转换成静态嵌套深度。源程序本身的多层 loop/try/defer 仍会增加
-生成深度。当前 emitter 对每个 Python 函数的生成树执行保守检查：try、except、
-finally 的代码体各按 3 计，while 的代码体按 1 计，每条嵌套路径累计不得超过 18；
-生成文本的缩进不得超过 80 层。普通 if 不增加控制块计数。这为 CPython 3.12 的
-20 个静态控制块限制保留空间，允许编译器在检查时完全不启动 Python。
+生成深度。当前 emitter 按锁定 CPython 3.12.15 的静态控制栈检查生成树，上限为
+`CO_MAXBLOCKS = 21`。while 体占 1；try/except 的 try 体占 1，handler 体占 2；
+try/finally 的 try 体占 1，finally 在异常或保留返回值时的执行体也占 1。
+组合 try/except/finally 按相邻分支一起计算，不能把各分支的代价重复累加。
+每个 def 重新计数，普通 if/elif/else 不增加计数；生成文本缩进上限仍为 80 层。
+编译器只检查自己的生成结构，不启动 Python 来判断能否生成。
 
 超过该生成范围时 emit/build 在发布文件前返回 `E_CAPABILITY_UNAVAILABLE`，
 不创建输出目录，也不改已有输出。该检查依赖 Python 私有生成树，公共 HIR 的
 后端支持检查只确认类型和操作，因此当前 `check` 可通过、`build` 再明确拒绝。
 不在公共前端复制 Python 的生成结构。若扩展 CLI check 的生成前检查，应使用同一 emitter，避免重复计算生成深度。
 
-测试包括累计 18 的接受项和超出范围的 loop/try/defer 混合项。后者分别记录为
-`unsupported`、运行 `not_run`，不计为执行通过；同时检查新目录和已有输出保留。
-此 profile 的限制不改变源语言语法或清理规则。
+此前被保守计数拒绝的四层/五层 try/defer、五层循环和循环内三层 try/defer，
+现保留原 Source 并实际编译、运行。测试还包括目标上限附近的十层循环接受项与
+十一层循环拒绝项；拒绝项记录为 `unsupported`、运行 `not_run`，同时检查新目录
+和已有输出保留。该目标限制不改变源语言语法或清理规则，也不代表任意嵌套已支持。
 
 原 19 项、原泛型输入及清单、baseline、floating fixtures 在运行前后比较 SHA256。
 原 Python/native throws/defer 拒绝项改由两端执行测试检查。

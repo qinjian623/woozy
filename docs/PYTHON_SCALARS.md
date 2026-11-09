@@ -9,8 +9,10 @@
 Python 已支持 typed throws、精确类型 catch 和词法块 defer，见
 [错误与清理执行说明](PYTHON_T08_EXECUTION.md)。当前运行库版本为
 `compiler-dev/1-python-values/3`；旧版运行库会被生成程序的版本检查拒绝。
-同块平铺 defer 不增加 Python 控制块深度；超过生成深度限制的输入在 build 时
-返回 `E_CAPABILITY_UNAVAILABLE`，check 仍可通过。后文保留各阶段的验证记录。
+同块平铺 defer 不增加 Python 控制块深度；生成结构按 CPython 3.12.15 的
+21 个静态控制块上限检查，取代旧的保守计数 profile 18。此前四个小规模嵌套输入
+已转为真实执行测试。超过目标限制的输入仍在 build 时返回
+`E_CAPABILITY_UNAVAILABLE`，check 可通过。后文保留各阶段的验证记录。
 
 常量字符串已接入，见[字符串实现](CONSTANT_STRINGS.md)。主代理三种构建各28/28，
 关闭LLVM22/22；每套另观察20个实际Python字符串返回值的类型、UTF-8字节和长度。

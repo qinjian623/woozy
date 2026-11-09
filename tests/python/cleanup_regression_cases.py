@@ -109,26 +109,44 @@ func probe(log inout i32) throws E {''' + 'defer{event(9);}' * 21 + '''
 log=7;event(1);var zero i32=0;let x=i32(1)/zero;}
 func main() i32 {var log i32=0;try {probe(inout log);}catch err E {return 9;}return 0;}
 '''), dict(panic='integer division by zero', events=[1], probe_log=7)
-    # Budget is defined on the generated control tree: try/except/finally
-    # bodies cost 3, while bodies cost 1; ceiling 18, indentation ceiling 80.
+    # These four formerly refused sources fit CPython's real control stack.
     for count in (2, 3, 4, 5):
         body = 'return 0;'
         for _ in range(count):
             body = 'try{defer{}' + body + '}catch err E {return 9;}'
         yield 'nested-try-defer-' + str(count), ('package app;enum E {Bad;}' +
-            'func main() i32 {' + body + 'return 7;}'), (
-                dict(main_return=0) if count <= 3 else dict(unsupported=True))
-    for count in (4, 5):
+            'func main() i32 {' + body + 'return 7;}'), dict(main_return=0)
+    # Ten generated loops reach the target stack limit; eleven exceed it.
+    for count in (4, 5, 10, 11):
         body = ''
         for n in range(count):
             body = f'for var i{n} i32=0;i{n}<1;i{n}+=1 {{' + body + '}'
         yield 'nested-loops-' + str(count), 'package app;func main() {' + body + '}', (
-            dict(main_return=None) if count <= 4 else dict(unsupported=True))
+            dict(main_return=None) if count <= 10 else dict(unsupported=True))
     for count in (2, 3):
         body = ''
         for _ in range(count):
             body = 'try{defer{}' + body + '}catch err E {}'
         body = 'for var i i32=0;i<1;i+=1 {' + body + '}'
         yield 'nested-loop-try-defer-' + str(count), ('package app;enum E {Bad;}' +
-            'func main() {' + body + '}'), (
-                dict(main_return=None) if count <= 2 else dict(unsupported=True))
+            'func main() {' + body + '}'), dict(main_return=None)
+    # Exercise returns, typed throws, break and continue across a finally at
+    # the real stack limit; one further loop must be refused before output.
+    for count in (9, 10):
+        body = ('defer{log+=1;event(1);}'
+                'if mode==0{return 7;}if mode==1{throw E.Bad;}'
+                'if mode==2{break;}continue;')
+        for n in range(count):
+            body = f'for var i{n} i32=0;i{n}<1;i{n}+=1 {{' + body + '}'
+        source = ('package app;enum E{Bad;}func event(digit i32){}'
+                  'func control(log inout i32,mode i32)i32 throws E{' + body +
+                  'return 9;}'
+                  'func main()i32 throws E{var log i32=0;'
+                  'if control(inout log,0)!=7 || log!=1{return 1;}log=0;'
+                  'try{let x=control(inout log,1);return 2;}'
+                  'catch err E{if log!=1{return 3;}}log=0;'
+                  'if control(inout log,2)!=9 || log!=1{return 4;}log=0;'
+                  'if control(inout log,3)!=9 || log!=1{return 5;}return 0;}')
+        yield 'nested-exit-finally-' + str(count), source, (
+            dict(main_return=0, events=[1, 1, 1, 1]) if count == 9
+            else dict(unsupported=True))
