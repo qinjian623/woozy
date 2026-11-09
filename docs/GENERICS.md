@@ -365,3 +365,13 @@ FunctionValue 的目标本身是 impl 方法或 raw prototype 时，来源检查
 `tests/generics/unbound-method-values/` 和 `generics.unbound_method_values_runtime` 覆盖两后端 check、Native O0/O2、Python3.12.15、局部/参数/返回/struct/Vec 保存、静态工厂、impl 与方法两层泛型、期望函数类型推断、phantom 显式、完整两种同签名 trait 应用、跨包 public/private、ordinary/move/inout Self、非 Self move/inout、throws/后参失败/defer、真实 Vec 分配与释放、string UTF-8 嵌入 NUL，以及拒绝构建不改写旧输出。原生观察使用 test-only allocator wrapper 核对真实 alloc/free，不以 Vec 的 event 5 代替物理释放；Python 另观察语言引用。捕获 `h.method`、字段/索引 inout、Vec/string/拥有聚合 inout、动态 trait 对象和完整 ARC 仍未开放；T07/T09 保持 in_progress。
 
 公开 const 方法值也检查最终函数类型：参数、返回或 throws 中的私有类型会报 `E_PRIVATE_TYPE_LEAK`；方法内部的 phantom 特化实参不算公开签名。持续测试包含跨包私有 phantom 方法值、96层别名，以及三种真实泄漏的拒绝构建。方法值运行测试复用 `tests/native/alloc_observer.cpp`，按真实指针核对分配/释放。
+
+## 局部非捕获函数值 const 别名
+
+局部 `const` 现在可以把另一个已知的纯非捕获函数值常量再别名。范围包括自由函数、非捕获函数字面量、`Type.method`、`Type.method[U]`、泛型自由函数/方法实例，以及受约束模板中的 `T.method` / `T.method[U]`；同块、子块、多层、同名外层初始化和跨包公开常量后再局部别名使用同一规则。初始化式仍在声明前的环境中求值，新绑定在其完整解析后加入 `locals/constants`，运行时只读取真实局部槽。
+
+别名初始化在 HIR 中保持真实 `Read`，没有把局部名统一 materialize 成 `FunctionValue`，也没有新增公共 HIR 字段、NodeKind、ABI、运行库 API 或捕获环境。检查器只在本绑定为 `const`、初始化节点确为 `Read`、其真实符号确为 `const` 且该符号已有的 `Constant` 记录带 function 元数据时，复制原符号和目标函数的完整有序 `type_args`。普通 `let`/`var`/参数、函数调用返回函数、field/index 取值、函数调用常量化、Vec/聚合 const 和普通函数 CTFE 均不放行；readonly、初始化前/出作用域/前向引用和常量环继续使用既有 Source 诊断。
+
+验证器独立于检查器的 `Constant` 表：函数类型的 const `Read` 在真实 Source 或已提交 payload 任一指向 const 时都必须通过现有 `resolved_source` 与 `instance.renamed` 核对两侧是同一真实 const 声明符号，payload 不能改成普通 let/参数来跳过检查；再按真实 Binding AST 走现有方法/自由函数/字面量/有序泛型实参来源路线；函数值 `const` Binding 的初始化 child 用现有 `source_input`（仅透明括号）绑定到真实 RHS，本地 const 别名必须保留 `Read` 且符号身份一致。模板与具体实例都检查，phantom 特化和克隆重命名按真实原符号恢复，不按名字猜测；坏 HIR 在直接/public verify 及成功重算 ownership 后仍报 `E_IR_INVALID`。
+
+`tests/generics/unbound-method-values/local-const-aliases/` 和 `local-const-alias-strings/` 覆盖双后端检查、Native O0/O2、Python3.12.15、跨包 const、泛型两层实例、完整 trait 实参、method phantom、UTF-8 嵌入 NUL 字节、move/inout 与 typed throws 间接调用；新增拒绝项目验证 fresh 无输出、stale 字节不变。聚合 const、捕获闭包、普通函数 CTFE 和 T07/T09 的既有缺口保持不变。

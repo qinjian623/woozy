@@ -1,0 +1,25 @@
+package app;
+
+func free(x i32) i32 { return x; }
+func other(x i32) i32 { return x + 1; }
+
+func call_shadow_let() i32 {
+    const F func(i32) i32 = free;
+    if true {
+        let F func(i32) i32 = other;
+        if F(3) != 4 { return 1; }
+    }
+    return F(3) - 3;
+}
+func call_shadow_param(F func(i32) i32) i32 {
+    if true {
+        const F func(i32) i32 = free;
+        if F(3) != 3 { return 1; }
+    }
+    return F(3) - 4;
+}
+func main() i32 {
+    if call_shadow_let() != 0 { return 1; }
+    if call_shadow_param(other) != 0 { return 2; }
+    return 0;
+}

@@ -1,0 +1,7 @@
+package app;
+func free(x i32) i32 { return x; }
+func main() i32 {
+    let functions = [free];
+    const C func(i32) i32 = functions[0];
+    return C(7);
+}

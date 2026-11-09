@@ -1,0 +1,43 @@
+package app;
+
+struct Text { text string; }
+struct Box[T] { value T; }
+
+impl Text {
+    func value(self Self) string { return self.text; }
+}
+impl[T] Box[T] {
+    func echo[U](self Self, item U) U { return item; }
+}
+func generic[U](x U) U { return x; }
+
+func probe_alias_value() string {
+    const VALUE func(Text) string = Text.value;
+    const VALUE2 func(Text) string = VALUE;
+    if true {
+        const VALUE3 func(Text) string = VALUE2;
+        let text = Text(text: "值\0😀");
+        return VALUE3(text);
+    }
+    return "unreachable";
+}
+func probe_alias_argument() string {
+    const ECHO func(Box[Text], string) string = Box[Text].echo[string];
+    const ECHO2 = ECHO;
+    let box = Box[Text](value: Text(text: "unused"));
+    return ECHO2(box, "替\0换😀");
+}
+func probe_alias_generic() string {
+    const ID func(string) string = generic[string];
+    if true {
+        const MORE func(string) string = ID;
+        return MORE("通\0用😀");
+    }
+    return "";
+}
+func main() i32 {
+    let first = probe_alias_value();
+    let second = probe_alias_argument();
+    let third = probe_alias_generic();
+    return 0;
+}

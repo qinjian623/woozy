@@ -14229,6 +14229,333 @@ func main() i32 {
                "target corruption passed\n";
 }
 
+void local_const_aliases() {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    auto types = hir::verify_types(*r.value);
+    need(types.success(), "local const alias HIR types rejected\n" +
+                              messages(types));
+    auto published = hir::verify(*r.value);
+    need(published.success(), "local const alias HIR did not publish\n" +
+                                  messages(published));
+    return *r.value;
+  };
+  const std::string base = R"(
+struct Host { value i32; }
+struct Box[T] { value T; }
+impl Host {
+    func get(self Self) i32 { return self.value; }
+    func other(self Self) i32 { return self.value + 1; }
+}
+impl[T] Box[T] {
+    func phantom[U](self Self) T { return self.value; }
+}
+func free(x i32) i32 { return x; }
+func generic[U](x U) U { return x; }
+func relay[U](x U) U {
+    const ID func(U) U = generic[U];
+    if true { const N func(U) U = ID; return N(x); }
+    return x;
+}
+func unused[U](x U) U {
+    const ID func(U) U = generic[U];
+    const N func(U) U = ID;
+    return N(x);
+}
+func main() i32 {
+    let runtime func(Host) i32 = Host.get;
+    const F func(Host) i32 = Host.get;
+    const OTHER func(Host) i32 = Host.other;
+    const G func(Host) i32 = F;
+    const OTHER2 func(Host) i32 = OTHER;
+    const PAREN func(Host) i32 = (Host.get);
+    const PAREN2 func(Host) i32 = (PAREN);
+    const FREE func(i32) i32 = free;
+    const FREE2 = FREE;
+    const PH func(Box[i32]) i32 = Box[i32].phantom[bool];
+    const PHI func(Box[i32]) i32 = Box[i32].phantom[i64];
+    const P1 = PH;
+    const P2 = PHI;
+    if true {
+        const H func(Host) i32 = G;
+        if true {
+            const K func(Host) i32 = H;
+            let h = Host(value: 7);
+            let box = Box[i32](value: 3);
+            if K(h) != 7 || OTHER2(h) != 8 || FREE2(3) != 3 { return 1; }
+            if P1(box) != 3 || P2(box) != 3 { return 2; }
+            if relay[i32](9) != 9 { return 3; }
+            return 0;
+        }
+    }
+    return 4;
+}
+)";
+  auto m = good(base);
+  auto binding = [](hir::HirModule &h, std::string_view name)
+      -> hir::HirNode & {
+    hir::HirNode *found = nullptr;
+    for (auto &n : h.nodes)
+      if (auto b = std::get_if<hir::Binding>(&n.data);
+          b && h.resolved->symbols[b->symbol.value].name == name) {
+        need(!found, "duplicate local const alias binding: " +
+                          std::string(name));
+        found = &n;
+      }
+    need(found, "local const alias binding missing: " + std::string(name));
+    return *found;
+  };
+  auto symbol = [](hir::HirModule &h, std::string_view name) {
+    for (const auto &s : h.resolved->symbols)
+      if (s.name == name)
+        return s.id;
+    throw std::runtime_error("symbol missing: " + std::string(name));
+  };
+  auto reject_both = [&](const std::string &name, const auto &change) {
+    invalid(m, name, change);
+    invalid_recomputed_published(m, name + " (recomputed ownership)",
+                                 change);
+  };
+
+  reject_both("local const alias read used another same-signature const",
+              [&](auto &h) {
+                auto &g = binding(h, "G");
+                auto *read =
+                    std::get_if<hir::Read>(&h.nodes[g.children[0].value].data);
+                need(read, "local alias initializer is not a Read");
+                read->symbol = symbol(h, "OTHER");
+              });
+  reject_both("local const alias read used a same-signature let",
+              [&](auto &h) {
+                auto &g = binding(h, "G");
+                auto *read =
+                    std::get_if<hir::Read>(&h.nodes[g.children[0].value].data);
+                need(read, "local alias initializer is not a Read");
+                read->symbol = symbol(h, "runtime");
+              });
+  reject_both("local const alias bindings exchanged their initializers",
+              [&](auto &h) {
+                auto &g = binding(h, "G");
+                auto &other2 = binding(h, "OTHER2");
+                std::swap(g.children[0], other2.children[0]);
+              });
+  reject_both("local const alias read Source replaced by another real name",
+              [&](auto &h) {
+                auto &g = binding(h, "G");
+                auto &other2 = binding(h, "OTHER2");
+                h.nodes[g.children[0].value].source =
+                    h.nodes[other2.children[0].value].source;
+              });
+  reject_both("local const alias binding Source replaced by another real binding",
+              [&](auto &h) {
+                auto &g = binding(h, "G");
+                auto &other = binding(h, "OTHER");
+                g.source = other.source;
+              });
+  reject_both("local const alias materialized a direct FunctionValue",
+              [&](auto &h) {
+                auto &f = binding(h, "F");
+                auto &g = binding(h, "G");
+                auto *direct = std::get_if<hir::FunctionValue>(
+                    &h.nodes[f.children[0].value].data);
+                need(direct, "direct const function initializer missing");
+                auto &child = h.nodes[g.children[0].value];
+                child.data = *direct;
+              });
+  reject_both("local const alias marked writable", [&](auto &h) {
+    auto &g = binding(h, "G");
+    std::get<hir::Binding>(g.data).writable = true;
+  });
+  reject_both("local phantom alias target merged by signature",
+              [&](auto &h) {
+                std::vector<hir::HirNode *> values;
+                for (auto &n : h.nodes)
+                  if (auto v = std::get_if<hir::FunctionValue>(&n.data);
+                      v && h.resolved->symbols[v->symbol.value].name ==
+                               "phantom")
+                    values.push_back(&n);
+                need(values.size() == 2,
+                     "two local phantom const function values missing");
+                auto *first = std::get_if<hir::FunctionValue>(
+                    &values[0]->data);
+                auto *second = std::get_if<hir::FunctionValue>(
+                    &values[1]->data);
+                need(first && second && first->symbol != second->symbol,
+                     "phantom const instances were merged");
+                first->symbol = second->symbol;
+              });
+  reject_both("local const alias instance read kept the template symbol",
+              [&](auto &h) {
+                for (const auto &instance : h.instances) {
+                  if (h.resolved->symbols[instance.origin.value].name !=
+                      "relay")
+                    continue;
+                  for (auto &n : h.nodes) {
+                    if (h.scopes[n.scope.value].function != instance.symbol)
+                      continue;
+                    auto *read = std::get_if<hir::Read>(&n.data);
+                    if (!read)
+                      continue;
+                    for (auto [from, to] : instance.renamed)
+                      if (to == read->symbol &&
+                          h.resolved->symbols[from.value].name == "ID") {
+                        read->symbol = from;
+                        return;
+                      }
+                  }
+                }
+                throw std::runtime_error(
+                    "instance local const alias read missing");
+              });
+  const std::string call_base = R"(
+func free(x i32) i32 { return x; }
+func other(x i32) i32 { return x + 1; }
+func call_alias_let() i32 {
+    const F func(i32) i32 = free;
+    const A func(i32) i32 = F;
+    let G func(i32) i32 = other;
+    if G(3) != 4 { return 9; }
+    return A(3) - 3;
+}
+func call_alias_param(param func(i32) i32) i32 {
+    const F func(i32) i32 = free;
+    const A func(i32) i32 = F;
+    return A(3) - 3;
+}
+func call_shadow_let() i32 {
+    const F func(i32) i32 = free;
+    if true {
+        let F func(i32) i32 = other;
+        if F(3) != 4 { return 9; }
+    }
+    return F(3) - 3;
+}
+func call_shadow_param(F func(i32) i32) i32 {
+    if true {
+        const F func(i32) i32 = free;
+        if F(3) != 3 { return 9; }
+    }
+    return F(3) - 4;
+}
+func main() i32 {
+    if call_alias_let() != 0 { return 1; }
+    if call_alias_param(other) != 0 { return 2; }
+    if call_shadow_let() != 0 { return 3; }
+    if call_shadow_param(other) != 0 { return 4; }
+    return 0;
+}
+)";
+  auto call_module = good(call_base);
+  auto function_symbol = [](hir::HirModule &h, std::string_view name) {
+    std::optional<SymbolId> found;
+    for (const auto &s : h.resolved->symbols)
+      if (s.name == name && s.kind == modules::SymbolKind::function) {
+        need(!found, "duplicate function symbol: " + std::string(name));
+        found = s.id;
+      }
+    need(found.has_value(), "function symbol missing: " + std::string(name));
+    return *found;
+  };
+  auto local_symbol = [&](hir::HirModule &h, SymbolId owner,
+                          std::string_view name) {
+    std::optional<SymbolId> found;
+    for (const auto &n : h.nodes)
+      if (auto b = std::get_if<hir::Binding>(&n.data);
+          b && h.scopes[n.scope.value].function == owner &&
+          h.resolved->symbols[b->symbol.value].name == name) {
+        need(!found, "duplicate local symbol: " + std::string(name));
+        found = b->symbol;
+      }
+    need(found.has_value(), "local symbol missing: " + std::string(name));
+    return *found;
+  };
+  auto parameter_symbol = [&](hir::HirModule &h, SymbolId owner,
+                              std::string_view label) {
+    for (const auto &f : h.functions)
+      if (f.symbol == owner)
+        for (const auto &p : f.parameters)
+          if (p.label == label)
+            return p.symbol;
+    throw std::runtime_error("parameter symbol missing: " +
+                             std::string(label));
+  };
+  auto call_callee = [&](hir::HirModule &h, std::string_view owner_name)
+      -> hir::HirNode & {
+    const auto owner = function_symbol(h, owner_name);
+    hir::HirNode *found = nullptr;
+    for (auto &n : h.nodes) {
+      if (h.scopes[n.scope.value].function != owner)
+        continue;
+      auto *call = std::get_if<hir::Call>(&n.data);
+      if (!call || call->kind != hir::CalleeKind::function_value ||
+          !call->callee)
+        continue;
+      auto *read = std::get_if<hir::Read>(&h.nodes[call->callee->value].data);
+      if (!read || h.resolved->symbols[read->symbol.value].name != "A")
+        continue;
+      need(!found, "duplicate A call callee");
+      found = &h.nodes[call->callee->value];
+    }
+    need(found, "indirect call callee missing in " + std::string(owner_name));
+    return *found;
+  };
+  auto read_source = [&](hir::HirModule &h, SymbolId owner,
+                         SymbolId symbol) {
+    for (const auto &n : h.nodes) {
+      if (h.scopes[n.scope.value].function != owner)
+        continue;
+      if (auto *read = std::get_if<hir::Read>(&n.data);
+          read && read->symbol == symbol)
+        return n.source;
+    }
+    throw std::runtime_error("real function variable Read Source missing");
+  };
+  auto reject_call = [&](const std::string &name, const auto &change) {
+    invalid(call_module, name, change);
+    invalid_recomputed_published(
+        call_module, name + " (recomputed ownership)", change);
+  };
+
+  reject_call("const call callee read used a same-signature let",
+              [&](auto &h) {
+                const auto owner = function_symbol(h, "call_alias_let");
+                auto *read = std::get_if<hir::Read>(
+                    &call_callee(h, "call_alias_let").data);
+                need(read, "const call callee is not a Read");
+                read->symbol = local_symbol(h, owner, "G");
+              });
+  reject_call("const call callee read used a same-signature parameter",
+              [&](auto &h) {
+                const auto owner = function_symbol(h, "call_alias_param");
+                auto *read = std::get_if<hir::Read>(
+                    &call_callee(h, "call_alias_param").data);
+                need(read, "const call callee is not a Read");
+                read->symbol = parameter_symbol(h, owner, "param");
+              });
+  reject_call("const call callee Source replaced by another real Name",
+              [&](auto &h) {
+                const auto owner = function_symbol(h, "call_alias_let");
+                const auto g = local_symbol(h, owner, "G");
+                call_callee(h, "call_alias_let").source =
+                    read_source(h, owner, g);
+              });
+  reject_call("const call callee payload and Source replaced together",
+              [&](auto &h) {
+                const auto owner = function_symbol(h, "call_alias_let");
+                const auto g = local_symbol(h, owner, "G");
+                const auto g_source = read_source(h, owner, g);
+                auto &callee = call_callee(h, "call_alias_let");
+                auto *read = std::get_if<hir::Read>(&callee.data);
+                need(read, "const call callee is not a Read");
+                read->symbol = g;
+                callee.source = g_source;
+              });
+  std::cout << "local-const-aliases: real Read Source identity, local-free "
+               "identities, phantom instances, instance renaming, const call "
+               "callee identity and corrupt HIR passed\n";
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -14310,6 +14637,7 @@ int main(int argc, char **argv) {
     explicit_self_modes();
     unbound_method_values();
     const_method_values();
+    local_const_aliases();
     dependent_callback_completion(root);
     repairs(root);
   } catch (const std::exception &e) {

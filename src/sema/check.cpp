@@ -3329,8 +3329,20 @@ class Checker {
         expected = parse_type(child(r, 0));
       auto e = expression(child(r, n.children.size() - 1), expected);
       bool writable = first(r) == "var";
+      // A local const name is a real Read, so its function identity is not in
+      // the expression value. Only reuse function metadata from an existing
+      // const when this Read's real symbol owns that metadata; ordinary
+      // bindings, parameters, calls, fields and indexes never qualify.
+      const Constant *alias = nullptr;
+      if (auto read = std::get_if<Read>(&m.nodes[e.id.value].data)) {
+        if (symbol(read->symbol).kind == modules::SymbolKind::constant) {
+          auto it = constants.find(read->symbol.value);
+          if (it != constants.end() && it->second.function)
+            alias = &it->second;
+        }
+      }
       if (first(r) == "const" && !e.value.integer && !e.value.floating &&
-          !e.value.boolean && !e.value.string &&
+          !e.value.boolean && !e.value.string && !alias &&
           !std::holds_alternative<FunctionValue>(m.nodes[e.id.value].data))
         unavailable(
             r,
@@ -3341,6 +3353,12 @@ class Checker {
         if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data)) {
           c.function = f->symbol;
           c.type_args = f->type_args;
+        } else if (alias) {
+          // Keep the initializer as Read; only propagate the known function
+          // identity and its complete ordered arguments for later aliases and
+          // verifier checks.
+          c.function = alias->function;
+          c.type_args = alias->type_args;
         }
         constants[s.value] = c;
       }

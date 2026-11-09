@@ -1,0 +1,4 @@
+package lib;
+pub struct Host { pub value i32; }
+impl Host { pub func get(self Self) i32 { return self.value; } }
+pub const IMPORTED func(Host) i32 = Host.get;

@@ -1,0 +1,8 @@
+package app;
+struct Holder { callback func(i32) i32; }
+func free(x i32) i32 { return x; }
+func main() i32 {
+    let holder = Holder(callback: free);
+    const C func(i32) i32 = holder.callback;
+    return C(7);
+}

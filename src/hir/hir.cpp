@@ -4719,6 +4719,34 @@ class Verifier {
       if (auto p = std::get_if<Read>(&n.data);
           p && classify_value(m, n.type).needs_drop)
         read = p->symbol;
+      // A local function-constant alias stays a real Read, so its function
+      // identity is not present in the node payload. Either side may reveal
+      // that this position is a const read: the immutable Source decides the
+      // real binding, while the submitted payload must be the same symbol
+      // after an actual instance rename. A changed payload must not be able to
+      // turn the check off by claiming to be an ordinary let/parameter.
+      std::optional<SymbolId> function_constant_read;
+      if (auto p = std::get_if<Read>(&n.data);
+          p && type(n.type).kind == TypeKind::Function) {
+        const auto payload = origin(p->symbol);
+        const auto source = resolved_source(n.source.node);
+        const bool payload_constant =
+            symbol(payload).kind == modules::SymbolKind::constant;
+        const bool source_constant =
+            source && symbol(*source).kind == modules::SymbolKind::constant;
+        if (payload_constant || source_constant) {
+          need(source && *source == payload,
+               "function constant read source identity differs from "
+               "resolver");
+          // A const chain may end in a Type.method source, which has no
+          // ordinary occurrence symbol; else it ends in a free function,
+          // literal or ordered generic suffix. Both routes are rebuilt from
+          // the real Binding AST, not from a checker-maintained table.
+          if (!constant_method_source(n))
+            (void)constant_function_source(payload);
+          function_constant_read = payload;
+        }
+      }
       if (auto mv = std::get_if<Move>(&n.data)) {
         need(ast.kind == AstKind::Unary &&
                  file.tokens.at(ast.token_begin).spelling == "move",
@@ -4767,6 +4795,14 @@ class Verifier {
             actual = o.symbol;
         need(actual && *actual == origin(*read),
              "owning read/move source identity differs from resolver");
+      }
+      if (function_constant_read) {
+        auto actual = resolved_source(n.source.node);
+        need(actual && *actual == *function_constant_read,
+             "function constant read source identity differs from resolver");
+        need(symbol(*actual).kind == modules::SymbolKind::constant &&
+                 symbol(*actual).definition,
+             "function constant read source is not a real const declaration");
       }
       if (owning_functions.count(scope(n.scope).function.value)) {
         auto within = [&](HirNodeId value, AstNodeId input) {
@@ -4854,6 +4890,30 @@ class Verifier {
             }
           need(expected == node(n.children[0]).type,
                "binding annotation type differs from source");
+        }
+        // A function-valued local const keeps either its direct function
+        // Source or a real Read of another local function const. Bind the
+        // initializer child to the actual Binding RHS, allowing only the same
+        // transparent wrappers as other source_input checks.
+        if (!a.children.empty() &&
+            file.tokens.at(a.token_begin).spelling == "const" &&
+            type(node(n.children[0]).type).kind == TypeKind::Function) {
+          source_input(n.children[0], a.children.back(),
+                       "const function initializer differs from real source "
+                       "initializer");
+          auto rhs = n.source.node;
+          rhs.node = a.children.back();
+          auto target = resolved_source(rhs);
+          if (target && symbol(*target).kind == modules::SymbolKind::constant &&
+              locals.count(target->value)) {
+            auto *initializer =
+                std::get_if<Read>(&node(n.children[0]).data);
+            need(initializer,
+                 "local function constant alias did not preserve a real Read");
+            need(origin(initializer->symbol) == *target,
+                 "local function constant alias read differs from its source "
+                 "binding");
+          }
         }
       }
       if (n.kind() == NodeKind::index_read ||

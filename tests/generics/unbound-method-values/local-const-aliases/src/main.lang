@@ -1,0 +1,129 @@
+package app;
+import "app/lib" as lib;
+
+struct Host { value i32; }
+struct Box[T] { value T; }
+struct Pair { value i32; }
+enum Err { Bad; }
+
+trait Pick[A, B] {
+    func tag(owner Self) i32;
+    func echo[U](owner Self, value U) U;
+}
+impl Pick[i32, bool] for Host {
+    func tag(owner Self) i32 { return 11; }
+    func echo[V](owner Self, value V) V { return value; }
+}
+impl Pick[bool, i32] for Host {
+    func tag(owner Self) i32 { return 22; }
+    func echo[V](owner Self, value V) V { return value; }
+}
+impl Host {
+    func get(self Self) i32 { return self.value; }
+    func other(self Self) i32 { return self.value + 1; }
+    func fail(self Self, log inout i64) i32 throws Err {
+        log = log * 10 + 3;
+        throw Err.Bad;
+    }
+}
+impl[T] Box[T] {
+    func echo[U](self Self, item U) U { return item; }
+    func phantom[U](self Self) T { return self.value; }
+}
+func free(x i32) i32 { return x; }
+func identity[U](x U) U { return x; }
+func take(x move i32) i32 { return x; }
+func bump(x inout i32, d i32) i32 { let old = x; x = x + d; return old; }
+
+func generic_free[U](value U) U {
+    const ID func(U) U = identity[U];
+    if true {
+        const NEXT func(U) U = ID;
+        if true { const FINAL func(U) U = NEXT; return FINAL(value); }
+    }
+    return value;
+}
+func generic_method[U](box Box[U], item U) U {
+    const ECHO func(Box[U], U) U = Box[U].echo[U];
+    if true {
+        const NEXT func(Box[U], U) U = ECHO;
+        return NEXT(box, item);
+    }
+    return item;
+}
+func generic_bound[T Pick[i32, bool]](value T) i32 {
+    const TAG func(T) i32 = T.tag;
+    const TAG2 func(T) i32 = TAG;
+    return TAG2(value);
+}
+func generic_bound_second[T Pick[bool, i32]](value T) i32 {
+    const TAG func(T) i32 = T.tag;
+    if true { const MORE func(T) i32 = TAG; return MORE(value); }
+    return 1;
+}
+func shadow() i32 {
+    const GET func(Host) i32 = Host.get;
+    if true {
+        const GET func(Host) i32 = GET;
+        if true { const GET2 func(Host) i32 = GET; return GET2(Host(value: 7)); }
+    }
+    return 1;
+}
+func aliases() i32 {
+    const F func(Host) i32 = Host.get;
+    const F2 func(Host) i32 = F;
+    const FREE func(i32) i32 = free;
+    const FREE2 = FREE;
+    const L func(i32) i32 = func(x i32) i32 { return x + 1; };
+    const L2 func(i32) i32 = L;
+    const OTHER func(Host) i32 = Host.other;
+    const OTHER2 = OTHER;
+    const PAREN func(Host) i32 = (Host.get);
+    const PAREN2 func(Host) i32 = (PAREN);
+    const ECHO func(Box[i32], bool) bool = Box[i32].echo[bool];
+    const ECHO2 = ECHO;
+    const PH_BOOL func(Box[i32]) i32 = Box[i32].phantom[bool];
+    const PH_I64 func(Box[i32]) i32 = Box[i32].phantom[i64];
+    const P1 = PH_BOOL;
+    const P2 = PH_I64;
+    const MOVEF func(move i32) i32 = take;
+    const MOVEF2 = MOVEF;
+    const BUMP func(inout i32, i32) i32 = bump;
+    const BUMP2 = BUMP;
+    const IMPORTED func(lib.Host) i32 = lib.IMPORTED;
+    const IMPORTED2 = IMPORTED;
+    let host = Host(value: 7);
+    let box = Box[i32](value: 9);
+    if F2(host) != 7 { return 1; }
+    if OTHER2(host) != 8 { return 2; }
+    if PAREN2(host) != 7 { return 15; }
+    if FREE2(3) != 3 { return 3; }
+    if L2(4) != 5 { return 4; }
+    if !ECHO2(box, true) { return 5; }
+    if P1(box) != 9 || P2(box) != 9 { return 6; }
+    if MOVEF2(move 9) != 9 { return 7; }
+    var slot i32 = 5;
+    if BUMP2(inout slot, 3) != 5 || slot != 8 { return 8; }
+    if IMPORTED2(lib.Host(value: 7)) != 7 { return 9; }
+    if generic_free[i32](11) != 11 { return 10; }
+    if generic_method[i32](Box[i32](value: 1), 12) != 12 { return 11; }
+    if generic_bound[Host](host) != 11 { return 12; }
+    if generic_bound_second[Host](host) != 22 { return 13; }
+    if shadow() != 7 { return 14; }
+    return 0;
+}
+func throws_alias() i32 {
+    const BAD func(Host, inout i64) i32 throws Err = Host.fail;
+    const BAD2 func(Host, inout i64) i32 throws Err = BAD;
+    var log i64 = 0;
+    try { let x = BAD2(Host(value: 1), inout log); return 1; }
+    catch error Err { if log != 3 { return 2; } }
+    return 0;
+}
+func main() i32 {
+    let a = aliases();
+    if a != 0 { return a; }
+    let b = throws_alias();
+    if b != 0 { return 20 + b; }
+    return 0;
+}

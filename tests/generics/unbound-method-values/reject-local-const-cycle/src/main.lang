@@ -1,0 +1,4 @@
+package app;
+const A = B;
+const B = A;
+func main() i32 { return 0; }

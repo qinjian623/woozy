@@ -1,0 +1,7 @@
+package app;
+func free(x i32) i32 { return x; }
+func choose() (func(i32) i32) { return free; }
+func main() i32 {
+    const C func(i32) i32 = choose();
+    return C(7);
+}

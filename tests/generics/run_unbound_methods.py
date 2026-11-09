@@ -12,7 +12,8 @@ import sys
 sys.dont_write_bytecode = True
 
 NATIVE_CASES = {'core', 'move-inout', 'throws'}
-SIMPLE_CASES = {'cross-package', 'public-const-phantom'}
+SIMPLE_CASES = {'cross-package', 'public-const-phantom', 'local-const-aliases',
+                'local-const-call-controls'}
 EXPECTED_ALLOCATIONS = {'core': 2, 'move-inout': 6, 'throws': 6}
 EXPECTED_VEC_ALLOCATIONS = {'core': 1, 'move-inout': 3, 'throws': 3}
 EXPECTED_NATIVE_IR_REJECTIONS = {'core': 11, 'move-inout': 13, 'throws': 11}
@@ -37,6 +38,15 @@ STRING_EXPECTED = {
     'probe_argument': '替\0换😀'.encode(),
     'probe_generic': '通\0用😀'.encode(),
 }
+LOCAL_STRING_EXPECTED = {
+    'probe_alias_value': '值\0😀'.encode(),
+    'probe_alias_argument': '替\0换😀'.encode(),
+    'probe_alias_generic': '通\0用😀'.encode(),
+}
+STRING_CASES = {
+    'strings': STRING_EXPECTED,
+    'local-const-alias-strings': LOCAL_STRING_EXPECTED,
+}
 REJECTS = {
     'reject-const-private-result': {'E_PRIVATE_TYPE_LEAK'},
     'reject-const-private-parameter': {'E_PRIVATE_TYPE_LEAK'},
@@ -49,6 +59,14 @@ REJECTS = {
     'reject-named': {'E_CALL_ARGUMENT'},
     'reject-constructor': {'E_TYPE_MISMATCH'},
     'reject-vec-inout': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-local-const-ordinary': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-local-const-call': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-local-const-field': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-local-const-index': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-local-const-forward': {'E_NAME_NOT_FOUND'},
+    'reject-local-const-out-of-scope': {'E_NAME_NOT_FOUND'},
+    'reject-local-const-readonly': {'E_TYPE_MISMATCH'},
+    'reject-local-const-cycle': {'E_CONSTANT_CYCLE'},
 }
 BEFORE = ('ordinary-self', 'static-factory', 'impl-own-generics',
           'constrained-full-trait')
@@ -301,17 +319,17 @@ def simple_case(args, library, case, manifest, sources, report):
     row['status'] = 'passed'
 
 
-def string_case(args, library, manifest, sources, report):
+def string_case(args, library, case, manifest, sources, expected, report):
     for backend in ('native', 'python'):
-        row = dict(case='strings', kind='check', backend=backend,
+        row = dict(case=case, kind='check', backend=backend,
                    check=check_source(args.cli, manifest, backend, library),
                    source_sha256=sources, status='passed')
         report['runs'].append(row)
     for opt in (0, 2):
-        row = dict(case='strings', kind='native', opt=opt,
+        row = dict(case=case, kind='native', opt=opt,
                    source_sha256=sources, status='failed')
         report['runs'].append(row)
-        target = args.out / 'strings' / f'O{opt}'
+        target = args.out / case / f'O{opt}'
         shutil.rmtree(target, ignore_errors=True)
         row['build'] = build = run(
             [args.cli, 'build', '--project', manifest, '--backend', 'native',
@@ -344,18 +362,18 @@ def string_case(args, library, manifest, sources, report):
             actual[name] = data[offset:offset + length]
             offset += length
         assert offset == len(data), ('extra observation bytes', offset, len(data))
-        assert set(actual) == set(STRING_EXPECTED), actual
+        assert set(actual) == set(expected), actual
         row['string_bytes'] = {}
-        for name, expected in STRING_EXPECTED.items():
-            assert actual[name] == expected, (name, actual[name].hex(),
-                                              expected.hex())
+        for name, value in expected.items():
+            assert actual[name] == value, (name, actual[name].hex(),
+                                           value.hex())
             row['string_bytes'][name] = dict(hex=actual[name].hex(),
                                              length=len(actual[name]))
         row['status'] = 'passed'
-    row = dict(case='strings', kind='python', source_sha256=sources,
+    row = dict(case=case, kind='python', source_sha256=sources,
                status='failed')
     report['runs'].append(row)
-    target = args.out / 'strings' / 'python'
+    target = args.out / case / 'python'
     shutil.rmtree(target, ignore_errors=True)
     row['build'] = build = run(
         [args.cli, 'build', '--project', manifest, '--backend', 'python',
@@ -366,7 +384,7 @@ def string_case(args, library, manifest, sources, report):
                                     library=library)
     ok(executed, 'string python execute')
     assert not executed['stdout'] and not executed['stderr'], executed
-    metadata_dir = args.out / 'strings' / 'python-metadata'
+    metadata_dir = args.out / case / 'python-metadata'
     shutil.rmtree(metadata_dir, ignore_errors=True)
     row['emit'] = emit = run(
         [args.helper, '--project', manifest, '--out-dir', metadata_dir],
@@ -375,8 +393,8 @@ def string_case(args, library, manifest, sources, report):
     metadata = json.loads((metadata_dir / 'metadata.json').read_text())
     symbols = {item['source_name']: item['generated']
                for item in metadata['symbols']
-               if item['source_name'] in STRING_EXPECTED}
-    assert set(symbols) == set(STRING_EXPECTED), symbols
+               if item['source_name'] in expected}
+    assert set(symbols) == set(expected), symbols
     code = (
         'import program,json\nresult={}\n'
         f'for name,generated in {symbols!r}.items():\n'
@@ -390,10 +408,10 @@ def string_case(args, library, manifest, sources, report):
     ok(imported, 'python string import')
     actual = json.loads(imported['stdout'])
     row['string_bytes'] = actual
-    for name, expected in STRING_EXPECTED.items():
-        assert actual[name]['hex'] == expected.hex(), (name, actual[name],
-                                                       expected.hex())
-        assert actual[name]['byte_length'] == len(expected), (name, actual)
+    for name, value in expected.items():
+        assert actual[name]['hex'] == value.hex(), (name, actual[name],
+                                                   value.hex())
+        assert actual[name]['byte_length'] == len(value), (name, actual)
     row['status'] = 'passed'
 
 
@@ -514,8 +532,9 @@ def main():
                             required=True)
     parser.add_argument('--before', type=Path)
     parser.add_argument('--only', action='append',
-                        choices=tuple(NATIVE_CASES | SIMPLE_CASES | {'strings'})
-                        + tuple(REJECTS) + tuple('before-' + x for x in BEFORE))
+                        choices=tuple(NATIVE_CASES | SIMPLE_CASES |
+                                      set(STRING_CASES)) + tuple(REJECTS) +
+                        tuple('before-' + x for x in BEFORE))
     args = parser.parse_args()
     for name in ('cli', 'probe', 'string_probe', 'helper', 'root', 'clang',
                  'runtime', 'python', 'out'):
@@ -551,10 +570,12 @@ def main():
                 simple_case(args, library, case, manifest, sources, report)
             assert source_hashes(manifest.parent) == sources, \
                 'positive source changed: ' + case
-        if selected is None or 'strings' in selected:
-            manifest = base / 'strings/lang.toml'
-            string_case(args, library, manifest, source_hashes(manifest.parent),
-                        report)
+        for case, expected in STRING_CASES.items():
+            if selected is not None and case not in selected:
+                continue
+            manifest = base / case / 'lang.toml'
+            string_case(args, library, case, manifest,
+                        source_hashes(manifest.parent), expected, report)
         for name, expected in REJECTS.items():
             if selected is None or name in selected:
                 reject_case(args, library, name, expected, report)

@@ -285,6 +285,41 @@ void suite(const fs::path &published) {
   source("func f() { for ; 1; {} }", "E_TYPE_MISMATCH");
   source("func f() { let x i32=1; { let x=x+1; } }");
   source("func f() { const x i32=1; x=2; }", "E_TYPE_MISMATCH");
+  // Local function-value const aliases read the real const binding; only an
+  // existing pure function constant qualifies, never a let/var/parameter or
+  // a runtime function-producing expression.
+  source("func free(x i32) i32 { return x; } "
+         "func f() i32 { const F func(i32) i32 = free; const G = F; "
+         "if true { const H func(i32) i32 = G; return H(7)-7; } return 1; }");
+  source("func free(x i32) i32 { return x; } "
+         "func f() { let a func(i32) i32 = free; "
+         "const C func(i32) i32 = a; }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func free(x i32) i32 { return x; } "
+         "func f() { var a func(i32) i32 = free; "
+         "const C func(i32) i32 = a; }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func f(a func(i32) i32) { const C func(i32) i32 = a; }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func free(x i32) i32 { return x; } "
+         "func choose() (func(i32) i32) { return free; } "
+         "func f() { const C func(i32) i32 = choose(); }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func one(x i32) i32 { return x; } "
+         "func f() { const N i32 = one(1); }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("struct H { cb func(i32) i32; } func free(x i32) i32 { return x; } "
+         "func f() { let h = H(cb: free); "
+         "const C func(i32) i32 = h.cb; }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func free(x i32) i32 { return x; } "
+         "func f() { let v = [free]; const C func(i32) i32 = v[0]; }",
+         "E_CAPABILITY_UNAVAILABLE");
+  source("func free(x i32) i32 { return x; } "
+         "func f() { const F func(i32) i32 = free; F = free; }",
+         "E_TYPE_MISMATCH");
+  // Forward and out-of-scope names are rejected by the existing Source
+  // resolver before this checker; the CLI reject fixtures cover those codes.
   source("func f(a i32) { a=2; }", "E_TYPE_MISMATCH");
   source("func f(a i32) { a+=2; }", "E_TYPE_MISMATCH");
   source("func f(a i32) { (a)=2; }", "E_TYPE_MISMATCH");
