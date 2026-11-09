@@ -56,7 +56,7 @@ struct Instruction {
   std::optional<ExitSite> exit; // exit_begin only: immutable HIR plan identity
   std::optional<HirNodeId> cleanup; // cleanup_begin/end: defer registration
   std::optional<HirNodeId>
-      origin; // call: source call identity, including inline copies
+      origin; // call/convert: source HIR identity, including inline copies
   std::optional<hir::OwnerRef> owner;
   hir::UnaryOp unary = hir::UnaryOp::negate;
   hir::BinaryOp binary = hir::BinaryOp::add;

@@ -1,0 +1,105 @@
+package app;
+
+// Explicit float identity/widening and the legacy numeric conversions used by
+// the bit-pattern probe. Sources stay exactly representable where the main
+// program compares values directly; the probe injects raw IEEE bits.
+func f2i8(x f64) i8 { return i8(x); }
+func f2u8(x f64) u8 { return u8(x); }
+func f2i16(x f64) i16 { return i16(x); }
+func f2u16(x f64) u16 { return u16(x); }
+func f2i32(x f64) i32 { return i32(x); }
+func f2u32(x f64) u32 { return u32(x); }
+func f2i64(x f64) i64 { return i64(x); }
+func f2u64(x f64) u64 { return u64(x); }
+func s2i8(x f32) i8 { return i8(x); }
+func s2u8(x f32) u8 { return u8(x); }
+func s2i16(x f32) i16 { return i16(x); }
+func s2u16(x f32) u16 { return u16(x); }
+func s2i32(x f32) i32 { return i32(x); }
+func s2u32(x f32) u32 { return u32(x); }
+func s2i64(x f32) i64 { return i64(x); }
+func s2u64(x f32) u64 { return u64(x); }
+func i2f32(x i64) f32 { return f32(x); }
+func u2f32(x u64) f32 { return f32(x); }
+func i2f64(x i64) f64 { return f64(x); }
+func u2f64(x u64) f64 { return f64(x); }
+func b2f32(x i8) f32 { return f32(x); }
+func c2f32(x u8) f32 { return f32(x); }
+func b2f64(x i16) f64 { return f64(x); }
+func c2f64(x u16) f64 { return f64(x); }
+func d2f32(x i32) f32 { return f32(x); }
+func e2f64(x u32) f64 { return f64(x); }
+
+func idf32(x f32) f32 { return f32(x); }
+func idf64(x f64) f64 { return f64(x); }
+func widen(x f32) f64 { return f64(x); }
+func widen_after_i32(x i32) f64 { return f64(f32(x)); }
+func add_then_widen(x f32, y f32) f64 { return f64(x + y); }
+func expression_then_widen(x f32, y f32) f64 { return f64(x * y + x); }
+func negate_then_widen(x f32) f64 { return f64(-x); }
+func plus_then_widen(x f32) f64 { return f64((+(x))); }
+
+func id[T](x T) T { return x; }
+
+enum WidenError { Failed; }
+func bump(c inout i32) f32 { c += 1; return 1.25; }
+func fail(c inout i32) i32 throws WidenError {
+    c += 1;
+    throw WidenError.Failed;
+}
+func identity_effect(c inout i32) f32 {
+    defer { c += 10; }
+    return f32(bump(inout c));
+}
+func widen_effect(c inout i32) f64 {
+    defer { c += 10; }
+    return f64(bump(inout c));
+}
+func throwing_effect(c inout i32) f64 throws WidenError {
+    defer { c += 10; }
+    return f64(f32(fail(inout c)));
+}
+
+const ident_f32 f32 = 1.5;
+const negative_zero32 f32 = -0.0;
+const infinity32 f32 = 1e38 * 10.0;
+const nan32 f32 = 0.0 / 0.0;
+
+func main() i32 {
+    let value32 f32 = 1.25;
+    let value64 f64 = 1.25;
+    if f32(value32) != 1.25 { return 1; }
+    if f64(value64) != 1.25 { return 1; }
+    if f64(value32) != 1.25 { return 1; }
+    if idf32(value32) != 1.25 { return 1; }
+    if idf64(value64) != 1.25 { return 1; }
+    if widen(value32) != 1.25 { return 1; }
+    if plus_then_widen(value32) != 1.25 { return 1; }
+    let widen_value = widen;
+    if widen_value(value32) != 1.25 { return 1; }
+    if id(f64(value32)) != 1.25 { return 1; }
+    if (f64)((value32)) != 1.25 { return 1; }
+    if f64(ident_f32) != 1.5 { return 2; }
+    if 1.0 / f64(negative_zero32) != -1.0 / 0.0 { return 2; }
+    if f64(infinity32) != 1.0 / 0.0 { return 2; }
+    if f64(nan32) == f64(nan32) { return 2; }
+
+    // The inner int->f32 conversion must still round before widening.
+    if f64(f32(16777217)) != 16777216.0 { return 3; }
+    if widen_after_i32(16777217) != 16777216.0 { return 3; }
+
+    // Side effects happen once; a typed-throwing operand propagates while the
+    // surrounding defer still runs.
+    var effect i32 = 0;
+    if identity_effect(inout effect) != 1.25 || effect != 11 { return 4; }
+    effect = 0;
+    if widen_effect(inout effect) != 1.25 || effect != 11 { return 4; }
+    effect = 0;
+    try {
+        let thrown = throwing_effect(inout effect);
+        return 4;
+    } catch err WidenError {
+        if effect != 11 { return 4; }
+    }
+    return 0;
+}

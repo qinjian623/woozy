@@ -133,8 +133,10 @@ struct ShortCircuit {
 struct IntegerConvert {
 }; // child: source; node.type is the numeric destination. Allowed pairs are
    // integer->integer (checked range), float->integer (truncate towards zero,
-   // then range; NaN/infinity/out-of-range is a Panic) and integer->float
-   // (one direct round to the destination precision, RNE).
+   // then range; NaN/infinity/out-of-range is a Panic), integer->float (one
+   // direct round to the destination precision, RNE), and float->float
+   // identity/widening only: f32->f32, f64->f64 and exact f32->f64. f64->f32
+   // narrowing is still unsupported.
 enum class CalleeKind { direct, function_value, foreign };
 struct CallArg {
   uint32_t source_index = 0, parameter_index = 0;

@@ -2873,17 +2873,50 @@ class Checker {
       const bool source_float = type(x.value.type).kind == TypeKind::Float;
       if (!source_integer && !source_float)
         reject(arg, "conversion operand must be an integer or float");
-      if (source_float && target_kind == TypeKind::Float)
-        unavailable(r, "float-to-float conversions are not implemented");
+      const unsigned source_width = width(x.value.type);
+      const unsigned target_width = width(target);
+      const bool float_pair = source_float && target_kind == TypeKind::Float;
+      // Identity and widening are exact. f64 -> f32 remains a capability
+      // boundary until its overflow rule is specified; it is not a source
+      // error and must not silently become one.
+      if (float_pair &&
+          !((source_width == 32 &&
+             (target_width == 32 || target_width == 64)) ||
+            (source_width == 64 && target_width == 64)))
+        unavailable(r, "narrowing float-to-float conversions are not implemented");
       Value v;
       v.type = target;
-      if (source_float) {
+      if (float_pair) {
+        if (x.value.floating) {
+          if (source_width == target_width) {
+            // The source value is already rounded to this IEEE width. Keep
+            // every bit, including a NaN payload/sign, without re-rounding.
+            v.floating = *x.value.floating;
+          } else {
+            const auto ieee = decode_ieee(*x.value.floating, source_width);
+            if (ieee.kind == Ieee::Kind::finite) {
+              // Binary32 finite values are exactly representable in binary64.
+              // Reuse the exact ratio kernel on the already-rounded source
+              // fields, never on the original decimal spelling or host double.
+              v.floating = round_fraction(ieee.negative, ieee.significand,
+                                          mpz_class(1), ieee.shift, target);
+            } else if (ieee.kind == Ieee::Kind::infinite) {
+              v.floating = (uint64_t(ieee.negative) << 63) |
+                           0x7ff0000000000000ULL;
+            } else {
+              // SEMANTICS does not promise a NaN payload or sign. Arithmetic
+              // folding uses a quiet NaN of the destination width.
+              v.floating = 0x7ff8000000000000ULL;
+            }
+          }
+        }
+      } else if (source_float) {
         if (x.value.floating) {
           // Truncate towards zero from the already-rounded IEEE value, then
           // check the mathematical integer range. Only the magnitude is
           // shifted; the sign is applied afterwards, so -0.9 -> u8 truncates
           // to 0 instead of -1.
-          const auto ieee = decode_ieee(*x.value.floating, width(x.value.type));
+          const auto ieee = decode_ieee(*x.value.floating, source_width);
           if (ieee.kind != Ieee::Kind::finite)
             reject(arg,
                    "conversion of a NaN or infinity constant is a source "

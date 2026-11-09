@@ -152,7 +152,7 @@ def main():
         # conversion (truncate, then range-check); it joins the accepted set
         # without changing its frozen source.
         assert len(cases) == 13 and sum(len(c['runtime_expected']['probes']) for c in cases) == 76
-        # These two frozen projects used to be capability rejections. The
+        # These frozen projects used to be capability rejections. The
         # explicit numeric conversion rule now makes them legal programs, so
         # they are built and executed while their .lang inputs stay unchanged.
         cases += [dict(id='reject-float-to-int',
@@ -160,11 +160,14 @@ def main():
                        runtime_expected=dict(main_return=0, probes=[])),
                   dict(id='reject-int-to-float',
                        manifest='tests/native/floating/reject-int-to-float/lang.toml',
+                       runtime_expected=dict(main_return=0, probes=[])),
+                  dict(id='reject-float-width-conversion',
+                       manifest='tests/native/floating/reject-float-width-conversion/lang.toml',
                        runtime_expected=dict(main_return=0, probes=[]))]
         report['reclassified'] = dict(
             cases=['reject-dynamic-float-int-conversion', 'reject-float-to-int',
-                   'reject-int-to-float'],
-            reason='explicit float->int truncation/range and int->float RNE are implemented; the frozen sources are built and run instead of rejected')
+                   'reject-int-to-float', 'reject-float-width-conversion'],
+            reason='explicit float->int, int->float and f32->f64 are implemented; the frozen sources are built and run instead of rejected')
         cases += [dict(id='dynamic', manifest='tests/native/floating/dynamic/lang.toml', runtime_expected=dict(main_return=0, probes=additional()))]
         values = [('probe_values32', 32, 0x41280000), ('probe_values64', 64, 0x4008000000000000),
                   ('probe_order', 32, 0x42240000), ('probe_cleanup', 32, 0x40b80000),
@@ -218,7 +221,7 @@ def main():
         rejection_root = Path(tempfile.mkdtemp(prefix='rejected-', dir=args.out))
         rejects = [c for c in published['cases'] if c['expected_static']['status'] == 'reject']
         reclassified = {'reject-move', 'reject-vec', 'reject-float-to-int',
-                        'reject-int-to-float'}
+                        'reject-int-to-float', 'reject-float-width-conversion'}
         for path in sorted((args.root / 'tests/native/floating').glob('reject-*/lang.toml')):
             if path.parent.name in reclassified:
                 continue

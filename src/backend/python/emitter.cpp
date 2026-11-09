@@ -655,12 +655,20 @@ class Emitter {
     }
     case NodeKind::integer_convert: {
       auto value = expression(n.children[0], suite);
+      const auto source_kind = type(node(n.children[0]).type).kind;
+      if (source_kind == TypeKind::Float &&
+          type(n.type).kind == TypeKind::Float)
+        // The runtime stores f32 after its own rounding, and every finite
+        // binary32 value is exactly representable in Python's binary64 float.
+        // Identity and widening therefore keep the saved value and its source
+        // order; this is not a blanket identity for other conversions.
+        return save(suite, value, n);
       if (type(n.type).kind == TypeKind::Float)
         return save(suite,
                     "_rt.int_to_float(" + value + ", " +
                         std::to_string(type(n.type).bits) + ")",
                     n);
-      if (type(node(n.children[0]).type).kind == TypeKind::Float)
+      if (source_kind == TypeKind::Float)
         return save(suite,
                     "_rt.float_to_int(" + value + ", " + numeric(n.type) +
                         ")",

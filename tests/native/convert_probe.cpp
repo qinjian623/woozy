@@ -7,11 +7,14 @@
 //
 // The same program also mutates conversion instructions in the verified Native
 // IR and requires the independent Native IR verifier to reject every real
-// source/target mutation (float->float, bool source/destination). A mutation
+// source/target mutation (narrowing, bool/address operands, arity/origin,
+// same-type operand substitution, and compound/unary operand child
+// substitution). A mutation
 // may insert into the same instruction vector, so the original conversion is
 // re-located by its stable result ValueId instead of keeping a reference.
 #include "lang/backend/native.hpp"
 #include "lang/sema/check.hpp"
+#include "../../src/hir/ownership.hpp"
 #include <algorithm>
 #include <filesystem>
 #include <fstream>
@@ -23,8 +26,10 @@
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/SourceMgr.h>
 #include <map>
+#include <set>
 #include <sstream>
 #include <string>
+#include <tuple>
 using namespace lang;
 void need(bool ok, const std::string &s) {
   if (!ok)
@@ -51,11 +56,34 @@ int main(int argc, char **argv) {
       for (auto &d : checked.diagnostics)
         std::cerr << d.code << ": " << d.message << '\n';
     need(checked.success(), "check real project");
+    size_t shortened_operand_rejections = 0;
+    const auto &hir_module = checked.value->module();
+    for (const auto &conversion : hir_module.nodes) {
+      if (conversion.kind() != hir::NodeKind::integer_convert)
+        continue;
+      const auto operand_id = conversion.children.at(0);
+      const auto &operand = hir_module.nodes.at(operand_id.value);
+      if (operand.kind() != hir::NodeKind::binary &&
+          operand.kind() != hir::NodeKind::unary)
+        continue;
+      auto damaged = hir_module;
+      damaged.nodes[operand_id.value].source.span =
+          hir_module.nodes.at(operand.children.at(0).value).source.span;
+      need(!hir::verify_types(damaged).success() &&
+               !hir::verify(damaged).success(),
+           "shortened conversion operand span accepted");
+      need(hir::detail::produce_ownership(damaged, {}).success(),
+           "shortened operand ownership recomputation failed");
+      need(!hir::verify_types(damaged).success() &&
+               !hir::verify(damaged).success(),
+           "shortened conversion operand span accepted after ownership");
+      ++shortened_operand_rejections;
+    }
     auto lowered = ir::lower(*checked.value);
     need(lowered.success(), "lower verified HIR");
     const auto original = lowered.value->module();
     const auto &types = original.hir.module().types;
-    TypeId boolean{}, narrow_float{};
+    TypeId boolean{}, narrow_float{}, wide_float{};
     for (uint64_t n = 1; n <= types.size(); ++n) {
       auto *t = types.find(TypeId{n});
       if (!t)
@@ -64,23 +92,60 @@ int main(int argc, char **argv) {
         boolean = TypeId{n};
       if (t->kind == hir::TypeKind::Float && t->bits == 32)
         narrow_float = TypeId{n};
+      if (t->kind == hir::TypeKind::Float && t->bits == 64)
+        wide_float = TypeId{n};
     }
     // Every conversion instruction is real material; mutate its destination
     // and source types without touching the verified HIR and require a refusal.
     // The original conversion is identified by its result ValueId, a stable
     // value identity, because a callback may insert into the same vector.
+    auto max_value = [](const ir::Function &fn) {
+      ValueId next{0};
+      for (const auto &b : fn.blocks) {
+        for (const auto &p : b.parameters)
+          next.value = std::max(next.value, p.value.value + 1);
+        for (const auto &v : b.instructions)
+          if (v.result)
+            next.value = std::max(next.value, v.result->value + 1);
+      }
+      return next;
+    };
+    struct Definition {
+      ValueId value;
+      TypeId type;
+      SourceSpan source;
+      size_t block, position;
+    };
     size_t rejected = 0, mutations = 0, insert_mutations = 0;
+    size_t bool_mutations = 0, float_width_mutations = 0;
+    size_t origin_mutations = 0, operand_mutations = 0, address_mutations = 0;
+    size_t compound_operand_mutations = 0, unary_operand_mutations = 0;
+    size_t external_operand_mutations = 0;
     for (size_t f = 0; f < original.functions.size(); ++f) {
       // ValueIds are function-local, so the source type is resolved inside the
       // same function that owns the conversion.
       std::map<uint64_t, TypeId> value_types;
-      for (const auto &bl : original.functions[f].blocks) {
-        for (const auto &p : bl.parameters)
+      std::vector<Definition> definitions;
+      for (size_t b = 0; b < original.functions[f].blocks.size(); ++b) {
+        const auto &bl = original.functions[f].blocks[b];
+        for (const auto &p : bl.parameters) {
           value_types[p.value.value] = p.type;
-        for (const auto &v : bl.instructions)
-          if (v.result)
+          definitions.push_back({p.value, p.type, original.functions[f].source,
+                                 b, 0});
+        }
+        for (size_t p = 0; p < bl.instructions.size(); ++p) {
+          const auto &v = bl.instructions[p];
+          if (v.result) {
             value_types[v.result->value] = v.type;
+            definitions.push_back({*v.result, v.type, v.source, b, p + 1});
+          }
+        }
       }
+      auto contains = [](SourceSpan inner, SourceSpan outer) {
+        return inner.snapshot == outer.snapshot &&
+               inner.begin_byte >= outer.begin_byte &&
+               inner.end_byte <= outer.end_byte;
+      };
       for (size_t b = 0; b < original.functions[f].blocks.size(); ++b) {
         const auto &block = original.functions[f].blocks[b];
         for (size_t i = 0; i < block.instructions.size(); ++i) {
@@ -91,11 +156,22 @@ int main(int argc, char **argv) {
           const auto source_type = found->second;
           need(block.instructions[i].result.has_value(),
                "conversion without a result value");
-          const ValueId convert_result = *block.instructions[i].result;
+          const auto convert_result = *block.instructions[i].result;
+          need(block.instructions[i].origin.has_value(),
+               "lowered conversion has no HIR origin");
+          const auto origin = *block.instructions[i].origin;
+          need(origin.value < original.hir.module().nodes.size(),
+               "conversion origin is out of range");
+          const auto &hir_origin = original.hir.module().nodes[origin.value];
+          need(hir_origin.kind() == hir::NodeKind::integer_convert &&
+                   hir_origin.children.size() == 1,
+               "conversion origin is not a HIR conversion");
+          const auto &hir_operand =
+              original.hir.module().nodes[hir_origin.children[0].value];
           // Locate the conversion in the mutated container by its result.
           // Never keep an element reference across a mutation callback: the
-          // bool-source callback inserts into this same vector, which shifts
-          // elements and may reallocate the buffer (ASan heap-use-after-free).
+          // bool-source/address callbacks insert into this same vector, which
+          // shifts elements and may reallocate the buffer (ASan UAF).
           auto locate = [](ir::Module &module, size_t function, size_t block,
                            ValueId result) -> ir::Instruction * {
             for (auto &instruction :
@@ -105,8 +181,12 @@ int main(int argc, char **argv) {
                 return &instruction;
             return nullptr;
           };
-          const bool source_float =
-              types.find(source_type)->kind == hir::TypeKind::Float;
+          const auto source_entry = types.find(source_type);
+          need(source_entry != nullptr, "conversion source type missing");
+          const bool source_float = source_entry->kind == hir::TypeKind::Float;
+          const auto target_entry = types.find(block.instructions[i].type);
+          need(target_entry != nullptr, "conversion target type missing");
+          const bool target_float = target_entry->kind == hir::TypeKind::Float;
           auto corrupt = [&](const char *label, auto change) {
             auto m = original;
             auto *first = locate(m, f, b, convert_result);
@@ -114,6 +194,7 @@ int main(int argc, char **argv) {
                  std::string("original conversion missing before ") + label);
             const auto before_type = first->type;
             const auto before_inputs = first->inputs;
+            const auto before_origin = first->origin;
             const auto before_size =
                 m.functions[f].blocks[b].instructions.size();
             change(m);
@@ -124,7 +205,8 @@ int main(int argc, char **argv) {
               ++insert_mutations;
             // Every listed mutation must be a real change, never a no-op.
             need(instruction->type != before_type ||
-                     instruction->inputs != before_inputs,
+                     instruction->inputs != before_inputs ||
+                     instruction->origin != before_origin,
                  std::string("no-op mutation ") + label);
             auto r = ir::verify(m);
             if (r.success())
@@ -132,7 +214,7 @@ int main(int argc, char **argv) {
                         << " b=" << b << " i=" << i << " types "
                         << source_type.value << "->"
                         << instruction->type.value << " kinds "
-                        << int(types.find(source_type)->kind) << " -> "
+                        << int(source_entry->kind) << " -> "
                         << int(types.find(instruction->type)->kind)
                         << " blocks=" << original.functions[f].blocks.size()
                         << " insns=" << block.instructions.size() << '\n';
@@ -144,6 +226,7 @@ int main(int argc, char **argv) {
           };
           if (boolean.value) {
             // A bool destination or a bool source is never a numeric pair.
+            ++bool_mutations;
             corrupt("bool destination", [&](auto &m) {
               auto *instruction = locate(m, f, b, convert_result);
               need(instruction != nullptr, "original conversion missing");
@@ -151,16 +234,41 @@ int main(int argc, char **argv) {
             });
           }
           if (source_float && narrow_float.value &&
-              narrow_float != source_type) {
-            // float -> int rewritten as float -> float.
+              narrow_float != source_type && !target_float) {
+            // float -> int rewritten as another float destination. For an
+            // f64 source this is actual narrowing; for f32 it is a legal
+            // width pair whose HIR target no longer matches.
+            ++float_width_mutations;
             corrupt("float destination", [&](auto &m) {
               auto *instruction = locate(m, f, b, convert_result);
               need(instruction != nullptr, "original conversion missing");
               instruction->type = narrow_float;
             });
           }
+          if (source_float && target_float && narrow_float.value &&
+              target_entry->bits == 64) {
+            // f64 -> f64 identity rewritten as actual f64 -> f32 narrowing.
+            ++float_width_mutations;
+            corrupt("float narrowing target", [&](auto &m) {
+              auto *instruction = locate(m, f, b, convert_result);
+              need(instruction != nullptr, "original conversion missing");
+              instruction->type = narrow_float;
+            });
+          }
+          if (source_float && target_float && wide_float.value &&
+              target_entry->bits == 32) {
+            // f32 -> f32 identity rewritten as a legal-looking widening pair;
+            // the real HIR conversion still targets f32.
+            ++float_width_mutations;
+            corrupt("float widening retarget", [&](auto &m) {
+              auto *instruction = locate(m, f, b, convert_result);
+              need(instruction != nullptr, "original conversion missing");
+              instruction->type = wide_float;
+            });
+          }
           if (!source_float && boolean.value) {
             // int -> float rewritten as int -> bool.
+            ++bool_mutations;
             corrupt("bool destination", [&](auto &m) {
               auto *instruction = locate(m, f, b, convert_result);
               need(instruction != nullptr, "original conversion missing");
@@ -170,18 +278,11 @@ int main(int argc, char **argv) {
           if (boolean.value) {
             // Replace the real source value with a bool constant. This mutates
             // the conversion and then inserts before it in the same vector.
+            ++bool_mutations;
             corrupt("bool source", [&](auto &m) {
               auto *instruction = locate(m, f, b, convert_result);
               need(instruction != nullptr, "original conversion missing");
-              ValueId next{0};
-              for (auto &fn : m.functions)
-                for (auto &bl : fn.blocks) {
-                  for (auto &p : bl.parameters)
-                    next.value = std::max(next.value, p.value.value + 1);
-                  for (auto &v : bl.instructions)
-                    if (v.result)
-                      next.value = std::max(next.value, v.result->value + 1);
-                }
+              ValueId next = max_value(m.functions[f]);
               ir::Instruction c;
               c.op = ir::Op::constant;
               c.type = boolean;
@@ -199,6 +300,159 @@ int main(int argc, char **argv) {
               instructions.insert(position, c);
             });
           }
+          {
+            // The origin must identify this exact HIR conversion. Removing it
+            // and replacing it with a real non-conversion HIR node are both
+            // actual malformed graphs, not mere missing metadata on an
+            // otherwise unrelated value.
+            ++origin_mutations;
+            corrupt("conversion origin removed", [&](auto &m) {
+              auto *instruction = locate(m, f, b, convert_result);
+              need(instruction != nullptr, "original conversion missing");
+              instruction->origin.reset();
+            });
+            ++origin_mutations;
+            corrupt("conversion origin is not a conversion", [&](auto &m) {
+              auto *instruction = locate(m, f, b, convert_result);
+              need(instruction != nullptr, "original conversion missing");
+              instruction->origin = hir_origin.children[0];
+            });
+            std::optional<HirNodeId> other_origin;
+            for (size_t n = 0; n < original.hir.module().nodes.size(); ++n) {
+              const auto &candidate = original.hir.module().nodes[n];
+              if (n != origin.value &&
+                  candidate.kind() == hir::NodeKind::integer_convert &&
+                  original.hir.module().scopes.at(candidate.scope.value)
+                          .function == original.functions[f].symbol) {
+                other_origin = HirNodeId{n};
+                break;
+              }
+            }
+            if (other_origin) {
+              ++origin_mutations;
+              corrupt("conversion origin is another conversion", [&](auto &m) {
+                auto *instruction = locate(m, f, b, convert_result);
+                need(instruction != nullptr, "original conversion missing");
+                instruction->origin = *other_origin;
+              });
+            }
+          }
+          {
+            // The real HIR operand may be a compound expression. Replacing
+            // only the SSA input with an internal same-typed child keeps the
+            // origin and every SourceSpan unchanged, but is not the value of
+            // the complete operand and must be rejected.
+            std::optional<size_t> input_position;
+            for (size_t p = 0; p < i; ++p)
+              if (block.instructions[p].result &&
+                  *block.instructions[p].result ==
+                      block.instructions[i].inputs[0])
+                input_position = p;
+            if (input_position) {
+              const auto &input_instruction =
+                  block.instructions[*input_position];
+              if (hir_operand.kind() == hir::NodeKind::binary &&
+                  input_instruction.op == ir::Op::binary &&
+                  input_instruction.inputs.size() == 2) {
+                for (size_t side = 0; side < 2; ++side) {
+                  const auto child = input_instruction.inputs[side];
+                  if (child == block.instructions[i].inputs[0])
+                    continue;
+                  auto child_type = value_types.find(child.value);
+                  need(child_type != value_types.end() &&
+                           child_type->second == source_type,
+                       "compound child type differs");
+                  ++compound_operand_mutations;
+                  corrupt(side == 0 ? "compound operand replaced by left child"
+                                    : "compound operand replaced by right child",
+                          [&](auto &m) {
+                    auto *instruction = locate(m, f, b, convert_result);
+                    need(instruction != nullptr,
+                         "original conversion missing");
+                    instruction->inputs[0] = child;
+                  });
+                }
+              }
+              if (hir_operand.kind() == hir::NodeKind::unary &&
+                  input_instruction.op == ir::Op::unary &&
+                  input_instruction.inputs.size() == 1) {
+                const auto child = input_instruction.inputs[0];
+                if (child != block.instructions[i].inputs[0]) {
+                  auto child_type = value_types.find(child.value);
+                  need(child_type != value_types.end() &&
+                           child_type->second == source_type,
+                       "unary child type differs");
+                  ++unary_operand_mutations;
+                  corrupt("unary operand replaced by pre-negation child",
+                          [&](auto &m) {
+                    auto *instruction = locate(m, f, b, convert_result);
+                    need(instruction != nullptr,
+                         "original conversion missing");
+                    instruction->inputs[0] = child;
+                  });
+                }
+              }
+            }
+          }
+          {
+            std::optional<ValueId> other;
+            bool other_inside = false;
+            for (const auto &definition : definitions) {
+              if (definition.value == block.instructions[i].inputs[0] ||
+                  definition.type != source_type)
+                continue;
+              if (definition.block > b ||
+                  (definition.block == b && definition.position > i))
+                continue;
+              other = definition.value;
+              other_inside = contains(definition.source, hir_operand.source.span);
+              break;
+            }
+            if (other) {
+              ++operand_mutations;
+              if (!other_inside)
+                ++external_operand_mutations;
+              corrupt("same-type other operand", [&](auto &m) {
+                auto *instruction = locate(m, f, b, convert_result);
+                need(instruction != nullptr, "original conversion missing");
+                instruction->inputs[0] = *other;
+              });
+            }
+          }
+          {
+            std::optional<LocalSlotId> slot;
+            for (size_t s = 0; s < original.functions[f].slots.size(); ++s)
+              if (original.functions[f].slots[s].type == source_type &&
+                  original.functions[f].slots[s].parameter) {
+                slot = LocalSlotId{s};
+                break;
+              }
+            if (slot) {
+              // Insert a real, initialized address value and use it where the
+              // numeric scalar operand is required.
+              ++address_mutations;
+              corrupt("address operand", [&](auto &m) {
+                auto *instruction = locate(m, f, b, convert_result);
+                need(instruction != nullptr, "original conversion missing");
+                ir::Instruction address;
+                address.op = ir::Op::address;
+                address.type = source_type;
+                address.result = max_value(m.functions[f]);
+                address.slot = *slot;
+                address.source = instruction->source;
+                instruction->inputs[0] = *address.result;
+                auto &instructions = m.functions[f].blocks[b].instructions;
+                const auto position = std::find_if(
+                    instructions.begin(), instructions.end(),
+                    [&](const ir::Instruction &v) {
+                      return v.result && *v.result == convert_result;
+                    });
+                need(position != instructions.end(),
+                     "original conversion missing before address insert");
+                instructions.insert(position, address);
+              });
+            }
+          }
           ++mutations;
         }
       }
@@ -207,69 +461,51 @@ int main(int argc, char **argv) {
     // The insertion path must actually run, so the relocation is exercised.
     need(insert_mutations >= 1,
          "no insertion mutation exercised the relocation path");
-    // Positive controls: the same mutation machinery must accept a legal pair,
-    // proving a refusal is the real rule and not a blanket rejection.
-    TypeId some_float{}, some_int{}, other_int{};
-    auto is_integer = [](hir::TypeKind k) {
-      return k == hir::TypeKind::SignedInt || k == hir::TypeKind::UnsignedInt ||
-             k == hir::TypeKind::Isize || k == hir::TypeKind::Usize;
-    };
-    for (uint64_t n = 1; n <= types.size(); ++n) {
-      auto *t = types.find(TypeId{n});
-      if (!t)
-        continue;
-      if (t->kind == hir::TypeKind::Float && !some_float.value)
-        some_float = TypeId{n};
-      if (is_integer(t->kind) && t->bits == 32 && !some_int.value)
-        some_int = TypeId{n};
-      if (is_integer(t->kind) && t->bits == 16 && !other_int.value)
-        other_int = TypeId{n};
-    }
+    // Positive controls: the same verifier must accept each legal pair. Clone
+    // real lowered conversions, preserving their HIR origin and operand, so a
+    // refusal above is the real rule and not a blanket rejection or missing
+    // metadata.
     size_t controls = 0;
-    auto max_value = [](const ir::Function &fn) {
-      ValueId next{0};
-      for (const auto &b : fn.blocks) {
-        for (const auto &p : b.parameters)
-          next.value = std::max(next.value, p.value.value + 1);
-        for (const auto &v : b.instructions)
-          if (v.result)
-            next.value = std::max(next.value, v.result->value + 1);
-      }
-      return next;
-    };
-    auto append_control = [&](bool float_source, TypeId target) {
-      for (size_t f = 0; f < original.functions.size(); ++f)
-        for (size_t b = 0; b < original.functions[f].blocks.size(); ++b) {
-          std::vector<std::pair<ValueId, TypeId>> available;
-          for (const auto &p : original.functions[f].blocks[b].parameters)
-            available.push_back({p.value, p.type});
-          for (const auto &v : original.functions[f].blocks[b].instructions)
-            if (v.result)
-              available.push_back({*v.result, v.type});
-          for (const auto &[value, value_type] : available) {
-            if ((types.find(value_type)->kind == hir::TypeKind::Float) !=
-                float_source)
-              continue;
-            auto m = original;
-            auto &fn = m.functions[f];
-            auto &bl = fn.blocks[b];
-            ir::Instruction c;
-            c.op = ir::Op::convert;
-            c.type = target;
-            c.result = max_value(fn);
-            c.inputs = {value};
-            c.source = fn.source;
-            bl.instructions.push_back(c);
-            if (!ir::verify(m).success())
-              continue;
-            ++controls;
-            return true;
-          }
+    std::set<std::tuple<int, unsigned, int, unsigned>> control_pairs;
+    for (size_t f = 0; f < original.functions.size(); ++f)
+      for (size_t b = 0; b < original.functions[f].blocks.size(); ++b) {
+        const auto &block = original.functions[f].blocks[b];
+        for (const auto &source_instruction : block.instructions) {
+          if (source_instruction.op != ir::Op::convert ||
+              !source_instruction.result || source_instruction.inputs.empty())
+            continue;
+          auto source_found =
+              std::find_if(block.parameters.begin(), block.parameters.end(),
+                           [&](const auto &p) {
+                             return p.value == source_instruction.inputs[0];
+                           });
+          std::optional<TypeId> source_type;
+          if (source_found != block.parameters.end())
+            source_type = source_found->type;
+          else
+            for (const auto &v : block.instructions)
+              if (v.result &&
+                  *v.result == source_instruction.inputs[0])
+                source_type = v.type;
+          need(source_type.has_value(), "control source type missing");
+          const auto *st = types.find(*source_type);
+          const auto *tt = types.find(source_instruction.type);
+          need(st != nullptr && tt != nullptr, "control type missing");
+          auto key = std::tuple{int(st->kind), st->bits, int(tt->kind), tt->bits};
+          if (!control_pairs.insert(key).second)
+            continue;
+          auto m = original;
+          auto &fn = m.functions[f];
+          auto &bl = fn.blocks[b];
+          ir::Instruction c = source_instruction;
+          c.result = max_value(fn);
+          bl.instructions.push_back(c);
+          need(ir::verify(m).success(),
+               "legal conversion control rejected");
+          ++controls;
         }
-      return false;
-    };
-    need(append_control(false, some_float), "legal int->float control rejected");
-    need(append_control(true, some_int), "legal float->int control rejected");
+      }
+    need(controls >= 5, "expected five legal numeric conversion pair controls");
     SymbolId entry;
     std::map<std::string, SymbolId> names;
     for (const auto &s : resolved.value->symbols)
@@ -287,6 +523,12 @@ int main(int argc, char **argv) {
     write(out / "before.ll", emitted.value->llvm_before_optimization);
     write(out / "after.ll", emitted.value->llvm_ir);
     write(out / "generated.nir", emitted.value->native_ir);
+    need(emitted.value->llvm_before_optimization.find("fptrunc") ==
+             std::string::npos,
+         "unexpected fptrunc in float identity/widening IR");
+    need(emitted.value->llvm_before_optimization.find("fpext float") !=
+             std::string::npos,
+         "missing fpext for f32->f64 widening");
     llvm::LLVMContext context;
     llvm::SMDiagnostic error;
     auto load_ir = [&](const std::string &ir) {
@@ -382,10 +624,28 @@ int main(int argc, char **argv) {
                            ",\"bad_ir_rejected\":" + std::to_string(rejected) +
                            ",\"convert_instructions\":" +
                            std::to_string(mutations) +
+                           ",\"shortened_operand_rejections\":" +
+                           std::to_string(shortened_operand_rejections) +
                            ",\"insert_mutations\":" +
                            std::to_string(insert_mutations) +
                            ",\"legal_retarget_controls\":" +
-                           std::to_string(controls) + "}\n";
+                           std::to_string(controls) +
+                           ",\"bool_mutations\":" +
+                           std::to_string(bool_mutations) +
+                           ",\"float_width_mutations\":" +
+                           std::to_string(float_width_mutations) +
+                           ",\"origin_mutations\":" +
+                           std::to_string(origin_mutations) +
+                           ",\"operand_mutations\":" +
+                           std::to_string(operand_mutations) +
+                           ",\"address_mutations\":" +
+                           std::to_string(address_mutations) +
+                           ",\"compound_operand_mutations\":" +
+                           std::to_string(compound_operand_mutations) +
+                           ",\"unary_operand_mutations\":" +
+                           std::to_string(unary_operand_mutations) +
+                           ",\"external_operand_mutations\":" +
+                           std::to_string(external_operand_mutations) + "}\n";
     write(out / "metadata.json", metadata);
     std::cout << metadata;
   } catch (const std::exception &e) {

@@ -369,6 +369,15 @@ class Emitter {
   }
   llvm::Value *convert(const ir::Instruction &i, llvm::Value *v) {
     const auto &from = type(value_types.at(i.inputs[0])), &to = type(i.type);
+    if (from.kind == hir::TypeKind::Float &&
+        to.kind == hir::TypeKind::Float) {
+      // Identity keeps the LLVM value unchanged. The only widening pair is
+      // binary32 -> binary64, which LLVM fpext performs exactly, including
+      // subnormals. f64->f32 narrowing never reaches code generation.
+      if (from.bits == to.bits)
+        return v;
+      return builder.CreateFPExt(v, lower_type(i.type));
+    }
     if (from.kind == hir::TypeKind::Float) {
       // Truncate into an i64 first only under bounds that every f32/f64 can
       // represent exactly; fptosi/fptoui are then never given a value whose

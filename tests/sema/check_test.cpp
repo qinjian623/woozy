@@ -981,11 +981,16 @@ void suite(const fs::path &published) {
   source("func f() { let x=+true; }", "E_TYPE_MISMATCH");
   source("func f() { let x=u64(18446744073709551615); }");
   // Explicit numeric conversions. bool is not a numeric operand, so it is a
-  // source type error; integer -> float is supported; float -> float stays
-  // closed and keeps the capability diagnostic.
+  // source type error. Float identity and f32->f64 widening are supported;
+  // f64->f32 remains a capability boundary because its overflow rule is open.
   source("func f() { let x=i32(true); }", "E_TYPE_MISMATCH");
   source("func f() { let x=f32(1); }");
   source("func f() { let x=f32(1.0); }", "E_CAPABILITY_UNAVAILABLE");
+  source("func f(a f32) f32 { return f32(a); } "
+         "func g(a f64) f64 { return f64(a); } "
+         "func h(a f32) f64 { return f64(a); }");
+  source("func f(a f64) f32 { return f32(a); }",
+         "E_CAPABILITY_UNAVAILABLE");
   for (const char *body : {
            "func f() { let x=i8(-128.9); }",
            "func f() { let x=u8(-0.9); }",
@@ -1015,10 +1020,13 @@ void suite(const fs::path &published) {
   source("func f() { let x=bool(1); }", "E_CAPABILITY_UNAVAILABLE");
   {
     // The shared record keeps the source type in the child and the destination
-    // in node.type for all three allowed pairs.
+    // in node.type for every allowed pair.
     auto r = source("func f(a f64) i32 { return i32(a); } "
                     "func g(b i32) f64 { return f64(b); } "
-                    "func h(c i8) f32 { return f32(c); }");
+                    "func h(c i8) f32 { return f32(c); } "
+                    "func p(a f32) f32 { return f32(a); } "
+                    "func q(a f64) f64 { return f64(a); } "
+                    "func w(a f32) f64 { return f64(a); }");
     const auto &m = r.value->module();
     size_t converts = 0;
     for (const auto &n : m.nodes)
@@ -1030,11 +1038,16 @@ void suite(const fs::path &published) {
             (source_type->kind == hir::TypeKind::Float &&
              target->kind == hir::TypeKind::SignedInt) ||
             (source_type->kind == hir::TypeKind::SignedInt &&
-             target->kind == hir::TypeKind::Float);
+             target->kind == hir::TypeKind::Float) ||
+            (source_type->kind == hir::TypeKind::Float &&
+             target->kind == hir::TypeKind::Float &&
+             ((source_type->bits == 32 &&
+               (target->bits == 32 || target->bits == 64)) ||
+              (source_type->bits == 64 && target->bits == 64)));
         require(numeric_pair, "conversion record source/target pair");
         ++converts;
       }
-    require(converts == 3, "conversion nodes missing");
+    require(converts == 6, "conversion nodes missing");
   }
   source("func f() { let x=[1]; }");
   source("func f() { switch 1 { default: break; } }");

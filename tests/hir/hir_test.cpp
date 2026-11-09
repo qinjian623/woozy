@@ -1,4 +1,5 @@
 #include "lang/hir/hir.hpp"
+#include "../../src/hir/ownership.hpp"
 #include <functional>
 #include <iostream>
 #include <stdexcept>
@@ -91,6 +92,14 @@ func main() i32 {
  var x i32 = 0;
  "中文\n";
  for var i i32 = 0; i < 4; i += 1 { if x > 1 { break; } continue; }
+ let xf f32 = 1.25;
+ let xd f64 = 1.25;
+ let c32 f32 = f32(xf);
+ let c64 f64 = f64(xd);
+ let w f64 = f64(xf);
+ let cx f64 = f64(x);
+ let ci i32 = i32(1.0);
+ let converted i32 = i32(x);
  add(b: 2, a: 1);
  add(1, 2);
  return x;
@@ -283,8 +292,32 @@ func main() i32 {
              {callee, arg0, arg1});
     auto value_stmt =
         node(unit, main_scope, main_src, ExpressionStatement{}, {value_call});
-    read = rd(x, main_scope, main_src);
-    conversion = node(i32, main_scope, main_src, IntegerConvert{}, {read});
+    const auto &conversion_file =
+        *project->modules[main_src.node.module.value].files[main_src.node.file];
+    Source conversion_src, conversion_operand_src;
+    bool found_conversion = false;
+    for (size_t i = 0; i < conversion_file.nodes.size() && !found_conversion;
+         ++i) {
+      const auto &candidate = conversion_file.nodes[i];
+      if (candidate.kind != AstKind::Call || candidate.children.size() != 2 ||
+          candidate.span.begin_byte < main_src.span.begin_byte ||
+          candidate.span.end_byte > main_src.span.end_byte)
+        continue;
+      const auto &callee = conversion_file.node(candidate.children[0]);
+      if (callee.kind != AstKind::Name ||
+          conversion_file.tokens[callee.token_begin].spelling != "i32")
+        continue;
+      auto ref = main_src.node;
+      ref.node = AstNodeId{i};
+      conversion_src = {ref, candidate.span};
+      ref.node = conversion_file.node(candidate.children[1]).children.at(0);
+      conversion_operand_src = {ref, conversion_file.node(ref.node).span};
+      found_conversion = true;
+    }
+    require(found_conversion, "fixture conversion source missing");
+    read = rd(x, main_scope, conversion_operand_src);
+    conversion = node(i32, main_scope, conversion_src, IntegerConvert{},
+                      {read});
     auto ret = node(unit, main_scope, main_src, Return{main}, {conversion});
     root = node(unit, main_scope, main_src, Block{},
                 {binding, loop, call_stmt, value_stmt, ret});
@@ -562,24 +595,77 @@ void numeric_conversion_tests() {
                        std::move(data)});
     return id;
   };
-  auto float_literal = [&](HirModule &m, float ignored = 0) {
-    (void)ignored;
-    return add(m, f64, FloatLiteral{0x3ff0000000000000ULL});
+  auto with_source = [&](HirModule &m, HirNodeId id, Source source) {
+    m.nodes[id.value].source = source;
+    return id;
+  };
+  auto literal = [&](HirModule &m, TypeId type, uint64_t bits, Source source) {
+    return with_source(m, add(m, type, FloatLiteral{bits}), source);
+  };
+  auto read_x = [&](HirModule &m, Source source = {}) {
+    auto id = add(m, f.i32, Read{f.x});
+    if (source.span.snapshot.value)
+      m.nodes[id.value].source = source;
+    return id;
   };
   // A discarded expression statement constrains no result type, so these nodes
   // exercise the conversion rule itself rather than a consumer's expectation.
-  auto add_convert = [&](HirModule &m, TypeId type, HirNodeId source) {
+  auto add_convert = [&](HirModule &m, TypeId type, HirNodeId source,
+                         Source conversion_source) {
     auto convert = add(m, type, IntegerConvert{}, {source});
+    m.nodes[convert.value].source = conversion_source;
     auto statement =
         add(m, f.unit, ExpressionStatement{}, {convert});
+    m.nodes[statement.value].source = conversion_source;
     auto &children = m.nodes[f.root.value].children;
     children.insert(children.end() - 1, statement);
     return convert;
   };
-  auto read_x = [&](HirModule &m) { return add(m, f.i32, Read{f.x}); };
+
+  const auto convs_src = f.main_src;
+  const auto &file =
+      *f.project->modules[convs_src.node.module.value].files[convs_src.node.file];
+  struct CallSource {
+    Source conversion, operand;
+  };
+  auto ast_source = [&](AstNodeId id) {
+    auto ref = convs_src.node;
+    ref.node = id;
+    return Source{ref, file.node(id).span};
+  };
+  auto call_source = [&](std::string_view callee_name,
+                         std::string_view operand_spelling) {
+    for (size_t i = 0; i < file.nodes.size(); ++i) {
+      const auto &call = file.nodes[i];
+      if (call.kind != AstKind::Call || call.children.size() != 2 ||
+          call.span.begin_byte < convs_src.span.begin_byte ||
+          call.span.end_byte > convs_src.span.end_byte)
+        continue;
+      const auto &callee = file.node(call.children[0]);
+      if (callee.kind != AstKind::Name ||
+          file.tokens[callee.token_begin].spelling != callee_name)
+        continue;
+      const auto &argument = file.node(call.children[1]);
+      if (argument.kind != AstKind::Argument || argument.children.size() != 1)
+        continue;
+      const auto &operand = file.node(argument.children[0]);
+      if (file.tokens[operand.token_begin].spelling != operand_spelling)
+        continue;
+      return CallSource{ast_source(AstNodeId{i}),
+                        ast_source(argument.children[0])};
+    }
+    throw std::runtime_error("fixture conversion call missing");
+  };
+  const auto int_to_float_call = call_source("f64", "x");
+  const auto float_to_int_call = call_source("i32", "1.0");
+  const auto identity32_call = call_source("f32", "xf");
+  const auto identity64_call = call_source("f64", "xd");
+  const auto widening_call = call_source("f64", "xf");
+
   {
     auto m = f.m;
-    add_convert(m, f64, read_x(m)); // integer -> float
+    auto source = read_x(m, int_to_float_call.operand);
+    add_convert(m, f64, source, int_to_float_call.conversion);
     auto r = verify(m);
     if (!r.success())
       for (const auto &d : r.diagnostics)
@@ -588,19 +674,84 @@ void numeric_conversion_tests() {
   }
   {
     auto m = f.m;
-    add_convert(m, f.i32, float_literal(m)); // float -> integer
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          float_to_int_call.operand);
+    add_convert(m, f.i32, source, float_to_int_call.conversion);
     require(verify(m).success(), "float to integer conversion rejected");
   }
-  invalid(f, "float to float conversion", [&](HirModule &m) {
-    auto convert = add_convert(m, f64, float_literal(m));
+  for (const auto &[type, source_type, bits, call] :
+       std::vector<std::tuple<TypeId, TypeId, uint64_t, CallSource>>{
+           {f32, f32, 0x3f800000ULL, identity32_call},
+           {f64, f64, 0x3ff0000000000000ULL, identity64_call},
+           {f64, f32, 0x3f800000ULL, widening_call}}) {
+    auto m = f.m;
+    auto source = literal(m, source_type, bits, call.operand);
+    add_convert(m, type, source, call.conversion);
+    require(verify(m).success(), "float identity/widening conversion rejected");
+  }
+  invalid(f, "identity target changed to f32", [&](HirModule &m) {
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          identity64_call.operand);
+    auto convert = add_convert(m, f64, source, identity64_call.conversion);
     m.nodes[convert.value].type = f32;
   });
   invalid(f, "bool conversion destination", [&](HirModule &m) {
-    add_convert(m, f.boolean, read_x(m));
+    add_convert(m, f.boolean, read_x(m), identity64_call.conversion);
   });
   invalid(f, "bool conversion source", [&](HirModule &m) {
     auto source = add(m, f.boolean, BoolLiteral{true});
-    add_convert(m, f.i32, source);
+    add_convert(m, f.i32, source, identity64_call.conversion);
+  });
+  invalid(f, "conversion arity", [&](HirModule &m) {
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          identity64_call.operand);
+    auto convert = add(m, f64, IntegerConvert{}, {source, source});
+    m.nodes[convert.value].source = identity64_call.conversion;
+  });
+
+  auto source_mutation = [&](const char *name,
+                             const std::function<void(HirModule &)> &edit) {
+    auto m = f.m;
+    edit(m);
+    require(!hir::verify_types(m).success(),
+            (std::string("direct verify_types accepted ") + name).c_str());
+    require(!verify(m).success(),
+            (std::string("public verify accepted ") + name).c_str());
+    auto ownership = hir::detail::produce_ownership(m, {});
+    require(ownership.success(),
+            (std::string("successful ownership recompute required: ") +
+             name).c_str());
+    require(!hir::verify_types(m).success(),
+            (std::string("verify_types accepted after recompute: ") +
+             name).c_str());
+    require(!verify(m).success(),
+            (std::string("public verify accepted after recompute: ") +
+             name).c_str());
+  };
+  source_mutation("conversion callee replaced", [&](HirModule &m) {
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          identity64_call.operand);
+    auto convert = add_convert(m, f64, source, identity64_call.conversion);
+    m.nodes[convert.value].source = identity32_call.conversion;
+  });
+  source_mutation("conversion operand replaced by same-type operand",
+                  [&](HirModule &m) {
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          identity64_call.operand);
+    auto convert = add_convert(m, f64, source, identity64_call.conversion);
+    m.nodes[source.value].source = widening_call.operand;
+    (void)convert;
+  });
+  source_mutation("conversion source is not a call", [&](HirModule &m) {
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          identity64_call.operand);
+    auto convert = add_convert(m, f64, source, identity64_call.conversion);
+    m.nodes[convert.value].source = f.main_src;
+  });
+  source_mutation("conversion operand span shortened", [&](HirModule &m) {
+    auto source = literal(m, f32, 0x3f800000ULL, identity32_call.operand);
+    add_convert(m, f32, source, identity32_call.conversion);
+    --m.nodes[source.value].source.span.end_byte;
   });
 }
 } // namespace

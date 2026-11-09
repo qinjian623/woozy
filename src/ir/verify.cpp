@@ -566,11 +566,70 @@ class Verifier {
         }
         case Op::convert: {
           arity(1);
-          const auto source = value(0).kind, destination = t.kind;
-          need((integer(source) && integer(destination)) ||
-                   (source == hir::TypeKind::Float && integer(destination)) ||
-                   (integer(source) && destination == hir::TypeKind::Float),
+          const auto &source = value(0);
+          const auto source_kind = source.kind, destination = t.kind;
+          const bool float_pair =
+              source_kind == hir::TypeKind::Float &&
+              destination == hir::TypeKind::Float &&
+              ((source.bits == 32 && (t.bits == 32 || t.bits == 64)) ||
+               (source.bits == 64 && t.bits == 64));
+          need((integer(source_kind) && integer(destination)) ||
+                   (source_kind == hir::TypeKind::Float &&
+                    integer(destination)) ||
+                   (integer(source_kind) &&
+                    destination == hir::TypeKind::Float) ||
+                   float_pair,
                "invalid numeric conversion", i.source);
+          // The instruction is an implementation of one real HIR conversion,
+          // not merely any pair of same-shaped SSA values.
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "conversion without HIR origin", i.source);
+          const auto &origin = m.hir.module().nodes[i.origin->value];
+          need(std::get_if<hir::IntegerConvert>(&origin.data) != nullptr &&
+                   origin.type == i.type && origin.children.size() == 1,
+               "conversion origin is not the matching HIR conversion",
+               i.source);
+          need(m.hir.module().scopes.at(origin.scope.value).function ==
+                   f.symbol,
+               "conversion origin belongs to another function", i.source);
+          need(i.source.snapshot == origin.source.span.snapshot &&
+                   i.source.begin_byte >= origin.source.span.begin_byte &&
+                   i.source.end_byte <= origin.source.span.end_byte,
+               "conversion source span differs from HIR origin", i.source);
+          const auto &operand =
+              m.hir.module().nodes[origin.children[0].value];
+          need(operand.type == args[0].type,
+               "conversion operand type differs from HIR", i.source);
+          // The SSA input must be the actual value produced for this HIR
+          // operand, not merely any same-typed value defined somewhere inside
+          // its SourceSpan. Follow only the existing transparent copy/borrow
+          // wrappers, keyed by the real ValueId chain; do not use block/slot
+          // depth as a proxy for value identity.
+          auto same_span = [](SourceSpan a, SourceSpan b) {
+            return a.snapshot == b.snapshot && a.begin_byte == b.begin_byte &&
+                   a.end_byte == b.end_byte;
+          };
+          ValueId operand_value = i.inputs[0];
+          std::set<ValueId> visited;
+          for (;;) {
+            need(visited.insert(operand_value).second,
+                 "conversion operand value cycle", i.source);
+            auto instruction = instructions.find(operand_value);
+            if (instruction != instructions.end()) {
+              const auto &transparent = *instruction->second;
+              if ((transparent.op == Op::copy ||
+                   transparent.op == Op::borrow) &&
+                  transparent.inputs.size() == 1) {
+                operand_value = transparent.inputs[0];
+                continue;
+              }
+            }
+            const auto &definition = defs.at(operand_value);
+            need(same_span(definition.source, operand.source.span),
+                 "conversion operand value differs from the real HIR operand",
+                 i.source);
+            break;
+          }
           break;
         }
         case Op::call: {

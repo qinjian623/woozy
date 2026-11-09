@@ -2089,14 +2089,59 @@ class Verifier {
     }
     case NodeKind::integer_convert: {
       arity(1);
-      // One shared record covers the three allowed numeric pairs; float->float,
-      // bool and non-numeric sources/destinations stay invalid.
-      const auto source = type(expr(ch[0]).type).kind;
-      const auto destination = type(n.type).kind;
+      // One shared record covers the allowed numeric pairs. Float identity and
+      // widening are exact; f64->f32 narrowing, bool and non-numeric
+      // sources/destinations stay invalid.
+      const auto &source_type = type(expr(ch[0]).type);
+      const auto &destination_type = type(n.type);
+      const auto source = source_type.kind;
+      const auto destination = destination_type.kind;
+      const bool float_pair =
+          source == TypeKind::Float && destination == TypeKind::Float &&
+          ((source_type.bits == 32 &&
+            (destination_type.bits == 32 || destination_type.bits == 64)) ||
+           (source_type.bits == 64 && destination_type.bits == 64));
       need((integer(source) && integer(destination)) ||
                (source == TypeKind::Float && integer(destination)) ||
-               (integer(source) && destination == TypeKind::Float),
+               (integer(source) && destination == TypeKind::Float) ||
+               float_pair,
            "integer conversion types");
+      // Reconstruct the written T(x) form. A same-shaped pair is not enough:
+      // the callee must be the builtin numeric type in the result slot and the
+      // operand must be the real, uniquely labelled-free argument syntax.
+      const auto &file = *m.resolved->project->module(n.source.node.module)
+                              .files.at(n.source.node.file);
+      auto r = n.source.node;
+      const auto &call = file.node(r.node);
+      need(call.kind == AstKind::Call && call.children.size() == 2 &&
+               n.children.size() == 1,
+           "conversion source is not a real one-argument call");
+      auto callee_ref = r;
+      callee_ref.node = call.children[0];
+      const auto callee = unwrapped(callee_ref);
+      auto target_symbol = resolved_source(callee);
+      need(target_symbol.has_value() &&
+               symbol(*target_symbol).kind == modules::SymbolKind::builtin_type &&
+               file.node(callee.node).children.empty(),
+           "conversion callee is not a plain builtin numeric type");
+      need(source_type_in_function(callee_ref, scope(n.scope).function) ==
+               n.type,
+           "conversion target differs from source callee");
+      auto argument_ref = r;
+      argument_ref.node = call.children[1];
+      const auto &argument = file.node(argument_ref.node);
+      need(argument.kind == AstKind::Argument && argument.children.size() == 1,
+           "conversion source argument shape");
+      need(!(argument.token_begin + 1 < argument.token_end &&
+             file.tokens.at(argument.token_begin + 1).spelling == ":"),
+           "conversion source argument has a label");
+      auto operand_ref = argument_ref;
+      operand_ref.node = argument.children[0];
+      need(same_ref(unwrapped(node(ch[0]).source.node), unwrapped(operand_ref)),
+           "conversion operand differs from the real source argument");
+      need(same_span(node(ch[0]).source.span,
+                     file.node(unwrapped(operand_ref).node).span),
+           "conversion operand span differs from the complete source argument");
       break;
     }
     case NodeKind::call:

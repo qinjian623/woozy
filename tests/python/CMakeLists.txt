@@ -94,6 +94,18 @@ add_test(NAME python.ownership_runtime COMMAND "${LANG_PYTHON312}"
 add_executable(lang_python_ownership_ir_test ownership_ir_test.cpp)
 target_link_libraries(lang_python_ownership_ir_test PRIVATE lang_sema lang_backend_python)
 add_test(NAME python.ownership_ir COMMAND lang_python_ownership_ir_test)
+if(TARGET langc AND TARGET lang_native_convert_probe AND TARGET lang_native_runtime
+   AND TARGET lang_python_emit)
+  add_test(NAME python.conversions COMMAND "${LANG_PYTHON312}"
+    "${LANG_PYTHON_TEST_ROOT}/tests/numeric/run_conversions.py"
+    --cli $<TARGET_FILE:langc> --probe $<TARGET_FILE:lang_native_convert_probe>
+    --root "${LANG_PYTHON_TEST_ROOT}" --python "${LANG_PYTHON312}"
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --runtime $<TARGET_FILE:lang_native_runtime>
+    --helper $<TARGET_FILE:lang_python_emit>
+    --out "${CMAKE_CURRENT_BINARY_DIR}/conversion-results")
+  set_tests_properties(python.conversions PROPERTIES TIMEOUT 900)
+endif()
 # T10 generated host/binding and original-04 execution.  The interpreter must
 # be the dedicated CPython 3.12 environment with NumPy/PyTorch CPU installed;
 # a plain python3.12 without those packages is intentionally not substituted.

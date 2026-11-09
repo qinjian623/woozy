@@ -266,6 +266,10 @@ verifyModule；O2 使用 PassBuilder 标准 O2 流程，然后再次 verifyModul
   LLVM 的后续优化可以根据已经证明的条件简化代码。
 - f32/f64 常量由 HIR 的确切位模式建立 APFloat，不经过 host double。
   支持字面量、参数、返回、绑定和普通传递。没有 fast-math；严格浮点算术未实施。
+- 2026-11-09 追加显式 float 同宽/扩宽转换：f32→f32 与 f64→f64 保留原值，
+  f32→f64 使用 LLVM `fpext`（全部 binary32 有限值均精确）；f64→f32 缩窄仍报
+  `E_CAPABILITY_UNAVAILABLE`。转换继续复用 `integer_convert`/`Op::convert`，
+  `origin` 指向同函数真实 HIR 转换及其 operand。
 
 目标由 LLVM 22.1.8 TargetMachine 固定为 Linux x86_64/PIC/small/generic；
 实际 DataLayout 为：
@@ -294,7 +298,7 @@ runner 同时检查完整记录、原因、空 stdout 与非零/信号终止。�
 没有 Panic 而返回 0 就会失败。
 
 string、聚合、泛型、throws/try/typed catch、defer、ARC/move、foreign、复杂 Place、
-捕获 lambda、严格浮点算术/比较/转换均未实施，由 checker 或目标检查报告
+捕获 lambda、严格浮点算术/比较及 f64→f32 缩窄均未实施，由 checker 或目标检查报告
 `E_CAPABILITY_UNAVAILABLE`。普通参数重新赋值仍遵循 checker 的未支持诊断，
 没有自行决定写权限。native32、其它目标/CPU/features/O 等级均未开放。
 Panic 直接终止，不进入 typed catch，不执行语言 defer；本阶段不保证 Panic 无泄漏。

@@ -266,6 +266,9 @@ helper 仅在选取入口时根据已解析符号表寻找入口模块的 main�
 - Unit、bool、i8/i16/i32/i64、u8/u16/u32/u64、isize/usize。目标字宽固定 64，不读取宿主指针宽度。
 - f32/f64 按 HIR 的 IEEE bits 重建；支持绑定、读取、赋值、普通传参/返回和整体 inout。
   传递过程中不做算术。测试逐位检查零、1、ties-to-even、最小 subnormal、下溢、上溢及 inout 更新。
+- 2026-11-09 追加显式 float 同宽/扩宽转换：f32→f32、f64→f64 与精确 f32→f64
+  直接传递已按源宽度舍入的 Python float，并保存真实 Source/求值顺序；f64→f32
+  缩窄仍报 `E_CAPABILITY_UNAVAILABLE`。没有新增运行库入口或通用 identity 转换。
 - 声明函数、函数值、无捕获 lambda、立即/间接调用、返回函数值、递归和相互递归、跨文件/模块调用。
 - let/var/const、赋值和整数复合赋值；局部 const 的计算由前端完成。
 - Block、If、三段式/条件式/无限 For、Return、Break、Continue、bool 短路。

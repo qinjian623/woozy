@@ -419,6 +419,7 @@ class Lower {
     }
     case hir::NodeKind::integer_convert:
       i.op = Op::convert;
+      i.origin = id;
       i.inputs = {expr(n.children[0])};
       return emit(i);
     case hir::NodeKind::short_circuit: {

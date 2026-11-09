@@ -96,15 +96,23 @@ def static_cases():
     yield dict(id='unsupported-float-to-float',
                source='func main() i32 { let x = f32(1.0); return 0; }',
                code='E_CAPABILITY_UNAVAILABLE',
-               reason='float width conversion stays closed')
+               reason='f64->f32 narrowing is still pending the overflow rule')
     yield dict(id='unsupported-float-to-float-dynamic',
                source='func narrow(x f64) f32 { return f32(x); } func main() i32 { return 0; }',
                code='E_CAPABILITY_UNAVAILABLE',
-               reason='float width conversion stays closed for dynamic values too')
+               reason='dynamic f64->f32 narrowing is still pending the overflow rule')
     yield dict(id='unsupported-bool-target',
                source='func main() i32 { let x = bool(1); return 0; }',
                code='E_CAPABILITY_UNAVAILABLE',
                reason='bool is not a conversion destination')
+    yield dict(id='static-conversion-label',
+               source='func main() i32 { let x = i32(value: 1); return 0; }',
+               code='E_CALL_ARGUMENT',
+               reason='explicit conversion accepts no argument labels')
+    yield dict(id='static-conversion-arity',
+               source='func main() i32 { let x = i32(); return 0; }',
+               code='E_CALL_ARGUMENT',
+               reason='explicit conversion requires exactly one argument')
 
 
 def panic_cases():

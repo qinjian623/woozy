@@ -8,7 +8,7 @@ Covers, for the same sources and both backends:
   * the native probe sweep: bit patterns are handed to the generated functions
     through their real LLVM signatures and compared with an exact `Fraction`
     oracle (`tests/native/float_expected.py`), never with the implementation;
-  * static failures (source errors and the still-closed float->float/bool
+  * static failures (source errors and the still-closed f64->f32/bool
     pairs) in both backends, including fresh "no output" and stale "unchanged
     bytes" checks;
   * dynamic failures: check accepts, real execution Panics with exit 101 and
@@ -94,52 +94,59 @@ def elf_checks(program):
 
 
 def values_matrix(args, report, tmp):
-    root = args.root / 'tests/numeric/values'
     rows = []
     report['values'] = rows
-    for backend in ('native', 'python'):
-        row = dict(backend=backend, word_bits=64)
-        row['check'] = r = command([args.cli, 'check', '--project',
-                                    root / 'lang.toml', '--backend', backend,
-                                    '--format', 'json'])
-        ok(r, 'values check ' + backend)
-        assert diagnostics(r)['status'] == 'ok', r
-        rows.append(row)
-        for opt in (0, 2) if backend == 'native' else (0,):
-            out = tmp / 'values' / backend / f'O{opt}'
-            build = [args.cli, 'build', '--project', root / 'lang.toml',
-                     '--backend', backend, '--out-dir', out, '--format',
-                     'json']
-            if backend == 'native':
-                build += ['--opt', str(opt)]
-            row[f'build{opt if backend == "native" else ""}'] = r = command(build)
-            ok(r, 'values build')
-            if backend == 'native':
-                program = out / 'program'
-                row[f'execute{opt}'] = r = command([program])
-            else:
-                program = out / 'program.py'
-                row['execute'] = r = command([args.python, program], cwd=out)
-            ok(r, 'values run')
-            row[f'artifacts{opt if backend == "native" else ""}'] = {
-                str(p.relative_to(out)): sha(p) for p in sorted(out.rglob('*'))
-                if p.is_file()}
-            if backend == 'native':
-                row[f'elf{opt}'] = elf_checks(program)
-    # The frontend must accept isize/usize conversions for a 32-bit target too;
-    # neither backend lowers python/32 or native/32, so this is check only.
-    row = dict(backend='native', word_bits=32, frontend_only=True)
-    narrow = tmp / 'values32'
-    project(narrow, (root / 'src' / 'main.lang').read_text(),
-            word_bits=32)
-    row['check'] = r = command([args.cli, 'check', '--project',
-                                narrow / 'lang.toml', '--backend', 'native',
-                                '--format', 'json'])
-    ok(r, 'values check word_bits=32')
-    assert diagnostics(r)['status'] == 'ok', r
-    rows.append(row)
-    return rows
 
+    def run_project(label, root, frontend32):
+        for backend in ('native', 'python'):
+            row = dict(project=label, backend=backend, word_bits=64)
+            row['check'] = r = command([args.cli, 'check', '--project',
+                                        root / 'lang.toml', '--backend', backend,
+                                        '--format', 'json'])
+            ok(r, f'{label} check {backend}')
+            assert diagnostics(r)['status'] == 'ok', r
+            rows.append(row)
+            for opt in (0, 2) if backend == 'native' else (0,):
+                out = tmp / label / backend / f'O{opt}'
+                build = [args.cli, 'build', '--project', root / 'lang.toml',
+                         '--backend', backend, '--out-dir', out, '--format',
+                         'json']
+                if backend == 'native':
+                    build += ['--opt', str(opt)]
+                row[f'build{opt if backend == "native" else ""}'] = r = command(build)
+                ok(r, f'{label} build')
+                if backend == 'native':
+                    program = out / 'program'
+                    row[f'execute{opt}'] = r = command([program])
+                else:
+                    program = out / 'program.py'
+                    row['execute'] = r = command([args.python, program], cwd=out)
+                ok(r, f'{label} run')
+                row[f'artifacts{opt if backend == "native" else ""}'] = {
+                    str(p.relative_to(out)): sha(p) for p in sorted(out.rglob('*'))
+                    if p.is_file()}
+                if backend == 'native':
+                    row[f'elf{opt}'] = elf_checks(program)
+        if frontend32:
+            # The frontend must accept isize/usize conversions for a 32-bit
+            # target too; neither backend lowers python/32 or native/32, so
+            # this is check only.
+            row = dict(project=label, backend='native', word_bits=32,
+                       frontend_only=True)
+            narrow = tmp / f'{label}32'
+            project(narrow, (root / 'src' / 'main.lang').read_text(),
+                    word_bits=32)
+            row['check'] = r = command([args.cli, 'check', '--project',
+                                        narrow / 'lang.toml', '--backend',
+                                        'native', '--format', 'json'])
+            ok(r, f'{label} check word_bits=32')
+            assert diagnostics(r)['status'] == 'ok', r
+            rows.append(row)
+
+    run_project('values', args.root / 'tests/numeric/values', True)
+    run_project('float-conversions',
+                args.root / 'tests/numeric/float-conversions', False)
+    return rows
 
 # Fixed probe values, hand chosen around RNE midpoints and integer bounds.
 FIXED_I64 = [0, 1, -1, 16777215, 16777216, 16777217, 16777218, 16777219,
@@ -182,6 +189,41 @@ def float_patterns(width):
     return patterns
 
 
+def float_edge_patterns(width):
+    """Exact-region identity/widening patterns, including all NaN categories."""
+    frac, exp = (23, 8) if width == 32 else (52, 11)
+    sign = 1 << (width - 1)
+    one = 0x3f800000 if width == 32 else 0x3ff0000000000000
+    half = 0x3f000000 if width == 32 else 0x3fe0000000000000
+    infinity = ((1 << exp) - 1) << frac
+    quiet = infinity | (1 << (frac - 1))
+    signaling = infinity | 1
+    values = [
+        0, sign, 1, sign | 1,
+        (1 << frac) - 1, sign | ((1 << frac) - 1),
+        1 << frac, sign | (1 << frac),
+        half, sign | half,
+        one - 1, one, one + 1,
+        sign | (one - 1), sign | one, sign | (one + 1),
+        infinity - 1, sign | (infinity - 1), infinity, sign | infinity,
+        quiet, sign | quiet, quiet | 0x123, sign | (quiet | 0x123),
+        signaling, sign | signaling, signaling | 0x123,
+    ]
+    return list(dict.fromkeys(values))
+
+
+def widen32(pattern):
+    """Independent binary32 -> binary64 expectation from exact decoded values."""
+    category, sign, value = decoded(pattern, 32)
+    if category == 'nan':
+        return 'nan'
+    if category == 'infinity':
+        return (sign << 63) | 0x7ff0000000000000
+    if category == 'zero':
+        return sign << 63
+    return rounded(value, 64, zero_sign=sign)
+
+
 def probe_requests():
     requests = []
     for name, result, width, values in (
@@ -218,6 +260,29 @@ def probe_requests():
                     name=name, result=target, arg_widths=[width],
                     arguments=[pattern], expected=truncated,
                     source='exact IEEE decode, truncate towards zero, range-check'))
+    for width in (32, 64):
+        for pattern in float_edge_patterns(width):
+            category, _, _ = decoded(pattern, width)
+            requests.append(dict(
+                name=f'idf{width}', result=f'f{width}',
+                arg_widths=[width], arguments=[pattern],
+                expected='nan' if category == 'nan' else pattern,
+                source='identity must preserve every non-NaN bit; NaN is compared by class'))
+    for pattern in float_edge_patterns(32):
+        requests.append(dict(
+            name='widen', result='f64', arg_widths=[32], arguments=[pattern],
+            expected=widen32(pattern),
+            source='exact binary32 value widened to binary64; NaN by class'))
+    for value in (-2147483648, -16777219, -16777217, -1, 0, 1, 16777215,
+                  16777216, 16777217, 16777218, 16777219, 16777220,
+                  2147483647):
+        inner = rounded(Fraction(value), 32)
+        category, sign, actual = decoded(inner, 32)
+        requests.append(dict(
+            name='widen_after_i32', result='f64', arg_widths=[32],
+            arguments=[value & 0xffffffff],
+            expected=rounded(actual, 64, zero_sign=sign),
+            source='int->f32 RNE first, then exact widening to f64'))
     return requests
 
 
@@ -241,7 +306,7 @@ def probe_matrix(args, report, tmp):
         row = dict(opt=opt, values=[])
         rows['runs'].append(row)
         row['build'] = r = command([
-            args.probe, args.root / 'tests/numeric/values/lang.toml',
+            args.probe, args.root / 'tests/numeric/float-conversions/lang.toml',
             out / 'probe', opt, request_file])
         ok(r, 'probe emit')
         row['metadata'] = json.loads((out / 'probe/metadata.json').read_text())
@@ -249,7 +314,12 @@ def probe_matrix(args, report, tmp):
         assert row['metadata']['bad_ir_rejected'] >= \
             row['metadata']['convert_instructions'], row['metadata']
         assert row['metadata']['convert_instructions'] >= 20, row['metadata']
-        assert row['metadata']['legal_retarget_controls'] == 2, row['metadata']
+        assert row['metadata']['legal_retarget_controls'] >= 5, row['metadata']
+        for key in ('bool_mutations', 'float_width_mutations',
+                    'origin_mutations', 'operand_mutations',
+                    'address_mutations', 'compound_operand_mutations',
+                    'unary_operand_mutations', 'external_operand_mutations'):
+            assert row['metadata'][key] >= 1, (key, row['metadata'])
         # The bool-source mutation inserts into the same instruction vector, so
         # the relocation path must really run (no stale reference is used).
         assert row['metadata']['insert_mutations'] >= 1, row['metadata']
@@ -275,9 +345,14 @@ def probe_matrix(args, report, tmp):
             raw = int.from_bytes(data[offset:offset + size], 'little')
             offset += size
             if result in ('f32', 'f64'):
-                matched = raw == request['expected']
-                observed = f'{raw:0{width // 4}x}'
-                expected = f"{request['expected']:0{width // 4}x}"
+                if request['expected'] == 'nan':
+                    category, _, _ = decoded(raw, width)
+                    matched = category == 'nan'
+                    observed, expected = category, 'nan'
+                else:
+                    matched = raw == request['expected']
+                    observed = f'{raw:0{width // 4}x}'
+                    expected = f"{request['expected']:0{width // 4}x}"
             else:
                 if result[0] == 'u':
                     observed_value = raw
@@ -298,6 +373,53 @@ def probe_matrix(args, report, tmp):
             rows['totals']['passed' if matched else 'failed'] += 1
             assert matched, observation
         assert offset == len(data), 'extra probe observation bytes'
+    python_probe(args, report, tmp, requests)
+    rows['status'] = 'passed'
+
+
+def python_probe(args, report, tmp, requests):
+    rows = dict(status='not_run', reason='--helper not given', values=[],
+                totals=dict(passed=0, failed=0))
+    report['probes']['python'] = rows
+    if not args.helper:
+        return
+    generated = tmp / 'probes' / 'python'
+    result = command([args.helper, '--project',
+                      args.root / 'tests/numeric/float-conversions/lang.toml',
+                      '--out-dir', generated])
+    ok(result, 'python probe emit')
+    spec = generated / 'requests.json'
+    spec.write_text(json.dumps(requests) + '\n')
+    observed = command([args.python,
+                        args.root / 'tests/numeric/observe_conversions.py',
+                        generated, spec])
+    ok(observed, 'python probe observe')
+    rows['execute'] = observed
+    for request, row in zip(requests, json.loads(observed['stdout'])):
+        assert row['outcome'] == 'return', row
+        actual = row['result']
+        expected = request['expected']
+        result_type = request['result']
+        width = int(result_type[1:])
+        if result_type in ('f32', 'f64'):
+            if expected == 'nan':
+                matched = actual['class'] == 'nan'
+            else:
+                matched = actual['bits'] == f'{expected:0{width // 4}x}'
+        else:
+            matched = actual['value'] == expected
+        observation = dict(function=request['name'], result=result_type,
+                           arguments=[f'{a:0{w // 4}x}' for a, w in
+                                      zip(request['arguments'],
+                                          request['arg_widths'])],
+                           expected='nan' if expected == 'nan' else
+                           f'{expected:0{width // 4}x}'
+                           if result_type in ('f32', 'f64') else str(expected),
+                           actual=actual, expected_source=request['source'],
+                           status='passed' if matched else 'failed')
+        rows['values'].append(observation)
+        rows['totals']['passed' if matched else 'failed'] += 1
+        assert matched, observation
     rows['status'] = 'passed'
 
 
@@ -382,9 +504,11 @@ def panic_matrix(args, report, tmp):
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ('cli', 'root', 'python', 'out', 'probe', 'clang', 'runtime'):
+    for name in ('cli', 'root', 'python', 'out', 'probe', 'clang', 'runtime',
+                 'helper'):
         parser.add_argument('--' + name, type=Path,
-                            required=name not in ('probe', 'clang', 'runtime'))
+                            required=name not in ('probe', 'clang', 'runtime',
+                                                  'helper'))
     args = parser.parse_args()
     args.out = args.out.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
