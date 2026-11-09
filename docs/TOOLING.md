@@ -32,7 +32,7 @@ T03 采用以下目录约定：每个模块读取对应目录直接包含的 `.l
 
 ## 3 CLI 目标接口
 
-`langc` 已支持单文件 syntax-only、项目标量类型 check 和 Python/64 标量 build。原生 build 正在接入，capabilities 与 lsp 仍未实现。高级构造在 check 中明确报未支持：
+`langc` 已支持单文件词法/语法检查、项目类型/效果/所有权检查、Linux x86_64 原生构建，以及 Python 3.12 代码生成。泛型、方法和值操作的具体支持范围见 [GENERICS.md](GENERICS.md) 与 [SEMANTICS.md](SEMANTICS.md)；尚未实现的合法语法报告 `E_CAPABILITY_UNAVAILABLE`。`capabilities` 与 `lsp` 仍未实现。以下命令中，这两项是目标接口，其余按已支持的目标和类型执行：
 
 ```bash
 langc check --syntax-only examples/core.lang
