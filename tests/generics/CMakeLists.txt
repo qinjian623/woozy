@@ -235,7 +235,12 @@ if(TARGET lang_native)
 endif()
 add_test(NAME sema.aggregate_constants COMMAND lang_aggregate_const_test "${LANG_T07_ROOT}")
 if(LANG_TEST_PYTHON)
+  set(aggregate_rejection_backends python)
+  if(LANG_ENABLE_LLVM)
+    list(PREPEND aggregate_rejection_backends native)
+  endif()
   add_test(NAME sema.aggregate_constant_rejections COMMAND ${LANG_TEST_PYTHON}
     ${CMAKE_CURRENT_LIST_DIR}/run_aggregate_const_rejections.py --cli $<TARGET_FILE:langc>
-    --out ${CMAKE_CURRENT_BINARY_DIR}/aggregate-constant-rejections)
+    --out ${CMAKE_CURRENT_BINARY_DIR}/aggregate-constant-rejections
+    --backends ${aggregate_rejection_backends})
 endif()

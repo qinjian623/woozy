@@ -30,10 +30,14 @@ def main():
     parser=argparse.ArgumentParser()
     parser.add_argument('--cli',type=Path,required=True)
     parser.add_argument('--out',type=Path,required=True)
+    parser.add_argument('--backends',nargs='+',choices=('native','python'),
+                        default=['native','python'])
     args=parser.parse_args();args.out.mkdir(parents=True,exist_ok=True)
-    report={'status':'failed','backends':{}}
+    report={'status':'failed','backends':{},'not_run':{
+        name:'backend not selected by this build configuration'
+        for name in ('native','python') if name not in args.backends}}
     try:
-        for backend in ('native','python'):
+        for backend in args.backends:
             for ident in ('private-field','private-constructor'):
                 module=args.out/backend/'rejected'/ident/'src/hidden/lib.lang'
                 module.parent.mkdir(parents=True,exist_ok=True)
