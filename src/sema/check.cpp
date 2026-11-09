@@ -1,5 +1,6 @@
 #include "lang/sema/check.hpp"
 #include "../hir/ownership.hpp"
+#include "../hir/public_type_visibility.hpp"
 #include "../hir/pattern_analysis.hpp"
 #include "../hir/foreign.hpp"
 #include "../hir/literal_value.hpp"
@@ -121,6 +122,19 @@ class Checker {
   }
   [[noreturn]] void unavailable(Ref r, std::string feature) const {
     reject(r, std::move(feature), "E_CAPABILITY_UNAVAILABLE");
+  }
+  [[noreturn]] void private_type_leak(Ref r, SymbolId private_type) const {
+    Diagnostic d;
+    d.code = "E_PRIVATE_TYPE_LEAK";
+    d.message = "public interface uses private type: " +
+                symbol(private_type).name;
+    d.phase = "type";
+    d.severity = "error";
+    d.primary = ast(r).span;
+    if (symbol(private_type).declaration)
+      d.related.push_back(
+          {*symbol(private_type).declaration, "private type declaration"});
+    throw Rejected{std::move(d), FailureKind::source};
   }
   SymbolId definition(Ref r) const { return definitions.at(key(r)); }
   std::optional<SymbolId> occurrence(Ref r) const {
@@ -2866,6 +2880,17 @@ class Checker {
     constants[s.value] = c;
     return c;
   }
+  void check_public_constant(SymbolId id) {
+    const auto &s = symbol(id);
+    if (s.kind != modules::SymbolKind::constant || !s.exported || !s.definition)
+      return;
+    auto c = constant(id);
+    // The public interface is the final TypeId graph. Internal specialization
+    // metadata on the selected callee is not part of that public type.
+    if (auto private_type =
+            detail::private_interface_type(m.types, *m.resolved, c.value.type))
+      private_type_leak(*s.definition, *private_type);
+  }
   ScopeId new_scope(Ref r, std::optional<ScopeId> parent) {
     ScopeId id{m.scopes.size()};
     m.scopes.push_back({function, parent, source(r)});
@@ -4428,6 +4453,12 @@ public:
           if (ast(r).kind == AstKind::Binding)
             constant(definition(r));
         }
+    // The inferred type of an exported constant is its public interface even
+    // when no later source uses that constant.
+    for (const auto &s : m.resolved->symbols)
+      if (s.kind == modules::SymbolKind::constant && s.exported &&
+          s.definition)
+        check_public_constant(s.id);
     for (auto [id, r] : bodies) {
       check_cancelled(stop);
       check_body(SymbolId{id});

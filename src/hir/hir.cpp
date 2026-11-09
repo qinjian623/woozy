@@ -2,6 +2,7 @@
 #include "pattern_analysis.hpp"
 #include "literal_value.hpp"
 #include "ownership.hpp"
+#include "public_type_visibility.hpp"
 #include "foreign.hpp"
 #include <algorithm>
 #include <functional>
@@ -4029,12 +4030,84 @@ class Verifier {
     }
   }
 
+  struct FunctionSource {
+    SymbolId function;
+    std::vector<TypeId> type_args;
+    bool explicit_type_args = false;
+  };
+
+  // Rebuild the function selected by a const initializer from its real Source.
+  // The public type does not include a callee's internal specialization, but
+  // the selected origin and ordered explicit type arguments still identify
+  // the represented FunctionValue. Only existing const routes are followed.
+  FunctionSource constant_function_source(SymbolId id) const {
+    std::set<uint64_t> visited;
+    // Alias chains have no syntax nesting limit; only repeated symbols cycle.
+    for (;;) {
+      check_cancelled(stop);
+      const auto &s = symbol(id);
+      need(s.kind == modules::SymbolKind::constant && s.definition,
+           "constant function source is not a real constant");
+      need(visited.insert(id.value).second, "constant function source cycle");
+      auto declaration = *s.definition;
+      const auto &file = *m.resolved->project->module(declaration.module)
+                              .files.at(declaration.file);
+      const auto &binding = file.node(declaration.node);
+      need(binding.kind == AstKind::Binding && !binding.children.empty(),
+           "constant function source is not a binding");
+      auto initializer = declaration;
+      initializer.node = binding.children.back();
+      initializer = unwrapped(initializer);
+      const auto &ast = file.node(initializer.node);
+      if (ast.kind == AstKind::FunctionLiteral) {
+        std::optional<SymbolId> function;
+        for (const auto &candidate : m.resolved->symbols)
+          if (candidate.kind == modules::SymbolKind::function &&
+              candidate.definition &&
+              same_ref(*candidate.definition, initializer))
+            function = candidate.id;
+        need(function.has_value(),
+             "constant function literal has no resolved symbol");
+        return {*function, {}, false};
+      }
+      if (ast.kind == AstKind::NeutralBracket) {
+        need(!ast.children.empty(),
+             "constant generic function value has no target");
+        auto base = initializer;
+        base.node = ast.children.front();
+        auto function = resolved_source(base);
+        need(function && symbol(*function).kind == modules::SymbolKind::function,
+             "constant generic initializer is not a function");
+        std::vector<TypeId> type_args;
+        for (size_t i = 1; i < ast.children.size(); ++i) {
+          auto argument = initializer;
+          argument.node = ast.children[i];
+          type_args.push_back(source_type(argument));
+        }
+        return {*function, std::move(type_args), true};
+      }
+      need(ast.kind == AstKind::Name || ast.kind == AstKind::Member,
+           "constant function initializer has an unsupported source kind");
+      auto target = resolved_source(initializer);
+      need(target.has_value(),
+           "constant function initializer has no resolved symbol");
+      const auto &selected = symbol(*target);
+      if (selected.kind == modules::SymbolKind::function)
+        return {*target, {}, false};
+      need(selected.kind == modules::SymbolKind::constant,
+           "constant initializer is neither a function nor a constant");
+      id = *target;
+    }
+  }
+
   // A function value is a source-level reference to an executable function,
   // not an arbitrary value of a matching function type. Keep the existing
   // constant routes separate, but require a Name/Member source that really
   // resolves to a function to keep its original symbol (or that symbol's
-  // instance origin). This rejects a corrupted FunctionValue whose type and
-  // signature are unchanged but whose callback implementation was replaced.
+  // instance origin). Const sources instead compare the selected function
+  // origin and ordered explicit type arguments with their real initializer.
+  // This rejects a corrupted FunctionValue whose type and signature are
+  // unchanged but whose callback implementation or specialization was replaced.
   void function_value_sources() const {
     auto origin = [&](SymbolId id) {
       for (const auto &i : m.instances)
@@ -4068,13 +4141,58 @@ class Verifier {
       for (const auto &o : m.resolved->occurrences)
         if (same_ref(o.source, r))
           source_symbol = o.symbol;
-      // Constants and other supported value producers retain their existing
-      // source checks; this rule only decides the function-name route.
+      if (source_symbol &&
+          symbol(*source_symbol).kind == modules::SymbolKind::constant) {
+        const auto expected = constant_function_source(*source_symbol);
+        auto actual_function = origin(value->symbol);
+        auto actual_args = value->type_args;
+        auto instance = instances.find(value->symbol.value);
+        if (instance != instances.end()) {
+          actual_function = instance->second->origin;
+          actual_args = instance->second->type_args;
+        }
+        need(actual_function == expected.function,
+             "constant function value differs from its real initializer "
+             "function or ordered type arguments");
+        need(!expected.explicit_type_args ||
+                 actual_args == expected.type_args,
+             "constant function value differs from its real initializer "
+             "function or ordered type arguments");
+        continue;
+      }
+      // Other supported value producers retain their existing source checks;
+      // this rule only decides the function-name route.
       if (!source_symbol ||
           symbol(*source_symbol).kind != modules::SymbolKind::function)
         continue;
       need(origin(value->symbol) == *source_symbol,
            "function value source identity differs from resolver");
+    }
+  }
+
+  // A FunctionValue whose real source names an exported constant publishes
+  // that constant's final inferred function type. Check every represented use
+  // against the same visibility rule as the source checker; internal callee
+  // specialization metadata is not part of this public type. An unused
+  // constant has no HIR node; only the checker can inspect its inferred type.
+  void public_constant_values() const {
+    for (const auto &n : m.nodes) {
+      const auto *value = std::get_if<FunctionValue>(&n.data);
+      if (!value)
+        continue;
+      auto source_symbol = resolved_source(n.source.node);
+      if (!source_symbol)
+        continue;
+      const auto &s = symbol(*source_symbol);
+      if (s.kind != modules::SymbolKind::constant || !s.exported)
+        continue;
+      auto reject = [&](SymbolId private_type) {
+        const auto &p = symbol(private_type);
+        fail("public constant value uses private type: " + p.name,
+             p.declaration);
+      };
+      if (auto p = detail::private_interface_type(m.types, *m.resolved, n.type))
+        reject(*p);
     }
   }
 
@@ -4829,6 +4947,7 @@ public:
     }
     instance_records();
     function_value_sources();
+    public_constant_values();
     finite_layouts();
     for (auto owner : owners)
       need(owner.has_value(), "orphan executable node");

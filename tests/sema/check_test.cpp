@@ -368,6 +368,303 @@ void suite(const fs::path &published) {
   source("func f() i32 { let outer=func(x i32) i32 { "
          "let inner=func(y i32) i32 { return y; }; return inner(x); }; return outer(1); }");
   source("const op=func(x i32) i32 { return x; }; func f() i32 { return op(1); }");
+  // An exported const publishes its final inferred type. The target function
+  // itself may stay private when every type in its signature is public.
+  {
+    auto r = source(
+        "struct Secret { pub value i32; } "
+        "func hidden() Secret { return Secret(value: 7); } "
+        "pub const Make = hidden; func f() i32 { return 0; }",
+        "E_PRIVATE_TYPE_LEAK");
+    require(r.diagnostics[0].related.size() == 1 &&
+                r.diagnostics[0].related[0].message ==
+                    "private type declaration",
+            "private const type declaration is not related");
+  }
+  source("pub struct Visible { pub value i32; } "
+         "func hidden() Visible { return Visible(value: 7); } "
+         "pub const Make = hidden; func f() i32 { return 0; }");
+  source("struct Secret { pub value i32; } "
+         "func hidden() Secret { return Secret(value: 7); } "
+         "const Make = hidden; func f() i32 { return Make().value - 7; }");
+  source("struct Secret { pub value i32; } "
+         "func hidden() Secret { return Secret(value: 7); } "
+         "const Inner = hidden; pub const Outer = Inner; "
+         "func f() i32 { return 0; }",
+         "E_PRIVATE_TYPE_LEAK");
+  source("struct Secret { pub value i32; } "
+         "func hidden(cb func() Secret) i32 { return 0; } "
+         "pub const Make = hidden; func f() i32 { return 0; }",
+         "E_PRIVATE_TYPE_LEAK");
+  source("struct Secret { pub value i32; } "
+         "func hidden() i32 throws Secret { throw Secret(value: 1); } "
+         "pub const Make = hidden; func f() i32 { return 0; }",
+         "E_PRIVATE_TYPE_LEAK");
+  source("pub struct Box[T] { pub value T; } "
+         "struct Secret { pub value i32; } "
+         "func hidden(x Box[Secret]) i32 { return 0; } "
+         "pub const Make = hidden; func f() i32 { return 0; }",
+         "E_PRIVATE_TYPE_LEAK");
+  source("pub struct Box[T] { pub value T; } "
+         "pub struct Visible { pub value i32; } "
+         "func hidden(x Box[Visible]) i32 { return 0; } "
+         "pub const Make = hidden; func f() i32 { return 0; }");
+  // A private specialization argument on the callee is not part of the final
+  // public function type when the signature itself is entirely public.
+  source("struct Secret {} func hidden[T]() i32 { return 0; } "
+         "pub const Make = hidden[Secret]; func f() i32 { return 0; }");
+  source("struct Secret {} func hidden[T]() i32 { return 0; } "
+         "const Inner = hidden[Secret]; pub const Make = Inner; "
+         "func f() i32 { return Make(); }");
+  source("pub struct Visible {} func hidden[T]() i32 { return 0; } "
+         "pub const Make = hidden[Visible]; func f() i32 { return 0; }");
+  // An explicit const signature may infer generic callee arguments; those
+  // arguments are not written in the initializer and remain internal.
+  source("func identity[T](x T) T { return x; } "
+         "pub const Id func(i32) i32 = identity; "
+         "func f() i32 { return Id(1); }");
+  {
+    std::string body = "func base() i32 { return 7; } const C0 = base; ";
+    for (unsigned i = 1; i <= 80; ++i)
+      body += "const C" + std::to_string(i) + " = C" +
+              std::to_string(i - 1) + "; ";
+    body += "pub const Make = C80; func f() i32 { return Make() - 7; }";
+    source(body);
+    source(body, nullptr, "python");
+  }
+  source("func identity[T](x T) T { return x; } "
+         "func outer[U](x U) U { const op=identity[U]; return op(x); } "
+         "func f() i32 { return outer[i32](7); }");
+  source("struct Secret {} func hidden[T](x T) i32 { return 0; } "
+         "pub const Make = hidden[Secret]; func f() i32 { return 0; }",
+         "E_PRIVATE_TYPE_LEAK");
+  source("struct Secret {} func hidden(x Vec[Secret]) i32 { return 0; } "
+         "pub const Make = hidden; func f() i32 { return 0; }",
+         "E_PRIVATE_TYPE_LEAK");
+  source("pub struct Box[T] { pub value T; } "
+         "pub struct Visible { pub value i32; } "
+         "func hidden(x Box[Box[Visible]]) i32 { return 0; } "
+         "pub const Keep = hidden; func f() i32 { return 0; }");
+  source("struct Secret {} pub struct Opaque { secret Secret; } "
+         "func hidden() Opaque { return Opaque(secret: Secret()); } "
+         "pub const Make = hidden; func f() i32 { return 0; }");
+  {
+    Temp t;
+    manifest(t.path, "native", 64);
+    write(t.path / "src/main.lang",
+          "package app; struct Secret { pub value i32; } "
+          "func hidden() Secret { return Secret(value: 7); }");
+    write(t.path / "src/z.lang",
+          "package app; pub const Make = hidden; "
+          "func f() i32 { return 0; }");
+    auto r = check(t.path / "lang.toml");
+    require(!r.success() && has(r, "E_PRIVATE_TYPE_LEAK"),
+            "later same-package file public const leak accepted\n" +
+                messages(r));
+  }
+  {
+    Temp t;
+    manifest(t.path, "native", 64);
+    {
+      std::ofstream out(t.path / "lang.toml", std::ios::app);
+      out << "[dependencies.dep]\nkind=\"source\"\npath=\"vendor/dep\"\n";
+    }
+    fs::create_directories(t.path / "vendor/dep/src");
+    manifest(t.path / "vendor/dep", "native", 64);
+    write(t.path / "vendor/dep/src/lib.lang",
+          "package dep; pub struct Box[T] { pub value T; } "
+          "pub struct Visible { pub value i32; } "
+          "struct Secret { pub value i32; } "
+          "func hidden(x Box[Secret]) i32 { return 0; } "
+          "pub const Bad = hidden;");
+    write(t.path / "src/main.lang",
+          "package app; import \"dep\" as d; "
+          "func main() i32 { return 0; }");
+    auto r = check(t.path / "lang.toml");
+    require(!r.success() && has(r, "E_PRIVATE_TYPE_LEAK"),
+            "dependency private generic type argument accepted\n" +
+                messages(r));
+    write(t.path / "vendor/dep/src/lib.lang",
+          "package dep; pub struct Box[T] { pub value T; } "
+          "pub struct Visible { pub value i32; } "
+          "func hidden(x Box[Visible]) i32 { return 0; } "
+          "pub const Good = hidden;");
+    r = check(t.path / "lang.toml");
+    require(r.success(),
+            "dependency public generic type argument rejected\n" +
+                messages(r));
+    write(t.path / "vendor/dep/src/lib.lang",
+          "package dep; struct Secret {} "
+          "func hidden[T]() i32 { return 7; } "
+          "pub const Phantom = hidden[Secret];");
+    write(t.path / "src/main.lang",
+          "package app; import \"dep\" as d; "
+          "func main() i32 { return d.Phantom() - 7; }");
+    r = check(t.path / "lang.toml");
+    require(r.success(),
+            "dependency public const phantom specialization rejected\n" +
+                messages(r));
+  }
+  {
+    auto exported_private_value = [&](const char *body) {
+      auto r = source(body);
+      auto m = r.value->module();
+      require(hir::verify(m).success(), "private const HIR is invalid");
+      auto resolved =
+          std::make_shared<modules::ResolvedProject>(*m.resolved);
+      m.resolved = resolved;
+      bool found = false;
+      for (auto &s : resolved->symbols)
+        if (s.name == "Make" &&
+            s.kind == modules::SymbolKind::constant) {
+          s.exported = true;
+          found = true;
+        }
+      require(found, "export mutation target missing");
+      auto rejected = [&] {
+        const auto types = hir::verify_types(m);
+        const auto published = hir::verify(m);
+        auto visibility_error = [](const auto &r) {
+          for (const auto &d : r.diagnostics)
+            if (d.message.find("public constant value uses private type") !=
+                std::string::npos)
+              return true;
+          return false;
+        };
+        require(!types.success() && has(types, "E_IR_INVALID") &&
+                    visibility_error(types) && !published.success() &&
+                    has(published, "E_IR_INVALID") &&
+                    visibility_error(published),
+                "HIR accepted an exported private const value");
+      };
+      rejected();
+      auto ownership = hir::detail::produce_ownership(m, {});
+      require(ownership.success(),
+              "private const mutation ownership preparation failed");
+      rejected();
+    };
+    exported_private_value(
+        "struct Secret { pub value i32; } "
+        "func hidden() Secret { return Secret(value: 7); } "
+        "const Make = hidden; func f() i32 { return Make().value - 7; }");
+    exported_private_value(
+        "struct Secret { pub value i32; } "
+        "func hidden(cb func() Secret) i32 { return 0; } "
+        "const Make = hidden; func f() { let op = Make; }");
+    exported_private_value(
+        "struct Secret {} func hidden(x Vec[Secret]) i32 { return 0; } "
+        "const Make = hidden; func f() { let op = Make; }");
+    exported_private_value(
+        "struct Secret { pub value i32; } "
+        "func hidden() i32 throws Secret { throw Secret(value: 1); } "
+        "const Make = hidden; func f() i32 { try { return Make(); } "
+        "catch e Secret { return e.value; } }");
+  }
+  {
+    auto r = source("struct Secret {} func hidden[T]() i32 { return 0; } "
+                    "const Make = hidden[Secret]; "
+                    "func f() i32 { return Make(); }");
+    auto m = r.value->module();
+    auto resolved = std::make_shared<modules::ResolvedProject>(*m.resolved);
+    m.resolved = resolved;
+    for (auto &s : resolved->symbols)
+      if (s.name == "Make" && s.kind == modules::SymbolKind::constant)
+        s.exported = true;
+    require(hir::verify(m).success(),
+            "HIR rejected an exported const with a public final type");
+  }
+  {
+    auto r = source("pub struct First {} pub struct Second {} "
+                    "func hidden[T]() i32 { return 0; } "
+                    "pub const Make = hidden[First]; "
+                    "func f() i32 { return Make(); }");
+    auto m = r.value->module();
+    SymbolId second_symbol;
+    for (const auto &s : m.resolved->symbols)
+      if (s.name == "Second" && s.kind == modules::SymbolKind::type)
+        second_symbol = s.id;
+    require(second_symbol.value < m.resolved->symbols.size(),
+            "type argument mutation target missing");
+    hir::Type second;
+    second.kind = hir::TypeKind::NominalStruct;
+    second.declaration = second_symbol;
+    require(!m.instances.empty(), "type argument instance missing");
+    m.instances[0].type_args[0] = m.types.intern(second);
+    auto rejected = [&] {
+      const auto types = hir::verify_types(m);
+      const auto published = hir::verify(m);
+      auto source_mismatch = [](const auto &r) {
+        for (const auto &d : r.diagnostics)
+          if (d.message.find("real initializer function or ordered type "
+                             "arguments") != std::string::npos)
+            return true;
+        return false;
+      };
+      require(!types.success() && has(types, "E_IR_INVALID") &&
+                  source_mismatch(types) && !published.success() &&
+                  has(published, "E_IR_INVALID") &&
+                  source_mismatch(published),
+              "HIR accepted a const specialization that differs from Source");
+    };
+    rejected();
+    auto ownership = hir::detail::produce_ownership(m, {});
+    require(ownership.success(),
+            "type argument mutation ownership preparation failed");
+    rejected();
+  }
+  {
+    auto r = source("pub struct First {} "
+                    "func hidden[T]() i32 { return 0; } "
+                    "func other[T]() i32 { return 0; } "
+                    "pub const Make = hidden[First]; "
+                    "func f() i32 { let a = Make(); "
+                    "let b = other[First](); return a + b; }");
+    auto m = r.value->module();
+    SymbolId make_symbol;
+    for (const auto &s : m.resolved->symbols)
+      if (s.name == "Make" && s.kind == modules::SymbolKind::constant)
+        make_symbol = s.id;
+    std::optional<HirNodeId> value_node;
+    for (size_t i = 0; i < m.nodes.size() && !value_node; ++i)
+      if (std::holds_alternative<hir::FunctionValue>(m.nodes[i].data))
+        for (const auto &o : m.resolved->occurrences)
+          if (o.symbol == make_symbol &&
+              o.source.module == m.nodes[i].source.node.module &&
+              o.source.file == m.nodes[i].source.node.file &&
+              o.source.node == m.nodes[i].source.node.node) {
+            value_node = HirNodeId{i};
+            break;
+          }
+    require(value_node.has_value(), "function origin mutation target missing");
+    SymbolId other_instance;
+    for (const auto &instance : m.instances)
+      if (m.resolved->symbols[instance.origin.value].name == "other")
+        other_instance = instance.symbol;
+    require(other_instance.value < m.resolved->symbols.size(),
+            "other function instance missing");
+    m.nodes[value_node->value].data = hir::FunctionValue{other_instance, {}};
+    auto rejected = [&] {
+      const auto types = hir::verify_types(m);
+      const auto published = hir::verify(m);
+      auto source_mismatch = [](const auto &r) {
+        for (const auto &d : r.diagnostics)
+          if (d.message.find("real initializer function or ordered type "
+                             "arguments") != std::string::npos)
+            return true;
+        return false;
+      };
+      require(!types.success() && has(types, "E_IR_INVALID") &&
+                  source_mismatch(types) && !published.success() &&
+                  has(published, "E_IR_INVALID") &&
+                  source_mismatch(published),
+              "HIR accepted a const function origin that differs from Source");
+    };
+    rejected();
+    auto ownership = hir::detail::produce_ownership(m, {});
+    require(ownership.success(),
+            "function origin mutation ownership preparation failed");
+    rejected();
+  }
   source("func f() { let op=func(x inout i32) { x+=1; }; var x i32=1; op(inout x); }");
   source("func f() { let op=func(x i32) i32 { return true; }; }", "E_TYPE_MISMATCH");
   source("func f() { let op=func(x i32) i32 { return x; }; op(x:1); }", "E_CALL_ARGUMENT");
