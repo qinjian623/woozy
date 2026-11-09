@@ -1,0 +1,72 @@
+// Mandelbrot preparation fixture: scalar f64 recurrence and packed u8 bitmap.
+// PERF-MANDELBROT n={{N}} iterations=50 bytes={{BYTE_COUNT}} expected_sha256={{EXPECTED_SHA}} flip={{FLIP_KIND}}
+package app;
+
+// Preparation-only observation point. Real builds keep this empty; the Native
+// observer is injected into this exact symbol in the exported pre-optimization
+// IR, and the Python observer wraps the generated module function. O2 may
+// remove this empty call entirely.
+func visit(bytes Vec[u8]) {
+}
+
+func render(n i32) Vec[u8] {
+    let width i32 = (n + 7) / 8;
+    // Exactly width * n zero bytes. The current Vec interface has no
+    // sized-zero constructor, so prepare.py renders the fixed zero list.
+    var bitmap Vec[u8] = [{{ZEROS}}];
+
+    for var y i32 = 0; y < n; y += 1 {
+        let ci f64 = 2.0 * f64(y) / f64(n) - 1.0;
+        for var x i32 = 0; x < n; x += 1 {
+            let cr f64 = 2.0 * f64(x) / f64(n) - 1.5;
+            var zr f64 = 0.0;
+            var zi f64 = 0.0;
+            var escaped bool = false;
+
+            // The official scalar order: zr2, zi2, zi, zr, then norm check.
+            // No SIMD, threads, fast-math, FMA, or reassociation.
+            for var iteration i32 = 0; iteration < 50; iteration += 1 {
+                let zr2 f64 = zr * zr;
+                let zi2 f64 = zi * zi;
+                zi = 2.0 * zr * zi + ci;
+                zr = zr2 - zi2 + cr;
+                if zr * zr + zi * zi > 4.0 {
+                    escaped = true;
+                    break;
+                }
+            }
+
+            if !escaped {
+                let byte_index i32 = y * width + x / 8;
+                let mask u8 = u8(128 >> (x % 8));
+                bitmap[byte_index] = bitmap[byte_index] | mask;
+            }
+        }
+    }
+
+    // Negative-observer variants flip one real bit only; correct variants leave
+    // this empty. Row padding bits are never written by the pack loop.
+    {{PACK_FLIP}}
+
+    return bitmap;
+}
+
+func main() i32 {
+    // Read the size through a one-element runtime vector so the optimized
+    // Source IR keeps the actual scalar work.
+    let dims Vec[i32] = [{{N}}];
+    let n i32 = dims[0];
+    let expected Vec[u8] = [{{EXPECTED}}];
+    let bitmap Vec[u8] = render(n);
+
+    // Full bitmap check, including row padding bytes/bits.
+    let total i32 = ((n + 7) / 8) * n;
+    for var index i32 = 0; index < total; index += 1 {
+        if bitmap[index] != expected[index] {
+            return 1;
+        }
+    }
+
+    visit(bitmap);
+    return 0;
+}

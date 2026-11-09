@@ -1,0 +1,73 @@
+// C++20 reference for the same scalar Mandelbrot recurrence and u8 bitmap.
+// PERF-MANDELBROT n={{N}} iterations=50 bytes={{BYTE_COUNT}} expected_sha256={{EXPECTED_SHA}} flip={{FLIP_KIND}}
+#include <cstdint>
+#include <vector>
+
+// Preparation-only observation point. The real program keeps this empty.
+// The C++ O0 IR is checked for a real call to this mangled symbol; O2 may
+// remove the call.
+static void visit(const std::vector<uint8_t>& bytes) {
+    (void)bytes;
+}
+
+static std::vector<uint8_t> render(int32_t n) {
+    const int32_t width = (n + 7) / 8;
+    std::vector<uint8_t> bitmap(
+        static_cast<std::size_t>(width) * static_cast<std::size_t>(n), 0);
+
+    for (int32_t y = 0; y < n; ++y) {
+        const double ci =
+            2.0 * static_cast<double>(y) / static_cast<double>(n) - 1.0;
+        for (int32_t x = 0; x < n; ++x) {
+            const double cr =
+                2.0 * static_cast<double>(x) / static_cast<double>(n) - 1.5;
+            double zr = 0.0;
+            double zi = 0.0;
+            bool escaped = false;
+
+            // Same scalar order as Source: zr2, zi2, zi, zr, then norm check.
+            for (int32_t iteration = 0; iteration < 50; ++iteration) {
+                const double zr2 = zr * zr;
+                const double zi2 = zi * zi;
+                zi = 2.0 * zr * zi + ci;
+                zr = zr2 - zi2 + cr;
+                if (zr * zr + zi * zi > 4.0) {
+                    escaped = true;
+                    break;
+                }
+            }
+
+            if (!escaped) {
+                const int32_t byte_index = y * width + x / 8;
+                const uint8_t mask = static_cast<uint8_t>(128 >> (x % 8));
+                bitmap[static_cast<std::size_t>(byte_index)] =
+                    static_cast<uint8_t>(
+                        bitmap[static_cast<std::size_t>(byte_index)] | mask);
+            }
+        }
+    }
+
+    {{PACK_FLIP}}
+
+    return bitmap;
+}
+
+int main() {
+    // Mirror the Source one-element runtime size vector.
+    const std::vector<int32_t> dims{ {{N}} };
+    const int32_t n = dims[0];
+    const std::vector<uint8_t> expected{ {{EXPECTED}} };
+    const std::vector<uint8_t> bitmap = render(n);
+
+    // Full bitmap check, including row padding bytes/bits.
+    const int32_t total = ((n + 7) / 8) * n;
+    for (int32_t index = 0; index < total; ++index) {
+        if (bitmap[static_cast<std::size_t>(index)] !=
+            expected[static_cast<std::size_t>(index)]) {
+            return 1;
+        }
+    }
+
+    visit(bitmap);
+    return 0;
+}
