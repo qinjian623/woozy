@@ -243,6 +243,27 @@ catch 有明确的错误类型、绑定符号、body 和外层错误目标。当
 
 switch 记录：被匹配值临时结果、每个模式的类型化结构、分支绑定、是否穷尽，以及不可达分析结果。被匹配表达式只求值一次；分支正常结束跳到 switch 后，不隐式 fallthrough。
 
+Pattern 的末尾追加字面量值，不新增 NodeKind 或“已匹配”可信标记：
+
+```cpp
+using PatternLiteral = std::variant<BoolLiteral, IntegerLiteral,
+                                    FloatLiteral, StringLiteral>;
+struct Pattern {
+    TypeId type;
+    Source source;
+    Optional<SymbolId> variant;
+    Optional<SymbolId> binding;
+    Vector<Pattern> payload;
+    Optional<PatternLiteral> literal;
+};
+```
+
+variant、binding、literal 三者互斥；literal 不能带 payload。无三者才是 wildcard。原五字段聚合初始化保持原意。integer 保存目标规范化十进制值和目标位模式，float 保存目标精度位模式（含符号零），string 保存解码后的完整 UTF-8 字节。验证器从真实 LiteralPattern Source 和实际目标类型重新解码并核对类别、值、位模式和字节；不能只信 producer 的值，也不能删除 literal 后把普通 `case` Source 冒充 default。普通 `_` 必须来自 BindPattern，只有起始 token 确为 `default` 的 Case 可作为 wildcard Source。
+
+普通 `case` 的 Pattern Source 必须精确等于本 Case AST 的 `children[0]` 的 NodeRef 与 span；default wildcard 必须精确等于本 Case 的 Source 并保留 `default` token 核对；variant payload 的 Source 必须精确对应当前 AST payload child，而不是只落在父 span 内的任意后代。泛型实例只替换类型/绑定并保留真实 Source 身份。
+
+覆盖分析区分真实空枚举、bool、整数、float、string 与其他总匹配域；内部 Other 类只表示“其余值”，不进入公共 Pattern 也不生成运行时代码。有限整数值按目标类型规范化后判重，float 的覆盖键合并正负零，NaN 只属于 Other。三个调用方（sema、HIR verifier、`RequiredExits`）必须使用同一分析，不能把未知或 `!variant` 一概当成穷尽。Native 模式测试先确认父 tag 再读取活动 payload，全部测试成功后才复制拥有绑定；String 相等的 NativeIR 只允许同类型 `equal/not_equal` 产生 bool，先比较长度，再比较完整字节。
+
 ## 8 所有权事实和目标能力
 
 HIR 应描述源语言所需的操作和检查结果，而不是提前确定 retain/release 次数。

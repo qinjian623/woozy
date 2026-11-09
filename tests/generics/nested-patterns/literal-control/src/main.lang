@@ -1,0 +1,115 @@
+package app;
+
+enum E { S(s string); V(v Vec[i32]); }
+enum Failure { Bad; }
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func make(log inout i64) E {
+    mark(inout log, 1);
+    return E.V(v: [7]);
+}
+
+func choose(log inout i64, value E) i32 {
+    switch value {
+    case E.S("bad"):
+        mark(inout log, 9);
+        return 1;
+    case E.S(_):
+        mark(inout log, 8);
+        return 2;
+    case E.V(v):
+        defer { mark(inout log, 3); }
+        mark(inout log, 2);
+        return v[0];
+    }
+}
+
+func fail(log inout i64, value E) i32 throws Failure {
+    switch value {
+    case E.S("bad"):
+        throw Failure.Bad;
+    case E.S(_):
+        throw Failure.Bad;
+    case E.V(v):
+        defer { mark(inout log, 5); }
+        mark(inout log, 4);
+        throw Failure.Bad;
+    }
+}
+
+func loop(log inout i64) i32 {
+    var total i32 = 0;
+    for var i i32 = 0; i < 4; i += 1 {
+        switch E.V(v: [i]) {
+        case E.S("bad"):
+            return 90;
+        case E.S(_):
+            return 91;
+        case E.V(v):
+            defer { mark(inout log, 7); }
+            if i == 0 {
+                mark(inout log, 6);
+                continue;
+            }
+            if i == 1 {
+                mark(inout log, 8);
+                break;
+            }
+            mark(inout log, 9);
+            total = total + v[0];
+        }
+        total = total + 10;
+    }
+    return total;
+}
+
+func normal(log inout i64) i32 {
+    var total i32 = 0;
+    switch E.S("bad") {
+    case E.S("bad"):
+        mark(inout log, 1);
+        total = 1;
+    case E.S(_):
+        mark(inout log, 2);
+        total = 2;
+    case E.V(v):
+        total = 3;
+    }
+    return total;
+}
+
+func main() i32 {
+    var log i64 = 0;
+    let chosen = make(inout log);
+    if choose(inout log, chosen) != 7 {
+        return 1;
+    }
+    if log != 123 {
+        return 2;
+    }
+    let failed = make(inout log);
+    try {
+        let ignored = fail(inout log, failed);
+        return 3;
+    } catch err Failure {
+    }
+    if log != 123145 {
+        return 4;
+    }
+    if loop(inout log) != 35 {
+        return 5;
+    }
+    if log != 12314567879797 {
+        return 6;
+    }
+    if normal(inout log) != 1 {
+        return 7;
+    }
+    if log != 123145678797971 {
+        return 8;
+    }
+    return 0;
+}

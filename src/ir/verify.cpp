@@ -444,9 +444,12 @@ class Verifier {
                            i.binary == hir::BinaryOp::subtract ||
                            i.binary == hir::BinaryOp::multiply ||
                            i.binary == hir::BinaryOp::divide);
+          // NativeIR-internal string equality is emitted only for pattern
+          // tests. It is not a new source-language `string ==` operator.
+          bool string_equal = eq && l == hir::TypeKind::String && r == l;
           need(i.binary >= hir::BinaryOp::add &&
                    i.binary <= hir::BinaryOp::greater_equal &&
-                   ((integer(l) && integer(r)) || floating ||
+                   ((integer(l) && integer(r)) || floating || string_equal ||
                     (eq && l == hir::TypeKind::Bool && r == l)) &&
                    (shift || args[0].type == args[1].type) &&
                    (comparison ? t.kind == hir::TypeKind::Bool

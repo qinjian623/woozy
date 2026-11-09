@@ -1,0 +1,69 @@
+package app;
+
+enum E { S(s string); V(v Vec[i32]); }
+enum Failure { Bad; }
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func make(log inout i64) E {
+    mark(inout log, 1);
+    return E.V(v: [7]);
+}
+
+func probe_return(log inout i64) i32 throws Failure {
+    switch make(inout log) {
+    case E.S("x"):
+        throw Failure.Bad;
+    case E.S(_):
+        throw Failure.Bad;
+    case E.V(v):
+        defer { mark(inout log, 3); }
+        if v[0] != 7 {
+            return 2;
+        }
+        mark(inout log, 2);
+        return 0;
+    }
+}
+
+func probe_throw(log inout i64) i32 throws Failure {
+    switch make(inout log) {
+    case E.S("x"):
+        throw Failure.Bad;
+    case E.S(_):
+        throw Failure.Bad;
+    case E.V(v):
+        defer { mark(inout log, 5); }
+        if v[0] != 7 {
+            return 2;
+        }
+        mark(inout log, 4);
+        throw Failure.Bad;
+    }
+}
+
+func main() i32 {
+    var first i64 = 0;
+    try {
+        if probe_return(inout first) != 0 {
+            return 1;
+        }
+    } catch err Failure {
+        return 2;
+    }
+    if first != 123 {
+        return 3;
+    }
+    var second i64 = 0;
+    try {
+        let ignored = probe_throw(inout second);
+        return 4;
+    } catch err Failure {
+    }
+    if second != 145 {
+        return 5;
+    }
+    return 0;
+}

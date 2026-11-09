@@ -1,0 +1,127 @@
+package app;
+
+enum Inner {
+    A(x i32, s string);
+    B(v Vec[i32]);
+}
+
+enum Mid {
+    M(i Inner, b bool, f f32);
+    N(s string);
+}
+
+enum Outer {
+    O(m Mid);
+    P(x u64);
+    Q;
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func dispatch(log inout i64, value Outer) i32 {
+    switch value {
+    case Outer.O(Mid.M(Inner.A(1, "a\0b"), true, 1.5)):
+        mark(inout log, 1);
+        return 10;
+    case Outer.O(Mid.M(Inner.A(_, _), true, _)):
+        mark(inout log, 2);
+        return 20;
+    case Outer.O(Mid.M(Inner.A(_, _), false, _)):
+        mark(inout log, 3);
+        return 30;
+    case Outer.O(Mid.M(Inner.B(v), _, 1.5)):
+        mark(inout log, 4);
+        v[0] = v[0] + 1;
+        return v[0] + 30;
+    case Outer.O(Mid.M(Inner.B(v), _, _)):
+        mark(inout log, 5);
+        return v[0] + 40;
+    case Outer.O(Mid.N("x\u{61}")):
+        mark(inout log, 6);
+        return 50;
+    case Outer.O(Mid.N(_)):
+        mark(inout log, 7);
+        return 60;
+    case Outer.P(18446744073709551615):
+        mark(inout log, 8);
+        return 70;
+    case Outer.P(_):
+        mark(inout log, 9);
+        return 80;
+    case Outer.Q:
+        mark(inout log, 0);
+        return 90;
+    }
+}
+
+func make(log inout i64) Outer {
+    mark(inout log, 0);
+    return Outer.O(m: Mid.M(i: Inner.B(v: [5]), b: true, f: 1.5));
+}
+
+func computed(log inout i64) i32 {
+    switch make(inout log) {
+    case Outer.O(Mid.M(Inner.A(_, _), _, _)):
+        return 1;
+    case Outer.O(Mid.M(Inner.B(v), _, 1.5)):
+        mark(inout log, 2);
+        if v[0] != 5 {
+            return 2;
+        }
+        return 0;
+    case Outer.O(Mid.M(Inner.B(_), _, _)):
+        return 3;
+    case Outer.O(Mid.N(_)):
+        return 4;
+    case Outer.P(_):
+        return 5;
+    case Outer.Q:
+        return 6;
+    }
+}
+
+func main() i32 {
+    var log i64 = 0;
+    if dispatch(inout log, Outer.O(m: Mid.M(i: Inner.A(x: 1, s: "a\0b"), b: true, f: 1.5))) != 10 {
+        return 1;
+    }
+    if dispatch(inout log, Outer.O(m: Mid.M(i: Inner.A(x: 2, s: "other"), b: true, f: 2.5))) != 20 {
+        return 2;
+    }
+    if dispatch(inout log, Outer.O(m: Mid.M(i: Inner.A(x: 3, s: "z"), b: false, f: 3.5))) != 30 {
+        return 3;
+    }
+    if dispatch(inout log, Outer.O(m: Mid.M(i: Inner.B(v: [5]), b: true, f: 1.5))) != 36 {
+        return 4;
+    }
+    if dispatch(inout log, Outer.O(m: Mid.M(i: Inner.B(v: [5]), b: false, f: 2.5))) != 45 {
+        return 5;
+    }
+    if dispatch(inout log, Outer.O(m: Mid.N(s: "xa"))) != 50 {
+        return 6;
+    }
+    if dispatch(inout log, Outer.O(m: Mid.N(s: "xb"))) != 60 {
+        return 7;
+    }
+    if dispatch(inout log, Outer.P(x: 18446744073709551615)) != 70 {
+        return 8;
+    }
+    if dispatch(inout log, Outer.P(x: 1)) != 80 {
+        return 9;
+    }
+    if dispatch(inout log, Outer.Q) != 90 {
+        return 10;
+    }
+    if log != 1234567890 {
+        return 11;
+    }
+    if computed(inout log) != 0 {
+        return 12;
+    }
+    if log != 123456789002 {
+        return 13;
+    }
+    return 0;
+}

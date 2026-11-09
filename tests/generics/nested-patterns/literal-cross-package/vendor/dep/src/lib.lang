@@ -1,0 +1,3 @@
+package dep;
+pub enum E[T] { A(x T, tag i32); B(s string); C(flag bool, f f32); }
+pub func make[T](x T) E[T] { return E[T].A(x: x, tag: 1); }

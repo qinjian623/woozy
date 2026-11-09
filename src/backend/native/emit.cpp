@@ -229,6 +229,46 @@ class Emitter {
     const auto &left = type(value_types.at(i.inputs[0]));
     bool sign = signed_(left);
     using B = hir::BinaryOp;
+    if (left.kind == hir::TypeKind::String) {
+      // String is {ptr, target_uintptr}. Compare the complete decoded byte
+      // sequence including embedded NULs, never the address or a terminator.
+      // The declaration resolves to the project's freestanding memcmp.
+      if (i.binary != B::equal && i.binary != B::not_equal)
+        fail("invalid verified string operation");
+      auto *len_a = builder.CreateExtractValue(a, {1});
+      auto *len_b = builder.CreateExtractValue(b, {1});
+      auto *len_equal = builder.CreateICmpEQ(len_a, len_b);
+      auto *fn = builder.GetInsertBlock()->getParent();
+      auto *same = llvm::BasicBlock::Create(context, "string.len.eq", fn);
+      auto *different = llvm::BasicBlock::Create(context, "string.len.ne", fn);
+      auto *nonzero = llvm::BasicBlock::Create(context, "string.bytes", fn);
+      auto *join = llvm::BasicBlock::Create(context, "string.cmp", fn);
+      builder.CreateCondBr(len_equal, same, different);
+      builder.SetInsertPoint(different);
+      builder.CreateBr(join);
+      builder.SetInsertPoint(same);
+      auto *present = builder.CreateICmpNE(len_a,
+          llvm::ConstantInt::get(len_a->getType(), 0));
+      builder.CreateCondBr(present, nonzero, join);
+      builder.SetInsertPoint(nonzero);
+      auto *memcmp_type = llvm::FunctionType::get(
+          builder.getInt32Ty(),
+          {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()},
+          false);
+      auto memcmp_fn = module.getOrInsertFunction("memcmp", memcmp_type);
+      auto *length = builder.CreateIntCast(len_a, builder.getInt64Ty(), false);
+      auto *compared = builder.CreateCall(
+          memcmp_fn, {builder.CreateExtractValue(a, {0}),
+                      builder.CreateExtractValue(b, {0}), length});
+      auto *equal = builder.CreateICmpEQ(compared, builder.getInt32(0));
+      builder.CreateBr(join);
+      builder.SetInsertPoint(join);
+      auto *phi = builder.CreatePHI(builder.getInt1Ty(), 3);
+      phi->addIncoming(builder.getFalse(), different);
+      phi->addIncoming(builder.getTrue(), same);
+      phi->addIncoming(equal, nonzero);
+      return i.binary == B::equal ? phi : builder.CreateNot(phi);
+    }
     if (left.kind == hir::TypeKind::Float) {
       // These operations round in their own LLVM float/double type. No
       // widening, fast-math flags, contraction, or integer zero guard.

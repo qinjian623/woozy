@@ -15,14 +15,24 @@ import shutil
 
 sys.dont_write_bytecode = True
 
-CASES = ('dispatch', 'control', 'owning', 'prefix')
+CASES = ('dispatch', 'control', 'owning', 'prefix', 'literal',
+         'literal-scalars', 'literal-cross-package', 'literal-full-i8',
+         'literal-control')
 EXPECTED_EVENTS = {
     'dispatch': [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 8, 9],
     'control': [1, 7, 2, 7, 3, 7, 6, 4, 0, 9, 4, 0, 9, 8],
     'owning': [3, 4, 5],
     'prefix': [1, 2, 3, 4],
+    'literal': [1, 2, 3, 4, 5, 6, 7, 8, 9, 0, 0, 2],
+    'literal-scalars': [],
+    'literal-cross-package': [],
+    'literal-full-i8': [],
+    'literal-control': [1, 2, 3, 1, 4, 5, 6, 7, 8, 7, 9, 7, 9, 7, 1],
 }
-EXPECTED_ALLOCATIONS = {'dispatch': 0, 'control': 0, 'owning': 2, 'prefix': 2}
+EXPECTED_ALLOCATIONS = {'dispatch': 0, 'control': 0, 'owning': 2, 'prefix': 2,
+                        'literal': 3, 'literal-scalars': 0,
+                        'literal-cross-package': 0, 'literal-full-i8': 0,
+                        'literal-control': 6}
 
 
 def digest(path):

@@ -186,13 +186,19 @@ struct FieldRead {
 struct FieldPlace {
   SymbolId field;
 }; // child: writable base place
+using PatternLiteral =
+    std::variant<BoolLiteral, IntegerLiteral, FloatLiteral, StringLiteral>;
 struct Pattern {
   TypeId type;
   Source source;
   std::optional<SymbolId> variant;
   std::optional<SymbolId> binding;
   std::vector<Pattern> payload;
-}; // no variant/binding: wildcard
+  // Appended to preserve the original five-field aggregate initialization.
+  // Exactly one of variant, binding, or literal may identify a pattern; a
+  // wildcard has none. Literal patterns never carry payload or a binding.
+  std::optional<PatternLiteral> literal;
+}; // no variant/binding/literal: wildcard
 struct Arm {
   Pattern pattern;
   ScopeId scope;

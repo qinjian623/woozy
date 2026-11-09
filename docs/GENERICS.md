@@ -270,7 +270,9 @@ trait 实参，纯改名不影响身份，真正不同的 bound 仍报 Source �
 
 HIR 验证每层的源码、真实枚举/变体、类型、载荷顺序和绑定作用域，再重算覆盖。显式模式类型实参按所属函数实例替换，包括泛型非捕获 lambda；不直接将模板 T 与具体 i32 比较。Native 只在父标签匹配后读取活动载荷，所有测试成功后才复制拥有绑定；Python 使用递归短路判断。退出计划包括同一外层变体的后续内部组合，以及其 return、throw、break、continue 和 defer。
 
-这项支持不包含部分字段 move、literal/guard/or/range 模式或 switch 表达式。失败分支没有绑定 copy/store 的检查来自生成 CFG 和源码，零存活观察不能单独证明平衡 copy/release 从未发生。T07/T09 仍为 in_progress。
+整数/负数、bool、f32/f64、string 字面量模式及其在任意层 enum payload 中的组合现已按 SEMANTICS §5 的覆盖规则支持；完整 UTF-8 字节、嵌入 NUL、bool 全列、小整数域、float 的 IEEE 零重叠/Inf/NaN 落总匹配，以及裸名遮蔽同名 const 均有两后端执行验证。literal pattern 不建立局部、不复制拥有载荷。
+
+这项支持仍不包含部分字段 move、guard/or/range 模式或 switch 表达式。失败分支没有绑定 copy/store 的检查来自生成 CFG 和源码，零存活观察不能单独证明平衡 copy/release 从未发生。完整核心仍未完成，T07/T09 仍为 in_progress。
 
 ## trait 类型名调用
 

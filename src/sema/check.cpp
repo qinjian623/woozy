@@ -2,6 +2,7 @@
 #include "../hir/ownership.hpp"
 #include "../hir/pattern_analysis.hpp"
 #include "../hir/foreign.hpp"
+#include "../hir/literal_value.hpp"
 #include <algorithm>
 #include <functional>
 #include <gmpxx.h>
@@ -1158,65 +1159,15 @@ class Checker {
     if (n.kind != AstKind::Literal ||
         file(r).tokens[n.token_begin].kind != TokenKind::integer)
       return {};
-    std::string s(token(r));
-    s.erase(std::remove(s.begin(), s.end(), '_'), s.end());
-    int base = 10;
-    if (s.size() > 2 && s[0] == '0') {
-      base = s[1] == 'x' || s[1] == 'X'   ? 16
-             : s[1] == 'b' || s[1] == 'B' ? 2
-             : s[1] == 'o' || s[1] == 'O' ? 8
-                                          : 10;
-      if (base != 10)
-        s.erase(0, 2);
-    }
-    mpz_class v;
-    if (v.set_str(s, base) != 0)
-      throw std::invalid_argument("invalid parsed integer");
+    mpz_class v = parse_integer_spelling(token(r));
     return negative ? mpz_class(-v) : v;
   }
-  // Round an exact rational to the target IEEE format with one integer RNE
-  // decision. Decimal literals and constant float arithmetic share it; neither
-  // a host double nor the LLVM frontend participates.
+  // The exact RNE kernel lives in the shared literal helper. The checker only
+  // supplies the already-determined target width.
   uint64_t round_ratio(bool negative, const mpz_class &numerator,
                        const mpz_class &denominator, TypeId t) const {
-    const unsigned width = type(t).bits;
-    const uint64_t sign = uint64_t(negative) << (width - 1);
-    const uint64_t infinity =
-        width == 32 ? 0x7f800000ULL : 0x7ff0000000000000ULL;
-    const int precision = width == 32 ? 24 : 53;
-    const int bias = width == 32 ? 127 : 1023;
-    if (numerator == 0)
-      return sign; // the sign of an exact zero is determined by the operation
-    long e = long(mpz_sizeinbase(numerator.get_mpz_t(), 2)) -
-             long(mpz_sizeinbase(denominator.get_mpz_t(), 2));
-    if (e >= 0 ? numerator < (denominator << e)
-               : (numerator << -e) < denominator)
-      --e;
-    if (e > bias)
-      return sign | infinity;
-    long scale = precision - 1 - std::max(e, long(1 - bias));
-    mpz_class a = numerator, b = denominator, q, rem;
-    if (scale >= 0)
-      a <<= scale;
-    else
-      b <<= -scale;
-    mpz_fdiv_qr(q.get_mpz_t(), rem.get_mpz_t(), a.get_mpz_t(), b.get_mpz_t());
-    if (2 * rem > b || (2 * rem == b && mpz_odd_p(q.get_mpz_t())))
-      ++q;
-    if (q >= (mpz_class(1) << precision)) {
-      q >>= 1;
-      ++e;
-    }
-    if (e > bias)
-      return sign | infinity;
-    bool normal = q >= (mpz_class(1) << (precision - 1));
-    uint64_t fraction = q.get_ui();
-    if (normal)
-      fraction -= uint64_t(1) << (precision - 1);
-    return sign | fraction |
-           (normal ? uint64_t(std::max(e, long(1 - bias)) + bias)
-                         << (precision - 1)
-                   : 0);
+    return exact_ratio_to_ieee(negative, numerator, denominator,
+                               type(t).bits);
   }
   // Round (numerator / denominator) * 2^shift for exact integer inputs.
   uint64_t round_fraction(bool negative, const mpz_class &numerator,
@@ -1258,49 +1209,9 @@ class Checker {
   // Correctly round the decimal rational directly to IEEE precision. No host
   // double intermediate (in particular for f32 halfway and subnormal values).
   uint64_t float_bits(Ref r, TypeId t) const {
-    std::string s(token(r));
-    s.erase(std::remove(s.begin(), s.end(), '_'), s.end());
-    auto ep = s.find_first_of("eE");
-    mpz_class decimal_exponent = 0;
-    if (ep != std::string::npos) {
-      const auto es = s.substr(ep + 1);
-      if (decimal_exponent.set_str(es[0] == '+' ? es.substr(1) : es, 10) != 0)
-        throw std::invalid_argument("invalid parsed float exponent");
-      s.resize(ep);
-    }
-    auto dot = s.find('.');
-    if (dot != std::string::npos) {
-      decimal_exponent -= s.size() - dot - 1;
-      s.erase(dot, 1);
-    }
-    auto first = s.find_first_not_of('0');
-    if (first == std::string::npos)
-      return 0;
-    s.erase(0, first);
-    auto last = s.find_last_not_of('0');
-    decimal_exponent += s.size() - last - 1;
-    s.resize(last + 1);
-    mpz_class magnitude = decimal_exponent + s.size() - 1;
-    // Beyond these decimal magnitudes no f32/f64 rounding boundary remains.
-    if (magnitude > 400)
-      return width(t) == 32 ? 0x7f800000ULL : 0x7ff0000000000000ULL;
-    if (magnitude < -400)
-      return 0;
-    const long exponent = decimal_exponent.get_si();
-    mpz_class numerator;
-    numerator.set_str(s, 10);
-    if (numerator == 0)
-      return 0;
-    mpz_class denominator = 1, power;
-    mpz_ui_pow_ui(
-        power.get_mpz_t(), 10,
-        static_cast<unsigned long>(exponent < 0 ? -exponent : exponent));
-    if (exponent >= 0)
-      numerator *= power;
-    else
-      denominator = power;
-    return round_ratio(false, numerator, denominator, t);
+    return ieee_float_bits(token(r), false, type(t).bits);
   }
+
   std::string_view binary_token(Ref r) const {
     return file(r).tokens.at(ast(child(r, 0)).token_end).spelling;
   }
@@ -3174,10 +3085,19 @@ class Checker {
       }
       return p;
     }
+    if (ast(r).kind == AstKind::LiteralPattern) {
+      try {
+        p.literal = decode_pattern_literal(*m.resolved->project, m.types, r, t,
+                                           m.config);
+      } catch (const LiteralError &e) {
+        reject(r, e.what());
+      }
+      return p;
+    }
     if (ast(r).kind != AstKind::VariantPattern)
       unavailable(
           r,
-          "only enum variant, binding and wildcard patterns are implemented");
+          "only literal, enum variant, binding and wildcard patterns are implemented");
     if (type(t).kind != TypeKind::NominalEnum)
       reject(r, "variant pattern requires an enum");
     auto base = occurrence(r);
@@ -3224,13 +3144,10 @@ class Checker {
   }
   Statement switch_statement(Ref r) {
     auto value = expression(child(r, 0));
-    if (type(value.value.type).kind != TypeKind::NominalEnum)
-      unavailable(r, "only enum switch is implemented in T07");
     auto id = node(r, unit, Switch{});
     PatternCoverage coverage(
         value.value.type,
-        [this](TypeId t) { return pattern_constructors(m, t, m.types); },
-        [this](TypeId t) { return type(t).kind == TypeKind::NominalEnum; },
+        [this](TypeId t) { return pattern_domain(m, t, m.types); },
         stop);
     break_targets.push_back(id);
     std::vector<HirNodeId> children{value.id};
@@ -3247,7 +3164,7 @@ class Checker {
       try {
         useful = coverage.add(p);
       } catch (const PatternAnalysisLimit &e) {
-        unavailable(cr, std::string("cannot complete enum pattern coverage: ") +
+        unavailable(cr, std::string("cannot complete switch pattern coverage: ") +
                             e.what());
       }
       if (!useful)
@@ -3272,11 +3189,11 @@ class Checker {
     try {
       exhaustive = coverage.exhaustive();
     } catch (const PatternAnalysisLimit &e) {
-      unavailable(r, std::string("cannot complete enum pattern coverage: ") +
+      unavailable(r, std::string("cannot complete switch pattern coverage: ") +
                           e.what());
     }
     if (!exhaustive)
-      reject(r, "enum switch is not exhaustive");
+      reject(r, "switch is not exhaustive");
     m.nodes[id.value].children = std::move(children);
     m.nodes[id.value].data = Switch{std::move(arms), exhaustive};
     break_targets.pop_back();

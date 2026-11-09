@@ -1,5 +1,6 @@
 #include "lang/hir/hir.hpp"
 #include "pattern_analysis.hpp"
+#include "literal_value.hpp"
 #include "ownership.hpp"
 #include "foreign.hpp"
 #include <algorithm>
@@ -1775,6 +1776,13 @@ class Verifier {
   static bool same_ref(const modules::NodeRef &a, const modules::NodeRef &b) {
     return a.module == b.module && a.file == b.file && a.node == b.node;
   }
+  static bool same_span(const SourceSpan &a, const SourceSpan &b) {
+    return a.snapshot == b.snapshot && a.begin_byte == b.begin_byte &&
+           a.end_byte == b.end_byte;
+  }
+  static bool same_source(const Source &a, const Source &b) {
+    return same_ref(a.node, b.node) && same_span(a.span, b.span);
+  }
   void declaration(SymbolId id, const Source &src, modules::SymbolKind kind,
                    AstKind ast_kind) const {
     const auto &s = symbol(id);
@@ -2456,13 +2464,22 @@ class Verifier {
   void register_pattern(const Pattern &p, ScopeId s, SymbolId f, size_t ready) {
     source(p.source);
     valid_type(p.type, allowed(f));
-    if (p.binding) {
-      need(!p.variant && p.payload.empty(), "binding pattern payload");
+    need(!(p.variant && p.binding) && !(p.variant && p.literal) &&
+             !(p.binding && p.literal),
+         "pattern variant/binding/literal are mutually exclusive");
+    if (p.variant) {
+      need(!p.binding && !p.literal, "variant pattern fields");
+    } else if (p.binding) {
+      need(!p.literal && p.payload.empty(), "binding pattern payload");
       declaration(*p.binding, p.source, modules::SymbolKind::value,
                   AstKind::BindPattern);
       need(locals.emplace(p.binding->value, Local{p.type, s, f, false, ready})
                .second,
            "duplicate pattern binding identity");
+    } else if (p.literal) {
+      need(p.payload.empty(), "literal pattern payload");
+    } else {
+      need(p.payload.empty(), "wildcard pattern payload");
     }
     for (const auto &c : p.payload)
       register_pattern(c, s, f, ready);
@@ -2492,9 +2509,13 @@ class Verifier {
     return name;
   }
   void pattern_shape(const Pattern &p, TypeId expected, SymbolId owner,
-                     std::optional<Source> parent = std::nullopt) const {
+                     std::optional<Source> parent = std::nullopt,
+                     std::optional<Source> required = std::nullopt) const {
     source(p.source);
     need(p.type == expected, "pattern type mismatch");
+    if (required)
+      need(same_source(p.source, *required),
+           "pattern source is not the exact AST pattern");
     if (parent)
       need(p.source.node.module == parent->node.module &&
                p.source.node.file == parent->node.file &&
@@ -2506,21 +2527,67 @@ class Verifier {
     const auto &file =
         *m.resolved->project->module(p.source.node.module)
              .files.at(p.source.node.file);
-    if (!p.variant) {
+    need(!(p.variant && p.binding) && !(p.variant && p.literal) &&
+             !(p.binding && p.literal),
+         "pattern variant/binding/literal are mutually exclusive");
+    if (!p.variant && !p.literal) {
       need(ast.kind == AstKind::BindPattern || ast.kind == AstKind::Case,
            "wildcard/binding pattern source kind");
       if (p.binding) {
         need(ast.kind == AstKind::BindPattern &&
                  file.tokens.at(ast.token_begin).spelling != "_",
              "binding pattern source/name");
+        need(symbol(*p.binding).name ==
+                 file.tokens.at(ast.token_begin).spelling,
+             "binding pattern symbol differs from source");
       } else if (ast.kind == AstKind::BindPattern)
         need(file.tokens.at(ast.token_begin).spelling == "_",
              "wildcard pattern source/name");
+      else
+        need(ast.token_begin < ast.token_end &&
+                 file.tokens.at(ast.token_begin).spelling == "default",
+             "wildcard pattern source is not an explicit default");
       need(p.payload.empty(), "wildcard/binding payload");
       return;
     }
+    if (p.literal) {
+      need(!p.binding && !p.variant && p.payload.empty(),
+           "literal pattern payload/binding");
+      need(ast.kind == AstKind::LiteralPattern, "literal pattern source kind");
+      PatternLiteral decoded;
+      try {
+        decoded = decode_pattern_literal(*m.resolved->project, substituted,
+                                         p.source.node, expected, m.config);
+      } catch (const LiteralError &e) {
+        fail(e.what(), p.source.span);
+      }
+      need(decoded.index() == p.literal->index(),
+           "literal pattern alternative differs from its type");
+      std::visit(
+          [&](const auto &value) {
+            using T = std::decay_t<decltype(value)>;
+            const auto *written = std::get_if<T>(&*p.literal);
+            need(written != nullptr, "literal pattern alternative mismatch");
+            if constexpr (std::is_same_v<T, BoolLiteral>)
+              need(written->value == value.value,
+                   "bool literal pattern value differs from source");
+            else if constexpr (std::is_same_v<T, IntegerLiteral>)
+              need(written->decimal == value.decimal &&
+                       written->bits == value.bits,
+                   "integer literal pattern value differs from source");
+            else if constexpr (std::is_same_v<T, FloatLiteral>)
+              need(written->bits == value.bits,
+                   "float literal pattern bits differ from source");
+            else
+              need(written->utf8 == value.utf8,
+                   "string literal pattern bytes differ from source");
+          },
+          decoded);
+      return;
+    }
     need(ast.kind == AstKind::VariantPattern, "variant pattern source kind");
-    need(!p.binding && type(expected).kind == TypeKind::NominalEnum,
+    need(!p.binding && !p.literal &&
+             type(expected).kind == TypeKind::NominalEnum,
          "variant pattern type");
     std::optional<SymbolId> base;
     for (const auto &occurrence : m.resolved->occurrences)
@@ -2556,21 +2623,23 @@ class Verifier {
       need(payload_index < p.payload.size(),
            "wrong variant pattern payload count");
       const auto &child_pattern = p.payload[payload_index];
-      need(child_pattern.source.node.module == p.source.node.module &&
-               child_pattern.source.node.file == p.source.node.file &&
-               child_pattern.source.span.snapshot == p.source.span.snapshot &&
-               child_pattern.source.span.begin_byte >= previous_end &&
-               child_pattern.source.span.end_byte <= p.source.span.end_byte,
+      const auto &child_ast = file.node(child);
+      need(child_ast.span.snapshot == p.source.span.snapshot &&
+               child_ast.span.begin_byte >= previous_end &&
+               child_ast.span.end_byte <= p.source.span.end_byte,
            "pattern payload source/order");
-      previous_end = child_pattern.source.span.end_byte;
+      previous_end = child_ast.span.end_byte;
+      Source required_child{p.source.node, child_ast.span};
+      required_child.node.node = child;
       pattern_shape(child_pattern,
                     field_type(expected, variant->payload[payload_index]),
-                    owner, p.source);
+                    owner, p.source, required_child);
       ++payload_index;
     }
     need(payload_index == p.payload.size(),
          "wrong variant pattern payload count");
   }
+
   void aggregate_shape(const HirNode &n) const {
     if (n.kind() == NodeKind::field_read || n.kind() == NodeKind::field_place) {
       need(n.children.size() == 1, "field receiver count");
@@ -2693,21 +2762,32 @@ class Verifier {
       need(n.children.size() == s->arms.size() + 1 && !n.children.empty(),
            "switch child count");
       auto scrutinee = expr(n.children[0]).type;
-      need(type(scrutinee).kind == TypeKind::NominalEnum,
-           "switch enum scrutinee");
       PatternCoverage coverage(
           scrutinee,
-          [&](TypeId t) { return pattern_constructors(m, t, substituted); },
-          [&](TypeId t) {
-            const auto *found = substituted.find(t);
-            return found && found->kind == TypeKind::NominalEnum;
-          },
+          [&](TypeId t) { return pattern_domain(m, t, substituted); },
           stop);
       for (size_t i = 0; i < s->arms.size(); ++i) {
         const auto &a = s->arms[i];
         source(a.source);
+        const auto &arm_file =
+            *m.resolved->project->module(a.source.node.module)
+                 .files.at(a.source.node.file);
+        const auto &case_ast = arm_file.node(a.source.node.node);
+        need(case_ast.kind == AstKind::Case,
+             "switch arm source is not a case");
+        std::optional<Source> required;
+        if (case_ast.token_begin < case_ast.token_end &&
+            arm_file.tokens.at(case_ast.token_begin).spelling == "default") {
+          required = a.source;
+        } else {
+          need(!case_ast.children.empty(), "case pattern child missing");
+          auto child = case_ast.children[0];
+          auto child_ref = a.source.node;
+          child_ref.node = child;
+          required = Source{child_ref, arm_file.node(child).span};
+        }
         pattern_shape(a.pattern, scrutinee, scope(n.scope).function,
-                      a.source);
+                      a.source, required);
         need(same_ref(scope(a.scope).source.node, a.source.node) &&
                  same_ref(node(a.body).source.node, a.source.node),
              "switch arm source belongs to another case");
@@ -2716,10 +2796,10 @@ class Verifier {
                  node(a.body).scope == a.scope &&
                  scope(a.scope).parent == n.scope,
              "switch arm body/scope");
-        need(coverage.add(a.pattern), "unreachable enum switch arm");
+        need(coverage.add(a.pattern), "unreachable switch arm");
       }
       const bool exhaustive = coverage.exhaustive();
-      need(s->exhaustive && exhaustive, "nonexhaustive enum switch");
+      need(s->exhaustive && exhaustive, "nonexhaustive switch");
       return;
     }
     const auto &c = std::get<ConstraintCall>(n.data);
@@ -5278,6 +5358,34 @@ std::string dump(const HirModule &m) {
                     s << p.binding->value;
                   else
                     s << '-';
+                  s << " literal=";
+                  if (!p.literal) {
+                    s << '-';
+                  } else {
+                    const auto *pt = m.types.find(p.type);
+                    const unsigned width =
+                        pt && (pt->kind == TypeKind::Float ||
+                               pt->kind == TypeKind::SignedInt ||
+                               pt->kind == TypeKind::UnsignedInt ||
+                               pt->kind == TypeKind::Isize ||
+                               pt->kind == TypeKind::Usize)
+                            ? bit_width(*pt, m.config)
+                            : 0;
+                    std::visit(
+                        [&](const auto &value) {
+                          using T = std::decay_t<decltype(value)>;
+                          if constexpr (std::is_same_v<T, BoolLiteral>)
+                            s << "bool:" << value.value;
+                          else if constexpr (std::is_same_v<T, IntegerLiteral>)
+                            s << "int:" << std::quoted(value.decimal) << ':'
+                              << width << ':' << value.bits;
+                          else if constexpr (std::is_same_v<T, FloatLiteral>)
+                            s << "float:" << width << ':' << value.bits;
+                          else
+                            s << "string:" << std::quoted(value.utf8);
+                        },
+                        *p.literal);
+                  }
                   for (const auto &c : p.payload)
                     pattern(c);
                 };

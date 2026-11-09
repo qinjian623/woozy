@@ -1,0 +1,26 @@
+package app;
+
+enum E {
+    A(x i32, s string);
+    B(v Vec[i32]);
+    C;
+}
+
+func pick(e E) i32 {
+    switch e {
+    case E.A(1, "a\0b"): return 1;
+    case E.A(_, _): return 2;
+    case E.B(v): return 3 + v[0];
+    case E.C: return 4;
+    }
+}
+
+func main() i32 {
+    let a = E.A(x: 1, s: "a\0b");
+    let b = E.B(v: [7]);
+    let c = E.C;
+    if pick(a) != 1 { return 1; }
+    if pick(b) != 10 { return 2; }
+    if pick(c) != 4 { return 3; }
+    return 0;
+}

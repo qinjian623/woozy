@@ -116,6 +116,21 @@ void invalid_recomputed(hir::HirModule m, const std::string &name,
            has(r, "E_IR_INVALID"),
        "recomputed corruption accepted: " + name + "\n" + messages(r));
 }
+void invalid_recomputed_published(hir::HirModule m, const std::string &name,
+                                  const auto &change) {
+  change(m);
+  auto derived = hir::detail::produce_ownership(m, {});
+  need(derived.success(),
+       "recomputed ownership failed before verification: " + name + "\n" +
+           messages(derived));
+  auto r = hir::verify_types(m);
+  need(!r.success() && !r.value && r.failure == FailureKind::internal &&
+           has(r, "E_IR_INVALID"),
+       "recomputed corruption accepted: " + name + "\n" + messages(r));
+  auto published = hir::verify(m);
+  need(!published.success() && has(published, "E_IR_INVALID"),
+       "recomputed corrupt module published: " + name);
+}
 void repairs(const fs::path &root) {
   auto good = [](const std::string &s) {
     auto r = source(s);
@@ -10555,6 +10570,182 @@ void nested_patterns() {
       }
     throw std::runtime_error("switch missing");
   });
+
+  // Literal patterns have their own independent source/value representation.
+  // Mutating one field must not be rescued by another producer-provided field.
+  auto literal = good(
+      "enum E{A(x i32,s string);B(v Vec[i32]);C;} "
+      "func scalar(x i32)i32{switch x{case 1:return 1;case 2:return 2;case _:return 0;}} "
+      "func floating(x f32)i32{switch x{case 1.5:return 1;default:return 0;}} "
+      "func text(x string)i32{switch x{case \"a\\0b\":return 1;default:return 0;}} "
+      "func nested(e E)i32{switch e{case E.A(1,\"a\\0b\"):return 1;"
+      "case E.A(_,_):return 2;case E.B(_):return 3;case E.C:return 4;}} "
+      "func outer_then_inner(x i32)i32{switch x{case 1:"
+      "switch x{case 2:return 2;default:return 1;}default:return 0;}} "
+      "func main()i32{return 0;}");
+  need(hir::verify_types(literal).success(),
+       "valid literal HIR rejected before corruption controls");
+  need(hir::verify(literal).success(), "valid literal HIR did not publish");
+  {
+    auto derived = hir::detail::produce_ownership(literal, {});
+    need(derived.success(), "valid literal ownership recomputation failed");
+    need(hir::verify_types(literal).success(),
+         "valid literal HIR rejected after ownership recomputation");
+  }
+  auto literal_patterns = [](hir::HirModule &x, auto visit) {
+    std::function<void(hir::Pattern &)> walk = [&](hir::Pattern &p) {
+      if (p.literal)
+        visit(p);
+      for (auto &child : p.payload)
+        walk(child);
+    };
+    for (auto &n : x.nodes)
+      if (auto sw = std::get_if<hir::Switch>(&n.data))
+        for (auto &arm : sw->arms)
+          walk(arm.pattern);
+  };
+  invalid(literal, "literal plus binding", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (std::holds_alternative<hir::IntegerLiteral>(*p.literal))
+        p.binding = SymbolId{0};
+    });
+  });
+  invalid(literal, "literal plus variant", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (std::holds_alternative<hir::IntegerLiteral>(*p.literal))
+        p.variant = SymbolId{0};
+    });
+  });
+  invalid(literal, "literal payload", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (std::holds_alternative<hir::IntegerLiteral>(*p.literal))
+        p.payload.emplace_back();
+    });
+  });
+  invalid(literal, "literal alternative/type", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (std::holds_alternative<hir::IntegerLiteral>(*p.literal))
+        p.literal = hir::BoolLiteral{true};
+    });
+  });
+  invalid(literal, "integer literal decimal", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (auto v = std::get_if<hir::IntegerLiteral>(&*p.literal))
+        v->decimal = "3";
+    });
+  });
+  invalid(literal, "integer literal bits", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (auto v = std::get_if<hir::IntegerLiteral>(&*p.literal))
+        ++v->bits;
+    });
+  });
+  invalid(literal, "float literal bits", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (auto v = std::get_if<hir::FloatLiteral>(&*p.literal))
+        ++v->bits;
+    });
+  });
+  invalid(literal, "string literal NUL tail", [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (auto v = std::get_if<hir::StringLiteral>(&*p.literal))
+        v->utf8.back() = 'c';
+    });
+  });
+  invalid(literal, "literal source replacement", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto sw = std::get_if<hir::Switch>(&n.data))
+        for (auto &arm : sw->arms)
+          if (arm.pattern.literal) {
+            arm.pattern.source = arm.source;
+            return;
+          }
+    throw std::runtime_error("literal pattern missing");
+  });
+  invalid(literal, "literal deleted as ordinary case", [&](auto &x) {
+    for (auto &n : x.nodes)
+      if (auto sw = std::get_if<hir::Switch>(&n.data))
+        for (auto &arm : sw->arms)
+          if (arm.pattern.literal) {
+            arm.pattern.literal.reset();
+            return;
+          }
+    throw std::runtime_error("literal pattern missing");
+  });
+  invalid_recomputed(literal, "integer literal after ownership recompute",
+                     [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (auto v = std::get_if<hir::IntegerLiteral>(&*p.literal))
+        v->decimal = "9";
+    });
+  });
+  auto outer_inner_source_swap = [](hir::HirModule &x) {
+    auto node_source = [&](HirNodeId id) -> const hir::Source & {
+      return x.nodes.at(id.value).source;
+    };
+    for (auto &outer : x.nodes) {
+      auto *outer_switch = std::get_if<hir::Switch>(&outer.data);
+      if (!outer_switch)
+        continue;
+      for (auto &arm : outer_switch->arms) {
+        if (!arm.pattern.literal)
+          continue;
+        const auto body = node_source(arm.body);
+        for (auto &inner : x.nodes) {
+          if (!std::get_if<hir::Switch>(&inner.data))
+            continue;
+          if (inner.source.node.module != body.node.module ||
+              inner.source.node.file != body.node.file ||
+              inner.source.span.snapshot != body.span.snapshot ||
+              inner.source.span.begin_byte < body.span.begin_byte ||
+              inner.source.span.end_byte > body.span.end_byte)
+            continue;
+          for (auto &inner_arm : std::get<hir::Switch>(inner.data).arms) {
+            if (!inner_arm.pattern.literal)
+              continue;
+            arm.pattern.source = inner_arm.pattern.source;
+            arm.pattern.literal = inner_arm.pattern.literal;
+            return;
+          }
+        }
+      }
+    }
+    throw std::runtime_error("outer/inner case pattern missing");
+  };
+  invalid(literal, "outer literal source from body inner case",
+          outer_inner_source_swap);
+  invalid_recomputed_published(
+      literal, "outer inner-case source after ownership recompute",
+      outer_inner_source_swap);
+  auto sibling_payload_source_swap = [](hir::HirModule &x) {
+    for (auto &n : x.nodes)
+      if (auto sw = std::get_if<hir::Switch>(&n.data))
+        for (auto &arm : sw->arms)
+          if (arm.pattern.variant && arm.pattern.payload.size() >= 2) {
+            std::swap(arm.pattern.payload[0].source,
+                      arm.pattern.payload[1].source);
+            return;
+          }
+    throw std::runtime_error("sibling payload sources missing");
+  };
+  invalid(literal, "sibling payload source swap",
+          sibling_payload_source_swap);
+  invalid_recomputed_published(
+      literal, "sibling payload source swap after ownership recompute",
+      sibling_payload_source_swap);
+  auto narrowed_literal_span = [&](auto &x) {
+    literal_patterns(x, [](hir::Pattern &p) {
+      if (p.source.span.begin_byte < p.source.span.end_byte)
+        ++p.source.span.begin_byte;
+    });
+  };
+  invalid(literal, "literal source span narrowed", narrowed_literal_span);
+  invalid_recomputed_published(
+      literal, "literal source span narrowed after ownership recompute",
+      narrowed_literal_span);
+  std::cout << "literal-source-ownership: outer/inner case, sibling payload, "
+               "narrowed span rejected directly, published, and after "
+               "ownership recomputation\n";
 
   auto generic = good(
       "enum E[T]{A(x T);} enum W[T]{A(x E[T]);} "

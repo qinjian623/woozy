@@ -705,8 +705,22 @@ void suite(const fs::path &published) {
     require(converts == 3, "conversion nodes missing");
   }
   source("func f() { let x=[1]; }");
-  source("func f() { switch 1 { default: break; } }",
-         "E_CAPABILITY_UNAVAILABLE");
+  source("func f() { switch 1 { default: break; } }");
+  source("func f(x bool)i32{switch x{case true:return 1;case false:return 0;}}");
+  source("func f(x i32)i32{switch x{case 16:return 1;case 0x10:return 2;"
+         "default:return 0;}}", "E_TYPE_MISMATCH");
+  source("func f(x i32)i32{switch x{case 1:return 1;}}", "E_TYPE_MISMATCH");
+  source("func f(x f32)i32{switch x{case 0.0:return 1;case -0.0:return 2;"
+         "default:return 0;}}", "E_TYPE_MISMATCH");
+  source("func f(x i32)i32{switch x{case 1.0:return 1;default:return 0;}}",
+         "E_TYPE_MISMATCH");
+  source("func f(x string)i32{switch x{case \"a\\0b\":return 1;"
+         "case \"a\\0c\":return 2;default:return 0;}}");
+  source("func f(x u64)i32{switch x{case 18446744073709551615:return 1;"
+         "default:return 0;}}");
+  source("func f(x i8)i32{switch x{case -128:return 1;default:return 0;}}");
+  source("func f(x bool)i32{switch x{case true:return 1;}}",
+         "E_TYPE_MISMATCH");
   source("func f() { defer {} }");
   source("func f() { let x=1; unsafe {} }");
   // Constant expressions keep their typed wrap/truncation semantics when

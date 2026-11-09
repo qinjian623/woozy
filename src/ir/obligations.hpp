@@ -142,13 +142,7 @@ class RequiredExits {
       hir::TypeContext types = h.types;
       hir::PatternCoverage coverage(
           node(n.children[0]).type,
-          [&](TypeId t) {
-            return hir::pattern_constructors(h, t, types);
-          },
-          [&](TypeId t) {
-            const auto *found = types.find(t);
-            return found && found->kind == hir::TypeKind::NominalEnum;
-          },
+          [&](TypeId t) { return hir::pattern_domain(h, t, types); },
           std::stop_token{});
       for (const auto &arm : std::get<hir::Switch>(n.data).arms) {
         // Recompute nested arm reachability with the same constructor-column

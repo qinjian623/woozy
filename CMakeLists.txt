@@ -20,10 +20,11 @@ add_library(lang_modules STATIC src/modules/resolve.cpp src/modules/project.cpp)
 target_link_libraries(lang_modules PUBLIC lang_frontend
   PRIVATE tomlplusplus::tomlplusplus json-c::json-c)
 add_library(lang_hir STATIC src/hir/hir.cpp src/hir/ownership.cpp
-  src/hir/pattern_analysis.cpp)
+  src/hir/pattern_analysis.cpp src/hir/literal_value.cpp)
 target_link_libraries(lang_hir PUBLIC lang_modules)
 find_package(PkgConfig REQUIRED)
 pkg_check_modules(GMPXX REQUIRED IMPORTED_TARGET gmpxx>=6.3.0)
+target_link_libraries(lang_hir PUBLIC PkgConfig::GMPXX)
 add_library(lang_sema STATIC src/sema/check.cpp)
 target_link_libraries(lang_sema PUBLIC lang_hir PRIVATE PkgConfig::GMPXX)
 add_subdirectory(src/backend/python)

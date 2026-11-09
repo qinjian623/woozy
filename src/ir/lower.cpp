@@ -2,6 +2,7 @@
 #include "layout.hpp"
 #include <map>
 #include <stdexcept>
+#include <type_traits>
 
 namespace lang::ir {
 namespace {
@@ -210,6 +211,38 @@ class Lower {
   using Extracted = std::map<const hir::Pattern *, ValueId>;
   void match_pattern(const hir::Pattern &p, ValueId value, BlockId failure,
                      Extracted &extracted) {
+    if (p.literal) {
+      ValueId expected;
+      std::visit(
+          [&](const auto &literal) {
+            using T = std::decay_t<decltype(literal)>;
+            if constexpr (std::is_same_v<T, hir::StringLiteral>) {
+              Instruction i;
+              i.op = Op::string_literal;
+              i.type = p.type;
+              i.utf8 = literal.utf8;
+              i.source = p.source.span;
+              expected = emit(std::move(i));
+            } else if constexpr (std::is_same_v<T, hir::BoolLiteral>) {
+              expected = constant(p.type, literal.value, p.source.span);
+            } else if constexpr (std::is_same_v<T, hir::IntegerLiteral>) {
+              expected = constant(p.type, literal.bits, p.source.span);
+            } else {
+              expected = constant(p.type, literal.bits, p.source.span);
+            }
+          },
+          *p.literal);
+      auto matched = block();
+      Instruction test;
+      test.op = Op::binary;
+      test.binary = hir::BinaryOp::equal;
+      test.type = boolean;
+      test.inputs = {value, expected};
+      test.source = p.source.span;
+      end(Exit::conditional, {emit(test)}, {matched, failure}, p.source.span);
+      current = matched;
+      return;
+    }
     if (!p.variant)
       return;
     auto matched = block();
@@ -224,8 +257,9 @@ class Lower {
     auto fields = aggregates.fields(p.type, *p.variant);
     for (size_t a = 0; a < p.payload.size(); ++a) {
       const auto &child = p.payload[a];
-      // A wildcard payload with no descendant binding needs no active read.
-      if (!child.variant && !child.binding)
+      // A wildcard payload with no descendant test or binding needs no
+      // active read. A literal must be tested, so it is not skipped.
+      if (!child.variant && !child.binding && !child.literal)
         continue;
       Instruction payload;
       payload.op = Op::enum_payload;
@@ -256,11 +290,11 @@ class Lower {
     if (!p.variant)
       return;
     for (const auto &child : p.payload) {
-      // A wildcard payload needs no deeper read. A binding or nested variant
-      // uses the exact active-payload value already tested by match_pattern;
-      // re-reading here would create a different SSA value without the
-      // matching-variant fact required by the Native IR verifier.
-      if (!child.variant && !child.binding)
+      // A wildcard payload needs no deeper read. A binding, nested variant,
+      // or literal uses the exact active-payload value already tested by
+      // match_pattern; re-reading here would create a different SSA value
+      // without the matching-variant fact required by the verifier.
+      if (!child.variant && !child.binding && !child.literal)
         continue;
       auto found = extracted.find(&child);
       if (found == extracted.end())

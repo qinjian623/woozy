@@ -95,6 +95,16 @@ def main():
     if ident=='computed-owning-error-escapes-arm':
      assert len(allocations)==1 and len(frees)==1,(allocations,frees)
      assert merged.index(('obs',1,2,2))<merged.index(('vec',5,allocations[0][0]))<merged.index(('obs',1,4,24)),merged
+    if ident=='computed-literal-exits':
+     assert len(allocations)==2 and len(frees)==2,(allocations,frees)
+     assert [x[1] for x in obs if x[0]==1]==[1,2,3,1,4,5],obs
+     first_free=[p for p,x in enumerate(merged) if x[0]=='vec' and x[1]==5][0]
+     second_free=[p for p,x in enumerate(merged) if x[0]=='vec' and x[1]==5][1]
+     make_marks=[p for p,x in enumerate(merged) if x==('obs',1,1,1)]
+     assert (make_marks[0]<merged.index(('obs',1,2,12))<
+             merged.index(('obs',1,3,123))<first_free<make_marks[1]<
+             merged.index(('obs',1,4,14))<merged.index(('obs',1,5,145))<
+             second_free),merged
     if ident=='computed-owning-catch-throw-nested':
      assert len(allocations)==3 and len(frees)==3,(allocations,frees)
      ida,idb,idc=[x[0] for x in allocations]

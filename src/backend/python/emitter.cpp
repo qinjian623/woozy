@@ -3,6 +3,7 @@
 #include <algorithm>
 #include <set>
 #include <stdexcept>
+#include <type_traits>
 
 namespace lang::backend::python {
 namespace {
@@ -410,11 +411,32 @@ class Emitter {
       throw Rejected{
           "Python pattern generation exceeds its safe nesting depth",
           p.source.span};
+    if (p.literal) {
+      if (p.variant || p.binding || !p.payload.empty())
+        throw Rejected{
+            "Python literal pattern has invalid fields", p.source.span};
+      return std::visit(
+          [&](const auto &literal) -> std::string {
+            using T = std::decay_t<decltype(literal)>;
+            if constexpr (std::is_same_v<T, BoolLiteral>)
+              return value + (literal.value ? " is True" : " is False");
+            else if constexpr (std::is_same_v<T, IntegerLiteral>)
+              return value + " == " + literal.decimal;
+            else if constexpr (std::is_same_v<T, FloatLiteral>)
+              return "_rt.float_binary('eq', " + value + ", _rt.ieee(" +
+                     std::to_string(literal.bits) + ", " +
+                     std::to_string(type(p.type).bits) + "), " +
+                     std::to_string(type(p.type).bits) + ")";
+            else
+              return value + " == " + string_literal(literal.utf8);
+          },
+          *p.literal);
+    }
     if (!p.variant)
       return "True";
     std::string test = value + "[0] == " + std::to_string(p.variant->value);
     for (size_t i = 0; i < p.payload.size(); ++i)
-      if (p.payload[i].variant)
+      if (p.payload[i].variant || p.payload[i].literal)
         test += " and (" +
                 pattern_test(p.payload[i],
                              value + "[1][" + std::to_string(i) + "]",
@@ -1227,6 +1249,27 @@ class Emitter {
     if (source)
       output.source_map.push_back({printed_lines, *source});
   }
+  void print_if_chain(const Statement &s, unsigned indent,
+                      unsigned control_depth, bool as_elif) {
+    if (!s.suite || !s.text.starts_with("if "))
+      throw std::logic_error("invalid generated if-chain");
+    std::string text = s.text;
+    if (as_elif)
+      text = "elif " + text.substr(3);
+    print_line(text + ":", indent, s.source);
+    // An `if` does not create a CPython static control block; keep the same
+    // depth accounting as the normal print body.
+    print(s.body, indent + 1, control_depth);
+    if (s.otherwise.empty())
+      return;
+    if (s.otherwise.size() == 1 && s.otherwise[0].suite &&
+        s.otherwise[0].text.starts_with("if "))
+      print_if_chain(s.otherwise[0], indent, control_depth, true);
+    else {
+      print_line("else:", indent, s.source);
+      print(s.otherwise, indent + 1, control_depth);
+    }
+  }
   void print(const Suite &suite, unsigned indent, unsigned control_depth = 0) {
     if (suite.empty())
       print_line("pass", indent, {});
@@ -1253,8 +1296,13 @@ class Emitter {
         print(s.body, indent + 1, depth);
       }
       if (!s.otherwise.empty()) {
-        print_line("else:", indent, s.source);
-        print(s.otherwise, indent + 1, control_depth);
+        if (s.otherwise.size() == 1 && s.otherwise[0].suite &&
+            s.otherwise[0].text.starts_with("if "))
+          print_if_chain(s.otherwise[0], indent, control_depth, true);
+        else {
+          print_line("else:", indent, s.source);
+          print(s.otherwise, indent + 1, control_depth);
+        }
       }
     }
   }
