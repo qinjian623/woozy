@@ -23,6 +23,10 @@ EXTRA = {
     'fn-error-inner-throws-renumbered': [], 'fn-error-outer-throws-renumbered': [],
     'function-key-parameters': [],
     'enum-switch-single-in-defer': [3], 'enum-switch-in-defer': [1,3],
+    'unsafe-scalar-lambda': [], 'unsafe-return-owned-defer': [1,2,3],
+    'unsafe-loop-owned-defer': [11,21,32],
+    'unsafe-caught-throw-owned-defer': [1,2,3],
+    'unsafe-inner-catch-owned-defer': [1,2,3,4],
 }
 ERROR_KEYS = {'main-i32-error': 'app.E', 'main-unit-error': 'app.E',
               'main-generic-error': 'app.Err[i32]', 'main-string-error': 'string',

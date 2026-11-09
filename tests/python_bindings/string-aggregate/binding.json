@@ -1,0 +1,61 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "review_status": "draft_requires_conformance",
+  "allowed_backends": [
+    "python"
+  ],
+  "conformance_required": [],
+  "package_requirements": [
+    {
+      "package": "strhost",
+      "version_policy": "test fixture only"
+    }
+  ],
+  "modules": [
+    {
+      "logical_path": "std/py",
+      "host_module": "langrt",
+      "provider": "language_runtime"
+    },
+    {
+      "logical_path": "host",
+      "host_module": "strhost",
+      "provider": "python_package"
+    }
+  ],
+  "types": [
+    {
+      "id": "lang.py.Error",
+      "module": "std/py",
+      "name": "Error",
+      "kind": "runtime_error",
+      "host_attribute": [
+        "Error"
+      ],
+      "copy": "error_payload_copy"
+    }
+  ],
+  "values": [],
+  "callables": [
+    {
+      "id": "strhost.make_text",
+      "module": "host",
+      "name": "make_text",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "make_text"
+      ],
+      "parameters": [],
+      "return_type": "string",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    }
+  ]
+}

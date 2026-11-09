@@ -224,7 +224,8 @@ REJECTED = {
 }
 
 
-for _ident in ('aggregate-float-operation', 'float-negation', 'struct-owned-vec'):
+for _ident in ('aggregate-float-operation', 'float-negation', 'struct-owned-vec',
+                  'struct-owned-string', 'enum-owned-string'):
     SOURCES[_ident] = REJECTED.pop(_ident)
 
 def main():

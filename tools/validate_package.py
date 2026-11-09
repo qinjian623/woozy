@@ -10,17 +10,42 @@ from __future__ import annotations
 import argparse
 import hashlib
 import json
+import os
 from pathlib import Path
 import re
 import subprocess
 import sys
 
 ROOT = Path(__file__).resolve().parents[1]
+VCS_DIRECTORIES = {".git", ".hg", ".svn", ".bzr", "CVS", "_darcs"}
+DOCUMENTATION_ALIASES = {"E_CAP": "E_CAPABILITY_UNAVAILABLE"}
 
 
 def require(ok, message):
     if not ok:
         raise ValueError(message)
+
+
+def is_generated_directory(path):
+    # Root build/ and build-*/ are the package's reserved CMake output locations
+    # (.gitignore); nested build trees are recognized by their CMake markers.
+    if path.parent == ROOT and (path.name == "build" or
+                                path.name.startswith(("build-", "build_"))):
+        return True
+    return (path / "CMakeCache.txt").is_file() or (path / "CMakeFiles").is_dir()
+
+
+def package_files():
+    """Return development-package files, excluding generated or VCS data."""
+    files = []
+    for current, directories, names in os.walk(ROOT):
+        directory = Path(current)
+        directories[:] = sorted(
+            name for name in directories
+            if name not in VCS_DIRECTORIES
+            and not is_generated_directory(directory / name))
+        files.extend(directory / name for name in sorted(names))
+    return files
 
 
 def read_json(path):
@@ -78,7 +103,9 @@ def schema_check(value, schema, document, location="$", depth=0):
 
 def check_markdown():
     count = 0
-    for path in sorted(ROOT.rglob("*.md")):
+    for path in package_files():
+        if path.suffix != ".md":
+            continue
         text = path.read_text(encoding="utf-8")
         fence = None
         ordinary = []
@@ -192,9 +219,10 @@ def check_syntax_cases():
 
 
 def validate():
+    files = package_files()
     parsed = 0
-    for path in ROOT.rglob("*.json"):
-        if path.name == "package_validation.json":
+    for path in files:
+        if path.suffix != ".json" or path.name == "package_validation.json":
             continue
         json.loads(path.read_text(encoding="utf-8"))
         parsed += 1
@@ -206,20 +234,25 @@ def validate():
         schema_check(read_json("contracts/"+data_name), schema, schema)
     by_id = check_tasks()
     codes = {c["code"] for c in read_json("contracts/diagnostic_codes.json")["codes"]}
-    for directory in (ROOT/"src", ROOT/"include"):
-        for path in directory.rglob("*"):
-            if path.suffix in {".cpp", ".hpp"}:
-                used = set(re.findall(r"\b[EW]_[A-Z][A-Z0-9_]*\b", path.read_text()))
-                require(used <= codes, f"unregistered codes in {path.relative_to(ROOT)}: {used-codes}")
+    for path in files:
+        relative = path.relative_to(ROOT)
+        if relative.parts[0] not in {"src", "include"} or path.suffix not in {".cpp", ".hpp"}:
+            continue
+        used = set(re.findall(r"\b[EW]_[A-Z][A-Z0-9_]*\b", path.read_text()))
+        require(used <= codes, f"unregistered codes in {relative}: {used-codes}")
     for case in read_json("contracts/test-cases.json")["cases"]:
         require((ROOT/case["path"]).is_file(), f"missing test {case['path']}")
         require(set(case["required_tasks"]) <= set(by_id), "unknown case task")
         if "expected_diagnostic" in case:
             require(case["expected_diagnostic"] in codes, "unregistered diagnostic")
-    for path in ROOT.rglob("*.md"):
-        if "baseline" not in path.relative_to(ROOT).parts:
+    for path in files:
+        relative = path.relative_to(ROOT)
+        if path.suffix == ".md" and "baseline" not in relative.parts:
             used = set(re.findall(r"\b[EW]_[A-Z][A-Z0-9_]*\b", path.read_text()))
-            require(used <= codes, f"unregistered codes in {path.relative_to(ROOT)}: {used-codes}")
+            # Documentation may use only the explicitly listed aliases; all
+            # other tokens require exact registration, including near-misses.
+            used = {DOCUMENTATION_ALIASES.get(token, token) for token in used}
+            require(used <= codes, f"unregistered codes in {relative}: {used-codes}")
     return {"status":"passed","scope":"development_package_consistency_only",
             "json_files":parsed,"schema_instance_pairs":len(pairs),
             "schema_engine":"standard_library_subset_for_keywords_used_in_this_package",

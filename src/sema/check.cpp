@@ -191,6 +191,10 @@ class Checker {
                "trait argument does not satisfy the trait declaration's "
                "parameter constraint");
     }
+    // Every complete application must recheck the method graphs after real
+    // Self/trait-argument substitution. Method-own parameters may still be
+    // templates here; their concrete instances and calls are checked again.
+    check_trait_application_data(r, trait, application);
     active_trait_bounds.erase(key);
   }
   bool integer(TypeId t) const {
@@ -464,8 +468,8 @@ class Checker {
   // declared parameter explicitly, so it has no synthetic receiver. New
   // top-level inout is permitted at non-self positions and at position zero
   // only when the raw first type is a method parameter, not the trait Self.
-  // Ordinary Self callbacks keep their value-form support; a static entry does
-  // not gain dependent Self callbacks. Method-own generics are matched by
+  // Callback data is checked from the complete substitution, not rejected by
+  // this source-entitlement relation. Method-own generics are matched by
   // position; this is still only a source check, while finish_arguments,
   // select_method and instantiate verify the actual implementation and key.
   std::optional<TraitMethodSource>
@@ -515,11 +519,9 @@ class Checker {
     if (proto_sig.parameters.front().mode != ParamMode::ordinary &&
         trait_self_type(proto_sig.parameters.front().type, tr->self))
       return {};
-    // Only the new top-level-inout entry gets the complete nested-signature
-    // check. Ordinary-only Type calls keep their pre-existing support for
-    // returned/held Self callbacks.
-    if (new_trait_entry_dependency(*prototype, *tr))
-      return {};
+    // Dependent callback data is validated from the complete substituted
+    // trait application and the concrete method signature; it is not a
+    // separate source-entitlement restriction.
     return TraitMethodSource{im, tr, prototype};
   }
   // Move eligibility is separate from the older inout route. A value-form
@@ -614,163 +616,6 @@ class Checker {
       return nullptr;
     return prototype;
   }
-  // Legacy type-qualified T entry used this shallow graph: it saw direct
-  // function parameters but did not expand nominal fields. Keep that exact
-  // behaviour for old ordinary/move-only calls so previously accepted
-  // Holder[Self] parameters stay accepted, while a direct callback parameter
-  // that was already rejected is not opened.
-  bool contains_trait_self_inout_shallow(TypeId root, SymbolId self) {
-    std::function<bool(TypeId)> contains_self = [&](TypeId id) {
-      std::set<uint64_t> seen;
-      std::vector<TypeId> pending{id};
-      while (!pending.empty()) {
-        auto current = pending.back();
-        pending.pop_back();
-        if (!seen.insert(current.value).second)
-          continue;
-        const auto &t = type(current);
-        if (t.kind == TypeKind::TypeParameter) {
-          if (t.declaration == self)
-            return true;
-          continue;
-        }
-        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
-        for (const auto &p : t.parameters)
-          pending.push_back(p.type);
-        if (t.kind == TypeKind::Function) {
-          pending.push_back(t.result);
-          if (t.throws_type)
-            pending.push_back(*t.throws_type);
-        }
-      }
-      return false;
-    };
-    std::set<uint64_t> visited;
-    std::function<bool(TypeId)> visit = [&](TypeId id) {
-      if (!visited.insert(id.value).second)
-        return false;
-      const auto &t = type(id);
-      if (t.kind == TypeKind::Function) {
-        for (const auto &p : t.parameters) {
-          if (p.mode == ParamMode::inout && contains_self(p.type))
-            return true;
-          if (visit(p.type))
-            return true;
-        }
-        if (visit(t.result))
-          return true;
-        if (t.throws_type && visit(*t.throws_type))
-          return true;
-        return false;
-      }
-      for (auto a : t.type_args)
-        if (visit(a))
-          return true;
-      return false;
-    };
-    return visit(root);
-  }
-  // Walk a type graph looking for a nested FunctionType whose inout data
-  // depends on a method-own parameter or the real trait Self. The caller
-  // invokes this on the top-level signature components, never on the method
-  // signature itself, so the new top-level inout is not mistaken for a
-  // callback. Checking every encountered FunctionType (without a root-depth
-  // exemption) makes the TypeId-only visited set safe even when a recursive
-  // nominal field holds the same Function TypeId.
-  bool dependent_inout_graph(TypeId root,
-                             const std::set<uint64_t> &dependent,
-                             bool expand_nominal) {
-    std::function<bool(TypeId)> contains_dependent = [&](TypeId id) {
-      std::set<uint64_t> seen;
-      std::vector<TypeId> pending{id};
-      while (!pending.empty()) {
-        auto current = pending.back();
-        pending.pop_back();
-        if (!seen.insert(current.value).second)
-          continue;
-        const auto &t = type(current);
-        if (t.kind == TypeKind::TypeParameter) {
-          if (dependent.count(t.declaration.value))
-            return true;
-          continue;
-        }
-        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
-        for (const auto &p : t.parameters)
-          pending.push_back(p.type);
-        if (t.kind == TypeKind::Function) {
-          pending.push_back(t.result);
-          if (t.throws_type)
-            pending.push_back(*t.throws_type);
-        }
-      }
-      return false;
-    };
-    std::set<uint64_t> visited, nominal_path;
-    std::function<bool(TypeId)> visit = [&](TypeId id) {
-      if (!visited.insert(id.value).second)
-        return false;
-      // Copy: recursive nominal expansion interns substituted field types and
-      // may grow the TypeContext.
-      const auto t = type(id);
-      if (t.kind == TypeKind::Function) {
-        for (const auto &p : t.parameters) {
-          if (p.mode == ParamMode::inout && contains_dependent(p.type))
-            return true;
-          if (visit(p.type))
-            return true;
-        }
-        if (visit(t.result))
-          return true;
-        if (t.throws_type && visit(*t.throws_type))
-          return true;
-        return false;
-      }
-      for (auto a : t.type_args)
-        if (visit(a))
-          return true;
-      if (expand_nominal &&
-          (t.kind == TypeKind::NominalStruct ||
-           t.kind == TypeKind::NominalEnum)) {
-        const auto &d = nominal(id);
-        if (!nominal_path.insert(d.symbol.value).second)
-          return false;
-        for (const auto &f : d.fields)
-          if (visit(field_type(id, f)))
-            return true;
-        for (const auto &v : d.variants)
-          for (const auto &f : v.payload)
-            if (visit(field_type(id, f)))
-              return true;
-        nominal_path.erase(d.symbol.value);
-      }
-      return false;
-    };
-    return visit(root);
-  }
-  // The new Type/T entry is authorized only when the complete nested
-  // signature is free of Self/method-own dependent inout callbacks. Legacy
-  // ordinary-only calls do not run this stricter check.
-  bool new_trait_entry_dependency(const MethodPrototype &prototype,
-                                  const TraitDecl &tr) {
-    const auto sig = type(prototype.signature);
-    const bool top_level_inout =
-        std::any_of(sig.parameters.begin(), sig.parameters.end(),
-                    [](const auto &p) { return p.mode == ParamMode::inout; });
-    if (!top_level_inout)
-      return false;
-    std::set<uint64_t> dependent{tr.self.value};
-    for (const auto &p : tr.params)
-      dependent.insert(p.symbol.value);
-    for (const auto &p : method_own_parameters(prototype.symbol))
-      dependent.insert(p.symbol.value);
-    for (const auto &p : sig.parameters)
-      if (dependent_inout_graph(p.type, dependent, true))
-        return true;
-    if (dependent_inout_graph(sig.result, dependent, true))
-      return true;
-    return sig.throws_type &&
-           dependent_inout_graph(*sig.throws_type, dependent, true);
-  }
   // Move eligibility for a value-form bounded T call. This uses the same
   // real trait/bound/prototype relation as the older inout source, but it
   // accepts either ordinary receiver label and does not inspect the old
@@ -816,9 +661,9 @@ class Checker {
   }
   // Move eligibility for a type-qualified T.method(...) call. It has no
   // runtime receiver, so every declared parameter is explicit. Move and the
-  // new top-level inout forms can coexist; dependent Self callbacks still
-  // keep the old capability limit. Actual first-position Self is classified
-  // from the raw prototype by typed_call.
+  // new top-level inout forms can coexist. Actual first-position Self is
+  // classified from the raw prototype by typed_call; callback data is not a
+  // separate source-entitlement restriction.
   const MethodPrototype *constraint_static_method_move_source(
       SymbolId target, const TraitRef &trait, TypeId receiver) {
     const TraitDecl *tr = trait_decl(trait.declaration);
@@ -854,18 +699,11 @@ class Checker {
         if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move &&
             p.mode != ParamMode::inout)
           return nullptr;
-      if (new_trait_entry_dependency(*prototype, *tr))
-        return nullptr;
       return prototype;
     }
-    for (const auto &p : sig.parameters) {
+    for (const auto &p : sig.parameters)
       if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move)
         return nullptr;
-      // This is the legacy ordinary/move-only route. It keeps the old
-      // shallow parameter check, not the new complete-signature check.
-      if (contains_trait_self_inout_shallow(p.type, tr->self))
-        return nullptr;
-    }
     return prototype;
   }
   // A type-qualified T.method(...) has no runtime receiver. All declared
@@ -917,15 +755,8 @@ class Checker {
       } else {
         if (p.mode != ParamMode::ordinary && p.mode != ParamMode::move)
           return nullptr;
-        // Legacy ordinary/move-only entry: preserve the old shallow parameter
-        // check. Nominal callback fields were not expanded here, and returned
-        // callbacks were not inspected.
-        if (contains_trait_self_inout_shallow(p.type, tr->self))
-          return nullptr;
       }
     }
-    if (top_level_inout && new_trait_entry_dependency(*prototype, *tr))
-      return nullptr;
     return prototype;
   }
   // A direct call to a generic free function. Trait constraints do not change
@@ -938,21 +769,68 @@ class Checker {
   bool check_inout_graph(Ref r, TypeId root, bool allow_template,
                          std::optional<SymbolId> trait_self = std::nullopt,
                          bool trait_self_callback = false) {
-    std::set<uint64_t> visited_args, expanded_nominals, nominal_path;
+    std::set<uint64_t> visited_args, expanded_nominals;
     bool direct_inout = false;
-    std::function<void(TypeId, size_t)> visit = [&](TypeId id, size_t depth) {
+    // A declaration that cannot contain any function with an inout parameter
+    // cannot hide an illegal callback, whatever its growing return graph is.
+    // This is only a pruning proof, not a second POD policy: any declaration
+    // that can reach an inout is expanded and checked by the common rule.
+    std::map<uint64_t, bool> inout_memo;
+    auto has_inout = [&](TypeId root) -> bool {
+      if (auto it = inout_memo.find(root.value); it != inout_memo.end())
+        return it->second;
+      // Cache only a completed reachability search, never a cycle back-edge.
+      std::set<uint64_t> seen_types, seen_declarations;
+      std::vector<TypeId> pending{root};
+      while (!pending.empty()) {
+        check_cancelled(stop);
+        const auto id = pending.back();
+        pending.pop_back();
+        if (!seen_types.insert(id.value).second)
+          continue;
+        const auto t = type(id);
+        pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+        if (t.kind == TypeKind::Function) {
+          for (const auto &p : t.parameters) {
+            if (p.mode == ParamMode::inout)
+              return inout_memo[root.value] = true;
+            pending.push_back(p.type);
+          }
+          pending.push_back(t.result);
+          if (t.throws_type)
+            pending.push_back(*t.throws_type);
+        }
+        if (t.kind != TypeKind::NominalStruct &&
+            t.kind != TypeKind::NominalEnum)
+          continue;
+        const auto &d = nominal(id);
+        if (!seen_declarations.insert(d.symbol.value).second)
+          continue;
+        for (const auto &f : d.fields)
+          pending.push_back(f.type);
+        for (const auto &v : d.variants)
+          for (const auto &f : v.payload)
+            pending.push_back(f.type);
+      }
+      return inout_memo[root.value] = false;
+    };
+    // Visit each depth before expanding a growing return graph further.
+    std::vector<std::pair<TypeId, size_t>> work{{root, 0}};
+    auto visit = [&](TypeId id, size_t depth) { work.emplace_back(id, depth); };
+    for (size_t next = 0; next < work.size(); ++next) {
+      const auto [id, depth] = work[next];
       check_cancelled(stop);
       if (depth > 512)
         unavailable(r, "inout type graph exceeds checking budget");
       const auto t = type(id);
       if (t.kind == TypeKind::TypeParameter)
-        return;
+        continue;
       if (t.kind == TypeKind::Vec) {
         if (!visited_args.insert(id.value).second)
-          return;
+          continue;
         for (auto a : t.type_args)
           visit(a, depth + 1);
-        return;
+        continue;
       }
       if (t.kind == TypeKind::NominalStruct ||
           t.kind == TypeKind::NominalEnum) {
@@ -960,9 +838,8 @@ class Checker {
           for (auto a : t.type_args)
             visit(a, depth + 1);
         const auto &d = nominal(id);
-        if (!nominal_path.insert(d.symbol.value).second)
-          return;
-        if (expanded_nominals.insert(id.value).second) {
+        // Distinct complete applications must each have their fields checked.
+        if (expanded_nominals.insert(id.value).second && has_inout(id)) {
           auto subs = nominal_subs(id);
           auto field = [&](const FieldDecl &f) {
             visit(substitute(f.type, subs, m.types), depth + 1);
@@ -973,12 +850,11 @@ class Checker {
             for (const auto &f : v.payload)
               field(f);
         }
-        nominal_path.erase(d.symbol.value);
-        return;
+        continue;
       }
       if (t.kind != TypeKind::Function ||
           !visited_args.insert(id.value).second)
-        return;
+        continue;
       for (size_t i = 0; i < t.parameters.size(); ++i) {
         const auto &p = t.parameters[i];
         if (p.mode == ParamMode::inout) {
@@ -988,18 +864,15 @@ class Checker {
           // Only this trait prototype's real Self may appear in `inout`
           // position. The receiver at depth 0 stays ordinary and a non-self
           // top-level slot keeps the old allowance. A nested FunctionType has
-          // no receiver of its own, but its first position is opened only for
-          // a prototype whose first parameter is ordinary Self (including the
-          // existing F1 owner spelling); this keeps trait-static prototypes
-          // rejected. Concrete impls are checked without this allowance, so a
-          // non-scalar Self still fails before HIR publication.
+          // no receiver of its own: its first slot is callback data, not the
+          // enclosing method's actual self, so it follows the same aggregate
+          // rule regardless of whether the prototype has a receiver. Concrete
+          // applications are checked again after real substitution.
           const bool trait_self_slot =
               trait_self && trait_self_type(p.type, *trait_self) &&
-              (depth > 0 ? trait_self_callback : i > 0);
+              (depth > 0 || i > 0);
           const auto data_self =
-              trait_self && (depth > 0 ? trait_self_callback : i > 0)
-                  ? trait_self
-                  : std::nullopt;
+              trait_self && (depth > 0 || i > 0) ? trait_self : std::nullopt;
           if (!aggregate_inout_type(p.type, data_self) &&
               !(allow_template && template_inout_type(p.type)) &&
               !trait_self_slot)
@@ -1012,9 +885,53 @@ class Checker {
       visit(t.result, depth + 1);
       if (t.throws_type)
         visit(*t.throws_type, depth + 1);
-    };
-    visit(root, 0);
+    }
     return direct_inout;
+  }
+  // Validate every method prototype of one complete trait application after
+  // substituting the real Self and all ordered trait arguments. Unresolved
+  // type parameters from the surrounding template (including nominal
+  // arguments such as Holder[U]) remain deferred; concrete data is checked
+  // with the same inout_data_type graph used by ordinary calls.
+  void check_trait_application_data(Ref r, const TraitRef &trait,
+                                    TypeId application) {
+    const auto *tr = trait_decl(trait.declaration);
+    if (!tr || trait.args.size() != tr->params.size())
+      return;
+    Substitutions sub{{tr->self, application}};
+    for (size_t i = 0; i < tr->params.size(); ++i)
+      sub.push_back({tr->params[i].symbol, trait.args[i]});
+    std::set<uint64_t> base;
+    std::set<uint64_t> seen;
+    std::function<void(TypeId)> allow = [&](TypeId id) {
+      if (!seen.insert(id.value).second)
+        return;
+      const auto t = type(id);
+      if (t.kind == TypeKind::TypeParameter) {
+        base.insert(t.declaration.value);
+        return;
+      }
+      for (auto a : t.type_args)
+        allow(a);
+      for (const auto &p : t.parameters)
+        allow(p.type);
+      if (t.kind == TypeKind::Function) {
+        allow(t.result);
+        if (t.throws_type)
+          allow(*t.throws_type);
+      }
+    };
+    allow(application);
+    for (auto arg : trait.args)
+      allow(arg);
+    auto saved = std::move(signature_parameters);
+    for (const auto &method : tr->methods) {
+      signature_parameters = base;
+      for (const auto &p : method_own_parameters(method.symbol))
+        signature_parameters.insert(p.symbol.value);
+      check_inout_graph(r, substitute(method.signature, sub, m.types), true);
+    }
+    signature_parameters = std::move(saved);
   }
   // Trait methods share the existing non-self move/inout rules. Dependent
   // callbacks stay unsupported; repeat this check after nominal fields exist.
@@ -1024,14 +941,8 @@ class Checker {
       const std::vector<GenericParam> *trait_params = nullptr) {
     if (!generic_trait && own.empty())
       return;
-    std::set<uint64_t> declarations;
-    for (const auto &p : own)
-      declarations.insert(p.symbol.value);
-    if (trait_self)
-      declarations.insert(trait_self->value);
-    if (trait_params)
-      for (const auto &p : *trait_params)
-        declarations.insert(p.symbol.value);
+    (void)own;
+    (void)trait_params;
     const auto top = type(signature);
     const auto parameters = top.parameters;
     for (size_t i = 0; i < parameters.size(); ++i) {
@@ -1043,21 +954,9 @@ class Checker {
       if (p.mode != ParamMode::move && p.mode != ParamMode::inout)
         unavailable(r, "trait method parameter mode is not implemented");
     }
-    // Check each top-level component separately. Starting at the method
-    // signature itself would make a nested FunctionType with the same TypeId
-    // look like the allowed root inout. Every FunctionType reached here is a
-    // callback, including one held by a recursive nominal field.
-    for (const auto &p : parameters)
-      if (dependent_inout_graph(p.type, declarations, true))
-        unavailable(r,
-                    "generic trait method dependent inout callback is not "
-                    "implemented");
-    if (dependent_inout_graph(top.result, declarations, true) ||
-        (top.throws_type &&
-         dependent_inout_graph(*top.throws_type, declarations, true)))
-      unavailable(r,
-                  "generic trait method dependent inout callback is not "
-                  "implemented");
+    // Nested callback data is checked by check_inout_graph and again for
+    // every complete trait application. It is no longer rejected merely for
+    // depending on Self, a trait argument or a method-own parameter.
   }
   void check_function_value_inout(Ref r, SymbolId target, TypeId sig) {
     if (!check_inout_graph(r, sig, true))
@@ -1213,8 +1112,6 @@ class Checker {
 
       if (pm != ParamMode::ordinary && type(pt).kind == TypeKind::ForeignOpaque)
         unavailable(cr, "external move/inout parameters are not supported");
-      if (pm == ParamMode::move && type(pt).kind == TypeKind::String)
-        unavailable(cr, "owned string parameter is not supported");
       // A trait prototype may declare its non-self top-level slot `inout
       // Self`. A nested FunctionType has no receiver, so its first parameter
       // is an ordinary callback parameter and may also be `inout Self`, but
@@ -1222,17 +1119,16 @@ class Checker {
       // The root method prototype always excludes position 0.
       const bool trait_self_slot =
           trait_self && trait_self_type(pt, *trait_self) &&
-          (callback ? trait_self_callback : i > 0);
+          (callback || i > 0);
       // The actual first-position trait Self keeps its old move/inout limit;
       // it is not opened by the aggregate data rule. A non-self later slot of
-      // the same raw Self type remains covered by trait_self_slot.
+      // the same raw Self type, and the first slot of a nested callback, are
+      // callback data and follow the common aggregate rule.
       if (!callback && i == 0 && pm != ParamMode::ordinary && trait_self &&
           trait_self_type(pt, *trait_self))
         unavailable(cr, "move/inout self is not implemented");
       const auto data_self =
-          trait_self && (callback ? trait_self_callback : i > 0)
-              ? trait_self
-              : std::nullopt;
+          trait_self && (callback || i > 0) ? trait_self : std::nullopt;
       if (pm == ParamMode::inout && !aggregate_inout_type(pt, data_self) &&
           !template_inout_type(pt) && !trait_self_slot)
         unavailable(cr,
@@ -1778,8 +1674,6 @@ class Checker {
             reject(r, "borrowed parameter cannot be moved", "E_CALL_ARGUMENT");
           if (type(l.type).kind == TypeKind::ForeignOpaque)
             unavailable(r, "external move is not supported");
-          if (type(l.type).kind == TypeKind::String)
-            unavailable(r, "owned string move is not supported");
           match(r, l.type, expected);
           return {node(r, l.type, Move{sid}), {l.type, {}, {}}};
         }
@@ -1789,8 +1683,6 @@ class Checker {
         auto e = expression(er, expected);
         if (type(e.value.type).kind == TypeKind::ForeignOpaque)
           unavailable(r, "external move is not supported");
-        if (type(e.value.type).kind == TypeKind::String)
-          unavailable(r, "owned string move is not supported");
         return {node(r, e.value.type, Move{{}}, {e.id}), e.value};
       }
       if (op == "inout")
@@ -2221,6 +2113,10 @@ class Checker {
   void check_constraints(Ref r, const std::vector<GenericParam> &ps,
                          const std::vector<TypeId> &args,
                          const Substitutions *sub = nullptr) {
+    // Bounds may intern substituted member types. Do not keep a reference
+    // into the TypeContext across that call: the vector can reallocate while
+    // the remaining requested arguments still need to be checked.
+    const std::vector<TypeId> requested = args;
     for (size_t i = 0; i < ps.size(); ++i) {
       if (!ps[i].trait)
         continue;
@@ -2228,8 +2124,8 @@ class Checker {
       if (sub)
         for (auto &arg : bound.args)
           arg = substitute(arg, *sub, m.types);
-      check_trait_parameter_bounds(r, bound, args.at(i));
-      if (!satisfies(r, args.at(i), bound))
+      check_trait_parameter_bounds(r, bound, requested.at(i));
+      if (!satisfies(r, requested.at(i), bound))
         reject(r, "generic constraint requires one applicable explicit trait "
                   "implementation");
     }
@@ -2543,8 +2439,8 @@ class Checker {
         if (const auto *im = impl_of(selected.method);
             im && im->trait &&
             !trait_impl_inout_source(selected.method, false))
-          unavailable(r, "trait-static actual self or dependent Self inout is "
-                         "not implemented");
+          unavailable(r, "trait-static actual self or method source "
+                         "signature is not implemented");
         return typed_call(r, selected.method, {}, selected.substitutions, {},
                           expected);
       }
@@ -2753,8 +2649,7 @@ class Checker {
         inherent_method_route(target, receiver.has_value(), original);
     // Move and inout eligibility use separate source helpers. Both admit an
     // ordinary receiver named self or owner and an explicit Type/T parameter
-    // list. The inout helper also checks the new top-level-inout route's
-    // dependent callback restriction.
+    // list. Complete callback data is checked after type substitution.
     const bool trait_impl_inout =
         !constraint &&
         trait_impl_inout_source(target, receiver.has_value()).has_value();
@@ -3393,6 +3288,11 @@ class Checker {
     switch (n.kind) {
     case AstKind::Block:
       return block(r);
+    case AstKind::Unsafe:
+      if (n.children.size() != 1 ||
+          ast(child(r, 0)).kind != AstKind::Block)
+        unavailable(r, "unsafe requires exactly one lexical block");
+      return block(child(r, 0));
     case AstKind::Switch:
       return switch_statement(r);
     case AstKind::Binding: {
@@ -3868,9 +3768,6 @@ class Checker {
       auto t = parse_type(child(field, 0));
       if (type(t).kind == TypeKind::ForeignOpaque)
         unavailable(field, "external aggregate fields are not supported");
-      if (type(t).kind == TypeKind::String)
-        unavailable(field,
-                    "string aggregate fields require owned-value support");
       return t;
     };
     for (auto &d : m.nominals) {
@@ -3961,39 +3858,9 @@ class Checker {
                    "impl method signature does not match trait");
         }
       }
-    // A nested callback whose inout data depends on the real trait Self still
-    // keeps its numeric/bool stage. The decision comes from the raw trait
-    // prototype and Self SymbolId, never from an impl type that happens to
-    // equal the callback's fixed data type. Nominal fields are populated now,
-    // so this also checks wrapped Self data and stored callback fields.
-    for (const auto &im : m.impls) {
-      if (!im.trait)
-        continue;
-      const TraitDecl *tr = trait_decl(im.trait->declaration);
-      if (!tr)
-        continue;
-      for (const auto &proto : tr->methods) {
-        SymbolId method{0};
-        for (auto id : im.methods)
-          if (symbol(id).name == symbol(proto.symbol).name)
-            method = id;
-        if (!method.value)
-          continue;
-        const auto sig = type(proto.signature);
-        auto check = [&](TypeId component) {
-          if (trait_self_callback_non_scalar(m, component, tr->self,
-                                             im.self_type))
-            unavailable(proto.source.node,
-                        "Self-dependent inout callbacks remain limited to "
-                        "numeric/bool");
-        };
-        for (const auto &p : sig.parameters)
-          check(p.type);
-        check(sig.result);
-        if (sig.throws_type)
-          check(*sig.throws_type);
-      }
-    }
+    // Self-dependent callback data is no longer limited by a separate
+    // scalar policy. The complete substituted application is checked below
+    // with the common inout aggregate rule.
     // Method-own mode restrictions are checked after every trait/impl
     // signature has been matched, so an own arity/bound mismatch keeps its
     // precise source diagnostic instead of being hidden by a capability check.
@@ -4480,9 +4347,6 @@ class Checker {
       if (p.mode != ParamMode::ordinary &&
           type(p.type).kind == TypeKind::ForeignOpaque)
         unavailable(use, "external move/inout parameters are not supported");
-      if (p.mode == ParamMode::move &&
-          type(p.type).kind == TypeKind::String)
-        unavailable(use, "owned string parameter is not supported");
     }
     if (check_inout_graph(use, f.signature, false) && !inout_source)
       unavailable(use, "generic/method inout is not implemented");

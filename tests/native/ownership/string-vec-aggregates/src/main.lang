@@ -1,0 +1,87 @@
+package app;
+
+struct Bundle { label string; items Vec[string]; }
+struct Pair { text string; items Vec[string]; }
+enum Failure { Bad(value Vec[string]); }
+
+func make_items() Vec[string] { return ["零","空","末\0😀"]; }
+func mark(log inout i64,digit i64) { log=log*10+digit; }
+func items(log inout i64) Vec[string] { mark(inout log,1); return ["一\0二","三"]; }
+func bad_items(log inout i64) Vec[string] throws Failure {
+    mark(inout log,2);
+    let value=items(inout log);
+    throw Failure.Bad(value:value);
+}
+func bad_text(log inout i64) string throws Failure {
+    mark(inout log,3);
+    throw Failure.Bad(value:["错\0误"]);
+}
+func probe(log inout i64) i32 {
+    {
+        let normal=items(inout log);
+        defer { mark(inout log,4); }
+        let first=normal[0];
+    }
+    try { let ignored=bad_items(inout log); }
+    catch e Failure { switch e { case Failure.Bad(payload): { let seen=payload[0]; } } }
+    try { let partial=Pair(items:items(inout log),text:bad_text(inout log)); }
+    catch e Failure { switch e { case Failure.Bad(payload): { let seen=payload[0]; } } }
+    return 0;
+}
+
+func probe_alias_replace() string {
+    let left Vec[string]=["原","二"];
+    let right=left;
+    right[1]="替\0换";
+    return left[1];
+}
+func probe_slice() string {
+    let base=make_items();
+    let part=base[1:3];
+    return part[1];
+}
+func probe_for_in() string {
+    let values=make_items();
+    var last="";
+    for item in values { last=item; }
+    return last;
+}
+func probe_element_copy() string {
+    let values=make_items();
+    let copied=values[1];
+    return copied;
+}
+func probe_release() string {
+    let values=make_items();
+    let taken=values[2];
+    return taken;
+}
+func probe_move_string() string {
+    var value="本地\0移动";
+    let moved=move value;
+    return moved;
+}
+func probe_move_vec() string {
+    var values Vec[string]=["向\0量移动"];
+    let moved=move values;
+    return moved[0];
+}
+func probe_bundle() string {
+    let bundle=Bundle(label:"标\0签",items:["项\0目"]);
+    let copied=bundle;
+    return copied.items[0];
+}
+
+func main() i32 {
+    var log i64=0;
+    if probe(inout log)!=0 { return 1; }
+    let a=probe_alias_replace();
+    let b=probe_slice();
+    let c=probe_for_in();
+    let d=probe_element_copy();
+    let e=probe_release();
+    let f=probe_move_string();
+    let g=probe_move_vec();
+    let h=probe_bundle();
+    return 0;
+}

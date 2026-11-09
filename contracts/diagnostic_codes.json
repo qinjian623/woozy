@@ -120,6 +120,10 @@
       "severity": "error"
     },
     {
+      "code": "E_TARGET_UNSUPPORTED",
+      "severity": "error"
+    },
+    {
       "code": "E_TOOLCHAIN_MISSING",
       "severity": "error"
     },

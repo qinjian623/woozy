@@ -1,0 +1,22 @@
+package lib;
+
+pub struct Pair {
+    pub value i32;
+    pub flag bool;
+}
+
+pub struct Box[I] {
+    pub marker i32;
+}
+
+pub trait Flow[A] {
+    func run[U](owner Self, callback func(inout A,A)A, slot inout A,
+                value A, tag U) A;
+}
+
+impl[I] Flow[I] for Box[I] {
+    func run[V](owner Self, callback func(inout I,I)I, slot inout I,
+                value I, tag V) I {
+        return callback(inout slot, value);
+    }
+}

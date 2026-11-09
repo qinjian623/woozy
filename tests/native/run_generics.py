@@ -59,7 +59,8 @@ def main():
         cases += [('positional-' + p.parent.name, p, 0) for p in
                   sorted((args.root / 'tests/generics/positional').glob('*/lang.toml'))]
         cases += [('former-' + n, args.root / f'tests/native/pod-reject/{n}/lang.toml', 0)
-                  for n in ('unknown-operation', 'float-operation', 'float-field-compound')]
+                  for n in ('unknown-operation', 'float-operation', 'float-field-compound',
+                            'owned-field')]
         for ident, manifest, expected in cases:
             for opt in (0, 2):
                 out = args.out / ident / f'O{opt}'
@@ -82,8 +83,9 @@ def main():
                 assert not ran['stdout'] and not ran['stderr'], ran
                 row['status'] = 'passed'
         for manifest in sorted((args.root / 'tests/native/pod-reject').glob('*/lang.toml')):
-            if manifest.parent.name in ('unknown-operation', 'float-field-compound', 'float-operation'):
-                continue  # executable defer/float cases are checked by their execution runners
+            if manifest.parent.name in ('unknown-operation', 'float-field-compound',
+                                        'float-operation', 'owned-field'):
+                continue  # executable defer/float/string cases are checked by execution runners
             for opt in (0, 2):
                 out = args.out / 'unsupported' / manifest.parent.name / f'O{opt}'
                 out.mkdir(parents=True, exist_ok=True)

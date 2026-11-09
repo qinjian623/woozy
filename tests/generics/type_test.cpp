@@ -675,12 +675,10 @@ void generic_move(const fs::path &root) {
   good("trait V{} impl V for i32{} "
        "func take[T V](value move T)T{return move value;} "
        "func main() i32{var x i32=1;let r=take(move x);return r-1;}");
-  unsupported("func relay[T](value move T)T{return move value;} "
-              "func main(){let r=relay[string](move \"x\");}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported("func relay[T](value move T)T{return move value;} "
-              "func main(){let r=relay[string](\"x\");}",
-              "E_CAPABILITY_UNAVAILABLE");
+  good("func relay[T](value move T)T{return move value;} "
+       "func main(){let r=relay[string](move \"x\");}");
+  good("func relay[T](value move T)T{return move value;} "
+       "func main(){let r=relay[string](\"x\");}");
 
   auto move_hir = good(
       "func relay[T](value move T) T{return move value;} "
@@ -1701,6 +1699,14 @@ void generic_inout(const fs::path &root) {
          "nested inout diagnostic lacks a source span: " + text + "\n" +
              messages(r));
   };
+  auto unsupported_budget = [&](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE") &&
+             messages(r).find("exceeds checking budget") != std::string::npos,
+         "growing inout graph did not stop at its explicit budget: " + text +
+             "\n" + messages(r));
+  };
   const std::string keep =
       "func keep[T](cb func(inout T))i32{return 0;} ";
   unsupported_span(keep + "func main()i32{let f=keep[Vec[i32]];return 0;}");
@@ -1720,11 +1726,14 @@ void generic_inout(const fs::path &root) {
   unsupported_span("enum E[T]{A(cb func(inout T));} "
                    "func keep(value E[Vec[i32]])i32{return 0;} "
                    "func main()i32{return 0;}");
-  // A concrete callback field whose inout data is now a trivial aggregate
-  // follows the same data rule as a top-level inout slot.
-  good("struct S[T]{f func() S[S[T]];cb func(inout T);} "
-       "func take(value S[S[i32]])i32{return 0;} "
-       "func main()i32{return 0;}");
+  // S[i32] contains function fields, so the first concrete callback is not POD.
+  unsupported_span("struct S[T]{f func() S[S[T]];cb func(inout T);} "
+                   "func take(value S[S[i32]])i32{return 0;} "
+                   "func main()i32{return 0;}");
+  // With only scalar callback data, unbounded applications hit the budget.
+  unsupported_budget("struct S[T]{f func() S[S[T]];cb func(inout i32);} "
+                     "func take(value S[i32])i32{return 0;} "
+                     "func main()i32{return 0;}");
   unsupported_span("struct A[T]{b B[T];} "
                    "struct B[T]{f func() A[T];cb func(inout T);} "
                    "func take(value A[Vec[i32]])i32{return 0;} "
@@ -2667,10 +2676,10 @@ void extra(const fs::path &root) {
       auto owned = source(
           "struct S{s string;} func main(){let x=S(s:\"owned\");}",
           backend, width);
-      need(!owned.success() &&
-               owned.failure == FailureKind::unsupported &&
-               has(owned, "E_CAPABILITY_UNAVAILABLE"),
-           "owned aggregate backend refusal is not E_CAP");
+      need(owned.success(), messages(owned));
+      need(hir::verify_types(*owned.value).success() &&
+               hir::check_backend_capabilities(*owned.value).success(),
+           "string aggregate backend support is not E_CAP-free");
     }
   Temp baseline;
   write(baseline.path / "lang.toml",
@@ -2917,7 +2926,7 @@ void method_move(const fs::path &root) {
       "func bump(self Self,a inout i32){a+=1;}} "
       "func main()i32{let h=H(marker:0);var x i32=1;"
       "h.bump(inout x);return x-2;}");
-  unsupported(
+  good(
       "struct H{marker i32;} impl H{"
       "func take(self Self,value move string)string{return move value;}} "
       "func main()i32{let h=H(marker:0);let r=h.take(move \"x\");return 0;}");
@@ -3357,7 +3366,7 @@ void generic_method_move(const fs::path &root) {
       "func take[T](self move Self,value move T)T{return move value;}} "
       "func main()i32{let h=H(marker:0);var v Vec[i32]=[1];"
       "let r=h.take(move v);return r[0];}");
-  unsupported(
+  good(
       "struct H{marker i32;} impl H{"
       "func take[T](self Self,value move T)T{return move value;}} "
       "func main()i32{let h=H(marker:0);"
@@ -3875,9 +3884,9 @@ return 0;}
                     "func take(self Self,value move T)T{return move value;}} "
                     "func main()i32{var b=Box[Vec[i32]](value:[1],items:[2],"
                     "marker:0);let r=b.take(move b.items);return r[0];}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func take(value move string)string{return move value;}} "
-                    "func main()i32{let r=Box[i32].take(move \"x\");return 0;}");
+  good(box + "impl[T] Box[T]{"
+            "func take(value move string)string{return move value;}} "
+            "func main()i32{let r=Box[i32].take(move \"x\");return 0;}");
   bad(box + "impl[T] Box[T]{"
            "func take(self Self,value move T)T{return move value;}} "
            "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
@@ -4514,9 +4523,9 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
                     "func take[U](self Self,value move U)U{return move value;}} "
                     "func main()i32{let b=Box[Vec[i32]](value:[1],items:[2],"
                     "marker:0);let r=b.take(move b.items);return r[0];}");
-  unsupported(box + "impl[T] Box[T]{"
-                    "func take[U](value move U)U{return move value;}} "
-                    "func main()i32{let r=Box[i32].take(move \"x\");return 0;}");
+  good(box + "impl[T] Box[T]{"
+            "func take[U](value move U)U{return move value;}} "
+            "func main()i32{let r=Box[i32].take(move \"x\");return 0;}");
   bad(box + "impl[T] Box[T]{"
            "func also[U](self Self,value move U)i32{return self.marker;}} "
            "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
@@ -6760,10 +6769,10 @@ impl Exchange for i32 {
                  "func main(){let s S=S(x:1);var x i32=1;"
                  "forward(s,inout x,2);}", "E_TYPE_MISMATCH");
 
-  unsupported("trait V{func bad(self Self,cb func(inout Self));} "
-              "struct S{x i32;} impl V for S{"
-              "func bad(self Self,cb func(inout Self)){}} "
-              "func main()i32{return 0;}");
+  good("trait V{func bad(self Self,cb func(inout Self));} "
+       "struct S{x i32;} impl V for S{"
+       "func bad(self Self,cb func(inout Self)){}} "
+       "func main()i32{return 0;}");
   unsupported("trait V{func bad(self inout Self);} struct S{x i32;} "
               "impl V for S{func bad(self inout Self){}} "
               "func main()i32{var s S=S(x:1);s.bad(inout s);return 0;}");
@@ -7091,17 +7100,17 @@ func main() i32 {
 }
 )");
 
-  // A concrete impl whose Self is not an already supported inout scalar still
-  // fails at the source boundary even when no method is called. Function
-  // values may only appear through an already expressible nominal target.
-  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-              "struct S{x i32;} impl V for S{"
-              "func bad(self Self,f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-              "enum E{One;} impl V for E{"
-              "func bad(self Self,f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
+  // Concrete Self data now follows the finite-POD aggregate rule. A struct
+  // with a trivial field and an enum are legal; an unresolved generic impl
+  // stays a template, and a function field is permitted as aggregate member.
+  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+       "struct S{x i32;} impl V for S{"
+       "func bad(self Self,f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
+  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+       "enum E{One;} impl V for E{"
+       "func bad(self Self,f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
   unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
               "impl V for Vec[i32]{"
               "func bad(self Self,f func(inout Self,Self)Self){}} "
@@ -7114,14 +7123,14 @@ func main() i32 {
               "impl V for Unit{"
               "func bad(self Self,f func(inout Self,Self)Self){}} "
               "func main()i32{return 0;}");
-  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-              "struct Box[U]{value U;} impl[U] V for Box[U]{"
-              "func bad(self Self,f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-              "struct Box[U]{value U;} impl V for Box[func() i32]{"
-              "func bad(self Self,f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
+  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+       "struct Box[U]{value U;} impl[U] V for Box[U]{"
+       "func bad(self Self,f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
+  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+       "struct Box[U]{value U;} impl V for Box[func() i32]{"
+       "func bad(self Self,f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
 
   // The new callback context does not open actual self modes or a callback
   // that accesses the same slot twice.
@@ -7130,11 +7139,11 @@ func main() i32 {
               "impl V for i32{func bad(self inout Self,"
               "f func(inout Self,Self)Self){}} "
               "func main()i32{return 0;}");
-  unsupported("trait V[U]{func bad(self Self,"
-              "f func(inout Self,Self)Self);}"
-              "impl V[i32] for i32{func bad(self Self,"
-              "f func(inout Self,Self)Self){}} "
-              "func main()i32{return 0;}");
+  good("trait V[U]{func bad(self Self,"
+       "f func(inout Self,Self)Self);}"
+       "impl V[i32] for i32{func bad(self Self,"
+       "f func(inout Self,Self)Self){}} "
+       "func main()i32{return 0;}");
   // This old source has a method-own parameter on the prototype but not on
   // the impl. It is now a precise source signature error, not a capability
   // limit. The own-consistent counterpart below still rejects the unsupported
@@ -7144,23 +7153,36 @@ func main() i32 {
       "impl V for i32{func bad(self Self,"
       "f func(inout Self,Self)Self){}} "
       "func main()i32{return 0;}", "E_TYPE_MISMATCH");
-  unsupported("trait V{func bad[U](self Self,"
-              "f func(inout Self,Self)Self);}"
-              "impl V for i32{func bad[U](self Self,"
-              "f func(inout Self,Self)Self){}} "
-              "func bump(slot inout i32,value i32)i32{"
-              "let old=slot;slot=value;return old;} "
-              "func main()i32{let o i32=1;"
-              "let f func(inout i32,i32)i32=bump;"
-              "return o.bad[i32](f);}");
-  // A trait-static prototype has no Self-typed first parameter, so the new
-  // callback context does not open `inout Self` in its callback.
-  unsupported("trait V{func bad(f func(inout Self,Self)Self);}"
-              "func replace(slot inout i32,value i32)i32{"
-              "let old=slot;slot=value;return old;}"
-              "impl V for i32{func bad(f func(inout Self,Self)Self){}} "
-              "func main()i32{let f func(inout i32,i32)i32=replace;"
-              "i32.bad(f);return 0;}");
+  // The old source returned a Unit method from an i32 main. That independent
+  // type error remains; the corrected call below exercises the newly legal
+  // method-own Self callback.
+  bad("trait V{func bad[U](self Self,"
+      "f func(inout Self,Self)Self);}"
+      "impl V for i32{func bad[U](self Self,"
+      "f func(inout Self,Self)Self){}} "
+      "func bump(slot inout i32,value i32)i32{"
+      "let old=slot;slot=value;return old;} "
+      "func main()i32{let o i32=1;"
+      "let f func(inout i32,i32)i32=bump;"
+      "return o.bad[i32](f);}", "E_TYPE_MISMATCH");
+  good("trait V{func bad[U](self Self,"
+       "f func(inout Self,Self)Self);}"
+       "impl V for i32{func bad[U](self Self,"
+       "f func(inout Self,Self)Self){}} "
+       "func bump(slot inout i32,value i32)i32{"
+       "let old=slot;slot=value;return old;} "
+       "func main()i32{let o i32=1;"
+       "let f func(inout i32,i32)i32=bump;"
+       "o.bad[i32](f);return 0;}");
+  // A trait-static prototype has no receiver, but its callback's first inout
+  // Self is callback data, not an actual self. Type qualification supplies
+  // every declared parameter and is now accepted with a real POD Self.
+  good("trait V{func bad(f func(inout Self,Self)Self);}"
+       "func replace(slot inout i32,value i32)i32{"
+       "let old=slot;slot=value;return old;}"
+       "impl V for i32{func bad(f func(inout Self,Self)Self){}} "
+       "func main()i32{let f func(inout i32,i32)i32=replace;"
+       "i32.bad(f);return 0;}");
   bad("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
       "impl V for i32{func bad(self Self,"
       "f func(inout Self,Self)Self){}} "
@@ -7888,8 +7910,8 @@ void trait_static_calls() {
               "func f[T Take](x T)T{return T.take(move x);}");
   unsupported("trait Bump{func bump(slot inout Self);}"
               "func f[T Bump](x T){T.bump(inout x);}");
-  unsupported("trait Callback{func apply(cb func(inout Self)Self)Self;}"
-              "func f[T Callback](cb func(inout T)T)T{return T.apply(cb);}");
+  good("trait Callback{func apply(cb func(inout Self)Self)Self;}"
+       "func f[T Callback](cb func(inout T)T)T{return T.apply(cb);}");
 
   auto damaged = good(
       "trait Maker{func make(seed i32)i32;}"
@@ -8150,10 +8172,9 @@ void trait_method_generics(const fs::path &root) {
           "func main()i32{return 0;}",
       "E_TYPE_MISMATCH");
 
-  // New generic trait methods now open top-level non-self move while still
-  // rejecting new inout and dependent callback modes. The exact former
-  // unsupported Source is retained and reclassified; the trait-generic-move
-  // fixture supplies real calls and executions.
+  // New generic trait methods open top-level non-self move and inout. The
+  // exact former unsupported Sources are retained and reclassified; their
+  // concrete calls and executions are covered by the trait-generic fixtures.
   good(values +
        "trait Move{func take[U](owner Self,value move U)U;}"
        "struct S{}"
@@ -8164,11 +8185,11 @@ void trait_method_generics(const fs::path &root) {
        "struct S{}"
        "impl Slot for S{func set[U](owner Self,slot inout U){}}"
        "func main()i32{return 0;}");
-  unsupported(values +
-              "trait Callback{func run[U](owner Self,cb func(inout U));}"
-              "struct S{}"
-              "impl Callback for S{func run[U](owner Self,cb func(inout U)){}}"
-              "func main()i32{return 0;}");
+  good(values +
+       "trait Callback{func run[U](owner Self,cb func(inout U));}"
+       "struct S{}"
+       "impl Callback for S{func run[U](owner Self,cb func(inout U)){}}"
+       "func main()i32{return 0;}");
   unsupported(values +
               "trait Move{func take[U](self move Self,value U)U;}"
               "struct S{}"
@@ -8176,19 +8197,19 @@ void trait_method_generics(const fs::path &root) {
               "return value;}} func main()i32{return 0;}");
 
   // Published HIR: the prototype's own parameter is a real type parameter,
-  // while its runtime parameter list stays the declared owner Self.
-  // The same restriction covers returned callbacks and nominal fields or
-  // payloads, including declarations that are never instantiated.
-  unsupported("trait M{func make[U](owner Self) (func(inout U,U)U);}"
-              "func main()i32{return 0;}");
-  unsupported("trait M{func make[U](owner Self) (func(inout Self,Self)Self);}"
-              "func main()i32{return 0;}");
-  unsupported("struct Holder[Q]{cb func(inout Q,Q)Q;}"
-              "trait M{func use[U](owner Self,value Holder[U])i32;}"
-              "func main()i32{return 0;}");
-  unsupported("enum Envelope[Q]{Hidden(cb func(inout Q,Q)Q);}"
-              "trait M{func use[U](owner Self,value Envelope[U])i32;}"
-              "func main()i32{return 0;}");
+  // while its runtime parameter list stays the declared owner Self. Returned
+  // callbacks and nominal fields or payloads follow the same deferred
+  // template rule, including declarations that are never instantiated.
+  good("trait M{func make[U](owner Self) (func(inout U,U)U);}"
+       "func main()i32{return 0;}");
+  good("trait M{func make[U](owner Self) (func(inout Self,Self)Self);}"
+       "func main()i32{return 0;}");
+  good("struct Holder[Q]{cb func(inout Q,Q)Q;}"
+       "trait M{func use[U](owner Self,value Holder[U])i32;}"
+       "func main()i32{return 0;}");
+  good("enum Envelope[Q]{Hidden(cb func(inout Q,Q)Q);}"
+       "trait M{func use[U](owner Self,value Envelope[U])i32;}"
+       "func main()i32{return 0;}");
   good("struct Holder[Q]{cb func(inout i32,i32)i32;}"
        "struct Loop[Q]{cb func(Loop[Q]);}"
        "trait M{func fixed[U](owner Self,value Holder[U])"
@@ -9051,9 +9072,9 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
     throw std::runtime_error("phantom direct call missing");
   });
 
-  // Top-level method-parameter inout is now legal; actual self modes and
-  // dependent callbacks keep the old capability limit. Fixed scalar
-  // callbacks remain legal.
+  // Top-level method-parameter inout and dependent callbacks are now legal;
+  // actual self modes keep the old capability limit. Fixed scalar callbacks
+  // remain legal.
   good("trait V{func set[U](owner Self, slot inout U);}"
        "struct S{} impl V for S{func set[U](owner Self, slot inout U){}}"
        "func main()i32{return 0;}");
@@ -9063,9 +9084,9 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
   unsupported("trait V{func take[U](owner move Self, value U)U;}"
               "struct S{} impl V for S{func take[U](owner move Self, value U)U{"
               "return value;}} func main()i32{return 0;}");
-  unsupported("trait V{func run[U](owner Self, cb func(inout U));}"
-              "struct S{} impl V for S{func run[U](owner Self, cb func(inout U)){}}"
-              "func main()i32{return 0;}");
+  good("trait V{func run[U](owner Self, cb func(inout U));}"
+       "struct S{} impl V for S{func run[U](owner Self, cb func(inout U)){}}"
+       "func main()i32{return 0;}");
   good("trait V{func run[U](owner Self, cb func(inout i32,i32)i32, tag U)i32;}"
        "struct S{} impl V for S{func run[U](owner Self,"
        "cb func(inout i32,i32)i32, tag U)i32{"
@@ -9773,10 +9794,10 @@ func main() i32 {
               "func main()i32{return 0;}");
   unsupported("trait V{func bad[U](owner inout Self,slot inout U);} "
               "func main()i32{return 0;}");
-  unsupported("trait V{func bad[U](owner Self,cb func(inout U));} "
-              "func main()i32{return 0;}");
-  unsupported("trait V{func bad[U](owner Self,cb func(inout Self));} "
-              "func main()i32{return 0;}");
+  good("trait V{func bad[U](owner Self,cb func(inout U));} "
+       "func main()i32{return 0;}");
+  good("trait V{func bad[U](owner Self,cb func(inout Self));} "
+       "func main()i32{return 0;}");
   unsupported("trait V{func bad[U](owner Self,slot inout U);} "
               "struct S{x i32;} impl V for S{"
               "func bad[U](owner Self,slot inout U){}} "
@@ -9806,8 +9827,10 @@ func main() i32 {
        "let h=Holder[i32](cb:f);via[i32](0,h);return 0;}");
 
   // F1: a recursive nominal function field reuses the top-level method
-  // signature TypeId. It is still a callback and may not depend on method U.
-  unsupported_both(R"(
+  // signature TypeId. The callback now depends on method-own U and real Self,
+  // both concrete POD i32 here, so the complete application is legal.
+  for (const char *backend : {"native", "python"}) {
+    auto r = source(R"(
 struct C[S, T] {
     f func(S, inout T, C[S, T]) Unit;
 }
@@ -9824,7 +9847,14 @@ func main() i32 {
     i32.visit[i32](7, inout slot, node);
     return 0;
 }
-)");
+)", backend);
+    need(r.success(), std::string(backend) + ": F1 callback rejected\n" +
+                          messages(r));
+    need(hir::verify_types(*r.value).success(),
+         std::string(backend) + ": F1 callback HIR rejected");
+    need(hir::verify(*r.value).success(),
+         std::string(backend) + ": F1 callback did not publish");
+  }
   // The finite recursive function-field control stays legal.
   good(R"(
 struct C[S, T] {
@@ -9839,8 +9869,9 @@ func main() i32 {
 }
 )");
 
-  // F2: the new Type/T top-level-inout entry does not authorize a returned
-  // Self-dependent callback. The value-form control is old legal behavior.
+  // F2: a returned Self-dependent callback is ordinary callback data. Both
+  // the value-form control and the Type/T top-level-inout entry are legal
+  // when the substituted Self is a POD.
   const std::string factory_callback = R"(
 trait Factory {
     func make(self Self, slot inout i32) (func(inout Self, Self) Self);
@@ -9857,7 +9888,8 @@ impl Factory for i32 {
     }
 }
 )";
-  unsupported_both(factory_callback + R"(
+  for (const char *backend : {"native", "python"}) {
+    auto r = source(factory_callback + R"(
 func route[T Factory](owner T, slot inout i32) (func(inout T, T) T) {
     return T.make(owner, inout slot);
 }
@@ -9868,7 +9900,14 @@ func main() i32 {
     if callback(inout slot, 8) != 1 || slot != 8 || made != 2 { return 1; }
     return 0;
 }
-)");
+)", backend);
+    need(r.success(), std::string(backend) + ": F2 callback rejected\n" +
+                          messages(r));
+    need(hir::verify_types(*r.value).success(),
+         std::string(backend) + ": F2 callback HIR rejected");
+    need(hir::verify(*r.value).success(),
+         std::string(backend) + ": F2 callback did not publish");
+  }
   good(factory_callback + R"(
 func route[T Factory](owner T, slot inout i32) (func(inout T, T) T) {
     return owner.make(inout slot);
@@ -10561,6 +10600,15 @@ void aggregate_inout_validation() {
          text + "\n" + messages(r));
     need(!has(r, "E_IR_INVALID"), "source E_CAP became E_IR_INVALID");
   };
+  auto unsupported_budget = [](const std::string &text) {
+    auto r = source(text);
+    need(!r.success() && r.failure == FailureKind::unsupported &&
+             has(r, "E_CAPABILITY_UNAVAILABLE") &&
+             messages(r).find("exceeds checking budget") != std::string::npos,
+         "growing inout graph did not stop at its explicit budget: " + text +
+             "\n" + messages(r));
+    need(!has(r, "E_IR_INVALID"), "source budget became E_IR_INVALID");
+  };
   auto named_type = [](const hir::HirModule &m, const std::string &name) {
     for (auto &d : m.nominals)
       if (m.resolved->symbols.at(d.symbol.value).name == name)
@@ -10740,10 +10788,8 @@ void aggregate_inout_validation() {
         return param.type;
     throw std::runtime_error("callback parameter missing");
   };
-  need(!hir::trait_self_callback_non_scalar(
-           fixed_callback, callback_type(fixed_callback, *apply), edit->self,
-           pair_type),
-       "fixed Pair callback was classified as Self-dependent");
+  (void)callback_type(fixed_callback, *apply);
+  (void)pair_type;
 
   const std::string function_cycle =
       "struct Wrap[T]{apply func(Wrap[T])T;value T;}"
@@ -10769,13 +10815,15 @@ void aggregate_inout_validation() {
       "callback func(inout Wrap[i32])Unit)Unit{}}"
       "func main()i32{return 0;}");
   need(hir::verify(growing_signature).success(),
-       "growing fixed function signature was classified as Self-dependent");
-  unavailable(function_cycle +
+       "ordinary growing function signature was rejected as an inout graph");
+  auto recursive_self_callback = good(function_cycle +
       "trait Edit{func apply(self Self,"
       "callback func(inout Wrap[i32],inout Self)Unit)Unit;}"
       "impl Edit for Owner{func apply(self Self,"
       "callback func(inout Wrap[i32],inout Self)Unit)Unit{}}"
       "func main()i32{return 0;}");
+  need(hir::verify(recursive_self_callback).success(),
+       "recursive POD Self callback did not publish");
 
   auto wrapped_self = good(
       "struct Wrap[T]{value T;} struct Pair{value i32;} "
@@ -10795,12 +10843,12 @@ void aggregate_inout_validation() {
   bad("struct Pair{value i32;} impl Pair{func bad(self inout Pair){}} "
       "func main()i32{var p=Pair(value:1);p.bad(inout p);return 0;}",
       "E_CALL_ARGUMENT");
-  unavailable("struct Pair{value i32;} "
-              "trait Apply{func run[U](owner Self,"
-              "callback func(inout U))Unit;} "
-              "impl Apply for Pair{func run[U](owner Self,"
-              "callback func(inout U))Unit{}} "
-              "func main()i32{return 0;}");
+  good("struct Pair{value i32;} "
+       "trait Apply{func run[U](owner Self,"
+       "callback func(inout U))Unit;} "
+       "impl Apply for Pair{func run[U](owner Self,"
+       "callback func(inout U))Unit{}} "
+       "func main()i32{return 0;}");
 
   auto self_callback = good(
       "struct Pair{value i32;} "
@@ -10830,20 +10878,9 @@ void aggregate_inout_validation() {
   }
   need(i32_type.value, "i32 type missing");
   auto self_component = callback_type(self_callback, *bad_callback);
-  need(!hir::trait_self_callback_non_scalar(
-           self_callback, self_component, v->self, i32_type),
-       "numeric Self callback was rejected by independent policy");
-  need(hir::trait_self_callback_non_scalar(
-           self_callback, self_component, v->self, self_pair_type),
-       "aggregate Self callback was not rejected by independent policy");
-  auto forged_self = self_callback;
-  for (auto &im : forged_self.impls)
-    if (im.trait)
-      im.self_type = self_pair_type;
-  auto forged = hir::verify_types(forged_self);
-  need(!forged.success() && has(forged, "E_IR_INVALID"),
-       "HIR verifier accepted an aggregate Self-dependent callback: " +
-           messages(forged));
+  need(self_component.value && i32_type.value && v->self.value,
+       "Self callback component identities missing");
+  (void)self_pair_type;
 }
 
 
@@ -10963,50 +11000,62 @@ func main() i32 {
       "impl Convert[bool] for Key{func get[U](owner Self,x U)U{return x;}}"
       "func main()i32{let k=Key();return k.get(1);}");
 
-  // Top-level non-self modes now combine with own parameters; dependent
-  // inout callbacks keep their existing restriction.
+  // Top-level non-self modes combine with own parameters. Dependent inout
+  // callbacks in parameters, returns and throws remain legal templates until
+  // a complete application substitutes concrete data.
   good("trait New[A]{func take[U](owner Self,value move U)U;}"
        "func main()i32{return 0;}");
   good("trait New[A]{func update[U](owner Self,slot inout U)Unit;}"
        "func main()i32{return 0;}");
-  unsupported("trait New[A]{func run[U](owner Self,cb func(inout U));}"
-              "func main()i32{return 0;}");
+  good("trait New[A]{func run[U](owner Self,cb func(inout U));}"
+       "func main()i32{return 0;}");
 
-  // The complete graph must be rechecked after nominal fields exist. These
-  // hidden callbacks are legal source syntax but depend on a method-own, trait
-  // or Self parameter, so both backends must return a source capability error
-  // rather than the verifier's internal E_IR_INVALID.
+  // The complete graph is rechecked after nominal fields exist. These hidden
+  // callbacks still depend only on deferred Self/trait/method-own identities,
+  // so they are legal declarations; concrete non-POD applications are checked
+  // in the dedicated rejection cases below.
   const std::string holder =
       "struct Holder[T]{cb func(inout T);}";
   const std::string main_zero = "func main()i32{return 0;}";
-  unsupported_both(holder +
-                   "trait Work[A]{func run[U](owner Self,holder Holder[U]);}" +
-                   main_zero);
-  unsupported_both(holder +
-                   "trait Work[A]{func run[U](owner Self)Holder[U];}" +
-                   main_zero);
-  unsupported_both(
-      "enum Holder[T]{Item(cb func(inout T));}"
-      "trait Work[A]{func run[U](owner Self,holder Holder[U]);}" +
-      main_zero);
-  unsupported_both(
-      "enum Err[T]{Fault(cb func(inout T));}"
-      "trait Work[A]{func run[U](owner Self) throws Err[U];}" + main_zero);
-  unsupported_both(holder +
-                   "trait Work[A]{func run[U](owner Self)(func()Holder[U]);}" +
-                   main_zero);
-  unsupported_both(holder +
-                   "trait Work[A]{func run[U](owner Self,holder Holder[A]);}" +
-                   main_zero);
-  unsupported_both(holder +
-                   "trait Work[A]{func run[U](owner Self,holder Holder[Self]);}" +
-                   main_zero);
-  unsupported_both(holder +
-                   "trait Work[A]{func run(owner Self,holder Holder[Self]);}" +
-                   main_zero);
-  unsupported_both(holder +
-                   "trait Work[A]{func run(owner Self,holder Holder[A]);}" +
-                   main_zero);
+  for (const char *backend : {"native", "python"}) {
+    for (const std::string &program : {
+             holder +
+                 "trait Work[A]{func run[U](owner Self,holder Holder[U]);}" +
+                 main_zero,
+             holder +
+                 "trait Work[A]{func run[U](owner Self)Holder[U];}" +
+                 main_zero,
+             std::string("enum Holder[T]{Item(cb func(inout T));}") +
+                 "trait Work[A]{func run[U](owner Self,holder Holder[U]);}" +
+                 main_zero,
+             std::string("enum Err[T]{Fault(cb func(inout T));}") +
+                 "trait Work[A]{func run[U](owner Self) throws Err[U];}" +
+                 main_zero,
+             holder +
+                 "trait Work[A]{func run[U](owner Self)(func()Holder[U]);}" +
+                 main_zero,
+             holder +
+                 "trait Work[A]{func run[U](owner Self,holder Holder[A]);}" +
+                 main_zero,
+             holder +
+                 "trait Work[A]{func run[U](owner Self,holder Holder[Self]);}" +
+                 main_zero,
+             holder +
+                 "trait Work[A]{func run(owner Self,holder Holder[Self]);}" +
+                 main_zero,
+             holder +
+                 "trait Work[A]{func run(owner Self,holder Holder[A]);}" +
+                 main_zero}) {
+      auto r = source(program, backend);
+      need(r.success(),
+           std::string(backend) + ": dependent hidden callback rejected\n" +
+               messages(r));
+      need(hir::verify(*r.value).success(),
+           std::string(backend) + ": dependent hidden callback HIR rejected");
+      need(hir::verify_types(*r.value).success(),
+           std::string(backend) + ": dependent hidden callback types rejected");
+    }
+  }
 
   // Fixed callback data stays legal for generic and non-generic traits, and
   // the old ordinary non-generic path remains accepted.
@@ -12007,20 +12056,74 @@ void generic_trait_method_modes(const fs::path &root) {
     reject(std::string("trait Closed[A]{func run[U](owner ") + mode +
                " Self,value U)U;}func main()i32{return 0;}",
            "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
-  // Adding a legal top-level mode cannot hide a callback dependency in a
-  // nominal field, nested function return, or typed error.
-  for (const char *argument : {"U", "A", "Self"})
-    reject(std::string("struct Holder[T]{cb func(inout T);}") +
-               "trait Closed[A]{func run[U](owner Self,slot inout i32,"
-               "holder Holder[" + argument + "]);}func main()i32{return 0;}",
-           "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
-  reject("struct Holder[T]{cb func(inout T);}"
-         "trait Closed[A]{func run[U](owner Self,value move U)"
-         "(func()Holder[A]);}func main()i32{return 0;}",
+  // A legal top-level mode does not make a callback dependency illegal. The
+  // same graphs are accepted as templates and rejected when a complete trait
+  // application substitutes owning data.
+  for (const char *argument : {"U", "A", "Self"}) {
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(std::string("struct Holder[T]{cb func(inout T);}") +
+                          "trait Closed[A]{func run[U](owner Self,"
+                          "slot inout i32,holder Holder[" + argument +
+                          "]);}func main()i32{return 0;}",
+                      backend);
+      need(r.success(),
+           std::string(backend) + ": dependent mode callback rejected\n" +
+               messages(r));
+      need(hir::verify_types(*r.value).success(),
+           std::string(backend) + ": dependent mode callback HIR rejected");
+      need(hir::verify(*r.value).success(),
+           std::string(backend) + ": dependent mode callback did not publish");
+    }
+  }
+  for (const char *backend : {"native", "python"}) {
+    auto r = source(
+        "struct Holder[T]{cb func(inout T);}"
+        "trait Closed[A]{func run[U](owner Self,value move U)"
+        "(func()Holder[A]);}func main()i32{return 0;}",
+        backend);
+    need(r.success(), std::string(backend) +
+                          ": dependent return callback rejected\n" +
+                          messages(r));
+    need(hir::verify_types(*r.value).success(),
+         std::string(backend) + ": dependent return callback HIR rejected");
+    auto e = source("enum E[T]{Bad(cb func(inout T));}"
+                    "trait Closed[A]{func run[U](owner Self,value move U) "
+                    "throws E[A];}func main()i32{return 0;}",
+                    backend);
+    need(e.success(), std::string(backend) +
+                          ": dependent throws callback rejected\n" +
+                          messages(e));
+    need(hir::verify_types(*e.value).success(),
+         std::string(backend) + ": dependent throws callback HIR rejected");
+  }
+  const std::string owning = "struct Own{items Vec[i32];}";
+  reject("struct Holder[T]{cb func(inout T);}" + owning +
+             "trait Closed[A]{func run[U](owner Self,holder Holder[A]);}"
+             "impl Closed[Own] for i32{"
+             "func run[U](owner Self,holder Holder[Own]){}}"
+             "func main()i32{return 0;}",
          "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
-  reject("enum E[T]{Bad(cb func(inout T));}"
-         "trait Closed[A]{func run[U](owner Self,value move U) throws E[A];}"
-         "func main()i32{return 0;}",
+  reject("struct Holder[T]{cb func(inout T);}" + owning +
+             "trait Closed[A]{func run[U](owner Self,holder Holder[Self]);}"
+             "impl Closed[bool] for Own{"
+             "func run[U](owner Self,holder Holder[Own]){}}"
+             "func main()i32{return 0;}",
+         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+  reject("struct Holder[T]{cb func(inout T);}" + owning +
+             "trait Closed[A]{func run[U](owner Self,value move U)"
+             "(func()Holder[A]);}"
+             "impl Closed[Own] for i32{"
+             "func run[U](owner Self,value move U)(func()Holder[Own]){"
+             "return func()Holder[Own]{return Holder[Own](cb:noop);};}}"
+             "func noop(slot inout Own){}"
+             "func main()i32{return 0;}",
+         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+  reject("enum E[T]{Bad(cb func(inout T));}" + owning +
+             "trait Closed[A]{func run[U](owner Self,value move U) "
+             "throws E[A];}"
+             "impl Closed[Own] for i32{"
+             "func run[U](owner Self,value move U) throws E[Own]{}}"
+             "func main()i32{return 0;}",
          "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
 
   auto name = [&](SymbolId s) -> const std::string & {
@@ -12808,6 +12911,356 @@ func main()i32{
                "multi-step HIR and generic controls passed\n";
 }
 
+
+void dependent_callback_completion(const fs::path &root) {
+  auto good = [](const std::string &text) {
+    auto r = source(text);
+    need(r.success(), text + "\n" + messages(r));
+    need(hir::verify_types(*r.value).success(),
+         "dependent callback HIR rejected\n" + messages(r));
+    need(hir::verify(*r.value).success(),
+         "dependent callback did not publish\n" + messages(r));
+    return *r.value;
+  };
+  auto unsupported = [](const std::string &text) {
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(text, backend);
+      need(!r.success() && r.failure == FailureKind::unsupported &&
+               has(r, "E_CAPABILITY_UNAVAILABLE") &&
+               !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+           std::string(backend) + ": concrete dependent data accepted\n" +
+               text + "\n" + messages(r));
+    }
+  };
+  auto nominal = [](const hir::HirModule &m,
+                    const std::string &name) -> TypeId {
+    for (uint64_t i = 1; i <= m.types.size(); ++i) {
+      auto t = m.types.find(TypeId{i});
+      if (t && (t->kind == hir::TypeKind::NominalStruct ||
+                t->kind == hir::TypeKind::NominalEnum) &&
+          m.resolved->symbols[t->declaration.value].name == name)
+        return TypeId{i};
+    }
+    throw std::runtime_error("dependent callback nominal missing: " + name);
+  };
+  auto trait = [](const hir::HirModule &m,
+                  const std::string &name) -> const hir::TraitDecl * {
+    for (const auto &t : m.traits)
+      if (m.resolved->symbols[t.symbol.value].name == name)
+        return &t;
+    return nullptr;
+  };
+
+  // Complete substitution of real Self, trait A, generic impl P and
+  // method-own U, including struct-held callbacks, a recursive Self callback,
+  // a returned Self callback, sibling generic forwarding and a concrete call.
+  const std::string full = R"FULL(
+struct Pair { value i32; flag bool; }
+struct Own { items Vec[i32]; }
+struct Holder[T] { cb func(inout T,T)T; }
+struct Box[P] { marker i32; value P; }
+func keep_own(value Own) Unit {}
+func replace(slot inout Pair, value Pair) Pair {
+    let old = slot; slot = value; return old;
+}
+func replace_box(slot inout Box[Pair], value Box[Pair]) Box[Pair] {
+    let old = slot; slot = value; return old;
+}
+trait Flow[A] {
+    func run[U](owner Self, callback func(inout A,A)A,
+                self_callback func(inout Self,Self)Self,
+                slot inout A, self_slot inout Self,
+                held Holder[A], self_held Holder[Self], tag U) Unit;
+}
+impl[P] Flow[P] for Box[P] {
+    func run[U](owner Self, callback func(inout P,P)P,
+                self_callback func(inout Self,Self)Self,
+                slot inout P, self_slot inout Self,
+                held Holder[P], self_held Holder[Self], tag U) Unit {}
+}
+func forward[T Flow[Pair],U](owner T, callback func(inout Pair,Pair)Pair,
+        self_callback func(inout T,T)T, slot inout Pair, self_slot inout T,
+        held Holder[Pair], self_held Holder[T], tag U) Unit {
+    T.run[U](owner, callback, self_callback, inout slot, inout self_slot,
+             held, self_held, tag);
+}
+trait SelfFactory {
+    func make[U](owner Self, tag U) (func(inout Self,Self)Self);
+}
+impl SelfFactory for Pair {
+    func make[U](owner Self, tag U) (func(inout Pair,Pair)Pair) {
+        return replace;
+    }
+}
+func main() i32 {
+    let owner = Box[Pair](marker:0, value:Pair(value:0, flag:false));
+    var slot = Pair(value:1, flag:false);
+    var self_slot = Box[Pair](marker:1, value:Pair(value:2, flag:true));
+    let held = Holder[Pair](cb:replace);
+    let self_held = Holder[Box[Pair]](cb:replace_box);
+    owner.run[i32](replace, replace_box, inout slot, inout self_slot,
+                   held, self_held, 1);
+    forward[Box[Pair],i32](owner, replace, replace_box, inout slot,
+                           inout self_slot, held, self_held, 2);
+    let powner = Pair(value:9, flag:true);
+    let factory = powner.make[i32](5);
+    var fslot = Pair(value:3, flag:false);
+    let old = factory(inout fslot, Pair(value:4, flag:true));
+    if old.value != 3 || old.flag || fslot.value != 4 || !fslot.flag { return 1; }
+    return 0;
+}
+)FULL";
+  auto complete = good(full);
+  const auto owned = nominal(complete, "Own");
+  const auto *flow = trait(complete, "Flow");
+  const auto *factory = trait(complete, "SelfFactory");
+  need(flow && factory, "dependent callback traits missing");
+  for (auto &im : complete.impls) {
+    need(!im.trait || im.trait->declaration != flow->symbol ||
+             im.trait->args.size() == 1,
+         "generic dependent impl application arity changed");
+  }
+
+  // A concrete trait application that substitutes owning data must reject
+  // even when the declaration is never called.
+  unsupported("struct Own{items Vec[i32];}"
+              "struct Box[P]{marker i32;}"
+              "trait F[A]{func bad[U](owner Self,cb func(inout A,A)A)Unit;}"
+              "impl[P] F[P] for Box[P]{"
+              "func bad[U](owner Self,cb func(inout P,P)P)Unit{}}"
+              "func uncalled[T F[Own]](x T)Unit{}"
+              "func main()i32{return 0;}");
+  // Real Self replacement with owning data is also a source error.
+  unsupported("struct Own{items Vec[i32];}"
+              "trait S{func bad[U](owner Self,"
+              "cb func(inout Self,Self)Self)Unit;}"
+              "impl S for Own{func bad[U](owner Self,"
+              "cb func(inout Own,Own)Own)Unit{}}"
+              "func main()i32{return 0;}");
+
+  // Corrupt the complete trait application and the real Self identity. Both
+  // direct verification and a successful ownership recomputation reject.
+  SymbolId flow_symbol = flow->symbol;
+  auto swap_application = [&](auto &x) {
+    bool changed = false;
+    for (auto &im : x.impls)
+      if (im.trait && im.trait->declaration == flow_symbol &&
+          im.trait->args.size() == 1) {
+        im.trait->args[0] = owned;
+        changed = true;
+      }
+    need(changed, "dependent callback application mutation target missing");
+  };
+  invalid(complete, "dependent callback trait application owning", swap_application);
+  invalid_recomputed(complete,
+                     "dependent callback trait application owning recomputed",
+                     swap_application);
+  SymbolId factory_symbol = factory->symbol;
+  auto replace_self = [&](auto &x) {
+    bool changed = false;
+    for (auto &im : x.impls)
+      if (im.trait && im.trait->declaration == factory_symbol) {
+        im.self_type = owned;
+        changed = true;
+      }
+    need(changed, "dependent callback Self mutation target missing");
+  };
+  invalid(complete, "dependent callback real Self owning", replace_self);
+  invalid_recomputed(complete,
+                     "dependent callback real Self owning recomputed",
+                     replace_self);
+
+  // A same-signature function-value target swap keeps the type but changes
+  // the real declaration identity.
+  auto values = good(R"(
+struct Pair { value i32; }
+func replace(slot inout Pair, value Pair) Pair {
+    let old = slot; slot = value; return old;
+}
+func duplicate(slot inout Pair, value Pair) Pair {
+    let old = slot; slot = Pair(value: value.value + 1); return old;
+}
+func main() i32 {
+    var slot = Pair(value:1);
+    let callback func(inout Pair,Pair)Pair = replace;
+    let old = callback(inout slot, Pair(value:2));
+    if old.value != 1 || slot.value != 2 { return 1; }
+    return 0;
+}
+)");
+  SymbolId replace_symbol{}, duplicate_symbol{};
+  for (const auto &f : values.functions) {
+    auto name = values.resolved->symbols[f.symbol.value].name;
+    if (name == "replace")
+      replace_symbol = f.symbol;
+    if (name == "duplicate")
+      duplicate_symbol = f.symbol;
+  }
+  need(replace_symbol.value && duplicate_symbol.value,
+       "same-signature callback helpers missing");
+  auto swap_value = [&](auto &x) {
+    bool changed = false;
+    for (auto &n : x.nodes)
+      if (auto v = std::get_if<hir::FunctionValue>(&n.data);
+          v && v->symbol == replace_symbol) {
+        v->symbol = duplicate_symbol;
+        changed = true;
+      }
+    need(changed, "dependent callback FunctionValue mutation target missing");
+  };
+  invalid(values, "dependent callback function value target", swap_value);
+  invalid_recomputed(values,
+                     "dependent callback function value target recomputed",
+                     swap_value);
+
+  // Erase an inner callback inout mode consistently: the function's callback
+  // parameter type, the indirect call signature, the argument mode and its
+  // Place->Read all change together. The concrete source declaration still
+  // proves the original mode, so both entry points reject.
+  auto erased = good(R"(
+struct Pair { value i32; }
+func replace(slot inout Pair, value Pair) Pair {
+    let old = slot; slot = value; return old;
+}
+func apply(callback func(inout Pair,Pair)Pair, slot inout Pair,
+           value Pair) Pair {
+    return callback(inout slot, value);
+}
+func main() i32 {
+    var slot = Pair(value:1);
+    let old = apply(replace, inout slot, Pair(value:2));
+    if old.value != 1 || slot.value != 2 { return 1; }
+    return 0;
+}
+)");
+  SymbolId apply_symbol{};
+  for (const auto &f : erased.functions)
+    if (erased.resolved->symbols[f.symbol.value].name == "apply")
+      apply_symbol = f.symbol;
+  need(apply_symbol.value, "dependent callback erase function missing");
+  auto erase_mode = [&](auto &x) {
+    bool changed = false;
+    for (auto &f : x.functions)
+      if (f.symbol == apply_symbol) {
+        auto sig = *x.types.find(f.signature);
+        need(sig.parameters.size() == 3, "erase apply signature shape");
+        auto cb = *x.types.find(sig.parameters[0].type);
+        need(cb.kind == hir::TypeKind::Function &&
+                 cb.parameters.size() == 2 &&
+                 cb.parameters[0].mode == hir::ParamMode::inout,
+             "erase callback signature shape");
+        cb.parameters[0].mode = hir::ParamMode::ordinary;
+        auto callback_type = x.types.intern(cb);
+        sig.parameters[0].type = callback_type;
+        f.signature = x.types.intern(sig);
+        for (auto &n : x.nodes) {
+          if (x.scopes[n.scope.value].function != apply_symbol)
+            continue;
+          auto c = std::get_if<hir::Call>(&n.data);
+          if (!c || c->kind != hir::CalleeKind::function_value)
+            continue;
+          need(c->callee.has_value() && c->args.size() == 2 &&
+                   c->args[0].mode == hir::ParamMode::inout,
+               "erase indirect callback call shape");
+          x.nodes[c->callee->value].type = callback_type;
+          c->signature = callback_type;
+          c->args[0].mode = hir::ParamMode::ordinary;
+          auto &argument = x.nodes[c->args[0].expression.value];
+          auto place = std::get<hir::Place>(argument.data);
+          argument.data = hir::Read{place.symbol};
+          changed = true;
+        }
+      }
+    need(changed, "dependent callback inout erase target missing");
+  };
+  invalid(erased, "dependent callback inout mode erased", erase_mode);
+  invalid_recomputed(erased,
+                     "dependent callback inout mode erased recomputed",
+                     erase_mode);
+
+  // A returned recursive nominal must expand the next complete application.
+  // Wrap[i32] -> Wrap[Vec[i32]] reaches a concrete illegal callback instead
+  // of stopping at the shared Wrap declaration or exhausting a budget.
+  const std::string recursive_return = R"WRAP(
+struct Wrap[T] {
+    direct func(inout T);
+    next func() Wrap[Vec[T]];
+}
+trait F[A] { func see[U](owner Self, held Wrap[A]); }
+struct Host {}
+impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
+func main() i32 { return 0; }
+)WRAP";
+  const std::string mutual_next_first = R"WRAP(
+struct Wrap[T] { next func() Relay[Vec[T]]; direct func(inout T); }
+struct Relay[U] { next func() Wrap[U]; }
+trait F[A] { func see[U](owner Self, held Wrap[A]); }
+struct Host {}
+impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
+func main() i32 { return 0; }
+)WRAP";
+  const std::string mutual_direct_first = R"WRAP(
+struct Wrap[T] { direct func(inout T); next func() Relay[Vec[T]]; }
+struct Relay[U] { next func() Wrap[U]; }
+trait F[A] { func see[U](owner Self, held Wrap[A]); }
+struct Host {}
+impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
+func main() i32 { return 0; }
+)WRAP";
+  for (const auto &program : {recursive_return, mutual_next_first,
+                              mutual_direct_first})
+    for (const char *backend : {"native", "python"}) {
+      auto r = source(program, backend);
+      auto text = messages(r);
+      need(!r.success() && r.failure == FailureKind::unsupported &&
+               has(r, "E_CAPABILITY_UNAVAILABLE") &&
+               !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR") &&
+               text.find("budget") == std::string::npos &&
+               text.find("exceeds") == std::string::npos,
+           std::string(backend) +
+               ": recursive return callback was not a precise source error\n" +
+               text);
+    }
+  auto same_application = good(R"WRAP(
+struct Wrap[T] {
+    direct func(inout T);
+    next func() Wrap[T];
+}
+trait F[A] { func see[U](owner Self, held Wrap[A]); }
+struct Host {}
+impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
+func main() i32 { return 0; }
+)WRAP");
+  need(hir::verify_types(same_application).success() &&
+           hir::verify(same_application).success(),
+       "same-application recursive control did not publish");
+  auto ordinary_mutual = good(R"WRAP(
+struct Wrap[T] { next func() Relay[Vec[T]]; }
+struct Relay[U] { next func() Wrap[U]; }
+trait F[A] { func see[U](owner Self, held Wrap[A]); }
+struct Host {}
+impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
+func main() i32 { return 0; }
+)WRAP");
+  need(hir::verify_types(ordinary_mutual).success() &&
+           hir::verify(ordinary_mutual).success(),
+       "ordinary mutual growing-return control did not publish");
+
+  // Cross-package forwarding and a non-capturing lambda are checked from the
+  // real project source; the runtime backends cover the same shape in the
+  // fixture projects below this C++ test's scope.
+  auto cross = check(root /
+      "tests/generics/generic-traits/callback-cross-package-lambda/lang.toml");
+  need(cross.success(), "dependent cross-package lambda rejected\n" +
+                            messages(cross));
+  need(hir::verify_types(*cross.value).success(),
+       "dependent cross-package lambda HIR rejected");
+  need(hir::verify(*cross.value).success(),
+       "dependent cross-package lambda did not publish");
+  std::cout << "dependent-callback-completion: complete Self/A/P/U graphs, "
+               "concrete owning rejects, identity and mode corruptions\n";
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || (argc == 3 && std::string(argv[2]) == "--repairs"),
@@ -12885,6 +13338,7 @@ int main(int argc, char **argv) {
     ordinary_trait_receiver(root);
     indexed_function_calls();
     trait_parameter_bounds(root);
+    dependent_callback_completion(root);
     repairs(root);
   } catch (const std::exception &e) {
     std::cerr << e.what() << "\n";

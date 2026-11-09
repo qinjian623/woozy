@@ -17,7 +17,8 @@ import sys
 sys.dont_write_bytecode = True
 
 POSITIVE = ('values', 'routes', 'correction-positive',
-            'fixed-callback-function-cycle')
+            'fixed-callback-function-cycle',
+            'reject-correction/generic-dependent-callback')
 REJECT_CODES = {'E_CALL_ARGUMENT', 'E_CAPABILITY_UNAVAILABLE'}
 FORBIDDEN_REJECT_CODES = {'E_IR_INVALID', 'E_INTERNAL_ERROR'}
 
@@ -173,6 +174,10 @@ def main():
         for group in ('reject-owned', 'reject-alias', 'reject-correction'):
             for manifest in sorted((cases / group).glob('*/lang.toml')):
                 case = f'{group}/{manifest.parent.name}'
+                if case == 'reject-correction/generic-dependent-callback':
+                    # The former template rejection is now a positive control;
+                    # the owning-data rejections below keep this loop covered.
+                    continue
                 project = manifest.parent
                 hashes = source_hashes(project)
                 for backend in ('native', 'python'):

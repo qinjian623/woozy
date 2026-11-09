@@ -14,10 +14,9 @@ sys.dont_write_bytecode = True
 CASES = ('positive', 'errors', 'constrained-inherent', 'trait-modes',
          'trait-self', 'trait-self-callback', 'trait-generic-inout',
          'trait-qualified-inout', 'trait-qualified-own',
-         'trait-ordinary-holder-control', 'trait-ordinary-return-control')
-REJECT_CASES = ('reject', 'trait-generic-nonscalar-reject',
-                'trait-function-cycle-reject',
-                'trait-type-inout-return-reject')
+         'trait-ordinary-holder-control', 'trait-ordinary-return-control',
+         'trait-function-cycle-reject', 'trait-type-inout-return-reject')
+REJECT_CASES = ('reject', 'trait-generic-nonscalar-reject')
 EXPECTED_EVENTS = {
     'positive': [9, 3, 5],
     'errors': [9, 2, 3, 9, 8, 2, 3, 9, 4, 3, 9, 4, 6, 3, 9, 5, 6],
@@ -31,6 +30,8 @@ EXPECTED_EVENTS = {
     'trait-qualified-own': [],
     'trait-ordinary-holder-control': [],
     'trait-ordinary-return-control': [],
+    'trait-function-cycle-reject': [],
+    'trait-type-inout-return-reject': [],
 }
 EXPECTED_LOGS = {
     'trait-generic-inout': [1, 11, 112, 1123, 11234, 112341, 1123411,
@@ -42,6 +43,8 @@ EXPECTED_LOGS = {
     'trait-qualified-own': [],
     'trait-ordinary-holder-control': [],
     'trait-ordinary-return-control': [],
+    'trait-function-cycle-reject': [],
+    'trait-type-inout-return-reject': [],
 }
 EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13,
                         'constrained-inherent': 8, 'trait-modes': 2,
@@ -50,7 +53,9 @@ EXPECTED_ALLOCATIONS = {'positive': 8, 'errors': 13,
                         'trait-qualified-inout': 2,
                         'trait-qualified-own': 0,
                         'trait-ordinary-holder-control': 0,
-                        'trait-ordinary-return-control': 0}
+                        'trait-ordinary-return-control': 0,
+                        'trait-function-cycle-reject': 0,
+                        'trait-type-inout-return-reject': 0}
 
 
 def digest(path):
@@ -161,9 +166,11 @@ def assert_native(case, observations, allocations):
         assert logs == EXPECTED_LOGS[case], logs
         assert frees == [], frees
     elif case in ('trait-ordinary-holder-control',
-                  'trait-ordinary-return-control'):
-        # Legacy ordinary-only Type/T calls keep their Self callbacks and
-        # allocate no language-owned heap objects.
+                  'trait-ordinary-return-control',
+                  'trait-function-cycle-reject',
+                  'trait-type-inout-return-reject'):
+        # Legacy ordinary-only Type/T calls and the newly opened dependent
+        # callback entry keep their Self callbacks and allocate no heap.
         assert logs == EXPECTED_LOGS[case], logs
         assert frees == [], frees
     elif case == 'trait-self-callback':
@@ -303,7 +310,9 @@ def assert_python(case, data):
         assert snapshots['p'] == 7 and snapshots['q'] is False, data
         assert snapshots['r'] == 8 and snapshots['s'] is True, data
     elif case in ('trait-ordinary-holder-control',
-                  'trait-ordinary-return-control'):
+                  'trait-ordinary-return-control',
+                  'trait-function-cycle-reject',
+                  'trait-type-inout-return-reject'):
         assert not data['allocations'], data
         assert data['main_return'] == 0, data
     elif case == 'trait-self-callback':

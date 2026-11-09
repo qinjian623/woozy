@@ -27,7 +27,7 @@ target_include_directories(lang_native_string_probe SYSTEM PRIVATE ${LLVM_INCLUD
 target_compile_options(lang_native_string_probe PRIVATE -fno-rtti)
 target_link_libraries(lang_native_string_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 if(LANG_TEST_PYTHON)
-  foreach(fixture IN ITEMS strings string-constants)
+  foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates)
     add_test(NAME native.${fixture} COMMAND ${LANG_TEST_PYTHON}
       ${CMAKE_CURRENT_LIST_DIR}/run_strings.py --cli $<TARGET_FILE:langc>
       --probe $<TARGET_FILE:lang_native_string_probe> --root ${LANG_SOURCE_ROOT}
@@ -38,7 +38,9 @@ if(LANG_TEST_PYTHON)
   add_test(NAME native.cli COMMAND ${LANG_TEST_PYTHON}
     ${CMAKE_CURRENT_LIST_DIR}/run_cli.py --cli $<TARGET_FILE:langc>
     --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
-    --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --out ${CMAKE_CURRENT_BINARY_DIR}/cli-results)
+    --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --out ${CMAKE_CURRENT_BINARY_DIR}/cli-results
+    --helper $<TARGET_FILE:lang_native_helper>
+    --invalid-json-cli $<TARGET_FILE:langc_native_invalid_json_probe>)
   set_tests_properties(native.cli PROPERTIES TIMEOUT 180)
   add_test(NAME native.generics COMMAND ${LANG_TEST_PYTHON}
     ${CMAKE_CURRENT_LIST_DIR}/run_generics.py --cli $<TARGET_FILE:langc>
@@ -111,6 +113,14 @@ if(LANG_TEST_PYTHON)
   set_tests_properties(native.ownership PROPERTIES TIMEOUT 240)
 endif()
 add_executable(lang_native_unreachable_try_test unreachable_try_test.cpp)
+# Private test-only helper for the driver's strict invalid-JSON exit-code context.
+add_executable(lang_native_exit2_helper fake_exit2_helper.cpp)
+add_executable(langc_native_invalid_json_probe ${LANG_SOURCE_ROOT}/src/driver/main.cpp)
+target_link_libraries(langc_native_invalid_json_probe PRIVATE
+  lang_sema lang_backend_python lang_driver_process json-c::json-c)
+target_compile_definitions(langc_native_invalid_json_probe PRIVATE
+  LANG_NATIVE_HELPER="$<TARGET_FILE:lang_native_exit2_helper>")
+add_dependencies(langc_native_invalid_json_probe lang_native_exit2_helper)
 target_include_directories(lang_native_unreachable_try_test SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_options(lang_native_unreachable_try_test PRIVATE -fno-rtti)
 target_link_libraries(lang_native_unreachable_try_test PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})

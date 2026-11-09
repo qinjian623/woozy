@@ -1,0 +1,9 @@
+package app;
+struct Wrap[T] {
+    direct func(inout T);
+    next func() Wrap[T];
+}
+trait F[A] { func see[U](owner Self, held Wrap[A]); }
+struct Host {}
+impl F[i32] for Host { func see[V](owner Self, held Wrap[i32]) {} }
+func main() i32 { return 0; }

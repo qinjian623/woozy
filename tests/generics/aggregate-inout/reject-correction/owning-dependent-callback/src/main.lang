@@ -1,0 +1,7 @@
+package app;
+struct Own { items Vec[i32]; }
+trait Apply { func run[U](owner Self, callback func(inout U)) Unit; }
+impl Apply for Own {
+    func run[U](owner Self, callback func(inout Own)) Unit {}
+}
+func main() i32 { return 0; }

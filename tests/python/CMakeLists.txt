@@ -41,7 +41,7 @@ add_test(NAME python.aggregates COMMAND "${LANG_PYTHON312}"
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/aggregates"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.aggregates PROPERTIES TIMEOUT 180)
-foreach(fixture IN ITEMS strings string-constants)
+foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates)
   add_test(NAME python.${fixture} COMMAND "${LANG_PYTHON312}"
     "${CMAKE_CURRENT_LIST_DIR}/run_strings.py"
     --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
@@ -49,6 +49,12 @@ foreach(fixture IN ITEMS strings string-constants)
     --python "${LANG_PYTHON312}" --fixture ${fixture})
   set_tests_properties(python.${fixture} PROPERTIES TIMEOUT 180)
 endforeach()
+add_test(NAME python.string-aggregate-binding COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/run_string_binding.py"
+  --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/string-aggregate-binding"
+  --python "${LANG_PYTHON312}")
+set_tests_properties(python.string-aggregate-binding PROPERTIES TIMEOUT 180)
 add_test(NAME python.cleanup COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_cleanup.py"
   --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_PYTHON_TEST_ROOT}"

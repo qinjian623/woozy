@@ -42,22 +42,58 @@ CONST_EXPECTED = {
     'probe_const_package': '跨包常量\0尾'.encode('utf-8'),
 }
 
+AGGREGATE_EXPECTED = {
+    'probe_box': '泛型\0盒😀'.encode('utf-8'),
+    'probe_nested': '嵌套\0😀'.encode('utf-8'),
+    'probe_enum': '原始\n多行\\0😀'.encode('utf-8'),
+    'probe_empty': b'',
+    'probe_parameter': '普通\0参数'.encode('utf-8'),
+    'probe_branch': '分支\n假'.encode('utf-8'),
+    'probe_move': '整体\0移动😀'.encode('utf-8'),
+    'probe_move_box': '盒\0移动'.encode('utf-8'),
+    'probe_reinit': '新\0值'.encode('utf-8'),
+}
+VEC_EXPECTED = {
+    'probe_alias_replace': '替\0换'.encode('utf-8'),
+    'probe_slice': '末\0😀'.encode('utf-8'),
+    'probe_for_in': '末\0😀'.encode('utf-8'),
+    'probe_element_copy': '空'.encode('utf-8'),
+    'probe_release': '末\0😀'.encode('utf-8'),
+    'probe_move_string': '本地\0移动'.encode('utf-8'),
+    'probe_move_vec': '向\0量移动'.encode('utf-8'),
+    'probe_bundle': '项\0目'.encode('utf-8'),
+}
+
 STRING_FIXTURES = {
     "strings": EXPECTED,
     "string-constants": CONST_EXPECTED,
+    "string-aggregates": AGGREGATE_EXPECTED,
+    "string-vec-aggregates": VEC_EXPECTED,
+}
+STRING_FIXTURE_PATHS = {
+    "strings": "tests/sema/strings",
+    "string-constants": "tests/sema/string-constants",
+    "string-aggregates": "tests/sema/string-aggregates",
+    "string-vec-aggregates": "tests/native/ownership/string-vec-aggregates",
 }
 
 CAP = 'E_CAPABILITY_UNAVAILABLE'
 TYPE = 'E_TYPE_MISMATCH'
 REJECTED = {
-    'struct-string': ('struct S {s string;} func main() {let x=S(s:"x");}', CAP),
-    'enum-string': ('enum E {A(s string);} func main() {let x=E.A(s:"x");}', CAP),
-    'generic-string-field': ('struct S[T] {x T;} func main() {let x=S[string](x:"x");}', CAP),
-    'vec': ('func main() {let x Vec[string]=["x"];}', CAP),
+    'struct-string-inout': ('struct S {s string;} func f(x inout S) {} func main() {}', CAP),
+    'vec-string-inout': ('func f(x inout Vec[string]) {} func main() {}', CAP),
     'concat': ('func main() {let a="x";let b="y";let x=a+b;}', TYPE),
     'index': ('func main() {let x="x";let y=x[0];}', CAP),
+    'slice': ('func main() {let x="x";let y=x[:];}', CAP),
     'inout': ('func f(x inout string) {} func main() {}', CAP),
-    'move': ('func f(x move string) {} func main() {}', CAP),
+    'move-after-read': ('func main() {let x="x";let y=move x;let z=x;}',
+                        'E_OWNERSHIP_USE_AFTER_MOVE'),
+    'ordinary-parameter-move': ('func take(x move string) string {return move x;} '
+                                'func f(p string) {let y=take(move p);} func main() {}',
+                                'E_CALL_ARGUMENT'),
+    'partial-field-move': ('struct S {s string;n i32;} func main() '
+                           '{var x=S(s:"x",n:1);let y=move x.s;}', CAP),
+    'partial-index-move': ('func main() {let x Vec[string]=["x"];let y=move x[0];}', CAP),
     'foreign': ('import "py" as p;func main() {p.run();}', CAP),
     'parameter-reassign': ('func f(x string) {x="y";} func main() {}', TYPE),
     'let-reassign': ('func main() {let x="x";x="y";}', TYPE),

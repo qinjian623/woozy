@@ -708,7 +708,7 @@ void suite(const fs::path &published) {
   source("func f() { switch 1 { default: break; } }",
          "E_CAPABILITY_UNAVAILABLE");
   source("func f() { defer {} }");
-  source("func f() { let x=1; unsafe {} }", "E_CAPABILITY_UNAVAILABLE");
+  source("func f() { let x=1; unsafe {} }");
   // Constant expressions keep their typed wrap/truncation semantics when
   // materialized; conversion checks use those values, not host arithmetic.
   {

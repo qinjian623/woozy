@@ -1,4 +1,5 @@
 #include "lang/sema/check.hpp"
+#include "../../src/hir/ownership.hpp"
 #include <algorithm>
 #include <cstdlib>
 #include <filesystem>
@@ -107,6 +108,21 @@ void invalid(const HirModule &input, const std::string &name,
   auto published = verify(m);
   need(!published.value && has(published, "E_IR_INVALID"),
        "damaged HIR reached backend capability check: " + name);
+  ++probes;
+  std::cout << "bad_hir " << name << " passed\n";
+}
+void invalid_recomputed(const HirModule &input, const std::string &name,
+                        const std::function<void(HirModule &)> &edit) {
+  auto m = input;
+  edit(m);
+  auto derived = detail::produce_ownership(m, {});
+  need(derived.success(), name + " ownership recompute " + diagnostics(derived));
+  auto r = verify_types(m);
+  need(!r.success() && !r.value && has(r, "E_IR_INVALID"),
+       "recomputed damaged HIR accepted: " + name + "\n" + diagnostics(r));
+  auto published = verify(m);
+  need(!published.value && has(published, "E_IR_INVALID"),
+       "recomputed damaged HIR reached backend capability check: " + name);
   ++probes;
   std::cout << "bad_hir " << name << " passed\n";
 }
@@ -745,6 +761,152 @@ void correction_probes() {
           });
   std::cout << "correction source effects/flow/order passed\n";
 }
+void unsafe_probes() {
+  const std::string valid =
+      "func empty(){unsafe{}}"
+      "func only_return()i32{unsafe{return 1;}}"
+      "func shadow(x i32)i32{unsafe{let x i32=x+1;unsafe{{let y i32=x;"
+      "if y!=2{return 9;}}}}return x-1;}"
+      "func generic[T](x T)T{unsafe{let y T=x;return y;}}"
+      "func lambda()i32{let g func() i32=func() i32{unsafe{let x i32=1;"
+      "return x;}};return g();}"
+      "func main()i32{empty();if only_return()!=1{return 1;}"
+      "if shadow(1)!=0{return 2;}if generic(4)!=4{return 3;}"
+      "if lambda()!=1{return 4;}return 0;}";
+  for (auto backend : {Backend::native, Backend::python})
+    supported(accepted(valid, backend));
+
+  auto rejected_clean = [&](const std::string &body, std::string_view code) {
+    for (auto backend : {Backend::native, Backend::python}) {
+      auto r = sema::check_types(resolve(body, backend));
+      need(!r.success() && !r.value && has(r, code) &&
+               !has(r, "E_IR_INVALID") && !has(r, "E_INTERNAL_ERROR"),
+           body + "\n" + diagnostics(r));
+      ++probes;
+    }
+  };
+  rejected_clean("func main()i32{unsafe{let x i32=1;x=2;}return 0;}",
+                 "E_TYPE_MISMATCH");
+  rejected_clean("func take(v move Vec[i32])i32{return v[0];}"
+                 "func main()i32{let v Vec[i32]=[1];let x=take(move v);"
+                 "unsafe{return x+v[0];}}",
+                 "E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected_clean("func main()i32{unsafe{defer{return 1;}}return 0;}",
+                 "E_CLEANUP_ESCAPE");
+  rejected_clean("enum E{Bad;}func main()throws E{"
+                 "unsafe{defer{throw E.Bad;}}}",
+                 "E_CLEANUP_ESCAPE");
+  rejected_clean("enum E{Bad;}func main(){unsafe{throw E.Bad;}}",
+                 "E_EFFECT_UNHANDLED");
+  rejected_clean("struct S{a i32;}func bump(x inout i32){}"
+                 "func main(){var s=S(a:1);unsafe{bump(inout s.a);}}",
+                 "E_CAPABILITY_UNAVAILABLE");
+  rejected_clean("func bump(x inout i32){}"
+                 "func main(){var v Vec[i32]=[1];unsafe{bump(inout v[0]);}}",
+                 "E_CAPABILITY_UNAVAILABLE");
+  auto rejected_resolve = [&](const std::string &body, std::string_view code) {
+    for (auto backend : {Backend::native, Backend::python}) {
+      SourceManager sm;
+      auto src =
+          sm.update(sm.add_file("t08-static.lang"), "package app; " + body);
+      auto tokens = lex(src);
+      need(tokens.success(), diagnostics(tokens));
+      auto ast = parse(*tokens.value);
+      need(ast.success(), diagnostics(ast));
+      auto p = std::make_shared<modules::Project>();
+      p->backend = backend == Backend::native ? "native" : "python";
+      modules::Module m;
+      m.id = ModuleId{0};
+      m.logical_path = "app";
+      m.files.push_back(std::make_shared<const AstFile>(std::move(*ast.value)));
+      p->modules.push_back(std::move(m));
+      auto names = modules::resolve_project(p);
+      need(!names.success() && has(names, code), body + "\n" + diagnostics(names));
+      ++probes;
+    }
+  };
+  rejected_resolve("func main()i32{unsafe{let x i32=1;}return x;}",
+                   "E_NAME_NOT_FOUND");
+  rejected_clean("func main()i32{for{unsafe{defer{break;}}}}",
+                 "E_CLEANUP_ESCAPE");
+
+  auto owned = accepted(
+      "func f(log inout i64)i32{unsafe{{let n i32=0;}"
+      "let v Vec[i32]=[2];defer{log=log*10+3;}return i32(v[0]);}}");
+  supported(owned);
+  const HirFunction *function = nullptr;
+  for (const auto &candidate : owned.functions)
+    if (owned.resolved->symbols.at(candidate.symbol.value).name == "f")
+      function = &candidate;
+  need(function, "unsafe HIR function missing");
+  const auto &root = owned.nodes[function->body.value];
+  need(root.kind() == NodeKind::block && root.children.size() == 1,
+       "unsafe function root shape");
+  const auto body = root.children[0];
+  need(owned.nodes[body.value].kind() == NodeKind::block,
+       "unsafe HIR body is not a lexical block");
+  const auto &body_node = owned.nodes[body.value];
+  need(body_node.children.size() == 4,
+       "unsafe HIR body statement count");
+  const auto nested = body_node.children[0];
+  need(owned.nodes[nested.value].kind() == NodeKind::block,
+       "unsafe HIR nested block missing");
+  auto ref = body_node.source.node;
+  const auto &file =
+      *owned.resolved->project->module(ref.module).files.at(ref.file);
+  need(file.node(ref.node).kind == AstKind::Block,
+       "unsafe HIR body source is not its real block");
+  std::optional<AstNodeId> unsafe_ast;
+  for (size_t i = 0; i < file.nodes.size(); ++i) {
+    const auto &candidate = file.nodes[i];
+    if (candidate.kind == AstKind::Unsafe && candidate.children.size() == 1 &&
+        candidate.children[0] == ref.node) {
+      unsafe_ast = AstNodeId{i};
+      break;
+    }
+  }
+  need(unsafe_ast.has_value(), "unsafe source parent missing");
+  auto unsafe_ref = ref;
+  unsafe_ref.node = *unsafe_ast;
+  const auto unsafe_source = Source{unsafe_ref, file.node(*unsafe_ast).span};
+  const auto adjacent_source = owned.nodes[nested.value].source;
+  invalid(owned, "unsafe-body-source-unsafe",
+          [&](auto &m) { m.nodes[body.value].source = unsafe_source; });
+  invalid_recomputed(owned, "unsafe-body-source-unsafe-recomputed",
+                     [&](auto &m) { m.nodes[body.value].source = unsafe_source; });
+  invalid(owned, "unsafe-body-source-adjacent-block",
+          [&](auto &m) { m.nodes[body.value].source = adjacent_source; });
+  invalid_recomputed(owned, "unsafe-body-source-adjacent-block-recomputed",
+                     [&](auto &m) { m.nodes[body.value].source = adjacent_source; });
+  invalid(owned, "unsafe-body-defer-after-return", [&](auto &m) {
+    auto &children = m.nodes[body.value].children;
+    need(children.size() == 4 &&
+             m.nodes[children[2].value].kind() == NodeKind::defer_ &&
+             m.nodes[children[3].value].kind() == NodeKind::return_,
+         "unsafe reorder probe missing");
+    std::swap(children[2], children[3]);
+  });
+  invalid(owned, "unsafe-body-defer-owner", [&](auto &m) {
+    const auto owner = m.scopes[m.nodes[body.value].scope.value].parent;
+    need(owner.has_value(), "unsafe body parent scope missing");
+    std::get<Defer>(m.nodes[body_node.children[2].value].data).owner_scope =
+        *owner;
+  });
+  invalid(owned, "unsafe-body-normal-cleanup-omitted", [&](auto &m) {
+    auto &exits = m.nodes[body.value].exits;
+    auto normal = std::find_if(exits.begin(), exits.end(), [](const auto &e) {
+      return e.kind == ExitKind::normal;
+    });
+    need(normal != exits.end(), "unsafe normal cleanup plan missing");
+    exits.erase(normal);
+  });
+  invalid(owned, "unsafe-body-scope-parent", [&](auto &m) {
+    auto &scope = m.scopes[m.nodes[body.value].scope.value];
+    need(scope.parent.has_value(), "unsafe body scope parent missing");
+    scope.parent.reset();
+  });
+  std::cout << "unsafe lexical block source/cleanup probes passed\n";
+}
 void short_circuit_flow_probes() {
   const std::string prefix =
       "enum E {Bad;} func fail() bool throws E {throw E.Bad;} ";
@@ -810,6 +972,7 @@ void fixtures(const fs::path &root) {
   json_object_put(json);
   module_probes();
   source_probes();
+  unsafe_probes();
   corruptions(positive);
   correction_probes();
   short_circuit_flow_probes();

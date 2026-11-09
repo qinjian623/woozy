@@ -239,7 +239,44 @@ void flow_tests() {
   rejected("func f() {let x i32=1;let y=x[0];}", "E_TYPE_MISMATCH");
   rejected("func f(v Vec[i32]) {v=[2];}", "E_TYPE_MISMATCH");
   rejected("func f(v inout Vec[i32]) {}", "E_CAPABILITY_UNAVAILABLE");
-  rejected("func f() {let x Vec[string]=[\"x\"];}", "E_CAPABILITY_UNAVAILABLE");
+  auto string_vec = accepted("func f() {let x Vec[string]=[\"x\"];}");
+  facts(string_vec);
+  bool saw_string = false;
+  for (uint64_t t = 1; t <= string_vec.types.size(); ++t) {
+    if (string_vec.types.find(TypeId{t})->kind != TypeKind::String)
+      continue;
+    auto ops = classify_value(string_vec, TypeId{t});
+    need(ops.kind == ValueKind::trivial && !ops.needs_drop && !ops.pod_inout,
+         "String must be trivial/no-drop/non-POD");
+    saw_string = true;
+  }
+  need(saw_string, "Vec[string] did not publish a String type");
+  auto mixed = accepted(
+      "struct Mix{text string;items Vec[i32];} func make() Mix{return "
+      "Mix(text:\"x\",items:[1]);} func f(){let m=make();let alias=m;}");
+  TypeId mixed_string{}, mixed_struct{};
+  for (uint64_t t = 1; t <= mixed.types.size(); ++t) {
+    const auto kind = mixed.types.find(TypeId{t})->kind;
+    if (kind == TypeKind::String)
+      mixed_string = TypeId{t};
+    if (kind == TypeKind::NominalStruct)
+      mixed_struct = TypeId{t};
+  }
+  need(mixed_string.value && mixed_struct.value, "mixed types missing");
+  bool injected = false;
+  invalid(mixed, "mixed String+Vec exit drops String instead of aggregate",
+          [&](auto &m) {
+            for (auto &n : m.nodes)
+              for (auto &plan : n.exits)
+                for (auto &a : plan.actions)
+                  if (a.kind == CleanupKind::destroy_if_live &&
+                      a.type == mixed_struct) {
+                    a.type = mixed_string;
+                    injected = true;
+                    return;
+                  }
+          });
+  need(injected, "mixed String+Vec destroy action missing");
   rejected("struct S {v Vec[S];} func f(v S) {}", "E_CAPABILITY_UNAVAILABLE");
   // Computed owning enum switch is now supported: the subject is evaluated
   // once and held to the end of the selected arm (SEMANTICS switch rule).

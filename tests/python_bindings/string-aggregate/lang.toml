@@ -1,0 +1,12 @@
+schema_version = 1
+[package]
+name = "app"
+source_root = "src"
+entry = "app"
+[build]
+backend = "python"
+word_bits = 64
+[dependencies.host]
+kind = "python"
+binding = "binding.json"
+host_package = "strhost"

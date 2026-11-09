@@ -1,0 +1,62 @@
+package app;
+
+struct Box[T] { value T; }
+enum Maybe[T] { Empty; Some(value T); }
+
+func echo[T](value T) T { let copy=value; return copy; }
+func pass(value string) string { return value; }
+func choose(flag bool) string { if flag { return "分支\0真"; } return "分支\n假"; }
+func unwrap[T](value Maybe[T], fallback T) T {
+    switch value { case Maybe.Some(payload): return payload; case Maybe.Empty: return fallback; }
+}
+
+func probe_box() string {
+    let box=Box[string](value:"泛型\0盒😀");
+    let copied=box;
+    return copied.value;
+}
+func probe_nested() string {
+    let nested=Box[Maybe[string]](value:Maybe[string].Some(value:"嵌套\0😀"));
+    switch nested.value { case Maybe.Some(payload): return payload; case Maybe.Empty: return ""; }
+}
+func probe_enum() string {
+    let value=Maybe[string].Some(value:`原始
+多行\0😀`);
+    let copied=value;
+    return unwrap(copied,"");
+}
+func probe_empty() string {
+    let value=Maybe[string].Empty;
+    return unwrap(value,"");
+}
+func probe_parameter() string { return echo("普通\0参数"); }
+func probe_branch() string { return pass(choose(false)); }
+func probe_move() string {
+    var value="整体\0移动😀";
+    let moved=move value;
+    return moved;
+}
+func probe_move_box() string {
+    var value=Box[string](value:"盒\0移动");
+    let moved=move value;
+    return moved.value;
+}
+func probe_reinit() string {
+    var value="旧\0值";
+    let moved=move value;
+    value="新\0值";
+    return value;
+}
+
+func main() i32 {
+    let a=probe_box();
+    let b=probe_nested();
+    let c=probe_enum();
+    let d=probe_empty();
+    let e=probe_parameter();
+    let f=probe_branch();
+    let g=probe_move();
+    let h=probe_move_box();
+    let i=probe_reinit();
+    return 0;
+}

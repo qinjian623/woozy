@@ -1,0 +1,26 @@
+package app;
+import "app/lib" as lib;
+
+func forward[T lib.Flow[lib.Pair],U](owner T,
+        callback func(inout lib.Pair,lib.Pair)lib.Pair,
+        slot inout lib.Pair, value lib.Pair, tag U) lib.Pair {
+    return T.run[U](owner, callback, inout slot, value, tag);
+}
+
+func main() i32 {
+    let owner = lib.Box[lib.Pair](marker: 0);
+    var slot = lib.Pair(value: 1, flag: false);
+    let f = func(slot inout lib.Pair, value lib.Pair) lib.Pair {
+        let old = slot;
+        slot = value;
+        return old;
+    };
+    let a = owner.run[i32](f, inout slot, lib.Pair(value: 2, flag: true), 7);
+    let b = lib.Box[lib.Pair].run[i32](owner, f, inout slot,
+                                       lib.Pair(value: 3, flag: false), 8);
+    let c = forward[lib.Box[lib.Pair],i32](owner, f, inout slot,
+                                           lib.Pair(value: 4, flag: true), 9);
+    if a.value != 1 || a.flag || b.value != 2 || !b.flag ||
+       c.value != 3 || c.flag || slot.value != 4 || !slot.flag { return 1; }
+    return 0;
+}

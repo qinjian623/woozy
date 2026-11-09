@@ -20,6 +20,10 @@ def value(x):
         return value(x.value)
     if isinstance(x, tuple):
         return [value(item) for item in x]
+    if isinstance(x, rt.Owner):
+        return '<owner>'
+    if isinstance(x, rt.Vec):
+        return [value(item) for item in x.items]
     if callable(x):
         return '<function>'
     return x

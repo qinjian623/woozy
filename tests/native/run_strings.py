@@ -7,7 +7,8 @@ import sys
 
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
-from string_cases import STRING_FIXTURES, command, rejection_checks, sha, succeeded
+from string_cases import (STRING_FIXTURES, STRING_FIXTURE_PATHS, command,
+                           rejection_checks, sha, succeeded)
 
 
 def main():
@@ -18,7 +19,7 @@ def main():
     args = parser.parse_args()
     expected_values = STRING_FIXTURES[args.fixture]
     args.out.mkdir(parents=True, exist_ok=True)
-    manifest = args.root / 'tests/sema' / args.fixture / 'lang.toml'
+    manifest = args.root / STRING_FIXTURE_PATHS[args.fixture] / 'lang.toml'
     report = dict(operation_id='language-constant-strings-20261104', backend='native',
                   status='failed', runs=[], rejections=[],
                   source_head=command(['git', '-C', args.root, 'rev-parse', 'HEAD']),

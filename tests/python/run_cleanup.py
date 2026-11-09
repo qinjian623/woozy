@@ -11,6 +11,18 @@ import sys
 sys.dont_write_bytecode = True
 from cleanup_cases import CASES, CROSS_MODULE
 
+UNSAFE = {
+    'unsafe-scalar-lambda': dict(events=[], main_return=0),
+    'unsafe-return-owned-defer': dict(events=[1, 2, 3], log=123,
+                                      main_return=0),
+    'unsafe-loop-owned-defer': dict(events=[11, 21, 32], log=1342,
+                                    main_return=0),
+    'unsafe-caught-throw-owned-defer': dict(events=[1, 2, 3], log=123,
+                                            main_return=0),
+    'unsafe-inner-catch-owned-defer': dict(events=[1, 2, 3, 4], log=1234,
+                                           main_return=0),
+}
+
 
 def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
@@ -35,6 +47,21 @@ def project(directory, files):
         file = directory / 'src' / name
         file.parent.mkdir(parents=True, exist_ok=True)
         file.write_text(source)
+    return manifest
+
+
+def copied_project(directory, source):
+    directory.mkdir(parents=True, exist_ok=True)
+    manifest = directory / 'lang.toml'
+    manifest.write_text('schema_version=1\n[package]\nname="main"\n'
+                        'source_root="src"\nentry="app"\n[build]\n'
+                        'backend="python"\nword_bits=64\n')
+    for file in source.rglob('*'):
+        if not file.is_file() or file.name == 'lang.toml':
+            continue
+        target = directory / file.relative_to(source)
+        target.parent.mkdir(parents=True, exist_ok=True)
+        target.write_bytes(file.read_bytes())
     return manifest
 
 
@@ -173,6 +200,11 @@ def main():
             compile_run(ident, manifest, expected, 'extra')
         manifest = project(args.out / 'sources/cross-module', CROSS_MODULE)
         compile_run('cross-module', manifest, dict(main_return=7), 'extra')
+        for ident, expected in UNSAFE.items():
+            manifest = copied_project(
+                args.out / 'sources' / ident,
+                args.root / 'tests/native/cleanup' / ident)
+            compile_run(ident, manifest, expected, 'extra')
         # Renumber the HIR type arena with unrelated declarations: the same
         # generic error must still have exactly the same logical key.
         source = CASES['unhandled-generic']['source']

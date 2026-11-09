@@ -155,7 +155,9 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
                                 std::to_string(result.exit_code) + ": " + result.output,
                                 lang::FailureKind::environment);
                 if (json && !diagnostic_document(result.output, result.exit_code))
-                    return fail("E_INTERNAL_ERROR", "invalid native helper diagnostics: " + result.output,
+                    return fail("E_INTERNAL_ERROR",
+                                "invalid native helper diagnostics: helper exit code " +
+                                    std::to_string(result.exit_code) + ": " + result.output,
                                 lang::FailureKind::internal);
                 (json || result.exit_code == 0 ? std::cout : std::cerr) << result.output;
                 return result.exit_code;

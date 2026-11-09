@@ -1,0 +1,11 @@
+package app;
+struct Own { items Vec[i32]; }
+struct Box[P] { marker i32; }
+trait F[A] {
+    func run[U](owner Self, callback func(inout A,A)A) Unit;
+}
+impl[P] F[P] for Box[P] {
+    func run[U](owner Self, callback func(inout P,P)P) Unit {}
+}
+func uncalled[T F[Own]](value T) Unit {}
+func main() i32 { return 0; }

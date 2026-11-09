@@ -51,8 +51,7 @@ uint64_t number(const std::string &s) {
     throw std::runtime_error("invalid integer argument: " + s);
   return n;
 }
-} // namespace
-int main(int argc, char **argv) {
+int run(int argc, char **argv) {
   SourceManager sources;
   bool json = false;
   bool executable = false;
@@ -302,4 +301,15 @@ int main(int argc, char **argv) {
                              {}});
     return report(r);
   }
+}
+bool flushed(std::ostream &stream) {
+  stream.flush();
+  return stream.good();
+}
+} // namespace
+int main(int argc, char **argv) {
+  const int status = run(argc, argv);
+  const bool stdout_ok = flushed(std::cout);
+  const bool stderr_ok = flushed(std::cerr);
+  return stdout_ok && stderr_ok ? status : 2;
 }

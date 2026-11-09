@@ -1,0 +1,35 @@
+package app;
+
+import "std/py" as py;
+import "host" as host;
+
+struct Box[T] { value T; }
+enum Maybe[T] { Empty; Some(value T); }
+
+func probe_host() string throws py.Error {
+    let text=host.make_text();
+    let box=Box[string](value:text);
+    return box.value;
+}
+func probe_host_enum() string throws py.Error {
+    let value=Maybe[string].Some(value:host.make_text());
+    switch value { case Maybe.Some(payload): return payload; case Maybe.Empty: return ""; }
+}
+func probe_host_vec() string throws py.Error {
+    let values Vec[string]=[host.make_text(),"常量"];
+    let part=values[0:2];
+    let copied=part;
+    return copied[0];
+}
+func probe_host_release() string throws py.Error {
+    let values Vec[string]=[host.make_text()];
+    let taken=values[0];
+    return taken;
+}
+func main() i32 throws py.Error {
+    let a=probe_host();
+    let b=probe_host_enum();
+    let c=probe_host_vec();
+    let d=probe_host_release();
+    return 0;
+}

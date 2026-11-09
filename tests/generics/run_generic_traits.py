@@ -31,7 +31,8 @@ POSITIVE = ('dual-phantom', 'joint-nonoverlap', 'cross-package',
             'modes-before-pod-inout-writeback',
             'modes-before-static-own-named-self',
             'modes-combinations', 'modes-lifetime',
-            'ordinary-receiver-identity')
+            'ordinary-receiver-identity',
+            'callback-cross-package-lambda')
 # Declaration-only controls: both backends must accept, but their main does not
 # exercise the bound, so they are not reported as runtime coverage.
 # Old reject-* sources keep their bytes. Their declarations are now legal;
@@ -40,7 +41,18 @@ STATIC_POSITIVE = ('prototype-bound-self', 'bound-nested-trait-parameter',
                    'bound-pod-callback-control',
                    'reject-own-generic', 'hidden-fixed-callback-control',
                    'reject-own-generic-move', 'reject-own-generic-inout',
-                   'reject-move', 'reject-inout')
+                   'reject-move', 'reject-inout',
+                   'reject-own-dependent-callback',
+                   'reject-hidden-own-callback',
+                   'reject-hidden-own-callback-return',
+                   'reject-hidden-own-callback-enum',
+                   'reject-hidden-own-callback-throws',
+                   'reject-hidden-own-callback-function-return',
+                   'reject-hidden-trait-callback',
+                   'reject-hidden-trait-callback-legacy',
+                   'reject-hidden-self-callback',
+                   'reject-hidden-self-callback-legacy',
+                   'recursive-wrap-same-application-control')
 OBSERVED = ('modes-combinations', 'modes-lifetime')
 EXPECTED_EVENTS = {
     'modes-combinations': [],
@@ -72,19 +84,13 @@ UNSUPPORTED = {
     'bound-held-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'bound-dependent-held-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-bound-owning-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-own-dependent-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-own-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-own-callback-return': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-own-callback-enum': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-own-callback-throws': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-own-callback-function-return': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-trait-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-trait-callback-legacy': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-self-callback': {'E_CAPABILITY_UNAVAILABLE'},
-    'reject-hidden-self-callback-legacy': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-concrete-self-callback': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-concrete-trait-argument': {'E_CAPABILITY_UNAVAILABLE'},
     'modes-reject-inout-owning': {'E_CAPABILITY_UNAVAILABLE'},
     'modes-reject-actual-self-move': {'E_CAPABILITY_UNAVAILABLE'},
     'modes-reject-actual-self-inout': {'E_CAPABILITY_UNAVAILABLE'},
+    'recursive-wrap-return-reject': {'E_CAPABILITY_UNAVAILABLE'},
+    'recursive-wrap-mutual-return-reject': {'E_CAPABILITY_UNAVAILABLE'},
 }
 FORBIDDEN = {'E_IR_INVALID', 'E_INTERNAL_ERROR'}
 

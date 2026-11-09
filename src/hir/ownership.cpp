@@ -62,7 +62,7 @@ ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
     out.needs_drop = true;
     return out;
   }
-  if (t.kind == TypeKind::String || t.kind == TypeKind::Error) {
+  if (t.kind == TypeKind::Error) {
     out.reason =
         "dynamic string/foreign/error value ownership is not supported";
     return out;
@@ -231,14 +231,12 @@ class Analysis {
     if (x.kind() == NodeKind::block || x.kind() == NodeKind::for_ ||
         x.kind() == NodeKind::for_in)
       scope_nodes[x.scope.value] = id;
-    if (ty(m, x.type).kind != TypeKind::String) {
-      auto ops = classify_value(m, x.type);
-      if (ops.kind == ValueKind::unsupported)
-        issue(id, "E_CAPABILITY_UNAVAILABLE", ops.reason);
-      if (ops.needs_drop || x.kind() == NodeKind::move ||
-          x.kind() == NodeKind::for_in)
-        enabled.insert(fun->symbol.value);
-    }
+    auto ops = classify_value(m, x.type);
+    if (ops.kind == ValueKind::unsupported)
+      issue(id, "E_CAPABILITY_UNAVAILABLE", ops.reason);
+    if (ops.needs_drop || x.kind() == NodeKind::move ||
+        x.kind() == NodeKind::for_in)
+      enabled.insert(fun->symbol.value);
     if (auto fi = std::get_if<ForIn>(&x.data))
       local(fi->element, fi->body_scope,
             ty(m, n(x.children[0]).type).type_args[0], ParamMode::move);
@@ -1101,8 +1099,6 @@ public:
       fun = f;
       auto sig = ty(m, f->signature);
       auto supported = [&](TypeId type) {
-        if (ty(m, type).kind == TypeKind::String)
-          return;
         auto ops = classify_value(m, type);
         if (ops.kind == ValueKind::unsupported)
           issue(f->body, "E_CAPABILITY_UNAVAILABLE", ops.reason);
@@ -1255,105 +1251,6 @@ bool inout_data_type(const HirModule &m, TypeId root,
         return ok;
       };
   return visit(root, false, 0, 0);
-}
-
-bool trait_self_callback_non_scalar(const HirModule &m, TypeId root,
-                                    SymbolId self, TypeId concrete_self) {
-  TypeContext types = m.types;
-  auto scalar = [](TypeKind kind) {
-    return kind == TypeKind::Bool || kind == TypeKind::SignedInt ||
-           kind == TypeKind::UnsignedInt || kind == TypeKind::Isize ||
-           kind == TypeKind::Usize || kind == TypeKind::Float;
-  };
-  auto nominal = [&](TypeId id) -> const NominalDecl * {
-    const auto *found = types.find(id);
-    if (!found)
-      return nullptr;
-    for (const auto &d : m.nominals)
-      if (d.symbol == found->declaration)
-        return &d;
-    return nullptr;
-  };
-  auto contains_self = [&](TypeId root) {
-    std::vector<TypeId> pending{root};
-    std::set<uint64_t> seen;
-    while (!pending.empty()) {
-      auto id = pending.back();
-      pending.pop_back();
-      if (!seen.insert(id.value).second)
-        continue;
-      const auto *found = types.find(id);
-      if (!found)
-        return true;
-      const Type t = *found;
-      if (t.kind == TypeKind::TypeParameter && t.declaration == self)
-        return true;
-      // A trait Self reaches nominal fields through this application's
-      // type arguments; expanding the fields can grow function signatures forever.
-      pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
-      if (t.kind == TypeKind::Function) {
-        for (const auto &p : t.parameters)
-          pending.push_back(p.type);
-        pending.push_back(t.result);
-        if (t.throws_type)
-          pending.push_back(*t.throws_type);
-      }
-    }
-    return false;
-  };
-  std::set<uint64_t> visited;
-  std::function<bool(TypeId, size_t)> visit = [&](TypeId id,
-                                                  size_t depth) -> bool {
-    if (depth > 128)
-      return false;
-    const auto *found = types.find(id);
-    if (!found)
-      return false;
-    const Type t = *found;
-    if (!visited.insert(id.value).second)
-      return false;
-    for (auto a : t.type_args)
-      if (visit(a, depth + 1))
-        return true;
-    if (t.kind == TypeKind::Function) {
-      for (const auto &p : t.parameters) {
-        if (p.mode == ParamMode::inout && contains_self(p.type)) {
-          auto concrete = substitute(p.type, {{self, concrete_self}}, types);
-          const auto *c = types.find(concrete);
-          if (!c || !scalar(c->kind))
-            return true;
-        }
-        if (visit(p.type, depth + 1))
-          return true;
-      }
-      if (visit(t.result, depth + 1))
-        return true;
-      if (t.throws_type && visit(*t.throws_type, depth + 1))
-        return true;
-      return false;
-    }
-    if (t.kind == TypeKind::NominalStruct ||
-        t.kind == TypeKind::NominalEnum) {
-      const auto *d = nominal(id);
-      if (!d || d->params.size() != t.type_args.size())
-        return true;
-      Substitutions sub;
-      for (size_t i = 0; i < d->params.size(); ++i)
-        sub.push_back({d->params[i].symbol, t.type_args[i]});
-      auto field = [&](const FieldDecl &f) {
-        return visit(substitute(f.type, sub, types), depth + 1);
-      };
-      for (const auto &f : d->fields)
-        if (field(f))
-          return true;
-      for (const auto &v : d->variants)
-        for (const auto &f : v.payload)
-          if (field(f))
-            return true;
-    }
-    return false;
-  };
-  return visit(root, 0);
 }
 
 ValueOps classify_value(const HirModule &m, TypeId id) {
