@@ -1800,8 +1800,6 @@ class Checker {
       if (inout)
         unavailable(r, "field inout is not implemented");
       auto base = place(child(r, 0), false);
-      if (m.nodes[base.id.value].kind() == NodeKind::index_place)
-        unavailable(r, "indexed value-field writeback is not supported");
       auto f = find_field(r, base.value.type);
       auto t = field_type(base.value.type, f);
       return {node(r, t, FieldPlace{f.symbol}, {base.id}), {t, {}, {}}};

@@ -56,6 +56,33 @@ struct Fixture {
   HirNodeId rd(SymbolId sym, ScopeId s, Source src) {
     return node(i32, s, src, Read{sym});
   }
+  HirNodeId increment(SymbolId target, ScopeId scope_id, Source owner) {
+    const auto &file = *project->modules[owner.node.module.value]
+                            .files[owner.node.file];
+    for (size_t i = 0; i < file.nodes.size(); ++i) {
+      const auto &assignment = file.nodes[i];
+      if (assignment.kind != AstKind::Assign || assignment.children.size() != 2 ||
+          assignment.span.begin_byte < owner.span.begin_byte ||
+          assignment.span.end_byte > owner.span.end_byte)
+        continue;
+      const auto &lhs = file.node(assignment.children[0]);
+      if (lhs.kind != AstKind::Name ||
+          file.tokens[lhs.token_begin].spelling !=
+              resolved->symbols[target.value].name)
+        continue;
+      auto src = [&](AstNodeId id) {
+        auto ref = owner.node;
+        ref.node = id;
+        return Source{ref, file.node(id).span};
+      };
+      auto place = node(i32, scope_id, src(assignment.children[0]), Place{target});
+      auto one = node(i32, scope_id, src(assignment.children[1]),
+                      IntegerLiteral{"1", 1});
+      return node(unit, scope_id, src(AstNodeId{i}), Assign{BinaryOp::add},
+                  {place, one});
+    }
+    throw std::runtime_error("fixture increment source missing");
+  }
   Fixture(unsigned inout_count = 0, bool unreachable_break = false,
            bool false_branch_break = false) {
     std::string code = R"(package main;
@@ -147,10 +174,7 @@ func main() i32 {
     add_return = node(unit, add_scope, add_src, Return{add}, {sum});
     auto add_body = node(unit, add_scope, add_src, Block{}, {add_return});
     if (inout_count) {
-      auto place = node(i32, add_scope, add_src, Place{a});
-      auto one = node(i32, add_scope, add_src, IntegerLiteral{"1", 1});
-      auto assignment = node(unit, add_scope, add_src, Assign{BinaryOp::add},
-                             {place, one});
+      auto assignment = increment(a, add_scope, add_src);
       m.nodes[add_body.value].children.insert(
           m.nodes[add_body.value].children.begin(), assignment);
     }
@@ -166,9 +190,7 @@ func main() i32 {
                     ? node(boolean, loop_scope, main_src, BoolLiteral{true})
                     : node(boolean, loop_scope, main_src, Binary{BinaryOp::less},
                            {rd(iteration, loop_scope, main_src), lit(4, loop_scope)});
-    auto place = node(i32, loop_scope, main_src, Place{iteration});
-    auto step = node(unit, loop_scope, main_src, Assign{BinaryOp::add},
-                     {place, lit(1, loop_scope)});
+    auto step = increment(iteration, loop_scope, main_src);
     HirNodeId body;
     if (false_branch_break) {
       auto then_scope = scope(main, body_scope, main_src);

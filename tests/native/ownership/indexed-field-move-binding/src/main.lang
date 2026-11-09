@@ -1,0 +1,4 @@
+package app;
+struct Pair{x i32;y i32;}
+func consume(values move Vec[Pair])i32 {return values[0].y;}
+func main()i32 {let values Vec[Pair]=[Pair(x:1,y:2)];let alias=values;values[0].x=consume(move values);if alias[0].x!=2{return 1;}if alias[0].y!=2{return 2;}return 0;}

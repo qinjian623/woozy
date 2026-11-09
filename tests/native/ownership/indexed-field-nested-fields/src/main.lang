@@ -1,0 +1,4 @@
+package app;
+struct Inner{x i32;y i32;}
+struct Box{inner Inner;tag i32;}
+func main()i32{let values Vec[Box]=[Box(inner:Inner(x:1,y:2),tag:3)];values[0].inner.x=7;if values[0].inner.x!=7{return 1;}if values[0].inner.y!=2{return 2;}if values[0].tag!=3{return 3;}return 0;}

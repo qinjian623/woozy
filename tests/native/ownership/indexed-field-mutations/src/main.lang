@@ -1,0 +1,4 @@
+package app;
+struct Pair{x i32;y i32;}
+struct Box{items Vec[i32];}
+func main()i32 {let values Vec[Pair]=[Pair(x:1,y:2)];let other Vec[Pair]=[Pair(x:3,y:4)];if other[0].x!=3{return 1;}values[0].x=7;var owned Vec[Box]=[Box(items:[1])];owned[0].items=[2];if owned[0].items[0]!=2{return 2;}return 0;}

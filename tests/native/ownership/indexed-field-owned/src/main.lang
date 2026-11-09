@@ -1,0 +1,3 @@
+package app;
+struct Box{items Vec[i32];other Vec[i32];}
+func main()i32 {var values Vec[Box]=[Box(items:[1],other:[2])];let old=values[0].items;values[0].items=values[0].items;if old[0]!=1{return 1;}if values[0].items[0]!=1{return 2;}if values[0].other[0]!=2{return 3;}values[0].items=[3,4];if old[0]!=1{return 4;}if values[0].items[1]!=4{return 5;}if values[0].other[0]!=2{return 6;}return 0;}

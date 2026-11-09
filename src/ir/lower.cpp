@@ -572,6 +572,69 @@ class Lower {
     }
     case hir::NodeKind::assign: {
       const auto &place = node(n.children[0]);
+      auto indexed_field = [&]() -> std::optional<HirNodeId> {
+        auto base = n.children[0];
+        while (node(base).kind() == hir::NodeKind::field_place)
+          base = node(base).children[0];
+        if (node(base).kind() == hir::NodeKind::index_place)
+          return base;
+        return {};
+      };
+      auto indexed_place = indexed_field();
+      if (place.kind() == hir::NodeKind::field_place && indexed_place) {
+        // The receiver/index are evaluated once in source order. The bounds
+        // check belongs to the assignment target and precedes the RHS.
+        auto index_place = *indexed_place;
+        const auto &indexed = node(index_place);
+        auto receiver = expr(indexed.children[0]);
+        auto index = expr(indexed.children[1]);
+        effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index});
+        Instruction element;
+        element.op = Op::vec_element_address;
+        element.type = indexed.type;
+        element.origin = index_place;
+        element.inputs = {receiver, index};
+        element.source = indexed.source.span;
+        auto target = emit(element);
+        std::vector<HirNodeId> fields;
+        for (auto field = n.children[0];
+             node(field).kind() == hir::NodeKind::field_place;
+             field = node(field).children[0])
+          fields.push_back(field);
+        for (auto it = fields.rbegin(); it != fields.rend(); ++it) {
+          const auto &field = node(*it);
+          Instruction address;
+          address.op = Op::field_address;
+          address.type = field.type;
+          address.field = std::get<hir::FieldPlace>(field.data).field;
+          address.inputs = {target};
+          address.source = field.source.span;
+          target = emit(address);
+        }
+        auto compound = std::get<hir::Assign>(n.data).compound;
+        std::optional<ValueId> lhs;
+        if (compound)
+          lhs = indirect(target, place.type, s);
+        auto rhs = expr(n.children[1]);
+        if (compound) {
+          Instruction op;
+          op.op = Op::binary;
+          op.type = place.type;
+          op.inputs = {*lhs, rhs};
+          op.binary = *compound;
+          op.source = s;
+          rhs = emit(op);
+        }
+        take(n.children[1]);
+        Instruction write;
+        write.op = owning(place.type) ? Op::replace_indirect : Op::store_indirect;
+        write.type = unit;
+        write.inputs = {target, rhs};
+        write.source = s;
+        f.blocks[current.value].instructions.push_back(write);
+        full(id);
+        break;
+      }
       if (place.kind() == hir::NodeKind::index_place) {
         auto receiver = expr(place.children[0]); auto index = expr(place.children[1]);
         effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index});

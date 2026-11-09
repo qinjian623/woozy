@@ -522,6 +522,13 @@ class Emitter {
       }
       break;
     }
+    case ir::Op::vec_element_address: {
+      // The preceding verified vec_check fixed the panic location. Reuse the
+      // current Vec layout and its bounds-checking accessor for the address.
+      auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
+      v = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
+      break;
+    }
     case ir::Op::vec_set: {
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
       auto element_type = type(value_types.at(i.inputs[0])).type_args[0];

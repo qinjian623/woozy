@@ -107,7 +107,9 @@ class Field:
     __slots__ = ('root', 'path')
 
     def __init__(self, base, index):
-        if isinstance(base, (Cell, Owner)):
+        if isinstance(base, Index):
+            self.root, self.path = base, (index,)
+        elif isinstance(base, (Cell, Owner)):
             self.root, self.path = base, (index,)
         else:
             self.root, self.path = base.root, base.path + (index,)
@@ -121,6 +123,12 @@ class Field:
 
     @value.setter
     def value(self, replacement):
+        if isinstance(self.root, Index):
+            # The indexed element remains the real shared storage. Replace
+            # only this field path and copy the sibling fields that stay in
+            # the object, so the old element's drop does not release them.
+            self.root.replace_field(self.path, replacement)
+            return
         def replace(value, depth):
             if depth == len(self.path):
                 return replacement
@@ -610,3 +618,23 @@ class Index:
     @value.setter
     def value(self, replacement):
         self.receiver.set(self.index, replacement)
+
+    def replace_field(self, path, replacement):
+        """Replace one field path inside this element with a real writeback."""
+        def replace(ops, value, depth):
+            if depth == len(path):
+                return replacement
+            field = path[depth]
+            if (ops.kind != 'struct' or field < 0 or
+                    field >= len(ops.fields)):
+                raise RuntimeError('field place does not match element storage')
+            values = list(value)
+            for index in range(len(values)):
+                if index != field:
+                    values[index] = ops.fields[index].copy(value[index])
+            values[field] = replace(ops.fields[field], value[field], depth + 1)
+            return tuple(values)
+
+        current = self.value
+        self.receiver.set(
+            self.index, replace(self.receiver.element, current, 0))

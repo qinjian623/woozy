@@ -334,6 +334,18 @@ integer→float（直接按目标 f32/f64 精度做一次 RNE）三类。float�
 真分支。存储布局替换使用私有 TypeContext 副本，其新增 ID 不进入公开 Native IR。
 具体结构和检查见 `include/lang/ir/native.hpp` 与 `docs/NATIVE_SCALARS.md`。
 
+2026-11-09 追加 `vec_element_address`，保留全部旧操作编号。其结果是某个
+已检查 Vec 元素的地址，类型为该元素类型；必须紧跟在参数完全相同的
+`vec_check` 之后，`origin` 指向真实 HIR `index_place`。该地址只能沿
+`field_address` 链用于所在赋值的一次字段 `load_indirect`/`store_indirect`/
+`replace_indirect`，不能 return、传给调用、普通 store 或充当 inout。
+拥有字段仍以 `replace_indirect` 执行旧字段 drop，非拥有字段不得使用该操作；
+地址逃逸、缺少 bounds check、receiver/index 与 HIR place 不符或重复字段写入
+均由独立 verifier 报 `E_IR_INVALID`。每个地址创建点及其派生字段的
+`load_indirect`/`store_indirect`/`replace_indirect` 还要沿真实 SSA 值身份和
+`field_address` 链找到容器的拥有槽，并按现有 ownership 数据流证明该槽在该
+路径仍存活；调用、typed throw 边和 CFG 合流不得提前释放 receiver。
+
 ### 9.3 可失败调用
 
 ```text

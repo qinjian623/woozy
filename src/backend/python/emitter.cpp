@@ -237,6 +237,12 @@ class Emitter {
             return i;
     throw std::logic_error("verified field has no declaration index");
   }
+  bool indexed_field_place(HirNodeId id) const {
+    auto base = id;
+    while (node(base).kind() == NodeKind::field_place)
+      base = node(base).children[0];
+    return node(base).kind() == NodeKind::index_place;
+  }
   const modules::ForeignDeclaration &
   foreign_declaration(ForeignBindingId id) const {
     return m.resolved->project->foreign_binding(id);
@@ -940,8 +946,10 @@ class Emitter {
             n);
       auto installed = take(n.children[1], value);
       if (owned(node(n.children[0]).type) &&
-          node(n.children[0]).kind() != NodeKind::index_place) {
+          !indexed_field_place(n.children[0])) {
         // Field is a short-lived place and its old field owns exactly once.
+        // An indexed field replaces the element through its real storage, so
+        // Vec.set performs that old-field drop with the sibling fields.
         if (node(n.children[0]).kind() == NodeKind::field_place)
           line(suite,
                ops(node(n.children[0]).type) + ".drop(" + place + ".value)", n);

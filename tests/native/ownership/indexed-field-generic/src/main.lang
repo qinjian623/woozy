@@ -1,0 +1,5 @@
+package app;
+struct Pair[T]{x T;y T;}
+struct Box[T]{items Vec[Pair[T]];tag T;}
+func change[T](values Vec[Box[T]],v T){values[0].items[0].x=v;}
+func main()i32 {let values Vec[Box[i32]]=[Box[i32](items:[Pair[i32](x:1,y:2)],tag:3)];change[i32](values,7);if values[0].items[0].x!=7{return 1;}if values[0].items[0].y!=2{return 2;}if values[0].tag!=3{return 3;}return 0;}

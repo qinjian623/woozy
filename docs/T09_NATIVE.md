@@ -31,3 +31,39 @@ Vec 复制共享容器；切片建立新容器并逻辑复制元素。索引先�
 - LLVM/Clang/LLD 为 22.1.8；测试 Python 固定为工具目录内的 3.12.15。公共 Clang sanitizer、LLVMoff 和跨后端比较由 root 运行，本次 `not_run`。
 
 完整命令、退出码、旧失败日志、逐项观察及 hash 位于 `/tmp/language-t09-native-20261104/`。临时公共补丁已还原，`src/hir/hir.cpp` SHA256 为 `bd8e0fab69833d3a556ce502706cc689551c49701447ea7b78c3fd46c099af7f`。产品补丁含新增文件，不含公共支持修改。
+
+## 2026-11-09：Vec 元素字段写回
+
+普通 `Vec` 元素上的 struct 字段赋值/复合赋值已开放，包括嵌套字段、泛型实例、
+`string` 字段和拥有字段。普通 `let`/普通参数仍只是只读绑定，不禁止修改已有
+共享容器元素；字段/索引 `inout`、部分 move 和直接修改 `let` struct 字段继续拒绝。
+
+NativeIR 在枚举末尾追加 `vec_element_address`，原有编号不变。该操作返回已索引
+元素的地址，结果类型是元素类型；它要求同一块中紧邻的 `vec_check` 使用完全相同
+的 receiver/index，`origin` 指向真实 HIR `index_place`。地址只能经
+`field_address` 链后用于一次 `load_indirect`/`store_indirect`/`replace_indirect`
+字段替换；返回、调用实参、普通 store 或其它逃逸均由 verifier 报 `E_IR_INVALID`。
+拥有字段仍用 `replace_indirect` 先 drop 旧字段再写新值，非拥有字段用
+`store_indirect`，不会回写整元素副本。Python 的 `Field`/`Index` 在真实 Vec 元素
+存储上按字段路径替换，并复制保留其余拥有兄弟字段。
+
+删除/遗漏旧字段 drop、把非拥有 store 改成 replace、提前销毁接收者临时值、移除
+bounds check、交换 receiver/index、替换字段 SymbolId、把地址送入 return 或其它
+非字段操作，均有独立失败探针；合法对照先通过。五个冻结 before 项目原先的
+`indexed value-field writeback is not supported` 现改为检查通过，并分别在
+Native O0/O2 与 Python 实际运行。
+
+### 2026-11-09 返修：Assign 来源与地址 owner 活期
+
+HIR verifier 现在把每个 `Assign` 的左右子树分别绑定到其真实
+`AstKind::Assign` 左右 AST 子节点，按既有括号/透明包装规范化比较完整
+`NodeRef`（module、file、node）和 span。交换两条赋值的完整 LHS place 或 RHS
+表达式，即使各自 Member/Bracket 内部仍自洽，也会在直接验证及成功重算
+ownership 后报 `E_IR_INVALID`。
+
+NativeIR ownership 数据流从每个 `vec_element_address` 经真实 SSA
+`field_address` 链追溯元素地址，并用实际 store 到拥有槽的值身份找到 receiver
+的 owner。每个元素地址创建点及其派生的 `load_indirect`、`store_indirect`、
+`replace_indirect` 使用点都要求该 owner 在对应成功/错误/合流路径上仍为 live。
+把字段 store 后的完整 receiver 清理批次原样移到 store 前，或移动嵌套字段链的
+owner 清理，均被拒绝；合法 RHS move 仍允许，typed throw 只在实际错误边清理。

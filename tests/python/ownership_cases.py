@@ -258,4 +258,80 @@ func main() i32 {
     if log != 123 { return 2; }
     return 0;
 }''', {'sequence': [['event', 2], ['free', 0], ['event', 3]]}),
+    'indexed-field-compound': ('''struct Pair {x i32; y i32;}
+func mutate(values Vec[Pair], n i32) i32 {values[0].x = 100; values[0].y = 9; return n;}
+func main() i32 {var values Vec[Pair] = [Pair(x: 1, y: 2)]; values[0].x += mutate(values, 5);
+if values[0].x != 6 {return 1;} if values[0].y != 9 {return 2;} return 0;}''', {}),
+    'indexed-field-order': ('''struct Pair {x i32; y i32;}
+func mark(log inout i64, digit i64) i64 {log = log * 10 + digit; return digit;}
+func make(log inout i64) Vec[Pair] {mark(inout log, 1); return [Pair(x: 2, y: 3)];}
+func choose(log inout i64) i64 {mark(inout log, 2); return 0;}
+func value(log inout i64) i32 {mark(inout log, 3); return 7;}
+func main() i32 {var log i64 = 0; make(inout log)[choose(inout log)].x = value(inout log);
+if log != 123 {return 1;} return 0;}''', {}),
+    'indexed-field-owned': ('''struct Box {items Vec[i32]; other Vec[i32];}
+func main() i32 {var values Vec[Box] = [Box(items: [1], other: [2])];
+let old = values[0].items; values[0].items = values[0].items;
+if old[0] != 1 {return 1;} if values[0].items[0] != 1 {return 2;}
+if values[0].other[0] != 2 {return 3;} values[0].items = [3, 4];
+if old[0] != 1 {return 4;} if values[0].items[1] != 4 {return 5;}
+if values[0].other[0] != 2 {return 6;} return 0;}''', {}),
+    'indexed-field-owned-sibling': ('''struct Box {x i32; items Vec[i32]; other Vec[i32];}
+func main() i32 {var values Vec[Box] = [Box(x: 1, items: [2], other: [3])];
+values[0].x = 7; if values[0].x != 7 {return 1;} if values[0].items[0] != 2 {return 2;}
+if values[0].other[0] != 3 {return 3;} values[0].items[0] = 8;
+if values[0].other[0] != 3 {return 4;} return 0;}''', {}),
+    'indexed-field-nested': ('''struct Inner {x i32; y i32;}
+struct Box {inner Vec[Inner]; tag i32;}
+func main() i32 {let outer Vec[Box] = [Box(inner: [Inner(x: 1, y: 2)], tag: 3)];
+outer[0].inner[0].x = 7; if outer[0].inner[0].x != 7 {return 1;}
+if outer[0].inner[0].y != 2 {return 2;} if outer[0].tag != 3 {return 3;}
+let temp Vec[Box] = [Box(inner: [Inner(x: 4, y: 5)], tag: 6)];
+temp[0].inner[0].y = 8; if temp[0].inner[0].x != 4 {return 4;}
+if temp[0].inner[0].y != 8 {return 5;} if temp[0].tag != 6 {return 6;} return 0;}''', {}),
+    'indexed-field-move-binding': ('''struct Pair {x i32; y i32;}
+func consume(values move Vec[Pair]) i32 {return values[0].y;}
+func main() i32 {let values Vec[Pair] = [Pair(x: 1, y: 2)]; let alias = values;
+values[0].x = consume(move values); if alias[0].x != 2 {return 1;}
+if alias[0].y != 2 {return 2;} return 0;}''', {}),
+    'indexed-field-throw-defer': ('''enum E {Bad;}
+struct Pair {x i32; y i32;}
+func fail(log inout i64) i32 throws E {log = log * 10 + 3; throw E.Bad;}
+func probe(log inout i64) i32 throws E {var values Vec[Pair] = [Pair(x: 1, y: 2)];
+{defer {log = log * 10 + 9;} try {values[0].x = fail(inout log);} catch e E {log = log * 10 + 4;}}
+if log != 349 {return 1;} if values[0].x != 1 {return 2;} return 0;}
+func main() i32 throws E {var log i64 = 0; if probe(inout log) != 0 {return 1;} return 0;}''', {}),
+    'indexed-field-assign-source': ('''struct P {x i32; y i32;}
+func main() i32 {let v Vec[P] = [P(x: 1, y: 2)]; v[0].x = 3; v[0].y = 4;
+if v[0].x != 3 {return 1;} if v[0].y != 4 {return 2;} return 0;}''', {}),
+    'indexed-field-lifetime': ('''struct P {x i32; y i32;}
+func consume(v move Vec[P]) i32 {return v[0].y;}
+func main() i32 {let v Vec[P] = [P(x: 1, y: 2)]; v[0].x = consume(move v); return 0;}''', {}),
+    'indexed-field-nested-fields': ('''struct Inner {x i32; y i32;}
+struct Box {inner Inner; tag i32;}
+func main() i32 {let values Vec[Box] = [Box(inner: Inner(x: 1, y: 2), tag: 3)];
+values[0].inner.x = 7; if values[0].inner.x != 7 {return 1;}
+if values[0].inner.y != 2 {return 2;} if values[0].tag != 3 {return 3;} return 0;}''', {}),
+    'indexed-field-throw-edges': ('''enum E {Bad;}
+struct P {x i32; y i32;}
+func maybe(flag bool, v move Vec[P]) i32 throws E {if flag {throw E.Bad;} return v[0].y;}
+func main() i32 throws E {let v Vec[P] = [P(x: 1, y: 2)]; let alias = v;
+v[0].x = maybe(false, move v); if alias[0].x != 2 {return 1;}
+let w Vec[P] = [P(x: 3, y: 4)]; let w_alias = w;
+try {w[0].y = maybe(true, move w); return 2;} catch e E {}
+if w_alias[0].y != 4 {return 3;} return 0;}''', {}),
+    'indexed-field-deep-fields': ('''struct T0{x i32;y i32;}
+struct T1{child T0;}
+struct T2{child T1;}
+struct T3{child T2;}
+struct T4{child T3;}
+struct T5{child T4;}
+struct T6{child T5;}
+struct T7{child T6;}
+struct T8{child T7;}
+struct T9{child T8;}
+struct T10{child T9;}
+struct T11{child T10;}
+struct T12{child T11;}
+func main()i32{let v Vec[T12]=[T12(child:T11(child:T10(child:T9(child:T8(child:T7(child:T6(child:T5(child:T4(child:T3(child:T2(child:T1(child:T0(x:1,y:2)))))))))))))];v[0].child.child.child.child.child.child.child.child.child.child.child.child.x=3;return v[0].child.child.child.child.child.child.child.child.child.child.child.child.x-3;}''', {}),
 }

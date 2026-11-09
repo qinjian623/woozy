@@ -1731,14 +1731,29 @@ class Verifier {
         need(expr(c).type == type(n.type).type_args[0], "Vec element type");
       break;
     case NodeKind::index_read:
-    case NodeKind::index_place:
+    case NodeKind::index_place: {
       arity(2);
       need(type(expr(ch[0]).type).kind == TypeKind::Vec &&
                integer(type(expr(ch[1]).type).kind),
            "Vec index types");
       need(n.type == type(node(ch[0]).type).type_args[0],
            "Vec indexed element type");
+      const auto &file = *m.resolved->project->module(n.source.node.module)
+                              .files.at(n.source.node.file);
+      const auto &syntax = file.node(n.source.node.node);
+      need(syntax.kind == AstKind::NeutralBracket &&
+               syntax.children.size() == 2,
+           "index source is not a real NeutralBracket");
+      auto source_child = [&](size_t index) {
+        auto ref = n.source.node;
+        ref.node = syntax.children[index];
+        return unwrapped(ref);
+      };
+      need(same_ref(unwrapped(node(ch[0]).source.node), source_child(0)) &&
+               same_ref(unwrapped(node(ch[1]).source.node), source_child(1)),
+           "index receiver/index differs from the real Bracket children");
       break;
+    }
     case NodeKind::vec_slice: {
       const auto &sl = std::get<VecSlice>(n.data);
       need(ch.size() == 1 + bool(sl.start) + bool(sl.end), "slice arity");
@@ -2649,11 +2664,26 @@ class Verifier {
           decl = &f;
       need(decl && n.type == field_type(base.type, *decl),
            "field identity/type mismatch");
+      const auto &file = *m.resolved->project->module(n.source.node.module)
+                              .files.at(n.source.node.file);
+      const auto &syntax = file.node(n.source.node.node);
+      need(syntax.kind == AstKind::Member && !syntax.children.empty() &&
+               syntax.token_end > syntax.token_begin &&
+               syntax.token_end <= file.tokens.size(),
+           "field source is not a real Member");
+      need(symbol(field).name == file.tokens.at(syntax.token_end - 1).spelling,
+           "field identity differs from the source member name");
+      auto receiver_source = n.source.node;
+      receiver_source.node = syntax.children[0];
+      need(same_ref(unwrapped(node(n.children[0]).source.node),
+                    unwrapped(receiver_source)),
+           "field receiver differs from the real Member base");
       if (n.kind() == NodeKind::field_read)
         expr(n.children[0]);
       else
         need(base.kind() == NodeKind::place ||
-                 base.kind() == NodeKind::field_place,
+                 base.kind() == NodeKind::field_place ||
+                 base.kind() == NodeKind::index_place,
              "field write requires writable base");
       return;
     }
@@ -4096,6 +4126,14 @@ class Verifier {
           expected.node = source.children[0];
         }
       };
+      if (n.kind() == NodeKind::assign) {
+        need(ast.kind == AstKind::Assign && ast.children.size() == 2,
+             "assignment source is not a real Assign with two children");
+        source_input(n.children[0], ast.children[0],
+                     "assignment LHS differs from the real Assign left child");
+        source_input(n.children[1], ast.children[1],
+                     "assignment RHS differs from the real Assign right child");
+      }
       std::optional<SymbolId> read;
       if (auto p = std::get_if<Read>(&n.data);
           p && classify_value(m, n.type).needs_drop)

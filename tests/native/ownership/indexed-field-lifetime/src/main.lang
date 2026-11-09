@@ -1,0 +1,4 @@
+package app;
+struct P{x i32;y i32;}
+func consume(v move Vec[P])i32{return v[0].y;}
+func main()i32{let v Vec[P]=[P(x:1,y:2)];v[0].x=consume(move v);return 0;}

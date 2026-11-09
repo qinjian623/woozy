@@ -168,6 +168,59 @@
                "owning temporary has multiple initializing instructions", i.source);
       }
     }
+    // Every use reached through a vec_element_address must still have an
+    // owning handle for that container. Trace the real SSA field chain to the
+    // indexed address, then map its receiver value to the owning slot(s) that
+    // actually stored that value. Liveness is checked path-sensitively below.
+    std::map<ValueId, ValueId> element_address_roots;
+    auto address_root = [&](ValueId value) -> std::optional<ValueId> {
+      std::set<ValueId> visited;
+      for (;;) {
+        need(visited.insert(value).second,
+             "Vec element address chain cycle", f.source);
+        auto found = definitions.find(value);
+        if (found == definitions.end())
+          return {};
+        const auto &definition = *found->second;
+        if (definition.op == Op::vec_element_address)
+          return value;
+        if (definition.op != Op::field_address ||
+            definition.inputs.size() != 1)
+          return {};
+        value = definition.inputs[0];
+      }
+    };
+    for (const auto &[value, definition] : definitions)
+      if (definition->op == Op::vec_element_address ||
+          definition->op == Op::field_address)
+        if (auto root = address_root(value))
+          element_address_roots.emplace(value, *root);
+    std::map<ValueId, std::set<LocalSlotId>> stored_owners;
+    for (const auto &block : f.blocks)
+      for (const auto &i : block.instructions)
+        if (i.op == Op::store && i.inputs.size() == 1 &&
+            i.slot.value < f.slots.size() && f.slots[i.slot.value].owner)
+          stored_owners[i.inputs[0]].insert(i.slot);
+    auto receiver_owners = [&](ValueId value) -> std::set<LocalSlotId> {
+      std::set<ValueId> visited;
+      for (;;) {
+        need(visited.insert(value).second,
+             "Vec element receiver ownership cycle", f.source);
+        auto stored = stored_owners.find(value);
+        if (stored != stored_owners.end() && !stored->second.empty())
+          return stored->second;
+        auto definition = definitions.find(value);
+        if (definition == definitions.end())
+          return {};
+        const auto &i = *definition->second;
+        if ((i.op == Op::load || i.op == Op::move) &&
+            i.slot.value < f.slots.size() && f.slots[i.slot.value].owner)
+          return {i.slot};
+        if ((i.op != Op::copy && i.op != Op::borrow) || i.inputs.empty())
+          return {};
+        value = i.inputs[0];
+      }
+    };
     using Borrows = std::vector<LocalSlotId>;
     std::vector<std::optional<std::set<LocalSlotId>>> iterating(f.blocks.size()); iterating[0] = std::set<LocalSlotId>{};
     std::vector<std::optional<Borrows>> borrowed(f.blocks.size()); borrowed[0] = Borrows{};
@@ -197,6 +250,29 @@
         values.at(p.value) = 2;
       }
       for (const auto &i : f.blocks[b].instructions) {
+        auto require_element_owner = [&](ValueId address, SourceSpan source) {
+          auto found = element_address_roots.find(address);
+          if (found == element_address_roots.end())
+            return;
+          const auto &root_instruction = *definitions.at(found->second);
+          need(!root_instruction.inputs.empty(),
+               "Vec element address has no receiver", source);
+          auto owners = receiver_owners(root_instruction.inputs[0]);
+          need(!owners.empty(),
+               "Vec element address receiver has no tracked owning storage",
+               source);
+          bool live = false;
+          for (auto slot : owners)
+            live |= slot.value < flags.size() && flags[slot.value] == 2;
+          need(live, "Vec element address owner is not live at field use",
+               source);
+        };
+        if (i.op == Op::vec_element_address && i.result)
+          require_element_owner(*i.result, i.source);
+        if (i.op == Op::load_indirect || i.op == Op::store_indirect ||
+            i.op == Op::replace_indirect)
+          for (auto value : i.inputs)
+            require_element_owner(value, i.source);
         if (i.op == Op::store && f.slots[i.slot.value].owner)
           consume(i.inputs[0], i.source);
         if (i.op == Op::struct_init || i.op == Op::enum_init || i.op == Op::vec_init)

@@ -1,0 +1,5 @@
+package app;
+enum E {Bad;}
+struct P{x i32;y i32;}
+func maybe(flag bool,v move Vec[P])i32 throws E {if flag {throw E.Bad;}return v[0].y;}
+func main()i32 throws E {let v Vec[P]=[P(x:1,y:2)];let alias=v;v[0].x=maybe(false,move v);if alias[0].x!=2{return 1;}let w Vec[P]=[P(x:3,y:4)];let w_alias=w;try {w[0].y=maybe(true,move w);return 2;}catch e E {}if w_alias[0].y!=4{return 3;}return 0;}

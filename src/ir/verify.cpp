@@ -64,6 +64,7 @@ class Verifier {
       size_t block, position;
       TypeId type;
       bool address;
+      SourceSpan source;
     };
     std::map<ValueId, Def> defs;
     std::map<ValueId, const Instruction *> instructions;
@@ -100,7 +101,9 @@ class Verifier {
         predecessors[dest.value].insert(b);
       }
       for (const auto &param : bb.parameters)
-        need(defs.emplace(param.value, Def{b, 0, param.type, false}).second,
+        need(defs.emplace(param.value,
+                          Def{b, 0, param.type, false, f.source})
+                 .second,
              "duplicate block parameter", t.source);
       for (size_t p = 0; p < bb.instructions.size(); ++p) {
         auto &i = bb.instructions[p];
@@ -118,13 +121,87 @@ class Verifier {
         if (i.result)
           need(defs.emplace(*i.result, Def{b, p + 1, i.type,
                                            i.op == Op::address ||
-                                               i.op == Op::field_address})
+                                               i.op == Op::field_address ||
+                                               i.op == Op::vec_element_address,
+                                           i.source})
                    .second,
                "duplicate value definition", i.source);
         if (i.result)
           instructions.emplace(*i.result, &i);
       }
     }
+    // A block parameter is defined on its TryCall edge. Use that call's real
+    // source span for the receiver/index location check rather than the
+    // parameter block's outgoing terminator.
+    for (size_t b = 0; b < f.blocks.size(); ++b)
+      if (predecessors[b].size() == 1) {
+        const auto predecessor = *predecessors[b].begin();
+        for (const auto &param : f.blocks[b].parameters)
+          defs[param.value].source = f.blocks[predecessor].terminator.source;
+      }
+    // A Vec element address is only an implementation detail of replacing a
+    // field in the assignment that owns the indexed place. Track each address
+    // through field_address nodes and reject any use that could store it, pass
+    // it to a call, return it, or use it as an inout argument.
+    using AddressInfo = std::pair<ValueId, size_t>; // root, field depth
+    std::map<ValueId, AddressInfo> address_roots;
+    auto resolve_address = [&](ValueId value) -> std::optional<AddressInfo> {
+      std::set<ValueId> visited;
+      size_t depth = 0;
+      for (;;) {
+        need(visited.insert(value).second,
+             "Vec element address chain cycle", s);
+        auto found = instructions.find(value);
+        if (found == instructions.end())
+          return {};
+        const auto &definition = *found->second;
+        if (definition.op == Op::vec_element_address)
+          return AddressInfo{value, depth};
+        if (definition.op != Op::field_address ||
+            definition.inputs.size() != 1)
+          return {};
+        value = definition.inputs[0];
+        ++depth;
+      }
+    };
+    for (const auto &[value, definition] : instructions)
+      if (definition->op == Op::vec_element_address ||
+          definition->op == Op::field_address)
+        if (auto root = resolve_address(value))
+          address_roots.emplace(value, *root);
+    std::map<ValueId, size_t> address_writes;
+    auto address_use = [&](const Instruction &consumer, ValueId value,
+                           SourceSpan source) {
+      auto found = address_roots.find(value);
+      if (found == address_roots.end())
+        return;
+      if (consumer.op == Op::field_address)
+        return;
+      if (consumer.op == Op::load_indirect ||
+          consumer.op == Op::store_indirect ||
+          consumer.op == Op::replace_indirect) {
+        need(found->second.second > 0,
+             "Vec element address used without a field replacement", source);
+        if (consumer.op != Op::load_indirect)
+          ++address_writes[found->second.first];
+        return;
+      }
+      need(false, "Vec element address escapes its field replacement", source);
+    };
+    for (const auto &bb : f.blocks) {
+      for (const auto &i : bb.instructions)
+        for (auto value : i.inputs)
+          address_use(i, value, i.source);
+      for (auto value : bb.terminator.inputs)
+        need(!address_roots.contains(value),
+             "Vec element address escapes through a terminator",
+             bb.terminator.source);
+    }
+    for (auto [root, info] : address_roots)
+      if (info.second == 0)
+        need(address_writes[root] == 1,
+             "Vec element address does not perform exactly one field write",
+             f.source);
     Set reachable;
     std::function<void(size_t)> visit = [&](size_t b) {
       if (!reachable.insert(b).second)
@@ -333,6 +410,36 @@ class Verifier {
                           t.kind == hir::TypeKind::Unit, "Vec write type", i.source);
           }
           break;
+        case Op::vec_element_address: {
+          arity(2);
+          need(value(0).kind == hir::TypeKind::Vec &&
+                   integer(value(1).kind) &&
+                   type(args[0].type, i.source).type_args[0] == i.type,
+               "Vec element address type", i.source);
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "Vec element address without HIR place", i.source);
+          const auto &place = m.hir.module().nodes[i.origin->value];
+          need(place.kind() == hir::NodeKind::index_place &&
+                   place.type == i.type && place.children.size() == 2,
+               "Vec element address origin is not the indexed place", i.source);
+          need(p > 0 && bb.instructions[p - 1].op == Op::vec_check &&
+                   bb.instructions[p - 1].inputs == i.inputs,
+               "Vec element address lacks the same receiver/index bounds check",
+               i.source);
+          auto from_place = [&](ValueId value, HirNodeId source) {
+            const auto &definition = defs.at(value);
+            const auto &span = m.hir.module().nodes[source.value].source.span;
+            need(definition.source.snapshot == span.snapshot &&
+                     definition.source.begin_byte >= span.begin_byte &&
+                     definition.source.end_byte <= span.end_byte,
+                 "Vec element address receiver/index differs from the HIR "
+                 "indexed place",
+                 i.source);
+          };
+          from_place(i.inputs[0], place.children[0]);
+          from_place(i.inputs[1], place.children[1]);
+          break;
+        }
         case Op::vec_slice:
           need(value(0).kind == hir::TypeKind::Vec && args[0].type == i.type && i.bits <= 3,
                "Vec slice type", i.source);
@@ -515,6 +622,25 @@ class Verifier {
           auto fields = aggregates.fields(args[0].type);
           auto index = aggregates.field_index(args[0].type, i.field);
           need(i.type == fields[index].type, "field result type", i.source);
+          if (i.op == Op::field_address) {
+            bool found = false;
+            const auto &h = m.hir.module();
+            for (const auto &source : h.nodes) {
+              const auto &span = source.source.span;
+              if (source.kind() != hir::NodeKind::field_place ||
+                  span.snapshot != i.source.snapshot ||
+                  span.begin_byte != i.source.begin_byte ||
+                  span.end_byte != i.source.end_byte ||
+                  h.scopes.at(source.scope.value).function != f.symbol)
+                continue;
+              need(std::get<hir::FieldPlace>(source.data).field == i.field &&
+                       source.type == i.type,
+                   "field address differs from the HIR source place", i.source);
+              found = true;
+              break;
+            }
+            need(found, "field address has no HIR source place", i.source);
+          }
           break;
         }
         case Op::load_indirect:
@@ -972,7 +1098,7 @@ std::string dump(const Module &m) {
             "enum_test",     "enum_payload",  "string_literal",
             "exit_begin",    "cleanup_begin", "cleanup_end",
             "copy", "move", "take", "destroy", "borrow", "end_borrow", "save_output",
-            "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check"};
+            "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check", "vec_element_address"};
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;

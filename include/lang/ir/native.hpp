@@ -28,7 +28,10 @@ enum class Op {
   cleanup_end,
   copy, move, take, destroy, borrow, end_borrow, save_output,
   vec_init, vec_read, vec_set, vec_slice, iteration_begin, iteration_end,
-  vec_length, iteration_test, iteration_read, iteration_next, ownership_begin, ownership_end, replace_indirect, begin_borrow, vec_check
+  vec_length, iteration_test, iteration_read, iteration_next, ownership_begin, ownership_end, replace_indirect, begin_borrow, vec_check,
+  // Appended: an address of one already bounds-checked Vec element. It is
+  // confined to the field replacement of the assignment identified by origin.
+  vec_element_address
 };
 struct ExitSite {
   HirNodeId origin;

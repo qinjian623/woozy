@@ -1,0 +1,15 @@
+package app;
+struct T0{x i32;y i32;}
+struct T1{child T0;}
+struct T2{child T1;}
+struct T3{child T2;}
+struct T4{child T3;}
+struct T5{child T4;}
+struct T6{child T5;}
+struct T7{child T6;}
+struct T8{child T7;}
+struct T9{child T8;}
+struct T10{child T9;}
+struct T11{child T10;}
+struct T12{child T11;}
+func main()i32{let v Vec[T12]=[T12(child:T11(child:T10(child:T9(child:T8(child:T7(child:T6(child:T5(child:T4(child:T3(child:T2(child:T1(child:T0(x:1,y:2)))))))))))))];v[0].child.child.child.child.child.child.child.child.child.child.child.child.x=3;return v[0].child.child.child.child.child.child.child.child.child.child.child.child.x-3;}

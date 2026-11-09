@@ -370,8 +370,9 @@ void extra_tests() {
        "ordinary argument borrow completion missing");
   invalid(calls, "delete borrow completion",
           [](auto &m) { m.ownership.calls.clear(); });
-  rejected("struct S {x i32;} func f(v Vec[S]) {v[0].x=2;}",
-           "E_CAPABILITY_UNAVAILABLE");
+  auto indexed_field = accepted(
+      "struct S {x i32;} func f(v Vec[S]) {v[0].x=2;}");
+  facts(indexed_field);
   auto before_iteration =
       accepted("enum E {Bad;} func source() Vec[i32] throws E {throw E.Bad;} "
                "func f() throws E {for e in source() {let v=e;}}");

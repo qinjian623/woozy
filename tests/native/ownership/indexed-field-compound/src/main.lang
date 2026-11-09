@@ -1,0 +1,4 @@
+package app;
+struct Pair{x i32;y i32;}
+func mutate(values Vec[Pair],n i32)i32 {values[0].x=100;values[0].y=9;return n;}
+func main()i32 {var values Vec[Pair]=[Pair(x:1,y:2)];values[0].x+=mutate(values,5);if values[0].x!=6{return 1;}if values[0].y!=9{return 2;}return 0;}
