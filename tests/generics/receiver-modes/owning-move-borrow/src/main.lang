@@ -1,0 +1,28 @@
+package app;
+enum E { Bad; }
+struct Box { items Vec[i32]; }
+trait Peek { func peek(owner Self, entered inout i32, after i32) i32; }
+impl Peek for Vec[i32] {
+    func peek(owner Self, entered inout i32, after i32) i32 {
+        entered += 1;
+        return owner[0] + after;
+    }
+}
+func mark(log inout i64, digit i64) { log = log * 10 + digit; }
+func fail(log inout i64) i32 throws E { mark(inout log, 2); throw E.Bad; }
+func main() i32 {
+    var log i64 = 0;
+    var entered i32 = 0;
+    let first = Box(items: [7]);
+    // Move the whole Box, then borrow its projected Vec as an ordinary Self.
+    let normal = (move first).items.peek(inout entered, 1);
+    mark(inout log, 1);
+    if normal != 8 || entered != 1 { return 1; }
+    let second = Box(items: [9]);
+    try {
+        let bad = (move second).items.peek(inout entered, fail(inout log));
+        return 2;
+    } catch error E { mark(inout log, 3); }
+    if log != 123 || entered != 1 { return 3; }
+    return 0;
+}

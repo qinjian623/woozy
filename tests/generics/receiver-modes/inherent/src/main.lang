@@ -1,0 +1,40 @@
+package app;
+struct Box[T] { value T; }
+struct Pair { value i32; }
+impl[T] Box[T] {
+    func take[U](owner move Self, tag U) Self { return move owner; }
+}
+impl Pair {
+    func change(self inout Self, delta i32) i32 {
+        let old = self.value;
+        defer { self = Pair(value: self.value + 1); }
+        self = Pair(value: self.value + delta);
+        return old;
+    }
+}
+impl i32 {
+    func read(self Self) i32 { return self; }
+    func bump(owner inout Self, delta i32) i32 {
+        let old = owner; owner += delta; return old;
+    }
+}
+func main() i32 {
+    let box = Box[Vec[i32]](value: [7]);
+    let alias = box.value;
+    let result = (move box).take[bool](true);
+    result.value[0] = 8;
+    let copied = (move Box[Vec[i32]](value: [9])).take[i32](1);
+    if alias[0] != 8 || copied.value[0] != 9 { return 1; }
+    var pair = Pair(value: 3);
+    let old = (inout pair).change(4);
+    if old != 3 || pair.value != 8 { return 2; }
+    var number i32 = 10;
+    if (inout number).bump(2) != 10 || number != 12 { return 3; }
+    // Type.method still takes every declared parameter; saving it creates
+    // an unbound function value, with no receiver environment.
+    let change func(inout Pair,i32)i32 = Pair.change;
+    if change(inout pair, 1) != 8 || pair.value != 10 { return 4; }
+    var temporary i32 = 3;
+    if (+(move temporary)).read() != 3 { return 5; }
+    return 0;
+}

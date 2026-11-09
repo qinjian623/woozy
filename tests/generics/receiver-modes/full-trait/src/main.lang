@@ -1,0 +1,43 @@
+package app;
+struct Pair { value i32; }
+struct Box { items Vec[i32]; }
+struct One { value i32; }
+struct Two { value i32; }
+trait Carry[A,B] {
+    func change[U](owner inout Self, delta A, tag U) i32;
+}
+impl Carry[i32,bool] for Pair {
+    func change[V](owner inout Self, delta i32, tag V) i32 {
+        let old = owner.value; owner = Pair(value: old + delta); return old;
+    }
+}
+impl Carry[bool,i32] for Pair {
+    func change[V](owner inout Self, delta bool, tag V) i32 {
+        let old = owner.value;
+        if delta { owner = Pair(value: old + 10); }
+        return old;
+    }
+}
+trait Take[A,B] {
+    func take[U](owner move Self, first A, second B, tag U) Self;
+}
+impl Take[i32,bool] for Box {
+    func take[V](owner move Self, first i32, second bool, tag V) Self {
+        owner.items[0] = first; return move owner;
+    }
+}
+func change[A,B,T Carry[A,B],U](x inout T, delta A, tag U)i32 {
+    return (inout x).change[U](delta, tag);
+}
+func take[A,B,T Take[A,B],U](x move T, first A, second B, tag U)T {
+    return (move x).take[U](first, second, tag);
+}
+func main()i32 {
+    var pair = Pair(value: 1);
+    if change[i32,bool,Pair,One](inout pair,2,One(value:0))!=1 || pair.value!=3{return 1;}
+    if change[bool,i32,Pair,Two](inout pair,true,Two(value:0))!=3 || pair.value!=13{return 2;}
+    let b=Box(items:[5]);
+    let r=take[i32,bool,Box,One](move b,6,true,One(value:0));
+    if r.items[0]!=6{return 3;}
+    return 0;
+}

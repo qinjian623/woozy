@@ -292,8 +292,7 @@ class Checker {
     ParamMode requested;
     bool has_marker;
   };
-  ArgumentMode argument_mode(Ref r) const {
-    auto value = child(r, 0);
+  ArgumentMode expression_mode(Ref value) const {
     while (ast(value).kind == AstKind::Parenthesized)
       value = child(value, 0);
     auto marked = value;
@@ -304,6 +303,9 @@ class Checker {
       value = child(value, 0);
     }
     return {value, marked, requested, requested != ParamMode::ordinary};
+  }
+  ArgumentMode argument_mode(Ref r) const {
+    return expression_mode(child(r, 0));
   }
   TypeId parameter_type(SymbolId s) {
     Type t;
@@ -371,6 +373,17 @@ class Checker {
     const auto &params = type(sig).parameters;
     return !params.empty() && params.front().type == im->self_type;
   }
+  bool inherent_self_source(SymbolId target) const {
+    const auto *im = impl_of(target);
+    auto found = parameters.find(target.value);
+    if (!im || im->trait || found == parameters.end() || found->second.empty())
+      return false;
+    auto definition = symbol(found->second.front().symbol).definition;
+    if (!definition || ast(*definition).children.empty())
+      return false;
+    auto raw = child(*definition, 0);
+    return occurrence(raw) == im->self_parameter;
+  }
   // This source route covers an inherent method in a non-generic impl, plus a
   // method in a generic impl whether or not its declaration adds generic
   // parameters of its own. register_function records the merged list in
@@ -395,11 +408,9 @@ class Checker {
         return false;
     return true;
   }
-  // An instance call needs a declared ordinary self; a type-qualified call
-  // needs a method whose declaration has no self at all. Receiver presence
-  // alone is not a declaration and cannot open this route through a static
-  // call. The call form is checked separately from inherent_method_source so
-  // instantiation can validate the declaration prefix/suffix without a use.
+  // The written receiver marker must match the declaration in typed_call.
+  // An explicit move/inout additionally needs the original Self SymbolId;
+  // substituting an own U to this type never creates a receiver.
   bool inherent_method_route(SymbolId target, bool receiver,
                              TypeId signature) const {
     if (!inherent_method_source(target))
@@ -407,8 +418,7 @@ class Checker {
     const auto &params = type(signature).parameters;
     const bool self = declared_self(target);
     if (receiver)
-      return self && !params.empty() &&
-             params.front().mode == ParamMode::ordinary;
+      return (self || inherent_self_source(target)) && !params.empty();
     return !self;
   }
   struct TraitMethodSource {
@@ -482,18 +492,11 @@ class Checker {
         return false;
     return true;
   }
-  // A concrete receiver or type qualifier may use a method from a real trait
-  // impl only when the impl names a trait whose prototype has the same source
-  // name, labels and alpha-substituted signature. A value-form call needs the
-  // prototype's first parameter to be the real ordinary Self; ordinary is not
-  // inferred from the spelling `self`. A type-qualified call supplies every
-  // declared parameter explicitly, so it has no synthetic receiver. New
-  // top-level inout is permitted at non-self positions and at position zero
-  // only when the raw first type is a method parameter, not the trait Self.
-  // Callback data is checked from the complete substitution, not rejected by
-  // this source-entitlement relation. Method-own generics are matched by
-  // position; this is still only a source check, while finish_arguments,
-  // select_method and instantiate verify the actual implementation and key.
+  // Match the real trait prototype and complete alpha-substituted signature.
+  // Value calls need its first real Self, independent of the parameter label;
+  // typed_call matches the written ordinary/move/inout receiver mode. Type/T
+  // calls supply every declaration parameter. Callback data still uses the
+  // complete concrete application, never this source-eligibility check.
   std::optional<TraitMethodSource>
   trait_impl_inout_source(SymbolId target, bool receiver) {
     const auto *im = impl_of(target);
@@ -528,8 +531,8 @@ class Checker {
       const auto &raw_self = type(proto_sig.parameters.front().type);
       if (raw_self.kind != TypeKind::TypeParameter ||
           raw_self.declaration != tr->self ||
-          proto_sig.parameters.front().mode != ParamMode::ordinary ||
-          method_sig.parameters.front().mode != ParamMode::ordinary ||
+          proto_sig.parameters.front().mode !=
+              method_sig.parameters.front().mode ||
           method_sig.parameters.front().type != im->self_type)
         return {};
       return TraitMethodSource{im, tr, prototype};
@@ -542,15 +545,9 @@ class Checker {
     // application and the concrete method signature.
     return TraitMethodSource{im, tr, prototype};
   }
-  // Move eligibility is separate from the older inout route. A value-form
-  // call requires a real ordinary trait-Self first parameter, but this batch
-  // no longer requires its label to be literally `self`; an owner-labelled
-  // ordinary receiver is already the same receiver. A type-qualified call
-  // supplies every declared parameter explicitly, so it starts at index zero
-  // and also admits a static method with no Self or a first move parameter
-  // whose own type parameter happens to be named `self`. Actual self modes
-  // are classified from the raw declaration in typed_call, not from the
-  // substituted signature where an own parameter may already equal Self.
+  // Move and inout retain separate source routes. The first parameter must
+  // be the real trait Self for a value call; static Type/T calls also admit
+  // method-own parameters whose actual type happens to equal Self.
   std::optional<TraitMethodSource>
   trait_impl_move_source(SymbolId target, bool receiver) {
     const auto *im = impl_of(target);
@@ -581,20 +578,16 @@ class Checker {
       const auto &raw_self = type(proto_sig.parameters.front().type);
       if (raw_self.kind != TypeKind::TypeParameter ||
           raw_self.declaration != tr->self ||
-          proto_sig.parameters.front().mode != ParamMode::ordinary ||
-          method_sig.parameters.front().mode != ParamMode::ordinary ||
+          proto_sig.parameters.front().mode !=
+              method_sig.parameters.front().mode ||
           method_sig.parameters.front().type != im->self_type)
         return {};
     }
     return TraitMethodSource{im, tr, prototype};
   }
-  // A constraint call is limited to a real prototype of the required trait,
-  // reached through a bounded template receiver with a real ordinary self.
-  // Ordinary is decided from the real trait Self type, not the label. Later
-  // top-level inout may be a fixed scalar, a method-own parameter, or the
-  // trait Self; the substituted call and instance still check the concrete
-  // data type. Method-own generics are completed by typed_call before the
-  // ConstraintCall is made.
+  // A bounded value call must use the required trait's real Self prototype.
+  // Its receiver mode is checked separately; concrete substitutions still
+  // validate all inout data, method-own arguments and their constraints.
   const MethodPrototype *constraint_method_source(SymbolId target,
                                                   const TraitRef &trait,
                                                   TypeId receiver) {
@@ -625,8 +618,7 @@ class Checker {
     if (prototype->parameters.empty())
       return nullptr;
     const auto &sig = type(prototype->signature);
-    if (sig.parameters.empty() ||
-        sig.parameters.front().mode != ParamMode::ordinary)
+    if (sig.parameters.empty())
       return nullptr;
     const auto &raw_self = type(sig.parameters.front().type);
     if (raw_self.kind != TypeKind::TypeParameter ||
@@ -668,8 +660,7 @@ class Checker {
     if (prototype->parameters.empty())
       return nullptr;
     const auto &sig = type(prototype->signature);
-    if (sig.parameters.empty() ||
-        sig.parameters.front().mode != ParamMode::ordinary)
+    if (sig.parameters.empty())
       return nullptr;
     const auto &raw_self = type(sig.parameters.front().type);
     if (raw_self.kind != TypeKind::TypeParameter ||
@@ -2547,8 +2538,14 @@ class Checker {
         return typed_call(r, selected.method, {}, selected.substitutions, {},
                           expected);
       }
-      auto receiver = expression(base);
+      const auto receiver_argument = expression_mode(base);
+      const auto receiver_mode = receiver_argument.requested;
+      auto receiver = receiver_mode == ParamMode::inout
+                          ? place(receiver_argument.value, true)
+                          : expression(base);
       if (type(receiver.value.type).kind == TypeKind::ForeignOpaque) {
+        if (receiver_mode != ParamMode::ordinary)
+          unavailable(base, "external receiver modes are not supported");
         if (method_explicit) unavailable(r, "external generic methods are not supported");
         auto candidates = foreign_members(receiver.value.type, name, "method");
         if (candidates.empty()) unavailable(r, "external member is not declared");
@@ -2557,6 +2554,9 @@ class Checker {
       if (type(receiver.value.type).kind == TypeKind::NominalStruct)
         for (const auto &f : nominal(receiver.value.type).fields)
           if (symbol(f.symbol).name == name) {
+            if (receiver_mode == ParamMode::inout)
+              reject(base, "inout receiver requires a method Self parameter",
+                     "E_CALL_ARGUMENT");
             if (method_explicit) {
               auto field = find_field(method_ref, receiver.value.type);
               auto t = field_type(receiver.value.type, field);
@@ -2603,13 +2603,13 @@ class Checker {
               auto sig = substitute(method.signature, sub, m.types);
               return typed_call(r, method.symbol, sig,
                                 explicit_method_sub(method.symbol), receiver,
-                                expected, application);
+                                expected, application, {}, receiver_mode);
             }
         reject(r, "method is not declared by the constraint");
       }
       auto selected = method_subs(select_method(r, receiver.value.type, name));
       return typed_call(r, selected.method, {}, selected.substitutions,
-                        receiver, expected);
+                        receiver, expected, {}, {}, receiver_mode);
     }
     auto base = callee_ref;
     std::vector<TypeId> explicit_args;
@@ -2685,28 +2685,35 @@ class Checker {
                   std::optional<TypeId> signature_override, Substitutions sub,
                   std::optional<Expr> receiver, std::optional<TypeId> expected,
                   std::optional<TraitRef> constraint = {},
-                  std::optional<TypeId> constraint_type = {}) {
+                  std::optional<TypeId> constraint_type = {},
+                  ParamMode receiver_mode = ParamMode::ordinary) {
     auto original = signature_override.value_or(signatures.at(target.value));
     // Copy: substitution below can intern new types and reallocate the
     // TypeContext while this signature is still inspected.
     auto original_type = type(original);
-    // A value-form call always binds parameter zero as its synthetic
-    // receiver. Reject an actual move/inout Self before arity or mode
-    // processing, so it remains an explicit capability limit rather than a
-    // misleading argument-count/type diagnostic. Type/T.method(...) has no
-    // synthetic receiver and supplies this first parameter explicitly.
-    if (receiver && !original_type.parameters.empty() &&
-        original_type.parameters.front().mode != ParamMode::ordinary)
-      unavailable(r, "move/inout self is not implemented");
-    if (receiver && !original_type.parameters.empty() &&
-        original_type.parameters.front().mode == ParamMode::ordinary) {
+    if (receiver) {
+      if (original_type.parameters.empty())
+        reject(r, "value call requires a Self parameter", "E_CALL_ARGUMENT");
+      const auto declared_mode = original_type.parameters.front().mode;
+      if (declared_mode != receiver_mode) {
+        if (receiver_mode == ParamMode::ordinary)
+          unavailable(r,
+                      "move/inout Self requires an explicit receiver marker");
+        reject(r, "receiver mode differs from the Self parameter",
+               "E_CALL_ARGUMENT");
+      }
       const auto *im = impl_of(target);
-      if ((constraint &&
-           !constraint_method_move_source(target, *constraint,
-                                          receiver->value.type)) ||
-          (!constraint && im && im->trait &&
-           !trait_impl_move_source(target, true)))
-        reject(r, "value call requires an ordinary trait Self first parameter",
+      const bool trait_self =
+          constraint ? constraint_method_move_source(
+                           target, *constraint, receiver->value.type) != nullptr
+                     : im && im->trait &&
+                           trait_impl_move_source(target, true).has_value();
+      if ((constraint || (im && im->trait)) && !trait_self)
+        reject(r, "value call requires the real trait Self first parameter",
+               "E_CALL_ARGUMENT");
+      if (receiver_mode != ParamMode::ordinary && !trait_self &&
+          !inherent_self_source(target))
+        reject(r, "receiver marker requires a real first-position Self",
                "E_CALL_ARGUMENT");
     }
     if (expected)
@@ -2724,7 +2731,7 @@ class Checker {
     std::vector<ParamMode> modes(values.size());
     if (receiver) {
       infer(r, original_type.parameters.at(0).type, receiver->value.type, sub);
-      args.push_back({0, 0, {}, ParamMode::ordinary, receiver->id});
+      args.push_back({0, 0, {}, receiver_mode, receiver->id});
       children.push_back(receiver->id);
       seen[0] = true;
     }
@@ -2766,9 +2773,8 @@ class Checker {
     // was already an explicit static parameter.
     const bool inherent_static =
         !constraint && !receiver && inherent_method_source(target);
-    // Move and inout eligibility use separate source helpers. Both admit an
-    // ordinary receiver named self or owner and an explicit Type/T parameter
-    // list. Complete callback data is checked after type substitution.
+    // Move and inout source routes share the real Self identity; the written
+    // receiver mode was checked above. Callback data uses full substitution.
     const bool trait_impl_inout =
         !constraint &&
         trait_impl_inout_source(target, receiver.has_value()).has_value();
@@ -2807,10 +2813,8 @@ class Checker {
     const bool allow_inout =
         free_inout || inherent || inherent_static || trait_impl_inout ||
         trait_constraint_inout;
-    // A value-form actual-self mode was rejected above, before arity. An own
-    // type parameter that happens to be named self, or later concretizes to
-    // Self, is not an actual self; a type-qualified call passes parameter zero
-    // explicitly and uses the same ordinary/move/inout checks below.
+    // Type/T calls pass parameter zero explicitly. An own parameter which
+    // later equals Self remains static; receiver form cannot change it.
     for (size_t pass = 0; pass < 2; ++pass)
       for (size_t i = 0; i < values.size(); ++i) {
         auto ar = child(r, i + 1), er = child(ar, 0);

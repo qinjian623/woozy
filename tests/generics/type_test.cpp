@@ -13639,6 +13639,113 @@ func main() i32 { return 0; }
                "concrete owning rejects, identity and mode corruptions\n";
 }
 
+void receiver_modes(const fs::path &root) {
+  auto legal = [&](const char *name) {
+    auto result =
+        check(root / "tests/generics/receiver-modes" / name / "lang.toml");
+    need(result.success(), std::string("receiver Source rejected: ") + name +
+                               "\n" + messages(result));
+    auto m = *result.value;
+    need(hir::verify_types(m).success() && hir::verify(m).success(),
+         "receiver legal direct/public control");
+    need(hir::detail::produce_ownership(m, {}).success(),
+         "receiver legal ownership recomputation");
+    need(hir::verify_types(m).success() && hir::verify(m).success(),
+         "receiver legal recomputed direct/public control");
+    return m;
+  };
+  auto core = legal("core"), inout = legal("inout"),
+       generic = legal("full-trait");
+  (void)legal("inherent");
+  (void)legal("owning-move-borrow");
+  auto first = [](hir::HirModule &m, hir::ParamMode mode) -> hir::Call & {
+    for (auto &n : m.nodes)
+      if (auto c = std::get_if<hir::Call>(&n.data);
+          c && c->direct_symbol && !c->args.empty() &&
+          c->args.front().mode == mode) {
+        const auto &file = *m.resolved->project->module(n.source.node.module)
+                                .files[n.source.node.file];
+        auto callee = file.node(n.source.node.node).children.front();
+        while (file.node(callee).kind == AstKind::Parenthesized ||
+               file.node(callee).kind == AstKind::NeutralBracket)
+          callee = file.node(callee).children.front();
+        if (file.node(callee).kind == AstKind::Member)
+          return *c;
+      }
+    throw std::runtime_error("receiver call missing");
+  };
+  auto both = [&](const hir::HirModule &m, const char *name,
+                  const auto &change) {
+    invalid(m, name, change);
+    invalid_recomputed_published(m, std::string(name) + " recomputed", change);
+  };
+  both(core, "receiver move call mode", [&](auto &m) {
+    first(m, hir::ParamMode::move).args.front().mode = hir::ParamMode::ordinary;
+  });
+  both(core, "receiver complete Move Source", [&](auto &m) {
+    auto target = first(m, hir::ParamMode::move).args.front().expression;
+    for (const auto &n : m.nodes)
+      if (n.kind() == hir::NodeKind::move &&
+          n.source.node.node != m.nodes[target.value].source.node.node) {
+        m.nodes[target.value].source = n.source;
+        return;
+      }
+    throw std::runtime_error("other receiver Move Source missing");
+  });
+  both(core, "receiver narrowed Move span", [&](auto &m) {
+    auto id = first(m, hir::ParamMode::move).args.front().expression;
+    auto &span = m.nodes[id.value].source.span;
+    need(span.end_byte > span.begin_byte + 1,
+         "receiver span cannot be narrowed");
+    --span.end_byte;
+  });
+  both(inout, "receiver Place binding identity", [&](auto &m) {
+    std::optional<HirNodeId> selected;
+    for (const auto &n : m.nodes)
+      if (auto call = std::get_if<hir::Call>(&n.data);
+          call && call->direct_symbol && !call->args.empty() &&
+          m.resolved->symbols[call->direct_symbol->value].name == "update") {
+        selected = call->args.front().expression;
+        break;
+      }
+    need(selected.has_value(), "late receiver update call missing");
+    const auto id = *selected;
+    auto &value = m.nodes[id.value];
+    const auto original = std::get<hir::Place>(value.data).symbol;
+    for (const auto &n : m.nodes)
+      if (auto p = std::get_if<hir::Place>(&n.data);
+          p && n.type == value.type && p->symbol != original) {
+        std::get<hir::Place>(value.data).symbol = p->symbol;
+        return;
+      }
+    throw std::runtime_error("other receiver Place binding missing");
+  });
+  both(inout, "receiver narrowed Place span", [&](auto &m) {
+    auto id = first(m, hir::ParamMode::inout).args.front().expression;
+    ++m.nodes[id.value].source.span.begin_byte;
+  });
+  both(generic, "constraint receiver mode", [&](auto &m) {
+    for (auto &n : m.nodes)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data);
+          c && !c->args.empty()) {
+        c->args.front().mode = hir::ParamMode::ordinary;
+        return;
+      }
+    throw std::runtime_error("constraint receiver missing");
+  });
+  both(generic, "constraint full ordered trait application", [&](auto &m) {
+    for (auto &n : m.nodes)
+      if (auto c = std::get_if<hir::ConstraintCall>(&n.data);
+          c && c->trait.args.size() == 2) {
+        std::swap(c->trait.args[0], c->trait.args[1]);
+        return;
+      }
+    throw std::runtime_error("constraint trait arguments missing");
+  });
+  std::cout << "receiver-modes: 5 legal direct/public/recomputed controls; 7 "
+               "mutations rejected directly, published and after successful "
+               "ownership recomputation\n";
+}
 
 void explicit_self_modes() {
   auto good = [](const std::string &text) {
@@ -14691,6 +14798,7 @@ int main(int argc, char **argv) {
     trait_parameter_bounds(root);
     builtin_impl_targets();
     explicit_self_modes();
+    receiver_modes(root);
     unbound_method_values();
     const_method_values();
     local_const_aliases();

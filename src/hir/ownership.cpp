@@ -539,6 +539,10 @@ class Analysis {
     return r;
   }
   void use(HirNodeId id, uint32_t operand, HirNodeId child, UseKind kind) {
+    // A computed trivial value has no storage to borrow. In particular a
+    // Move result is distinct from its now-consumed source binding.
+    if (kind == UseKind::borrow && !owned(n(child).type) && !borrow_root(child))
+      return;
     if (!owned(n(child).type) && n(child).kind() != NodeKind::move &&
         kind != UseKind::inout &&
         !(kind == UseKind::borrow && borrow_root(child)))
@@ -548,7 +552,8 @@ class Analysis {
       root = r->symbol;
     if (auto r = std::get_if<Place>(&n(child).data))
       root = r->symbol;
-    if (auto r = std::get_if<Move>(&n(child).data))
+    if (auto r = std::get_if<Move>(&n(child).data);
+        r && kind != UseKind::borrow)
       root = r->binding;
     out.records.uses.push_back({id, operand, kind, root, n(child).type});
   }

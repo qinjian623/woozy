@@ -6,7 +6,7 @@
 
 2026-11-09 核对：依赖 Self、trait 实参、impl 实参或方法自身参数的 inout callback，按替换后的实际数据类型检查，也接受有限平凡 struct/enum 整体绑定。固定 Pair、自由泛型 T、trait Self、trait 实参和方法自身 U 五种写法均已在 Native O0/O2 与 Python 实际写回；不把它们列为待实现功能。完整签名、嵌套字段、非法拥有值及坏 HIR 另由既有持续测试检查。
 
-下文保留分批实现和测试记录。Type/T 显式首位 Self move/inout 与无捕获 Type/T 方法函数值已实现。用户已确定接收者写法为 `(move x).take()`、`(inout x).change()`，对应实现正在独立目录检查；纯 struct/enum 聚合 const 规则也已确认，尚未合入。源语言捕获闭包仍延后。
+下文保留分批实现和测试记录。Type/T 显式首位 Self move/inout 与无捕获 Type/T 方法函数值已实现。用户已确定接收者写法为 `(move x).take()`、`(inout x).change()`，对应点调用已实现并通过独立目录及root重跑检查；纯 struct/enum 聚合 const 规则也已确认，尚未合入。源语言捕获闭包仍延后。
 
 `sema::check_types`返回有类型的HirModule；`hir::verify_types`检查类型、声明、作用域、实例身份和控制流。这个结果不能直接交给后端。`sema::check_project`继续通过唯一的`hir::verify`发布只读VerifiedHirModule；发布前还检查当前后端已支持的操作。合法但后端尚未实现的操作返回E_CAPABILITY_UNAVAILABLE，损坏HIR返回E_IR_INVALID。
 
@@ -381,3 +381,42 @@ FunctionValue 的目标本身是 impl 方法或 raw prototype 时，来源检查
 验证器独立于检查器的 `Constant` 表：函数类型的 const `Read` 在真实 Source 或已提交 payload 任一指向 const 时都必须通过现有 `resolved_source` 与 `instance.renamed` 核对两侧是同一真实 const 声明符号，payload 不能改成普通 let/参数来跳过检查；再按真实 Binding AST 走现有方法/自由函数/字面量/有序泛型实参来源路线；函数值 `const` Binding 的初始化 child 用现有 `source_input`（仅透明括号）绑定到真实 RHS，本地 const 别名必须保留 `Read` 且符号身份一致。模板与具体实例都检查，phantom 特化和克隆重命名按真实原符号恢复，不按名字猜测；坏 HIR 在直接/public verify 及成功重算 ownership 后仍报 `E_IR_INVALID`。
 
 `tests/generics/unbound-method-values/local-const-aliases/` 和 `local-const-alias-strings/` 覆盖双后端检查、Native O0/O2、Python3.12.15、跨包 const、泛型两层实例、完整 trait 实参、method phantom、UTF-8 嵌入 NUL 字节、move/inout 与 typed throws 间接调用；新增拒绝项目验证 fresh 无输出、stale 字节不变。聚合 const、捕获闭包、普通函数 CTFE 和 T07/T09 的既有缺口保持不变。
+
+## 显式 move/inout Self 接收者点调用
+
+已确认的接收者写法现在支持 `(move x).take()`、`(inout x).change(args)`。
+普通 `x.take()`、`x.change()` 不自动移动或取得可写访问；Type/T 调用仍显式提供
+全部声明参数。`move x.take()` 仍移动调用结果，不改变接收者参数模式。前文各批
+记录中“点调用规则待定/尚未实施”的说明由本节更新。
+
+接收者必须来自真实首位 Self。trait 检查 raw prototype 的 Self SymbolId，
+固有方法检查首参类型的原始 impl Self 声明；标签可以是 self 或 owner。
+trait 参数 A、方法自身 U 或具体类型参数即使替换后等于 Self，也不会因此得到
+隐含接收者。完整 trait 实参与方法自身类型实参、约束、实例键及静态选择保持原规则；
+同 Self 的多个 trait 应用不能通过预期类型或接收者标记猜选。无捕获 Type/T
+方法函数值保持原来参数列表，不增加绑定方法捕获。
+
+move 仍只转交整体本地拥有绑定或临时值，普通借用参数、字段/索引部分移动、
+已移动绑定读取和 defer 读取已移动绑定继续拒绝。inout 仍要求整体可写 var 或
+现有 inout 参数，数据限数字/bool 和有限平凡聚合；let、普通参数、临时值、
+字段/索引、非平凡拥有值、同存储读写重叠或重复 inout 不因接收者形式而放宽。
+
+接收者先且只求值一次，后面的实参按书写顺序求值，命名参数只决定对应形参。
+后实参抛错时，已移动的接收者临时在 catch 前清理，源绑定不恢复；callee 尚未
+进入。callee 抛错前的 inout 写回仍可见；返回值先保存，之后执行 defer 和销毁。
+两个后端沿用现有 Call/ConstraintCall、CallArg.mode、Move、Place 和退出计划，
+没有增加公共 HIR、ABI 或运行库接口。
+
+`tests/generics/receiver-modes/` 五个项目覆盖固有 impl/方法泛型、trait、受约束
+T、完整有序 trait 实参、self/owner、拥有临时值、POD/标量 inout、错误实参与
+callee 抛错/defer。`run_receiver_modes.py` 真实执行 Native O0/O2、Python3.12.15，
+并观察 Vec 与物理 Native 分配/释放以及 Python Frame。拒绝输入另检查两后端
+check 和 fresh/stale build 的准确诊断及输出字节保持。T07 另包含真实 receiver
+Source/模式/Place 绑定/完整 trait 实参变异，先验合法模块通过，再要求直接、
+发布以及成功重算 ownership 后均拒绝坏图。
+
+组合用例同时保留数值 `+(move x)` 作为普通接收者的合法控制，并检查整体 Move 后
+读取字段、再把该拥有结果作为普通 receiver 的成功及后参抛错。私有 ownership
+记录不再对没有存储身份的平凡 Move 结果登记借用；拥有 Move 的借用指向结果临时，
+不指向已消费的源绑定。观察器要求两次实际拥有借用均结束，且正常、错误退出后
+Vec/堆分配全部释放、Frame 没有残留借用或拥有槽。

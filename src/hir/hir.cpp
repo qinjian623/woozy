@@ -1016,6 +1016,86 @@ class Verifier {
     ref.node = call.children.front();
     return source_method_member(ref);
   }
+  std::pair<modules::NodeRef, ParamMode>
+  receiver_input(modules::NodeRef base) const {
+    const auto &file =
+        *m.resolved->project->module(base.module).files.at(base.file);
+    auto parentheses = [&](modules::NodeRef ref) {
+      while (file.node(ref.node).kind == AstKind::Parenthesized)
+        ref.node = file.node(ref.node).children.at(0);
+      return ref;
+    };
+    base = parentheses(base);
+    const auto &syntax = file.node(base.node);
+    auto mode = ParamMode::ordinary;
+    if (syntax.kind == AstKind::Unary) {
+      auto marker = file.tokens.at(syntax.token_begin).spelling;
+      if (marker == "move")
+        mode = ParamMode::move;
+      if (marker == "inout") {
+        mode = ParamMode::inout;
+        need(syntax.children.size() == 1, "inout receiver has no operand");
+        base.node = syntax.children.front();
+        base = parentheses(base);
+      }
+    }
+    // Unary + is a value operation, not an inout place or a receiver marker.
+    return {mode == ParamMode::ordinary ? unwrapped(base) : base, mode};
+  }
+  void check_receiver_source(const HirNode &n, const std::vector<CallArg> &args,
+                             modules::NodeRef base, ParamMode declared) const {
+    auto [input, mode] = receiver_input(base);
+    const auto &file =
+        *m.resolved->project->module(base.module).files.at(base.file);
+    need(!args.empty() &&
+             args.size() == file.node(n.source.node.node).children.size(),
+         "value call receiver differs from source arguments (source arity)");
+    const auto &receiver = args.front();
+    const auto &value = node(receiver.expression);
+    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+             !receiver.label && receiver.mode == mode && mode == declared &&
+             same_ref(unwrapped(value.source.node), input),
+         "value call receiver source/mode differs from the real Member base");
+    if (mode != ParamMode::ordinary) {
+      const auto &actual =
+          *m.resolved->project->module(value.source.node.module)
+               .files.at(value.source.node.file);
+      need(same_span(value.source.span,
+                     actual.node(value.source.node.node).span),
+           "explicit receiver source span differs from its complete AST node");
+      need(value.kind() ==
+               (mode == ParamMode::move ? NodeKind::move : NodeKind::place),
+           "explicit receiver must keep its Move or whole Place");
+      if (mode == ParamMode::inout) {
+        auto binding = resolved_source(input);
+        need(binding.has_value(), "inout receiver has no source binding");
+        for (const auto &instance : m.instances)
+          if (instance.symbol == scope(n.scope).function)
+            for (auto [from, to] : instance.renamed)
+              if (from == *binding) {
+                binding = to;
+                break;
+              }
+        need(std::get<Place>(value.data).symbol == *binding,
+             "inout receiver Place differs from its real source binding");
+      }
+    }
+  }
+  bool inherent_self_source(SymbolId method, const ImplDecl &impl) const {
+    const auto &source = function(method).source;
+    const auto &file = *m.resolved->project->module(source.node.module)
+                            .files.at(source.node.file);
+    for (auto id : file.node(source.node.node).children) {
+      const auto &parameter = file.node(id);
+      if (parameter.kind != AstKind::Parameter)
+        continue;
+      need(!parameter.children.empty(), "method parameter has no source type");
+      auto raw = source.node;
+      raw.node = parameter.children.front();
+      return resolved_source(raw) == impl.self_parameter;
+    }
+    return false;
+  }
   const ForeignBinding &foreign_binding(ForeignBindingId id) const {
     need(id.value < m.foreign_bindings.size(), "foreign binding index");
     return m.foreign_bindings[id.value];
@@ -1297,8 +1377,17 @@ class Verifier {
         need(!impl, "type-qualified call target belongs to two impls");
         impl = &candidate;
       }
-    if (!type_qualifier && (!impl || !impl->trait))
+    if (!type_qualifier && (!impl || !impl->trait)) {
+      if (receiver_input(source->base).second == ParamMode::ordinary)
+        return;
+      need(impl && inherent_self_source(origin, *impl),
+           "explicit receiver requires the real inherent first Self");
+      const auto &signature = type(function(origin).signature);
+      need(!signature.parameters.empty(), "method receiver signature is empty");
+      check_receiver_source(n, c.args, source->base,
+                            signature.parameters.front().mode);
       return;
+    }
     need(impl, "type-qualified call target is not an impl method");
     if (impl->trait) {
       const TraitDecl *trait = trait_declaration(impl->trait->declaration);
@@ -1312,21 +1401,14 @@ class Verifier {
       need(prototype, "type-qualified call has no source trait prototype");
       if (!type_qualifier) {
         const auto &raw = type(prototype->signature);
-        need(!raw.parameters.empty() &&
-                 raw.parameters.front().mode == ParamMode::ordinary,
-             "value call requires an ordinary trait Self first parameter");
+        need(!raw.parameters.empty(),
+             "value call requires a trait Self parameter");
         const auto &first = type(raw.parameters.front().type);
         need(first.kind == TypeKind::TypeParameter &&
                  first.declaration == trait->self,
              "value call first parameter must be the real trait Self");
-        const auto &file = *m.resolved->project->module(n.source.node.module)
-                                .files.at(n.source.node.file);
-        need(c.args.size() == file.node(n.source.node.node).children.size() &&
-                 !c.args.empty() && c.args.front().parameter_index == 0 &&
-                 !c.args.front().label &&
-                 same_ref(unwrapped(node(c.args.front().expression).source.node),
-                          unwrapped(source->base)),
-             "value call receiver differs from source arguments");
+        check_receiver_source(n, c.args, source->base,
+                              raw.parameters.front().mode);
         return;
       }
     }
@@ -3412,14 +3494,10 @@ class Verifier {
            "value-form constraint call has a type qualifier");
     }
     const auto &prototype = type(method->signature);
-    need(!method->parameters.empty() && !prototype.parameters.empty() &&
-             prototype.parameters.front().mode == ParamMode::ordinary,
-         "constraint method must declare ordinary self");
-    // Ordinary receiver is decided from the real trait Self type, not from
-    // the name `self`; `owner` is the same receiver. Top-level non-self move
-    // and inout are admitted, while a first-position actual-self mode is
-    // already excluded by the ordinary-first check above and the actual-mode
-    // classification in check_call/typed call sources.
+    need(!method->parameters.empty() && !prototype.parameters.empty(),
+         "constraint method must declare Self");
+    // Only the raw prototype Self creates a receiver. The written marker
+    // below must match its declared mode before any concrete substitution.
     for (const auto &p : prototype.parameters)
       need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
                p.mode == ParamMode::inout,
@@ -3432,19 +3510,28 @@ class Verifier {
              n.children.size() == c.args.size() && !c.args.empty(),
          "constraint call shape");
     // The receiver is a synthetic first argument. It must be evaluated first,
-    // once, as an ordinary read; only explicit arguments follow in source
+    // once, with its declared mode; explicit arguments follow in Source
     // order. Labels come from the real trait prototype, not a name match.
     const auto &receiver = c.args[0];
     need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
-             !receiver.label && receiver.mode == ParamMode::ordinary &&
+             !receiver.label &&
+             receiver.mode == prototype.parameters.front().mode &&
              receiver.expression == n.children[0] &&
-             expr(receiver.expression).type == c.receiver,
+             node(receiver.expression).type == c.receiver,
          "constraint receiver order/mode/type");
-    need(same_ref(unwrapped(node(receiver.expression).source.node),
-                  unwrapped(written->base)),
-         "constraint receiver differs from its source base");
+    check_receiver_source(n, c.args, written->base,
+                          prototype.parameters.front().mode);
     std::set<uint32_t> seen{0};
     std::set<uint64_t> borrowed;
+    if (receiver.mode == ParamMode::inout) {
+      const auto &place = node(receiver.expression);
+      need(place.kind() == NodeKind::place &&
+               inout_data_type(m, place.type, owner_allowed),
+           "constraint receiver inout requires a whole trivial place");
+      borrowed.insert(std::get<Place>(place.data).symbol.value);
+    } else {
+      expr(receiver.expression);
+    }
     bool named = false;
     for (size_t i = 1; i < c.args.size(); ++i) {
       const auto &a = c.args[i];
