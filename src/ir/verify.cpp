@@ -68,6 +68,17 @@ class Verifier {
     };
     std::map<ValueId, Def> defs;
     std::map<ValueId, const Instruction *> instructions;
+    using ConstantKey = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
+    std::multimap<ConstantKey, size_t> constant_roots;
+    for (size_t h = 0; h < m.hir.module().nodes.size(); ++h) {
+      const auto &n = m.hir.module().nodes[h];
+      if (n.kind() == hir::NodeKind::constant_literal &&
+          m.hir.module().scopes.at(n.scope.value).function == f.symbol)
+        constant_roots.emplace(
+            ConstantKey{n.source.span.snapshot.value, n.source.span.begin_byte,
+                        n.source.span.end_byte, n.type.value},
+            h);
+    }
     std::vector<Set> predecessors(f.blocks.size());
     for (size_t b = 0; b < f.blocks.size(); ++b) {
       const auto &bb = f.blocks[b];
@@ -322,6 +333,80 @@ class Verifier {
         auto arity = [&](size_t n) {
           need(args.size() == n, "instruction operand count", i.source);
         };
+        // A pure HIR constant expands to existing scalar/aggregate ops. Bind
+        // its root by real Source and type as well as origin, so deleting the
+        // origin cannot turn a damaged constant into an unchecked constructor.
+        if (i.origin && i.origin->value < m.hir.module().nodes.size()) {
+          const auto &root = m.hir.module().nodes[i.origin->value];
+          if (root.kind() == hir::NodeKind::constant_literal)
+            need(root.type == i.type &&
+                     root.source.span.snapshot == i.source.snapshot &&
+                     root.source.span.begin_byte == i.source.begin_byte &&
+                     root.source.span.end_byte == i.source.end_byte,
+                 "constant expansion changed its real source/type", i.source);
+        }
+        auto [constant_begin, constant_end] = constant_roots.equal_range(
+            ConstantKey{i.source.snapshot.value, i.source.begin_byte,
+                        i.source.end_byte, i.type.value});
+        for (auto entry = constant_begin; entry != constant_end; ++entry) {
+          const size_t h = entry->second;
+          const auto &root = m.hir.module().nodes[h];
+          const auto *literal = std::get_if<hir::ConstantLiteral>(&root.data);
+          if (!literal || !i.result || root.type != i.type ||
+              root.source.span.snapshot != i.source.snapshot ||
+              root.source.span.begin_byte != i.source.begin_byte ||
+              root.source.span.end_byte != i.source.end_byte)
+            continue;
+          need(i.origin == HirNodeId{h},
+               "constant expansion lost its real HIR origin", i.source);
+          size_t work = 0;
+          std::function<void(const hir::ConstantValue &, const Instruction &,
+                             size_t)>
+              check = [&](const auto &v, const auto &actual, size_t depth) {
+                need(depth <= 128 && ++work <= 100000,
+                     "constant expansion exceeds budget", i.source);
+                need(v.type == actual.type, "constant expansion type",
+                     i.source);
+                std::visit(
+                    [&](const auto &data) {
+                      using T = std::decay_t<decltype(data)>;
+                      if constexpr (std::is_same_v<T, hir::ConstantAggregate>) {
+                        need(actual.op == (data.variant ? Op::enum_init
+                                                        : Op::struct_init) &&
+                                 (!data.variant ||
+                                  actual.variant == *data.variant) &&
+                                 actual.inputs.size() == data.fields.size(),
+                             "constant expansion aggregate/variant", i.source);
+                        for (size_t c = 0; c < data.fields.size(); ++c) {
+                          auto d = instructions.find(actual.inputs[c]);
+                          need(d != instructions.end(),
+                               "constant field is not a real definition",
+                               i.source);
+                          check(data.fields[c], *d->second, depth + 1);
+                        }
+                      } else if constexpr (std::is_same_v<T,
+                                                          hir::StringLiteral>)
+                        need(actual.op == Op::string_literal &&
+                                 actual.utf8 == data.utf8,
+                             "constant expansion bytes", i.source);
+                      else if constexpr (std::is_same_v<T, hir::FunctionValue>)
+                        need(actual.op == Op::function &&
+                                 actual.function == data.symbol,
+                             "constant expansion function identity", i.source);
+                      else {
+                        uint64_t bits = 0;
+                        if constexpr (std::is_same_v<T, hir::BoolLiteral>)
+                          bits = data.value;
+                        else if constexpr (!std::is_same_v<T, hir::UnitLiteral>)
+                          bits = data.bits;
+                        need(actual.op == Op::constant && actual.bits == bits,
+                             "constant expansion scalar value", i.source);
+                      }
+                    },
+                    v.data);
+              };
+          check(literal->value, i, 0);
+        }
         auto value = [&](size_t n) -> const hir::Type & {
           need(!args.at(n).address, "address used as scalar value", i.source);
           return type(args[n].type, i.source);

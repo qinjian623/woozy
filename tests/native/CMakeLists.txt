@@ -31,7 +31,7 @@ target_include_directories(lang_native_string_probe SYSTEM PRIVATE ${LLVM_INCLUD
 target_compile_options(lang_native_string_probe PRIVATE -fno-rtti)
 target_link_libraries(lang_native_string_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 if(LANG_TEST_PYTHON)
-  foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates)
+  foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates aggregate-constants)
     add_test(NAME native.${fixture} COMMAND ${LANG_TEST_PYTHON}
       ${CMAKE_CURRENT_LIST_DIR}/run_strings.py --cli $<TARGET_FILE:langc>
       --probe $<TARGET_FILE:lang_native_string_probe> --root ${LANG_SOURCE_ROOT}

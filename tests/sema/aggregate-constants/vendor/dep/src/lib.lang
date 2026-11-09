@@ -1,0 +1,3 @@
+package dep;
+pub struct Label {pub text string;pub code i32;}
+pub const Exported = Label(code:40+2,text:"跨包\0😀");

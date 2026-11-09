@@ -314,12 +314,47 @@ class Lower {
       }
     return value;
   }
+  ValueId constant_value(const hir::ConstantValue &value, SourceSpan source,
+                         std::optional<HirNodeId> origin = {}) {
+    Instruction i;
+    i.type = value.type;
+    i.source = source;
+    i.origin = origin;
+    std::visit(
+        [&](const auto &v) {
+          using T = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<T, hir::StringLiteral>) {
+            i.op = Op::string_literal;
+            i.utf8 = v.utf8;
+          } else if constexpr (std::is_same_v<T, hir::FunctionValue>) {
+            i.op = Op::function;
+            i.function = v.symbol;
+          } else if constexpr (std::is_same_v<T, hir::ConstantAggregate>) {
+            i.op = v.variant ? Op::enum_init : Op::struct_init;
+            if (v.variant)
+              i.variant = *v.variant;
+            for (const auto &field : v.fields)
+              i.inputs.push_back(constant_value(field, source));
+          } else {
+            i.op = Op::constant;
+            if constexpr (std::is_same_v<T, hir::BoolLiteral>)
+              i.bits = v.value;
+            else if constexpr (!std::is_same_v<T, hir::UnitLiteral>)
+              i.bits = v.bits;
+          }
+        },
+        value.data);
+    return emit(i);
+  }
   ValueId raw_expr(HirNodeId id) {
     const auto &n = node(id);
     Instruction i;
     i.type = n.type;
     i.source = n.source.span;
     switch (n.kind()) {
+    case hir::NodeKind::constant_literal:
+      return constant_value(std::get<hir::ConstantLiteral>(n.data).value,
+                            i.source, id);
     case hir::NodeKind::unit_literal:
       return constant(n.type, 0, i.source);
     case hir::NodeKind::bool_literal:

@@ -65,12 +65,21 @@ VEC_EXPECTED = {
 }
 
 STRING_FIXTURES = {
+    "aggregate-constants": {
+        'probe_control': b'control',
+        'probe_payload': '聚合\0😀'.encode('utf-8'),
+        'probe_alias_field': '跨包\0😀'.encode('utf-8'),
+        'probe_local_shadow': '外层\0值'.encode('utf-8'),
+        'probe_local_field_const': '局部\0字段'.encode('utf-8'),
+        'probe_error': '错误\0载荷'.encode('utf-8'),
+    },
     "strings": EXPECTED,
     "string-constants": CONST_EXPECTED,
     "string-aggregates": AGGREGATE_EXPECTED,
     "string-vec-aggregates": VEC_EXPECTED,
 }
 STRING_FIXTURE_PATHS = {
+    "aggregate-constants": "tests/sema/aggregate-constants",
     "strings": "tests/sema/strings",
     "string-constants": "tests/sema/string-constants",
     "string-aggregates": "tests/sema/string-aggregates",

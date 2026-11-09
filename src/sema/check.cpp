@@ -1,9 +1,10 @@
 #include "lang/sema/check.hpp"
-#include "../hir/ownership.hpp"
-#include "../hir/public_type_visibility.hpp"
-#include "../hir/pattern_analysis.hpp"
+#include "../hir/constant_value.hpp"
 #include "../hir/foreign.hpp"
 #include "../hir/literal_value.hpp"
+#include "../hir/ownership.hpp"
+#include "../hir/pattern_analysis.hpp"
+#include "../hir/public_type_visibility.hpp"
 #include <algorithm>
 #include <functional>
 #include <gmpxx.h>
@@ -46,6 +47,7 @@ struct Constant {
   Value value;
   std::optional<SymbolId> function;
   std::vector<TypeId> type_args;
+  std::optional<ConstantValue> aggregate;
 };
 class Checker {
   HirModule m;
@@ -1587,11 +1589,13 @@ class Checker {
       } else if (k == modules::SymbolKind::constant &&
                  !locals.count(s->value)) {
         const auto c = constant(*s);
-        if (c.value.integer) {
+        if (c.aggregate) {
+          result = {node(r, c.value.type, ConstantLiteral{*c.aggregate}),
+                    c.value};
+        } else if (c.value.integer) {
           match(r, c.value.type, expected);
           return int_literal(r, *c.value.integer, c.value.type);
-        }
-        if (c.value.floating) {
+        } else if (c.value.floating) {
           match(r, c.value.type, expected);
           result = {node(r, c.value.type, FloatLiteral{*c.value.floating}),
                     c.value};
@@ -1614,9 +1618,11 @@ class Checker {
         result = {node(r, l->second.type, Read{*s}), {l->second.type, {}, {}}};
         if (auto c = constants.find(s->value); c != constants.end())
           result.value = c->second.value;
-        if (result.value.boolean)
+        const bool aggregate = constants.contains(s->value) &&
+                               constants.at(s->value).aggregate.has_value();
+        if (result.value.boolean && !aggregate)
           m.nodes[result.id.value].data = BoolLiteral{*result.value.boolean};
-        if (result.value.string)
+        if (result.value.string && !aggregate)
           m.nodes[result.id.value].data =
               StringLiteral{*result.value.string};
       }
@@ -3097,6 +3103,21 @@ class Checker {
     return {node(r, sig.result, std::move(c), std::move(children)),
             {sig.result, {}, {}}};
   }
+  void evaluated_constant(Constant &c, const ConstantValue &value) {
+    c.value.type = value.type;
+    if (auto p = std::get_if<IntegerLiteral>(&value.data))
+      c.value.integer = mpz_class(p->decimal);
+    if (auto p = std::get_if<FloatLiteral>(&value.data))
+      c.value.floating = p->bits;
+    if (auto p = std::get_if<BoolLiteral>(&value.data))
+      c.value.boolean = p->value;
+    if (auto p = std::get_if<StringLiteral>(&value.data))
+      c.value.string = p->utf8;
+    if (auto p = std::get_if<FunctionValue>(&value.data)) {
+      c.function = p->symbol;
+      c.type_args = p->type_args;
+    }
+  }
   Constant constant(SymbolId s) {
     if (auto it = constants.find(s.value); it != constants.end())
       return it->second;
@@ -3111,14 +3132,20 @@ class Checker {
       expected = parse_type(child(r, 0));
     auto e = expression(child(r, ast(r).children.size() - 1), expected);
     Constant c{e.value, {}};
+    auto pure = evaluate_hir_constant(m, e.id, stop);
+    if (pure) {
+      evaluated_constant(c, *pure);
+      if (aggregate_constant_expression(m, e.id))
+        c.aggregate = *pure;
+    }
     if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data)) {
       c.function = f->symbol;
       c.type_args = f->type_args;
     }
     if (!c.value.integer && !c.value.floating && !c.value.boolean &&
-        !c.value.string && !c.function)
+        !c.value.string && !c.function && !c.aggregate)
       unavailable(
-          r, "const initializer must be a non-Panic scalar compile-time value");
+          r, "const initializer must be a pure non-Panic compile-time value");
     m.nodes.resize(begin);
     evaluating.erase(s.value);
     constants[s.value] = c;
@@ -3435,6 +3462,8 @@ class Checker {
         expected = parse_type(child(r, 0));
       auto e = expression(child(r, n.children.size() - 1), expected);
       bool writable = first(r) == "var";
+      auto pure = first(r) == "const" ? evaluate_hir_constant(m, e.id, stop)
+                                      : std::optional<ConstantValue>{};
       // A local const name is a real Read, so its function identity is not in
       // the expression value. Only reuse function metadata from an existing
       // const when this Read's real symbol owns that metadata; ordinary
@@ -3449,13 +3478,18 @@ class Checker {
       }
       if (first(r) == "const" && !e.value.integer && !e.value.floating &&
           !e.value.boolean && !e.value.string && !alias &&
-          !std::holds_alternative<FunctionValue>(m.nodes[e.id.value].data))
+          !std::holds_alternative<FunctionValue>(m.nodes[e.id.value].data) &&
+          !pure)
         unavailable(
-            r,
-            "const initializer must be a non-Panic scalar compile-time value");
+            r, "const initializer must be a pure non-Panic compile-time value");
       locals[s.value] = {e.value.type, writable};
       if (first(r) == "const") {
         Constant c{e.value, {}};
+        if (pure) {
+          evaluated_constant(c, *pure);
+          if (aggregate_constant_expression(m, e.id))
+            c.aggregate = *pure;
+        }
         if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data)) {
           c.function = f->symbol;
           c.type_args = f->type_args;
@@ -4411,6 +4445,13 @@ class Checker {
     if (depth > 512)
       throw std::invalid_argument("HIR transform nesting limit");
     auto n = m.nodes.at(id.value);
+    if (auto c = std::get_if<ConstantLiteral>(&n.data))
+      transform_constant(c->value, {}, m.types, [&](FunctionValue &v) {
+        if (template_ids.count(v.symbol.value)) {
+          v.symbol = instantiate(v.symbol, v.type_args, n.source.node);
+          v.type_args.clear();
+        }
+      });
     if (auto c = std::get_if<Call>(&n.data);
         c && c->direct_symbol && template_ids.count(c->direct_symbol->value)) {
       auto original = *c->direct_symbol;
@@ -4632,6 +4673,8 @@ class Checker {
       if (auto v = std::get_if<FunctionValue>(&n.data))
         for (auto &t : v->type_args)
           t = substitute(t, sub, m.types);
+      if (auto c = std::get_if<ConstantLiteral>(&n.data))
+        transform_constant(c->value, sub, m.types, [](FunctionValue &) {});
       if (auto c = std::get_if<ConstraintCall>(&n.data)) {
         c->signature = substitute(c->signature, sub, m.types);
         c->receiver = substitute(c->receiver, sub, m.types);

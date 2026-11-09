@@ -1,9 +1,10 @@
 #include "lang/hir/hir.hpp"
-#include "pattern_analysis.hpp"
+#include "constant_value.hpp"
+#include "foreign.hpp"
 #include "literal_value.hpp"
 #include "ownership.hpp"
+#include "pattern_analysis.hpp"
 #include "public_type_visibility.hpp"
-#include "foreign.hpp"
 #include <algorithm>
 #include <functional>
 #include <iomanip>
@@ -414,6 +415,7 @@ class Verifier {
   bool expression(const HirNode &n) const {
     switch (n.kind()) {
     case NodeKind::unit_literal:
+    case NodeKind::constant_literal:
     case NodeKind::bool_literal:
     case NodeKind::integer_literal:
     case NodeKind::float_literal:
@@ -2086,6 +2088,11 @@ class Verifier {
       }
       need(std::get<StringLiteral>(n.data).utf8 == source_string(n.source.node),
            "string literal bytes differ from real source");
+      break;
+    case NodeKind::constant_literal:
+      arity(0);
+      need(std::get<ConstantLiteral>(n.data).value.type == n.type,
+           "constant root type differs from expression");
       break;
     case NodeKind::read:
     case NodeKind::place:
@@ -3762,6 +3769,22 @@ class Verifier {
       if (auto r = std::get_if<Read>(&x.data))
         need(std::get<Read>(y.data).symbol == local(r->symbol),
              "instance read binding mismatch");
+      if (auto c = std::get_if<ConstantLiteral>(&x.data)) {
+        auto expected = c->value;
+        auto actual = std::get<ConstantLiteral>(y.data).value;
+        auto origin = [&](FunctionValue &v) {
+          for (const auto &i : m.instances)
+            if (i.symbol == v.symbol) {
+              v.symbol = i.origin;
+              v.type_args = i.type_args;
+              break;
+            }
+        };
+        transform_constant(expected, sub, substituted, origin);
+        transform_constant(actual, {}, substituted, origin);
+        need(same_constant_value(expected, actual),
+             "instance constant differs from template");
+      }
       if (auto r = std::get_if<Place>(&x.data))
         need(std::get<Place>(y.data).symbol == local(r->symbol),
              "instance place binding mismatch");
@@ -4681,87 +4704,305 @@ class Verifier {
   // origin and ordered explicit type arguments with their real initializer.
   // This rejects a corrupted FunctionValue whose type and signature are
   // unchanged but whose callback implementation or specialization was replaced.
-  void function_value_sources() const {
+  FunctionValue source_lambda_value(modules::NodeRef r, SymbolId owner) const {
+    std::optional<SymbolId> original;
+    // As in instance_records(), resolver declarations precede generated copies.
+    for (const auto &s : m.resolved->symbols)
+      if (s.kind == modules::SymbolKind::function && s.definition &&
+          same_ref(*s.definition, r)) {
+        original = s.id;
+        break;
+      }
+    need(original.has_value(), "function literal has no original declaration");
+    const auto target = templates.find(original->value);
+    if (target == templates.end())
+      return {*original, {}};
+    std::vector<TypeId> arguments;
+    for (const auto &p : target->second->params)
+      arguments.push_back(parameter_type(p.symbol));
+    if (templates.count(owner.value))
+      return {*original, std::move(arguments)};
+    const auto environment = instances.find(owner.value);
+    need(environment != instances.end(),
+         "generic function literal has no enclosing instance");
+    const auto &instance = *environment->second;
+    const auto &parameters = templates.at(instance.origin.value)->params;
+    Substitutions sub;
+    for (size_t i = 0; i < parameters.size(); ++i)
+      sub.emplace_back(parameters[i].symbol, instance.type_args.at(i));
+    for (auto &argument : arguments)
+      argument = substitute(argument, sub, substituted);
+    for (const auto &candidate : m.instances)
+      if (candidate.origin == *original && candidate.type_args == arguments)
+        return {candidate.symbol, {}};
+    fail("function literal has no matching enclosing specialization");
+  }
+
+  void function_value_source(const HirNode &n) const {
     auto origin = [&](SymbolId id) {
       for (const auto &i : m.instances)
         if (i.symbol == id)
           return i.origin;
       return id;
     };
-    for (const auto &n : m.nodes) {
-      auto value = std::get_if<FunctionValue>(&n.data);
-      if (!value)
-        continue;
-      const auto &file = *m.resolved->project->module(n.source.node.module)
-                              .files.at(n.source.node.file);
-      auto r = n.source.node;
-      auto ast = file.node(r.node);
-      while (ast.kind == AstKind::Parenthesized ||
-             ast.kind == AstKind::BracketItem ||
-             ast.kind == AstKind::NeutralBracket) {
-        need(!ast.children.empty(), "function value source wrapper");
-        r.node = ast.children.at(0);
-        ast = file.node(r.node);
+    auto value = std::get_if<FunctionValue>(&n.data);
+    if (!value)
+      return;
+    const auto &file = *m.resolved->project->module(n.source.node.module)
+                            .files.at(n.source.node.file);
+    auto r = n.source.node;
+    auto ast = file.node(r.node);
+    while (ast.kind == AstKind::Parenthesized ||
+           ast.kind == AstKind::BracketItem ||
+           ast.kind == AstKind::NeutralBracket) {
+      need(!ast.children.empty(), "function value source wrapper");
+      r.node = ast.children.at(0);
+      ast = file.node(r.node);
+    }
+    if (ast.kind == AstKind::FunctionLiteral) {
+      const auto expected = source_lambda_value(r, scope(n.scope).function);
+      need(value->symbol == expected.symbol &&
+               value->type_args == expected.type_args,
+           "function literal identity differs from its enclosing "
+           "specialization");
+      return;
+    }
+    if (auto method = source_method_member(n.source.node)) {
+      if (auto prototype = trait_prototype(value->symbol))
+        check_template_method_value_source(n, *value, *prototype->first,
+                                           *prototype->second, *method);
+      else
+        check_concrete_method_value_source(n, *value, *method);
+      return;
+    }
+    // A FunctionValue whose target is an impl method or raw prototype can
+    // never fall through the generic non-function-source skip. Its legal
+    // non-Member Source is a constant alias; everything else is corrupt.
+    const auto prototype = trait_prototype(value->symbol);
+    if (prototype || method_value_is_impl(*value)) {
+      auto source = constant_method_source(n);
+      need(source.has_value(),
+           "method value source has no method or constant declaration");
+      need(!prototype,
+           "trait prototype method value source is not a bounded T method");
+      check_concrete_method_value_source(n, *value, *source,
+                                         source->base.module, SymbolId{});
+      return;
+    }
+    std::optional<SymbolId> source_symbol;
+    for (const auto &o : m.resolved->occurrences)
+      if (same_ref(o.source, r))
+        source_symbol = o.symbol;
+    if (source_symbol &&
+        symbol(*source_symbol).kind == modules::SymbolKind::constant) {
+      const auto expected = constant_function_source(*source_symbol);
+      auto actual_function = origin(value->symbol);
+      auto actual_args = value->type_args;
+      auto instance = instances.find(value->symbol.value);
+      if (instance != instances.end()) {
+        actual_function = instance->second->origin;
+        actual_args = instance->second->type_args;
       }
-      if (ast.kind == AstKind::FunctionLiteral) {
-        const auto expected = origin(value->symbol);
-        need(symbol(expected).definition &&
-                 same_ref(*symbol(expected).definition, r),
-             "function literal value source identity differs from its symbol");
-        continue;
-      }
-      if (auto method = source_method_member(n.source.node)) {
-        if (auto prototype = trait_prototype(value->symbol))
-          check_template_method_value_source(n, *value, *prototype->first,
-                                             *prototype->second, *method);
-        else
-          check_concrete_method_value_source(n, *value, *method);
-        continue;
-      }
-      // A FunctionValue whose target is an impl method or raw prototype can
-      // never fall through the generic non-function-source skip. Its legal
-      // non-Member Source is a constant alias; everything else is corrupt.
-      const auto prototype = trait_prototype(value->symbol);
-      if (prototype || method_value_is_impl(*value)) {
-        auto source = constant_method_source(n);
-        need(source.has_value(),
-             "method value source has no method or constant declaration");
-        need(!prototype,
-             "trait prototype method value source is not a bounded T method");
-        check_concrete_method_value_source(n, *value, *source,
-                                           source->base.module, SymbolId{});
-        continue;
-      }
-      std::optional<SymbolId> source_symbol;
-      for (const auto &o : m.resolved->occurrences)
-        if (same_ref(o.source, r))
-          source_symbol = o.symbol;
-      if (source_symbol &&
-          symbol(*source_symbol).kind == modules::SymbolKind::constant) {
-        const auto expected = constant_function_source(*source_symbol);
-        auto actual_function = origin(value->symbol);
-        auto actual_args = value->type_args;
-        auto instance = instances.find(value->symbol.value);
-        if (instance != instances.end()) {
-          actual_function = instance->second->origin;
-          actual_args = instance->second->type_args;
+      need(actual_function == expected.function,
+           "constant function value differs from its real initializer "
+           "function or ordered type arguments");
+      need(!expected.explicit_type_args || actual_args == expected.type_args,
+           "constant function value differs from its real initializer "
+           "function or ordered type arguments");
+      return;
+    }
+    // Other supported value producers retain their existing source checks;
+    // this rule only decides the function-name route.
+    if (!source_symbol ||
+        symbol(*source_symbol).kind != modules::SymbolKind::function)
+      return;
+    need(origin(value->symbol) == *source_symbol,
+         "function value source identity differs from resolver");
+  }
+  void function_value_sources() const {
+    for (const auto &n : m.nodes)
+      function_value_source(n);
+  }
+
+  void check_constant(const HirNode &n, const ConstantValue &value) const {
+    need(value.type == n.type, "constant root type differs from expression");
+    size_t work = 0;
+    std::function<void(const ConstantValue &, size_t)> shape =
+        [&](const ConstantValue &v, size_t depth) {
+          check_cancelled(stop);
+          need(depth <= 128 && ++work <= 100000,
+               "constant value exceeds budget");
+          valid_type(v.type, allowed(scope(n.scope).function));
+          const auto t = type(v.type);
+          if (auto a = std::get_if<ConstantAggregate>(&v.data)) {
+            need(t.kind == TypeKind::NominalStruct ||
+                     t.kind == TypeKind::NominalEnum,
+                 "constant aggregate type");
+            const auto &d = nominal_type(v.type);
+            const auto *fields = &d.fields;
+            if (t.kind == TypeKind::NominalEnum) {
+              fields = nullptr;
+              for (const auto &variant : d.variants)
+                if (a->variant == variant.symbol)
+                  fields = &variant.payload;
+            } else
+              need(!a->variant, "variant on constant struct");
+            need(fields && a->fields.size() == fields->size(),
+                 "constant payload arity/variant");
+            for (size_t i = 0; i < a->fields.size(); ++i) {
+              need(a->fields[i].type == field_type(v.type, (*fields)[i]),
+                   "constant field type/order");
+              shape(a->fields[i], depth + 1);
+            }
+          } else if (auto i = std::get_if<IntegerLiteral>(&v.data)) {
+            need(integer(t.kind), "constant integer type");
+            mpz_class number(i->decimal);
+            const auto width = bit_width(t, m.config);
+            mpz_class mod = mpz_class(1) << width;
+            mpz_class low =
+                signed_integer(t.kind) ? mpz_class(-(mod >> 1)) : mpz_class(0);
+            mpz_class high = signed_integer(t.kind) ? mpz_class(mod >> 1) : mod;
+            need(number.get_str() == i->decimal && number >= low &&
+                     number < high,
+                 "constant integer range/canonical value");
+            if (number < 0)
+              number += mod;
+            need(number.get_ui() == i->bits, "constant integer bits");
+          } else if (auto s = std::get_if<StringLiteral>(&v.data)) {
+            need(t.kind == TypeKind::String, "constant string type");
+            validate_utf8(s->utf8);
+          } else if (auto f = std::get_if<FloatLiteral>(&v.data))
+            need(t.kind == TypeKind::Float &&
+                     (t.bits == 64 || f->bits >> 32 == 0),
+                 "constant float bits/type");
+          else if (auto f = std::get_if<FunctionValue>(&v.data)) {
+            need(t.kind == TypeKind::Function, "constant function type");
+            if (trait_prototype(f->symbol))
+              need(templates.count(scope(n.scope).function.value),
+                   "constant trait prototype survived concrete execution");
+            else
+              need(instantiated_signature(f->symbol, f->type_args) == v.type,
+                   "constant function signature");
+          } else if (std::holds_alternative<BoolLiteral>(v.data))
+            need(t.kind == TypeKind::Bool, "constant bool type");
+          else
+            need(t.kind == TypeKind::Unit, "constant Unit type");
+        };
+    shape(value, 0);
+    auto expected = source_constant_value(
+        m, substituted, n.source.node, n.type,
+        [&](modules::NodeRef r) {
+          return source_type_in_function(r, scope(n.scope).function);
+        },
+        [&](modules::NodeRef r, TypeId signature) {
+          // Reuse the existing independent function/method identity checks.
+          // Equal signatures alone never choose a different implementation.
+          auto try_value = [&](FunctionValue v) -> bool {
+            try {
+              if (!trait_prototype(v.symbol) &&
+                  instantiated_signature(v.symbol, v.type_args) != signature)
+                return false;
+              HirNode candidate{signature,
+                                {r, m.resolved->project->module(r.module)
+                                        .files.at(r.file)
+                                        ->node(r.node)
+                                        .span},
+                                n.scope,
+                                {},
+                                v,
+                                {},
+                                {}};
+              function_value_source(candidate);
+              auto ref = r;
+              const auto &file =
+                  *m.resolved->project->module(r.module).files.at(r.file);
+              while (file.node(ref.node).kind == AstKind::Parenthesized)
+                ref.node = file.node(ref.node).children.at(0);
+              if (file.node(ref.node).kind == AstKind::NeutralBracket &&
+                  !source_method_member(r)) {
+                std::vector<TypeId> written;
+                for (size_t i = 1; i < file.node(ref.node).children.size();
+                     ++i) {
+                  auto a = ref;
+                  a.node = file.node(ref.node).children[i];
+                  written.push_back(
+                      source_type_in_function(a, scope(n.scope).function));
+                }
+                auto actual = v.type_args;
+                if (auto found = instances.find(v.symbol.value);
+                    found != instances.end())
+                  actual = found->second->type_args;
+                need(actual == written,
+                     "constant function explicit arguments differ from source");
+              }
+              return true;
+            } catch (const Invalid &) {
+              return false;
+            }
+          };
+          auto literal = unwrapped(r);
+          if (m.resolved->project->module(literal.module)
+                  .files.at(literal.file)
+                  ->node(literal.node)
+                  .kind == AstKind::FunctionLiteral) {
+            auto value = source_lambda_value(literal, scope(n.scope).function);
+            need(try_value(value),
+                 "constant function literal signature/source mismatch");
+            return value;
+          }
+          for (const auto &f : m.functions)
+            if (try_value({f.symbol, {}}))
+              return FunctionValue{f.symbol, {}};
+          for (const auto &t : m.templates) {
+            auto ref = r;
+            const auto &file =
+                *m.resolved->project->module(r.module).files.at(r.file);
+            while (file.node(ref.node).kind == AstKind::Parenthesized)
+              ref.node = file.node(ref.node).children.at(0);
+            std::vector<TypeId> arguments;
+            if (file.node(ref.node).kind == AstKind::NeutralBracket)
+              for (size_t i = 1; i < file.node(ref.node).children.size(); ++i) {
+                auto a = ref;
+                a.node = file.node(ref.node).children[i];
+                arguments.push_back(
+                    source_type_in_function(a, scope(n.scope).function));
+              }
+            FunctionValue v{t.function.symbol, arguments};
+            if (arguments.size() == t.params.size() && try_value(v))
+              return v;
+          }
+          for (const auto &trait : m.traits)
+            for (const auto &method : trait.methods) {
+              FunctionValue v{method.symbol, {}};
+              if (try_value(v))
+                return v;
+            }
+          fail("constant function has no matching real source identity");
+        },
+        stop);
+    if (!same_constant_value(value, expected)) {
+      std::function<std::string(const ConstantValue &, const ConstantValue &)>
+          difference = [&](const auto &a, const auto &b) -> std::string {
+        if (a.type != b.type)
+          return " type " + std::to_string(a.type.value) + "/" +
+                 std::to_string(b.type.value);
+        if (auto f = std::get_if<FunctionValue>(&a.data)) {
+          auto g = std::get_if<FunctionValue>(&b.data);
+          return " function " + std::to_string(f->symbol.value) + "/" +
+                 (g ? std::to_string(g->symbol.value) : "other");
         }
-        need(actual_function == expected.function,
-             "constant function value differs from its real initializer "
-             "function or ordered type arguments");
-        need(!expected.explicit_type_args ||
-                 actual_args == expected.type_args,
-             "constant function value differs from its real initializer "
-             "function or ordered type arguments");
-        continue;
-      }
-      // Other supported value producers retain their existing source checks;
-      // this rule only decides the function-name route.
-      if (!source_symbol ||
-          symbol(*source_symbol).kind != modules::SymbolKind::function)
-        continue;
-      need(origin(value->symbol) == *source_symbol,
-           "function value source identity differs from resolver");
+        if (auto fields = std::get_if<ConstantAggregate>(&a.data))
+          if (auto other = std::get_if<ConstantAggregate>(&b.data))
+            for (size_t i = 0;
+                 i < std::min(fields->fields.size(), other->fields.size()); ++i)
+              if (!same_constant_value(fields->fields[i], other->fields[i]))
+                return " field " + std::to_string(i) +
+                       difference(fields->fields[i], other->fields[i]);
+        return {};
+      };
+      fail("constant value differs from real source" +
+               difference(value, expected),
+           n.source.span);
     }
   }
 
@@ -4772,8 +5013,8 @@ class Verifier {
   // constant has no HIR node; only the checker can inspect its inferred type.
   void public_constant_values() const {
     for (const auto &n : m.nodes) {
-      const auto *value = std::get_if<FunctionValue>(&n.data);
-      if (!value)
+      if (!std::holds_alternative<FunctionValue>(n.data) &&
+          !std::holds_alternative<ConstantLiteral>(n.data))
         continue;
       auto source_symbol = resolved_source(n.source.node);
       if (!source_symbol)
@@ -5601,6 +5842,17 @@ public:
       source_effect_nodes(*f);
     }
     instance_records();
+    for (const auto &n : m.nodes) {
+      if (auto c = std::get_if<ConstantLiteral>(&n.data))
+        check_constant(n, c->value);
+      if (auto b = std::get_if<Binding>(&n.data);
+          b && symbol(b->symbol).kind == modules::SymbolKind::constant &&
+          aggregate_constant_expression(m, n.children.at(0))) {
+        auto value = evaluate_hir_constant(m, n.children[0], stop);
+        need(value.has_value(), "aggregate const initializer is not pure");
+        check_constant(node(n.children[0]), *value);
+      }
+    }
     function_value_sources();
     public_constant_values();
     finite_layouts();
@@ -6136,9 +6388,40 @@ std::string dump(const HirModule &m) {
             s << " bits=" << data.bits;
           else if constexpr (std::is_same_v<T, StringLiteral>)
             s << " utf8=" << std::quoted(data.utf8);
-          else if constexpr (std::is_same_v<T, Read> ||
-                             std::is_same_v<T, Place> ||
-                             std::is_same_v<T, FunctionValue>) {
+          else if constexpr (std::is_same_v<T, ConstantLiteral>) {
+            std::function<void(const ConstantValue &)> value =
+                [&](const auto &v) {
+                  s << " const=" << v.type.value << ':' << v.data.index();
+                  std::visit(
+                      [&](const auto &x) {
+                        using V = std::decay_t<decltype(x)>;
+                        if constexpr (std::is_same_v<V, ConstantAggregate>) {
+                          if (x.variant)
+                            s << " variant=" << x.variant->value;
+                          s << '[';
+                          for (auto &f : x.fields)
+                            value(f);
+                          s << ']';
+                        } else if constexpr (std::is_same_v<V, StringLiteral>)
+                          s << ':' << std::quoted(x.utf8);
+                        else if constexpr (std::is_same_v<V, IntegerLiteral>)
+                          s << ':' << x.decimal << ':' << x.bits;
+                        else if constexpr (std::is_same_v<V, FloatLiteral>)
+                          s << ':' << x.bits;
+                        else if constexpr (std::is_same_v<V, BoolLiteral>)
+                          s << ':' << x.value;
+                        else if constexpr (std::is_same_v<V, FunctionValue>) {
+                          s << ':' << x.symbol.value;
+                          for (auto a : x.type_args)
+                            s << ':' << a.value;
+                        }
+                      },
+                      v.data);
+                };
+            value(data.value);
+          } else if constexpr (std::is_same_v<T, Read> ||
+                               std::is_same_v<T, Place> ||
+                               std::is_same_v<T, FunctionValue>) {
             s << " symbol=" << data.symbol.value;
             if constexpr (std::is_same_v<T, FunctionValue>)
               for (auto t : data.type_args)

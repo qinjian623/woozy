@@ -6,7 +6,7 @@
 
 2026-11-09 核对：依赖 Self、trait 实参、impl 实参或方法自身参数的 inout callback，按替换后的实际数据类型检查，也接受有限平凡 struct/enum 整体绑定。固定 Pair、自由泛型 T、trait Self、trait 实参和方法自身 U 五种写法均已在 Native O0/O2 与 Python 实际写回；不把它们列为待实现功能。完整签名、嵌套字段、非法拥有值及坏 HIR 另由既有持续测试检查。
 
-下文保留分批实现和测试记录。Type/T 显式首位 Self move/inout 与无捕获 Type/T 方法函数值已实现。用户已确定接收者写法为 `(move x).take()`、`(inout x).change()`，对应点调用已实现并通过独立目录及root重跑检查；纯 struct/enum 聚合 const 规则也已确认，尚未合入。源语言捕获闭包仍延后。
+下文保留分批实现和测试记录。Type/T 显式首位 Self move/inout 与无捕获 Type/T 方法函数值已实现。用户已确定接收者写法为 `(move x).take()`、`(inout x).change()`，对应点调用已实现并通过独立目录及root重跑检查；纯 struct/enum 聚合 const 与字段读取也已实现。源语言捕获闭包仍延后。
 
 `sema::check_types`返回有类型的HirModule；`hir::verify_types`检查类型、声明、作用域、实例身份和控制流。这个结果不能直接交给后端。`sema::check_project`继续通过唯一的`hir::verify`发布只读VerifiedHirModule；发布前还检查当前后端已支持的操作。合法但后端尚未实现的操作返回E_CAPABILITY_UNAVAILABLE，损坏HIR返回E_IR_INVALID。
 
@@ -420,3 +420,11 @@ Source/模式/Place 绑定/完整 trait 实参变异，先验合法模块通过�
 记录不再对没有存储身份的平凡 Move 结果登记借用；拥有 Move 的借用指向结果临时，
 不指向已消费的源绑定。观察器要求两次实际拥有借用均结束，且正常、错误退出后
 Vec/堆分配全部释放、Frame 没有残留借用或拥有槽。
+
+## 纯 struct/enum 聚合 const
+
+顶层和局部 const 支持纯 struct/enum 构造、嵌套字段读取，以及由字段取得的标量、string 和非捕获函数值。字符串保留完整UTF-8/NUL字节；不执行普通函数，不创建Vec或外部对象。局部const保留真实Binding/Read，不能通过常量折叠绕过move后的读取检查。
+
+HIR追加唯一的ConstantValue/ConstantLiteral表示，旧NodeKind编号不变。来源验证从真实AST与当前函数的完整类型实参重新取得值；泛型内lambda不能从全局同签名函数中任选。NativeIR沿用已有标量、字符串、函数和struct/enum指令，验证常量根与递归SSA值；Python按已有值表示生成平坦临时变量。未增加NativeIR字段、运行库接口或普通函数CTFE。
+
+持续测试覆盖跨包与私有访问、泛型函数/方法/lambda别名、typed error、字符串字节、fresh/stale失败输出和坏HIR/IR。完整构建配置和运行记录以本次集成结果为准。

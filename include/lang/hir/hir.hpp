@@ -114,6 +114,20 @@ struct FunctionValue {
   SymbolId symbol;
   std::vector<TypeId> type_args;
 }; // noncapturing function identity
+struct ConstantValue;
+struct ConstantAggregate {
+  std::optional<SymbolId> variant;   // absent for struct; active enum variant
+  std::vector<ConstantValue> fields; // declaration/active-payload order
+};
+struct ConstantValue {
+  TypeId type;
+  std::variant<UnitLiteral, BoolLiteral, IntegerLiteral, FloatLiteral,
+               StringLiteral, FunctionValue, ConstantAggregate>
+      data;
+};
+struct ConstantLiteral {
+  ConstantValue value;
+}; // pure immutable value, no executable children; verified against source
 struct Binding {
   SymbolId symbol;
   bool writable = false;
@@ -371,14 +385,13 @@ struct ExitPlan {
   std::vector<CleanupStep> actions;
   bool operator==(const ExitPlan &) const = default;
 };
-using NodeData =
-    std::variant<UnitLiteral, BoolLiteral, IntegerLiteral, FloatLiteral,
-                 StringLiteral, Read, Place, FunctionValue, Binding, Assign,
-                 Unary, Binary, ShortCircuit, IntegerConvert, Call, Block,
-                 ExpressionStatement, If, For, Noop, Return, Break, Continue,
-                 Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
-                 Switch, ConstraintCall, Try, Defer, Throw, Move, VecInit,
-                 IndexRead, IndexPlace, VecSlice, ForIn, ForeignRead>;
+using NodeData = std::variant<
+    UnitLiteral, BoolLiteral, IntegerLiteral, FloatLiteral, StringLiteral, Read,
+    Place, FunctionValue, Binding, Assign, Unary, Binary, ShortCircuit,
+    IntegerConvert, Call, Block, ExpressionStatement, If, For, Noop, Return,
+    Break, Continue, Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
+    Switch, ConstraintCall, Try, Defer, Throw, Move, VecInit, IndexRead,
+    IndexPlace, VecSlice, ForIn, ForeignRead, ConstantLiteral>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -419,7 +432,8 @@ enum class NodeKind {
   index_place,
   vec_slice,
   for_in,
-  foreign_read
+  foreign_read,
+  constant_literal
 };
 struct HirNode {
   TypeId type;

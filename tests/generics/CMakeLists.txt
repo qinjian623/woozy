@@ -226,3 +226,16 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
     --python "${LANG_PYTHON312}" --out "${CMAKE_CURRENT_BINARY_DIR}/receiver-modes-runtime")
   set_tests_properties(generics.receiver_modes_runtime PROPERTIES TIMEOUT 600)
 endif()
+
+add_executable(lang_aggregate_const_test aggregate_const_test.cpp)
+target_link_libraries(lang_aggregate_const_test PRIVATE lang_sema)
+if(TARGET lang_native)
+  target_link_libraries(lang_aggregate_const_test PRIVATE lang_native)
+  target_compile_definitions(lang_aggregate_const_test PRIVATE LANG_AGGREGATE_NATIVE=1)
+endif()
+add_test(NAME sema.aggregate_constants COMMAND lang_aggregate_const_test "${LANG_T07_ROOT}")
+if(LANG_TEST_PYTHON)
+  add_test(NAME sema.aggregate_constant_rejections COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_aggregate_const_rejections.py --cli $<TARGET_FILE:langc>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/aggregate-constant-rejections)
+endif()

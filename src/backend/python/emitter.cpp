@@ -533,6 +533,39 @@ class Emitter {
     return "_rt.binary('" + operation(op) + "', " + a + ", " + b + ", " +
            numeric(operand) + ")";
   }
+  std::string constant_value(const ConstantValue &value, Suite &suite,
+                             const HirNode &n) {
+    return std::visit(
+        [&](const auto &v) -> std::string {
+          using T = std::decay_t<decltype(v)>;
+          if constexpr (std::is_same_v<T, UnitLiteral>)
+            return save(suite, "None", n);
+          else if constexpr (std::is_same_v<T, BoolLiteral>)
+            return save(suite, v.value ? "True" : "False", n);
+          else if constexpr (std::is_same_v<T, IntegerLiteral>)
+            return save(suite, v.decimal, n);
+          else if constexpr (std::is_same_v<T, FloatLiteral>)
+            return save(suite,
+                        "_rt.ieee(" + std::to_string(v.bits) + ", " +
+                            std::to_string(type(value.type).bits) + ")",
+                        n);
+          else if constexpr (std::is_same_v<T, StringLiteral>)
+            return save(suite, string_literal(v.utf8), n);
+          else if constexpr (std::is_same_v<T, FunctionValue>)
+            return save(suite, function_name(v.symbol), n);
+          else {
+            std::vector<std::string> fields;
+            for (const auto &field : v.fields)
+              fields.push_back(constant_value(field, suite, n));
+            auto result = tuple(fields);
+            if (v.variant)
+              result =
+                  "(" + std::to_string(v.variant->value) + ", " + result + ")";
+            return save(suite, result, n);
+          }
+        },
+        value.data);
+  }
   std::string expression(HirNodeId id, Suite &suite) {
     if (outlining && expression_depth >= 16)
       return outlined_expression(id, suite);
@@ -551,6 +584,8 @@ class Emitter {
     const auto &n = node(id);
     exits(n);
     switch (n.kind()) {
+    case NodeKind::constant_literal:
+      return constant_value(std::get<ConstantLiteral>(n.data).value, suite, n);
     case NodeKind::unit_literal:
       return save(suite, "None", n);
     case NodeKind::bool_literal:

@@ -1,0 +1,92 @@
+package app;
+import "dep";
+struct Point {x i32;y i32;}
+struct Box[T] {value T;}
+enum Item {Empty;Full(text string,point Point);}
+enum Mirror {A(x i32);B(x i32);}
+const Reflection=Mirror.A(17);
+func predicate()bool{return false;}
+struct Bits {short bool;flag bool;small u8;fraction f32;negative i8;}
+const Flags=Bits(short:true||predicate(),flag:1<2,small:u8(255)+u8(1),fraction:1.5+0.5,negative:i8(-128));
+struct Range {max u64;min i64;}
+const Limits=Range(max:u64(18446744073709551615),min:i64(-9223372036854775808));
+const AtLimits=18446744073709551615==Limits.max&&-9223372036854775808==Limits.min;
+enum Failure {Stop(text string,code i32);}
+struct Functions {call func(i32)i32;}
+struct Host {}
+impl Host {func add(x i32)i32{return x+5;}}
+trait Calc {func calculate(x i32)i32;}
+impl Calc for Host {func calculate(x i32)i32{return x+6;}}
+func twice(x i32)i32{return x*2;}
+func other(x i32)i32{return x*3;}
+func identity[T](x T)T{return x;}
+const Forward = Origin;
+const Origin = Box[Point](value:Point(y:4,x:i32(3)));
+const Sum i32 = Forward.value.x+Origin.value.y;
+const Active = Item.Full(point:Point(x:Sum,y:9),text:"聚合\0😀");
+const Empty = Item.Empty;
+const Error = Failure.Stop(code:Sum,text:"错误\0载荷");
+const FunctionAlias=twice;
+const Function = Functions(call:FunctionAlias);
+const GenericAlias=identity[i32];
+const GenericFunction = Functions(call:GenericAlias);
+const ExtractedFunction=GenericFunction.call;
+const MethodFunction = Functions(call:Host.add);
+const LambdaFunction = Functions(call:func(x i32)i32{return x+4;});
+const Package = dep.Exported;
+const PackageText = Package.text;
+func generic[T](unused T)i32{
+    const functionAlias=twice;const functions=Functions(call:functionAlias);let call=functions.call;
+    if call(4)!=8{return 0;}
+    const local = Box[i32](value:Sum+1);
+    const alias = local;
+    return alias.value;
+}
+func bounded[T Calc]()i32{const functions=Functions(call:T.calculate);let call=functions.call;return call(4);}
+struct Nullary {call func()i32;}
+trait Value {func get()i32;}
+impl Value for i32 {func get()i32{return 17;}}
+impl Value for bool {func get()i32{return 25;}}
+func invoke[T Value]()i32{
+    const functions=Nullary(call:func()i32{return T.get();});
+    let call=functions.call;return call();
+}
+func plainLambda[T]()i32{
+    const functions=Nullary(call:func()i32{return 42;});
+    let call=functions.call;return call();
+}
+func fail()throws Failure{throw Error;}
+func probe_control()string{return "control";}
+func probe_payload()string{switch Active{case Item.Full(text,point):return text;case Item.Empty:return "wrong";}}
+func probe_alias_field()string{return PackageText;}
+func probe_local_shadow()string{
+    const x = "外层\0值";
+    {const x = Box[string](value:x);const alias=x;return alias.value;}
+}
+func probe_local_field_const()string{
+    const box = Box[string](value:"局部\0字段");
+    const field = box.value;
+    const alias = field;
+    return alias;
+}
+func probe_error()string{
+    try{fail();}catch error Failure{switch error{case Failure.Stop(text,code):return text;}}
+    return "wrong";
+}
+func main()i32{
+    if invoke[i32]()+invoke[bool]()!=42||plainLambda[i32]()+plainLambda[bool]()!=84{return 14;}
+    if !AtLimits{return 12;}
+    switch Reflection{case Mirror.A(x):if x!=17{return 9;}case Mirror.B(x):return 10;}
+    if !Flags.short||!Flags.flag||Flags.small!=0||Flags.fraction!=2.0||Flags.negative!=i8(-128){return 11;}
+    if Sum!=7||Forward.value.x!=3||generic(1)!=8||generic(true)!=8{return 1;}
+    let a=Function.call;let b=GenericFunction.call;let extracted=ExtractedFunction;
+    if extracted(2)!=2{return 13;}
+    if a(5)!=10||b(9)!=9||Package.code!=42{return 2;}
+    let method=MethodFunction.call;let lambda=LambdaFunction.call;
+    if method(2)!=7||lambda(2)!=6||bounded[Host]()!=10{return 8;}
+    switch Active{case Item.Full(text,point):if point.x!=7||point.y!=9{return 3;}case Item.Empty:return 4;}
+    switch Empty{case Item.Empty:case Item.Full(text,point):return 5;}
+    const n i32=6;{const n=Point(x:n,y:2);if n.x!=6{return 6;}}
+    var copied=Origin;copied.value.x=99;if Origin.value.x!=3{return 7;}
+    return 0;
+}

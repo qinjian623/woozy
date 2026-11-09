@@ -41,7 +41,7 @@ add_test(NAME python.aggregates COMMAND "${LANG_PYTHON312}"
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/aggregates"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.aggregates PROPERTIES TIMEOUT 180)
-foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates)
+foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates aggregate-constants)
   add_test(NAME python.${fixture} COMMAND "${LANG_PYTHON312}"
     "${CMAKE_CURRENT_LIST_DIR}/run_strings.py"
     --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
