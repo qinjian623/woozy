@@ -1,5 +1,13 @@
 # T10 CPU 实测记录
 
+## 2026-11-09 当前核心版本检查
+
+编译器源码 `163ba5c` 已完成四种构建配置的全部已注册测试：GNU Release 68 项、GNU Debug 68 项、Clang 22 ASan/UBSan/泄漏检查 68 项、GNU Debug 关闭 LLVM 37 项，共 241 项，无失败或跳过。每种配置均包含真实 CPU T10 的 14 个绑定组和 7 个 CLI 组；这两组已计入各配置总数，不能再重复相加。
+
+四种配置均明确指定固定 CPython 3.12.15 和现有 NumPy/PyTorch 专用 venv。实际运行包括对象身份与修改、宿主异常和原始 04 样例的 200 步更新及独立参考比较。LLVM 关闭配置仍可生成并执行 Python；它不执行 Native 测试。
+
+完整命令、构建选项、工具摘要、输入摘要、JUnit 和各配置 T10 JSON 保存在外层 `checks/core-four-config-163ba5c-20261109/`。Sanitizer 覆盖项目自身的 C++ 工具；预编译 LLVM 和生成程序没有因此全部经过插桩。这批是正确性检查，没有执行正式性能计时，也不表示整个 v0.1 规范已经全部完成。下文保留较早的 CPU 环境与执行记录。
+
 本记录只适用于 Linux x86_64、glibc 2.44、Python 后端 64 位、CPU。精确版本、wheel 文件名、公开来源和 SHA-256 见 [toolchain.lock.json](../contracts/toolchain.lock.json) 的 `python_cpu`。
 
 CPython 为 3.12.15，NumPy 为 2.5.4，PyTorch 为 2.15.0+cpu。锁中包含这两个包及其 9 个运行依赖；pip 25.0.1 是额外安装工具。11 个 wheel 的完整摘要、安装后的顶层 METADATA/WHEEL 与保存的公开索引记录一致。这次没有重新下载，也没有逐个核对安装目录中的所有 `.py`、`.so` 文件。

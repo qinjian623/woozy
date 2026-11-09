@@ -4,6 +4,10 @@
 
 契约 compiler-dev/1。当前实现检查值struct/enum、泛型函数/类型、名义trait/显式impl（含泛型trait的完整应用和方法自身泛型）及静态方法选择。新增后端执行单独检查，不由静态通过推定。
 
+2026-11-09 核对：依赖 Self、trait 实参、impl 实参或方法自身参数的 inout callback，按替换后的实际数据类型检查，也接受有限平凡 struct/enum 整体绑定。固定 Pair、自由泛型 T、trait Self、trait 实参和方法自身 U 五种写法均已在 Native O0/O2 与 Python 实际写回；不把它们列为待实现功能。完整签名、嵌套字段、非法拥有值及坏 HIR 另由既有持续测试检查。
+
+下文保留分批实现和测试记录。Type/T 显式首位 Self move/inout 与无捕获 Type/T 方法函数值已实现；真实首位 Self 的 move/inout 接收者点调用写法仍待用户确定，源语言捕获闭包仍延后。
+
 `sema::check_types`返回有类型的HirModule；`hir::verify_types`检查类型、声明、作用域、实例身份和控制流。这个结果不能直接交给后端。`sema::check_project`继续通过唯一的`hir::verify`发布只读VerifiedHirModule；发布前还检查当前后端已支持的操作。合法但后端尚未实现的操作返回E_CAPABILITY_UNAVAILABLE，损坏HIR返回E_IR_INVALID。
 
 HIR沿用唯一TypeContext、SymbolId和节点arena。名义类型按声明身份和类型实参驻留；声明字段、enum变体、trait/impl、模板和具体实例均有独立记录。原NodeKind 0至23不变，新节点追加。模板内的已绑定TypeParameter有真实声明；具体函数中不允许残留它、未消解调用或ConstraintCall。Source可以指向原NeutralBracket AST，具体HIR必须已经确定含义。
@@ -225,7 +229,7 @@ trait 定义的每个类型参数可以带一个已有 trait 约束，例如 `tr
 
 实例仍按真实 impl 方法 SymbolId 与完整 `[impl 实参..., 方法实参...]` 缓存。仅由 trait 应用确定的 impl 参数和签名中未出现的 phantom own 参数都进入键；同一组合重复调用去重，不同组合即使签名相同也不合并。具体 `ConstraintCall` 从真实 Source 后缀和所属实例恢复方法实参，替换 Self、trait 实参及全部 own 参数后再验证 bound，最终仍是普通直接 `Call`。
 
-顶层 move/inout 的支持范围见下节。依赖 Self/trait 参数/own 参数的 inout callback、实际 self move/inout、方法值及捕获闭包仍报源级 `E_CAPABILITY_UNAVAILABLE`。泛型 trait 参数自身的 bound 见前节；非泛型 trait 与固有方法的已有行为不变。验证器从真实 Source 重建 trait 参数、own 参数、bound、调用后缀与实例键；错误的 trait 应用、完整实例键、phantom 调用目标或 clone 重命名，以及成功重算 ownership 后的坏图都报 `E_IR_INVALID`。
+顶层 move/inout 的支持范围见下节。依赖 Self/trait 参数/own 参数的 inout callback 按替换后的实际数据类型检查，接受数字/bool 和有限平凡聚合。Self 参数模式及无捕获方法函数值的后续支持见各自章节，捕获闭包仍延后。泛型 trait 参数自身的 bound 见前节；非泛型 trait 与固有方法的已有行为不变。验证器从真实 Source 重建 trait 参数、own 参数、bound、调用后缀与实例键；错误的 trait 应用、完整实例键、phantom 调用目标或 clone 重命名，以及成功重算 ownership 后的坏图都报 `E_IR_INVALID`。
 
 本批新 fixture 与 `run_generic_traits.py` 在两后端执行原三个 before 组合、参数 bound、Self bound、四组完整 phantom 实例和去重、显式/推断、跨包、转交、非捕获 lambda、Vec copy/返回、命名参数顺序及 typed-error/defer 事件；拒绝组合验证 fresh 构建不产物且 stale 旧字节保持。未新增公共 HIR/NodeKind、ABI、schema 或后端接口。
 
@@ -304,7 +308,7 @@ Type/T 入口支持普通参数、非 self move，以及非 self 顶层数字/bo
 
 方法实例按真实 impl 方法 SymbolId 及完整 `[impl 类型实参..., 方法类型实参...]` 保存。签名中没有出现的类型参数必须显式填写；HIR 从该调用的真实源码及所属实例还原它，不能用相同签名猜测。One/Two 等签名相同、完整实参不同的实例分别保存，调换显式调用或具体化 ConstraintCall 的目标会被拒绝。trait 原型只有声明，没有虚构的可执行模板体；公共 HIR 和后端接口保持原样。
 
-泛型 trait 方法的顶层参数支持 ordinary、非 self move 和非 self 数字/bool 或有限平凡 struct/enum 整体 inout。依赖方法类型参数或 Self 的 inout callback 仍报 `E_CAPABILITY_UNAVAILABLE`。旧非泛型 trait 的数字/bool Self callback、固定 callback 和 `Self.helper` 保持原规则。泛型 trait 已在〈泛型 trait 的完整应用身份〉与〈泛型 trait 的 ordinary 方法自身泛型〉开放；方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
+泛型 trait 方法的顶层参数支持 ordinary、非 self move 和非 self 数字/bool 或有限平凡 struct/enum 整体 inout。依赖方法类型参数或 Self 的 inout callback 按替换后的实际数据类型检查，接受数字/bool 和有限平凡聚合。旧非泛型 trait 的数字/bool Self callback、固定 callback 和 `Self.helper` 保持原规则。泛型 trait 已在〈泛型 trait 的完整应用身份〉与〈泛型 trait 的 ordinary 方法自身泛型〉开放；方法值、捕获闭包、实际 self move/inout 和完整 ARC 尚未完成；T07/T09 仍为 in_progress。
 
 ## trait 非 self move 与类型名调用
 
@@ -324,7 +328,7 @@ Type/T 入口支持普通参数、非 self move，以及非 self 顶层数字/bo
 
 inout 必须传入可写的整体绑定；let、普通参数、临时值、字段、索引，以及同存储冲突、重复或嵌套借用继续拒绝。值接收者先求值一次，命名实参按书写顺序求值。后续实参抛错时不进入 callee；callee 抛错前的写回仍可见；返回值先保存，再执行 defer。move 实参及局部拥有值沿用原释放顺序。
 
-方法自身泛型中的 inout callback 如果依赖方法类型参数或 trait Self，继续报 `E_CAPABILITY_UNAVAILABLE`。新开放的 Type/T 顶层 inout 调用还检查完整嵌套签名，包括参数、返回、throws 和替换后的 struct/enum 字段及载荷。已有值调用，以及旧 ordinary-only Type/T 调用中的 Self callback 返回和 Holder 参数保持原行为；原先拒绝的直接 callback 参数仍拒绝。固定数字/bool callback 不受此限制。
+方法自身泛型中的 inout callback 即使依赖方法类型参数或 trait Self，也按实际替换后的数据类型检查，允许数字/bool 和有限平凡聚合。完整嵌套签名的参数、返回、throws 以及替换后的 struct/enum 字段和载荷都检查；拥有字段等非平凡 inout 数据继续拒绝。直接 callback、返回 callback 和 Holder 中的 callback 沿用完整签名与实例身份检查。
 
 HIR 沿用 Call/ConstraintCall、Place、Move、实例和 Source 记录。验证器核对真实 trait/impl、调用形式、参数顺序/标签/模式、整体 Place 及完整实例类型实参；方法类型参数保留为真实 TypeParameter，不替换成 Any。递归函数字段即使与外围签名使用同一 Function TypeId，也须检查其 callback 参数。
 
@@ -336,7 +340,7 @@ HIR 沿用 Call/ConstraintCall、Place、Move、实例和 Source 记录。验证
 
 数字/bool 之外的有限平凡聚合现在可以作为整体可写绑定传入 `inout`。顶层数据仍只接受数字/bool 或 `NominalStruct`/`NominalEnum`；struct 字段和所有 enum 变体载荷递归允许数字/bool、`Unit`、非捕获函数值、空 struct 和无载荷 enum。顶层 `Unit`/函数值、`Vec`、`string`、foreign/未知类型、含拥有字段的聚合和无限值布局继续拒绝。该判断读取实际实例、声明字段及替换后的字段类型，不按名称或仅按 `needs_drop` 猜测；`ValueOps.pod_inout` 同步表示同一顶层规则，但 HIR 独立验证不依赖它。
 
-自由/泛型函数、固有方法、trait 非 self 参数、值/具体 Type/T 调用、函数值和既有泛型转交共用该数据规则。`slot inout Self` 在具体或泛型 impl 中按替换后的聚合检查；trait 原型首位真实 Self 的 move/inout 仍不支持。依赖方法自身类型参数或 trait Self 的 callback inout 数据继续限制为数字/bool，普通 callback 中与 Self 无关的平凡聚合参数合法。捕获闭包、方法值、非平凡拥有值 inout 和字段/索引 inout 未开放。
+自由/泛型函数、固有方法、trait 非 self 参数、值/具体 Type/T 调用、函数值和既有泛型转交共用该数据规则。`slot inout Self` 及依赖方法自身类型参数或 trait Self 的 callback，在具体或泛型 impl 中都按替换后的实际数据检查，也接受有限平凡聚合。Type/T 显式首位 Self 的支持和接收者点调用的待定写法见对应章节。无捕获 Type/T 方法函数值已支持；捕获闭包、非平凡拥有值 inout 和字段/索引 inout 未开放。
 
 被调用方可以整体替换 struct、改变 enum 活动变体、修改值字段或把同一整体绑定继续转交给另一个 inout 参数。调用仍要求整体可写 `var` 绑定；let、普通参数、临时值、字段和索引不能作为 inout。重复或嵌套借用、另一实参读取/移动同一绑定或其子字段继续拒绝；不同平坦 POD 绑定各自复制。receiver 只求值一次，命名实参按源码顺序，后续实参抛错不进入 callee，callee 的 typed throw 写回可见，return 先保存返回值再执行 defer。
 
@@ -344,7 +348,7 @@ Native 以 LLVM 聚合值和调用者存储指针降低；Python 的 writable `C
 
 新增 `tests/generics/aggregate-inout/` 覆盖嵌套 POD、padding、enum 活动变体、显式/推断泛型、函数值、固有和 trait 方法、ConcreteType/T 调用、整体替换、字段修改、copy/return、throw/defer/求值顺序，以及 owning 聚合和别名拒绝。`tests/generics/run_aggregate_inout.py` 在两后端检查和执行，并对拒绝项目验证 fresh 构建不产物、已有目录不被覆盖。C++ 静态检查另覆盖 `ValueOps.pod_inout`、顶层 Unit/Function 拒绝、坏 HIR 字段和把 Place 改成 Read 后重算 ownership 仍拒绝。旧 constrained move/inout 拒绝项目因聚合 inout 变为合法，保留原输入未改，测试改用新增的含 Vec 字段版本作为拒绝控制。四配置的最终数量以本次交付日志为准。
 
-修正版进一步区分了三个来源问题：同一个泛型 nominal 声明的有限嵌套（如 `Box[Box[i32]]`）按具体类型实参的严格缩小判断值存储循环，不再仅因声明相同就当作无限布局；函数签名中的 nominal 回指不参与值布局环判断。trait callback 的 Self 依赖只从真实原型中的 trait Self SymbolId 判断，固定 `Pair` callback 即使 impl Self 也是 `Pair` 或 `i32` 也不被当作 Self 依赖；真正的 Self callback 仍保留既有数字/bool 限制。`slot inout Wrap[Self]` 在原型检查时把真实 Self 放入类型环境，具体 impl 仍按实际替换后的聚合检查，拥有字段的 Self 继续报 Source `E_CAPABILITY_UNAVAILABLE`。这些限制同时由独立 HIR 验证器按同一 raw prototype/Self 关系重查。
+修正版进一步区分了三个来源问题：同一个泛型 nominal 声明的有限嵌套（如 `Box[Box[i32]]`）按具体类型实参的严格缩小判断值存储循环，不再仅因声明相同就当作无限布局；函数签名中的 nominal 回指不参与值布局环判断。trait callback 的 Self 依赖只从真实原型中的 trait Self SymbolId 判断，固定 `Pair` callback 即使 impl Self 也是 `Pair` 或 `i32` 也不被当作 Self 依赖；真正的 Self callback 按实际 Self 替换后检查，也接受有限平凡聚合。`slot inout Wrap[Self]` 在原型检查时把真实 Self 放入类型环境，具体 impl 仍按实际替换后的聚合检查，拥有字段的 Self 继续报 Source `E_CAPABILITY_UNAVAILABLE`。这些限制同时由独立 HIR 验证器按同一 raw prototype/Self 关系重查。
 
 ## 索引后调用函数值
 
