@@ -3424,10 +3424,13 @@ void generic_method_move(const fs::path &root) {
       "func make() np.ndarray throws py.Error{return np.linspace(-1.0,1.0);} "
       "func main()i32 throws py.Error{let h=H(marker:0);"
       "let r=use(h,make());return 0;}");
-  need(!foreign.success() && foreign.failure == FailureKind::unsupported &&
-           has(foreign, "E_CAPABILITY_UNAVAILABLE"),
-       "foreign generic method move was not rejected at its concrete instance\n" +
-           messages(foreign));
+  // Behavior update: the original negative Source bytes are retained, but a
+  // declared Python host reference now follows the shared move rules.  The
+  // concrete generic instance must therefore pass and publish verified HIR.
+  need(foreign.success(), "foreign generic method move rejected\n" +
+                              messages(foreign));
+  need(hir::verify(*foreign.value).success(),
+       "foreign generic method move HIR rejected");
 }
 
 void generic_impl_move() {
@@ -4631,11 +4634,12 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
       "let b=Box[i32](value:1);return b.take(move local);} "
       "func make() np.ndarray throws py.Error{return np.linspace(-1.0,1.0);} "
       "func main()i32 throws py.Error{let r=use(make());return 0;}");
-  need(!foreign.success() && foreign.failure == FailureKind::unsupported &&
-           has(foreign, "E_CAPABILITY_UNAVAILABLE"),
-       "foreign generic impl own-method move was not rejected at its "
-       "concrete instance\n" +
-           messages(foreign));
+  // Behavior update: retain the original Source bytes; declared Python host
+  // references now use the same concrete move instance rules.
+  need(foreign.success(), "foreign generic impl own-method move rejected\n" +
+                              messages(foreign));
+  need(hir::verify(*foreign.value).success(),
+       "foreign generic impl own-method move HIR rejected");
 }
 
 void constrained_inherent_move(const fs::path &root) {

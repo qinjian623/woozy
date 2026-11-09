@@ -428,3 +428,9 @@ Vec/堆分配全部释放、Frame 没有残留借用或拥有槽。
 HIR追加唯一的ConstantValue/ConstantLiteral表示，旧NodeKind编号不变。来源验证从真实AST与当前函数的完整类型实参重新取得值；泛型内lambda不能从全局同签名函数中任选。NativeIR沿用已有标量、字符串、函数和struct/enum指令，验证常量根与递归SSA值；Python按已有值表示生成平坦临时变量。未增加NativeIR字段、运行库接口或普通函数CTFE。
 
 持续测试覆盖跨包与私有访问、泛型函数/方法/lambda别名、typed error、字符串字节、fresh/stale失败输出和坏HIR/IR。完整构建配置和运行记录以本次集成结果为准。
+
+## Python/64 已声明宿主引用的 move 与聚合保存
+
+Python/64 现在把已声明的 `ForeignOpaque` 宿主引用纳入同一套拥有值规则：已有绑定或整个临时值可显式 move，移动的是本语言持有的句柄并使源绑定失效；`Vec` 元素、struct 字段、enum payload 和泛型字段/元素可保存该引用。普通 copy、容器切片、for-in、字段替换和返回继续共享同一宿主对象，不搬移 ndarray/Tensor 数据，也不承诺宿主析构时机。自由泛型函数、函数值、固有/trait 方法的 `move` 参数沿原有参数模式和实例替换传递。
+
+本节更新前文各批关于 foreign move 仍报 `E_CAPABILITY_UNAVAILABLE` 的阶段记录。外部 inout、字段/索引部分 move、绑定方法值逃逸、宿主属性/索引、任意 FFI 和捕获闭包仍拒绝；native/32 位仍明确拒绝。普通借用参数直接 move、移动后读取、双 move 和同存储借用/move 冲突继续使用既有诊断。公共 TypeId/SymbolId/AST/HIR/NodeKind/ABI 和运行库表示未新增替代类图。

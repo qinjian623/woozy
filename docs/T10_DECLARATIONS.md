@@ -37,7 +37,7 @@ JSON 键先按完整解码字符串检查 NUL 和重复项，拒绝转义后重�
 
 以上读取和名称解析不启动 Python，不执行 import，也不读取真实 NumPy/PyTorch 属性。
 `review_status=verified_against_lock` 只是输入中的声明，不是读取器核实依赖后产生的证明。
-当前 foreign 类型检查、HIR 验证及拥有处理、Python emit/runtime 仍不支持；模块声明读取成功不能据此声称源码可通过 check、生成或执行。
+声明读取本身不代表源码能力；实际支持范围见 [T10_STATIC.md](T10_STATIC.md) 和 [T10_PYTHON.md](T10_PYTHON.md)。当前 Python/64 已实现声明的外部类型、读取、调用、普通 copy、整体 move 及宿主引用进入 Vec/struct/enum/泛型字段；外部 inout、部分 move、宿主索引和函数值逃逸仍拒绝，native/32 位仍拒绝。
 CPU conformance 只检查宿主库是否符合声明；它不能替代编译器静态检查、原 04 的真实生成执行或训练验证。
 
 后续类型检查及生成计划见 [T10_BINDING_PROPOSAL.md](T10_BINDING_PROPOSAL.md)。其中提出的 HIR 扩展尚未实现。

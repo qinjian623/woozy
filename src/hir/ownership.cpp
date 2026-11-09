@@ -249,11 +249,10 @@ class Classifier {
         return {ValueKind::vec, {}};
       auto e = support(element, depth + 1, nullptr);
       if (e.kind == ValueKind::unsupported ||
-          e.kind == ValueKind::foreign_reference ||
           e.kind == ValueKind::foreign_callable ||
           e.kind == ValueKind::foreign_error)
         return {ValueKind::unsupported,
-                e.reason.empty() ? "external values in Vec are not supported"
+                e.reason.empty() ? "external callable/error values in Vec are not supported"
                                  : e.reason};
       return {ValueKind::vec, {}};
     }
@@ -276,13 +275,12 @@ class Classifier {
           out->push_back({variant, f.symbol, concrete});
         auto s = support(concrete, depth + 1, nullptr);
         if (s.kind == ValueKind::unsupported ||
-            s.kind == ValueKind::foreign_reference ||
             s.kind == ValueKind::foreign_callable ||
             s.kind == ValueKind::foreign_error) {
           result.kind = ValueKind::unsupported;
           if (result.reason.empty())
             result.reason = s.reason.empty()
-                                ? "external aggregate fields are not supported"
+                                ? "external callable/error aggregate fields are not supported"
                                 : s.reason;
         }
       }

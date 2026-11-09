@@ -124,6 +124,22 @@ if(LANG_T10_PYTHON AND EXISTS "${LANG_T10_PYTHON}")
     --original-observer "${CMAKE_CURRENT_LIST_DIR}/t10_original04.py"
     --reference-observer "${CMAKE_CURRENT_LIST_DIR}/t10_reference04.py")
   set_tests_properties(python.t10_bindings PROPERTIES TIMEOUT 600)
+  add_test(NAME python.foreign_ownership COMMAND "${LANG_T10_PYTHON}"
+    "${CMAKE_CURRENT_LIST_DIR}/run_t10_bindings.py"
+    --helper $<TARGET_FILE:lang_python_emit>
+    --root "${LANG_PYTHON_TEST_ROOT}"
+    --out "${CMAKE_CURRENT_BINARY_DIR}/foreign-ownership"
+    --python "${LANG_T10_PYTHON}"
+    --binding "${LANG_PYTHON_TEST_ROOT}/tests/python/t10_binding.json"
+    --example-binding "${LANG_PYTHON_TEST_ROOT}/contracts/python_bindings.example.json"
+    --reference "${LANG_PYTHON_TEST_ROOT}/baseline/samples/numpy_torch_reference.py"
+    --observe "${CMAKE_CURRENT_LIST_DIR}/observe_t10.py"
+    --original-observer "${CMAKE_CURRENT_LIST_DIR}/t10_original04.py"
+    --reference-observer "${CMAKE_CURRENT_LIST_DIR}/t10_reference04.py"
+    --only foreign-ownership-move-aggregate
+           foreign-ownership-cleanup
+           foreign-ownership-rejections)
+  set_tests_properties(python.foreign_ownership PROPERTIES TIMEOUT 300)
   set(LANG_T10_CLI_NATIVE_ARGS)
   if(LANG_ENABLE_LLVM AND TARGET lang_native_helper)
     list(APPEND LANG_T10_CLI_NATIVE_ARGS

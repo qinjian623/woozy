@@ -163,6 +163,26 @@ class Runtime(unittest.TestCase):
         error.drop(Drop())
         self.assertEqual(dropped, [True])
 
+    def test_foreign_reference_copy_in_vec_and_aggregates(self):
+        foreign = rt.ValueType('foreign')
+        host = object()
+        outer = rt.Vec.create(foreign, [host])
+        part = outer.slice(0, 1)
+        self.assertIs(outer.get(0), host)
+        self.assertIs(part.get(0), host)
+        outer.release()
+        self.assertIs(part.get(0), host)
+        part.release()
+        struct = rt.ValueType('struct', (foreign, foreign))
+        copied = struct.copy((host, host))
+        self.assertIs(copied[0], host)
+        self.assertIs(copied[1], host)
+        struct.drop(copied)
+        enum = rt.ValueType('enum', variants={3: (foreign,)})
+        copied_enum = enum.copy((3, (host,)))
+        self.assertIs(copied_enum[1][0], host)
+        enum.drop(copied_enum)
+
     def test_foreign_read_wraps_host_error_once(self):
         class Outer(Exception):
             pass

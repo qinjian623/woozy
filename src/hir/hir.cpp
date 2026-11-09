@@ -501,8 +501,9 @@ class Verifier {
            "internal foreign callable in function output");
       for (auto p : t.parameters) {
         need(type(p.type).kind != TypeKind::ForeignCallable &&
-                 (type(p.type).kind != TypeKind::ForeignOpaque || p.mode == ParamMode::ordinary),
-             "internal callable/external move parameter");
+                 (type(p.type).kind != TypeKind::ForeignOpaque ||
+                  p.mode == ParamMode::ordinary || p.mode == ParamMode::move),
+             "internal callable/external inout parameter");
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move ||
                  (p.mode == ParamMode::inout &&
                   inout_data_type(m, p.type, allowed)),
@@ -2294,7 +2295,6 @@ class Verifier {
       effect_shape(n);
       break;
     case NodeKind::move: {
-      need(type(n.type).kind != TypeKind::ForeignOpaque, "external move is unsupported");
       const auto &mv = std::get<Move>(n.data);
       need(mv.binding ? ch.empty() : ch.size() == 1, "move source arity");
       if (!mv.binding)
@@ -2434,7 +2434,14 @@ class Verifier {
       t.declaration = *sid;
     } else if (s.kind == modules::SymbolKind::type) {
       if (auto ex = m.resolved->foreign_export(*sid)) {
-        need(ex->kind == modules::ForeignExportKind::type && ex->declaration && n.children.empty(),
+        // Name/Member syntax keeps its qualifier as a child; only a type
+        // application supplies real arguments.  Foreign declarations never
+        // take type arguments, matching sema's parse_type rule.
+        const bool type_arguments =
+            (n.kind == AstKind::NeutralBracket && n.children.size() > 1) ||
+            (n.kind == AstKind::NamedType && !n.children.empty());
+        need(ex->kind == modules::ForeignExportKind::type && ex->declaration &&
+                 !type_arguments,
              "foreign source type identity/arity");
         Type ft; ft.kind = TypeKind::ForeignOpaque; ft.binding = *ex->declaration;
         return substituted.intern(ft);
@@ -5949,11 +5956,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       if (t.kind == TypeKind::Vec) {
         if (!ownership_values || t.type_args.size() != 1)
           return false;
-        const auto *element = storage_types.find(t.type_args.at(0));
-        if (!element)
-          return false;
-        if (element->kind == TypeKind::ForeignOpaque ||
-            element->kind == TypeKind::ForeignCallable)
+        if (!storage_types.find(t.type_args.at(0)))
           return false;
         return supported(t.type_args.at(0), depth + 1);
       }
@@ -5974,12 +5977,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
             // private scratch context may not manufacture a missing member.
             if (!m.types.find(field))
               return false;
-            const auto *field_type = storage_types.find(field);
-            if (!field_type)
-              return false;
-            const auto kind = field_type->kind;
-            if (kind == TypeKind::ForeignOpaque ||
-                kind == TypeKind::ForeignCallable ||
+            if (!storage_types.find(field) ||
                 !supported(field, depth + 1))
               return false;
           }
@@ -6017,11 +6015,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
           if (value.kind == TypeKind::Vec) {
             if (!ownership_values || value.type_args.size() != 1)
               return false;
-            const auto *element = storage_types.find(value.type_args.at(0));
-            if (!element)
-              return false;
-            if (element->kind == TypeKind::ForeignOpaque ||
-                element->kind == TypeKind::ForeignCallable)
+            if (!storage_types.find(value.type_args.at(0)))
               return false;
           }
           if (value.kind == TypeKind::NominalStruct ||
@@ -6031,12 +6025,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
                 auto add = [&](TypeId field) {
                   if (!m.types.find(field))
                     return false;
-                  const auto *found = storage_types.find(field);
-                  if (!found)
-                    return false;
-                  const auto kind = found->kind;
-                  if (kind == TypeKind::ForeignOpaque ||
-                      kind == TypeKind::ForeignCallable)
+                  if (!storage_types.find(field))
                     return false;
                   pending.push_back(field);
                   return true;

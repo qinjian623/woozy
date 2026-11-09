@@ -22,7 +22,7 @@ auto checked = sema::check_project(resolved, {}, {}, hir::VerifyMode::static_onl
 
 `static_only` 只跳过尚未实现的生成支持检查。项目 backend/word_bits 必须匹配，声明 `allowed_backends` 仍有效；使用外部模块的 native 源报 `E_CAPABILITY_UNAVAILABLE`。外部读取需要声明中的 `lang.py.Error`；没有该类型的旧测试绑定继续明确报未支持，不伪造 std 声明或恢复类型。
 
-`check_backend_capabilities` 现在只对 Python/64 开放已实现的外部类型、读取和调用：可执行 callable 必须声明 `error_type=lang.py.Error`，所有参数为 ordinary；外部值读取也要求声明存在。native/其他 profile、无 throws 的外部 callable、move/inout 参数及其他未实现组合仍报 `E_CAPABILITY_UNAVAILABLE`。即便调用只有标量参数、返回 Unit，也按操作和声明本身检查。外部对象进入 Vec/聚合、函数值逃逸、外部索引/数据属性仍拒绝；返回外部对象的函数类型签名本身不被误拒。Python emit 仍独立调用该检查，native lower 仍独立拒绝不支持的输入；未使用模板和类型池中的外部声明不会被当作可执行操作扫描。实际生成范围见 [T10_PYTHON.md](T10_PYTHON.md)。
+`check_backend_capabilities` 现在只对 Python/64 开放已实现的外部类型、读取和调用：可执行 callable 必须声明 `error_type=lang.py.Error`，所有参数为 ordinary；外部值读取也要求声明存在。外部宿主引用可作为整体 move 参数或从已有绑定/临时值 move，也可放入 Vec、struct 字段、enum payload 和泛型字段/元素；分类与清理继续使用同一 `ValueKind::foreign_reference` 和共享 ownership。native/其他 profile、无 throws 的外部 callable、外部 inout、部分 move 及其他未实现组合仍报 `E_CAPABILITY_UNAVAILABLE`。即便调用只有标量参数、返回 Unit，也按操作和声明本身检查。函数值逃逸、外部索引/数据属性仍拒绝；返回外部对象的函数类型签名本身不被误拒。Python emit 仍独立调用该检查，native lower 仍独立拒绝不支持的输入；未使用模板和类型池中的外部声明不会被当作可执行操作扫描。实际生成范围见 [T10_PYTHON.md](T10_PYTHON.md)。
 
 ## 公共表示
 
@@ -55,7 +55,7 @@ auto checked = sema::check_project(resolved, {}, {}, hir::VerifyMode::static_onl
 
 每个 ForeignRead 有独立的 py.Error 错误出口；Call 的独立出口来自声明的 error_type。两者都沿用原 errors、ExitPlan、try/catch 和 typed throws 检查。读取失败时不会登记尚未求值的实参或未成功的调用结果；后续实参失败只清理已完成的临时值，并结束已开始的借用。清空 errors/exits/ownership 后重新计算，也不能绕过上面的源码外部操作检查。
 
-ForeignOpaque、ForeignCallable、py.Error 的 `classify_value` 都返回 `needs_drop=true`、`pod_inout=false`。接收者及内部目标使用既有 Temporary/ValueUse/CallLifetime 保活，目标借用在调用返回或失败时结束，拥有临时值在 full-expression 结束时销毁。方法接收者读取可取得同一对象的逻辑 copy，并保持到该表达式结束。普通参数保存、赋值、返回取得同一对象的新拥有引用；普通调用仍借用参数，不做深复制或 move。返回或传播错误先保存活动输出，再执行清理。catch 载荷及其复制也有真实拥有记录。
+ForeignOpaque、ForeignCallable、py.Error 的 `classify_value` 都返回 `needs_drop=true`、`pod_inout=false`。接收者及内部目标使用既有 Temporary/ValueUse/CallLifetime 保活，目标借用在调用返回或失败时结束，拥有临时值在 full-expression 结束时销毁。方法接收者读取可取得同一对象的逻辑 copy，并保持到该表达式结束。普通参数保存、赋值、返回取得同一对象的新拥有引用；普通调用借用参数，显式 move 才消费整个拥有绑定或临时值。foreign 位于 Vec/struct/enum/泛型字段时，copy 递归共享宿主对象，drop 只释放语言槽；move 转移同一句柄，不搬移宿主数据。返回或传播错误先保存活动输出，再执行清理。catch 载荷及其复制也有真实拥有记录。
 
 生产者和验证器都从结构重新推导拥有记录，验证器不读取提交的记录作为预期。绑定、owner、读取目标、签名、源码实参、形参索引、省略项、效果、错误出口或拥有记录不符均报 `E_IR_INVALID`。把错误树的拥有记录重新计算成自洽形式，也不能绕过源码身份检查。
 
@@ -63,7 +63,7 @@ ForeignOpaque、ForeignCallable、py.Error 的 `classify_value` 都返回 `needs
 
 本阶段支持声明中的外部类型、dtype 值、普通函数、构造、方法、对象调用、有限重载、可选参数省略、命名实参，以及普通对象持有/赋值/回传、typed py.Error 传播/catch。shape、设备可用性和动态 dtype 仍由宿主运行时决定；device 只按声明的 string 类型检查，没有 cpu 字面量限制。静态通过不代表设备或库实际存在。
 
-外部对象放入 Vec/聚合、外部 move/inout、外部索引/切片/数据属性、外部函数值逃逸仍报 `E_CAPABILITY_UNAVAILABLE`；向 ordinary 外部形参写 move/inout 沿用 `E_CALL_ARGUMENT`。未知成员明确拒绝，不创建 Any、Unsupported 或恢复类型代替新节点。普通参数重赋值、计算产生的拥有 switch 临时值和原有动态字符串等限制保持。
+外部 inout、字段/索引部分 move、外部索引/切片/数据属性、外部函数值逃逸仍报 `E_CAPABILITY_UNAVAILABLE`；向 ordinary 外部形参写 move/inout 沿用 `E_CALL_ARGUMENT`。未知成员明确拒绝，不创建 Any、Unsupported 或恢复类型代替新节点。普通参数重赋值、移动后读取/双 move、计算产生的拥有 switch 临时值和原有动态字符串等限制保持。
 
 紧邻调用目标外的透明括号不构成方法值逃逸：`(x.backward)()`、`(np.linspace)(...)`、`(m)(x)` 和 `get(x).backward()` 都按实际紧邻 Call 处理，并保留真实 Call/Member/自变量顺序。真正保存、返回或传递括号方法值，例如 `let v=(x.backward);`，仍报 `E_CAPABILITY_UNAVAILABLE`。
 

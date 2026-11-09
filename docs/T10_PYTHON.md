@@ -9,11 +9,13 @@
 - 现有 15 个 ordinary 外部 callable：模块函数、构造、方法、对象 callable；每个可执行 callable 必须声明 `error_type=lang.py.Error`，参数全部 ordinary。
 - dtype/外部值读取：只使用声明中的模块和 `host_attribute` 路径。
 - 外部对象的保存、普通参数传递、返回、丢弃，以及方法/对象调用；逻辑 copy 持有同一宿主对象，不复制 ndarray/Tensor 数据。
+- 外部宿主引用的整体 move：已有绑定写 `move x`，或移动整个临时值；移动的是本语言持有的句柄并使源绑定失效。它不移动 ndarray/Tensor 数据，也不深复制宿主对象。
+- 外部宿主引用保存在 `Vec`、struct 字段、enum payload 和泛型字段/元素中；容器 copy、切片、for-in、字段替换和返回沿用共享容器/聚合所有权规则，普通 copy 仍共享同一宿主对象。
 - 可选参数省略、位置/命名实参及其源码顺序；省略参数不补 `None`。
 - typed `py.Error` 的传播、跨源模块 catch、`let` copy、再抛出和未捕获报告。
 - 生成的 `program.py` 由纯结构化 Python 组成，内嵌 `_LANG_BINDING_INFO`；`langrt.py` 来自 `runtime/python/langrt.py`。不新增第三个输出文件。
 
-不生成：外部 move/inout、外部索引/切片/数据属性、外部函数值逃逸、外部对象进入 Vec/聚合、未知成员、动态 shape/device 类型推断、其他 profile。无 throws 的外部 callable 即使返回 Unit、参数只有标量，也报 `E_CAPABILITY_UNAVAILABLE`；其源程序和静态 HIR 仍可按静态 API 检查，但不能进入生成。native/32 位仍拒绝。
+不生成：外部 inout、字段/索引部分 move、外部索引/切片/数据属性、外部函数值逃逸、未知成员、动态 shape/device 类型推断、其他 profile。普通借用参数不能直接 move；移动后读取、双 move 和同存储借用/move 冲突沿用既有所有权诊断。无 throws 的外部 callable 即使返回 Unit、参数只有标量，也报 `E_CAPABILITY_UNAVAILABLE`；其源程序和静态 HIR 仍可按静态 API 检查，但不能进入生成。native/32 位仍拒绝。
 
 外部类型作为错误载荷时，只支持 `runtime_error` 声明。普通宿主对象或含普通宿主类型的函数值作为错误载荷仍在生成时明确报 `E_CAPABILITY_UNAVAILABLE`，不报内部错误。
 
@@ -61,7 +63,7 @@ CLI 参数只负责选择绑定文件。该 example bundle 保留 `draft_require
 
 ## 4. 运行库和 py.Error
 
-`runtime/python/langrt.py` 版本为 `compiler-dev/1-python-values/5`，与 `include/lang/backend/python.hpp` 和嵌入 runtime 一致。
+`runtime/python/langrt.py` 版本为 `compiler-dev/1-python-values/7`，与 `include/lang/backend/python.hpp` 和嵌入 runtime 一致。
 
 - `host_module(logical, host)` 只 import 声明中的宿主模块。缓存 key 是 `(logical, host)`，避免两个逻辑模块声明不同宿主时返回错误对象。import 失败抛 `HostEnvironmentError`，不伪装成源码 `py.Error`；该异常发生在外部操作桥之前。
 - `foreign_read` 和 `foreign_call` 只包住已声明的属性读取/实际调用。先原样传播 `TypedError`，再捕获普通 `Exception`；`Panic`、`KeyboardInterrupt`、`SystemExit`、`SwitchBreak` 等 `BaseException` 不被包装。生成函数没有整体 `except Exception`。
@@ -85,10 +87,10 @@ CLI 参数只负责选择绑定文件。该 example bundle 保留 `draft_require
 ## 6. 测试和当前证据
 
 - `tests/python/t10_binding.json`、`t10_host.py`：测试专用 ordinary 声明和宿主，不导入真实 NumPy/PyTorch，不冒充 conformance。
-- `tests/python/run_t10_bindings.py`：真实 API 生成，执行顺序/省略/别名/Error/cause/span/cross-module/BaseException/失败清理/无 throws E_CAP/缺宿主环境错误，并检查 Frame 无活动 owner/borrow。
+- `tests/python/run_t10_bindings.py`：真实 API 生成，执行顺序/省略/别名/Error/cause/span/cross-module/BaseException/失败清理/无 throws E_CAP/缺宿主环境错误，并检查 Frame 无活动 owner/borrow。`foreign-ownership-*` 用例另执行外部引用整体 move、函数/泛型/trait 参数模式、Vec/嵌套结构/enum/泛型字段身份、普通/return/defer/typed-error/后参失败/部分构造清理；观察器核对每次 foreign copy 返回同一 Probe、move 后源 owner 槽失效、Frame/borrow 清空，并拒绝改坏的 HIR。
 - `tests/python/t10_original04.py`：使用专用 CPython 3.12.15、NumPy 2.5.4、PyTorch 2.15.0+cpu，调用真实生成的 `train`；检查 seed 7、Linear(1,1)、lr 0.1、200 次 backward/step/zero_grad、201 次真实 model forward hook、x/y 形状/dtype、y=2x+1、参数更新、loss 下降和返回零维 CPU float32 Tensor 保留 autograd。数值读取仅在测试端进行。
 - `tests/python/t10_real_objects.py`：对生成的普通参数/let/返回函数传入真实 ndarray、Tensor、view 和带梯度的派生 Tensor，检查身份、data_ptr、双向别名修改及无隐式转换；真实 NumPy ValueError 经生成代码包装为 py.Error，保留消息、traceback、源位置，函数退出后 owner/borrow 清空。宿主测试中的索引和 no_grad 不扩展源语言。
 - `tests/python/t10_reference04.py` 独立执行原手写参考，按 `rtol=1e-5/atol=1e-6` 比较，不修改参考。
-- 本地 `tests/python/CMakeLists.txt` 只在配置了 `LANG_T10_PYTHON` 时注册 `python.t10_bindings` 和 `python.t10_cli`；普通 `python3.12` 未被替换成专用依赖环境。`python.t10_cli` 使用正式 `langc` 的 `--std-binding`，检查参数/路径/错误保留/native 转发，并实际执行 CLI 生成的原 04 训练函数。
+- 本地 `tests/python/CMakeLists.txt` 只在配置了 `LANG_T10_PYTHON` 时注册 `python.t10_bindings`、聚焦的 `python.foreign_ownership` 和 `python.t10_cli`；普通 `python3.12` 未被替换成专用依赖环境。`python.t10_cli` 使用正式 `langc` 的 `--std-binding`，检查参数/路径/错误保留/native 转发，并实际执行 CLI 生成的原 04 训练函数。
 
 原 04 的 API 与正式 CLI 生成、真实 CPU 执行、参考比较以及依赖锁的检查结果见 [T10_CPU_VERIFICATION.md](T10_CPU_VERIFICATION.md)。这些结果只覆盖所记录的环境、声明集和样例，不代表 GPU/CUDA、其他训练或任意 Python 库已经支持。

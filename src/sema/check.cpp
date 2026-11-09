@@ -1093,8 +1093,6 @@ class Checker {
     if (name == "Vec") {
       if (args.size() != 1)
         reject(r, "Vec requires one element type");
-      if (type(args[0]).kind == TypeKind::ForeignOpaque)
-        unavailable(r, "external values in Vec are not supported");
       Type t;
       t.kind = TypeKind::Vec;
       t.type_args = args;
@@ -1138,8 +1136,8 @@ class Checker {
       auto pm = mode(cr);
       auto pt = parse_type(child(cr, 0), trait_self, trait_self_callback);
 
-      if (pm != ParamMode::ordinary && type(pt).kind == TypeKind::ForeignOpaque)
-        unavailable(cr, "external move/inout parameters are not supported");
+      if (pm == ParamMode::inout && type(pt).kind == TypeKind::ForeignOpaque)
+        unavailable(cr, "external inout parameters are not supported");
       // A trait prototype may declare its actual first-position receiver or
       // any other slot `inout Self`. The raw Self is deferred here because no
       // concrete type exists yet; every complete trait application substitutes
@@ -1643,8 +1641,6 @@ class Checker {
               (l.writable && symbol(*sid).definition &&
                ast(*symbol(*sid).definition).kind == AstKind::Parameter))
             reject(r, "borrowed parameter cannot be moved", "E_CALL_ARGUMENT");
-          if (type(l.type).kind == TypeKind::ForeignOpaque)
-            unavailable(r, "external move is not supported");
           match(r, l.type, expected);
           return {node(r, l.type, Move{sid}), {l.type, {}, {}}};
         }
@@ -1652,8 +1648,6 @@ class Checker {
             ast(er).kind == AstKind::NeutralBracket)
           unavailable(r, "partial field/element move is not supported");
         auto e = expression(er, expected);
-        if (type(e.value.type).kind == TypeKind::ForeignOpaque)
-          unavailable(r, "external move is not supported");
         return {node(r, e.value.type, Move{{}}, {e.id}), e.value};
       }
       if (op == "inout")
@@ -3950,10 +3944,7 @@ class Checker {
         m.traits.push_back(std::move(tr));
       }
     auto field_value_type = [&](Ref field) {
-      auto t = parse_type(child(field, 0));
-      if (type(t).kind == TypeKind::ForeignOpaque)
-        unavailable(field, "external aggregate fields are not supported");
-      return t;
+      return parse_type(child(field, 0));
     };
     for (auto &d : m.nominals) {
       auto r = d.source.node;
@@ -4595,9 +4586,9 @@ class Checker {
          trait_impl_inout_source(origin, true).has_value() ||
          trait_impl_inout_source(origin, false).has_value());
     for (const auto &p : type(f.signature).parameters) {
-      if (p.mode != ParamMode::ordinary &&
+      if (p.mode == ParamMode::inout &&
           type(p.type).kind == TypeKind::ForeignOpaque)
-        unavailable(use, "external move/inout parameters are not supported");
+        unavailable(use, "external inout parameters are not supported");
     }
     if (check_inout_graph(use, f.signature, false) && !inout_source)
       unavailable(use, "generic/method inout is not implemented");

@@ -269,6 +269,297 @@ func main() i32 throws py.Error {
 
     r.add('order-objects-errors', order_case)
 
+    foreign_ownership_source = '''package main;
+import "std/py" as py;
+import "t10host" as host;
+
+struct Box[T] { value T; }
+struct Inner { p host.Probe; }
+struct Outer { inner Inner; v Vec[i32]; }
+enum Choice { One(p host.Probe); None; }
+enum Maybe[T] { Some(value T); None; }
+trait Sink { func keep(self Self, p move host.Probe) host.Probe; }
+struct Holder { n i32; }
+impl Sink for Holder {
+  func keep(self Holder, p move host.Probe) host.Probe { return p; }
+}
+struct GenericHolder { n i32; }
+impl GenericHolder {
+  func keep[T](self GenericHolder, value move T) T { return move value; }
+}
+struct GenericBox[T] { value T; }
+impl[T] GenericBox[T] {
+  func keep[U](self Self, value move U) U { return move value; }
+}
+func pass(p host.Probe) host.Probe { return p; }
+func take(p move host.Probe) host.Probe { return p; }
+func relay[T](value move T) T { return move value; }
+func apply(cb func(move host.Probe) host.Probe, p move host.Probe) host.Probe {
+  return cb(move p);
+}
+func wrap(p host.Probe) Outer {
+  return Outer(inner: Inner(p: p), v: [4]);
+}
+func pack(p host.Probe) Vec[host.Probe] {
+  return [p];
+}
+func main() i32 throws py.Error {
+  let x = host.make();
+  let y = move x;
+  if host.same(y, y) != true { return 1; }
+  let values Vec[host.Probe] = [y];
+  if host.same(y, values[0]) != true { return 2; }
+  host.set_value(values[0], 42);
+  if host.get_value(y) != 42 { return 3; }
+  let part = values[0:1];
+  if host.same(y, part[0]) != true { return 4; }
+  let inner = Inner(p: pass(y));
+  let outer = Outer(inner: inner, v: [1]);
+  let wrapped = wrap(y);
+  if host.same(wrapped.inner.p, y) != true { return 28; }
+  let packed = pack(y);
+  if host.same(packed[0], y) != true { return 29; }
+  if host.same(y, outer.inner.p) != true { return 5; }
+  host.set_value(outer.inner.p, 7);
+  if host.get_value(y) != 7 { return 6; }
+  var changed = outer;
+  let q = host.make();
+  changed.inner.p = q;
+  if host.same(changed.inner.p, q) != true { return 7; }
+  if host.get_value(y) != 7 { return 8; }
+  if changed.v[0] != 1 { return 9; }
+  var outer_move = outer;
+  let moved_outer = move outer_move;
+  if host.same(y, moved_outer.inner.p) != true { return 19; }
+  var vec_move = values;
+  let moved_vec = move vec_move;
+  if host.same(y, moved_vec[0]) != true { return 20; }
+  let direct_outer = move Outer(inner: Inner(p: y), v: [3]);
+  if host.same(y, direct_outer.inner.p) != true { return 21; }
+  let made = move host.make();
+  host.set_value(made, 3);
+  if host.get_value(made) != 3 { return 22; }
+  let made_vec Vec[host.Probe] = [move made];
+  if host.get_value(made_vec[0]) != 3 { return 23; }
+  let choice = Choice.One(p: y);
+  switch choice {
+  case Choice.One(p):
+    if host.same(p, y) != true { return 10; }
+  case Choice.None: return 11;
+  }
+  let maybe = Maybe[host.Probe].Some(value: y);
+  switch maybe {
+  case Maybe.Some(p):
+    if host.same(p, y) != true { return 26; }
+  case Maybe.None: return 27;
+  }
+  let boxed = Box[host.Probe](value: y);
+  if host.same(boxed.value, y) != true { return 12; }
+  let moved = take(move q);
+  if host.same(moved, moved) != true { return 13; }
+  let relayed = relay[host.Probe](move moved);
+  if host.same(relayed, relayed) != true { return 14; }
+  let held = Holder(n: 1);
+  let kept = held.keep(move relayed);
+  if host.same(kept, kept) != true { return 15; }
+  let temp = pass(y);
+  let functional = apply(take, move temp);
+  if host.same(functional, y) != true { return 16; }
+  let result = apply(take, move functional);
+  if host.same(result, y) != true { return 17; }
+  for item in values {
+    if host.same(item, y) != true { return 18; }
+  }
+  let gh = GenericHolder(n: 2);
+  let generic_kept = gh.keep[host.Probe](move result);
+  if host.same(generic_kept, y) != true { return 24; }
+  let gb = GenericBox[host.Probe](value: y);
+  let gb_kept = gb.keep[host.Probe](move generic_kept);
+  if host.same(gb_kept, y) != true { return 25; }
+  return 0;
+}
+'''
+
+    def foreign_ownership_case(row):
+        project = r.project('foreign-ownership',
+                            {'src/main.lang': foreign_ownership_source}, binding)
+        out, _ = r.emit(row, project, binding)
+        observed, events = r.observe(row, out)
+        require(observed['main_return'] == 0, observed)
+        require(observed['owners'] == [], observed)
+        require(all(not borrows for borrows in observed['borrows']), observed)
+        require(not error_events(events), events)
+        metadata = json.loads((out / 'metadata.json').read_text())
+        entry = '_f' + str(metadata['entry_symbol'])
+        x_states = [state for state in observed['owner_states']
+                    if state['function'] == entry and state['name'] == 'x']
+        require(any(state['active'] for state in x_states), x_states)
+        require(x_states and not x_states[-1]['active'], x_states)
+        require(len(observed['foreign_copies']) > 0, observed)
+        require(len(observed['foreign_drops']) > 0, observed)
+        makes = [op for op in observed['operations'] if op == ['host', 'MAKE']]
+        require(len(makes) == 3, observed['operations'])
+        for event in (['host', 'SET', 42], ['host', 'GET', 42],
+                      ['host', 'SET', 7], ['host', 'GET', 7]):
+            require(event in observed['operations'], (event, observed['operations']))
+        row['observation'] = observed
+
+    r.add('foreign-ownership-move-aggregate', foreign_ownership_case)
+
+    foreign_cleanup_source = '''package main;
+import "std/py" as py;
+import "t10host" as host;
+
+enum Failure { Bad(value Vec[host.Probe]); }
+enum Bad { Stop; }
+struct Pair { p host.Probe; n i32; }
+func consume(p move host.Probe, n i64) i64 throws py.Error {
+  if host.same(p, p) != true { return -1; }
+  return n;
+}
+func fail_move(p move host.Probe) i32 throws Bad { throw Bad.Stop; }
+func fail_agg(seed host.Probe) Vec[host.Probe] throws Failure {
+  let values Vec[host.Probe] = [seed];
+  throw Failure.Bad(value: values);
+}
+func fail_partial() i32 throws Bad { throw Bad.Stop; }
+func keep_deferred(p move host.Probe) host.Probe throws py.Error {
+  defer { try { host.same(p, p); host.note(7); } catch e py.Error { } }
+  return p;
+}
+func main() i32 throws py.Error {
+  let a = host.make();
+  if consume(move a, host.arg(1)) != 1 { return 1; }
+  let b = host.make();
+  try { consume(move b, host.arg_fail(2)); return 2; }
+  catch e py.Error { host.note(2); }
+  let c = host.make();
+  try { fail_move(move c); return 3; }
+  catch e Bad { host.note(3); }
+  try { let values = fail_agg(host.make()); return 4; }
+  catch e Failure {
+    switch e {
+    case Failure.Bad(values):
+      if host.same(values[0], values[0]) != true { return 5; }
+    }
+  }
+  try { let pair = Pair(p: host.make(), n: fail_partial()); return 6; }
+  catch e Bad { host.note(6); }
+  let d = host.make();
+  let deferred = keep_deferred(move d);
+  if host.same(deferred, deferred) != true { return 7; }
+  host.note(9);
+  return 0;
+}
+'''
+
+    def foreign_cleanup_case(row):
+        project = r.project('foreign-cleanup',
+                            {'src/main.lang': foreign_cleanup_source}, binding)
+        out, _ = r.emit(row, project, binding)
+        observed, events = r.observe(row, out)
+        require(observed['main_return'] == 0, observed)
+        require(observed['owners'] == [], observed)
+        require(all(not borrows for borrows in observed['borrows']), observed)
+        require(not error_events(events), events)
+        metadata = json.loads((out / 'metadata.json').read_text())
+        entry = '_f' + str(metadata['entry_symbol'])
+        for name in ('a', 'b', 'c', 'd'):
+            states = [state for state in observed['owner_states']
+                      if state['function'] == entry and state['name'] == name]
+            require(any(state['active'] for state in states), states)
+            require(states and not states[-1]['active'], states)
+        operations = [op for op in observed['operations']
+                      if op[0] in ('host', 'foreign_drop')]
+        def index_of(value, start=0):
+            for index in range(start, len(operations)):
+                if operations[index] == value:
+                    return index
+            raise AssertionError((value, operations))
+        failed_arg = index_of(['host', 'ARG_FAIL', 2])
+        note_after_arg = index_of(['host', 'NOTE', 2], failed_arg)
+        require(any(op == ['foreign_drop']
+                    for op in operations[failed_arg + 1:note_after_arg]),
+                operations)
+        made_b = index_of(['host', 'MAKE'], index_of(['host', 'NOTE', 2]))
+        note_after_c = index_of(['host', 'NOTE', 3], made_b)
+        require(any(op == ['foreign_drop']
+                    for op in operations[made_b + 1:note_after_c]), operations)
+        note_after_partial = index_of(['host', 'NOTE', 6], note_after_c)
+        partial_make = max(index for index, op in enumerate(operations)
+                           if op == ['host', 'MAKE'] and index < note_after_partial)
+        require(any(op == ['foreign_drop']
+                    for op in operations[partial_make + 1:note_after_partial]),
+                operations)
+        note_after_defer = index_of(['host', 'NOTE', 7], note_after_partial)
+        defer_make = max(index for index, op in enumerate(operations)
+                         if op == ['host', 'MAKE'] and index < note_after_defer)
+        require(['host', 'SAME', True] in operations[defer_make + 1:note_after_defer],
+                operations)
+        note_after_return = index_of(['host', 'NOTE', 9], note_after_defer)
+        require(any(op == ['foreign_drop']
+                    for op in operations[note_after_defer + 1:note_after_return]),
+                operations)
+        require(len(observed['foreign_copies']) > 0, observed)
+        require(len(observed['foreign_drops']) >= 5, observed)
+        row['observation'] = observed
+
+    r.add('foreign-ownership-cleanup', foreign_cleanup_case)
+
+    def foreign_rejections_case(row):
+        cases = [
+            ('inout', 'func f(x inout host.Probe) Unit { } '
+             'func main() i32 { return 0; }', 'E_CAPABILITY_UNAVAILABLE'),
+            ('partial-move', 'struct S { p host.Probe; } '
+             'func main() i32 throws py.Error { let s = S(p: host.make()); '
+             'let p = move s.p; return 0; }', 'E_CAPABILITY_UNAVAILABLE'),
+            ('undeclared-member', 'func main() i32 throws py.Error { '
+             'let p = host.make(); p.missing(); return 0; }',
+             'E_CAPABILITY_UNAVAILABLE'),
+            ('read-after-move', 'func main() i32 throws py.Error { '
+             'let p = host.make(); let q = move p; host.same(p, q); '
+             'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
+            ('double-move', 'func main() i32 throws py.Error { '
+             'let p = host.make(); let q = move p; let r = move p; '
+             'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
+            ('borrow-alias', 'func f(a host.Probe, b move host.Probe) i32 '
+             '{ return 0; } func main() i32 throws py.Error { '
+             'let p = host.make(); return f(p, move p); }', 'E_CALL_ARGUMENT'),
+            ('move-borrowed-parameter', 'func f(p host.Probe) i32 { '
+             'let q = move p; return 0; } func main() i32 throws py.Error { '
+             'return f(host.make()); }', 'E_CALL_ARGUMENT'),
+        ]
+        for name, body, code in cases:
+            source = ('package main; import "std/py" as py; '
+                      'import "t10host" as host; ' + body)
+            project = r.project('foreign-reject-' + name,
+                                {'src/main.lang': source}, binding)
+            out, result = r.emit(row, project, binding, expect_success=False)
+            require(result['exit'] == 1, result)
+            data = json.loads(result['stdout'])
+            codes = [d['code'] for d in data['diagnostics']]
+            require(code in codes, (name, data))
+            require(not (out / 'program.py').exists(), result)
+            require(not (out / 'langrt.py').exists(), result)
+        source = ('package main; import "std/py" as py; '
+                  'import "t10host" as host; '
+                  'func main() i32 throws py.Error { let p = host.make(); '
+                  'let values Vec[host.Probe] = [p]; return 0; }')
+        project = r.project('foreign-reject-32bit',
+                            {'src/main.lang': source}, binding)
+        manifest = (project / 'lang.toml').read_text().replace(
+            'word_bits = 64', 'word_bits = 32')
+        (project / 'lang.toml').write_text(manifest)
+        out, result = r.emit(row, project, binding, expect_success=False)
+        require(result['exit'] == 1, result)
+        data = json.loads(result['stdout'])
+        require(any(d['code'] == 'E_CAPABILITY_UNAVAILABLE'
+                    for d in data['diagnostics']), data)
+        require(not (out / 'program.py').exists(), result)
+        row['rejections'] = cases
+
+    r.add('foreign-ownership-rejections', foreign_rejections_case)
+
     internal_helper = '''package helper;
 import "std/py" as py;
 import "t10host" as host;

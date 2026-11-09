@@ -60,6 +60,14 @@ void rejected(const std::string &text, const std::string &name, const std::strin
   need(!r.success() && !r.value && has(r, code), name + " expected " + code + " got " + diagnostics(r));
   ++probes; std::cout << "passed " << name << ' ' << code << '\n';
 }
+std::string_view m_name(const HirModule &m, SymbolId id) {
+  return m.resolved->symbols.at(id.value).name;
+}
+const HirFunction &named_function(const HirModule &m, std::string_view name) {
+  for (const auto &f : m.functions)
+    if (m.resolved->symbols.at(f.symbol.value).name == name) return f;
+  throw std::runtime_error("missing function " + std::string(name));
+}
 size_t foreign_call(const HirModule &m, const std::string &identity) {
   for (size_t i=0;i<m.nodes.size();++i)
     if (auto c=std::get_if<Call>(&m.nodes[i].data); c && c->binding &&
@@ -224,10 +232,85 @@ int main(int argc, char **argv) try {
   for(size_t i=0;i<bad_args.size();++i) rejected(imports+"func f() Unit throws py.Error { "+bad_args[i].first+"; }","argument-reject-"+std::to_string(i),bad_args[i].second);
   rejected(imports+"func f() Unit { np.float32; }","unhandled-read","E_EFFECT_UNHANDLED");
   rejected(imports+"func f() Unit { np.linspace(-1.0,1.0); }","unhandled-call","E_EFFECT_UNHANDLED");
-  rejected(imports+"func f(x torch.Tensor) Unit { let v=[x]; }","foreign-vec","E_CAPABILITY_UNAVAILABLE");
-  rejected(imports+"struct S { value torch.Tensor; }","foreign-struct","E_CAPABILITY_UNAVAILABLE");
+  // Behavior update: these three sources were formerly rejected before the
+  // shared ownership rules handled declared Python host references.  Keep the
+  // original source bytes and assert their now-defined copy/move behavior.
+  auto foreign_vec = accepted(imports+"func f(x torch.Tensor) Unit { let v=[x]; }","foreign-vec");
+  auto foreign_struct = accepted(imports+"struct S { value torch.Tensor; }","foreign-struct");
+  auto foreign_move = accepted(imports+"func f(x torch.Tensor) Unit { let v=x; let z=move v; }","foreign-move-local");
+  auto foreign_modes = accepted(imports+"func relay[T](value move T) T { return move value; } func keep(value move torch.Tensor) torch.Tensor { return value; } func apply(cb func(move torch.Tensor) torch.Tensor,value move torch.Tensor) torch.Tensor { return cb(move value); } func two(a move torch.Tensor,b move torch.Tensor) torch.Tensor { let a2=a; let b2=b; let x=move a2; return x; } func use() Unit throws py.Error { let x=torch.tensor(np.linspace(-1.0,1.0),dtype:torch.float32,device:\"cpu\"); let y=relay[torch.Tensor](move x); let z=keep(move y); let f=keep; let w=apply(f,move z); }","foreign-move-modes");
+  auto foreign_generic_impl = accepted(imports+"struct Box[T]{value T;} impl[T] Box[T]{func keep[U](self Self,value move U)U{return move value;}} func use(x torch.Tensor)torch.Tensor{let local=x;let b=Box[torch.Tensor](value:local);return b.keep[torch.Tensor](move local);}","foreign-generic-impl");
+  need(check_backend_capabilities(foreign_modes).success(),"Python/64 foreign move modes");
+  need(check_backend_capabilities(foreign_generic_impl).success(),"Python/64 foreign generic impl move");
+  auto native_foreign=foreign_vec;
+  auto foreign_native_resolved=std::make_shared<modules::ResolvedProject>(*native_foreign.resolved);
+  auto foreign_native_project=std::make_shared<modules::Project>(*foreign_native_resolved->project);
+  foreign_native_project->backend="native";foreign_native_resolved->project=foreign_native_project;
+  native_foreign.resolved=foreign_native_resolved;native_foreign.config.backend=Backend::native;
+  auto rejected_native=check_backend_capabilities(native_foreign);
+  need(!rejected_native.success()&&has(rejected_native,"E_CAPABILITY_UNAVAILABLE"),
+       "native foreign Vec/move not rejected");
+  auto profile32=foreign_vec;
+  auto profile32_resolved=std::make_shared<modules::ResolvedProject>(*profile32.resolved);
+  auto profile32_project=std::make_shared<modules::Project>(*profile32_resolved->project);
+  profile32_project->word_bits=32;profile32_resolved->project=profile32_project;
+  profile32.resolved=profile32_resolved;profile32.config.word_bits=32;
+  auto rejected_32=check_backend_capabilities(profile32);
+  need(!rejected_32.success()&&has(rejected_32,"E_CAPABILITY_UNAVAILABLE"),
+       "32-bit foreign Vec/move not rejected: "+diagnostics(rejected_32));
+  TypeId vec_type;
+  for(const auto &n:foreign_vec.nodes)
+    if(n.kind()==NodeKind::vec_init) vec_type=n.type;
+  need(vec_type.value && classify_value(foreign_vec,vec_type).kind==ValueKind::vec,"foreign Vec ownership");
+  need(classify_value(foreign_struct,foreign_struct.nominals.at(0).fields.at(0).type).kind==ValueKind::foreign_reference,"foreign field ownership");
+  const auto &two = named_function(foreign_modes,"two");
+  size_t two_move = foreign_modes.nodes.size();
+  for(size_t i=0;i<foreign_modes.nodes.size();++i) {
+    const auto &n=foreign_modes.nodes[i];
+    if(n.kind()==NodeKind::move &&
+       foreign_modes.scopes.at(n.scope.value).function==two.symbol) {
+      two_move=i; break;
+    }
+  }
+  need(two_move<foreign_modes.nodes.size(),"foreign local move node");
+  bad(foreign_modes,"foreign-move-source",[&](auto &m){
+    std::get<Move>(m.nodes[two_move].data).binding=named_function(m,"two").parameters.at(0).symbol;
+  },true);
+  size_t keep_call=foreign_modes.nodes.size();
+  for(size_t i=0;i<foreign_modes.nodes.size();++i) {
+    auto c=std::get_if<Call>(&foreign_modes.nodes[i].data);
+    if(c && c->direct_symbol &&
+       m_name(foreign_modes,*c->direct_symbol)=="keep" && !c->args.empty() &&
+       c->args[0].mode==ParamMode::move) { keep_call=i; break; }
+  }
+  need(keep_call<foreign_modes.nodes.size(),"foreign move call node");
+  bad(foreign_modes,"foreign-call-mode",[&](auto &m){
+    std::get<Call>(m.nodes[keep_call].data).args[0].mode=ParamMode::ordinary;
+  },true);
+  size_t relay_instance=foreign_modes.instances.size();
+  for(size_t i=0;i<foreign_modes.instances.size();++i)
+    if(m_name(foreign_modes,foreign_modes.instances[i].origin)=="relay") {
+      relay_instance=i; break;
+    }
+  need(relay_instance<foreign_modes.instances.size(),"foreign generic instance");
+  bad(foreign_modes,"foreign-instance-substitution",[&](auto &m){
+    Type i64; i64.kind=TypeKind::SignedInt; i64.bits=64;
+    m.instances[relay_instance].type_args.at(0)=m.types.intern(i64);
+  },true);
+  bad(foreign_struct,"foreign-field-type",[&](auto &m){
+    Type i64; i64.kind=TypeKind::SignedInt; i64.bits=64;
+    m.nominals.at(0).fields.at(0).type=m.types.intern(i64);
+  },true);
+  bad(foreign_vec,"foreign-vec-element-type",[&](auto &m){
+    Type i64; i64.kind=TypeKind::SignedInt; i64.bits=64;
+    Type vec; vec.kind=TypeKind::Vec; vec.type_args={m.types.intern(i64)};
+    for(auto &n:m.nodes)
+      if(n.kind()==NodeKind::vec_init) { n.type=m.types.intern(vec); break; }
+  },true);
   rejected(imports+"func f(x torch.Tensor) Unit { let v=move x; }","foreign-move-borrowed","E_CALL_ARGUMENT");
-  rejected(imports+"func f(x torch.Tensor) Unit { let v=x; let z=move v; }","foreign-move-local","E_CAPABILITY_UNAVAILABLE");
+  rejected(imports+"func f() Unit throws py.Error { let v=np.linspace(-1.0,1.0); let z=move v; let q=v; }","foreign-read-after-move","E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected(imports+"func f() Unit throws py.Error { let v=np.linspace(-1.0,1.0); let z=move v; let q=move v; }","foreign-double-move","E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected(imports+"struct S { value torch.Tensor; } func f(s S) Unit { let v=move s.value; }","foreign-partial-move","E_CAPABILITY_UNAVAILABLE");
   rejected(imports+"func f() Unit { let v=np.linspace; }","foreign-function-escape","E_CAPABILITY_UNAVAILABLE");
   rejected(imports+"func f(x torch.Tensor) Unit { x[0]; }","foreign-index","E_CAPABILITY_UNAVAILABLE");
   rejected(imports+"func f(x torch.Tensor) Unit { x.device; }","foreign-data-member","E_CAPABILITY_UNAVAILABLE");
