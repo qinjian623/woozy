@@ -1,5 +1,7 @@
 # T07 泛型与聚合类型
 
+设计范围按 2026-11-09 用户确认：保持 Go、Java 一类类型参数和约束，不追求 C++ 模板特性。实现常规泛型函数、类型、方法及 trait 约束，不增加非类型模板参数、变参模板、特化/部分特化或 SFINAE。下文的“模板”“实例”是编译器内部记录；按具体类型生成代码不要求源码支持模板元编程。
+
 契约 compiler-dev/1。当前实现检查值struct/enum、泛型函数/类型、名义trait/显式impl（含泛型trait的完整应用和方法自身泛型）及静态方法选择。新增后端执行单独检查，不由静态通过推定。
 
 `sema::check_types`返回有类型的HirModule；`hir::verify_types`检查类型、声明、作用域、实例身份和控制流。这个结果不能直接交给后端。`sema::check_project`继续通过唯一的`hir::verify`发布只读VerifiedHirModule；发布前还检查当前后端已支持的操作。合法但后端尚未实现的操作返回E_CAPABILITY_UNAVAILABLE，损坏HIR返回E_IR_INVALID。
