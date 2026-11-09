@@ -1,0 +1,33 @@
+package app;
+
+enum Err { Bad; }
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func bad(log inout i64) i32 throws Err {
+    mark(inout log, 2);
+    throw Err.Bad;
+}
+
+func consume(entry inout i64, values move Vec[Vec[i32]], first i32,
+             second i32) i32 {
+    entry = entry * 10 + 4;
+    return values[0][0] + values[1][0] + first + second;
+}
+
+func main() i32 {
+    const F func(inout i64, move Vec[Vec[i32]], i32, i32) i32 = consume;
+    const NEXT func(inout i64, move Vec[Vec[i32]], i32, i32) i32 = F;
+    var log i64 = 0;
+    var entry i64 = 0;
+    let owned Vec[Vec[i32]] = [[1], [2]];
+    try {
+        let ignored = NEXT(inout entry, move owned, bad(inout log), 0);
+        return 1;
+    } catch error Err {
+        mark(inout log, 3);
+    }
+    return owned[0][0];
+}

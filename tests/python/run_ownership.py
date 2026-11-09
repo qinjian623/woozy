@@ -142,6 +142,15 @@ def main():
             if ident == 'error-arg-interrupt':
                 sequence = [x for x in data['operations'] if x[0] in ('event', 'free')]
                 assert sequence == [['event', 2], ['free', 0], ['event', 3]], sequence
+            if ident == 'recursive-for-in-early-exits':
+                assert data['events'] == [10, 20, 10, 20, 10, 20], data
+                assert len(data['allocations']) == 7 and len(data['frees']) == 7, data
+                for name in ('break_log', 'return_log', 'throw_log'):
+                    assert ['binding', name, 1020] in data['operations'], data
+                events = [i for i, x in enumerate(data['operations']) if x[0] == 'event']
+                frees = [i for i, x in enumerate(data['operations']) if x[0] == 'free']
+                assert len(events) == 6 and len(frees) == 7, data
+                assert min(frees) > max(events), data
             if 'sequence' in expected:
                 sequence = [x for x in data['operations'] if x[0] in ('event', 'free')]
                 assert sequence == expected['sequence'], sequence

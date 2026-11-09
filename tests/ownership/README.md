@@ -10,7 +10,7 @@ root_evidence_correction_count: `1`
 
 初版 task 已 rejected，不作为 accepted dependency。初版 root 证据审查后只做一次修正：`defer-before-destroy` 使用显式 `i64(values[0])`；`for-in-element-copy` 增加写后 `value` 断言并让首轮修改后续槽。其余 16 份源码和 18 份 manifest 与初版快照逐字一致。
 
-当前 31 个项目的 `expected_static` 由 `sema.t09` 实际执行；Native 和 Python ownership runner 读取同一清单，构建/运行、真实 alloc/free 与语言引用计数观察由 `native.ownership`、`python.ownership` 执行。`recursive-generic-growth` 以固定预算 `E_CAPABILITY_UNAVAILABLE` 拒绝；三个无限按值布局项目保持 `E_TYPE_MISMATCH`；`recursive-cycle-retained` 不要求零存活，必须单独观察语言 refs 保持非零。
+当前 32 个项目的 `expected_static` 由 `sema.t09` 实际执行；Native 和 Python ownership runner 读取同一清单，构建/运行、真实 alloc/free 与语言引用计数观察由 `native.ownership`、`python.ownership` 执行。新增 `recursive-for-in-early-exits` 检查递归元素遍历的 continue、break、return 和 typed throw。`recursive-generic-growth` 以固定预算 `E_CAPABILITY_UNAVAILABLE` 拒绝；三个无限按值布局项目保持 `E_TYPE_MISMATCH`；`recursive-cycle-retained` 不要求零存活，必须单独观察语言 refs 保持非零。
 
 ## 布局与计数
 
@@ -23,7 +23,7 @@ tests/ownership/
     <case-id>/src/main.lang
 ```
 
-`case_count = 31`；静态应接受 `accepted_count = 20`（包含运行时 Panic 的 `panic-vec-index` 与有意保持存活的 `recursive-cycle-retained`），静态应拒绝 `reject_count = 11`。初版项目使用包名 `main`；递归值批次沿用项目清单的 `package app;`。每个项目都是独立 `lang.toml` 项目。
+`case_count = 32`；静态应接受 `accepted_count = 21`（包含运行时 Panic 的 `panic-vec-index` 与有意保持存活的 `recursive-cycle-retained`），静态应拒绝 `reject_count = 11`。初版项目使用包名 `main`；递归值批次沿用项目清单的 `package app;`。每个项目都是独立 `lang.toml` 项目。
 
 初版修正只改了两份源码：
 

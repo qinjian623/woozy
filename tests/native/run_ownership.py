@@ -132,6 +132,19 @@ def main():
      last_free=max(i for i,x in enumerate(merged) if x[0]=='vec' and x[1]==5)
      assert defer_mark<last_free,merged
      assert probe_return>defer_mark,merged
+    if ident=='recursive-for-in-early-exits':
+     assert [x[1] for x in obs if x[0]==1]==[10,20,10,20,10,20],obs
+     assert [x[2] for x in obs if x[0]==1]==[10,1020,10,1020,10,1020],obs
+     assert sorted(length for _,length in allocations)==[0,0,0,1,1,1,3],allocations
+     roots=[identity for identity,length in allocations if length==3]
+     assert len(roots)==1,allocations
+     root=roots[0]
+     marks=[i for i,x in enumerate(merged) if x[0]=='obs']
+     last_frees=[i for i,x in enumerate(merged) if x[0]=='vec' and x[1]==5]
+     assert len(marks)==6 and len(last_frees)==7,merged
+     assert min(last_frees)>max(marks),merged
+     assert [x for x in merged if (x[0]=='vec' and x[2]==root and x[1] in (6,7)) or x[0]=='obs']==[
+       ('vec',6,root),('obs',1,10,10),('obs',1,20,1020),('vec',7,root)]*3,merged
     if ident=='defer-before-destroy':assert [x[2] for x in obs if x[0]==2]==[17],obs
     if ident=='owned-return-error-defer':assert [x[1] for x in obs if x[0]==1]==[2,1,4,3],obs
     if ident=='computed-owning-once-defer-order':

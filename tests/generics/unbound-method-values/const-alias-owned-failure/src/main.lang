@@ -1,0 +1,59 @@
+package app;
+
+enum Err { Bad; }
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func bad(log inout i64) i32 throws Err {
+    mark(inout log, 2);
+    throw Err.Bad;
+}
+
+func later(log inout i64) i32 {
+    mark(inout log, 9);
+    return 5;
+}
+
+func consume(entry inout i64, values move Vec[Vec[i32]], first i32,
+             second i32) i32 {
+    entry = entry * 10 + 4;
+    if values[0][0] != 1 || values[1][0] != 2 { return 7; }
+    return first + second;
+}
+
+func alias_failure() i32 {
+    const F func(inout i64, move Vec[Vec[i32]], i32, i32) i32 = consume;
+    const NEXT func(inout i64, move Vec[Vec[i32]], i32, i32) i32 = F;
+    var log i64 = 0;
+    var entry i64 = 0;
+    let owned Vec[Vec[i32]] = [[1], [2]];
+    try {
+        let ignored = NEXT(inout entry, move owned, bad(inout log),
+                          later(inout log));
+        return 1;
+    } catch error Err {
+        mark(inout log, 3);
+    }
+    if log != 23 { return 2; }
+    if entry != 0 { return 3; }
+    return 0;
+}
+
+func direct_control() i32 {
+    var entry i64 = 0;
+    let owned Vec[Vec[i32]] = [[1], [2]];
+    let result = consume(inout entry, move owned, 1, 2);
+    if entry != 4 { return 1; }
+    if result != 3 { return 2; }
+    return 0;
+}
+
+func main() i32 {
+    let a = alias_failure();
+    if a != 0 { return 10 + a; }
+    let b = direct_control();
+    if b != 0 { return 20 + b; }
+    return 0;
+}

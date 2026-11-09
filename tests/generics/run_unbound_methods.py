@@ -11,27 +11,34 @@ import sys
 
 sys.dont_write_bytecode = True
 
-NATIVE_CASES = {'core', 'move-inout', 'throws'}
+NATIVE_CASES = {'core', 'move-inout', 'throws', 'const-alias-owned-failure'}
 SIMPLE_CASES = {'cross-package', 'public-const-phantom', 'local-const-aliases',
                 'local-const-call-controls'}
-EXPECTED_ALLOCATIONS = {'core': 2, 'move-inout': 6, 'throws': 6}
-EXPECTED_VEC_ALLOCATIONS = {'core': 1, 'move-inout': 3, 'throws': 3}
-EXPECTED_NATIVE_IR_REJECTIONS = {'core': 11, 'move-inout': 13, 'throws': 11}
+EXPECTED_ALLOCATIONS = {'core': 2, 'move-inout': 6, 'throws': 6,
+                        'const-alias-owned-failure': 12}
+EXPECTED_VEC_ALLOCATIONS = {'core': 1, 'move-inout': 3, 'throws': 3,
+                            'const-alias-owned-failure': 6}
+EXPECTED_NATIVE_IR_REJECTIONS = {'core': 11, 'move-inout': 13, 'throws': 11,
+                                 'const-alias-owned-failure': 13}
 EXPECTED_MUTATIONS = {
     'core': set(),
     'move-inout': {'actual-self-inout-parameter-slot-not-inout'},
     'throws': set(),
+    'const-alias-owned-failure': {
+        'move-argument-take-before-later-throwing-argument'},
 }
 EXPECTED_EVENTS = {
     'core': [],
     'move-inout': [],
     'throws': [(8, 8), (9, 89), (1, 1), (6, 16), (2, 162), (1, 1621),
                (6, 16216), (3, 162163), (4, 1621634), (7, 16216347)],
+    'const-alias-owned-failure': [(2, 2), (3, 23)],
 }
 EXPECTED_PYTHON_EVENTS = {
     'core': [],
     'move-inout': [],
     'throws': [8, 9, 1, 6, 2, 1, 6, 3, 4, 7],
+    'const-alias-owned-failure': [2, 3],
 }
 STRING_EXPECTED = {
     'probe_value': '值\0😀'.encode(),
@@ -67,6 +74,7 @@ REJECTS = {
     'reject-local-const-out-of-scope': {'E_NAME_NOT_FOUND'},
     'reject-local-const-readonly': {'E_TYPE_MISMATCH'},
     'reject-local-const-cycle': {'E_CONSTANT_CYCLE'},
+    'reject-const-alias-owned-after-move': {'E_OWNERSHIP_USE_AFTER_MOVE'},
 }
 BEFORE = ('ordinary-self', 'static-factory', 'impl-own-generics',
           'constrained-full-trait')
@@ -145,7 +153,7 @@ def elf_checks(program):
 def parse_observer(text):
     live, allocations, frees = {}, [], []
     vec_live, vec_allocations, vec_frees = {}, [], []
-    events = []
+    events, sequence = [], []
     for line in text.splitlines():
         fields = line.split(':')
         if fields[0] == 'ALLOC':
@@ -154,32 +162,39 @@ def parse_observer(text):
             token = len(allocations)
             live[pointer] = token
             allocations.append(dict(token=token, pointer=pointer))
+            sequence.append(('alloc', token))
         elif fields[0] == 'FREE':
             pointer = fields[1]
             assert pointer in live, line
-            frees.append(live.pop(pointer))
+            token = live.pop(pointer)
+            frees.append(token)
+            sequence.append(('free', token))
         elif fields[0] == 'VEC':
             event, identity, detail = int(fields[1]), fields[2], int(fields[3])
             if event == 1:
                 assert identity not in vec_live, line
-                vec_live[identity] = dict(token=len(vec_allocations),
-                                          length=detail, drops=[])
+                token = len(vec_allocations)
+                vec_live[identity] = dict(token=token, length=detail, drops=[])
                 vec_allocations.append(identity)
+                sequence.append(('vec_alloc', token))
             elif event == 5:
                 value = vec_live.pop(identity)
                 assert value['drops'] == list(range(value['length'] - 1, -1, -1)), value
                 vec_frees.append(value['token'])
+                sequence.append(('vec_free', value['token']))
             else:
                 assert identity in vec_live, line
                 if event == 4:
                     vec_live[identity]['drops'].append(detail)
         elif fields[0] == 'OBS':
-            events.append((int(fields[2]), int(fields[3])))
+            value = (int(fields[2]), int(fields[3]))
+            events.append(value)
+            sequence.append(('obs',) + value)
         else:
             raise AssertionError(line)
     return dict(allocations=allocations, frees=frees, live=live,
                 vec_allocations=vec_allocations, vec_frees=vec_frees,
-                vec_live=vec_live, events=events)
+                vec_live=vec_live, events=events, sequence=sequence)
 
 
 def assert_observer(case, data):
@@ -189,6 +204,25 @@ def assert_observer(case, data):
     assert len(data['vec_allocations']) == EXPECTED_VEC_ALLOCATIONS[case], data
     assert sorted(data['vec_frees']) == list(range(len(data['vec_allocations']))), data
     assert data['events'] == EXPECTED_EVENTS[case], data
+    if case == 'const-alias-owned-failure':
+        sequence = data['sequence']
+        bad = sequence.index(('obs', 2, 2))
+        catch = sequence.index(('obs', 3, 23))
+        for token in range(3):
+            free = sequence.index(('vec_free', token))
+            assert bad < free < catch, (token, sequence)
+        for token in range(3, 6):
+            assert sequence.index(('vec_free', token)) > catch, (token, sequence)
+        for token, position in ((token, sequence.index(('alloc', token)))
+                                for token in range(len(data['allocations']))):
+            free = sequence.index(('free', token))
+            if position < bad:
+                assert bad < free < catch, (token, sequence)
+            elif position > catch:
+                assert free > catch, (token, sequence)
+            else:
+                raise AssertionError(('allocation between bad and catch',
+                                      token, sequence))
 
 
 def native_cases(args, library, case, manifest, sources, report):
@@ -273,6 +307,16 @@ def python_cases(args, library, case, manifest, sources, report):
     assert len(data['allocations']) == EXPECTED_VEC_ALLOCATIONS[case], data
     assert sorted(data['frees']) == sorted(item['object']
                                           for item in data['allocations']), data
+    if case == 'const-alias-owned-failure':
+        operations = data['operations']
+        bad = operations.index(['event', 2])
+        catch = operations.index(['event', 3])
+        for object_id in range(3):
+            free = operations.index(['free', object_id])
+            assert bad < free < catch, (object_id, operations)
+        for object_id in range(3, 6):
+            assert operations.index(['free', object_id]) > catch, \
+                (object_id, operations)
     row['python_observation'] = data
     row['generated_sha256'] = {
         name: digest(target / name)

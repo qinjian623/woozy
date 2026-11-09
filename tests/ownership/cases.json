@@ -2,8 +2,8 @@
   "schema": "compiler-dev/ownership-fixtures/1",
   "contract": "compiler-dev/1",
   "root_revision": "e808169",
-  "case_count": 31,
-  "accepted_count": 20,
+  "case_count": 32,
+  "accepted_count": 21,
   "reject_count": 11,
   "accepted_note": "accepted_count 包含 panic-vec-index：其源码未来应通过静态检查，但运行时必须 Panic；不等于运行通过。",
   "stage_policy": {
@@ -929,6 +929,31 @@
         "cycle": true,
         "status": "not_run",
         "reason": "经 Vec 整元素替换形成语言强引用自环；保留存活，不要求零泄漏。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-for-in-early-exits",
+      "purpose": "递归拥有元素的 for-in 在 continue 后分别由 break/return/typed throw 退出；每轮 defer 读取当前元素子节点，第三项不执行。",
+      "specification": "docs/SEMANTICS.md §2 for-in 元素绑定、§7.1 每轮元素逻辑拥有值、§9 defer 与 continue/break/return/typed throw 的块退出清理；reviews/core-next-after-9241d49-20261109.md 第 2 项",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-for-in-early-exits/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-for-in-early-exits/src/main.lang",
+      "source_sha256": "ff016e3d5c0d1542c762a7f5c3de0a59ad8e8aed9c89d8fd3409c384ebe02f04",
+      "source_bytes": 1615,
+      "runtime_expected": {
+        "main_return": 0,
+        "events": [
+          10,
+          20,
+          10,
+          20,
+          10,
+          20
+        ],
+        "status": "not_run",
+        "reason": "三路各自从 log=0 开始，首项 continue 的 defer 记 10，第二项 break/return/throw 的 defer 记 20，故每路 log=1020；break 返回 99，return 返回元素值 2，throw 只进入 code=2 的对应 catch，第三项 30 不执行。defer 中的元素子 Vec 必须在事件时仍存活，退出后每次迭代结束，最后 7 个 Vec 的真实分配全部释放且无重复 free。实际结果见 checks/recursive-for-in-early-exits-flash-20261109/。"
       }
     }
   ],

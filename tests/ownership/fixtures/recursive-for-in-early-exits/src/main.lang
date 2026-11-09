@@ -1,0 +1,73 @@
+package app;
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+enum Failure {
+    Stopped(code i32);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 100 + digit;
+}
+
+func scan(root Node, mode i32, log inout i64) i32 throws Failure {
+    for node in root.children {
+        defer {
+            mark(inout log, i64(node.children[0].value));
+        }
+        if node.value == 1 {
+            continue;
+        }
+        if mode == 0 {
+            break;
+        }
+        if mode == 1 {
+            return node.value;
+        }
+        throw Failure.Stopped(code: node.value);
+    }
+    return 99;
+}
+
+func main() i32 throws Failure {
+    let root = Node(value: 0, children: [
+        Node(value: 1, children: [Node(value: 10, children: [])]),
+        Node(value: 2, children: [Node(value: 20, children: [])]),
+        Node(value: 3, children: [Node(value: 30, children: [])])
+    ]);
+    var break_log i64 = 0;
+    if scan(root, 0, inout break_log) != 99 {
+        return 1;
+    }
+    if break_log != 1020 {
+        return 2;
+    }
+    var return_log i64 = 0;
+    if scan(root, 1, inout return_log) != 2 {
+        return 3;
+    }
+    if return_log != 1020 {
+        return 4;
+    }
+    var throw_log i64 = 0;
+    var caught i32 = 0;
+    try {
+        let result = scan(root, 2, inout throw_log);
+        return 5;
+    } catch error Failure {
+        switch error {
+            case Failure.Stopped(code):
+                if code != 2 {
+                    return 6;
+                }
+        }
+        caught = 1;
+    }
+    if caught != 1 || throw_log != 1020 {
+        return 7;
+    }
+    return 0;
+}
