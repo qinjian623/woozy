@@ -1,0 +1,99 @@
+package app;
+
+enum Failure { Stop; }
+
+func dormant(enter bool, bound i32) i32 throws Failure {
+    var total i32 = 0;
+    if enter {
+        try {
+            defer { total += 1; }
+            if bound < 0 { throw Failure.Stop; }
+            for var i00 i32 = 0; i00 < bound; i00 += 1 {
+                defer { total += 1; }
+                for var i01 i32 = 0; i01 < bound; i01 += 1 {
+                    defer { total += 1; }
+                    for var i02 i32 = 0; i02 < bound; i02 += 1 {
+                        defer { total += 1; }
+                        for var i03 i32 = 0; i03 < bound; i03 += 1 {
+                            defer { total += 1; }
+                            for var i04 i32 = 0; i04 < bound; i04 += 1 {
+                                defer { total += 1; }
+                                for var i05 i32 = 0; i05 < bound; i05 += 1 {
+                                    defer { total += 1; }
+                                    for var i06 i32 = 0; i06 < bound; i06 += 1 {
+                                        defer { total += 1; }
+                                        for var i07 i32 = 0; i07 < bound; i07 += 1 {
+                                            defer { total += 1; }
+                                            for var i08 i32 = 0; i08 < bound; i08 += 1 {
+                                                defer { total += 1; }
+                                                for var i09 i32 = 0; i09 < bound; i09 += 1 {
+                                                    defer { total += 1; }
+                                                    for var i10 i32 = 0; i10 < bound; i10 += 1 {
+                                                        defer { total += 1; }
+                                                        for var i11 i32 = 0; i11 < bound; i11 += 1 {
+                                                            defer { total += 1; }
+                                                            try {
+                                                                defer { total += 1; }
+                                                                for var i12 i32 = 0; i12 < bound; i12 += 1 {
+                                                                    defer { total += 1; }
+                                                                    for var i13 i32 = 0; i13 < bound; i13 += 1 {
+                                                                        defer { total += 1; }
+                                                                        for var i14 i32 = 0; i14 < bound; i14 += 1 {
+                                                                            defer { total += 1; }
+                                                                            for var i15 i32 = 0; i15 < bound; i15 += 1 {
+                                                                                defer { total += 1; }
+                                                                                for var i16 i32 = 0; i16 < bound; i16 += 1 {
+                                                                                    defer { total += 1; }
+                                                                                    for var i17 i32 = 0; i17 < bound; i17 += 1 {
+                                                                                        defer { total += 1; }
+                                                                                        for var i18 i32 = 0; i18 < bound; i18 += 1 {
+                                                                                            defer { total += 1; }
+                                                                                            for var i19 i32 = 0; i19 < bound; i19 += 1 {
+                                                                                                defer { total += 1; }
+                                                                                                for var i20 i32 = 0; i20 < bound; i20 += 1 {
+                                                                                                    defer { total += 1; }
+                                                                                                    for var i21 i32 = 0; i21 < bound; i21 += 1 {
+                                                                                                        defer { total += 1; }
+                                                                                                        for var i22 i32 = 0; i22 < bound; i22 += 1 {
+                                                                                                            defer { total += 1; }
+                                                                                                            for var i23 i32 = 0; i23 < bound; i23 += 1 {
+                                                                                                                defer { total += 1; }
+                                                                                                                throw Failure.Stop;
+                                                                                                            }
+                                                                                                        }
+                                                                                                    }
+                                                                                                }
+                                                                                            }
+                                                                                        }
+                                                                                    }
+                                                                                }
+                                                                            }
+                                                                        }
+                                                                    }
+                                                                }
+                                                            } catch inner Failure {
+                                                                defer { total += 1; }
+                                                                total += 1;
+                                                            }
+                                                        }
+                                                    }
+                                                }
+                                            }
+                                        }
+                                    }
+                                }
+                            }
+                        }
+                    }
+                }
+            }
+        } catch outer Failure {
+            total += 1000;
+        }
+    }
+    return total;
+}
+
+func main() i32 throws Failure {
+    return dormant(false, 1);
+}

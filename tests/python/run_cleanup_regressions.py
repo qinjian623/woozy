@@ -28,8 +28,12 @@ def main():
                               args.root / 'include/lang/backend/python.hpp',
                               args.root / 'runtime/python/langrt.py', fixture,
                               args.root / 'tests/python/fixtures/mixed-loop-cleanup.lang',
+                              args.root / 'tests/python/fixtures/outlining-recursive-replacement.lang',
+                              args.root / 'tests/python/fixtures/outlining-unentered.lang',
                               Path(__file__), Path(__file__).with_name('cleanup_regression_cases.py'),
-                              Path(__file__).with_name('observe_cleanup_regressions.py')]},
+                              Path(__file__).with_name('observe_cleanup_regressions.py'),
+                              Path(__file__).with_name('outlining_cases.py'),
+                              Path(__file__).with_name('observe_outlining.py')]},
                   shared_test_sha256={name: sha(args.root / name)
                     for name in ('src/hir/hir.cpp', 'tests/cleanup/static_test.cpp')},
                   not_run=['final integrated CLI/ASan/LLVM-off (root)', 'native T08 (native actor)'])
@@ -91,12 +95,20 @@ def main():
             assert emitted['returncode'] == 0 and not emitted['stderr'] and data['status'] == 'ok', emitted
             row['generated_sha256'] = {name: sha(generated / name)
                 for name in ('program.py', 'langrt.py', 'verified.hir')}
+            execution_dir = generated
+            if expected.get('outlined'):
+                execution_dir = args.out / 'formal' / ident
+                row['build'] = built = compile_command([args.cli, 'build', '--project', manifest,
+                    '--backend', 'python', '--format', 'json', '--out-dir', execution_dir])
+                assert built['returncode'] == 0 and not built['stderr'], built
+                assert all(sha(execution_dir / name) == sha(generated / name)
+                           for name in ('program.py', 'langrt.py')), 'formal CLI differs from helper'
             # Compile the complete emitted module with locked CPython even if
             # source main would not execute a deeply nested branch.
             code = 'from pathlib import Path;import sys;compile(Path(sys.argv[1]).read_bytes(),sys.argv[1],"exec")'
             row['cpython_compile'] = compiled = command([args.python, '-B', '-s', '-c', code,
-                                                         generated / 'program.py'])
-            row['runner'] = ran = command([args.python, '-B', '-s', generated / 'program.py'])
+                                                         execution_dir / 'program.py'])
+            row['runner'] = ran = command([args.python, '-B', '-s', execution_dir / 'program.py'])
             row['runtime'] = 'failed'
             assert compiled['returncode'] == 0 and not compiled['stderr'], compiled
             if 'panic' in expected:
@@ -121,6 +133,50 @@ def main():
             if 'panic' in expected:
                 assert actual['probe_panic'] == expected['panic'], actual
                 assert actual['probe_events'] == expected['events'], actual
+            if expected.get('outlined'):
+                metadata = json.loads((generated / 'metadata.json').read_text())
+                lines = (generated / 'program.py').read_text().splitlines()
+                mapped = {m['line']: m for m in metadata['source_map']}
+                definitions = [i for i, line in enumerate(lines, 1)
+                               if line.startswith('def _outline_')]
+                assert definitions, 'deep Source did not exercise outlining'
+                # Check actual generated line numbers and original Source
+                # spans after all helpers have been placed at module scope.
+                assert len(mapped) == len(metadata['source_map']), 'duplicate mapped line'
+                for number, entry in mapped.items():
+                    original_source = Path(entry['path']).read_bytes()
+                    assert 1 <= number <= len(lines), entry
+                    assert 0 <= entry['start_byte'] < entry['end_byte'] <= len(original_source), entry
+                    if 'raise _LangReturn(' in lines[number - 1]:
+                        assert original_source[entry['start_byte']:entry['end_byte']].lstrip().startswith(b'return'), entry
+                    if 'raise _LangLoopJump(' in lines[number - 1]:
+                        assert original_source[entry['start_byte']:entry['end_byte']].strip().rstrip(b';') in (b'break', b'continue'), entry
+                assert all(number in mapped for number in definitions), definitions
+                row['outlined_helpers'] = len(definitions)
+                row['source_map_entries'] = len(mapped)
+            if 'ownership' in expected:
+                row['owning_observe'] = observed = command([args.python, '-B', '-s',
+                    Path(__file__).with_name('observe_outlining.py'), generated])
+                assert observed['returncode'] == 0 and not observed['stderr'], observed
+                row['ownership'] = owning = json.loads(observed['stdout'])
+                wanted = expected['ownership']
+                assert not owning['alive'] and owning['frames_clean'] > 0, owning
+                assert len(owning['allocations']) == len(owning['frees']) == wanted['allocations'], owning
+                assert owning['iterations'] == dict(begin=wanted['iterations'], end=wanted['iterations']), owning
+                ordered = [op for op in owning['operations'] if op[0] in ('event', 'free')]
+                if 'sequence' in wanted:
+                    assert ordered == wanted['sequence'], ordered
+                if 'free_intervals' in wanted:
+                    intervals, current = [], None
+                    for op in ordered:
+                        if op[0] == 'event':
+                            if current is not None:
+                                intervals.append(current)
+                            current = 0
+                        elif current is not None:
+                            current += 1
+                    intervals.append(current)
+                    assert intervals == wanted['free_intervals'], intervals
             row['status'], row['runtime'] = 'passed', 'passed'
         except (AssertionError, ValueError, OSError) as error:
             row['failure'] = str(error)

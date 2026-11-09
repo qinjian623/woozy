@@ -125,12 +125,15 @@ func main() i32 {var log i32=0;try {probe(inout log);}catch err E {return 9;}ret
         yield 'nested-try-defer-' + str(count), ('package app;enum E {Bad;}' +
             'func main() i32 {' + body + 'return 7;}'), dict(main_return=0)
     # Plain loops now use one control block each, without a continue handler.
-    for count in (4, 5, 10, 11, 21, 22):
+    for count in (4, 5, 10, 11, 21, 22, 48):
         body = ''
+        prefix = 'i' if count <= 22 else 'layer'
         for n in range(count):
-            body = f'for var i{n} i32=0;i{n}<1;i{n}+=1 {{' + body + '}'
-        yield 'nested-loops-' + str(count), 'package app;func main() {' + body + '}', (
-            dict(main_return=None) if count <= 21 else dict(unsupported=True))
+            body = f'for var {prefix}{n} i32=0;{prefix}{n}<1;{prefix}{n}+=1 {{' + body + '}'
+        expected = dict(main_return=None)
+        if count > 21:
+            expected['outlined'] = True
+        yield 'nested-loops-' + str(count), 'package app;func main() {' + body + '}', expected
     for count in (2, 3):
         body = ''
         for _ in range(count):
@@ -139,12 +142,13 @@ func main() i32 {var log i32=0;try {probe(inout log);}catch err E {return 9;}ret
         yield 'nested-loop-try-defer-' + str(count), ('package app;enum E {Bad;}' +
             'func main() {' + body + '}'), dict(main_return=None)
     # A cleanup guard uses one control block in addition to the loops.
-    for count in (9, 10, 18, 19, 20, 21):
+    for count in (9, 10, 18, 19, 20, 21, 48):
         body = ('defer{log+=1;event(1);}'
                 'if mode==0{return 7;}if mode==1{throw E.Bad;}'
                 'if mode==2{break;}continue;')
+        prefix = 'i' if count <= 21 else 'layer'
         for n in range(count):
-            body = f'for var i{n} i32=0;i{n}<1;i{n}+=1 {{' + body + '}'
+            body = f'for var {prefix}{n} i32=0;{prefix}{n}<1;{prefix}{n}+=1 {{' + body + '}'
         source = ('package app;enum E{Bad;}func event(digit i32){}'
                   'func control(log inout i32,mode i32)i32 throws E{' + body +
                   'return 9;}'
@@ -154,9 +158,10 @@ func main() i32 {var log i32=0;try {probe(inout log);}catch err E {return 9;}ret
                   'catch err E{if log!=1{return 3;}}log=0;'
                   'if control(inout log,2)!=9 || log!=1{return 4;}log=0;'
                   'if control(inout log,3)!=9 || log!=1{return 5;}return 0;}')
-        yield 'nested-exit-finally-' + str(count), source, (
-            dict(main_return=0, events=[1, 1, 1, 1]) if count <= 20
-            else dict(unsupported=True))
+        expected = dict(main_return=0, events=[1, 1, 1, 1])
+        if count > 20:
+            expected['outlined'] = True
+        yield 'nested-exit-finally-' + str(count), source, expected
     yield 'for-in-empty-single', ('''package app;
 func event(digit i32) {}
 func main() i32 {
@@ -296,3 +301,5 @@ func main() i32 throws E {
         [0, 1, 2, 3, 9, 8] +
         [0, 1, 2, 3, 1, 9, 8] +
         [0, 1, 5, 2, 3, 1, 5, 4, 2, 3, 1, 5, 4, 2, 9, 8]))
+    from outlining_cases import cases
+    yield from cases()

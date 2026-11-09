@@ -1,6 +1,7 @@
 #include "lang/backend/python.hpp"
 #include "runtime.hpp"
 #include <algorithm>
+#include <iterator>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -19,9 +20,11 @@ struct Statement {
   std::vector<Statement> body, otherwise;
 };
 using Suite = std::vector<Statement>;
+enum class RejectReason { other, control_depth, indentation, resources };
 struct Rejected {
   std::string message;
   std::optional<SourceSpan> source;
+  RejectReason reason = RejectReason::other;
 };
 bool integer(const Type &t) {
   return t.kind == TypeKind::SignedInt || t.kind == TypeKind::UnsignedInt ||
@@ -98,11 +101,19 @@ class Emitter {
   uint64_t serial = 0;
   struct Loop {
     HirNodeId id;
+    uint64_t code_scope = 0;
+    bool crosses_helper = false;
   };
   std::vector<Loop> loops;
   std::vector<HirNodeId> break_targets;
   std::vector<HirNodeId> active_defers;
   bool uses_cleanup_guard = false;
+  bool fallback = false, outlining = false, checking_only = false;
+  uint64_t code_scope = 0, next_scope = 0, helper_count = 0;
+  uint64_t capture_work = 0;
+  unsigned expression_depth = 0;
+  std::set<SymbolId> available;
+  Suite helpers;
   // Computed owning switch subjects currently held by an enclosing
   // structured try/finally. Their drops are emitted by that finally after
   // the arm block cleanup, so an expression failure handler must never
@@ -469,6 +480,8 @@ class Emitter {
            false,
            {},
            {}});
+    if (p.binding)
+      available.insert(*p.binding);
     if (p.binding && owned(p.type))
       suite.push_back({name(*p.binding) + ".install(" + ops(p.type) + ".copy(" +
                            value + "))",
@@ -521,6 +534,19 @@ class Emitter {
            numeric(operand) + ")";
   }
   std::string expression(HirNodeId id, Suite &suite) {
+    if (outlining && expression_depth >= 16)
+      return outlined_expression(id, suite);
+    ++expression_depth;
+    try {
+      auto value = expression_inner(id, suite);
+      --expression_depth;
+      return value;
+    } catch (...) {
+      --expression_depth;
+      throw;
+    }
+  }
+  std::string expression_inner(HirNodeId id, Suite &suite) {
     check_cancelled(stop);
     const auto &n = node(id);
     exits(n);
@@ -857,6 +883,111 @@ class Emitter {
       throw std::logic_error("non-expression in verified expression position");
     }
   }
+  static bool structural(NodeKind kind) {
+    return kind == NodeKind::block || kind == NodeKind::if_ ||
+           kind == NodeKind::for_ || kind == NodeKind::for_in ||
+           kind == NodeKind::switch_ || kind == NodeKind::try_;
+  }
+  std::vector<SymbolId> captures(HirNodeId root) {
+    std::set<SymbolId> used;
+    std::vector<HirNodeId> pending{root};
+    while (!pending.empty()) {
+      check_cancelled(stop);
+      if (++capture_work > 2000000)
+        throw Rejected{"Python outlining exceeds its source traversal budget",
+                       node(root).source.span, RejectReason::resources};
+      auto id = pending.back();
+      pending.pop_back();
+      const auto &n = node(id);
+      if (auto r = std::get_if<Read>(&n.data))
+        used.insert(r->symbol);
+      if (auto p = std::get_if<Place>(&n.data))
+        used.insert(p->symbol);
+      if (auto v = std::get_if<Move>(&n.data); v && v->binding)
+        used.insert(*v->binding);
+      if (auto d = std::get_if<Defer>(&n.data))
+        used.insert(d->references.begin(), d->references.end());
+      pending.insert(pending.end(), n.children.begin(), n.children.end());
+    }
+    std::vector<SymbolId> result;
+    for (auto symbol : used)
+      if (available.contains(symbol))
+        result.push_back(symbol);
+    return result;
+  }
+  std::string outline(HirNodeId id, Suite &suite, bool expression_body) {
+    if (++helper_count > 200000)
+      throw Rejected{"Python outlining exceeds its helper budget",
+                     node(id).source.span, RejectReason::resources};
+    auto captured = captures(id);
+    std::vector<std::string> arguments{"_frame"};
+    for (auto symbol : captured)
+      arguments.push_back(name(symbol));
+    const auto helper = "_outline_" + std::to_string(current.value) + "_" +
+                        std::to_string(helper_count);
+    // Raw Cells/Owners cross code objects by reference. HIR identities select
+    // captures; evaluating read(symbol) here would copy an owning value or
+    // lose the storage required by an inout place.
+    auto saved_available = available;
+    auto saved_scope = code_scope;
+    auto saved_depth = expression_depth;
+    available = std::set<SymbolId>(captured.begin(), captured.end());
+    code_scope = ++next_scope;
+    expression_depth = 0;
+    Suite body;
+    try {
+      if (expression_body) {
+        auto value = expression_inner(id, body);
+        line(body, "return " + value, node(id));
+      } else {
+        statement_inner(id, body);
+      }
+    } catch (...) {
+      available = std::move(saved_available);
+      code_scope = saved_scope;
+      expression_depth = saved_depth;
+      throw;
+    }
+    available = std::move(saved_available);
+    code_scope = saved_scope;
+    expression_depth = saved_depth;
+    helpers.push_back({"def " + helper + "(" + join(arguments) + ")",
+                       node(id).source.span,
+                       true,
+                       std::move(body),
+                       {}});
+    auto call = helper + "(" + join(arguments) + ")";
+    if (expression_body)
+      return save(suite, call, node(id));
+    line(suite, call, node(id));
+    return {};
+  }
+  std::string outlined_expression(HirNodeId id, Suite &suite) {
+    return outline(id, suite, true);
+  }
+  void loop_body(Suite body, Suite &suite, const Loop &loop, const HirNode &n) {
+    if (!loop.crosses_helper) {
+      suite.insert(suite.end(), std::make_move_iterator(body.begin()),
+                   std::make_move_iterator(body.end()));
+      return;
+    }
+    suite.push_back({"try", n.source.span, true, std::move(body), {}});
+    suite.push_back({"except _LangLoopJump as _jump",
+                     n.source.span,
+                     true,
+                     {{"if _jump.target != " + std::to_string(loop.id.value),
+                       n.source.span,
+                       true,
+                       {{"raise", n.source.span, false, {}, {}}},
+                       {}},
+                      {"if _jump.continuing",
+                       n.source.span,
+                       true,
+                       {{"continue", n.source.span, false, {}, {}}},
+                       {}},
+                      {"break", n.source.span, false, {}, {}}},
+                     {}});
+  }
   void block(const HirNode &n, Suite &suite) {
     std::vector<HirNodeId> registrations;
     for (auto id : n.children)
@@ -905,6 +1036,13 @@ class Emitter {
     guarded(std::move(body), std::move(cleanup), suite, n);
   }
   void statement(HirNodeId id, Suite &suite) {
+    if (outlining && structural(node(id).kind())) {
+      outline(id, suite, false);
+      return;
+    }
+    statement_inner(id, suite);
+  }
+  void statement_inner(HirNodeId id, Suite &suite) {
     check_cancelled(stop);
     const auto &n = node(id);
     exits(n);
@@ -930,6 +1068,7 @@ class Emitter {
                  (b.writable ? "_rt.Cell(" + value + ")" : value),
              n);
       full(id, suite);
+      available.insert(b.symbol);
       break;
     }
     case NodeKind::assign: {
@@ -1000,11 +1139,14 @@ class Emitter {
                            true,
                            {{"break", n.source.span, false, {}, {}}},
                            {}});
-      loops.push_back({id});
+      loops.push_back({id, code_scope});
       break_targets.push_back(id);
-      statement(n.children[3], loop.body);
+      Suite body;
+      statement(n.children[3], body);
+      auto completed_loop = loops.back();
       break_targets.pop_back();
       loops.pop_back();
+      loop_body(std::move(body), loop.body, completed_loop, n);
       for_scope.push_back(std::move(loop));
       scope_wrap(n.scope, std::move(for_scope), suite, n);
       break;
@@ -1042,11 +1184,15 @@ class Emitter {
       } else
         line(loop.body,
              name(fi.element) + " = " + collection + ".get(" + index + ")", n);
-      loops.push_back({id});
+      available.insert(fi.element);
+      loops.push_back({id, code_scope});
       break_targets.push_back(id);
-      statement(fi.body, loop.body);
+      Suite body;
+      statement(fi.body, body);
+      auto completed_loop = loops.back();
       loops.pop_back();
       break_targets.pop_back();
+      loop_body(std::move(body), loop.body, completed_loop, n);
       Suite cleanup;
       line(cleanup, collection + ".end()", n);
       line(cleanup, "_frame.drop(" + iteration_key + ")", n);
@@ -1066,6 +1212,7 @@ class Emitter {
       if (computed_owning)
         held_subjects.push_back(n.children[0]);
       for (auto arm = arms.rbegin(); arm != arms.rend(); ++arm) {
+        auto saved_available = available;
         Statement branch{"if " + pattern_test(arm->pattern, value),
                          arm->pattern.source.span,
                          true,
@@ -1077,6 +1224,7 @@ class Emitter {
         statement(arm->body, branch.body);
         branch.otherwise = std::move(branches);
         branches = {std::move(branch)};
+        available = std::move(saved_available);
       }
       break_targets.pop_back();
       if (computed_owning) {
@@ -1135,7 +1283,11 @@ class Emitter {
       if (!n.children.empty())
         value = save(suite, take(n.children[0], value), n);
       full(id, suite);
-      line(suite, "return " + std::string(value), n);
+      line(suite,
+           outlining ? "raise _LangReturn(" + std::to_string(current.value) +
+                           ", " + value + ")"
+                     : "return " + value,
+           n);
       break;
     }
     case NodeKind::throw_: {
@@ -1158,6 +1310,7 @@ class Emitter {
       Suite handlers{{"raise", n.source.span, false, {}, {}}};
       const auto &catches = std::get<Try>(n.data).catches;
       for (auto c = catches.rbegin(); c != catches.rend(); ++c) {
+        auto saved_available = available;
         Statement branch{"if " + error + ".type_key == " +
                              string_literal(type_key(c->error_type)),
                          c->source.span,
@@ -1184,8 +1337,10 @@ class Emitter {
                                  false,
                                  {},
                                  {}});
+        available.insert(c->binding);
         statement(c->body, branch.body);
         handlers = {std::move(branch)};
+        available = std::move(saved_available);
       }
       suite.push_back({"except _rt.TypedError as " + error,
                        n.source.span,
@@ -1199,18 +1354,30 @@ class Emitter {
       if (break_targets.empty() || break_targets.back() != target)
         throw std::logic_error(
             "verified break target is not the enclosing loop/switch");
-      line(suite,
-           node(target).kind() == NodeKind::switch_
-               ? "raise _rt.SwitchBreak(" + std::to_string(target.value) + ")"
-               : "break",
-           n);
+      if (node(target).kind() == NodeKind::switch_)
+        line(suite,
+             "raise _rt.SwitchBreak(" + std::to_string(target.value) + ")", n);
+      else if (loops.back().code_scope != code_scope) {
+        loops.back().crosses_helper = true;
+        line(suite,
+             "raise _LangLoopJump(" + std::to_string(target.value) + ", False)",
+             n);
+      } else
+        line(suite, "break", n);
       break;
     }
     case NodeKind::continue_: {
       if (loops.empty() || loops.back().id != std::get<Continue>(n.data).loop)
         throw std::logic_error(
             "verified continue target is not the enclosing loop");
-      line(suite, "continue", n);
+      if (loops.back().code_scope != code_scope) {
+        loops.back().crosses_helper = true;
+        line(suite,
+             "raise _LangLoopJump(" + std::to_string(loops.back().id.value) +
+                 ", True)",
+             n);
+      } else
+        line(suite, "continue", n);
       break;
     }
     case NodeKind::noop:
@@ -1226,7 +1393,9 @@ class Emitter {
     if (indent > 80)
       throw Rejected{
           "generated Python indentation exceeds the supported profile (80)",
-          source};
+          source, RejectReason::indentation};
+    if (checking_only)
+      return;
     output.code += std::string(indent * 4, ' ') + text + "\n";
     ++printed_lines;
     if (source)
@@ -1244,7 +1413,7 @@ class Emitter {
     if (depth > python_control_block_limit)
       throw Rejected{"generated Python control blocks exceed the CPython "
                      "3.12 static limit (21)",
-                     source};
+                     source, RejectReason::control_depth};
   }
   void print_if_chain(const Statement &s, unsigned indent,
                       unsigned control_depth, bool as_elif) {
@@ -1322,8 +1491,7 @@ class Emitter {
       if (s.suite) {
         auto depth = control_depth;
         if (s.text.starts_with("def "))
-          depth =
-              0; // Each generated function is a separate Python code object.
+          depth = 0; // Each generated function is a separate Python code object.
         else if (s.text.starts_with("while ") || s.text.starts_with("with "))
           ++depth;
         check_control_depth(depth, s.source);
@@ -1342,9 +1510,63 @@ class Emitter {
     }
   }
 
+  Statement function_tree(const HirFunction &f, bool use_outlining) {
+    current = f.symbol;
+    serial = 0;
+    outlining = use_outlining;
+    code_scope = ++next_scope;
+    expression_depth = 0;
+    available.clear();
+    for (const auto &p : f.parameters)
+      available.insert(p.symbol);
+    std::vector<std::string> parameters;
+    for (const auto &p : f.parameters)
+      parameters.push_back(name(p.symbol));
+    Statement function{"def " + function_name(f.symbol) + "(" +
+                           join(parameters) + ")",
+                       f.source.span,
+                       true,
+                       {},
+                       {}};
+    line(function.body, "_frame = _rt.Frame()", node(f.body));
+    for (size_t i = 0; i < f.parameters.size(); ++i) {
+      const auto &p = f.parameters[i];
+      const auto &pt = type(f.signature).parameters[i];
+      if (pt.mode == ParamMode::move && owned(pt.type)) {
+        line(function.body,
+             "_frame.put(" + key(OwnerKind::binding, p.symbol.value) + ", " +
+                 ops(pt.type) + ", " + name(p.symbol) + ")",
+             node(f.body));
+        line(function.body,
+             name(p.symbol) + " = _frame.slot(" +
+                 key(OwnerKind::binding, p.symbol.value) + ", " + ops(pt.type) +
+                 ")",
+             node(f.body));
+      }
+    }
+    statement(f.body, function.body);
+    if (use_outlining) {
+      Suite original = std::move(function.body);
+      function.body.push_back(
+          {"try", f.source.span, true, std::move(original), {}});
+      function.body.push_back(
+          {"except _LangReturn as _returned",
+           f.source.span,
+           true,
+           {{"if _returned.target != " + std::to_string(f.symbol.value),
+             f.source.span,
+             true,
+             {{"raise", f.source.span, false, {}, {}}},
+             {}},
+            {"return _returned.take()", f.source.span, false, {}, {}}},
+           {}});
+    }
+    return function;
+  }
+
 public:
-  Emitter(const HirModule &module, std::stop_token token)
-      : m(module), stop(token) {}
+  Emitter(const HirModule &module, std::stop_token token, bool retry = false)
+      : m(module), stop(token), fallback(retry) {}
   Output generate(SymbolId entry, const Options &options) {
     check_cancelled(stop);
     if (m.config.backend != Backend::python || m.config.word_bits != 64)
@@ -1436,34 +1658,23 @@ public:
     for (auto t : value_types)
       emit_type(TypeId{t}, program, emitted_types);
     for (const auto &f : m.functions) {
-      current = f.symbol;
-      serial = 0;
-      std::vector<std::string> parameters;
-      for (const auto &p : f.parameters)
-        parameters.push_back(name(p.symbol));
-      Statement function{"def " + function_name(f.symbol) + "(" +
-                             join(parameters) + ")",
-                         f.source.span,
-                         true,
-                         {},
-                         {}};
-      line(function.body, "_frame = _rt.Frame()", node(f.body));
-      for (size_t i = 0; i < f.parameters.size(); ++i) {
-        const auto &p = f.parameters[i];
-        const auto &pt = type(f.signature).parameters[i];
-        if (pt.mode == ParamMode::move && owned(pt.type)) {
-          line(function.body,
-               "_frame.put(" + key(OwnerKind::binding, p.symbol.value) + ", " +
-                   ops(pt.type) + ", " + name(p.symbol) + ")",
-               node(f.body));
-          line(function.body,
-               name(p.symbol) + " = _frame.slot(" +
-                   key(OwnerKind::binding, p.symbol.value) + ", " +
-                   ops(pt.type) + ")",
-               node(f.body));
+      auto function = function_tree(f, false);
+      if (fallback) {
+        // A fresh emitter retries only functions whose unchanged private
+        // generation tree exceeds CPython's static limits. Checking emits no
+        // text or SourceMap entries; ordinary functions keep their bytes.
+        checking_only = true;
+        try {
+          print(Suite{function}, 0);
+          checking_only = false;
+        } catch (const Rejected &e) {
+          checking_only = false;
+          if (e.reason != RejectReason::control_depth &&
+              e.reason != RejectReason::indentation)
+            throw;
+          function = function_tree(f, true);
         }
       }
-      statement(f.body, function.body);
       program.push_back(std::move(function));
     }
     if (uses_cleanup_guard) {
@@ -1479,6 +1690,38 @@ public:
              {{"if not isinstance(error, _rt.Panic)", {}, true,
                {{"self.cleanup()", {}, false, {}, {}}}, {}},
               {"return False", {}, false, {}, {}}}, {}}}, {}});
+    }
+    if (!helpers.empty()) {
+      program.push_back(
+          {"class _LangReturn(BaseException)",
+           {},
+           true,
+           {{"def __init__(self, target, value)",
+             {},
+             true,
+             {{"self.target = target", {}, false, {}, {}},
+              {"self.value = value", {}, false, {}, {}}},
+             {}},
+            {"def take(self)",
+             {},
+             true,
+             {{"value, self.value = self.value, None", {}, false, {}, {}},
+              {"return value", {}, false, {}, {}}},
+             {}}},
+           {}});
+      program.push_back(
+          {"class _LangLoopJump(BaseException)",
+           {},
+           true,
+           {{"def __init__(self, target, continuing)",
+             {},
+             true,
+             {{"self.target = target", {}, false, {}, {}},
+              {"self.continuing = continuing", {}, false, {}, {}}},
+             {}}},
+           {}});
+      program.insert(program.end(), std::make_move_iterator(helpers.begin()),
+                     std::make_move_iterator(helpers.end()));
     }
     if (options.entrypoint)
       program.push_back(
@@ -1504,7 +1747,15 @@ PhaseResult<Output> emit(const hir::VerifiedHirModule &verified, SymbolId entry,
     result.diagnostics = std::move(checked.diagnostics);
     if (!supported)
       return result;
-    result.value = Emitter(verified.module(), stop).generate(entry, options);
+    try {
+      result.value = Emitter(verified.module(), stop).generate(entry, options);
+    } catch (const Rejected &e) {
+      if (e.reason != RejectReason::control_depth &&
+          e.reason != RejectReason::indentation)
+        throw;
+      result.value =
+          Emitter(verified.module(), stop, true).generate(entry, options);
+    }
     result.state = PhaseState::complete;
   } catch (const Cancelled &) {
     result.state = PhaseState::cancelled;

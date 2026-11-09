@@ -1,0 +1,82 @@
+package app;
+struct Node { value i32; children Vec[Node]; }
+enum Failure { Stopped(code i32); }
+func mark(log inout i64, digit i64) { log = log * 100 + digit; }
+func scan(mode i32, log inout i64) i32 throws Failure {
+    let root = Node(value: 0, children: [
+        Node(value: 1, children: [Node(value: 10, children: [])]),
+        Node(value: 2, children: [Node(value: 20, children: [])]),
+        Node(value: 3, children: [Node(value: 30, children: [])])
+    ]);
+for var layer0 i32=0;layer0<1;layer0+=1 {
+    for var layer1 i32=0;layer1<1;layer1+=1 {
+        for var layer2 i32=0;layer2<1;layer2+=1 {
+            for var layer3 i32=0;layer3<1;layer3+=1 {
+                for var layer4 i32=0;layer4<1;layer4+=1 {
+                    for var layer5 i32=0;layer5<1;layer5+=1 {
+                        for var layer6 i32=0;layer6<1;layer6+=1 {
+                            for var layer7 i32=0;layer7<1;layer7+=1 {
+                                for var layer8 i32=0;layer8<1;layer8+=1 {
+                                    for var layer9 i32=0;layer9<1;layer9+=1 {
+                                        for var layer10 i32=0;layer10<1;layer10+=1 {
+                                            for var layer11 i32=0;layer11<1;layer11+=1 {
+                                                for var layer12 i32=0;layer12<1;layer12+=1 {
+                                                    for var layer13 i32=0;layer13<1;layer13+=1 {
+                                                        for var layer14 i32=0;layer14<1;layer14+=1 {
+                                                            for var layer15 i32=0;layer15<1;layer15+=1 {
+                                                                for var layer16 i32=0;layer16<1;layer16+=1 {
+                                                                    for var layer17 i32=0;layer17<1;layer17+=1 {
+                                                                        for var layer18 i32=0;layer18<1;layer18+=1 {
+                                                                            for var layer19 i32=0;layer19<1;layer19+=1 {
+                                                                                for var layer20 i32=0;layer20<1;layer20+=1 {
+                                                                                    for var layer21 i32=0;layer21<1;layer21+=1 {
+                                                                                        for var layer22 i32=0;layer22<1;layer22+=1 {
+                                                                                            for var layer23 i32=0;layer23<1;layer23+=1 {
+    for node in root.children {
+        root.children[node.value - 1] = Node(value: 90, children: []);
+        defer { mark(inout log, i64(node.children[0].value)); }
+        if node.value == 1 { continue; }
+        if mode == 0 { break; }
+        if mode == 1 { return node.value; }
+        throw Failure.Stopped(code: node.value);
+    }
+
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+}
+    return 99;
+}
+func main() i32 throws Failure {
+    var log i64 = 0;
+    if scan(0, inout log) != 99 || log != 1020 { return 1; }
+    log = 0;
+    if scan(1, inout log) != 2 || log != 1020 { return 2; }
+    log = 0;
+    try { let ignored = scan(2, inout log); return 3; }
+    catch error Failure {
+        switch error { case Failure.Stopped(code): if code != 2 { return 4; } }
+    }
+    if log != 1020 { return 5; }
+    return 0;
+}

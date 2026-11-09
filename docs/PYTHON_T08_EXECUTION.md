@@ -90,23 +90,42 @@ case-09 的 found、原错误样例 cleaned 的实际变化 1/2；case-10 另用
 ## 生成深度限制
 
 平铺注册数量不再转换成静态嵌套深度。源程序本身的多层 loop/try/defer 仍会增加
-生成深度。当前 emitter 按锁定 CPython 3.12.15 的静态控制栈检查生成树，上限为
+生成深度。emitter 按锁定 CPython 3.12.15 的静态控制栈检查生成树，上限为
 `CO_MAXBLOCKS = 21`。while 和 with 体各占 1；try/except 的 try 体占 1，handler 体占 2；
 try/finally 的 try 体占 1，finally 在异常或保留返回值时的执行体也占 1。
 组合 try/except/finally 按相邻分支一起计算，不能把各分支的代价重复累加。
 每个 def 重新计数，普通 if/elif/else 不增加计数；生成文本缩进上限仍为 80 层。
 编译器只检查自己的生成结构，不启动 Python 来判断能否生成。
 
-超过该生成范围时 emit/build 在发布文件前返回 `E_CAPABILITY_UNAVAILABLE`，
-不创建输出目录，也不改已有输出。该检查依赖 Python 私有生成树，公共 HIR 的
-后端支持检查只确认类型和操作，因此当前 `check` 可通过、`build` 再明确拒绝。
-不在公共前端复制 Python 的生成结构。若扩展 CLI check 的生成前检查，应使用同一 emitter，避免重复计算生成深度。
+原生成方式通过时保留原来的全部字节。只有打印生成树明确报告控制块或缩进超限，
+才用新的 emitter 重试；重试也只拆分超过限制的 Source 函数。完整的 HIR
+block、if、loop、switch、try 节点生成模块级同步私有函数，节点自己的
+try/except/finally 保持完整。表达式递归达到 16 层时也生成同步私有函数，
+返回原来计算出的结果，不额外复制、取走或清理拥有值。
+
+私有函数只接收 HIR 实际引用且已经绑定的 SymbolId，以及共享 `_frame`；
+Cell、Owner 和普通参数原样传入。跨私有函数的 Source return、loop
+break/continue 由生成模块内的私有 BaseException 传递，所属 Source 函数或
+loop 接住后继续原来的退出顺序。返回值先取走再执行清理；Panic 仍跳过语言清理；
+for-in 的 continue 不调用集合 end，其他退出先 end 再释放集合。SourceMap 根据
+最终生成行号重新记录原 Source span，公共 HIR 和 langrt API 未增加字段或接口。
+
+每个生成的 Python code object 仍检查上述 21/80 限制。重试另限制最多 200000
+个私有函数和 2000000 次 HIR 捕获遍历，并在遍历、生成和打印时检查取消。
+超过生成资源预算时，emit/build 在发布文件前返回 `E_CAPABILITY_UNAVAILABLE`，
+不创建输出目录，也不改已有输出。公共后端支持检查不复制 Python 私有生成树，
+所以 `check` 通过后 `build` 仍可能报告生成资源不足。同步调用仍使用 Python
+调用栈；这里没有取消前端、内存、调用栈等总资源限制，也不声称无限嵌套可运行。
 
 此前被保守计数拒绝的四层/五层 try/defer、五层循环和循环内三层 try/defer，
-现保留原 Source 并实际编译、运行。测试还包括二十一层普通循环接受、二十二层拒绝，
-二十层循环加清理接受、二十一层加清理拒绝，以及五层循环与 try/defer 混合的 48 个固定事件。
-拒绝项记录为 `unsupported`、运行 `not_run`，同时检查新目录
-和已有输出保留。该目标限制不改变源语言语法或清理规则，也不代表任意嵌套已支持。
+现保留原 Source 并实际编译、运行。原二十二层普通循环、二十一层循环加清理也
+保留原 Source，改为完整编译并运行；新增四十八层循环及四种退出、二十四层
+未进入分支、递归 Vec 替换、入口绑定捕获、拥有值返回与深表达式、computed owning
+switch 错误、Panic 和九十六层短路。测试检查固定事件、迭代 begin/end、Vec
+最终释放及正常、类型错误退出的 Frame 槽清空；原 63 个接受项目的
+program.py/langrt.py 逐字节保持。
+五层循环与 try/defer 混合的 48 个固定事件继续检查。所有接受项先编译整个生成
+模块，再运行；未进入的分支也必须是有效 Python。
 
 原 19 项、原泛型输入及清单、baseline、floating fixtures 在运行前后比较 SHA256。
 原 Python/native throws/defer 拒绝项改由两端执行测试检查。
