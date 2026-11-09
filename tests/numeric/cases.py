@@ -6,9 +6,12 @@ create a fresh output nor change stale output bytes. Panic cases are dynamic by
 construction (a function parameter): check must accept them, and a real build
 and execution must terminate with Panic exit 101 and the backend's marker.
 
-Expected values are not repeated here; the executable value table lives in
-`tests/numeric/values` and every expectation there is an exactly representable
-hand-written constant.
+Expected values are not repeated here; the executable value tables live in
+`tests/numeric/values`, `tests/numeric/float-conversions` and the independent
+`tests/numeric/float-narrowing`, and probe expectations are independently
+decoded/rounded in `run_conversions.py`.
+`accepted_cases()` keeps the two former f64->f32 capability rejections as
+normal check/build/run inputs.
 """
 
 
@@ -93,14 +96,9 @@ def static_cases():
                source='func main() i32 { let x = i32(true); return 0; }',
                code='E_TYPE_MISMATCH',
                reason='bool is not a numeric conversion source')
-    yield dict(id='unsupported-float-to-float',
-               source='func main() i32 { let x = f32(1.0); return 0; }',
-               code='E_CAPABILITY_UNAVAILABLE',
-               reason='f64->f32 narrowing is still pending the overflow rule')
-    yield dict(id='unsupported-float-to-float-dynamic',
-               source='func narrow(x f64) f32 { return f32(x); } func main() i32 { return 0; }',
-               code='E_CAPABILITY_UNAVAILABLE',
-               reason='dynamic f64->f32 narrowing is still pending the overflow rule')
+    # f64->f32 is now supported. Both the constant f32(1.0) form and the
+    # dynamic f32(x) form that used to be capability rejections are exercised
+    # by the values/probe matrices instead of being listed as static failures.
     yield dict(id='unsupported-bool-target',
                source='func main() i32 { let x = bool(1); return 0; }',
                code='E_CAPABILITY_UNAVAILABLE',
@@ -113,6 +111,21 @@ def static_cases():
                source='func main() i32 { let x = i32(); return 0; }',
                code='E_CALL_ARGUMENT',
                reason='explicit conversion requires exactly one argument')
+
+
+def accepted_cases():
+    """Frozen inputs that used to be rejected only for the narrowing gap.
+
+    They are now ordinary programs in both backends; the value/probe matrices
+    carry the numerical expectations.
+    """
+    yield dict(id='supported-float-to-float',
+               source='func main() i32 { let x = f32(1.0); return 0; }',
+               reason='constant f64->f32 narrowing is implemented')
+    yield dict(id='supported-float-to-float-dynamic',
+               source='func narrow(x f64) f32 { return f32(x); } '
+                      'func main() i32 { return 0; }',
+               reason='dynamic f64->f32 narrowing is implemented')
 
 
 def panic_cases():

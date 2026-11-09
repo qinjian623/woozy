@@ -1,7 +1,7 @@
 # Python typed throws、catch 与 defer 执行
 
 契约仍为 `compiler-dev/1`。T08引入的运行库版本为`/2`，当前版本为
-`compiler-dev/1-python-values/6`；公共头、生成代码的版本检查和嵌入的
+`compiler-dev/1-python-values/7`；公共头、生成代码的版本检查和嵌入的
 `langrt.py` 使用同一版本。旧 runtime 无法运行新生成的程序。
 
 ## 生成行为

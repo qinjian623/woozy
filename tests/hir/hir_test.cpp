@@ -97,6 +97,7 @@ func main() i32 {
  let c32 f32 = f32(xf);
  let c64 f64 = f64(xd);
  let w f64 = f64(xf);
+ let n f32 = f32(xd);
  let cx f64 = f64(x);
  let ci i32 = i32(1.0);
  let converted i32 = i32(x);
@@ -661,6 +662,7 @@ void numeric_conversion_tests() {
   const auto identity32_call = call_source("f32", "xf");
   const auto identity64_call = call_source("f64", "xd");
   const auto widening_call = call_source("f64", "xf");
+  const auto narrowing_call = call_source("f32", "xd");
 
   {
     auto m = f.m;
@@ -683,11 +685,12 @@ void numeric_conversion_tests() {
        std::vector<std::tuple<TypeId, TypeId, uint64_t, CallSource>>{
            {f32, f32, 0x3f800000ULL, identity32_call},
            {f64, f64, 0x3ff0000000000000ULL, identity64_call},
-           {f64, f32, 0x3f800000ULL, widening_call}}) {
+           {f64, f32, 0x3f800000ULL, widening_call},
+           {f32, f64, 0x3ff0000000000000ULL, narrowing_call}}) {
     auto m = f.m;
     auto source = literal(m, source_type, bits, call.operand);
     add_convert(m, type, source, call.conversion);
-    require(verify(m).success(), "float identity/widening conversion rejected");
+    require(verify(m).success(), "float conversion rejected");
   }
   invalid(f, "identity target changed to f32", [&](HirModule &m) {
     auto source = literal(m, f64, 0x3ff0000000000000ULL,
@@ -751,6 +754,19 @@ void numeric_conversion_tests() {
   source_mutation("conversion operand span shortened", [&](HirModule &m) {
     auto source = literal(m, f32, 0x3f800000ULL, identity32_call.operand);
     add_convert(m, f32, source, identity32_call.conversion);
+    --m.nodes[source.value].source.span.end_byte;
+  });
+  source_mutation("narrowing target differs from source callee",
+                  [&](HirModule &m) {
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          narrowing_call.operand);
+    auto convert = add_convert(m, f32, source, identity64_call.conversion);
+    (void)convert;
+  });
+  source_mutation("narrowing operand span shortened", [&](HirModule &m) {
+    auto source = literal(m, f64, 0x3ff0000000000000ULL,
+                          narrowing_call.operand);
+    add_convert(m, f32, source, narrowing_call.conversion);
     --m.nodes[source.value].source.span.end_byte;
   });
 }

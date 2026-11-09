@@ -5,7 +5,7 @@ import struct
 import sys
 import traceback
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/6'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/7'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
@@ -177,6 +177,25 @@ def float_to_int(value, bits, signed):
 def int_to_float(value, bits):
     """Round one exact integer directly to the destination IEEE precision."""
     return _float_round(abs(value), 1, bits, value < 0)
+
+
+def float_to_float(value, bits):
+    """Round an IEEE source value once to the destination IEEE precision.
+
+    The source is an exact Python float (binary64) produced by the existing
+    f32/f64 runtime. NaN/infinity keep their class; a finite ratio is rounded
+    with RNE, including subnormals, signed zero and overflow to signed
+    infinity. This is a conversion, never the float-to-integer Panic path.
+    """
+    if bits not in (32, 64):
+        raise ValueError('unsupported IEEE width')
+    if math.isnan(value) or math.isinf(value):
+        return value
+    negative = math.copysign(1.0, value) < 0
+    if value == 0:
+        return ieee(int(negative) << (bits - 1), bits)
+    numerator, denominator = value.as_integer_ratio()
+    return _float_round(abs(numerator), denominator, bits, negative)
 
 
 def unary(op, value, bits, signed):

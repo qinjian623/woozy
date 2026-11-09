@@ -1,6 +1,6 @@
 # T09 当前执行范围
 
-native/64 Linux x86_64 与 python/64 CPython 3.12.15 已支持 Vec 和含 Vec 的 struct/enum：共享复制、整体 move、普通参数借用和返回复制、索引读写、切片、for-in，以及 return/typed-error/defer 的拥有值清理。经 Vec 回指的有限递归值类型图（包括结构体/枚举互相引用、具体泛型实例和周期交换的具体 TypeId）也按同一套 copy/drop 规则处理；直接按值包含自身的无限布局仍拒绝。Python runtime 为 `compiler-dev/1-python-values/6`；native 保留标量 ABI，新增私有 `lang-native-values/1`。
+native/64 Linux x86_64 与 python/64 CPython 3.12.15 已支持 Vec 和含 Vec 的 struct/enum：共享复制、整体 move、普通参数借用和返回复制、索引读写、切片、for-in，以及 return/typed-error/defer 的拥有值清理。经 Vec 回指的有限递归值类型图（包括结构体/枚举互相引用、具体泛型实例和周期交换的具体 TypeId）也按同一套 copy/drop 规则处理；直接按值包含自身的无限布局仍拒绝。Python runtime 为 `compiler-dev/1-python-values/7`；native 保留标量 ABI，新增私有 `lang-native-values/1`。
 
 仍不支持动态 string/Vec[string]、部分 move、拥有值或 foreign 的 inout、索引 inout、索引字段写回、捕获闭包、foreign、循环回收及原 T07 限制。强引用环保持存活，本轮没有新增 GC、弱引用或 reject-cycles 规则。运行时对顶层数字/bool 和有限平凡 struct/enum 的整体 inout 分别用标量槽和聚合存储处理，详见下文。普通参数绑定只读已按 SEMANTICS 实施：重赋值报 `E_TYPE_MISMATCH`，普通 Vec 参数的内容写入仍按共享容器规则允许；计算产生的拥有 switch 主体保留到分支结束的规则已在 SEMANTICS 中确定并实现：Native 用真实 temp slot 在正常与异常 ExitPlan 中释放，Python 用 switch 结构化 try/finally 在分支 defer/局部清理之后释放，Panic 不执行语言清理，typed-error handler 不提前销毁由 finally 持有的 subject。没有新增公开 len/push/share API。完整 ARC 和外部对象支持尚未完成。
 

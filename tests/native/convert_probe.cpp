@@ -7,9 +7,9 @@
 //
 // The same program also mutates conversion instructions in the verified Native
 // IR and requires the independent Native IR verifier to reject every real
-// source/target mutation (narrowing, bool/address operands, arity/origin,
-// same-type operand substitution, and compound/unary operand child
-// substitution). A mutation
+// source/target mutation (destination retargeting, bool/address operands,
+// narrowing operand substitution, arity/origin, same-type operand
+// substitution, and compound/unary operand child substitution). A mutation
 // may insert into the same instruction vector, so the original conversion is
 // re-located by its stable result ValueId instead of keeping a reference.
 #include "lang/backend/native.hpp"
@@ -117,6 +117,7 @@ int main(int argc, char **argv) {
       size_t block, position;
     };
     size_t rejected = 0, mutations = 0, insert_mutations = 0;
+    bool expects_fptrunc = false, expects_fpext = false;
     size_t bool_mutations = 0, float_width_mutations = 0;
     size_t origin_mutations = 0, operand_mutations = 0, address_mutations = 0;
     size_t compound_operand_mutations = 0, unary_operand_mutations = 0;
@@ -187,6 +188,12 @@ int main(int argc, char **argv) {
           const auto target_entry = types.find(block.instructions[i].type);
           need(target_entry != nullptr, "conversion target type missing");
           const bool target_float = target_entry->kind == hir::TypeKind::Float;
+          if (source_float && target_float && source_entry->bits == 64 &&
+              target_entry->bits == 32)
+            expects_fptrunc = true;
+          if (source_float && target_float && source_entry->bits == 32 &&
+              target_entry->bits == 64)
+            expects_fpext = true;
           auto corrupt = [&](const char *label, auto change) {
             auto m = original;
             auto *first = locate(m, f, b, convert_result);
@@ -247,7 +254,8 @@ int main(int argc, char **argv) {
           }
           if (source_float && target_float && narrow_float.value &&
               target_entry->bits == 64) {
-            // f64 -> f64 identity rewritten as actual f64 -> f32 narrowing.
+            // A wide result rewritten as f32. The width pair may be legal,
+            // but the HIR conversion still targets f64.
             ++float_width_mutations;
             corrupt("float narrowing target", [&](auto &m) {
               auto *instruction = locate(m, f, b, convert_result);
@@ -257,13 +265,42 @@ int main(int argc, char **argv) {
           }
           if (source_float && target_float && wide_float.value &&
               target_entry->bits == 32) {
-            // f32 -> f32 identity rewritten as a legal-looking widening pair;
+            // A narrow result rewritten as a legal-looking widening pair;
             // the real HIR conversion still targets f32.
             ++float_width_mutations;
             corrupt("float widening retarget", [&](auto &m) {
               auto *instruction = locate(m, f, b, convert_result);
               need(instruction != nullptr, "original conversion missing");
               instruction->type = wide_float;
+            });
+          }
+          if (source_float && target_float && source_entry->bits == 64 &&
+              target_entry->bits == 32 && narrow_float.value) {
+            // The new f64->f32 cast must not accept an f32 SSA operand even
+            // though f32->f32 is itself a legal pair. The real HIR operand is
+            // f64, so the operand identity/type check must reject this.
+            ++float_width_mutations;
+            corrupt("narrowing operand replaced by f32 constant",
+                    [&](auto &m) {
+              auto *instruction = locate(m, f, b, convert_result);
+              need(instruction != nullptr, "original conversion missing");
+              ValueId next = max_value(m.functions[f]);
+              ir::Instruction constant;
+              constant.op = ir::Op::constant;
+              constant.type = narrow_float;
+              constant.result = next;
+              constant.bits = 0x3f800000ULL;
+              constant.source = instruction->source;
+              instruction->inputs[0] = next;
+              auto &instructions = m.functions[f].blocks[b].instructions;
+              const auto position = std::find_if(
+                  instructions.begin(), instructions.end(),
+                  [&](const ir::Instruction &v) {
+                    return v.result && *v.result == convert_result;
+                  });
+              need(position != instructions.end(),
+                   "original conversion missing before insert");
+              instructions.insert(position, constant);
             });
           }
           if (!source_float && boolean.value) {
@@ -505,7 +542,11 @@ int main(int argc, char **argv) {
           ++controls;
         }
       }
-    need(controls >= 5, "expected five legal numeric conversion pair controls");
+    // A project may intentionally contain only one conversion pair (the
+    // narrowing fixture); the legacy project still requires all five.
+    need(!control_pairs.empty() &&
+             controls >= std::min<size_t>(5, control_pairs.size()),
+         "expected legal numeric conversion pair controls");
     SymbolId entry;
     std::map<std::string, SymbolId> names;
     for (const auto &s : resolved.value->symbols)
@@ -523,12 +564,22 @@ int main(int argc, char **argv) {
     write(out / "before.ll", emitted.value->llvm_before_optimization);
     write(out / "after.ll", emitted.value->llvm_ir);
     write(out / "generated.nir", emitted.value->native_ir);
-    need(emitted.value->llvm_before_optimization.find("fptrunc") ==
-             std::string::npos,
-         "unexpected fptrunc in float identity/widening IR");
-    need(emitted.value->llvm_before_optimization.find("fpext float") !=
-             std::string::npos,
-         "missing fpext for f32->f64 widening");
+    if (expects_fptrunc)
+      need(emitted.value->llvm_before_optimization.find("fptrunc") !=
+               std::string::npos,
+           "missing fptrunc for f64->f32 narrowing");
+    else
+      need(emitted.value->llvm_before_optimization.find("fptrunc") ==
+               std::string::npos,
+           "unexpected fptrunc in a project without narrowing");
+    if (expects_fpext)
+      need(emitted.value->llvm_before_optimization.find("fpext float") !=
+               std::string::npos,
+           "missing fpext for f32->f64 widening");
+    else
+      need(emitted.value->llvm_before_optimization.find("fpext float") ==
+               std::string::npos,
+           "unexpected fpext in a project without widening");
     llvm::LLVMContext context;
     llvm::SMDiagnostic error;
     auto load_ir = [&](const std::string &ir) {

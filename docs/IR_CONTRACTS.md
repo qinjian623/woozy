@@ -324,10 +324,12 @@ Native IR 采用块参数形式表达跨块值，局部可变绑定先表示为�
 显式数值转换沿用原有 `integer_convert` / `Op::convert` 记录与全部字段：子节点类型
 是源类型，结果类型是目标类型。允许 integer→integer（范围检查）、float→integer
 （先按源 IEEE 值向零截断，再检查截断后的数学整数范围；NaN、无穷和越界是 Panic）、
-integer→float（直接按目标 f32/f64 精度做一次 RNE），以及 float→float 的同宽/扩宽
-三对 f32→f32、f64→f64、f32→f64。f64→f32 缩窄、bool 参与以及非数值源/目标仍是
-无效 IR；转换嵌套沿用同一记录。float 同宽保留已舍入的源位模式；f32→f64 的有限值
-按源 binary32 精确扩展，常量折叠不经 host double。`Op::convert` 的 `origin` 指向
+integer→float（直接按目标 f32/f64 精度做一次 RNE），以及全部 f32/f64 源目标对：
+f32→f32、f64→f64、f32→f64 和 f64→f32。f32→f64 精确扩宽；f64→f32 按源 f64 精确
+值做一次 RNE，有限溢出得到带符号 Infinity，保留 ±0 和 NaN 分类，不进入浮点到整数
+的 Panic 规则。bool 参与以及非数值源/目标仍是无效 IR；转换嵌套沿用同一记录。float
+同宽保留已舍入的源位模式；f64→f32 常量折叠使用目标 f32 位模式，不经 host double。
+`Op::convert` 的 `origin` 指向
 同函数真实 HIR `integer_convert`，其源/目标必须与指令一致；实际 SSA 输入还必须
 是完整 HIR operand 的结果，不能仅替换为位于该 operand SourceSpan 内的同型子表达式。
 透明 `copy`/`borrow` 链只按实际 ValueId 跟随。不新增 NodeKind、字段或 Native ABI。

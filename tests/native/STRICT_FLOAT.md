@@ -23,8 +23,8 @@ Native IR verifier 分别检查浮点合法操作、操作数 TypeId 相同、�
 全部屏蔽。编译器按该环境生成普通 IEEE LLVM 指令，不在函数入口修改调用者的浮点
 环境。Linux 进程默认环境满足此要求；改变该环境的 foreign 调用仍未支持。
 不保证 NaN payload/sign 或异常标志；NaN 只比较分类。显式 float->int 与 int->float
-转换见 `tests/numeric`（float->int 先向零截断再范围检查，int->float 一次 RNE）；
-浮点宽度转换、ARC、Vec、move 和 foreign 仍明确拒绝。
+转换见 `tests/numeric`：float->int 先向零截断再范围检查，int->float 一次 RNE，
+f64->f32 一次 RNE 且有限溢出为带符号 Infinity。ARC、Vec、move 和 foreign 仍明确拒绝。
 
 ## 执行检查
 

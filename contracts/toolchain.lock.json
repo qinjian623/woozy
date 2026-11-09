@@ -86,7 +86,7 @@
       "version": "3.12.15",
       "executable_sha256": "eaaa308032c4aa063df5880c4c293cd458b4629d503fbc2c03ec163d71f7f790"
     },
-    "runtime_version": "compiler-dev/1-python-values/6",
+    "runtime_version": "compiler-dev/1-python-values/7",
     "binding_bundle": {
       "repository_path": "contracts/python_bindings.example.json",
       "contract": "compiler-dev/1",

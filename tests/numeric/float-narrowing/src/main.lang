@@ -1,0 +1,204 @@
+package app;
+
+// Independent f64->f32 narrowing fixture. The frozen float-conversions
+// fixture and its original main remain byte-for-byte unchanged; this project
+// owns the new declarations, value checks and probe functions.
+func narrow(x f64) f32 { return f32(x); }
+func narrow_read(x f64) f32 { let y f64 = x; return f32(y); }
+func narrow_indirect(x f64) f32 { let f = narrow; return f(x); }
+func narrow_add(x f64, y f64) f32 { return f32(x + y); }
+func narrow_expr(x f64, y f64) f32 { return f32(x * y + x); }
+
+func narrow_tie_down() f32 {
+    return f32(1.0 + 0.000000059604644775390625);
+}
+func narrow_tie_up() f32 {
+    return f32(1.0 + 0.000000178813934326171875);
+}
+func narrow_above_tie() f32 {
+    return f32(1.0 + 0.000000059604644775390625 +
+               0.00000000000000088817841970012523233890533447265625);
+}
+func narrow_max_finite() f32 {
+    return f32(f32_max);
+}
+func narrow_below_overflow() f32 {
+    return f32(f32_max + two103 - two75);
+}
+func narrow_overflow_tie() f32 {
+    return f32(f32_max + two103);
+}
+func narrow_negative_overflow() f32 {
+    return f32(-1e300);
+}
+func narrow_positive_infinity() f32 {
+    return f32(1.0 / 0.0);
+}
+func narrow_negative_infinity() f32 {
+    return f32(-1.0 / 0.0);
+}
+func narrow_half_min_subnormal() f32 {
+    return f32(half_min_subnormal);
+}
+func narrow_negative_half_min_subnormal() f32 {
+    return f32(-half_min_subnormal);
+}
+func narrow_min_subnormal_tie_up() f32 {
+    return f32(3.0 * half_min_subnormal);
+}
+func narrow_min_subnormal_above_half() f32 {
+    return f32(half_min_subnormal + subnormal_tiny);
+}
+func narrow_min_subnormal_below_half() f32 {
+    return f32(half_min_subnormal - subnormal_tiny);
+}
+func narrow_min_normal_tie() f32 {
+    return f32(min_normal - half_min_subnormal);
+}
+func narrow_nan() f32 {
+    return f32(0.0 / 0.0);
+}
+func narrow_positive_zero() f32 {
+    return f32(0.0);
+}
+func narrow_negative_zero() f32 {
+    return f32(-0.0);
+}
+func narrow_const_read() f32 {
+    return narrow_const_tie_value;
+}
+func narrow_from_const() f32 {
+    return f32(narrow_const_source);
+}
+func narrow_from_const_infinity() f32 {
+    return f32(narrow_const_infinity);
+}
+func narrow_from_const_overflow() f32 {
+    return f32(narrow_const_overflow);
+}
+
+enum WidenError { Failed; }
+func narrow_bump(c inout i32) f64 { c = c * 10 + 1; return 1.25; }
+func narrow_effect(c inout i32) f32 {
+    defer { c += 10; }
+    return f32(narrow_bump(inout c));
+}
+func narrow_fail(c inout i32) f64 throws WidenError {
+    c = c + 1;
+    throw WidenError.Failed;
+}
+func narrow_throwing_effect(c inout i32) f32 throws WidenError {
+    defer { c += 10; }
+    return f32(narrow_fail(inout c));
+}
+func narrow_short_circuit(c inout i32, skip bool) f32 {
+    // Neither right-hand operand may be evaluated, including its conversion.
+    if skip && (f32(narrow_bump(inout c)) == 1.25) { c = 99; }
+    if !skip || (f32(narrow_bump(inout c)) == 1.25) { } else { c = 99; }
+    return f32(narrow_bump(inout c));
+}
+func narrow_order(c inout i32) f32 {
+    return f32(narrow_bump(inout c)) + f32(narrow_bump(inout c));
+}
+
+// Exact binary64 neighbours of f32 boundaries. These constants are already
+// representable in binary64, so each decimal is not an extra rounding step.
+const f32_max f64 = 340282346638528859811704183484516925440.0;
+const two103 f64 = 10141204801825835211973625643008.0;
+const two75 f64 = 37778931862957161709568.0;
+const half_min_subnormal f64 =
+    0.000000000000000000000000000000000000000000000700649232162408535461864791644958065640130970938257885878534141944895541342930300743319094181060791015625;
+const min_normal f64 =
+    0.000000000000000000000000000000000000011754943508222875079687365372222456778186655567720875215087517062784172594547271728515625;
+const subnormal_tiny f64 =
+    1.0 / 1606938044258990275541962092341162602522202993782792835301376.0;
+const narrow_const_source f64 = 1.0 + 0.000000059604644775390625;
+const narrow_const_tie_value f32 = f32(narrow_const_source);
+const narrow_const_infinity f64 = 1.0 / 0.0;
+const narrow_const_overflow f64 = 1e300;
+
+func main() i32 {
+    // f64 -> f32 narrowing uses one IEEE RNE step. The source expressions are
+    // exact binary64 values around normal and subnormal f32 boundaries.
+    let tie_down = 1.0 + 0.000000059604644775390625;
+    let tie_up = 1.0 + 0.000000178813934326171875;
+    if narrow(tie_down) != 1.0 { return 17; }
+    if narrow(tie_up) != 1.0000002384185791015625 { return 17; }
+    if narrow(1.0 + 0.000000059604644775390625 +
+               0.00000000000000088817841970012523233890533447265625) !=
+        1.00000011920928955078125 { return 17; }
+    if narrow_read(tie_down) != 1.0 { return 17; }
+    if narrow_indirect(tie_down) != 1.0 { return 17; }
+    if narrow_add(1.0, 0.000000059604644775390625) != 1.0 { return 17; }
+    if narrow_expr(0.5, 0.5) != 0.75 { return 17; }
+    if narrow_tie_down() != narrow(tie_down) { return 17; }
+    if narrow_tie_up() != narrow(tie_up) { return 17; }
+
+    let positive_infinity f32 = 1.0 / 0.0;
+    let negative_infinity f32 = -1.0 / 0.0;
+    if narrow_tie_down() != 1.0 { return 18; }
+    if narrow_tie_up() != 1.0000002384185791015625 { return 18; }
+    if narrow_const_read() != 1.0 { return 18; }
+    if narrow_from_const() != 1.0 { return 18; }
+    if narrow_from_const_infinity() != positive_infinity { return 18; }
+    if narrow_from_const_overflow() != positive_infinity { return 18; }
+    if narrow_above_tie() != 1.00000011920928955078125 { return 18; }
+    if narrow_max_finite() !=
+        340282346638528859811704183484516925440.0 { return 18; }
+    if narrow_below_overflow() !=
+        340282346638528859811704183484516925440.0 { return 18; }
+
+    // The source value is exactly max_f32 + 0.5 ulp, so the tie rounds to the
+    // even (2^128) significand and overflows to +Inf.
+    if narrow_overflow_tie() != positive_infinity { return 18; }
+    if narrow_negative_overflow() != negative_infinity { return 18; }
+    // A source f64 infinity must be converted through the target-width Inf
+    // branch, not reused as a binary64 literal.
+    if narrow_positive_infinity() != positive_infinity { return 18; }
+    if narrow_negative_infinity() != negative_infinity { return 18; }
+
+    // Half of the minimum subnormal ties to even zero; the signs survive.
+    let half_positive f32 = narrow_half_min_subnormal();
+    let half_negative f32 = narrow_negative_half_min_subnormal();
+    if half_positive != 0.0 { return 19; }
+    if half_negative != 0.0 { return 19; }
+    if 1.0 / half_positive != positive_infinity { return 19; }
+    if 1.0 / half_negative != negative_infinity { return 19; }
+    if narrow_min_subnormal_tie_up() !=
+        0.0000000000000000000000000000000000000000000028025969286496341418474591665798322625605238837530315435141365677795821653717212029732763767242431640625 { return 19; }
+    if narrow_min_subnormal_above_half() !=
+        0.00000000000000000000000000000000000000000000140129846432481707092372958328991613128026194187651577175706828388979108268586060148663818836212158203125 { return 19; }
+    if narrow_min_subnormal_below_half() != 0.0 { return 19; }
+    // The midpoint between the largest subnormal and the minimum normal
+    // rounds to the even minimum-normal significand.
+    if narrow_min_normal_tie() !=
+        0.000000000000000000000000000000000000011754943508222875079687365372222456778186655567720875215087517062784172594547271728515625 { return 19; }
+
+    let nan = narrow_nan();
+    if nan == nan { return 20; }
+    if !(nan != nan) { return 20; }
+    let positive_zero f32 = narrow_positive_zero();
+    let negative_zero f32 = narrow_negative_zero();
+    if 1.0 / positive_zero != positive_infinity { return 20; }
+    if 1.0 / negative_zero != negative_infinity { return 20; }
+
+    // The conversion preserves source order and only evaluates its operand
+    // once. A dropped or hoisted operand changes the counter.
+    var narrow_effect_count i32 = 0;
+    if narrow_effect(inout narrow_effect_count) != 1.25 ||
+       narrow_effect_count != 11 { return 21; }
+    narrow_effect_count = 0;
+    if narrow_short_circuit(inout narrow_effect_count, false) != 1.25 ||
+       narrow_effect_count != 1 { return 21; }
+    narrow_effect_count = 0;
+    if narrow_order(inout narrow_effect_count) != 2.5 ||
+       narrow_effect_count != 11 { return 21; }
+    narrow_effect_count = 0;
+    try {
+        let thrown = narrow_throwing_effect(inout narrow_effect_count);
+        return 22;
+    } catch err WidenError {
+        if narrow_effect_count != 11 { return 22; }
+    }
+    return 0;
+}

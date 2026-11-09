@@ -2171,18 +2171,18 @@ class Verifier {
     }
     case NodeKind::integer_convert: {
       arity(1);
-      // One shared record covers the allowed numeric pairs. Float identity and
-      // widening are exact; f64->f32 narrowing, bool and non-numeric
-      // sources/destinations stay invalid.
+      // One shared record covers the allowed numeric pairs. Every f32/f64
+      // source-target pair is valid: identity/widening are exact and
+      // f64->f32 narrowing rounds once with IEEE RNE, overflowing to a signed
+      // infinity. Bool and non-numeric sources/destinations stay invalid.
       const auto &source_type = type(expr(ch[0]).type);
       const auto &destination_type = type(n.type);
       const auto source = source_type.kind;
       const auto destination = destination_type.kind;
       const bool float_pair =
           source == TypeKind::Float && destination == TypeKind::Float &&
-          ((source_type.bits == 32 &&
-            (destination_type.bits == 32 || destination_type.bits == 64)) ||
-           (source_type.bits == 64 && destination_type.bits == 64));
+          (source_type.bits == 32 || source_type.bits == 64) &&
+          (destination_type.bits == 32 || destination_type.bits == 64);
       need((integer(source) && integer(destination)) ||
                (source == TypeKind::Float && integer(destination)) ||
                (integer(source) && destination == TypeKind::Float) ||

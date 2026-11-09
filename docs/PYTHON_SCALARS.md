@@ -8,7 +8,7 @@
 
 Python 已支持 typed throws、精确类型 catch 和词法块 defer，见
 [错误与清理执行说明](PYTHON_T08_EXECUTION.md)。当前运行库版本为
-`compiler-dev/1-python-values/6`；旧版运行库会被生成程序的版本检查拒绝。
+`compiler-dev/1-python-values/7`；旧版运行库会被生成程序的版本检查拒绝。
 同块平铺 defer 不增加 Python 控制块深度；生成结构按 CPython 3.12.15 的
 21 个静态控制块上限检查，取代旧的保守计数 profile 18。此前四个小规模嵌套输入
 已转为真实执行测试。超过目标限制的输入仍在 build 时返回
@@ -268,9 +268,11 @@ helper 仅在选取入口时根据已解析符号表寻找入口模块的 main�
 - Unit、bool、i8/i16/i32/i64、u8/u16/u32/u64、isize/usize。目标字宽固定 64，不读取宿主指针宽度。
 - f32/f64 按 HIR 的 IEEE bits 重建；支持绑定、读取、赋值、普通传参/返回和整体 inout。
   传递过程中不做算术。测试逐位检查零、1、ties-to-even、最小 subnormal、下溢、上溢及 inout 更新。
-- 2026-11-09 追加显式 float 同宽/扩宽转换：f32→f32、f64→f64 与精确 f32→f64
-  直接传递已按源宽度舍入的 Python float，并保存真实 Source/求值顺序；f64→f32
-  缩窄仍报 `E_CAPABILITY_UNAVAILABLE`。没有新增运行库入口或通用 identity 转换。
+- 2026-11-09 追加显式 float 转换：f32→f32、f64→f64 与精确 f32→f64 直接传递已按
+  源宽度舍入的 Python float，并保存真实 Source/求值顺序；f64→f32 调用运行库私有
+  `float_to_float`，用精确 `as_integer_ratio` 和目标宽度 RNE 一次舍入，有限溢出得到
+  带符号 Infinity，保留 ±0/NaN 分类，不进入 float→int Panic 路径。没有通用 identity
+  转换。
 - 声明函数、函数值、无捕获 lambda、立即/间接调用、返回函数值、递归和相互递归、跨文件/模块调用。
 - let/var/const、赋值和整数复合赋值；局部 const 的计算由前端完成。
 - Block、If、三段式/条件式/无限 For、Return、Break、Continue、bool 短路。

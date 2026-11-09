@@ -371,12 +371,16 @@ class Emitter {
     const auto &from = type(value_types.at(i.inputs[0])), &to = type(i.type);
     if (from.kind == hir::TypeKind::Float &&
         to.kind == hir::TypeKind::Float) {
-      // Identity keeps the LLVM value unchanged. The only widening pair is
-      // binary32 -> binary64, which LLVM fpext performs exactly, including
-      // subnormals. f64->f32 narrowing never reaches code generation.
+      // Identity keeps the LLVM value unchanged. Binary32 -> binary64 uses
+      // fpext and is exact, including subnormals. Binary64 -> binary32 uses
+      // fptrunc, which is IEEE round-to-nearest ties-to-even under the
+      // checked RNE/FTZ-off environment; finite overflow becomes a signed
+      // infinity and no guard or Panic is involved.
       if (from.bits == to.bits)
         return v;
-      return builder.CreateFPExt(v, lower_type(i.type));
+      if (from.bits == 32)
+        return builder.CreateFPExt(v, lower_type(i.type));
+      return builder.CreateFPTrunc(v, lower_type(i.type));
     }
     if (from.kind == hir::TypeKind::Float) {
       // Truncate into an i64 first only under bounds that every f32/f64 can

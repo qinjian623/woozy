@@ -2,15 +2,22 @@
 """Explicit numeric conversions: real build/run and independent expectations.
 
 Covers, for the same sources and both backends:
-  * the executable value table in `tests/numeric/values` (truncation at every
-    integer width and sign, isize/usize, subnormals, signed zero, one-step RNE
-    ties, the f32 double-rounding trap and nested/const conversions);
-  * the native probe sweep: bit patterns are handed to the generated functions
-    through their real LLVM signatures and compared with an exact `Fraction`
-    oracle (`tests/native/float_expected.py`), never with the implementation;
-  * static failures (source errors and the still-closed f64->f32/bool
-    pairs) in both backends, including fresh "no output" and stale "unchanged
-    bytes" checks;
+  * the executable value tables in `tests/numeric/values`,
+    `tests/numeric/float-conversions` and `tests/numeric/float-narrowing`
+    (integer truncation, integer/float conversion, f64->f32
+    normal/subnormal/overflow/signed-zero/NaN classes, constant and dynamic
+    paths, variable/read/parameter/return/indirect calls, evaluation order,
+    short circuit and typed throws);
+  * the native probe sweep, split into the frozen legacy fixture (367
+    requests) and the independent narrowing fixture (271 requests): bit
+    patterns are handed to the generated functions through their real LLVM
+    signatures and compared with an exact `Fraction` oracle
+    (`tests/native/float_expected.py`), never with the implementation;
+  * the frozen inputs that used to be rejected only for f64->f32 narrowing,
+    now checked, built and run in both backends;
+  * static failures (source errors and unsupported bool/non-numeric pairs)
+    in both backends, including fresh "no output" and stale "unchanged bytes"
+    checks;
   * dynamic failures: check accepts, real execution Panics with exit 101 and
     the backend marker;
   * static ELF properties: no PT_INTERP, no DT_NEEDED and no libm/trunc symbol.
@@ -27,7 +34,7 @@ import tempfile
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'native'))
 sys.path.insert(0, str(Path(__file__).resolve().parent))
-from float_expected import decoded, rounded  # noqa: E402
+from float_expected import decoded, operation, rounded  # noqa: E402
 import cases  # noqa: E402
 from fractions import Fraction  # noqa: E402
 
@@ -146,6 +153,8 @@ def values_matrix(args, report, tmp):
     run_project('values', args.root / 'tests/numeric/values', True)
     run_project('float-conversions',
                 args.root / 'tests/numeric/float-conversions', False)
+    run_project('float-narrowing',
+                args.root / 'tests/numeric/float-narrowing', False)
     return rows
 
 # Fixed probe values, hand chosen around RNE midpoints and integer bounds.
@@ -224,6 +233,84 @@ def widen32(pattern):
     return rounded(value, 64, zero_sign=sign)
 
 
+def narrow64(pattern):
+    """Exact f64 -> f32 expectation from the decoded source value.
+
+    Binary32 rounding is done by the test-only integer RNE kernel; finite
+    overflow becomes signed infinity, signed zero keeps its sign, and NaN is
+    compared only by class. The critical constants below were also checked by
+    the LLVM 22.1.8 APFloat oracle used by tests/floating.
+    """
+    category, sign, value = decoded(pattern, 64)
+    if category == 'nan':
+        return 'nan'
+    if category == 'infinity':
+        return sign << 31 | 0x7f800000
+    if category == 'zero':
+        return sign << 31
+    return rounded(value, 32, zero_sign=sign)
+
+
+def f64_exact(value):
+    return rounded(Fraction(value), 64, zero_sign=int(value < 0))
+
+
+def narrow_patterns():
+    """Edge patterns plus fixed random binary64 inputs for the dynamic path."""
+    import random
+    sign = 1 << 63
+    infinity = 0x7ff0000000000000
+    quiet = infinity | (1 << 51)
+    signaling = infinity | 1
+    patterns = [0, sign, 1, sign | 1, 2, sign | 2,
+                infinity, sign | infinity,
+                quiet, sign | quiet, quiet | 0x123, sign | (quiet | 0x123),
+                signaling, sign | signaling, signaling | 0x123,
+                sign | (signaling | 0x123)]
+    min_normal = Fraction(1, 2 ** 126)
+    min_subnormal = Fraction(1, 2 ** 149)
+    half_min_subnormal = Fraction(1, 2 ** 150)
+    tiny = Fraction(1, 2 ** 200)
+    max_f32 = Fraction(2 ** 24 - 1) * Fraction(2) ** 104
+    overflow_tie = max_f32 + Fraction(2) ** 103
+    exact = [
+        min_subnormal, -min_subnormal,
+        half_min_subnormal, -half_min_subnormal,
+        half_min_subnormal - tiny, half_min_subnormal + tiny,
+        3 * half_min_subnormal,
+        3 * min_subnormal,
+        Fraction(2 ** 23 - 1) * min_subnormal,
+        min_normal - half_min_subnormal,
+        min_normal, min_normal + half_min_subnormal,
+        max_f32, -max_f32,
+        overflow_tie, -overflow_tie,
+        overflow_tie - Fraction(2) ** 75,
+        overflow_tie + Fraction(2) ** 75,
+        Fraction(1), -Fraction(1),
+        Fraction(1) + Fraction(1, 2 ** 24),
+        Fraction(1) - Fraction(1, 2 ** 24),
+        Fraction(1) + Fraction(3, 2 ** 24),
+        Fraction(1) + Fraction(1, 2 ** 24) + Fraction(1, 2 ** 50),
+        Fraction(1) + Fraction(1, 2 ** 24) - Fraction(1, 2 ** 50),
+        Fraction(1) + Fraction(1, 2 ** 23),
+        Fraction(1) + Fraction(1, 2 ** 22),
+        Fraction(2) ** -149, Fraction(2) ** -126,
+        Fraction(2) ** 127, Fraction(2) ** 128,
+        (Fraction(2 ** 53 - 1) * Fraction(2) ** 971),
+    ]
+    for value in exact:
+        patterns.append(f64_exact(value))
+        patterns.append(f64_exact(-value))
+    rng = random.Random(20261109)
+    patterns.extend(rng.getrandbits(64) for _ in range(64))
+    return list(dict.fromkeys(patterns))
+
+
+def narrow_request(name, pattern, expected, source):
+    return dict(name=name, result='f32', arg_widths=[64],
+                arguments=[pattern], expected=expected, source=source)
+
+
 def probe_requests():
     requests = []
     for name, result, width, values in (
@@ -283,18 +370,101 @@ def probe_requests():
             arguments=[value & 0xffffffff],
             expected=rounded(actual, 64, zero_sign=sign),
             source='int->f32 RNE first, then exact widening to f64'))
+
     return requests
 
 
-def probe_matrix(args, report, tmp):
-    if not args.probe:
-        report['probes'] = dict(status='not_run', reason='--probe not given')
-        return
+def narrowing_probe_requests():
+    requests = []
+    patterns = narrow_patterns()
+    narrow_source = ('exact f64 decode, then one RNE rounding to binary32; '
+                     'overflow to signed infinity, NaN by class')
+    for pattern in patterns:
+        requests.append(narrow_request('narrow', pattern,
+                                       narrow64(pattern), narrow_source))
+    # The variable-read and indirect-call routes must produce the same bits
+    # for every edge value, not only for a convenient finite subset.
+    for name in ('narrow_read', 'narrow_indirect'):
+        for pattern in patterns[:48]:
+            requests.append(narrow_request(name, pattern, narrow64(pattern),
+                                           'same narrowing through ' + name))
+    add_pairs = [
+        (f64_exact(Fraction(1)), f64_exact(Fraction(1, 2 ** 24))),
+        (f64_exact(Fraction(1)), f64_exact(Fraction(3, 2 ** 24))),
+        (f64_exact(Fraction(1)), f64_exact(Fraction(-1, 2 ** 24))),
+        (f64_exact(Fraction(2 ** 24 - 1) * Fraction(2) ** 104),
+         f64_exact(Fraction(2) ** 103)),
+        (f64_exact(Fraction(2 ** 24 - 1) * Fraction(2) ** 104),
+         f64_exact(-Fraction(2) ** 75)),
+        (f64_exact(Fraction(2) ** -150), f64_exact(Fraction(2) ** -151)),
+        (f64_exact(Fraction(2) ** -150), f64_exact(-Fraction(2) ** -151)),
+        (0x7ff0000000000000, 0xfff0000000000000),
+        (0, 1 << 63), (1 << 63, 1 << 63),
+        (0x7fefffffffffffff, 0x7fefffffffffffff),
+        (0xffefffffffffffff, 0xffefffffffffffff),
+    ]
+    add_pairs += [(patterns[i], patterns[j])
+                  for i, j in ((0, 0), (2, 2), (4, 5), (30, 31), (40, 41))]
+    for x, y in add_pairs:
+        raw = operation('add', [x, y], 64)
+        requests.append(dict(
+            name='narrow_add', result='f32', arg_widths=[64, 64],
+            arguments=[x, y], expected=narrow64(raw),
+            source='f64 add with one RNE step, then f64->f32 RNE'))
+    expr_pairs = [
+        (f64_exact(Fraction(1)), f64_exact(Fraction(1, 2 ** 24))),
+        (f64_exact(Fraction(2 ** 24 - 1) * Fraction(2) ** 104),
+         f64_exact(Fraction(2))),
+        (f64_exact(Fraction(2) ** -150), f64_exact(Fraction(2))),
+        (f64_exact(Fraction(1) + Fraction(1, 2 ** 24)),
+         f64_exact(Fraction(1))),
+        (0x7ff0000000000000, 0x3ff0000000000000),
+        (0, 1 << 63),
+    ]
+    for x, y in expr_pairs:
+        raw = operation('nofma', [x, y, x], 64)
+        requests.append(dict(
+            name='narrow_expr', result='f32', arg_widths=[64, 64],
+            arguments=[x, y], expected=narrow64(raw),
+            source='f64 x*y then +x, each RNE, then f64->f32 RNE'))
+    constants = [
+        ('narrow_tie_down', 0x3f800000),
+        ('narrow_tie_up', 0x3f800002),
+        ('narrow_above_tie', 0x3f800001),
+        ('narrow_max_finite', 0x7f7fffff),
+        ('narrow_below_overflow', 0x7f7fffff),
+        ('narrow_overflow_tie', 0x7f800000),
+        ('narrow_negative_overflow', 0xff800000),
+        ('narrow_positive_infinity', 0x7f800000),
+        ('narrow_negative_infinity', 0xff800000),
+        ('narrow_half_min_subnormal', 0x00000000),
+        ('narrow_negative_half_min_subnormal', 0x80000000),
+        ('narrow_min_subnormal_tie_up', 0x00000002),
+        ('narrow_min_subnormal_above_half', 0x00000001),
+        ('narrow_min_subnormal_below_half', 0x00000000),
+        ('narrow_min_normal_tie', 0x00800000),
+        ('narrow_nan', 'nan'),
+        ('narrow_positive_zero', 0x00000000),
+        ('narrow_negative_zero', 0x80000000),
+        ('narrow_const_read', 0x3f800000),
+        ('narrow_from_const', 0x3f800000),
+        ('narrow_from_const_infinity', 0x7f800000),
+        ('narrow_from_const_overflow', 0x7f800000),
+    ]
+    for name, expected in constants:
+        requests.append(dict(name=name, result='f32', arg_widths=[],
+                             arguments=[], expected=expected,
+                             source='constant folding of the same IEEE RNE '
+                                    'rule; expected bits checked by APFloat'))
+    return requests
+
+
+def probe_matrix_for(args, report, tmp, key, manifest, requests,
+                     min_controls=5):
     rows = dict(status='failed', runs=[], totals=dict(passed=0, failed=0))
-    report['probes'] = rows
-    requests = probe_requests()
+    report[key] = rows
     for opt in (0, 2):
-        out = tmp / 'probes' / f'O{opt}'
+        out = tmp / 'probes' / key / f'O{opt}'
         out.mkdir(parents=True, exist_ok=True)
         request_file = out / 'requests.tsv'
         request_file.write_text(''.join(
@@ -306,20 +476,22 @@ def probe_matrix(args, report, tmp):
         row = dict(opt=opt, values=[])
         rows['runs'].append(row)
         row['build'] = r = command([
-            args.probe, args.root / 'tests/numeric/float-conversions/lang.toml',
-            out / 'probe', opt, request_file])
+            args.probe, args.root / manifest, out / 'probe', opt, request_file])
         ok(r, 'probe emit')
         row['metadata'] = json.loads((out / 'probe/metadata.json').read_text())
         assert row['metadata']['probes'] == len(requests), row['metadata']
         assert row['metadata']['bad_ir_rejected'] >= \
             row['metadata']['convert_instructions'], row['metadata']
         assert row['metadata']['convert_instructions'] >= 20, row['metadata']
-        assert row['metadata']['legal_retarget_controls'] >= 5, row['metadata']
-        for key in ('bool_mutations', 'float_width_mutations',
-                    'origin_mutations', 'operand_mutations',
-                    'address_mutations', 'compound_operand_mutations',
-                    'unary_operand_mutations', 'external_operand_mutations'):
-            assert row['metadata'][key] >= 1, (key, row['metadata'])
+        assert row['metadata']['legal_retarget_controls'] >= min_controls, \
+            row['metadata']
+        for mutation_key in ('bool_mutations', 'float_width_mutations',
+                             'origin_mutations', 'operand_mutations',
+                             'address_mutations', 'compound_operand_mutations',
+                             'unary_operand_mutations',
+                             'external_operand_mutations'):
+            assert row['metadata'][mutation_key] >= 1, \
+                (mutation_key, row['metadata'])
         # The bool-source mutation inserts into the same instruction vector, so
         # the relocation path must really run (no stale reference is used).
         assert row['metadata']['insert_mutations'] >= 1, row['metadata']
@@ -373,20 +545,19 @@ def probe_matrix(args, report, tmp):
             rows['totals']['passed' if matched else 'failed'] += 1
             assert matched, observation
         assert offset == len(data), 'extra probe observation bytes'
-    python_probe(args, report, tmp, requests)
+    python_probe(args, report, tmp, key, manifest, requests)
     rows['status'] = 'passed'
 
 
-def python_probe(args, report, tmp, requests):
+def python_probe(args, report, tmp, key, manifest, requests):
     rows = dict(status='not_run', reason='--helper not given', values=[],
                 totals=dict(passed=0, failed=0))
-    report['probes']['python'] = rows
+    report[key]['python'] = rows
     if not args.helper:
         return
-    generated = tmp / 'probes' / 'python'
+    generated = tmp / 'probes' / 'python' / key
     result = command([args.helper, '--project',
-                      args.root / 'tests/numeric/float-conversions/lang.toml',
-                      '--out-dir', generated])
+                      args.root / manifest, '--out-dir', generated])
     ok(result, 'python probe emit')
     spec = generated / 'requests.json'
     spec.write_text(json.dumps(requests) + '\n')
@@ -421,6 +592,67 @@ def python_probe(args, report, tmp, requests):
         rows['totals']['passed' if matched else 'failed'] += 1
         assert matched, observation
     rows['status'] = 'passed'
+
+
+def probe_matrix(args, report, tmp):
+    """Run the frozen legacy project and the independent narrowing project.
+
+    The original float-conversions source keeps its exact bytes and its 367
+    requests; the new narrowing declarations live in a separate project and
+    contribute the remaining 271 requests.
+    """
+    if not args.probe:
+        report['probes'] = dict(status='not_run', reason='--probe not given')
+        report['probes_narrowing'] = dict(status='not_run',
+                                          reason='--probe not given')
+        return
+    legacy = probe_requests()
+    narrowing = narrowing_probe_requests()
+    assert len(legacy) == 367, ('legacy probe count', len(legacy))
+    assert len(narrowing) == 271, ('narrowing probe count', len(narrowing))
+    probe_matrix_for(args, report, tmp, 'probes',
+                     'tests/numeric/float-conversions/lang.toml', legacy)
+    probe_matrix_for(args, report, tmp, 'probes_narrowing',
+                     'tests/numeric/float-narrowing/lang.toml', narrowing,
+                     min_controls=1)
+    report['probes']['narrowing_fixture'] = 'probes_narrowing'
+
+
+def accepted_matrix(args, report, tmp):
+    rows = []
+    report['accepted'] = rows
+    for case in cases.accepted_cases():
+        root = tmp / 'accepted' / case['id'] / 'project'
+        project(root, 'package app;\n' + case['source'] + '\n')
+        row = dict(id=case['id'], reason=case['reason'], checks=[], runs=[])
+        rows.append(row)
+        for backend in ('native', 'python'):
+            r = command([args.cli, 'check', '--project', root / 'lang.toml',
+                         '--backend', backend, '--format', 'json'])
+            ok(r, f'accepted case {case["id"]} check {backend}')
+            assert diagnostics(r)['status'] == 'ok', r
+            row['checks'].append(dict(backend=backend, command=r))
+        for opt in (0, 2):
+            out = tmp / 'accepted' / case['id'] / 'native' / f'O{opt}'
+            build = command([args.cli, 'build', '--project',
+                             root / 'lang.toml', '--backend', 'native',
+                             '--out-dir', out, '--opt', str(opt),
+                             '--format', 'json'])
+            ok(build, f'accepted case {case["id"]} native build O{opt}')
+            ran = command([out / 'program'])
+            ok(ran, f'accepted case {case["id"]} native run O{opt}')
+            row['runs'].append(dict(backend='native', opt=opt, build=build,
+                                    execute=ran))
+        out = tmp / 'accepted' / case['id'] / 'python' / 'O0'
+        build = command([args.cli, 'build', '--project', root / 'lang.toml',
+                         '--backend', 'python', '--out-dir', out,
+                         '--format', 'json'])
+        ok(build, f'accepted case {case["id"]} python build')
+        ran = command([args.python, out / 'program.py'], cwd=out)
+        ok(ran, f'accepted case {case["id"]} python run')
+        row['runs'].append(dict(backend='python', opt=0, build=build,
+                                execute=ran))
+    return rows
 
 
 def static_matrix(args, report, tmp):
@@ -527,12 +759,21 @@ def main():
                   failures=[])
     try:
         values_matrix(args, report, tmp)
+        accepted_matrix(args, report, tmp)
         probe_matrix(args, report, tmp)
         static_matrix(args, report, tmp)
         panic_matrix(args, report, tmp)
+        legacy = report.get('probes', {}).get('totals', {})
+        narrowing = report.get('probes_narrowing', {}).get('totals', {})
         report['counts'] = dict(
             values_runs=len(report['values']),
-            probes=report.get('probes', {}).get('totals', {}),
+            accepted_cases=len(report['accepted']),
+            probes=dict(passed=legacy.get('passed', 0) +
+                                narrowing.get('passed', 0),
+                        failed=legacy.get('failed', 0) +
+                               narrowing.get('failed', 0)),
+            probes_legacy=legacy,
+            probes_narrowing=narrowing,
             static_cases=len(report['static']),
             panic_cases=len(report['panic']))
         report['status'] = 'passed'

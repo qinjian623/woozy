@@ -2943,14 +2943,15 @@ class Checker {
       const unsigned source_width = width(x.value.type);
       const unsigned target_width = width(target);
       const bool float_pair = source_float && target_kind == TypeKind::Float;
-      // Identity and widening are exact. f64 -> f32 remains a capability
-      // boundary until its overflow rule is specified; it is not a source
-      // error and must not silently become one.
-      if (float_pair &&
-          !((source_width == 32 &&
-             (target_width == 32 || target_width == 64)) ||
-            (source_width == 64 && target_width == 64)))
-        unavailable(r, "narrowing float-to-float conversions are not implemented");
+      // Every f32/f64 source-target pair is supported. Narrowing uses the
+      // same IEEE round-to-nearest ties-to-even rule as arithmetic: finite
+      // values round once to binary32, overflow becomes a signed infinity,
+      // and signed zero/NaN keep their class. It is not a float-to-integer
+      // failure and never Panics. The fixed type system only provides 32/64.
+      if (float_pair && source_width != 32 && source_width != 64)
+        reject(r, "floating conversion source has an invalid width");
+      if (float_pair && target_width != 32 && target_width != 64)
+        reject(r, "floating conversion destination has an invalid width");
       Value v;
       v.type = target;
       if (float_pair) {
@@ -2962,18 +2963,23 @@ class Checker {
           } else {
             const auto ieee = decode_ieee(*x.value.floating, source_width);
             if (ieee.kind == Ieee::Kind::finite) {
-              // Binary32 finite values are exactly representable in binary64.
               // Reuse the exact ratio kernel on the already-rounded source
               // fields, never on the original decimal spelling or host double.
+              // For f64 -> f32 this kernel also rounds overflow to infinity
+              // and preserves a zero sign exactly like the dynamic operation.
               v.floating = round_fraction(ieee.negative, ieee.significand,
                                           mpz_class(1), ieee.shift, target);
             } else if (ieee.kind == Ieee::Kind::infinite) {
-              v.floating = (uint64_t(ieee.negative) << 63) |
-                           0x7ff0000000000000ULL;
+              const uint64_t infinity = target_width == 32
+                                            ? 0x7f800000ULL
+                                            : 0x7ff0000000000000ULL;
+              v.floating =
+                  (uint64_t(ieee.negative) << (target_width - 1)) | infinity;
             } else {
               // SEMANTICS does not promise a NaN payload or sign. Arithmetic
               // folding uses a quiet NaN of the destination width.
-              v.floating = 0x7ff8000000000000ULL;
+              v.floating = target_width == 32 ? 0x7fc00000ULL
+                                              : 0x7ff8000000000000ULL;
             }
           }
         }

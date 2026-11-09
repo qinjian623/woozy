@@ -568,11 +568,15 @@ class Verifier {
           arity(1);
           const auto &source = value(0);
           const auto source_kind = source.kind, destination = t.kind;
+          // Every f32/f64 source-target pair is a real conversion. In
+          // particular f64->f32 narrowing is IEEE RNE and overflows to a
+          // signed infinity; the HIR origin check below still binds it to the
+          // exact checked T(x) expression and operand.
           const bool float_pair =
               source_kind == hir::TypeKind::Float &&
               destination == hir::TypeKind::Float &&
-              ((source.bits == 32 && (t.bits == 32 || t.bits == 64)) ||
-               (source.bits == 64 && t.bits == 64));
+              (source.bits == 32 || source.bits == 64) &&
+              (t.bits == 32 || t.bits == 64);
           need((integer(source_kind) && integer(destination)) ||
                    (source_kind == hir::TypeKind::Float &&
                     integer(destination)) ||

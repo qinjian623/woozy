@@ -44,7 +44,9 @@ PhaseResult<hir::VerifiedHirModule> check_project(
   最小负数、完整 u64 最大值，以及远大于 u64 的错误输入。无上下文默认 i64；已定类型
   变量不能隐式混宽或混符号。显式数值转换支持 integer->integer 的动态/常量范围检查、
   float->integer（先向零截断，再检查截断后的数学整数范围；已知 NaN/无穷/越界为源码
-  错误）和 integer->float（直接按目标精度一次 RNE）。float->float 和 bool 转换仍拒绝。
+  错误）和 integer->float（直接按目标精度一次 RNE）。float->float 支持全部 f32/f64
+  源目标对；f64->f32 按 IEEE RNE 舍入，有限溢出为带符号 Infinity，不套用浮点到整数
+  的失败规则。bool 源/目标仍拒绝。
   const 求值接受整数、bool、已声明函数值和已舍入的浮点常量（含符号零、subnormal、
   NaN/无穷），浮点位值在括号、正负号、已知 `+ - * /` 和引用处不丢失。
 - GMP/GMPXX 6.3.0 计算常量。定宽加减乘、负号、位运算和左移回绕；有符号除法向零，
