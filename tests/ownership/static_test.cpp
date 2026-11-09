@@ -460,6 +460,35 @@ void recursive_value_tests() {
        "family");
 }
 
+void folded_constant_move_tests() {
+  const std::string setup =
+      "const x string=\"ok\";let y=move x;";
+  rejected("func main() i32 {" + setup +
+               "switch x {case \"ok\":return 0;default:return 1;}}",
+           "E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected("func f() string {" + setup + "return x;}",
+           "E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected("func f(flag bool) string {const x string=\"ok\";"
+           "if flag {let y=move x;}return x;}",
+           "E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected("func f() {const x string=\"ok\";defer {let z=x;}"
+           "let y=move x;}",
+           "E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected("func f[T]() string {" + setup + "return x;}"
+           "func main() i32 {let z=f[i32]();return 0;}",
+           "E_OWNERSHIP_USE_AFTER_MOVE");
+  rejected("func f() bool {const x bool=true;let y=move x;return x;}",
+           "E_OWNERSHIP_USE_AFTER_MOVE");
+  for (auto b : {Backend::native, Backend::python}) {
+    facts(accepted("func main() i32 {" + setup +
+                   "switch y {case \"ok\":return 0;default:return 1;}}", b));
+    facts(accepted("func f() string {const x string=\"ok\";const alias=x;"
+                   "let y=move x;return alias;}", b));
+    facts(accepted("func f() string {const x string=\"ok\";"
+                   "if false {let y=move x;}return x;}", b));
+  }
+}
+
 void flow_tests() {
   const std::string take = "func take(v move Vec[i32]) i32 { return v[0]; } ";
   rejected(
@@ -1717,6 +1746,7 @@ int main(int argc, char **argv) {
       return 0;
     }
     test_cases(argv[1]);
+    folded_constant_move_tests();
     flow_tests();
     recursive_value_tests();
     record_tests();

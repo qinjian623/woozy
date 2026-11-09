@@ -998,7 +998,10 @@ class Analysis {
       if (auto p = std::get_if<Place>(&n(base).data))
         readable(id, p->symbol, st);
     }
-    if (x.kind() == NodeKind::bool_literal) {
+    // Folded local constants still read their source binding.
+    if (x.kind() == NodeKind::bool_literal ||
+        x.kind() == NodeKind::string_literal ||
+        x.kind() == NodeKind::constant_literal) {
       const auto &ref = x.source.node;
       for (const auto &o : m.resolved->occurrences)
         if (o.source.module == ref.module && o.source.file == ref.file &&
