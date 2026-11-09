@@ -1,0 +1,52 @@
+// C++20 reference for the same single-threaded inclusive sieve and u8 array.
+// PERF-SIEVE n={{N}} rounds={{ROUNDS}} count={{EXPECTED_COUNT}} sum={{EXPECTED_SUM}}
+#include <cstdint>
+#include <vector>
+
+static int32_t sieve(int32_t n, uint64_t expected_count, uint64_t expected_sum) {
+    // Exactly n+1 zero bytes; uint8_t is required, not vector<bool>.
+    std::vector<uint8_t> composite(static_cast<std::size_t>(n) + 1, 0);
+    for (int32_t i = 0; i <= n; ++i) {
+        composite[static_cast<std::size_t>(i)] = 0;
+    }
+
+    for (int32_t p = 2; p * p <= n; ++p) {
+        if (composite[static_cast<std::size_t>(p)] == 0) {
+            for (int32_t m = p * p; m <= n; m += p) {
+                composite[static_cast<std::size_t>(m)] = 1;
+            }
+        }
+    }
+
+    uint64_t count = 0;
+    uint64_t sum = 0;
+    for (int32_t i = 2; i <= n; ++i) {
+        if (composite[static_cast<std::size_t>(i)] == 0) {
+            count += UINT64_C(1);
+            sum += static_cast<uint64_t>(i);
+        }
+    }
+
+    if (count != expected_count) {
+        return 1;
+    }
+    if (sum != expected_sum) {
+        return 2;
+    }
+    return 0;
+}
+
+int main() {
+    // Mirror the Source one-element runtime bound vector.
+    const std::vector<int32_t> bounds{ {{N}} };
+    const int32_t n = bounds[0];
+    const uint64_t expected_count = UINT64_C({{EXPECTED_COUNT}});
+    const uint64_t expected_sum = UINT64_C({{EXPECTED_SUM}});
+    for (int32_t round = 0; round < {{ROUNDS}}; ++round) {
+        const int32_t status = sieve(n, expected_count, expected_sum);
+        if (status != 0) {
+            return status;
+        }
+    }
+    return 0;
+}

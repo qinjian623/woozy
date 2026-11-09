@@ -1,0 +1,57 @@
+// Sieve of Eratosthenes preparation fixture: inclusive bound, u8 byte array.
+// PERF-SIEVE n={{N}} rounds={{ROUNDS}} count={{EXPECTED_COUNT}} sum={{EXPECTED_SUM}}
+package app;
+
+func sieve(n i32, expected_count u64, expected_sum u64) i32 {
+    // Exactly n+1 zero bytes. The current Vec interface has no sized-zero
+    // constructor, so prepare.py renders the fixed zero list.
+    var composite Vec[u8] = [{{ZEROS}}];
+    for var i i32 = 0; i <= n; i += 1 {
+        composite[i] = 0;
+    }
+
+    var p i32 = 2;
+    for p * p <= n {
+        if composite[p] == 0 {
+            var m i32 = p * p;
+            for m <= n {
+                composite[m] = 1;
+                m += p;
+            }
+        }
+        p += 1;
+    }
+
+    var count u64 = 0;
+    var sum u64 = 0;
+    for var i i32 = 2; i <= n; i += 1 {
+        if composite[i] == 0 {
+            count += 1;
+            sum += u64(i);
+        }
+    }
+
+    if count != expected_count {
+        return 1;
+    }
+    if sum != expected_sum {
+        return 2;
+    }
+    return 0;
+}
+
+func main() i32 {
+    // Read the bound through a one-element runtime vector so the optimized
+    // Source IR keeps the actual sieve loops and byte reads/writes.
+    let bounds Vec[i32] = [{{N}}];
+    let n i32 = bounds[0];
+    let expected_count u64 = {{EXPECTED_COUNT}};
+    let expected_sum u64 = {{EXPECTED_SUM}};
+    for var round i32 = 0; round < {{ROUNDS}}; round += 1 {
+        let status i32 = sieve(n, expected_count, expected_sum);
+        if status != 0 {
+            return status;
+        }
+    }
+    return 0;
+}
