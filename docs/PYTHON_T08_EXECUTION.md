@@ -1,7 +1,7 @@
 # Python typed throws、catch 与 defer 执行
 
-契约仍为 `compiler-dev/1`。T08引入的运行库版本为`/2`，当前严格浮点版本为
-`compiler-dev/1-python-values/3`；公共头、生成代码的版本检查和嵌入的
+契约仍为 `compiler-dev/1`。T08引入的运行库版本为`/2`，当前版本为
+`compiler-dev/1-python-values/6`；公共头、生成代码的版本检查和嵌入的
 `langrt.py` 使用同一版本。旧 runtime 无法运行新生成的程序。
 
 ## 生成行为
@@ -11,28 +11,29 @@
 按 `exited_scopes` 从活跃注册中取出相应清理，并比较执行顺序。
 代码生成继续使用公共 ScopeId、SymbolId、TypeId 和 HIR，不另建语言作用域模型。
 
-含 defer 的词法块只生成一组 try/except/finally，以及一个从零开始的注册计数。
+含 defer 的词法块生成一个私有清理函数、一个 with 清理作用域，以及从零开始的注册计数。
 同块的直接注册按语句顺序经过，活跃注册总是这个序列的一段前缀；每经过一个
-注册点才把计数更新到该序号。finally 按逆序逐项检查计数，执行实际注册的清理。
+注册点才把计数更新到该序号。退出作用域时按逆序逐项检查计数，执行实际注册的清理。
 平铺增加注册不会增加 Python 的静态控制块深度，空清理也采用相同表示。
 嵌套块和循环每轮分别初始化自己的计数。
 
-清理体直接生成在 finally 中，读取执行时的原绑定；计数不保存源变量的值，
-也不创建 Python 闭包。未经过的注册不会执行。return/throw 和调用参数先求值
+清理函数通过 Python 闭包读取执行时的原绑定，写入沿用已有 Cell/Field；计数不保存源变量的值。
+未经过的注册不会执行。return/throw 和调用参数先求值
 到临时变量，随后才会发生清理。不可变 tuple 与 Cell/Field 保持已有行为。
 
-三段式 for 的 continue 抛出内部 `LoopContinue(target)`，只由对应循环接收。
-循环体的 finally 先执行，再执行 step。break 仍退出实际对应的循环；switch
-继续使用独立 `SwitchBreak`。两种控制事件都继承 BaseException。
+三段式 for 和 for-in 使用 Python 的 continue。三段式 for 首轮跳过 step，之后每轮先执行 step 再检查条件，
+因此 continue 先完成本轮清理，再执行下一轮 step；break、return 和 throw 不执行 step。
+for-in 同样在下一轮开始时增加下标。switch 继续使用继承 BaseException 的独立 `SwitchBreak`。
 
-每个含 defer 的块单独捕获 `langrt.Panic`，禁止该块执行清理后重新抛出。
-清理自身 Panic 会立即中止同块剩余清理；外层块也会捕获它并跳过外层清理。
+生成模块内的私有 `_LangCleanup.__exit__` 检查该作用域实际离开的异常；遇到 `langrt.Panic` 就跳过清理。
+清理自身 Panic 会立即中止同块剩余清理，外层清理也跳过。
+宿主调用者正在处理另一个 Panic，不影响函数自身的正常清理。
 正常返回、typed error、break/continue 均执行实际离开块的清理。
 
 `langrt.TypedError(type_key, value)` 保存语言错误类型和完整载荷。
 catch 只捕获 TypedError，再按 type_key 精确匹配；未匹配时原样重新抛出。
 handler 的代码位于 except 内，handler 自己抛出的错误进入外层 try。
-Panic、SwitchBreak、LoopContinue、KeyboardInterrupt、SystemExit 和普通
+Panic、SwitchBreak、KeyboardInterrupt、SystemExit 和普通
 宿主异常都不会进入 typed handler。
 
 ## 类型键与入口
@@ -90,7 +91,7 @@ case-09 的 found、原错误样例 cleaned 的实际变化 1/2；case-10 另用
 
 平铺注册数量不再转换成静态嵌套深度。源程序本身的多层 loop/try/defer 仍会增加
 生成深度。当前 emitter 按锁定 CPython 3.12.15 的静态控制栈检查生成树，上限为
-`CO_MAXBLOCKS = 21`。while 体占 1；try/except 的 try 体占 1，handler 体占 2；
+`CO_MAXBLOCKS = 21`。while 和 with 体各占 1；try/except 的 try 体占 1，handler 体占 2；
 try/finally 的 try 体占 1，finally 在异常或保留返回值时的执行体也占 1。
 组合 try/except/finally 按相邻分支一起计算，不能把各分支的代价重复累加。
 每个 def 重新计数，普通 if/elif/else 不增加计数；生成文本缩进上限仍为 80 层。
@@ -102,8 +103,9 @@ try/finally 的 try 体占 1，finally 在异常或保留返回值时的执行�
 不在公共前端复制 Python 的生成结构。若扩展 CLI check 的生成前检查，应使用同一 emitter，避免重复计算生成深度。
 
 此前被保守计数拒绝的四层/五层 try/defer、五层循环和循环内三层 try/defer，
-现保留原 Source 并实际编译、运行。测试还包括目标上限附近的十层循环接受项与
-十一层循环拒绝项；拒绝项记录为 `unsupported`、运行 `not_run`，同时检查新目录
+现保留原 Source 并实际编译、运行。测试还包括二十一层普通循环接受、二十二层拒绝，
+二十层循环加清理接受、二十一层加清理拒绝，以及五层循环与 try/defer 混合的 48 个固定事件。
+拒绝项记录为 `unsupported`、运行 `not_run`，同时检查新目录
 和已有输出保留。该目标限制不改变源语言语法或清理规则，也不代表任意嵌套已支持。
 
 原 19 项、原泛型输入及清单、baseline、floating fixtures 在运行前后比较 SHA256。
@@ -121,7 +123,9 @@ cmake --build <gnu-release-build>
 ctest --test-dir <gnu-release-build> --output-on-failure
 ```
 
-动态 ARC/Vec、foreign、捕获闭包及泛型直接 inout 调用仍未支持。
+动态 ARC/Vec、foreign 及泛型直接 inout 的当前范围见 [SEMANTICS.md](SEMANTICS.md)、
+[GENERICS.md](GENERICS.md) 与 [T10_PYTHON.md](T10_PYTHON.md)。源语言捕获闭包仍延后；
+生成器内部的清理函数不开放该语法。
 严格浮点现已实现，见[浮点说明](../tests/python/STRICT_FLOATING.md)。
 原生说明见[Native T08](../tests/native/T08_EXECUTION.md)。两端共同使用稳定错误类型键，
 原生O0/O2及Python3.12.15的同源执行另有记录。

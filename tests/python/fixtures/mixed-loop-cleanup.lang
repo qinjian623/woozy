@@ -1,0 +1,86 @@
+package app;
+
+enum Failure {
+    Stop(code i32);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func exercise(mode i32, log inout i64) i32 throws Failure {
+    defer { mark(inout log, 9); }
+    try {
+        defer { mark(inout log, 8); }
+        for var a i32 = 0; a < 1; a += 1 {
+            defer { mark(inout log, 7); }
+            for var b i32 = 0; b < 1; b += 1 {
+                defer { mark(inout log, 6); }
+                try {
+                    defer { mark(inout log, 5); }
+                    for var c i32 = 0; c < 2; c += 1 {
+                        defer { mark(inout log, 4); }
+                        for var d i32 = 0; d < 1; d += 1 {
+                            defer { mark(inout log, 3); }
+                            for var e i32 = 0; e < 2; e += 1 {
+                                defer { mark(inout log, 2); }
+                                if e == 0 {
+                                    mark(inout log, 1);
+                                    continue;
+                                }
+                                if mode == 0 {
+                                    mark(inout log, 0);
+                                    break;
+                                }
+                                if mode == 1 {
+                                    mark(inout log, 1);
+                                    return 17;
+                                }
+                                throw Failure.Stop(code: 23);
+                            }
+                            break;
+                        }
+                        break;
+                    }
+                } catch inner Failure {
+                    defer { mark(inout log, 0); }
+                    mark(inout log, 6);
+                    switch inner {
+                        case Failure.Stop(code):
+                            if code != 23 { return 90; }
+                    }
+                    if mode == 2 { return 29; }
+                    throw inner;
+                }
+            }
+        }
+    } catch outer Failure {
+        defer { mark(inout log, 0); }
+        mark(inout log, 7);
+        switch outer {
+            case Failure.Stop(code):
+                if code != 23 { return 91; }
+        }
+        return 31;
+    }
+    return 13;
+}
+
+func main() i32 throws Failure {
+    var break_log i64 = 0;
+    let broken = exercise(0, inout break_log);
+    if broken != 13 || break_log != 12023456789 { return 1; }
+
+    var return_log i64 = 0;
+    let returned = exercise(1, inout return_log);
+    if returned != 17 || return_log != 12123456789 { return 2; }
+
+    var caught_log i64 = 0;
+    let caught = exercise(2, inout caught_log);
+    if caught != 29 || caught_log != 122345606789 { return 3; }
+
+    var rethrow_log i64 = 0;
+    let rethrown = exercise(3, inout rethrow_log);
+    if rethrown != 31 || rethrow_log != 12234560678709 { return 4; }
+    return 0;
+}

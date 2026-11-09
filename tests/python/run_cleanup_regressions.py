@@ -27,6 +27,7 @@ def main():
                     for p in [args.root / 'src/backend/python/emitter.cpp',
                               args.root / 'include/lang/backend/python.hpp',
                               args.root / 'runtime/python/langrt.py', fixture,
+                              args.root / 'tests/python/fixtures/mixed-loop-cleanup.lang',
                               Path(__file__), Path(__file__).with_name('cleanup_regression_cases.py'),
                               Path(__file__).with_name('observe_cleanup_regressions.py')]},
                   shared_test_sha256={name: sha(args.root / name)

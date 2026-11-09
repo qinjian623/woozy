@@ -97,11 +97,12 @@ class Emitter {
   SymbolId current;
   uint64_t serial = 0;
   struct Loop {
-    HirNodeId id, step;
+    HirNodeId id;
   };
   std::vector<Loop> loops;
   std::vector<HirNodeId> break_targets;
   std::vector<HirNodeId> active_defers;
+  bool uses_cleanup_guard = false;
   // Computed owning switch subjects currently held by an enclosing
   // structured try/finally. Their drops are emitted by that finally after
   // the arm block cleanup, so an expression failure handler must never
@@ -154,28 +155,23 @@ class Emitter {
       line(suite,
            "_frame.drop(" + key(OwnerKind::binding, l.symbol.value) + ")", n);
   }
-  void scope_wrap(ScopeId scope, Suite body, Suite &suite, const HirNode &n) {
-    Suite cleanup;
-    local_drops(scope, cleanup, n);
+  void guarded(Suite body, Suite cleanup, Suite &suite, const HirNode &n) {
     if (cleanup.empty()) {
       suite.insert(suite.end(), std::make_move_iterator(body.begin()),
                    std::make_move_iterator(body.end()));
       return;
     }
-    auto allow = save(suite, "True", n);
-    suite.push_back({"try", n.source.span, true, std::move(body), {}});
-    suite.push_back({"except _rt.Panic",
-                     n.source.span,
-                     true,
-                     {{allow + " = False", n.source.span, false, {}, {}},
-                      {"raise", n.source.span, false, {}, {}}},
-                     {}});
-    suite.push_back(
-        {"finally",
-         n.source.span,
-         true,
-         {{"if " + allow, n.source.span, true, std::move(cleanup), {}}},
-         {}});
+    uses_cleanup_guard = true;
+    auto callback = "_cleanup" + std::to_string(serial++);
+    suite.push_back({"def " + callback + "()", n.source.span, true,
+                     std::move(cleanup), {}});
+    suite.push_back({"with _LangCleanup(" + callback + ")", n.source.span,
+                     true, std::move(body), {}});
+  }
+  void scope_wrap(ScopeId scope, Suite body, Suite &suite, const HirNode &n) {
+    Suite cleanup;
+    local_drops(scope, cleanup, n);
+    guarded(std::move(body), std::move(cleanup), suite, n);
   }
   void collect_type(TypeId id) {
     if (!value_types.insert(id.value).second)
@@ -880,27 +876,19 @@ class Emitter {
     // their active set is a prefix. Nested blocks own separate counters.
     // This records only reachability, never copies a referenced source value.
     auto registered = save(suite, "0", n);
-    auto allow = save(suite, "True", n);
-    Statement body{"try", n.source.span, true, {}, {}};
+    Suite body;
     size_t ordinal = 0;
     for (auto id : n.children) {
       if (node(id).kind() == NodeKind::defer_) {
         active_defers.push_back(id);
-        line(body.body, registered + " = " + std::to_string(++ordinal),
+        line(body, registered + " = " + std::to_string(++ordinal),
              node(id));
       } else {
-        statement(id, body.body);
+        statement(id, body);
       }
     }
     exits(n, true);
-    suite.push_back(std::move(body));
-    suite.push_back({"except _rt.Panic",
-                     n.source.span,
-                     true,
-                     {{allow + " = False", n.source.span, false, {}, {}},
-                      {"raise", n.source.span, false, {}, {}}},
-                     {}});
-    Statement cleanup{"if " + allow, n.source.span, true, {}, {}};
+    Suite cleanup;
     for (auto it = registrations.rbegin(); it != registrations.rend(); ++it) {
       active_defers.pop_back();
       const auto &d = node(*it);
@@ -910,12 +898,11 @@ class Emitter {
                        {},
                        {}};
       statement(d.children[0], branch.body);
-      cleanup.body.push_back(std::move(branch));
+      cleanup.push_back(std::move(branch));
     }
-    local_drops(n.scope, cleanup.body, n);
-    // A Panic in a cleanup aborts the remaining siblings naturally; enclosing
-    // blocks' Panic handlers also skip their cleanups.
-    suite.push_back({"finally", n.source.span, true, {std::move(cleanup)}, {}});
+    local_drops(n.scope, cleanup, n);
+    // A Panic in a cleanup aborts its siblings and skips enclosing cleanups.
+    guarded(std::move(body), std::move(cleanup), suite, n);
   }
   void statement(HirNodeId id, Suite &suite) {
     check_cancelled(stop);
@@ -997,6 +984,15 @@ class Emitter {
       Suite for_scope;
       statement(n.children[0], for_scope);
       Statement loop{"while True", n.source.span, true, {}, {}};
+      if (node(n.children[2]).kind() != NodeKind::noop) {
+        // A native continue runs body cleanup before reaching the next step.
+        auto first = save(for_scope, "True", n);
+        Statement step{"if " + first, n.source.span, true,
+                       {{first + " = False", n.source.span, false, {}, {}}},
+                       {}};
+        statement(n.children[2], step.otherwise);
+        loop.body.push_back(std::move(step));
+      }
       auto condition = expression(n.children[1], loop.body);
       full(n.children[1], loop.body);
       loop.body.push_back({"if not " + condition,
@@ -1004,23 +1000,11 @@ class Emitter {
                            true,
                            {{"break", n.source.span, false, {}, {}}},
                            {}});
-      loops.push_back({id, n.children[2]});
+      loops.push_back({id});
       break_targets.push_back(id);
-      Statement body{"try", n.source.span, true, {}, {}};
-      statement(n.children[3], body.body);
-      loop.body.push_back(std::move(body));
-      loop.body.push_back({"except _rt.LoopContinue as _jump",
-                           n.source.span,
-                           true,
-                           {{"if _jump.target != " + std::to_string(id.value),
-                             n.source.span,
-                             true,
-                             {{"raise", n.source.span, false, {}, {}}},
-                             {}}},
-                           {}});
+      statement(n.children[3], loop.body);
       break_targets.pop_back();
       loops.pop_back();
-      statement(n.children[2], loop.body);
       for_scope.push_back(std::move(loop));
       scope_wrap(n.scope, std::move(for_scope), suite, n);
       break;
@@ -1037,9 +1021,13 @@ class Emitter {
       full(id, suite);
       auto length = save(suite, collection + ".begin()", n);
       auto index = save(suite, "0", n);
-      auto allow = save(suite, "True", n);
-      Statement loop{
-          "while " + index + " < " + length, n.source.span, true, {}, {}};
+      auto first = save(suite, "True", n);
+      Statement loop{"while True", n.source.span, true,
+                     {{"if " + first, n.source.span, true,
+                       {{first + " = False", n.source.span, false, {}, {}}},
+                       {{index + " += 1", n.source.span, false, {}, {}}}},
+                      {"if " + index + " >= " + length, n.source.span, true,
+                       {{"break", n.source.span, false, {}, {}}}, {}}}, {}};
       auto element_type = type(node(n.children[0]).type).type_args[0];
       if (owned(element_type)) {
         line(loop.body,
@@ -1054,39 +1042,15 @@ class Emitter {
       } else
         line(loop.body,
              name(fi.element) + " = " + collection + ".get(" + index + ")", n);
-      loops.push_back({id, id});
+      loops.push_back({id});
       break_targets.push_back(id);
-      Suite body;
-      statement(fi.body, body);
-      loop.body.push_back({"try", n.source.span, true, std::move(body), {}});
-      loop.body.push_back({"except _rt.LoopContinue as _jump",
-                           n.source.span,
-                           true,
-                           {{"if _jump.target != " + std::to_string(id.value),
-                             n.source.span,
-                             true,
-                             {{"raise", n.source.span, false, {}, {}}},
-                             {}}},
-                           {}});
+      statement(fi.body, loop.body);
       loops.pop_back();
       break_targets.pop_back();
-      line(loop.body, index + " += 1", n);
-      suite.push_back({"try", n.source.span, true, {std::move(loop)}, {}});
-      suite.push_back({"except _rt.Panic",
-                       n.source.span,
-                       true,
-                       {{allow + " = False", n.source.span, false, {}, {}},
-                        {"raise", n.source.span, false, {}, {}}},
-                       {}});
       Suite cleanup;
       line(cleanup, collection + ".end()", n);
       line(cleanup, "_frame.drop(" + iteration_key + ")", n);
-      suite.push_back(
-          {"finally",
-           n.source.span,
-           true,
-           {{"if " + allow, n.source.span, true, std::move(cleanup), {}}},
-           {}});
+      guarded({std::move(loop)}, std::move(cleanup), suite, n);
       break;
     }
     case NodeKind::switch_: {
@@ -1246,10 +1210,7 @@ class Emitter {
       if (loops.empty() || loops.back().id != std::get<Continue>(n.data).loop)
         throw std::logic_error(
             "verified continue target is not the enclosing loop");
-      line(suite,
-           "raise _rt.LoopContinue(" + std::to_string(loops.back().id.value) +
-               ")",
-           n);
+      line(suite, "continue", n);
       break;
     }
     case NodeKind::noop:
@@ -1363,7 +1324,7 @@ class Emitter {
         if (s.text.starts_with("def "))
           depth =
               0; // Each generated function is a separate Python code object.
-        else if (s.text.starts_with("while "))
+        else if (s.text.starts_with("while ") || s.text.starts_with("with "))
           ++depth;
         check_control_depth(depth, s.source);
         print(s.body, indent + 1, depth);
@@ -1504,6 +1465,20 @@ public:
       }
       statement(f.body, function.body);
       program.push_back(std::move(function));
+    }
+    if (uses_cleanup_guard) {
+      // __exit__ receives this scope's actual exception, even when its caller
+      // is handling another Panic. Cleanup callbacks cannot escape by return.
+      program.insert(program.begin() + 3,
+          {"class _LangCleanup", {}, true,
+           {{"def __init__(self, cleanup)", {}, true,
+             {{"self.cleanup = cleanup", {}, false, {}, {}}}, {}},
+            {"def __enter__(self)", {}, true,
+             {{"return None", {}, false, {}, {}}}, {}},
+            {"def __exit__(self, _type, error, _traceback)", {}, true,
+             {{"if not isinstance(error, _rt.Panic)", {}, true,
+               {{"self.cleanup()", {}, false, {}, {}}}, {}},
+              {"return False", {}, false, {}, {}}}, {}}}, {}});
     }
     if (options.entrypoint)
       program.push_back(

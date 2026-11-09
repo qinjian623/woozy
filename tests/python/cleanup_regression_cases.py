@@ -1,5 +1,7 @@
 """Independent expectations for the root's two Python T08 findings."""
 
+from pathlib import Path
+
 PRELUDE = 'enum E {Bad;}enum F {Bad;}enum Token[T] {Bad;}'
 
 # Each row preserves the source's parameter/return/error grouping in its
@@ -72,6 +74,12 @@ catch right Token[{a[1]}] {{return 0;}}return 7;}}''')
 
 
 def flat_cases():
+    yield 'mixed-loop-cleanup', (Path(__file__).parent /
+        'fixtures/mixed-loop-cleanup.lang').read_text(), dict(main_return=0,
+        events=[1, 2, 0, 2, 3, 4, 5, 6, 7, 8, 9] +
+               [1, 2, 1, 2, 3, 4, 5, 6, 7, 8, 9] +
+               [1, 2, 2, 3, 4, 5, 6, 0, 6, 7, 8, 9] +
+               [1, 2, 2, 3, 4, 5, 6, 0, 6, 7, 8, 7, 0, 9])
     for count in (0, 1, 8, 9, 10, 11, 20, 21, 22, 64, 256):
         source = ('package app;func probe(log inout i32) i32 {' +
                   'defer{log+=1;}' * count + 'return log;}' +
@@ -116,13 +124,13 @@ func main() i32 {var log i32=0;try {probe(inout log);}catch err E {return 9;}ret
             body = 'try{defer{}' + body + '}catch err E {return 9;}'
         yield 'nested-try-defer-' + str(count), ('package app;enum E {Bad;}' +
             'func main() i32 {' + body + 'return 7;}'), dict(main_return=0)
-    # Ten generated loops reach the target stack limit; eleven exceed it.
-    for count in (4, 5, 10, 11):
+    # Plain loops now use one control block each, without a continue handler.
+    for count in (4, 5, 10, 11, 21, 22):
         body = ''
         for n in range(count):
             body = f'for var i{n} i32=0;i{n}<1;i{n}+=1 {{' + body + '}'
         yield 'nested-loops-' + str(count), 'package app;func main() {' + body + '}', (
-            dict(main_return=None) if count <= 10 else dict(unsupported=True))
+            dict(main_return=None) if count <= 21 else dict(unsupported=True))
     for count in (2, 3):
         body = ''
         for _ in range(count):
@@ -130,9 +138,8 @@ func main() i32 {var log i32=0;try {probe(inout log);}catch err E {return 9;}ret
         body = 'for var i i32=0;i<1;i+=1 {' + body + '}'
         yield 'nested-loop-try-defer-' + str(count), ('package app;enum E {Bad;}' +
             'func main() {' + body + '}'), dict(main_return=None)
-    # Exercise returns, typed throws, break and continue across a finally at
-    # the real stack limit; one further loop must be refused before output.
-    for count in (9, 10):
+    # A cleanup guard uses one control block in addition to the loops.
+    for count in (9, 10, 18, 19, 20, 21):
         body = ('defer{log+=1;event(1);}'
                 'if mode==0{return 7;}if mode==1{throw E.Bad;}'
                 'if mode==2{break;}continue;')
@@ -148,5 +155,144 @@ func main() i32 {var log i32=0;try {probe(inout log);}catch err E {return 9;}ret
                   'if control(inout log,2)!=9 || log!=1{return 4;}log=0;'
                   'if control(inout log,3)!=9 || log!=1{return 5;}return 0;}')
         yield 'nested-exit-finally-' + str(count), source, (
-            dict(main_return=0, events=[1, 1, 1, 1]) if count == 9
+            dict(main_return=0, events=[1, 1, 1, 1]) if count <= 20
             else dict(unsupported=True))
+    yield 'for-in-empty-single', ('''package app;
+func event(digit i32) {}
+func main() i32 {
+    let empty Vec[i32] = [];
+    for value in empty { event(9); return 1; }
+    let single Vec[i32] = [7];
+    var log i32 = 0;
+    for value in single {
+        defer { log = log * 10 + 2; event(2); }
+        if value != 7 { return 2; }
+        log = log * 10 + 1; event(1);
+        continue;
+    }
+    if log != 12 { return 3; }
+    return 0;
+}'''), dict(main_return=0, events=[1, 2])
+
+    # Fixed independently from source order: init=0, condition=1, body
+    # defer=2, step=3, function defer=9, caller/catch=8. The first body
+    # iteration continues. A later break/return/throw must skip the next step;
+    # an error in step/condition must not rerun the preceding body cleanup.
+    yield 'loop-head-step-order', '''package app;
+enum E { Bad; }
+
+func event(digit i64) {}
+func record(log inout i64, digit i64) {
+    log = log * 10 + digit;
+    event(digit);
+}
+func initialize(mode i32, log inout i64) i32 {
+    record(inout log, 0);
+    if mode == 0 { return 2; }
+    return 0;
+}
+func condition(i i32, mode i32, limit i32, log inout i64) bool throws E {
+    record(inout log, 1);
+    if mode == 6 && i == 1 { throw E.Bad; }
+    return i < limit;
+}
+func advance(i inout i32, mode i32, log inout i64) throws E {
+    record(inout log, 3);
+    if mode == 5 { throw E.Bad; }
+    i += 1;
+}
+func control(mode i32, log inout i64) i32 throws E {
+    defer { record(inout log, 9); }
+    for var i i32 = initialize(mode, inout log);
+        condition(i, mode, 2, inout log);
+        advance(inout i, mode, inout log) {
+        defer { record(inout log, 2); }
+        if i == 0 { continue; }
+        if mode == 2 { break; }
+        if mode == 3 { return 42; }
+        if mode == 4 { throw E.Bad; }
+    }
+    return 13;
+}
+func switch_control(log inout i64) i32 throws E {
+    defer { record(inout log, 9); }
+    for var i i32 = initialize(7, inout log);
+        condition(i, 7, 3, inout log);
+        advance(inout i, 7, inout log) {
+        defer { record(inout log, 2); }
+        switch i {
+            case 0:
+                defer { record(inout log, 5); }
+                continue;
+            default:
+                defer { record(inout log, 5); }
+                break;
+        }
+        record(inout log, 4);
+        if i == 2 { break; }
+    }
+    return 13;
+}
+func main() i32 throws E {
+    var empty_log i64 = 0;
+    let empty = control(0, inout empty_log);
+    record(inout empty_log, 8);
+    if empty != 13 || empty_log != 198 { return 1; }
+
+    var normal_log i64 = 0;
+    let normal = control(1, inout normal_log);
+    record(inout normal_log, 8);
+    if normal != 13 || normal_log != 123123198 { return 2; }
+
+    var break_log i64 = 0;
+    let broken = control(2, inout break_log);
+    record(inout break_log, 8);
+    if broken != 13 || break_log != 1231298 { return 3; }
+
+    var return_log i64 = 0;
+    let returned = control(3, inout return_log);
+    record(inout return_log, 8);
+    if returned != 42 || return_log != 1231298 { return 4; }
+
+    var body_error_log i64 = 0;
+    try {
+        let unexpected = control(4, inout body_error_log);
+        return 5;
+    } catch body_error E {
+        record(inout body_error_log, 8);
+    }
+    if body_error_log != 1231298 { return 6; }
+
+    var step_error_log i64 = 0;
+    try {
+        let unexpected = control(5, inout step_error_log);
+        return 7;
+    } catch step_error E {
+        record(inout step_error_log, 8);
+    }
+    if step_error_log != 12398 { return 8; }
+
+    var condition_error_log i64 = 0;
+    try {
+        let unexpected = control(6, inout condition_error_log);
+        return 9;
+    } catch condition_error E {
+        record(inout condition_error_log, 8);
+    }
+    if condition_error_log != 123198 { return 10; }
+
+    var switch_log i64 = 0;
+    let switched = switch_control(inout switch_log);
+    record(inout switch_log, 8);
+    if switched != 13 || switch_log != 152315423154298 { return 11; }
+    return 0;
+}
+''', dict(main_return=0, events=(
+        [0, 1, 9, 8] +
+        [0, 1, 2, 3, 1, 2, 3, 1, 9, 8] +
+        [0, 1, 2, 3, 1, 2, 9, 8] +
+        [0, 1, 2, 3, 1, 2, 9, 8] +
+        [0, 1, 2, 3, 1, 2, 9, 8] +
+        [0, 1, 2, 3, 9, 8] +
+        [0, 1, 2, 3, 1, 9, 8] +
+        [0, 1, 5, 2, 3, 1, 5, 4, 2, 3, 1, 5, 4, 2, 9, 8]))

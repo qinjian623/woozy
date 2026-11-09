@@ -26,13 +26,16 @@ def trace(frame, event, arg):
     return trace
 
 
+def observe_events(original):
+    def call(*args):
+        row['events'].append(args[-1])
+        return original(*args)
+    return call
+
+
 for generated, name in names.items():
-    if name == 'event' and generated.startswith('_f'):
-        original = getattr(program, generated)
-        def event(digit):
-            row['events'].append(digit)
-            return original(digit)
-        setattr(program, generated, event)
+    if name in ('event', 'mark') and generated.startswith('_f'):
+        setattr(program, generated, observe_events(getattr(program, generated)))
 main = getattr(program, '_f' + str(metadata['entry_symbol']))
 sys.settrace(trace)
 try:
