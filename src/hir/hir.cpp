@@ -5023,28 +5023,39 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         m.config.backend == Backend::python && m.config.word_bits == 64;
     TypeContext storage_types = m.types;
     std::set<uint64_t> checked_types;
-    std::function<bool(TypeId)> supported = [&](TypeId id) {
+    bool type_budget_exceeded = false;
+    std::function<bool(TypeId, size_t)> supported = [&](TypeId id,
+                                                       size_t depth) {
       check_cancelled(stop);
-      const auto t = *storage_types.find(id);
+      if (depth > 512 || checked_types.size() > 65536) {
+        type_budget_exceeded = true;
+        return false;
+      }
+      const auto *found = storage_types.find(id);
+      if (!found)
+        return false;
+      const auto t = *found;
       if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable)
         return foreign_values;
       if (!checked_types.insert(id.value).second)
         return true;
       if (t.kind == TypeKind::Vec) {
-        if (!ownership_values)
+        if (!ownership_values || t.type_args.size() != 1)
           return false;
-        const auto &element = *storage_types.find(t.type_args.at(0));
-        if (element.kind == TypeKind::ForeignOpaque ||
-            element.kind == TypeKind::ForeignCallable)
+        const auto *element = storage_types.find(t.type_args.at(0));
+        if (!element)
           return false;
-        return supported(t.type_args.at(0));
+        if (element->kind == TypeKind::ForeignOpaque ||
+            element->kind == TypeKind::ForeignCallable)
+          return false;
+        return supported(t.type_args.at(0), depth + 1);
       }
       if (t.kind == TypeKind::NominalStruct ||
           t.kind == TypeKind::NominalEnum) {
         const auto d = std::find_if(
             m.nominals.begin(), m.nominals.end(),
             [&](const auto &d) { return d.symbol == t.declaration; });
-        if (d == m.nominals.end())
+        if (d == m.nominals.end() || d->params.size() != t.type_args.size())
           return false;
         Substitutions subst;
         for (size_t p = 0; p < d->params.size(); ++p)
@@ -5052,9 +5063,17 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         auto fields = [&](const auto &fs) {
           for (const auto &f : fs) {
             auto field = substitute(f.type, subst, storage_types);
-            const auto kind = storage_types.find(field)->kind;
+            // A concrete member must already be public.  Substitution into a
+            // private scratch context may not manufacture a missing member.
+            if (!m.types.find(field))
+              return false;
+            const auto *field_type = storage_types.find(field);
+            if (!field_type)
+              return false;
+            const auto kind = field_type->kind;
             if (kind == TypeKind::ForeignOpaque ||
-                kind == TypeKind::ForeignCallable || !supported(field))
+                kind == TypeKind::ForeignCallable ||
+                !supported(field, depth + 1))
               return false;
           }
           return true;
@@ -5070,11 +5089,18 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         std::vector<TypeId> pending{id};
         std::set<uint64_t> seen;
         while (!pending.empty()) {
+          if (pending.size() > 65536) {
+            type_budget_exceeded = true;
+            return false;
+          }
           auto current = pending.back();
           pending.pop_back();
           if (!seen.insert(current.value).second)
             continue;
-          const auto value = *storage_types.find(current);
+          const auto *current_found = storage_types.find(current);
+          if (!current_found)
+            return false;
+          const auto value = *current_found;
           if (value.kind == TypeKind::ForeignOpaque ||
               value.kind == TypeKind::ForeignCallable) {
             if (!foreign_values)
@@ -5082,11 +5108,13 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
             continue;
           }
           if (value.kind == TypeKind::Vec) {
-            if (!ownership_values)
+            if (!ownership_values || value.type_args.size() != 1)
               return false;
-            const auto &element = *storage_types.find(value.type_args.at(0));
-            if (element.kind == TypeKind::ForeignOpaque ||
-                element.kind == TypeKind::ForeignCallable)
+            const auto *element = storage_types.find(value.type_args.at(0));
+            if (!element)
+              return false;
+            if (element->kind == TypeKind::ForeignOpaque ||
+                element->kind == TypeKind::ForeignCallable)
               return false;
           }
           if (value.kind == TypeKind::NominalStruct ||
@@ -5094,7 +5122,12 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
             for (const auto &d : m.nominals)
               if (d.symbol == value.declaration) {
                 auto add = [&](TypeId field) {
-                  const auto kind = storage_types.find(field)->kind;
+                  if (!m.types.find(field))
+                    return false;
+                  const auto *found = storage_types.find(field);
+                  if (!found)
+                    return false;
+                  const auto kind = found->kind;
                   if (kind == TypeKind::ForeignOpaque ||
                       kind == TypeKind::ForeignCallable)
                     return false;
@@ -5132,20 +5165,22 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
     };
     auto signature_supported = [&](TypeId id) {
       const auto t = *m.types.find(id);
-      if (t.throws_type && !supported(*t.throws_type))
+      if (t.throws_type && !supported(*t.throws_type, 0))
         return false;
       for (auto p : t.parameters)
         if ((p.mode == ParamMode::move && !ownership_values) ||
-            !supported(p.type))
+            !supported(p.type, 0))
           return false;
-      return supported(t.result);
+      return supported(t.result, 0);
     };
     for (const auto &f : m.functions) {
       check_cancelled(stop);
       if (!signature_supported(f.signature)) {
         unavailable(
             f.source,
-            "backend does not support this concrete function signature");
+            type_budget_exceeded
+                ? "backend concrete type expansion budget exceeded"
+                : "backend does not support this concrete function signature");
         return r;
       }
       std::vector<HirNodeId> todo{f.body};
@@ -5221,9 +5256,11 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
           unavailable(n.source, "backend does not support this call signature");
           return r;
         }
-        if (!supported(n.type)) {
+        if (!supported(n.type, 0)) {
           unavailable(n.source,
-                      "backend does not support this concrete aggregate type");
+                      type_budget_exceeded
+                          ? "backend concrete type expansion budget exceeded"
+                          : "backend does not support this concrete aggregate type");
           return r;
         }
         todo.insert(todo.end(), n.children.begin(), n.children.end());

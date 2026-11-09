@@ -173,6 +173,293 @@ void test_cases(const fs::path &root) {
   }
   json_object_put(json);
 }
+
+void invalid_recomputed(const HirModule &, const std::string &,
+                        const std::function<void(HirModule &)> &);
+std::vector<TypeId> nominal_types(const HirModule &m, std::string_view name) {
+  std::vector<TypeId> result;
+  for (uint64_t i = 1; i <= m.types.size(); ++i) {
+    const auto *t = m.types.find(TypeId{i});
+    if (!t || (t->kind != TypeKind::NominalStruct &&
+               t->kind != TypeKind::NominalEnum))
+      continue;
+    if (t->declaration.value < m.resolved->symbols.size() &&
+        m.resolved->symbols[t->declaration.value].name == name)
+      result.push_back(TypeId{i});
+  }
+  return result;
+}
+const NominalDecl &nominal_named(const HirModule &m, std::string_view name) {
+  for (const auto &d : m.nominals)
+    if (d.symbol.value < m.resolved->symbols.size() &&
+        m.resolved->symbols[d.symbol.value].name == name)
+      return d;
+  throw std::runtime_error("nominal missing: " + std::string(name));
+}
+size_t field_index_named(const HirModule &m, const NominalDecl &d,
+                         std::string_view name) {
+  for (size_t i = 0; i < d.fields.size(); ++i)
+    if (m.resolved->symbols[d.fields[i].symbol.value].name == name)
+      return i;
+  throw std::runtime_error("field missing: " + std::string(name));
+}
+bool concrete_nominal(const HirModule &m, TypeId id) {
+  std::vector<TypeId> pending{id};
+  std::set<uint64_t> seen;
+  while (!pending.empty()) {
+    auto current = pending.back();
+    pending.pop_back();
+    if (!seen.insert(current.value).second)
+      continue;
+    const auto &t = *m.types.find(current);
+    if (t.kind == TypeKind::TypeParameter)
+      return false;
+    pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+  }
+  return true;
+}
+// The recursive value graph is a reference graph: a Vec element back-edge is
+// a finite shape, while a direct nominal value field is an infinite layout.
+void recursive_value_tests() {
+  auto node = accepted(
+      "struct Node {value i32;children Vec[Node];} "
+      "func make(v i32) Node {return Node(value:v,children:[]);} "
+      "func main() i32 {let leaf=make(7);let root=Node(value:5,children:"
+      "[leaf]);return root.value+root.children[0].value-12;}");
+  facts(node);
+  need(!infinite_value_layout(node), "Vec-recursive Node is not infinite");
+  auto nodes = nominal_types(node, "Node");
+  need(nodes.size() == 1, "single Node declaration expected");
+  auto node_ops = classify_value(node, nodes[0]);
+  need(node_ops.kind == ValueKind::structure && node_ops.needs_drop &&
+           node_ops.fields.size() == 2,
+       "recursive Node classification incomplete");
+  auto children_ops = classify_value(node, node_ops.fields[1].type);
+  need(children_ops.kind == ValueKind::vec && children_ops.needs_drop,
+       "recursive Vec field not owned");
+  need(node.types.find(children_ops.fields.empty() ? node_ops.fields[1].type
+                                                   : children_ops.fields[0].type),
+       "recursive field TypeId left the public context");
+  const auto &children_type =
+      *node.types.find(node_ops.fields[1].type);
+  need(children_type.kind == TypeKind::Vec &&
+           children_type.type_args.at(0) == nodes[0],
+       "recursive Vec element is not the exact Node TypeId");
+
+  auto stable = accepted(
+      "struct Node[T] {value T;children Vec[Node[T]];} "
+      "func make[T](v T) Node[T] {return Node[T](value:v,children:[]);} "
+      "func first[T](n Node[T]) T {return n.value;} "
+      "func echo[T](n Node[T]) Node[T] {return n;} "
+      "func main() i32 {let a=Node[i32](value:1,children:[]);let "
+      "b=Node[i32](value:2,children:[a]);let c=make[i32](3);let "
+      "d=Node[bool](value:true,children:[]);let e=make[bool](false);let "
+      "f=echo[i32](b);if first[i32](b)!=2||f.value!=2||f.children[0].value!=1"
+      "||first[i32](c)!=3||!d.value||e.value{return 1;}return 0;}");
+  facts(stable);
+  auto stable_nodes = nominal_types(stable, "Node");
+  size_t concrete = 0, saw_i32 = 0, saw_bool = 0;
+  for (auto id : stable_nodes) {
+    if (!concrete_nominal(stable, id))
+      continue;
+    ++concrete;
+    auto ops = classify_value(stable, id);
+    need(ops.kind == ValueKind::structure && ops.needs_drop,
+         "concrete Node[T] is not owned");
+    for (const auto &f : ops.fields)
+      need(stable.types.find(f.type),
+           "concrete Node[T] field escaped the public TypeContext");
+    const auto &args = stable.types.find(id)->type_args;
+    need(!args.empty(), "concrete Node type has no actual argument");
+    auto arg_kind = stable.types.find(args[0])->kind;
+    saw_i32 += arg_kind == TypeKind::SignedInt;
+    saw_bool += arg_kind == TypeKind::Bool;
+  }
+  need(concrete >= 2 && saw_i32 && saw_bool,
+       "Node[T] did not keep two concrete instances");
+
+  auto periodic = accepted(
+      "struct Flip[A,B] {tag A;children Vec[Flip[B,A]];} "
+      "struct Box[T] {value T;} struct S[T] {f func() S[S[T]];} "
+      "func bottom() S[S[i32]] {return bottom();} "
+      "func pass(x S[i32]) S[i32] {return x;} "
+      "func main() i32 {let a=Flip[i32,bool](tag:1,children:[]);let "
+      "b=Flip[bool,i32](tag:true,children:[a]);let "
+      "c=Flip[i32,bool](tag:12,children:[b]);if c.tag!=12||!c.children[0].tag"
+      "||c.children[0].children[0].tag!=1{return 1;}let "
+      "box=Box[Box[i32]](value:Box[i32](value:7));if "
+      "box.value.value!=7{return 2;}let x=S[i32](f:bottom);let y=pass(x);"
+      "return 0;}");
+  facts(periodic);
+  auto flips = nominal_types(periodic, "Flip");
+  need(!flips.empty(), "Flip declaration missing");
+  bool saw_swap = false;
+  for (auto id : flips) {
+    if (!concrete_nominal(periodic, id))
+      continue;
+    const auto &decl = nominal_named(periodic, "Flip");
+    auto ops = classify_value(periodic, id);
+    auto children = field_index_named(periodic, decl, "children");
+    const auto &vec = *periodic.types.find(ops.fields[children].type);
+    need(vec.kind == TypeKind::Vec, "Flip children is not Vec");
+    auto other = vec.type_args.at(0);
+    need(other.value != id.value, "periodic Flip did not change TypeId");
+    auto other_ops = classify_value(periodic, other);
+    auto other_children = field_index_named(periodic, decl, "children");
+    const auto &back =
+        *periodic.types.find(other_ops.fields[other_children].type);
+    need(back.kind == TypeKind::Vec && back.type_args.at(0) == id,
+         "Flip period did not return to the exact TypeId");
+    saw_swap = true;
+  }
+  need(saw_swap, "no concrete Flip period checked");
+  auto unused = accepted(
+      "struct Grow[T] {children Vec[Grow[Vec[T]]];} "
+      "func main() i32 {let v Vec[i32]=[1];return v[0]-1;}");
+  need(!infinite_value_layout(unused),
+       "unused growing declaration was treated as infinite layout");
+  need(check_backend_capabilities(unused).success(),
+       "unused growing declaration rejected by backend capability check");
+  for (auto backend : {Backend::native, Backend::python}) {
+    auto r = sema::check_types(resolve(
+        "struct Grow[T] {children Vec[Grow[Vec[T]]];} "
+        "func main() i32 {let v=Grow[i32](children: []);return 0;}",
+        backend));
+    need(!r.success() && has(r, "E_CAPABILITY_UNAVAILABLE") &&
+             !r.diagnostics.empty(),
+         "growing concrete family was not budget-rejected");
+    const auto &d = r.diagnostics.front();
+    need(d.message.find("budget") != std::string::npos,
+         "growth diagnostic does not name the budget");
+    need(d.primary && d.primary->end_byte > d.primary->begin_byte,
+         "growth diagnostic has no source span");
+  }
+
+  for (auto body : {std::string("struct Bad {value Bad;}"),
+                    std::string("struct A {b B;} struct B {a A;}"),
+                    std::string(
+                        "struct Grow[T] {next Grow[Vec[T]];}")}) {
+    auto r = sema::check_types(resolve(
+        body + " func main() i32 {return 0;}", Backend::native));
+    need(!r.success() && has(r, "E_TYPE_MISMATCH"),
+         "infinite value layout was not rejected: " + body);
+  }
+  auto finite_mutated = node;
+  auto &node_decl = const_cast<NominalDecl &>(
+      nominal_named(finite_mutated, "Node"));
+  node_decl.fields.push_back({node_decl.fields[0].symbol, nodes[0], false,
+                              node_decl.fields[0].source});
+  need(infinite_value_layout(finite_mutated) == node_decl.symbol,
+       "finite-layout helper missed a direct value cycle");
+  bool classifier_stopped = false;
+  try {
+    (void)classify_value(finite_mutated, nodes[0]);
+  } catch (const std::invalid_argument &) {
+    classifier_stopped = true;
+  }
+  need(classifier_stopped,
+       "standalone classifier did not stop on a value-storage cycle");
+
+  auto cycle = accepted(
+      "struct Node {value i32;children Vec[Node];} "
+      "func main() i32 {var v Vec[Node]=[Node(value:1,children:[])];"
+      "v[0]=Node(value:2,children:v);return 0;}");
+  facts(cycle);
+
+  auto copied = accepted(
+      "struct Node {value i32;children Vec[Node];} "
+      "func make(v i32) Node {return Node(value:v,children:[]);} "
+      "func main() i32 {let n=make(1);let alias=n;return alias.value-1;}");
+  facts(copied);
+  bool removed = false;
+  invalid(copied, "recursive copy use removed", [&](auto &m) {
+    for (auto it = m.ownership.uses.begin(); it != m.ownership.uses.end();
+         ++it) {
+      const auto &t = *m.types.find(it->type);
+      if (it->kind == UseKind::copy && it->root &&
+          (t.kind == TypeKind::NominalStruct ||
+           t.kind == TypeKind::NominalEnum)) {
+        m.ownership.uses.erase(it);
+        removed = true;
+        return;
+      }
+    }
+  });
+  need(removed, "recursive copy use was not present");
+  bool field_changed = false;
+  invalid(copied, "recursive public member TypeId missing", [&](auto &m) {
+    auto &d = const_cast<NominalDecl &>(nominal_named(m, "Node"));
+    d.fields[field_index_named(m, d, "children")].type =
+        TypeId{m.types.size() + 1};
+    field_changed = true;
+  });
+  need(field_changed, "recursive member field missing");
+  invalid_recomputed(
+      copied, "recursive Vec element replaced with another concrete type",
+      [](auto &m) {
+        TypeId ints;
+        for (uint64_t i = 1; i <= m.types.size(); ++i)
+          if (m.types.find(TypeId{i})->kind == TypeKind::SignedInt)
+            ints = TypeId{i};
+        need(ints.value, "i32 TypeId missing");
+        Type vec;
+        vec.kind = TypeKind::Vec;
+        vec.type_args = {ints};
+        auto vec_int = m.types.intern(std::move(vec));
+        auto &d = const_cast<NominalDecl &>(nominal_named(m, "Node"));
+        d.fields[field_index_named(m, d, "children")].type = vec_int;
+      });
+  invalid_recomputed(copied, "recursive struct initializer field index",
+                     [](auto &m) {
+                       auto id = find(m, NodeKind::struct_init);
+                       auto &init = std::get<StructInit>(m.nodes[id.value].data);
+                       need(init.fields.size() > 1, "Node initializer fields");
+                       std::swap(init.fields[0].parameter_index,
+                                 init.fields[1].parameter_index);
+                     });
+  invalid(copied, "recursive value field without Vec", [&](auto &m) {
+    auto &d = const_cast<NominalDecl &>(nominal_named(m, "Node"));
+    d.fields.push_back({d.fields[0].symbol, nodes[0], false,
+                        d.fields[0].source});
+  });
+
+  auto instance = accepted(
+      "struct Node[T] {value T;children Vec[Node[T]];} "
+      "func make[T](v T) Node[T] {return Node[T](value:v,children:[]);} "
+      "func main() i32 {let n=make[i32](1);return n.value-1;}");
+  facts(instance);
+  need(!instance.instances.empty(), "concrete recursive instance missing");
+  invalid_recomputed(instance, "recursive instance actual argument changed",
+                     [](auto &m) {
+                       TypeId bools;
+                       for (uint64_t i = 1; i <= m.types.size(); ++i)
+                         if (m.types.find(TypeId{i})->kind == TypeKind::Bool)
+                           bools = TypeId{i};
+                       need(bools.value, "bool TypeId missing");
+                       m.instances[0].type_args = {bools};
+                     });
+
+  auto growth = accepted(
+      "struct Grow[T] {children Vec[Grow[Vec[T]]];} "
+      "func main() i32 {let v Vec[i32]=[1];return v[0]-1;}");
+  auto growth_bad = growth;
+  TypeId ints;
+  for (uint64_t i = 1; i <= growth_bad.types.size(); ++i)
+    if (growth_bad.types.find(TypeId{i})->kind == TypeKind::SignedInt)
+      ints = TypeId{i};
+  const auto &grow_decl = nominal_named(growth_bad, "Grow");
+  Type grow_type;
+  grow_type.kind = TypeKind::NominalStruct;
+  grow_type.declaration = grow_decl.symbol;
+  grow_type.type_args = {ints};
+  auto grow_i32 = growth_bad.types.intern(std::move(grow_type));
+  growth_bad.nodes[find(growth_bad, NodeKind::binding).value].type = grow_i32;
+  auto stopped = detail::verify_ownership(growth_bad, {});
+  need(!stopped.success() && has(stopped, "E_IR_INVALID"),
+       "independent ownership verifier did not stop on a growing concrete "
+       "family");
+}
+
 void flow_tests() {
   const std::string take = "func take(v move Vec[i32]) i32 { return v[0]; } ";
   rejected(
@@ -277,7 +564,13 @@ void flow_tests() {
                   }
           });
   need(injected, "mixed String+Vec destroy action missing");
-  rejected("struct S {v Vec[S];} func f(v S) {}", "E_CAPABILITY_UNAVAILABLE");
+  // A nominal type may refer back to itself through Vec.  The exact TypeId
+  // back-edge is a finite reference cycle, not an infinite value layout.
+  auto recursive_s = accepted("struct S {v Vec[S];} func f(v S) {}");
+  auto recursive_s_types = nominal_types(recursive_s, "S");
+  need(recursive_s_types.size() == 1 &&
+           classify_value(recursive_s, recursive_s_types[0]).needs_drop,
+       "recursive struct field is not classified as owned");
   // Computed owning enum switch is now supported: the subject is evaluated
   // once and held to the end of the selected arm (SEMANTICS switch rule).
   auto computed = accepted(
@@ -1425,10 +1718,22 @@ int main(int argc, char **argv) {
     }
     test_cases(argv[1]);
     flow_tests();
+    recursive_value_tests();
     record_tests();
     extra_tests();
     computed_owning_switch_tests();
     for (auto b : {Backend::native, Backend::python}) {
+      // This signature-only regression intentionally has no owned locals.
+      auto signature = project(
+          fs::path(argv[1]) /
+              "tests/ownership/fixtures/throws-before-parameter/lang.toml",
+          b);
+      need(signature.success(),
+           "throws-before-parameter rejected: " + diagnostics(signature));
+      need(verify_types(*signature.value).success() &&
+               verify(*signature.value).success(),
+           "throws-before-parameter independent verification failed");
+      ++probes;
       auto r = project(fs::path(argv[1]) /
                            "tests/ownership/static-extra/independent/lang.toml",
                        b);

@@ -1,0 +1,56 @@
+package app;
+
+struct Branch {
+    label i32;
+    children Vec[Item];
+    extras Vec[Item];
+}
+
+enum Item {
+    Leaf(value i32);
+    Node(data Branch);
+}
+
+func count(item Item) i32 {
+    switch item {
+        case Item.Leaf(value):
+            return value;
+        case Item.Node(data):
+            var total = data.label;
+            for child in data.children {
+                total += count(child);
+            }
+            for extra in data.extras {
+                total += count(extra);
+            }
+            return total;
+    }
+}
+
+func main() i32 {
+    let leaf1 = Item.Leaf(value: 2);
+    let leaf2 = Item.Leaf(value: 3);
+    let branch = Branch(label: 1, children: [leaf1, leaf2],
+                        extras: [Item.Leaf(value: 4)]);
+    let root = Item.Node(data: branch);
+    if count(root) != 10 {
+        return 1;
+    }
+    switch root {
+        case Item.Leaf(value):
+            return 2;
+        case Item.Node(data):
+            if data.label != 1 {
+                return 3;
+            }
+            switch data.children[0] {
+                case Item.Leaf(value):
+                    if value != 2 {
+                        return 4;
+                    }
+                case Item.Node(nested):
+                    return 5;
+            }
+    }
+    return 0;
+}

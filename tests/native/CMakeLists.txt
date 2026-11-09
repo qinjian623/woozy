@@ -103,6 +103,12 @@ set_tests_properties(native.vec_runtime PROPERTIES TIMEOUT 30)
 add_executable(lang_native_startup_test startup_test.cpp)
 target_compile_features(lang_native_startup_test PRIVATE cxx_std_20)
 add_test(NAME native.startup COMMAND lang_native_startup_test)
+add_executable(lang_native_alloc_wrap_test alloc_wrap_test.cpp alloc_observer.cpp)
+target_compile_features(lang_native_alloc_wrap_test PRIVATE cxx_std_20)
+target_link_libraries(lang_native_alloc_wrap_test PRIVATE lang_native_runtime)
+target_link_options(lang_native_alloc_wrap_test PRIVATE
+  -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
+add_test(NAME native.alloc_wrap COMMAND lang_native_alloc_wrap_test)
 add_executable(lang_native_ownership_probe ownership_probe.cpp)
 target_include_directories(lang_native_ownership_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_options(lang_native_ownership_probe PRIVATE -fno-rtti)
@@ -113,6 +119,7 @@ if(LANG_TEST_PYTHON)
     --probe $<TARGET_FILE:lang_native_ownership_probe> --root ${LANG_SOURCE_ROOT}
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
     --runtime-test $<TARGET_FILE:lang_native_vec_runtime_test>
+    --alloc-selftest $<TARGET_FILE:lang_native_alloc_wrap_test>
     --out ${CMAKE_CURRENT_BINARY_DIR}/ownership-results)
   set_tests_properties(native.ownership PROPERTIES TIMEOUT 240)
 endif()

@@ -1,0 +1,41 @@
+package app;
+
+struct Flip[A, B] {
+    tag A;
+    children Vec[Flip[B, A]];
+}
+
+struct Box[T] {
+    value T;
+}
+
+struct S[T] {
+    f func() S[S[T]];
+}
+
+func bottom() S[S[i32]] {
+    return bottom();
+}
+
+func pass(x S[i32]) S[i32] {
+    return x;
+}
+
+func main() i32 {
+    let first = Flip[i32, bool](tag: 1, children: []);
+    let second = Flip[bool, i32](tag: true, children: [first]);
+    let third = Flip[i32, bool](tag: 12, children: [second]);
+    if third.tag != 12 || !third.children[0].tag {
+        return 1;
+    }
+    if third.children[0].children[0].tag != 1 {
+        return 2;
+    }
+    let box = Box[Box[i32]](value: Box[i32](value: 7));
+    if box.value.value != 7 {
+        return 3;
+    }
+    let x = S[i32](f: bottom);
+    let y = pass(x);
+    return 0;
+}

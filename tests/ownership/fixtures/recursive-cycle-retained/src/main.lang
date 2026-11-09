@@ -1,0 +1,12 @@
+package app;
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+func main() i32 {
+    var cycle Vec[Node] = [Node(value: 1, children: [])];
+    cycle[0] = Node(value: 2, children: cycle);
+    return 0;
+}

@@ -1,0 +1,9 @@
+package app;
+
+struct Grow[T] {
+    next Grow[Vec[T]];
+}
+
+func main() i32 {
+    return 0;
+}

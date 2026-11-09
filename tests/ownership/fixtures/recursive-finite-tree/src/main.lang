@@ -1,0 +1,10 @@
+package app;
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+func main() i32 {
+    let leaf = Node(value: 7, children: []);
+    let root = Node(value: 5, children: [leaf]);
+    return root.value + root.children[0].value - 12;
+}

@@ -16,11 +16,11 @@ def sha(path):
     return hashlib.sha256(path.read_bytes()).hexdigest()
 
 
-def command(argv):
+def command(argv, timeout=60):
     argv = list(map(str, argv))
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONNOUSERSITE='1')
     env.pop('PYTHONPATH', None)
-    p = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=60)
+    p = subprocess.run(argv, capture_output=True, text=True, env=env, timeout=timeout)
     return dict(argv=argv, exit=p.returncode, stdout=p.stdout, stderr=p.stderr)
 
 
@@ -29,6 +29,7 @@ def main():
     for key in ('cli', 'helper', 'root', 'out', 'python'):
         parser.add_argument('--' + key, type=Path, required=True)
     parser.add_argument('--allow-stage-rejection', action='store_true')
+    parser.add_argument('--case', action='append')
     args = parser.parse_args()
     for key in ('cli', 'helper', 'root', 'out', 'python'):
         setattr(args, key, getattr(args, key).resolve())
@@ -46,12 +47,17 @@ def main():
         manifest.write_text('schema_version=1\n[package]\nname="main"\nsource_root="src"\nentry="app"\n[build]\nbackend="python"\nword_bits=64\n')
         (root / 'src/main.lang').write_text('package main;\n' + source + '\n')
         inputs.append((ident, manifest, dict(status='accept'), expected))
+    if args.case:
+        inputs = [row for row in inputs if row[0] in args.case]
+        assert len(inputs) == len(set(args.case)), 'unknown case'
     for ident, manifest, static, expected in inputs:
         row = dict(id=ident, commands=[], status='failed', source_hashes={str(p):sha(p) for p in manifest.parent.rglob('*.lang')})
         report['cases'].append(row)
         try:
             out = args.out / ident
-            build = command([args.cli, 'build', '--project', manifest, '--backend', 'python', '--out-dir', out, '--format', 'json'])
+            limit = 20 if ident in ('recursive-generic-growth',
+                                    'recursive-generic-growth-unused') else 60
+            build = command([args.cli, 'build', '--project', manifest, '--backend', 'python', '--out-dir', out, '--format', 'json'], timeout=limit)
             row['commands'].append(build)
             if args.allow_stage_rejection and not report['cases'][:-1] and build['exit'] == 1:
                 diagnostics = json.loads(build['stdout'])['diagnostics']
@@ -68,6 +74,10 @@ def main():
                 if static.get('code'):
                     assert static['code'] in codes, codes
                 assert not out.exists(), out
+                if ident == 'recursive-generic-growth':
+                    diagnostic = data['diagnostics'][0]
+                    assert 'budget' in diagnostic['message'], diagnostic
+                    assert diagnostic['primary']['end_byte'] > diagnostic['primary']['start_byte'], diagnostic
                 row['status'] = 'passed'
                 continue
             assert build['exit'] == 0, build
@@ -94,6 +104,19 @@ def main():
             assert sha(out / 'program.py') == sha(helper_out / 'program.py'), 'helper differs from formal CLI'
             assert sha(out / 'langrt.py') == sha(helper_out / 'langrt.py'), 'embedded runtime differs'
             (out / 'metadata.json').write_bytes((helper_out / 'metadata.json').read_bytes())
+            if expected.get('cycle'):
+                observed = command([args.python, '-s', Path(__file__).with_name('observe_cycle.py'), out])
+                row['commands'].append(observed)
+                assert observed['exit'] == 0, observed
+                data = json.loads(observed['stdout'])
+                row['observation'] = data
+                assert data['main_return'] == 0, data
+                assert data['self_cycle'] and len(data['alive']) == 1, data
+                assert data['alive'][0]['refs'] > 0, data
+                assert data['alive'][0]['object'] not in data['frees'], data
+                assert data['frames_clean'] > 0, data
+                row['status'] = 'passed'
+                continue
             observed = command([args.python, '-s', Path(__file__).with_name('observe_ownership.py'), out])
             row['commands'].append(observed)
             assert observed['exit'] == 0, observed

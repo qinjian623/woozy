@@ -2,9 +2,9 @@
   "schema": "compiler-dev/ownership-fixtures/1",
   "contract": "compiler-dev/1",
   "root_revision": "e808169",
-  "case_count": 18,
-  "accepted_count": 11,
-  "reject_count": 7,
+  "case_count": 31,
+  "accepted_count": 20,
+  "reject_count": 11,
   "accepted_note": "accepted_count 包含 panic-vec-index：其源码未来应通过静态检查，但运行时必须 Panic；不等于运行通过。",
   "stage_policy": {
     "syntax": "全部 18 个项目的 src/main.lang 必须通过现有 C++ langc check --syntax-only --format json：退出 0、status=ok、diagnostics 为空。语法通过不代表类型、所有权、后端生成或执行通过。",
@@ -712,6 +712,224 @@
           "message": "container, owned string and Result support requires T08/T09"
         }
       }
+    },
+    {
+      "id": "recursive-finite-tree",
+      "purpose": "原始审查 Source 原样保存；有限 Node 树通过两端检查、构建和运行。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-finite-tree/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-finite-tree/src/main.lang",
+      "source_sha256": "0a0f5d80535164a4d02738af09c9a3d8bdc99c7fbb54ec6f4fc9f4081e59db43",
+      "source_bytes": 235,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "原始审查 Source 原样保存；有限 Node 树通过两端检查、构建和运行。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-copy-move-slice",
+      "purpose": "同一有限树的 copy/普通参数返回/move/slice/for-in/别名共享。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-copy-move-slice/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-copy-move-slice/src/main.lang",
+      "source_sha256": "c4c66040e5a89e5461385843fdb34d5dd85bcccb84ede194641e974169765be4",
+      "source_bytes": 1226,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "同一有限树的 copy/普通参数返回/move/slice/for-in/别名共享。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-mutual-struct-enum",
+      "purpose": "struct/enum 经 Vec 互相回指；嵌套 switch 和逆序销毁。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-mutual-struct-enum/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-mutual-struct-enum/src/main.lang",
+      "source_sha256": "140362b423c9ab265409686102cb1e840398a26e9331ff44e7df819521f2e3e1",
+      "source_bytes": 1291,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "struct/enum 经 Vec 互相回指；嵌套 switch 和逆序销毁。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-descriptor-order",
+      "purpose": "Python Vec 描述先于元素描述；A/B/C 前向引用实际 import/运行。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-descriptor-order/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-descriptor-order/src/main.lang",
+      "source_sha256": "0b532f5d1eafead3db2ef86172e1ab33bd619d2543e8fb479ff5db9d063ff621",
+      "source_bytes": 396,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "Python Vec 描述先于元素描述；A/B/C 前向引用实际 import/运行。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-generic-stable",
+      "purpose": "Node[T] 两组具体实例及泛型函数实例。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-generic-stable/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-generic-stable/src/main.lang",
+      "source_sha256": "5bb3c37b99c9939176707feed7e78a2f0d24ca12854f2c3d20b74a270f5358b3",
+      "source_bytes": 781,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "Node[T] 两组具体实例及泛型函数实例。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-generic-periodic",
+      "purpose": "Flip[A,B] 周期交换后精确 TypeId 回指；Box[Box[i32]] 与函数字段控制。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-generic-periodic/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-generic-periodic/src/main.lang",
+      "source_sha256": "ae582fcbb1c282703bd421cf61bfa0627b69107282c19c283c6654cdaa568f16",
+      "source_bytes": 769,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "Flip[A,B] 周期交换后精确 TypeId 回指；Box[Box[i32]] 与函数字段控制。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-generic-growth-unused",
+      "purpose": "未使用的增长泛型声明不触发具体成员展开预算。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-generic-growth-unused/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-generic-growth-unused/src/main.lang",
+      "source_sha256": "46044ddf97fdf01a5d2d94701e0de73410bfcda03033b63179c71b4be8853141",
+      "source_bytes": 180,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "未使用的增长泛型声明不触发具体成员展开预算。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
+    },
+    {
+      "id": "recursive-generic-growth",
+      "purpose": "实际使用 Grow[i32] 时在固定预算内给带 span 的 E_CAP；超时或信号不算拒绝。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_CAPABILITY_UNAVAILABLE"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-generic-growth/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-generic-growth/src/main.lang",
+      "source_sha256": "e0e90ae2fb99d3a4f22c72b2ae164831769dc7e0981c1a6aab10f1d4c069179a",
+      "source_bytes": 141
+    },
+    {
+      "id": "recursive-typed-error",
+      "purpose": "递归 Node 错误载荷、move 后后续参数失败、catch 重抛、返回结果先存 defer。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-typed-error/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-typed-error/src/main.lang",
+      "source_sha256": "18bdcb3a3c11ecce4171fee5d79e55a9021d8ab180ea809f799f5dff83609ded",
+      "source_bytes": 2687,
+      "runtime_expected": {
+        "main_return": 0,
+        "status": "not_run",
+        "reason": "递归 Node 错误载荷、move 后后续参数失败、catch 重抛、返回结果先存 defer。 实际结果见 checks/recursive-values-flash-20261109/。",
+        "events": [
+          1,
+          2,
+          3,
+          4,
+          5,
+          6,
+          7,
+          8,
+          9,
+          0
+        ]
+      }
+    },
+    {
+      "id": "recursive-infinite-layout",
+      "purpose": "直接递归值字段无限布局，保留原源类型错误。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_TYPE_MISMATCH"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-infinite-layout/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-infinite-layout/src/main.lang",
+      "source_sha256": "b56ba8eebe7ee48385b3c171ba4e52d893933371e7833fa5f5d1640f547190c9",
+      "source_bytes": 79
+    },
+    {
+      "id": "recursive-infinite-layout-mutual",
+      "purpose": "互相直接包含的 struct 无限布局。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_TYPE_MISMATCH"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-infinite-layout-mutual/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-infinite-layout-mutual/src/main.lang",
+      "source_sha256": "627364e3b99cc582e1451b03c16a8fea6bf01b89067b4eb1668509dcf781ddc0",
+      "source_bytes": 94
+    },
+    {
+      "id": "recursive-infinite-layout-growth",
+      "purpose": "没有 Vec 截断的增长泛型字段无限布局。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "reject",
+        "code": "E_TYPE_MISMATCH"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-infinite-layout-growth/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-infinite-layout-growth/src/main.lang",
+      "source_sha256": "9c93787718a51c4a9aaa27098e2820eb3fc1f2fa714a97e39a75b55404e7509c",
+      "source_bytes": 91
+    },
+    {
+      "id": "recursive-cycle-retained",
+      "purpose": "经 Vec 整元素替换形成语言强引用自环；保留存活，不要求零泄漏。",
+      "specification": "docs/SEMANTICS.md §7.1/§7.3；checks/recursive-values-flash-20261109 交付记录",
+      "expected_static": {
+        "status": "accept"
+      },
+      "manifest": "tests/ownership/fixtures/recursive-cycle-retained/lang.toml",
+      "source": "tests/ownership/fixtures/recursive-cycle-retained/src/main.lang",
+      "source_sha256": "c5003cb66e451ce7657ef9573fb6d04c5fc03a958d90793bb060b1f445c76e25",
+      "source_bytes": 210,
+      "runtime_expected": {
+        "main_return": 0,
+        "cycle": true,
+        "status": "not_run",
+        "reason": "经 Vec 整元素替换形成语言强引用自环；保留存活，不要求零泄漏。 实际结果见 checks/recursive-values-flash-20261109/。"
+      }
     }
   ],
   "correction_operation_id": "language-t09-ownership-fixtures-20261104-correction",
@@ -722,5 +940,11 @@
     "status": "rejected",
     "accepted_dependency": false
   },
-  "root_integration_note": "root依据contracts/diagnostic_codes.json和contracts/test-cases.json补用已登记的E_OWNERSHIP_USE_AFTER_MOVE；18份修正后源码及所有数值/事件预期不变，未来静态和运行仍not_run。"
+  "root_integration_note": "root依据contracts/diagnostic_codes.json和contracts/test-cases.json补用已登记的E_OWNERSHIP_USE_AFTER_MOVE；18份修正后源码及所有数值/事件预期不变，未来静态和运行仍not_run。",
+  "recursive_value_batch": {
+    "date": "2026-11-09",
+    "root_revision": "5827dce",
+    "note": "新增 13 个经过 Vec 的递归值项目；原 18 个 Source 和预期未改。runtime_expected 的 status 由实际 runner 结果覆盖为 passed/failed，静态计划不冒充执行。",
+    "expected_mutation_scope": "见 checks/recursive-values-flash-20261109/results.json"
+  }
 }

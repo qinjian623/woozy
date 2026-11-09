@@ -192,13 +192,19 @@ class Emitter {
       return;
     auto v = classify_value(m, id);
     const auto &t = type(id);
+    // A Vec descriptor does not reference its element descriptor: Vec.create
+    // receives the element ops at the use site.  Publish the Vec name before
+    // visiting the element so a recursive element such as B -> C -> Vec[B]
+    // cannot observe an unassigned Vec name.
+    if (t.kind == TypeKind::Vec) {
+      program.push_back(
+          {ops(id) + " = _rt.ValueType('vec')", {}, false, {}, {}});
+      emit_type(t.type_args[0], program, done);
+      return;
+    }
     for (auto f : v.fields)
       emit_type(f.type, program, done);
-    if (t.kind == TypeKind::Vec)
-      emit_type(t.type_args[0], program, done);
     std::string desc = "_rt.ValueType()";
-    if (v.kind == ValueKind::vec)
-      desc = "_rt.ValueType('vec')";
     if (v.kind == ValueKind::foreign_reference ||
         v.kind == ValueKind::foreign_callable)
       desc = "_rt.ValueType('foreign')";

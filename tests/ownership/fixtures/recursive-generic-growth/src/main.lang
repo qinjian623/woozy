@@ -1,0 +1,10 @@
+package app;
+
+struct Grow[T] {
+    children Vec[Grow[Vec[T]]];
+}
+
+func main() i32 {
+    let value = Grow[i32](children: []);
+    return 0;
+}

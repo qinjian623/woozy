@@ -1,0 +1,119 @@
+package app;
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+struct Wrapper {
+    first Node;
+    second Vec[i32];
+}
+
+enum Failure {
+    Bad(node Node);
+}
+
+func mark(log inout i64, digit i64) {
+    log = log * 10 + digit;
+}
+
+func fail_after(log inout i64, digit i64) i32 throws Failure {
+    mark(inout log, digit);
+    let first = Node(value: 1, children: []);
+    let second = Node(value: 2, children: [first]);
+    throw Failure.Bad(node: second);
+}
+
+func bad(log inout i64) i32 throws Failure {
+    mark(inout log, 3);
+    throw Failure.Bad(node: Node(value: 9, children: []));
+}
+
+func later(log inout i64) i32 {
+    mark(inout log, 99);
+    return 3;
+}
+
+func bad_vec(log inout i64) Vec[i32] throws Failure {
+    mark(inout log, 8);
+    throw Failure.Bad(node: Node(value: 8, children: []));
+}
+
+func consume(node move Node, first i32, second i32) i32 {
+    return node.value + first + second;
+}
+
+func probe(log inout i64) i32 {
+    let node = Node(value: 7, children: []);
+    defer {
+        mark(inout log, 0);
+    }
+    return node.value;
+}
+
+func main() i32 {
+    var log i64 = 0;
+    try {
+        let value = fail_after(inout log, 1);
+        return 1;
+    } catch error Failure {
+        switch error {
+            case Failure.Bad(node):
+                if node.value != 2 || node.children[0].value != 1 {
+                    return 2;
+                }
+        }
+        mark(inout log, 2);
+    }
+    var moved = Node(value: 5, children: []);
+    try {
+        let value = consume(move moved, bad(inout log), later(inout log));
+        return 3;
+    } catch error Failure {
+        switch error {
+            case Failure.Bad(node):
+                if node.value != 9 {
+                    return 4;
+                }
+        }
+        mark(inout log, 4);
+    }
+    try {
+        try {
+            let value = fail_after(inout log, 5);
+            return 5;
+        } catch inner Failure {
+            mark(inout log, 6);
+            throw inner;
+        }
+    } catch outer Failure {
+        switch outer {
+            case Failure.Bad(node):
+                if node.value != 2 {
+                    return 6;
+                }
+        }
+        mark(inout log, 7);
+    }
+    try {
+        let wrapper = Wrapper(first: Node(value: 6, children: []),
+                              second: bad_vec(inout log));
+        return 7;
+    } catch error Failure {
+        switch error {
+            case Failure.Bad(node):
+                if node.value != 8 {
+                    return 8;
+                }
+        }
+        mark(inout log, 9);
+    }
+    if probe(inout log) != 7 {
+        return 9;
+    }
+    if log != 1234567890 {
+        return 10;
+    }
+    return 0;
+}

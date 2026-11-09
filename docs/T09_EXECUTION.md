@@ -1,14 +1,24 @@
 # T09 当前执行范围
 
-native/64 Linux x86_64 与 python/64 CPython 3.12.15 已支持有限、无环的 Vec 和含 Vec 的 struct/enum：共享复制、整体 move、普通参数借用和返回复制、索引读写、切片、for-in，以及 return/typed-error/defer 的拥有值清理。Python runtime 为 `compiler-dev/1-python-values/6`；native 保留标量 ABI，新增私有 `lang-native-values/1`。
+native/64 Linux x86_64 与 python/64 CPython 3.12.15 已支持 Vec 和含 Vec 的 struct/enum：共享复制、整体 move、普通参数借用和返回复制、索引读写、切片、for-in，以及 return/typed-error/defer 的拥有值清理。经 Vec 回指的有限递归值类型图（包括结构体/枚举互相引用、具体泛型实例和周期交换的具体 TypeId）也按同一套 copy/drop 规则处理；直接按值包含自身的无限布局仍拒绝。Python runtime 为 `compiler-dev/1-python-values/6`；native 保留标量 ABI，新增私有 `lang-native-values/1`。
 
-仍不支持动态 string/Vec[string]、部分 move、拥有值或 foreign 的 inout、索引 inout、索引字段写回、递归拥有图、捕获闭包、foreign 及原 T07 限制。运行时对顶层数字/bool 和有限平凡 struct/enum 的整体 inout 分别用标量槽和聚合存储处理，详见下文。普通参数绑定只读已按 SEMANTICS 实施：重赋值报 `E_TYPE_MISMATCH`，普通 Vec 参数的内容写入仍按共享容器规则允许；计算产生的拥有 switch 主体保留到分支结束的规则已在 SEMANTICS 中确定并实现：Native 用真实 temp slot 在正常与异常 ExitPlan 中释放，Python 用 switch 结构化 try/finally 在分支 defer/局部清理之后释放，Panic 不执行语言清理，typed-error handler 不提前销毁由 finally 持有的 subject。没有新增公开 len/push/share API。完整 ARC 和外部对象支持尚未完成。
+仍不支持动态 string/Vec[string]、部分 move、拥有值或 foreign 的 inout、索引 inout、索引字段写回、捕获闭包、foreign、循环回收及原 T07 限制。强引用环保持存活，本轮没有新增 GC、弱引用或 reject-cycles 规则。运行时对顶层数字/bool 和有限平凡 struct/enum 的整体 inout 分别用标量槽和聚合存储处理，详见下文。普通参数绑定只读已按 SEMANTICS 实施：重赋值报 `E_TYPE_MISMATCH`，普通 Vec 参数的内容写入仍按共享容器规则允许；计算产生的拥有 switch 主体保留到分支结束的规则已在 SEMANTICS 中确定并实现：Native 用真实 temp slot 在正常与异常 ExitPlan 中释放，Python 用 switch 结构化 try/finally 在分支 defer/局部清理之后释放，Panic 不执行语言清理，typed-error handler 不提前销毁由 finally 持有的 subject。没有新增公开 len/push/share API。完整 ARC 和外部对象支持尚未完成。
 
 Vec 别名共享写入；切片创建新容器并逻辑复制元素，引用元素继续共享。for-in 持有一次求值的旧集合，使用入口长度，每轮取得当前元素的逻辑副本。元素替换可见；活动迭代中的长度改变必须在修改前 Panic，此项目前只由私有 runtime 检查。
 
-分配失败、分配大小或引用计数溢出、非法索引和切片均 Panic，不能被 typed catch 捕获。Panic 不保证语言清理。普通和 typed-error 结束才检查零存活、最后释放及次序；Python 不依赖 `__del__` 或宿主 GC 完成语言释放。
+分配失败、分配大小或引用计数溢出、非法索引和切片均 Panic，不能被 typed catch 捕获。Panic 不保证语言清理。普通和 typed-error 结束才检查零存活、最后释放及次序；有意构造的语言强引用环是例外，必须单独观察其语言引用计数保持非零，不能套用零存活要求。Python 不依赖 `__del__` 或宿主 GC 完成语言释放。
 
 默认 Linux x86_64 原生程序使用自有入口和直接系统调用；无 libc 运行支持与索引优化见 [NATIVE_RUNTIME.md](NATIVE_RUNTIME.md)。下表保留 T09 首次开放时的检查记录，后续检查以项目外层最新报告为准。
+
+## 经过 Vec 的递归值
+
+具体成员补全从真实函数/模板签名、调用签名、可达节点、catch 类型和模式类型取根，按精确 TypeId 去重；只有在完整检查后仍被实际使用的具体类型族才可能触发预算。每个根最多展开 128 层、访问 4096 个不同具体 TypeId，超限在触发根源码位置返回 `E_CAPABILITY_UNAVAILABLE` / unsupported，不发布输出目录。未使用的增长声明保持合法；直接按值回指仍由 `infinite_value_layout` 报源类型错误。泛型模板中仍含真实 TypeParameter 的 Vec 元素不继续产生具体替换，具体实例会重新补全和分类。独立的 ownership verifier 不信任 producer 的完成标记/记录，遇到坏、不完整或增长型 HIR 在分类预算内返回 `E_IR_INVALID`。
+
+支持检查与按值 `needs_drop` 分开计算：Vec 恒为拥有值并在此停止，struct/enum 字段按声明/活动载荷取或，精确 TypeId 回指只结束当前遍历而不会把临时 false 结果缓存为完成。名称、类型实参和公开 member TypeId 的缺失仍是内部错误。Python 的 Vec `ValueType('vec')` 描述先于元素描述输出，名义值仍先输出字段描述；Native 复用既有 ptr Vec 布局、copy/drop 私有函数和 runtime ABI，没有新增公共 HIR/NativeIR 字段或运行库入口。
+
+持久 Source 在 `tests/ownership/fixtures/recursive-*`，`tests/native/run_ownership.py` 与 `tests/python/run_ownership.py` 支持 `--case` 定向运行。实际 alloc/free 观察使用测试链接的 `--wrap=lang_alloc_v1` / `--wrap=lang_free_v1`，调用真实 allocator 并记录 pointer；事件 5 只表示 Vec 释放路径开始，不单独作为物理内存已释放的证明。自环用例在独立进程/专用 observer 中只记录语言 refs、items 与 frame 清理，不宣称 CPython 物理释放或 GC。
+
+本轮实际运行记录、工具/源码 SHA 与变异清单见项目外层 `checks/recursive-values-flash-20261109/`。下表是 T09 首次开放时的历史记录，不能代替本轮定向证据。
 
 ## 平凡聚合整体 inout 的执行范围
 

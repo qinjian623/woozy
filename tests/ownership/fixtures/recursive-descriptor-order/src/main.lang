@@ -1,0 +1,29 @@
+package app;
+
+struct A {
+    bs Vec[B];
+}
+
+struct B {
+    label i32;
+    c C;
+}
+
+struct C {
+    label i32;
+    bs Vec[B];
+}
+
+func main() i32 {
+    let a = A(bs: []);
+    let b = B(label: 3, c: C(label: 4, bs: []));
+    let c = C(label: 7, bs: [b]);
+    let d = A(bs: c.bs);
+    if d.bs[0].label != 3 {
+        return 1;
+    }
+    if d.bs[0].c.label != 4 {
+        return 2;
+    }
+    return 0;
+}

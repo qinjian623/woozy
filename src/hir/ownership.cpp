@@ -26,117 +26,71 @@ const NominalDecl &decl(const HirModule &m, SymbolId id) {
       return d;
   throw std::invalid_argument("ownership nominal declaration missing");
 }
-size_t weight(const HirModule &m, TypeId id) {
-  size_t result = 1;
-  for (auto a : ty(m, id).type_args)
-    result += weight(m, a);
-  return result;
-}
-bool recursive(const HirModule &m, TypeId id,
-               const std::set<uint64_t> &active) {
-  const auto &t = ty(m, id);
-  for (auto prior : active) {
-    if (prior == id.value)
+constexpr size_t kCompletionDepth = 128;
+constexpr size_t kCompletionTypes = 4096;
+constexpr size_t kClassificationDepth = 512;
+constexpr size_t kClassificationTypes = 65536;
+
+bool contains_type_parameter(const HirModule &m, TypeId root) {
+  std::vector<TypeId> pending{root};
+  std::set<uint64_t> seen;
+  while (!pending.empty()) {
+    auto id = pending.back();
+    pending.pop_back();
+    if (!seen.insert(id.value).second)
+      continue;
+    if (seen.size() > kClassificationTypes)
+      throw std::invalid_argument(
+          "concrete ownership type traversal budget exceeded");
+    const auto &t = ty(m, id);
+    if (t.kind == TypeKind::TypeParameter)
       return true;
-    const auto &p = ty(m, TypeId{prior});
-    if ((t.kind == TypeKind::NominalStruct ||
-         t.kind == TypeKind::NominalEnum) &&
-        p.kind == t.kind && p.declaration == t.declaration &&
-        weight(m, id) >= weight(m, TypeId{prior}))
-      return true;
+    pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+    for (auto p : t.parameters)
+      pending.push_back(p.type);
+    if (t.kind == TypeKind::Function) {
+      pending.push_back(t.result);
+      if (t.throws_type)
+        pending.push_back(*t.throws_type);
+    }
   }
-  return active.size() >= 128;
+  return false;
 }
-ValueOps classify(const HirModule &m, TypeId id, std::set<uint64_t> &active) {
-  auto t = ty(m, id);
-  ValueOps out;
-  if (t.kind == TypeKind::TypeParameter) {
-    out.kind = ValueKind::dependent;
-    return out;
+
+// A growing concrete family such as Grow[T] -> Vec[Grow[Vec[T]]] creates a
+// new TypeId at every expansion.  The producer stops within this fixed budget
+// and reports the source location of the actual root that demanded the type.
+struct RootBudget {
+  Source source;
+  std::set<uint64_t> expanded;
+  void account(TypeId id, size_t depth) {
+    if (depth > kCompletionDepth)
+      throw Problem{source, "E_CAPABILITY_UNAVAILABLE",
+                    "concrete ownership member/type expansion budget exceeded"};
+    if (expanded.insert(id.value).second && expanded.size() > kCompletionTypes)
+      throw Problem{source, "E_CAPABILITY_UNAVAILABLE",
+                    "concrete ownership member/type expansion budget exceeded"};
   }
-  if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable) {
-    const auto &d = m.resolved->project->foreign_binding(t.binding);
-    out.kind = t.kind == TypeKind::ForeignCallable ? ValueKind::foreign_callable :
-      std::get<modules::BindingType>(d.detail).kind == "runtime_error"
-        ? ValueKind::foreign_error : ValueKind::foreign_reference;
-    out.needs_drop = true;
-    return out;
-  }
-  if (t.kind == TypeKind::Error) {
-    out.reason =
-        "dynamic string/foreign/error value ownership is not supported";
-    return out;
-  }
-  if (t.kind != TypeKind::Vec && t.kind != TypeKind::NominalStruct &&
-      t.kind != TypeKind::NominalEnum) {
-    out.kind = ValueKind::trivial;
-    out.pod_inout = t.kind == TypeKind::Bool || t.kind == TypeKind::SignedInt ||
-                    t.kind == TypeKind::UnsignedInt ||
-                    t.kind == TypeKind::Isize || t.kind == TypeKind::Usize ||
-                    t.kind == TypeKind::Float;
-    return out;
-  }
-  // Reject declaration recursion, including through Vec, before substitution
-  // can produce an unbounded sequence such as S[T] -> Vec[S[Vec[T]]].
-  uint64_t key = id.value;
-  if (recursive(m, id, active)) {
-    out.reason = "recursive owning graph is not supported";
-    return out;
-  }
-  active.insert(key);
-  if (t.kind == TypeKind::Vec) {
-    auto e = classify(m, t.type_args.at(0), active);
-    out.kind = e.kind == ValueKind::unsupported || e.kind == ValueKind::foreign_reference ||
-                       e.kind == ValueKind::foreign_callable || e.kind == ValueKind::foreign_error
-                   ? ValueKind::unsupported : ValueKind::vec;
-    if (out.kind == ValueKind::unsupported && e.reason.empty())
-      e.reason = "external values in Vec are not supported";
-    out.needs_drop = out.kind != ValueKind::unsupported;
-    out.reason = e.reason;
-  } else {
-    const auto &d = decl(m, t.declaration);
-    TypeContext ctx = m.types;
-    Substitutions sub;
-    for (size_t i = 0; i < d.params.size(); ++i)
-      sub.push_back({d.params[i].symbol, t.type_args.at(i)});
-    out.kind = t.kind == TypeKind::NominalStruct ? ValueKind::structure
-                                                 : ValueKind::enumeration;
-    auto fields = [&](const auto &fs, std::optional<SymbolId> v) {
-      for (const auto &f : fs) {
-        auto ft = substitute(f.type, sub, ctx);
-        // No IDs from the scratch context may appear in returned records.
-        if (!m.types.find(ft))
-          throw std::invalid_argument(
-              "concrete ownership member type was not interned publicly");
-        auto ops = classify(m, ft, active);
-        out.fields.push_back({v, f.symbol, ft});
-        out.needs_drop |= ops.needs_drop;
-        if (ops.kind == ValueKind::unsupported || ops.kind == ValueKind::foreign_reference ||
-            ops.kind == ValueKind::foreign_callable || ops.kind == ValueKind::foreign_error) {
-          out.kind = ValueKind::unsupported;
-          out.reason = ops.reason.empty() ? "external aggregate fields are not supported" : ops.reason;
-        }
-      }
-    };
-    fields(d.fields, {});
-    for (const auto &v : d.variants)
-      fields(v.payload, v.symbol);
-    out.pod_inout = inout_data_type(m, id);
-  }
-  active.erase(key);
-  return out;
-}
+};
+
 void intern_members(HirModule &m, TypeId id, std::set<uint64_t> &active,
-                    std::set<uint64_t> &done) {
+                    std::set<uint64_t> &done, RootBudget &budget, size_t depth,
+                    std::stop_token stop) {
+  check_cancelled(stop);
   if (done.count(id.value))
     return;
+  // An exact concrete TypeId back-edge is the finite reference cycle we now
+  // support.  It ends this branch before counting a new expansion.
+  if (active.count(id.value))
+    return;
+  budget.account(id, depth);
   auto t = ty(m, id);
   if (t.kind == TypeKind::Vec) {
-    if (recursive(m, id, active))
-      return;
-    active.insert(id.value);
-    intern_members(m, t.type_args.at(0), active, done);
-    active.erase(id.value);
+    auto element = t.type_args.at(0);
+    // A Vec element that still contains a real TypeParameter is deferred to
+    // the concrete instance.  Vec itself already owns retain/release work.
+    if (!contains_type_parameter(m, element))
+      intern_members(m, element, active, done, budget, depth + 1, stop);
     done.insert(id.value);
     return;
   }
@@ -144,16 +98,18 @@ void intern_members(HirModule &m, TypeId id, std::set<uint64_t> &active,
     done.insert(id.value);
     return;
   }
-  if (recursive(m, id, active))
-    return;
-  active.insert(id.value); // classifier issues the source diagnostic
-  auto d = decl(m, t.declaration);
+  const auto &d = decl(m, t.declaration);
+  if (t.type_args.size() != d.params.size())
+    throw std::invalid_argument("ownership nominal type argument count");
+  active.insert(id.value);
   Substitutions sub;
   for (size_t i = 0; i < d.params.size(); ++i)
     sub.push_back({d.params[i].symbol, t.type_args.at(i)});
   auto fields = [&](const auto &fs) {
-    for (const auto &f : fs)
-      intern_members(m, substitute(f.type, sub, m.types), active, done);
+    for (const auto &f : fs) {
+      auto concrete = substitute(f.type, sub, m.types);
+      intern_members(m, concrete, active, done, budget, depth + 1, stop);
+    }
   };
   fields(d.fields);
   for (const auto &v : d.variants)
@@ -161,6 +117,270 @@ void intern_members(HirModule &m, TypeId id, std::set<uint64_t> &active,
   active.erase(id.value);
   done.insert(id.value);
 }
+
+void complete_root(HirModule &m, TypeId root, const Source &source,
+                   std::set<uint64_t> &done, std::stop_token stop) {
+  check_cancelled(stop);
+  RootBudget budget{source};
+  std::set<uint64_t> active;
+  auto complete = [&](TypeId id) {
+    intern_members(m, id, active, done, budget, 0, stop);
+  };
+  // Copy the root Type before completing any member: substitution interns new
+  // concrete types into m.types and may reallocate its storage, invalidating a
+  // reference into it.  TypeId fields in this value remain stable indices.
+  const Type t = ty(m, root);
+  if (t.kind == TypeKind::Function) {
+    if (t.throws_type)
+      complete(*t.throws_type);
+    for (auto p : t.parameters)
+      complete(p.type);
+    complete(t.result);
+  } else {
+    complete(root);
+  }
+}
+
+void complete_pattern(HirModule &m, const Pattern &pattern,
+                      std::set<uint64_t> &done, std::stop_token stop) {
+  complete_root(m, pattern.type, pattern.source, done, stop);
+  for (const auto &child : pattern.payload)
+    complete_pattern(m, child, done, stop);
+}
+
+void complete_function(HirModule &m, const HirFunction &function,
+                       std::set<uint64_t> &done, std::stop_token stop) {
+  complete_root(m, function.signature, function.source, done, stop);
+  std::vector<HirNodeId> pending{function.body};
+  std::set<uint64_t> seen;
+  while (!pending.empty()) {
+    check_cancelled(stop);
+    auto id = pending.back();
+    pending.pop_back();
+    if (!seen.insert(id.value).second)
+      continue;
+    const auto &n = m.nodes.at(id.value);
+    complete_root(m, n.type, n.source, done, stop);
+    if (auto call = std::get_if<Call>(&n.data))
+      complete_root(m, call->signature, n.source, done, stop);
+    if (auto call = std::get_if<ConstraintCall>(&n.data)) {
+      complete_root(m, call->signature, n.source, done, stop);
+      complete_root(m, call->receiver, n.source, done, stop);
+    }
+    if (auto attempts = std::get_if<Try>(&n.data))
+      for (const auto &c : attempts->catches)
+        complete_root(m, c.error_type, c.source, done, stop);
+    if (auto branches = std::get_if<Switch>(&n.data))
+      for (const auto &arm : branches->arms)
+        complete_pattern(m, arm.pattern, done, stop);
+    pending.insert(pending.end(), n.children.begin(), n.children.end());
+  }
+}
+
+ValueKind provisional_kind(const Type &t) {
+  switch (t.kind) {
+  case TypeKind::Vec:
+    return ValueKind::vec;
+  case TypeKind::NominalStruct:
+    return ValueKind::structure;
+  case TypeKind::NominalEnum:
+    return ValueKind::enumeration;
+  case TypeKind::TypeParameter:
+    return ValueKind::dependent;
+  case TypeKind::ForeignOpaque:
+    return ValueKind::foreign_reference;
+  case TypeKind::ForeignCallable:
+    return ValueKind::foreign_callable;
+  case TypeKind::Error:
+    return ValueKind::unsupported;
+  default:
+    return ValueKind::trivial;
+  }
+}
+
+// Support is a graph reachability property over reference storage (Vec
+// elements and nominal fields).  A seen TypeId is a real reference back-edge;
+// all remaining branches are still checked by the outer visit.  needs_drop is
+// deliberately computed by a separate value-storage walk below, so a
+// temporary back-edge result is never cached as a completed classification.
+class Classifier {
+  const HirModule &m;
+  TypeContext scratch;
+  std::set<uint64_t> support_seen;
+  size_t support_count = 0;
+
+  struct Support {
+    ValueKind kind = ValueKind::unsupported;
+    std::string reason;
+  };
+
+  Support support(TypeId id, size_t depth, std::vector<ValueField> *out) {
+    if (depth > kClassificationDepth)
+      throw std::invalid_argument(
+          "concrete ownership type expansion budget exceeded");
+    const auto &t = ty(m, id);
+    if (t.kind == TypeKind::TypeParameter)
+      return {ValueKind::dependent, {}};
+    if (t.kind == TypeKind::ForeignOpaque ||
+        t.kind == TypeKind::ForeignCallable) {
+      if (t.kind == TypeKind::ForeignCallable)
+        return {ValueKind::foreign_callable, {}};
+      const auto &d = m.resolved->project->foreign_binding(t.binding);
+      return {std::get<modules::BindingType>(d.detail).kind == "runtime_error"
+                  ? ValueKind::foreign_error
+                  : ValueKind::foreign_reference,
+              {}};
+    }
+    if (t.kind == TypeKind::Error)
+      return {ValueKind::unsupported,
+              "dynamic string/foreign/error value ownership is not supported"};
+    if (t.kind != TypeKind::Vec && t.kind != TypeKind::NominalStruct &&
+        t.kind != TypeKind::NominalEnum)
+      return {ValueKind::trivial, {}};
+    if (support_seen.count(id.value))
+      return {provisional_kind(t), {}};
+    if (++support_count > kClassificationTypes)
+      throw std::invalid_argument(
+          "concrete ownership type expansion budget exceeded");
+    support_seen.insert(id.value);
+    if (t.kind == TypeKind::Vec) {
+      auto element = t.type_args.at(0);
+      if (contains_type_parameter(m, element))
+        return {ValueKind::vec, {}};
+      auto e = support(element, depth + 1, nullptr);
+      if (e.kind == ValueKind::unsupported ||
+          e.kind == ValueKind::foreign_reference ||
+          e.kind == ValueKind::foreign_callable ||
+          e.kind == ValueKind::foreign_error)
+        return {ValueKind::unsupported,
+                e.reason.empty() ? "external values in Vec are not supported"
+                                 : e.reason};
+      return {ValueKind::vec, {}};
+    }
+    const auto &d = decl(m, t.declaration);
+    if (t.type_args.size() != d.params.size())
+      throw std::invalid_argument("ownership nominal type argument count");
+    Substitutions sub;
+    for (size_t i = 0; i < d.params.size(); ++i)
+      sub.push_back({d.params[i].symbol, t.type_args.at(i)});
+    Support result{t.kind == TypeKind::NominalStruct ? ValueKind::structure
+                                                     : ValueKind::enumeration,
+                   {}};
+    auto fields = [&](const auto &fs, std::optional<SymbolId> variant) {
+      for (const auto &f : fs) {
+        auto concrete = substitute(f.type, sub, scratch);
+        if (!m.types.find(concrete))
+          throw std::invalid_argument(
+              "concrete ownership member type was not interned publicly");
+        if (out)
+          out->push_back({variant, f.symbol, concrete});
+        auto s = support(concrete, depth + 1, nullptr);
+        if (s.kind == ValueKind::unsupported ||
+            s.kind == ValueKind::foreign_reference ||
+            s.kind == ValueKind::foreign_callable ||
+            s.kind == ValueKind::foreign_error) {
+          result.kind = ValueKind::unsupported;
+          if (result.reason.empty())
+            result.reason = s.reason.empty()
+                                ? "external aggregate fields are not supported"
+                                : s.reason;
+        }
+      }
+    };
+    fields(d.fields, {});
+    for (const auto &v : d.variants)
+      fields(v.payload, v.symbol);
+    return result;
+  }
+
+  bool needs_drop(TypeId id, std::set<uint64_t> &active, size_t depth) {
+    if (depth > kClassificationDepth)
+      throw std::invalid_argument(
+          "concrete ownership value dependency budget exceeded");
+    const auto &t = ty(m, id);
+    if (t.kind == TypeKind::Vec)
+      return true;
+    if (t.kind == TypeKind::ForeignOpaque ||
+        t.kind == TypeKind::ForeignCallable)
+      return true;
+    if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum)
+      return false;
+    // Value storage recursion that does not pass through Vec has no finite
+    // layout.  A caller may invoke this classifier directly on malformed HIR;
+    // stop instead of looping or publishing a false completed result.
+    if (!active.insert(id.value).second)
+      throw std::invalid_argument("cyclic value ownership dependency");
+    const auto &d = decl(m, t.declaration);
+    if (t.type_args.size() != d.params.size()) {
+      active.erase(id.value);
+      throw std::invalid_argument("ownership nominal type argument count");
+    }
+    Substitutions sub;
+    for (size_t i = 0; i < d.params.size(); ++i)
+      sub.push_back({d.params[i].symbol, t.type_args.at(i)});
+    bool result = false;
+    auto fields = [&](const auto &fs) {
+      for (const auto &f : fs) {
+        auto concrete = substitute(f.type, sub, scratch);
+        if (!m.types.find(concrete))
+          throw std::invalid_argument(
+              "concrete ownership member type was not interned publicly");
+        result |= needs_drop(concrete, active, depth + 1);
+      }
+    };
+    fields(d.fields);
+    for (const auto &v : d.variants)
+      fields(v.payload);
+    active.erase(id.value);
+    return result;
+  }
+
+public:
+  explicit Classifier(const HirModule &module)
+      : m(module), scratch(module.types) {}
+  ValueOps run(TypeId id) {
+    std::vector<ValueField> fields;
+    auto support_result = support(id, 0, &fields);
+    ValueOps out;
+    out.fields = std::move(fields);
+    const auto &t = ty(m, id);
+    if (t.kind == TypeKind::TypeParameter) {
+      out.kind = ValueKind::dependent;
+      return out;
+    }
+    if (t.kind == TypeKind::ForeignOpaque ||
+        t.kind == TypeKind::ForeignCallable) {
+      out.kind = support_result.kind;
+      out.needs_drop = true;
+      return out;
+    }
+    if (t.kind == TypeKind::Error) {
+      out.kind = ValueKind::unsupported;
+      out.reason = support_result.reason;
+      return out;
+    }
+    if (t.kind != TypeKind::Vec && t.kind != TypeKind::NominalStruct &&
+        t.kind != TypeKind::NominalEnum) {
+      out.kind = ValueKind::trivial;
+      out.pod_inout = t.kind == TypeKind::Bool ||
+                      t.kind == TypeKind::SignedInt ||
+                      t.kind == TypeKind::UnsignedInt ||
+                      t.kind == TypeKind::Isize || t.kind == TypeKind::Usize ||
+                      t.kind == TypeKind::Float;
+      return out;
+    }
+    out.kind = support_result.kind;
+    out.reason = support_result.reason;
+    if (t.kind == TypeKind::Vec) {
+      out.needs_drop = out.kind != ValueKind::unsupported;
+      return out;
+    }
+    std::set<uint64_t> active;
+    out.needs_drop = needs_drop(id, active, 0);
+    out.pod_inout = inout_data_type(m, id);
+    return out;
+  }
+};
 struct Derived {
   Ownership records;
   std::vector<std::vector<ExitPlan>> exits;
@@ -1254,18 +1474,18 @@ bool inout_data_type(const HirModule &m, TypeId root,
 }
 
 ValueOps classify_value(const HirModule &m, TypeId id) {
-  std::set<uint64_t> active;
-  return classify(m, id, active);
+  return Classifier(m).run(id);
 }
 namespace detail {
 PhaseResult<std::monostate> produce_ownership(HirModule &m,
                                               std::stop_token stop) {
   return result(
       [&] {
-        std::set<uint64_t> active, done;
-        auto roots = m.types.size();
-        for (size_t i = 1; i <= roots; ++i)
-          intern_members(m, TypeId{i}, active, done);
+        std::set<uint64_t> done;
+        for (const auto &f : m.functions)
+          complete_function(m, f, done, stop);
+        for (const auto &t : m.templates)
+          complete_function(m, t.function, done, stop);
         auto derived = Analysis(m, stop).run();
         m.ownership = std::move(derived.records);
         for (size_t i = 0; i < m.nodes.size(); ++i)

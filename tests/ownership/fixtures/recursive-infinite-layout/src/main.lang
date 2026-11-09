@@ -1,0 +1,9 @@
+package app;
+
+struct Bad {
+    value Bad;
+}
+
+func main() i32 {
+    return 0;
+}

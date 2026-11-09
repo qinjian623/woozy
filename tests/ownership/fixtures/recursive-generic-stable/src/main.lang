@@ -1,0 +1,40 @@
+package app;
+
+struct Node[T] {
+    value T;
+    children Vec[Node[T]];
+}
+
+func make[T](value T) Node[T] {
+    return Node[T](value: value, children: []);
+}
+
+func first[T](node Node[T]) T {
+    return node.value;
+}
+
+func echo[T](node Node[T]) Node[T] {
+    return node;
+}
+
+func main() i32 {
+    let a = Node[i32](value: 1, children: []);
+    let b = Node[i32](value: 2, children: [a]);
+    let c = make[i32](3);
+    let d = Node[bool](value: true, children: []);
+    let e = make[bool](false);
+    let echoed = echo[i32](b);
+    if first[i32](b) != 2 {
+        return 1;
+    }
+    if echoed.value != 2 || echoed.children[0].value != 1 {
+        return 2;
+    }
+    if first[i32](c) != 3 {
+        return 3;
+    }
+    if !d.value || e.value {
+        return 4;
+    }
+    return 0;
+}

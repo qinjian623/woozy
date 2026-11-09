@@ -4,13 +4,13 @@ operation_id: `language-t09-ownership-fixtures-20261104`
 correction_operation_id: `language-t09-ownership-fixtures-20261104-correction`
 root_evidence_correction_count: `1`
 契约版本：`compiler-dev/1`
-根版本：`e808169`
+根版本：`5827dce`（初版目录准备于 `e808169`）
 
-本目录只准备 T09 的独立源码项目和未来预期，不实现生产代码。没有修改 `src/`、runtime、driver、根 CMake、contracts、旧文档或原 baseline；没有新增 runner、CMake 或 schema 文件。`cases.json` 的 `schema` 字段只是数据格式标签。
+本目录保存 T09 的独立源码项目、静态/运行预期和当前执行的入口。`cases.json` 的 `schema` 字段只是数据格式标签。初版 18 个项目的历史检查记录保留在 `current_check`；2026-11-09 追加 13 个经过 Vec 的递归值项目，原 18 份源码和 manifest 未改。
 
 初版 task 已 rejected，不作为 accepted dependency。初版 root 证据审查后只做一次修正：`defer-before-destroy` 使用显式 `i64(values[0])`；`for-in-element-copy` 增加写后 `value` 断言并让首轮修改后续槽。其余 16 份源码和 18 份 manifest 与初版快照逐字一致。
 
-18 个项目的源码均通过现有 C++ CLI 的 `--syntax-only`。当前完整 `check` 全部在当前 `Vec` 类型处返回 `E_CAPABILITY_UNAVAILABLE`；这是 T09 未实现前的能力拒绝，不是未来 `expected_static` 的 accept/reject，也不能算作所有权、后端或运行通过。没有任何 T09 runtime 执行，**本任务不能标记 T09 完成**。
+当前 31 个项目的 `expected_static` 由 `sema.t09` 实际执行；Native 和 Python ownership runner 读取同一清单，构建/运行、真实 alloc/free 与语言引用计数观察由 `native.ownership`、`python.ownership` 执行。`recursive-generic-growth` 以固定预算 `E_CAPABILITY_UNAVAILABLE` 拒绝；三个无限按值布局项目保持 `E_TYPE_MISMATCH`；`recursive-cycle-retained` 不要求零存活，必须单独观察语言 refs 保持非零。
 
 ## 布局与计数
 
@@ -23,7 +23,7 @@ tests/ownership/
     <case-id>/src/main.lang
 ```
 
-`case_count = 18`；未来静态应接受的源码 `accepted_count = 11`（包含运行时 Panic 的 `panic-vec-index`），未来静态应拒绝 `reject_count = 7`。每个项目都是独立 `lang.toml` 项目：包名 `main`、`source_root = "src"`、`entry = "app"`，`src/main.lang` 声明 `package main;`。
+`case_count = 31`；静态应接受 `accepted_count = 20`（包含运行时 Panic 的 `panic-vec-index` 与有意保持存活的 `recursive-cycle-retained`），静态应拒绝 `reject_count = 11`。初版项目使用包名 `main`；递归值批次沿用项目清单的 `package app;`。每个项目都是独立 `lang.toml` 项目。
 
 初版修正只改了两份源码：
 
@@ -90,7 +90,20 @@ tests/ownership/
 | `reject-inout-vec` | reject，`E_CAPABILITY_UNAVAILABLE` | §7.2；A07 | 首版 inout 拒绝共享 Vec，不把槽独占推导成深层 noalias |
 | `reject-branch-maybe-moved` | reject，`E_OWNERSHIP_USE_AFTER_MOVE` | §7.2；A07 | 一侧 move 后未重建、另一侧保留，合流读取可能已移动绑定 |
 
-## 当前实际检查（2026-11-04，根版本 e808169）
+## 递归值批次（2026-11-09，根版本 5827dce）
+
+新增项目保存于 `tests/ownership/fixtures/recursive-*`：原始审查 Source 的逐字副本、copy/move/slice/for-in、struct/enum 互相回指、Python Vec 描述顺序、两组 `Node[T]` 实例与周期交换 `Flip[A,B]`、未使用和实际使用的增长泛型、typed-error 清理顺序、三个无限布局反例，以及整元素替换形成的强引用自环。实际命令、工具/源码 SHA、变异名称和 alloc/free 指针记录在项目外层 `checks/recursive-values-flash-20261109/`。
+
+定向运行示例：
+
+```sh
+python3 tests/native/run_ownership.py ... --case recursive-finite-tree --case recursive-cycle-retained
+python3 tests/python/run_ownership.py ... --case recursive-finite-tree --case recursive-cycle-retained
+```
+
+Native observer 链接额外使用 `--wrap=lang_alloc_v1` / `--wrap=lang_free_v1`，记录真实 pointer 并调用真实 allocator；`VEC:5` 只表示释放路径开始，不再单独作为物理 free 已完成的证明。普通与 typed-error 项目要求最终 heap live 为空；自环项目要求两个真实分配仍存活、Vec 语言 refs 非零且没有最后释放。
+
+## 当前实际检查（2026-11-04，根版本 e808169；历史记录）
 
 使用根仓库现有 C++ CLI：
 
@@ -134,8 +147,8 @@ langc check --project tests/ownership/fixtures/<id>/lang.toml --backend python -
 3. 普通参数借用不可直接 move 尚无固定专用诊断，其 code 为 null；5个已移动绑定反例已使用既有 E_OWNERSHIP_USE_AFTER_MOVE，不把已公布的码误列为缺项。
 4. 没有单独的 enum 活动 payload 销毁或“部分构造失败只逆序销毁已完成成员”项目；这需要能在构造实参中抛错并观察已完成成员 drop 的运行期支持，留作后续测试。
 5. 没有单独覆盖 A07 的借用逃逸、同一存储同时作为 inout 与另一访问、受限借用期间销毁或移动拥有者；本批 18 例优先用户指定的 Vec/move/defer/error/Panic 主路径。
-6. 没有 T09 runtime/native/Python 执行；没有用户可观察的 drop 事件，因此析构顺序和引用计数只能列为未来观测目标。
-7. 没有覆盖线程、弱引用、循环回收、捕获闭包、外部 Python/C++ 对象所有权；这些不属于本批冻结范围。
+6. 初版 18 例没有 runtime 记录；2026-11-09 的递归值批次已由 Native/Python runner 实际执行并记录 alloc/free、drop 元素逆序和语言 refs。初版案例也随之由同一 runner 覆盖，但历史 `current_check` 仍只表示 `e808169` 的拒绝结果。
+7. 有意保留的语言强引用自环已由专用进程/observer 覆盖；没有实现循环回收、弱引用、线程、捕获闭包或外部 Python/C++ 对象所有权。自环结果不能写成“已回收”或“GC 已实现”。
 8. 没有把当前 `E_CAPABILITY_UNAVAILABLE` 当作未来语义通过，也没有为适应当前 checker 修改未来预期或规范。
 
 root 集成补充：诊断码采用既有公开定义，18份源码与修正交付逐字一致；独立复核及实际检查保存在外层 checks/t09-fixtures-root/correction/ 和 checks/t09-fixtures-independent/。源码数值、事件及生命周期目标仍未执行。

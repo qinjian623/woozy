@@ -1,0 +1,62 @@
+package app;
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+func leaf(value i32) Node {
+    return Node(value: value, children: []);
+}
+
+func wrap(value i32, child Node) Node {
+    return Node(value: value, children: [child]);
+}
+
+func borrow(node Node) i32 {
+    return node.value + node.children[0].value;
+}
+
+func return_same(node Node) Node {
+    return node;
+}
+
+func consume(node move Node) i32 {
+    return node.value;
+}
+
+func main() i32 {
+    let base = wrap(5, leaf(7));
+    let copied = base;
+    if copied.value != 5 || copied.children[0].value != 7 {
+        return 1;
+    }
+    let returned = return_same(base);
+    if borrow(returned) != 12 {
+        return 2;
+    }
+    if consume(move copied) != 5 {
+        return 3;
+    }
+    let part = base.children[0:1];
+    part[0] = Node(value: 11, children: []);
+    if part[0].value != 11 {
+        return 4;
+    }
+    if base.children[0].value != 7 {
+        return 5;
+    }
+    let alias = base.children;
+    alias[0] = Node(value: 13, children: []);
+    if base.children[0].value != 13 {
+        return 6;
+    }
+    var sum i32 = 0;
+    for child in base.children {
+        sum += child.value;
+    }
+    if sum != 13 {
+        return 7;
+    }
+    return 0;
+}

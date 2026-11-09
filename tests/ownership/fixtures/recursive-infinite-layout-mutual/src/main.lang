@@ -1,0 +1,13 @@
+package app;
+
+struct A {
+    b B;
+}
+
+struct B {
+    a A;
+}
+
+func main() i32 {
+    return 0;
+}

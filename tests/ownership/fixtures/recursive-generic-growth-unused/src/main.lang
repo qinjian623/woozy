@@ -1,0 +1,11 @@
+package app;
+
+struct Grow[T] {
+    children Vec[Grow[Vec[T]]];
+}
+
+func main() i32 {
+    let unused i32 = 0;
+    let values Vec[i32] = [unused, 1];
+    return values[0] - unused;
+}

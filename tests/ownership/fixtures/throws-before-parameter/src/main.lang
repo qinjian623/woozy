@@ -1,0 +1,5 @@
+package app;
+struct Node[T]{children Vec[Node[T]];}
+enum E[A,B,C,D]{None;More(a Vec[E[B,C,D,A]],b Vec[E[B,A,C,D]]);}
+func touch(x Node[i32]) throws E[i32,bool,i64,u8] {}
+func main()i32{return 0;}
