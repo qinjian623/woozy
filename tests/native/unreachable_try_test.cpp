@@ -141,16 +141,16 @@ int main(int argc, char **argv) {
         const auto *run = function(module, hir, "run");
         need(run != nullptr, name + ": run");
         need(run->handlers.empty(), name + ": dead catch handler survived");
-        // x, Vec temporary, live binding, and the copied Vec read. The two
-        // owning slots allocated inside the dead catch are gone, so the later
-        // reachable slots were shifted down to indices 1..3.
-        need(run->slots.size() == 4, name + ": non-tail slot map is not dense");
+        // x, Vec temporary and live binding; live[0] borrows that binding.
+        // The dead catch slots are gone and reachable slots remain dense.
+        need(run->slots.size() == 3, name + ": non-tail slot map is not dense");
         for (size_t s = 0; s < run->slots.size(); ++s)
           need(slot_uses(*run, s) != 0, name + ": unused remapped slot");
       } else if (name == "both-return-join") {
         const auto *branch = function(module, hir, "branch");
         need(branch != nullptr, name + ": branch");
-        need(branch->slots.size() == 7,
+        // flag plus each arm's Vec temporary and binding; no receiver copy.
+        need(branch->slots.size() == 5,
              name + ": dead join owning slots survived");
         for (size_t s = 0; s < branch->slots.size(); ++s)
           need(slot_uses(*branch, s) != 0, name + ": unused remapped slot");

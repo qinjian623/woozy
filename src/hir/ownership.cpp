@@ -487,6 +487,12 @@ class Analysis {
   }
   std::set<uint32_t> safe_borrow_receivers;
   std::set<uint64_t> parameter_symbols;
+  // The evaluated expression root of the full expression currently being
+  // recorded, and its moved/inout/rebound roots collected once. expr_records
+  // visits one full expression many times; nested index reads must not rescan
+  // a large tree for every receiver.
+  std::optional<HirNodeId> full_expression_root;
+  std::map<uint64_t, std::set<uint64_t>> full_expression_effects;
 
   bool is_borrowed_param(SymbolId sym) const {
     if (!parameter_symbols.count(sym.value))
@@ -517,6 +523,67 @@ class Analysis {
       if (expr_consumes_symbol(c, sym))
         return true;
     return false;
+  }
+
+  // Collects the owning roots that this expression may move, borrow as inout,
+  // or replace. This mirrors expr_consumes_symbol's effect rules exactly.
+  void collect_effects(HirNodeId expr_id, std::set<uint64_t> &out) const {
+    const auto &x = n(expr_id);
+    if (auto r = std::get_if<Move>(&x.data); r && r->binding)
+      out.insert(r->binding->value);
+    if (x.kind() == NodeKind::assign)
+      if (auto p = std::get_if<Place>(&n(x.children[0]).data))
+        out.insert(p->symbol.value);
+    if (auto args = call_args(x))
+      for (const auto &a : *args)
+        if (a.mode == ParamMode::move || a.mode == ParamMode::inout)
+          if (auto root = borrow_root(a.expression))
+            out.insert(root->value);
+    for (auto c : x.children)
+      collect_effects(c, out);
+  }
+
+  const std::set<uint64_t> &full_effects() {
+    auto root = *full_expression_root;
+    auto it = full_expression_effects.find(root.value);
+    if (it != full_expression_effects.end())
+      return it->second;
+    std::set<uint64_t> effects;
+    collect_effects(root, effects);
+    return full_expression_effects.emplace(root.value, std::move(effects))
+        .first->second;
+  }
+
+  // A direct trivial-element read of a plain local Vec may borrow the
+  // binding's existing handle when the complete full expression cannot move,
+  // inout borrow, or rebind that binding. The binding owns the Vec through the
+  // full expression, so the old receiver copy was only an extra non-final
+  // handle. Parameters keep their separate rule; fields, computed receivers,
+  // owning elements and non-trivial indexes stay on the copy path.
+  bool local_index_borrow(HirNodeId receiver, HirNodeId index) const {
+    const auto *read = std::get_if<Read>(&n(receiver).data);
+    if (!read || !declarations.count(read->symbol.value) ||
+        parameter_symbols.count(read->symbol.value))
+      return false;
+    auto local = locals.find(read->symbol.value);
+    if (local == locals.end() ||
+        m.scopes.at(local->second.scope.value).function != fun->symbol)
+      return false;
+    const auto &receiver_type = ty(m, n(receiver).type);
+    if (receiver_type.kind != TypeKind::Vec ||
+        receiver_type.type_args.size() != 1)
+      return false;
+    auto element = receiver_type.type_args[0];
+    if (contains_type_parameter(m, element) || owned(element))
+      return false;
+    const auto &index_node = n(index);
+    if (index_node.kind() == NodeKind::integer_literal)
+      return true;
+    if (index_node.kind() != NodeKind::read)
+      return false;
+    auto kind = ty(m, index_node.type).kind;
+    return kind == TypeKind::SignedInt || kind == TypeKind::UnsignedInt ||
+           kind == TypeKind::Isize || kind == TypeKind::Usize;
   }
 
   std::optional<SymbolId> borrow_root(HirNodeId id) const {
@@ -625,6 +692,10 @@ class Analysis {
       auto index = x.children[1];
       auto root = borrow_root(receiver);
       bool can_borrow = root && is_borrowed_param(*root) && !expr_consumes_symbol(index, *root);
+      if (!can_borrow && root && full_expression_root &&
+          local_index_borrow(receiver, index) &&
+          !full_effects().count(root->value))
+        can_borrow = true;
       expr_records(receiver, fe, live, can_borrow);
       expr_records(index, fe, live, false);
     } else if (x.kind() == NodeKind::index_place) {
@@ -677,6 +748,7 @@ class Analysis {
   void full(HirNodeId root, HirNodeId expression, bool transfer) {
     std::vector<HirNodeId> live;
     active_borrows.clear();
+    full_expression_root = expression;
     expr_records(expression, root, live);
     if (transfer) {
       use(root, 0, expression, UseKind::take);
@@ -697,6 +769,7 @@ class Analysis {
     case NodeKind::assign: {
       std::vector<HirNodeId> live;
       active_borrows.clear();
+      full_expression_root = id;
       if (n(x.children[0]).kind() == NodeKind::index_place) {
         auto receiver = n(x.children[0]).children[0];
         auto index = n(x.children[0]).children[1];
@@ -774,6 +847,7 @@ class Analysis {
           // itself is held per arm and dropped by the arm-scope exit plans.
           std::vector<HirNodeId> live;
           active_borrows.clear();
+          full_expression_root = subject;
           expr_records(subject, id, live);
           consume(live, subject);
           out.records.full_expressions.push_back({id, prefix_cleanup(live)});

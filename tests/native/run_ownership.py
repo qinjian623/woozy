@@ -146,6 +146,10 @@ def main():
      assert [x for x in merged if (x[0]=='vec' and x[2]==root and x[1] in (6,7)) or x[0]=='obs']==[
        ('vec',6,root),('obs',1,10,10),('obs',1,20,1020),('vec',7,root)]*3,merged
     if ident=='defer-before-destroy':assert [x[2] for x in obs if x[0]==2]==[17],obs
+    if ident=='local-index-borrow-error':
+     assert len(allocations)==1 and len(frees)==1,(allocations,frees)
+     assert [x[1] for x in obs if x[0]==1]==[1,2,3,4],obs
+     assert merged.index(('obs',1,3,123))<merged.index(('vec',5,allocations[0][0]))<merged.index(('obs',1,4,1234)),merged
     if ident=='owned-return-error-defer':assert [x[1] for x in obs if x[0]==1]==[2,1,4,3],obs
     if ident=='computed-owning-once-defer-order':
      assert len(allocations)==1 and len(frees)==1,(allocations,frees)

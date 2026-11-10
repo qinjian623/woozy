@@ -1,0 +1,12 @@
+package app;
+func consume(v move Vec[i32]) i32 {return v[1];}
+func consume_index(v move Vec[i32]) usize {return 0;}
+func main() i32 {
+    let v Vec[i32] = [11, 22];
+    let sum = v[0] + consume(move v);
+    if sum != 33 {return 1;}
+    let w Vec[i32] = [71];
+    let first = w[consume_index(move w)];
+    if first != 71 {return 2;}
+    return 0;
+}

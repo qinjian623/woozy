@@ -1,5 +1,34 @@
 """Independent T09 sources. Original ownership fixtures remain unchanged."""
 CASES = {
+    'local-index-borrow-basic': ('''struct P {x i32;}
+func first(v Vec[i32]) i32 {return v[0];}
+func main() i32 {
+var v Vec[i32] = [3, 5]; var i usize = 1;
+if v[0] + v[i] != 8 {return 1;}
+{let v Vec[i32] = [7]; if v[0] != 7 {return 2;}}
+v = [11, 13]; if v[i] != 13 || first(v) != 11 {return 3;}
+let points Vec[P] = [P(x: 17)]; if points[0].x != 17 {return 4;}
+let owners Vec[Vec[i32]] = [[19]]; if owners[0][0] != 19 {return 5;}
+return 0;}''', {}),
+    'local-index-borrow-move': ('''func consume(v move Vec[i32]) i32 {return v[1];}
+func consume_index(v move Vec[i32]) usize {return 0;}
+func main() i32 {let v Vec[i32] = [11, 22];
+let sum = v[0] + consume(move v); if sum != 33 {return 1;}
+let w Vec[i32] = [71]; let first = w[consume_index(move w)];
+if first != 71 {return 2;} return 0;}''', {}),
+    'local-index-borrow-error': ('''enum E {Bad;}
+func mark(log inout i64, n i64) {log = log * 10 + n;}
+func fail(log inout i64) i32 throws E {mark(inout log, 2); throw E.Bad;}
+func work(log inout i64) i32 throws E {let v Vec[i32] = [11];
+defer {mark(inout log, 3);} mark(inout log, 1);
+return v[0] + fail(inout log);}
+func main() i32 {var log i64 = 0;
+try {let value = work(inout log); return 1;}
+catch e E {mark(inout log, 4);}
+if log != 1234 {return 2;} return 0;}''', {
+        'events': [1, 2, 3, 4],
+        'sequence': [['event', 1], ['event', 2], ['event', 3], ['free', 0], ['event', 4]],
+    }),
     'reverse-vec': ('''func main() i32 {let v Vec[Vec[i32]] = [[11], [22]]; return 0;}''', {'frees': [1, 0, 2]}),
     'reverse-struct': ('''struct S {a Vec[i32]; b Vec[i32];}
 func main() i32 {let v = S(b: [22], a: [11]); return 0;}''', {'frees': [0, 1]}),

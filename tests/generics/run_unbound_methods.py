@@ -18,12 +18,18 @@ EXPECTED_ALLOCATIONS = {'core': 2, 'move-inout': 6, 'throws': 6,
                         'const-alias-owned-failure': 12}
 EXPECTED_VEC_ALLOCATIONS = {'core': 1, 'move-inout': 3, 'throws': 3,
                             'const-alias-owned-failure': 6}
-EXPECTED_NATIVE_IR_REJECTIONS = {'core': 11, 'move-inout': 13, 'throws': 11,
+EXPECTED_NATIVE_IR_REJECTIONS = {'core': 11, 'move-inout': 13, 'throws': 6,
                                  'const-alias-owned-failure': 13}
 EXPECTED_MUTATIONS = {
     'core': set(),
     'move-inout': {'actual-self-inout-parameter-slot-not-inout'},
-    'throws': set(),
+    # Its local Vec index reads borrow; no copy operation remains to corrupt.
+    'throws': {'erase-actual-op-41-metadata-retained',
+               'erase-actual-op-23-metadata-retained',
+               'erase-actual-op-24-metadata-retained',
+               'erase-actual-op-26-metadata-retained',
+               'owning-store-erased-with-live-metadata-recreated',
+               'live-flag-identity-erased'},
     'const-alias-owned-failure': {
         'move-argument-take-before-later-throwing-argument'},
 }

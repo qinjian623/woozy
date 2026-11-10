@@ -1,0 +1,16 @@
+package app;
+struct P {x i32;}
+func first(v Vec[i32]) i32 {return v[0];}
+func main() i32 {
+    var v Vec[i32] = [3, 5];
+    var i usize = 1;
+    if v[0] + v[i] != 8 {return 1;}
+    {let v Vec[i32] = [7]; if v[0] != 7 {return 2;}}
+    v = [11, 13];
+    if v[i] != 13 || first(v) != 11 {return 3;}
+    let points Vec[P] = [P(x: 17)];
+    if points[0].x != 17 {return 4;}
+    let owners Vec[Vec[i32]] = [[19]];
+    if owners[0][0] != 19 {return 5;}
+    return 0;
+}

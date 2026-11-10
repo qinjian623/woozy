@@ -1279,6 +1279,226 @@ void record_tests() {
   });
 }
 
+SymbolId function_named(const HirModule &m, std::string_view name) {
+  auto consider = [&](const HirFunction &f) -> std::optional<SymbolId> {
+    const auto &candidate = m.resolved->symbols[f.symbol.value].name;
+    if (candidate == name)
+      return f.symbol;
+    return std::nullopt;
+  };
+  for (const auto &f : m.functions)
+    if (auto symbol = consider(f))
+      return *symbol;
+  for (const auto &t : m.templates)
+    if (auto symbol = consider(t.function))
+      return *symbol;
+  throw std::runtime_error("probe function missing: " + std::string(name));
+}
+struct IndexReadRecord {
+  HirNodeId receiver;
+  SymbolId function;
+  std::optional<UseKind> use;
+  std::optional<SymbolId> root;
+  bool temporary = false;
+  std::optional<SymbolId> reader;
+};
+std::vector<IndexReadRecord> index_read_records(const HirModule &m) {
+  std::vector<IndexReadRecord> out;
+  for (size_t i = 0; i < m.nodes.size(); ++i) {
+    const auto &n = m.nodes[i];
+    if (n.kind() != NodeKind::index_read)
+      continue;
+    IndexReadRecord r{n.children[0],
+                      m.scopes.at(n.scope.value).function,
+                      std::nullopt,
+                      std::nullopt,
+                      false,
+                      std::nullopt};
+    bool plain_read = false;
+    if (auto read = std::get_if<Read>(&m.nodes[r.receiver.value].data)) {
+      r.reader = read->symbol;
+      plain_read = true;
+    }
+    for (const auto &u : m.ownership.uses)
+      if (plain_read && u.consumer == r.receiver) {
+        r.use = u.kind;
+        r.root = u.root;
+      }
+    for (const auto &t : m.ownership.temporaries)
+      if (t.producer == r.receiver)
+        r.temporary = true;
+    out.push_back(r);
+  }
+  return out;
+}
+IndexReadRecord only_index_read(const HirModule &m, std::string_view function) {
+  auto symbol = function_named(m, function);
+  std::vector<IndexReadRecord> found;
+  for (auto &r : index_read_records(m))
+    if (r.function == symbol)
+      found.push_back(r);
+  need(found.size() == 1,
+       std::string(function) + " must contain exactly one index read");
+  return found.front();
+}
+void expect_use(const IndexReadRecord &r, UseKind kind, bool temporary,
+                std::string_view what) {
+  need(r.use && *r.use == kind,
+       std::string(what) + ": wrong receiver use " +
+           (r.use ? std::to_string(int(*r.use)) : "missing"));
+  need(r.temporary == temporary,
+       std::string(what) + ": wrong receiver temporary");
+}
+const CleanupStep *temporary_destroy(const HirModule &m, HirNodeId fe,
+                                     HirNodeId producer) {
+  for (const auto &f : m.ownership.full_expressions)
+    if (f.node == fe)
+      for (const auto &a : f.actions)
+        if (a.kind == CleanupKind::destroy_if_live &&
+            a.owner.kind == OwnerKind::temporary &&
+            a.owner.identity == producer.value)
+          return &a;
+  return nullptr;
+}
+HirNodeId return_node(const HirModule &m, SymbolId function) {
+  for (size_t i = 0; i < m.nodes.size(); ++i)
+    if (m.nodes[i].kind() == NodeKind::return_ &&
+        m.scopes.at(m.nodes[i].scope.value).function == function)
+      return HirNodeId{i};
+  throw std::runtime_error("probe return missing");
+}
+
+// A direct trivial-element index read of a real local binding borrows that
+// binding's handle for the complete full expression; every listed negative
+// keeps the old receiver copy and temporary. The receiver is evaluated once
+// and before the index either way, which the shared verifier re-derives.
+void local_index_borrow_tests() {
+  for (auto b : {Backend::native, Backend::python}) {
+    auto literal = accepted(
+        "func f() i32 {let v Vec[i32]=[1,2];let x=v[0];return x;}", b);
+    facts(literal);
+    auto literal_read = only_index_read(literal, "f");
+    expect_use(literal_read, UseKind::borrow, false, "local literal read");
+    need(literal_read.reader && literal_read.root &&
+             *literal_read.root == *literal_read.reader,
+         "local literal read root is not its binding");
+
+    auto binding_index = accepted(
+        "func f() i32 {let v Vec[i32]=[1,2];var i i32=1;let x=v[i];return "
+        "x;}",
+        b);
+    facts(binding_index);
+    auto binding_read = only_index_read(binding_index, "f");
+    expect_use(binding_read, UseKind::borrow, false, "local binding index");
+    need(binding_read.reader && binding_read.root &&
+             *binding_read.root == *binding_read.reader,
+         "local binding index root is not its binding");
+
+    auto ordinary = accepted("func f(v Vec[i32]) i32 {return v[0];}", b);
+    facts(ordinary);
+    expect_use(only_index_read(ordinary, "f"), UseKind::borrow, false,
+               "ordinary parameter read");
+  }
+  auto rebound = accepted(
+      "func f() i32 {var v Vec[i32]=[1];v=[2];let x=v[0];return x;}");
+  facts(rebound);
+  expect_use(only_index_read(rebound, "f"), UseKind::borrow, false,
+             "local var after rebind");
+  auto shadowed = accepted(
+      "func f() i32 {let v Vec[i32]=[1];{let v Vec[i32]=[2];let "
+      "inner=v[0];}let outer=v[0];return outer;}");
+  facts(shadowed);
+  auto shadow_uses = index_read_records(shadowed);
+  need(shadow_uses.size() == 2, "shadow probe index reads");
+  for (auto &r : shadow_uses) {
+    expect_use(r, UseKind::borrow, false, "shadowed local read");
+    need(r.reader && r.root && *r.root == *r.reader,
+         "shadowed read root is not its own SymbolId");
+  }
+  need(shadow_uses[0].reader->value != shadow_uses[1].reader->value,
+       "shadowed locals must keep distinct SymbolIds");
+
+  auto move_parameter =
+      accepted("func f(v move Vec[i32]) i32 {return v[0];}");
+  facts(move_parameter);
+  expect_use(only_index_read(move_parameter, "f"), UseKind::copy, true,
+             "move parameter read");
+
+  auto dependent = accepted(
+      "func f[T](v Vec[T]) T {let copy=v;let x=copy[0];return x;}");
+  facts(dependent);
+  expect_use(only_index_read(dependent, "f"), UseKind::copy, true,
+             "dependent element read");
+
+  auto owning = accepted(
+      "func f() i32 {let v Vec[Vec[i32]]=[[1]];let x=v[0];return x[0];}");
+  facts(owning);
+  bool owning_checked = false;
+  for (auto &r : index_read_records(owning)) {
+    const auto &type = *owning.types.find(owning.nodes[r.receiver.value].type);
+    if (type.kind == TypeKind::Vec && type.type_args.size() == 1 &&
+        owning.types.find(type.type_args[0])->kind == TypeKind::Vec) {
+      expect_use(r, UseKind::copy, true, "owning element read");
+      owning_checked = true;
+    }
+  }
+  need(owning_checked, "owning element index read missing");
+  // String is a trivial value in this ownership model (needs_drop == false),
+  // so a Vec[string] element read takes the same borrow path.
+  auto string_element =
+      accepted("func f() i32 {let v Vec[string]=[\"x\"];let s=v[0];return 0;}");
+  facts(string_element);
+  expect_use(only_index_read(string_element, "f"), UseKind::borrow, false,
+             "trivial string element read");
+
+  auto computed_index = accepted(
+      "func f() i32 {let v Vec[i32]=[1];var i i32=0;let x=v[i+1];return x;}");
+  facts(computed_index);
+  expect_use(only_index_read(computed_index, "f"), UseKind::copy, true,
+             "computed index read");
+  auto call_index = accepted(
+      "func pick() i32 {return 0;} func f() i32 {let v Vec[i32]=[1];return "
+      "v[pick()];}");
+  facts(call_index);
+  expect_use(only_index_read(call_index, "f"), UseKind::copy, true,
+             "call index read");
+
+  auto field_receiver = accepted(
+      "struct S {items Vec[i32];} func f(s S) i32 {return s.items[0];}");
+  facts(field_receiver);
+  auto parameter_field = only_index_read(field_receiver, "f");
+  need(!parameter_field.reader && !parameter_field.temporary,
+       "parameter field keeps its existing borrowed receiver");
+  auto local_field = accepted(
+      "struct S {items Vec[i32];} func f() i32 {let s=S(items:[1]);return s.items[0];}");
+  facts(local_field);
+  auto local_field_read = only_index_read(local_field, "f");
+  need(!local_field_read.reader && local_field_read.temporary,
+       "local field receiver keeps its owned temporary");
+  auto computed_receiver = accepted(
+      "func make() Vec[i32] {return [1];} func f() i32 {return make()[0];}");
+  need(verify(computed_receiver).success(), "computed receiver public verify");
+  auto computed_read = only_index_read(computed_receiver, "f");
+  need(!computed_read.reader && computed_read.temporary,
+       "computed receiver keeps its owned temporary");
+
+  auto moved = accepted(
+      "func consume(v move Vec[i32]) i32 {return v[0];} func f() i32 {let v "
+      "Vec[i32]=[1];return v[0]+consume(move v);}");
+  facts(moved);
+  auto moved_read = only_index_read(moved, "f");
+  expect_use(moved_read, UseKind::copy, true, "same full-expression move");
+  auto fe = return_node(moved, function_named(moved, "f"));
+  need(temporary_destroy(moved, fe, moved_read.receiver),
+       "same full-expression move keeps receiver temporary until the end");
+  auto index_moved = accepted(
+      "func take(v move Vec[i32]) i32 {return 0;} func f() i32 {let v "
+      "Vec[i32]=[1];return v[take(move v)];}");
+  facts(index_moved);
+  expect_use(only_index_read(index_moved, "f"), UseKind::copy, true,
+             "index consumes receiver");
+}
+
 // Recompute every submitted fact as a malicious/incorrect producer could do.
 // The public verifier must still derive source identity and evaluation order.
 void invalid_recomputed(const HirModule &input, const std::string &name,
@@ -1750,6 +1970,7 @@ int main(int argc, char **argv) {
     flow_tests();
     recursive_value_tests();
     record_tests();
+    local_index_borrow_tests();
     extra_tests();
     computed_owning_switch_tests();
     for (auto b : {Backend::native, Backend::python}) {
