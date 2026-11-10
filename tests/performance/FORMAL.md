@@ -8,8 +8,10 @@
 
 调用方先完成核心要求、核对实际R/2R工作、冻结输入/工具/Source/IR/对象/ELF，再停止本任务的并行构建，并在子进程固定同CPU和32MiB软栈执行。校准和采样的完整返回值应写入新目录，保留此前所有失败。
 
-当前模块尚未接入八算法生成程序；正式校准和采样未启动。13项自检使用合成时间，只检查选R、采样顺序、文件变化和失败处理，不是Source/C++性能结果：
+`formal_sort_programs.SortPrograms` 已提供三种排序的构建回调：用固定二进制输入生成Source/C++，`build_cpp(R)`保存独立的O2对象、由该对象链接的程序、同参数LLVM IR和verify记录，可传给`calibrate`。它不会运行生成的测速程序。Source最终构建、R/2R实际工作审读及其他五算法的生成回调仍需接入。
+
+正式校准和采样未启动。13项采样自检使用合成时间，另有3项固定输入生成检查；这些都不是Source/C++性能结果：
 
 ```sh
-python3.12 -B -m unittest discover -s tests/performance -p test_formal_sampling.py -v
+python3.12 -B -m unittest discover -s tests/performance -p 'test_formal*.py' -v
 ```
