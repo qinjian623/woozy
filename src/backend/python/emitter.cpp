@@ -330,7 +330,18 @@ class Emitter {
                        "trivial numeric/bool/POD aggregate inout parameters",
                        source};
   }
-  std::string type_key(TypeId id) const {
+  // Stable identity for typed-error dispatch.  A foreign type in error
+  // position must itself be a declared runtime_error; a source nominal's type
+  // arguments are payload identity, where an ordinary host reference is legal
+  // and fully preserved.  Ordinary host identities are length-framed and
+  // start with '@', which cannot start a source key or identifier, so their
+  // text cannot imitate type structure; the fixed runtime_error bridge keeps
+  // its identity.
+  static std::string foreign_type_key(std::string_view identity) {
+    return "@" + std::to_string(identity.size()) + ":" +
+           std::string(identity);
+  }
+  std::string type_key(TypeId id, bool error_position) const {
     const auto &t = type(id);
     switch (t.kind) {
     case TypeKind::Unit:
@@ -359,23 +370,25 @@ class Emitter {
         for (size_t i = 0; i < t.type_args.size(); ++i) {
           if (i)
             key += ",";
-          key += type_key(t.type_args[i]);
+          key += type_key(t.type_args[i], false);
         }
         key += "]";
       }
       return key;
     }
     case TypeKind::Vec:
-      return "Vec[" + type_key(t.type_args[0]) + "]";
+      return "Vec[" + type_key(t.type_args[0], error_position) + "]";
     case TypeKind::ForeignOpaque: {
       const auto &d = m.resolved->project->foreign_binding(t.binding);
       const auto *binding = std::get_if<modules::BindingType>(&d.detail);
       if (binding == nullptr)
         throw std::logic_error("foreign type declaration is invalid");
-      if (binding->kind != "runtime_error")
+      if (error_position && binding->kind != "runtime_error")
         throw Rejected{"Python foreign error payload requires a runtime_error declaration",
                        d.source};
-      return d.identity;
+      if (binding->kind == "runtime_error")
+        return d.identity;
+      return foreign_type_key(d.identity);
     }
     case TypeKind::Function: {
       std::string key = "func(";
@@ -387,11 +400,11 @@ class Emitter {
           key += "inout ";
         if (p.mode == ParamMode::move)
           key += "move ";
-        key += type_key(p.type);
+        key += type_key(p.type, error_position);
       }
-      key += ")->(" + type_key(t.result) + ")";
+      key += ")->(" + type_key(t.result, error_position) + ")";
       if (t.throws_type)
-        key += " throws(" + type_key(*t.throws_type) + ")";
+        key += " throws(" + type_key(*t.throws_type, true) + ")";
       return key;
     }
     default:
@@ -1338,7 +1351,7 @@ class Emitter {
       full(id, suite);
       line(suite,
            "raise _rt.TypedError(" +
-               string_literal(type_key(node(n.children[0]).type)) + ", " +
+               string_literal(type_key(node(n.children[0]).type, true)) + ", " +
                value + ", " + ops(node(n.children[0]).type) + ")",
            n);
       break;
@@ -1354,7 +1367,7 @@ class Emitter {
       for (auto c = catches.rbegin(); c != catches.rend(); ++c) {
         auto saved_available = available;
         Statement branch{"if " + error + ".type_key == " +
-                             string_literal(type_key(c->error_type)),
+                             string_literal(type_key(c->error_type, true)),
                          c->source.span,
                          true,
                          {},
@@ -1635,8 +1648,13 @@ public:
       check_cancelled(stop);
       check_signature(f.signature, f.source.span);
       collect_type(type(f.signature).result);
-      if (type(f.signature).throws_type)
+      if (type(f.signature).throws_type) {
+        // A declared error is an error position even when the body has no
+        // throw/catch for it.  Ordinary host refs remain legal only inside a
+        // source nominal's generic arguments.
+        type_key(*type(f.signature).throws_type, true);
         collect_type(*type(f.signature).throws_type);
+      }
       for (auto p : type(f.signature).parameters)
         collect_type(p.type);
       output.symbols.push_back({f.symbol, function_name(f.symbol)});

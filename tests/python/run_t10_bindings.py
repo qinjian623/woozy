@@ -7,6 +7,7 @@ runner does not import NumPy/PyTorch itself except through the independent
 original-04, real-object and reference subprocesses.
 """
 import argparse
+import ast
 import hashlib
 import json
 import math
@@ -653,6 +654,350 @@ func main() i32 throws py.Error {
 
     r.add('foreign-ownership-cleanup', foreign_cleanup_case)
 
+    generic_error_kinds = '''package kinds;
+import "t10host" as host;
+
+pub enum Failure[T] { Bad(value T); }
+pub enum Phantom[T] { Bad; }
+
+pub func fail(p host.Probe) Unit throws Failure[host.Probe] {
+  throw Failure[host.Probe].Bad(value: p);
+}
+pub func fail_vec(p host.Probe) Unit throws Failure[Vec[host.Probe]] {
+  let values Vec[host.Probe] = [p];
+  throw Failure[Vec[host.Probe]].Bad(value: values);
+}
+pub func fail_phantom() Unit throws Phantom[host.Probe] {
+  throw Phantom[host.Probe].Bad;
+}
+pub func fail_i32(value i32) Unit throws Failure[i32] {
+  throw Failure[i32].Bad(value: value);
+}
+pub func unused() Unit throws Failure[Vec[host.Probe]] { }
+'''
+
+    # The enum lives in another module.  Every use below names it through an
+    # import alias while the thrown identity stays the helper module symbol.
+    # Wrong catch clauses come first so a key that dropped or confused a type
+    # argument would take the wrong branch and return a nonzero code.
+    generic_error_source = '''package main;
+import "std/py" as py;
+import "t10host" as host;
+import "app/kinds" as k;
+import "app/kinds" as alias;
+
+struct Box[T] { value T; }
+enum Concrete { Bad(value host.Probe); }
+
+func fail_box(p host.Probe) Unit throws k.Failure[Box[host.Probe]] {
+  throw k.Failure[Box[host.Probe]].Bad(value: Box[host.Probe](value: p));
+}
+func fail_error(e py.Error) Unit throws alias.Failure[py.Error] {
+  throw alias.Failure[py.Error].Bad(value: e);
+}
+
+func main() i32 throws py.Error {
+  var seen i32 = 0;
+  let p = host.make();
+  try { k.fail(p); return 1; }
+  catch e k.Failure[Box[host.Probe]] { return 2; }
+  catch e alias.Failure[host.Probe] {
+    switch e {
+    case k.Failure.Bad(value):
+      if host.same(value, p) != true { return 3; }
+      let copied = e;
+      let moved = move copied;
+      switch moved {
+      case alias.Failure.Bad(inner):
+        if host.same(inner, p) != true { return 4; }
+        host.set_value(inner, 41);
+      }
+    }
+    seen += 1;
+    host.note(1);
+  }
+  if host.get_value(p) != 41 { return 5; }
+
+  let q = host.make();
+  try { k.fail_vec(q); return 6; }
+  catch e k.Failure[host.Probe] { return 7; }
+  catch e k.Failure[Vec[host.Probe]] {
+    switch e {
+    case k.Failure.Bad(values):
+      if host.same(values[0], q) != true { return 8; }
+      let copy = values;
+      if host.same(copy[0], q) != true { return 9; }
+    }
+    seen += 2;
+    host.note(2);
+  }
+
+  let r = host.make();
+  try { fail_box(r); return 10; }
+  catch e k.Failure[host.Probe] { return 11; }
+  catch e k.Failure[Box[host.Probe]] {
+    switch e {
+    case k.Failure.Bad(boxed):
+      if host.same(boxed.value, r) != true { return 12; }
+    }
+    seen += 4;
+    host.note(4);
+  }
+
+  try { k.fail_phantom(); return 13; }
+  catch e k.Phantom[host.Probe] {
+    seen += 8;
+    host.note(8);
+  }
+
+  try { k.fail_i32(7); return 14; }
+  catch e k.Failure[i32] {
+    switch e {
+    case k.Failure.Bad(value):
+      if value != 7 { return 15; }
+    }
+    seen += 16;
+    host.note(16);
+  }
+
+  let s = host.make();
+  try { throw Concrete.Bad(value: s); return 17; }
+  catch e Concrete {
+    switch e {
+    case Concrete.Bad(value):
+      if host.same(value, s) != true { return 18; }
+    }
+    seen += 32;
+    host.note(32);
+  }
+
+  try { host.error_source(); return 19; }
+  catch err py.Error {
+    host.inspect(err);
+    let nested = host.make();
+    try { fail_error(err); return 20; }
+    catch e k.Failure[host.Probe] { return 21; }
+    catch e k.Failure[py.Error] {
+      switch e {
+      case k.Failure.Bad(value):
+        host.inspect(value);
+      }
+      seen += 64;
+      host.note(64);
+    }
+    if host.same(nested, nested) != true { return 22; }
+  }
+
+  if seen != 127 { return 23; }
+  return 0;
+}
+'''
+
+    def generic_error_key_case(row):
+        project = r.project('generic-foreign-error-key',
+                            {'src/main.lang': generic_error_source,
+                             'src/kinds/main.lang': generic_error_kinds},
+                            binding)
+        out, _ = r.emit(row, project, binding)
+        if args.langc is not None:
+            cli_out = project / 'cli-out'
+            record = r.command(
+                row,
+                [args.langc, 'build', '--project', project / 'lang.toml',
+                 '--backend', 'python', '--format', 'json',
+                 '--std-binding', binding, '--out-dir', cli_out],
+                project)
+            require(record['exit'] == 0, record)
+            for name in ('program.py', 'langrt.py'):
+                require(sha(out / name) == sha(cli_out / name),
+                        'formal CLI differs from helper for ' + name)
+            row['cli_comparison'] = {
+                'status': 'passed',
+                'langc': str(args.langc),
+                'program.py': sha(out / 'program.py'),
+                'langrt.py': sha(out / 'langrt.py'),
+            }
+        else:
+            row['cli_comparison'] = {'status': 'not_run',
+                                     'reason': '--langc not supplied'}
+        # The stable keys must retain the full ordered concrete arguments and
+        # the defining module, not a local alias or a session/binding number.
+        keys = {node.value.decode('utf-8')
+                for node in ast.walk(ast.parse((out / 'program.py').read_text()))
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, bytes)}
+        expected_keys = {
+            'app/kinds.Failure[@13:t10host.Probe]',
+            'app/kinds.Failure[Vec[@13:t10host.Probe]]',
+            'app/kinds.Failure[app.Box[@13:t10host.Probe]]',
+            'app/kinds.Phantom[@13:t10host.Probe]',
+            'app/kinds.Failure[i32]',
+            'app/kinds.Failure[lang.py.Error]',
+            'app.Concrete',
+        }
+        require(expected_keys <= keys, sorted(expected_keys - keys))
+        row['typed_error_keys'] = sorted(expected_keys)
+        observed, events = r.observe(row, out)
+        require(observed['main_return'] == 0, observed)
+        require(observed['owners'] == [], observed)
+        require(all(not borrows for borrows in observed['borrows']), observed)
+        require(non_error_events(events) == [
+            'MAKE', 'SAME True', 'SAME True', 'SET 41', 'NOTE 1', 'GET 41',
+            'MAKE', 'SAME True', 'SAME True', 'NOTE 2',
+            'MAKE', 'SAME True', 'NOTE 4', 'NOTE 8', 'NOTE 16',
+            'MAKE', 'SAME True', 'NOTE 32', 'MAKE', 'NOTE 64', 'SAME True',
+        ], events)
+        errors = error_events(events)
+        require(len(errors) == 2, events)
+        identity_keys = ('payload_id', 'exception_id', 'cause_id',
+                         'traceback_id', 'cause_traceback_id')
+        def identity(event):
+            found = {}
+            for token in event.split():
+                name, separator, value = token.partition('=')
+                if separator and name in identity_keys:
+                    found[name] = value
+            require(set(found) == set(identity_keys), event)
+            return found
+        # Inspecting the caught py.Error and the same payload re-thrown inside
+        # Failure[py.Error] must keep the host exception's stable identity.
+        require(identity(errors[0]) == identity(errors[1]), errors)
+        for event in errors:
+            require('traceback=yes' in event, event)
+            require('cause=t10host.HostInner:inner cause' in event, event)
+            require('operation=t10host.error_source' in event, event)
+        # Catch bindings install owned slots; all must be cleared on exit.
+        e_states = [state for state in observed['owner_states']
+                    if state['name'] == 'e']
+        require(any(state['active'] for state in e_states), e_states)
+        require(e_states and not e_states[-1]['active'], e_states)
+        require(len(observed['foreign_copies']) > 0, observed)
+        require(len(observed['foreign_drops']) > 0, observed)
+        row['observation'] = observed
+        row['events'] = events
+
+    r.add('generic-foreign-error-key', generic_error_key_case)
+
+    # Ordinary host ids are opaque text.  These ids collide with source types
+    # under the old plain format, and the comma/prefix-like ids also collide
+    # with each other under an unescaped-prefix format.  Wrong catches come
+    # first, so taking one returns a nonzero code.
+    generic_error_key_escaping_source = '''package main;
+import "t10host" as host;
+
+struct Box[T] { value T; }
+struct X[A,B] { a A; b B; }
+enum E[T] { Bad; }
+enum Pair[L,R] { Bad; }
+
+func main() i32 {
+  var seen i32 = 0;
+  try { throw E[host.Other].Bad; }
+  catch wrong E[Box[i32]] { return 7; }
+  catch right E[host.Other] { seen += 1; }
+
+  try { throw E[Box[i32]].Bad; }
+  catch wrong E[host.Other] { return 8; }
+  catch right E[Box[i32]] { seen += 2; }
+
+  try { throw E[host.VecLike].Bad; }
+  catch wrong E[Vec[i32]] { return 9; }
+  catch right E[host.VecLike] { seen += 4; }
+
+  try { throw E[host.FuncLike].Bad; }
+  catch wrong E[func(i32) i32] { return 10; }
+  catch right E[host.FuncLike] { seen += 8; }
+
+  try { throw E[host.XLike].Bad; }
+  catch wrong E[X[i32,i32]] { return 11; }
+  catch right E[host.XLike] { seen += 16; }
+
+  try { throw Pair[host.AB, host.C].Bad; }
+  catch wrong Pair[host.A, host.BC] { return 12; }
+  catch wrong2 Pair[host.C, host.AB] { return 13; }
+  catch right Pair[host.AB, host.C] { seen += 32; }
+  if seen != 63 { return 14; }
+  return 0;
+}
+'''
+
+    def generic_error_key_escaping_case(row):
+        variant = json.loads(args.binding.read_text())
+        for name, identity in (
+                ('Other', 'app.Box[i32]'),
+                ('A', 'a'),
+                ('AB', 'a,@b'),
+                ('BC', 'b,@c'),
+                ('C', 'c'),
+                ('VecLike', 'Vec[i32]'),
+                ('FuncLike', 'func(i32)->(i32)'),
+                ('XLike', 'app.X[i32,i32]')):
+            variant['types'].append({
+                'id': identity, 'module': 't10host', 'name': name,
+                'kind': 'host_reference',
+                'host_attribute': ['HostInner'],
+                'copy': 'shared_reference',
+            })
+        variant_path = (args.out / 'variants' /
+                        'key-escaping-binding.json')
+        variant_path.parent.mkdir(parents=True, exist_ok=True)
+        variant_path.write_text(
+            json.dumps(variant, ensure_ascii=False, indent=2) + '\n')
+        project = r.project('generic-error-key-escaping',
+                            {'src/main.lang': generic_error_key_escaping_source},
+                            variant_path)
+        out, _ = r.emit(row, project, variant_path)
+        if args.langc is not None:
+            cli_out = project / 'cli-out'
+            record = r.command(
+                row,
+                [args.langc, 'build', '--project', project / 'lang.toml',
+                 '--backend', 'python', '--format', 'json',
+                 '--std-binding', variant_path, '--out-dir', cli_out],
+                project)
+            require(record['exit'] == 0, record)
+            for name in ('program.py', 'langrt.py'):
+                require(sha(out / name) == sha(cli_out / name),
+                        'formal CLI differs from helper for ' + name)
+            row['cli_comparison'] = {
+                'status': 'passed',
+                'langc': str(args.langc),
+                'program.py': sha(out / 'program.py'),
+                'langrt.py': sha(out / 'langrt.py'),
+            }
+        else:
+            row['cli_comparison'] = {'status': 'not_run',
+                                     'reason': '--langc not supplied'}
+        keys = {node.value.decode('utf-8')
+                for node in ast.walk(ast.parse((out / 'program.py').read_text()))
+                if isinstance(node, ast.Constant)
+                and isinstance(node.value, bytes)}
+        expected_keys = {
+            'app.E[@12:app.Box[i32]]',
+            'app.E[app.Box[i32]]',
+            'app.E[@8:Vec[i32]]',
+            'app.E[Vec[i32]]',
+            'app.E[@16:func(i32)->(i32)]',
+            'app.E[func(i32)->(i32)]',
+            'app.E[@14:app.X[i32,i32]]',
+            'app.E[app.X[i32,i32]]',
+            'app.Pair[@4:a,@b,@1:c]',
+            'app.Pair[@1:a,@4:b,@c]',
+            'app.Pair[@1:c,@4:a,@b]',
+        }
+        require(expected_keys <= keys, sorted(expected_keys - keys))
+        row['typed_error_keys'] = sorted(expected_keys)
+        observed, events = r.observe(row, out)
+        require(observed['main_return'] == 0, observed)
+        require(observed['owners'] == [], observed)
+        require(all(not borrows for borrows in observed['borrows']), observed)
+        require(not events, events)
+        require(observed['foreign_copies'] == [], observed)
+        require(observed['foreign_drops'] == [], observed)
+        row['observation'] = observed
+
+    r.add('generic-error-key-escaping', generic_error_key_escaping_case)
+
     def foreign_rejections_case(row):
         cases = [
             ('inout', 'func f(x inout host.Probe) Unit { } '
@@ -691,6 +1036,29 @@ func main() i32 throws py.Error {
             data = json.loads(result['stdout'])
             codes = [d['code'] for d in data['diagnostics']]
             require(code in codes, (name, data))
+            require(not (out / 'program.py').exists(), result)
+            require(not (out / 'langrt.py').exists(), result)
+        # A source enum's ordinary host type argument is not an error-root
+        # foreign type, but declaring, throwing or catching host.Probe itself
+        # must stay rejected.
+        direct_cases = [
+            ('direct-throws', 'func fail() Unit throws host.Probe { } '
+             'func main() i32 { return 0; }'),
+            ('direct-catch', 'func fail() Unit throws host.Probe { } '
+             'func main() i32 { try { fail(); } '
+             'catch e host.Probe { return 0; } return 1; }'),
+        ]
+        for name, body in direct_cases:
+            source = ('package main; import "std/py" as py; '
+                      'import "t10host" as host; ' + body)
+            project = r.project('foreign-reject-' + name,
+                                {'src/main.lang': source}, binding)
+            out, result = r.emit(row, project, binding, expect_success=False)
+            require(result['exit'] == 1, result)
+            data = json.loads(result['stdout'])
+            require(any(d['code'] == 'E_CAPABILITY_UNAVAILABLE' and
+                        'runtime_error declaration' in d['message']
+                        for d in data['diagnostics']), data)
             require(not (out / 'program.py').exists(), result)
             require(not (out / 'langrt.py').exists(), result)
         source = ('package main; import "std/py" as py; '

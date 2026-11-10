@@ -17,7 +17,7 @@
 
 不生成：外部 inout、字段/索引部分 move、外部索引/切片/数据属性、外部函数值逃逸、未知成员、动态 shape/device 类型推断、其他 profile。普通借用参数不能直接 move；移动后读取、双 move 和同存储借用/move 冲突沿用既有所有权诊断。无 throws 的外部 callable 即使返回 Unit、参数只有标量，也报 `E_CAPABILITY_UNAVAILABLE`；其源程序和静态 HIR 仍可按静态 API 检查，但不能进入生成。native/32 位仍拒绝。
 
-外部类型作为错误载荷时，只支持 `runtime_error` 声明。普通宿主对象或含普通宿主类型的函数值作为错误载荷仍在生成时明确报 `E_CAPABILITY_UNAVAILABLE`，不报内部错误。
+外部类型直接作为错误类型（`throws`/`throw`/`catch` 的类型本身）时，只支持 `runtime_error` 声明。源语言枚举的泛型实参不是错误根，可含已声明的普通宿主引用（如 `Failure[host.Probe]`、`Failure[Vec[host.Probe]]`），完整有序实参保留在稳定身份中；跨模块导入别名仍指向定义模块的同一身份。普通宿主类型身份按 `@<UTF-8字节长度>:<绑定id>` 编码，id 内的逗号、方括号、函数格式等文字不能冒充类型结构；`runtime_error` 桥仍使用固定 `lang.py.Error`。普通宿主对象或含普通宿主类型的函数值直接作为错误载荷仍在生成时明确报 `E_CAPABILITY_UNAVAILABLE`，不报内部错误。
 
 ## 2. API 生成
 
