@@ -159,3 +159,9 @@ target_compile_options(lang_native_vec_scratch_test PRIVATE -fno-rtti)
 target_link_libraries(lang_native_vec_scratch_test PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 add_test(NAME native.vec_scratch COMMAND lang_native_vec_scratch_test
   ${LANG_SOURCE_ROOT}/tests/native/fixtures/vec-scratch/lang.toml)
+add_executable(lang_native_vec_constant_test vec_constant_test.cpp)
+target_include_directories(lang_native_vec_constant_test SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
+target_compile_options(lang_native_vec_constant_test PRIVATE -fno-rtti)
+target_link_libraries(lang_native_vec_constant_test PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
+add_test(NAME native.vec_constant COMMAND lang_native_vec_constant_test
+  ${LANG_SOURCE_ROOT}/tests/native/fixtures/vec-constants/lang.toml)

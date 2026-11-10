@@ -6,7 +6,10 @@ struct Pair { left i32; right i32; }
 func noop() {}
 
 func main() i32 {
-    let numbers = [1, 2, 3];
+    var first i32 = 1;
+    var second i32 = 2;
+    var third i32 = 3;
+    let numbers = [first, second, third];
     let pairs = [Pair(left: 4, right: 5), Pair(left: 6, right: 7)];
     let zeros = [Empty(), Empty()];
     let unit = noop();

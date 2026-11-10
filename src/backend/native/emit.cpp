@@ -509,6 +509,14 @@ class Emitter {
                   {builder.getInt64(args.size()),
                    builder.getInt64(stride(element)),
                    value_op(element, true), value_op(element, false)});
+      bool constants = !args.empty() && constant_vec_element(element);
+      for (auto *arg : args)
+        constants = constants && (llvm::isa<llvm::ConstantInt>(arg) ||
+                                  llvm::isa<llvm::ConstantFP>(arg));
+      if (constants) {
+        constant_vec_init(v, element, args);
+        break;
+      }
       llvm::AllocaInst *scratch = nullptr;
       for (auto *arg : args) {
         auto *address = element_storage(element, arg, scratch);

@@ -20,6 +20,56 @@
     if (!empty) builder.CreateStore(value, scratch);
     return scratch;
   }
+  bool constant_vec_element(TypeId id) const {
+    const auto kind = type(id).kind;
+    return kind == hir::TypeKind::Bool ||
+           kind == hir::TypeKind::SignedInt ||
+           kind == hir::TypeKind::UnsignedInt ||
+           kind == hir::TypeKind::Isize ||
+           kind == hir::TypeKind::Usize ||
+           kind == hir::TypeKind::Float;
+  }
+  // Constant scalar elements have no ownership and no runtime evaluation
+  // order. Keep their values in read-only static storage and copy them from a
+  // compact loop instead of expanding one store and runtime call per element.
+  void constant_vec_init(llvm::Value *vec, TypeId element,
+                         const std::vector<llvm::Value *> &args) {
+    auto *element_type = lower_type(element);
+    auto *array_type = llvm::ArrayType::get(element_type, args.size());
+    llvm::SmallVector<llvm::Constant *, 16> elements;
+    for (auto *arg : args)
+      elements.push_back(llvm::cast<llvm::Constant>(arg));
+    bool all_null = true;
+    for (auto *value : elements) all_null = all_null && value->isNullValue();
+    llvm::Constant *initializer =
+        all_null ? llvm::ConstantAggregateZero::get(array_type)
+                 : llvm::ConstantArray::get(array_type, elements);
+    auto *data = new llvm::GlobalVariable(
+        module, array_type, true, llvm::GlobalValue::PrivateLinkage,
+        initializer, "vec.constants");
+    data->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+    data->setAlignment(module.getDataLayout().getABITypeAlign(array_type));
+
+    auto *index = storage(builder.getInt64Ty());
+    builder.CreateStore(builder.getInt64(0), index);
+    auto *fn = builder.GetInsertBlock()->getParent();
+    auto *test = llvm::BasicBlock::Create(context, "vec.constants.test", fn);
+    auto *body = llvm::BasicBlock::Create(context, "vec.constants.body", fn);
+    auto *done = llvm::BasicBlock::Create(context, "vec.constants.done", fn);
+    builder.CreateBr(test);
+    builder.SetInsertPoint(test);
+    auto *next = builder.CreateLoad(builder.getInt64Ty(), index);
+    builder.CreateCondBr(
+        builder.CreateICmpUGE(next, builder.getInt64(args.size())), done, body);
+    builder.SetInsertPoint(body);
+    auto *address = builder.CreateGEP(
+        array_type, data, {builder.getInt64(0), next});
+    runtime("lang_vec_init_v1", builder.getVoidTy(), {vec, address});
+    builder.CreateStore(
+        builder.CreateAdd(next, builder.getInt64(1)), index);
+    builder.CreateBr(test);
+    builder.SetInsertPoint(done);
+  }
   llvm::Value *element_storage(TypeId id, llvm::Value *value) {
     llvm::AllocaInst *scratch = nullptr;
     return element_storage(id, value, scratch);
