@@ -9,12 +9,20 @@
     auto size = module.getDataLayout().getTypeAllocSize(lower_type(id)).getFixedValue();
     return size ? size : 1;
   }
-  llvm::Value *element_storage(TypeId id, llvm::Value *value) {
-    if (module.getDataLayout().getTypeAllocSize(lower_type(id)).getFixedValue() == 0) {
-      auto *address = storage(builder.getInt8Ty()); builder.CreateStore(builder.getInt8(0), address);
-      return address;
+  llvm::Value *element_storage(TypeId id, llvm::Value *value,
+                               llvm::AllocaInst *&scratch) {
+    const bool empty =
+        module.getDataLayout().getTypeAllocSize(lower_type(id)).getFixedValue() == 0;
+    if (!scratch) {
+      scratch = storage(empty ? builder.getInt8Ty() : lower_type(id));
+      if (empty) builder.CreateStore(builder.getInt8(0), scratch);
     }
-    auto *address = storage(lower_type(id)); builder.CreateStore(value, address); return address;
+    if (!empty) builder.CreateStore(value, scratch);
+    return scratch;
+  }
+  llvm::Value *element_storage(TypeId id, llvm::Value *value) {
+    llvm::AllocaInst *scratch = nullptr;
+    return element_storage(id, value, scratch);
   }
   bool owning(TypeId id) const {
     return hir::classify_value(input.hir.module(), id).needs_drop;

@@ -1,0 +1,27 @@
+package app;
+
+struct Empty {}
+struct Pair { left i32; right i32; }
+
+func noop() {}
+
+func main() i32 {
+    let numbers = [1, 2, 3];
+    let pairs = [Pair(left: 4, right: 5), Pair(left: 6, right: 7)];
+    let zeros = [Empty(), Empty()];
+    let unit = noop();
+    let units = [unit, unit];
+    let empty Vec[Vec[i32]] = [];
+    if numbers[0] != 1 || numbers[1] != 2 || numbers[2] != 3 { return 1; }
+    if pairs[0].left != 4 || pairs[0].right != 5 { return 2; }
+    if pairs[1].left != 6 || pairs[1].right != 7 { return 3; }
+    let z = zeros[1];
+    let sliced = zeros[:];
+    let unit_slice = units[:];
+    let empty_slice = empty[:];
+    var count i32 = 0;
+    for ignored in unit_slice { count += 1; }
+    if count != 2 { return 4; }
+    for value in empty_slice { return 5; }
+    return 0;
+}

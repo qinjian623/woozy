@@ -509,8 +509,9 @@ class Emitter {
                   {builder.getInt64(args.size()),
                    builder.getInt64(stride(element)),
                    value_op(element, true), value_op(element, false)});
+      llvm::AllocaInst *scratch = nullptr;
       for (auto *arg : args) {
-        auto *address = element_storage(element, arg);
+        auto *address = element_storage(element, arg, scratch);
         runtime("lang_vec_init_v1", builder.getVoidTy(), {v, address});
       }
       break;
