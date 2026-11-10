@@ -6,6 +6,7 @@
 #include <llvm/AsmParser/Parser.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/SourceMgr.h>
@@ -113,6 +114,7 @@ int main(int argc, char **argv) {
       need(globals.size() == 2 && saw_f32 && saw_f64,
            "expected one read-only f32 and one f64 negative constant array");
 
+      std::map<const llvm::CallInst *, const llvm::MemCpyInst *> bulk;
       std::vector<const llvm::CallInst *> vectors;
       std::map<const llvm::CallInst *,
                std::vector<const llvm::CallInst *>>
@@ -120,6 +122,13 @@ int main(int argc, char **argv) {
       for (const auto &function : *module)
         for (const auto &block : function)
           for (const auto &instruction : block) {
+            if (const auto *copy = llvm::dyn_cast<llvm::MemCpyInst>(&instruction)) {
+              const auto *target = llvm::dyn_cast<llvm::LoadInst>(copy->getRawDest());
+              const auto *field = target ? llvm::dyn_cast<llvm::GetElementPtrInst>(target->getPointerOperand()) : nullptr;
+              const auto *created = field ? llvm::dyn_cast<llvm::CallInst>(field->getPointerOperand()) : nullptr;
+              need(created && bulk.emplace(created, copy).second,
+                   "negative constant Vec has no unique bulk copy");
+            }
             const auto *call = llvm::dyn_cast<llvm::CallInst>(&instruction);
             if (!call || !call->getCalledFunction()) continue;
             const auto name = call->getCalledFunction()->getName();
@@ -140,39 +149,45 @@ int main(int argc, char **argv) {
       std::set<size_t> group_sizes;
       size_t scratch_initializers = 0;
       for (const auto *created : vectors) {
-        const auto &calls = initializers.at(created);
-        need(!calls.empty(), "Vec constructor has no element initializers");
-        group_sizes.insert(calls.size());
-        if (calls.size() == 1) {
-          const auto *gep = llvm::dyn_cast<llvm::GetElementPtrInst>(
-              calls[0]->getArgOperand(1));
-          need(gep != nullptr && gep->getNumIndices() == 2 &&
-                   llvm::isa<llvm::ConstantInt>(gep->getOperand(1)) &&
-                   llvm::cast<llvm::ConstantInt>(gep->getOperand(1))->isZero() &&
-                   !llvm::isa<llvm::Constant>(gep->getOperand(2)),
-               "negative constant Vec initialization is not a compact loop");
+        if (auto found = bulk.find(created); found != bulk.end()) {
+          const auto *copy = found->second;
           const auto *global = llvm::dyn_cast<llvm::GlobalVariable>(
-              gep->getPointerOperand()->stripPointerCasts());
-          need(global != nullptr &&
-                   global->getName().starts_with("vec.constants"),
-               "negative constant Vec initialization does not read its array");
+              copy->getRawSource()->stripPointerCasts());
+          need(global && globals.count(global), "negative constant copy uses the wrong table");
+          const auto *bytes = llvm::dyn_cast<llvm::ConstantInt>(copy->getLength());
+          need(bytes && bytes->getZExtValue() ==
+                   module->getDataLayout().getTypeAllocSize(global->getValueType()).getFixedValue(),
+               "negative constant copy does not cover all eight values");
+          bool published = false;
+          for (const auto &instruction : *copy->getParent()) {
+            const auto *store = llvm::dyn_cast<llvm::StoreInst>(&instruction);
+            if (!store || !copy->comesBefore(store)) continue;
+            const auto *field = llvm::dyn_cast<llvm::GetElementPtrInst>(store->getPointerOperand());
+            const auto *count = llvm::dyn_cast<llvm::ConstantInt>(store->getValueOperand());
+            if (field && field->getNumIndices() == 2 && field->getPointerOperand() == created &&
+                llvm::cast<llvm::ConstantInt>(field->getOperand(2))->getZExtValue() == 2 &&
+                count && count->getZExtValue() == 8) published = true;
+          }
+          need(published, "negative constant Vec is not fully initialized after copy");
           used.insert(global);
-        } else {
-          scratch_initializers += calls.size();
-          for (const auto *call : calls)
-            need(llvm::isa<llvm::AllocaInst>(
-                     call->getArgOperand(1)->stripPointerCasts()),
-                 "dynamic/side-effect Vec initialization must use scratch");
+          continue;
         }
+        const auto &calls = initializers.at(created);
+        need(!calls.empty(), "dynamic Vec constructor has no element initializers");
+        group_sizes.insert(calls.size());
+        scratch_initializers += calls.size();
+        for (const auto *call : calls)
+          need(llvm::isa<llvm::AllocaInst>(call->getArgOperand(1)->stripPointerCasts()),
+               "dynamic/side-effect Vec initialization must use scratch");
       }
-      need(group_sizes == std::set<size_t>{1, 3, 4} && used.size() == 2,
-           "negative floats did not share the compact constant path");
+      need(group_sizes == std::set<size_t>{3, 4} && bulk.size() == 2 && used.size() == 2,
+           "negative constants did not use two bulk copies");
       need(scratch_initializers == 7,
            "dynamic negative or side-effect Vec elements changed their path");
     }
     std::cout << "passed: real load/check/lower/emit keeps signed f32/f64 "
                  "constants including -0.0 in private read-only arrays and "
-                 "compact loops; dynamic negative and side-effect lists still "
+                 "complete copies; dynamic negative and side-effect lists still "
                  "use scratch initialization\n";
     return 0;
   } catch (const std::exception &e) {

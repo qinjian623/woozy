@@ -5,6 +5,7 @@
 #include <llvm/AsmParser/Parser.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/IntrinsicInst.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/Verifier.h>
 #include <llvm/Support/SourceMgr.h>
@@ -139,39 +140,59 @@ int main(int argc, char **argv) {
            "expected seven read-only constant Vec arrays");
 
       std::set<const llvm::GlobalVariable *> used;
-      size_t initializers = 0;
+      size_t copies = 0;
       for (const auto &function : *module)
         for (const auto &block : function)
           for (const auto &instruction : block) {
-            const auto *call = llvm::dyn_cast<llvm::CallInst>(&instruction);
-            if (!call || !call->getCalledFunction() ||
-                call->getCalledFunction()->getName() != "lang_vec_init_v1")
-              continue;
-            ++initializers;
-            need(call->arg_size() == 2, "unexpected Vec initialization arity");
-            const auto *gep =
-                llvm::dyn_cast<llvm::GetElementPtrInst>(call->getArgOperand(1));
-            need(gep != nullptr && gep->getNumIndices() == 2 &&
-                     llvm::isa<llvm::ConstantInt>(gep->getOperand(1)) &&
-                     llvm::cast<llvm::ConstantInt>(gep->getOperand(1))
-                         ->isZero() &&
-                     !llvm::isa<llvm::Constant>(gep->getOperand(2)),
-                 "constant Vec initialization is not a compact indexed loop");
+            if (const auto *call = llvm::dyn_cast<llvm::CallInst>(&instruction))
+              need(!call->getCalledFunction() ||
+                       call->getCalledFunction()->getName() != "lang_vec_init_v1",
+                   "constant Vec still initializes one element per runtime call");
+            const auto *copy = llvm::dyn_cast<llvm::MemCpyInst>(&instruction);
+            if (!copy) continue;
             const auto *global = llvm::dyn_cast<llvm::GlobalVariable>(
-                gep->getPointerOperand()->stripPointerCasts());
-            need(global != nullptr &&
-                     global->getName().starts_with("vec.constants"),
-                 "constant Vec initialization does not read its global array");
-            used.insert(global);
+                copy->getRawSource()->stripPointerCasts());
+            need(global && global->getName().starts_with("vec.constants"),
+                 "bulk Vec copy does not read its constant table");
+            auto *array = llvm::cast<llvm::ArrayType>(global->getValueType());
+            const auto *length = llvm::dyn_cast<llvm::ConstantInt>(copy->getLength());
+            need(length && length->getZExtValue() ==
+                     module->getDataLayout().getTypeAllocSize(array).getFixedValue(),
+                 "bulk Vec copy does not cover the complete table");
+            const auto *target = llvm::dyn_cast<llvm::LoadInst>(copy->getRawDest());
+            const auto *data = target ? llvm::dyn_cast<llvm::GetElementPtrInst>(
+                                           target->getPointerOperand()) : nullptr;
+            need(data && data->getNumIndices() == 2 &&
+                     llvm::cast<llvm::ConstantInt>(data->getOperand(2))->getZExtValue() == 5,
+                 "bulk Vec copy does not target its data pointer");
+            const auto *created = llvm::dyn_cast<llvm::CallInst>(data->getPointerOperand());
+            need(created && created->getCalledFunction() &&
+                     created->getCalledFunction()->getName() == "lang_vec_new_v1" &&
+                     llvm::cast<llvm::ConstantInt>(created->getArgOperand(0))->getZExtValue() == array->getNumElements() &&
+                     llvm::cast<llvm::Constant>(created->getArgOperand(2))->isNullValue() &&
+                     llvm::cast<llvm::Constant>(created->getArgOperand(3))->isNullValue(),
+                 "bulk Vec copy is not a fresh trivial-element allocation");
+            bool published = false;
+            for (const auto &following : block) {
+              const auto *store = llvm::dyn_cast<llvm::StoreInst>(&following);
+              if (!store || !copy->comesBefore(store)) continue;
+              const auto *field = llvm::dyn_cast<llvm::GetElementPtrInst>(store->getPointerOperand());
+              const auto *count = llvm::dyn_cast<llvm::ConstantInt>(store->getValueOperand());
+              if (field && field->getNumIndices() == 2 &&
+                  field->getPointerOperand() == created && count &&
+                  llvm::cast<llvm::ConstantInt>(field->getOperand(2))->getZExtValue() == 2 &&
+                  count->getZExtValue() == array->getNumElements()) published = true;
+            }
+            need(published, "Vec initialized count is not published after its full copy");
+            need(used.insert(global).second, "a constant table is copied twice");
+            ++copies;
           }
-      need(initializers == 7,
-           "expected one Vec initialization loop per constant list");
-      need(used.size() == globals.size(),
-           "a constant Vec array was not used by exactly one list");
+      need(copies == 7 && used.size() == globals.size(),
+           "expected one complete copy per constant Vec list");
     }
     std::cout << "passed: real load/check/lower/emit stores each integer, "
                  "bool and float constant list once in read-only storage and "
-                 "initializes it from one compact loop; independent values, "
+                 "initializes it with one full copy; independent values, "
                  "zeroinitializer and per-list storage are preserved\n";
     return 0;
   } catch (const std::exception &e) {

@@ -48,9 +48,8 @@
     folded.changeSign();
     return llvm::ConstantFP::get(context, folded);
   }
-  // Constant scalar elements have no ownership and no runtime evaluation
-  // order. Keep their values in read-only static storage and copy them from a
-  // compact loop instead of expanding one store and runtime call per element.
+  // Constant scalars need no element cleanup or runtime evaluation. Copy the
+  // table once, then publish the fully initialized element count.
   void constant_vec_init(llvm::Value *vec, TypeId element,
                          llvm::ArrayRef<llvm::Constant *> elements) {
     auto *element_type = lower_type(element);
@@ -66,25 +65,12 @@
     data->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
     data->setAlignment(module.getDataLayout().getABITypeAlign(array_type));
 
-    auto *index = storage(builder.getInt64Ty());
-    builder.CreateStore(builder.getInt64(0), index);
-    auto *fn = builder.GetInsertBlock()->getParent();
-    auto *test = llvm::BasicBlock::Create(context, "vec.constants.test", fn);
-    auto *body = llvm::BasicBlock::Create(context, "vec.constants.body", fn);
-    auto *done = llvm::BasicBlock::Create(context, "vec.constants.done", fn);
-    builder.CreateBr(test);
-    builder.SetInsertPoint(test);
-    auto *next = builder.CreateLoad(builder.getInt64Ty(), index);
-    builder.CreateCondBr(
-        builder.CreateICmpUGE(next, builder.getInt64(elements.size())), done, body);
-    builder.SetInsertPoint(body);
-    auto *address = builder.CreateGEP(
-        array_type, data, {builder.getInt64(0), next});
-    runtime("lang_vec_init_v1", builder.getVoidTy(), {vec, address});
-    builder.CreateStore(
-        builder.CreateAdd(next, builder.getInt64(1)), index);
-    builder.CreateBr(test);
-    builder.SetInsertPoint(done);
+    auto *target = builder.CreateLoad(
+        builder.getPtrTy(), builder.CreateStructGEP(vec_type, vec, 5));
+    auto bytes = module.getDataLayout().getTypeAllocSize(array_type).getFixedValue();
+    builder.CreateMemCpy(target, llvm::MaybeAlign(1), data, data->getAlign(), bytes);
+    builder.CreateStore(builder.getInt64(elements.size()),
+                        builder.CreateStructGEP(vec_type, vec, 2));
   }
   llvm::Value *element_storage(TypeId id, llvm::Value *value) {
     llvm::AllocaInst *scratch = nullptr;

@@ -10,6 +10,33 @@ v = [11, 13]; if v[i] != 13 || first(v) != 11 {return 3;}
 let points Vec[P] = [P(x: 17)]; if points[0].x != 17 {return 4;}
 let owners Vec[Vec[i32]] = [[19]]; if owners[0][0] != 19 {return 5;}
 return 0;}''', {}),
+    'local-index-borrow-arithmetic': ('''func main() i32 {
+var v Vec[i32] = [10, 20, 30, 40]; var i i32 = 1;
+if v[i * 3 - 2] != 20 {return 1;}
+v[i * 2] = 77; if v[2] != 77 {return 2;}
+if v[-(-i)] != 20 {return 3;}
+if v[(i & 1) | 2] != 40 {return 4;}
+let sum = v[i + 1] + v[i * 2 - 1]; if sum != 97 {return 5;}
+v[i + i] = 55; if v[i * 2] != 55 {return 6;}
+v[i * 2] += 5; if v[i * 2] != 60 {return 7;}
+if v[0] + v[1] + v[2] + v[3] != 130 {return 8;}
+return 0;}''', {}),
+    'local-index-borrow-negative': ('''func main() i32 {
+let a Vec[i32] = [1, 2, 3]; var i i32 = 1; let x = a[i - 2]; return x;}''',
+        {'panic': True}),
+    'local-index-borrow-place-error': ('''enum E {Bad;}
+func mark(log inout i64, n i64) {log = log * 10 + n;}
+func fail(log inout i64) i32 throws E {mark(inout log, 2); throw E.Bad;}
+func work(log inout i64) i32 throws E {var v Vec[i32] = [11, 22];
+defer {mark(inout log, 3);} mark(inout log, 1);
+v[0 + 1] = fail(inout log); return 0;}
+func main() i32 {var log i64 = 0;
+try {let value = work(inout log); return 1;}
+catch e E {mark(inout log, 4);}
+if log != 1234 {return 2;} return 0;}''', {
+        'events': [1, 2, 3, 4],
+        'sequence': [['event', 1], ['event', 2], ['event', 3], ['free', 0], ['event', 4]],
+    }),
     'local-index-borrow-move': ('''func consume(v move Vec[i32]) i32 {return v[1];}
 func consume_index(v move Vec[i32]) usize {return 0;}
 func main() i32 {let v Vec[i32] = [11, 22];

@@ -1302,11 +1302,12 @@ struct IndexReadRecord {
   bool temporary = false;
   std::optional<SymbolId> reader;
 };
-std::vector<IndexReadRecord> index_read_records(const HirModule &m) {
+std::vector<IndexReadRecord> index_receiver_records(const HirModule &m,
+                                                    NodeKind kind) {
   std::vector<IndexReadRecord> out;
   for (size_t i = 0; i < m.nodes.size(); ++i) {
     const auto &n = m.nodes[i];
-    if (n.kind() != NodeKind::index_read)
+    if (n.kind() != kind)
       continue;
     IndexReadRecord r{n.children[0],
                       m.scopes.at(n.scope.value).function,
@@ -1331,6 +1332,12 @@ std::vector<IndexReadRecord> index_read_records(const HirModule &m) {
   }
   return out;
 }
+std::vector<IndexReadRecord> index_read_records(const HirModule &m) {
+  return index_receiver_records(m, NodeKind::index_read);
+}
+std::vector<IndexReadRecord> index_place_records(const HirModule &m) {
+  return index_receiver_records(m, NodeKind::index_place);
+}
 IndexReadRecord only_index_read(const HirModule &m, std::string_view function) {
   auto symbol = function_named(m, function);
   std::vector<IndexReadRecord> found;
@@ -1339,6 +1346,17 @@ IndexReadRecord only_index_read(const HirModule &m, std::string_view function) {
       found.push_back(r);
   need(found.size() == 1,
        std::string(function) + " must contain exactly one index read");
+  return found.front();
+}
+IndexReadRecord only_index_place(const HirModule &m,
+                                 std::string_view function) {
+  auto symbol = function_named(m, function);
+  std::vector<IndexReadRecord> found;
+  for (auto &r : index_place_records(m))
+    if (r.function == symbol)
+      found.push_back(r);
+  need(found.size() == 1,
+       std::string(function) + " must contain exactly one index place");
   return found.front();
 }
 void expect_use(const IndexReadRecord &r, UseKind kind, bool temporary,
@@ -1454,8 +1472,75 @@ void local_index_borrow_tests() {
   auto computed_index = accepted(
       "func f() i32 {let v Vec[i32]=[1];var i i32=0;let x=v[i+1];return x;}");
   facts(computed_index);
-  expect_use(only_index_read(computed_index, "f"), UseKind::copy, true,
+  expect_use(only_index_read(computed_index, "f"), UseKind::borrow, false,
              "computed index read");
+  auto arithmetic_index = accepted(
+      "func f() i32 {let v Vec[i32]=[1,2,3,4];var i i32=1;let "
+      "x=v[i*3-1];return x;}");
+  facts(arithmetic_index);
+  expect_use(only_index_read(arithmetic_index, "f"), UseKind::borrow, false,
+             "arithmetic index read");
+  auto unary_index = accepted(
+      "func f() i32 {let v Vec[i32]=[1,2];var i i32=1;let x=v[-(-i)];return "
+      "x;}");
+  facts(unary_index);
+  expect_use(only_index_read(unary_index, "f"), UseKind::borrow, false,
+             "unary arithmetic index read");
+  auto bit_index = accepted(
+      "func f() i32 {let v Vec[i32]=[1,2,3];var i i32=1;let x=v[(i&1)|2];return "
+      "x;}");
+  facts(bit_index);
+  expect_use(only_index_read(bit_index, "f"), UseKind::borrow, false,
+             "bit index read");
+  auto convert_index = accepted(
+      "func f() i32 {let v Vec[i32]=[1,2];var i i32=1;let x=v[usize(i)];return "
+      "x;}");
+  facts(convert_index);
+  expect_use(only_index_read(convert_index, "f"), UseKind::copy, true,
+             "converted index read");
+  auto inout_index = accepted(
+      "func bump(x inout i32) i32 {x=x+1;return x;} func f() i32 {let v "
+      "Vec[i32]=[1,2];var i i32=0;let x=v[bump(inout i)];return x;}");
+  facts(inout_index);
+  expect_use(only_index_read(inout_index, "f"), UseKind::copy, true,
+             "inout index read");
+
+  auto place = accepted(
+      "func f() i32 {var v Vec[i32]=[1,2,3];var i i32=0;v[i+1]=7;return "
+      "v[2];}");
+  facts(place);
+  expect_use(only_index_place(place, "f"), UseKind::borrow, false,
+             "local arithmetic index place");
+  auto place_compound = accepted(
+      "func f() i32 {var v Vec[i32]=[1,2,3];var i i32=0;v[i+1]+=2;return "
+      "v[2];}");
+  facts(place_compound);
+  expect_use(only_index_place(place_compound, "f"), UseKind::borrow, false,
+             "compound local arithmetic index place");
+  auto place_move = accepted(
+      "func consume(v move Vec[i32]) i32 {return 0;} func f() i32 {var v "
+      "Vec[i32]=[1,2];var i i32=0;v[i+1]=consume(move v);return 0;}");
+  facts(place_move);
+  expect_use(only_index_place(place_move, "f"), UseKind::copy, true,
+             "index place with same full-expression move");
+  auto place_call_index = accepted(
+      "func pick() i32 {return 0;} func f() i32 {var v Vec[i32]=[1,2];"
+      "v[pick()+1]=7;return 0;}");
+  facts(place_call_index);
+  expect_use(only_index_place(place_call_index, "f"), UseKind::copy, true,
+             "index place with call index");
+  auto place_field = accepted(
+      "struct P {x i32;} func f() i32 {var v Vec[P]=[P(x:1)];var i i32=0;"
+      "v[i+0].x=7;return v[0].x;}");
+  facts(place_field);
+  expect_use(only_index_place(place_field, "f"), UseKind::copy, true,
+             "indexed field place keeps receiver copy");
+  auto place_owning = accepted(
+      "func f() i32 {var v Vec[Vec[i32]]=[[1]];var i i32=0;v[i+0]=[2];return "
+      "v[0][0];}");
+  facts(place_owning);
+  expect_use(only_index_place(place_owning, "f"), UseKind::copy, true,
+             "owning element index place");
   auto call_index = accepted(
       "func pick() i32 {return 0;} func f() i32 {let v Vec[i32]=[1];return "
       "v[pick()];}");

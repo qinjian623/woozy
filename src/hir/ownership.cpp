@@ -558,12 +558,57 @@ class Analysis {
         .first->second;
   }
 
-  // A direct trivial-element read of a plain local Vec may borrow the
-  // binding's existing handle when the complete full expression cannot move,
-  // inout borrow, or rebind that binding. The binding owns the Vec through the
-  // full expression, so the old receiver copy was only an extra non-final
-  // handle. Parameters keep their separate rule; fields, computed receivers,
-  // owning elements and non-trivial indexes stay on the copy path.
+  static bool integer_index_kind(TypeKind kind) {
+    return kind == TypeKind::SignedInt || kind == TypeKind::UnsignedInt ||
+           kind == TypeKind::Isize || kind == TypeKind::Usize;
+  }
+
+  // Only a builtin integer tree of literals, integer reads, unary negate/bit
+  // complement and integer binary arithmetic/bit/shift may be evaluated while
+  // the receiver binding is borrowed. Calls, moves, inout arguments,
+  // assignments, conversions and short-circuit forms stay on the copy path.
+  // Wrapping overflow and division/remainder Panic rules are unchanged:
+  // borrowing only removes an extra handle, not the index evaluation or
+  // bounds checks.
+  bool pure_integer_index(HirNodeId id) const {
+    const auto &x = n(id);
+    if (!integer_index_kind(ty(m, x.type).kind))
+      return false;
+    if (x.kind() == NodeKind::integer_literal || x.kind() == NodeKind::read)
+      return true;
+    if (x.kind() == NodeKind::unary) {
+      auto op = std::get<Unary>(x.data).op;
+      return x.children.size() == 1 &&
+             (op == UnaryOp::negate || op == UnaryOp::bit_not) &&
+             pure_integer_index(x.children[0]);
+    }
+    if (x.kind() != NodeKind::binary || x.children.size() != 2)
+      return false;
+    switch (std::get<Binary>(x.data).op) {
+    case BinaryOp::add:
+    case BinaryOp::subtract:
+    case BinaryOp::multiply:
+    case BinaryOp::divide:
+    case BinaryOp::remainder:
+    case BinaryOp::shift_left:
+    case BinaryOp::shift_right:
+    case BinaryOp::bit_and:
+    case BinaryOp::bit_or:
+    case BinaryOp::bit_xor:
+      return pure_integer_index(x.children[0]) &&
+             pure_integer_index(x.children[1]);
+    default:
+      return false;
+    }
+  }
+
+  // A direct trivial-element read or direct element write of a plain local
+  // Vec may borrow the binding's existing handle when the complete full
+  // expression cannot move, inout borrow, or rebind that binding. The binding
+  // owns the Vec through the full expression, so the old receiver copy was only
+  // an extra non-final handle. Parameters keep their separate rule; fields,
+  // computed receivers, owning elements and impure indexes stay on the copy
+  // path.
   bool local_index_borrow(HirNodeId receiver, HirNodeId index) const {
     const auto *read = std::get_if<Read>(&n(receiver).data);
     if (!read || !declarations.count(read->symbol.value) ||
@@ -580,14 +625,15 @@ class Analysis {
     auto element = receiver_type.type_args[0];
     if (contains_type_parameter(m, element) || owned(element))
       return false;
-    const auto &index_node = n(index);
-    if (index_node.kind() == NodeKind::integer_literal)
-      return true;
-    if (index_node.kind() != NodeKind::read)
-      return false;
-    auto kind = ty(m, index_node.type).kind;
-    return kind == TypeKind::SignedInt || kind == TypeKind::UnsignedInt ||
-           kind == TypeKind::Isize || kind == TypeKind::Usize;
+    return pure_integer_index(index);
+  }
+
+  // Shared read/write gate: a plain local trivial-element Vec receiver may
+  // borrow its binding handle for this complete full expression.
+  bool local_index_can_borrow(HirNodeId receiver, HirNodeId index,
+                              SymbolId root) {
+    return full_expression_root && local_index_borrow(receiver, index) &&
+           !full_effects().count(root.value);
   }
 
   std::optional<SymbolId> borrow_root(HirNodeId id) const {
@@ -696,9 +742,8 @@ class Analysis {
       auto index = x.children[1];
       auto root = borrow_root(receiver);
       bool can_borrow = root && is_borrowed_param(*root) && !expr_consumes_symbol(index, *root);
-      if (!can_borrow && root && full_expression_root &&
-          local_index_borrow(receiver, index) &&
-          !full_effects().count(root->value))
+      if (!can_borrow && root &&
+          local_index_can_borrow(receiver, index, *root))
         can_borrow = true;
       expr_records(receiver, fe, live, can_borrow);
       expr_records(index, fe, live, false);
@@ -780,6 +825,8 @@ class Analysis {
         auto root = borrow_root(receiver);
         if (root && is_borrowed_param(*root) && !expr_consumes_symbol(index, *root) &&
             !expr_consumes_symbol(x.children[1], *root))
+          safe_borrow_receivers.insert(receiver.value);
+        else if (root && local_index_can_borrow(receiver, index, *root))
           safe_borrow_receivers.insert(receiver.value);
       }
       expr_records(x.children[0], id, live);

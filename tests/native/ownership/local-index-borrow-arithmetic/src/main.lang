@@ -1,0 +1,18 @@
+package app;
+func main() i32 {
+    var v Vec[i32] = [10, 20, 30, 40];
+    var i i32 = 1;
+    if v[i * 3 - 2] != 20 {return 1;}
+    v[i * 2] = 77;
+    if v[2] != 77 {return 2;}
+    if v[-(-i)] != 20 {return 3;}
+    if v[(i & 1) | 2] != 40 {return 4;}
+    let sum = v[i + 1] + v[i * 2 - 1];
+    if sum != 97 {return 5;}
+    v[i + i] = 55;
+    if v[i * 2] != 55 {return 6;}
+    v[i * 2] += 5;
+    if v[i * 2] != 60 {return 7;}
+    if v[0] + v[1] + v[2] + v[3] != 130 {return 8;}
+    return 0;
+}
