@@ -985,8 +985,9 @@ PhaseResult<Output> emit(const ir::VerifiedModule &input, SymbolId entry,
     r.diagnostics.push_back(
         {e.code, "codegen", "error", e.message, {}, {}, {}, {}, {}, {}});
   } catch (const std::exception &e) {
+    r.failure = FailureKind::internal;
     r.diagnostics.push_back(
-        {"E_IR_INVALID", "codegen", "error", e.what(), {}, {}, {}, {}, {}, {}});
+        {"E_INTERNAL_ERROR", "codegen", "error", e.what(), {}, {}, {}, {}, {}, {}});
   }
   return r;
 }

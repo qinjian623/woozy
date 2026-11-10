@@ -26,6 +26,15 @@ target_link_libraries(lang_native_llvm_test PRIVATE lang_sema lang_native ${LANG
 add_test(NAME native.llvm COMMAND lang_native_llvm_test
   ${LANG_SOURCE_ROOT}/tests/native/fixtures/float-transfer/lang.toml
   ${LANG_SOURCE_ROOT}/tests/native/pod/empty-and-float/lang.toml)
+add_executable(lang_native_emit_exception_test emit_exception_test.cpp)
+target_compile_options(lang_native_emit_exception_test PRIVATE -fno-rtti)
+target_link_libraries(lang_native_emit_exception_test PRIVATE lang_sema lang_native
+  ${LANG_NATIVE_TEST_LLVM_LIBS})
+target_link_options(lang_native_emit_exception_test PRIVATE
+  -Wl,--wrap=_ZN4lang2ir4dumpB5cxx11ERKNS0_6ModuleE)
+add_test(NAME native.emit_exception COMMAND lang_native_emit_exception_test
+  ${LANG_SOURCE_ROOT}/tests/native/fixtures/unit-main/lang.toml)
+set_tests_properties(native.emit_exception PROPERTIES TIMEOUT 60)
 add_executable(lang_native_string_probe string_probe.cpp)
 target_include_directories(lang_native_string_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_options(lang_native_string_probe PRIVATE -fno-rtti)
