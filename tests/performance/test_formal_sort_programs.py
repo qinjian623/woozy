@@ -44,6 +44,20 @@ class SortProgramTests(unittest.TestCase):
             self.assertEqual(tuple(sorted(builder.raw)), builder.golden)
             self.assertEqual(builder.render(4), case)
 
+    def test_shared_cpp_commands_disable_float_contraction(self):
+        program, ir, obj, commands = formal.cpp_build_commands(
+            4, self.root / "reference.cpp", self.root / "out", self.tools)
+        self.assertEqual(len(commands), 4)
+        for argv in commands[:3]:
+            self.assertIn("-ffp-contract=off", argv)
+            self.assertNotIn("-ffast-math", argv)
+        self.assertIn(obj, commands[0])
+        self.assertIn(obj, commands[1])
+        self.assertIn(program, commands[1])
+        self.assertIn("-emit-llvm", commands[2])
+        self.assertIn("-passes=verify", commands[3])
+        self.assertIn("-disable-output", commands[3])
+
     def test_new_output_and_fixed_scope_required(self):
         builder = self.make()
         with self.assertRaises(formal.common.PerfError):

@@ -19,6 +19,43 @@ SEED = 0x6D2B79F5
 common = run_sort.common
 
 
+def cpp_build_commands(rounds, reference, directory, llvm_bin):
+    """Return the shared C++ object/link/IR/verify command sequence."""
+    directory = Path(directory)
+    program = directory / "reference"
+    ir = directory / "reference.ll"
+    obj = directory / "reference.o"
+    flags = [Path(llvm_bin) / "clang++", *run_sort.TARGET_FLAGS,
+             "-ffp-contract=off", "-std=c++20", "-O2"]
+    return program, ir, obj, [
+        flags + ["-c", reference, "-o", obj],
+        flags + [f"--ld-path={Path(llvm_bin) / 'ld.lld'}", obj, "-o", program],
+        flags + ["-S", "-emit-llvm", reference, "-o", ir],
+        [Path(llvm_bin) / "opt", "-passes=verify", "-disable-output", ir],
+    ]
+
+
+def build_cpp_artifacts(rounds, reference, directory, llvm_bin, env, row, save):
+    """Compile one independent O2 object, link it, export IR and verify it."""
+    directory = Path(directory)
+    directory.mkdir(exist_ok=False)
+    program, ir, obj, commands = cpp_build_commands(
+        rounds, reference, directory, llvm_bin)
+    for argv in commands:
+        result = common.command(argv, timeout=600, env=env)
+        row["commands"].append(result)
+        save()
+        common.require_success(result, f"C++ R{rounds} build/export/verify")
+    row["program"] = run_sort.file_rec(program)
+    row["object"] = run_sort.file_rec(obj)
+    row["llvm"] = run_sort.file_rec(ir)
+    row["object_elf"] = common.checked_elf(
+        obj, executable=False, label=f"C++ R{rounds} object")
+    row["elf"] = common.checked_elf(
+        program, executable=True, label=f"C++ R{rounds}")
+    return program
+
+
 class SortPrograms:
     def __init__(self, algorithm, n, oracle_dir, out, llvm_bin, env):
         if algorithm not in run_sort.ALGORITHMS or type(n) is not int or n not in PINNED:
@@ -83,28 +120,12 @@ class SortPrograms:
     def build_cpp(self, rounds):
         case = self.render(rounds)
         directory = self.out / f"r{rounds}" / "cpp-O2"
-        directory.mkdir(exist_ok=False)
-        program, ir, obj = directory / "reference", directory / "reference.ll", directory / "reference.o"
         row = {"rounds": rounds, "status": "running", "commands": []}
         self.builds.append(row)
         try:
-            flags = [self.llvm_bin / "clang++", *run_sort.TARGET_FLAGS, "-std=c++20", "-O2"]
-            commands = [
-                flags + ["-c", case["reference"]["path"], "-o", obj],
-                flags + [f"--ld-path={self.llvm_bin / 'ld.lld'}", obj, "-o", program],
-                flags + ["-S", "-emit-llvm", case["reference"]["path"], "-o", ir],
-                [self.llvm_bin / "opt", "-passes=verify", "-disable-output", ir],
-            ]
-            for argv in commands:
-                result = common.command(argv, timeout=600, env=self.env)
-                row["commands"].append(result)
-                self.save()
-                common.require_success(result, f"C++ R{rounds} build/export/verify")
-            row["program"] = run_sort.file_rec(program)
-            row["object"] = run_sort.file_rec(obj)
-            row["llvm"] = run_sort.file_rec(ir)
-            row["object_elf"] = common.checked_elf(obj, executable=False, label=f"C++ R{rounds} object")
-            row["elf"] = common.checked_elf(program, executable=True, label=f"C++ R{rounds}")
+            program = build_cpp_artifacts(
+                rounds, case["reference"]["path"], directory,
+                self.llvm_bin, self.env, row, self.save)
             self.unchanged()
             row["status"] = "built"
             return program

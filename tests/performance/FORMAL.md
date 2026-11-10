@@ -8,9 +8,13 @@
 
 调用方先完成核心要求、核对实际R/2R工作、冻结输入/工具/Source/IR/对象/ELF，再停止本任务的并行构建，并在子进程固定同CPU和32MiB软栈执行。校准和采样的完整返回值应写入新目录，保留此前所有失败。
 
-`formal_sort_programs.SortPrograms` 已提供三种排序的构建回调：用固定二进制输入生成Source/C++，`build_cpp(R)`保存独立的O2对象、由该对象链接的程序、同参数LLVM IR和verify记录，可传给`calibrate`。它不会运行生成的测速程序。Source最终构建、R/2R实际工作审读及其他五算法的生成回调仍需接入。
+`formal_sort_programs.SortPrograms` 已提供三种排序的构建回调：用固定二进制输入生成Source/C++，`build_cpp(R)`保存独立的O2对象、由该对象链接的程序、同参数LLVM IR和verify记录，可传给`calibrate`。它不会运行生成的测速程序。
 
-正式校准和采样未启动。13项采样自检使用合成时间，另有3项固定输入生成检查；这些都不是Source/C++性能结果：
+`formal_algorithm_programs.AlgorithmPrograms` 为其余五种算法提供同样的构建回调，只接受 `formal_sampling.GRID` 中固定的两个规模：sieve 1000000/10000000、fannkuch 9/10、mandelbrot 512/2048、binarytrees 14/18、matmul 128/512；R 只接受允许范围内的2的幂。它直接调用各目录 `large_prepare.py` 的现有生成函数，不复制算法、模板、工作量、尺寸或预期值。`render(R)` 保留Source、C++、manifest、冻结输入/模板/工具哈希；`build_cpp(R)` 使用与 `SortPrograms` 相同的四条C++命令，保存独立对象、由该对象链接的ELF、同flags无调试LLVM IR、verify以及全部命令和失败记录。R1/R2分别生成，不把R1缓存复制成R2。输出记录 `actual_work_review=pending` 和 `formal_timing=false`。
+
+本任务的新检查覆盖十个固定单元的R1/R2渲染，并与对应旧prepare真实文件逐字节比较（记录哈希、是否相等及差异位置）；对每个算法的小规模实际构建一次R4 C++ O2对象、ELF、IR并verify，不运行算法程序、不编译Source、不启动校准采样。检查记录在 `checks/formal-other-five-program-builders-20261110/results.json`，失败运行保存在同目录 `failed-run-1/`。Source最终构建、R/2R实际工作审读仍需接入。
+
+正式校准和采样未启动。13项采样自检使用合成时间，3项排序固定输入生成检查，另有4项五算法固定输入生成检查；这些都不是Source/C++性能结果：
 
 ```sh
 python3.12 -B -m unittest discover -s tests/performance -p 'test_formal*.py' -v
