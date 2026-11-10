@@ -1,0 +1,62 @@
+// C++20 reference for the same scalar single-threaded dense f64 matmul:
+// row-major A[N*N] and B[N*N], zero-initialized C, i-j-k loop order.
+// PERF-MATMUL n={{N}} variant={{VARIANT}} a_sha256={{A_SHA}} b_sha256={{B_SHA}} c_sha256={{C_SHA}} expected_sha256={{EXPECTED_SHA}} oracle_sha256={{ORACLE_SHA}}
+#include <cstdint>
+#include <vector>
+
+// Preparation-only observation point. The real program keeps this empty.
+// The C++ O0 IR is checked for a real call to this mangled symbol; O2 may
+// remove the call.
+static void visit(const std::vector<double>& values) {
+    (void)values;
+}
+
+static std::vector<double> multiply(int32_t n) {
+    // Same oracle A and B literals as Source.
+    const std::vector<double> a{ {{A}} };
+    const std::vector<double> b{ {{B}} };
+
+    // Zero-initialized row-major C.
+    std::vector<double> c(
+        static_cast<std::size_t>(n) * static_cast<std::size_t>(n), 0.0);
+
+    for (int32_t i = 0; i < n; ++i) {
+        for (int32_t j = 0; j < n; ++j) {
+            double sum = 0.0;
+            // Same i-j-k order as Source. -ffp-contract=off and
+            // -fno-fast-math keep separate rounding and no FMA.
+            for (int32_t k = 0; k < n; ++k) {
+                sum = sum +
+                    a[static_cast<std::size_t>(i * n + k)] *
+                    b[static_cast<std::size_t>(k * n + j)];
+            }
+            c[static_cast<std::size_t>(i * n + j)] = sum;
+        }
+    }
+
+    // Wrong-value and negative-observer variants change one real element of C.
+    // Correct variants leave this empty.
+    {{MUTATION}}
+
+    return c;
+}
+
+int main() {
+    // Mirror the Source one-element runtime size vector.
+    const std::vector<int32_t> dims{ {{N}} };
+    const int32_t n = dims[0];
+    const std::vector<double> expected{ {{EXPECTED}} };
+    const std::vector<double> c = multiply(n);
+
+    // Full per-element comparison with the embedded expected matrix.
+    const int32_t total = {{NN}};
+    for (int32_t index = 0; index < total; ++index) {
+        if (c[static_cast<std::size_t>(index)] !=
+            expected[static_cast<std::size_t>(index)]) {
+            return 1;
+        }
+    }
+
+    visit(c);
+    return 0;
+}

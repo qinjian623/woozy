@@ -1,0 +1,79 @@
+// Binarytrees preparation fixture: full perfect trees, post-order creation,
+// recursive node-count traversal, and complete release. There is no output,
+// FFI, thread, SIMD, timing call, arena, pool, free-list, cached node, shared
+// leaf, or formula-only replacement for building/visiting the trees.
+// PERF-BINARYTREES n={{N}} max={{MAX_DEPTH}} stretch={{STRETCH_DEPTH}} expected_sha256={{EXPECTED_SHA}} variant={{VARIANT}}
+package app;
+
+// Every logical node owns a real Vec object, including leaves whose Vec has
+// length zero.  Internal nodes own a two-element Vec of child Node values.
+struct Node {
+    leaf bool;
+    children Vec[Node];
+}
+
+// Post-order creation: left subtree, right subtree, then the parent Vec.
+func make_tree(depth i32) Node {
+    if depth == 0 {
+        return Node(leaf: true, children: []);
+    }
+    let left = make_tree(depth - 1);
+    let right = make_tree(depth - 1);
+    return Node(leaf: false, children: [left, right]);
+}
+
+// Traverse the complete tree.  The leaf flag selects the base case and both
+// child slots are read through the real Vec element access path.
+func check(node Node) i32 {
+    if node.leaf {
+        return 1;
+    }
+    return 1 + check(node.children[0]) + check(node.children[1]);
+}
+
+func stretch_phase() i32 {
+    let tree = make_tree({{STRETCH_DEPTH}});
+    let total = check(tree);
+    if total != {{STRETCH_CHECK}} {
+        return 1;
+    }
+    return 0;
+}
+
+func bucket_phase(max_depth i32, depth i32, expected_trees i32, expected_check i32) i32 {
+    let tree_count i32 = i32(1) << (max_depth - depth + 4);
+    if tree_count != expected_trees {
+        return 4;
+    }
+    var total i32 = 0;
+    for var i i32 = 0; i < tree_count; i += 1 {
+        // The tree is fully created before check, then destroyed at the end of
+        // this iteration.
+        let tree = make_tree(depth);
+        total += check(tree);
+    }
+    if total != expected_check {
+        return 2;
+    }
+    return 0;
+}
+
+func run() i32 {
+    let stretch_result = stretch_phase();
+    if stretch_result != 0 {
+        return stretch_result;
+    }
+
+    // This tree remains alive through every bucket build/check/release below.
+    let long_lived = make_tree({{MAX_DEPTH}});
+{{BUCKET_CALLS}}
+    let long_total = check(long_lived);
+    if long_total != {{LONG_CHECK}} {
+        return 3;
+    }
+    return 0;
+}
+
+func main() i32 {
+    return run();
+}

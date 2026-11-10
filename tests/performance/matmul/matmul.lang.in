@@ -1,0 +1,60 @@
+// Matmul preparation fixture: scalar single-threaded dense f64, row-major
+// A[N*N] and B[N*N], the same i-j-k loop order in both languages.
+// PERF-MATMUL n={{N}} variant={{VARIANT}} a_sha256={{A_SHA}} b_sha256={{B_SHA}} c_sha256={{C_SHA}} expected_sha256={{EXPECTED_SHA}} oracle_sha256={{ORACLE_SHA}}
+package app;
+
+// Preparation-only observation point. Real builds keep this empty; the Native
+// observer is injected into this exact symbol in the exported pre-optimization
+// IR, and the Python observer wraps the generated module function. O2 may
+// remove this empty call entirely.
+func visit(values Vec[f64]) {
+}
+
+func multiply(n i32) Vec[f64] {
+    // Literal A and B from the independent exact-rational oracle. The values
+    // are exact binary64 numbers rendered as shortest exact decimal literals.
+    let a Vec[f64] = [{{A}}];
+    let b Vec[f64] = [{{B}}];
+
+    // Zero-initialized row-major C. No sized-zero Vec constructor is exposed,
+    // so prepare.py renders the fixed zero list.
+    var c Vec[f64] = [{{ZEROS}}];
+
+    for var i i32 = 0; i < n; i += 1 {
+        for var j i32 = 0; j < n; j += 1 {
+            var sum f64 = 0.0;
+            // Same i-j-k order, one f64 multiply and one f64 add per k, no
+            // BLAS, SIMD, threads, fast-math, FMA, or reassociation.
+            for var k i32 = 0; k < n; k += 1 {
+                sum = sum + a[i * n + k] * b[k * n + j];
+            }
+            c[i * n + j] = sum;
+        }
+    }
+
+    // Wrong-value and negative-observer variants change one real element of C.
+    // Correct variants leave this empty.
+    {{MUTATION}}
+
+    return c;
+}
+
+func main() i32 {
+    // Read the size through a one-element runtime vector so the optimized
+    // Source IR keeps the actual scalar work.
+    let dims Vec[i32] = [{{N}}];
+    let n i32 = dims[0];
+    let expected Vec[f64] = [{{EXPECTED}}];
+    let c = multiply(n);
+
+    // Full per-element comparison with the embedded expected matrix.
+    let total i32 = {{NN}};
+    for var index i32 = 0; index < total; index += 1 {
+        if c[index] != expected[index] {
+            return 1;
+        }
+    }
+
+    visit(c);
+    return 0;
+}
