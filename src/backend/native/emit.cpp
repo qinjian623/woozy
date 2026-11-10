@@ -547,10 +547,26 @@ class Emitter {
         constant_vec_init(v, element, constant_args);
         break;
       }
+      // The constructor's storage is fresh and every argument has already
+      // been evaluated, so copy each element directly and publish the
+      // initialized prefix one element at a time. The scratch byte for Unit
+      // and other zero-sized elements stays zero as before. Ownership is
+      // already arranged by NativeIR; no extra retain or drop belongs here.
+      auto *data = vec_field(v, 5, builder.getPtrTy());
+      const uint64_t element_stride = stride(element);
       llvm::AllocaInst *scratch = nullptr;
-      for (auto *arg : args) {
-        auto *address = element_storage(element, arg, scratch);
-        runtime("lang_vec_init_v1", builder.getVoidTy(), {v, address});
+      for (size_t n = 0; n < args.size(); ++n) {
+        auto *address = element_storage(element, args[n], scratch);
+        auto *target = builder.CreateGEP(
+            builder.getInt8Ty(), data,
+            builder.getInt64(static_cast<uint64_t>(n) * element_stride));
+        vec_memory(builder.CreateMemCpy(target, llvm::MaybeAlign(1), address,
+                                        llvm::MaybeAlign(1), element_stride),
+                   false);
+        vec_memory(builder.CreateStore(
+                       builder.getInt64(n + 1),
+                       builder.CreateStructGEP(vec_type, v, 2)),
+                   true);
       }
       break;
     }

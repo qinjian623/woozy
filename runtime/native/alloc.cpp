@@ -40,6 +40,13 @@ struct AllocHeader {
 static_assert(sizeof(AllocHeader) == 16, "allocation header size changed");
 
 constexpr uint64_t kPoolPageSize = 64 * 1024;
+// Empty pages stay mapped and reusable up to this per-class budget.  A page is
+// only ever mapped on demand, so this is a cap rather than a reservation.
+constexpr uint64_t kEmptyPageBudget = 1 * 1024 * 1024;
+constexpr uint32_t kMaxEmptyPages =
+    static_cast<uint32_t>(kEmptyPageBudget / kPoolPageSize);
+static_assert(kMaxEmptyPages * kPoolPageSize == kEmptyPageBudget,
+              "empty-page budget must hold whole pool pages");
 constexpr uint64_t kAlignmentLimit = 0x10000000ULL;
 constexpr uint64_t kSmallAlignMax = 16;
 constexpr uint64_t kSmallClassSizes[] = {
@@ -65,7 +72,7 @@ struct PoolPage {
 
 struct ClassState {
   PoolPage *nonfull;
-  PoolPage *empty;
+  uint32_t empty_count;
 };
 
 // Zero-initialized POD state; there is no static destructor or dynamic setup.
@@ -138,7 +145,7 @@ static PoolPage *new_pool_page(uint32_t class_index) noexcept {
     head = slot;
   }
   page->free_list = head;
-  g_classes[class_index].empty = page;
+  ++g_classes[class_index].empty_count;
   add_nonfull(page);
   return page;
 }
@@ -161,10 +168,9 @@ static void *small_alloc(uint64_t size) noexcept {
     return nullptr;
   page->free_list = slot->next;
 
-  const bool was_empty = page->active == 0;
+  if (page->active == 0)
+    --state.empty_count;
   ++page->active;
-  if (was_empty && state.empty == page)
-    state.empty = nullptr;
   if (!page->free_list)
     remove_nonfull(page);
 
@@ -232,11 +238,14 @@ extern "C" void lang_free_v1(void *ptr) noexcept {
       add_nonfull(page);
 
     if (page->active == 0) {
-      if (state.empty == nullptr) {
-        state.empty = page;
-      } else if (state.empty != page) {
-        // Drop the page from the allocatable list before unmapping it.  No
-        // class or free-list pointer may retain an address into this page.
+      if (state.empty_count < kMaxEmptyPages) {
+        // Keep the page on the nonfull list for later reuse.  The double-linked
+        // list already holds any number of pages; only the budget is new.
+        ++state.empty_count;
+      } else {
+        // Budget is full.  Drop the page from the allocatable list before
+        // unmapping it; no class or free-list pointer may retain an address
+        // into this page.
         remove_nonfull(page);
         sys_munmap(page, kPoolPageSize);
       }

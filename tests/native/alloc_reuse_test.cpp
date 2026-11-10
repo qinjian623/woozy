@@ -191,10 +191,12 @@ static bool deny_mmap() {
 static int test_reuse_without_mmap() {
 #if defined(__x86_64__) && defined(__linux__)
   // Create several full pages in one class, then release them.  After the
-  // filter is installed, only the bounded cached page may be reused; if all
-  // historical peak pages were retained, the later allocation loop would not
-  // hit a null result before two pages worth of slots.
-  constexpr uint32_t kPeakCount = 5000;
+  // filter is installed, only the per-class budget of empty pages may be
+  // reused; if all historical peak pages were retained, enough slots for the
+  // whole peak would remain available and the later loop would not fail.
+  // 48-byte requests use 64-byte slots, so 20,000 live allocations span about
+  // 20 pages and exceed the 16-page (1 MiB) per-class budget.
+  constexpr uint32_t kPeakCount = 20000;
   void *peak[kPeakCount];
   for (uint32_t index = 0; index < kPeakCount; ++index) {
     peak[index] = lang_alloc_v1(48, 16);
@@ -240,10 +242,12 @@ static int test_reuse_without_mmap() {
     lang_free_v1(pointer);
   }
 
-  // One 64 KiB page holds about one thousand 64-byte slots.  Two retained
-  // empty pages would let 2,000 live allocations succeed; the bounded cache
-  // must fail before that, while still satisfying well over 512 requests.
-  constexpr uint32_t kBound = 2000;
+  // A 64 KiB page holds 1,023 64-byte slots, so the 16-page budget covers at
+  // most 16,368 live allocations.  The loop must still fail before 1 MiB / 64
+  // + 1 = 16,385 requests while reusing at least half of the budget.
+  constexpr uint32_t kSlotSize = 64;
+  constexpr uint32_t kBound = (1024 * 1024) / kSlotSize + 1;
+  constexpr uint32_t kMinimumLive = ((1024 * 1024) / kSlotSize) / 2;
   void *bounded[kBound];
   uint32_t live = 0;
   for (; live < kBound; ++live) {
@@ -253,7 +257,7 @@ static int test_reuse_without_mmap() {
   }
   if (live == kBound)
     return 57;
-  if (live < 512)
+  if (live < kMinimumLive)
     return 58;
   for (uint32_t index = 0; index < live; ++index)
     lang_free_v1(bounded[index]);
