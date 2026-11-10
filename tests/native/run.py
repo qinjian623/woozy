@@ -39,7 +39,8 @@ def main():
     helper = a.build.resolve() / "native/lang_native_helper"
     runtime = a.build.resolve() / "native/liblang_native_runtime.a"
     report = {"task": "T05", "contract": "compiler-dev/1", "checked_at": datetime.now(timezone.utc).isoformat(),
-              "scope": "standalone native scalar backend; formal build CLI not integrated", "preflight": [], "runs": []}
+              "scope": "native scalar helper object emission, LLVM verification, Clang/LLD link, and ELF execution",
+              "preflight": [], "runs": []}
     failed = []
 
     def command(argv, timeout=30):
@@ -70,7 +71,7 @@ def main():
             for f in sorted(root.glob(pattern)) if f.is_file()}
         report["helper_sha256"] = hashlib.sha256(helper.read_bytes()).hexdigest()
         report["runtime_sha256"] = hashlib.sha256(runtime.read_bytes()).hexdigest()
-        report["tools"] = {name: command([llvm / name, "--version"]) for name in ["clang", "ld.lld", "opt"]}
+        report["tools"] = {name: command([llvm / name, "--version"]) for name in ["clang", "ld.lld", "opt", "llvm-readelf", "llvm-nm"]}
         for name, r in report["tools"].items():
             if not ok(r) or "22.1.8" not in r["stdout"]:
                 raise RuntimeError("wrong/missing tool version: " + name)
@@ -92,32 +93,78 @@ def main():
         if failed:
             raise RuntimeError("static prerequisites failed; no object emitted")
         report["shared_preflight"] = [len(common), len(common)]
-        for name, manifest, expected, main_return in cases:
+        # These three frozen sources were capability rejections in the original
+        # runner. They now use the same build/link/execute loop, while their
+        # rows stay separate from the original 35-case run set.
+        report["previously_rejected"] = []
+        supported = [
+            ("strict-float", "func f(x f32) f32 {return x+x;} func main() i32{return 0;}"),
+            ("string", 'func main() i32 {let text = "hello";return 0;}'),
+            ("defer", "func f() {} func main() i32 {defer {f();} return 0;}"),
+        ]
+        supported_sources = {}
+        external_cases = []
+        for name, source in supported:
+            d = out / "previously-rejected" / name
+            (d / "src").mkdir(parents=True, exist_ok=True)
+            manifest = d / "lang.toml"
+            manifest.write_text('schema_version=1\n[package]\nname="supported"\nsource_root="src"\nentry="app"\n[build]\nbackend="native"\nword_bits=64\n')
+            (d / "src/main.lang").write_text("package app;\n" + source + "\n")
+            supported_sources[name] = source
+            external_cases.append((name, manifest, "return", 0))
+        for name, manifest, expected, main_return in cases + external_cases:
+            external = name in supported_sources
             for optimization in [0, 2]:
-                directory = out / name / ("O" + str(optimization))
+                directory = (out / "previously-rejected" / name if external else out / name) / ("O" + str(optimization))
                 directory.mkdir(parents=True, exist_ok=True)
                 obj, executable = directory / "program.o", directory / "program"
                 ll, before, cfg = directory / "program.ll", directory / "before.ll", directory / "program.nir"
                 row = {"id": name, "optimization": optimization, "manifest": str(manifest),
-                       "source_sha256": {str(s.relative_to(root)): hashlib.sha256(s.read_bytes()).hexdigest()
+                       "source_sha256": {(str(s.relative_to(root)) if s.is_relative_to(root) else str(s)):
+                                         hashlib.sha256(s.read_bytes()).hexdigest()
                                          for s in sorted((manifest.parent / "src").rglob("*.lang"))},
                        "expected": {"status": expected, "main_return": main_return}}
-                report["runs"].append(row)
+                if external:
+                    row["source"] = supported_sources[name]
+                    report["previously_rejected"].append(row)
+                else:
+                    report["runs"].append(row)
                 row["compile"] = command([helper, "--project", manifest, "--opt", optimization,
                     "--out-object", obj, "--out-llvm", ll, "--out-llvm-before", before, "--out-native", cfg, "--format", "json"])
                 if not ok(row["compile"]):
                     row["result"] = "failed"; failed.append(name + ": compile O" + str(optimization)); continue
+                if external:
+                    row["object_created"] = obj.is_file() and obj.stat().st_size > 0
+                    if not row["object_created"]:
+                        row["result"] = "failed"; failed.append(name + ": object missing O" + str(optimization)); continue
                 row["metadata"] = json.loads(row["compile"]["stdout"])
                 row["verify_files"] = [command([llvm / "opt", "-passes=verify", "-disable-output", f]) for f in [before, ll]]
                 if not all(ok(x) for x in row["verify_files"]):
                     row["result"] = "failed"; failed.append(name + ": LLVM verify"); continue
                 row["link"] = command([llvm / "clang", "--target=x86_64-unknown-linux-gnu",
+                    "-nostdlib", "-static",
                     "--ld-path=" + str(llvm / "ld.lld"), obj, runtime, "-o", executable])
                 if not ok(row["link"]):
                     row["result"] = "failed"; failed.append(name + ": link"); continue
                 data = executable.read_bytes()
                 row["elf_x86_64"] = data[:4] == b"\x7fELF" and data[4] == 2 and data[18:20] == b"\x3e\x00"
                 row["executable_sha256"] = hashlib.sha256(data).hexdigest()
+                row["readelf_program_headers"] = command([llvm / "llvm-readelf", "-lW", executable])
+                row["readelf_dynamic"] = command([llvm / "llvm-readelf", "-dW", executable])
+                row["undefined_symbols"] = command([llvm / "llvm-nm", "-u", "--format=posix", executable])
+                undefined = [line.split() for line in row["undefined_symbols"]["stdout"].splitlines() if line.split()]
+                row["strong_undefined_symbols"] = [fields[0] for fields in undefined
+                                                   if len(fields) >= 2 and fields[1] == "U"]
+                row["static_elf"] = (
+                    ok(row["readelf_program_headers"]) and
+                    "Elf file type is EXEC" in row["readelf_program_headers"]["stdout"] and
+                    "INTERP" not in row["readelf_program_headers"]["stdout"] and
+                    ok(row["readelf_dynamic"]) and
+                    "NEEDED" not in row["readelf_dynamic"]["stdout"] and
+                    ok(row["undefined_symbols"]) and
+                    not row["strong_undefined_symbols"])
+                if not row["static_elf"]:
+                    row["result"] = "failed"; failed.append(name + ": static ELF O" + str(optimization)); continue
                 row["execute"] = command([executable], timeout=5)
                 row["panic_record"] = panic_record(row["execute"])
                 if expected == "panic":
@@ -128,7 +175,7 @@ def main():
                     passed = (row["execute"]["status"] == "exited" and row["execute"]["exit"] == main_return
                               and not row["panic_record"] and row["execute"]["stdout"] == "" and row["execute"]["stderr"] == "")
                 passed = passed and row["elf_x86_64"]
-                row["result"] = "passed" if passed else "failed"
+                row["result"] = ("supported" if external else "passed") if passed else "failed"
                 if not passed:
                     failed.append(name + ": execute O" + str(optimization))
                 print(f"{name} O{optimization}: {row['result']} exit={row['execute']['exit']} panic={row['panic_record']}", flush=True)
@@ -147,12 +194,6 @@ def main():
             ("ordinary-parameter-write",
              "func f(x i32) i32 {x=1;return x;} func main() i32{return 0;}", 64,
              "E_TYPE_MISMATCH", "rejected"),
-            ("strict-float", "func f(x f32) f32 {return x+x;} func main() i32{return 0;}", 64,
-             "E_CAPABILITY_UNAVAILABLE", "unsupported"),
-            ("string", 'func main() i32 {let text = "hello";return 0;}', 64,
-             "E_CAPABILITY_UNAVAILABLE", "unsupported"),
-            ("defer", "func f() {} func main() i32 {defer {f();} return 0;}", 64,
-             "E_CAPABILITY_UNAVAILABLE", "unsupported"),
         ]
         for name, source, width, expected_code, category in rejects:
             d = out / "rejections" / name
@@ -165,9 +206,10 @@ def main():
                 codes = [x["code"] for x in json.loads(r["stderr"])["diagnostics"]]
             except (ValueError, KeyError):
                 codes = []
-            passed = (r["exit"] == 1 and expected_code in codes and
-                      not (d / "must-not-exist.o").exists())
+            absent = not (d / "must-not-exist.o").exists()
+            passed = r["exit"] == 1 and expected_code in codes and absent
             report["rejections"].append({"id": name, "expected_code": expected_code,
+                                         "object_absent": absent,
                                          "result": category if passed else "failed",
                                          "command": r})
             if not passed: failed.append(name + ": rejection")
