@@ -1,10 +1,10 @@
 {
   "status": "passed",
   "scope": "development_package_consistency_only",
-  "json_files": 13,
+  "json_files": 30,
   "schema_instance_pairs": 3,
   "schema_engine": "standard_library_subset_for_keywords_used_in_this_package",
-  "markdown_files": 18,
+  "markdown_files": 69,
   "tasks": 13,
   "baseline_files_unchanged": 25,
   "bindings": {
@@ -98,27 +98,27 @@
         "actual": "reject"
       },
       {
-        "path": "examples/core.lang",
+        "path": "examples/core.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "examples/numeric.lang",
+        "path": "examples/numeric.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "examples/errors.lang",
+        "path": "examples/errors.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "examples/ownership.lang",
+        "path": "examples/ownership.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "examples/negative/use_after_move.lang",
+        "path": "examples/negative/use_after_move.wz",
         "expected": "accept",
         "actual": "accept"
       }

@@ -140,7 +140,7 @@ def rejection_checks(cli, backend, out):
         manifest.write_text('schema_version=1\n[package]\nname="app"\n'
                             'source_root="src"\nentry="app"\n[build]\n'
                             'backend="' + backend + '"\nword_bits=64\n')
-        path = project / 'src/main.lang'
+        path = project / 'src/main.wz'
         path.write_text('package app;' + source, encoding='utf-8')
         if ident == 'foreign':
             with manifest.open('a') as file:

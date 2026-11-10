@@ -67,7 +67,7 @@ ForeignOpaque、ForeignCallable、py.Error 的 `classify_value` 都返回 `needs
 
 紧邻调用目标外的透明括号不构成方法值逃逸：`(x.backward)()`、`(np.linspace)(...)`、`(m)(x)` 和 `get(x).backward()` 都按实际紧邻 Call 处理，并保留真实 Call/Member/自变量顺序。真正保存、返回或传递括号方法值，例如 `let v=(x.backward);`，仍报 `E_CAPABILITY_UNAVAILABLE`。
 
-Python/64 的有限外部生成和 runtime 异常桥接已实现，范围见 [T10_PYTHON.md](T10_PYTHON.md)；原 04 的 CPU 生成执行已在独立检查中用 API 和专用解释器实测。正式 `langc check/build --project` 现已提供可选 `--std-binding BUNDLE`，将工具链标准声明交给同一个 `ProjectOptions::std_binding_bundle`；静态检查本身仍不启动 Python、不 import NumPy/PyTorch。该参数不用于 `--syntax-only`，不允许项目 `std` 依赖遮蔽，也没有默认路径或环境变量。已验证的 CPU 声明集、正式依赖锁及主目录整合结果见 [T10_CPU_VERIFICATION.md](T10_CPU_VERIFICATION.md)。schema、原 fixtures 和绑定字节保持不变，绑定仍为 draft；GPU 和任意 Python API 未验证。
+Python/64 的有限外部生成和 runtime 异常桥接已实现，范围见 [T10_PYTHON.md](T10_PYTHON.md)；原 04 的 CPU 生成执行已在独立检查中用 API 和专用解释器实测。正式 `woozyc check/build --project` 现已提供可选 `--std-binding BUNDLE`，将工具链标准声明交给同一个 `ProjectOptions::std_binding_bundle`；静态检查本身仍不启动 Python、不 import NumPy/PyTorch。该参数不用于 `--syntax-only`，不允许项目 `std` 依赖遮蔽，也没有默认路径或环境变量。已验证的 CPU 声明集、正式依赖锁及主目录整合结果见 [T10_CPU_VERIFICATION.md](T10_CPU_VERIFICATION.md)。schema、原 fixtures 和绑定字节保持不变，绑定仍为 draft；GPU 和任意 Python API 未验证。
 
 ## 测试和接入
 

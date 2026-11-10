@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build concrete T07 trivial-value instances with langc and execute the ELF files."""
+"""Build concrete T07 trivial-value instances with woozyc and execute the ELF files."""
 import argparse
 import json
 from pathlib import Path
@@ -17,7 +17,7 @@ def sources(root, manifest):
     # Include vendored source packages, as well as the main source directory.
     return {str(p.relative_to(root)): digest(p)
             for p in sorted(manifest.parent.rglob('*'))
-            if p.is_file() and (p.suffix == '.lang' or p.name == 'lang.toml')}
+            if p.is_file() and (p.suffix == '.wz' or p.name == 'lang.toml')}
 
 
 def build(args, manifest, opt, out):

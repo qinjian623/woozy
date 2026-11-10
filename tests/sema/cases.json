@@ -3,7 +3,7 @@
   "contract": "compiler-dev/1",
   "case_count": 22,
   "stage_policy": {
-    "syntax": "All fixtures must be accepted by `langc check --syntax-only --format json`.",
+    "syntax": "All fixtures must be accepted by `woozyc check --syntax-only --format json`.",
     "names": "All fixtures must be accepted by `lang_module_check` on their lang.toml; reject cases must fail for a type/effect reason, not a misspelled name or import.",
     "type_check": "Expected accept/reject is derived from the cited specification. `unavailable` means the construct belongs to T07, T08 or T09 and expects the published E_CAPABILITY_UNAVAILABLE, not a T04 static type error.",
     "diagnostic_codes": "Unavailable cases bind only the published E_CAPABILITY_UNAVAILABLE. T04-specific reject/accept codes are not bound because they are not published."

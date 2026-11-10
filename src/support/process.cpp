@@ -24,7 +24,7 @@ ProcessResult run_process(const std::vector<std::string>& argv) {
     std::vector<char*> args;
     for (const auto& s : argv) args.push_back(const_cast<char*>(s.c_str()));
     args.push_back(nullptr);
-    char name[] = "/tmp/lang-process-XXXXXX";
+    char name[] = "/tmp/woozyc-process-XXXXXX";
     File file{mkostemp(name, O_CLOEXEC)};
     if (file.fd < 0) fail(errno);
     if (unlink(name) < 0) { int e = errno; ::unlink(name); fail(e); }

@@ -5,8 +5,8 @@
   "positive_count": 11,
   "reject_count": 8,
   "stage_policy": {
-    "syntax": "全部 19 个项目的源码必须通过现有 C++ `langc check --syntax-only --format json`，退出 0、status=ok 且无诊断。语法通过不代表类型/效果检查或执行通过。",
-    "current_full_check": "T08 实现前，现有 `langc check --project` 对这些项目返回 E_CAPABILITY_UNAVAILABLE。该结果只记录当前能力拒绝，不是未来 expected_static 的结果。",
+    "syntax": "全部 19 个项目的源码必须通过现有 C++ `woozyc check --syntax-only --format json`，退出 0、status=ok 且无诊断。语法通过不代表类型/效果检查或执行通过。",
+    "current_full_check": "T08 实现前，现有 `woozyc check --project` 对这些项目返回 E_CAPABILITY_UNAVAILABLE。该结果只记录当前能力拒绝，不是未来 expected_static 的结果。",
     "future_static": "expected_static 是 T08 实现后的目标结果，不是当前检查结果。反例只绑定已公布的 E_TYPE_MISMATCH、E_EFFECT_UNHANDLED、E_CLEANUP_ESCAPE，不新增诊断码。",
     "runtime": "runtime_expected 全部是未来执行目标。当前 native/Python 执行均为 not_run；不得把当前 E_CAPABILITY_UNAVAILABLE 或语法通过算作运行通过。"
   },
@@ -254,7 +254,7 @@
         "log_at_panic": 12,
         "panic": {
           "reason": "division-by-zero",
-          "source": "tests/cleanup/fixtures/case-10/src/main.lang",
+          "source": "tests/cleanup/fixtures/case-10/src/main.wz",
           "line": 12,
           "expression": "i32(1)/zero"
         },
@@ -273,8 +273,8 @@
     {
       "id": "errors-original",
       "manifest": "tests/cleanup/fixtures/errors-original/lang.toml",
-      "purpose": "examples/errors.lang 的字节不变副本：成功调用、失败调用、defer 计数和 catch 后正常返回 0。",
-      "source_origin": "examples/errors.lang",
+      "purpose": "examples/errors.wz 的字节不变副本：成功调用、失败调用、defer 计数和 catch 后正常返回 0。",
+      "source_origin": "examples/errors.wz",
       "source_copy": "byte_identical",
       "specification": "docs/SEMANTICS.md §8 typed throws 与 Panic；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/ACCEPTANCE.md A06",
       "expected_static": {

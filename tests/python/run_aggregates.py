@@ -230,7 +230,8 @@ for _ident in ('aggregate-float-operation', 'float-negation', 'struct-owned-vec'
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ('langc', 'helper', 'root', 'out', 'python'):
+    parser.add_argument('--woozyc', dest='langc', type=Path, required=True)
+    for name in ('helper', 'root', 'out', 'python'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
     for name, value in vars(args).items():
@@ -334,12 +335,12 @@ def main():
     for ident, body in REJECTED.items():
         manifest = source_project(args.out, ident, body)
         directory = args.out / 'rejected' / ident / 'fresh'
-        row = {'id': ident, 'source_sha256': sha(manifest.parent / 'src/main.lang')}
+        row = {'id': ident, 'source_sha256': sha(manifest.parent / 'src/main.wz')}
         passed = True
         for phase in ('check', 'build'):
             result = row[phase] = compile(phase, manifest, directory)
             parsed = json.loads(result['stdout'])
-            source = manifest.parent / 'src/main.lang'
+            source = manifest.parent / 'src/main.wz'
             passed &= (result['returncode'] == 1 and not result['stderr'] and parsed['status'] == 'error'
                        and any(d['code'] == 'E_CAPABILITY_UNAVAILABLE' and d['primary'] is not None
                                and Path(d['primary']['path']).resolve() == source.resolve()

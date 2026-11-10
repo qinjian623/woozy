@@ -1,5 +1,7 @@
 # Fannkuch-redux 准备交付（correction 1/1）
 
+This file records pre-release measurements made with the old `langc` / `.lang` names. The archived hashes and observations below retain those names. Current releases use `woozyc`, `.wz`, and the runner option `--woozyc`; see the current [performance summary](../../../docs/PERFORMANCE.md).
+
 任务：`language-classic-fannkuch-prepare-20261109`
 契约版本：`compiler-dev/1`
 状态：`done`（仅正确性与编译产物准备；正式计时 `not_run`）

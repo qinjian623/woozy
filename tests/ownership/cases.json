@@ -7,7 +7,7 @@
   "reject_count": 11,
   "accepted_note": "accepted_count 包含 panic-vec-index：其源码未来应通过静态检查，但运行时必须 Panic；不等于运行通过。",
   "stage_policy": {
-    "syntax": "全部 18 个项目的 src/main.lang 必须通过现有 C++ langc check --syntax-only --format json：退出 0、status=ok、diagnostics 为空。语法通过不代表类型、所有权、后端生成或执行通过。",
+    "syntax": "全部 18 个项目的 src/main.wz 必须通过现有 C++ woozyc check --syntax-only --format json：退出 0、status=ok、diagnostics 为空。语法通过不代表类型、所有权、后端生成或执行通过。",
     "current_full_check": "在根版本 e808169 的现有完整 check 下，native 与 python 各 18/18 都在当前 Vec 类型处返回 E_CAPABILITY_UNAVAILABLE。该结果只是 T09 未实现前的当前能力拒绝，不是未来 expected_static 的 accept/reject 结果。",
     "future_static": "expected_static 是 T09 实现后的目标。5个已移动绑定反例采用既有 E_OWNERSHIP_USE_AFTER_MOVE，inout Vec采用 E_CAPABILITY_UNAVAILABLE；普通参数借用不可直接move尚无专用固定诊断，code保留null，不在资料中新增code。",
     "runtime": "runtime_expected 全部是未来目标；没有 T09 runtime/native/Python 执行。所有 runtime_expected 和 future_observations 都标 not_run，不能把语法通过或当前 E_CAPABILITY_UNAVAILABLE 算作运行通过。"
@@ -25,8 +25,8 @@
     "date": "2026-11-04",
     "compiler_version": "0.1.0-bootstrap (compiler-dev/1)",
     "root_revision": "e808169",
-    "syntax_command": "langc check --syntax-only --format json <source>",
-    "full_command": "langc check --project <manifest> --format json",
+    "syntax_command": "woozyc check --syntax-only --format json <source>",
+    "full_command": "woozyc check --project <manifest> --format json",
     "syntax_passed": 18,
     "syntax_failed": 0,
     "full_check_accepted": 0,
@@ -39,8 +39,8 @@
     "full_check_python_codes": {
       "E_CAPABILITY_UNAVAILABLE": 18
     },
-    "full_command_native": "langc check --project <manifest> --backend native --format json",
-    "full_command_python": "langc check --project <manifest> --backend python --format json"
+    "full_command_native": "woozyc check --project <manifest> --backend native --format json",
+    "full_command_python": "woozyc check --project <manifest> --backend python --format json"
   },
   "cases": [
     {
@@ -67,7 +67,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/vec-shared-index/lang.toml",
-      "source": "tests/ownership/fixtures/vec-shared-index/src/main.lang",
+      "source": "tests/ownership/fixtures/vec-shared-index/src/main.wz",
       "source_sha256": "821e1ed0be0cbd34e8af7f06a8d2bc1f9ad287552fd7f5637da0130614ff4310",
       "source_bytes": 167,
       "current_check": {
@@ -111,7 +111,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/slice-copy-scalars/lang.toml",
-      "source": "tests/ownership/fixtures/slice-copy-scalars/src/main.lang",
+      "source": "tests/ownership/fixtures/slice-copy-scalars/src/main.wz",
       "source_sha256": "10dd7f5e3f82e947cd658eb732849e8ee83679d2b02f14c16d18a8227d56b7d2",
       "source_bytes": 235,
       "current_check": {
@@ -152,7 +152,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/slice-shares-elements/lang.toml",
-      "source": "tests/ownership/fixtures/slice-shares-elements/src/main.lang",
+      "source": "tests/ownership/fixtures/slice-shares-elements/src/main.wz",
       "source_sha256": "a3c896da082467c2f863f2788e3b620c409b95cd5a419e311d3fa485c73dfbec",
       "source_bytes": 262,
       "current_check": {
@@ -194,7 +194,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/struct-copy-shares-vec/lang.toml",
-      "source": "tests/ownership/fixtures/struct-copy-shares-vec/src/main.lang",
+      "source": "tests/ownership/fixtures/struct-copy-shares-vec/src/main.wz",
       "source_sha256": "47c96fee5f184f56f16efbf9c4210451e3287ee317e9dbc5a7d26b2e12024b6e",
       "source_bytes": 415,
       "current_check": {
@@ -236,7 +236,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/ordinary-param-return/lang.toml",
-      "source": "tests/ownership/fixtures/ordinary-param-return/src/main.lang",
+      "source": "tests/ownership/fixtures/ordinary-param-return/src/main.wz",
       "source_sha256": "e4ad7fc8e4ab1478027b557bdc6a26cdac82ab48c927cf7e580ff62dae05aa7d",
       "source_bytes": 370,
       "current_check": {
@@ -277,7 +277,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/move-reinitialize/lang.toml",
-      "source": "tests/ownership/fixtures/move-reinitialize/src/main.lang",
+      "source": "tests/ownership/fixtures/move-reinitialize/src/main.wz",
       "source_sha256": "d4a1ed968a305e4b63fb00df55371e930e8ac6c932295d3a9f093ad6417479ab",
       "source_bytes": 294,
       "current_check": {
@@ -318,7 +318,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/branch-reinit-merge/lang.toml",
-      "source": "tests/ownership/fixtures/branch-reinit-merge/src/main.lang",
+      "source": "tests/ownership/fixtures/branch-reinit-merge/src/main.wz",
       "source_sha256": "4f44003f40a07c34e11ea470e8c20f01a8cce5c7d886e77584869eea5a86998e",
       "source_bytes": 433,
       "current_check": {
@@ -359,7 +359,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/defer-before-destroy/lang.toml",
-      "source": "tests/ownership/fixtures/defer-before-destroy/src/main.lang",
+      "source": "tests/ownership/fixtures/defer-before-destroy/src/main.wz",
       "source_sha256": "3b114f5d427438f3eaceb9614dec5279707088d144ff66ac9690bde145ad8139",
       "source_bytes": 345,
       "current_check": {
@@ -405,7 +405,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/error-arg-interrupt/lang.toml",
-      "source": "tests/ownership/fixtures/error-arg-interrupt/src/main.lang",
+      "source": "tests/ownership/fixtures/error-arg-interrupt/src/main.wz",
       "source_sha256": "4cf654b6702f5fddbc8de1e618289bb9405dab95c41432d45d2c5417a2afcd34",
       "source_bytes": 824,
       "current_check": {
@@ -459,7 +459,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/for-in-element-copy/lang.toml",
-      "source": "tests/ownership/fixtures/for-in-element-copy/src/main.lang",
+      "source": "tests/ownership/fixtures/for-in-element-copy/src/main.wz",
       "source_sha256": "0714fb3dc6a7f6b276df254b551ba2bf557be260c11d92f4a17a5ea39395e186",
       "source_bytes": 521,
       "current_check": {
@@ -486,7 +486,7 @@
         "reason": "take(move values) 后 values 已移动；first+values[0] 读取未重新初始化的绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
       },
       "manifest": "tests/ownership/fixtures/reject-read-after-move/lang.toml",
-      "source": "tests/ownership/fixtures/reject-read-after-move/src/main.lang",
+      "source": "tests/ownership/fixtures/reject-read-after-move/src/main.wz",
       "source_sha256": "5fdaf039d37ed8abc66d41a0c4de3b54dd0d32579821523fc8d6c653b8e9cafd",
       "source_bytes": 194,
       "current_check": {
@@ -513,7 +513,7 @@
         "reason": "第一次 take(move values) 后 values 已移动；重建前再次 move 同一绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
       },
       "manifest": "tests/ownership/fixtures/reject-double-move/lang.toml",
-      "source": "tests/ownership/fixtures/reject-double-move/src/main.lang",
+      "source": "tests/ownership/fixtures/reject-double-move/src/main.wz",
       "source_sha256": "7b8dca524e829bd1582aca23cbec3fe3d71d43aba820a1a12b337c678d54201b",
       "source_bytes": 227,
       "current_check": {
@@ -540,7 +540,7 @@
         "reason": "forward 的 values 是普通参数借用，不是调用者转移的拥有值；take(move values) 不允许。T09 诊断码未冻结，不绑定 code。"
       },
       "manifest": "tests/ownership/fixtures/reject-move-ordinary-param/lang.toml",
-      "source": "tests/ownership/fixtures/reject-move-ordinary-param/src/main.lang",
+      "source": "tests/ownership/fixtures/reject-move-ordinary-param/src/main.wz",
       "source_sha256": "e74fab3ee5b12eec451e625c791dc4094edea7402e1f5f4e2926c80f395660be",
       "source_bytes": 226,
       "current_check": {
@@ -567,7 +567,7 @@
         "reason": "defer 注册后 values 被移走且未重新初始化；执行 defer 时读取该绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
       },
       "manifest": "tests/ownership/fixtures/reject-defer-moved/lang.toml",
-      "source": "tests/ownership/fixtures/reject-defer-moved/src/main.lang",
+      "source": "tests/ownership/fixtures/reject-defer-moved/src/main.wz",
       "source_sha256": "4c2e53bf713ce1949eec2eb1b2ced8f0a4a3ef691b11b7e211ee38cba17de143",
       "source_bytes": 234,
       "current_check": {
@@ -594,7 +594,7 @@
         "reason": "第一个实参 move values 已完成，后续实参抛错不恢复源绑定；catch 中读取 values[0]，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
       },
       "manifest": "tests/ownership/fixtures/reject-error-does-not-restore/lang.toml",
-      "source": "tests/ownership/fixtures/reject-error-does-not-restore/src/main.lang",
+      "source": "tests/ownership/fixtures/reject-error-does-not-restore/src/main.wz",
       "source_sha256": "6d4364aa91ba4c9aa0e304033199767a1d9cf902dbb638f9dc46de3583d22bbc",
       "source_bytes": 523,
       "current_check": {
@@ -621,7 +621,7 @@
         "reason": "bump 的 inout Vec[i32] 是共享引用容器；首版 inout 明确拒绝引用容器，使用已发布的 E_CAPABILITY_UNAVAILABLE，不把槽独占推导成深层 noalias。"
       },
       "manifest": "tests/ownership/fixtures/reject-inout-vec/lang.toml",
-      "source": "tests/ownership/fixtures/reject-inout-vec/src/main.lang",
+      "source": "tests/ownership/fixtures/reject-inout-vec/src/main.wz",
       "source_sha256": "f23ed989164e7513dd698cf13e842b8d3bc92d8cacfbe04763e3f4e218850cb2",
       "source_bytes": 185,
       "current_check": {
@@ -648,7 +648,7 @@
         "reason": "分支一侧 move 后未重建，另一侧保留；合流读取可能已移动的绑定，按已发布 E_OWNERSHIP_USE_AFTER_MOVE 拒绝。"
       },
       "manifest": "tests/ownership/fixtures/reject-branch-maybe-moved/lang.toml",
-      "source": "tests/ownership/fixtures/reject-branch-maybe-moved/src/main.lang",
+      "source": "tests/ownership/fixtures/reject-branch-maybe-moved/src/main.wz",
       "source_sha256": "2990c689a45f5889edf0588f01da879731ae8934598b6cfa49a19564fe33e6ec",
       "source_bytes": 306,
       "current_check": {
@@ -696,7 +696,7 @@
         }
       },
       "manifest": "tests/ownership/fixtures/panic-vec-index/lang.toml",
-      "source": "tests/ownership/fixtures/panic-vec-index/src/main.lang",
+      "source": "tests/ownership/fixtures/panic-vec-index/src/main.wz",
       "source_sha256": "ccb39b766a41575fa14bb8a85da77a4e512d93008833ca4ee57eff91271af17d",
       "source_bytes": 269,
       "current_check": {
@@ -721,7 +721,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-finite-tree/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-finite-tree/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-finite-tree/src/main.wz",
       "source_sha256": "0a0f5d80535164a4d02738af09c9a3d8bdc99c7fbb54ec6f4fc9f4081e59db43",
       "source_bytes": 235,
       "runtime_expected": {
@@ -738,7 +738,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-copy-move-slice/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-copy-move-slice/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-copy-move-slice/src/main.wz",
       "source_sha256": "c4c66040e5a89e5461385843fdb34d5dd85bcccb84ede194641e974169765be4",
       "source_bytes": 1226,
       "runtime_expected": {
@@ -755,7 +755,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-mutual-struct-enum/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-mutual-struct-enum/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-mutual-struct-enum/src/main.wz",
       "source_sha256": "140362b423c9ab265409686102cb1e840398a26e9331ff44e7df819521f2e3e1",
       "source_bytes": 1291,
       "runtime_expected": {
@@ -772,7 +772,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-descriptor-order/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-descriptor-order/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-descriptor-order/src/main.wz",
       "source_sha256": "0b532f5d1eafead3db2ef86172e1ab33bd619d2543e8fb479ff5db9d063ff621",
       "source_bytes": 396,
       "runtime_expected": {
@@ -789,7 +789,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-generic-stable/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-generic-stable/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-generic-stable/src/main.wz",
       "source_sha256": "5bb3c37b99c9939176707feed7e78a2f0d24ca12854f2c3d20b74a270f5358b3",
       "source_bytes": 781,
       "runtime_expected": {
@@ -806,7 +806,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-generic-periodic/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-generic-periodic/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-generic-periodic/src/main.wz",
       "source_sha256": "ae582fcbb1c282703bd421cf61bfa0627b69107282c19c283c6654cdaa568f16",
       "source_bytes": 769,
       "runtime_expected": {
@@ -823,7 +823,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-generic-growth-unused/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-generic-growth-unused/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-generic-growth-unused/src/main.wz",
       "source_sha256": "46044ddf97fdf01a5d2d94701e0de73410bfcda03033b63179c71b4be8853141",
       "source_bytes": 180,
       "runtime_expected": {
@@ -841,7 +841,7 @@
         "code": "E_CAPABILITY_UNAVAILABLE"
       },
       "manifest": "tests/ownership/fixtures/recursive-generic-growth/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-generic-growth/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-generic-growth/src/main.wz",
       "source_sha256": "e0e90ae2fb99d3a4f22c72b2ae164831769dc7e0981c1a6aab10f1d4c069179a",
       "source_bytes": 141
     },
@@ -853,7 +853,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-typed-error/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-typed-error/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-typed-error/src/main.wz",
       "source_sha256": "18bdcb3a3c11ecce4171fee5d79e55a9021d8ab180ea809f799f5dff83609ded",
       "source_bytes": 2687,
       "runtime_expected": {
@@ -883,7 +883,7 @@
         "code": "E_TYPE_MISMATCH"
       },
       "manifest": "tests/ownership/fixtures/recursive-infinite-layout/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-infinite-layout/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-infinite-layout/src/main.wz",
       "source_sha256": "b56ba8eebe7ee48385b3c171ba4e52d893933371e7833fa5f5d1640f547190c9",
       "source_bytes": 79
     },
@@ -896,7 +896,7 @@
         "code": "E_TYPE_MISMATCH"
       },
       "manifest": "tests/ownership/fixtures/recursive-infinite-layout-mutual/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-infinite-layout-mutual/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-infinite-layout-mutual/src/main.wz",
       "source_sha256": "627364e3b99cc582e1451b03c16a8fea6bf01b89067b4eb1668509dcf781ddc0",
       "source_bytes": 94
     },
@@ -909,7 +909,7 @@
         "code": "E_TYPE_MISMATCH"
       },
       "manifest": "tests/ownership/fixtures/recursive-infinite-layout-growth/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-infinite-layout-growth/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-infinite-layout-growth/src/main.wz",
       "source_sha256": "9c93787718a51c4a9aaa27098e2820eb3fc1f2fa714a97e39a75b55404e7509c",
       "source_bytes": 91
     },
@@ -921,7 +921,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-cycle-retained/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-cycle-retained/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-cycle-retained/src/main.wz",
       "source_sha256": "c5003cb66e451ce7657ef9573fb6d04c5fc03a958d90793bb060b1f445c76e25",
       "source_bytes": 210,
       "runtime_expected": {
@@ -939,7 +939,7 @@
         "status": "accept"
       },
       "manifest": "tests/ownership/fixtures/recursive-for-in-early-exits/lang.toml",
-      "source": "tests/ownership/fixtures/recursive-for-in-early-exits/src/main.lang",
+      "source": "tests/ownership/fixtures/recursive-for-in-early-exits/src/main.wz",
       "source_sha256": "ff016e3d5c0d1542c762a7f5c3de0a59ad8e8aed9c89d8fd3409c384ebe02f04",
       "source_bytes": 1615,
       "runtime_expected": {

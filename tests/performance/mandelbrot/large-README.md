@@ -17,7 +17,7 @@
 ../toolchains/python/cpython-3.12.15-linux-x86_64-gnu/bin/python3.12 \
   tests/performance/mandelbrot/large_prepare.py \
   --n 512 --rounds 2 --out /tmp/new-mandelbrot-check \
-  --compiler-root . --langc build/native-perf-release/langc \
+  --compiler-root . --woozyc build/native-perf-release/woozyc \
   --helper build/native-perf-release/native/lang_native_helper \
   --runtime build/native-perf-release/native/liblang_native_runtime.a \
   --llvm-bin ../toolchains/llvm-22.1.8/bin \

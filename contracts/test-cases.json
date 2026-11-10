@@ -4,7 +4,7 @@
   "cases": [
     {
       "id": "core",
-      "path": "examples/core.lang",
+      "path": "examples/core.wz",
       "syntax": "accept",
       "semantic": "accept",
       "execution": "expected_success",
@@ -20,7 +20,7 @@
     },
     {
       "id": "numeric",
-      "path": "examples/numeric.lang",
+      "path": "examples/numeric.wz",
       "syntax": "accept",
       "semantic": "accept",
       "execution": "expected_success",
@@ -36,7 +36,7 @@
     },
     {
       "id": "errors",
-      "path": "examples/errors.lang",
+      "path": "examples/errors.wz",
       "syntax": "accept",
       "semantic": "accept",
       "execution": "expected_success",
@@ -51,7 +51,7 @@
     },
     {
       "id": "ownership",
-      "path": "examples/ownership.lang",
+      "path": "examples/ownership.wz",
       "syntax": "accept",
       "semantic": "accept",
       "execution": "expected_success",
@@ -66,7 +66,7 @@
     },
     {
       "id": "use_after_move",
-      "path": "examples/negative/use_after_move.lang",
+      "path": "examples/negative/use_after_move.wz",
       "syntax": "accept",
       "semantic": "reject",
       "execution": "not_applicable",

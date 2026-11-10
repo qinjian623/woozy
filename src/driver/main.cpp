@@ -44,7 +44,7 @@ bool diagnostic_document(const std::string& text, int exit) {
 #endif
 void write_python(const fs::path& out, const lang::backend::python::Output& output) {
     fs::create_directories(out);
-    auto pattern = (out / ".langc-XXXXXX").string();
+    auto pattern = (out / ".woozyc-XXXXXX").string();
     if (!mkdtemp(pattern.data()))
         throw fs::filesystem_error("create build staging directory", out,
                                    std::error_code(errno, std::generic_category()));
@@ -210,16 +210,16 @@ int compile(const char* path, bool syntax, bool json, std::string_view backend,
 
 int main(int argc, char** argv) {
     if (argc == 2 && std::string_view(argv[1]) == "--help") {
-        std::cout << "Usage: langc --help | --version\n"
-                     "       langc check --syntax-only [--format json] FILE\n"
-                     "       langc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n"
-                     "       langc build --project MANIFEST --backend python --out-dir DIR [--std-binding BUNDLE] [--format json]\n"
-                     "       langc build --project MANIFEST --backend native --out-dir DIR [--std-binding BUNDLE] [--opt 0|2] [--target TRIPLE] [--format json]\n"
+        std::cout << "Usage: woozyc --help | --version\n"
+                     "       woozyc check --syntax-only [--format json] FILE\n"
+                     "       woozyc check --project MANIFEST [--std-binding BUNDLE] [--backend native|python] [--format json]\n"
+                     "       woozyc build --project MANIFEST --backend python --out-dir DIR [--std-binding BUNDLE] [--format json]\n"
+                     "       woozyc build --project MANIFEST --backend native --out-dir DIR [--std-binding BUNDLE] [--opt 0|2] [--target TRIPLE] [--format json]\n"
                      "Native build requires LANG_ENABLE_LLVM=ON; lsp and capabilities are not implemented\n";
         return 0;
     }
     if (argc == 2 && std::string_view(argv[1]) == "--version") {
-        std::cout << "langc " << lang::version() << '\n';
+        std::cout << "woozyc " << lang::version() << '\n';
         return 0;
     }
     if (argc >= 2) {

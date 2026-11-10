@@ -29,7 +29,7 @@
 | Python 参考文件 | `compile` 检查通过 | 转译器已经生成或运行它 |
 | NumPy 数据准备 | `(128, 1)`、`float32`、`y = 2x + 1` | PyTorch 训练、梯度、GPU 或性能通过 |
 
-各完整 `.lang` 示例是独立程序，不应将七个 `main` 合并到一个包。[examples_notes.json](../baseline/examples_notes.json) 是期望分类，[validation.json](../baseline/validation.json) 是当时检查器的实际记录；不能把两者互相替代。
+`baseline/` 中的七个原始 `.lang` 示例是独立程序，不应将它们的 `main` 合并到一个包。[examples_notes.json](../baseline/examples_notes.json) 是期望分类，[validation.json](../baseline/validation.json) 是当时检查器的实际记录；不能把两者互相替代。
 
 在包内 `baseline/` 目录中可复现：
 

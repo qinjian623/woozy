@@ -39,7 +39,7 @@ also checked element by element after every round.
 
 ## Files
 
-- `quick.lang.in`: Source template (`{{ARRAY}}`, `{{EXPECTED}}`, `{{N}}`,
+- `quick.wz.in`: Source template (`{{ARRAY}}`, `{{EXPECTED}}`, `{{N}}`,
   `{{SEED}}`, `{{ROUNDS}}`).
 - `reference.cpp.in`: C++20 reference template with the same placeholders.
 - `../run_sort.py`: shared generator, prepare/verification harness, and
@@ -74,7 +74,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 
 "$PY" tests/performance/run_sort.py --prepare-only --algorithm quick \
   --out build/quicksort/prepare-release-final \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \

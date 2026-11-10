@@ -15,7 +15,7 @@ std::shared_ptr<Project> project(SourceManager &sources,
     Module module{ModuleId(m), "module" + std::to_string(m)};
     for (size_t f = 0; f < modules[m].size(); ++f) {
       auto source = sources.update(sources.add_file(std::to_string(m) + "/" +
-          std::to_string(f) + ".lang"), modules[m][f]);
+          std::to_string(f) + ".wz"), modules[m][f]);
       auto tokens = lex(source);
       check(tokens.success(), "test lex failed");
       auto parsed = parse(*tokens.value);
@@ -41,7 +41,7 @@ void example(const char *source, const char *error = nullptr) {
   }
   check(r.value && r.value->project == p, "project lifetime lost");
   for (const auto &d : r.diagnostics) if (d.primary)
-    check(manager.get(d.primary->snapshot)->path == "0/0.lang", "wrong diagnostic file");
+    check(manager.get(d.primary->snapshot)->path == "0/0.wz", "wrong diagnostic file");
 }
 AstNodeId top_declaration(const AstFile &file, AstKind kind,
                           std::string_view name = {}) {
@@ -157,7 +157,7 @@ int main() {
   p->modules[0].imports.push_back({0, import, ModuleId(1), "d", b.node(import).span});
   r = resolve_project(p);
   check(r.diagnostics.size() == 1 && has(r, "E_NAME_NOT_FOUND"), "file alias leaked");
-  check(manager.get(r.diagnostics[0].primary->snapshot)->path == "0/1.lang", "alias diagnostic wrong file");
+  check(manager.get(r.diagnostics[0].primary->snapshot)->path == "0/1.wz", "alias diagnostic wrong file");
   p = project(manager, {{"package p; func f() { let a = func(x i32) i32 { return x; }; let b = func() { let c = func(y i32) i32 { return y; }; }; }"}});
   r = resolve_project(p);
   check(r.success(), "nested noncapturing literals rejected");

@@ -91,7 +91,7 @@ PINNED_TOOLS = {
     "runtime": "40ea4d083e97f511c776166ede32e294753aeef3c3417742b84a79885f48d4eb",
 }
 OBSERVER_SOURCE = PERFORMANCE_DIR / "large_observer.cpp"
-TEMPLATE_NAMES = ("sieve.lang.in", "reference.cpp.in")
+TEMPLATE_NAMES = ("sieve.wz.in", "reference.cpp.in")
 MARK_STORE_RE = re.compile(r"\bstore\s+i8\s+1\b")
 ZERO_STORE_RE = re.compile(r"\bstore\s+i8\s+0\b")
 LOAD_I8_RE = re.compile(r"\bload\b[^\n]*\bi8\b")
@@ -313,7 +313,7 @@ def generate_case(out, templates, n, rounds, count, total, variant):
     elif variant != "correct":
         raise PerfError(f"unknown variant {variant}")
     zeros = zero_text(n)
-    source_text = render(templates["sieve.lang.in"], n, rounds, count, total,
+    source_text = render(templates["sieve.wz.in"], n, rounds, count, total,
                          zeros)
     reference_text = render(templates["reference.cpp.in"], n, rounds, count,
                             total, zeros)
@@ -322,7 +322,7 @@ def generate_case(out, templates, n, rounds, count, total, variant):
                      zeros, label)
     directory = out / "cases" / f"n{n}" / f"r{rounds}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
-    source, reference = directory / "src/main.lang", directory / "reference.cpp"
+    source, reference = directory / "src/main.wz", directory / "reference.cpp"
     manifest = directory / "lang.toml"
     source.write_text(source_text, encoding="utf-8")
     reference.write_text(reference_text, encoding="utf-8")
@@ -1396,7 +1396,7 @@ def compact_work(work):
 def correction_input_paths(args, old_root):
     paths = [
         Path(__file__).resolve(), OBSERVER_SOURCE,
-        PERFORMANCE_DIR / "sieve.lang.in",
+        PERFORMANCE_DIR / "sieve.wz.in",
         PERFORMANCE_DIR / "reference.cpp.in",
         PERFORMANCE_DIR / "prepare.py",
         old_root / "summary.json",
@@ -1518,7 +1518,7 @@ def recheck_existing(args):
             "--oracle-dir", str(args.oracle_dir),
             "--python", str(args.python),
             "--python-helper", str(args.python_helper),
-            "--langc", str(args.langc), "--helper", str(args.helper),
+            "--woozyc", str(args.langc), "--helper", str(args.helper),
             "--runtime", str(args.runtime),
             "--llvm-bin", str(args.llvm_bin),
             "--compiler-root", str(args.compiler_root),
@@ -1720,7 +1720,7 @@ def parse_args(argv=None):
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--python-helper", type=Path,
                         default=DEFAULT_PYTHON_HELPER)
-    parser.add_argument("--langc", type=Path, required=True)
+    parser.add_argument("--woozyc", dest="langc", type=Path, required=True)
     parser.add_argument("--helper", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--llvm-bin", type=Path, required=True)

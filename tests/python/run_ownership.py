@@ -45,13 +45,13 @@ def main():
         (root / 'src').mkdir(parents=True, exist_ok=True)
         manifest = root / 'lang.toml'
         manifest.write_text('schema_version=1\n[package]\nname="main"\nsource_root="src"\nentry="app"\n[build]\nbackend="python"\nword_bits=64\n')
-        (root / 'src/main.lang').write_text('package main;\n' + source + '\n')
+        (root / 'src/main.wz').write_text('package main;\n' + source + '\n')
         inputs.append((ident, manifest, dict(status='accept'), expected))
     if args.case:
         inputs = [row for row in inputs if row[0] in args.case]
         assert len(inputs) == len(set(args.case)), 'unknown case'
     for ident, manifest, static, expected in inputs:
-        row = dict(id=ident, commands=[], status='failed', source_hashes={str(p):sha(p) for p in manifest.parent.rglob('*.lang')})
+        row = dict(id=ident, commands=[], status='failed', source_hashes={str(p):sha(p) for p in manifest.parent.rglob('*.wz')})
         report['cases'].append(row)
         try:
             out = args.out / ident

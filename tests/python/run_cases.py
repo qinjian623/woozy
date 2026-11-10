@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
 """Real frontend -> VerifiedHirModule -> C++ emitter -> explicit Python 3.12.
 
-No .lang evaluator lives here. Extra source projects are written under --out;
+No .wz evaluator lives here. Extra source projects are written under --out;
 all compilation goes through the C++ helper. Existing fixtures are read-only.
 """
 import argparse
@@ -183,7 +183,7 @@ def classify(result):
 def source_project(out, ident, body, *, bits=64):
     root = out / 'sources' / ident
     (root / 'src').mkdir(parents=True, exist_ok=True)
-    (root / 'src/main.lang').write_text('package app;\n' + body + '\n')
+    (root / 'src/main.wz').write_text('package app;\n' + body + '\n')
     (root / 'lang.toml').write_text(
         'schema_version = 1\n[package]\nname = "python_test"\n'
         'source_root = "src"\nentry = "app"\n[build]\n'
@@ -271,10 +271,10 @@ def main():
     immutable = [cases_file]
     for case in published['cases']:
         manifest = args.root / case['manifest']
-        immutable.extend([manifest, manifest.parent / 'src/main.lang'])
+        immutable.extend([manifest, manifest.parent / 'src/main.wz'])
     for ident in ('core', 'numeric'):
         immutable.extend([args.root / f'tests/fixtures/{ident}/lang.toml',
-                          args.root / f'tests/fixtures/{ident}/src/main.lang'])
+                          args.root / f'tests/fixtures/{ident}/src/main.wz'])
     before = {str(path): sha(path) for path in immutable}
     report = {'task': 'T06', 'operation_id': 'language-t06-python-scalars-20261103',
               'contract': 'compiler-dev/1', 'profile': 'python64',
@@ -333,8 +333,8 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
 ''')
     math_dir = module_manifest.parent / 'src/math'
     math_dir.mkdir(parents=True, exist_ok=True)
-    (math_dir / 'value.lang').write_text('package math; pub func twice(x i32) i32 {return x*2;}\n')
-    (module_manifest.parent / 'src/other.lang').write_text('package app; func unused() {}\n')
+    (math_dir / 'value.wz').write_text('package math; pub func twice(x i32) i32 {return x*2;}\n')
+    (module_manifest.parent / 'src/other.wz').write_text('package app; func unused() {}\n')
     compile_case('cross-module', module_manifest, 'extra')
 
     # Actual generated module + runtime, with an external harness injecting a
@@ -410,7 +410,7 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
         directory = args.out / 'generated' / ('unsupported-' + ident)
         result = command([args.helper, '--project', manifest, '--out-dir', directory])
         parsed = json.loads(result['stdout'])
-        source = manifest.parent / 'src/main.lang'
+        source = manifest.parent / 'src/main.wz'
         passed = (result['returncode'] == 1 and parsed['status'] == 'error' and
                   any(d['code'] == 'E_CAPABILITY_UNAVAILABLE' and d['primary'] is not None and
                       Path(d['primary']['path']).resolve() == source.resolve() and
@@ -426,7 +426,7 @@ func main() i32 {if math.twice(21)!=42 {return 1;}return 0;}
         result = command([args.helper, '--project', manifest,
                           '--out-dir', directory])
         parsed = json.loads(result['stdout'])
-        source = manifest.parent / 'src/main.lang'
+        source = manifest.parent / 'src/main.wz'
         passed = (result['returncode'] == 1 and parsed['status'] == 'error' and
                   any(d['code'] == expected_code and d['primary'] is not None and
                       Path(d['primary']['path']).resolve() == source.resolve() and

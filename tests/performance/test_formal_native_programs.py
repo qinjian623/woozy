@@ -91,7 +91,7 @@ class NativeProgramTests(unittest.TestCase):
         self.llvm = self.build / "llvm"
         for path in (self.build / "native", self.llvm):
             path.mkdir(parents=True)
-        self.langc = self.build / "langc"
+        self.langc = self.build / "woozyc"
         self.helper = self.build / "native" / "lang_native_helper"
         self.runtime = self.build / "native" / "liblang_native_runtime.a"
         for path in (self.langc, self.helper, self.runtime,
@@ -106,7 +106,7 @@ class NativeProgramTests(unittest.TestCase):
         clang, lld = str(self.llvm / "clang"), str(self.llvm / "ld.lld")
         runtime = str(self.runtime)
         self.build.joinpath("build.ninja").write_text(
-            "build CMakeFiles/langc.dir/src/driver/main.cpp.o: CXX_COMPILER__langc_unscanned_Release /x\n"
+            "build CMakeFiles/woozyc.dir/src/driver/main.cpp.o: CXX_COMPILER__woozyc_unscanned_Release /x\n"
             f'  DEFINES = -DLANG_NATIVE_HELPER=\\"{helper}\\"\n\n'
             "build native/CMakeFiles/lang_native_helper.dir/helper.cpp.o: CXX_COMPILER__lang_native_helper_unscanned_Release /x\n"
             f'  DEFINES = -DLANG_NATIVE_CLANG=\\"{clang}\\" -DLANG_NATIVE_LLD=\\"{lld}\\" '

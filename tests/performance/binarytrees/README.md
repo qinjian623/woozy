@@ -112,7 +112,7 @@ linked from the same prepared Source object and the same C++ reference source.
 ### Source
 
 `prepare.py` links the helper `program.o` (byte-identical to the formal
-`langc build` `program.o`) with `native_observer.cpp` and the project runtime
+`woozyc build` `program.o`) with `native_observer.cpp` and the project runtime
 using `--wrap=lang_alloc_v1` / `--wrap=lang_free_v1`. `native_observer.cpp`
 defines the runtime's existing weak `lang_vec_observe_v1` ABI and reads the real
 `LangVec` layout from `runtime/native/vec.hpp`; it does not guess the ABI. The
@@ -157,12 +157,12 @@ live count zero. The observer binary is test-only.
 
 For every correct N and O0/O2:
 
-- public `langc check` JSON;
+- public `woozyc check` JSON;
 - Source Native O0/O2 build, static ELF checks, quiet execution;
 - C++ O0/O2 build, dynamic ELF checks, quiet execution;
 - Source LLVM `before.ll` / `after.ll` from `lang_native_helper`;
 - two explicit `opt -passes=verify` runs;
-- helper-object SHA-256 and byte equality with the formal `langc build`
+- helper-object SHA-256 and byte equality with the formal `woozyc build`
   `program.o`;
 - C++ O0/O2 `-g -S -emit-llvm` IR export and `opt -passes=verify`;
 - O2 work checks that real recursive tree construction/traversal remains:
@@ -186,7 +186,7 @@ their SHA-256/size/line counts are recorded; they are not embedded in the JSON.
 The production tools used by the recorded preparation run are under
 `/home/qin/Work/language-dev-20261103`; `--compiler-root` must point at the main
 compiler checkout. The script may run from that checkout or from a worker
-worktree, but the supplied `langc`, helper and runtime must be under
+worktree, but the supplied `woozyc`, helper and runtime must be under
 `--compiler-root`. The CMake cache must record `BUILD_TESTING=OFF`.
 
 ```sh
@@ -198,7 +198,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 
 "$PY" -B -s tests/performance/binarytrees/prepare.py \
   --out checks/binarytrees-preparation-<new-name> \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \

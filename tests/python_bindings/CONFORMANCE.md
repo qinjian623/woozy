@@ -1,6 +1,6 @@
 # T10 CPU host conformance (corrected)
 
-操作：`language-t10-cpu-conformance-20261104-correction`。基点：`058ee4c`。本文件只记录**宿主接口实测**；不是 `.lang` 生成程序、`py.Error` 桥接或 T10 完成证明。
+操作：`language-t10-cpu-conformance-20261104-correction`。基点：`058ee4c`。本文件只记录**宿主接口实测**；不是 `.wz` 生成程序、`py.Error` 桥接或 T10 完成证明。
 
 ## 修正结论
 
@@ -37,7 +37,7 @@
 - 15/15 接口 passed；2 个 dtype 值通过；8 个 host 类型声明和 3 个协议检查通过；`lang.py.Error` 为 `not_run`。
 - 宿主错误：`{"passed": 6, "failed": 0, "not_run": 0}`，其中 2 个真实正例、4 个正确拒绝的负例。
 - 手写参考：`forward=201`、`backward=200`、`zero_grad=200`、`step=200`；最终 loss `9.684752999561397e-13`，有限、非负、`<1e-3`。
-- `not_run`：`.lang` 生成/执行、`py.Error` 桥接、源语言清理/控制事件、GPU/CUDA/AMP/DDP。
+- `not_run`：`.wz` 生成/执行、`py.Error` 桥接、源语言清理/控制事件、GPU/CUDA/AMP/DDP。
 
 ## 环境与依赖
 

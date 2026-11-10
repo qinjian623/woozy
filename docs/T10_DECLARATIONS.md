@@ -16,7 +16,7 @@
 
 `resolve_project(std::shared_ptr<const Project>, std::stop_token)` 返回 `PhaseResult<ResolvedProject>`。
 `import "numpy" as np` 的 np 只是当前源文件的模块别名；`np.linspace` 依次解析到目标模块和导出 SymbolId，不改变绑定身份。
-外部符号的 `Symbol.foreign` 指向 `ForeignExportRef{module,index}`；`Symbol.declaration` 保存绑定源位置，`definition` 不指向 `.lang` 声明。
+外部符号的 `Symbol.foreign` 指向 `ForeignExportRef{module,index}`；`Symbol.declaration` 保存绑定源位置，`definition` 不指向 `.wz` 声明。
 下一阶段应从已解析的 SymbolId 调用 `ResolvedProject::foreign_export(symbol)`；非外部符号返回 nullptr。
 再按导出的 `declaration` 或 `candidates` 取 `ForeignDeclaration`，不要通过别名或显示名称重新猜绑定。
 

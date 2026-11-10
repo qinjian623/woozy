@@ -6,7 +6,7 @@
 ## 读取规则
 
 - 所有清单相对路径相对于该清单目录。`app` 指该项目的 `package.source_root`，入口采用 `package.entry`（app 或 app 子模块）。
-- 一个模块读取目录直接包含的全部 `.lang`，文件排序；不递归枚举子目录。子目录仅由逻辑 import 请求。
+- 一个模块读取目录直接包含的全部 `.wz`，文件排序；不递归枚举子目录。子目录仅由逻辑 import 请求。
 - source dependency 的 path 指项目目录；有 `lang.toml` 时读取其 source_root 和 dependencies，否则显式 path 本身是源码根，其上下文没有额外 dependencies。依赖项目内部的 app 指依赖项目自己的源码根。
 - canonical 目录是源码模块身份；同目录不同别名返回同一个从 0 开始的 ModuleId。首次按确定的 DFS 顺序分配，`modules[id.value]` 可直接读取。不同来源请求同一个 logical 名报 E_MODULE_CONFLICT。
 - std 只接受 ProjectOptions 中显式源码根或 binding bundle，两者同时提供报冲突；dependencies 禁止声明 app/std。未配置 std 报 E_IMPORT_NOT_FOUND。
@@ -43,7 +43,7 @@ clang++ -std=c++20 -O2 -DNDEBUG -Iinclude tests/modules/project_test.cpp src/mod
 
 ```sh
 python3 tests/modules/run_cases.py build/frontend-debug/lang_module_check
-python3 tools/validate_module_fixtures.py --langc build/frontend-debug/langc
+python3 tools/validate_module_fixtures.py --woozyc build/frontend-debug/woozyc
 python3 tools/validate_module_fixtures.py --self-test
 ```
 

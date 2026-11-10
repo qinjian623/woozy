@@ -68,7 +68,7 @@ int main() {
 namespace {
 PhaseResult<AstFile> real_parse(std::string source) {
   auto snapshot = std::make_shared<SourceSnapshot>(
-      FileId(2), RevisionId(1), SourceSnapshotId(2), "real.lang",
+      FileId(2), RevisionId(1), SourceSnapshotId(2), "real.wz",
       std::move(source));
   auto tokens = lex(snapshot);
   require(tokens.success());
@@ -149,7 +149,7 @@ void integration_tests() {
   require(limit);
   auto snapshot = std::make_shared<SourceSnapshot>(FileId(3), RevisionId(1),
                                                    SourceSnapshotId(3),
-                                                   "cancel.lang", "package p;");
+                                                   "cancel.wz", "package p;");
   auto tokens = lex(snapshot);
   require(tokens.success());
   std::stop_source stop;

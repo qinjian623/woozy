@@ -11,10 +11,10 @@ def loops(body, count=24):
 def cases():
     fixtures = Path(__file__).parent / 'fixtures'
     yield 'outlined-recursive-replacement', (fixtures /
-        'outlining-recursive-replacement.lang').read_text(), dict(main_return=0,
+        'outlining-recursive-replacement.wz').read_text(), dict(main_return=0,
         events=[10, 20] * 3, outlined=True,
         ownership=dict(allocations=27, iterations=3, free_intervals=[2, 7] * 3))
-    yield 'outlined-unentered', (fixtures / 'outlining-unentered.lang').read_text(), dict(
+    yield 'outlined-unentered', (fixtures / 'outlining-unentered.wz').read_text(), dict(
         main_return=0, outlined=True)
 
     # Each defer reads a binding installed at a structural statement's entry:

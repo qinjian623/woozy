@@ -2,7 +2,7 @@
 
 Fixed Source/C++20 pair for `tests/performance/run_sort.py --algorithm merge`.
 
-- `merge.lang.in` and `reference.cpp.in` are rendered from the same LCG inputs,
+- `merge.wz.in` and `reference.cpp.in` are rendered from the same LCG inputs,
   Python `sorted` golden array, round count, and per-element check.
 - Both programs implement the same hand-written stable **bottom-up** merge
   sort: identical width/start/merge/copy loop order, `<=` left-run comparison,

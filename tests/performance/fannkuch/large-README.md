@@ -1,5 +1,7 @@
 # Fannkuch-redux large-input and rounds preparation
 
+This file records pre-release measurements made with the old `langc` / `.lang` names. The archived hashes and observations below retain those names. Current releases use `woozyc`, `.wz`, and the runner option `--woozyc`; see the current [performance summary](../../../docs/PERFORMANCE.md).
+
 This directory now has a separate preparation entry point for n=9/10:
 
 ```text

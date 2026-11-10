@@ -230,7 +230,7 @@ parser 不查询符号表。对于 `f[T]`、`values[i]` 和 `tensor[i, j]`，构
       "severity": "error",
       "code": "E_TYPE_MISMATCH",
       "message": "实参类型为 string，参数 value 要求 i32",
-      "primary": {"path": "main.lang", "start_byte": 48, "end_byte": 53},
+      "primary": {"path": "main.wz", "start_byte": 48, "end_byte": 53},
       "related": [],
       "notes": [],
       "fixits": []

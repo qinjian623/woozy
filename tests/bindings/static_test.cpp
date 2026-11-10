@@ -35,7 +35,7 @@ void write(const fs::path &path, const std::string &text) {
 std::shared_ptr<modules::ResolvedProject> resolve(const std::string &text, const std::string &name,
                                                 const std::string &bundle = "", std::string backend = "python") {
   auto root = output / name;
-  write(root / "src/main.lang", text);
+  write(root / "src/main.wz", text);
   write(root / "binding.json", bundle.empty() ? read(repo / "contracts/python_bindings.example.json") : bundle);
   write(root / "lang.toml", "schema_version=1\n[package]\nname=\"main\"\nsource_root=\"src\"\nentry=\"app\"\n[build]\nbackend=\"" + backend + "\"\n[dependencies.numpy]\nkind=\"python\"\nbinding=\"binding.json\"\nhost_package=\"numpy\"\n[dependencies.torch]\nkind=\"python\"\nbinding=\"binding.json\"\nhost_package=\"torch\"\n");
   SourceManager sm;

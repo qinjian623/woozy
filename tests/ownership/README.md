@@ -20,15 +20,15 @@ tests/ownership/
   cases.json
   fixtures/
     <case-id>/lang.toml
-    <case-id>/src/main.lang
+    <case-id>/src/main.wz
 ```
 
 `case_count = 32`；静态应接受 `accepted_count = 21`（包含运行时 Panic 的 `panic-vec-index` 与有意保持存活的 `recursive-cycle-retained`），静态应拒绝 `reject_count = 11`。初版项目使用包名 `main`；递归值批次沿用项目清单的 `package app;`。每个项目都是独立 `lang.toml` 项目。
 
 初版修正只改了两份源码：
 
-- `defer-before-destroy/src/main.lang`：`log * 10 + values[0]` 的 i64/i32 混宽改为 `log * 10 + i64(values[0])`；未来目标仍是 defer 先于局部 Vec 销毁，`log=17`。
-- `for-in-element-copy/src/main.lang`：写当前槽后断言本轮 `value` 未变；首轮写 `values[1]=20`，后续迭代必须读取新值。正确迭代值为 1/20/3，`sum=24`，最终 `values=[11,30,13]`。
+- `defer-before-destroy/src/main.wz`：`log * 10 + values[0]` 的 i64/i32 混宽改为 `log * 10 + i64(values[0])`；未来目标仍是 defer 先于局部 Vec 销毁，`log=17`。
+- `for-in-element-copy/src/main.wz`：写当前槽后断言本轮 `value` 未变；首轮写 `values[1]=20`，后续迭代必须读取新值。正确迭代值为 1/20/3，`sum=24`，最终 `values=[11,30,13]`。
 
 其余 16 份源码和 18 份 manifest 保持初版逐字不变；逐项 hash 见 `cases.json`。
 
@@ -108,9 +108,9 @@ Native observer 链接额外使用 `--wrap=lang_alloc_v1` / `--wrap=lang_free_v1
 使用根仓库现有 C++ CLI：
 
 ```sh
-langc check --syntax-only --format json tests/ownership/fixtures/<id>/src/main.lang
-langc check --project tests/ownership/fixtures/<id>/lang.toml --backend native --format json
-langc check --project tests/ownership/fixtures/<id>/lang.toml --backend python --format json
+woozyc check --syntax-only --format json tests/ownership/fixtures/<id>/src/main.wz
+woozyc check --project tests/ownership/fixtures/<id>/lang.toml --backend native --format json
+woozyc check --project tests/ownership/fixtures/<id>/lang.toml --backend python --format json
 ```
 
 实际二进制为 `/home/qin/Work/language-dev-20261103/compiler/build/native-cli/langc`，版本 `0.1.0-bootstrap (compiler-dev/1)`，源码版本 `e808169`。逐项 argv、绝对路径、退出码和原始 native/python JSON 保存在 `/tmp/language-t09-ownership-fixtures-correction-20261104/checks.json`；`/tmp` 中的机器记录不属于本目录。

@@ -34,6 +34,6 @@ git diff --check
 
 ## 限制
 
-`59/59` 是 Python 语法原型的自测结果。C++ 前端另外通过了 Debug/Release 各 80/80（59 个内存输入和 21 个实际文件）的分类及 JSON schema 检查，并已接入 CTest。单独执行方法为 python3 tests/syntax/run_cases.py build/frontend-debug/langc。
+`59/59` 是 Python 语法原型的自测结果。C++ 前端另外通过了 Debug/Release 各 80/80（59 个内存输入和 21 个实际文件）的分类及 JSON schema 检查，并已接入 CTest。单独执行方法为 python3 tests/syntax/run_cases.py build/frontend-debug/woozyc。
 
 这些结果不证明类型、效果、所有权、代码生成或运行时正确。语义负例通过语法阶段是预期行为。

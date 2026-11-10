@@ -93,7 +93,7 @@ def main():
     def source(ident, body):
         project = args.out / 'sources' / ident
         (project / 'src').mkdir(parents=True, exist_ok=True)
-        (project / 'src/main.lang').write_text('package app;\n' + body)
+        (project / 'src/main.wz').write_text('package app;\n' + body)
         manifest = project / 'lang.toml'
         manifest.write_text('schema_version=1\n[package]\nname="app"\nsource_root="src"\n'
                             'entry="app"\n[build]\nbackend="python"\nword_bits=64\n')
@@ -102,7 +102,7 @@ def main():
     def accepted(ident, manifest, expected, probes):
         generated = args.out / 'generated' / ident
         row = dict(id=ident, manifest=str(manifest), expected=expected, status='failed',
-                   runtime='not_run', source_sha256=sha(manifest.parent / 'src/main.lang'),
+                   runtime='not_run', source_sha256=sha(manifest.parent / 'src/main.wz'),
                    manifest_sha256=sha(manifest))
         rows.append(row)
         try:
@@ -206,7 +206,7 @@ def main():
     for ident, body, expected, probes in supplemental():
         accepted(ident, source(ident, body), expected, probes)
 
-    const_fixture = args.root / 'tests/native/floating/const-comparison/src/main.lang'
+    const_fixture = args.root / 'tests/native/floating/const-comparison/src/main.wz'
     const_body = const_fixture.read_text()
     prefix = 'package app;\n'
     assert const_body.startswith(prefix)

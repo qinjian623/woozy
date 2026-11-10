@@ -416,35 +416,35 @@
     },
     {
       "name": "contracts/core",
-      "path": "examples/core.lang",
+      "path": "examples/core.wz",
       "source": "package main;\n\nfunc max_i32(a i32, b i32) i32 {\n    if a > b {\n        return a;\n    }\n    return b;\n}\n\nfunc main() i32 {\n    var total i32 = 0;\n    for var i i32 = 0; i < 4; i += 1 {\n        total += i;\n    }\n    if max_i32(total, 5) != 6 {\n        return 1;\n    }\n    return 0;\n}\n",
       "expected_syntax": "accept",
       "expected_semantic": "accept"
     },
     {
       "name": "contracts/numeric",
-      "path": "examples/numeric.lang",
+      "path": "examples/numeric.wz",
       "source": "package main;\n\nfunc main() i32 {\n    let high i8 = 127;\n    let wrapped = high + 1;\n    if wrapped != -128 {\n        return 1;\n    }\n    let minimum i32 = -2_147_483_648;\n    let negative_one i32 = -1;\n    if minimum / negative_one != minimum {\n        return 2;\n    }\n    if minimum % negative_one != 0 {\n        return 3;\n    }\n    let negative i32 = -7;\n    if negative / 3 != -2 || negative % 3 != -1 {\n        return 4;\n    }\n    return 0;\n}\n",
       "expected_syntax": "accept",
       "expected_semantic": "accept"
     },
     {
       "name": "contracts/errors",
-      "path": "examples/errors.lang",
+      "path": "examples/errors.wz",
       "source": "package main;\n\nenum ReadError {\n    Missing;\n}\n\nfunc read_value(found bool, cleaned inout i32) i32 throws ReadError {\n    defer {\n        cleaned += 1;\n    }\n    if !found {\n        throw ReadError.Missing;\n    }\n    return 7;\n}\n\nfunc main() i32 {\n    var cleaned i32 = 0;\n    try {\n        let first = read_value(true, inout cleaned);\n        if first != 7 || cleaned != 1 {\n            return 1;\n        }\n        let second = read_value(false, inout cleaned);\n        return 2;\n    } catch err ReadError {\n        if cleaned != 2 {\n            return 3;\n        }\n    }\n    return 0;\n}\n",
       "expected_syntax": "accept",
       "expected_semantic": "accept"
     },
     {
       "name": "contracts/ownership",
-      "path": "examples/ownership.lang",
+      "path": "examples/ownership.wz",
       "source": "package main;\n\nfunc take(values move Vec[i32]) i32 {\n    return values[0];\n}\n\nfunc main() i32 {\n    let left Vec[i32] = [1, 2];\n    let right = left;\n    right[0] = 9;\n    let answer = take(move right);\n    if answer != 9 || left[0] != 9 {\n        return 1;\n    }\n    return 0;\n}\n",
       "expected_syntax": "accept",
       "expected_semantic": "accept"
     },
     {
       "name": "contracts/use_after_move",
-      "path": "examples/negative/use_after_move.lang",
+      "path": "examples/negative/use_after_move.wz",
       "source": "package main;\n\nfunc take(values move Vec[i32]) i32 {\n    return values[0];\n}\n\nfunc main() i32 {\n    let values Vec[i32] = [1];\n    let answer = take(move values);\n    return values[0];\n}\n",
       "expected_syntax": "accept",
       "expected_semantic": "reject"

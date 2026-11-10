@@ -269,7 +269,7 @@ def main():
         for case, (source, code) in REJECTS.items():
             project = args.out / "reject-sources" / case
             (project / "src").mkdir(parents=True, exist_ok=True)
-            (project / "src/main.lang").write_text("package app;" + source + "\n")
+            (project / "src/main.wz").write_text("package app;" + source + "\n")
             manifest = project / "lang.toml"
             manifest.write_text(
                 'schema_version=1\n[package]\nname="app"\nsource_root="src"\nentry="app"\n[build]\nbackend="native"\nword_bits=64\n'

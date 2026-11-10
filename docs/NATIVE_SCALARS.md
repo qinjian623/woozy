@@ -99,7 +99,7 @@ checks/t07-pod-backend-comparison.json；运行库、ARC及严格浮点运算的
 operation_id：`language-t05-native-scalars-20261103`。契约：`compiler-dev/1`。
 基础 HEAD：`b8ccf384a16e85141994995fe1869fd5fc084100`。
 
-2026-11-04：root 已接入正式 `langc build --backend native --out-dir DIR --opt 0|2`，
+2026-11-04：root 已接入正式 `woozyc build --backend native --out-dir DIR --opt 0|2`，
 输出 program.o 和 program，构建不运行程序。GNU Debug、GNU Release、Clang22
 ASan/UBSan 各21/21组测试通过，包含正式CLI的34次主项目执行和2次普通返回7对照。
 组件的独立62次ELF执行另有记录；两组数字不重复合计为不同源码数。
@@ -212,7 +212,7 @@ add_subdirectory(src/backend/native)
 ```
 
 该片段定义 `lang_native_ir`、`lang_native`、`lang_native_runtime` 和
-`lang_native_helper`。LLVM 只出现在 native 目标中；`langc` 链接前端、Python发射器和进程工具，不链接LLVM或CPython。
+`lang_native_helper`。LLVM 只出现在 native 目标中；`woozyc` 链接前端、Python发射器和进程工具，不链接LLVM或CPython。
 不应把 lang_native 链接到 check 或未来的 LSP 目标。
 
 helper 的参数：
@@ -413,7 +413,7 @@ Verified 后检查 f32/f64 ties-to-even 和最小 f32 subnormal 的精确位模�
 另有合法语法但破坏支配关系的 LLVM 文本被 opt verifier 拒绝。
 
 native32、普通参数写入、严格浮点算术、string、defer 五类实际输入均得到未支持诊断；
-不计入功能执行通过数。`langc` 的动态依赖和未解析符号检查未发现 LLVM。
+不计入功能执行通过数。`woozyc` 的动态依赖和未解析符号检查未发现 LLVM。
 前端 14 个既有 CTest 保持通过；当前没有 LSP 实现可运行。
 
 ## 首轮失败及修正
@@ -427,7 +427,7 @@ Panic 函数产生了 `__gxx_personality_v0` 引用，而 C 链接命令没有 C
 ## 正式 CLI 集成结果
 
 ```sh
-build/native-cli/langc build --project tests/fixtures/core/lang.toml \
+build/native-cli/woozyc build --project tests/fixtures/core/lang.toml \
   --backend native --out-dir build/core/native --opt 2 --format json
 build/core/native/program
 ```

@@ -20,7 +20,7 @@ endif()
 if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312)
   add_test(NAME generics.list_inference COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_list_inference.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --root "${LANG_T07_ROOT}"
     --python "${LANG_PYTHON312}"
     --out "${CMAKE_CURRENT_BINARY_DIR}/list-inference")
@@ -30,7 +30,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.move_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_move.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
@@ -46,7 +46,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.inout_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_inout.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
     --python "${LANG_PYTHON312}"
@@ -59,7 +59,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.method_move_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_method_move.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
@@ -75,7 +75,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.method_inout_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_method_inout.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
@@ -91,7 +91,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.constrained_inout_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_constrained_inout.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
@@ -107,7 +107,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_python_emit)
   add_test(NAME generics.aggregate_inout_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_aggregate_inout.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
     --python "${LANG_PYTHON312}"
@@ -120,7 +120,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.nested_patterns_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_nested_patterns.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
@@ -136,7 +136,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_python_emit)
   add_test(NAME generics.generic_trait_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_generic_traits.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
     --python "${LANG_PYTHON312}"
@@ -149,7 +149,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.indexed_calls_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_indexed_calls.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_T07_ROOT}"
@@ -166,7 +166,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_python_emit)
   add_test(NAME generics.builtin_impl_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_builtin_impl.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --string-probe $<TARGET_FILE:lang_native_string_probe>
     --helper $<TARGET_FILE:lang_python_emit>
@@ -184,7 +184,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_python_emit)
   add_test(NAME generics.self_modes_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_self_modes.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --string-probe $<TARGET_FILE:lang_native_string_probe>
     --helper $<TARGET_FILE:lang_python_emit>
@@ -202,7 +202,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_python_emit)
   add_test(NAME generics.unbound_method_values_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_unbound_methods.py"
-    --cli $<TARGET_FILE:langc>
+    --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe>
     --string-probe $<TARGET_FILE:lang_native_string_probe>
     --helper $<TARGET_FILE:lang_python_emit>
@@ -220,7 +220,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON AND LANG_PYTHON312 AND
    TARGET lang_native_ownership_probe AND TARGET lang_python_emit)
   add_test(NAME generics.receiver_modes_runtime COMMAND "${LANG_TEST_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_receiver_modes.py"
-    --cli $<TARGET_FILE:langc> --probe $<TARGET_FILE:lang_native_ownership_probe>
+    --cli $<TARGET_FILE:woozyc> --probe $<TARGET_FILE:lang_native_ownership_probe>
     --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_T07_ROOT}"
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
     --python "${LANG_PYTHON312}" --out "${CMAKE_CURRENT_BINARY_DIR}/receiver-modes-runtime")
@@ -240,7 +240,7 @@ if(LANG_TEST_PYTHON)
     list(PREPEND aggregate_rejection_backends native)
   endif()
   add_test(NAME sema.aggregate_constant_rejections COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_aggregate_const_rejections.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_aggregate_const_rejections.py --cli $<TARGET_FILE:woozyc>
     --out ${CMAKE_CURRENT_BINARY_DIR}/aggregate-constant-rejections
     --backends ${aggregate_rejection_backends})
 endif()

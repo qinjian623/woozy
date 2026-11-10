@@ -216,14 +216,14 @@ def fill(text, values):
 
 
 def template_records():
-    names = ("mandelbrot.lang.in", "reference.cpp.in", "native_observer.cpp",
+    names = ("mandelbrot.wz.in", "reference.cpp.in", "native_observer.cpp",
              "visit_trace.py")
     return {name: file_rec(PERFORMANCE_DIR / name) for name in names}
 
 
 def read_templates():
     return {name: (PERFORMANCE_DIR / name).read_text(encoding="utf-8")
-            for name in ("mandelbrot.lang.in", "reference.cpp.in")}
+            for name in ("mandelbrot.wz.in", "reference.cpp.in")}
 
 
 def load_oracle(path):
@@ -385,7 +385,7 @@ def generate_case(out, templates, n, rounds, payload, variant):
         "PACK_FLIP": source_flip,
     }
     source_text, source_render = render_program(
-        templates["mandelbrot.lang.in"], SOURCE_MAIN, SOURCE_WRAPPER,
+        templates["mandelbrot.wz.in"], SOURCE_MAIN, SOURCE_WRAPPER,
         mapping, "source")
     cpp_mapping = dict(mapping)
     cpp_mapping["PACK_FLIP"] = cpp_flip
@@ -397,7 +397,7 @@ def generate_case(out, templates, n, rounds, payload, variant):
                      zeros, rounds, f"n={n} r={rounds} {variant}")
     directory = out / "cases" / f"n{n}" / f"r{rounds}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
-    source = directory / "src" / "main.lang"
+    source = directory / "src" / "main.wz"
     reference = directory / "reference.cpp"
     manifest = directory / "lang.toml"
     source.write_text(source_text, encoding="utf-8")
@@ -850,7 +850,7 @@ def tool_hashes(args):
 
 def input_paths(args, oracle_files):
     paths = [PERFORMANCE_DIR / name for name in (
-        "mandelbrot.lang.in", "reference.cpp.in", "native_observer.cpp",
+        "mandelbrot.wz.in", "reference.cpp.in", "native_observer.cpp",
         "visit_trace.py", "prepare.py", "large_prepare.py")]
     paths += [
         PERFORMANCE_DIR.parent / "run_native.py",
@@ -1300,7 +1300,7 @@ def parse_args(argv=None):
     parser.add_argument("--oracle-dir", type=Path, default=DEFAULT_ORACLE_DIR)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--python-helper", type=Path, default=DEFAULT_PYTHON_HELPER)
-    parser.add_argument("--langc", type=Path, required=True)
+    parser.add_argument("--woozyc", dest="langc", type=Path, required=True)
     parser.add_argument("--helper", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--llvm-bin", type=Path, required=True)

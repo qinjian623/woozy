@@ -39,7 +39,7 @@ PYTHON = Path("/home/qin/Work/language-dev-20261103/toolchains/python/"
               "cpython-3.12.15-linux-x86_64-gnu/bin/python3.12")
 TOOLS = {
     "langc": Path("/home/qin/Work/language-dev-20261103/compiler/build/"
-                  "native-perf-release/langc"),
+                  "native-perf-release/woozyc"),
     "helper": Path("/home/qin/Work/language-dev-20261103/compiler/build/"
                    "native-perf-release/native/lang_native_helper"),
     "runtime": Path("/home/qin/Work/language-dev-20261103/compiler/build/"
@@ -810,7 +810,7 @@ def snapshot():
     paths = list(TOOLS.values()) + [
         LLVM_BIN / "clang++", LLVM_BIN / "opt", LLVM_BIN / "ld.lld",
         ORACLE, OBSERVER, PERF / "large_prepare.py",
-        PERF / "binarytrees.lang.in", PERF / "reference.cpp.in",
+        PERF / "binarytrees.wz.in", PERF / "reference.cpp.in",
         PERF / "prepare.py", WORKTREE / "tests/performance/run_native.py",
         WORKTREE / "tests/performance/sieve/prepare.py",
         WORKTREE / "tests/performance/mandelbrot/prepare.py",
@@ -880,7 +880,7 @@ def main(argv=None):
         "oracle": {"path": str(ORACLE), "sha256": sha256_file(ORACLE),
                    "expected_sha256": ORACLE_SHA, "cases": []},
         "templates": {name: file_rec(PERF / name)
-                      for name in ("binarytrees.lang.in", "reference.cpp.in")},
+                      for name in ("binarytrees.wz.in", "reference.cpp.in")},
         "observer_source": file_rec(OBSERVER),
         "input_snapshot_before": before,
         "input_snapshot_after": None,

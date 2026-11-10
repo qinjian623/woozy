@@ -418,20 +418,20 @@ def build_tree_info(args, env, cpu):
     if not ninja_path.is_file() or not cache_path.is_file():
         raise PerfError(
             f"{build_dir}: missing build.ninja/CMakeCache.txt; "
-            "this script requires a CMake build tree, not an arbitrary installed langc"
+            "this script requires a CMake build tree, not an arbitrary installed woozyc"
         )
     ninja_text = ninja_path.read_text(encoding="utf-8")
     values = {}
     for block in re.split(r"(?m)(?=^build )", ninja_text):
         target = re.match(
-            r"build [^\n]*CMakeFiles/(langc|lang_native_helper)\.dir/[^\n]*: CXX_COMPILER_",
+            r"build [^\n]*CMakeFiles/(woozyc|lang_native_helper)\.dir/[^\n]*: CXX_COMPILER_",
             block)
         if target is None:
             continue
         # Test CLI targets intentionally embed a failing helper; inspect the
         # production CLI and helper targets that this benchmark will execute.
         for key, value in _BUILD_DEFINE_RE.findall(block):
-            if (key == "LANG_NATIVE_HELPER") == (target[1] == "langc"):
+            if (key == "LANG_NATIVE_HELPER") == (target[1] == "woozyc"):
                 values.setdefault(key, set()).add(value)
     requested = {
         "LANG_NATIVE_HELPER": args.helper,
@@ -700,7 +700,7 @@ def limitations():
         "Wall-clock timings include process creation, dynamic loading and file I/O; they are not in-process kernel timings.",
         "The language programs have no output or public FFI value; each program compares its full-width result with the embedded expected value and exits 0 only on exact equality. The harness observes only that exit status.",
         "The independent Python oracle masks after every intermediate operation and is recomputed from the fixed seed/width/iteration inputs; it is not derived from compiler output.",
-        "langc build work and clang++ build work are not identical: langc includes its own frontend/check and native link, while clang++ compiles only the C++ reference and links it.",
+        "woozyc build work and clang++ build work are not identical: woozyc includes its own frontend/check and native link, while clang++ compiles only the C++ reference and links it.",
         "No CPU governor change, cache drop/flush, process killing, perf counters, LTO, fast-math or -march=native is used.",
         "Cold file-cache behavior is not controlled; process warmups do not guarantee cold-cache measurements.",
         "The public CLI has no in-process incremental check entry; check timing is one fresh process per sample.",
@@ -753,7 +753,7 @@ def run_negative_controls(args, env, out, cases, report):
         reference_text = reference_text.replace(str(case["iterations"]), "2").replace(
             str(case["expected"]), str(flipped)
         )
-        source_path = directory / "src" / "main.lang"
+        source_path = directory / "src" / "main.wz"
         reference_path = directory / "reference.cpp"
         source_path.write_text(source_text, encoding="utf-8")
         reference_path.write_text(reference_text, encoding="utf-8")
@@ -1700,7 +1700,7 @@ def self_test():
             runtime.touch()
             (build / "CMakeCache.txt").write_text("CMAKE_BUILD_TYPE:STRING=Release\n")
             cli = (
-                "build CMakeFiles/langc.dir/main.cpp.o: CXX_COMPILER__langc_Release main.cpp\n"
+                "build CMakeFiles/woozyc.dir/main.cpp.o: CXX_COMPILER__woozyc_Release main.cpp\n"
                 f'  DEFINES = -DLANG_NATIVE_HELPER=\\"{helper}\\"\n')
             native = (
                 "build native/CMakeFiles/lang_native_helper.dir/helper.cpp.o: CXX_COMPILER__helper_Release helper.cpp\n"
@@ -1711,7 +1711,7 @@ def self_test():
                 '  DEFINES = -DLANG_NATIVE_HELPER=\\"/missing/test-helper\\"\n')
             ninja = build / "build.ninja"
             ninja.write_text(cli + native + probe)
-            args = argparse.Namespace(langc=build / "langc", helper=helper,
+            args = argparse.Namespace(langc=build / "woozyc", helper=helper,
                                       runtime=runtime, llvm_bin=build)
             tree = build_tree_info(args, os.environ.copy(), None)
             add("production-helper-not-test-probe",
@@ -1835,10 +1835,10 @@ def parse_args(argv=None):
         formatter_class=argparse.RawDescriptionHelpFormatter,
         epilog=(
             "Prepare:\n"
-            "  run_native.py --prepare-only --out NEW_DIR --langc PATH --helper PATH \\\n"
+            "  run_native.py --prepare-only --out NEW_DIR --woozyc PATH --helper PATH \\\n"
             "      --llvm-bin DIR [--runtime PATH] [--compiler-root PATH]\n\n"
             "Measure (requires a passed prepare report):\n"
-            "  run_native.py --out NEW_DIR --prepare-report PREPARE_JSON --langc PATH \\\n"
+            "  run_native.py --out NEW_DIR --prepare-report PREPARE_JSON --woozyc PATH \\\n"
             "      --helper PATH --llvm-bin DIR [--runtime PATH] [--cpu N]\n\n"
             "Self-test:\n"
             "  run_native.py --self-test"
@@ -1848,7 +1848,7 @@ def parse_args(argv=None):
     parser.add_argument("--prepare-only", action="store_true", help="prepare and validate; do not run formal timing")
     parser.add_argument("--out", type=Path, help="new output directory; existing paths are refused")
     parser.add_argument("--prepare-report", type=Path, help="passed prepare.json required by the measurement stage")
-    parser.add_argument("--langc", type=Path, help="public langc executable")
+    parser.add_argument("--woozyc", dest="langc", type=Path, help="public woozyc executable")
     parser.add_argument("--helper", type=Path, help="lang_native_helper executable")
     parser.add_argument("--runtime", type=Path, help="liblang_native_runtime.a (default: next to helper)")
     parser.add_argument("--llvm-bin", type=Path, help="directory containing clang++ and opt")
@@ -1878,7 +1878,7 @@ def validate_args(args):
     if args.out is None:
         raise PerfError("--out is required")
     if args.langc is None or args.helper is None or args.llvm_bin is None:
-        raise PerfError("--langc, --helper and --llvm-bin are required")
+        raise PerfError("--woozyc, --helper and --llvm-bin are required")
     if args.prepare_only and args.prepare_report is not None:
         raise PerfError("--prepare-report is only valid for the measurement stage")
     if not args.prepare_only and args.prepare_report is None:
@@ -1897,7 +1897,7 @@ def validate_args(args):
         args.ld_library_path = args.ld_library_path.resolve()
 
     for path, label in (
-        (args.langc, "--langc"),
+        (args.langc, "--woozyc"),
         (args.helper, "--helper"),
         (args.runtime, "--runtime"),
         (args.fixtures, "--fixtures"),
@@ -1905,7 +1905,7 @@ def validate_args(args):
         if not path.exists():
             raise PerfError(f"{label} does not exist: {path}")
     if not args.langc.is_file() or not os.access(args.langc, os.X_OK):
-        raise PerfError(f"--langc is not executable: {args.langc}")
+        raise PerfError(f"--woozyc is not executable: {args.langc}")
     if not args.helper.is_file() or not os.access(args.helper, os.X_OK):
         raise PerfError(f"--helper is not executable: {args.helper}")
     for name in ("clang", "clang++", "ld.lld", "opt"):

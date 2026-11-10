@@ -42,21 +42,21 @@ target_link_libraries(lang_native_string_probe PRIVATE lang_sema lang_native ${L
 if(LANG_TEST_PYTHON)
   foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates aggregate-constants)
     add_test(NAME native.${fixture} COMMAND ${LANG_TEST_PYTHON}
-      ${CMAKE_CURRENT_LIST_DIR}/run_strings.py --cli $<TARGET_FILE:langc>
+      ${CMAKE_CURRENT_LIST_DIR}/run_strings.py --cli $<TARGET_FILE:woozyc>
       --probe $<TARGET_FILE:lang_native_string_probe> --root ${LANG_SOURCE_ROOT}
       --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
       --out ${CMAKE_CURRENT_BINARY_DIR}/${fixture}-results --fixture ${fixture})
     set_tests_properties(native.${fixture} PROPERTIES TIMEOUT 180)
   endforeach()
   add_test(NAME native.cli COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_cli.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_cli.py --cli $<TARGET_FILE:woozyc>
     --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --out ${CMAKE_CURRENT_BINARY_DIR}/cli-results
     --helper $<TARGET_FILE:lang_native_helper>
     --invalid-json-cli $<TARGET_FILE:langc_native_invalid_json_probe>)
   set_tests_properties(native.cli PROPERTIES TIMEOUT 180)
   add_test(NAME native.generics COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_generics.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_generics.py --cli $<TARGET_FILE:woozyc>
     --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --out ${CMAKE_CURRENT_BINARY_DIR}/generic-results)
   set_tests_properties(native.generics PROPERTIES TIMEOUT 180)
@@ -69,7 +69,7 @@ target_compile_options(lang_native_cleanup_probe PRIVATE -fno-rtti)
 target_link_libraries(lang_native_cleanup_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 if(LANG_TEST_PYTHON)
   add_test(NAME native.cleanup COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_cleanup.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_cleanup.py --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_cleanup_probe> --root ${LANG_SOURCE_ROOT}
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
     --out ${CMAKE_CURRENT_BINARY_DIR}/cleanup-results)
@@ -86,7 +86,7 @@ target_link_libraries(lang_native_convert_probe PRIVATE lang_sema lang_native ${
 if(LANG_TEST_PYTHON AND LANG_PYTHON312)
   add_test(NAME native.conversions COMMAND ${LANG_TEST_PYTHON}
     ${LANG_SOURCE_ROOT}/tests/numeric/run_conversions.py
-    --cli $<TARGET_FILE:langc> --probe $<TARGET_FILE:lang_native_convert_probe>
+    --cli $<TARGET_FILE:woozyc> --probe $<TARGET_FILE:lang_native_convert_probe>
     --root ${LANG_SOURCE_ROOT} --python ${LANG_PYTHON312}
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --runtime $<TARGET_FILE:lang_native_runtime>
@@ -97,7 +97,7 @@ else()
 endif()
 if(LANG_TEST_PYTHON)
   add_test(NAME native.floating COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_floating.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_floating.py --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_float_probe> --root ${LANG_SOURCE_ROOT}
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
     --out ${CMAKE_CURRENT_BINARY_DIR}/floating-results)
@@ -129,7 +129,7 @@ add_test(NAME native.alloc_reuse_deny_mmap COMMAND lang_native_alloc_reuse_test 
 set_tests_properties(native.alloc_reuse_deny_mmap PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
 if(LANG_TEST_PYTHON)
   add_test(NAME native.trivial_vec COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_trivial_vec.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_trivial_vec.py --cli $<TARGET_FILE:woozyc>
     --helper $<TARGET_FILE:lang_native_helper>
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --runtime $<TARGET_FILE:lang_native_runtime>
@@ -145,7 +145,7 @@ target_compile_options(lang_native_ownership_probe PRIVATE -fno-rtti)
 target_link_libraries(lang_native_ownership_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 if(LANG_TEST_PYTHON)
   add_test(NAME native.ownership COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_ownership.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_ownership.py --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_ownership_probe> --root ${LANG_SOURCE_ROOT}
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
     --runtime-test $<TARGET_FILE:lang_native_vec_runtime_test>
@@ -167,7 +167,7 @@ target_compile_options(lang_native_unreachable_try_test PRIVATE -fno-rtti)
 target_link_libraries(lang_native_unreachable_try_test PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 if(LANG_TEST_PYTHON)
   add_test(NAME native.unreachable_try COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_unreachable_try.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_unreachable_try.py --cli $<TARGET_FILE:woozyc>
     --probe $<TARGET_FILE:lang_native_unreachable_try_test> --root ${LANG_SOURCE_ROOT}
     --python ${LANG_TEST_PYTHON} --cxx ${LLVM_TOOLS_BINARY_DIR}/clang++
     --runtime $<TARGET_FILE:lang_native_runtime>
@@ -194,7 +194,7 @@ add_test(NAME native.vec_negative_constant COMMAND lang_native_vec_negative_cons
   ${LANG_SOURCE_ROOT}/tests/native/fixtures/vec-negative-constants/lang.toml)
 if(LANG_TEST_PYTHON)
   add_test(NAME native.vec_negative_runtime COMMAND ${LANG_TEST_PYTHON}
-    ${CMAKE_CURRENT_LIST_DIR}/run_vec_negative.py --cli $<TARGET_FILE:langc>
+    ${CMAKE_CURRENT_LIST_DIR}/run_vec_negative.py --cli $<TARGET_FILE:woozyc>
     --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/vec-negative-results)
   set_tests_properties(native.vec_negative_runtime PROPERTIES TIMEOUT 180)
 else()

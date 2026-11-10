@@ -99,7 +99,7 @@ def main():
                 row = dict(id=ident, opt=opt, build=built, expected_main_return=main_return,
                            source_sha256={str(p.relative_to(args.root)): digest(p)
                                           for p in sorted(manifest.parent.rglob('*'))
-                                          if p.is_file() and (p.suffix == '.lang' or p.name == 'lang.toml')})
+                                          if p.is_file() and (p.suffix == '.wz' or p.name == 'lang.toml')})
                 report['runs'].append(row)
                 assert built['exit'] == 0 and not built['stderr'], built
                 assert json.loads(built['stdout'])['status'] == 'ok', built
@@ -128,7 +128,7 @@ def main():
         (project / 'src').mkdir(parents=True, exist_ok=True)
         manifest = project / 'lang.toml'
         manifest.write_text('schema_version=1\n[package]\nname="cli"\nsource_root="src"\nentry="app"\n[build]\nbackend="native"\nword_bits=64\n')
-        (project / 'src/main.lang').write_text('package app; func main() i32 {return true;}')
+        (project / 'src/main.wz').write_text('package app; func main() i32 {return true;}')
         out = args.out / 'core/O0'
         before = {f: digest(out / f) for f in ('program', 'program.o')}
         failed = command([args.cli, 'build', '--project', manifest, '--backend', 'native', '--out-dir', out, '--format', 'json'])
@@ -163,11 +163,11 @@ def main():
         assert 'helper exit code 2' in invalid_diagnostic['message'], invalid_json
         report['controls'].append(dict(id='driver-invalid-helper-json-exit-context',
                                        build=invalid_json))
-        (project / 'src/main.lang').write_text('package app; func library() {}')
+        (project / 'src/main.wz').write_text('package app; func library() {}')
         no_main = command([args.cli, 'build', '--project', manifest, '--backend', 'native', '--out-dir', args.out / 'no-main', '--format', 'json'])
         assert no_main['exit'] == 1 and json.loads(no_main['stdout'])['diagnostics'][0]['code'] == 'E_CAPABILITY_UNAVAILABLE', no_main
         report['controls'].append(dict(id='no-entry', build=no_main))
-        (project / 'src/main.lang').write_text('package app; func main() {}')
+        (project / 'src/main.wz').write_text('package app; func main() {}')
         blocked = args.out / 'blocked'
         (blocked / 'program').mkdir(parents=True, exist_ok=True)
         # Clear only files owned by this repeated failure test.
@@ -175,7 +175,7 @@ def main():
         (blocked / 'unrelated').unlink(missing_ok=True)
         io = command([args.cli, 'build', '--project', manifest, '--backend', 'native', '--out-dir', blocked, '--format', 'json'])
         assert io['exit'] == 2 and not io['stderr'] and json.loads(io['stdout'])['diagnostics'][0]['code'] == 'E_INPUT_IO', io
-        assert (blocked / 'program').is_dir() and not list(blocked.glob('.langc-native-*'))
+        assert (blocked / 'program').is_dir() and not list(blocked.glob('.woozyc-native-*'))
         report['controls'].append(dict(id='io-error-cleans-stage', build=io))
         assert not (blocked / 'program.o').exists()
         (blocked / 'program.o').write_bytes(b'old-object-sentinel')
@@ -184,7 +184,7 @@ def main():
         assert io['exit'] == 2 and not io['stderr'] and json.loads(io['stdout'])['diagnostics'][0]['code'] == 'E_INPUT_IO', io
         assert (blocked / 'program.o').read_bytes() == b'old-object-sentinel'
         assert (blocked / 'unrelated').read_bytes() == b'keep'
-        assert (blocked / 'program').is_dir() and not list(blocked.glob('.langc-*'))
+        assert (blocked / 'program').is_dir() and not list(blocked.glob('.woozyc-*'))
         (blocked / 'program').rmdir()
         (blocked / 'program.o').unlink()
         (blocked / 'unrelated').unlink()

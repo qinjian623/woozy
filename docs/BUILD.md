@@ -6,16 +6,16 @@
 cmake --preset frontend-debug
 cmake --build --preset frontend-debug
 ctest --preset frontend-debug
-build/frontend-debug/langc --help
-build/frontend-debug/langc --version
+build/frontend-debug/woozyc --help
+build/frontend-debug/woozyc --version
 ```
 
 帮助和版本返回 0；无参数、未知命令、多余帮助/版本参数返回 2。check --syntax-only [--format json] FILE 检查一个文件；check --project MANIFEST [--backend native|python] [--format json] 读取项目并检查已支持的标量类型。检查成功为 0、源码错误或未支持操作为 1、输入文件/配置/参数错误为 2、内部错误为 3。build 已支持 Python/64 和 Linux x86_64 原生标量程序；未开启 LANG_ENABLE_LLVM 时原生 build 明确拒绝。lsp 和 capabilities 仍返回 E_CAPABILITY_UNAVAILABLE。
 
 ```sh
-build/frontend-debug/langc check --syntax-only examples/core.lang
-build/frontend-debug/langc check --syntax-only --format json examples/core.lang
-python3 tests/syntax/run_cases.py build/frontend-debug/langc
+build/frontend-debug/woozyc check --syntax-only examples/core.wz
+build/frontend-debug/woozyc check --syntax-only --format json examples/core.wz
+python3 tests/syntax/run_cases.py build/frontend-debug/woozyc
 ```
 
 CTest 已包含 80 个分类的真实 C++ CLI 执行及 JSON schema 检查，另有 lexer、AST、恢复、深度、取消、源码和输入错误测试。文件用例先读取实际文件并与固定清单逐字节比较，防止只检查旧副本。
@@ -24,7 +24,7 @@ CTest 已包含 80 个分类的真实 C++ CLI 执行及 JSON schema 检查，另
 
 ```sh
 python3 tests/modules/run_cases.py build/frontend-debug/lang_module_check
-python3 tools/validate_module_fixtures.py --langc build/frontend-debug/langc
+python3 tools/validate_module_fixtures.py --woozyc build/frontend-debug/woozyc
 ```
 
 第一条真正执行 C++ 项目和名称解析，并检查错误种类与原始文件区间。第二条只检查资料引用及语法，不代替名称检查。实例成员和 trait 选择留给 T07；局部新绑定在初始化完成后才可见，初始化表达式可以引用同名外层绑定。
@@ -58,12 +58,12 @@ build/llvm-clang22/lang_llvm_probe
 
 已分别运行 LLVM 22.1.8 接入探针，以及 Clang 22.1.8 + LLD 22.1.8 的 C++20 编译、链接、运行检查。LLVM 23.1.3 配置会被版本检查拒绝。探针结果只验证工具链；下文的实际源语言程序另做生成与运行检查。
 
-独立验收工程为 tests/fixtures/core 和 tests/fixtures/numeric，每个只有 src/main.lang 的一个 main，源码分别复制 examples/core.lang、examples/numeric.lang，未改历史样例。清单遵循现有项目格式。使用开启 LLVM 的 langc，分别执行：
+独立验收工程为 tests/fixtures/core 和 tests/fixtures/numeric，每个只有 src/main.wz 的一个 main，源码分别复制 examples/core.wz、examples/numeric.wz，未改历史样例。清单遵循现有项目格式。使用开启 LLVM 的 woozyc，分别执行：
 
 ```sh
-langc build --project tests/fixtures/core/lang.toml --backend native --out-dir build/core/native
+woozyc build --project tests/fixtures/core/lang.toml --backend native --out-dir build/core/native
 ./build/core/native/program
-langc build --project tests/fixtures/core/lang.toml --backend python --out-dir build/core/python
+woozyc build --project tests/fixtures/core/lang.toml --backend python --out-dir build/core/python
 /path/to/python3.12 -s build/core/python/program.py
 ```
 
@@ -83,7 +83,7 @@ T07 的泛型、聚合类型和 trait 静态接口及当前限制见 [GENERICS.m
 ## Python 标量程序
 
 ```sh
-langc build --project tests/fixtures/core/lang.toml --backend python --out-dir build/core/python
+woozyc build --project tests/fixtures/core/lang.toml --backend python --out-dir build/core/python
 /path/to/python3.12 -s build/core/python/program.py
 ```
 
@@ -99,12 +99,12 @@ build 检查源程序并写入 program.py 和 langrt.py，不执行 Python。执
 ## 原生标量程序
 
 ```sh
-build/native-cli/langc build --project tests/fixtures/core/lang.toml \
+build/native-cli/woozyc build --project tests/fixtures/core/lang.toml \
   --backend native --opt 2 --out-dir build/core/native --format json
 build/core/native/program
 ```
 
-仅接受 Linux x86_64、64位项目和 O0/O2。langc 不链接 LLVM 或 CPython；生成工作由独立
+仅接受 Linux x86_64、64位项目和 O0/O2。woozyc 不链接 LLVM 或 CPython；生成工作由独立
 helper 执行。源码/未支持错误返回1，工具缺失和写文件错误返回2，链接失败报告
 E_LINK_FAILED。发布前检查目的文件类型；第二个文件替换报错时恢复第一个旧文件，
 没有旧文件则移除新文件。恢复失败会保留备份并在诊断中给出位置。构建命令不执行新程序。

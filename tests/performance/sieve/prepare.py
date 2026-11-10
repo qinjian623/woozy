@@ -32,7 +32,7 @@ TARGET_FLAGS = (
     "--target=x86_64-unknown-linux-gnu", "-march=x86-64", "-mtune=generic",
     "-fno-fast-math", "-fno-lto",
 )
-TEMPLATE_NAMES = ("sieve.lang.in", "reference.cpp.in")
+TEMPLATE_NAMES = ("sieve.wz.in", "reference.cpp.in")
 PerfError = common.PerfError
 MARKER_RE = re.compile(
     r"^//\s*PERF-SIEVE\s+n=(\d+)\s+rounds=(\d+)\s+count=(\d+)\s+sum=(\d+)\s*$",
@@ -162,14 +162,14 @@ def generate_case(out, templates, n, variant, expected_count, expected_sum):
     directory = out / "cases" / f"n{n}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
     zeros = render_zero_list(n)
-    source_text = render(templates["sieve.lang.in"], n, expected_count,
+    source_text = render(templates["sieve.wz.in"], n, expected_count,
                          expected_sum, zeros)
     reference_text = render(templates["reference.cpp.in"], n, expected_count,
                             expected_sum, zeros)
     label = f"n={n} {variant}"
     verify_generated(source_text, reference_text, n, expected_count,
                      expected_sum, label)
-    source, reference = directory / "src" / "main.lang", directory / "reference.cpp"
+    source, reference = directory / "src" / "main.wz", directory / "reference.cpp"
     manifest = directory / "lang.toml"
     source.write_text(source_text, encoding="utf-8")
     reference.write_text(reference_text, encoding="utf-8")
@@ -490,7 +490,7 @@ def repo_signature(record):
 
 def write_patch(out, args, env):
     worktree = PERFORMANCE_DIR.parents[2]
-    names = ("sieve.lang.in", "reference.cpp.in", "prepare.py", "README.md")
+    names = ("sieve.wz.in", "reference.cpp.in", "prepare.py", "README.md")
     parts = []
     for name in names:
         relative = f"tests/performance/sieve/{name}"
@@ -706,7 +706,7 @@ def prepare(args):
             "worktree": str(worktree),
             "worktree_head": report["repositories"]["worktree"]["head"],
             "files": [file_rec(PERFORMANCE_DIR / name)
-                      for name in ("sieve.lang.in", "reference.cpp.in",
+                      for name in ("sieve.wz.in", "reference.cpp.in",
                                    "prepare.py", "README.md")],
             "patch": write_patch(out, args, env),
         }
@@ -768,7 +768,7 @@ def parse_args(argv=None):
         description=__doc__,
         formatter_class=argparse.RawDescriptionHelpFormatter)
     parser.add_argument("--out", type=Path, help="new output directory; must not exist")
-    parser.add_argument("--langc", type=Path, required=True)
+    parser.add_argument("--woozyc", dest="langc", type=Path, required=True)
     parser.add_argument("--helper", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--llvm-bin", type=Path, required=True)

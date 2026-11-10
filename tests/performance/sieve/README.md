@@ -38,12 +38,12 @@ runs the small bounds first and stops on the first failure.
 
 For every correct case:
 
-- public `langc check` JSON;
+- public `woozyc check` JSON;
 - Native O0/O2 and C++ O0/O2 builds, ELF64 x86_64 executable checks, and quiet
   executions;
 - Source LLVM `before.ll` / `after.ll` from `lang_native_helper`, two explicit
   `opt -passes=verify` runs, helper-object SHA-256, and byte equality with the
-  formal `langc build` `program.o`;
+  formal `woozyc build` `program.o`;
 - `opt -passes=print<loops>` on the O2 Source IR, limited to the one function
   that contains a real `store i8 1` marking write (that is `main` when the
   sieve was inlined, or the separate sieve function otherwise). The function
@@ -80,7 +80,7 @@ durations only, not performance samples. The run also writes `oracle.json`,
 The production tools used by the recorded preparation run are under
 `/home/qin/Work/language-dev-20261103`; `compiler-root` must point at the main
 compiler checkout. The script may run from that checkout or from a worker
-worktree, but the supplied `langc`, helper, and runtime must be under
+worktree, but the supplied `woozyc`, helper, and runtime must be under
 `compiler-root` (the worker must not point them at a worker build). The CMake
 cache must record `BUILD_TESTING=OFF`, and the script does not rebuild or
 replace the supplied tools.
@@ -94,7 +94,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 
 "$PY" tests/performance/sieve/prepare.py \
   --out checks/sieve-preparation-20261109-correction1 \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \

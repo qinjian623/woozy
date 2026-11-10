@@ -19,7 +19,7 @@ struct Stage {
   bool preserve = false;
   explicit Stage(const fs::path &out) {
     fs::create_directories(out);
-    auto pattern = (out / ".langc-native-XXXXXX").string();
+    auto pattern = (out / ".woozyc-native-XXXXXX").string();
     if (!mkdtemp(pattern.data()))
       throw fs::filesystem_error("create build staging directory", out,
                                 std::error_code(errno, std::generic_category()));

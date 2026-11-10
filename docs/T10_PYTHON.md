@@ -21,7 +21,7 @@
 
 ## 2. API 生成
 
-标准绑定通过 `ProjectOptions::std_binding_bundle` 提供；普通依赖仍使用清单中的 binding 文件。正式 `langc` 的 `check/build --project` 已提供可选 `--std-binding BUNDLE`，把操作者选择的工具链标准声明直接交给同一个 `load_project`。`check_project` 默认后端模式已会检查 Python/64 外部操作。
+标准绑定通过 `ProjectOptions::std_binding_bundle` 提供；普通依赖仍使用清单中的 binding 文件。正式 `woozyc` 的 `check/build --project` 已提供可选 `--std-binding BUNDLE`，把操作者选择的工具链标准声明直接交给同一个 `load_project`。`check_project` 默认后端模式已会检查 Python/64 外部操作。
 
 ```cpp
 SourceManager sources;
@@ -42,9 +42,9 @@ for (const auto &symbol : output.value->symbols)
 `emit` 只生成字符串，不启动 Python、不 import NumPy/PyTorch，也不访问文件系统或子进程。正式 CLI 使用同一路径：
 
 ```bash
-langc check --project lang.toml --backend python \
+woozyc check --project lang.toml --backend python \
   --std-binding contracts/python_bindings.example.json --format json
-langc build --project lang.toml --backend python \
+woozyc build --project lang.toml --backend python \
   --std-binding contracts/python_bindings.example.json --out-dir build/python
 ```
 
@@ -91,6 +91,6 @@ CLI 参数只负责选择绑定文件。该 example bundle 保留 `draft_require
 - `tests/python/t10_original04.py`：使用专用 CPython 3.12.15、NumPy 2.5.4、PyTorch 2.15.0+cpu，调用真实生成的 `train`；检查 seed 7、Linear(1,1)、lr 0.1、200 次 backward/step/zero_grad、201 次真实 model forward hook、x/y 形状/dtype、y=2x+1、参数更新、loss 下降和返回零维 CPU float32 Tensor 保留 autograd。数值读取仅在测试端进行。
 - `tests/python/t10_real_objects.py`：对生成的普通参数/let/返回函数传入真实 ndarray、Tensor、view 和带梯度的派生 Tensor，检查身份、data_ptr、双向别名修改及无隐式转换；真实 NumPy ValueError 经生成代码包装为 py.Error，保留消息、traceback、源位置，函数退出后 owner/borrow 清空。宿主测试中的索引和 no_grad 不扩展源语言。
 - `tests/python/t10_reference04.py` 独立执行原手写参考，按 `rtol=1e-5/atol=1e-6` 比较，不修改参考。
-- 本地 `tests/python/CMakeLists.txt` 只在配置了 `LANG_T10_PYTHON` 时注册 `python.t10_bindings`、聚焦的 `python.foreign_ownership` 和 `python.t10_cli`；普通 `python3.12` 未被替换成专用依赖环境。`python.t10_cli` 使用正式 `langc` 的 `--std-binding`，检查参数/路径/错误保留/native 转发，并实际执行 CLI 生成的原 04 训练函数。
+- 本地 `tests/python/CMakeLists.txt` 只在配置了 `LANG_T10_PYTHON` 时注册 `python.t10_bindings`、聚焦的 `python.foreign_ownership` 和 `python.t10_cli`；普通 `python3.12` 未被替换成专用依赖环境。`python.t10_cli` 使用正式 `woozyc` 的 `--std-binding`，检查参数/路径/错误保留/native 转发，并实际执行 CLI 生成的原 04 训练函数。
 
 原 04 的 API 与正式 CLI 生成、真实 CPU 执行、参考比较以及依赖锁的检查结果见 [T10_CPU_VERIFICATION.md](T10_CPU_VERIFICATION.md)。这些结果只覆盖所记录的环境、声明集和样例，不代表 GPU/CUDA、其他训练或任意 Python 库已经支持。

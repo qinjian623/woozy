@@ -62,9 +62,9 @@ Vec 别名共享写入；切片创建新容器并逻辑复制元素，引用元�
 使用已启用 LLVM 的主目录构建，执行共享写入例子：
 
 ```sh
-build/native-cli/langc build --project tests/ownership/fixtures/vec-shared-index/lang.toml --backend native --opt 2 --out-dir build/vec-native --format json
+build/native-cli/woozyc build --project tests/ownership/fixtures/vec-shared-index/lang.toml --backend native --opt 2 --out-dir build/vec-native --format json
 build/vec-native/program
-build/native-cli/langc build --project tests/ownership/fixtures/vec-shared-index/lang.toml --backend python --out-dir build/vec-python --format json
+build/native-cli/woozyc build --project tests/ownership/fixtures/vec-shared-index/lang.toml --backend python --out-dir build/vec-python --format json
 python3.12 -s build/vec-python/program.py
 ```
 

@@ -127,11 +127,11 @@ observers, work checks, and report remain local.
 
 For every N:
 
-- public `langc check` JSON for the correct case;
+- public `woozyc check` JSON for the correct case;
 - Source/C++ O0/O2 builds, ELF64 x86_64 checks, and quiet executions for the
   correct, wrong, and negative variants;
 - Source LLVM `before.ll`/`after.ll`, two explicit verifier runs, helper-object
-  SHA-256 and byte equality with the formal `langc build` `program.o`;
+  SHA-256 and byte equality with the formal `woozyc build` `program.o`;
 - exact `visit` SymbolId recognition and actual call counts: O0 positive, O2
   zero; an unknown or missing symbol fails instead of counting zero;
 - O2 main/helper IR checks: no fast/contract float flags and no FMA intrinsic;
@@ -170,7 +170,7 @@ does.
 The production tools used by the recorded preparation run are under
 `/home/qin/Work/language-dev-20261103`; `--compiler-root` must point at the main
 compiler checkout. The script may run from that checkout or from a worker
-worktree, but the supplied `langc`, helper, and runtime must be under
+worktree, but the supplied `woozyc`, helper, and runtime must be under
 `--compiler-root`. The CMake cache must record `BUILD_TESTING=OFF`.
 
 ```sh
@@ -182,7 +182,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 
 "$PY" tests/performance/matmul/prepare.py \
   --out /path/outside/the/worktree/matmul-preparation \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \

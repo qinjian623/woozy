@@ -28,23 +28,23 @@ LLVM API 示例优先查 22.1.x 发布文档和 22.1.8 头文件，禁止从主�
 
 标准库位置可以由工具链安装目录、显式 `--sysroot` 或配置指定。后两者进入有效配置与缓存 key；源码不随机器路径变化。导入补全使用同一个模块索引，支持标准库、项目库和已声明依赖。
 
-T03 采用以下目录约定：每个模块读取对应目录直接包含的 `.lang` 文件，按文件名排序；`app/foo` 读取 `package.source_root/foo/`，不把 `foo.lang` 同时当成候选。source 依赖的 path 指项目目录，存在 `lang.toml` 时读取其 source_root 和 dependencies，否则显式 path 本身作为源码根。库的 entry 不影响导入模块的选择。源码目录先取 canonical 身份，同一目录经不同别名导入只加载一次；不同来源提供同一逻辑模块时报告冲突。
+T03 采用以下目录约定：每个模块读取对应目录直接包含的 `.wz` 文件，按文件名排序；`app/foo` 读取 `package.source_root/foo/`，不把 `foo.wz` 同时当成候选。source 依赖的 path 指项目目录，存在 `lang.toml` 时读取其 source_root 和 dependencies，否则显式 path 本身作为源码根。库的 entry 不影响导入模块的选择。源码目录先取 canonical 身份，同一目录经不同别名导入只加载一次；不同来源提供同一逻辑模块时报告冲突。
 
 ## 3 CLI 目标接口
 
-`langc` 已支持单文件词法/语法检查、项目类型/效果/所有权检查、Linux x86_64 原生构建，以及 Python 3.12 代码生成。泛型、方法和值操作的具体支持范围见 [GENERICS.md](GENERICS.md) 与 [SEMANTICS.md](SEMANTICS.md)；尚未实现的合法语法报告 `E_CAPABILITY_UNAVAILABLE`。`capabilities` 与 `lsp` 仍未实现。以下命令中，这两项是目标接口，其余按已支持的目标和类型执行：
+`woozyc` 已支持单文件词法/语法检查、项目类型/效果/所有权检查、Linux x86_64 原生构建，以及 Python 3.12 代码生成。泛型、方法和值操作的具体支持范围见 [GENERICS.md](GENERICS.md) 与 [SEMANTICS.md](SEMANTICS.md)；尚未实现的合法语法报告 `E_CAPABILITY_UNAVAILABLE`。`capabilities` 与 `lsp` 仍未实现。以下命令中，这两项是目标接口，其余按已支持的目标和类型执行：
 
 ```bash
-langc check --syntax-only examples/core.lang
-langc check --project lang.toml --backend native --format json
-langc check --project lang.toml --backend python --format json
-langc build --project lang.toml --backend native --emit llvm
-langc build --project lang.toml --backend native --target x86_64-unknown-linux-gnu
-langc build --project lang.toml --backend python --out-dir build/python
-langc check --project lang.toml --backend python --std-binding BUNDLE --format json
-langc build --project lang.toml --backend python --std-binding BUNDLE --out-dir build/python
-langc capabilities --format json
-langc lsp
+woozyc check --syntax-only examples/core.wz
+woozyc check --project lang.toml --backend native --format json
+woozyc check --project lang.toml --backend python --format json
+woozyc build --project lang.toml --backend native --emit llvm
+woozyc build --project lang.toml --backend native --target x86_64-unknown-linux-gnu
+woozyc build --project lang.toml --backend python --out-dir build/python
+woozyc check --project lang.toml --backend python --std-binding BUNDLE --format json
+woozyc build --project lang.toml --backend python --std-binding BUNDLE --out-dir build/python
+woozyc capabilities --format json
+woozyc lsp
 ```
 
 `check --syntax-only` 不要求依赖安装或链接器；全量 check 读取项目、绑定、目标能力并检查语义，但不运行代码、不启动 Python、不加载 LLVM 后端。build 才进行代码生成和链接；build 默认不执行产物。生成 Python 之后的运行是显式独立步骤。
@@ -53,7 +53,7 @@ langc lsp
 
 ### 3.1 退出码
 
-| 命令状态 | langc 退出码 |
+| 命令状态 | woozyc 退出码 |
 | --- | --- |
 | 检查或构建成功 | 0 |
 | 用户源码、绑定或目标能力不合法 | 1 |

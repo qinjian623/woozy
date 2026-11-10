@@ -164,7 +164,7 @@ callee 一次求值、实参源码顺序、inout Cell、continue step、函数�
 `E_CAPABILITY_UNAVAILABLE`；Verified 输入仍只由共用 `hir::verify` 发布。
 
 `tests/python/run_generics.py` 读取原 `tests/generics/cases.json` 中的预期返回值。
-每个项目分别执行正式 `langc check`、`langc build --backend python`，再以独立的
+每个项目分别执行正式 `woozyc check`、`woozyc build --backend python`，再以独立的
 Python **3.12.15** 进程运行生成的 `program.py`。check/build 子进程的 PATH 只含会失败的
 Python 命令，确认它们无需通过 PATH 启动 Python；代码检查也确认 Python build 分支只写文件。
 执行阶段使用指定解释器绝对路径。生成器没有新增解释器调用或 Python 导入。
@@ -258,7 +258,7 @@ lang::backend::python::emit(
 一基行号到原 SourceSpan 的对应。辅助 import、顶层 runner 和自动生成的空块 pass 不伪造源码位置。
 这些 ID 仍属于本次编译，不能当成跨构建缓存身份。
 
-emitter 不读 `.lang`，不按源名字查找变量，不调用解释器、eval、exec 或外部包。
+emitter 不读 `.wz`，不按源名字查找变量，不调用解释器、eval、exec 或外部包。
 函数为 `_f<SymbolId>`，参数和绑定为 `_s<SymbolId>`，临时量为
 `_t<函数SymbolId>_<序号>`。重复 `_` 参数使用各自独立的 SymbolId，得到不同合法形参名。
 helper 仅在选取入口时根据已解析符号表寻找入口模块的 main；代码生成不重新解析名字。
@@ -443,7 +443,7 @@ native 差分、T08 错误清理、T09 ARC/泄漏、T10 foreign 集成未执行�
 
 ## 主目录集成结果
 
-主代理已加入正式 `langc build --project MANIFEST --backend python --out-dir DIR [--format json]`。
+主代理已加入正式 `woozyc build --project MANIFEST --backend python --out-dir DIR [--format json]`。
 该命令先检查再生成 program.py/langrt.py，不运行解释器。主目录 Debug、Release、Clang22
 ASan/UBSan 均17/17通过（包括新增 python.cli），实际17工程、15补充、5分类对照通过。
 独立只读审查310f6335未发现可确认错误。主目录新输出不依赖上述旧独立构建目录。
@@ -456,6 +456,6 @@ LANG_PYTHON312且由runner核实真实版本。正式CLI源码错误或未支持
 cmake --preset frontend-debug -DLANG_PYTHON312=/path/to/python3.12
 cmake --build --preset frontend-debug
 ctest --preset frontend-debug
-build/frontend-debug/langc build --project tests/fixtures/core/lang.toml --backend python --out-dir build/core/python
+build/frontend-debug/woozyc build --project tests/fixtures/core/lang.toml --backend python --out-dir build/core/python
 /path/to/python3.12 -s build/core/python/program.py
 ```

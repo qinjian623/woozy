@@ -48,7 +48,7 @@ auto project(const fs::path &path, Backend backend) {
 std::shared_ptr<const modules::ResolvedProject> resolve(const std::string &body,
                                                         Backend backend) {
   SourceManager sm;
-  auto src = sm.update(sm.add_file("t08-static.lang"), "package app; " + body);
+  auto src = sm.update(sm.add_file("t08-static.wz"), "package app; " + body);
   auto tokens = lex(src);
   need(tokens.success(), diagnostics(tokens));
   auto ast = parse(*tokens.value);
@@ -232,18 +232,18 @@ void module_probes() {
   write("lang.toml",
         "schema_version=1\n[package]\nname=\"t08_modules\"\nsource_root="
         "\"src\"\nentry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-  write("src/a/lib.lang",
+  write("src/a/lib.wz",
         "package a;pub enum E {Bad;} pub func fail() throws E {throw E.Bad;}");
-  write("src/b/lib.lang", "package b;pub enum E {Bad;}");
+  write("src/b/lib.wz", "package b;pub enum E {Bad;}");
   const std::string prefix =
       "package app; import \"app/a\" as a;import \"app/b\" as b; ";
   for (auto backend : {Backend::native, Backend::python}) {
-    write("src/main.lang",
+    write("src/main.wz",
           prefix + "func f() {try {defer {} a.fail();}catch e a.E {}}");
     auto good = project(temp.path / "lang.toml", backend);
     need(good.success(), "qualified catch identity: " + diagnostics(good));
     supported(*good.value);
-    write("src/main.lang", prefix + "func f() {try {a.fail();}catch e b.E {}}");
+    write("src/main.wz", prefix + "func f() {try {a.fail();}catch e b.E {}}");
     auto wrong = project(temp.path / "lang.toml", backend);
     need(!wrong.value && has(wrong, "E_EFFECT_UNHANDLED"),
          "distinct modules' E types were equated");
@@ -808,7 +808,7 @@ void unsafe_probes() {
     for (auto backend : {Backend::native, Backend::python}) {
       SourceManager sm;
       auto src =
-          sm.update(sm.add_file("t08-static.lang"), "package app; " + body);
+          sm.update(sm.add_file("t08-static.wz"), "package app; " + body);
       auto tokens = lex(src);
       need(tokens.success(), diagnostics(tokens));
       auto ast = parse(*tokens.value);

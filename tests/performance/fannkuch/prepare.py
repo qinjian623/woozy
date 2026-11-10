@@ -80,14 +80,14 @@ def sha_map(paths, base):
 def template_records():
     return {
         name: file_rec(PERFORMANCE_DIR / name)
-        for name in ("fannkuch.lang.in", "reference.cpp.in", "visit_trace.py")
+        for name in ("fannkuch.wz.in", "reference.cpp.in", "visit_trace.py")
     }
 
 
 def read_templates():
     return {
         name: (PERFORMANCE_DIR / name).read_text(encoding="utf-8")
-        for name in ("fannkuch.lang.in", "reference.cpp.in")
+        for name in ("fannkuch.wz.in", "reference.cpp.in")
     }
 
 
@@ -123,11 +123,11 @@ def generate_case(out, templates, n, expected, variant, visit_values, visit_flip
         maximum += 1
     directory = out / "cases" / f"n{n}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
-    source = directory / "src" / "main.lang"
+    source = directory / "src" / "main.wz"
     reference = directory / "reference.cpp"
     manifest = directory / "lang.toml"
     source.write_text(
-        render(templates["fannkuch.lang.in"], n, checksum, maximum,
+        render(templates["fannkuch.wz.in"], n, checksum, maximum,
                visit_values, visit_flips), encoding="utf-8"
     )
     reference.write_text(
@@ -783,7 +783,7 @@ def parse_args(argv=None):
     parser.add_argument("--oracle-dir", type=Path, default=DEFAULT_ORACLE_DIR)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--python-helper", type=Path, default=DEFAULT_PYTHON_HELPER)
-    parser.add_argument("--langc", type=Path)
+    parser.add_argument("--woozyc", dest="langc", type=Path)
     parser.add_argument("--helper", type=Path)
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--llvm-bin", type=Path)
@@ -799,7 +799,8 @@ def validate_args(args):
     need(args.out is not None, "--out is required")
     need(args.oracle_dir.is_dir(), f"--oracle-dir is missing: {args.oracle_dir}")
     for name in ("python", "python_helper", "langc", "helper", "runtime", "llvm_bin"):
-        need(getattr(args, name) is not None, f"--{name.replace('_', '-')} is required")
+        option = "--woozyc" if name == "langc" else "--" + name.replace("_", "-")
+        need(getattr(args, name) is not None, f"{option} is required")
     for label, path in (
         ("python", args.python), ("python-helper", args.python_helper),
         ("langc", args.langc), ("helper", args.helper), ("runtime", args.runtime),

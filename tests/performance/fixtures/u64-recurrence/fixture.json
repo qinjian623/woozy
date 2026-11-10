@@ -9,6 +9,6 @@
   "entry": "advance",
   "oracle": "u64-xorshift-multiply-v1",
   "manifest": "lang.toml",
-  "source": "src/main.lang",
+  "source": "src/main.wz",
   "reference": "reference.cpp"
 }

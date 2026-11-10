@@ -20,7 +20,7 @@ int main() {
   static_assert(!std::is_convertible_v<FileId, TypeId>);
   static_assert(!std::is_convertible_v<int, SymbolId>);
   SourceManager m;
-  auto f = m.add_file("test.lang");
+  auto f = m.add_file("test.wz");
   auto s = m.update(f, "\xef\xbb\xbf中😀\t\r\nx\xef\xbb\xbf");
   check(s->normalized() == "中😀\t\nx\xef\xbb\xbf");
   check((s->position(10) == Position{0, 3}));

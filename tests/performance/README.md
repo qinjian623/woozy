@@ -44,8 +44,8 @@ than reading the final integer directly.
 ## Build-tree and actual-tool check
 
 This harness is a check for this repository's CMake/Ninja build tree; it does
-not promise to work with an arbitrary installed `langc`. Before any fixture
-command, it reads `langc.parent/build.ninja` and `CMakeCache.txt` and requires:
+not promise to work with an arbitrary installed `woozyc`. Before any fixture
+command, it reads `woozyc.parent/build.ninja` and `CMakeCache.txt` and requires:
 
 - exactly one `LANG_NATIVE_HELPER`, `LANG_NATIVE_CLANG`, `LANG_NATIVE_LLD`, and
   `LANG_NATIVE_RUNTIME` definition;
@@ -54,7 +54,7 @@ command, it reads `langc.parent/build.ninja` and `CMakeCache.txt` and requires:
 - `CMAKE_BUILD_TYPE:STRING=Release`;
 - all four actual tool paths exist and their SHA-256/version probes are saved.
 
-The public `langc` driver uses the helper path embedded at compile time, and
+The public `woozyc` driver uses the helper path embedded at compile time, and
 that helper uses the embedded Clang, LLD, and runtime paths. The harness also
 saves each formal `program.o` and compares it byte-for-byte with the object
 exported by the independently invoked helper whose before/after IR was
@@ -78,7 +78,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 "$PY" tests/performance/run_native.py \
   --prepare-only \
   --out build/performance-prepare/correction-1/prepare-release \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
@@ -89,15 +89,15 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 
 For each of the two fixtures, prepare:
 
-1. Runs public `langc check` and requires a JSON `ok` status.
-2. Runs public `langc build --opt 0` and `--opt 2`, verifies ELF64 x86_64,
+1. Runs public `woozyc check` and requires a JSON `ok` status.
+2. Runs public `woozyc build --opt 0` and `--opt 2`, verifies ELF64 x86_64,
    saves `program.o` and its SHA-256, and executes the program once.
 3. Compiles the C++ reference with Clang at `-O0` and `-O2` using the fixed
    `x86_64-unknown-linux-gnu` target, C++20, `-fno-fast-math`, and `-fno-lto`,
    then executes it once. These are eight correct executions total.
 4. Uses the explicitly invoked helper to export before/after LLVM IR, native IR,
    and an object. `opt -passes=verify` must pass both IR files (eight files
-   total), and the helper object must byte-match the public `langc` `program.o`
+   total), and the helper object must byte-match the public `woozyc` `program.o`
    for all four fixture/optimization pairs.
 5. Runs `opt -passes=print<loops>` on optimized IR. At `-O2`, the IR must still
    contain a loop and expected arithmetic work; a constant-return artifact is
@@ -130,7 +130,7 @@ directory. It reuses the prepared binaries and fixed inputs:
 "$PY" tests/performance/run_native.py \
   --out build/performance-prepare/correction-1/measure-release-idle \
   --prepare-report build/performance-prepare/correction-1/prepare-release/prepare.json \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
@@ -144,8 +144,8 @@ The measurement stage:
 - Rechecks the script, tools, build-tree definitions, fixtures, prepared
   binaries, `program.o`, and helper-object SHA-256 values; it also rechecks
   byte equality before timing.
-- Records at least 5 fresh `langc check` process samples per fixture.
-- Records at least 5 full public `langc build` samples and at least 5 full
+- Records at least 5 fresh `woozyc check` process samples per fixture.
+- Records at least 5 full public `woozyc build` samples and at least 5 full
   Clang C++ build samples per fixture and optimization level, alternating the
   tool order between samples.
 - Provides grouped `count/raw_ns/median_ns/min_ns/max_ns` statistics for check
@@ -159,7 +159,7 @@ The measurement stage:
 - Warns if a measured minimum is below 50 ms, where process startup and loader
   overhead may be non-negligible.
 
-The two build timings are not the same amount of work: public `langc build`
+The two build timings are not the same amount of work: public `woozyc build`
 includes its frontend/check and native link, while the C++ command is only a
 Clang compile/link of the reference. Compare them as separate observations.
 
@@ -180,8 +180,8 @@ short-timeout command's status/output survive serialization:
 The correction run also has expected-failure controls under
 `build/performance-prepare/correction-1/`:
 
-- `failure-control/prepare.json`: a fake build-tree `langc` exits `9` on check;
-- `timeout-control/prepare.json`: a fake build-tree `langc` prints markers and
+- `failure-control/prepare.json`: a fake build-tree `woozyc` exits `9` on check;
+- `timeout-control/prepare.json`: a fake build-tree `woozyc` prints markers and
   sleeps until the harness's short timeout;
 - `control-results.json`: assertions that both saved reports contain the full
   failed/timeout command records;

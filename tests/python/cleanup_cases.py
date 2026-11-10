@@ -139,11 +139,11 @@ func main() throws Err[i32] {throw Err[i32].Bad(value:23);}
 }
 
 CROSS_MODULE = {
-    'main.lang': '''package main;import "app/a";import "app/b";
+    'main.wz': '''package main;import "app/a";import "app/b";
 func main() i32 {
     try {a.fail();}catch err b.E {return 9;}
     catch err a.E {switch err {case a.E.Bad(code):return code;}}return 8;
 }''',
-    'a/a.lang': 'package a;pub enum E {Bad(code i32);}pub func fail() throws E {throw E.Bad(code:7);}',
-    'b/b.lang': 'package b;pub enum E {Bad(code i32);}',
+    'a/a.wz': 'package a;pub enum E {Bad(code i32);}pub func fail() throws E {throw E.Bad(code:7);}',
+    'b/b.wz': 'package b;pub enum E {Bad(code i32);}',
 }

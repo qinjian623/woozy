@@ -1,5 +1,5 @@
 // Strict floating fixture oracle.  This is a test-only tool: it links to the
-// externally installed LLVM 22.1.8 APFloat and is never linked into langc.
+// externally installed LLVM 22.1.8 APFloat and is never linked into woozyc.
 //
 // Every decimal literal is parsed directly at the target precision.  Every
 // arithmetic step explicitly requests round-to-nearest, ties-to-even.  No

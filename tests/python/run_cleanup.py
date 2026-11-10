@@ -196,7 +196,7 @@ def main():
                         case['expected_static'].get('code'))
         for ident, expected in CASES.items():
             manifest = project(args.out / 'sources' / ident,
-                               {'main.lang': 'package main;' + expected['source']})
+                               {'main.wz': 'package main;' + expected['source']})
             compile_run(ident, manifest, expected, 'extra')
         manifest = project(args.out / 'sources/cross-module', CROSS_MODULE)
         compile_run('cross-module', manifest, dict(main_return=7), 'extra')
@@ -208,7 +208,7 @@ def main():
         # Renumber the HIR type arena with unrelated declarations: the same
         # generic error must still have exactly the same logical key.
         source = CASES['unhandled-generic']['source']
-        manifest = project(args.out / 'sources/shifted-type-ids', {'main.lang':
+        manifest = project(args.out / 'sources/shifted-type-ids', {'main.wz':
             'package main;struct Noise {x u64;y bool;}enum Earlier {A;B(value Noise);}' + source})
         compile_run('shifted-type-ids', manifest, dict(typed='app.Err[i32]'), 'extra')
         # True no-runner API path for the Panic/Cell observation.

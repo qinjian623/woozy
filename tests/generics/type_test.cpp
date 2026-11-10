@@ -64,7 +64,7 @@ auto source(const std::string &s, std::string backend = "native",
         "1\n[package]\nname=\"test\"\nsource_root=\"src\"\nentry=\"app\"\n["
         "build]\nbackend=\"" +
             backend + "\"\nword_bits=" + std::to_string(width) + "\n");
-  write(t.path / "src/main.lang", "package app; " + s);
+  write(t.path / "src/main.wz", "package app; " + s);
   SourceManager sm;
   auto loaded = modules::load_project({t.path / "lang.toml", {}, {}}, sm);
   if (!loaded.success()) {
@@ -148,8 +148,8 @@ void repairs(const fs::path &root) {
     write(t.path / "lang.toml",
           "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
           "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
-    write(t.path / "src/main.lang",
+    write(t.path / "src/lib/lib.wz", "package lib; " + lib);
+    write(t.path / "src/main.wz",
           "package app; import \"app/lib\" as lib; " + app);
     return check(t.path / "lang.toml");
   };
@@ -2703,7 +2703,7 @@ void extra(const fs::path &root) {
         "schema_version=1\n[package]\nname=\"app\"\nsource_root=\"src\"\nentry="
         "\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
   fs::copy_file(root / "baseline/samples/05_traits.lang",
-                baseline.path / "src/main.lang");
+                baseline.path / "src/main.wz");
   auto traits = check(baseline.path / "lang.toml");
   need(traits.success(),
        "full 05_traits static check failed: " + messages(traits));
@@ -3016,8 +3016,8 @@ void method_move(const fs::path &root) {
     write(t.path / "lang.toml",
           "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
           "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
-    write(t.path / "src/main.lang",
+    write(t.path / "src/lib/lib.wz", "package lib; " + lib);
+    write(t.path / "src/main.wz",
           "package app; import \"app/lib\" as lib; " + app);
     return check(t.path / "lang.toml");
   };
@@ -3406,7 +3406,7 @@ void generic_method_move(const fs::path &root) {
           "entry=\"app\"\n[build]\nbackend=\"python\"\n"
           "[dependencies.numpy]\nkind=\"python\"\nbinding=\"binding.json\"\n"
           "host_package=\"numpy\"\n");
-    write(t.path / "src/main.lang", "package app; " + text);
+    write(t.path / "src/main.wz", "package app; " + text);
     SourceManager sm;
     auto loaded = modules::load_project(
         {t.path / "lang.toml", {}, t.path / "binding.json"}, sm);
@@ -4616,7 +4616,7 @@ rsn[0]+rss+rp.items[0]+rq+e0[0]+re[0];}
           "entry=\"app\"\n[build]\nbackend=\"python\"\n"
           "[dependencies.numpy]\nkind=\"python\"\nbinding=\"binding.json\"\n"
           "host_package=\"numpy\"\n");
-    write(t.path / "src/main.lang", "package app; " + text);
+    write(t.path / "src/main.wz", "package app; " + text);
     SourceManager sm;
     auto loaded = modules::load_project(
         {t.path / "lang.toml", {}, t.path / "binding.json"}, sm);
@@ -7676,8 +7676,8 @@ void trait_static_calls() {
     write(t.path / "lang.toml",
           "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
           "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
-    write(t.path / "src/main.lang",
+    write(t.path / "src/lib/lib.wz", "package lib; " + lib);
+    write(t.path / "src/main.wz",
           "package app; import \"app/lib\" as lib; " + app);
     return check(t.path / "lang.toml");
   };
@@ -8131,13 +8131,13 @@ void trait_method_generics(const fs::path &root) {
     write(t.path / "lang.toml",
           "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
           "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write(t.path / "src/lib/lib.lang",
+    write(t.path / "src/lib/lib.wz",
           "package lib; "
           "pub trait Echo{func echo[U](owner Self,value U)U;}"
           "pub struct Box[T]{pub value i32;}"
           "impl[T] Echo for Box[T]{"
           "func echo[U](owner Self,value U)U{return value;}}");
-    write(t.path / "src/main.lang",
+    write(t.path / "src/main.wz",
           "package app; import \"app/lib\" as lib; "
           "func via[T lib.Echo,U](x T,value U)U{return T.echo[U](x,value);}"
           "func main()i32{let b=lib.Box[i32](value:0);"
@@ -9207,13 +9207,13 @@ func main() i32 { var v Vec[i32] = [1]; return via[S, Vec[i32]](S(items: [1]), m
     write(t.path / "lang.toml",
           "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
           "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write(t.path / "src/lib/lib.lang",
+    write(t.path / "src/lib/lib.wz",
           "package lib; "
           "pub trait Take{func take[U](owner Self,value move U)U;}"
           "pub struct Box[T]{pub value i32;}"
           "impl[T] Take for Box[T]{"
           "func take[U](owner Self,value move U)U{return move value;}}");
-    write(t.path / "src/main.lang",
+    write(t.path / "src/main.wz",
           "package app; import \"app/lib\" as lib; "
           "func via[T lib.Take,U](x T,value move U)U{"
           "return T.take[U](x,move value);}"
@@ -9984,7 +9984,7 @@ void inherent_static_self_identity() {
     write(t.path / "lang.toml",
           "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
           "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write(t.path / "src/main.lang", text);
+    write(t.path / "src/main.wz", text);
     auto r = check(t.path / "lang.toml");
     need(r.success(), text + "\n" + messages(r));
     need(hir::verify_types(*r.value).success(),
@@ -10267,8 +10267,8 @@ void nested_patterns() {
     write(t.path / "lang.toml",
           "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\n"
           "entry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write(t.path / "src/lib/lib.lang", "package lib; " + lib);
-    write(t.path / "src/main.lang",
+    write(t.path / "src/lib/lib.wz", "package lib; " + lib);
+    write(t.path / "src/main.wz",
           "package app; import \"app/lib\" as lib; " + app);
     return check(t.path / "lang.toml");
   };

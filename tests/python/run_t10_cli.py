@@ -1,7 +1,7 @@
 #!/usr/bin/env python3
-"""Verify the public langc CLI standard-binding path.
+"""Verify the public woozyc CLI standard-binding path.
 
-The official `langc check/build --project` commands are exercised with the
+The official `woozyc check/build --project` commands are exercised with the
 existing `ProjectOptions.std_binding_bundle` plumbing.  The API helper is used
 only to locate the generated `train` symbol and to prove byte identity; the
 executed programs are the files produced by the CLI itself.
@@ -127,7 +127,7 @@ def assert_driver_argument(record):
 
 def main():
     parser = argparse.ArgumentParser()
-    parser.add_argument('--langc', type=Path, required=True)
+    parser.add_argument('--woozyc', dest="langc", type=Path, required=True)
     parser.add_argument('--helper', type=Path, required=True)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
@@ -155,7 +155,7 @@ def main():
     binding = str(args.binding)
     original = args.out / 'projects' / 'original-04'
     r.fresh(original)
-    write(original / 'src/main.lang',
+    write(original / 'src/main.wz',
           (args.root / 'baseline/samples/04_numpy_torch.lang').read_text())
     write(original / 'lang.toml', f'''schema_version = 1
 [package]
@@ -177,7 +177,7 @@ host_package = "torch"
 
     def ordinary_project(name, source, binding=None, extra_manifest=''):
         root = r.fresh(args.out / 'projects' / name)
-        write(root / 'src/main.lang', source)
+        write(root / 'src/main.wz', source)
         dependency = ''
         if binding is not None:
             dependency = f'''[dependencies.numpy]
@@ -345,7 +345,7 @@ word_bits = 64
 
     def spaced_path_case(row):
         project = r.fresh(args.out / 'projects' / '项目 space 04')
-        write(project / 'src/main.lang',
+        write(project / 'src/main.wz',
               'package app;\nimport "std/py" as py;\nfunc main() {}\n')
         spaces = r.fresh(args.out / 'bindings 目录')
         spaces.mkdir(parents=True)
@@ -397,7 +397,7 @@ word_bits = 64
 
     def std_shadow_case(row):
         project = r.fresh(args.out / 'projects' / 'std-shadow')
-        write(project / 'src/main.lang', 'package app;\nimport "std/py";\nfunc main() {}\n')
+        write(project / 'src/main.wz', 'package app;\nimport "std/py";\nfunc main() {}\n')
         write(project / 'lang.toml', f'''schema_version = 1
 [package]
 name = "app"
@@ -434,7 +434,7 @@ host_package = "numpy"
         (old_out / 'unrelated').write_bytes(b'keep')
         before = {name: (old_out / name).read_bytes()
                   for name in ('program.py', 'langrt.py', 'unrelated')}
-        write(project / 'src/main.lang',
+        write(project / 'src/main.wz',
               'package app;\nimport "std/py";\nfunc main() i32 { return true; }\n')
         failed_new = build(row, project, new_out, args.binding)
         assert_json_error(failed_new, 1, 'E_TYPE_MISMATCH')
@@ -445,7 +445,7 @@ host_package = "numpy"
                  for name in ('program.py', 'langrt.py', 'unrelated')}
         require(after == before, 'source failure changed old outputs')
 
-        write(project / 'src/main.lang', good)
+        write(project / 'src/main.wz', good)
         broken = args.out / 'bad-binding.json'
         broken.write_text('{"schema_version": 1, }')
         failed_new = build(row, project, new_out, broken)

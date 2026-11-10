@@ -14,7 +14,7 @@ void need(bool ok, const char *message) {
 }
 HirModule input() {
   SourceManager sm;
-  auto snapshot = sm.update(sm.add_file("ownership-ir.lang"), R"(
+  auto snapshot = sm.update(sm.add_file("ownership-ir.wz"), R"(
 package app;
 enum E {Bad(v Vec[i32]);}
 func fail(x Vec[i32]) Vec[i32] throws E {throw E.Bad(v: x);}
@@ -43,7 +43,7 @@ try {let b = fail(a);} catch e E {} let c = keep(a); return c[0] - 1;}
 }
 HirModule switch_input() {
   SourceManager sm;
-  auto snapshot = sm.update(sm.add_file("switch-ir.lang"), R"(
+  auto snapshot = sm.update(sm.add_file("switch-ir.wz"), R"(
 package app;
 enum Data {Empty; Items(v Vec[i32]);}
 enum E {Bad;}

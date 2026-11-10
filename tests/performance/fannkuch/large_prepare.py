@@ -86,7 +86,7 @@ PINNED_SHA = {
 OLD_ORACLE = Path(
     "/home/qin/Work/language-dev-20261103/checks/fannkuch-oracle-20261109")
 TARGET_FLAGS = legacy.TARGET_FLAGS
-TEMPLATE_NAMES = ("fannkuch.lang.in", "reference.cpp.in")
+TEMPLATE_NAMES = ("fannkuch.wz.in", "reference.cpp.in")
 FORBIDDEN = ("asm", "volatile", "noinline", "optnone", "__attribute__")
 
 SOURCE_MAIN = """func main() i32 {
@@ -204,10 +204,10 @@ def generate_case(out, templates, n, rounds, expected, variant):
     directory = out / "cases" / f"n{n}" / f"r{rounds}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
     source_text, source_render = render_program(
-        templates["fannkuch.lang.in"], n, rounds, checksum, maximum, "source")
+        templates["fannkuch.wz.in"], n, rounds, checksum, maximum, "source")
     reference_text, reference_render = render_program(
         templates["reference.cpp.in"], n, rounds, checksum, maximum, "cpp")
-    source, reference = directory / "src" / "main.lang", directory / "reference.cpp"
+    source, reference = directory / "src" / "main.wz", directory / "reference.cpp"
     manifest = directory / "lang.toml"
     source.write_text(source_text, encoding="utf-8")
     reference.write_text(reference_text, encoding="utf-8")
@@ -890,7 +890,7 @@ def parse_args(argv=None):
     parser.add_argument("--oracle-dir", type=Path, default=DEFAULT_ORACLE_DIR)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--python-helper", type=Path, default=DEFAULT_PYTHON_HELPER)
-    parser.add_argument("--langc", type=Path)
+    parser.add_argument("--woozyc", dest="langc", type=Path)
     parser.add_argument("--helper", type=Path)
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--llvm-bin", type=Path)

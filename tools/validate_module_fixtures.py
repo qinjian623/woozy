@@ -76,20 +76,20 @@ def validate_data(path=CASES, root=ROOT, fixtures=FIXTURES):
         manifests.add(manifest)
         case_dir = (fixtures / case_id).resolve()
         expect(case_dir.is_dir(), f"case {case_id}: fixture directory does not exist")
-        native = sorted(path for path in case_dir.rglob("*.lang") if path.is_file())
-        expect(native, f"case {case_id}: fixture directory has no .lang files")
+        native = sorted(path for path in case_dir.rglob("*.wz") if path.is_file())
+        expect(native, f"case {case_id}: fixture directory has no .wz files")
         sources.update(path.resolve() for path in native)
     return cases, sorted(sources)
 
-def check_syntax(langc, sources):
-    if langc is None:
-        return {"status": "not_run", "reason": "--langc not provided",
+def check_syntax(woozyc, sources):
+    if woozyc is None:
+        return {"status": "not_run", "reason": "--woozyc not provided",
                 "passed": 0, "total": len(sources), "failures": []}
     failures = []
     for source in sources:
         try:
             run = subprocess.run(
-                [str(langc), "check", "--syntax-only", "--format", "json", str(source)],
+                [str(woozyc), "check", "--syntax-only", "--format", "json", str(source)],
                 capture_output=True, text=True, timeout=20)
             payload = json.loads(run.stdout)
             errors = [item for item in payload.get("diagnostics", [])
@@ -125,7 +125,7 @@ def self_test():
 
 def main():
     parser = argparse.ArgumentParser(description=__doc__)
-    parser.add_argument("--langc", help="optional C++ langc executable")
+    parser.add_argument("--woozyc", help="optional C++ woozyc executable")
     parser.add_argument("--self-test", action="store_true")
     args = parser.parse_args()
     if args.self_test:
@@ -133,10 +133,10 @@ def main():
         return 0
     try:
         cases, sources = validate_data()
-        langc = Path(args.langc).expanduser().resolve() if args.langc else None
-        if langc:
-            expect(langc.is_file(), f"--langc is not a file: {args.langc}")
-        syntax = check_syntax(langc, sources)
+        woozyc = Path(args.woozyc).expanduser().resolve() if args.woozyc else None
+        if woozyc:
+            expect(woozyc.is_file(), f"--woozyc is not a file: {args.woozyc}")
+        syntax = check_syntax(woozyc, sources)
         print(json.dumps({"status": "failed" if syntax["status"] == "failed" else "passed",
                           "cases": len(cases), "source_files": len(sources),
                           "syntax": syntax}, ensure_ascii=False, indent=2))

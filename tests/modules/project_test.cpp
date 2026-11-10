@@ -49,7 +49,7 @@ void json_key_tests(const fs::path &root) {
 "conformance_required": ["check"]})";
   write(root / "lang.toml", "schema_version=1\n[package]\nname=\"main\"\nsource_root=\"src\"\nentry=\"app\"\n"
         "[dependencies.py]\nkind=\"python\"\nbinding=\"binding.json\"\nhost_package=\"host\"\n");
-  write(root / "src/main.lang", "package main; import \"py\" as p; func main() { p.run(); }");
+  write(root / "src/main.wz", "package main; import \"py\" as p; func main() { p.run(); }");
   SourceManager sm;
   auto load = [&](const std::string &text) {
     write(root / "binding.json", text);
@@ -117,7 +117,7 @@ kind="python"
 binding="binding.json"
 host_package="torch"
 )");
-  write(root / "src/main.lang", read(repo / "baseline/samples/04_numpy_torch.lang"));
+  write(root / "src/main.wz", read(repo / "baseline/samples/04_numpy_torch.lang"));
   write(root / "binding.json", original);
   SourceManager sm;
   ProjectOptions opts{root / "lang.toml", {}, root / "binding.json"};
@@ -435,7 +435,7 @@ host_package="torch"
   // A different source file with identical bytes has the same content identity.
   write(root / "other.json", original);
   opts.std_binding_bundle = root / "other.json";
-  write(root / "src/main.lang", "package main; import \"std/py\"; func main() {}");
+  write(root / "src/main.wz", "package main; import \"std/py\"; func main() {}");
   auto relocated = load();
   require(relocated.success(), "relocated bundle");
   for (size_t i = 0; i < project->foreign_bindings.size(); ++i)
@@ -446,7 +446,7 @@ host_package="torch"
   auto original_manifest = read(root / "lang.toml");
   write(root / "extra.json", extra);
   write(root / "lang.toml", original_manifest + "\n[dependencies.extra]\nkind=\"python\"\nbinding=\"extra.json\"\nhost_package=\"extra\"\n");
-  write(root / "src/main.lang", "package main; import \"extra\"; import \"numpy\"; func main() {}");
+  write(root / "src/main.wz", "package main; import \"extra\"; import \"numpy\"; func main() {}");
   auto separate = load();
   require(separate.success() && separate.value->bindings.size() == 2 && separate.value->foreign_bindings.size() == 27, "multiple valid bundles");
   for (size_t i = 0; i < separate.value->foreign_bindings.size(); ++i)
@@ -455,7 +455,7 @@ host_package="torch"
           separate.value->foreign_bindings[1].id != project->foreign_bindings[0].id, "stable identity depends on local ID");
   write(root / "lang.toml", original_manifest);
   // Distinct bundles must not silently alias an explicit declaration identity.
-  write(root / "src/main.lang", "package main; import \"std/py\"; import \"numpy\"; func main() {}");
+  write(root / "src/main.wz", "package main; import \"std/py\"; import \"numpy\"; func main() {}");
   auto collision = load();
   require(!collision.success() && code(collision, "E_BINDING_INVALID"), "duplicate IDs across bundles");
   opts.std_binding_bundle = root / "binding.json";
@@ -469,7 +469,7 @@ host_package="torch"
   require(!shadow.success() && code(shadow, "E_MANIFEST_INVALID"), "project std shadow");
   write(root / "lang.toml", manifest);
   // Keep a usable foreign project for the separately executed CLI refusal test.
-  write(root / "src/main.lang", "package main; import \"numpy\" as np; func main() { np.asarray; }");
+  write(root / "src/main.wz", "package main; import \"numpy\" as np; func main() { np.asarray; }");
   require(load().success(), "foreign refusal fixture is valid");
   std::cout << "T10 declarations: " << positive << " positive variants, " << negative
             << " invalid variants; original 6/9/2/15 fields and names verified\n";
@@ -497,14 +497,14 @@ kind="python"
 binding="binding.json"
 host_package="host"
 )");
-    write(root / "src/a.lang",
+    write(root / "src/a.wz",
           "package demo; import \"geo\"; import \"alias\"; import \"py\" as p; "
           "pub func main() {}\n");
-    write(root / "src/b.lang", "package demo; pub const N = 1;\n");
+    write(root / "src/b.wz", "package demo; pub const N = 1;\n");
     write(root / "vendor/geo/lang.toml",
           "schema_version=1\n[package]\nname=\"geometry\"\nsource_root="
           "\"lib\"\nentry=\"app\"\n");
-    write(root / "vendor/geo/lib/g.lang",
+    write(root / "vendor/geo/lib/g.wz",
           "package geometry; pub func area() {}\n");
     write(
         root / "binding.json",
@@ -526,11 +526,11 @@ host_package="host"
             "foreign exports / constructor merge");
     require(r.value->bindings.size() == 1 && !r.value->bindings[0].json.empty(),
             "raw binding");
-    require(sm.get(app.imports[0].span.snapshot)->path.ends_with("a.lang"),
+    require(sm.get(app.imports[0].span.snapshot)->path.ends_with("a.wz"),
             "source snapshot");
     require(app.files[1]->tokens[3].spelling == "pub", "pub retained in AST");
     auto run = [&](const std::string &source) {
-      write(root / "src/a.lang", source);
+      write(root / "src/a.wz", source);
       return modules::load_project(opts, sm);
     };
     auto bad = run("package demo; import \"app//bad\"; func main() {}");
@@ -540,7 +540,7 @@ host_package="host"
     auto mismatch = run("package other; func main() {}");
     require(!mismatch.success() && code(mismatch, "E_PACKAGE_MISMATCH"),
             "package mismatch");
-    write(root / "src/sub/s.lang", "package sub; import \"app\"; func f() {}");
+    write(root / "src/sub/s.wz", "package sub; import \"app\"; func f() {}");
     auto loop = run("package demo; import \"app/sub\"; func main() {}");
     require(!loop.success() && code(loop, "E_IMPORT_CYCLE"), "loop");
     bool related = false;
@@ -561,18 +561,18 @@ host_package="host"
     auto no_std = run("package demo; import \"std/io\"; func main() {}");
     require(!no_std.success() && code(no_std, "E_IMPORT_NOT_FOUND"),
             "explicit std required");
-    write(root / "stdlib/io/io.lang", "package io; pub func print() {}");
+    write(root / "stdlib/io/io.wz", "package io; pub func print() {}");
     opts.std_source_root = root / "stdlib";
     auto with_std = modules::load_project(opts, sm);
     require(with_std.success() && with_std.value->modules.size() == 2,
             "std source");
     opts.std_source_root.reset();
-    write(root / "vendor/geo/lib/g.lang",
+    write(root / "vendor/geo/lib/g.wz",
           "package geometry; import \"app\"; pub func area() {}");
     auto dep_loop = run("package demo; import \"geo\"; func main() {}");
     require(!dep_loop.success() && code(dep_loop, "E_IMPORT_CYCLE"),
             "dependency app uses dependency source_root");
-    write(root / "vendor/geo/lib/g.lang",
+    write(root / "vendor/geo/lib/g.wz",
           "package geometry; pub func area() {}");
     auto bundle_text = r.value->bindings.front().json;
     opts.std_binding_bundle = root / "binding.json";
@@ -610,7 +610,7 @@ host_package="host"
               "deterministic module ids");
     auto rendered = diagnostic_json(sm, "test", "test", missing.status(),
                                     missing.diagnostics);
-    require(rendered.find("a.lang") != std::string::npos,
+    require(rendered.find("a.wz") != std::string::npos,
             "format original location");
     auto syntax = run("package demo; func (");
     require(!syntax.success() && syntax.exit_code() == ExitCode::source_error,

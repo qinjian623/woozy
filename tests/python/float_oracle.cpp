@@ -1,4 +1,4 @@
-// Test-only LLVM 22.1.8 oracle. Never linked into langc or its runtime.
+// Test-only LLVM 22.1.8 oracle. Never linked into woozyc or its runtime.
 #include "llvm/ADT/APFloat.h"
 #include "llvm/ADT/SmallString.h"
 #include "llvm/Config/llvm-config.h"

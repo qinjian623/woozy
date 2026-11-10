@@ -48,7 +48,7 @@ auto project(const fs::path &path, Backend backend, unsigned width = 64) {
 std::shared_ptr<const modules::ResolvedProject>
 resolve(const std::string &body, Backend backend, unsigned width = 64) {
   SourceManager sm;
-  auto src = sm.update(sm.add_file("t09-static.lang"), "package app; " + body);
+  auto src = sm.update(sm.add_file("t09-static.wz"), "package app; " + body);
   auto tokens = lex(src);
   need(tokens.success(), diagnostics(tokens));
   auto ast = parse(*tokens.value);

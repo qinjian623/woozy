@@ -9,6 +9,6 @@
   "entry": "accumulate",
   "oracle": "u32-branch-mix-v1",
   "manifest": "lang.toml",
-  "source": "src/main.lang",
+  "source": "src/main.wz",
   "reference": "reference.cpp"
 }

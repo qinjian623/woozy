@@ -90,7 +90,7 @@ TARGET_FLAGS = (
     "--target=x86_64-unknown-linux-gnu", "-march=x86-64", "-mtune=generic",
     "-fno-fast-math", "-ffp-contract=off", "-fno-lto",
 )
-TEMPLATE_NAMES = ("mandelbrot.lang.in", "reference.cpp.in")
+TEMPLATE_NAMES = ("mandelbrot.wz.in", "reference.cpp.in")
 OBSERVER_SOURCES = ("native_observer.cpp", "visit_trace.py")
 MARKER_RE = re.compile(
     r"^//\s*PERF-MANDELBROT\s+n=(\d+)\s+iterations=(\d+)"
@@ -230,14 +230,14 @@ def generate_case(out, templates, n, oracle, variant, flip_kind, mutate):
     }
     cpp_mapping = dict(mapping)
     cpp_mapping["PACK_FLIP"] = cpp_flip
-    source_text = render(templates["mandelbrot.lang.in"], mapping)
+    source_text = render(templates["mandelbrot.wz.in"], mapping)
     reference_text = render(templates["reference.cpp.in"], cpp_mapping)
     label = f"n={n} {variant}"
     verify_generated(source_text, reference_text, wanted, byte_count,
                      expected_sha, label)
     directory = out / "cases" / f"n{n}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
-    source = directory / "src" / "main.lang"
+    source = directory / "src" / "main.wz"
     reference = directory / "reference.cpp"
     manifest = directory / "lang.toml"
     source.write_text(source_text, encoding="utf-8")
@@ -1287,7 +1287,7 @@ def parse_args(argv=None):
     parser.add_argument("--official-check", type=Path, default=DEFAULT_OFFICIAL_CHECK)
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--python-helper", type=Path, default=DEFAULT_PYTHON_HELPER)
-    parser.add_argument("--langc", type=Path, required=True)
+    parser.add_argument("--woozyc", dest="langc", type=Path, required=True)
     parser.add_argument("--helper", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--llvm-bin", type=Path, required=True)

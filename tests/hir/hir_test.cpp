@@ -130,7 +130,7 @@ func main() i32 {
       code.replace(code.find("add(inout x, 2)"), 15,
                    "add(inout x, inout y)");
     }
-    auto src = sources.update(sources.add_file("fixture.lang"), code);
+    auto src = sources.update(sources.add_file("fixture.wz"), code);
     auto tokens = lex(src);
     require(tokens.success(), "fixture lexer");
     auto ast = parse(*tokens.value);
@@ -454,7 +454,7 @@ void inout_tests() {
 }
 HirModule source_module(std::string code) {
   SourceManager sources;
-  auto source = sources.update(sources.add_file("flow.lang"), std::move(code));
+  auto source = sources.update(sources.add_file("flow.wz"), std::move(code));
   auto tokens = lex(source);
   require(tokens.success(), "flow fixture lexer");
   auto parsed = parse(*tokens.value);
@@ -820,7 +820,7 @@ int main() {
       auto code = f.project->modules[0].files[0]->source->original;
       code.replace(code.find("var x"), 3, "let");
       SourceManager sources;
-      auto source = sources.update(sources.add_file("fixture.lang"), code);
+      auto source = sources.update(sources.add_file("fixture.wz"), code);
       auto tokens = lex(source);
       require(tokens.success(), "let fixture lexer");
       auto parsed = parse(*tokens.value);

@@ -13,18 +13,18 @@
 
 | 文件 | 未来静态期望 | 覆盖点 |
 | --- | --- | --- |
-| `fixtures/01_imports_and_types.lang` | accept | 六个原导入、全部外部类型、`py.Error` |
-| `fixtures/02_numpy_pipeline.lang` | accept | NumPy 管线、显式 `torch.tensor` 复制、dtype 分离、关键字 |
-| `fixtures/03_module_call_optimizer.lang` | accept | 构造、`model(x)` 实例调用、`parameters`、zero_grad/backward/step |
-| `fixtures/04_autograd_loss.lang` | accept | Tensor 运算与返回保留 autograd，不 detach/item |
-| `fixtures/05_error_cause.lang` | accept | 外部异常桥接为 `py.Error`，保留原始 cause/traceback |
-| `fixtures/06_named_argument_order.lang` | accept | 命名实参逆形参顺序书写，按源码顺序求值，平凡 `inout` 计数 |
-| `fixtures/07_bad_call_signature.lang` | reject | 未知参数名；keyword-only 参数按位置传递 |
-| `fixtures/08_bad_member.lang` | reject | 未声明的模型成员（拼写错误）；正确接口是 `model(x)` |
-| `fixtures/09_bad_types.lang` | reject | `torch.float32` 当 `np.DTypeSpec`；ndarray 当 Tensor |
-| `fixtures/10_bad_move.lang` | reject | 对普通借用参数使用 `move`，且目标是 ordinary 形参 |
-| `fixtures/11_bad_inout.lang` | reject | 外部对象作为首版 `inout`，规范明确未支持 |
-| `fixtures/12_external_index_attributes.lang` | unresolved | 外部属性 `x.device` 和多下标 `x[-1, 0]`；不得套用 Vec 非负索引规则 |
+| `fixtures/01_imports_and_types.wz` | accept | 六个原导入、全部外部类型、`py.Error` |
+| `fixtures/02_numpy_pipeline.wz` | accept | NumPy 管线、显式 `torch.tensor` 复制、dtype 分离、关键字 |
+| `fixtures/03_module_call_optimizer.wz` | accept | 构造、`model(x)` 实例调用、`parameters`、zero_grad/backward/step |
+| `fixtures/04_autograd_loss.wz` | accept | Tensor 运算与返回保留 autograd，不 detach/item |
+| `fixtures/05_error_cause.wz` | accept | 外部异常桥接为 `py.Error`，保留原始 cause/traceback |
+| `fixtures/06_named_argument_order.wz` | accept | 命名实参逆形参顺序书写，按源码顺序求值，平凡 `inout` 计数 |
+| `fixtures/07_bad_call_signature.wz` | reject | 未知参数名；keyword-only 参数按位置传递 |
+| `fixtures/08_bad_member.wz` | reject | 未声明的模型成员（拼写错误）；正确接口是 `model(x)` |
+| `fixtures/09_bad_types.wz` | reject | `torch.float32` 当 `np.DTypeSpec`；ndarray 当 Tensor |
+| `fixtures/10_bad_move.wz` | reject | 对普通借用参数使用 `move`，且目标是 ordinary 形参 |
+| `fixtures/11_bad_inout.wz` | reject | 外部对象作为首版 `inout`，规范明确未支持 |
+| `fixtures/12_external_index_attributes.wz` | unresolved | 外部属性 `x.device` 和多下标 `x[-1, 0]`；不得套用 Vec 非负索引规则 |
 
 `cases.json` 为每个文件记录源码 SHA-256、规范出处、未来静态 accept/reject、未来执行观察和当前 syntax-only 结果。反例的诊断码是当前注册表中的预期提示；规范只固定“必须静态拒绝”，最终稳定码仍由 T10 诊断契约确认。
 
@@ -43,7 +43,7 @@
 临时构建位于 `/tmp/language-t10-binding-fixtures-20261104/build/langc`，未改编译器和仓库构建目录。先读了 `docs/TOOLING.md` 第 3 节和 `langc --help`。
 
 ```sh
-langc check --syntax-only --format json <fixture>
+woozyc check --syntax-only --format json <fixture>
 ```
 
 - 12 个新 fixture + 原 `04_numpy_torch.lang`：13/13 `status=ok`、0 diagnostics。语法通过不代表类型、绑定或执行通过。
@@ -55,7 +55,7 @@ langc check --syntax-only --format json <fixture>
 
 ## 未决问题
 
-1. **外部属性/下标绑定**：原 schema 只有 modules/types/values/callables，没有字段属性、Tensor/ndarray 下标、单/多下标或结果类型的声明位置。T10 是扩展绑定契约，还是把这些统一报为未支持能力？在决定前，`12_...lang` 不写成 accept 或 reject；更不能用 Vec 非负索引规则代替外部语义。
+1. **外部属性/下标绑定**：原 schema 只有 modules/types/values/callables，没有字段属性、Tensor/ndarray 下标、单/多下标或结果类型的声明位置。T10 是扩展绑定契约，还是把这些统一报为未支持能力？在决定前，`12_...wz` 不写成 accept 或 reject；更不能用 Vec 非负索引规则代替外部语义。
 
 ## 已确定的测试处理
 

@@ -70,7 +70,7 @@ def main():
                 assert r['exit']==expected_exit and not r['stdout'],r
                 if ident in ('case-10','panic-body','panic-defer'):
                     assert r['stderr'].startswith('LANG_NATIVE_PANIC:v1:division-by-zero:'),r
-                    source=(manifest.parent/'src/main.lang').read_bytes()
+                    source=(manifest.parent/'src/main.wz').read_bytes()
                     fields=r['stderr'].strip().split(':');begin,end=map(int,fields[-2:])
                     assert source[begin:end]==b'i32(1)/zero', (begin,end,source[begin:end])
                     if ident=='case-10':assert source[:begin].count(b'\n')+1==12

@@ -32,26 +32,26 @@ add_test(NAME python.projects COMMAND "${LANG_PYTHON312}"
 set_tests_properties(python.projects PROPERTIES TIMEOUT 180)
 add_test(NAME python.generics COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_generics.py"
-  --langc $<TARGET_FILE:langc> --root "${LANG_PYTHON_TEST_ROOT}"
+  --woozyc $<TARGET_FILE:woozyc> --root "${LANG_PYTHON_TEST_ROOT}"
   --out "${CMAKE_CURRENT_BINARY_DIR}/generics" --python "${LANG_PYTHON312}")
 set_tests_properties(python.generics PROPERTIES TIMEOUT 180)
 add_test(NAME python.aggregates COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_aggregates.py"
-  --langc $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --woozyc $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/aggregates"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.aggregates PROPERTIES TIMEOUT 180)
 foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates aggregate-constants)
   add_test(NAME python.${fixture} COMMAND "${LANG_PYTHON312}"
     "${CMAKE_CURRENT_LIST_DIR}/run_strings.py"
-    --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+    --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/${fixture}"
     --python "${LANG_PYTHON312}" --fixture ${fixture})
   set_tests_properties(python.${fixture} PROPERTIES TIMEOUT 180)
 endforeach()
 add_test(NAME python.string-aggregate-binding COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_string_binding.py"
-  --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/string-aggregate-binding"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.string-aggregate-binding PROPERTIES TIMEOUT 180)
@@ -62,7 +62,7 @@ add_test(NAME python.cleanup COMMAND "${LANG_PYTHON312}"
 set_tests_properties(python.cleanup PROPERTIES TIMEOUT 180)
 add_test(NAME python.cleanup_regressions COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_cleanup_regressions.py"
-  --helper $<TARGET_FILE:lang_python_emit> --cli $<TARGET_FILE:langc>
+  --helper $<TARGET_FILE:lang_python_emit> --cli $<TARGET_FILE:woozyc>
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/cleanup-regressions"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.cleanup_regressions PROPERTIES TIMEOUT 180)
@@ -75,17 +75,17 @@ if(LANG_ENABLE_LLVM)
 endif()
 add_test(NAME python.floating COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_floating.py"
-  --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/floating"
   --python "${LANG_PYTHON312}" ${LANG_PYTHON_FLOAT_ORACLE_ARGS})
 set_tests_properties(python.floating PROPERTIES TIMEOUT 180)
 add_test(NAME python.cli COMMAND ${CMAKE_COMMAND}
-  -DLANGC=$<TARGET_FILE:langc> -DPYTHON=${LANG_PYTHON312}
+  -DLANGC=$<TARGET_FILE:woozyc> -DPYTHON=${LANG_PYTHON312}
   -DROOT=${LANG_PYTHON_TEST_ROOT} -DNATIVE_AVAILABLE=${LANG_ENABLE_LLVM}
   -P ${CMAKE_CURRENT_LIST_DIR}/cli.cmake)
 add_test(NAME python.ownership COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/run_ownership.py"
-  --cli $<TARGET_FILE:langc> --helper $<TARGET_FILE:lang_python_emit>
+  --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/ownership"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.ownership PROPERTIES TIMEOUT 180)
@@ -94,11 +94,11 @@ add_test(NAME python.ownership_runtime COMMAND "${LANG_PYTHON312}"
 add_executable(lang_python_ownership_ir_test ownership_ir_test.cpp)
 target_link_libraries(lang_python_ownership_ir_test PRIVATE lang_sema lang_backend_python)
 add_test(NAME python.ownership_ir COMMAND lang_python_ownership_ir_test)
-if(TARGET langc AND TARGET lang_native_convert_probe AND TARGET lang_native_runtime
+if(TARGET woozyc AND TARGET lang_native_convert_probe AND TARGET lang_native_runtime
    AND TARGET lang_python_emit)
   add_test(NAME python.conversions COMMAND "${LANG_PYTHON312}"
     "${LANG_PYTHON_TEST_ROOT}/tests/numeric/run_conversions.py"
-    --cli $<TARGET_FILE:langc> --probe $<TARGET_FILE:lang_native_convert_probe>
+    --cli $<TARGET_FILE:woozyc> --probe $<TARGET_FILE:lang_native_convert_probe>
     --root "${LANG_PYTHON_TEST_ROOT}" --python "${LANG_PYTHON312}"
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang
     --runtime $<TARGET_FILE:lang_native_runtime>
@@ -114,7 +114,7 @@ if(LANG_T10_PYTHON AND EXISTS "${LANG_T10_PYTHON}")
   add_test(NAME python.t10_bindings COMMAND "${LANG_T10_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_t10_bindings.py"
     --helper $<TARGET_FILE:lang_python_emit>
-    --langc $<TARGET_FILE:langc>
+    --woozyc $<TARGET_FILE:woozyc>
     --root "${LANG_PYTHON_TEST_ROOT}"
     --out "${CMAKE_CURRENT_BINARY_DIR}/t10-bindings"
     --python "${LANG_T10_PYTHON}"
@@ -148,7 +148,7 @@ if(LANG_T10_PYTHON AND EXISTS "${LANG_T10_PYTHON}")
   endif()
   add_test(NAME python.t10_cli COMMAND "${LANG_T10_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_t10_cli.py"
-    --langc $<TARGET_FILE:langc>
+    --woozyc $<TARGET_FILE:woozyc>
     --helper $<TARGET_FILE:lang_python_emit>
     --root "${LANG_PYTHON_TEST_ROOT}"
     --out "${CMAKE_CURRENT_BINARY_DIR}/t10-cli"

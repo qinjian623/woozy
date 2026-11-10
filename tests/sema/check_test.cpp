@@ -75,7 +75,7 @@ auto source(const std::string &body, const char *error = nullptr,
             std::string backend = "native", unsigned width = 64) {
   Temp t;
   manifest(t.path, backend, width);
-  write(t.path / "src/main.lang", "package app; " + body);
+  write(t.path / "src/main.wz", "package app; " + body);
   auto r = [&] {
     try {
       return check(t.path / "lang.toml");
@@ -105,7 +105,7 @@ auto typed_source(const std::string &body, const char *error = nullptr,
                   std::string backend = "native", unsigned width = 64) {
   Temp t;
   manifest(t.path, backend, width);
-  write(t.path / "src/main.lang", "package app; " + body);
+  write(t.path / "src/main.wz", "package app; " + body);
   auto r = [&] {
     try {
       SourceManager sources;
@@ -194,8 +194,8 @@ void suite(const fs::path &published) {
     for (const char *backend : {"native", "python"}) {
       Temp t;
       manifest(t.path, backend, 64);
-      fs::copy_file(published / (std::string("examples/") + name + ".lang"),
-                    t.path / "src/main.lang");
+      fs::copy_file(published / (std::string("examples/") + name + ".wz"),
+                    t.path / "src/main.wz");
       auto r = check(t.path / "lang.toml");
       require(r.success(),
               std::string(name) + " " + backend + "\n" + messages(r));
@@ -486,10 +486,10 @@ void suite(const fs::path &published) {
   {
     Temp t;
     manifest(t.path, "native", 64);
-    write(t.path / "src/main.lang",
+    write(t.path / "src/main.wz",
           "package app; struct Secret { pub value i32; } "
           "func hidden() Secret { return Secret(value: 7); }");
-    write(t.path / "src/z.lang",
+    write(t.path / "src/z.wz",
           "package app; pub const Make = hidden; "
           "func f() i32 { return 0; }");
     auto r = check(t.path / "lang.toml");
@@ -506,20 +506,20 @@ void suite(const fs::path &published) {
     }
     fs::create_directories(t.path / "vendor/dep/src");
     manifest(t.path / "vendor/dep", "native", 64);
-    write(t.path / "vendor/dep/src/lib.lang",
+    write(t.path / "vendor/dep/src/lib.wz",
           "package dep; pub struct Box[T] { pub value T; } "
           "pub struct Visible { pub value i32; } "
           "struct Secret { pub value i32; } "
           "func hidden(x Box[Secret]) i32 { return 0; } "
           "pub const Bad = hidden;");
-    write(t.path / "src/main.lang",
+    write(t.path / "src/main.wz",
           "package app; import \"dep\" as d; "
           "func main() i32 { return 0; }");
     auto r = check(t.path / "lang.toml");
     require(!r.success() && has(r, "E_PRIVATE_TYPE_LEAK"),
             "dependency private generic type argument accepted\n" +
                 messages(r));
-    write(t.path / "vendor/dep/src/lib.lang",
+    write(t.path / "vendor/dep/src/lib.wz",
           "package dep; pub struct Box[T] { pub value T; } "
           "pub struct Visible { pub value i32; } "
           "func hidden(x Box[Visible]) i32 { return 0; } "
@@ -528,11 +528,11 @@ void suite(const fs::path &published) {
     require(r.success(),
             "dependency public generic type argument rejected\n" +
                 messages(r));
-    write(t.path / "vendor/dep/src/lib.lang",
+    write(t.path / "vendor/dep/src/lib.wz",
           "package dep; struct Secret {} "
           "func hidden[T]() i32 { return 7; } "
           "pub const Phantom = hidden[Secret];");
-    write(t.path / "src/main.lang",
+    write(t.path / "src/main.wz",
           "package app; import \"dep\" as d; "
           "func main() i32 { return d.Phantom() - 7; }");
     r = check(t.path / "lang.toml");
@@ -1112,7 +1112,7 @@ void suite(const fs::path &published) {
     write(
         t.path / "binding.json",
         R"({"schema_version":1,"contract":"compiler-dev/1","review_status":"draft_requires_conformance","allowed_backends":["python"],"package_requirements":[{"package":"host","version_policy":"test fixture only"}],"modules":[{"logical_path":"py","host_module":"host","provider":"python_package"}],"types":[],"values":[],"callables":[{"module":"py","name":"run","call_kind":"function","id":"host.run","owner_type":null,"host_attribute":["run"],"parameters":[],"return_type":"Unit","error_type":null,"ownership":{"return":"unit","storage":"no_tensor_storage"},"effects":[],"receiver_escapes":"not_applicable"}],"conformance_required":[]})");
-    write(t.path / "src/main.lang",
+    write(t.path / "src/main.wz",
           "package app; import \"py\" as p; func f() { p.run(); }");
     auto r = check(t.path / "lang.toml");
     require(!r.value && r.failure == FailureKind::unsupported &&
@@ -1130,12 +1130,12 @@ void suite(const fs::path &published) {
     }
     fs::create_directories(t.path / "vendor/dep/src");
     manifest(t.path / "vendor/dep", "native", 64);
-    write(t.path / "vendor/dep/src/a.lang",
+    write(t.path / "vendor/dep/src/a.wz",
           "package dep; pub const N i32=3; pub func add(x i32) i32 { return "
           "x+N; }");
-    write(t.path / "src/main.lang", "package app; import \"dep\" as d; func "
+    write(t.path / "src/main.wz", "package app; import \"dep\" as d; func "
                                     "f() i32 { return d.add(1)+d.N; }");
-    write(t.path / "src/other.lang",
+    write(t.path / "src/other.wz",
           "package app; func g() i32 { return f(); }");
     auto r = check(t.path / "lang.toml");
     require(r.success(), "source-module scalar call\n" + messages(r));
@@ -1167,7 +1167,7 @@ void suite(const fs::path &published) {
   {
     Temp t;
     manifest(t.path, "native", 64);
-    write(t.path / "src/main.lang", "package app; func f() {}");
+    write(t.path / "src/main.wz", "package app; func f() {}");
     SourceManager sm;
     auto r = resolve(t.path / "lang.toml", sm);
     std::stop_source stop;

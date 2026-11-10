@@ -122,7 +122,7 @@ T10 的 Python 外部对象由 Python 对象模型管理，不能据此声称原
 
 - 绑定至少覆盖已有训练 sample 实际调用的 NumPy、torch、nn、optim、functional 接口。
 - 检查时不导入真实 Python 包；执行集成测试时使用锁定依赖环境。
-- 运行从 `.lang` 生成的 Python。手写参考程序仅为行为对照，不能代替转译产物执行。
+- 运行从 `.wz` 生成的 Python。手写参考程序仅为行为对照，不能代替转译产物执行。
 - 保留 `model(x)`、真实 Tensor、autograd 图和显式数据转换；不能通过隐式 detach/item 修复类型问题。
 - CPU 训练为首批必验能力；GPU、AMP、DDP、torch.compile 另立任务。
 

@@ -10,15 +10,15 @@
 tests/cleanup/
   cases.json
   fixtures/
-    case-01/{lang.toml,src/main.lang}       # case-01 ... case-10
-    errors-original/{lang.toml,src/main.lang}
-    reject-*/{lang.toml,src/main.lang}      # 8 个反例
+    case-01/{lang.toml,src/main.wz}       # case-01 ... case-10
+    errors-original/{lang.toml,src/main.wz}
+    reject-*/{lang.toml,src/main.wz}      # 8 个反例
 ```
 
-每个项目都是独立 `lang.toml` 项目。manifest 的包名统一为合法标识符 `main`，不使用目录中的短横线；`source_root = "src"`，`entry = "app"`，`source_root` 中唯一的 `main.lang` 声明 `package main;`。
+每个项目都是独立 `lang.toml` 项目。manifest 的包名统一为合法标识符 `main`，不使用目录中的短横线；`source_root = "src"`，`entry = "app"`，`source_root` 中唯一的 `main.wz` 声明 `package main;`。
 
 - `case-01` 到 `case-10` 的源码逐字节复制自已审查的 proposal 源码。
-- `errors-original/src/main.lang` 是 `examples/errors.lang` 的逐字节副本。
+- `errors-original/src/main.wz` 是 `examples/errors.wz` 的逐字节副本。
 - 8 个 `reject-*` 源码是本任务新增的小反例，全部通过语法检查。
 
 ## 正例预期
@@ -41,7 +41,7 @@ tests/cleanup/
 
 ### case-10 观察限制
 
-native 进程终止后不能直接读取局部 `log=12`。未来 native 检查只验证 Panic 原因、源位置（`src/main.lang` 第 12 行的 `i32(1)/zero`）和 runner 退出 `101`；不能把较早 defer 中的非法移位当成实际 Panic。Python 未来可用 `entrypoint=false` 调用 `probe`，捕获 Panic 后检查 Cell 的 12。
+native 进程终止后不能直接读取局部 `log=12`。未来 native 检查只验证 Panic 原因、源位置（`src/main.wz` 第 12 行的 `i32(1)/zero`）和 runner 退出 `101`；不能把较早 defer 中的非法移位当成实际 Panic。Python 未来可用 `entrypoint=false` 调用 `probe`，捕获 Panic 后检查 Cell 的 12。
 
 ## 反例预期
 
@@ -63,15 +63,15 @@ native 进程终止后不能直接读取局部 `log=12`。未来 native 检查�
 使用现有 C++ 正式 CLI：
 
 ```sh
-langc check --syntax-only --format json tests/cleanup/fixtures/<id>/src/main.lang
-langc check --project tests/cleanup/fixtures/<id>/lang.toml --format json
+woozyc check --syntax-only --format json tests/cleanup/fixtures/<id>/src/main.wz
+woozyc check --project tests/cleanup/fixtures/<id>/lang.toml --format json
 ```
 
 | 检查 | 实际结果 |
 | --- | --- |
 | `cases.json` JSON 解析、manifest/source 引用 | 19/19 passed |
 | 10 个 proposal 源码 hash | 10/10 与独立审查记录一致 |
-| `examples/errors.lang` 副本 | 字节一致，hash 一致 |
+| `examples/errors.wz` 副本 | 字节一致，hash 一致 |
 | 8 个新反例源码 hash | 已记录；无外部原始 hash 可比 |
 | `--syntax-only` | 19/19 passed，退出 0，`status=ok`，无诊断 |
 | 当前 `check --project`（manifest 默认 native） | 18 个 `E_CAPABILITY_UNAVAILABLE`，1 个 `E_TYPE_MISMATCH` |

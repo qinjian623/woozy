@@ -1,5 +1,5 @@
 #!/usr/bin/env python3
-"""Build all published accept projects with langc and run independent Python files."""
+"""Build all published accept projects with woozyc and run independent Python files."""
 import argparse
 import json
 from pathlib import Path
@@ -47,7 +47,8 @@ func main() i32 {return 0;}
 
 def main():
     parser = argparse.ArgumentParser()
-    for name in ('langc', 'root', 'out', 'python'):
+    parser.add_argument('--woozyc', dest='langc', type=Path, required=True)
+    for name in ('root', 'out', 'python'):
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
     args.langc = args.langc.resolve()
@@ -86,7 +87,7 @@ def main():
     def run(ident, manifest, expected, group):
         directory = args.out / 'generated' / ident
         sources = sorted(p for p in manifest.parent.rglob('*')
-                         if p.is_file() and p.suffix in ('.lang', '.toml', '.json'))
+                         if p.is_file() and p.suffix in ('.wz', '.toml', '.json'))
         row = {
             'id': ident, 'manifest': str(manifest),
             'runtime_expected': {'main_return': expected},

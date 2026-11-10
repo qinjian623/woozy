@@ -2,7 +2,7 @@
 """Host-side conformance checks for the T10 NumPy/PyTorch binding bundle.
 
 This program deliberately exercises the real NumPy and PyTorch host APIs on
-CPU.  It does not generate or execute a .lang program, and it does not
+CPU.  It does not generate or execute a .wz program, and it does not
 implement or imitate the future lang.py.Error runtime type.  The JSON result
 therefore separates host-level results from the generator/runtime items that
 remain not_run.
@@ -1219,7 +1219,7 @@ def not_run_items() -> list[dict[str, str]]:
         {
             "id": "generated_language_program",
             "status": "not_run",
-            "reason": "No T10 Python emitter/runtime/CLI integration is present in this worktree; no .lang program was generated or executed.",
+            "reason": "No T10 Python emitter/runtime/CLI integration is present in this worktree; no .wz program was generated or executed.",
         },
         {
             "id": "lang.py.Error_bridge",
@@ -1286,7 +1286,7 @@ def frozen_bundle_rejection(
         "scope": (
             "This corrected script accepts only the frozen original binding bundle; "
             "declaration changes are rejected before host calls or reference execution. "
-            "It is not .lang generation and not py.Error bridge verification."
+            "It is not .wz generation and not py.Error bridge verification."
         ),
         "bundle": {
             "path": str(bundle_path),
@@ -1399,7 +1399,7 @@ def main(argv: list[str] | None = None) -> int:
         "status": overall,
         "scope": (
             "Host-level execution of the 15 declared NumPy/PyTorch callables and 2 dtype values. "
-            "This is not .lang generation/execution and not py.Error bridge verification."
+            "This is not .wz generation/execution and not py.Error bridge verification."
         ),
         "bundle": {
             "path": str(bundle_path),

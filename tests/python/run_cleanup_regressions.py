@@ -17,7 +17,7 @@ def main():
         parser.add_argument('--' + name, type=Path, required=True)
     args = parser.parse_args()
     args.out.mkdir(parents=True, exist_ok=True)
-    fixture = args.root / 'tests/python/fixtures/function-key-collision/src/main.lang'
+    fixture = args.root / 'tests/python/fixtures/function-key-collision/src/main.wz'
     original = fixture.read_text()
     assert sha(fixture) == '310c4df4d72549f1743a30139ea1907b2a14833da15f9dabba16858c56060061'
     rows = []
@@ -27,9 +27,9 @@ def main():
                     for p in [args.root / 'src/backend/python/emitter.cpp',
                               args.root / 'include/lang/backend/python.hpp',
                               args.root / 'runtime/python/langrt.py', fixture,
-                              args.root / 'tests/python/fixtures/mixed-loop-cleanup.lang',
-                              args.root / 'tests/python/fixtures/outlining-recursive-replacement.lang',
-                              args.root / 'tests/python/fixtures/outlining-unentered.lang',
+                              args.root / 'tests/python/fixtures/mixed-loop-cleanup.wz',
+                              args.root / 'tests/python/fixtures/outlining-recursive-replacement.wz',
+                              args.root / 'tests/python/fixtures/outlining-unentered.wz',
                               Path(__file__), Path(__file__).with_name('cleanup_regression_cases.py'),
                               Path(__file__).with_name('observe_cleanup_regressions.py'),
                               Path(__file__).with_name('outlining_cases.py'),
@@ -52,7 +52,7 @@ def main():
     for ident, source, expected in [*key_cases(original), *flat_cases()]:
         directory = args.out / 'sources' / ident
         (directory / 'src').mkdir(parents=True, exist_ok=True)
-        file = directory / 'src/main.lang'
+        file = directory / 'src/main.wz'
         file.write_text(source)
         manifest = directory / 'lang.toml'
         manifest.write_text('schema_version=1\n[package]\nname="app"\nsource_root="src"\n'

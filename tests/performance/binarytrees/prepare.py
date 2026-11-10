@@ -118,7 +118,7 @@ TARGET_FLAGS = (
     "--target=x86_64-unknown-linux-gnu", "-march=x86-64", "-mtune=generic",
     "-fno-fast-math", "-ffp-contract=off", "-fno-lto",
 )
-TEMPLATE_NAMES = ("binarytrees.lang.in", "reference.cpp.in")
+TEMPLATE_NAMES = ("binarytrees.wz.in", "reference.cpp.in")
 OBSERVER_SOURCES = ("native_observer.cpp", "cpp_observer.cpp")
 DELIVERABLE_NAMES = (*TEMPLATE_NAMES, *OBSERVER_SOURCES, "prepare.py", "README.md")
 VARIANTS = ("correct", "wrong-stretch", "wrong-tree-count",
@@ -330,13 +330,13 @@ def generate_case(out: Path, templates: dict, case: dict, variant: str) -> dict:
     }
     cpp_mapping = dict(mapping)
     cpp_mapping["BUCKET_CALLS"] = cpp_bucket_calls(case, values)
-    source_text = render(templates["binarytrees.lang.in"], mapping)
+    source_text = render(templates["binarytrees.wz.in"], mapping)
     reference_text = render(templates["reference.cpp.in"], cpp_mapping)
     label = f"n={case['n']} {variant}"
     verify_generated(source_text, reference_text, case, variant, values, label)
     directory = out / "cases" / f"n{case['n']}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
-    source = directory / "src" / "main.lang"
+    source = directory / "src" / "main.wz"
     reference = directory / "reference.cpp"
     manifest = directory / "lang.toml"
     expected = directory / "expected.txt"
@@ -1517,7 +1517,7 @@ def parse_args(argv=None):
     parser.add_argument("--official", type=Path, default=DEFAULT_OFFICIAL)
     parser.add_argument("--official-check", type=Path,
                         default=DEFAULT_OFFICIAL_CHECK)
-    parser.add_argument("--langc", type=Path, required=True)
+    parser.add_argument("--woozyc", dest="langc", type=Path, required=True)
     parser.add_argument("--helper", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--llvm-bin", type=Path, required=True)

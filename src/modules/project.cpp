@@ -681,12 +681,12 @@ struct Loader {
     std::vector<fs::path> paths;
     for (auto &e : fs::directory_iterator(dir)) {
       check_cancelled(stop);
-      if (e.is_regular_file() && e.path().extension() == ".lang")
+      if (e.is_regular_file() && e.path().extension() == ".wz")
         paths.push_back(e.path());
     }
     std::sort(paths.begin(), paths.end());
     if (paths.empty())
-      fail("E_MODULE_EMPTY", "no .lang files in " + dir.string(), where,
+      fail("E_MODULE_EMPTY", "no .wz files in " + dir.string(), where,
            FailureKind::environment);
     for (auto &p : paths) {
       auto src = read(p);

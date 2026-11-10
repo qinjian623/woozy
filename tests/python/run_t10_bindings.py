@@ -161,7 +161,7 @@ def error_events(events):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--helper', type=Path, required=True)
-    parser.add_argument('--langc', type=Path)
+    parser.add_argument('--woozyc', dest="langc", type=Path)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--python', type=Path, required=True)
@@ -241,7 +241,7 @@ func main() i32 throws py.Error {
     ]
 
     def order_case(row):
-        project = r.project('order-objects-errors', {'src/main.lang': order_source}, binding)
+        project = r.project('order-objects-errors', {'src/main.wz': order_source}, binding)
         out, _ = r.emit(row, project, binding)
         observed, events = r.observe(row, out)
         require(observed['main_return'] == 0, observed)
@@ -386,7 +386,7 @@ func main() i32 throws py.Error {
 
     def foreign_ownership_case(row):
         project = r.project('foreign-ownership',
-                            {'src/main.lang': foreign_ownership_source}, binding)
+                            {'src/main.wz': foreign_ownership_source}, binding)
         out, _ = r.emit(row, project, binding)
         observed, events = r.observe(row, out)
         require(observed['main_return'] == 0, observed)
@@ -494,7 +494,7 @@ func main() i32 throws py.Error {
 
     def error_aggregate_case(row):
         project = r.project('py-error-aggregate-storage',
-                            {'src/main.lang': error_aggregate_source}, binding)
+                            {'src/main.wz': error_aggregate_source}, binding)
         out, _ = r.emit(row, project, binding)
         if args.langc is not None:
             cli_out = project / 'cli-out'
@@ -516,7 +516,7 @@ func main() i32 throws py.Error {
             }
         else:
             row['cli_comparison'] = {'status': 'not_run',
-                                     'reason': '--langc not supplied'}
+                                     'reason': '--woozyc not supplied'}
         observed, events = r.observe(row, out)
         require(observed['main_return'] == 0, observed)
         require(observed['owners'] == [], observed)
@@ -603,7 +603,7 @@ func main() i32 throws py.Error {
 
     def foreign_cleanup_case(row):
         project = r.project('foreign-cleanup',
-                            {'src/main.lang': foreign_cleanup_source}, binding)
+                            {'src/main.wz': foreign_cleanup_source}, binding)
         out, _ = r.emit(row, project, binding)
         observed, events = r.observe(row, out)
         require(observed['main_return'] == 0, observed)
@@ -795,8 +795,8 @@ func main() i32 throws py.Error {
 
     def generic_error_key_case(row):
         project = r.project('generic-foreign-error-key',
-                            {'src/main.lang': generic_error_source,
-                             'src/kinds/main.lang': generic_error_kinds},
+                            {'src/main.wz': generic_error_source,
+                             'src/kinds/main.wz': generic_error_kinds},
                             binding)
         out, _ = r.emit(row, project, binding)
         if args.langc is not None:
@@ -819,7 +819,7 @@ func main() i32 throws py.Error {
             }
         else:
             row['cli_comparison'] = {'status': 'not_run',
-                                     'reason': '--langc not supplied'}
+                                     'reason': '--woozyc not supplied'}
         # The stable keys must retain the full ordered concrete arguments and
         # the defining module, not a local alias or a session/binding number.
         keys = {node.value.decode('utf-8')
@@ -944,7 +944,7 @@ func main() i32 {
         variant_path.write_text(
             json.dumps(variant, ensure_ascii=False, indent=2) + '\n')
         project = r.project('generic-error-key-escaping',
-                            {'src/main.lang': generic_error_key_escaping_source},
+                            {'src/main.wz': generic_error_key_escaping_source},
                             variant_path)
         out, _ = r.emit(row, project, variant_path)
         if args.langc is not None:
@@ -967,7 +967,7 @@ func main() i32 {
             }
         else:
             row['cli_comparison'] = {'status': 'not_run',
-                                     'reason': '--langc not supplied'}
+                                     'reason': '--woozyc not supplied'}
         keys = {node.value.decode('utf-8')
                 for node in ast.walk(ast.parse((out / 'program.py').read_text()))
                 if isinstance(node, ast.Constant)
@@ -1030,7 +1030,7 @@ func main() i32 {
             source = ('package main; import "std/py" as py; '
                       'import "t10host" as host; ' + body)
             project = r.project('foreign-reject-' + name,
-                                {'src/main.lang': source}, binding)
+                                {'src/main.wz': source}, binding)
             out, result = r.emit(row, project, binding, expect_success=False)
             require(result['exit'] == 1, result)
             data = json.loads(result['stdout'])
@@ -1052,7 +1052,7 @@ func main() i32 {
             source = ('package main; import "std/py" as py; '
                       'import "t10host" as host; ' + body)
             project = r.project('foreign-reject-' + name,
-                                {'src/main.lang': source}, binding)
+                                {'src/main.wz': source}, binding)
             out, result = r.emit(row, project, binding, expect_success=False)
             require(result['exit'] == 1, result)
             data = json.loads(result['stdout'])
@@ -1066,7 +1066,7 @@ func main() i32 {
                   'func main() i32 throws py.Error { let p = host.make(); '
                   'let values Vec[host.Probe] = [p]; return 0; }')
         project = r.project('foreign-reject-32bit',
-                            {'src/main.lang': source}, binding)
+                            {'src/main.wz': source}, binding)
         manifest = (project / 'lang.toml').read_text().replace(
             'word_bits = 64', 'word_bits = 32')
         (project / 'lang.toml').write_text(manifest)
@@ -1102,8 +1102,8 @@ func main() i32 throws py.Error {
 
     def internal_case(row):
         project = r.project('internal-cross-module',
-                            {'src/main.lang': internal_main,
-                             'src/helper/main.lang': internal_helper}, binding)
+                            {'src/main.wz': internal_main,
+                             'src/helper/main.wz': internal_helper}, binding)
         out, _ = r.emit(row, project, binding)
         observed, events = r.observe(row, out)
         require(observed['main_return'] == 0, observed)
@@ -1115,7 +1115,7 @@ func main() i32 throws py.Error {
         require('type=t10host.HostOuter' in errors[0], errors)
         require('operation=t10host.error_source' in errors[0], errors)
         require('cause=t10host.HostInner:inner cause' in errors[0], errors)
-        require('/src/helper/main.lang' in errors[0], errors)
+        require('/src/helper/main.wz' in errors[0], errors)
         require('TAKE' not in non_error_events(events), events)
         row['observation'] = observed
         row['events'] = events
@@ -1133,7 +1133,7 @@ func main() i32 {
 '''
 
     def internal_escape_case(row):
-        project = r.project('internal-escape', {'src/main.lang': escape_main}, binding)
+        project = r.project('internal-escape', {'src/main.wz': escape_main}, binding)
         out, _ = r.emit(row, project, binding)
         observed, events = r.observe(row, out)
         require('typed' in observed, observed)
@@ -1150,7 +1150,7 @@ import "std/py" as py;
 import "t10host" as host;
 func main() Unit throws py.Error {{ host.raise_base({kind}); }}
 '''
-        project = r.project('base-' + str(kind), {'src/main.lang': source}, binding)
+        project = r.project('base-' + str(kind), {'src/main.wz': source}, binding)
         out, _ = r.emit(row, project, binding)
         result = r.direct(row, out)
         if expected_exit is not None:
@@ -1176,7 +1176,7 @@ import "std/py" as py;
 import "t10host" as host;
 func main() Unit throws py.Error { host.return_bad_unit(); }
 '''
-        project = r.project('bad-unit', {'src/main.lang': source}, binding)
+        project = r.project('bad-unit', {'src/main.wz': source}, binding)
         out, _ = r.emit(row, project, binding)
         result = r.direct(row, out)
         require(result['exit'] == 101, result)
@@ -1200,7 +1200,7 @@ import "std/py" as py;
 import "t10host" as host;
 func main() Unit throws py.Error { host.note(1); }
 '''
-        project = r.project('no-throws', {'src/main.lang': source}, variant_path)
+        project = r.project('no-throws', {'src/main.wz': source}, variant_path)
         out, result = r.emit(row, project, variant_path, expect_success=False)
         require(result['exit'] == 1, result)
         data = json.loads(result['stdout'])
@@ -1221,7 +1221,7 @@ func main() Unit throws py.Error { host.note(1); }
         def unsupported_error_case(row, name=name, declaration=declaration):
             source = ('package main; import "std/py" as py; '
                       'import "t10host" as host; ' + declaration + ' func main() Unit {}')
-            project = r.project(name, {'src/main.lang': source}, binding)
+            project = r.project(name, {'src/main.wz': source}, binding)
             out, result = r.emit(row, project, binding, expect_success=False)
             require(result['exit'] == 1, result)
             data = json.loads(result['stdout'])
@@ -1254,7 +1254,7 @@ import "std/py" as py;
 import "missinghost" as missing;
 func main() Unit throws py.Error { missing.ping(); }
 '''
-        project = r.project('missing-host', {'src/main.lang': source}, variant_path)
+        project = r.project('missing-host', {'src/main.wz': source}, variant_path)
         with (project / 'lang.toml').open('a') as manifest:
             manifest.write(f'''[dependencies.missinghost]
 kind = "python"
@@ -1313,7 +1313,7 @@ func main() Unit throws py.Error {
         project = args.out / 'projects' / name
         if project.exists():
             shutil.rmtree(project)
-        write(project / 'src/main.lang', source)
+        write(project / 'src/main.wz', source)
         dependencies = ''.join(f'''[dependencies.{package}]
 kind = "python"
 binding = "{args.example_binding}"
@@ -1366,7 +1366,7 @@ word_bits = 64
         project = args.out / 'projects' / 'original-04'
         if project.exists():
             shutil.rmtree(project)
-        write(project / 'src/main.lang', source.read_text())
+        write(project / 'src/main.wz', source.read_text())
         write(project / 'lang.toml', f'''schema_version = 1
 [package]
 name = "app"

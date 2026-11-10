@@ -31,7 +31,7 @@ int main() {
     check(static_cast<int>(r.exit_code()) == code);
   }
   SourceManager m;
-  auto f = m.add_file("old.lang");
+  auto f = m.add_file("old.wz");
   auto old = m.update(f, "old");
   std::stop_source stop;
   stop.request_stop();
@@ -47,13 +47,13 @@ int main() {
        std::to_string(
            std::chrono::steady_clock::now().time_since_epoch().count()));
   check(std::filesystem::create_directory(directory));
-  auto missing = read_source(directory / "missing.lang", m);
+  auto missing = read_source(directory / "missing.wz", m);
   check(missing.exit_code() == ExitCode::environment_error);
   check(missing.diagnostics.at(0).code == "E_INPUT_IO");
   std::cout << diagnostic_json(m, "test", "1", missing.status(),
                                missing.diagnostics)
             << '\n';
-  auto path = directory / "input.lang";
+  auto path = directory / "input.wz";
   for (auto bytes :
        {std::string("a\x80"), std::string("a\0", 2), std::string("a\r")}) {
     {

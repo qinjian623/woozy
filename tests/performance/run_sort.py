@@ -40,7 +40,7 @@ ALGORITHMS = {
         "self_test_schema": "compiler-dev/native-heapsort-self-test/1",
         "arrays_schema": "compiler-dev/native-heapsort-arrays/1",
         "directory": PERFORMANCE_DIR / "sort",
-        "source_template": "heap.lang.in",
+        "source_template": "heap.wz.in",
         "reference_template": "reference.cpp.in",
         "manifest_name": "perf_sort_heap",
         "display": "heap-sort",
@@ -55,7 +55,7 @@ ALGORITHMS = {
         "self_test_schema": "compiler-dev/native-quicksort-self-test/1",
         "arrays_schema": "compiler-dev/native-quicksort-arrays/1",
         "directory": PERFORMANCE_DIR / "quicksort",
-        "source_template": "quick.lang.in",
+        "source_template": "quick.wz.in",
         "reference_template": "reference.cpp.in",
         "manifest_name": "perf_sort_quick",
         "display": "quicksort",
@@ -70,7 +70,7 @@ ALGORITHMS = {
         "self_test_schema": "compiler-dev/native-mergesort-self-test/1",
         "arrays_schema": "compiler-dev/native-mergesort-arrays/1",
         "directory": PERFORMANCE_DIR / "mergesort",
-        "source_template": "merge.lang.in",
+        "source_template": "merge.wz.in",
         "reference_template": "reference.cpp.in",
         "manifest_name": "perf_sort_merge",
         "display": "merge-sort",
@@ -293,7 +293,7 @@ def generate_sources(out, template_map, raw, golden, params, name, algorithm):
     config = algorithm_config(algorithm)
     directory = out / name
     (directory / "src").mkdir(parents=True, exist_ok=False)
-    (directory / "src" / "main.lang").write_text(
+    (directory / "src" / "main.wz").write_text(
         render(template_map[config["source_template"]], raw, golden, params["n"],
                params["seed"], params["rounds"]), encoding="utf-8")
     (directory / "reference.cpp").write_text(
@@ -303,7 +303,7 @@ def generate_sources(out, template_map, raw, golden, params, name, algorithm):
                                          encoding="utf-8")
     return {"directory": str(directory),
             "manifest": file_rec(directory / "lang.toml", out),
-            "source": file_rec(directory / "src" / "main.lang", out),
+            "source": file_rec(directory / "src" / "main.wz", out),
             "reference": file_rec(directory / "reference.cpp", out)}
 
 
@@ -825,7 +825,7 @@ def parse_args(argv=None):
     parser.add_argument("--self-test", action="store_true")
     parser.add_argument("--out", type=Path)
     parser.add_argument("--prepare-report", type=Path)
-    parser.add_argument("--langc", type=Path)
+    parser.add_argument("--woozyc", dest="langc", type=Path)
     parser.add_argument("--helper", type=Path)
     parser.add_argument("--runtime", type=Path)
     parser.add_argument("--llvm-bin", type=Path)
@@ -854,7 +854,8 @@ def validate_args(args):
     else:
         need(args.prepare_report is not None, "measurement requires --prepare-report")
     for name in ("langc", "helper", "runtime", "llvm_bin"):
-        need(getattr(args, name) is not None, f"--{name.replace('_', '-')} is required")
+        option = "--woozyc" if name == "langc" else "--" + name.replace("_", "-")
+        need(getattr(args, name) is not None, f"{option} is required")
     for label, path in (("langc", args.langc), ("helper", args.helper), ("runtime", args.runtime),
                         ("llvm-bin/clang++", args.llvm_bin / "clang++"),
                         ("llvm-bin/ld.lld", args.llvm_bin / "ld.lld"),

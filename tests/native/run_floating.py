@@ -34,7 +34,7 @@ def success(row):
 
 def source_hashes(project):
     return {str(p.relative_to(project)): sha(p) for p in sorted(project.rglob('*'))
-            if p.is_file() and (p.suffix == '.lang' or p.name == 'lang.toml')}
+            if p.is_file() and (p.suffix == '.wz' or p.name == 'lang.toml')}
 
 
 def additional():
@@ -154,7 +154,7 @@ def main():
         assert len(cases) == 13 and sum(len(c['runtime_expected']['probes']) for c in cases) == 76
         # These frozen projects used to be capability rejections. The
         # explicit numeric conversion rule now makes them legal programs, so
-        # they are built and executed while their .lang inputs stay unchanged.
+        # they are built and executed while their .wz inputs stay unchanged.
         cases += [dict(id='reject-float-to-int',
                        manifest='tests/native/floating/reject-float-to-int/lang.toml',
                        runtime_expected=dict(main_return=0, probes=[])),

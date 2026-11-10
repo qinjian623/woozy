@@ -136,7 +136,7 @@ class Runtime(unittest.TestCase):
             except Inner as inner:
                 raise Outer('outer') from inner
         except Outer as outer:
-            payload = rt.Error(outer, '/tmp/source.lang', 10, 20, 'host.read')
+            payload = rt.Error(outer, '/tmp/source.wz', 10, 20, 'host.read')
         self.assertIs(payload.copy(), payload)
         self.assertTrue(payload.type_name.endswith('Outer'))
         self.assertEqual(payload.message, 'outer')
@@ -144,10 +144,10 @@ class Runtime(unittest.TestCase):
         self.assertIn('Outer', payload.traceback_text)
         self.assertEqual((payload.file, payload.begin_byte, payload.end_byte,
                           payload.operation),
-                         ('/tmp/source.lang', 10, 20, 'host.read'))
+                         ('/tmp/source.wz', 10, 20, 'host.read'))
         payload.drop()
         self.assertTrue(payload.describe().endswith(
-            "Outer: outer at /tmp/source.lang:10:20 (host.read)"))
+            "Outer: outer at /tmp/source.wz:10:20 (host.read)"))
 
     def test_foreign_value_copy_and_drop(self):
         foreign = rt.ValueType('foreign')
@@ -174,7 +174,7 @@ class Runtime(unittest.TestCase):
             except Inner as inner:
                 raise Outer('outer') from inner
         except Outer as outer:
-            payload = rt.Error(outer, '/tmp/source.lang', 10, 20, 'host.read')
+            payload = rt.Error(outer, '/tmp/source.wz', 10, 20, 'host.read')
         exception = payload.exception
         cause = payload.cause
         traceback_object = exception.__traceback__
@@ -216,7 +216,7 @@ class Runtime(unittest.TestCase):
                           id(payload.cause.__traceback__)), ids)
         self.assertIn('Outer', payload.traceback_text)
         self.assertTrue(payload.describe().endswith(
-            'Outer: outer at /tmp/source.lang:10:20 (host.read)'))
+            'Outer: outer at /tmp/source.wz:10:20 (host.read)'))
 
     def test_foreign_reference_copy_in_vec_and_aggregates(self):
         foreign = rt.ValueType('foreign')
@@ -249,7 +249,7 @@ class Runtime(unittest.TestCase):
                 raise Outer('outer') from cause
 
         with self.assertRaises(rt.TypedError) as caught:
-            rt.foreign_call(fail, (), {}, '/tmp/f.lang', 3, 4, 'f.call', False)
+            rt.foreign_call(fail, (), {}, '/tmp/f.wz', 3, 4, 'f.call', False)
         error = caught.exception
         self.assertEqual(error.type_key, 'lang.py.Error')
         self.assertIsInstance(error.value, rt.Error)
@@ -258,7 +258,7 @@ class Runtime(unittest.TestCase):
         self.assertIs(error.value.cause.__class__, ValueError)
         self.assertEqual((error.value.file, error.value.begin_byte,
                           error.value.end_byte, error.value.operation),
-                         ('/tmp/f.lang', 3, 4, 'f.call'))
+                         ('/tmp/f.wz', 3, 4, 'f.call'))
         self.assertIn('Outer', error.value.traceback_text)
         error.drop()
 
@@ -266,7 +266,7 @@ class Runtime(unittest.TestCase):
         typed = rt.TypedError('app.E', 1, rt.ValueType())
         with self.assertRaises(rt.TypedError) as caught:
             rt.foreign_call(lambda: (_ for _ in ()).throw(typed), (), {},
-                            '/tmp/f.lang', 1, 1, 'f', False)
+                            '/tmp/f.wz', 1, 1, 'f', False)
         self.assertIs(caught.exception, typed)
 
     def test_foreign_call_preserves_base_exceptions(self):
@@ -274,13 +274,13 @@ class Runtime(unittest.TestCase):
             def fail(kind=kind):
                 raise kind('base')
             with self.assertRaises(kind):
-                rt.foreign_call(fail, (), {}, '/tmp/f.lang', 1, 1, 'f', False)
+                rt.foreign_call(fail, (), {}, '/tmp/f.wz', 1, 1, 'f', False)
 
     def test_foreign_call_unit_contract(self):
         self.assertIsNone(
-            rt.foreign_call(lambda: None, (), {}, '/tmp/f.lang', 1, 1, 'f', True))
+            rt.foreign_call(lambda: None, (), {}, '/tmp/f.wz', 1, 1, 'f', True))
         with self.assertRaises(rt.Panic):
-            rt.foreign_call(lambda: 1, (), {}, '/tmp/f.lang', 1, 1, 'f', True)
+            rt.foreign_call(lambda: 1, (), {}, '/tmp/f.wz', 1, 1, 'f', True)
 
     def test_missing_host_module_is_environment_error(self):
         with self.assertRaises(rt.HostEnvironmentError):
@@ -299,9 +299,9 @@ class Runtime(unittest.TestCase):
         self.assertIsNot(second, math)
         self.assertIs(other, cmath)
         self.assertIs(rt.host_module('shared-test', 'cmath'), second)
-        value = rt.foreign_read(second, ('sqrt',), 'cache.lang', 3, 9,
+        value = rt.foreign_read(second, ('sqrt',), 'cache.wz', 3, 9,
                                 'shared-test.sqrt')
-        result = rt.foreign_call(value, (-1.0,), {}, 'cache.lang', 3, 10,
+        result = rt.foreign_call(value, (-1.0,), {}, 'cache.wz', 3, 10,
                                  'shared-test.sqrt', False)
         self.assertEqual(result, 1j)
         failed = False

@@ -16,11 +16,11 @@
 在主仓库根目录使用真实构建：
 
 ```sh
-build/frontend-debug/langc check --syntax-only --format json <each .lang>
+build/frontend-debug/woozyc check --syntax-only --format json <each .wz>
 build/frontend-debug/lang_module_check <each lang.toml>
 ```
 
-- 语法：20/20 `.lang` 通过，退出 0，`status=ok`，无诊断。
+- 语法：20/20 `.wz` 通过，退出 0，`status=ok`，无诊断。
 - 名称：20/20 项目通过 `lang_module_check`，退出 0，`status=ok`，无诊断。
 - 因此 13 个 `reject` 不是因语法、拼写名称或导入失败而拒绝；它们通过语法和名称阶段后才应被类型/效果阶段拒绝。
 - 类型检查：`not_run`，不是通过。HEAD 没有 T04 的完整检查器；本目录不执行 fixture 程序，也不声称 T04 或 T08 已完成。

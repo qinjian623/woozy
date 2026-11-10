@@ -27,11 +27,11 @@ the smaller partition and loops on the larger partition.
 
 ## Files
 
-- `heap.lang.in`: Source heap-sort template (`{{ARRAY}}`, `{{EXPECTED}}`,
+- `heap.wz.in`: Source heap-sort template (`{{ARRAY}}`, `{{EXPECTED}}`,
   `{{N}}`, `{{SEED}}`, `{{ROUNDS}}`).
 - `reference.cpp.in`: C++20 heap-sort reference template with the same
   placeholders.
-- `../quicksort/quick.lang.in`: Source quicksort template with the same
+- `../quicksort/quick.wz.in`: Source quicksort template with the same
   placeholders.
 - `../quicksort/reference.cpp.in`: C++20 quicksort reference template.
 - `run_sort.py`: algorithm selector, generator, prepare/verification harness,
@@ -56,7 +56,7 @@ export XML="$MAIN/toolchains/libxml2-legacy-2.13.9/usr/lib"
 
 "$PY" tests/performance/run_sort.py --prepare-only \
   --out build/sort-prepare/prepare-release-final \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
@@ -109,7 +109,7 @@ binaries still match.
 "$PY" tests/performance/run_sort.py \
   --out build/sort-prepare/measure-release-idle \
   --prepare-report build/sort-prepare/prepare-release-final/prepare.json \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \

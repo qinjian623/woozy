@@ -116,7 +116,7 @@ PINNED_MATRIX = {
     },
 }
 TARGET_FLAGS = mandel.TARGET_FLAGS
-TEMPLATE_NAMES = ("matmul.lang.in", "reference.cpp.in")
+TEMPLATE_NAMES = ("matmul.wz.in", "reference.cpp.in")
 VARIANT_EXIT = {"correct": 0, "wrong": 1}
 
 SOURCE_MAIN = """func main() i32 {
@@ -584,7 +584,7 @@ def generate_case(base, templates, n, rounds, literals, variant):
     directory = base / "cases" / f"n{n}" / f"r{rounds}" / variant
     (directory / "src").mkdir(parents=True, exist_ok=False)
     source_text, source_render = render_program(
-        templates["matmul.lang.in"], n, rounds, literals, variant, "source")
+        templates["matmul.wz.in"], n, rounds, literals, variant, "source")
     reference_text, reference_render = render_program(
         templates["reference.cpp.in"], n, rounds, literals, variant, "cpp")
     marker = (n, variant, PINNED_MATRIX[n]["a"][0],
@@ -592,7 +592,7 @@ def generate_case(base, templates, n, rounds, literals, variant):
               literals["expected_bits_sha256"], RESULTS_SHA256)
     checks = verify_generated_large(
         source_text, reference_text, n, rounds, variant, literals, marker)
-    source = directory / "src" / "main.lang"
+    source = directory / "src" / "main.wz"
     reference = directory / "reference.cpp"
     manifest = directory / "lang.toml"
     source.write_text(source_text, encoding="utf-8")
@@ -1848,7 +1848,7 @@ def parse_args(argv=None):
     parser.add_argument("--python", type=Path, default=Path(sys.executable))
     parser.add_argument("--python-helper", type=Path,
                         default=DEFAULT_PYTHON_HELPER)
-    parser.add_argument("--langc", type=Path, required=True)
+    parser.add_argument("--woozyc", dest="langc", type=Path, required=True)
     parser.add_argument("--helper", type=Path, required=True)
     parser.add_argument("--runtime", type=Path, required=True)
     parser.add_argument("--llvm-bin", type=Path, required=True)

@@ -75,7 +75,7 @@ catch right Token[{a[1]}] {{return 0;}}return 7;}}''')
 
 def flat_cases():
     yield 'mixed-loop-cleanup', (Path(__file__).parent /
-        'fixtures/mixed-loop-cleanup.lang').read_text(), dict(main_return=0,
+        'fixtures/mixed-loop-cleanup.wz').read_text(), dict(main_return=0,
         events=[1, 2, 0, 2, 3, 4, 5, 6, 7, 8, 9] +
                [1, 2, 1, 2, 3, 4, 5, 6, 7, 8, 9] +
                [1, 2, 2, 3, 4, 5, 6, 0, 6, 7, 8, 9] +

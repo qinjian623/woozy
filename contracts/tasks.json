@@ -194,8 +194,8 @@
         "O0/O2 执行记录"
       ],
       "acceptance": [
-        "core.lang实际编译链接运行返回0",
-        "numeric.lang的已实施整数规则与预期一致",
+        "core.wz实际编译链接运行返回0",
+        "numeric.wz的已实施整数规则与预期一致",
         "O0/O2均验证和执行"
       ],
       "read": [
@@ -301,7 +301,7 @@
         "退出路径事件测试"
       ],
       "acceptance": [
-        "errors.lang实际运行",
+        "errors.wz实际运行",
         "正常/throw/return/break/continue清理正确",
         "Panic隔离且Result不自动传播"
       ],
@@ -337,7 +337,7 @@
         "别名/移动/释放验收"
       ],
       "acceptance": [
-        "ownership.lang符合共享与移动规则",
+        "ownership.wz符合共享与移动规则",
         "移动后读取被拒绝",
         "正常/错误路径无双重drop",
         "限制inout和捕获闭包"

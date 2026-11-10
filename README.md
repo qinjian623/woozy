@@ -1,10 +1,12 @@
 # Woozy
 
-Woozy 是一门编译型语言，提供 Native 和 Python 两个后端。本仓库包含编译器实现、原生运行库、语言规范和测试。编译器当前命令名为 `langc`，源文件后缀为 `.lang`。
+Woozy 是一门编译型语言，提供 Native 和 Python 两个后端。本仓库包含编译器实现、原生运行库、语言规范和测试。编译器命令为 `woozyc`，源文件后缀为 `.wz`。
 
-`langc` 已能检查项目并生成 Native 与 Python 程序。现有实现包括整数、严格标量浮点、函数与非捕获函数值、已有泛型和 trait 组合、struct/enum、Vec、typed throws 与词法块 defer。具体支持的组合和限制见 [GENERICS.md](docs/GENERICS.md)、[值与清理执行说明](docs/T09_EXECUTION.md)、[字符串说明](docs/CONSTANT_STRINGS.md)。
+`woozyc` 已能检查项目并生成 Native 与 Python 程序。现有实现包括整数、严格标量浮点、函数与非捕获函数值、已有泛型和 trait 组合、struct/enum、Vec、typed throws 与词法块 defer。具体支持的组合和限制见 [GENERICS.md](docs/GENERICS.md)、[值与清理执行说明](docs/T09_EXECUTION.md)、[字符串说明](docs/CONSTANT_STRINGS.md)。
 
 截至 2026-11-10，已完成现有 v0.1 语法和 [SEMANTICS.md](docs/SEMANTICS.md) 已定义的核心要求；文档明确延后的语言扩展和完整标准库另做。Release、Debug、Sanitizer、LLVM OFF 四配置共 290 项检查通过，无失败或跳过。8 种算法各 2 个固定规模的正式测速均在等价 C++ 实现耗时的 2 倍以内，具体结果和测试范围见 [性能记录](docs/PERFORMANCE.md)。
+
+原始 `baseline/` 规范包保留旧 `.lang` 文件名及原始字节，作为语法对照；当前项目、样例和测试使用 `.wz`。项目清单仍名为 `lang.toml`。
 
 ## 从哪里开始
 
@@ -50,7 +52,7 @@ python3 tools/validate_package.py
 cmake --preset frontend-debug
 cmake --build --preset frontend-debug
 ctest --preset frontend-debug
-build/frontend-debug/langc check --syntax-only --format json examples/core.lang
+build/frontend-debug/woozyc check --syntax-only --format json examples/core.wz
 ```
 
-项目语义检查使用 `langc check --project MANIFEST`；生成程序使用 `langc build --project MANIFEST --backend native|python --out-dir DIR`，构建命令不运行程序。原生生成需要开启 LLVM 22.1.8，Python 运行测试使用独立 3.12.15 解释器。构建方法与实际输出见 [BUILD.md](docs/BUILD.md)。LSP 和 capabilities 命令仍明确报告未支持。
+项目语义检查使用 `woozyc check --project MANIFEST`；生成程序使用 `woozyc build --project MANIFEST --backend native|python --out-dir DIR`，构建命令不运行程序。原生生成需要开启 LLVM 22.1.8，Python 运行测试使用独立 3.12.15 解释器。构建方法与实际输出见 [BUILD.md](docs/BUILD.md)。LSP 和 capabilities 命令仍明确报告未支持。

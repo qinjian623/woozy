@@ -8,7 +8,7 @@
   "original_probe_count": 62,
   "added_probe_count": 14,
   "stage_policy": {
-    "syntax": "全部 18 个项目的源码必须通过现有 C++ `langc check --syntax-only --format json`，退出 0、status=ok 且无诊断。",
+    "syntax": "全部 18 个项目的源码必须通过现有 C++ `woozyc check --syntax-only --format json`，退出 0、status=ok 且无诊断。",
     "current_full_check": "基线 aacd448 的现有 `langc check --project` 对 12 个正例全部返回 E_CAPABILITY_UNAVAILABLE；这些只是当前能力拒绝，不是未来 expected_static 结果。六个反例的当前 code 见 README。",
     "future_static": "expected_static 是严格浮点实现完成后的目标；正例 accept，五个反例 reject。",
     "runtime": "native/Python 执行均为 not_run。main_return 0 只表示项目 main 的未来整数返回，不证明调用了 probe 或观察了浮点结果。",
@@ -48,7 +48,7 @@
     {
       "id": "f32-round-ties-even",
       "manifest": "tests/floating/fixtures/f32-round-ties-even/lang.toml",
-      "source": "tests/floating/fixtures/f32-round-ties-even/src/main.lang",
+      "source": "tests/floating/fixtures/f32-round-ties-even/src/main.wz",
       "purpose": "f32 RNE ties-to-even：四个原有半途值，加两个仅在直接按 f32 解析时才正确的 double-rounding 陷阱。",
       "specification": "docs/SEMANTICS.md §4.2；baseline/LEXICAL_SYNTAX.md §2.6",
       "source_sha256": "2b8ca339f7a26d0c7cba690c06ce2befae189be741c807fe124dd1f520315800",
@@ -140,7 +140,7 @@
     {
       "id": "f64-round-ties-even",
       "manifest": "tests/floating/fixtures/f64-round-ties-even/lang.toml",
-      "source": "tests/floating/fixtures/f64-round-ties-even/src/main.lang",
+      "source": "tests/floating/fixtures/f64-round-ties-even/src/main.wz",
       "purpose": "f64 RNE ties-to-even：加法与十进制字面量各覆盖向下/向上两个半途值。",
       "specification": "docs/SEMANTICS.md §4.2；baseline/LEXICAL_SYNTAX.md §2.6",
       "source_sha256": "e42d9212fd77f7f434585641c7215147b3758356a8ffbd280883818701b6f71a",
@@ -200,7 +200,7 @@
     {
       "id": "f32-overflow",
       "manifest": "tests/floating/fixtures/f32-overflow/lang.toml",
-      "source": "tests/floating/fixtures/f32-overflow/src/main.lang",
+      "source": "tests/floating/fixtures/f32-overflow/src/main.wz",
       "purpose": "f32 最大有限值乘 2 溢出为 +Inf，负值溢出为 -Inf。",
       "specification": "docs/SEMANTICS.md §4.2；docs/ACCEPTANCE.md A04 数值规则",
       "source_sha256": "4a29cf5a2433d9fececaf1f69c12949dbe566c288e3074c306a730b3f1e37b8f",
@@ -240,7 +240,7 @@
     {
       "id": "f64-overflow",
       "manifest": "tests/floating/fixtures/f64-overflow/lang.toml",
-      "source": "tests/floating/fixtures/f64-overflow/src/main.lang",
+      "source": "tests/floating/fixtures/f64-overflow/src/main.wz",
       "purpose": "f64 最大有限值乘 2 溢出为 +Inf，负值溢出为 -Inf。",
       "specification": "docs/SEMANTICS.md §4.2；docs/ACCEPTANCE.md A04 数值规则",
       "source_sha256": "44484e622d3a8884dd4845256626a62eaee9b980e6fbafa3c981f422dd3ce1ae",
@@ -280,7 +280,7 @@
     {
       "id": "f32-subnormal",
       "manifest": "tests/floating/fixtures/f32-subnormal/lang.toml",
-      "source": "tests/floating/fixtures/f32-subnormal/src/main.lang",
+      "source": "tests/floating/fixtures/f32-subnormal/src/main.wz",
       "purpose": "f32 最小正规数除 2 进入 subnormal；最小 subnormal 除 2 下溢到带符号零；subnormal 半途值按 ties-to-even 舍入。",
       "specification": "docs/SEMANTICS.md §4.2；docs/ACCEPTANCE.md A04 数值规则",
       "source_sha256": "d083b7bf2a1961b42ba20f35c7680c22c5eb80a2834deed8869d3e54eeaa0f8d",
@@ -340,7 +340,7 @@
     {
       "id": "f64-subnormal",
       "manifest": "tests/floating/fixtures/f64-subnormal/lang.toml",
-      "source": "tests/floating/fixtures/f64-subnormal/src/main.lang",
+      "source": "tests/floating/fixtures/f64-subnormal/src/main.wz",
       "purpose": "f64 最小正规数除 2 进入 subnormal；最小 subnormal 除 2 下溢到带符号零；subnormal 半途值按 ties-to-even 舍入。",
       "specification": "docs/SEMANTICS.md §4.2；docs/ACCEPTANCE.md A04 数值规则",
       "source_sha256": "0f24fe7455584a0f4cabe44960bc33029539f3f1ab9f8af56a1ebf755440bc01",
@@ -400,7 +400,7 @@
     {
       "id": "f32-zero-div-nan",
       "manifest": "tests/floating/fixtures/f32-zero-div-nan/lang.toml",
-      "source": "tests/floating/fixtures/f32-zero-div-nan/src/main.lang",
+      "source": "tests/floating/fixtures/f32-zero-div-nan/src/main.wz",
       "purpose": "f32 符号零、除零 Inf、0/0 与 Inf-Inf 的 NaN 分类；NaN 有序比较全假，另加有限有序数与 +0/-0 的 true/false 对照。",
       "specification": "docs/SEMANTICS.md §4.2；docs/ACCEPTANCE.md A04 数值规则",
       "source_sha256": "978053fce47ba80e046d9686dcb28e50807cf5fd394709ecf4f47ee70ea55490",
@@ -668,7 +668,7 @@
     {
       "id": "f64-zero-div-nan",
       "manifest": "tests/floating/fixtures/f64-zero-div-nan/lang.toml",
-      "source": "tests/floating/fixtures/f64-zero-div-nan/src/main.lang",
+      "source": "tests/floating/fixtures/f64-zero-div-nan/src/main.wz",
       "purpose": "f64 符号零、除零 Inf、0/0 与 Inf-Inf 的 NaN 分类；NaN 有序比较全假，另加有限有序数与 +0/-0 的 true/false 对照。",
       "specification": "docs/SEMANTICS.md §4.2；docs/ACCEPTANCE.md A04 数值规则",
       "source_sha256": "89b747a8808c2e9ca65a35d012285055889ae30078aa9d5a19454adb1b6c345c",
@@ -936,7 +936,7 @@
     {
       "id": "f32-no-fma",
       "manifest": "tests/floating/fixtures/f32-no-fma/lang.toml",
-      "source": "tests/floating/fixtures/f32-no-fma/src/main.lang",
+      "source": "tests/floating/fixtures/f32-no-fma/src/main.wz",
       "purpose": "f32 a*b+c 必须分别舍入乘与加；列出若隐式 FMA 会得到的非预期结果。",
       "specification": "docs/SEMANTICS.md §4.2 不隐式融合乘加；docs/ACCEPTANCE.md A04",
       "source_sha256": "a1715a551dba8b478ead4df05d7c3992bbd388d772f90cf5599611912554571b",
@@ -985,7 +985,7 @@
     {
       "id": "f64-no-fma",
       "manifest": "tests/floating/fixtures/f64-no-fma/lang.toml",
-      "source": "tests/floating/fixtures/f64-no-fma/src/main.lang",
+      "source": "tests/floating/fixtures/f64-no-fma/src/main.wz",
       "purpose": "f64 a*b+c 必须分别舍入乘与加；列出若隐式 FMA 会得到的非预期结果。",
       "specification": "docs/SEMANTICS.md §4.2 不隐式融合乘加；docs/ACCEPTANCE.md A04",
       "source_sha256": "870c98fa33134d376077b392a00d5fd452d686f58de2d38bcfc6468e54fc1ee4",
@@ -1034,7 +1034,7 @@
     {
       "id": "baseline-01-basics",
       "manifest": "tests/floating/fixtures/baseline-01-basics/lang.toml",
-      "source": "tests/floating/fixtures/baseline-01-basics/src/main.lang",
+      "source": "tests/floating/fixtures/baseline-01-basics/src/main.wz",
       "purpose": "逐字节复制 01_basics，未来作为既有浮点算术/比较和整数控制流依赖；执行 main 应返回 0。",
       "specification": "docs/SEMANTICS.md §4.2；baseline/samples 既有样例",
       "source_sha256": "b8b035cd0fc09798abb310d23e416f714ad449806c1e0fb726306c82c2e70051",
@@ -1056,7 +1056,7 @@
     {
       "id": "baseline-05-traits",
       "manifest": "tests/floating/fixtures/baseline-05-traits/lang.toml",
-      "source": "tests/floating/fixtures/baseline-05-traits/src/main.lang",
+      "source": "tests/floating/fixtures/baseline-05-traits/src/main.wz",
       "purpose": "逐字节复制 05_traits，未来作为 trait + 浮点乘法/比较依赖；执行 main 应返回 0。",
       "specification": "docs/SEMANTICS.md §4.2；baseline/samples 既有样例",
       "source_sha256": "d435ed5a30cfe75600bd982e12e27ec59306181c5fe998aba05751370bd3c961",
@@ -1078,7 +1078,7 @@
     {
       "id": "reject-float-remainder",
       "manifest": "tests/floating/fixtures/reject-float-remainder/lang.toml",
-      "source": "tests/floating/fixtures/reject-float-remainder/src/main.lang",
+      "source": "tests/floating/fixtures/reject-float-remainder/src/main.wz",
       "purpose": "浮点 % 不在源语言支持范围；§4.2 规定 % 初期只接受整数。",
       "specification": "docs/SEMANTICS.md §4.2；docs/SEMANTICS.md §4.1",
       "source_sha256": "bc894e12780ff3f0c613e02dd4fee769e12df518f1289f5a19181c30c3e4d251",
@@ -1091,7 +1091,7 @@
     {
       "id": "reject-mixed-float-width",
       "manifest": "tests/floating/fixtures/reject-mixed-float-width/lang.toml",
-      "source": "tests/floating/fixtures/reject-mixed-float-width/src/main.lang",
+      "source": "tests/floating/fixtures/reject-mixed-float-width/src/main.wz",
       "purpose": "已定 f32 与 f64 变量不能隐式混合；字面量上下文规则不适用于两个已定变量。",
       "specification": "docs/SEMANTICS.md §3 基础类型与推断",
       "source_sha256": "952ef66922b8c49168bb3003fda666b64633af8345b567df42c32470881deff1",
@@ -1104,7 +1104,7 @@
     {
       "id": "reject-float-bitwise",
       "manifest": "tests/floating/fixtures/reject-float-bitwise/lang.toml",
-      "source": "tests/floating/fixtures/reject-float-bitwise/src/main.lang",
+      "source": "tests/floating/fixtures/reject-float-bitwise/src/main.wz",
       "purpose": "bitwise 运算符要求同一具体整数类型；f32 操作数不满足。",
       "specification": "docs/SEMANTICS.md §4.1 整数运算",
       "source_sha256": "01ccc67f888a1f5013ea5d427a1dd2292793a8c80a4268df57f6c89c15b58e6d",
@@ -1117,7 +1117,7 @@
     {
       "id": "reject-float-shift",
       "manifest": "tests/floating/fixtures/reject-float-shift/lang.toml",
-      "source": "tests/floating/fixtures/reject-float-shift/src/main.lang",
+      "source": "tests/floating/fixtures/reject-float-shift/src/main.wz",
       "purpose": "移位左操作数必须为整数；f32 操作数不满足。",
       "specification": "docs/SEMANTICS.md §4.1 整数运算",
       "source_sha256": "ead29097ddc34c944476935488dad3030dc7839c94aa4cf715f22a81d0b19440",
@@ -1130,7 +1130,7 @@
     {
       "id": "reject-float-condition",
       "manifest": "tests/floating/fixtures/reject-float-condition/lang.toml",
-      "source": "tests/floating/fixtures/reject-float-condition/src/main.lang",
+      "source": "tests/floating/fixtures/reject-float-condition/src/main.wz",
       "purpose": "if 条件必须是 bool；f32 值不能隐式转换为真值。",
       "specification": "docs/SEMANTICS.md §5 求值与控制流；baseline/LEXICAL_SYNTAX.md §10.1 if 与 for",
       "source_sha256": "ec68cb57be7fbd1fad3fd617e43f1efabbd155ebc7fbe56587fba4bcd8caa00b",
@@ -1143,7 +1143,7 @@
     {
       "id": "reject-dynamic-float-int-conversion",
       "manifest": "tests/floating/fixtures/reject-dynamic-float-int-conversion/lang.toml",
-      "source": "tests/floating/fixtures/reject-dynamic-float-int-conversion/src/main.lang",
+      "source": "tests/floating/fixtures/reject-dynamic-float-int-conversion/src/main.wz",
       "purpose": "动态 f64 到 i32 转换现按 §3 实施：先向零截断，再检查截断后的数学整数范围；NaN、无穷和越界只在动态时 Panic。本源只声明转换函数，main 返回 0。",
       "specification": "docs/SEMANTICS.md §3 基础类型与推断",
       "source_sha256": "5120b65b6fb50f984e321c5054f78900e56586969b1b285e3c8bdc59a59e7db9",

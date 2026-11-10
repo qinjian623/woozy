@@ -25,7 +25,7 @@ normalized()、span()、position()、byte() 只接受有效源码快照；非法
 
 ## 验证与限制
 
-测试覆盖 BOM/CRLF/LF、中文/非 BMP/制表符、非法编码/NUL/独立 CR、原始错误诊断、不可变旧快照、非法位置/ID、旧 fixit、JSON 转义和各类非法 UTF-8 元数据。标准输出只有孤立续字节源码的真实诊断 JSON，错误范围为 test.lang 的 [1,2)。
+测试覆盖 BOM/CRLF/LF、中文/非 BMP/制表符、非法编码/NUL/独立 CR、原始错误诊断、不可变旧快照、非法位置/ID、旧 fixit、JSON 转义和各类非法 UTF-8 元数据。标准输出只有孤立续字节源码的真实诊断 JSON，错误范围为 test.wz 的 [1,2)。
 
 未实现：编辑应用、修复原文比较、终端显示列、UTF-8/UTF-32 LSP 协商、lexer/parser、通用 IR、诊断排序和 driver 集成。每个非法快照仅记录首个输入错误。真实序列化结果已由主 agent 使用包内 schema 检查器逐项检查。
 

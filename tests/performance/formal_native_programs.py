@@ -149,9 +149,9 @@ def _static_elf(program, llvm_bin, run, label):
 def build_source(programs, rounds, langc, helper, runtime, llvm_bin, env):
     """Compile one Source manifest to O2 and return its real program path.
 
-    The caller must pass the frozen Release ``langc``, its embedded helper and
+    The caller must pass the frozen Release ``woozyc``, its embedded helper and
     runtime, and the matching LLVM tool directory.  The returned path is the
-    ELF linked by public ``langc build``; the helper object must match
+    ELF linked by public ``woozyc build``; the helper object must match
     ``program.o`` byte-for-byte.  All other artifacts and every command are in
     ``r{R}/source-O2/build.json``.
     """

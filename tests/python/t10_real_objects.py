@@ -223,7 +223,7 @@ def error_mode():
     require(isinstance(payload, rt.Error), 'error payload is not langrt.Error')
     frame_state = cleanup(frames)
     source_path = Path(payload.file)
-    expected_source = directory.parent / 'src' / 'main.lang'
+    expected_source = directory.parent / 'src' / 'main.wz'
     source = source_path.read_bytes()
     require(0 <= payload.begin_byte < payload.end_byte <= len(source),
             'invalid source span')

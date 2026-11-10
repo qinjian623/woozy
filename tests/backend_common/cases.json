@@ -7,7 +7,7 @@
   ],
   "case_count": 15,
   "stage_policy": {
-    "syntax": "Every fixture must be accepted by `langc check --syntax-only --format json`.",
+    "syntax": "Every fixture must be accepted by `woozyc check --syntax-only --format json`.",
     "names": "Every fixture must be accepted by `lang_module_check` on its own `lang.toml`.",
     "type_check": "Every fixture is intended to be accepted by the T04 scalar checker. `inout-argument-order` additionally requires the plain scalar `var` whole-binding inout subset that T04 is still completing. Type checking was not run for this data-preparation task.",
     "native": "T05 must still compile, link and execute each project at O0 and O2. No result is claimed here.",

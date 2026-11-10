@@ -8,7 +8,7 @@
 
 ## 1. 实际检查及可直接定位的代码
 
-在本工作树源码上新建 `/tmp/language-t09-ownership-proposal-20261104/build`，以 GCC 16.2.1、CMake 4.4.4、Debug、`LANG_ENABLE_LLVM=OFF`、`BUILD_TESTING=OFF` 实际配置并编译 `langc`。没有借用其他 worktree 的二进制，没有安装包。native/64、python/64 都使用这个 CLI 做完整 check；本次没有运行生成程序、CTest、LLVM 或 CPython，因此不重报历史三构建测试数量为本次结果。
+在本工作树源码上新建 `/tmp/language-t09-ownership-proposal-20261104/build`，以 GCC 16.2.1、CMake 4.4.4、Debug、`LANG_ENABLE_LLVM=OFF`、`BUILD_TESTING=OFF` 实际配置并编译 `langc`（现发布名 `woozyc`）。没有借用其他 worktree 的二进制，没有安装包。native/64、python/64 都使用这个 CLI 做完整 check；本次没有运行生成程序、CTest、LLVM 或 CPython，因此不重报历史三构建测试数量为本次结果。
 
 18 个独立临时项目、54 次 CLI 调用的源码、清单、SHA256、完整 argv、退出码及诊断保存在外层 `probes.json` 和 `probes/`。全部 syntax-only 退出 0。以下完整 check 的两种后端结果相同：
 

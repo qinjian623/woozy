@@ -70,7 +70,7 @@ def manifest(root, backend='native', word_bits=64):
 
 def project(root, source, backend='native', word_bits=64):
     manifest(root, backend, word_bits)
-    (root / 'src' / 'main.lang').write_text(source)
+    (root / 'src' / 'main.wz').write_text(source)
 
 
 def diagnostics(build):
@@ -141,7 +141,7 @@ def values_matrix(args, report, tmp):
             row = dict(project=label, backend='native', word_bits=32,
                        frontend_only=True)
             narrow = tmp / f'{label}32'
-            project(narrow, (root / 'src' / 'main.lang').read_text(),
+            project(narrow, (root / 'src' / 'main.wz').read_text(),
                     word_bits=32)
             row['check'] = r = command([args.cli, 'check', '--project',
                                         narrow / 'lang.toml', '--backend',
@@ -692,7 +692,7 @@ def static_matrix(args, report, tmp):
                 else:
                     assert before == {p.name: sha(p) for p in stale.iterdir()}, \
                         f'{case["id"]} changed stale output'
-            assert not list(stale.parent.glob('.langc-*')), 'left assembly temp'
+            assert not list(stale.parent.glob('.woozyc-*')), 'left assembly temp'
     return rows
 
 

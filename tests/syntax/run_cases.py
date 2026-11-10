@@ -30,7 +30,7 @@ def main():
     cases = inventory["in_memory_cases"] + inventory["file_cases"]
     failures = []
     with tempfile.TemporaryDirectory(prefix="lang-syntax-cases-") as temporary:
-        source = Path(temporary) / "input.lang"
+        source = Path(temporary) / "input.wz"
         for case in cases:
             try:
                 payload = source_for_case(case, ROOT)

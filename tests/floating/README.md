@@ -21,11 +21,11 @@ tests/floating/
   oracle/vectors.tsv                 # 该工具的实际输出
 ```
 
-18 个项目 = 13 个正例（11 个新增浮点项目 + 2 个既有样例副本）+ 5 个反例；共 76 条探针（原 62 条 + 本修正追加 14 条）。原准备时的分类是 12/6；显式数值转换实施后 `reject-dynamic-float-int-conversion` 的 `expected_static` 转为 accept，当前 13/5 见“当前预期分类”一节。每个项目有独立 `lang.toml`，源码位于 `src/main.lang`。
+18 个项目 = 13 个正例（11 个新增浮点项目 + 2 个既有样例副本）+ 5 个反例；共 76 条探针（原 62 条 + 本修正追加 14 条）。原准备时的分类是 12/6；显式数值转换实施后 `reject-dynamic-float-int-conversion` 的 `expected_static` 转为 accept，当前 13/5 见“当前预期分类”一节。每个项目有独立 `lang.toml`，源码位于 `src/main.wz`。
 
 - 正例覆盖：两种精度的 RNE ties-to-even（加法和十进制字面量）、两个只能直接按 f32 解析才正确的 double-rounding 陷阱、溢出到带符号 Inf、subnormal/下溢到带符号零、subnormal tie、`+0/-0` 的运算与符号、除零、`0/0` 和 `Inf-Inf` 的 NaN 分类、NaN 的有序比较、有限有序数与 `+0/-0` 的 true/false 对照、以及禁止隐式融合的 `a*b+c`。
 - 反例覆盖：浮点 `%`、已定 f32/f64 混合、浮点 bitwise、浮点 shift、浮点条件。
-  动态 f64→i32 转换原为反例，显式数值转换实施后成为正例；其 `.lang` 源未改。
+  动态 f64→i32 转换原为反例，显式数值转换实施后成为正例；其 `.wz` 源未改。
 - 不使用 NaN 字面量、bitcast、十六进制浮点或类型后缀。NaN 和 Inf 均由合法的 IEEE 运算产生。
 - 每个 probe 都有显式参数/返回类型。`cases.json` 记录未来静态结果、探针签名、参数位模式、返回分类/固定宽度 hex 位模式和零符号。NaN 的 `bits` 和 `sign` 写为 `null`，明确表示不比较 payload 或符号；只比较 `class=nan`。
 - `baseline-01-basics` 和 `baseline-05-traits` 的源码与 `baseline/samples/01_basics.lang`、`05_traits.lang` 逐字节相同，仅作为未来严格浮点/trait 执行的既有依赖；原样例没有被修改。
@@ -64,7 +64,7 @@ tests/floating/
 - 边界输入用 `require_bits` 与固定 hex 直接核对（最大有限值、最小正规数、最小 subnormal 等）；oracle 不依赖 `getLargest/getSmallestNormalized/getSmallest` 生成预期。
 - 两个 f32 double-rounding 陷阱同时计算 direct f32 与 f64-first 两种策略；只有 direct f32 的结果写入 expected，f64-first 仅作为错误对照。
 - NaN 只检查 `isNaN()`；零检查 `isZero()`/`isNegative()`；其他值输出 `bitcastToAPInt()` 的 canonical 位模式。
-- `tools/apfloat_oracle.cpp` 只是测试工具，不进入 `langc`，不给前端增加 LLVM 依赖。
+- `tools/apfloat_oracle.cpp` 只是测试工具，不进入 `woozyc`，不给前端增加 LLVM 依赖。
 
 实际使用的工具链位于工作区外的 `toolchains/llvm-22.1.8` 和 `toolchains/libxml2-legacy-2.13.9/usr/lib`；逐字机器路径与构建日志保存在外层检查目录，不写入本目录。下面命令用占位变量表示这些路径。
 
@@ -104,8 +104,8 @@ LD_LIBRARY_PATH=/path/to/libxml2-legacy-2.13.9/usr/lib \
 使用现有 C++ 正式 CLI：
 
 ```sh
-langc check --syntax-only --format json tests/floating/fixtures/<id>/src/main.lang
-langc check --project tests/floating/fixtures/<id>/lang.toml --format json
+woozyc check --syntax-only --format json tests/floating/fixtures/<id>/src/main.wz
+woozyc check --project tests/floating/fixtures/<id>/lang.toml --format json
 ```
 
 `--syntax-only` 实际结果：18/18 退出 0，`status=ok`，无诊断。native/python 各 18 个 `check --project` 实际为 36/36 退出非 0；正例均为当前 `E_CAPABILITY_UNAVAILABLE`。语法通过不代表类型/效果检查或执行通过。
@@ -124,7 +124,7 @@ langc check --project tests/floating/fixtures/<id>/lang.toml --format json
 
 ## 当前完整检查的真实拒绝
 
-以下为基线 `aacd448` 的现有 `langc check --project` 实际结果（默认 native；另用 `--backend python` 复跑得到相同的 18 组 code）。正例的 `E_CAPABILITY_UNAVAILABLE` 是当前后端/严格浮点尚未实现导致的真实拒绝，**不是**未来 `expected_static` 的结果。反例的当前 code 仅记录实际行为，未来仍以 `expected_static` 的目标类别为准。
+以下为基线 `aacd448` 使用当时命令 `langc check --project` 的实际结果（默认 native；另用 `--backend python` 复跑得到相同的 18 组 code）。正例的 `E_CAPABILITY_UNAVAILABLE` 是当前后端/严格浮点尚未实现导致的真实拒绝，**不是**未来 `expected_static` 的结果。反例的当前 code 仅记录实际行为，未来仍以 `expected_static` 的目标类别为准。
 
 | 项目 | 当前退出码 | 当前 code |
 | --- | ---: | --- |

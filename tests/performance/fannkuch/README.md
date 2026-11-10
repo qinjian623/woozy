@@ -31,7 +31,7 @@ after the run.
 
 | File | Purpose |
 | --- | --- |
-| `fannkuch.lang.in` | renderable Source template; placeholders `{{N}}`, `{{CHECKSUM}}`, `{{MAXIMUM}}`, `{{ZEROS}}`, `{{VISIT_VALUES}}`, `{{VISIT_FLIPS}}` |
+| `fannkuch.wz.in` | renderable Source template; placeholders `{{N}}`, `{{CHECKSUM}}`, `{{MAXIMUM}}`, `{{ZEROS}}`, `{{VISIT_VALUES}}`, `{{VISIT_FLIPS}}` |
 | `reference.cpp.in` | renderable C++20 template with the same placeholders |
 | `visit_trace.py` | observer of the unmodified generated Source Python module |
 | `prepare.py` | prepare driver; reuses `../run_native.py` for commands, hashing, ELF checks, build-tree/tool validation, host records, and report writing |
@@ -126,7 +126,7 @@ export PYHELPER="$MAIN/compiler/build/native-cli-release/tests/python/lang_pytho
   --oracle-dir "$MAIN/checks/fannkuch-oracle-20261109" \
   --python "$PY" \
   --python-helper "$PYHELPER" \
-  --langc "$RELEASE/langc" \
+  --woozyc "$RELEASE/woozyc" \
   --helper "$RELEASE/native/lang_native_helper" \
   --runtime "$RELEASE/native/liblang_native_runtime.a" \
   --llvm-bin "$LLVM" \
@@ -148,7 +148,7 @@ stderr and timeout. It also contains:
 - real observer traces, frozen traces, exact-match results, and negative-control
   first mismatches;
 - Source LLVM `before.ll` / `after.ll`, both `opt -passes=verify` results, the
-  helper object comparison against the formal `langc` `program.o`, and the
+  helper object comparison against the formal `woozyc` `program.o`, and the
   metadata/NativeIR/LLVM visit-symbol mapping;
 - C++ O0/O2 IR verifies and mangled-symbol visit call counts;
 - wrong-checksum/wrong-maximum and negative-control builds, runs, and exits;

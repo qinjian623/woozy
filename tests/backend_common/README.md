@@ -1,6 +1,6 @@
 # T05/T06 共用整数与控制流夹具
 
-本目录只准备后端共用的源码、规范预期和阶段记录，不实现类型检查器、解释器或任一后端。15 个独立 `lang.toml` 项目的 `src/main.lang` 都声明 `main() i32`；成功程序在语义正确时返回 0，内部检查失败时返回不同的小非零码。`cases.json` 给出每个预期值和依据。
+本目录只准备后端共用的源码、规范预期和阶段记录，不实现类型检查器、解释器或任一后端。15 个独立 `lang.toml` 项目的 `src/main.wz` 都声明 `main() i32`；成功程序在语义正确时返回 0，内部检查失败时返回不同的小非零码。`cases.json` 给出每个预期值和依据。
 
 ## 数据
 
@@ -38,7 +38,7 @@
 使用主仓库已有构建，不依赖 LLVM 后端、Python 转译器或 GPU：
 
 ```sh
-build/frontend-debug/langc check --syntax-only --format json <fixture>/src/main.lang
+build/frontend-debug/woozyc check --syntax-only --format json <fixture>/src/main.wz
 build/frontend-debug/lang_module_check <fixture>/lang.toml
 ```
 

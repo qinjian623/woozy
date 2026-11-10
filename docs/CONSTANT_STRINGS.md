@@ -27,7 +27,7 @@ String 的分类是无需析构的可复制值（`needs_drop=false`），布局�
 
 ## 测试
 
-`native.strings`、`python.strings` 保留原 20 个观察函数。`native.string-constants`、`python.string-constants` 使用独立项目，新增 11 个常量观察函数，覆盖显式与推断类型、顶层/局部常量、别名、遮蔽、跨模块/包、空串、原始字符串、Unicode 与 NUL。旧 `.lang` 输入没有修改。
+`native.strings`、`python.strings` 保留原 20 个观察函数。`native.string-constants`、`python.string-constants` 使用独立项目，新增 11 个常量观察函数，覆盖显式与推断类型、顶层/局部常量、别名、遮蔽、跨模块/包、空串、原始字符串、Unicode 与 NUL。原有字符串样例内容保持不变，发布改名只将活动文件后缀迁移为 `.wz`。
 
 Native 测试先用正式 CLI 构建并运行，再按生成 LLVM 的真实函数类型观察返回值。辅助程序与 CLI 的目标文件必须逐字节相同；观察程序输出目标长度和完整字节，分别以 Clang O0/O2 执行。Python 在独立 3.12.15 进程中核对实际返回类型、文本、UTF-8 字节与长度。两端采用同一组冻结预期。
 

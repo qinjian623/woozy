@@ -156,7 +156,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/01_imports_and_types.lang",
+      "file": "fixtures/01_imports_and_types.wz",
       "sha256": "d2012ae5ba3b8543355cdb69e320fa44812c2cee626aa28b7fe323850b1cfbdf"
     },
     {
@@ -213,7 +213,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/02_numpy_pipeline.lang",
+      "file": "fixtures/02_numpy_pipeline.wz",
       "sha256": "8d7e408446977c94108ca571ab2cb51693b56d8405e2ba569e5088efc56da2f8"
     },
     {
@@ -269,7 +269,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/03_module_call_optimizer.lang",
+      "file": "fixtures/03_module_call_optimizer.wz",
       "sha256": "4f3f428da92155a90d957e7f8fde0b9ded1496ef2e71727c1ed3566f0cd9cb11"
     },
     {
@@ -324,7 +324,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/04_autograd_loss.lang",
+      "file": "fixtures/04_autograd_loss.wz",
       "sha256": "42887b4ed0ced405027c3f890491b2bd38ab519f275dbbca9cafe6336a35e413"
     },
     {
@@ -380,7 +380,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/05_error_cause.lang",
+      "file": "fixtures/05_error_cause.wz",
       "sha256": "67dc592d70716e4be2bee8349cd3d496e35df6a80ac8cf5ee51523b9aaa0d383"
     },
     {
@@ -436,7 +436,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/06_named_argument_order.lang",
+      "file": "fixtures/06_named_argument_order.wz",
       "sha256": "45b4da9669c5afb608d9db864edbf10c5bcb00b98214c0912429439767602afe"
     },
     {
@@ -491,7 +491,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/07_bad_call_signature.lang",
+      "file": "fixtures/07_bad_call_signature.wz",
       "sha256": "9cc5a017dd008115d3582808711f17ade794ac317b4c9d18d1ca5dd90debb9fe"
     },
     {
@@ -547,7 +547,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/08_bad_member.lang",
+      "file": "fixtures/08_bad_member.wz",
       "sha256": "87ca7db360131e466b5fb8f403913d448f313d5c3b0ed934509c910714727f83"
     },
     {
@@ -601,7 +601,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/09_bad_types.lang",
+      "file": "fixtures/09_bad_types.wz",
       "sha256": "0ab3ae5c4d573b86d5944dbbed005c3a19a9d2f43c82da2c1d60f52e11b88de8"
     },
     {
@@ -656,7 +656,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/10_bad_move.lang",
+      "file": "fixtures/10_bad_move.wz",
       "sha256": "2f8eb16de0e8e77368aa4d54336595a55728b1174133f3baa46dc3de4f212353"
     },
     {
@@ -710,7 +710,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/11_bad_inout.lang",
+      "file": "fixtures/11_bad_inout.wz",
       "sha256": "968ba10cd154ab137788d9c8790e4064d8461558e4f83c9a4fd34508273c48b0"
     },
     {
@@ -766,7 +766,7 @@
         "status_field": "ok",
         "diagnostic_count": 0
       },
-      "file": "fixtures/12_external_index_attributes.lang",
+      "file": "fixtures/12_external_index_attributes.wz",
       "sha256": "22ee850f50d8455de882a9de6fe30412967ef49ff8298db6a58540741c09d0d4"
     }
   ],

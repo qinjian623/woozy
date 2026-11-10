@@ -109,7 +109,7 @@ def main():
             (d / "src").mkdir(parents=True, exist_ok=True)
             manifest = d / "lang.toml"
             manifest.write_text('schema_version=1\n[package]\nname="supported"\nsource_root="src"\nentry="app"\n[build]\nbackend="native"\nword_bits=64\n')
-            (d / "src/main.lang").write_text("package app;\n" + source + "\n")
+            (d / "src/main.wz").write_text("package app;\n" + source + "\n")
             supported_sources[name] = source
             external_cases.append((name, manifest, "return", 0))
         for name, manifest, expected, main_return in cases + external_cases:
@@ -122,7 +122,7 @@ def main():
                 row = {"id": name, "optimization": optimization, "manifest": str(manifest),
                        "source_sha256": {(str(s.relative_to(root)) if s.is_relative_to(root) else str(s)):
                                          hashlib.sha256(s.read_bytes()).hexdigest()
-                                         for s in sorted((manifest.parent / "src").rglob("*.lang"))},
+                                         for s in sorted((manifest.parent / "src").rglob("*.wz"))},
                        "expected": {"status": expected, "main_return": main_return}}
                 if external:
                     row["source"] = supported_sources[name]
@@ -200,7 +200,7 @@ def main():
             (d / "src").mkdir(parents=True, exist_ok=True)
             manifest = d / "lang.toml"
             manifest.write_text('schema_version=1\n[package]\nname="reject"\nsource_root="src"\nentry="app"\n[build]\nbackend="native"\nword_bits=' + str(width) + '\n')
-            (d / "src/main.lang").write_text("package app;\n" + source + "\n")
+            (d / "src/main.wz").write_text("package app;\n" + source + "\n")
             r = command([helper, "--project", manifest, "--out-object", d / "must-not-exist.o", "--format", "json"])
             try:
                 codes = [x["code"] for x in json.loads(r["stderr"])["diagnostics"]]
@@ -226,7 +226,7 @@ join: ret i32 %v
         if (ok(report["bad_llvm"]) or "does not dominate" not in report["bad_llvm"]["stderr"]
                 or not report["panic_classifier_controls"]):
             failed.append("invalid IR/classifier accepted")
-        frontend = a.build.resolve() / "frontend/langc"
+        frontend = a.build.resolve() / "frontend/woozyc"
         report["frontend_dynamic_dependencies"] = command(["ldd", frontend])
         report["frontend_llvm_symbols"] = command(["nm", "-C", "--undefined-only", frontend])
         if "llvm::" in report["frontend_llvm_symbols"]["stdout"] or "libLLVM" in report["frontend_dynamic_dependencies"]["stdout"]:

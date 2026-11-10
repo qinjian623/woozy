@@ -39,7 +39,7 @@ def main():
     try:
         for backend in args.backends:
             for ident in ('private-field','private-constructor'):
-                module=args.out/backend/'rejected'/ident/'src/hidden/lib.lang'
+                module=args.out/backend/'rejected'/ident/'src/hidden/lib.wz'
                 module.parent.mkdir(parents=True,exist_ok=True)
                 module.write_text('package hidden;pub struct S{x i32;}pub const Value=S(x:1);')
             report['backends'][backend]=string_cases.rejection_checks(args.cli,backend,args.out/backend)

@@ -168,7 +168,7 @@ Python 生成代码可通过专用异常承载源语言 typed error。编译期�
 
 Panic 表示除零、非法移位、越界等不可由 typed catch 恢复的运行失败。native 顶层终止程序；Python 使用 `langrt.Panic`（BaseException 子类）由生成的顶层 runner 转为失败诊断。两端不保证 Panic 后执行语言清理；Python 生成的 finally 必须避免把 Panic 路径误当普通错误路径执行语言 defer。由 Python 自身触发的对象析构也不作为可移植清理承诺。
 
-错误离开 main 时输出错误诊断并以非零状态结束。正常 `main() i32` 返回整数状态，`main() Unit` 返回成功；支持是否声明 typed throws。程序退出码不与 `langc` 检查命令退出码混为一谈。
+错误离开 main 时输出错误诊断并以非零状态结束。正常 `main() i32` 返回整数状态，`main() Unit` 返回成功；支持是否声明 typed throws。程序退出码不与 `woozyc` 检查命令退出码混为一谈。
 
 ## 9 defer 和销毁顺序
 
