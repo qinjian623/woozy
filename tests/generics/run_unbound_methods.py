@@ -14,8 +14,6 @@ sys.dont_write_bytecode = True
 NATIVE_CASES = {'core', 'move-inout', 'throws', 'const-alias-owned-failure'}
 SIMPLE_CASES = {'cross-package', 'public-const-phantom', 'local-const-aliases',
                 'local-const-call-controls'}
-EXPECTED_ALLOCATIONS = {'core': 2, 'move-inout': 6, 'throws': 6,
-                        'const-alias-owned-failure': 12}
 EXPECTED_VEC_ALLOCATIONS = {'core': 1, 'move-inout': 3, 'throws': 3,
                             'const-alias-owned-failure': 6}
 EXPECTED_NATIVE_IR_REJECTIONS = {'core': 11, 'move-inout': 13, 'throws': 6,
@@ -205,7 +203,7 @@ def parse_observer(text):
 
 def assert_observer(case, data):
     assert not data['live'] and not data['vec_live'], (case, data)
-    assert len(data['allocations']) == EXPECTED_ALLOCATIONS[case], data
+    assert len(data['allocations']) == EXPECTED_VEC_ALLOCATIONS[case], data
     assert sorted(data['frees']) == list(range(len(data['allocations']))), data
     assert len(data['vec_allocations']) == EXPECTED_VEC_ALLOCATIONS[case], data
     assert sorted(data['vec_frees']) == list(range(len(data['vec_allocations']))), data

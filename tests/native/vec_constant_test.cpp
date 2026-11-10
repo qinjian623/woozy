@@ -141,6 +141,7 @@ int main(int argc, char **argv) {
 
       std::set<const llvm::GlobalVariable *> used;
       size_t copies = 0;
+      std::set<const llvm::MDNode *> data_tags, header_tags;
       for (const auto &function : *module)
         for (const auto &block : function)
           for (const auto &instruction : block) {
@@ -165,6 +166,12 @@ int main(int argc, char **argv) {
             need(data && data->getNumIndices() == 2 &&
                      llvm::cast<llvm::ConstantInt>(data->getOperand(2))->getZExtValue() == 5,
                  "bulk Vec copy does not target its data pointer");
+            auto *data_tag = copy->getMetadata(llvm::LLVMContext::MD_tbaa);
+            auto *header_tag = target->getMetadata(llvm::LLVMContext::MD_tbaa);
+            need(data_tag && header_tag && data_tag != header_tag,
+                 "Vec descriptor and payload accesses need distinct TBAA tags");
+            data_tags.insert(data_tag);
+            header_tags.insert(header_tag);
             const auto *created = llvm::dyn_cast<llvm::CallInst>(data->getPointerOperand());
             need(created && created->getCalledFunction() &&
                      created->getCalledFunction()->getName() == "lang_vec_new_v1" &&
@@ -181,7 +188,11 @@ int main(int argc, char **argv) {
               if (field && field->getNumIndices() == 2 &&
                   field->getPointerOperand() == created && count &&
                   llvm::cast<llvm::ConstantInt>(field->getOperand(2))->getZExtValue() == 2 &&
-                  count->getZExtValue() == array->getNumElements()) published = true;
+                  count->getZExtValue() == array->getNumElements()) {
+                need(store->getMetadata(llvm::LLVMContext::MD_tbaa) == header_tag,
+                     "Vec initialized count must retain the descriptor tag");
+                published = true;
+              }
             }
             need(published, "Vec initialized count is not published after its full copy");
             need(used.insert(global).second, "a constant table is copied twice");
@@ -189,6 +200,13 @@ int main(int argc, char **argv) {
           }
       need(copies == 7 && used.size() == globals.size(),
            "expected one complete copy per constant Vec list");
+      need(data_tags.size() == 1 && header_tags.size() == 1,
+           "different Vec buffers must keep shared alias classes");
+      for (const auto &function : *module)
+        if (function.getName().starts_with("lang.fn."))
+          for (const auto &arg : function.args())
+            need(!arg.hasAttribute(llvm::Attribute::NoAlias),
+                 "unknown source-parameter aliases must not acquire noalias");
     }
     std::cout << "passed: real load/check/lower/emit stores each integer, "
                  "bool and float constant list once in read-only storage and "

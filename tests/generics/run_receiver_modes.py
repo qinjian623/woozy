@@ -144,18 +144,18 @@ def main():
                 r["observation"] = data
                 assert not data["live"] and not data["vec_live"], data
                 assert len(data["vec_allocations"]) == len(data["vec_frees"]) == wanted["vec"], data
-                assert len(data["allocations"]) == len(data["frees"]) == wanted["vec"] * 2, data
+                assert len(data["allocations"]) == len(data["frees"]) == wanted["vec"], data
                 assert data["events"] == wanted["native_events"], data
                 if case == "core":
                     sequence = data["sequence"]
-                    for a, b, vecs, heaps in ((7, 9, 1, 2), (4, 5, 2, 4)):
+                    for a, b, vecs in ((7, 9, 1), (4, 5, 2)):
                         start = next(
                             i for i, x in enumerate(sequence) if x[0] == "obs" and x[1] == a
                         )
                         end = next(i for i, x in enumerate(sequence) if x[0] == "obs" and x[1] == b)
                         middle = sequence[start + 1 : end]
                         assert sum(x[0] == "vec_free" for x in middle) == vecs, middle
-                        assert sum(x[0] == "free" for x in middle) == heaps, middle
+                        assert sum(x[0] == "free" for x in middle) == vecs, middle
                 if case == "owning-move-borrow":
                     sequence = data["sequence"]
                     first = next(i for i, x in enumerate(sequence) if x[0] == "obs" and x[1] == 1)
@@ -167,7 +167,7 @@ def main():
                     assert [x for x in sequence[bad + 1 : catch] if x[0] == "vec_free"] == [
                         ("vec_free", 1)
                     ], sequence
-                    assert sum(x[0] == "free" for x in sequence[bad + 1 : catch]) == 2, sequence
+                    assert sum(x[0] == "free" for x in sequence[bad + 1 : catch]) == 1, sequence
                 r["status"] = "passed"
             r = row(case, "python", source_sha256=hashes)
             target = args.out / case / "python"

@@ -643,26 +643,19 @@ def parse_source_trace(trace_path: Path, case: dict, label: str):
                 need(length in (0, 2),
                      f"{label}: unexpected Vec length {length}")
                 need(stride > 0, f"{label}: non-positive Vec stride")
-                need(len(alloc_records) >= 2,
-                     f"{label}: Vec create has no real allocation pair")
-                tail = alloc_records[-2:]
-                need(any(pointer == identity for pointer, _ in tail),
-                     f"{label}: Vec identity is not one of the last two allocations")
-                data = [size for pointer, size in tail if pointer != identity]
-                need(len(data) == 1,
-                     f"{label}: Vec create does not have exactly one data allocation")
-                expected_data = length * stride if length else 1
-                need(data[0] == expected_data,
-                     f"{label}: Vec data allocation {data[0]} != {expected_data}")
-                object_sizes = [size for pointer, size in tail
-                                if pointer == identity]
-                need(len(object_sizes) == 1,
-                     f"{label}: Vec object allocation is not unique")
-                vec_object_sizes.add(object_sizes[0])
+                need(len(alloc_records) == vec_creates + 1,
+                     f"{label}: expected one allocation before each Vec create")
+                pointer, size = alloc_records[-1]
+                need(pointer == identity,
+                     f"{label}: Vec identity differs from its allocation")
+                expected_data = length * stride
+                need(size == 64 + expected_data,
+                     f"{label}: combined Vec allocation {size} != {64 + expected_data}")
+                vec_object_sizes.add(size)
                 live_vec.add(identity)
                 new_ids.append(identity)
                 new_lengths.append(length)
-                new_data_sizes.append(data[0])
+                new_data_sizes.append(expected_data)
                 drops[identity] = []
                 refs[identity] = ref_count
                 vec_creates += 1
@@ -702,16 +695,14 @@ def parse_source_trace(trace_path: Path, case: dict, label: str):
         raise PerfError(f"{label}: unexpected observer trace line {line!r}")
     need(not live_heap, f"{label}: heap pointers remain live")
     need(not live_vec, f"{label}: Vec identities remain live")
-    need(len(alloc_records) == 2 * len(new_ids),
-         f"{label}: expected two heap allocations per logical node")
+    need(len(alloc_records) == len(new_ids),
+         f"{label}: expected one heap allocation per logical node")
     need(len(free_records) == len(alloc_records),
          f"{label}: heap allocation/free counts differ")
     need(set(new_ids) <= set(free_records),
          f"{label}: a Vec object identity was not physically freed")
-    need(len(vec_object_sizes) == 1,
-         f"{label}: Vec object allocation size is not stable")
     need(len(new_data_sizes) == len(new_lengths),
-         f"{label}: missing data allocation sizes")
+         f"{label}: missing element storage sizes")
     lifecycle = analyze_runs(events, case, label)
     leaf_count = new_lengths.count(0)
     internal_count = new_lengths.count(2)
@@ -735,9 +726,9 @@ def parse_source_trace(trace_path: Path, case: dict, label: str):
         "release_events": release,
         "heap_allocations": len(alloc_records),
         "heap_frees": len(free_records),
-        "heap_peak_live": max(0, 2 * lifecycle["peak_live_nodes"]),
-        "vec_object_allocation_sizes": sorted(vec_object_sizes),
-        "data_allocation_sizes": sorted(set(new_data_sizes)),
+        "heap_peak_live": lifecycle["peak_live_nodes"],
+        "combined_allocation_sizes": sorted(vec_object_sizes),
+        "element_storage_sizes": sorted(set(new_data_sizes)),
         "lifecycle": lifecycle,
     }
 
@@ -1495,8 +1486,8 @@ def limitations():
     return [
         "No timing, throughput, speedup, or <=2x comparison is performed or claimed; command elapsed_ns is diagnostic only.",
         "The formal programs print nothing; each line is checked inside the program against independent formula constants, and wrong-expected variants must exit quietly with 1/2/3/4.",
-        "Source uses the existing recursive Node { leaf bool; children Vec[Node]; } representation. Every logical node owns a real Vec object, including zero-length leaf Vecs, so its two heap allocations per node are an implementation cost and are not hidden by an arena/pool/free-list/shared leaf.",
-        "C++ allocates one Node per logical node, including leaves, and uses owning unique_ptr left/right. Its allocation count is therefore one per node, not the Source two allocations per node.",
+        "Source uses the existing recursive Node { leaf bool; children Vec[Node]; } representation. Every logical node owns one combined Vec descriptor/element allocation, including independent zero-length leaf Vecs; no shared leaf or benchmark-specific arena is used.",
+        "C++ allocates one Node per logical node, including leaves, and uses owning unique_ptr left/right. Both implementations allocate once per logical node, with different object sizes.",
         "The Source observer is a test-only instrumented binary linked from the same helper program.o with host libc, --wrap allocator hooks, and the runtime's existing weak lang_vec_observe_v1 ABI. It is not a standalone Native performance program and is not used for timing.",
         "The C++ observer is a test-only binary with global operator new/delete counters. It prints its final count after tree_program_main returns and does not rely on host static-destructor order.",
         "The independent oracle is the integer perfect-tree formula; the N=10 formatted text is compared byte-for-byte with the official file and N=6/8/10 values with the recorded oracle-check JSON.",

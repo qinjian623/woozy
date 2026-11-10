@@ -67,9 +67,9 @@ struct Node {
 Every logical node owns a real `Vec[Node]` object. Leaves use a real empty Vec,
 not a constant sentinel; internal nodes own exactly two child Node values in
 their Vec. Creation is post-order: left subtree, right subtree, then the parent
-Vec. The Source runtime therefore performs two real heap allocations per logical
-node (the `LangVec` object and its element storage), including leaves. This is
-recorded as an implementation cost, not hidden.
+Vec. The Source runtime allocates its descriptor and element storage together,
+once per logical node, including independent empty leaf Vecs. Object sizes still
+differ from C++ and are recorded as implementation costs.
 
 C++ uses one separately allocated `Node` per logical node, including leaves:
 
@@ -127,8 +127,8 @@ host libc and is not a formal Native performance program.
 
 The checker validates:
 
-- each new Vec has a real object allocation and a real element-storage
-  allocation of `length * stride` (or one byte for a zero-length leaf);
+- each new Vec has one real allocation of `64 + length * stride` bytes,
+  including a distinct 64-byte descriptor for each zero-length leaf;
 - every node is a length 0 leaf or length 2 internal Vec;
 - leaf count = internal count + 1 for each full tree;
 - element drops occur in reverse index order;

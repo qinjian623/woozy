@@ -108,8 +108,10 @@ def main():
     if not panic and not cycle:assert not live,('still live',live)
     if not panic:
      if cycle:
-      assert len(heap_live)==2,('cycle live allocations',heap_live)
-      assert len(heap_allocated)==len(heap_freed)+2,(heap_allocated,heap_freed)
+      # The Vec descriptor and payload are one allocation; the retained
+      # self-cycle keeps exactly that one block live.
+      assert len(heap_live)==1,('cycle live allocations',heap_live)
+      assert len(heap_allocated)==len(heap_freed)+1,(heap_allocated,heap_freed)
       assert len(live)==1,('cycle Vec identities',live)
       identity=next(iter(live))
       assert last_refs[identity]>=1,last_refs
@@ -196,7 +198,7 @@ def main():
     row['hashes']={str(p.relative_to(out)):digest(p) for p in sorted(out.rglob('*')) if p.is_file()}
     row['kind']='panic' if panic else 'execution-and-final-release';row['status']='passed'
    except Exception as e:row['failure']=str(e);row['traceback']=traceback.format_exc()
- for mode,cause in [('normal',None),('object-oom','allocation-failed'),('storage-oom','allocation-failed'),('size-overflow','allocation-size-overflow'),('count-overflow','reference-count-overflow'),('iteration-resize','active-iteration'),('null-iteration-resize','active-iteration'),('null-observe',None)]:
+ for mode,cause in [('normal',None),('object-oom','allocation-failed'),('storage-oom','allocation-failed'),('size-overflow','allocation-size-overflow'),('size-overflow-total','allocation-size-overflow'),('count-overflow','reference-count-overflow'),('iteration-resize','active-iteration'),('null-iteration-resize','active-iteration'),('null-observe',None)]:
   r=command([a.runtime_test,mode]);report['runtime'].append(dict(mode=mode,result=r,status='passed' if (r['exit']==0 if cause is None else r['exit']==101 and ':'+cause+':' in r['stderr']) else 'failed'))
  report['passed']=sum(r['status']=='passed' for r in report['runs']);report['failed']=len(report['runs'])-report['passed']
  report['status']='passed' if report['failed']==0 and all(r['status']=='passed' for r in report['runtime']) else 'failed'

@@ -127,16 +127,29 @@ void *element(LangVec *v, uint64_t i) {
   return static_cast<unsigned char *>(v->data) + i * v->stride;
 }
 
+// The descriptor and its payload are one allocation. The payload starts after
+// the descriptor rounded up to the allocator's 16-byte alignment, so a
+// non-empty payload never overlaps the header. Empty Vecs still allocate an
+// independent descriptor and use a null data pointer instead of dummy bytes.
+constexpr uint64_t kVecHeaderBytes =
+    (static_cast<uint64_t>(sizeof(LangVec)) + 15) & ~uint64_t{15};
+static_assert(kVecHeaderBytes >= sizeof(LangVec),
+              "Vec payload must not overlap its descriptor");
+static_assert(kVecHeaderBytes % 16 == 0,
+              "Vec payload must remain 16-byte aligned");
+
 }
 
 extern "C" LangVec *lang_vec_new_v1(uint64_t length, uint64_t stride,
                                     LangValueOp copy, LangValueOp drop) noexcept {
   if (!stride || length > 0xFFFFFFFFFFFFFFFFULL / stride) vec_panic(6);
-  auto *v = static_cast<LangVec *>(lang_alloc_v1(sizeof(LangVec), alignof(LangVec)));
+  const uint64_t payload_bytes = length * stride;
+  if (payload_bytes > 0xFFFFFFFFFFFFFFFFULL - kVecHeaderBytes) vec_panic(6);
+  auto *v = static_cast<LangVec *>(
+      lang_alloc_v1(kVecHeaderBytes + payload_bytes, 16));
   if (!v) vec_panic(5);
-  uint64_t data_size = length ? length * stride : 1;
-  void *data = lang_alloc_v1(data_size, 16);
-  if (!data) { lang_free_v1(v); vec_panic(5); }
+  auto *data = length ? reinterpret_cast<unsigned char *>(v) + kVecHeaderBytes
+                      : nullptr;
   *v = {1, length, 0, stride, 0, data, copy, drop};
   observe(1, v, length);
   return v;
@@ -163,7 +176,8 @@ extern "C" void lang_vec_release_v1(LangVec *v) noexcept {
     }
   }
   observe(5, v);
-  lang_free_v1(v->data);
+  // The descriptor and payload share this allocation; the payload is interior
+  // storage and is never freed by itself.
   lang_free_v1(v);
 }
 extern "C" void lang_vec_init_v1(LangVec *v, const void *value) noexcept {

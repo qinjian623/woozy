@@ -6,6 +6,9 @@
 #include <string>
 #include <vector>
 static_assert(sizeof(LangVec) == 64, "LangVec layout must stay 64 bytes");
+static constexpr uint64_t kVecHeaderBytes =
+    (static_cast<uint64_t>(sizeof(LangVec)) + 15) & ~uint64_t{15};
+static_assert(kVecHeaderBytes == 64, "Vec header bytes changed");
 static std::vector<int> drops;
 static unsigned observed_create = 0;
 static unsigned observed_element_drop = 0;
@@ -25,9 +28,24 @@ extern "C" void lang_vec_observe_v1(uint32_t event, const void *, uint64_t detai
 static void copy(void *) {}
 static void drop(void *p) { drops.push_back(*static_cast<int *>(p)); }
 extern "C" void *__real_lang_alloc_v1(uint64_t, uint64_t);
+extern "C" void __real_lang_free_v1(void *);
 static unsigned allocation = 0, fail_at = 0;
+static uint64_t last_allocation_size = 0, last_allocation_align = 0;
+static unsigned frees = 0, free_calls = 0;
+static void *last_freed = nullptr;
 extern "C" void *__wrap_lang_alloc_v1(uint64_t size, uint64_t align) {
-  return fail_at && ++allocation == fail_at ? nullptr : __real_lang_alloc_v1(size, align);
+  ++allocation;
+  last_allocation_size = size;
+  last_allocation_align = align;
+  return fail_at && allocation == fail_at ? nullptr : __real_lang_alloc_v1(size, align);
+}
+extern "C" void __wrap_lang_free_v1(void *pointer) {
+  ++free_calls;
+  if (pointer) {
+    ++frees;
+    last_freed = pointer;
+  }
+  __real_lang_free_v1(pointer);
 }
 
 struct S12 { int a, b, c; };
@@ -98,6 +116,108 @@ static void test_freestanding_memory() {
   if (memcmp(overlap2, "456789abcdef", 12) != 0) std::abort();
 }
 
+static int test_single_allocation_storage() {
+  drops.clear();
+  const unsigned base_allocations = allocation;
+  const unsigned base_frees = frees;
+  const unsigned base_free_calls = free_calls;
+
+  // An empty Vec owns exactly one descriptor allocation and no dummy payload.
+  auto *empty = lang_vec_new_v1(0, sizeof(int), copy, drop);
+  if (!empty) return 30;
+  if (allocation != base_allocations + 1) return 31;
+  if (last_allocation_size != kVecHeaderBytes) return 32;
+  if (last_allocation_align != 16) return 33;
+  if (empty->data != nullptr) return 34;
+  if (reinterpret_cast<uintptr_t>(empty) % 16 != 0) return 35;
+
+  // Slicing an empty Vec creates another independent empty descriptor.
+  auto *empty_slice = lang_vec_slice_v1(empty, 0, 0);
+  if (!empty_slice) return 36;
+  if (allocation != base_allocations + 2) return 37;
+  if (last_allocation_size != kVecHeaderBytes ||
+      last_allocation_align != 16) return 38;
+  if (empty_slice == empty || empty_slice->data != nullptr) return 39;
+  lang_vec_release_v1(empty_slice);
+  if (frees != base_frees + 1 || last_freed != empty_slice) return 40;
+  lang_vec_release_v1(empty);
+  if (frees != base_frees + 2 || last_freed != empty) return 41;
+  if (!drops.empty()) return 42;
+
+  // A non-empty Vec keeps its payload inside the same block, after the
+  // 16-byte-aligned descriptor, with every full element value preserved.
+  auto *full = lang_vec_new_v1(3, sizeof(int), copy, drop);
+  if (!full) return 43;
+  if (allocation != base_allocations + 3) return 44;
+  if (last_allocation_size != kVecHeaderBytes + 3 * sizeof(int)) return 45;
+  if (last_allocation_align != 16) return 46;
+  const auto full_address = reinterpret_cast<uintptr_t>(full);
+  if (reinterpret_cast<uintptr_t>(full->data) != full_address + kVecHeaderBytes)
+    return 47;
+  if (reinterpret_cast<uintptr_t>(full->data) % 16 != 0) return 48;
+  if (reinterpret_cast<uintptr_t>(full->data) <
+      full_address + sizeof(LangVec)) return 49;
+  const int values[] = {11, 22, 33};
+  for (int value : values) lang_vec_init_v1(full, &value);
+  int replaced = 44;
+  lang_vec_set_v1(full, 1, &replaced);
+  if (*static_cast<int *>(lang_vec_at_v1(full, 0)) != 11 ||
+      *static_cast<int *>(lang_vec_at_v1(full, 1)) != 44 ||
+      *static_cast<int *>(lang_vec_at_v1(full, 2)) != 33) return 50;
+  drops.clear();
+
+  // A slice is one more self-contained Vec allocation.
+  auto *slice = lang_vec_slice_v1(full, 1, 3);
+  if (!slice) return 51;
+  if (allocation != base_allocations + 4) return 52;
+  if (last_allocation_size != kVecHeaderBytes + 2 * sizeof(int)) return 53;
+  if (last_allocation_align != 16) return 54;
+  if (reinterpret_cast<uintptr_t>(slice->data) !=
+      reinterpret_cast<uintptr_t>(slice) + kVecHeaderBytes) return 55;
+  if (*static_cast<int *>(lang_vec_at_v1(slice, 0)) != 44 ||
+      *static_cast<int *>(lang_vec_at_v1(slice, 1)) != 33) return 56;
+  lang_vec_release_v1(slice);
+  if (frees != base_frees + 3 || last_freed != slice) return 57;
+  if (drops != std::vector<int>{33, 44}) return 58;
+  drops.clear();
+  lang_vec_release_v1(full);
+  if (frees != base_frees + 4 || last_freed != full) return 59;
+  if (drops != std::vector<int>{33, 44, 11}) return 60;
+  drops.clear();
+
+  // Partially initialized destructors still drop only the initialized prefix.
+  auto *partial = lang_vec_new_v1(4, sizeof(int), copy, drop);
+  if (!partial) return 61;
+  if (allocation != base_allocations + 5) return 62;
+  const int prefix[] = {7, 8};
+  for (int value : prefix) lang_vec_init_v1(partial, &value);
+  lang_vec_release_v1(partial);
+  if (frees != base_frees + 5 || last_freed != partial) return 63;
+  if (drops != std::vector<int>{8, 7}) return 64;
+  drops.clear();
+
+  // A payload above the small-class ceiling still shares one aligned block.
+  auto *large = lang_vec_new_v1(600, sizeof(uint64_t), nullptr, nullptr);
+  if (!large) return 65;
+  if (allocation != base_allocations + 6) return 66;
+  if (last_allocation_size != kVecHeaderBytes + 600 * sizeof(uint64_t))
+    return 67;
+  if (last_allocation_align != 16) return 68;
+  if (reinterpret_cast<uintptr_t>(large->data) !=
+      reinterpret_cast<uintptr_t>(large) + kVecHeaderBytes) return 69;
+  if (reinterpret_cast<uintptr_t>(large->data) % 16 != 0) return 70;
+  uint64_t first = 0x1122334455667788ULL;
+  lang_vec_init_v1(large, &first);
+  if (*static_cast<uint64_t *>(lang_vec_at_v1(large, 0)) != first) return 71;
+  lang_vec_release_v1(large);
+  if (frees != base_frees + 6 || last_freed != large) return 72;
+
+  if (allocation - base_allocations != 6) return 73;
+  if (frees - base_frees != 6) return 74;
+  if (free_calls - base_free_calls != 6) return 75;
+  return 0;
+}
+
 int main(int argc, char **argv) {
   std::string mode = argc > 1 ? argv[1] : "normal";
   if (mode == "null-observe") {
@@ -130,10 +250,23 @@ int main(int argc, char **argv) {
     return 9;
   }
   if (mode == "object-oom" || mode == "storage-oom") {
-    allocation = 0; fail_at = mode == "object-oom" ? 1 : 2;
+    allocation = 0;
+    fail_at = mode == "object-oom" ? 1 : 2;
+    if (mode == "storage-oom") {
+      // Descriptor and payload are one allocation now. After one Vec succeeds,
+      // fail the next combined allocation so this mode still exercises OOM
+      // after a prior successful allocation.
+      auto *parent = lang_vec_new_v1(1, sizeof(int), copy, drop);
+      lang_vec_slice_v1(parent, 0, 1);
+      return 9;
+    }
     lang_vec_new_v1(2, sizeof(int), copy, drop); return 9;
   }
   if (mode == "size-overflow") { lang_vec_new_v1(UINT64_MAX, 8, copy, drop); return 9; }
+  if (mode == "size-overflow-total") {
+    // The multiplication fits, but adding the 16-aligned descriptor overflows.
+    lang_vec_new_v1(UINT64_MAX / 8, 8, copy, drop); return 9;
+  }
   auto *v = lang_vec_new_v1(3, sizeof(int), copy, drop);
   for (int i : {1,2,3}) lang_vec_init_v1(v, &i);
   if (mode == "count-overflow") { v->refs = UINT64_MAX; lang_vec_retain_v1(v); return 9; }
@@ -170,6 +303,8 @@ int main(int argc, char **argv) {
   test_freestanding_memory();
   int nullable = test_nullable_callbacks();
   if (nullable) return nullable;
+  int single = test_single_allocation_storage();
+  if (single) return single;
 
   std::puts("reverse-index-and-prefix-ok");
   return 0;

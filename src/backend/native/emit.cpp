@@ -9,6 +9,7 @@
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
 #include <llvm/IR/LegacyPassManager.h>
+#include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/NoFolder.h>
 #include <llvm/IR/Verifier.h>
@@ -449,12 +450,30 @@ class Emitter {
     guard(bad, 3, i.source);
     return builder.CreateIntCast(v, lower_type(i.type), signed_(from));
   }
+  llvm::MDNode *vec_header_tag = nullptr, *vec_data_tag = nullptr;
+  // A Vec's descriptor and element storage never overlap. Different Vec
+  // payloads may alias, so all payload accesses keep the same tag.
+  void vec_memory(llvm::Instruction *instruction, bool header) {
+    if (!vec_header_tag) {
+      llvm::MDBuilder metadata(context);
+      auto *root = metadata.createTBAARoot("lang.vec.storage");
+      auto *descriptor = metadata.createTBAAScalarTypeNode("descriptor", root);
+      auto *data = metadata.createTBAAScalarTypeNode("elements", root);
+      vec_header_tag = metadata.createTBAAStructTagNode(descriptor, descriptor, 0);
+      vec_data_tag = metadata.createTBAAStructTagNode(data, data, 0);
+    }
+    instruction->setMetadata(llvm::LLVMContext::MD_tbaa,
+                             header ? vec_header_tag : vec_data_tag);
+  }
+  llvm::LoadInst *vec_field(llvm::Value *vec, unsigned field, llvm::Type *type) {
+    auto *value = builder.CreateLoad(type, builder.CreateStructGEP(vec_type, vec, field));
+    vec_memory(value, true);
+    return value;
+  }
 #include "value_ops.inc"
   void emit_vec_check(llvm::Value *vec, llvm::Value *index, SourceSpan source) {
-    auto *len_ptr = builder.CreateStructGEP(vec_type, vec, 1);
-    auto *init_ptr = builder.CreateStructGEP(vec_type, vec, 2);
-    auto *length = builder.CreateLoad(builder.getInt64Ty(), len_ptr);
-    auto *init = builder.CreateLoad(builder.getInt64Ty(), init_ptr);
+    auto *length = vec_field(vec, 1, builder.getInt64Ty());
+    auto *init = vec_field(vec, 2, builder.getInt64Ty());
     auto *bad = builder.CreateOr(builder.CreateICmpUGE(index, length),
                                  builder.CreateICmpUGE(index, init));
     guard(bad, 4, source);
@@ -500,8 +519,7 @@ class Emitter {
       v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address)); break;
     }
     case ir::Op::vec_length: {
-      auto *len_ptr = builder.CreateStructGEP(vec_type, args[0], 1);
-      v = builder.CreateLoad(builder.getInt64Ty(), len_ptr);
+      v = vec_field(args[0], 1, builder.getInt64Ty());
       break;
     }
     case ir::Op::vec_init: {
@@ -546,10 +564,11 @@ class Emitter {
       auto element_type = type(value_types.at(i.inputs[0])).type_args[0];
       if (!owning(element_type)) {
         emit_vec_check(args[0], index, i.source);
-        auto *data_ptr = builder.CreateStructGEP(vec_type, args[0], 5);
-        auto *data = builder.CreateLoad(builder.getPtrTy(), data_ptr);
+        auto *data = vec_field(args[0], 5, builder.getPtrTy());
         auto *elem_addr = builder.CreateGEP(lower_type(element_type), data, index);
-        v = builder.CreateLoad(lower_type(element_type), elem_addr);
+        auto *loaded = builder.CreateLoad(lower_type(element_type), elem_addr);
+        vec_memory(loaded, false);
+        v = loaded;
       } else {
         auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
         v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));
@@ -568,10 +587,9 @@ class Emitter {
       auto element_type = type(value_types.at(i.inputs[0])).type_args[0];
       if (!owning(element_type)) {
         emit_vec_check(args[0], index, i.source);
-        auto *data_ptr = builder.CreateStructGEP(vec_type, args[0], 5);
-        auto *data = builder.CreateLoad(builder.getPtrTy(), data_ptr);
+        auto *data = vec_field(args[0], 5, builder.getPtrTy());
         auto *elem_addr = builder.CreateGEP(lower_type(element_type), data, index);
-        builder.CreateStore(args[2], elem_addr);
+        vec_memory(builder.CreateStore(args[2], elem_addr), false);
       } else {
         auto *address = element_storage(value_types.at(i.inputs[2]), args[2]);
         runtime("lang_vec_set_v1", builder.getVoidTy(), {args[0], index, address});

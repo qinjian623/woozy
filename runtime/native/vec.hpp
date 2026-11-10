@@ -6,6 +6,8 @@ extern "C" {
 // Null copy/drop means bit-copy/no element cleanup (trivial elements).
 using LangValueOp = void (*)(void *);
 struct LangVec {
+  // Element bytes never overlap a live LangVec descriptor. Payloads of
+  // aliased Vec values may still share element storage.
   uint64_t refs, length, initialized, stride, iterations;
   void *data;
   LangValueOp copy, drop;

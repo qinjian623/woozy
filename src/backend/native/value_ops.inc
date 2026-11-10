@@ -65,12 +65,11 @@
     data->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
     data->setAlignment(module.getDataLayout().getABITypeAlign(array_type));
 
-    auto *target = builder.CreateLoad(
-        builder.getPtrTy(), builder.CreateStructGEP(vec_type, vec, 5));
+    auto *target = vec_field(vec, 5, builder.getPtrTy());
     auto bytes = module.getDataLayout().getTypeAllocSize(array_type).getFixedValue();
-    builder.CreateMemCpy(target, llvm::MaybeAlign(1), data, data->getAlign(), bytes);
-    builder.CreateStore(builder.getInt64(elements.size()),
-                        builder.CreateStructGEP(vec_type, vec, 2));
+    vec_memory(builder.CreateMemCpy(target, llvm::MaybeAlign(1), data, data->getAlign(), bytes), false);
+    vec_memory(builder.CreateStore(builder.getInt64(elements.size()),
+                                   builder.CreateStructGEP(vec_type, vec, 2)), true);
   }
   llvm::Value *element_storage(TypeId id, llvm::Value *value) {
     llvm::AllocaInst *scratch = nullptr;
