@@ -1,10 +1,10 @@
-# 编译器开发文档 v0.1
+# Woozy
 
-日期：2026-11-03。面向实现前端、LLVM 后端、Python 后端、运行库及开发工具的 agent。
+Woozy 是一门编译型语言，提供 Native 和 Python 两个后端。本仓库包含编译器实现、原生运行库、语言规范和测试。编译器当前命令名为 `langc`，源文件后缀为 `.lang`。
 
 `langc` 已能检查项目并生成 Native 与 Python 程序。现有实现包括整数、严格标量浮点、函数与非捕获函数值、已有泛型和 trait 组合、struct/enum、Vec、typed throws 与词法块 defer。具体支持的组合和限制见 [GENERICS.md](docs/GENERICS.md)、[值与清理执行说明](docs/T09_EXECUTION.md)、[字符串说明](docs/CONSTANT_STRINGS.md)。
 
-v0.1 核心仍未完整：字面量/非枚举 switch、字符串容器、部分参数模式和方法组合等还在开发。词法语法通过、HIR 验证通过或当前测试通过，都不能单独证明完整规范已经实现。
+截至 2026-11-10，已完成现有 v0.1 语法和 [SEMANTICS.md](docs/SEMANTICS.md) 已定义的核心要求；文档明确延后的语言扩展和完整标准库另做。Release、Debug、Sanitizer、LLVM OFF 四配置共 290 项检查通过，无失败或跳过。8 种算法各 2 个固定规模的正式测速均在等价 C++ 实现耗时的 2 倍以内，具体结果和测试范围见 [性能记录](docs/PERFORMANCE.md)。
 
 ## 从哪里开始
 
