@@ -126,6 +126,18 @@ add_test(NAME native.alloc_reuse COMMAND lang_native_alloc_reuse_test)
 set_tests_properties(native.alloc_reuse PROPERTIES TIMEOUT 30)
 add_test(NAME native.alloc_reuse_deny_mmap COMMAND lang_native_alloc_reuse_test reuse-deny-mmap)
 set_tests_properties(native.alloc_reuse_deny_mmap PROPERTIES TIMEOUT 30 SKIP_RETURN_CODE 77)
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.trivial_vec COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_trivial_vec.py --cli $<TARGET_FILE:langc>
+    --helper $<TARGET_FILE:lang_native_helper>
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --runtime $<TARGET_FILE:lang_native_runtime>
+    --root ${LANG_SOURCE_ROOT}
+    --out ${CMAKE_CURRENT_BINARY_DIR}/trivial-vec-results)
+  set_tests_properties(native.trivial_vec PROPERTIES TIMEOUT 240)
+else()
+  message(STATUS "native.trivial_vec: not_run (test Python not found)")
+endif()
 add_executable(lang_native_ownership_probe ownership_probe.cpp)
 target_include_directories(lang_native_ownership_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_options(lang_native_ownership_probe PRIVATE -fno-rtti)

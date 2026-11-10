@@ -151,10 +151,16 @@ extern "C" void lang_vec_release_v1(LangVec *v) noexcept {
   observe(3, v, v->refs - 1);
   if (--v->refs) return;
   if (v->iterations) vec_panic(8);
-  while (v->initialized) {
-    auto i = --v->initialized;
-    observe(4, v, i);
-    v->drop(element(v, i));
+  if (!v->drop && !lang_vec_observe_v1) {
+    // Trivial elements have no cleanup and no observer needs per-element
+    // events.
+    v->initialized = 0;
+  } else {
+    while (v->initialized) {
+      auto i = --v->initialized;
+      observe(4, v, i);
+      if (v->drop) v->drop(element(v, i));
+    }
   }
   observe(5, v);
   lang_free_v1(v->data);
@@ -173,7 +179,7 @@ extern "C" void *lang_vec_at_v1(LangVec *v, uint64_t i) noexcept {
 }
 extern "C" void lang_vec_set_v1(LangVec *v, uint64_t i, const void *value) noexcept {
   void *target = lang_vec_at_v1(v, i);
-  v->drop(target);
+  if (v->drop) v->drop(target);
   unsigned char *dst = static_cast<unsigned char *>(target);
   const unsigned char *src = static_cast<const unsigned char *>(value);
   for (uint64_t k = 0; k < v->stride; ++k)
@@ -185,7 +191,8 @@ extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
   auto *result = lang_vec_new_v1(end-start, v->stride, v->copy, v->drop);
   for (uint64_t i = start; i < end; ++i) {
     lang_vec_init_v1(result, lang_vec_at_v1(v, i));
-    result->copy(element(result, result->initialized - 1));
+    if (result->copy)
+      result->copy(element(result, result->initialized - 1));
   }
   return result;
 }

@@ -506,10 +506,15 @@ class Emitter {
     }
     case ir::Op::vec_init: {
       auto element = type(i.type).type_args[0];
+      llvm::Value *copy = owning(element)
+                              ? static_cast<llvm::Value *>(value_op(element, true))
+                              : llvm::ConstantPointerNull::get(builder.getPtrTy());
+      llvm::Value *drop = owning(element)
+                              ? static_cast<llvm::Value *>(value_op(element, false))
+                              : llvm::ConstantPointerNull::get(builder.getPtrTy());
       v = runtime("lang_vec_new_v1", builder.getPtrTy(),
                   {builder.getInt64(args.size()),
-                   builder.getInt64(stride(element)),
-                   value_op(element, true), value_op(element, false)});
+                   builder.getInt64(stride(element)), copy, drop});
       bool constants = !args.empty() && constant_vec_element(element);
       llvm::SmallVector<llvm::Constant *, 16> constant_args;
       for (auto *arg : args) {

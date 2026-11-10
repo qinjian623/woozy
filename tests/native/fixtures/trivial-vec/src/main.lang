@@ -1,0 +1,69 @@
+package app;
+
+struct Trivial {
+    n i32;
+    flag bool;
+}
+
+struct NestedTrivial {
+    inner Trivial;
+    tag i32;
+}
+
+struct Empty {}
+
+func noop() {}
+func inc(x i32) i32 { return x + 1; }
+
+func main() i32 {
+    let ints Vec[i32] = [1, 2, 3];
+    let units Vec[Unit] = [noop(), noop()];
+    let fs Vec[func(i32) i32] = [inc, inc];
+    let ts Vec[Trivial] = [Trivial(n: 1, flag: true), Trivial(n: 2, flag: false)];
+    let nts Vec[NestedTrivial] = [
+        NestedTrivial(inner: Trivial(n: 3, flag: true), tag: 30),
+        NestedTrivial(inner: Trivial(n: 4, flag: false), tag: 40)
+    ];
+    let empties Vec[Empty] = [Empty(), Empty()];
+    let nested Vec[Vec[i32]] = [[1, 2], [3]];
+
+    let int_slice Vec[i32] = ints[1:3];
+    let unit_slice Vec[Unit] = units[0:2];
+    let fs_slice Vec[func(i32) i32] = fs[0:1];
+    let ts_slice Vec[Trivial] = ts[0:1];
+    let nts_slice Vec[NestedTrivial] = nts[0:1];
+    let empty_slice Vec[Empty] = empties[0:2];
+    let nested_slice Vec[Vec[i32]] = nested[0:1];
+    let nested_alias Vec[Vec[i32]] = nested;
+
+    if ints[2] != 3 || int_slice[0] != 2 || int_slice[1] != 3 { return 1; }
+    if fs[0](2) != 3 || fs_slice[0](4) != 5 { return 2; }
+    if ts[1].n != 2 || ts[1].flag || !ts_slice[0].flag { return 3; }
+    if nts[1].inner.n != 4 || nts[1].tag != 40 { return 4; }
+    if nts_slice[0].inner.n != 3 || nts_slice[0].tag != 30 { return 5; }
+    if nested[1][0] != 3 || nested_slice[0][1] != 2 { return 6; }
+
+    ints[0] = 7;
+    units[0] = noop();
+    fs[1] = inc;
+    ts[0] = Trivial(n: 7, flag: true);
+    nts[0] = NestedTrivial(inner: Trivial(n: 8, flag: false), tag: 80);
+    empties[0] = Empty();
+    if ints[0] != 7 || ts[0].n != 7 || !ts[0].flag { return 7; }
+    if nts[0].inner.n != 8 || nts[0].tag != 80 || nts[0].inner.flag { return 8; }
+    if fs[1](5) != 6 { return 9; }
+
+    int_slice[0] = 9;
+    if ints[1] != 2 || int_slice[0] != 9 { return 10; }
+
+    nested_slice[0][0] = 11;
+    if nested[0][0] != 11 { return 11; }
+    nested_alias[1][0] = 12;
+    if nested[1][0] != 12 { return 12; }
+
+    let u Unit = unit_slice[1];
+    units[1] = u;
+    let e Empty = empty_slice[1];
+    empties[1] = e;
+    return 0;
+}

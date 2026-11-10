@@ -3,6 +3,7 @@
 // Private runtime ABI. Element callbacks operate on storage, so no C++
 // aggregate calling convention is assumed by generated LLVM code.
 extern "C" {
+// Null copy/drop means bit-copy/no element cleanup (trivial elements).
 using LangValueOp = void (*)(void *);
 struct LangVec {
   uint64_t refs, length, initialized, stride, iterations;

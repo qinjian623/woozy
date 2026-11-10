@@ -5,7 +5,23 @@
 #include <cstdint>
 #include <string>
 #include <vector>
+static_assert(sizeof(LangVec) == 64, "LangVec layout must stay 64 bytes");
 static std::vector<int> drops;
+static unsigned observed_create = 0;
+static unsigned observed_element_drop = 0;
+static unsigned observed_final_free = 0;
+static unsigned observed_indices[16] = {};
+static unsigned observed_index_count = 0;
+static bool track_observed_indices = false;
+extern "C" void lang_vec_observe_v1(uint32_t event, const void *, uint64_t detail) {
+  if (event == 1) ++observed_create;
+  if (event == 4) {
+    ++observed_element_drop;
+    if (track_observed_indices && observed_index_count < 16)
+      observed_indices[observed_index_count++] = static_cast<unsigned>(detail);
+  }
+  if (event == 5) ++observed_final_free;
+}
 static void copy(void *) {}
 static void drop(void *p) { drops.push_back(*static_cast<int *>(p)); }
 extern "C" void *__real_lang_alloc_v1(uint64_t, uint64_t);
@@ -16,6 +32,35 @@ extern "C" void *__wrap_lang_alloc_v1(uint64_t size, uint64_t align) {
 
 struct S12 { int a, b, c; };
 struct S24 { uint64_t a, b, c; };
+
+static int test_nullable_callbacks() {
+  drops.clear();
+  auto *v = lang_vec_new_v1(3, sizeof(int), nullptr, nullptr);
+  if (!v) return 20;
+  for (int i : {1, 2, 3}) lang_vec_init_v1(v, &i);
+  if (*static_cast<int *>(lang_vec_at_v1(v, 2)) != 3) return 21;
+  int nine = 9;
+  lang_vec_set_v1(v, 1, &nine);
+  auto *slice = lang_vec_slice_v1(v, 1, 3);
+  if (*static_cast<int *>(lang_vec_at_v1(slice, 0)) != 9 ||
+      *static_cast<int *>(lang_vec_at_v1(slice, 1)) != 3) return 22;
+  lang_vec_release_v1(slice);
+  if (!drops.empty()) return 23;
+  lang_vec_release_v1(v);
+  if (!drops.empty()) return 24;
+
+  auto *empty = lang_vec_new_v1(0, sizeof(int), nullptr, nullptr);
+  auto *empty_slice = lang_vec_slice_v1(empty, 0, 0);
+  if (lang_vec_length_v1(empty_slice) != 0) return 25;
+  lang_vec_release_v1(empty_slice);
+  lang_vec_release_v1(empty);
+
+  auto *partial = lang_vec_new_v1(4, sizeof(int), nullptr, nullptr);
+  for (int i : {4, 5}) lang_vec_init_v1(partial, &i);
+  lang_vec_release_v1(partial);
+  if (!drops.empty()) return 26;
+  return 0;
+}
 
 static void test_freestanding_memory() {
   // Test memset
@@ -55,6 +100,35 @@ static void test_freestanding_memory() {
 
 int main(int argc, char **argv) {
   std::string mode = argc > 1 ? argv[1] : "normal";
+  if (mode == "null-observe") {
+    observed_create = observed_element_drop = observed_final_free = 0;
+    observed_index_count = 0;
+    track_observed_indices = true;
+    auto *v = lang_vec_new_v1(4, sizeof(int), nullptr, nullptr);
+    for (int i : {1, 2, 3, 4}) lang_vec_init_v1(v, &i);
+    lang_vec_release_v1(v);
+    if (observed_create != 1 || observed_element_drop != 4 ||
+        observed_final_free != 1 || observed_index_count != 4)
+      return 10;
+    for (unsigned i = 0; i < 4; ++i)
+      if (observed_indices[i] != 3 - i) return 11;
+    observed_element_drop = observed_final_free = 0;
+    observed_index_count = 0;
+    auto *partial = lang_vec_new_v1(4, sizeof(int), nullptr, nullptr);
+    for (int i : {8, 9}) lang_vec_init_v1(partial, &i);
+    lang_vec_release_v1(partial);
+    if (observed_element_drop != 2 || observed_final_free != 1 ||
+        observed_index_count != 2 || observed_indices[0] != 1 ||
+        observed_indices[1] != 0)
+      return 12;
+    return 0;
+  }
+  if (mode == "null-iteration-resize") {
+    auto *v = lang_vec_new_v1(2, sizeof(int), nullptr, nullptr);
+    lang_vec_begin_v1(v);
+    lang_vec_check_resize_v1(v);
+    return 9;
+  }
   if (mode == "object-oom" || mode == "storage-oom") {
     allocation = 0; fail_at = mode == "object-oom" ? 1 : 2;
     lang_vec_new_v1(2, sizeof(int), copy, drop); return 9;
@@ -94,6 +168,8 @@ int main(int argc, char **argv) {
   lang_vec_release_v1(v24);
 
   test_freestanding_memory();
+  int nullable = test_nullable_callbacks();
+  if (nullable) return nullable;
 
   std::puts("reverse-index-and-prefix-ok");
   return 0;
