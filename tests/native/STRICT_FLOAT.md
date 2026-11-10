@@ -2,6 +2,7 @@
 
 operation_id: `language-strict-float-native-20261104`。契约 `compiler-dev/1`。
 起点 `c58730e4b0bb95c85df8606b3d236342e968461e`，T08 的 CFG、错误通道和清理检查保留。
+下文构建数字保留首次浮点实现时的记录，不代表当前完整测试数量。
 
 支持同宽 f32/f64 的 `+ - * /`、一元负号和 `== != < <= > >=`，也支持这些运算的
 复合赋值。操作直接生成相应类型的 LLVM `fadd/fsub/fmul/fdiv/fneg/fcmp`，不先转
@@ -24,7 +25,8 @@ Native IR verifier 分别检查浮点合法操作、操作数 TypeId 相同、�
 环境。Linux 进程默认环境满足此要求；改变该环境的 foreign 调用仍未支持。
 不保证 NaN payload/sign 或异常标志；NaN 只比较分类。显式 float->int 与 int->float
 转换见 `tests/numeric`：float->int 先向零截断再范围检查，int->float 一次 RNE，
-f64->f32 一次 RNE 且有限溢出为带符号 Infinity。ARC、Vec、move 和 foreign 仍明确拒绝。
+f64->f32 一次 RNE 且有限溢出为带符号 Infinity。当前 Vec、move 和聚合执行范围见
+[T09_EXECUTION.md](../../docs/T09_EXECUTION.md)；Native 的 foreign 仍明确拒绝。
 
 ## 执行检查
 

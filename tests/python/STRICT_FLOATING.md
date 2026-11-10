@@ -3,6 +3,7 @@
 任务 T06 补充；契约 `compiler-dev/1`，运行库
 `compiler-dev/1-python-values/7`。起点 `c58730e`。只声明已验证的
 Linux x86_64、Python/64、CPython 3.12.15。旧运行库在导入生成模块时被版本检查拒绝。
+下文构建数字和独立交付过程保留首次浮点实现时的记录，不代表当前完整测试数量。
 
 支持 f32/f64 的 `+ - * /`、取负、六种比较、四种复合赋值；每次运算独立
 round-to-nearest ties-to-even，保留 subnormal、符号零、Inf 和 NaN 分类。
@@ -10,7 +11,8 @@ round-to-nearest ties-to-even，保留 subnormal、符号零、Inf 和 NaN 分�
 typed throws/catch/defer 使用原实现。显式 float->int/int->float 及 f64->f32 转换由
 `tests/numeric` 覆盖（运行库新增私有 `float_to_int`/`int_to_float`/`float_to_float`
 helper 与版本 /7）；f64->f32 用精确整数比做一次 RNE，有限溢出为带符号 Infinity。
-ARC/Vec、move、foreign 仍按现有检查拒绝。没有新增共享类型或语言关键字。
+当前 Vec、move 和聚合执行范围见 [T09_EXECUTION.md](../../docs/T09_EXECUTION.md)，
+已声明 Python 宿主引用见 [T10_PYTHON.md](../../docs/T10_PYTHON.md)。浮点实现没有新增语言关键字。
 
 ## 舍入依据
 
