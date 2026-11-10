@@ -422,8 +422,17 @@ def build_tree_info(args, env, cpu):
         )
     ninja_text = ninja_path.read_text(encoding="utf-8")
     values = {}
-    for key, value in _BUILD_DEFINE_RE.findall(ninja_text):
-        values.setdefault(key, set()).add(value)
+    for block in re.split(r"(?m)(?=^build )", ninja_text):
+        target = re.match(
+            r"build [^\n]*CMakeFiles/(langc|lang_native_helper)\.dir/[^\n]*: CXX_COMPILER_",
+            block)
+        if target is None:
+            continue
+        # Test CLI targets intentionally embed a failing helper; inspect the
+        # production CLI and helper targets that this benchmark will execute.
+        for key, value in _BUILD_DEFINE_RE.findall(block):
+            if (key == "LANG_NATIVE_HELPER") == (target[1] == "langc"):
+                values.setdefault(key, set()).add(value)
     requested = {
         "LANG_NATIVE_HELPER": args.helper,
         "LANG_NATIVE_RUNTIME": args.runtime,
@@ -1680,6 +1689,45 @@ def self_test():
         add("oracle-u32-two-steps", got == 207895806, {"got": str(got)})
         got = compute_expected("u32-branch-mix-v1", 0x100000001, 0)
         add("oracle-u32-seed-mask", got == 1, {"got": str(got)})
+
+        with tempfile.TemporaryDirectory() as temporary:
+            build = Path(temporary)
+            helper, runtime = build / "helper", build / "runtime.a"
+            clang, lld = build / "clang", build / "ld.lld"
+            for path in (helper, clang, lld):
+                path.write_text("#!/bin/sh\nexit 0\n", encoding="utf-8")
+                path.chmod(0o700)
+            runtime.touch()
+            (build / "CMakeCache.txt").write_text("CMAKE_BUILD_TYPE:STRING=Release\n")
+            cli = (
+                "build CMakeFiles/langc.dir/main.cpp.o: CXX_COMPILER__langc_Release main.cpp\n"
+                f'  DEFINES = -DLANG_NATIVE_HELPER=\\"{helper}\\"\n')
+            native = (
+                "build native/CMakeFiles/lang_native_helper.dir/helper.cpp.o: CXX_COMPILER__helper_Release helper.cpp\n"
+                f'  DEFINES = -DLANG_NATIVE_RUNTIME=\\"{runtime}\\" '
+                f'-DLANG_NATIVE_CLANG=\\"{clang}\\" -DLANG_NATIVE_LLD=\\"{lld}\\"\n')
+            probe = (
+                "build tests/CMakeFiles/langc_probe.dir/main.cpp.o: CXX_COMPILER__probe main.cpp\n"
+                '  DEFINES = -DLANG_NATIVE_HELPER=\\"/missing/test-helper\\"\n')
+            ninja = build / "build.ninja"
+            ninja.write_text(cli + native + probe)
+            args = argparse.Namespace(langc=build / "langc", helper=helper,
+                                      runtime=runtime, llvm_bin=build)
+            tree = build_tree_info(args, os.environ.copy(), None)
+            add("production-helper-not-test-probe",
+                tree["defines"]["LANG_NATIVE_HELPER"] == str(helper))
+            for name, text in (
+                ("missing-production-helper-rejected", native + probe),
+                ("wrong-production-helper-rejected", cli.replace(str(helper), "/wrong/helper") + native + probe),
+                ("conflicting-production-helper-rejected", cli + cli.replace(str(helper), "/other/helper") + native + probe),
+            ):
+                ninja.write_text(text)
+                rejected = False
+                try:
+                    build_tree_info(args, os.environ.copy(), None)
+                except PerfError:
+                    rejected = True
+                add(name, rejected)
 
         rejected = False
         try:
