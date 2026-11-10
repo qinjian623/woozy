@@ -1,4 +1,5 @@
   std::map<std::pair<TypeId, bool>, llvm::Function *> value_ops;
+  llvm::Function *vec_retain_fast = nullptr, *vec_release_fast = nullptr;
   std::vector<llvm::Value *> active;
   llvm::AllocaInst *storage(llvm::Type *type) {
     auto &entry = builder.GetInsertBlock()->getParent()->getEntryBlock();
@@ -85,6 +86,68 @@
     auto callee = module.getOrInsertFunction(name, llvm::FunctionType::get(result, types, false));
     return builder.CreateCall(callee, args);
   }
+  // The test-only Vec observer is a weak declaration. A null resolved address
+  // means no observer is linked, so the common refcount updates can stay
+  // inline. Any resolved observer, including a reentrant one, keeps the
+  // pre-existing runtime path and therefore its exact event order. The
+  // overflow cases also return to the runtime: retain at UINT64_MAX and
+  // release at zero or at the final reference. Refcount 1 must stay with the
+  // runtime's iteration check, reverse element drop and free.
+  llvm::Function *vec_rc(bool retain) {
+    auto *&cached = retain ? vec_retain_fast : vec_release_fast;
+    if (cached) return cached;
+    auto *fn = llvm::Function::Create(
+        llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                false),
+        llvm::GlobalValue::InternalLinkage,
+        retain ? "lang.vec.retain" : "lang.vec.release", module);
+    cached = fn;
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    auto *vec = fn->getArg(0);
+    auto observer = module.getOrInsertFunction(
+        "lang_vec_observe_v1",
+        llvm::FunctionType::get(builder.getVoidTy(),
+                                {builder.getInt32Ty(), builder.getPtrTy(),
+                                 builder.getInt64Ty()},
+                                false));
+    auto *observer_decl = llvm::cast<llvm::Function>(observer.getCallee());
+    observer_decl->setLinkage(llvm::GlobalValue::ExternalWeakLinkage);
+    auto runtime_fn = module.getOrInsertFunction(
+        retain ? "lang_vec_retain_v1" : "lang_vec_release_v1",
+        llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                false));
+    auto *fast = llvm::BasicBlock::Create(context, "fast", fn);
+    auto *slow = llvm::BasicBlock::Create(context, "runtime", fn);
+    auto *update = llvm::BasicBlock::Create(context, "update", fn);
+    auto *done = llvm::BasicBlock::Create(context, "done", fn);
+    builder.CreateCondBr(
+        builder.CreateICmpNE(
+            observer_decl, llvm::ConstantPointerNull::get(builder.getPtrTy())),
+        slow, fast);
+    builder.SetInsertPoint(fast);
+    auto *refs = vec_field(vec, 0, builder.getInt64Ty());
+    auto *defer =
+        retain ? builder.CreateICmpEQ(
+                     refs, llvm::ConstantInt::get(builder.getInt64Ty(),
+                                                  llvm::APInt::getMaxValue(64)))
+               : builder.CreateICmpULT(refs, builder.getInt64(2));
+    builder.CreateCondBr(defer, slow, update);
+    builder.SetInsertPoint(update);
+    auto *next = retain ? builder.CreateAdd(refs, builder.getInt64(1))
+                        : builder.CreateSub(refs, builder.getInt64(1));
+    vec_memory(builder.CreateStore(
+                   next, builder.CreateStructGEP(vec_type, vec, 0)),
+               true);
+    builder.CreateBr(done);
+    builder.SetInsertPoint(slow);
+    builder.CreateCall(runtime_fn, {vec});
+    builder.CreateBr(done);
+    builder.SetInsertPoint(done);
+    builder.CreateRetVoid();
+    builder.restoreIP(ip);
+    return fn;
+  }
   llvm::Function *value_op(TypeId id, bool copy) {
     auto key = std::pair{id, copy};
     if (auto it = value_ops.find(key); it != value_ops.end()) return it->second;
@@ -99,7 +162,7 @@
     auto t = type(id);
     if (t.kind == hir::TypeKind::Vec) {
       auto *value = builder.CreateLoad(builder.getPtrTy(), address);
-      runtime(copy ? "lang_vec_retain_v1" : "lang_vec_release_v1", builder.getVoidTy(), {value});
+      builder.CreateCall(vec_rc(copy), {value});
     } else if (t.kind == hir::TypeKind::NominalStruct) {
       auto fields = aggregates.fields(id);
       for (size_t n = 0; n < fields.size(); ++n) {
