@@ -7,6 +7,7 @@
 #include <llvm/Config/llvm-config.h>
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/IRBuilder.h>
+#include <llvm/IR/Instructions.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/Module.h>
 #include <llvm/IR/NoFolder.h>
@@ -510,11 +511,17 @@ class Emitter {
                    builder.getInt64(stride(element)),
                    value_op(element, true), value_op(element, false)});
       bool constants = !args.empty() && constant_vec_element(element);
-      for (auto *arg : args)
-        constants = constants && (llvm::isa<llvm::ConstantInt>(arg) ||
-                                  llvm::isa<llvm::ConstantFP>(arg));
+      llvm::SmallVector<llvm::Constant *, 16> constant_args;
+      for (auto *arg : args) {
+        auto *constant = constant_vec_value(arg);
+        if (!constant) {
+          constants = false;
+          break;
+        }
+        constant_args.push_back(constant);
+      }
       if (constants) {
-        constant_vec_init(v, element, args);
+        constant_vec_init(v, element, constant_args);
         break;
       }
       llvm::AllocaInst *scratch = nullptr;

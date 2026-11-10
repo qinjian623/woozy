@@ -1,0 +1,26 @@
+package app;
+
+func tick(value inout i32) i32 {
+    let old = value;
+    value += 1;
+    return old;
+}
+
+func main() i32 {
+    let f32s Vec[f32] = [-0.0, 0.0, -1.5, 1.5, -2.25, 2.25, -3.5, 3.5];
+    let f64s Vec[f64] = [-0.0, 0.0, -1.5, 1.5, -2.25, 2.25, -3.5, 3.5];
+
+    var source f64 = 2.25;
+    let dynamic Vec[f64] = [-source, source, -0.0, 1.5];
+    var counter i32 = 0;
+    let effects Vec[i32] = [tick(inout counter), tick(inout counter), tick(inout counter)];
+
+    if counter != 3 { return 1; }
+    if effects[0] != 0 || effects[1] != 1 || effects[2] != 2 { return 2; }
+    if f32s[0] != 0.0 || f32s[2] != -1.5 || f32s[4] != -2.25 || f32s[6] != -3.5 { return 3; }
+    if f32s[1] != 0.0 || f32s[3] != 1.5 || f32s[5] != 2.25 || f32s[7] != 3.5 { return 4; }
+    if f64s[0] != 0.0 || f64s[2] != -1.5 || f64s[4] != -2.25 || f64s[6] != -3.5 { return 5; }
+    if f64s[1] != 0.0 || f64s[3] != 1.5 || f64s[5] != 2.25 || f64s[7] != 3.5 { return 6; }
+    if dynamic[0] != -2.25 || dynamic[1] != 2.25 || dynamic[2] != 0.0 || dynamic[3] != 1.5 { return 7; }
+    return 0;
+}

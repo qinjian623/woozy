@@ -29,16 +29,32 @@
            kind == hir::TypeKind::Usize ||
            kind == hir::TypeKind::Float;
   }
+  // A lexically negative float literal is an fneg applied to ConstantFP.
+  // Recognize only that pure operation for Vec storage; this is not general
+  // constant evaluation. APFloat::changeSign preserves the payload and the
+  // sign bit, including negative zero.
+  llvm::Constant *constant_vec_value(llvm::Value *value) {
+    if (auto *constant = llvm::dyn_cast<llvm::ConstantInt>(value))
+      return constant;
+    if (auto *constant = llvm::dyn_cast<llvm::ConstantFP>(value))
+      return constant;
+    auto *negate = llvm::dyn_cast<llvm::UnaryOperator>(value);
+    if (!negate || negate->getOpcode() != llvm::Instruction::FNeg)
+      return nullptr;
+    auto *operand =
+        llvm::dyn_cast<llvm::ConstantFP>(negate->getOperand(0));
+    if (!operand) return nullptr;
+    auto folded = operand->getValueAPF();
+    folded.changeSign();
+    return llvm::ConstantFP::get(context, folded);
+  }
   // Constant scalar elements have no ownership and no runtime evaluation
   // order. Keep their values in read-only static storage and copy them from a
   // compact loop instead of expanding one store and runtime call per element.
   void constant_vec_init(llvm::Value *vec, TypeId element,
-                         const std::vector<llvm::Value *> &args) {
+                         llvm::ArrayRef<llvm::Constant *> elements) {
     auto *element_type = lower_type(element);
-    auto *array_type = llvm::ArrayType::get(element_type, args.size());
-    llvm::SmallVector<llvm::Constant *, 16> elements;
-    for (auto *arg : args)
-      elements.push_back(llvm::cast<llvm::Constant>(arg));
+    auto *array_type = llvm::ArrayType::get(element_type, elements.size());
     bool all_null = true;
     for (auto *value : elements) all_null = all_null && value->isNullValue();
     llvm::Constant *initializer =
@@ -60,7 +76,7 @@
     builder.SetInsertPoint(test);
     auto *next = builder.CreateLoad(builder.getInt64Ty(), index);
     builder.CreateCondBr(
-        builder.CreateICmpUGE(next, builder.getInt64(args.size())), done, body);
+        builder.CreateICmpUGE(next, builder.getInt64(elements.size())), done, body);
     builder.SetInsertPoint(body);
     auto *address = builder.CreateGEP(
         array_type, data, {builder.getInt64(0), next});
