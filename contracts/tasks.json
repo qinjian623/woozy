@@ -348,7 +348,7 @@
         "docs/IMPLEMENTATION_PLAN.md",
         "docs/ACCEPTANCE.md"
       ],
-      "notes": "native/64 Linux x86_64 与 python/64 CPython3.12.15 已支持 Vec、字符串值和 Vec[string]、拥有 struct/enum、经 Vec 回指的有限递归值、整体 move、普通参数借用/返回复制、索引与元素字段读写、切片、for-in，以及正常/typed-error/defer 的拥有值清理。Vec 别名共享写入，切片/for-in 复制逻辑值。Python 已声明宿主引用支持整体 move 和 Vec/struct/enum 保存，逻辑 copy 保持同一宿主对象身份；不承诺宿主立即析构。仍不支持部分 move、非平凡或字段/索引 inout、捕获闭包、循环回收、Native foreign 与动态 shape/device 类型推断；py.Error 容器保存尚未开放。没有新增字符串动态构造或公开 Vec 长度/伸缩 API。T09 保持 in_progress，不据上述支持范围声称完整 ARC。当前规则见 docs/SEMANTICS.md、docs/T09_EXECUTION.md 和 docs/T10_PYTHON.md。"
+      "notes": "native/64 Linux x86_64 与 python/64 CPython3.12.15 已支持 Vec、字符串值和 Vec[string]、拥有 struct/enum、经 Vec 回指的有限递归值、整体 move、普通参数借用/返回复制、索引与元素字段读写、切片、for-in，以及正常/typed-error/defer 的拥有值清理。Vec 别名共享写入，切片/for-in 复制逻辑值。Python 已声明宿主引用支持整体 move 和 Vec/struct/enum 保存，逻辑 copy 保持同一宿主对象身份；不承诺宿主立即析构。仍不支持部分 move、非平凡或字段/索引 inout、捕获闭包、循环回收、Native foreign 与动态 shape/device 类型推断；Python py.Error 支持 Vec/struct/enum 保存，复制共享原异常、cause 和 traceback；语言清理不保证宿主立即析构。没有新增字符串动态构造或公开 Vec 长度/伸缩 API。T09 保持 in_progress，不据上述支持范围声称完整 ARC。当前规则见 docs/SEMANTICS.md、docs/T09_EXECUTION.md 和 docs/T10_PYTHON.md。"
     },
     {
       "id": "T10",

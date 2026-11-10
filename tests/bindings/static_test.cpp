@@ -152,6 +152,46 @@ int main(int argc, char **argv) try {
        baseline.types.find(error_type)->binding == ForeignBindingId{0}, "zero foreign binding");
   need(classify_value(baseline,error_type).kind == ValueKind::foreign_error &&
        classify_value(baseline,error_type).needs_drop && !classify_value(baseline,error_type).pod_inout, "error ownership");
+  auto error_vec=accepted(imports+"func f(e py.Error) Unit { let values Vec[py.Error] = [e]; }", "py-error-vec");
+  TypeId error_vec_type;
+  for(const auto &n:error_vec.nodes)
+    if(n.kind()==NodeKind::vec_init) error_vec_type=n.type;
+  need(error_vec_type.value &&
+       classify_value(error_vec,error_vec_type).kind==ValueKind::vec &&
+       classify_value(error_vec,error_vec_type).needs_drop, "py.Error Vec ownership");
+  auto error_struct=accepted(imports+"struct Saved { value py.Error; } func f(e py.Error) Unit { let saved = Saved(value: e); }", "py-error-struct");
+  TypeId error_struct_type;
+  for(const auto &n:error_struct.nodes)
+    if(n.kind()==NodeKind::struct_init) error_struct_type=n.type;
+  need(error_struct_type.value &&
+       classify_value(error_struct,error_struct_type).kind==ValueKind::structure &&
+       classify_value(error_struct,error_struct_type).needs_drop, "py.Error struct ownership");
+  auto error_enum=accepted(imports+"enum Slot { One(value py.Error); Empty; } func f(e py.Error) Unit { let slot = Slot.One(value: e); }", "py-error-enum");
+  TypeId error_enum_type;
+  for(const auto &n:error_enum.nodes)
+    if(n.kind()==NodeKind::enum_init) error_enum_type=n.type;
+  need(error_enum_type.value &&
+       classify_value(error_enum,error_enum_type).kind==ValueKind::enumeration &&
+       classify_value(error_enum,error_enum_type).needs_drop, "py.Error enum ownership");
+  auto error_generic=accepted(imports+"struct Box[T] { value T; } func f(e py.Error) Unit { let boxed = Box[py.Error](value: e); }", "py-error-generic");
+  TypeId error_generic_type;
+  for(const auto &n:error_generic.nodes)
+    if(n.kind()==NodeKind::struct_init) error_generic_type=n.type;
+  need(error_generic_type.value &&
+       classify_value(error_generic,error_generic_type).kind==ValueKind::structure &&
+       classify_value(error_generic,error_generic_type).needs_drop, "py.Error generic ownership");
+  auto callable_probe=baseline;
+  TypeId callable_type;
+  for(const auto &n:callable_probe.nodes)
+    if(callable_probe.types.find(n.type)->kind==TypeKind::ForeignCallable) {
+      callable_type=n.type; break;
+    }
+  need(callable_type.value, "foreign callable type");
+  Type callable_vec; callable_vec.kind=TypeKind::Vec;
+  callable_vec.type_args={callable_type};
+  auto callable_vec_type=callable_probe.types.intern(callable_vec);
+  need(classify_value(callable_probe,callable_vec_type).kind==ValueKind::unsupported,
+       "foreign callable Vec must stay unsupported");
   size_t reads=0, calls=0;
   for (size_t i=0;i<baseline.nodes.size();++i) {
     const auto &n=baseline.nodes[i];
@@ -250,6 +290,14 @@ int main(int argc, char **argv) try {
   auto rejected_native=check_backend_capabilities(native_foreign);
   need(!rejected_native.success()&&has(rejected_native,"E_CAPABILITY_UNAVAILABLE"),
        "native foreign Vec/move not rejected");
+  auto native_error_vec=error_vec;
+  auto native_error_resolved=std::make_shared<modules::ResolvedProject>(*native_error_vec.resolved);
+  auto native_error_project=std::make_shared<modules::Project>(*native_error_resolved->project);
+  native_error_project->backend="native";native_error_resolved->project=native_error_project;
+  native_error_vec.resolved=native_error_resolved;native_error_vec.config.backend=Backend::native;
+  auto rejected_native_error=check_backend_capabilities(native_error_vec);
+  need(!rejected_native_error.success()&&has(rejected_native_error,"E_CAPABILITY_UNAVAILABLE"),
+       "native py.Error Vec not rejected");
   auto profile32=foreign_vec;
   auto profile32_resolved=std::make_shared<modules::ResolvedProject>(*profile32.resolved);
   auto profile32_project=std::make_shared<modules::Project>(*profile32_resolved->project);

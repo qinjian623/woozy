@@ -67,7 +67,7 @@ CLI 参数只负责选择绑定文件。该 example bundle 保留 `draft_require
 
 - `host_module(logical, host)` 只 import 声明中的宿主模块。缓存 key 是 `(logical, host)`，避免两个逻辑模块声明不同宿主时返回错误对象。import 失败抛 `HostEnvironmentError`，不伪装成源码 `py.Error`；该异常发生在外部操作桥之前。
 - `foreign_read` 和 `foreign_call` 只包住已声明的属性读取/实际调用。先原样传播 `TypedError`，再捕获普通 `Exception`；`Panic`、`KeyboardInterrupt`、`SystemExit`、`SwitchBreak` 等 `BaseException` 不被包装。生成函数没有整体 `except Exception`。
-- `Error` 载荷固定键 `lang.py.Error`，保存原宿主异常、cause、格式化 traceback、源文件及字节范围、操作身份。`error_payload_copy` 共享该载荷，不深复制宿主异常，也不重复 take 同一 TypedError。
+- `Error` 载荷固定键 `lang.py.Error`，保存原宿主异常、cause、格式化 traceback、源文件及字节范围、操作身份。`error_payload_copy` 共享该载荷，不深复制宿主异常，也不重复 take 同一 TypedError。该载荷可位于 `Vec[py.Error]`、struct 字段、enum payload 和嵌套泛型值中；语言复制/清理沿用同一 Error 对象，宿主异常、cause、traceback 保持同一身份。
 - `ValueType('foreign')` 和 `ValueType('error')` 的 copy 保持宿主对象身份；drop 只释放语言 owner 槽，不承诺宿主对象立即析构或释放宿主缓冲区。
 - Unit callable 成功返回必须是 `None`；其他返回值触发明确 `Panic`，不静默丢弃。未捕获的 `py.Error` 先输出稳定的 `LANG_TYPED_ERROR: lang.py.Error` 行，再输出可用原因/源位置并 drop。
 

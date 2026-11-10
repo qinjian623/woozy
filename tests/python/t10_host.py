@@ -106,6 +106,7 @@ def inspect(error):
     cause = error.cause
     cause_text = 'None' if cause is None else (
         type(cause).__module__ + '.' + type(cause).__qualname__ + ':' + str(cause))
+    cause_traceback = None if error.cause is None else error.cause.__traceback__
     _log('ERR', 'type=' + error.type_name,
          'message=' + str(error.message).replace('\n', '\\n'),
          'cause=' + cause_text.replace('\n', '\\n'),
@@ -113,7 +114,14 @@ def inspect(error):
          'file=' + error.file,
          'begin=' + str(error.begin_byte),
          'end=' + str(error.end_byte),
-         'operation=' + error.operation)
+         'operation=' + error.operation,
+         'payload_id=' + str(id(error)),
+         'exception_id=' + str(id(error.exception)),
+         'cause_id=' + ('none' if error.cause is None else str(id(error.cause))),
+         'traceback_id=' + ('none' if error.exception.__traceback__ is None
+                             else str(id(error.exception.__traceback__))),
+         'cause_traceback_id=' + ('none' if cause_traceback is None
+                                  else str(id(cause_traceback))))
 
 
 def error_source():

@@ -122,6 +122,7 @@ Python 的 f32 标量运算需显式舍入；浮点除零、NaN 和无穷不能�
 | string | 不可变 UTF-8 值；底层可共享存储，用户观察不到可变别名 |
 | Vec[T] | 共享同一个容器对象，新增拥有句柄；无隐式深复制或 COW |
 | Python ndarray/Tensor 等外部引用 | 保留原对象身份；所有权由绑定和 Python runtime 维护 |
+| py.Error | 共享同一 Error 载荷及原 Python Exception、cause、traceback 对象；语言清理只释放该拥有槽 |
 
 `let` 禁止重新绑定和修改本语言值字段；引用对象允许通过已声明的可变操作修改内部状态。Vec 的索引赋值修改共享容器，所有别名可观察到；这一点在 native 与 Python runtime 中必须相同。
 
@@ -132,6 +133,8 @@ Vec 对象或元素存储分配失败，以及分配大小计算溢出时，产�
 Vec 遍历使用进入循环时的长度，每轮读取当前索引元素并取得本次迭代所需的逻辑拥有值。活跃遍历期间，任何改变该 Vec 长度的操作必须在修改发生前产生 Panic；通过共享别名改变元素值仍可观察。实现维护活跃迭代状态并在结构修改入口检查，不能仅在下一轮比较长度而漏掉“修改后立即 break/return”或“删后再补回”等情况，也不能保留因扩容失效的裸元素指针。
 
 struct 按字段声明逆序销毁，enum 按活动载荷字段逆序销毁，Vec 对象最后释放时按元素索引逆序销毁。部分构造失败仅销毁已完成初始化的字段/元素，顺序与其初始化相反。对外部 Python 对象，宿主析构时机不属于本语言的跨后端保证；确定资源释放必须使用显式 defer 或受控包装协议。
+
+`py.Error` 可作为 `Vec` 元素、struct 字段和 enum payload 保存，也可位于嵌套泛型值中；它支持普通复制、整体 move、返回、越过 catch 继续持有以及再次 `throw`/`catch`。复制共享同一个语言 Error 载荷和原 Python `Exception`、cause、traceback 对象，不做异常深复制；语言 drop 只释放该拥有槽，不承诺 Python 立即析构，也不依赖 `__del__` 执行语言清理。上述容器的既有复制/销毁顺序、move 后不可读和部分 move 限制不变。普通外部引用（如 ndarray/Tensor）和 `py.Error` 的聚合保存只在对应 Python 后端范围开放，不扩大 Native FFI；外部 callable 仍不能作为聚合成员保存。
 
 Map、通用 Slice、Ptr 等名称不因出现在类型语法示例中就自动成为已实现标准库类型；按能力矩阵逐步添加。
 
@@ -161,7 +164,7 @@ Map、通用 Slice、Ptr 等名称不因出现在类型语法示例中就自动�
 
 原生内部降低采用成功标记及 value/error 两个输出通道。成功仅初始化 value，失败仅初始化 error；非活动侧禁止读取或销毁。这个内部调用约定未承诺二进制稳定；不能直接用作 C/C++ 公共 ABI。
 
-Python 生成代码可通过专用异常承载源语言 typed error。编译期按 TypeId 检查匹配，生成产物用稳定逻辑类型身份或生成的类型对象匹配；会话内 TypeId 裸编号不能写入跨模块缓存。外部 Python `Exception` 在绑定边界转换为 `py.Error` 并保留 cause/traceback。不捕获所有 `BaseException`；KeyboardInterrupt、SystemExit 以及本语言 Panic 不能被误包装。
+Python 生成代码可通过专用异常承载源语言 typed error。编译期按 TypeId 检查匹配，生成产物用稳定逻辑类型身份或生成的类型对象匹配；会话内 TypeId 裸编号不能写入跨模块缓存。外部 Python `Exception` 在绑定边界转换为 `py.Error` 并保留 cause/traceback。`py.Error` 与其他拥有值一样可存入 Vec/struct/enum；复制共享原异常对象，清理不保证宿主立即析构。不捕获所有 `BaseException`；KeyboardInterrupt、SystemExit 以及本语言 Panic 不能被误包装。
 
 Panic 表示除零、非法移位、越界等不可由 typed catch 恢复的运行失败。native 顶层终止程序；Python 使用 `langrt.Panic`（BaseException 子类）由生成的顶层 runner 转为失败诊断。两端不保证 Panic 后执行语言清理；Python 生成的 finally 必须避免把 Panic 路径误当普通错误路径执行语言 defer。由 Python 自身触发的对象析构也不作为可移植清理承诺。
 

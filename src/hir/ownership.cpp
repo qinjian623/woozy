@@ -248,11 +248,14 @@ class Classifier {
       if (contains_type_parameter(m, element))
         return {ValueKind::vec, {}};
       auto e = support(element, depth + 1, nullptr);
+      // A declared py.Error is a finite owning reference: Vec copies share the
+      // same runtime payload and release only the language element slot.
+      // Foreign callables remain unavailable because they are not storable
+      // source values and cannot be copied or dropped independently.
       if (e.kind == ValueKind::unsupported ||
-          e.kind == ValueKind::foreign_callable ||
-          e.kind == ValueKind::foreign_error)
+          e.kind == ValueKind::foreign_callable)
         return {ValueKind::unsupported,
-                e.reason.empty() ? "external callable/error values in Vec are not supported"
+                e.reason.empty() ? "external callable values in Vec are not supported"
                                  : e.reason};
       return {ValueKind::vec, {}};
     }
@@ -274,13 +277,14 @@ class Classifier {
         if (out)
           out->push_back({variant, f.symbol, concrete});
         auto s = support(concrete, depth + 1, nullptr);
+        // py.Error fields are shared owning references, like ordinary host
+        // references. Foreign callables are still not valid aggregate fields.
         if (s.kind == ValueKind::unsupported ||
-            s.kind == ValueKind::foreign_callable ||
-            s.kind == ValueKind::foreign_error) {
+            s.kind == ValueKind::foreign_callable) {
           result.kind = ValueKind::unsupported;
           if (result.reason.empty())
             result.reason = s.reason.empty()
-                                ? "external callable/error aggregate fields are not supported"
+                                ? "external callable aggregate fields are not supported"
                                 : s.reason;
         }
       }

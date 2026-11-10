@@ -4,7 +4,7 @@ native/64 Linux x86_64 与 python/64 CPython 3.12.15 已支持 Vec 和含 Vec �
 
 字符串值已支持复制和整体 move，保留完整 UTF-8 字节和嵌入 NUL。`Vec[string]` 支持元素替换、切片和 for-in。Vec 元素的字段写回也已支持，包括嵌套字段、拥有字段替换，以及右值求值失败时保留原值。相应源码见 `tests/native/ownership/string-vec-aggregates` 和 `indexed-field-*`。
 
-仍不支持部分 move、拥有值或 foreign 的 inout、字段/索引 inout、捕获闭包和循环回收。强引用环保持存活，不自动回收。字符串动态构造和公开 len/push/share API 尚未定义。Python 已声明宿主引用的整体 move、Vec/struct/enum 保存见 [T10_PYTHON.md](T10_PYTHON.md)；Native 仍不支持 foreign，`py.Error` 容器保存尚未开放。
+仍不支持部分 move、拥有值或 foreign 的 inout、字段/索引 inout、捕获闭包和循环回收。强引用环保持存活，不自动回收。字符串动态构造和公开 len/push/share API 尚未定义。Python 已声明宿主引用的整体 move、Vec/struct/enum 保存见 [T10_PYTHON.md](T10_PYTHON.md)；`py.Error` 也可作为这些容器的递归成员保存和复制，共享原异常载荷。Native 仍不支持 foreign，包括 `py.Error` 容器。
 
 运行时支持数值/bool 和有限平凡 struct/enum 的整体 inout。普通参数绑定只读，重赋值报 `E_TYPE_MISMATCH`；普通 Vec 参数仍可修改共享容器内容。计算得到的拥有 switch 主体持有到分支结束：先执行分支 defer 和局部清理，再释放主体。typed-error handler 不提前销毁由 finally 持有的主体；Panic 不执行语言清理。
 

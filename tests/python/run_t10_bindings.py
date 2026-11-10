@@ -160,6 +160,7 @@ def error_events(events):
 def main():
     parser = argparse.ArgumentParser()
     parser.add_argument('--helper', type=Path, required=True)
+    parser.add_argument('--langc', type=Path)
     parser.add_argument('--root', type=Path, required=True)
     parser.add_argument('--out', type=Path, required=True)
     parser.add_argument('--python', type=Path, required=True)
@@ -179,6 +180,8 @@ def main():
     for key in ('helper', 'root', 'out', 'binding', 'example_binding',
                 'reference', 'observe', 'original_observer', 'reference_observer'):
         setattr(args, key, getattr(args, key).resolve())
+    if args.langc is not None:
+        args.langc = args.langc.resolve()
     if args.real_observer is None:
         args.real_observer = args.root / 'tests/python/t10_real_objects.py'
     else:
@@ -406,6 +409,150 @@ func main() i32 throws py.Error {
 
     r.add('foreign-ownership-move-aggregate', foreign_ownership_case)
 
+    error_aggregate_source = '''package main;
+import "std/py" as py;
+import "t10host" as host;
+
+// py.Error storage keeps the same host exception payload in every copy.
+struct Saved { value py.Error; n i32; }
+struct Nested { saved Saved; values Vec[py.Error]; }
+enum Slot { One(value py.Error); Empty; }
+struct Box[T] { value T; }
+
+func wrap(e py.Error) Saved { return Saved(value: e, n: 3); }
+func pass_saved(s Saved) Saved { return s; }
+func choose(slot Slot, fallback py.Error) py.Error {
+  switch slot {
+  case Slot.One(value): return value;
+  case Slot.Empty: return fallback;
+  }
+}
+
+func exercise(seed py.Error) i32 throws py.Error {
+  var outside = Saved(value: seed, n: 0);
+  try { host.error_source(); return 1; } catch e py.Error {
+    host.inspect(e);
+    let saved = Saved(value: e, n: 1);
+    let copied = saved;
+    host.inspect(copied.value);
+    let moved = move copied;
+    host.inspect(moved.value);
+    let values Vec[py.Error] = [e, saved.value];
+    host.inspect(values[0]);
+    host.inspect(values[1]);
+    let copy_values = values;
+    host.inspect(copy_values[1]);
+    let part = values[0:2];
+    host.inspect(part[0]);
+    let saved_values Vec[Saved] = [saved];
+    host.inspect(saved_values[0].value);
+    let nested = Nested(saved: saved, values: values);
+    host.inspect(nested.saved.value);
+    host.inspect(nested.values[0]);
+    let slot = Slot.One(value: e);
+    switch slot {
+    case Slot.One(value):
+      host.inspect(value);
+    case Slot.Empty: return 2;
+    }
+    let boxed = Box[py.Error](value: e);
+    host.inspect(boxed.value);
+    let wrapped = wrap(e);
+    host.inspect(wrapped.value);
+    let returned = pass_saved(wrapped);
+    host.inspect(returned.value);
+    let picked = choose(slot, seed);
+    host.inspect(picked);
+    outside = Saved(value: e, n: 4);
+  }
+  host.inspect(outside.value);
+  let moved_outside = move outside;
+  host.inspect(moved_outside.value);
+  try { throw moved_outside.value; return 3; } catch e py.Error {
+    host.inspect(e);
+  }
+  let slot2 = Slot.One(value: moved_outside.value);
+  try {
+    switch slot2 {
+    case Slot.One(value): throw value;
+    case Slot.Empty: return 4;
+    }
+  } catch e py.Error { host.inspect(e); }
+  let values2 Vec[py.Error] = [seed];
+  try { throw values2[0]; return 5; } catch e py.Error { host.inspect(e); }
+  return 0;
+}
+
+func main() i32 throws py.Error {
+  try { host.error_source(); return 1; } catch e py.Error {
+    return exercise(e);
+  }
+  return 0;
+}
+'''
+
+    def error_aggregate_case(row):
+        project = r.project('py-error-aggregate-storage',
+                            {'src/main.lang': error_aggregate_source}, binding)
+        out, _ = r.emit(row, project, binding)
+        if args.langc is not None:
+            cli_out = project / 'cli-out'
+            record = r.command(
+                row,
+                [args.langc, 'build', '--project', project / 'lang.toml',
+                 '--backend', 'python', '--format', 'json',
+                 '--std-binding', binding, '--out-dir', cli_out],
+                project)
+            require(record['exit'] == 0, record)
+            for name in ('program.py', 'langrt.py'):
+                require(sha(out / name) == sha(cli_out / name),
+                        'formal CLI differs from helper for ' + name)
+            row['cli_comparison'] = {
+                'status': 'passed',
+                'langc': str(args.langc),
+                'program.py': sha(out / 'program.py'),
+                'langrt.py': sha(out / 'langrt.py'),
+            }
+        else:
+            row['cli_comparison'] = {'status': 'not_run',
+                                     'reason': '--langc not supplied'}
+        observed, events = r.observe(row, out)
+        require(observed['main_return'] == 0, observed)
+        require(observed['owners'] == [], observed)
+        require(all(not borrows for borrows in observed['borrows']), observed)
+        require(not non_error_events(events), events)
+        errors = error_events(events)
+        # The first nineteen inspects share the exception caught in exercise.
+        # The final throw/catch reuses the seed caught in main.
+        require(len(errors) == 20, errors)
+        keys = ('payload_id', 'exception_id', 'cause_id', 'traceback_id',
+                'cause_traceback_id')
+        def identity(event):
+            found = {}
+            for token in event.split():
+                name, separator, value = token.partition('=')
+                if separator and name in keys:
+                    found[name] = value
+            require(set(found) == set(keys), event)
+            return found
+        shared = identity(errors[0])
+        for event in errors[1:19]:
+            require(identity(event) == shared, (event, shared))
+        seed = identity(errors[19])
+        require(seed['exception_id'] != shared['exception_id'], (seed, shared))
+        require(shared['cause_id'] != 'none' and shared['traceback_id'] != 'none'
+                and shared['cause_traceback_id'] != 'none', shared)
+        require(seed['cause_id'] != 'none' and seed['traceback_id'] != 'none'
+                and seed['cause_traceback_id'] != 'none', seed)
+        for event in errors:
+            require('traceback=yes' in event, event)
+            require('cause=t10host.HostInner:inner cause' in event, event)
+        row['observation'] = observed
+        row['events'] = events
+        row['shared_identity'] = shared
+
+    r.add('py-error-aggregate-storage', error_aggregate_case)
+
     foreign_cleanup_source = '''package main;
 import "std/py" as py;
 import "t10host" as host;
@@ -525,6 +672,11 @@ func main() i32 throws py.Error {
             ('borrow-alias', 'func f(a host.Probe, b move host.Probe) i32 '
              '{ return 0; } func main() i32 throws py.Error { '
              'let p = host.make(); return f(p, move p); }', 'E_CALL_ARGUMENT'),
+            ('error-aggregate-read-after-move', 'struct Saved { value py.Error; } '
+             'func main() i32 throws py.Error { try { host.error_source(); } '
+             'catch e py.Error { let saved = Saved(value: e); '
+             'let moved = move saved; host.inspect(saved.value); } '
+             'return 0; }', 'E_OWNERSHIP_USE_AFTER_MOVE'),
             ('move-borrowed-parameter', 'func f(p host.Probe) i32 { '
              'let q = move p; return 0; } func main() i32 throws py.Error { '
              'return f(host.make()); }', 'E_CALL_ARGUMENT'),

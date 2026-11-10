@@ -163,6 +163,61 @@ class Runtime(unittest.TestCase):
         error.drop(Drop())
         self.assertEqual(dropped, [True])
 
+    def test_error_payload_copy_in_vec_and_aggregates(self):
+        class Inner(Exception):
+            pass
+        class Outer(Exception):
+            pass
+        try:
+            try:
+                raise Inner('inner')
+            except Inner as inner:
+                raise Outer('outer') from inner
+        except Outer as outer:
+            payload = rt.Error(outer, '/tmp/source.lang', 10, 20, 'host.read')
+        exception = payload.exception
+        cause = payload.cause
+        traceback_object = exception.__traceback__
+        cause_traceback = cause.__traceback__
+        ids = (id(exception), id(cause), id(traceback_object),
+               id(cause_traceback))
+        error = rt.ValueType('error')
+        self.assertIs(error.copy(payload), payload)
+
+        values = rt.Vec.create(error, [payload])
+        part = values.slice(0, 1)
+        self.assertIs(values.get(0), payload)
+        self.assertIs(part.get(0), payload)
+
+        struct = rt.ValueType('struct', (error, error))
+        copied = struct.copy((payload, payload))
+        self.assertIs(copied[0], payload)
+        self.assertIs(copied[1], payload)
+        struct.drop(copied)
+
+        enum = rt.ValueType('enum', variants={3: (error,)})
+        copied_enum = enum.copy((3, (payload,)))
+        self.assertIs(copied_enum[1][0], payload)
+        enum.drop(copied_enum)
+
+        values.release()
+        self.assertIs(part.get(0), payload)
+        part.release()
+        # Language cleanup only releases owner slots. The host exception,
+        # cause and traceback remain the same live Python objects.
+        error.drop(payload)
+        error.drop(payload)
+        self.assertIs(payload.exception, exception)
+        self.assertIs(payload.cause, cause)
+        self.assertIs(payload.exception.__traceback__, traceback_object)
+        self.assertIs(payload.cause.__traceback__, cause_traceback)
+        self.assertEqual((id(payload.exception), id(payload.cause),
+                          id(payload.exception.__traceback__),
+                          id(payload.cause.__traceback__)), ids)
+        self.assertIn('Outer', payload.traceback_text)
+        self.assertTrue(payload.describe().endswith(
+            'Outer: outer at /tmp/source.lang:10:20 (host.read)'))
+
     def test_foreign_reference_copy_in_vec_and_aggregates(self):
         foreign = rt.ValueType('foreign')
         host = object()

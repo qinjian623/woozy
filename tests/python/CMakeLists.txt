@@ -114,6 +114,7 @@ if(LANG_T10_PYTHON AND EXISTS "${LANG_T10_PYTHON}")
   add_test(NAME python.t10_bindings COMMAND "${LANG_T10_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_t10_bindings.py"
     --helper $<TARGET_FILE:lang_python_emit>
+    --langc $<TARGET_FILE:langc>
     --root "${LANG_PYTHON_TEST_ROOT}"
     --out "${CMAKE_CURRENT_BINARY_DIR}/t10-bindings"
     --python "${LANG_T10_PYTHON}"
