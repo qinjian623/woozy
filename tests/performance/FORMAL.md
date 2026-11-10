@@ -12,9 +12,13 @@
 
 `formal_algorithm_programs.AlgorithmPrograms` 为其余五种算法提供同样的构建回调，只接受 `formal_sampling.GRID` 中固定的两个规模：sieve 1000000/10000000、fannkuch 9/10、mandelbrot 512/2048、binarytrees 14/18、matmul 128/512；R 只接受允许范围内的2的幂。它直接调用各目录 `large_prepare.py` 的现有生成函数，不复制算法、模板、工作量、尺寸或预期值。`render(R)` 保留Source、C++、manifest、冻结输入/模板/工具哈希；`build_cpp(R)` 使用与 `SortPrograms` 相同的四条C++命令，保存独立对象、由该对象链接的ELF、同flags无调试LLVM IR、verify以及全部命令和失败记录。R1/R2分别生成，不把R1缓存复制成R2。输出记录 `actual_work_review=pending` 和 `formal_timing=false`。
 
-本任务的新检查覆盖十个固定单元的R1/R2渲染，并与对应旧prepare真实文件逐字节比较（记录哈希、是否相等及差异位置）；对每个算法的小规模实际构建一次R4 C++ O2对象、ELF、IR并verify，不运行算法程序、不编译Source、不启动校准采样。检查记录在 `checks/formal-other-five-program-builders-20261110/results.json`，失败运行保存在同目录 `failed-run-1/`。Source最终构建、R/2R实际工作审读仍需接入。
+本任务的新检查覆盖十个固定单元的R1/R2渲染，并与对应旧prepare真实文件逐字节比较（记录哈希、是否相等及差异位置）；对每个算法的小规模实际构建一次R4 C++ O2对象、ELF、IR并verify，不运行算法程序、不编译Source、不启动校准采样。检查记录在 `checks/formal-other-five-program-builders-20261110/results.json`，失败运行保存在同目录 `failed-run-1/`。R/2R实际工作审读仍需接入。
 
-正式校准和采样未启动。13项采样自检使用合成时间，3项排序固定输入生成检查，另有4项五算法固定输入生成检查；这些都不是Source/C++性能结果：
+`formal_native_programs.build_source(programs, rounds, langc, helper, runtime, llvm_bin, env)` 是两种程序构建对象共用的Source O2构建入口。它只调用现有 `programs.render(R)`，在 `programs.out/r{R}/source-O2` 创建新目录；目录已存在即拒绝，不以R1缓存冒充R2。构建前用 `run_native.build_tree_info` 要求Release CLI实际嵌入的helper/runtime/clang/ld与传入路径一致。命令顺序沿用准备脚本：`langc check`、`langc build --backend native --opt 2`、helper的`--out-object/--out-llvm/--out-llvm-before/--out-native`；helper对象必须与CLI `program.o`逐字节一致，前后IR均由`opt -passes=verify`验证。Source ELF用`common.checked_elf`、`llvm-readelf -l/-d`和`llvm-nm -u`检查无INTERP、无NEEDED、无未解析强符号；Mandelbrot/matmul只调用各自生成器已有的`float_policy`/`float_flags`检查实际Source IR。`build.json`保存源码/manifest/对象/ELF/Native IR/LLVM/全部命令/失败及langc、helper、runtime、LLVM工具和构建元数据的前后SHA，并固定`actual_work_review=pending`、`formal_timing=false`。它不执行程序，不替代核心完成、最终冻结、R/2R工作审读或闲置机器要求。
+
+API检查只用旧冻结`build/native-perf-7917`（7917f70；派单所称391/7917旧版本）对heap 65536/R1构建一次，不运行程序，不编译其他15格或百万/千万AST，结果不是最终产品或性能结论。检查记录在 `checks/formal-native-program-artifacts-20261110/results.json`。
+
+正式校准和采样未启动。13项采样自检使用合成时间，4项排序固定输入生成检查，4项五算法固定输入生成检查，另有6项Source构建自检；这些都不是Source/C++性能结果：
 
 ```sh
 python3.12 -B -m unittest discover -s tests/performance -p 'test_formal*.py' -v
