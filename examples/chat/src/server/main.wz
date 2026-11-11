@@ -1,0 +1,224 @@
+package server;
+import "app/protocol" as wire;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/option" as option;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/time" as time;
+import "std/vec" as vec;
+
+struct Client {
+    socket net.Socket;
+    active bool;
+    named bool;
+    closing bool;
+    deadline_ms i64;
+    name string;
+    input Vec[u8];
+    output Vec[u8];
+}
+func broadcast(clients Vec[Client], message string) {
+    let departed = vec.empty[string]();
+    for var index usize = 0; index < vec.len(clients); index += 1 {
+        let client = clients[index];
+        if client.active && client.named && !client.closing {
+            if !wire.flush(client.socket,client.output) || !wire.queue(client.output,message) ||
+               !wire.flush(client.socket,client.output) {
+                disconnect(clients,index,false);
+                vec.push(departed,client.name);
+            }
+        }
+    }
+    // Offer this message to every peer before announcing failed connections.
+    for name in departed { broadcast(clients,"* "+name+" left"); }
+}
+func milliseconds() i64 throws os.Error {
+    let now = time.monotonic();
+    return now.seconds*1000+now.nanoseconds/1000000;
+}
+func finish(clients Vec[Client], index usize) {
+    var client = clients[index];
+    if vec.len(client.output) == 0 { disconnect(clients,index,true); return; }
+    try { client.deadline_ms = milliseconds()+2000; }
+    catch error os.Error { disconnect(clients,index,true); return; }
+    client.closing = true;
+    clients[index] = client;
+}
+func disconnect(clients Vec[Client], index usize, announce bool) {
+    var client = clients[index];
+    if !client.active { return; }
+    client.active = false;
+    clients[index] = client;
+    wire.close(client.socket);
+    vec.clear(client.input);
+    vec.clear(client.output);
+    if announce && client.named { broadcast(clients,"* "+client.name+" left"); }
+}
+func reject(clients Vec[Client], index usize, reason string) {
+    try { net.send_all(clients[index].socket,text.bytes("ERROR "+reason+"\n"),net.MSG_DONTWAIT); }
+    catch error os.Error {}
+    disconnect(clients,index,true);
+}
+func line(clients Vec[Client], index usize, value string) {
+    var client = clients[index];
+    if !client.named {
+        if !wire.valid_name(value) { reject(clients,index,"invalid nickname"); return; }
+        for var other usize = 0; other < vec.len(clients); other += 1 {
+            let peer = clients[other];
+            if peer.active && peer.named && peer.name == value {
+                reject(clients,index,"nickname already in use"); return;
+            }
+        }
+        client.named = true;
+        client.name = value;
+        clients[index] = client;
+        broadcast(clients,"* "+value+" joined");
+        return;
+    }
+    if value == "/quit" { finish(clients,index); return; }
+    if value == "" { return; }
+    if text.byte_len(value) > wire.MAX_LINE || !wire.valid_message(value) {
+        reject(clients,index,"invalid or oversized message"); return;
+    }
+    broadcast(clients,"["+client.name+"] "+value);
+}
+func receive(clients Vec[Client], index usize, buffer Vec[u8]) {
+    for var batch i32 = 0; batch < 4; batch += 1 {
+        if !clients[index].active || clients[index].closing { return; }
+        var count usize = 0;
+        try { count = net.recv(clients[index].socket,buffer,vec.len(buffer),net.MSG_DONTWAIT); }
+        catch error os.Error {
+            if wire.would_block(error) { return; }
+            if wire.interrupted(error) { continue; }
+            disconnect(clients,index,true); return;
+        }
+        if count == 0 { finish(clients,index); return; }
+        for var offset usize = 0; offset < count; offset += 1 {
+            try {
+                switch wire.feed(clients[index].input,buffer[offset]) {
+                    case option.Option.Some(value): line(clients,index,value);
+                    case option.Option.None: {}
+                }
+            } catch error os.Error { reject(clients,index,"invalid or oversized frame"); return; }
+            if !clients[index].active || clients[index].closing { return; }
+        }
+    }
+}
+func retry_accept(error os.Error) bool {
+    // Linux accept4 may report a queued peer's error without losing the listener.
+    let code = wire.error_code(error);
+    return code == 103 || code == 100 || code == 71 || code == 92 || code == 112 ||
+           code == 64 || code == 113 || code == 95 || code == 101;
+}
+func accept_clients(listener net.Socket, clients Vec[Client]) throws os.Error {
+    for var batch i32 = 0; batch < 16; batch += 1 {
+        try {
+            let accepted = net.accept(listener,u32(net.SOCK_NONBLOCK|net.SOCK_CLOEXEC));
+            var index usize = 0;
+            for index < vec.len(clients) && clients[index].active { index += 1; }
+            if index == wire.MAX_CLIENTS {
+                try { net.send_all(accepted.socket,text.bytes("ERROR server full\n"),net.MSG_DONTWAIT); }
+                catch error os.Error {}
+                wire.close(accepted.socket);
+                continue;
+            }
+            let client = Client(socket:accepted.socket,active:true,named:false,closing:false,deadline_ms:0,name:"",
+                input:vec.empty[u8](),output:vec.empty[u8]());
+            if index == vec.len(clients) { vec.push(clients,client); }
+            else { clients[index] = client; }
+        } catch error os.Error {
+            if wire.would_block(error) { return; }
+            if wire.interrupted(error) || retry_accept(error) { continue; }
+            throw error;
+        }
+    }
+}
+func run(address string, port u16) throws os.Error {
+    var family = net.AF_INET;
+    if text.contains(address,":") { family = net.AF_INET6; }
+    let listener = net.socket(family,net.SOCK_STREAM|net.SOCK_NONBLOCK|net.SOCK_CLOEXEC,0);
+    defer { wire.close(listener); }
+    net.setsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+    net.bind(listener,net.ip(address,port));
+    net.listen(listener,64);
+    let clients = vec.empty[Client]();
+    defer {
+        for client in clients { if client.active { wire.close(client.socket); } }
+    }
+    let bound = net.getsockname(listener);
+    io.println("LISTENING "+net.inet_ntop(bound)+" "+strconv.format_u64(u64(bound.port)));
+    let buffer = vec.make[u8](4096,0);
+    for true {
+        let count = vec.len(clients);
+        let now = milliseconds();
+        var timeout_ms i32 = -1;
+        for var index usize = 0; index < count; index += 1 {
+            let client = clients[index];
+            if client.active && client.closing {
+                if vec.len(client.output) == 0 || now >= client.deadline_ms { disconnect(clients,index,true); }
+                else { timeout_ms = 100; }
+            }
+        }
+        let rows = vec.empty[net.PollFd]();
+        vec.push(rows,net.PollFd(fd:net.fd(listener),events:net.POLLIN,revents:0));
+        for var index usize = 0; index < count; index += 1 {
+            let client = clients[index];
+            var descriptor i32 = -1;
+            var events i16 = 0;
+            if client.active {
+                descriptor = net.fd(client.socket);
+                if !client.closing { events = net.POLLIN; }
+                if vec.len(client.output) != 0 { events |= net.POLLOUT; }
+            }
+            vec.push(rows,net.PollFd(fd:descriptor,events:events,revents:0));
+        }
+        try { let ready = net.poll(rows,timeout_ms); }
+        catch error os.Error { if wire.interrupted(error) { continue; } throw error; }
+        if (rows[0].revents & (net.POLLERR|net.POLLHUP|net.POLLNVAL)) != 0 {
+            throw os.Error.System(5,0);
+        }
+        if (rows[0].revents & net.POLLIN) != 0 { accept_clients(listener,clients); }
+        for var index usize = 0; index < count; index += 1 {
+            if !clients[index].active { continue; }
+            let events = rows[index+1].revents;
+            if (events & net.POLLNVAL) != 0 { disconnect(clients,index,true); continue; }
+            // HUP may accompany unread bytes. Drain them before observing EOF.
+            if !clients[index].closing && (events & (net.POLLIN|net.POLLHUP|net.POLLERR)) != 0 {
+                receive(clients,index,buffer);
+            }
+            if !clients[index].active { continue; }
+            if (events & net.POLLERR) != 0 {
+                let error = net.getsockopt_int(clients[index].socket,net.SOL_SOCKET,net.SO_ERROR);
+                if error != 0 { disconnect(clients,index,true); continue; }
+            }
+            if (events & net.POLLOUT) != 0 {
+                if !wire.flush(clients[index].socket,clients[index].output) { disconnect(clients,index,true); }
+            }
+            if clients[index].active && clients[index].closing && vec.len(clients[index].output) == 0 {
+                disconnect(clients,index,true);
+            }
+        }
+    }
+}
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) == 2 && (arguments[1] == "--help" || arguments[1] == "-h") {
+        io.println("usage: chat-server [IP] [PORT] (default 127.0.0.1 9000; PORT 0 chooses a free port)");
+        return 0;
+    }
+    if vec.len(arguments) > 3 { io.eprintln("usage: chat-server [IP] [PORT]"); return 2; }
+    var address = "127.0.0.1";
+    var port u16 = 9000;
+    if vec.len(arguments) > 1 { address = arguments[1]; }
+    try {
+        if vec.len(arguments) > 2 { port = wire.port(arguments[2]); }
+        run(address,port);
+    } catch error os.Error {
+        io.eprintln("chat-server: error "+strconv.format_i64(i64(wire.error_code(error))));
+        return 1;
+    }
+    return 0;
+}

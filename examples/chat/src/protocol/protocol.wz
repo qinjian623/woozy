@@ -1,0 +1,89 @@
+package protocol;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub const MAX_LINE usize = 16384;
+pub const MAX_FRAME usize = 16640;
+pub const MAX_PENDING usize = 65536;
+pub const MAX_CLIENTS usize = 64;
+
+pub func port(value string) u16 throws os.Error {
+    try {
+        let number = strconv.parse_u64(value);
+        if number > 65535 { throw os.Error.System(22,0); }
+        return u16(number);
+    } catch error strconv.Error { throw os.Error.System(22,0); }
+}
+pub func error_code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(code,completed): return code;
+        case os.Error.WouldBlock(code,completed): return code;
+        case os.Error.System(code,completed): return code;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+pub func interrupted(error os.Error) bool { return error_code(error) == 4; }
+pub func would_block(error os.Error) bool { return error_code(error) == 11; }
+pub func close(socket net.Socket) {
+    try { net.close(socket); } catch error os.Error {}
+}
+pub func valid_message(value string) bool {
+    if text.len(value) == 0 { return false; }
+    // Strings are valid UTF-8; byte scanning avoids repeated codepoint lookups.
+    let bytes = text.bytes(value);
+    for var index usize = 0; index < vec.len(bytes); index += 1 {
+        let byte = bytes[index];
+        if byte < 32 || byte == 127 { return false; }
+        if byte == 194 && index+1 < vec.len(bytes) && bytes[index+1] >= 128 && bytes[index+1] <= 159 {
+            return false;
+        }
+    }
+    return true;
+}
+pub func valid_name(value string) bool {
+    if text.len(value) > 32 || text.trim(value) != value { return false; }
+    return valid_message(value);
+}
+// The same byte buffer is kept across reads; TCP packets do not delimit lines.
+pub func feed(buffer Vec[u8], byte u8) option.Option[string] throws os.Error {
+    if byte == 10 {
+        var line = io.decode(buffer);
+        vec.clear(buffer);
+        let length = text.len(line);
+        if length != 0 && line[length-1] == 13 { line = line[:length-1]; }
+        return option.Option[string].Some(line);
+    }
+    if vec.len(buffer) >= MAX_FRAME { throw os.Error.System(90,0); }
+    vec.push(buffer,byte);
+    return option.Option[string].None;
+}
+pub func queue(pending Vec[u8], line string) bool {
+    let bytes = text.bytes(line+"\n");
+    if vec.len(bytes) > MAX_PENDING || vec.len(pending) > MAX_PENDING-vec.len(bytes) { return false; }
+    for byte in bytes { vec.push(pending,byte); }
+    return true;
+}
+pub func flush(socket net.Socket, pending Vec[u8]) bool {
+    try {
+        net.send_all(socket,pending,net.MSG_DONTWAIT);
+        vec.clear(pending);
+        return true;
+    } catch error os.Error {
+        switch error {
+            case os.Error.WouldBlock(code,completed): {
+                if completed != 0 {
+                    let remaining = pending[completed:];
+                    vec.clear(pending);
+                    for byte in remaining { vec.push(pending,byte); }
+                }
+                return true;
+            }
+            default: return false;
+        }
+    }
+}

@@ -1,0 +1,479 @@
+package client;
+
+import "app/protocol" as wire;
+import "std/io" as io;
+import "std/net" as net;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/time" as time;
+import "std/vec" as vec;
+
+const HELP string = `Usage: chat-client [IP] [PORT] [NICKNAME]
+
+Connect to a Woozy chat server over TCP.
+Defaults: IP 127.0.0.1, PORT 9000, NICKNAME guest.
+Lines from stdin are sent as UTF-8 chat messages; /quit disconnects.
+Use --help to show this text.
+`;
+const CONNECT_TIMEOUT_MS i64 = 5000;
+const DRAIN_TIMEOUT_MS i64 = 2000;
+const READ_BUFFER usize = 4096;
+
+func notice(message string) {
+    try { io.eprintln(message); }
+    catch error os.Error {}
+}
+
+func reject(message string) {
+    try {
+        io.eprintln("chat-client: " + message);
+        io.eprint(HELP);
+    } catch error os.Error {}
+}
+
+func describe(value os.Error) string {
+    let code = wire.error_code(value);
+    if code == 111 { return "connection refused"; }
+    if code == 110 { return "connection timed out"; }
+    if code == 101 { return "network is unreachable"; }
+    if code == 113 { return "no route to host"; }
+    if code == 104 { return "connection reset by peer"; }
+    if code == 32 { return "broken pipe"; }
+    if code == 71 { return "server protocol error"; }
+    if code == 84 { return "invalid UTF-8 from server"; }
+    if code == 90 { return "server frame exceeds the protocol limit"; }
+    return "system error " + strconv.format_i64(i64(code));
+}
+
+func elapsed_ms(start os.Timespec, end os.Timespec) i64 {
+    let seconds = end.seconds - start.seconds;
+    let nanoseconds = end.nanoseconds - start.nanoseconds;
+    return seconds * 1000 + nanoseconds / 1000000;
+}
+
+func handle_server_line(line string) throws os.Error {
+    if text.len(line) != 0 && !wire.valid_message(line) {
+        notice("chat-client: server line contains control characters");
+        throw os.Error.System(71, 0);
+    }
+    if text.starts_with(line, "ERROR ") {
+        var reason = line[6:];
+        if text.len(reason) == 0 { reason = "server rejected the connection"; }
+        notice("chat-client: server rejected the connection: " + reason);
+        throw os.Error.System(71, 0);
+    }
+    io.println(line);
+}
+
+func connect(host string, port u16) net.Socket throws os.Error {
+    var family = net.AF_INET;
+    if text.contains(host, ":") { family = net.AF_INET6; }
+    let address = net.ip(host, port);
+    let started = time.monotonic();
+    let socket = net.socket(
+        family,
+        net.SOCK_STREAM | net.SOCK_NONBLOCK | net.SOCK_CLOEXEC,
+        0);
+    var handed_off = false;
+    defer { if !handed_off { wire.close(socket); } }
+
+    var in_progress = false;
+    try { net.connect(socket, address); }
+    catch error os.Error {
+        let code = wire.error_code(error);
+        if code == 115 || wire.would_block(error) || wire.interrupted(error) {
+            in_progress = true;
+        } else { throw error; }
+    }
+    if !in_progress {
+        handed_off = true;
+        return socket;
+    }
+
+    for true {
+        let remaining = CONNECT_TIMEOUT_MS - elapsed_ms(started, time.monotonic());
+        if remaining <= 0 { throw os.Error.System(110, 0); }
+        let rows = [net.PollFd(
+            fd: net.fd(socket),
+            events: net.POLLOUT,
+            revents: 0)];
+        var ready i32 = 0;
+        try { ready = net.poll(rows, i32(remaining)); }
+        catch error os.Error {
+            if wire.interrupted(error) { continue; }
+            throw error;
+        }
+        if ready == 0 { throw os.Error.System(110, 0); }
+        let socket_error = net.getsockopt_int(socket, net.SOL_SOCKET, net.SO_ERROR);
+        if socket_error != 0 { throw os.Error.System(socket_error, 0); }
+        handed_off = true;
+        return socket;
+    }
+}
+
+func flush_bounded(socket net.Socket, pending Vec[u8], timeout_ms i64) throws os.Error {
+    if vec.len(pending) == 0 { return; }
+    let started = time.monotonic();
+    for true {
+        if !wire.flush(socket, pending) { throw os.Error.System(32, 0); }
+        if vec.len(pending) == 0 { return; }
+        let remaining = timeout_ms - elapsed_ms(started, time.monotonic());
+        if remaining <= 0 { throw os.Error.System(110, 0); }
+        let rows = [net.PollFd(
+            fd: net.fd(socket),
+            events: net.POLLOUT,
+            revents: 0)];
+        var ready i32 = 0;
+        try { ready = net.poll(rows, i32(remaining)); }
+        catch error os.Error {
+            if wire.interrupted(error) { continue; }
+            throw error;
+        }
+        if ready == 0 { throw os.Error.System(110, 0); }
+        if (rows[0].revents & net.POLLNVAL) != 0 {
+            throw os.Error.System(9, 0);
+        }
+    }
+}
+
+func drain(socket net.Socket, line_buffer Vec[u8], timeout_ms i64) throws os.Error {
+    let started = time.monotonic();
+    let buffer = vec.make[u8](READ_BUFFER, 0);
+    for true {
+        let remaining = timeout_ms - elapsed_ms(started, time.monotonic());
+        if remaining <= 0 { return; }
+        let rows = [net.PollFd(
+            fd: net.fd(socket),
+            events: net.POLLIN,
+            revents: 0)];
+        var ready i32 = 0;
+        try { ready = net.poll(rows, i32(remaining)); }
+        catch error os.Error {
+            if wire.interrupted(error) { continue; }
+            throw error;
+        }
+        if ready == 0 { return; }
+        if (rows[0].revents & net.POLLNVAL) != 0 { return; }
+        for true {
+            var count usize = 0;
+            try { count = net.recv(socket, buffer, vec.len(buffer), 0); }
+            catch error os.Error {
+                if wire.interrupted(error) { continue; }
+                if wire.would_block(error) { break; }
+                let code = wire.error_code(error);
+                if code == 32 || code == 104 || code == 107 { return; }
+                throw error;
+            }
+            if count == 0 { return; }
+            for var index usize = 0; index < count; index += 1 {
+                switch wire.feed(line_buffer, buffer[index]) {
+                    case option.Option.Some(line): { handle_server_line(line); }
+                    case option.Option.None: {}
+                }
+            }
+            if elapsed_ms(started, time.monotonic()) >= timeout_ms { return; }
+        }
+    }
+}
+
+func submit(line string, pending Vec[u8]) i32 {
+    if text.len(line) == 0 { return 0; }
+    if line == "/quit" {
+        if !wire.queue(pending, line) {
+            notice("chat-client: outbound queue is full");
+            return 2;
+        }
+        return 1;
+    }
+    if text.byte_len(line) > wire.MAX_LINE {
+        notice("chat-client: input line exceeds 16384 bytes");
+        return 0;
+    }
+    if !wire.valid_message(line) {
+        notice("chat-client: input contains control characters");
+        return 0;
+    }
+    if !wire.queue(pending, line) {
+        notice("chat-client: outbound queue is full");
+        return 2;
+    }
+    return 0;
+}
+
+func run(host string, port u16, nickname string) i32 throws os.Error {
+    let socket = connect(host, port);
+    var closed = false;
+    defer { if !closed { wire.close(socket); } }
+    notice("connected to " + host + ":" +
+        strconv.format_u64(u64(port)) + " as " + nickname);
+
+    let pending = vec.empty[u8]();
+    if !wire.queue(pending, nickname) {
+        notice("chat-client: nickname does not fit the outbound queue");
+        closed = true;
+        wire.close(socket);
+        return 1;
+    }
+    if !wire.flush(socket, pending) {
+        notice("chat-client: connection lost while sending nickname");
+        closed = true;
+        wire.close(socket);
+        return 1;
+    }
+
+    let input = os.stdin();
+    let input_buffer = vec.empty[u8]();
+    let socket_buffer = vec.empty[u8]();
+    let read_buffer = vec.make[u8](READ_BUFFER, 0);
+    var stdin_open = true;
+    var input_discard = false;
+
+    for true {
+        let rows = vec.empty[net.PollFd]();
+        if stdin_open {
+            vec.push(rows, net.PollFd(
+                fd: os.fd(input),
+                events: net.POLLIN,
+                revents: 0));
+        }
+        var socket_events = net.POLLIN;
+        if vec.len(pending) != 0 { socket_events = socket_events | net.POLLOUT; }
+        vec.push(rows, net.PollFd(
+            fd: net.fd(socket),
+            events: socket_events,
+            revents: 0));
+        let socket_index = vec.len(rows) - 1;
+
+        var ready i32 = 0;
+        try { ready = net.poll(rows, -1); }
+        catch error os.Error {
+            if wire.interrupted(error) { continue; }
+            throw error;
+        }
+        if ready == 0 { continue; }
+
+        if vec.len(pending) != 0 {
+            if !wire.flush(socket, pending) {
+                notice("chat-client: connection lost while sending");
+                return 1;
+            }
+        }
+
+        var closing = false;
+
+        if stdin_open {
+            let stdin_events = rows[0].revents;
+            if (stdin_events & net.POLLNVAL) != 0 {
+                stdin_open = false;
+                closing = true;
+            } else if (stdin_events & (net.POLLIN | net.POLLHUP)) != 0 {
+                var count usize = 0;
+                var attempted = false;
+                var eof = false;
+                for !attempted {
+                    try {
+                        count = os.read(input, read_buffer, vec.len(read_buffer));
+                        attempted = true;
+                        if count == 0 { eof = true; }
+                    } catch error os.Error {
+                        if wire.interrupted(error) { continue; }
+                        if wire.would_block(error) { attempted = true; }
+                        else { throw error; }
+                    }
+                }
+
+                if eof {
+                    stdin_open = false;
+                    closing = true;
+                    if input_discard {
+                        notice("chat-client: input line exceeds the protocol frame limit");
+                    } else if vec.len(input_buffer) != 0 {
+                        var final_line = "";
+                        var valid = false;
+                        try {
+                            final_line = io.decode(input_buffer);
+                            valid = true;
+                        } catch error os.Error {
+                            notice("chat-client: input is not valid UTF-8");
+                        }
+                        if valid {
+                            let action = submit(final_line, pending);
+                            if action == 2 { return 1; }
+                        }
+                    }
+                    vec.clear(input_buffer);
+                    input_discard = false;
+                } else if count != 0 {
+                    for var index usize = 0; index < count; index += 1 {
+                        let byte = read_buffer[index];
+                        if input_discard {
+                            if byte == 10 { input_discard = false; }
+                            continue;
+                        }
+                        try {
+                            switch wire.feed(input_buffer, byte) {
+                                case option.Option.Some(line): {
+                                    let action = submit(line, pending);
+                                    if action == 2 { return 1; }
+                                    if action == 1 {
+                                        closing = true;
+                                        stdin_open = false;
+                                    }
+                                }
+                                case option.Option.None: {}
+                            }
+                        } catch error os.Error {
+                            let code = wire.error_code(error);
+                            if code == 90 {
+                                vec.clear(input_buffer);
+                                input_discard = true;
+                                notice("chat-client: input line exceeds the protocol frame limit");
+                            } else if code == 84 {
+                                vec.clear(input_buffer);
+                                notice("chat-client: input is not valid UTF-8");
+                            } else { throw error; }
+                        }
+                        if closing { break; }
+                    }
+                }
+            }
+        }
+
+        if vec.len(pending) != 0 {
+            if !wire.flush(socket, pending) {
+                notice("chat-client: connection lost while sending");
+                return 1;
+            }
+        }
+        if closing { break; }
+
+        let socket_readiness = rows[socket_index].revents;
+        if (socket_readiness & net.POLLNVAL) != 0 {
+            notice("chat-client: socket became invalid");
+            return 1;
+        }
+        if (socket_readiness & (net.POLLIN | net.POLLHUP | net.POLLERR)) != 0 {
+            var open = true;
+            var chunks i32 = 0;
+            for open {
+                if chunks >= 4 { break; }
+                var count usize = 0;
+                try { count = net.recv(socket, read_buffer, vec.len(read_buffer), 0); }
+                catch error os.Error {
+                    if wire.interrupted(error) { continue; }
+                    if wire.would_block(error) { break; }
+                    let code = wire.error_code(error);
+                    if code == 32 || code == 104 || code == 107 {
+                        open = false;
+                        break;
+                    }
+                    throw error;
+                }
+                if count == 0 {
+                    open = false;
+                    break;
+                }
+                chunks += 1;
+                for var index usize = 0; index < count; index += 1 {
+                    switch wire.feed(socket_buffer, read_buffer[index]) {
+                        case option.Option.Some(line): { handle_server_line(line); }
+                        case option.Option.None: {}
+                    }
+                }
+            }
+            if !open {
+                notice("chat-client: server disconnected");
+                return 0;
+            }
+        }
+    }
+
+    try { flush_bounded(socket, pending, DRAIN_TIMEOUT_MS); }
+    catch error os.Error {
+        let code = wire.error_code(error);
+        if code == 32 || code == 104 || code == 107 {
+            notice("chat-client: server disconnected");
+            closed = true;
+            wire.close(socket);
+            return 0;
+        }
+        throw error;
+    }
+
+    var half_closed = true;
+    try { net.shutdown(socket, net.SHUT_WR); }
+    catch error os.Error {
+        let code = wire.error_code(error);
+        if code == 32 || code == 104 || code == 107 {
+            closed = true;
+            wire.close(socket);
+            return 0;
+        }
+        half_closed = false;
+        throw error;
+    }
+    if half_closed { drain(socket, socket_buffer, DRAIN_TIMEOUT_MS); }
+
+    closed = true;
+    wire.close(socket);
+    return 0;
+}
+
+func main() i32 {
+    var arguments = vec.empty[string]();
+    try { arguments = process.args(); }
+    catch error os.Error {
+        notice("chat-client: cannot read command-line arguments");
+        return 1;
+    }
+
+    if vec.len(arguments) == 2 && arguments[1] == "--help" {
+        try { io.print(HELP); }
+        catch error os.Error { return 1; }
+        return 0;
+    }
+    if vec.len(arguments) > 4 {
+        reject("too many arguments");
+        return 2;
+    }
+
+    var host = "127.0.0.1";
+    var port u16 = 9000;
+    var nickname = "guest";
+    if vec.len(arguments) >= 2 { host = arguments[1]; }
+    if vec.len(arguments) >= 3 {
+        try { port = wire.port(arguments[2]); }
+        catch error os.Error {
+            reject("invalid port: " + arguments[2]);
+            return 2;
+        }
+        if port == 0 {
+            reject("port must be between 1 and 65535");
+            return 2;
+        }
+    }
+    if vec.len(arguments) >= 4 {
+        nickname = arguments[3];
+        if !wire.valid_name(nickname) {
+            reject("invalid nickname (1-32 visible characters, no surrounding whitespace)");
+            return 2;
+        }
+    }
+
+    var family = net.AF_INET;
+    if text.contains(host, ":") { family = net.AF_INET6; }
+    try { let address = net.inet_pton(family, host); }
+    catch error os.Error {
+        reject("invalid numeric IP address: " + host);
+        return 2;
+    }
+
+    try { return run(host, port, nickname); }
+    catch error os.Error {
+        notice("chat-client: " + describe(error));
+        return 1;
+    }
+}

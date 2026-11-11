@@ -349,3 +349,12 @@ if(LANG_PYTHON312)
     --python ${LANG_PYTHON312} --out ${CMAKE_CURRENT_BINARY_DIR}/map-budget-results --native)
   set_tests_properties(generics.map_budget PROPERTIES TIMEOUT 300)
 endif()
+
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.chat COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/native/run_chat.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/chat-results
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld
+    --runtime $<TARGET_FILE:lang_native_runtime>)
+  set_tests_properties(native.chat PROPERTIES TIMEOUT 300)
+endif()
