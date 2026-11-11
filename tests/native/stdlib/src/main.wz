@@ -1,0 +1,202 @@
+package app;
+import "std/os" as os;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/path" as path;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/time" as time;
+import "std/random" as random;
+import "std/math" as math;
+import "std/net" as net;
+import "std/thread" as thread;
+func numbers() bool {
+    try {
+        if strconv.parse_i64("-9223372036854775808") != -9223372036854775808 { return false; }
+        if strconv.parse_u64("18446744073709551615") != 18446744073709551615 { return false; }
+        if strconv.parse_f64("1.5") != 1.5 || strconv.parse_f32("0.125") != 0.125 { return false; }
+        if strconv.format_i64(-42) != "-42" || strconv.format_u64(42) != "42" ||
+           strconv.format_f32(1.5) != "1.5" || strconv.format_f64(1e21) != "1e+21" { return false; }
+    } catch error strconv.Error { return false; }
+    var rejected = false;
+    try { let bad = strconv.parse_f64("1e999"); }
+    catch error strconv.Error { switch error { case strconv.Error.OutOfRange: rejected=true; default: {} } }
+    if !rejected { return false; }
+    return true;
+}
+func dates() bool {
+    try {
+        let epoch = time.from_timestamp(os.Timespec(seconds:0,nanoseconds:0));
+        if time.format_rfc3339(epoch) != "1970-01-01T00:00:00Z" || time.weekday(epoch) != 4 { return false; }
+        let earlier = time.from_timestamp(os.Timespec(seconds:-1,nanoseconds:123000000));
+        if time.format_rfc3339(earlier) != "1969-12-31T23:59:59.123Z" { return false; }
+        if time.parse_rfc3339("1970-01-01T08:00:00+08:00").seconds != 0 { return false; }
+        let minimum = os.Timespec(seconds:-9223372036854775808,nanoseconds:999999999);
+        let maximum = os.Timespec(seconds:9223372036854775807,nanoseconds:0);
+        if time.to_timestamp(time.from_timestamp(minimum)).seconds != minimum.seconds ||
+           time.to_timestamp(time.from_timestamp(maximum)).seconds != maximum.seconds { return false; }
+        if !time.is_leap(2000) || time.is_leap(1900) { return false; }
+        let whole_minimum = os.Timespec(seconds:minimum.seconds,nanoseconds:0);
+        let ends = [maximum,whole_minimum,whole_minimum,
+            os.Timespec(seconds:5,nanoseconds:250000000),os.Timespec(seconds:3,nanoseconds:750000000)];
+        let starts = [os.Timespec(seconds:-1,nanoseconds:1),
+            os.Timespec(seconds:minimum.seconds,nanoseconds:1),os.Timespec(seconds:-1,nanoseconds:1),
+            os.Timespec(seconds:3,nanoseconds:750000000),os.Timespec(seconds:5,nanoseconds:250000000)];
+        let expected = [os.Timespec(seconds:maximum.seconds,nanoseconds:999999999),
+            os.Timespec(seconds:-1,nanoseconds:999999999),minimum,
+            os.Timespec(seconds:1,nanoseconds:500000000),os.Timespec(seconds:-2,nanoseconds:500000000)];
+        for var index usize = 0; index < vec.len(ends); index += 1 {
+            let actual = time.difference(ends[index],starts[index]);
+            if actual.seconds != expected[index].seconds || actual.nanoseconds != expected[index].nanoseconds { return false; }
+        }
+        let overflow_ends = [whole_minimum,maximum,whole_minimum];
+        let overflow_starts = [os.Timespec(seconds:0,nanoseconds:1),
+            os.Timespec(seconds:-1,nanoseconds:0),os.Timespec(seconds:maximum.seconds,nanoseconds:1)];
+        for var index usize = 0; index < vec.len(overflow_ends); index += 1 {
+            var overflow = false;
+            try { let value = time.difference(overflow_ends[index],overflow_starts[index]); }
+            catch error time.Error {
+                switch error { case time.Error.OutOfRange: overflow=true; default: return false; }
+            }
+            if !overflow { return false; }
+        }
+        for nanoseconds in [i64(-1),i64(1000000000)] {
+            let invalid = os.Timespec(seconds:0,nanoseconds:nanoseconds);
+            let zero = os.Timespec(seconds:0,nanoseconds:0);
+            var invalid_end = false;
+            try { let value = time.difference(invalid,zero); }
+            catch error time.Error {
+                switch error { case time.Error.InvalidDate: invalid_end=true; default: return false; }
+            }
+            var invalid_start = false;
+            try { let value = time.difference(zero,invalid); }
+            catch error time.Error {
+                switch error { case time.Error.InvalidDate: invalid_start=true; default: return false; }
+            }
+            if !invalid_end || !invalid_start { return false; }
+        }
+    } catch error time.Error { return false; }
+    var rejected = false;
+    try { let invalid = time.parse_rfc3339("2023-02-29T12:00:00Z"); }
+    catch error time.Error { rejected = true; }
+    return rejected;
+}
+func server(listener net.Socket) i64 {
+    try {
+        let accepted = net.accept(listener,0);
+        let value = io.read_text(net.file(accepted.socket));
+        if value != "ping中😀" { net.close(accepted.socket); return 1; }
+        net.send_all(accepted.socket,text.bytes(value+"!"),0);
+        net.close(accepted.socket);
+        return 0;
+    } catch error os.Error { return 2; }
+}
+func networking() bool throws os.Error {
+    let resolved = net.getaddrinfo("localhost",80,net.AF_UNSPEC);
+    if vec.len(resolved) != 2 || resolved[0].port != 80 { return false; }
+    let numeric = net.getaddrinfo("127.0.0.1",443,net.AF_INET);
+    if vec.len(numeric) != 1 || net.inet_ntop(numeric[0]) != "127.0.0.1" { return false; }
+    var invalid_host = false;
+    try { let result = net.getaddrinfo("bad\0host",0,net.AF_UNSPEC); }
+    catch error os.Error { invalid_host = true; }
+    if !invalid_host { return false; }
+    if net.inet_ntop(net.inet_pton(net.AF_INET6,"2001:0db8::1")) != "2001:db8::1" { return false; }
+    let listener = net.socket(net.AF_INET,net.SOCK_STREAM|net.SOCK_CLOEXEC,0);
+    net.setsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+    if net.getsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR) != 1 { return false; }
+    net.bind(listener,net.ip("127.0.0.1",0));
+    net.listen(listener,4);
+    let address = net.getsockname(listener);
+    let worker = thread.spawn[net.Socket](server,listener);
+    let client = net.socket(net.AF_INET,net.SOCK_STREAM|net.SOCK_CLOEXEC,0);
+    net.connect(client,address);
+    net.send_all(client,text.bytes("ping中😀"),0);
+    net.shutdown(client,net.SHUT_WR);
+    if io.read_text(net.file(client)) != "ping中😀!" { return false; }
+    net.close(client);
+    if thread.join(worker) != 0 { return false; }
+    net.close(listener);
+    let receiver = net.socket(net.AF_INET,net.SOCK_DGRAM|net.SOCK_CLOEXEC,0);
+    net.bind(receiver,net.ip("127.0.0.1",0));
+    let sender = net.socket(net.AF_INET,net.SOCK_DGRAM|net.SOCK_CLOEXEC,0);
+    let empty = vec.empty[u8]();
+    if net.sendto(sender,empty,0,0,net.getsockname(receiver)) != 0 { return false; }
+    let buffer = vec.make[u8](8,0);
+    let datagram = net.recvfrom(receiver,buffer,8,0);
+    if datagram.count != 0 || datagram.address.port == 0 { return false; }
+    net.close(sender);
+    net.close(receiver);
+    let pair = net.socketpair(net.AF_UNIX,net.SOCK_STREAM|net.SOCK_CLOEXEC,0);
+    if net.send(pair.first,[42],1,0) != 1 { return false; }
+    let rows = [net.PollFd(fd:net.fd(pair.second),events:net.POLLIN,revents:0)];
+    if net.poll(rows,1000) != 1 || (rows[0].revents & net.POLLIN) == 0 { return false; }
+    if net.recv(pair.second,buffer,1,0) != 1 || buffer[0] != 42 { return false; }
+    net.close(pair.second);
+    var refused = false;
+    try { let count = net.send(pair.first,[1],1,0); }
+    catch error os.Error { refused = true; }
+    net.close(pair.first);
+    return refused;
+}
+func main() i32 throws os.Error {
+    if !numbers() { return 1; }
+    if !dates() { return 21; }
+    if !networking() { return 22; }
+    if math.sqrt(4.0) != 2.0 || math.sin(0.0) != 0.0 || !math.isnan(math.sqrt(-1.0)) ||
+       !math.isinf(math.log(0.0)) || math.frexp(8.0).exponent != 4 { return 23; }
+    let first_rng = random.seeded(42);
+    let second_rng = random.seeded(42);
+    for var index i32 = 0; index < 100; index += 1 {
+        if random.next_u64(first_rng) != random.next_u64(second_rng) { return 24; }
+        if random.below(first_rng,7) >= 7 || random.below(second_rng,7) >= 7 { return 25; }
+    }
+    let samples = random.bytes(8193);
+    if vec.len(samples) != 8193 { return 26; }
+    time.sleep_ms(1);
+    if text.trim("\u{3000}中😀\n") != "中😀" || text.len("e\u{301}") != 2 { return 2; }
+    if text.replace("a中a中","中","😀") != "a😀a😀" || text.repeat("中",3) != "中中中" { return 3; }
+    if text.ascii_lower("AB中") != "ab中" || text.ascii_upper("ab😀") != "AB😀" { return 4; }
+    if text.join(text.split("a,,中,",","),"|") != "a||中|" { return 5; }
+    if option.unwrap_or(text.find("中😀abc","abc"),99) != 2 { return 6; }
+    if path.clean("/a//b/../中/.") != "/a/中" || path.extension("x.wz") != ".wz" { return 7; }
+    let directory = "/tmp/woozy-stdlib-"+strconv.format_i64(i64(os.getpid()));
+    os.mkdir(directory,0o700);
+    let name = directory+"/中.wz";
+    fs.write_text(name,"hello中😀\n",0o600);
+    if fs.read_text(name) != "hello中😀\n" { return 8; }
+    if os.stat(name).size != 13 || !fs.is_file(os.stat(name)) { return 9; }
+    os.link(name,directory+"/hard");
+    var refused = false;
+    try { fs.copy_file(name,directory+"/hard",0o600); }
+    catch error os.Error { refused=true; }
+    if !refused || fs.read_text(name) != "hello中😀\n" { return 10; }
+    os.unlink(directory+"/hard");
+    os.symlink("中.wz",directory+"/link");
+    if os.readlink(directory+"/link") != "中.wz" || !fs.is_symlink(os.lstat(directory+"/link")) { return 11; }
+    os.unlink(directory+"/link");
+    let entries = fs.read_dir(directory);
+    if vec.len(entries) != 1 || fs.name_text(entries[0]) != "中.wz" { return 12; }
+    let file = os.open(name,os.O_RDONLY,0);
+    let input = io.reader(file);
+    switch io.read_line(input) { case option.Option.Some(line): if line != "hello中😀" { return 13; } case option.Option.None: return 14; }
+    if option.is_some(io.read_line(input)) { return 15; }
+    os.close(file);
+    let pair = os.pipe(u32(os.O_CLOEXEC));
+    let output = io.writer(pair.write_end);
+    io.write_text(output,"pipe\n");
+    io.flush(output);
+    os.close(pair.write_end);
+    if io.read_text(pair.read_end) != "pipe\n" { return 16; }
+    os.close(pair.read_end);
+    let clock = os.clock_gettime(os.CLOCK_MONOTONIC);
+    var remaining = os.Timespec(seconds:0,nanoseconds:0);
+    os.nanosleep(os.Timespec(seconds:0,nanoseconds:1000),inout remaining);
+    let entropy = vec.make[u8](16,0);
+    if os.getrandom(entropy,16,0) != 16 { return 17; }
+    os.unlink(name);
+    os.rmdir(directory);
+    io.println("stdlib: ok");
+    return 0;
+}

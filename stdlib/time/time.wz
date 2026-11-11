@@ -1,0 +1,161 @@
+package time;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+
+pub enum Error { InvalidDate; OutOfRange; }
+pub struct DateTime {
+    pub year i64; pub month i64; pub day i64;
+    pub hour i64; pub minute i64; pub second i64; pub nanoseconds i64;
+}
+pub func now() os.Timespec throws os.Error { return os.clock_gettime(os.CLOCK_REALTIME); }
+pub func monotonic() os.Timespec throws os.Error { return os.clock_gettime(os.CLOCK_MONOTONIC); }
+pub func sleep(duration os.Timespec) throws os.Error {
+    var request = duration;
+    var remaining = os.Timespec(seconds:0,nanoseconds:0);
+    for true {
+        try { os.nanosleep(request,inout remaining); return; }
+        catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): request = remaining;
+                default: throw error;
+            }
+        }
+    }
+}
+pub func sleep_ms(milliseconds i64) throws os.Error {
+    if milliseconds < 0 { throw os.Error.System(22,0); }
+    sleep(os.Timespec(seconds:milliseconds/1000,nanoseconds:(milliseconds%1000)*1000000));
+}
+pub func difference(end os.Timespec, start os.Timespec) os.Timespec throws Error {
+    if end.nanoseconds < 0 || end.nanoseconds >= 1000000000 ||
+       start.nanoseconds < 0 || start.nanoseconds >= 1000000000 { throw Error.InvalidDate; }
+    var end_seconds = end.seconds;
+    var start_seconds = start.seconds;
+    var nanoseconds = end.nanoseconds-start.nanoseconds;
+    if nanoseconds < 0 {
+        nanoseconds += 1000000000;
+        // Borrow before subtraction so a representable result does not overflow.
+        if end_seconds > -9223372036854775808 { end_seconds -= 1; }
+        else if start_seconds < 9223372036854775807 { start_seconds += 1; }
+        else { throw Error.OutOfRange; }
+    }
+    if (start_seconds > 0 && end_seconds < -9223372036854775808+start_seconds) ||
+       (start_seconds < 0 && end_seconds > 9223372036854775807+start_seconds) { throw Error.OutOfRange; }
+    return os.Timespec(seconds:end_seconds-start_seconds,nanoseconds:nanoseconds);
+}
+func floor_div(value i64, divisor i64) i64 {
+    let quotient = value/divisor;
+    if value%divisor < 0 { return quotient-1; }
+    return quotient;
+}
+func modulo(value i64, divisor i64) i64 {
+    let remainder = value%divisor;
+    if remainder < 0 { return remainder+divisor; }
+    return remainder;
+}
+pub func is_leap(year i64) bool { return year%4 == 0 && (year%100 != 0 || year%400 == 0); }
+pub func days_in_month(year i64, month i64) i64 {
+    if month == 2 { if is_leap(year) { return 29; } return 28; }
+    if month == 4 || month == 6 || month == 9 || month == 11 { return 30; }
+    if month >= 1 && month <= 12 { return 31; }
+    return 0;
+}
+func civil_days(value DateTime) i64 throws Error {
+    if value.year < -1000000000000 || value.year > 1000000000000 { throw Error.OutOfRange; }
+    if value.month < 1 || value.month > 12 || value.day < 1 ||
+       value.day > days_in_month(value.year,value.month) || value.hour < 0 || value.hour > 23 ||
+       value.minute < 0 || value.minute > 59 || value.second < 0 || value.second > 59 ||
+       value.nanoseconds < 0 || value.nanoseconds >= 1000000000 { throw Error.InvalidDate; }
+    var year = value.year;
+    if value.month <= 2 { year -= 1; }
+    let era = floor_div(year,400);
+    let year_of_era = year-era*400;
+    var month = value.month-3;
+    if value.month <= 2 { month = value.month+9; }
+    let day_of_year = (153*month+2)/5+value.day-1;
+    return era*146097+year_of_era*365+year_of_era/4-year_of_era/100+day_of_year-719468;
+}
+pub func to_timestamp(value DateTime) os.Timespec throws Error {
+    let days = civil_days(value);
+    let clock = value.hour*3600+value.minute*60+value.second;
+    if days < -106751991167301 || days > 106751991167300 ||
+       (days == -106751991167301 && clock < 30592) ||
+       (days == 106751991167300 && clock > 55807) { throw Error.OutOfRange; }
+    var seconds i64 = 0;
+    if days == -106751991167301 { seconds = (days+1)*86400+(clock-86400); }
+    else { seconds = days*86400+clock; }
+    return os.Timespec(seconds:seconds,nanoseconds:value.nanoseconds);
+}
+pub func from_timestamp(value os.Timespec) DateTime throws Error {
+    if value.nanoseconds < 0 || value.nanoseconds >= 1000000000 { throw Error.InvalidDate; }
+    let days = floor_div(value.seconds,86400);
+    let clock = modulo(value.seconds,86400);
+    let shifted = days+719468;
+    let era = floor_div(shifted,146097);
+    let day_of_era = shifted-era*146097;
+    let year_of_era = (day_of_era-day_of_era/1460+day_of_era/36524-day_of_era/146096)/365;
+    var year = year_of_era+era*400;
+    let day_of_year = day_of_era-(365*year_of_era+year_of_era/4-year_of_era/100);
+    let month_position = (5*day_of_year+2)/153;
+    let day = day_of_year-(153*month_position+2)/5+1;
+    var month = month_position+3;
+    if month_position >= 10 { month = month_position-9; }
+    if month <= 2 { year += 1; }
+    return DateTime(year:year,month:month,day:day,hour:clock/3600,
+        minute:(clock%3600)/60,second:clock%60,nanoseconds:value.nanoseconds);
+}
+// Sunday is 0; this uses the proleptic Gregorian calendar in UTC.
+pub func weekday(value DateTime) i64 throws Error { return modulo(civil_days(value)+4,7); }
+func padded(value i64, width usize) string {
+    let result = strconv.format_i64(value);
+    if text.len(result) >= width { return result; }
+    return text.repeat("0",width-text.len(result))+result;
+}
+pub func format_rfc3339(value DateTime) string throws Error {
+    let checked = civil_days(value);
+    if value.year < 0 || value.year > 9999 { throw Error.OutOfRange; }
+    var out = padded(value.year,4)+"-"+padded(value.month,2)+"-"+padded(value.day,2)+
+        "T"+padded(value.hour,2)+":"+padded(value.minute,2)+":"+padded(value.second,2);
+    if value.nanoseconds != 0 {
+        let fraction = padded(value.nanoseconds,9);
+        var end = text.len(fraction);
+        for end > 0 && fraction[end-1] == 48 { end -= 1; }
+        out += "."+fraction[:end];
+    }
+    return out+"Z";
+}
+func decimal(value string) i64 throws Error {
+    for rune in value { if rune < 48 || rune > 57 { throw Error.InvalidDate; } }
+    try { return strconv.parse_i64(value); }
+    catch error strconv.Error { throw Error.InvalidDate; }
+}
+pub func parse_rfc3339(value string) os.Timespec throws Error {
+    let length = text.len(value);
+    if length < 20 || value[4] != 45 || value[7] != 45 ||
+       (value[10] != 84 && value[10] != 116) || value[13] != 58 || value[16] != 58 { throw Error.InvalidDate; }
+    var nanoseconds i64 = 0;
+    var end usize = 19;
+    if value[end] == 46 {
+        end += 1;
+        let start = end;
+        for end < length && value[end] >= 48 && value[end] <= 57 { end += 1; }
+        if end == start || end-start > 9 { throw Error.InvalidDate; }
+        nanoseconds = decimal(value[start:end]);
+        for var index = end-start; index < 9; index += 1 { nanoseconds *= 10; }
+    }
+    var offset i64 = 0;
+    if end+1 == length && (value[end] == 90 || value[end] == 122) {}
+    else {
+        if end+6 != length || (value[end] != 43 && value[end] != 45) || value[end+3] != 58 { throw Error.InvalidDate; }
+        let hour = decimal(value[end+1:end+3]);
+        let minute = decimal(value[end+4:end+6]);
+        if hour > 23 || minute > 59 { throw Error.InvalidDate; }
+        offset = hour*3600+minute*60;
+        if value[end] == 45 { offset = -offset; }
+    }
+    let result = to_timestamp(DateTime(year:decimal(value[:4]),month:decimal(value[5:7]),
+        day:decimal(value[8:10]),hour:decimal(value[11:13]),minute:decimal(value[14:16]),
+        second:decimal(value[17:19]),nanoseconds:nanoseconds));
+    return os.Timespec(seconds:result.seconds-offset,nanoseconds:result.nanoseconds);
+}

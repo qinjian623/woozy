@@ -1,0 +1,56 @@
+package app;
+
+import "std/hash" as hash;
+import "std/map" as map;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct PairKey {
+    left i32;
+    right i32;
+}
+
+impl hash.Hash for PairKey {
+    func hash(value Self) u64 {
+        return hash.combine(u64(value.left), u64(value.right));
+    }
+    func equals(left Self, right Self) bool {
+        return left.left == right.left && left.right == right.right;
+    }
+}
+
+func main() i32 {
+    // Custom struct keys use the trait implementation, not pointer identity.
+    let pairs = map.new[PairKey,i32]();
+    map.insert(pairs, PairKey(left: 1, right: 2), 12);
+    switch map.get(pairs, PairKey(left: 1, right: 2)) {
+        case option.Option.Some(value): if value != 12 { return 1; }
+        case option.Option.None: return 2;
+    }
+    switch map.get(pairs, PairKey(left: 2, right: 1)) {
+        case option.Option.Some(value): return 3;
+        case option.Option.None: {}
+    }
+    let pair_entries = map.entries(pairs);
+    if vec.len(pair_entries) != 1 { return 4; }
+    if pair_entries[0].key.left != 1 || pair_entries[0].key.right != 2 { return 5; }
+    if pair_entries[0].value != 12 { return 6; }
+
+    // Large string keys and Vec[string] values keep ownership and aliasing.
+    let big_key = text.repeat("键", 2000) + text.repeat("a", 2000);
+    let string_values = map.new[string,Vec[string]]();
+    let holder = vec.make[string](1, "x");
+    map.insert(string_values, big_key, holder);
+    vec.push(holder, "y");
+    switch map.get(string_values, big_key) {
+        case option.Option.Some(value): if vec.len(value) != 2 { return 7; }
+        case option.Option.None: return 8;
+    }
+    if !map.contains(string_values, text.repeat("键", 2000) + text.repeat("a", 2000)) { return 9; }
+    switch map.remove(string_values, big_key) {
+        case option.Option.Some(value): if vec.len(value) != 2 { return 10; }
+        case option.Option.None: return 11;
+    }
+    return 0;
+}

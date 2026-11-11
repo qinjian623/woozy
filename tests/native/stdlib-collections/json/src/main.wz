@@ -1,0 +1,209 @@
+package app;
+
+import "std/json" as json;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func error_name(value json.Error) string {
+    switch value {
+        case json.Error.Syntax(offset): return "syntax:" + strconv.format_u64(u64(offset));
+        case json.Error.DepthLimit: return "depth";
+        case json.Error.InvalidNumber: return "invalid";
+        case json.Error.NumberRange: return "range";
+    }
+}
+
+func parse_error(source string) string {
+    try {
+        let value = json.parse(source);
+        return "ok";
+    } catch error json.Error {
+        return error_name(error);
+    }
+}
+
+func main() i32 throws json.Error {
+    // Whitespace and canonical reserialization.
+    let value = json.parse(" { \"a\" : [ null, true, false, \"x\", 1.50, -0, 1e+10 ] } ");
+    if json.serialize(value) != "{\"a\":[null,true,false,\"x\",1.50,-0,1e+10]}" { return 1; }
+
+    // field/index helpers return Option[Value].
+    switch json.field(value, "a") {
+        case option.Option.Some(items): {
+            switch json.index(items, 4) {
+                case option.Option.Some(number): {
+                    switch json.number_text(number) {
+                        case option.Option.Some(token): if token != "1.50" { return 2; }
+                        case option.Option.None: return 3;
+                    }
+                }
+                case option.Option.None: return 4;
+            }
+            switch json.index(items, 7) {
+                case option.Option.Some(extra): return 5;
+                case option.Option.None: {}
+            }
+        }
+        case option.Option.None: return 6;
+    }
+    switch json.field(value, "missing") {
+        case option.Option.Some(extra): return 7;
+        case option.Option.None: {}
+    }
+    switch json.index(value, 0) {
+        case option.Option.Some(extra): return 8;
+        case option.Option.None: {}
+    }
+
+    // Explicit numeric conversion keeps the raw token until requested.
+    if json.as_i64(json.Value.Number("-42")) != -42 { return 9; }
+    if json.as_u64(json.Value.Number("42")) != 42 { return 10; }
+    if json.as_f64(json.Value.Number("1.5")) != 1.5 { return 11; }
+    for token in ["nan","+1","01"] {
+        var rejected = false;
+        try { let invalid = json.as_f64(json.Value.Number(token)); }
+        catch error json.Error { switch error { case json.Error.InvalidNumber: rejected = true; default: {} } }
+        if !rejected { return 101; }
+    }
+
+    try {
+        let never = json.as_i64(json.Value.Number("9223372036854775808"));
+        return 12;
+    } catch error json.Error {
+        if error_name(error) != "range" { return 13; }
+    }
+    try {
+        let never = json.as_u64(json.Value.Number("-1"));
+        return 14;
+    } catch error json.Error {
+        if error_name(error) != "range" { return 15; }
+    }
+    try {
+        let never = json.as_i64(json.Value.String("1"));
+        return 16;
+    } catch error json.Error {
+        if error_name(error) != "invalid" { return 17; }
+    }
+
+    // Duplicate keys: last value wins at the first member position.
+    let duplicates = json.parse("{\"a\":1,\"b\":2,\"a\":3}");
+    if json.serialize(duplicates) != "{\"a\":3,\"b\":2}" { return 18; }
+    switch json.field(duplicates, "a") {
+        case option.Option.Some(number): {
+            if json.as_i64(number) != 3 { return 19; }
+        }
+        case option.Option.None: return 20;
+    }
+
+    // Escaped controls and all short escapes round-trip.
+    let escaped = json.parse(`"\"\\\/\b\f\n\r\t\u0000\u001f"`);
+    switch escaped {
+        case json.Value.String(decoded): if text.len(decoded) != 10 { return 21; }
+        case other: return 22;
+    }
+    if json.serialize(escaped) != `"\"\\/\b\f\n\r\t\u0000\u001f"` { return 23; }
+
+    // Raw control characters are rejected inside strings.
+    if parse_error("\"a" + "\n" + "b\"") != "syntax:2" { return 24; }
+
+    // Unicode scalar escapes, surrogate pairs and raw UTF-8.
+    let smile = json.parse(`"\uD83D\uDE00"`);
+    switch smile {
+        case json.Value.String(decoded): if text.len(decoded) != 1 { return 25; }
+        case other: return 26;
+    }
+    if parse_error(`"\uD800"`) != "syntax:7" { return 27; }
+    if parse_error(`"\uDC00"`) != "syntax:7" { return 28; }
+    if parse_error(`"\uD800\u0041"`) != "syntax:13" { return 29; }
+    if json.serialize(json.parse("\"hé😀\"")) != "\"hé😀\"" { return 30; }
+
+    // Strict RFC 8259 number grammar.
+    if parse_error("+1") != "syntax:0" { return 31; }
+    if parse_error(".5") != "syntax:0" { return 32; }
+    if parse_error("01") != "syntax:1" { return 33; }
+    if parse_error("1.") != "syntax:2" { return 34; }
+    if parse_error("1e") != "syntax:2" { return 35; }
+    if parse_error("-") != "syntax:0" { return 36; }
+    if parse_error("NaN") != "syntax:0" { return 37; }
+    if parse_error("Infinity") != "syntax:0" { return 38; }
+    if parse_error("[1,]") != "syntax:3" { return 39; }
+    if parse_error("{} x") != "syntax:3" { return 40; }
+    if parse_error("[\"😀\", x]") != "syntax:6" { return 41; }
+
+    // Empty containers and member order.
+    if json.serialize(json.parse(" [ ] ")) != "[]" { return 42; }
+    if json.serialize(json.parse(" { } ")) != "{}" { return 43; }
+    if json.serialize(json.parse("{\"b\":1,\"a\":2}")) != "{\"b\":1,\"a\":2}" { return 44; }
+
+    // Parser depth limit: 256 containers accepted, 257 rejected.
+    if parse_error(text.repeat("[", 256) + text.repeat("]", 256)) != "ok" { return 45; }
+    if parse_error(text.repeat("[", 257) + text.repeat("]", 257)) != "depth" { return 46; }
+
+    // Serializer depth limit for user-constructed values.
+    var deep = json.Value.Null;
+    for var level usize = 0; level < 257; level += 1 {
+        let box = vec.make[json.Value](1, deep);
+        deep = json.Value.Array(box);
+    }
+    try {
+        let never = json.serialize(deep);
+        return 47;
+    } catch error json.Error {
+        if error_name(error) != "depth" { return 48; }
+    }
+
+    // A cyclic Vec graph is stopped by the serializer depth limit.
+    let cycle = vec.make[json.Value](1, json.Value.Null);
+    cycle[0] = json.Value.Array(cycle);
+    try {
+        let never = json.serialize(json.Value.Array(cycle));
+        return 49;
+    } catch error json.Error {
+        if error_name(error) != "depth" { return 50; }
+    }
+
+    // Invalid user-constructed Number tokens are rejected on serialization.
+    try {
+        let never = json.serialize(json.Value.Number("01"));
+        return 51;
+    } catch error json.Error {
+        if error_name(error) != "invalid" { return 52; }
+    }
+    if json.serialize(json.Value.Number("1e+10")) != "1e+10" { return 53; }
+
+    // Large integers and long fractions keep every digit.
+    let huge = "1234567890123456789012345678901234567890";
+    if json.serialize(json.parse(huge)) != huge { return 54; }
+    let fraction = "0.000000000000000000000000000000000001";
+    if json.serialize(json.parse(fraction)) != fraction { return 55; }
+
+    // NUL and controls survive a parse/serialize round trip.
+    let nul = json.parse(`"\u0000"`);
+    switch nul {
+        case json.Value.String(decoded): if text.len(decoded) != 1 { return 56; }
+        case other: return 57;
+    }
+    if json.serialize(nul) != `"\u0000"` { return 58; }
+
+    // Object depth uses the same limit as arrays (the accepted boundary is
+    // covered by the array case above; parsing 256 nested objects would make
+    // the Python runtime's recursive teardown exceed Python's own stack).
+    if parse_error(text.repeat("{\"a\":", 257) + "null" + text.repeat("}", 257)) != "depth" { return 59; }
+    // A cyclic object graph is also stopped by the serializer depth limit.
+    let object_cycle = vec.make[json.Member](1, json.Member(name: "a", value: json.Value.Null));
+    object_cycle[0] = json.Member(name: "a", value: json.Value.Object(object_cycle));
+    try {
+        let never = json.serialize(json.Value.Object(object_cycle));
+        return 61;
+    } catch error json.Error {
+        if error_name(error) != "depth" { return 62; }
+    }
+
+    // User-constructed duplicate members are written, not silently dropped.
+    let duplicates_out = vec.make[json.Member](2, json.Member(name: "a", value: json.Value.Number("1")));
+    duplicates_out[1] = json.Member(name: "a", value: json.Value.Number("2"));
+    if json.serialize(json.Value.Object(duplicates_out)) != "{\"a\":1,\"a\":2}" { return 63; }
+    return 0;
+}

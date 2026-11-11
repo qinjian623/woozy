@@ -1,0 +1,24 @@
+package signal;
+import "std/os" as os;
+pub struct Info { pub number i32; pub code i32; pub pid i32; pub uid u32; pub status i32; reserved u32; pub value i64; }
+pub enum Action { Default; Ignore; }
+pub const SIGHUP i32 = 1; pub const SIGINT i32 = 2; pub const SIGQUIT i32 = 3;
+pub const SIGILL i32 = 4; pub const SIGABRT i32 = 6; pub const SIGFPE i32 = 8;
+pub const SIGKILL i32 = 9; pub const SIGUSR1 i32 = 10; pub const SIGSEGV i32 = 11;
+pub const SIGUSR2 i32 = 12; pub const SIGPIPE i32 = 13; pub const SIGALRM i32 = 14;
+pub const SIGTERM i32 = 15; pub const SIGCHLD i32 = 17; pub const SIGCONT i32 = 18;
+pub const SIGSTOP i32 = 19; pub const SIGTSTP i32 = 20; pub const SIGTTIN i32 = 21; pub const SIGTTOU i32 = 22;
+pub const SIG_BLOCK i32 = 0; pub const SIG_UNBLOCK i32 = 1; pub const SIG_SETMASK i32 = 2;
+pub func bit(number i32) u64 throws os.Error {
+    if number < 1 || number > 64 { throw os.Error.System(22,0); }
+    return u64(1) << (number-1);
+}
+pub func sigprocmask(how i32, mask u64) u64 throws os.Error { return os.check(__woozy_signal_mask(how,mask)); }
+pub func sigpending() u64 throws os.Error { return os.check(__woozy_signal_pending()); }
+pub func sigtimedwait(mask u64, timeout_ns i64) Info throws os.Error { return os.check(__woozy_signal_wait(mask,timeout_ns)); }
+pub func sigwaitinfo(mask u64) Info throws os.Error { return sigtimedwait(mask,-1); }
+pub func signal(number i32, action Action) throws os.Error {
+    var code i32 = 0;
+    switch action { case Action.Default: {} case Action.Ignore: code = 1; }
+    os.check(__woozy_signal_disposition(number,code));
+}

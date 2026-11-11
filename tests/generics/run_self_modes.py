@@ -103,7 +103,9 @@ def elf_checks(program):
               if line.split()[0] not in ('w', 'v')]
     assert not strong, ('strong undefined symbols', strong)
     for line in undefined:
-        assert line.split()[-1] == 'lang_vec_observe_v1', line
+        kind, name = line.split()
+        assert kind == 'w' and name in {
+            'lang_vec_observe_v1', 'lang_process_init_v1'}, line
     return dict(program_headers=headers, dynamic=dynamic,
                 undefined=undefined, strong_undefined=strong)
 
@@ -166,10 +168,14 @@ def parse_string_observation(data, metadata):
     width = metadata['target_word_bits'] // 8
     offset, result = 0, {}
     for name in metadata['probes']:
-        assert offset + width <= len(data), ('missing length', name)
+        assert offset + 2 * width <= len(data), ('missing lengths', name)
         length = int.from_bytes(data[offset:offset + width], 'little')
         offset += width
+        runes = int.from_bytes(data[offset:offset + width], 'little')
+        offset += width
+        assert offset + length <= len(data), ('missing string bytes', name)
         result[name] = data[offset:offset + length]
+        assert runes == len(STRING_EXPECTED[name].decode('utf-8')), (name, runes)
         offset += length
     assert offset == len(data), ('extra observation bytes', offset, len(data))
     return result

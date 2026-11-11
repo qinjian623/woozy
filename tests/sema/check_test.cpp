@@ -959,7 +959,7 @@ void suite(const fs::path &published) {
   source("func f(x string){const C=x;}", "E_CAPABILITY_UNAVAILABLE");
   source("func s() string{return \"x\";} const C=s(); func f(){}",
          "E_CAPABILITY_UNAVAILABLE");
-  source("const C=\"x\"+\"y\"; func f(){}", "E_TYPE_MISMATCH");
+  source("const C=\"x\"+\"y\"; func f(){}", "E_CAPABILITY_UNAVAILABLE");
   source("const C i32=\"x\"; func f(){}", "E_TYPE_MISMATCH");
   source("func f(x f32){const C=1.0<x;}", "E_CAPABILITY_UNAVAILABLE");
   typed_source("func p(x f32, y f64) bool { return x < y; }",

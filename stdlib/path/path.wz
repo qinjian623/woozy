@@ -1,0 +1,55 @@
+package path;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub func is_absolute(value string) bool { return text.starts_with(value,"/"); }
+pub func clean(value string) string {
+    let parts = vec.empty[string]();
+    let absolute = is_absolute(value);
+    for part in text.split(value,"/") {
+        if part == "" || part == "." { continue; }
+        if part == ".." {
+            if vec.len(parts) != 0 && parts[vec.len(parts)-1] != ".." {
+                let removed = vec.pop(parts);
+            } else { if !absolute { vec.push(parts,part); } }
+        } else { vec.push(parts,part); }
+    }
+    let joined = text.join(parts,"/");
+    if absolute { return "/"+joined; }
+    if joined == "" { return "."; }
+    return joined;
+}
+pub func join(left string, right string) string {
+    if left == "" || is_absolute(right) { return clean(right); }
+    return clean(left+"/"+right);
+}
+pub func base(value string) string {
+    let normalized = clean(value);
+    if normalized == "/" { return "/"; }
+    let parts = text.split(normalized,"/");
+    return parts[vec.len(parts)-1];
+}
+pub func dir(value string) string {
+    let normalized = clean(value);
+    var index = text.len(normalized);
+    for index > 0 {
+        index -= 1;
+        if normalized[index] == 47 {
+            if index == 0 { return "/"; }
+            return normalized[:index];
+        }
+    }
+    return ".";
+}
+pub func extension(value string) string {
+    let name = base(value);
+    var index = text.len(name);
+    for index > 0 {
+        index -= 1;
+        if name[index] == 46 {
+            if index == 0 { return ""; }
+            return name[index:];
+        }
+    }
+    return "";
+}

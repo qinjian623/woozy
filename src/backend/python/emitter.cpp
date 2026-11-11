@@ -199,29 +199,39 @@ class Emitter {
       return;
     auto v = classify_value(m, id);
     const auto &t = type(id);
-    // A Vec descriptor does not reference its element descriptor: Vec.create
-    // receives the element ops at the use site.  Publish the Vec name before
-    // visiting the element so a recursive element such as B -> C -> Vec[B]
-    // cannot observe an unassigned Vec name.
-    if (t.kind == TypeKind::Vec) {
-      program.push_back(
-          {ops(id) + " = _rt.ValueType('vec')", {}, false, {}, {}});
-      emit_type(t.type_args[0], program, done);
-      return;
-    }
-    for (auto f : v.fields)
-      emit_type(f.type, program, done);
     std::string desc = "_rt.ValueType()";
+    if (t.kind == TypeKind::Vec)
+      desc = "_rt.ValueType('vec')";
+    else if (t.kind == TypeKind::String)
+      desc = "_rt.ValueType('string', stride=32)";
+    else if (t.kind == TypeKind::Bool || t.kind == TypeKind::Unit)
+      desc = "_rt.ValueType(stride=1)";
+    else if (t.kind == TypeKind::SignedInt || t.kind == TypeKind::UnsignedInt ||
+             t.kind == TypeKind::Float)
+      desc = "_rt.ValueType(stride=" + std::to_string(t.bits / 8) + ")";
+
     if (v.kind == ValueKind::foreign_reference ||
         v.kind == ValueKind::foreign_callable)
       desc = "_rt.ValueType('foreign')";
     if (v.kind == ValueKind::foreign_error)
       desc = "_rt.ValueType('error')";
+    if (v.kind == ValueKind::structure)
+      desc = "_rt.ValueType('struct')";
+    if (v.kind == ValueKind::enumeration)
+      desc = "_rt.ValueType('enum')";
+    // Recursive aggregates must share the same descriptor object before any
+    // of their field/variant descriptors can refer back to it.
+    program.push_back({ops(id) + " = " + desc, {}, false, {}, {}});
+    if (t.kind == TypeKind::Vec)
+      emit_type(t.type_args[0], program, done);
+    for (auto f : v.fields)
+      emit_type(f.type, program, done);
     if (v.kind == ValueKind::structure) {
       std::vector<std::string> fields;
       for (auto f : v.fields)
         fields.push_back(ops(f.type));
-      desc = "_rt.ValueType('struct', " + tuple(fields) + ")";
+      program.push_back(
+          {ops(id) + ".fields = " + tuple(fields), {}, false, {}, {}});
     }
     if (v.kind == ValueKind::enumeration) {
       std::vector<std::string> variants;
@@ -235,9 +245,9 @@ class Emitter {
             variants.push_back(std::to_string(variant.symbol.value) + ": " +
                                tuple(fields));
           }
-      desc = "_rt.ValueType('enum', variants={" + join(variants) + "})";
+      program.push_back(
+          {ops(id) + ".variants = {" + join(variants) + "}", {}, false, {}, {}});
     }
-    program.push_back({ops(id) + " = " + desc, {}, false, {}, {}});
   }
 
   const HirNode &node(HirNodeId id) const { return m.nodes.at(id.value); }
@@ -540,6 +550,8 @@ class Emitter {
   }
   std::string binary(BinaryOp op, const std::string &a, const std::string &b,
                      TypeId operand) const {
+    if (type(operand).kind == TypeKind::String)
+      return "_rt.text_binary('" + operation(op) + "', " + a + ", " + b + ")";
     if (type(operand).kind == TypeKind::Float)
       return "_rt.float_binary('" + operation(op) + "', " + a + ", " + b +
              ", " + std::to_string(type(operand).bits) + ")";
@@ -598,7 +610,7 @@ class Emitter {
     exits(n);
     switch (n.kind()) {
     case NodeKind::constant_literal:
-      return constant_value(std::get<ConstantLiteral>(n.data).value, suite, n);
+      return value_save(suite, constant_value(std::get<ConstantLiteral>(n.data).value, suite, n), id);
     case NodeKind::unit_literal:
       return save(suite, "None", n);
     case NodeKind::bool_literal:
@@ -613,8 +625,7 @@ class Emitter {
                       ", " + std::to_string(type(n.type).bits) + ")",
                   n);
     case NodeKind::string_literal:
-      return save(suite, string_literal(std::get<StringLiteral>(n.data).utf8),
-                  n);
+      return value_save(suite, string_literal(std::get<StringLiteral>(n.data).utf8), id);
     case NodeKind::read:
       return value_save(suite,
                         temporary_ids.contains(id.value)
@@ -686,7 +697,9 @@ class Emitter {
       auto index = expression(n.children[1], suite);
       if (n.kind() == NodeKind::index_place)
         return save(suite, "_rt.Index(" + receiver + ", " + index + ")", n);
-      auto value = receiver + ".get(" + index + ")";
+      auto value = type(node(n.children[0]).type).kind == TypeKind::String
+                       ? "_rt.text_at(" + receiver + ", " + index + ")"
+                       : receiver + ".get(" + index + ")";
       if (owned(n.type))
         value = ops(n.type) + ".copy(" + value + ")";
       return value_save(suite, value, id);
@@ -696,8 +709,10 @@ class Emitter {
       auto receiver = expression(n.children[0], suite);
       auto start = slice.start ? expression(*slice.start, suite) : "None";
       auto end = slice.end ? expression(*slice.end, suite) : "None";
-      return value_save(suite, receiver + ".slice(" + start + ", " + end + ")",
-                        id);
+      return value_save(suite,
+          type(n.type).kind == TypeKind::String
+              ? "_rt.text_slice(" + receiver + ", " + start + ", " + end + ")"
+              : receiver + ".slice(" + start + ", " + end + ")", id);
     }
     case NodeKind::unary: {
       auto operand = expression(n.children[0], suite);
@@ -718,10 +733,8 @@ class Emitter {
     case NodeKind::binary: {
       auto a = expression(n.children[0], suite);
       auto b = expression(n.children[1], suite);
-      return save(
-          suite,
-          binary(std::get<Binary>(n.data).op, a, b, node(n.children[0]).type),
-          n);
+      return value_save(suite,
+          binary(std::get<Binary>(n.data).op, a, b, node(n.children[0]).type), id);
     }
     case NodeKind::integer_convert: {
       auto value = expression(n.children[0], suite);
@@ -770,6 +783,40 @@ class Emitter {
     }
     case NodeKind::call: {
       const auto &call = std::get<Call>(n.data);
+      if (call.kind == CalleeKind::system) {
+        std::vector<std::string> args(call.args.size());
+        for (const auto &arg : call.args) {
+          args[arg.parameter_index] = expression(arg.expression, suite);
+          for (const auto &use : m.ownership.uses)
+            if (use.consumer == id && use.operand == arg.source_index &&
+                use.kind == UseKind::borrow && !use.destination) {
+              auto owner = use.root ? key(OwnerKind::binding, use.root->value)
+                                   : key(OwnerKind::temporary, arg.expression.value);
+              line(suite, "_frame.borrow(" + owner + ")", n);
+            }
+        }
+        const auto *spec = system_operation_spec(*call.system);
+        std::string element = "None", tags = "{}";
+        if (spec->operation == SystemOperation::vec_empty ||
+            spec->operation == SystemOperation::vec_make ||
+            spec->operation == SystemOperation::text_bytes)
+          element = ops(type(n.type).type_args.at(0));
+        if (type(n.type).kind == TypeKind::NominalEnum) {
+          std::vector<std::string> entries;
+          for (const auto &declaration : m.nominals)
+            if (declaration.symbol == type(n.type).declaration)
+              for (const auto &variant : declaration.variants)
+                entries.push_back(string_literal(m.resolved->symbols.at(variant.symbol.value).name) +
+                                  ": " + std::to_string(variant.symbol.value));
+          tags = "{" + join(entries) + "}";
+        }
+        auto value = value_save(suite,
+            "_rt.value_call(" + string_literal(spec->name.substr(8)) + ", " + tuple(args) +
+            ", " + element + ", " + tags + ")", id);
+        for (const auto &lifetime : m.ownership.calls)
+          if (lifetime.node == id) steps(lifetime.on_return, suite, n);
+        return value;
+      }
       if (call.kind == CalleeKind::foreign) {
         if (!call.callee || !call.binding)
           throw std::logic_error("verified foreign call lost target/binding");
@@ -811,7 +858,8 @@ class Emitter {
             "_rt.foreign_call(" + callee + ", " + tuple(positional) + ", {" +
                 join(keywords) + "}, " +
                 foreign_location(n, declaration) + ", " +
-                (unit ? "True" : "False") + ")",
+                (unit ? "True" : "False") + ", " +
+                (type(type(call.signature).result).kind == TypeKind::String ? "True" : "False") + ")",
             id);
         bool error = false;
         Suite failure;
@@ -913,7 +961,8 @@ class Emitter {
       auto value = value_save(
           invoke,
           "_rt.foreign_read(" + base + ", " + path + ", " +
-              foreign_location(n, declaration) + ")",
+              foreign_location(n, declaration) + ", " +
+              (type(n.type).kind == TypeKind::String ? "True" : "False") + ")",
           id);
       bool error = false;
       Suite failure;
@@ -1139,7 +1188,8 @@ class Emitter {
             suite,
             binary(*assign.compound, before, value, node(n.children[0]).type),
             n);
-      auto installed = take(n.children[1], value);
+      auto installed = assign.compound && type(node(n.children[0]).type).kind == TypeKind::String
+                           ? value : take(n.children[1], value);
       if (owned(node(n.children[0]).type) &&
           !indexed_field_place(n.children[0])) {
         // Field is a short-lived place and its old field owns exactly once.
@@ -1216,7 +1266,8 @@ class Emitter {
                take(n.children[0], collection) + ")",
            n);
       full(id, suite);
-      auto length = save(suite, collection + ".begin()", n);
+      const bool text = type(node(n.children[0]).type).kind == TypeKind::String;
+      auto length = save(suite, text ? "len(" + collection + ")" : collection + ".begin()", n);
       auto index = save(suite, "0", n);
       auto first = save(suite, "True", n);
       Statement loop{"while True", n.source.span, true,
@@ -1225,7 +1276,11 @@ class Emitter {
                        {{index + " += 1", n.source.span, false, {}, {}}}},
                       {"if " + index + " >= " + length, n.source.span, true,
                        {{"break", n.source.span, false, {}, {}}}, {}}}, {}};
-      auto element_type = type(node(n.children[0]).type).type_args[0];
+      TypeId element_type{};
+      if (text) {
+        for (const auto &local : m.ownership.locals)
+          if (local.symbol == fi.element) element_type = local.type;
+      } else element_type = type(node(n.children[0]).type).type_args[0];
       if (owned(element_type)) {
         line(loop.body,
              name(fi.element) + " = _frame.slot(" +
@@ -1238,7 +1293,8 @@ class Emitter {
              n);
       } else
         line(loop.body,
-             name(fi.element) + " = " + collection + ".get(" + index + ")", n);
+             name(fi.element) + " = " + (text ? "_rt.text_at(" + collection + ", " + index + ")"
+                                                : collection + ".get(" + index + ")"), n);
       available.insert(fi.element);
       loops.push_back({id, code_scope});
       break_targets.push_back(id);
@@ -1249,7 +1305,7 @@ class Emitter {
       break_targets.pop_back();
       loop_body(std::move(body), loop.body, completed_loop, n);
       Suite cleanup;
-      line(cleanup, collection + ".end()", n);
+      if (!text) line(cleanup, collection + ".end()", n);
       line(cleanup, "_frame.drop(" + iteration_key + ")", n);
       guarded({std::move(loop)}, std::move(cleanup), suite, n);
       break;

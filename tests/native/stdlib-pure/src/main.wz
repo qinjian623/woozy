@@ -1,0 +1,35 @@
+package app;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/option" as option;
+import "std/result" as result;
+import "std/strconv" as strconv;
+import "std/math" as math;
+import "std/path" as path;
+func twice(value i32) i32 { return value*2; }
+func main() i32 throws strconv.Error {
+    if text.join(text.split("中,,😀,",","),"|") != "中||😀|" { return 1; }
+    if text.replace("😀ab😀","","|") != "|😀|a|b|😀|" || text.repeat("😀x",9) != "😀x😀x😀x😀x😀x😀x😀x😀x😀x" { return 2; }
+    if option.unwrap_or(option.map[i32,i32](option.Option[i32].Some(3),twice),0) != 6 { return 3; }
+    if result.unwrap_or(result.map[i32,i32,string](result.Result[i32,string].Ok(4),twice),0) != 8 { return 4; }
+    if path.clean("a/../b//./c") != "b/c" || path.dir("/a/中.wz") != "/a" { return 5; }
+    if path.join("", "file") != "file" || path.join("", "") != "." ||
+       path.join("a", "") != "a" || path.join("a", "/b") != "/b" ||
+       path.join("a", "../b") != "b" { return 17; }
+    if strconv.format_f32(strconv.parse_f32("1.000000059604644775390625")) != "1" { return 6; }
+    if strconv.format_f32(strconv.parse_f32("1.000000059604644775390626")) != "1.0000001" { return 7; }
+    if strconv.format_f64(strconv.parse_f64("-0")) != "-0" || strconv.format_f64(strconv.parse_f64("1e-99999")) != "0" { return 8; }
+    if strconv.format_f64(1e-6) != "0.000001" || strconv.format_f64(1e-7) != "1e-7" ||
+       strconv.format_f64(1e20) != "100000000000000000000" || strconv.format_f64(1e21) != "1e+21" { return 9; }
+    if !math.isnan(math.sqrt(-1.0)) || !math.isinf(math.log(0.0)) || math.log(0.0) >= 0.0 { return 10; }
+    if !math.signbit(math.ceil(-0.25)) || !math.signbit(math.trunc(-0.25)) || !math.signbit(math.round(-0.25)) { return 11; }
+    if math.round(-0.5) != -1.0 || math.round(0.49999999999999994) != 0.0 { return 12; }
+    let max = 1.7976931348623157e308;
+    if math.fma(max,2.0,-max) != max || math.ldexp(0.5,4) != 8.0 || math.frexp(8.0).fraction != 0.5 { return 13; }
+    if math.sin(0.0) != 0.0 || math.cos(0.0) != 1.0 || math.pow(2.0,8.0) != 256.0 { return 14; }
+    if !math.signbit(math.min(-0.0,0.0)) || math.signbit(math.max(-0.0,0.0)) { return 15; }
+    var caught = false;
+    try { let value = strconv.parse_u64("-1"); } catch error strconv.Error { caught = true; }
+    if !caught { return 16; }
+    return 0;
+}

@@ -1091,8 +1091,9 @@ class Checker {
       reject(r, "name does not denote a value type", "E_NAME_KIND");
     const auto name = symbol(*s).name;
     if (private_runtime_type_name(name)) {
-      if (!private_runtime_type_module(
-              m.resolved->project->module(r.module).logical_path))
+      const auto &owner = m.resolved->project->module(r.module).logical_path;
+      if (name == "__woozy_IpcHandle" ? owner != "std/ipc"
+                                     : !private_runtime_type_module(owner))
         reject(r, "private runtime type is only available to its std module",
                "E_PRIVATE_ACCESS");
       if (!args.empty())
@@ -1105,6 +1106,8 @@ class Checker {
         t.kind = TypeKind::MutexHandle;
       else if (name == "__woozy_Condvar")
         t.kind = TypeKind::CondvarHandle;
+      else if (name == "__woozy_IpcHandle")
+        t.kind = TypeKind::IpcHandle;
       else
         t.kind = TypeKind::AtomicI64Handle;
       return m.types.intern(t);
@@ -1542,6 +1545,8 @@ class Checker {
         // The lexer already decoded escapes and normalized physical newlines.
         // Keep its complete byte sequence, including embedded NULs.
         const auto text = file(r).tokens[n.token_begin].string_value.value();
+        try { validate_utf8(text); }
+        catch (const SourceError &) { reject(r, "string literal is not valid UTF-8"); }
         result = {node(r, t, StringLiteral{text}), {t, {}, {}, {}, text}};
       } else
         unavailable(r, "string/owned literals require T09");
@@ -1747,6 +1752,14 @@ class Checker {
       } else
         match(r, b.value.type, a.value.type);
       const auto k = type(a.value.type).kind;
+      if (k == TypeKind::String) {
+        if (bop != BinaryOp::add && !comparison)
+          reject(r, "string operators support concatenation and comparisons");
+        auto result_type = comparison ? boolean : a.value.type;
+        result = {node(r, result_type, Binary{bop}, {a.id, b.id}),
+                  {result_type, {}, {}}};
+        break;
+      }
       if ((bop == BinaryOp::remainder || bop == BinaryOp::bit_and ||
            bop == BinaryOp::bit_or || bop == BinaryOp::bit_xor) &&
           !integer(a.value.type))
@@ -1825,10 +1838,9 @@ class Checker {
       auto base = expression(child(r, 0));
       if (type(base.value.type).kind == TypeKind::ForeignOpaque)
         unavailable(r, "external slicing is not supported");
-      if (type(base.value.type).kind == TypeKind::String)
-        unavailable(r, "string slicing is not supported");
-      if (type(base.value.type).kind != TypeKind::Vec)
-        reject(r, "slice receiver must be Vec");
+      if (type(base.value.type).kind != TypeKind::Vec &&
+          type(base.value.type).kind != TypeKind::String)
+        reject(r, "slice receiver must be Vec or string");
       std::vector<HirNodeId> values{base.id};
       VecSlice slice;
       // A start endpoint is a BracketItem; an end endpoint is a plain expr.
@@ -1849,7 +1861,8 @@ class Checker {
         else
           slice.end = e.id;
       }
-      result = {node(r, base.value.type, slice, values), base.value};
+      result = {node(r, base.value.type, slice, values),
+                {base.value.type, {}, {}}};
       break;
     }
     case AstKind::NeutralBracket: {
@@ -1884,16 +1897,17 @@ class Checker {
         auto v = expression(base);
         if (type(v.value.type).kind == TypeKind::ForeignOpaque)
           unavailable(r, "external indexing is not supported");
-        if (type(v.value.type).kind == TypeKind::String)
-          unavailable(r, "string indexing is not supported");
-        if (type(v.value.type).kind != TypeKind::Vec)
-          reject(r, "index receiver must be Vec");
+        if (type(v.value.type).kind != TypeKind::Vec &&
+            type(v.value.type).kind != TypeKind::String)
+          reject(r, "index receiver must be Vec or string");
         if (n.children.size() != 2)
           reject(r, "Vec requires one index");
         auto index = expression(child(r, 1));
         if (!integer(index.value.type))
           reject(r, "Vec index must be integer");
-        auto t = type(v.value.type).type_args.at(0);
+        auto t = type(v.value.type).kind == TypeKind::String
+                     ? scalar(TypeKind::UnsignedInt, 32)
+                     : type(v.value.type).type_args.at(0);
         result = {node(r, t, IndexRead{}, {v.id, index.id}), {t, {}, {}}};
         break;
       }
@@ -2377,8 +2391,7 @@ class Checker {
     if (ast(callee).kind == AstKind::NeutralBracket)
       for (size_t i = 1; i < ast(callee).children.size(); ++i)
         type_args.push_back(parse_type(child(callee, i)));
-    const size_t required_type_args =
-        system_operation_has_type_arguments(spec.operation) ? 1 : 0;
+    const size_t required_type_args = spec.type_arity;
     if (type_args.size() != required_type_args)
       reject(r, "wrong number of system operation type arguments",
              "E_CALL_ARGUMENT");
@@ -2387,8 +2400,11 @@ class Checker {
     call.system = spec.operation;
     call.direct_symbol = target;
     call.type_args = type_args;
-    call.signature =
-        system_operation_signature(m.types, spec.operation, type_args);
+    try {
+      call.signature = system_operation_signature(m.types, m, spec.operation, type_args);
+    } catch (const std::invalid_argument &e) {
+      unavailable(r, e.what());
+    }
     const auto signature = type(call.signature);
     if (ast(r).children.size() != spec.count + 1)
       reject(r, "wrong number of system operation arguments", "E_CALL_ARGUMENT");
@@ -3588,7 +3604,11 @@ class Checker {
             type(p.value.type).kind == TypeKind::Float &&
             (*compound == BinaryOp::add || *compound == BinaryOp::subtract ||
              *compound == BinaryOp::multiply || *compound == BinaryOp::divide);
-        if (!floating && (!integer(p.value.type) || !integer(rhs.value.type)))
+        bool text = type(p.value.type).kind == TypeKind::String &&
+                    *compound == BinaryOp::add;
+        if (text && m.nodes[p.id.value].kind() != NodeKind::place)
+          unavailable(r, "string += requires a whole writable binding");
+        if (!floating && !text && (!integer(p.value.type) || !integer(rhs.value.type)))
           reject(r, "compound assignment requires integer operands");
         if (!shift)
           match(r, rhs.value.type, p.value.type);
@@ -3696,8 +3716,9 @@ class Checker {
     }
     case AstKind::ForIn: {
       auto collection = expression(child(r, 0));
-      if (type(collection.value.type).kind != TypeKind::Vec)
-        reject(r, "for-in requires Vec");
+      if (type(collection.value.type).kind != TypeKind::Vec &&
+          type(collection.value.type).kind != TypeKind::String)
+        reject(r, "for-in requires Vec or string");
       auto saved = scope;
       scope = new_scope(r, saved);
       auto id = node(r, unit, ForIn{definition(r), ScopeId{0}, HirNodeId{0}});
@@ -3707,8 +3728,10 @@ class Checker {
       auto loop_scope = scope;
       scope = new_scope(bodyref, loop_scope);
       auto bs = scope;
-      locals[definition(r).value] = {type(collection.value.type).type_args[0],
-                                     false};
+      auto element_type = type(collection.value.type).kind == TypeKind::String
+                              ? scalar(TypeKind::UnsignedInt, 32)
+                              : type(collection.value.type).type_args[0];
+      locals[definition(r).value] = {element_type, false};
       auto body = block(bodyref, true);
       scope = loop_scope;
       m.nodes[id.value].children = {collection.id, body.id};
@@ -4632,8 +4655,12 @@ class Checker {
     auto key = std::make_pair(origin.value, ids);
     if (auto it = instance_cache.find(key); it != instance_cache.end())
       return it->second;
-    if (instance_cache.size() >= 128 || instantiation_depth >= 48)
-      reject(use, "generic instantiation budget exceeded",
+    // This counts all concrete functions, including ordinary library helpers.
+    if (instance_cache.size() >= 4096)
+      reject(use, "generic instance count budget exceeded (4096)",
+             "E_INSTANTIATION_LIMIT");
+    if (instantiation_depth >= 48)
+      reject(use, "generic instantiation depth budget exceeded (48)",
              "E_INSTANTIATION_LIMIT");
     ++instantiation_depth;
     auto f = temp.function;

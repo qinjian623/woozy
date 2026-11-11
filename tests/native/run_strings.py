@@ -8,7 +8,7 @@ import sys
 sys.dont_write_bytecode = True
 sys.path.insert(0, str(Path(__file__).resolve().parents[1] / 'python'))
 from string_cases import (STRING_FIXTURES, STRING_FIXTURE_PATHS, command,
-                           rejection_checks, sha, succeeded)
+                           rejection_checks, runtime_checks, sha, succeeded)
 
 
 def main():
@@ -62,17 +62,24 @@ def main():
                 assert offset + width <= len(data), 'missing length'
                 length = int.from_bytes(data[offset:offset + width], 'little')
                 offset += width
+                assert offset + width <= len(data), 'missing codepoint length'
+                runes = int.from_bytes(data[offset:offset + width], 'little')
+                offset += width
                 actual = data[offset:offset + length]
                 offset += length
                 value = dict(id=name, actual_hex=actual.hex(), actual_byte_length=length,
                              expected_hex=expected_values[name].hex(), expected_byte_length=len(expected_values[name]),
-                             status='passed' if actual == expected_values[name] and length == len(expected_values[name]) else 'failed')
+                             actual_length=runes, expected_length=len(expected_values[name].decode('utf-8')),
+                             status='passed' if actual == expected_values[name] and
+                             length == len(expected_values[name]) and
+                             runes == len(expected_values[name].decode('utf-8')) else 'failed')
                 row['values'].append(value)
                 assert value['status'] == 'passed', value
             assert offset == len(data), 'extra observation bytes'
             row['artifacts'] = {str(p.relative_to(out)): sha(p) for p in sorted(out.rglob('*')) if p.is_file()}
             row['status'] = 'passed'
         report['rejections'] = rejection_checks(args.cli, 'native', args.out)
+        report['runtime_cases'] = runtime_checks(args.cli, 'native', args.out)
         report['status'] = 'passed'
     finally:
         path = args.out / 'string-results.json'

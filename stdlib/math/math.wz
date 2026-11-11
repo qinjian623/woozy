@@ -1,0 +1,38 @@
+package math;
+pub struct Fraction { pub fraction f64; pub exponent i32; }
+pub const PI f64 = 3.141592653589793238462643383279502884;
+pub const E f64 = 2.718281828459045235360287471352662498;
+pub func fabs(value0 f64) f64 { return __woozy_math_fabs(value0); }
+pub func floor(value0 f64) f64 { return __woozy_math_floor(value0); }
+pub func ceil(value0 f64) f64 { return __woozy_math_ceil(value0); }
+pub func trunc(value0 f64) f64 { return __woozy_math_trunc(value0); }
+pub func round(value0 f64) f64 { return __woozy_math_round(value0); }
+pub func sqrt(value0 f64) f64 { return __woozy_math_sqrt(value0); }
+pub func sin(value0 f64) f64 { return __woozy_math_sin(value0); }
+pub func cos(value0 f64) f64 { return __woozy_math_cos(value0); }
+pub func tan(value0 f64) f64 { return __woozy_math_tan(value0); }
+pub func asin(value0 f64) f64 { return __woozy_math_asin(value0); }
+pub func acos(value0 f64) f64 { return __woozy_math_acos(value0); }
+pub func atan(value0 f64) f64 { return __woozy_math_atan(value0); }
+pub func exp(value0 f64) f64 { return __woozy_math_exp(value0); }
+pub func exp2(value0 f64) f64 { return __woozy_math_exp2(value0); }
+pub func expm1(value0 f64) f64 { return __woozy_math_expm1(value0); }
+pub func log(value0 f64) f64 { return __woozy_math_log(value0); }
+pub func log2(value0 f64) f64 { return __woozy_math_log2(value0); }
+pub func log10(value0 f64) f64 { return __woozy_math_log10(value0); }
+pub func log1p(value0 f64) f64 { return __woozy_math_log1p(value0); }
+pub func copysign(value0 f64, value1 f64) f64 { return __woozy_math_copysign(value0, value1); }
+pub func hypot(value0 f64, value1 f64) f64 { return __woozy_math_hypot(value0, value1); }
+pub func atan2(value0 f64, value1 f64) f64 { return __woozy_math_atan2(value0, value1); }
+pub func pow(value0 f64, value1 f64) f64 { return __woozy_math_pow(value0, value1); }
+pub func fmod(value0 f64, value1 f64) f64 { return __woozy_math_fmod(value0, value1); }
+pub func remainder(value0 f64, value1 f64) f64 { return __woozy_math_remainder(value0, value1); }
+pub func fma(value0 f64, value1 f64, value2 f64) f64 { return __woozy_math_fma(value0, value1, value2); }
+pub func ldexp(value0 f64, value1 i32) f64 { return __woozy_math_ldexp(value0, value1); }
+pub func frexp(value0 f64) Fraction { return __woozy_math_frexp(value0); }
+pub func isnan(value0 f64) bool { return __woozy_math_isnan(value0); }
+pub func isinf(value0 f64) bool { return __woozy_math_isinf(value0); }
+pub func isfinite(value0 f64) bool { return __woozy_math_isfinite(value0); }
+pub func signbit(value0 f64) bool { return __woozy_math_signbit(value0); }
+pub func min(left f64, right f64) f64 { if isnan(left) { return left; } if isnan(right) { return right; } if left < right { return left; } if left == 0.0 && right == 0.0 && signbit(left) { return left; } return right; }
+pub func max(left f64, right f64) f64 { if isnan(left) { return left; } if isnan(right) { return right; } if left > right { return left; } if left == 0.0 && right == 0.0 && !signbit(left) { return left; } return right; }

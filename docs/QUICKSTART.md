@@ -39,14 +39,15 @@ Linux x86_64 Native 程序可以这样输出文字；这是一个独立的完整
 
 ```wz
 package main;
+import "std/io" as io;
 import "std/os" as os;
 
 func main() throws os.Error {
-    os.write_all_text(os.stdout(), "Hello, world!\n");
+    io.println("Hello, world!");
 }
 ```
 
-系统接口使用 C 风格名称和参数顺序，失败时 `throws os.Error`。文件读写、短写、中断和 File 生命周期见 [std/os](OS.md)；Python 后端不支持该模块。
+`std/io.println` 写出字符串并补一个换行，失败时抛出 `os.Error`。文件和系统接口使用 C 风格名称与参数顺序；文件读写、短写、中断和 File 生命周期见 [std/os](OS.md)，模块清单见 [标准库](STDLIB.md)。带系统调用的模块用于 Linux x86_64 Native 程序，Python 后端不支持。
 
 ## 绑定与类型
 
@@ -68,7 +69,7 @@ let title string = "Woozy";
 
 整数类型有 `i8/i16/i32/i64`、`u8/u16/u32/u64` 和目标字宽的 `isize/usize`；浮点类型为 `f32/f64`。不同具体数值类型不隐式混算，转换用 `T(value)`。字面量可以从上下文取得类型。
 
-定宽整数加减乘会回绕，整数除法向零截断；整数除零、动态转换为整数时越界、非法移位会产生 Panic，编译时已知失败的转换直接报错。浮点除零按 IEEE 规则得到无穷或 NaN。`bool` 不与整数互换。`string` 是不可变 UTF-8 值，当前不支持普通字符串相等、动态拼接、索引、切片或字符串插值。
+定宽整数加减乘会回绕，整数除法向零截断；整数除零、动态转换为整数时越界、非法移位会产生 Panic，编译时已知失败的转换直接报错。浮点除零按 IEEE 规则得到无穷或 NaN。`bool` 不与整数互换。`string` 是不可变 UTF-8 值；`text.len`、索引和切片按 Unicode 码点计算，索引得到 `u32`。字符串支持 `+`、整体 `var` 上的 `+=`、`==` 和大小比较，比较按 UTF-8 字节内容进行，不做 Unicode 正规化。`std/text` 的 `bytes` 和 `from_bytes` 显式转换 `Vec[u8]`，后者严格检查 UTF-8 并抛出 `text.Error`。字符串插值仍未支持；`const` 字符串只接受编译期能确定的值。
 
 注释写 `// ...` 或 `/* ... */`，块注释不嵌套。常用运算符有 `+ - * / %`、`== != < <= > >=`、`! && ||` 和整数位运算；`%` 只用于整数。
 
@@ -188,6 +189,8 @@ slice[0] = 7;              // left[0] 仍是 9
 
 Vec 赋值共享同一个容器，没有隐式深复制；`let` 不禁止修改元素。切片建立新的 Vec 并复制元素的逻辑值，引用元素仍可共享。下标必须非负，越界产生 Panic，不接受 Python 式负索引。
 
+`std/vec` 提供 `empty`、`make`、`len`、`capacity`、`reserve`、`push`、`pop`、`resize` 和 `clear`。`pop` 返回 `Option[T]`；`resize` 变大时用给定值填充，变小时截断；`clear` 保留容量。Vec 赋值共享容器，这些调用会影响所有别名。遍历期间不要 push、pop、resize、clear 或 reserve，只修改已有元素。
+
 顶层声明：
 
 ```wz
@@ -246,7 +249,7 @@ try {
 } // cleaned 是 1，result 是 -1
 ```
 
-`throws E` 属于函数类型。未捕获的调用错误必须由当前函数声明兼容的 `throws`；不需要逐次写 `?`。自行定义的 `Result` 枚举只是普通数据，不自动传播，当前也没有可直接使用的内建 `Result`。
+`throws E` 属于函数类型。未捕获的调用错误必须由当前函数声明兼容的 `throws`；不需要逐次写 `?`。自行定义的 `Result` 枚举只是普通数据，不自动传播。标准库 `std/result.Result[T,E]` 同样是普通 enum，构造时要写完整类型实参，例如 `result.Result[i32,i32].Ok(7)`。
 
 `defer` 在当前词法块退出时执行，后注册先执行；它读取执行时的绑定值。`return value` 先保存返回值，再执行清理。defer 本身不能向外执行 `return/break/continue` 或传播错误。整数除零、越界等 Panic 不能由 typed `catch` 捕获，也不保证执行语言清理。
 
@@ -323,6 +326,6 @@ func main() i32 {
 
 模块由目录中的 `.wz` 文件组成，`app/geometry` 对应源码根下的 `geometry/`；包依赖不能循环。其他导入首段需要在项目清单声明；导入 Python 库也要有对应绑定声明，源码检查不会执行外部库。
 
-运行示例见 [BUILD.md](../development/docs/BUILD.md)。逐步讲解见 [教程](TUTORIAL.md)，数值、共享、错误和清理的完整规则见 [SEMANTICS.md](SEMANTICS.md)。
+运行示例见 [BUILD.md](../development/docs/BUILD.md)。逐步讲解见 [教程](TUTORIAL.md)，标准库接口和资源规则见 [标准库](STDLIB.md)，数值、共享、错误和清理的完整规则见 [SEMANTICS.md](SEMANTICS.md)。
 
 本文的组织参考官方仓库中的 [Go Tour 基础章节](https://github.com/golang/website/blob/master/_content/tour/basics.article)、[Julia Getting Started](https://github.com/JuliaLang/julia/blob/master/doc/src/manual/getting-started.md)，以及 [Effective Go](https://go.dev/doc/effective_go)，具体语言规则以本仓库为准。

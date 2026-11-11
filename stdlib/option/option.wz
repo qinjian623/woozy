@@ -1,0 +1,19 @@
+package option;
+pub enum Option[T] { None; Some(value T); }
+pub enum Error { Empty; }
+pub func is_some[T](value Option[T]) bool {
+    switch value { case Option.Some(item): return true; case Option.None: return false; }
+}
+pub func is_none[T](value Option[T]) bool { return !is_some(value); }
+pub func get[T](value Option[T]) T throws Error {
+    switch value { case Option.Some(item): return item; case Option.None: throw Error.Empty; }
+}
+pub func unwrap_or[T](value Option[T], fallback T) T {
+    switch value { case Option.Some(item): return item; case Option.None: return fallback; }
+}
+pub func map[A,B](value Option[A], transform func(A) B) Option[B] {
+    switch value {
+        case Option.Some(item): return Option[B].Some(transform(item));
+        case Option.None: return Option[B].None;
+    }
+}

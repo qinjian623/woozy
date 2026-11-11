@@ -3,4 +3,12 @@
 
 def make_text():
     # Build at runtime so this cannot be mistaken for a source StringLiteral.
-    return ''.join(('宿', chr(0), '主', chr(0x1F600)))
+    return ''.join(('宿', chr(0), '主', chr(0x1F600), 'e', chr(0x301)))
+
+
+good_value = make_text()
+bad_value = 'left' + chr(0xd800) + 'right'
+
+
+def bad_text():
+    return bad_value

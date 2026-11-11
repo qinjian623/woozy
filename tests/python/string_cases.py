@@ -91,9 +91,6 @@ TYPE = 'E_TYPE_MISMATCH'
 REJECTED = {
     'struct-string-inout': ('struct S {s string;} func f(x inout S) {} func main() {}', CAP),
     'vec-string-inout': ('func f(x inout Vec[string]) {} func main() {}', CAP),
-    'concat': ('func main() {let a="x";let b="y";let x=a+b;}', TYPE),
-    'index': ('func main() {let x="x";let y=x[0];}', CAP),
-    'slice': ('func main() {let x="x";let y=x[:];}', CAP),
     'inout': ('func f(x inout string) {} func main() {}', CAP),
     'move-after-read': ('func main() {let x="x";let y=move x;let z=x;}',
                         'E_OWNERSHIP_USE_AFTER_MOVE'),
@@ -110,7 +107,9 @@ REJECTED = {
     'integer-as-string': ('func f() string {return 1;} func main() {}', TYPE),
     'const-runtime': ('func main() {let x="x";const C=x;}', CAP),
     'const-call': ('func s() string {return "x";} const C=s(); func main() {}', CAP),
-    'const-concat': ('const C="x"+"y"; func main() {}', TYPE),
+    'const-concat': ('const C="x"+"y"; func main() {}', CAP),
+    'const-slice': ('const C="xyz"[0:1]; func main() {}', CAP),
+    'string-index-assign': ('func main() {let s="x";s[0]=65;}', TYPE),
     'const-type': ('const C i32="x"; func main() {}', TYPE),
     'const-cycle': ('const A=B;const B=A;func main() {}', 'E_CONSTANT_CYCLE'),
 }
@@ -177,4 +176,44 @@ def rejection_checks(cli, backend, out):
         assert result['returncode'] == 1 and not result['stderr'], result
         assert before == {p.name: sha(p) for p in output.iterdir()}
         row['status'] = 'unsupported' if code == CAP else 'passed'
+    return rows
+
+
+RUN_CASES = {
+    'concat': ('let a="中";let b="😀";let c=a+b;if c!="中😀" {return 1;}', 0),
+    'index': ('let s="A中😀";if s[1]!=0x4e2d || s[2]!=0x1f600 {return 1;}', 0),
+    'slice': ('let s="A中😀Z";if s[1:3]!="中😀" || s[4:4]!="" {return 1;}', 0),
+    'compare': ('if !("中"<"😀" && "😀">"\\u{ffff}" && "中"=="中") {return 1;}', 0),
+    'negative-index': ('let s="中"+"😀";let rune=s[-1];', 101),
+    'index-end': ('let s="中"+"😀";let rune=s[2];', 101),
+    'reverse-slice': ('let s="中"+"😀";let part=s[2:1];', 101),
+}
+
+
+def runtime_checks(cli, backend, out, python=None):
+    rows = []
+    for ident, (body, expected) in RUN_CASES.items():
+        project = Path(tempfile.mkdtemp(prefix='value-' + ident + '-', dir=out))
+        (project / 'src').mkdir()
+        manifest = project / 'lang.toml'
+        manifest.write_text('schema_version=1\n[package]\nname="strings"\n'
+                            'source_root="src"\nentry="app"\n[build]\n'
+                            f'backend="{backend}"\nword_bits=64\n')
+        (project / 'src/main.wz').write_text('package app;func main() i32 {' + body + 'return 0;}')
+        output = project / 'output'
+        row = dict(id=ident, expected_exit=expected, status='failed')
+        row['check'] = checked = command([cli, 'check', '--project', manifest,
+                                         '--backend', backend, '--format', 'json'])
+        succeeded(checked)
+        row['build'] = built = command([cli, 'build', '--project', manifest,
+                                       '--backend', backend, '--out-dir', output, '--format', 'json'])
+        succeeded(built)
+        row['execute'] = result = command([output/'program'] if backend == 'native'
+                                         else [python, output/'program.py'])
+        assert result['returncode'] == expected, result
+        if expected:
+            marker = 'LANG_NATIVE_PANIC:v1:' if backend == 'native' else 'LANG_PANIC:'
+            assert marker in result['stderr'], result
+        row['status'] = 'passed'
+        rows.append(row)
     return rows

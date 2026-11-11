@@ -1,0 +1,131 @@
+package net;
+import "std/os" as os;
+import "std/vec" as vec;
+import "std/text" as text;
+
+pub struct Socket { descriptor i32; }
+pub struct Address { pub family i32; pub port u16; pub flags u16; pub scope u32; reserved u32; pub data Vec[u8]; }
+pub struct Accepted { pub socket Socket; pub address Address; }
+pub struct Received { pub count usize; pub address Address; }
+pub struct Pair { pub first Socket; pub second Socket; }
+pub struct PollFd { pub fd i32; pub events i16; pub revents i16; }
+pub const AF_UNIX i32 = 1;
+pub const AF_INET i32 = 2;
+pub const AF_INET6 i32 = 10;
+pub const SOCK_STREAM i32 = 1;
+pub const SOCK_DGRAM i32 = 2;
+pub const SOCK_NONBLOCK i32 = 2048;
+pub const SOCK_CLOEXEC i32 = 524288;
+pub const SOL_SOCKET i32 = 1;
+pub const SO_REUSEADDR i32 = 2;
+pub const SO_ERROR i32 = 4;
+pub const SO_KEEPALIVE i32 = 9;
+pub const SO_RCVTIMEO i32 = 20;
+pub const SO_SNDTIMEO i32 = 21;
+pub const IPPROTO_TCP i32 = 6;
+pub const IPPROTO_IPV6 i32 = 41;
+pub const TCP_NODELAY i32 = 1;
+pub const IPV6_V6ONLY i32 = 26;
+pub const SHUT_RD i32 = 0;
+pub const SHUT_WR i32 = 1;
+pub const SHUT_RDWR i32 = 2;
+pub const MSG_PEEK i32 = 2;
+pub const MSG_DONTWAIT i32 = 64;
+pub const MSG_WAITALL i32 = 256;
+pub const MSG_TRUNC i32 = 32;
+pub const POLLIN i16 = 1;
+pub const POLLOUT i16 = 4;
+pub const POLLERR i16 = 8;
+pub const POLLHUP i16 = 16;
+pub const POLLNVAL i16 = 32;
+pub func fd(socket Socket) i32 { return socket.descriptor; }
+pub func from_fd(descriptor i32) Socket { return Socket(descriptor:descriptor); }
+pub func file(socket Socket) os.File { return os.from_fd(socket.descriptor); }
+pub func socket(family i32, kind i32, protocol i32) Socket throws os.Error {
+    return from_fd(os.check(__woozy_net_socket(family,kind,protocol)));
+}
+pub func close(socket Socket) throws os.Error { os.close(file(socket)); }
+pub func inet_pton(family i32, value string) Address throws os.Error {
+    return os.check(__woozy_net_inet_pton(family,value));
+}
+pub func inet_ntop(address Address) string throws os.Error {
+    return os.check(__woozy_net_inet_ntop(address));
+}
+pub func ip(value string, port u16) Address throws os.Error {
+    var family = AF_INET;
+    if text.contains(value,":") { family = AF_INET6; }
+    var address = inet_pton(family,value);
+    address.port = port;
+    return address;
+}
+pub func any4(port u16) Address {
+    return Address(family:AF_INET,port:port,flags:0,scope:0,reserved:0,data:[0,0,0,0]);
+}
+pub func any6(port u16) Address {
+    return Address(family:AF_INET6,port:port,flags:0,scope:0,reserved:0,data:vec.make[u8](16,0));
+}
+pub func unix_address(name string) Address {
+    return Address(family:AF_UNIX,port:0,flags:0,scope:0,reserved:0,data:text.bytes(name));
+}
+pub func unix_abstract(name Vec[u8]) Address {
+    return Address(family:AF_UNIX,port:0,flags:1,scope:0,reserved:0,data:name[:]);
+}
+pub func bind(socket Socket, address Address) throws os.Error { os.check(__woozy_net_bind(fd(socket),address)); }
+pub func connect(socket Socket, address Address) throws os.Error { os.check(__woozy_net_connect(fd(socket),address)); }
+pub func listen(socket Socket, backlog i32) throws os.Error { os.check(__woozy_net_listen(fd(socket),backlog)); }
+pub func accept(socket Socket, flags u32) Accepted throws os.Error { return os.check(__woozy_net_accept(fd(socket),flags)); }
+pub func getsockname(socket Socket) Address throws os.Error { return os.check(__woozy_net_getsockname(fd(socket))); }
+pub func getpeername(socket Socket) Address throws os.Error { return os.check(__woozy_net_getpeername(fd(socket))); }
+pub func shutdown(socket Socket, how i32) throws os.Error { os.check(__woozy_net_shutdown(fd(socket),how)); }
+pub func send(socket Socket, data Vec[u8], count usize, flags i32) usize throws os.Error {
+    return os.check(__woozy_net_send(fd(socket),data,0,count,flags));
+}
+pub func recv(socket Socket, data Vec[u8], count usize, flags i32) usize throws os.Error {
+    return os.check(__woozy_net_recv(fd(socket),data,count,flags));
+}
+pub func sendto(socket Socket, data Vec[u8], count usize, flags i32, address Address) usize throws os.Error {
+    return os.check(__woozy_net_sendto(fd(socket),data,count,flags,address));
+}
+pub func recvfrom(socket Socket, data Vec[u8], count usize, flags i32) Received throws os.Error {
+    return os.check(__woozy_net_recvfrom(fd(socket),data,count,flags));
+}
+pub func send_all(socket Socket, data Vec[u8], flags i32) throws os.Error {
+    var completed usize = 0;
+    for completed < vec.len(data) {
+        try {
+            let count = os.check(__woozy_net_send(fd(socket),data,completed,vec.len(data)-completed,flags));
+            if count == 0 { throw os.Error.NoProgress(completed); }
+            completed += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,count): continue;
+                case os.Error.WouldBlock(code,count): throw os.Error.WouldBlock(code,completed);
+                case os.Error.System(code,count): throw os.Error.System(code,completed);
+                case os.Error.NoProgress(count): throw error;
+            }
+        }
+    }
+}
+pub func setsockopt_int(socket Socket, level i32, option i32, value i32) throws os.Error {
+    os.check(__woozy_net_setsockopt_int(fd(socket),level,option,value));
+}
+pub func getsockopt_int(socket Socket, level i32, option i32) i32 throws os.Error {
+    return os.check(__woozy_net_getsockopt_int(fd(socket),level,option));
+}
+pub func setsockopt(socket Socket, level i32, option i32, value Vec[u8], count usize) throws os.Error {
+    os.check(__woozy_net_setsockopt_bytes(fd(socket),level,option,value,count));
+}
+pub func getsockopt(socket Socket, level i32, option i32, value Vec[u8], count usize) usize throws os.Error {
+    return os.check(__woozy_net_getsockopt_bytes(fd(socket),level,option,value,count));
+}
+pub func socketpair(family i32, kind i32, protocol i32) Pair throws os.Error {
+    return os.check(__woozy_net_socketpair(family,kind,protocol));
+}
+pub func poll(rows Vec[PollFd], timeout_ms i32) i32 throws os.Error {
+    return os.check(__woozy_net_poll(rows,vec.len(rows),timeout_ms));
+}
+
+pub const AF_UNSPEC i32 = 0;
+pub func getaddrinfo(hostname string, port u16, family i32) Vec[Address] throws os.Error {
+    return os.check(__woozy_net_lookup(hostname,port,family));
+}

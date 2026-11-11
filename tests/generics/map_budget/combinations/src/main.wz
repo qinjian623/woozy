@@ -1,0 +1,61 @@
+package app;
+
+import "std/hash" as hash;
+import "std/map" as map;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct PairKey { left i32; right i32; }
+impl hash.Hash for PairKey {
+    func hash(value Self) u64 {
+        return hash.combine(u64(value.left), u64(value.right));
+    }
+    func equals(left Self, right Self) bool {
+        return left.left == right.left && left.right == right.right;
+    }
+}
+struct CollisionKey { id i32; }
+impl hash.Hash for CollisionKey {
+    func hash(value Self) u64 { return 7; }
+    func equals(left Self, right Self) bool { return left.id == right.id; }
+}
+
+func exercise[K hash.Hash,V](key K, value V) i32 {
+    let values = map.new[K,V]();
+    switch map.insert(values, key, value) {
+        case option.Option.Some(previous): return 1;
+        case option.Option.None: {}
+    }
+    if map.len(values) != 1 || !map.contains(values, key) { return 2; }
+    switch map.get(values, key) {
+        case option.Option.Some(found): {}
+        case option.Option.None: return 3;
+    }
+    if vec.len(map.keys(values)) != 1 { return 4; }
+    if vec.len(map.values(values)) != 1 { return 5; }
+    let entries = map.entries(values);
+    if vec.len(entries) != 1 || !K.equals(entries[0].key, key) { return 6; }
+    switch map.remove(values, key) {
+        case option.Option.Some(found): {}
+        case option.Option.None: return 7;
+    }
+    if map.len(values) != 0 { return 8; }
+    map.insert(values, key, value);
+    map.clear(values);
+    if map.len(values) != 0 || map.contains(values, key) { return 9; }
+    return 0;
+}
+
+func main() i32 {
+    // The first five combinations come from the collection library fixtures.
+    if exercise[i32,string](1, "one") != 0 { return 11; }
+    if exercise[CollisionKey,string](CollisionKey(id: 1), "collision") != 0 { return 12; }
+    if exercise[PairKey,i32](PairKey(left: 1, right: 2), 12) != 0 { return 13; }
+    if exercise[i32,i32](2, 3) != 0 { return 14; }
+    if exercise[string,Vec[string]]("key", ["value"]) != 0 { return 15; }
+    if exercise[i64,bool](4, true) != 0 { return 16; }
+    // Repeated requests for the same concrete function must reuse its instance.
+    if exercise[i32,string](2, "two") != 0 { return 17; }
+    if exercise[string,Vec[string]]("other", ["again"]) != 0 { return 18; }
+    return 0;
+}

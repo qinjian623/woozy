@@ -74,7 +74,8 @@ class Emitter {
        builder.getInt64Ty(),
        builder.getPtrTy(),
        builder.getPtrTy(),
-       builder.getPtrTy()});
+       builder.getPtrTy(),
+       builder.getInt64Ty()});
   hir::Type type(TypeId id) const { return *aggregates.types.find(id); }
   llvm::Type *lower_type(TypeId id) {
     if (auto found = layouts.find(id); found != layouts.end())
@@ -98,11 +99,12 @@ class Emitter {
     case hir::TypeKind::MutexHandle:
     case hir::TypeKind::CondvarHandle:
     case hir::TypeKind::AtomicI64Handle:
+    case hir::TypeKind::IpcHandle:
       return builder.getPtrTy();
     case hir::TypeKind::String: {
       auto *layout = llvm::StructType::get(
           context,
-          {builder.getPtrTy(), module.getDataLayout().getIntPtrType(context)});
+          {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty(), builder.getPtrTy()});
       layouts.emplace(id, layout);
       return layout;
     }
@@ -173,6 +175,7 @@ class Emitter {
     case hir::TypeKind::MutexHandle: return "std/sync.Mutex";
     case hir::TypeKind::CondvarHandle: return "std/sync.Condvar";
     case hir::TypeKind::AtomicI64Handle: return "std/sync.AtomicI64";
+    case hir::TypeKind::IpcHandle: return "std/ipc.Handle";
     case hir::TypeKind::Vec:
       return "Vec[" + type_key(t.type_args[0]) + "]";
     case hir::TypeKind::Function: {
@@ -239,46 +242,7 @@ class Emitter {
     const auto &left = type(value_types.at(i.inputs[0]));
     bool sign = signed_(left);
     using B = hir::BinaryOp;
-    if (left.kind == hir::TypeKind::String) {
-      // String is {ptr, target_uintptr}. Compare the complete decoded byte
-      // sequence including embedded NULs, never the address or a terminator.
-      // The declaration resolves to the project's freestanding memcmp.
-      if (i.binary != B::equal && i.binary != B::not_equal)
-        fail("invalid verified string operation");
-      auto *len_a = builder.CreateExtractValue(a, {1});
-      auto *len_b = builder.CreateExtractValue(b, {1});
-      auto *len_equal = builder.CreateICmpEQ(len_a, len_b);
-      auto *fn = builder.GetInsertBlock()->getParent();
-      auto *same = llvm::BasicBlock::Create(context, "string.len.eq", fn);
-      auto *different = llvm::BasicBlock::Create(context, "string.len.ne", fn);
-      auto *nonzero = llvm::BasicBlock::Create(context, "string.bytes", fn);
-      auto *join = llvm::BasicBlock::Create(context, "string.cmp", fn);
-      builder.CreateCondBr(len_equal, same, different);
-      builder.SetInsertPoint(different);
-      builder.CreateBr(join);
-      builder.SetInsertPoint(same);
-      auto *present = builder.CreateICmpNE(len_a,
-          llvm::ConstantInt::get(len_a->getType(), 0));
-      builder.CreateCondBr(present, nonzero, join);
-      builder.SetInsertPoint(nonzero);
-      auto *memcmp_type = llvm::FunctionType::get(
-          builder.getInt32Ty(),
-          {builder.getPtrTy(), builder.getPtrTy(), builder.getInt64Ty()},
-          false);
-      auto memcmp_fn = module.getOrInsertFunction("memcmp", memcmp_type);
-      auto *length = builder.CreateIntCast(len_a, builder.getInt64Ty(), false);
-      auto *compared = builder.CreateCall(
-          memcmp_fn, {builder.CreateExtractValue(a, {0}),
-                      builder.CreateExtractValue(b, {0}), length});
-      auto *equal = builder.CreateICmpEQ(compared, builder.getInt32(0));
-      builder.CreateBr(join);
-      builder.SetInsertPoint(join);
-      auto *phi = builder.CreatePHI(builder.getInt1Ty(), 3);
-      phi->addIncoming(builder.getFalse(), different);
-      phi->addIncoming(builder.getTrue(), same);
-      phi->addIncoming(equal, nonzero);
-      return i.binary == B::equal ? phi : builder.CreateNot(phi);
-    }
+    if (left.kind == hir::TypeKind::String) return text_binary(i, a, b);
     if (left.kind == hir::TypeKind::Float) {
       // These operations round in their own LLVM float/double type. No
       // widening, fast-math flags, contraction, or integer zero guard.
@@ -480,6 +444,9 @@ class Emitter {
   }
 #include "value_ops.inc"
 #include "concurrency.inc"
+#include "system_extra.inc"
+#include "process_ops.inc"
+#include "text_values.inc"
   void emit_vec_check(llvm::Value *vec, llvm::Value *index, SourceSpan source) {
     auto *length = vec_field(vec, 1, builder.getInt64Ty());
     auto *init = vec_field(vec, 2, builder.getInt64Ty());
@@ -491,6 +458,10 @@ class Emitter {
                            llvm::ArrayRef<llvm::Value *> args) {
     using hir::SystemOperation;
     if (!i.system) fail("system operation missing");
+    if (auto *value = process_system_call(i, args)) return value;
+    if (auto *value = extra_system_call(i, args)) return value;
+    for (const auto &spec : hir::value_system_operations)
+      if (spec.operation == *i.system) return value_system_call(i, args);
     auto call = [&](llvm::StringRef name, llvm::Type *result,
                     llvm::ArrayRef<llvm::Value *> actual) -> llvm::Value * {
       llvm::SmallVector<llvm::Type *, 8> types;
@@ -577,6 +548,7 @@ class Emitter {
       call(name, builder.getVoidTy(), args);
       return builder.getInt8(0);
     }
+    default: break;
     }
     fail("unknown system operation");
     return nullptr;
@@ -600,11 +572,16 @@ class Emitter {
     case ir::Op::destroy:
       destroy_slot(i.slot.value, current_function->slots.at(i.slot.value).type); break;
     case ir::Op::iteration_end:
-      runtime("lang_vec_end_v1", builder.getVoidTy(),
-              {builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value))}); break;
+      if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::Vec)
+        runtime("lang_vec_end_v1", builder.getVoidTy(),
+                {builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value))});
+      break;
     case ir::Op::iteration_begin: {
-      auto *vec = builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value));
-      auto *length = runtime("lang_vec_begin_v1", builder.getInt64Ty(), {vec});
+      auto collection_type = current_function->slots.at(i.slot.value).type;
+      auto *collection = builder.CreateLoad(lower_type(collection_type), slots.at(i.slot.value));
+      auto *length = type(collection_type).kind == hir::TypeKind::String
+                         ? builder.CreateExtractValue(collection, {2})
+                         : runtime("lang_vec_begin_v1", builder.getInt64Ty(), {collection});
       builder.CreateStore(length, iteration_lengths.at(i.slot.value));
       builder.CreateStore(builder.getInt64(0), iteration_indices.at(i.slot.value)); break;
     }
@@ -616,13 +593,20 @@ class Emitter {
       builder.CreateStore(builder.CreateAdd(builder.CreateLoad(builder.getInt64Ty(), index), builder.getInt64(1)), index); break;
     }
     case ir::Op::iteration_read: {
-      auto *vec = builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value));
       auto *index = builder.CreateLoad(builder.getInt64Ty(), iteration_indices.at(i.slot.value));
-      auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {vec, index});
-      v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address)); break;
+      if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::String) {
+        v = runtime("lang_text_at_v1", builder.getInt32Ty(), {slots.at(i.slot.value), index});
+      } else {
+        auto *vec = builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value));
+        auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {vec, index});
+        v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));
+      }
+      break;
     }
     case ir::Op::vec_length: {
-      v = vec_field(args[0], 1, builder.getInt64Ty());
+      v = type(value_types.at(i.inputs[0])).kind == hir::TypeKind::String
+              ? builder.CreateExtractValue(args[0], {2})
+              : vec_field(args[0], 1, builder.getInt64Ty());
       break;
     }
     case ir::Op::vec_init: {
@@ -680,7 +664,13 @@ class Emitter {
     }
     case ir::Op::vec_read: {
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
-      auto element_type = type(value_types.at(i.inputs[0])).type_args[0];
+      auto receiver_type = value_types.at(i.inputs[0]);
+      if (type(receiver_type).kind == hir::TypeKind::String) {
+        guard(builder.CreateICmpUGE(index, builder.CreateExtractValue(args[0], {2})), 4, i.source);
+        v = runtime("lang_text_at_v1", builder.getInt32Ty(), {value_address(receiver_type, args[0]), index});
+        break;
+      }
+      auto element_type = type(receiver_type).type_args[0];
       if (!owning(element_type)) {
         emit_vec_check(args[0], index, i.source);
         auto *data = vec_field(args[0], 5, builder.getPtrTy());
@@ -721,8 +711,17 @@ class Emitter {
                                : static_cast<llvm::Value *>(builder.getInt64(0));
       if (i.bits & 1) ++p;
       auto *end = (i.bits & 2) ? checked_index(args[p], value_types.at(i.inputs[p]), i.source, 9)
-                             : runtime("lang_vec_length_v1", builder.getInt64Ty(), {args[0]});
-      v = runtime("lang_vec_slice_v1", builder.getPtrTy(), {args[0], start, end}); break;
+                             : type(i.type).kind == hir::TypeKind::String
+                                 ? builder.CreateExtractValue(args[0], {2})
+                                 : runtime("lang_vec_length_v1", builder.getInt64Ty(), {args[0]});
+      if (type(i.type).kind == hir::TypeKind::String) {
+        guard(builder.CreateOr(builder.CreateICmpUGT(start, end),
+                                builder.CreateICmpUGT(end, builder.CreateExtractValue(args[0], {2}))), 9, i.source);
+        auto *out = storage(lower_type(i.type));
+        runtime("lang_text_slice_v1", builder.getVoidTy(), {out, value_address(i.type, args[0]), start, end});
+        v = builder.CreateLoad(lower_type(i.type), out);
+      } else v = runtime("lang_vec_slice_v1", builder.getPtrTy(), {args[0], start, end});
+      break;
     }
     case ir::Op::begin_borrow:
     case ir::Op::ownership_begin:
@@ -747,7 +746,10 @@ class Emitter {
       auto *length = llvm::ConstantInt::get(
           llvm::cast<llvm::IntegerType>(layout->getElementType(1)),
           i.utf8.size());
-      v = llvm::ConstantStruct::get(layout, {storage, length});
+      uint64_t runes = 0;
+      for (unsigned char byte : i.utf8) if ((byte & 0xc0) != 0x80) ++runes;
+      v = llvm::ConstantStruct::get(layout,
+          {storage, length, builder.getInt64(runes), llvm::ConstantPointerNull::get(builder.getPtrTy())});
       break;
     }
     case ir::Op::constant: {

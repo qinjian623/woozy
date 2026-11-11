@@ -84,11 +84,14 @@ def elf_checks(program):
     headers = command(['readelf', '--wide', '-l', program])
     dynamic = command(['readelf', '--wide', '-d', program])
     symbols = command(['nm', '--undefined-only', program])
-    undefined = [line.split()[-1] for line in symbols['stdout'].splitlines()
-                 if line.strip()]
-    unexpected = [s for s in undefined if not s.startswith('lang_vec_observe_')]
+    undefined_rows = [line.split() for line in symbols['stdout'].splitlines()
+                      if line.strip()]
+    undefined = [fields[-1] for fields in undefined_rows]
+    optional_hooks = {'lang_vec_observe_v1', 'lang_process_init_v1'}
+    unexpected = [fields for fields in undefined_rows
+                  if fields[0] != 'w' or fields[-1] not in optional_hooks]
     check = dict(command=[headers, dynamic, symbols], undefined=undefined,
-                 unexpected=undefined)
+                 unexpected=unexpected)
     assert 'INTERP' not in headers['stdout'], 'PT_INTERP present'
     assert 'NEEDED' not in dynamic['stdout'], 'DT_NEEDED present'
     assert 'There is no dynamic section' in dynamic['stdout'] or \

@@ -149,7 +149,9 @@ def elf_checks(program):
               if line.split()[0] not in ('w', 'v')]
     assert not strong, ('strong undefined symbols', strong)
     for line in undefined:
-        assert line.split()[-1] == 'lang_vec_observe_v1', line
+        kind, name = line.split()
+        assert kind == 'w' and name in {
+            'lang_vec_observe_v1', 'lang_process_init_v1'}, line
     return dict(program_headers=headers, dynamic=dynamic,
                 undefined=undefined, strong_undefined=strong)
 
@@ -402,12 +404,17 @@ def string_case(args, library, case, manifest, sources, expected, report):
                                         raw=True)
         ok(observed, 'string observer execute')
         data = bytes.fromhex(observed['stdout_hex'])
+        width = metadata['target_word_bits'] // 8
         offset, actual = 0, {}
         for name in metadata['probes']:
-            assert offset + 8 <= len(data), ('missing length', name)
-            length = int.from_bytes(data[offset:offset + 8], 'little')
-            offset += 8
+            assert offset + 2 * width <= len(data), ('missing lengths', name)
+            length = int.from_bytes(data[offset:offset + width], 'little')
+            offset += width
+            runes = int.from_bytes(data[offset:offset + width], 'little')
+            offset += width
+            assert offset + length <= len(data), ('missing string bytes', name)
             actual[name] = data[offset:offset + length]
+            assert runes == len(expected[name].decode('utf-8')), (name, runes)
             offset += length
         assert offset == len(data), ('extra observation bytes', offset, len(data))
         assert set(actual) == set(expected), actual

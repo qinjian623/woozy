@@ -1,0 +1,145 @@
+package io;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/option" as option;
+import "std/strconv" as strconv;
+
+pub trait Printable { func to_text(value Self) string; }
+impl Printable for string { func to_text(value Self) string { return value; } }
+impl Printable for bool { func to_text(value Self) string { if value { return "true"; } return "false"; } }
+impl Printable for i8 { func to_text(value Self) string { return strconv.format_i64(i64(value)); } }
+impl Printable for i16 { func to_text(value Self) string { return strconv.format_i64(i64(value)); } }
+impl Printable for i32 { func to_text(value Self) string { return strconv.format_i64(i64(value)); } }
+impl Printable for i64 { func to_text(value Self) string { return strconv.format_i64(value); } }
+impl Printable for isize { func to_text(value Self) string { return strconv.format_i64(i64(value)); } }
+impl Printable for u8 { func to_text(value Self) string { return strconv.format_u64(u64(value)); } }
+impl Printable for u16 { func to_text(value Self) string { return strconv.format_u64(u64(value)); } }
+impl Printable for u32 { func to_text(value Self) string { return strconv.format_u64(u64(value)); } }
+impl Printable for u64 { func to_text(value Self) string { return strconv.format_u64(value); } }
+impl Printable for usize { func to_text(value Self) string { return strconv.format_u64(u64(value)); } }
+impl Printable for f32 { func to_text(value Self) string { return strconv.format_f32(value); } }
+impl Printable for f64 { func to_text(value Self) string { return strconv.format_f64(value); } }
+
+pub func print[T Printable](value T) throws os.Error {
+    os.write_all_text(os.stdout(),value.to_text());
+}
+pub func println[T Printable](value T) throws os.Error {
+    os.write_all_text(os.stdout(),value.to_text()+"\n");
+}
+pub func eprint[T Printable](value T) throws os.Error {
+    os.write_all_text(os.stderr(),value.to_text());
+}
+pub func eprintln[T Printable](value T) throws os.Error {
+    os.write_all_text(os.stderr(),value.to_text()+"\n");
+}
+pub func decode(data Vec[u8]) string throws os.Error {
+    try { return text.from_bytes(data); }
+    catch error text.Error { throw os.Error.System(84,0); }
+}
+pub func read_all(file os.File) Vec[u8] throws os.Error {
+    let out = vec.empty[u8]();
+    let buffer = vec.make[u8](4096,0);
+    for true {
+        var count usize = 0;
+        try { count = os.read(file,buffer,vec.len(buffer)); }
+        catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): continue;
+                default: throw error;
+            }
+        }
+        if count == 0 { return out; }
+        for var index usize = 0; index < count; index += 1 { vec.push(out,buffer[index]); }
+    }
+}
+pub func read_text(file os.File) string throws os.Error { return decode(read_all(file)); }
+
+pub struct Reader { file os.File; buffer Vec[u8]; cursor Vec[usize]; }
+pub func reader(file os.File) Reader {
+    return Reader(file:file,buffer:vec.make[u8](4096,0),cursor:[0,0]);
+}
+pub func read_byte(input Reader) option.Option[u8] throws os.Error {
+    for input.cursor[0] == input.cursor[1] {
+        try {
+            let count = os.read(input.file,input.buffer,vec.len(input.buffer));
+            input.cursor[0] = 0;
+            input.cursor[1] = count;
+            if count == 0 { return option.Option[u8].None; }
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): continue;
+                default: throw error;
+            }
+        }
+    }
+    let byte = input.buffer[input.cursor[0]];
+    input.cursor[0] += 1;
+    return option.Option[u8].Some(byte);
+}
+// A line excludes LF and a preceding CR; EOF after data still returns a line.
+pub func read_line_bytes(input Reader) option.Option[Vec[u8]] throws os.Error {
+    let out = vec.empty[u8]();
+    for true {
+        try {
+            switch read_byte(input) {
+                case option.Option.None: {
+                    if vec.len(out) == 0 { return option.Option[Vec[u8]].None; }
+                    return option.Option[Vec[u8]].Some(out);
+                }
+                case option.Option.Some(byte): {
+                    if byte == 10 {
+                        if vec.len(out) > 0 && out[vec.len(out)-1] == 13 { let removed=vec.pop(out); }
+                        return option.Option[Vec[u8]].Some(out);
+                    }
+                    vec.push(out,byte);
+                }
+            }
+        } catch error os.Error {
+            // A failed refill has no unread suffix; replay this line for aliases.
+            let count = vec.len(out);
+            if count > 0 {
+                if vec.len(input.buffer) < count { vec.resize(input.buffer,count,0); }
+                for var index usize = 0; index < count; index += 1 { input.buffer[index] = out[index]; }
+                input.cursor[0] = 0;
+                input.cursor[1] = count;
+            }
+            throw error;
+        }
+    }
+}
+pub func read_line(input Reader) option.Option[string] throws os.Error {
+    switch read_line_bytes(input) {
+        case option.Option.None: return option.Option[string].None;
+        case option.Option.Some(data): return option.Option[string].Some(decode(data));
+    }
+}
+
+pub struct Writer { file os.File; pending Vec[u8]; }
+pub func writer(file os.File) Writer { return Writer(file:file,pending:vec.empty[u8]()); }
+pub func flush(output Writer) throws os.Error {
+    try { os.write_all(output.file,output.pending); }
+    catch error os.Error {
+        var completed usize = 0;
+        switch error {
+            case os.Error.Interrupted(code,count): completed = count;
+            case os.Error.WouldBlock(code,count): completed = count;
+            case os.Error.System(code,count): completed = count;
+            case os.Error.NoProgress(count): completed = count;
+        }
+        let remaining = vec.len(output.pending)-completed;
+        for var index usize = 0; index < remaining; index += 1 {
+            output.pending[index] = output.pending[index+completed];
+        }
+        vec.resize(output.pending,remaining,0);
+        throw error;
+    }
+    vec.clear(output.pending);
+}
+pub func write(output Writer, data Vec[u8]) throws os.Error {
+    for byte in data {
+        if vec.len(output.pending) == 4096 { flush(output); }
+        vec.push(output.pending,byte);
+    }
+}
+pub func write_text(output Writer, value string) throws os.Error { write(output,text.bytes(value)); }

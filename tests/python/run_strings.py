@@ -7,7 +7,7 @@ import sys
 
 sys.dont_write_bytecode = True
 from string_cases import (STRING_FIXTURES, STRING_FIXTURE_PATHS, command,
-                           rejection_checks, sha, succeeded)
+                           rejection_checks, runtime_checks, sha, succeeded)
 
 
 def main():
@@ -65,6 +65,7 @@ def main():
             assert observed['text'] == expected.decode('utf-8'), row
             row['status'] = 'passed'
         report['rejections'] = rejection_checks(args.cli, 'python', args.out)
+        report['runtime_cases'] = runtime_checks(args.cli, 'python', args.out, args.python)
         report['generated_sha256'] = {name: sha(out / name) for name in ('program.py', 'langrt.py')}
         report['status'] = 'passed'
     finally:

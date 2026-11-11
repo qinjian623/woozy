@@ -98,33 +98,42 @@ void suite() {
     auto &a=system(m,SystemOperation::unlink); auto &b=system(m,SystemOperation::rmdir);
     std::swap(a.origin,b.origin);std::swap(a.system,b.system);
   });
-  rejected(good,"system instruction order",[](auto &m){
+  // Move complete statements, including the String argument's borrow/drop.
+  auto groups = [](const auto &instructions) -> std::pair<size_t,size_t> {
+    std::vector<size_t> calls;
+    for (size_t i=0;i<instructions.size();++i)
+      if (instructions[i].op==ir::Op::system_call) calls.push_back(i);
+    if (calls.size()!=2 || instructions[calls[0]].system!=SystemOperation::unlink ||
+        instructions[calls[1]].system!=SystemOperation::rmdir) return {0,0};
+    need(instructions.front().op==ir::Op::string_literal, "first argument missing");
+    size_t middle=calls[0]+1;
+    while (middle<instructions.size() && instructions[middle].op!=ir::Op::string_literal) ++middle;
+    need(middle<calls[1] && instructions.back().op==ir::Op::constant,
+         "statement group prerequisite changed");
+    return {middle,instructions.size()-1};
+  };
+  rejected(good,"system instruction order",[&](auto &m){
     for(auto &function:m.functions) for(auto &block:function.blocks) {
+      auto [middle,end]=groups(block.instructions);
+      if (!middle) continue;
       auto &instructions=block.instructions;
-      for(size_t i=1;i+2<instructions.size();++i)
-        if(instructions[i].op==ir::Op::system_call&&instructions[i].system==SystemOperation::unlink) {
-          need(instructions[i-1].op==ir::Op::string_literal&&instructions[i+1].op==ir::Op::string_literal&&
-                   instructions[i+2].op==ir::Op::system_call&&instructions[i+2].system==SystemOperation::rmdir,
-               "order mutation prerequisite changed");
-          std::rotate(instructions.begin()+i-1,instructions.begin()+i+1,instructions.begin()+i+3);
-          return;
-        }
+      std::rotate(instructions.begin(),instructions.begin()+middle,instructions.begin()+end);
+      return;
     }
     throw std::runtime_error("order mutation missing");
   });
-  rejected(good,"system order across a split block",[](auto &m){
+  rejected(good,"system order across a split block",[&](auto &m){
     for(auto &function:m.functions) {
       if(function.blocks.size()!=1) continue;
       auto &block=function.blocks.front();
       auto &instructions=block.instructions;
-      if(instructions.size()<4||instructions[1].system!=SystemOperation::unlink||
-         instructions[3].system!=SystemOperation::rmdir) continue;
-      need(instructions[0].op==ir::Op::string_literal&&instructions[2].op==ir::Op::string_literal,
-           "split order mutation prerequisite changed");
-      std::rotate(instructions.begin(),instructions.begin()+2,instructions.begin()+4);
+      auto [middle,end]=groups(instructions);
+      if (!middle) continue;
+      const auto first_size=end-middle;
+      std::rotate(instructions.begin(),instructions.begin()+middle,instructions.begin()+end);
       ir::BasicBlock tail;
-      tail.instructions.assign(instructions.begin()+2,instructions.end());
-      instructions.erase(instructions.begin()+2,instructions.end());
+      tail.instructions.assign(instructions.begin()+first_size,instructions.end());
+      instructions.erase(instructions.begin()+first_size,instructions.end());
       tail.terminator=block.terminator;
       block.terminator={};
       block.terminator.kind=ir::Exit::branch;

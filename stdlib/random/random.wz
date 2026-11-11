@@ -1,0 +1,98 @@
+package random;
+import "std/os" as os;
+import "std/vec" as vec;
+
+pub func fill(data Vec[u8]) throws os.Error {
+    var chunk = vec.len(data);
+    if chunk == 0 { return; }
+    if chunk > 4096 { chunk = 4096; }
+    let buffer = vec.make[u8](chunk,0);
+    var completed usize = 0;
+    for completed < vec.len(data) {
+        var count = vec.len(data)-completed;
+        if count > 4096 { count = 4096; }
+        var received usize = 0;
+        try { received = os.getrandom(buffer,count,0); }
+        catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,ignored): continue;
+                case os.Error.WouldBlock(code,ignored): throw os.Error.WouldBlock(code,completed);
+                case os.Error.System(code,ignored): throw os.Error.System(code,completed);
+                case os.Error.NoProgress(ignored): throw os.Error.NoProgress(completed);
+            }
+        }
+        if received == 0 { throw os.Error.NoProgress(completed); }
+        for var index usize = 0; index < received; index += 1 { data[completed+index] = buffer[index]; }
+        completed += received;
+    }
+}
+pub func bytes(count usize) Vec[u8] throws os.Error {
+    let out = vec.make[u8](count,0);
+    fill(out);
+    return out;
+}
+pub func secure_u64() u64 throws os.Error {
+    let data = bytes(8);
+    var out u64 = 0;
+    for var index usize = 0; index < 8; index += 1 { out = out | (u64(data[index]) << (index*8)); }
+    return out;
+}
+pub func secure_below(bound u64) u64 throws os.Error {
+    if bound == 0 { throw os.Error.System(22,0); }
+    let threshold = (u64(0)-bound)%bound;
+    for true {
+        let value = secure_u64();
+        if value >= threshold { return value%bound; }
+    }
+}
+
+// xoshiro256++ is deterministic, not a cryptographic generator; use fill for secrets.
+pub struct Random { state Vec[u64]; }
+func mix(value u64) u64 {
+    var mixed = value;
+    mixed = (mixed ^ (mixed >> 30))*0xbf58476d1ce4e5b9;
+    mixed = (mixed ^ (mixed >> 27))*0x94d049bb133111eb;
+    return mixed ^ (mixed >> 31);
+}
+func rotate(value u64, count u64) u64 { return (value << count) | (value >> (64-count)); }
+pub func seeded(seed u64) Random {
+    let state = vec.empty[u64]();
+    var value = seed;
+    for var index i32 = 0; index < 4; index += 1 {
+        value += 0x9e3779b97f4a7c15;
+        vec.push(state,mix(value));
+    }
+    return Random(state:state);
+}
+pub func new() Random throws os.Error { return seeded(secure_u64()); }
+pub func next_u64(random Random) u64 {
+    let state = random.state;
+    let result = rotate(state[0]+state[3],23)+state[0];
+    let temporary = state[1] << 17;
+    state[2] = state[2] ^ state[0];
+    state[3] = state[3] ^ state[1];
+    state[1] = state[1] ^ state[2];
+    state[0] = state[0] ^ state[3];
+    state[2] = state[2] ^ temporary;
+    state[3] = rotate(state[3],45);
+    return result;
+}
+pub func below(random Random, bound u64) u64 throws os.Error {
+    if bound == 0 { throw os.Error.System(22,0); }
+    let threshold = (u64(0)-bound)%bound;
+    for true {
+        let value = next_u64(random);
+        if value >= threshold { return value%bound; }
+    }
+}
+pub func next_f64(random Random) f64 { return f64(next_u64(random) >> 11)/9007199254740992.0; }
+pub func shuffle[T](random Random, values Vec[T]) throws os.Error {
+    var count = vec.len(values);
+    for count > 1 {
+        let index = usize(below(random,u64(count)));
+        count -= 1;
+        let saved = values[count];
+        values[count] = values[index];
+        values[index] = saved;
+    }
+}

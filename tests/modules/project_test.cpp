@@ -559,14 +559,15 @@ host_package="host"
     require(!undeclared.success() && code(undeclared, "E_IMPORT_NOT_FOUND"),
             "bundle must not open undeclared modules");
     auto bundled_std = run("package demo; import \"std/os\"; func main() {}");
-    require(bundled_std.success() && bundled_std.value->modules.size() == 2,
+    require(bundled_std.success() && std::any_of(bundled_std.value->modules.begin(), bundled_std.value->modules.end(),
+                [](const auto &module) { return module.logical_path == "std/os" && !module.binding; }),
             "bundled source std is available without explicit configuration");
-    auto no_std = run("package demo; import \"std/io\"; func main() {}");
+    auto no_std = run("package demo; import \"std/missing_module\"; func main() {}");
     require(!no_std.success() && code(no_std, "E_IMPORT_NOT_FOUND"),
             "an absent bundled std module still fails");
     write(root / "stdlib/io/io.wz", "package io; pub func print() {}");
     opts.std_source_root = root / "stdlib";
-    auto with_std = modules::load_project(opts, sm);
+    auto with_std = run("package demo; import \"std/io\"; func main() {}");
     require(with_std.success() && with_std.value->modules.size() == 2,
             "std source");
     opts.std_source_root.reset();

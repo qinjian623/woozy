@@ -1,0 +1,119 @@
+package app;
+import "std/io" as io;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/option" as option;
+import "std/thread" as thread;
+
+func blocked(input io.Reader) bool throws os.Error {
+    try { let line = io.read_line_bytes(input); }
+    catch error os.Error {
+        switch error {
+            case os.Error.WouldBlock(code,completed): return code == 11;
+            default: throw error;
+        }
+    }
+    return false;
+}
+func lines() i32 throws os.Error {
+    let pipe = os.pipe(u32(os.O_NONBLOCK|os.O_CLOEXEC));
+    defer { try { os.close(pipe.read_end); } catch error os.Error {} }
+    let input = io.reader(pipe.read_end);
+    let alias = input;
+    os.write_all_text(pipe.write_end,"ab");
+    var would_block = false;
+    try { let line = io.read_line(input); }
+    catch error os.Error {
+        switch error { case os.Error.WouldBlock(code,completed): would_block = code == 11; default: throw error; }
+    }
+    if !would_block || !blocked(alias) { return 1; }
+    os.write_all_text(pipe.write_end,"cd\n");
+    switch io.read_line(alias) { case option.Option.Some(line): if line != "abcd" { return 2; } case option.Option.None: return 3; }
+    os.close(pipe.write_end);
+    switch io.read_line_bytes(input) { case option.Option.Some(line): return 4; case option.Option.None: {} }
+
+    let next = os.pipe(u32(os.O_NONBLOCK|os.O_CLOEXEC));
+    defer { try { os.close(next.read_end); } catch error os.Error {} }
+    let second = io.reader(next.read_end);
+    let second_alias = second;
+    os.write_all_text(next.write_end,"xy");
+    if !blocked(second) { return 5; }
+    switch io.read_byte(second_alias) { case option.Option.Some(byte): if byte != 120 { return 6; } case option.Option.None: return 7; }
+    os.write_all_text(next.write_end,"z\n");
+    switch io.read_line(second) { case option.Option.Some(line): if line != "yz" { return 8; } case option.Option.None: return 9; }
+    os.close(next.write_end);
+    switch io.read_byte(second_alias) { case option.Option.Some(byte): return 10; case option.Option.None: {} }
+
+    let long_pipe = os.pipe(u32(os.O_NONBLOCK|os.O_CLOEXEC));
+    defer { try { os.close(long_pipe.read_end); } catch error os.Error {} }
+    let long_reader = io.reader(long_pipe.read_end);
+    let long_alias = long_reader;
+    let chunk = vec.make[u8](3000,97);
+    os.write_all(long_pipe.write_end,chunk);
+    if !blocked(long_reader) { return 11; }
+    os.write_all(long_pipe.write_end,chunk);
+    if !blocked(long_alias) { return 12; }
+    switch io.read_byte(long_reader) { case option.Option.Some(byte): if byte != 97 { return 13; } case option.Option.None: return 14; }
+    os.write_all_text(long_pipe.write_end,"\r\nNEXT\n");
+    switch io.read_line_bytes(long_alias) {
+        case option.Option.Some(line): {
+            if vec.len(line) != 5999 { return 15; }
+            for byte in line { if byte != 97 { return 16; } }
+        }
+        case option.Option.None: return 17;
+    }
+    switch io.read_line(long_reader) { case option.Option.Some(line): if line != "NEXT" { return 18; } case option.Option.None: return 19; }
+    os.close(long_pipe.write_end);
+    return 0;
+}
+struct FifoInput { name string; data string; }
+func fifo_writer(input FifoInput) i64 {
+    try {
+        let output = os.open(input.name,os.O_WRONLY|os.O_CLOEXEC,0);
+        os.write_all_text(output,input.data);
+        os.close(output);
+        return 0;
+    } catch error os.Error { return 1; }
+}
+func files() i32 throws os.Error {
+    fs.write_text("destination","keep\0中😀",0o600);
+    os.mkdir("source-directory",0o700);
+    var rejected = false;
+    try { fs.copy_file("source-directory","destination",0o600); }
+    catch error os.Error {
+        switch error { case os.Error.System(code,completed): rejected = code == 21; default: throw error; }
+    }
+    if !rejected || fs.read_text("destination") != "keep\0中😀" { return 21; }
+    rejected = false;
+    try { fs.copy_file("source-directory","absent-destination",0o600); }
+    catch error os.Error {
+        switch error { case os.Error.System(code,completed): rejected = code == 21; default: throw error; }
+    }
+    if !rejected || fs.exists("absent-destination") { return 22; }
+    fs.write_text("source-file","copied\0😀",0o600);
+    fs.copy_file("source-file","destination",0o600);
+    if fs.read_text("destination") != "copied\0😀" { return 23; }
+    rejected = false;
+    try { fs.copy_file("source-file","source-file",0o600); }
+    catch error os.Error { switch error { case os.Error.System(code,completed): rejected = code == 22; default: throw error; } }
+    if !rejected || fs.read_text("source-file") != "copied\0😀" { return 24; }
+    os.link("source-file","hard-link");
+    rejected = false;
+    try { fs.copy_file("source-file","hard-link",0o600); }
+    catch error os.Error { switch error { case os.Error.System(code,completed): rejected = code == 22; default: throw error; } }
+    if !rejected || fs.read_text("source-file") != "copied\0😀" { return 25; }
+    os.mkfifo("source-fifo",0o600);
+    let worker = thread.spawn[FifoInput](fifo_writer,FifoInput(name:"source-fifo",data:"fifo😀"));
+    fs.copy_file("source-fifo","fifo-copy",0o600);
+    if thread.join(worker) != 0 || fs.read_text("fifo-copy") != "fifo😀" { return 26; }
+    return 0;
+}
+func main() i32 {
+    try {
+        let file_status = files();
+        if file_status != 0 { return file_status; }
+        return lines();
+    } catch error os.Error { return 90; }
+}

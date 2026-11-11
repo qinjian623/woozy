@@ -1090,23 +1090,21 @@ int main() {
       t.kind = TypeKind::String;
       t.bits = 0;
       auto string = m.types.intern(t);
-      auto text = add_node(string, StringLiteral{"中文\n"});
-      const auto &file = *f.project->modules[0].files[0];
-      bool text_source = false;
-      for (size_t i = 0; i < file.nodes.size(); ++i) {
-        const auto &ast = file.nodes[i];
-        if (ast.kind == AstKind::Literal &&
-            file.tokens.at(ast.token_begin).string_value ==
-                std::optional<std::string>{"中文\n"}) {
-          m.nodes[text.value].source = {{ModuleId{0}, 0, AstNodeId{i}}, ast.span};
-          text_source = true;
-          break;
-        }
-      }
-      require(text_source, "string shape real source missing");
-      add_stmt(text);
+      // String has owned storage; adding it to this synthetic scalar graph
+      // correctly requires an exact source body. Literal sources are tested
+      // through the source checker instead of this scalar-only builder.
+      const auto string_ops = classify_value(m, string);
+      require(string_ops.kind == ValueKind::string && string_ops.needs_drop &&
+                  !string_ops.pod_inout,
+              "String ownership classification changed");
       add_stmt(add_node(f.unit, UnitLiteral{}));
-      require(verify(m).success(), "additional scalar shapes rejected");
+      const auto shapes = verify(m);
+      if (!shapes.success()) {
+        std::string message = "additional scalar shapes rejected";
+        for (const auto &diagnostic : shapes.diagnostics)
+          message += "\n" + diagnostic.code + ": " + diagnostic.message;
+        throw std::runtime_error(message);
+      }
     }
     auto old_dump = dump(*r.value);
     f.m.nodes.clear();

@@ -1,4 +1,7 @@
 package os;
+import "std/result" as result;
+import "std/vec" as vec;
+import "std/text" as text;
 
 pub struct File {
     descriptor i32;
@@ -102,3 +105,103 @@ pub func rmdir(path string) throws Error {
 
 pub func getpid() i32 { return i32(__woozy_os_getpid()); }
 pub func exit(status i32) { __woozy_os_exit(status); }
+
+pub struct Timespec { pub seconds i64; pub nanoseconds i64; }
+pub struct FileInfo {
+    pub device u64; pub inode u64; pub links u64;
+    pub mode u32; pub uid u32; pub gid u32; pub rdev u64;
+    pub size i64; pub block_size i64; pub blocks i64;
+    pub accessed Timespec; pub modified Timespec; pub changed Timespec;
+}
+pub struct Pipe { pub read_end File; pub write_end File; }
+pub const O_DIRECTORY i32 = 65536;
+pub const O_NOFOLLOW i32 = 131072;
+pub const F_OK i32 = 0;
+pub const R_OK i32 = 4;
+pub const W_OK i32 = 2;
+pub const X_OK i32 = 1;
+pub const CLOCK_REALTIME i32 = 0;
+pub const CLOCK_MONOTONIC i32 = 1;
+pub const GRND_NONBLOCK u32 = 1;
+pub const GRND_RANDOM u32 = 2;
+pub const S_IFMT u32 = 0o170000;
+pub const S_IFREG u32 = 0o100000;
+pub const S_IFDIR u32 = 0o040000;
+pub const S_IFLNK u32 = 0o120000;
+pub const S_IFIFO u32 = 0o010000;
+
+pub func check[T](value result.Result[T,i32]) T throws Error {
+    switch value {
+        case result.Result.Ok(item): return item;
+        case result.Result.Err(code):
+            if code == 4 { throw Error.Interrupted(code,0); }
+            if code == 11 { throw Error.WouldBlock(code,0); }
+            throw Error.System(code,0);
+    }
+}
+pub func fd(file File) i32 { return file.descriptor; }
+pub func from_fd(descriptor i32) File { return File(descriptor:descriptor); }
+pub func stat(path string) FileInfo throws Error { return check(__woozy_os_stat(path)); }
+pub func lstat(path string) FileInfo throws Error { return check(__woozy_os_lstat(path)); }
+pub func fstat(file File) FileInfo throws Error { return check(__woozy_os_fstat(file.descriptor)); }
+pub func rename(old_path string, new_path string) throws Error { check(__woozy_os_rename(old_path,new_path)); }
+pub func chmod(path string, mode u32) throws Error { check(__woozy_os_chmod(path,mode)); }
+pub func fchmod(file File, mode u32) throws Error { check(__woozy_os_fchmod(file.descriptor,mode)); }
+pub func chdir(path string) throws Error { check(__woozy_os_chdir(path)); }
+pub func symlink(target string, path string) throws Error { check(__woozy_os_symlink(target,path)); }
+pub func link(old_path string, new_path string) throws Error { check(__woozy_os_link(old_path,new_path)); }
+pub func truncate(path string, length i64) throws Error { check(__woozy_os_truncate(path,length)); }
+pub func ftruncate(file File, length i64) throws Error { check(__woozy_os_ftruncate(file.descriptor,length)); }
+pub func fsync(file File) throws Error { check(__woozy_os_fsync(file.descriptor)); }
+pub func fdatasync(file File) throws Error { check(__woozy_os_fdatasync(file.descriptor)); }
+pub func dup(file File) File throws Error { return from_fd(check(__woozy_os_dup(file.descriptor))); }
+pub func dup2(file File, descriptor i32) File throws Error { return from_fd(check(__woozy_os_dup2(file.descriptor,descriptor))); }
+pub func pipe(flags u32) Pipe throws Error { return check(__woozy_os_pipe(flags)); }
+pub func mkfifo(path string, mode u32) throws Error { check(__woozy_os_mkfifo(path,mode)); }
+pub func access(path string, mode i32) throws Error { check(__woozy_os_access(path,mode)); }
+pub func getuid() u32 throws Error { return check(__woozy_os_getuid()); }
+pub func geteuid() u32 throws Error { return check(__woozy_os_geteuid()); }
+pub func getgid() u32 throws Error { return check(__woozy_os_getgid()); }
+pub func getegid() u32 throws Error { return check(__woozy_os_getegid()); }
+pub func getppid() i32 throws Error { return check(__woozy_os_getppid()); }
+pub func gettid() i32 throws Error { return check(__woozy_os_gettid()); }
+pub func setpgid(pid i32, group i32) throws Error { check(__woozy_os_setpgid(pid,group)); }
+pub func getpgid(pid i32) i32 throws Error { return check(__woozy_os_getpgid(pid)); }
+pub func setsid() i32 throws Error { return check(__woozy_os_setsid()); }
+pub func kill(pid i32, signal i32) throws Error { check(__woozy_os_kill(pid,signal)); }
+pub func clock_gettime(clock i32) Timespec throws Error { return check(__woozy_os_clock_gettime(clock)); }
+pub func nanosleep(request Timespec, remaining inout Timespec) throws Error {
+    let out = [remaining];
+    let status = __woozy_os_nanosleep(request,out);
+    remaining = out[0];
+    checked(status,0);
+}
+pub func getrandom(data Vec[u8], count usize, flags u32) usize throws Error {
+    return checked(__woozy_os_getrandom(data,count,flags),0);
+}
+pub func getdents(directory File, data Vec[u8], count usize) usize throws Error {
+    return checked(__woozy_os_getdents(directory.descriptor,data,count),0);
+}
+func decode(data Vec[u8]) string throws Error {
+    try { return text.from_bytes(data); }
+    catch error text.Error { throw Error.System(84,0); }
+}
+pub func getcwd_bytes() Vec[u8] throws Error {
+    let buffer = vec.make[u8](256,0);
+    for true {
+        let count = __woozy_os_getcwd(buffer,vec.len(buffer));
+        if count == -34 { vec.resize(buffer,vec.len(buffer)*2,0); continue; }
+        let length = checked(count,0);
+        return buffer[0:length];
+    }
+}
+pub func getcwd() string throws Error { return decode(getcwd_bytes()); }
+pub func readlink_bytes(path string) Vec[u8] throws Error {
+    let buffer = vec.make[u8](256,0);
+    for true {
+        let count = checked(__woozy_os_readlink(path,buffer,vec.len(buffer)),0);
+        if count == vec.len(buffer) { vec.resize(buffer,vec.len(buffer)*2,0); continue; }
+        return buffer[0:count];
+    }
+}
+pub func readlink(path string) string throws Error { return decode(readlink_bytes(path)); }

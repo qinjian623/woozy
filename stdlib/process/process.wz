@@ -1,0 +1,82 @@
+package process;
+import "std/os" as os;
+import "std/option" as option;
+import "std/text" as text;
+
+pub struct WaitStatus { pub pid i32; pub status i32; }
+pub const WNOHANG i32 = 1;
+pub const WUNTRACED i32 = 2;
+pub const WCONTINUED i32 = 8;
+pub func args() Vec[string] throws os.Error { return os.check(__woozy_process_args()); }
+pub func args_bytes() Vec[Vec[u8]] throws os.Error { return os.check(__woozy_process_args_bytes()); }
+pub func environment() Vec[string] throws os.Error { return os.check(__woozy_process_environment()); }
+pub func environment_bytes() Vec[Vec[u8]] throws os.Error { return os.check(__woozy_process_environment_bytes()); }
+pub func getenv(name string) option.Option[string] throws os.Error { return os.check(__woozy_process_getenv(name)); }
+pub func getenv_bytes(name Vec[u8]) option.Option[Vec[u8]] throws os.Error { return os.check(__woozy_process_getenv_bytes(name)); }
+pub func setenv(name string, value string, overwrite bool) throws os.Error {
+    var flag i32 = 0; if overwrite { flag = 1; }
+    os.check(__woozy_process_setenv(name,value,flag));
+}
+pub func setenv_bytes(name Vec[u8], value Vec[u8], overwrite bool) throws os.Error {
+    var flag i32 = 0; if overwrite { flag = 1; }
+    os.check(__woozy_process_setenv_bytes(name,value,flag));
+}
+pub func unsetenv(name string) throws os.Error { os.check(__woozy_process_unsetenv(name)); }
+pub func unsetenv_bytes(name Vec[u8]) throws os.Error { os.check(__woozy_process_unsetenv_bytes(name)); }
+pub func fork() i32 throws os.Error { return os.check(__woozy_process_fork()); }
+pub func waitpid(pid i32, options i32) WaitStatus throws os.Error { return os.check(__woozy_process_waitpid(pid,options)); }
+pub func wait(pid i32) WaitStatus throws os.Error {
+    for true {
+        try { return waitpid(pid,0); }
+        catch error os.Error {
+            switch error { case os.Error.Interrupted(code,completed): continue; default: throw error; }
+        }
+    }
+}
+pub func exited(value WaitStatus) bool { return value.pid != 0 && (value.status & 0x7f) == 0; }
+pub func exit_status(value WaitStatus) i32 { return (value.status >> 8) & 255; }
+pub func signaled(value WaitStatus) bool { let signal = value.status & 0x7f; return value.pid != 0 && signal != 0 && signal != 0x7f; }
+pub func term_signal(value WaitStatus) i32 { return value.status & 0x7f; }
+pub func stopped(value WaitStatus) bool { return value.pid != 0 && (value.status & 255) == 0x7f; }
+pub func stop_signal(value WaitStatus) i32 { return (value.status >> 8) & 255; }
+pub func continued(value WaitStatus) bool { return value.pid != 0 && value.status == 0xffff; }
+pub func core_dumped(value WaitStatus) bool { return signaled(value) && (value.status & 128) != 0; }
+pub func execve(path string, arguments Vec[string], env Vec[string]) throws os.Error {
+    os.check(__woozy_process_execve(path,arguments,env));
+}
+pub func execve_bytes(path Vec[u8], arguments Vec[Vec[u8]], env Vec[Vec[u8]]) throws os.Error {
+    os.check(__woozy_process_execve_bytes(path,arguments,env));
+}
+pub func execv(path string, arguments Vec[string]) throws os.Error { execve(path,arguments,environment()); }
+pub func spawn_with(path string, arguments Vec[string], env Vec[string], input i32, output i32, error i32) i32 throws os.Error {
+    return os.check(__woozy_process_spawn(path,arguments,env,input,output,error));
+}
+pub func spawn(path string, arguments Vec[string]) i32 throws os.Error {
+    return spawn_with(path,arguments,environment(),-1,-1,-1);
+}
+pub func spawn_bytes(path Vec[u8], arguments Vec[Vec[u8]], env Vec[Vec[u8]], input i32, output i32, error i32) i32 throws os.Error {
+    return os.check(__woozy_process_spawn_bytes(path,arguments,env,input,output,error));
+}
+pub func spawnp(command string, arguments Vec[string]) i32 throws os.Error {
+    if text.contains(command,"/") { return spawn(command,arguments); }
+    var search = "/bin:/usr/bin";
+    switch getenv("PATH") { case option.Option.Some(value): search = value; case option.Option.None: {} }
+    var denied = false;
+    for directory in text.split(search,":") {
+        var candidate = command;
+        if directory != "" { candidate = directory+"/"+command; }
+        try { return spawn(candidate,arguments); }
+        catch error os.Error {
+            switch error {
+                case os.Error.System(code,completed): {
+                    if code == 13 { denied = true; continue; }
+                    if code == 2 || code == 20 { continue; }
+                    throw error;
+                }
+                default: throw error;
+            }
+        }
+    }
+    if denied { throw os.Error.System(13,0); }
+    throw os.Error.System(2,0);
+}

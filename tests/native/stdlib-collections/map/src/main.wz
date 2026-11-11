@@ -1,0 +1,195 @@
+package app;
+
+import "std/hash" as hash;
+import "std/map" as map;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct PairKey {
+    left i32;
+    right i32;
+}
+
+impl hash.Hash for PairKey {
+    func hash(value Self) u64 {
+        return hash.combine(u64(value.left), u64(value.right));
+    }
+    func equals(left Self, right Self) bool {
+        return left.left == right.left && left.right == right.right;
+    }
+}
+
+struct CollisionKey {
+    id i32;
+}
+
+impl hash.Hash for CollisionKey {
+    // Every key lands in the same bucket on purpose.
+    func hash(value Self) u64 { return 7; }
+    func equals(left Self, right Self) bool { return left.id == right.id; }
+}
+
+func main() i32 {
+    // Basic operations and insert/get/remove Option results.
+    let basic = map.new[i32,string]();
+    switch map.insert(basic, 1, "one") {
+        case option.Option.Some(previous): return 1;
+        case option.Option.None: {}
+    }
+    let alias = basic;
+    switch map.insert(alias, 2, "two") {
+        case option.Option.Some(previous): return 2;
+        case option.Option.None: {}
+    }
+    map.insert(basic, 3, "three");
+    if map.len(basic) != 3 || map.len(alias) != 3 { return 3; }
+    if !map.contains(basic, 2) || map.contains(basic, 4) { return 4; }
+    switch map.get(basic, 2) {
+        case option.Option.Some(value): if value != "two" { return 5; }
+        case option.Option.None: return 6;
+    }
+    switch map.insert(basic, 1, "uno") {
+        case option.Option.Some(previous): if previous != "one" { return 7; }
+        case option.Option.None: return 8;
+    }
+    if map.len(basic) != 3 { return 9; }
+    switch map.remove(basic, 2) {
+        case option.Option.Some(value): if value != "two" { return 10; }
+        case option.Option.None: return 11;
+    }
+    switch map.remove(basic, 2) {
+        case option.Option.Some(value): return 12;
+        case option.Option.None: {}
+    }
+    if map.len(basic) != 2 { return 13; }
+
+    // Missing V must stay unconstructed and be reported as None.
+    let empty_values = map.new[i32,string]();
+    switch map.get(empty_values, 9) {
+        case option.Option.Some(value): return 14;
+        case option.Option.None: {}
+    }
+    switch map.remove(empty_values, 9) {
+        case option.Option.Some(value): return 15;
+        case option.Option.None: {}
+    }
+
+    // All keys collide: growth must keep every entry exactly once.
+    let collisions = map.new[CollisionKey,string]();
+    var index i32 = 0;
+    for index < 200 {
+        let key = CollisionKey(id: index);
+        switch map.insert(collisions, key, "value") {
+            case option.Option.Some(previous): return 16;
+            case option.Option.None: {}
+        }
+        index += 1;
+    }
+    if map.len(collisions) != 200 { return 17; }
+    index = 0;
+    for index < 200 {
+        if !map.contains(collisions, CollisionKey(id: index)) { return 18; }
+        index += 1;
+    }
+    index = 0;
+    for index < 200 {
+        switch map.remove(collisions, CollisionKey(id: index)) {
+            case option.Option.Some(value): if value != "value" { return 19; }
+            case option.Option.None: return 20;
+        }
+        index += 2;
+    }
+    if map.len(collisions) != 100 { return 21; }
+    index = 0;
+    for index < 200 {
+        let present = map.contains(collisions, CollisionKey(id: index));
+        if index % 2 == 0 {
+            if present { return 22; }
+        } else {
+            if !present { return 23; }
+        }
+        index += 1;
+    }
+    index = 0;
+    for index < 200 {
+        map.insert(collisions, CollisionKey(id: index), "again");
+        index += 2;
+    }
+    if map.len(collisions) != 200 { return 24; }
+
+    // Custom struct keys use the trait implementation, not pointer identity.
+    let pairs = map.new[PairKey,i32]();
+    map.insert(pairs, PairKey(left: 1, right: 2), 12);
+    switch map.get(pairs, PairKey(left: 1, right: 2)) {
+        case option.Option.Some(value): if value != 12 { return 25; }
+        case option.Option.None: return 26;
+    }
+    switch map.get(pairs, PairKey(left: 2, right: 1)) {
+        case option.Option.Some(value): return 27;
+        case option.Option.None: {}
+    }
+    let pair_entries = map.entries(pairs);
+    if vec.len(pair_entries) != 1 { return 28; }
+    if pair_entries[0].key.left != 1 || pair_entries[0].key.right != 2 { return 29; }
+    if pair_entries[0].value != 12 { return 30; }
+
+    // A 5000-entry map exercises repeated growth, snapshots and reinsertion.
+    let large = map.new[i32,i32]();
+    index = 0;
+    for index < 5000 {
+        map.insert(large, index, index * 3);
+        index += 1;
+    }
+    if map.len(large) != 5000 { return 36; }
+    let snapshot_keys = map.keys(large);
+    let snapshot_values = map.values(large);
+    let snapshot_entries = map.entries(large);
+    if vec.len(snapshot_keys) != 5000 { return 37; }
+    if vec.len(snapshot_values) != 5000 { return 38; }
+    if vec.len(snapshot_entries) != 5000 { return 39; }
+    index = 0;
+    for index < 5000 {
+        switch map.get(large, index) {
+            case option.Option.Some(value): if value != index * 3 { return 40; }
+            case option.Option.None: return 41;
+        }
+        index += 1;
+    }
+    index = 0;
+    for index < 5000 {
+        switch map.remove(large, index) {
+            case option.Option.Some(value): if value != index * 3 { return 42; }
+            case option.Option.None: return 43;
+        }
+        index += 2;
+    }
+    if map.len(large) != 2500 { return 44; }
+    index = 0;
+    for index < 5000 {
+        let present = map.contains(large, index);
+        if index % 2 == 0 {
+            if present { return 45; }
+        } else {
+            if !present { return 46; }
+        }
+        index += 1;
+    }
+    index = 0;
+    for index < 5000 {
+        map.insert(large, index, index * 3);
+        index += 2;
+    }
+    if map.len(large) != 5000 { return 47; }
+    if vec.len(snapshot_keys) != 5000 { return 48; }
+    if vec.len(snapshot_values) != 5000 { return 49; }
+    if vec.len(snapshot_entries) != 5000 { return 50; }
+
+    // clear is visible through aliases, while snapshots stay valid.
+    let cleared_alias = basic;
+    let before_clear = map.keys(basic);
+    map.clear(cleared_alias);
+    if map.len(basic) != 0 || map.len(cleared_alias) != 0 { return 51; }
+    if map.contains(basic, 1) || map.contains(cleared_alias, 3) { return 52; }
+    if vec.len(before_clear) != 2 { return 53; }
+    return 0;
+}

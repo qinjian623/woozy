@@ -23,10 +23,22 @@ add_library(lang_native_runtime STATIC
   ${LANG_NATIVE_ROOT}/runtime/native/os.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/os_buffers.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/thread.cpp
-  ${LANG_NATIVE_ROOT}/runtime/native/sync.cpp)
+  ${LANG_NATIVE_ROOT}/runtime/native/sync.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/text.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/system.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/system_buffers.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/process.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/ipc.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/dns.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/network_buffers.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/network.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/numbers.cpp)
+enable_language(C)
+include(${LANG_NATIVE_ROOT}/runtime/native/math/sources.cmake)
+lang_native_math_sources(lang_native_runtime)
 target_compile_features(lang_native_runtime PRIVATE cxx_std_20)
 # This archive is linked into generated programs, independently of compiler instrumentation.
-target_compile_options(lang_native_runtime PRIVATE -fno-exceptions -fno-rtti -fno-sanitize=all -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove
+target_compile_options(lang_native_runtime PRIVATE -ffreestanding -fno-builtin -fno-exceptions -fno-rtti -fno-sanitize=all -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove
   $<$<CXX_COMPILER_ID:GNU>:-fno-tree-loop-distribute-patterns>)
 set_target_properties(lang_native_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
 add_executable(lang_native_helper helper.cpp)

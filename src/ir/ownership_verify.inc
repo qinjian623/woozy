@@ -147,6 +147,8 @@
     std::map<LocalSlotId, ValueId> temporary_values;
     auto owned_value = [&](ValueId value) {
       auto definition = definitions.find(value);
+      if (definition != definitions.end() && definition->second->op == Op::string_literal)
+        return false; // Verified static bytes have no runtime owner.
       auto type = definition != definitions.end() ? definition->second->type
                                                  : parameters.at(value)->type;
       return hir::classify_value(h, type).needs_drop;
@@ -155,7 +157,8 @@
       return op == Op::copy || op == Op::move || op == Op::struct_init ||
              op == Op::enum_init || op == Op::vec_init || op == Op::vec_read ||
              op == Op::vec_slice || op == Op::iteration_read ||
-             op == Op::call || op == Op::system_call;
+             op == Op::call || op == Op::system_call ||
+             op == Op::binary;
     };
     for (const auto &block : f.blocks) {
       for (const auto &p : block.parameters)
@@ -283,9 +286,11 @@
         if (i.op == Op::call) call_inputs(i);
         if (i.op == Op::take) {
           auto value = temporary_values.at(i.slot);
-          need(values.contains(value) && values.at(value) == 1,
-               "temporary take duplicates an available owned value", i.source);
-          values.at(value) = 2;
+          if (owned_value(value)) {
+            need(values.contains(value) && values.at(value) == 1,
+                 "temporary take duplicates an available owned value", i.source);
+            values.at(value) = 2;
+          }
         }
         if (i.result && produces_owner(i.op) && owned_value(*i.result)) {
           need(values.at(*i.result) == 1, "owned result overwritten before transfer", i.source);

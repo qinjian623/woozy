@@ -1,0 +1,74 @@
+package ipc;
+import "std/os" as os;
+pub struct Memory { handle __woozy_IpcHandle; }
+pub struct Mutex { memory Memory; offset usize; }
+pub struct Condvar { memory Memory; offset usize; }
+pub struct Semaphore { memory Memory; offset usize; }
+pub const PROT_READ i32 = 1;
+pub const PROT_WRITE i32 = 2;
+pub const MUTEX_BYTES usize = 16;
+pub const COND_BYTES usize = 16;
+pub const SEM_BYTES usize = 16;
+pub const SYNC_ALIGNMENT usize = 4;
+pub func map_anon(bytes usize, protection i32) Memory throws os.Error {
+    return Memory(handle:os.check(__woozy_ipc_map_anon(bytes,protection)));
+}
+pub func map_file(file os.File, bytes usize, offset u64, protection i32) Memory throws os.Error {
+    return Memory(handle:os.check(__woozy_ipc_map_file(os.fd(file),bytes,offset,protection)));
+}
+pub func len(memory Memory) usize { return __woozy_ipc_length(memory.handle); }
+pub func shm_open(name string, flags i32, mode u32) os.File throws os.Error {
+    return os.from_fd(os.check(__woozy_ipc_shm_open(name,flags,mode)));
+}
+pub func shm_unlink(name string) throws os.Error { os.check(__woozy_ipc_shm_unlink(name)); }
+pub func read_bytes(memory Memory, offset usize, count usize) Vec[u8] throws os.Error {
+    return os.check(__woozy_ipc_read_bytes(memory.handle,offset,count));
+}
+pub func write_bytes(memory Memory, offset usize, data Vec[u8], start usize, count usize) throws os.Error {
+    os.check(__woozy_ipc_write_bytes(memory.handle,offset,data,start,count));
+}
+pub func read_i32(memory Memory, offset usize) i32 throws os.Error { return os.check(__woozy_ipc_read_i32(memory.handle,offset)); }
+pub func read_i64(memory Memory, offset usize) i64 throws os.Error { return os.check(__woozy_ipc_read_i64(memory.handle,offset)); }
+pub func atomic_load(memory Memory, offset usize) i64 throws os.Error { return os.check(__woozy_ipc_atomic_load(memory.handle,offset)); }
+pub func write_i32(memory Memory, offset usize, value i32) throws os.Error { os.check(__woozy_ipc_write_i32(memory.handle,offset,value)); }
+pub func write_i64(memory Memory, offset usize, value i64) throws os.Error { os.check(__woozy_ipc_write_i64(memory.handle,offset,value)); }
+pub func atomic_store(memory Memory, offset usize, value i64) throws os.Error { os.check(__woozy_ipc_atomic_store(memory.handle,offset,value)); }
+pub func atomic_add(memory Memory, offset usize, delta i64) i64 throws os.Error {
+    return os.check(__woozy_ipc_atomic_add(memory.handle,offset,delta));
+}
+pub func atomic_compare_exchange(memory Memory, offset usize, expected i64, desired i64) bool throws os.Error {
+    return os.check(__woozy_ipc_atomic_compare(memory.handle,offset,expected,desired));
+}
+pub func mutex_at(memory Memory, offset usize) Mutex { return Mutex(memory:memory,offset:offset); }
+pub func mutex_init(memory Memory, offset usize) Mutex throws os.Error {
+    os.check(__woozy_ipc_mutex_init(memory.handle,offset));
+    return mutex_at(memory,offset);
+}
+pub func cond_at(memory Memory, offset usize) Condvar { return Condvar(memory:memory,offset:offset); }
+pub func cond_init(memory Memory, offset usize) Condvar throws os.Error {
+    os.check(__woozy_ipc_cond_init(memory.handle,offset));
+    return cond_at(memory,offset);
+}
+pub func sem_at(memory Memory, offset usize) Semaphore { return Semaphore(memory:memory,offset:offset); }
+pub func sem_init(memory Memory, offset usize, value u32) Semaphore throws os.Error {
+    os.check(__woozy_ipc_sem_init(memory.handle,offset,value));
+    return sem_at(memory,offset);
+}
+pub func mutex_lock(mutex Mutex) { __woozy_ipc_mutex_lock(mutex.memory.handle,mutex.offset); }
+pub func mutex_unlock(mutex Mutex) { __woozy_ipc_mutex_unlock(mutex.memory.handle,mutex.offset); }
+pub func mutex_destroy(mutex Mutex) { __woozy_ipc_mutex_destroy(mutex.memory.handle,mutex.offset); }
+pub func cond_signal(condition Condvar) { __woozy_ipc_cond_signal(condition.memory.handle,condition.offset); }
+pub func cond_broadcast(condition Condvar) { __woozy_ipc_cond_broadcast(condition.memory.handle,condition.offset); }
+pub func cond_destroy(condition Condvar) { __woozy_ipc_cond_destroy(condition.memory.handle,condition.offset); }
+pub func sem_post(semaphore Semaphore) { __woozy_ipc_sem_post(semaphore.memory.handle,semaphore.offset); }
+pub func sem_destroy(semaphore Semaphore) { __woozy_ipc_sem_destroy(semaphore.memory.handle,semaphore.offset); }
+pub func cond_wait(condition Condvar, mutex Mutex) {
+    __woozy_ipc_cond_wait(condition.memory.handle,condition.offset,mutex.memory.handle,mutex.offset,-1);
+}
+pub func cond_timedwait(condition Condvar, mutex Mutex, timeout_ns i64) bool {
+    return __woozy_ipc_cond_wait(condition.memory.handle,condition.offset,mutex.memory.handle,mutex.offset,timeout_ns);
+}
+pub func sem_wait(semaphore Semaphore) { __woozy_ipc_sem_wait(semaphore.memory.handle,semaphore.offset,-1); }
+pub func sem_timedwait(semaphore Semaphore, timeout_ns i64) bool { return __woozy_ipc_sem_wait(semaphore.memory.handle,semaphore.offset,timeout_ns); }
+pub func sem_trywait(semaphore Semaphore) bool { return __woozy_ipc_sem_trywait(semaphore.memory.handle,semaphore.offset); }
+pub func sem_value(semaphore Semaphore) u32 { return __woozy_ipc_sem_value(semaphore.memory.handle,semaphore.offset); }

@@ -1,7 +1,7 @@
 #pragma once
 #include <cstdint>
 
-enum class LangHandleKind : uint64_t { thread = 1, mutex, condvar, atomic_i64 };
+enum class LangHandleKind : uint64_t { thread = 1, mutex, condvar, atomic_i64, text, ipc };
 struct LangHandle {
   uint64_t refs;
   LangHandleKind kind;

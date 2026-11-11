@@ -471,12 +471,10 @@ public:
       for (const auto *s : {"Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16",
                            "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Result",
                            "__woozy_Thread", "__woozy_Mutex", "__woozy_Condvar",
-                           "__woozy_AtomicI64"})
+                           "__woozy_AtomicI64", "__woozy_IpcHandle"})
         add(prelude, s, SymbolKind::builtin_type);
       for (const auto *s : {"assert", "panic", "share"}) add(prelude, s, SymbolKind::builtin_function);
-      for (const auto &spec : hir::system_operations)
-        add(prelude, std::string(spec.name), SymbolKind::builtin_function);
-      for (const auto &spec : hir::concurrency_system_operations)
+      for (const auto &spec : hir::all_system_operations)
         add(prelude, std::string(spec.name), SymbolKind::builtin_function);
       collect();
       for (const auto &m : out.project->modules) {

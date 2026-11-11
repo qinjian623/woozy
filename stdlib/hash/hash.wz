@@ -1,0 +1,124 @@
+// Hash trait and builtin implementations.
+//
+// The hash functions are deterministic, non-cryptographic FNV-1a-style
+// hashes followed by a 64-bit avalanche finalizer. They are suitable for
+// in-memory hash tables only: there is no process seed, so they are not
+// collision resistant and must not be used for passwords, signatures or
+// other security decisions.
+//
+// A Hash implementation must satisfy: equals(left, right) implies
+// hash(left) == hash(right). The reverse is not required; collisions are
+// allowed and the map/set implementations compare keys with equals.
+package hash;
+
+pub trait Hash {
+    func hash(value Self) u64;
+    func equals(left Self, right Self) bool;
+}
+
+const OFFSET_BASIS u64 = 14695981039346656037;
+const FNV_PRIME u64 = 1099511628211;
+
+// avalanche spreads changes across all 64 bits so that the low bits used
+// for bucket selection are well distributed.
+pub func avalanche(value u64) u64 {
+    var mixed = value;
+    mixed ^= mixed >> 33;
+    mixed *= 0xff51afd7ed558ccd;
+    mixed ^= mixed >> 33;
+    mixed *= 0xc4ceb9fe1a85ec53;
+    mixed ^= mixed >> 33;
+    return mixed;
+}
+
+// combine mixes an already hashed field value into a seed. Custom key
+// implementations can build a stable hash by folding fields in order:
+// hash.combine(hash.combine(0, hash_of_a), hash_of_b). The helper is
+// deterministic and does not allocate.
+pub func combine(seed u64, value u64) u64 {
+    var mixed = seed ^ (value + 0x9e3779b97f4a7c15);
+    mixed = (mixed ^ (mixed >> 30)) * 0xbf58476d1ce4e5b9;
+    mixed = (mixed ^ (mixed >> 27)) * 0x94d049bb133111eb;
+    return avalanche(mixed ^ (mixed >> 31));
+}
+
+func from_signed(value i64) u64 {
+    if value < 0 {
+        // Two's-complement bits without a range-checked negative-to-u64 cast.
+        let magnitude = i64(-(value + 1));
+        return ~u64(magnitude);
+    }
+    return u64(value);
+}
+
+impl Hash for string {
+    func hash(value Self) u64 {
+        var state = OFFSET_BASIS;
+        var count u64 = 0;
+        for rune in value {
+            state = (state ^ u64(rune)) * FNV_PRIME;
+            count += 1;
+        }
+        state = (state ^ count) * FNV_PRIME;
+        return avalanche(state);
+    }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for bool {
+    func hash(value Self) u64 {
+        if value { return avalanche(OFFSET_BASIS ^ 1); }
+        return avalanche(OFFSET_BASIS);
+    }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for i8 {
+    func hash(value Self) u64 { return avalanche(from_signed(i64(value))); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for i16 {
+    func hash(value Self) u64 { return avalanche(from_signed(i64(value))); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for i32 {
+    func hash(value Self) u64 { return avalanche(from_signed(i64(value))); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for i64 {
+    func hash(value Self) u64 { return avalanche(from_signed(value)); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for isize {
+    func hash(value Self) u64 { return avalanche(from_signed(i64(value))); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for u8 {
+    func hash(value Self) u64 { return avalanche(u64(value)); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for u16 {
+    func hash(value Self) u64 { return avalanche(u64(value)); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for u32 {
+    func hash(value Self) u64 { return avalanche(u64(value)); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for u64 {
+    func hash(value Self) u64 { return avalanche(value); }
+    func equals(left Self, right Self) bool { return left == right; }
+}
+
+impl Hash for usize {
+    func hash(value Self) u64 { return avalanche(u64(value)); }
+    func equals(left Self, right Self) bool { return left == right; }
+}

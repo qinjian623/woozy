@@ -5,10 +5,10 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-static_assert(sizeof(LangVec) == 64, "LangVec layout must stay 64 bytes");
+static_assert(sizeof(LangVec) == 72, "LangVec capacity ABI must stay 72 bytes");
 static constexpr uint64_t kVecHeaderBytes =
     (static_cast<uint64_t>(sizeof(LangVec)) + 15) & ~uint64_t{15};
-static_assert(kVecHeaderBytes == 64, "Vec header bytes changed");
+static_assert(kVecHeaderBytes == 80, "Vec header bytes changed");
 static std::vector<int> drops;
 static unsigned observed_create = 0;
 static unsigned observed_element_drop = 0;

@@ -131,11 +131,13 @@ int main(int argc, char **argv) {
       auto *generated = m->getFunction("lang.fn." + std::to_string(f.symbol.value));
       need(generated && generated->arg_empty(), "probe function signature");
       auto *layout = llvm::dyn_cast<llvm::StructType>(generated->getReturnType());
-      need(layout && layout->getNumElements() == 2 && layout->getElementType(0)->isPointerTy() &&
-           layout->getElementType(1) == length_type, "string return layout");
+      need(layout && layout->getNumElements() == 4 && layout->getElementType(0)->isPointerTy() &&
+           layout->getElementType(1) == length_type && layout->getElementType(2) == length_type &&
+           layout->getElementType(3)->isPointerTy(), "string return layout");
       auto *offsets = dl.getStructLayout(layout);
       need(offsets->getElementOffset(0) == 0 && offsets->getElementOffset(1) == 8 &&
-           dl.getTypeAllocSize(layout) == 16 && dl.getABITypeAlign(layout).value() == 8,
+           offsets->getElementOffset(2) == 16 && offsets->getElementOffset(3) == 24 &&
+           dl.getTypeAllocSize(layout) == 32 && dl.getABITypeAlign(layout).value() == 8,
            "x86_64 string target layout changed");
       auto *value = builder.CreateCall(generated->getFunctionType(), generated);
       auto *pointer = builder.CreateExtractValue(value, {0});
@@ -144,7 +146,22 @@ int main(int argc, char **argv) {
       builder.CreateStore(length, slot);
       builder.CreateCall(writer, {builder.getInt32(1), slot,
           llvm::ConstantInt::get(length_type, dl.getTypeStoreSize(length_type))});
+      auto *rune_length = builder.CreateExtractValue(value, {2});
+      builder.CreateStore(rune_length, slot);
+      builder.CreateCall(writer, {builder.getInt32(1), slot,
+          llvm::ConstantInt::get(length_type, dl.getTypeStoreSize(length_type))});
       builder.CreateCall(writer, {builder.getInt32(1), pointer, length});
+      auto *owner = builder.CreateExtractValue(value, {3});
+      auto *drop = llvm::BasicBlock::Create(context, "probe.drop", main);
+      auto *next = llvm::BasicBlock::Create(context, "probe.next", main);
+      builder.CreateCondBr(builder.CreateICmpNE(owner,
+          llvm::ConstantPointerNull::get(builder.getPtrTy())), drop, next);
+      builder.SetInsertPoint(drop);
+      auto release = m->getOrInsertFunction("lang_handle_release_v1",
+          llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false));
+      builder.CreateCall(release, {owner});
+      builder.CreateBr(next);
+      builder.SetInsertPoint(next);
       metadata += std::string(first ? "" : ",") + "\"" + symbol.name + "\"";
       first = false;
     }
@@ -154,7 +171,7 @@ int main(int argc, char **argv) {
     llvm::raw_string_ostream stream(observation);
     m->print(stream, nullptr);
     write(out / "observe.ll", observation);
-    metadata += "],\"layout\":{\"size\":16,\"alignment\":8,\"offsets\":[0,8]},"
+    metadata += "],\"layout\":{\"size\":32,\"alignment\":8,\"offsets\":[0,8,16,24]},"
                 "\"abi\":\"private LLVM function types; no C++ aggregate ABI\"}\n";
     write(out / "metadata.json", metadata);
     std::cout << metadata;

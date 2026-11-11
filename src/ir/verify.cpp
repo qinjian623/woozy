@@ -419,17 +419,35 @@ class Verifier {
         auto arity = [&](size_t n) {
           need(args.size() == n, "instruction operand count", i.source);
         };
+        auto source_inputs = [&](hir::NodeKind expected) -> const hir::HirNode & {
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "text operation has no HIR origin", i.source);
+          const auto &node = m.hir.module().nodes.at(i.origin->value);
+          need(node.kind() == expected && node.type == i.type &&
+                   same_span(node.source.span, i.source) &&
+                   m.hir.module().scopes.at(node.scope.value).function == f.symbol &&
+                   node.children.size() == args.size(),
+               "text operation differs from verified HIR", i.source);
+          for (size_t a = 0; a < args.size(); ++a)
+            need(same_span(args[a].source,
+                           m.hir.module().nodes.at(node.children[a].value).source.span),
+                 "text operation operand differs from source", i.source);
+          return node;
+        };
         // A pure HIR constant expands to existing scalar/aggregate ops. Bind
         // its root by real Source and type as well as origin, so deleting the
         // origin cannot turn a damaged constant into an unchecked constructor.
         if (i.origin && i.origin->value < m.hir.module().nodes.size()) {
           const auto &root = m.hir.module().nodes[i.origin->value];
-          if (root.kind() == hir::NodeKind::constant_literal)
-            need(root.type == i.type &&
-                     root.source.span.snapshot == i.source.snapshot &&
-                     root.source.span.begin_byte == i.source.begin_byte &&
-                     root.source.span.end_byte == i.source.end_byte,
+          if (root.kind() == hir::NodeKind::constant_literal) {
+            // Cleanup markers name the full expression, not its value.
+            const bool cleanup = i.op == Op::ownership_begin ||
+                                 i.op == Op::ownership_end;
+            need((cleanup ? t.kind == hir::TypeKind::Unit && !i.result
+                          : root.type == i.type) &&
+                     same_span(root.source.span, i.source),
                  "constant expansion changed its real source/type", i.source);
+          }
         }
         auto [constant_begin, constant_end] = constant_roots.equal_range(
             ConstantKey{i.source.snapshot.value, i.source.begin_byte,
@@ -510,8 +528,17 @@ class Verifier {
           break;
         case Op::ownership_begin:
         case Op::ownership_end:
-          arity(0); need(i.origin && i.bits <= 1 && t.kind == hir::TypeKind::Unit,
-                        "ownership batch shape", i.source); break;
+          arity(0);
+          need(i.origin && i.origin->value < m.hir.module().nodes.size() &&
+                   i.bits <= 1 && t.kind == hir::TypeKind::Unit,
+               "ownership batch shape", i.source);
+          {
+            const auto &origin = m.hir.module().nodes.at(i.origin->value);
+            need(same_span(origin.source.span, i.source) &&
+                     m.hir.module().scopes.at(origin.scope.value).function == f.symbol,
+                 "ownership batch source differs from HIR", i.source);
+          }
+          break;
         case Op::copy:
         case Op::borrow:
           arity(1); value(0);
@@ -569,18 +596,23 @@ class Verifier {
           break;
         case Op::vec_read:
         case Op::vec_check:
-        case Op::vec_set:
+        case Op::vec_set: {
           arity(i.op == Op::vec_set ? 3 : 2);
-          need(value(0).kind == hir::TypeKind::Vec && integer(value(1).kind),
-               "Vec access receiver/index", i.source);
+          const bool text = value(0).kind == hir::TypeKind::String;
+          need((value(0).kind == hir::TypeKind::Vec || (text && i.op == Op::vec_read)) &&
+                   integer(value(1).kind), "index receiver/type", i.source);
+          if (text) source_inputs(hir::NodeKind::index_read);
           if (i.op == Op::vec_read)
-            need(type(args[0].type, i.source).type_args[0] == i.type, "Vec read result", i.source);
+            need(text ? t.kind == hir::TypeKind::UnsignedInt && t.bits == 32
+                      : type(args[0].type, i.source).type_args[0] == i.type,
+                 "indexed result", i.source);
           else if (i.op == Op::vec_check) need(t.kind == hir::TypeKind::Unit, "Vec check type", i.source);
           else {
             value(2); need(type(args[0].type, i.source).type_args[0] == args[2].type &&
                           t.kind == hir::TypeKind::Unit, "Vec write type", i.source);
           }
           break;
+        }
         case Op::vec_element_address: {
           arity(2);
           need(value(0).kind == hir::TypeKind::Vec &&
@@ -612,10 +644,17 @@ class Verifier {
           break;
         }
         case Op::vec_slice:
-          need(value(0).kind == hir::TypeKind::Vec && args[0].type == i.type && i.bits <= 3,
+          need((value(0).kind == hir::TypeKind::Vec || value(0).kind == hir::TypeKind::String) &&
+                   args[0].type == i.type && i.bits <= 3,
                "Vec slice type", i.source);
           arity(1 + bool(i.bits & 1) + bool(i.bits & 2));
           for (size_t a = 1; a < args.size(); ++a) need(integer(value(a).kind), "slice endpoint type", i.source);
+          if (value(0).kind == hir::TypeKind::String) {
+            const auto &origin = source_inputs(hir::NodeKind::vec_slice);
+            const auto &slice = std::get<hir::VecSlice>(origin.data);
+            need(i.bits == (bool(slice.start) | (bool(slice.end) << 1)),
+                 "text slice endpoint presence differs from source", i.source);
+          }
           break;
         case Op::iteration_begin:
         case Op::iteration_next:
@@ -624,15 +663,20 @@ class Verifier {
           arity(0);
           need(i.slot.value < f.slots.size() && f.slots[i.slot.value].owner &&
                f.slots[i.slot.value].owner->kind == hir::OwnerKind::iteration &&
-               type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::Vec,
+               (type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::Vec ||
+                type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::String),
                "iteration slot", i.source);
           if (i.op == Op::iteration_read)
-            need(i.type == type(f.slots[i.slot.value].type, i.source).type_args[0], "iteration element type", i.source);
+            need(type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::String
+                     ? t.kind == hir::TypeKind::UnsignedInt && t.bits == 32
+                     : i.type == type(f.slots[i.slot.value].type, i.source).type_args[0],
+                 "iteration element type", i.source);
           else need(t.kind == (i.op == Op::iteration_test ? hir::TypeKind::Bool : hir::TypeKind::Unit),
                     "iteration operation type", i.source);
           break;
         case Op::vec_length:
-          arity(1); need(value(0).kind == hir::TypeKind::Vec && t.kind == hir::TypeKind::Usize,
+          arity(1); need((value(0).kind == hir::TypeKind::Vec || value(0).kind == hir::TypeKind::String) &&
+                         t.kind == hir::TypeKind::Usize,
                          "iteration/length type", i.source); break;
         case Op::exit_begin:
           need(t.kind == hir::TypeKind::Unit, "exit marker type", i.source);
@@ -722,9 +766,9 @@ class Verifier {
                            i.binary == hir::BinaryOp::subtract ||
                            i.binary == hir::BinaryOp::multiply ||
                            i.binary == hir::BinaryOp::divide);
-          // NativeIR-internal string equality is emitted only for pattern
-          // tests. It is not a new source-language `string ==` operator.
-          bool string_equal = eq && l == hir::TypeKind::String && r == l;
+          // String patterns and source operators use the same binary ops.
+          bool string_equal = (comparison || i.binary == hir::BinaryOp::add) &&
+                              l == hir::TypeKind::String && r == l;
           need(i.binary >= hir::BinaryOp::add &&
                    i.binary <= hir::BinaryOp::greater_equal &&
                    ((integer(l) && integer(r)) || floating || string_equal ||
@@ -733,6 +777,38 @@ class Verifier {
                    (comparison ? t.kind == hir::TypeKind::Bool
                                : i.type == args[0].type),
                "invalid binary types/op", i.source);
+          if (string_equal) {
+            if (i.origin && m.hir.module().nodes.at(i.origin->value).kind() == hir::NodeKind::binary) {
+              const auto &origin = source_inputs(hir::NodeKind::binary);
+              need(std::get<hir::Binary>(origin.data).op == i.binary,
+                   "text binary operator differs from source", i.source);
+            } else if (i.origin) {
+              const auto &origin = m.hir.module().nodes.at(i.origin->value);
+              const auto *assign = std::get_if<hir::Assign>(&origin.data);
+              need(assign && assign->compound == i.binary && i.binary == hir::BinaryOp::add &&
+                       origin.children.size() == 2 &&
+                       m.hir.module().nodes.at(origin.children[0].value).type == i.type &&
+                       same_span(origin.source.span, i.source) &&
+                       same_span(args[1].source, m.hir.module().nodes.at(origin.children[1].value).source.span),
+                   "text compound operator differs from source", i.source);
+            } else {
+              bool pattern = false;
+              auto expected = instructions.find(i.inputs[1]);
+              std::function<void(const hir::Pattern &)> find = [&](const auto &p) {
+                if (p.literal && std::holds_alternative<hir::StringLiteral>(*p.literal) &&
+                    same_span(p.source.span, i.source) && expected != instructions.end() &&
+                    expected->second->op == Op::string_literal &&
+                    expected->second->utf8 == std::get<hir::StringLiteral>(*p.literal).utf8)
+                  pattern = true;
+                for (const auto &child : p.payload) find(child);
+              };
+              for (const auto &node : m.hir.module().nodes)
+                if (const auto *sw = std::get_if<hir::Switch>(&node.data))
+                  for (const auto &arm : sw->arms) find(arm.pattern);
+              need(pattern && i.binary == hir::BinaryOp::equal,
+                   "text binary without source or real pattern", i.source);
+            }
+          }
           break;
         }
         case Op::convert: {

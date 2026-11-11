@@ -1,0 +1,41 @@
+package app;
+struct Reader { data Vec[u8]; }
+enum Error { Failed; }
+enum Next { Done; Byte(value u8); }
+func read(input Reader, fail bool) Next throws Error {
+    if fail { throw Error.Failed; }
+    return Next.Done;
+}
+func ready(input Reader, fail bool) bool throws Error {
+    if fail { throw Error.Failed; }
+    return false;
+}
+func consume(input Reader, fail bool) throws Error {
+    for true {
+        switch read(input, fail) {
+            case Next.Done: return;
+            case Next.Byte(byte): {}
+        }
+    }
+}
+func condition(input Reader, fail bool) throws Error {
+    for ready(input, fail) {}
+    if ready(input, fail) { return; }
+}
+func branch(input Reader, fail bool) throws Error {
+    if ready(input, fail) { return; }
+}
+func main() i32 {
+    let input = Reader(data: [1, 2]);
+    try { consume(input, false); condition(input, false); branch(input, false); }
+    catch error Error { return 1; }
+    var caught i32 = 0;
+    try { consume(input, true); }
+    catch error Error { caught += 1; }
+    try { condition(input, true); }
+    catch error Error { caught += 1; }
+    try { branch(input, true); }
+    catch error Error { caught += 1; }
+    if caught != 3 || input.data[0] != 1 { return 2; }
+    return 0;
+}

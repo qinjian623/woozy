@@ -155,10 +155,14 @@ def parse_string_observation(data, metadata):
     width = metadata['target_word_bits'] // 8
     offset, result = 0, {}
     for name in metadata['probes']:
-        assert offset + width <= len(data), ('missing length', name)
+        assert offset + 2 * width <= len(data), ('missing lengths', name)
         length = int.from_bytes(data[offset:offset + width], 'little')
         offset += width
+        runes = int.from_bytes(data[offset:offset + width], 'little')
+        offset += width
+        assert offset + length <= len(data), ('missing string bytes', name)
         result[name] = data[offset:offset + length]
+        assert runes == len(STRING_EXPECTED[name].decode('utf-8')), (name, runes)
         offset += length
     assert offset == len(data), ('extra observation bytes', offset, len(data))
     return result

@@ -1,0 +1,58 @@
+// Set is a thin wrapper around Map[K,Unit]. Like Map, copying a Set shares
+// the same logical set because all mutable state is held by shared Vec
+// handles inside the wrapped map.
+package set;
+
+import "std/hash" as hash;
+import "std/map" as map;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct Set[K hash.Hash] {
+    items map.Map[K,Unit];
+}
+
+func unit_value() {}
+
+pub func new[K hash.Hash]() Set[K] {
+    return Set[K](items: map.new[K,Unit]());
+}
+
+pub func len[K hash.Hash](values Set[K]) usize {
+    return map.len(values.items);
+}
+
+pub func contains[K hash.Hash](values Set[K], key K) bool {
+    return map.contains(values.items, key);
+}
+
+// add returns true when the key was inserted and false when it was already
+// present.
+pub func add[K hash.Hash](values Set[K], key K) bool {
+    if map.contains(values.items, key) {
+        return false;
+    }
+    let previous = map.insert(values.items, key, unit_value());
+    switch previous {
+        case option.Option.Some(existing): return false;
+        case option.Option.None: return true;
+    }
+}
+
+// remove returns true when the key was present.
+pub func remove[K hash.Hash](values Set[K], key K) bool {
+    switch map.remove(values.items, key) {
+        case option.Option.Some(removed): return true;
+        case option.Option.None: return false;
+    }
+}
+
+// values returns a snapshot of the keys. It is not invalidated by later
+// mutations of the set.
+pub func values[K hash.Hash](values Set[K]) Vec[K] {
+    return map.keys(values.items);
+}
+
+pub func clear[K hash.Hash](values Set[K]) {
+    map.clear(values.items);
+}

@@ -36,7 +36,24 @@
       "copy": "error_payload_copy"
     }
   ],
-  "values": [],
+  "values": [
+    {
+      "module": "host",
+      "name": "good_value",
+      "type": "string",
+      "host_attribute": [
+        "good_value"
+      ]
+    },
+    {
+      "module": "host",
+      "name": "bad_value",
+      "type": "string",
+      "host_attribute": [
+        "bad_value"
+      ]
+    }
+  ],
   "callables": [
     {
       "id": "strhost.make_text",
@@ -46,6 +63,25 @@
       "owner_type": null,
       "host_attribute": [
         "make_text"
+      ],
+      "parameters": [],
+      "return_type": "string",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "strhost.bad_text",
+      "module": "host",
+      "name": "bad_text",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "bad_text"
       ],
       "parameters": [],
       "return_type": "string",

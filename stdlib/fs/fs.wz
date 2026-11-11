@@ -1,0 +1,142 @@
+package fs;
+import "std/os" as os;
+import "std/io" as io;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/path" as path;
+
+pub func read_file(name string) Vec[u8] throws os.Error {
+    let file = os.open(name,os.O_RDONLY|os.O_CLOEXEC,0);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    let data = io.read_all(file);
+    closed = true;
+    os.close(file);
+    return data;
+}
+pub func read_text(name string) string throws os.Error { return io.decode(read_file(name)); }
+pub func write_file(name string, data Vec[u8], mode u32) throws os.Error {
+    let file = os.open(name,os.O_WRONLY|os.O_CREAT|os.O_TRUNC|os.O_CLOEXEC,mode);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    os.write_all(file,data);
+    closed = true;
+    os.close(file);
+}
+pub func write_text(name string, value string, mode u32) throws os.Error {
+    write_file(name,text.bytes(value),mode);
+}
+pub func append_file(name string, data Vec[u8], mode u32) throws os.Error {
+    let file = os.open(name,os.O_WRONLY|os.O_CREAT|os.O_APPEND|os.O_CLOEXEC,mode);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    os.write_all(file,data);
+    closed = true;
+    os.close(file);
+}
+pub func copy_file(source string, destination string, mode u32) throws os.Error {
+    let input = os.open(source,os.O_RDONLY|os.O_CLOEXEC,0);
+    var input_closed = false;
+    defer { if !input_closed { try { os.close(input); } catch error os.Error {} } }
+    let first = os.fstat(input);
+    if is_dir(first) { throw os.Error.System(21,0); }
+    // Open before truncating so identical files and hard links can be refused.
+    let output = os.open(destination,os.O_WRONLY|os.O_CREAT|os.O_CLOEXEC,mode);
+    var output_closed = false;
+    defer { if !output_closed { try { os.close(output); } catch error os.Error {} } }
+    let second = os.fstat(output);
+    if first.device == second.device && first.inode == second.inode {
+        throw os.Error.System(22,0);
+    }
+    os.ftruncate(output,0);
+    let buffer = vec.make[u8](4096,0);
+    for true {
+        var count usize = 0;
+        try { count = os.read(input,buffer,vec.len(buffer)); }
+        catch error os.Error {
+            switch error { case os.Error.Interrupted(code,completed): continue; default: throw error; }
+        }
+        if count == 0 { break; }
+        os.write_all(output,buffer[:count]);
+    }
+    output_closed = true;
+    os.close(output);
+    input_closed = true;
+    os.close(input);
+}
+pub func is_dir(info os.FileInfo) bool { return (info.mode & os.S_IFMT) == os.S_IFDIR; }
+pub func is_file(info os.FileInfo) bool { return (info.mode & os.S_IFMT) == os.S_IFREG; }
+pub func is_symlink(info os.FileInfo) bool { return (info.mode & os.S_IFMT) == os.S_IFLNK; }
+pub func exists(name string) bool throws os.Error {
+    try { let info = os.stat(name); return true; }
+    catch error os.Error {
+        switch error {
+            case os.Error.System(code,completed): {
+                if code == 2 || code == 20 { return false; }
+                throw error;
+            }
+            default: throw error;
+        }
+    }
+}
+pub func create_dir_all(name string, mode u32) throws os.Error {
+    var prefix = ".";
+    if path.is_absolute(name) { prefix = "/"; }
+    for component in text.split(name,"/") {
+        if component == "" || component == "." { continue; }
+        prefix = prefix+"/"+component;
+        try { os.mkdir(prefix,mode); }
+        catch error os.Error {
+            switch error {
+                case os.Error.System(code,completed): {
+                    if code != 17 { throw error; }
+                    if !is_dir(os.stat(prefix)) { throw os.Error.System(20,0); }
+                }
+                default: throw error;
+            }
+        }
+    }
+}
+// Linux filenames are bytes; converting an entry's name to text is explicit.
+pub struct DirEntry { pub name Vec[u8]; pub inode u64; pub kind u8; }
+pub func name_text(entry DirEntry) string throws os.Error { return io.decode(entry.name); }
+func little_u64(bytes Vec[u8], offset usize) u64 {
+    var out u64 = 0;
+    for var index usize = 0; index < 8; index += 1 {
+        out = out | (u64(bytes[offset+index]) << (index*8));
+    }
+    return out;
+}
+pub func read_dir(name string) Vec[DirEntry] throws os.Error {
+    let file = os.open(name,os.O_RDONLY|os.O_DIRECTORY|os.O_NOFOLLOW|os.O_CLOEXEC,0);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    let out = vec.empty[DirEntry]();
+    let buffer = vec.make[u8](8192,0);
+    for true {
+        var count usize = 0;
+        try { count = os.getdents(file,buffer,vec.len(buffer)); }
+        catch error os.Error {
+            switch error { case os.Error.Interrupted(code,completed): continue; default: throw error; }
+        }
+        if count == 0 { break; }
+        var offset usize = 0;
+        for offset < count {
+            if count-offset < 20 { throw os.Error.System(5,0); }
+            let length = usize(buffer[offset+16]) | (usize(buffer[offset+17]) << 8);
+            if length < 20 || length > count-offset { throw os.Error.System(5,0); }
+            var end = offset+19;
+            for end < offset+length && buffer[end] != 0 { end += 1; }
+            if end == offset+length { throw os.Error.System(5,0); }
+            let bytes = buffer[offset+19:end];
+            if !(vec.len(bytes) == 1 && bytes[0] == 46) &&
+               !(vec.len(bytes) == 2 && bytes[0] == 46 && bytes[1] == 46) {
+                vec.push(out,DirEntry(name:bytes,inode:little_u64(buffer,offset),kind:buffer[offset+18]));
+            }
+            offset += length;
+        }
+    }
+    closed = true;
+    os.close(file);
+    return out;
+}

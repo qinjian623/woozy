@@ -562,8 +562,8 @@ void flow_tests() {
     if (string_vec.types.find(TypeId{t})->kind != TypeKind::String)
       continue;
     auto ops = classify_value(string_vec, TypeId{t});
-    need(ops.kind == ValueKind::trivial && !ops.needs_drop && !ops.pod_inout,
-         "String must be trivial/no-drop/non-POD");
+    need(ops.kind == ValueKind::string && ops.needs_drop && !ops.pod_inout,
+         "String must own immutable text storage and remain non-POD");
     saw_string = true;
   }
   need(saw_string, "Vec[string] did not publish a String type");
@@ -1461,13 +1461,12 @@ void local_index_borrow_tests() {
     }
   }
   need(owning_checked, "owning element index read missing");
-  // String is a trivial value in this ownership model (needs_drop == false),
-  // so a Vec[string] element read takes the same borrow path.
+  // A Vec[string] element read acquires an independent owner reference.
   auto string_element =
       accepted("func f() i32 {let v Vec[string]=[\"x\"];let s=v[0];return 0;}");
   facts(string_element);
-  expect_use(only_index_read(string_element, "f"), UseKind::borrow, false,
-             "trivial string element read");
+  expect_use(only_index_read(string_element, "f"), UseKind::copy, true,
+             "owning string element read");
 
   auto computed_index = accepted(
       "func f() i32 {let v Vec[i32]=[1];var i i32=0;let x=v[i+1];return x;}");

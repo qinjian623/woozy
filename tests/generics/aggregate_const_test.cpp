@@ -168,7 +168,7 @@ int main(int argc, char **argv) {
           for (auto &f : m.functions)
             for (auto &b : f.blocks)
               for (auto &i : b.instructions)
-                if (!found && i.origin &&
+                if (!found && i.result && i.origin &&
                     original.nodes.at(i.origin->value).kind() ==
                         hir::NodeKind::constant_literal) {
                   change(i);
@@ -187,11 +187,35 @@ int main(int argc, char **argv) {
       else
         i.bits ^= 1;
     });
+    auto corrupt_cleanup = [&](std::string name, const auto &change) {
+      auto m = lowered.value->module();
+      bool found = false;
+      for (auto &f : m.functions)
+        for (auto &b : f.blocks)
+          for (auto &i : b.instructions)
+            if (!found && i.op == ir::Op::ownership_begin && i.origin &&
+                original.nodes.at(i.origin->value).kind() ==
+                    hir::NodeKind::constant_literal &&
+                original.types.find(original.nodes.at(i.origin->value).type)->kind !=
+                    hir::TypeKind::Unit) {
+              change(i);
+              found = true;
+            }
+      need(found, "constant full-expression cleanup marker missing");
+      const auto result = ir::verify(m);
+      need(invalid_result(result),
+           "constant cleanup mutation accepted: " + name + "\n" + messages(result));
+    };
+    corrupt_cleanup("wrong value type", [&](auto &i) {
+      i.type = original.nodes.at(i.origin->value).type;
+    });
+    corrupt_cleanup("source changed", [](auto &i) { ++i.source.begin_byte; });
+    corrupt_cleanup("call cleanup on a constant", [](auto &i) { i.bits = 1; });
 #endif
     std::cout << "aggregate constants: 7 HIR mutations rejected directly and "
                  "after ownership recompute";
 #ifdef LANG_AGGREGATE_NATIVE
-    std::cout << "; 3 NativeIR mutations rejected\n";
+    std::cout << "; 6 NativeIR mutations rejected\n";
 #else
     std::cout << "; NativeIR not_run (LLVM disabled)\n";
 #endif

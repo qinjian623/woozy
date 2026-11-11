@@ -1,0 +1,129 @@
+package app;
+import "std/process" as process;
+import "std/signal" as signal;
+import "std/ipc" as ipc;
+import "std/os" as os;
+import "std/vec" as vec;
+import "std/text" as text;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/thread" as thread;
+
+func decode(bytes Vec[u8]) string throws os.Error {
+    try { return text.from_bytes(bytes); }
+    catch error text.Error { throw os.Error.System(84,0); }
+}
+
+func fork_from_thread(memory ipc.Memory) i64 {
+    try {
+        let pid = process.fork();
+        if pid == 0 {
+            let values = vec.make[string](3,"child😀");
+            ipc.atomic_store(memory,128,i64(vec.len(values)));
+            os.exit(0);
+        }
+        let status = process.wait(pid);
+        if !process.exited(status) || process.exit_status(status) != 0 { return 1; }
+        return 0;
+    } catch error os.Error { return 2; }
+}
+func run() i32 throws os.Error {
+    let arguments = process.args();
+    let raw_arguments = process.args_bytes();
+    if vec.len(arguments) != 2 || arguments[1] != "probe😀" ||
+       vec.len(raw_arguments) != 2 || decode(raw_arguments[1]) != "probe😀" { return 1; }
+    process.setenv("WOOZY_ST08","value😀",true);
+    switch process.getenv("WOOZY_ST08") { case option.Option.Some(value): if value != "value😀" { return 2; } case option.Option.None: return 3; }
+    process.setenv("WOOZY_ST08","kept",false);
+    switch process.getenv_bytes(text.bytes("WOOZY_ST08")) { case option.Option.Some(value): if decode(value) != "value😀" { return 4; } case option.Option.None: return 5; }
+    if vec.len(process.environment()) == 0 || vec.len(process.environment_bytes()) == 0 { return 6; }
+    process.unsetenv("WOOZY_ST08");
+    switch process.getenv("WOOZY_ST08") { case option.Option.Some(value): return 7; case option.Option.None: {} }
+    process.setenv_bytes(text.bytes("WOOZY_ST08"),[255],true);
+    var invalid = false;
+    try { let rejected = process.getenv("WOOZY_ST08"); } catch error os.Error { invalid = true; }
+    if !invalid { return 8; }
+    process.unsetenv_bytes(text.bytes("WOOZY_ST08"));
+    let pipe = os.pipe(0);
+    let pid = process.spawn_with("/bin/sh",["sh","-c","printf '%s' \"$VALUE\"; exit 7"],["VALUE=child😀"],-1,os.fd(pipe.write_end),-1);
+    os.close(pipe.write_end);
+    let data = vec.make[u8](64,0);
+    let count = os.read(pipe.read_end,data,64);
+    os.close(pipe.read_end);
+    if decode(data[:count]) != "child😀" { return 9; }
+    let waited = process.wait(pid);
+    if !process.exited(waited) || process.exit_status(waited) != 7 { return 10; }
+    let raw_pid = process.spawn_bytes(text.bytes("/bin/sh"),[text.bytes("sh"),text.bytes("-c"),text.bytes("exit 3")],vec.empty[Vec[u8]](),-1,-1,-1);
+    if process.exit_status(process.wait(raw_pid)) != 3 { return 11; }
+    invalid = false;
+    try { let rejected = process.spawn("/definitely/missing/woozy",["missing"]); } catch error os.Error { invalid = true; }
+    if !invalid { return 12; }
+    invalid = false;
+    try { process.execve("/definitely/missing/woozy",["missing"],vec.empty[string]()); } catch error os.Error { invalid = true; }
+    if !invalid { return 13; }
+    invalid = false;
+    try { process.execve_bytes(text.bytes("/definitely/missing/woozy"),[text.bytes("missing")],vec.empty[Vec[u8]]()); } catch error os.Error { invalid = true; }
+    if !invalid { return 14; }
+    let bit = signal.bit(signal.SIGUSR1);
+    let old = signal.sigprocmask(signal.SIG_BLOCK,bit);
+    os.kill(os.getpid(),signal.SIGUSR1);
+    if (signal.sigpending() & bit) == 0 { return 15; }
+    let info = signal.sigwaitinfo(bit);
+    if info.number != signal.SIGUSR1 || info.pid != os.getpid() { return 16; }
+    signal.sigprocmask(signal.SIG_SETMASK,old);
+    signal.signal(signal.SIGUSR2,signal.Action.Ignore);
+    os.kill(os.getpid(),signal.SIGUSR2);
+    signal.signal(signal.SIGUSR2,signal.Action.Default);
+
+    let memory = ipc.map_anon(4096,ipc.PROT_READ|ipc.PROT_WRITE);
+    let mutex = ipc.mutex_init(memory,0);
+    let condition = ipc.cond_init(memory,16);
+    let semaphore = ipc.sem_init(memory,32,0);
+    if ipc.len(memory) != 4096 || ipc.sem_trywait(semaphore) || ipc.sem_timedwait(semaphore,0) { return 17; }
+    ipc.write_i32(memory,96,42);
+    if ipc.read_i32(memory,96) != 42 { return 18; }
+    ipc.write_bytes(memory,100,text.bytes("abc"),0,3);
+    if decode(ipc.read_bytes(memory,100,3)) != "abc" { return 19; }
+    ipc.atomic_store(memory,112,4);
+    if ipc.atomic_add(memory,112,2) != 4 || !ipc.atomic_compare_exchange(memory,112,6,8) || ipc.atomic_load(memory,112) != 8 { return 20; }
+    let child = process.fork();
+    if child == 0 {
+        var index = 0;
+        for index < 1000 {
+            ipc.mutex_lock(mutex);
+            ipc.write_i64(memory,64,ipc.read_i64(memory,64)+1);
+            ipc.mutex_unlock(mutex);
+            index += 1;
+        }
+        ipc.sem_post(semaphore);
+        os.exit(0);
+    }
+    ipc.sem_wait(semaphore);
+    if ipc.sem_value(semaphore) != 0 || process.exit_status(process.wait(child)) != 0 || ipc.read_i64(memory,64) != 1000 { return 21; }
+    ipc.mutex_lock(mutex);
+    if ipc.cond_timedwait(condition,mutex,0) { return 22; }
+    ipc.cond_signal(condition);
+    ipc.cond_broadcast(condition);
+    ipc.mutex_unlock(mutex);
+    let worker = thread.spawn[ipc.Memory](fork_from_thread,memory);
+    if thread.join(worker) != 0 || ipc.atomic_load(memory,128) != 3 { return 23; }
+    ipc.mutex_destroy(mutex);
+    ipc.cond_destroy(condition);
+    ipc.sem_destroy(semaphore);
+    invalid = false;
+    try { let rejected = ipc.read_i64(memory,4092); } catch error os.Error { invalid = true; }
+    if !invalid { return 24; }
+    let name = "/woozy-source-"+strconv.format_i64(i64(os.getpid()));
+    let file = ipc.shm_open(name,os.O_RDWR|os.O_CREAT|os.O_EXCL,0o600);
+    os.ftruncate(file,4096);
+    let mapped = ipc.map_file(file,4096,0,ipc.PROT_READ|ipc.PROT_WRITE);
+    os.close(file);
+    ipc.shm_unlink(name);
+    ipc.write_i64(mapped,0,99);
+    if ipc.read_i64(mapped,0) != 99 { return 25; }
+    return 0;
+}
+func main() i32 {
+    try { return run(); }
+    catch error os.Error { return 90; }
+}

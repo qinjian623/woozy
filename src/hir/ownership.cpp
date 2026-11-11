@@ -183,6 +183,7 @@ ValueKind provisional_kind(const Type &t) {
   case TypeKind::MutexHandle:
   case TypeKind::CondvarHandle:
   case TypeKind::AtomicI64Handle:
+  case TypeKind::IpcHandle:
     return ValueKind::runtime_handle;
   case TypeKind::Vec:
     return ValueKind::vec;
@@ -226,10 +227,12 @@ class Classifier {
     const auto &t = ty(m, id);
     if (t.kind == TypeKind::TypeParameter)
       return {ValueKind::dependent, {}};
+    if (t.kind == TypeKind::String)
+      return {ValueKind::string, {}};
     if (t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
         t.kind == TypeKind::CondvarHandle ||
-        t.kind == TypeKind::AtomicI64Handle)
+        t.kind == TypeKind::AtomicI64Handle || t.kind == TypeKind::IpcHandle)
       return {ValueKind::runtime_handle, {}};
     if (t.kind == TypeKind::ForeignOpaque ||
         t.kind == TypeKind::ForeignCallable) {
@@ -310,12 +313,12 @@ class Classifier {
       throw std::invalid_argument(
           "concrete ownership value dependency budget exceeded");
     const auto &t = ty(m, id);
-    if (t.kind == TypeKind::Vec)
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::String)
       return true;
     if (t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
         t.kind == TypeKind::CondvarHandle ||
-        t.kind == TypeKind::AtomicI64Handle)
+        t.kind == TypeKind::AtomicI64Handle || t.kind == TypeKind::IpcHandle)
       return true;
     if (t.kind == TypeKind::ForeignOpaque ||
         t.kind == TypeKind::ForeignCallable)
@@ -365,10 +368,15 @@ public:
       out.kind = ValueKind::dependent;
       return out;
     }
+    if (t.kind == TypeKind::String) {
+      out.kind = ValueKind::string;
+      out.needs_drop = true;
+      return out;
+    }
     if (t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
         t.kind == TypeKind::CondvarHandle ||
-        t.kind == TypeKind::AtomicI64Handle) {
+        t.kind == TypeKind::AtomicI64Handle || t.kind == TypeKind::IpcHandle) {
       out.kind = ValueKind::runtime_handle;
       out.needs_drop = true;
       return out;
@@ -482,9 +490,20 @@ class Analysis {
     if (ops.needs_drop || x.kind() == NodeKind::move ||
         x.kind() == NodeKind::for_in)
       enabled.insert(fun->symbol.value);
-    if (auto fi = std::get_if<ForIn>(&x.data))
-      local(fi->element, fi->body_scope,
-            ty(m, n(x.children[0]).type).type_args[0], ParamMode::move);
+    if (auto fi = std::get_if<ForIn>(&x.data)) {
+      auto collection = ty(m, n(x.children[0]).type);
+      TypeId element{};
+      if (collection.kind == TypeKind::String) {
+        for (uint64_t i = 1; i <= m.types.size(); ++i) {
+          const auto &candidate = ty(m, TypeId{i});
+          if (candidate.kind == TypeKind::UnsignedInt && candidate.bits == 32) {
+            element = TypeId{i}; break;
+          }
+        }
+        if (!element.value) throw std::invalid_argument("String iteration has no public u32 type");
+      } else element = collection.type_args[0];
+      local(fi->element, fi->body_scope, element, ParamMode::move);
+    }
     if (auto sw = std::get_if<Switch>(&x.data))
       for (const auto &a : sw->arms)
         pattern(a.pattern, a.scope);
@@ -827,7 +846,9 @@ class Analysis {
       consume(live, expression);
     }
     out.records.full_expressions.push_back({root, temp_cleanup(live)});
-    failure_prefix[root.value] = temp_cleanup(live);
+    // A call used directly as a condition/switch subject already recorded
+    // its failing argument borrows before releasing the successful ones.
+    failure_prefix.try_emplace(root.value, temp_cleanup(live));
   }
   void records(HirNodeId id) {
     const auto &x = n(id);
@@ -862,8 +883,10 @@ class Analysis {
       }
       expr_records(x.children[1], id, live);
       use(id, 0, x.children[0], UseKind::borrow);
-      use(id, 1, x.children[1], UseKind::take);
-      consume(live, x.children[1]);
+      bool text_compound = std::get<Assign>(x.data).compound &&
+                           ty(m, n(x.children[0]).type).kind == TypeKind::String;
+      use(id, 1, x.children[1], text_compound ? UseKind::borrow : UseKind::take);
+      if (!text_compound) consume(live, x.children[1]);
       out.records.full_expressions.push_back({id, prefix_cleanup(live)});
       active_borrows.clear();
       return;
@@ -1293,7 +1316,9 @@ class Analysis {
         readable(x.children[0], p->symbol, st);
       if (f.normal) {
         std::set<uint64_t> protected_root;
-        if (n(x.children[0]).kind() == NodeKind::field_place)
+        if (n(x.children[0]).kind() == NodeKind::field_place ||
+            (std::get<Assign>(x.data).compound &&
+             ty(m, n(x.children[0]).type).kind == TypeKind::String))
           if (auto root = borrow_root(x.children[0]))
             protected_root.insert(root->value);
         auto rhs = expression(x.children[1], *f.normal, protected_root);

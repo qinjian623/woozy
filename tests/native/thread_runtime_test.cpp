@@ -134,7 +134,7 @@ void suite() {
   for(size_t i=0;i<4;++i) {
     need(observations[i].tcb!=parent_tcb&&observations[i].canary==parent_canary&&parent_canary,"thread TLS/stack canary invalid");
     for(size_t j=0;j<i;++j) need(observations[i].tcb!=observations[j].tcb,"threads share a TCB");
-    need(permissions(observations[i].tcb-1024*1024-4096).starts_with("---"),"stack guard page missing");
+    need(permissions(observations[i].tcb-LANG_THREAD_STACK_BYTES-4096).starts_with("---"),"stack guard page missing");
   }
   __atomic_store_n(&gate,1,__ATOMIC_RELEASE);
   for(size_t i=0;i<4;++i) {

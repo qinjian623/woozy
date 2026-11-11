@@ -1,0 +1,17 @@
+package app;
+import "std/json" as json;
+import "std/text" as text;
+import "std/thread" as thread;
+import "std/os" as os;
+func parse_one(source string) i64 {
+    try { let value=json.parse(source); if json.serialize(value)!=source { return 1; } }
+    catch error json.Error { return 2; }
+    return 0;
+}
+func main() i32 throws os.Error {
+    let arrays=text.repeat("[",256)+"0"+text.repeat("]",256);
+    let objects=text.repeat("{\"x\":",256)+"0"+text.repeat("}",256);
+    if thread.join(thread.spawn[string](parse_one,arrays))!=0 { return 3; }
+    if thread.join(thread.spawn[string](parse_one,objects))!=0 { return 4; }
+    return 0;
+}

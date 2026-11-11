@@ -2,7 +2,7 @@
 
 Woozy 使用静态类型，支持局部类型推断、泛型、结构体、枚举和可声明的错误。函数、值、作用域与容器的规则在不同后端保持一致。
 
-这份教程讲如何用 Woozy 表达程序。下面从一段完整代码开始，再逐项介绍写法。已有编程经验、想快速查差异的读者可以看 [语言快速入门](QUICKSTART.md)。示例使用 `.wz` 文件；准备运行环境见 [BUILD.md](../development/docs/BUILD.md)，不影响先阅读语言内容。
+这份教程讲如何用 Woozy 表达程序。下面从一段完整代码开始，再逐项介绍写法。已有编程经验、想快速查差异的读者可以看 [语言快速入门](QUICKSTART.md)。示例使用 `.wz` 文件；准备运行环境见 [BUILD.md](../development/docs/BUILD.md)，标准库接口见 [标准库](STDLIB.md)。
 
 ## 1. 先读一个程序
 
@@ -10,14 +10,15 @@ Woozy 使用静态类型，支持局部类型推断、泛型、结构体、枚�
 
 ```wz
 package main;
+import "std/io" as io;
 import "std/os" as os;
 
 func main() throws os.Error {
-    os.write_all_text(os.stdout(), "Hello, world!\n");
+    io.println("Hello, world!");
 }
 ```
 
-`import "std/os" as os;` 导入系统接口。`stdout()` 取得标准输出，`write_all_text` 写完字符串，`\n` 表示换行。`throws os.Error` 声明输出可能失败，错误处理在后面的章节介绍。这个程序用于 Linux x86_64 Native 后端，运行时输出 `Hello, world!`。
+`import "std/io" as io;` 导入输出函数。`io.println` 写出字符串并补一个换行。`throws os.Error` 声明输出可能失败，错误处理在后面的章节介绍。这个程序用于 Linux x86_64 Native 后端，运行时输出 `Hello, world!`。
 
 下面是另一个完整程序，用来计算一组分数的总和；与上例分别阅读和保存：
 
@@ -127,7 +128,39 @@ let message = `第一行
 第二行`;
 ```
 
-没有单引号字符字面量、字符串插值或 `\xHH` 转义。当前字符串可以保存、复制、传参和放入聚合类型；动态拼接、字符串索引、切片和普通 `string ==` 尚未支持。
+没有单引号字符字面量、字符串插值或 `\xHH` 转义。`string` 是不可变 UTF-8 值，可以保存、复制、传参和放入聚合类型。拼接、相等和排序已经可用；比较按 UTF-8 字节内容进行，不做 Unicode 正规化。
+
+`std/text` 的 `len` 按 Unicode 码点计数，字符串索引也返回 `u32` 码点，切片端点同样是码点位置。需要字节时用 `text.bytes`，从字节建立字符串用 `text.from_bytes`；后者严格检查 UTF-8，失败抛出 `text.Error`。先导入 `std/text`：
+
+```wz
+import "std/text" as text;
+```
+
+以下写在函数体内：
+
+```wz
+let sample = "a你😀";
+let count = text.len(sample);            // 3 个码点
+let byte_count = text.byte_len(sample);  // 8 个字节
+let second = sample[1];                  // 20320，u32
+let tail = sample[1:3];                  // "你😀"
+let raw = text.bytes(sample);            // Vec[u8]
+raw[0] = 98;                             // 修改字节容器不影响 sample
+try {
+    let restored = text.from_bytes(text.bytes(sample));
+} catch error text.Error {
+    // 输入不是合法 UTF-8
+}
+```
+
+`string` 可以用 `+` 拼接，也可以用 `==`、`!=` 和大小比较。`var` 整体绑定支持 `+=`：
+
+```wz
+var greeting = "你好";
+greeting += "，Woozy";  // 建立新字符串
+```
+
+字段、索引和 `let` 绑定的字符串不能直接 `+=`，需要写成 `target = target + suffix`。字符串 `const` 的初始值仍须在编译期确定，`const C = "a" + "b";` 会报错；const 只接受能在编译期确定的字符串值。
 
 ## 4. 运算与转换
 
@@ -274,7 +307,22 @@ copy[0] = 99;                // scores[0] 仍为 15
 
 `let` 禁止给名称重新赋值，也禁止修改本语言值的字段，但允许修改共享 Vec 的元素。切片复制元素的值；若元素也是 Vec，里面的容器仍会共享，不是递归深复制。
 
-Vec 没有负索引。越界下标、非法切片会产生 Panic。遍历时可以修改已有元素，不能改变正在遍历的 Vec 的长度。
+`std/vec` 提供长度和可变操作，使用前写 `import "std/vec" as vec;`。以下写在函数体内：
+
+```wz
+let items = vec.empty[i32]();
+vec.reserve(items, 8);
+vec.push(items, 12);
+vec.push(items, 18);
+let last = vec.pop(items); // option.Option[i32]
+vec.resize(items, 4, 0);   // 长度变为 4，新增元素填 0
+let capacity = vec.capacity(items);
+vec.clear(items);          // 长度为 0，容量保留
+```
+
+`vec.pop` 在空 Vec 上返回 `None`。`resize` 变大时用给定值填充，变小时截断。`clear` 不释放容量。Vec 赋值共享同一个容器，这些操作会改变所有别名看到的内容。
+
+Vec 没有负索引。越界下标、非法切片会产生 Panic。遍历期间可以修改已有元素，不能改变正在遍历的 Vec 的长度或存储；不要在循环里 push、pop、resize、clear 或 reserve。
 
 ## 8. 结构体与方法
 
@@ -439,7 +487,7 @@ func handled() i32 {
 }
 ```
 
-错误类型可以是普通枚举，不必实现特殊 Error trait。自行定义的 `Result[T, E]` 也是普通数据，不会自动触发错误传播。捕获错误不会撤销已经发生的容器修改或外部操作。
+错误类型可以是普通枚举，不必实现特殊 Error trait。自行定义的 `Result[T, E]` 也是普通数据，不会自动触发错误传播。标准库的 `std/result.Result[T,E]` 同样是普通 enum，变体是 `result.Result.Ok` 和 `result.Result.Err`；构造泛型 enum 时写完整类型实参，例如 `result.Result[i32,i32].Ok(7)`，跨包匹配写 `result.Result.Ok(value)`。捕获错误不会撤销已经发生的容器修改或外部操作。
 
 越界、整数除零等运行失败称为 Panic，不能由 typed catch 恢复。可预期、需要调用者处理的错误应通过 `throws` 表达。
 
@@ -549,7 +597,7 @@ func smaller[T Ordered](left T, right T) T {
 }
 ```
 
-`smaller[i32](12, 18)` 得到 `12`。类型必须显式实现对应 trait，仅有同名方法不够。每个类型参数最多一个具名约束；泛型 trait 可以带类型参数。同一类型可实现不同实参的同一个 trait，调用存在歧义时会报错，不根据预期返回类型猜测。
+`smaller[i32](12, 18)` 得到 `12`。泛型 enum 构造也要写完整类型实参，例如 `option.Option[i32].Some(1)`；跨包匹配写 `option.Option.Some(value)`。`std/option.Option` 和 `std/result.Result` 都是普通泛型 enum；在 `std/option` 包内部才可以省略成 `Option.Some(value)`。类型必须显式实现对应 trait，仅有同名方法不够。每个类型参数最多一个具名约束；泛型 trait 可以带类型参数。同一类型可实现不同实参的同一个 trait，调用存在歧义时会报错，不根据预期返回类型猜测。
 
 当前不支持 C++ 模板特化、常量泛型、关联类型或动态 trait 对象。更多规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
 
@@ -559,8 +607,38 @@ func smaller[T Ordered](left T, right T) T {
 
 Vec 传给线程后仍共享容器。多个线程读写同一份可变数据时，用 `std/sync` 的 Mutex 保护访问；Condvar 用于等待共享条件，AtomicI64 用于原子计数。引用计数的原子操作不会代替这些同步。完整示例和接口见 [线程与同步](CONCURRENCY.md)。
 
+## 16. 常用标准库
+
+标准库按 `std/...` 导入。下面完整文件用 `std/text` 拆分输入，用 `std/strconv` 解析整数，再用 `std/io` 输出总和：
+
+```wz
+package main;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+
+func main() throws os.Error {
+    let pieces = text.split("12,18,20", ",");
+    var total i64 = 0;
+    for piece in pieces {
+        try {
+            total += strconv.parse_i64(piece);
+        } catch error strconv.Error {
+            io.eprintln("invalid number: " + piece);
+            return;
+        }
+    }
+    io.println(total);
+}
+```
+
+`std/io.println` 补换行，`std/io.eprintln` 写到标准错误。文件读写用 `std/fs`，文件和缓冲 I/O 用 `std/os`、`std/io`，时间、随机、数学、网络、线程和同步见 [标准库](STDLIB.md)、[系统接口](OS.md) 和 [线程与同步](CONCURRENCY.md)。
+
+`std/fs` 的 `read_text`、`write_text` 等函数会打开并关闭文件；直接使用 `os.File` 或 `io.Reader`/`io.Writer` 时，关闭和 `flush` 由调用者负责。详细规则见 [标准库](STDLIB.md)。
+
 ## 继续阅读
 
-[快速入门](QUICKSTART.md) 按有经验读者常遇到的差异组织内容。[SEMANTICS.md](SEMANTICS.md) 规定数值、复制、错误和清理的精确行为；[词法与语法](../baseline/LEXICAL_SYNTAX.md) 可查字面量与声明写法，[系统接口](OS.md) 介绍输出、文件读写与进程操作。
+[快速入门](QUICKSTART.md) 按有经验读者常遇到的差异组织内容。[SEMANTICS.md](SEMANTICS.md) 规定数值、复制、错误和清理的精确行为；[词法与语法](../baseline/LEXICAL_SYNTAX.md) 可查字面量与声明写法，[系统接口](OS.md) 介绍输出、文件读写与进程操作，[标准库](STDLIB.md) 按模块列出接口和资源规则。
 
 章节组织参考了 [Rust Book](https://github.com/rust-lang/book/blob/main/src/SUMMARY.md) 与 [Go Tour 基础篇](https://github.com/golang/website/blob/master/_content/tour/basics.article)。示例和规则以 Woozy 为准。

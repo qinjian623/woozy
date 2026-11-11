@@ -1,0 +1,564 @@
+// Strict RFC 8259 JSON reader and writer.
+//
+// Numbers are stored as their raw decimal token in Value.Number. The token is
+// never converted through a double, so arbitrary-size integers and long
+// fractions keep every digit. Use as_i64/as_u64/as_f64 (or number_text plus
+// std/strconv) when a numeric value is needed. serialize validates the raw
+// token of user-constructed Number values and rejects malformed tokens.
+//
+// Parser and serializer both accept at most 256 nested containers and report
+// Error.DepthLimit instead of exhausting the stack. serialize also detects a
+// cyclic Vec graph through that depth limit.
+//
+// Object duplicate keys: the last value wins, and the member keeps the
+// position of its first occurrence. This applies to the parser and is
+// documented here; the serializer writes every member it is given.
+//
+// Error.Syntax offsets are Unicode code point indices into the input string,
+// matching std/text.len and string indexing.
+package json;
+
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const MAX_DEPTH usize = 256;
+
+pub enum Error {
+    Syntax(offset usize);
+    DepthLimit;
+    InvalidNumber;
+    NumberRange;
+}
+
+pub enum Value {
+    Null;
+    Bool(value bool);
+    String(value string);
+    Number(value string);
+    Array(value Vec[Value]);
+    Object(value Vec[Member]);
+}
+
+pub struct Member {
+    pub name string;
+    pub value Value;
+}
+
+func decode_utf8(bytes Vec[u8], offset usize) string throws Error {
+    try {
+        return text.from_bytes(bytes);
+    } catch error text.Error {
+        throw Error.Syntax(offset);
+    }
+}
+
+func skip_whitespace(source string, cursor inout usize) {
+    for cursor < text.len(source) {
+        let rune = source[cursor];
+        if rune == 32 || rune == 9 || rune == 10 || rune == 13 {
+            cursor += 1;
+        } else {
+            break;
+        }
+    }
+}
+
+func is_digit(rune u32) bool { return rune >= 48 && rune <= 57; }
+
+func is_hex_digit(rune u32) bool {
+    return is_digit(rune) || (rune >= 65 && rune <= 70) || (rune >= 97 && rune <= 102);
+}
+
+func hex_value(rune u32) u32 {
+    if rune <= 57 { return rune - 48; }
+    if rune <= 70 { return rune - 55; }
+    return rune - 87;
+}
+
+func push_byte(out Vec[u8], value u32) {
+    vec.push(out, u8(value));
+}
+
+func push_rune(out Vec[u8], rune u32) {
+    if rune <= 0x7f {
+        push_byte(out, rune);
+    } else if rune <= 0x7ff {
+        push_byte(out, 0xc0 | (rune >> 6));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    } else if rune <= 0xffff {
+        push_byte(out, 0xe0 | (rune >> 12));
+        push_byte(out, 0x80 | ((rune >> 6) & 0x3f));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    } else {
+        push_byte(out, 0xf0 | (rune >> 18));
+        push_byte(out, 0x80 | ((rune >> 12) & 0x3f));
+        push_byte(out, 0x80 | ((rune >> 6) & 0x3f));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    }
+}
+
+func parse_hex4(source string, cursor inout usize) u32 throws Error {
+    var value u32 = 0;
+    for var index usize = 0; index < 4; index += 1 {
+        if cursor >= text.len(source) {
+            throw Error.Syntax(cursor);
+        }
+        let rune = source[cursor];
+        if !is_hex_digit(rune) {
+            throw Error.Syntax(cursor);
+        }
+        value = value * 16 + hex_value(rune);
+        cursor += 1;
+    }
+    return value;
+}
+
+func parse_string(source string, cursor inout usize) string throws Error {
+    cursor += 1;
+    let out = vec.empty[u8]();
+    for true {
+        if cursor >= text.len(source) {
+            throw Error.Syntax(cursor);
+        }
+        let rune = source[cursor];
+        if rune == 34 {
+            cursor += 1;
+            return decode_utf8(out, cursor);
+        }
+        if rune < 0x20 {
+            throw Error.Syntax(cursor);
+        }
+        if rune != 92 {
+            push_rune(out, rune);
+            cursor += 1;
+            continue;
+        }
+        cursor += 1;
+        if cursor >= text.len(source) {
+            throw Error.Syntax(cursor);
+        }
+        let escape = source[cursor];
+        if escape == 34 || escape == 92 || escape == 47 {
+            push_byte(out, escape);
+            cursor += 1;
+            continue;
+        }
+        if escape == 98 {
+            push_byte(out, 8);
+            cursor += 1;
+            continue;
+        }
+        if escape == 102 {
+            push_byte(out, 12);
+            cursor += 1;
+            continue;
+        }
+        if escape == 110 {
+            push_byte(out, 10);
+            cursor += 1;
+            continue;
+        }
+        if escape == 114 {
+            push_byte(out, 13);
+            cursor += 1;
+            continue;
+        }
+        if escape == 116 {
+            push_byte(out, 9);
+            cursor += 1;
+            continue;
+        }
+        if escape != 117 {
+            throw Error.Syntax(cursor);
+        }
+        cursor += 1;
+        let high = parse_hex4(source, inout cursor);
+        if high >= 0xd800 && high <= 0xdbff {
+            if cursor + 1 >= text.len(source) || source[cursor] != 92 || source[cursor + 1] != 117 {
+                throw Error.Syntax(cursor);
+            }
+            cursor += 2;
+            let low = parse_hex4(source, inout cursor);
+            if low < 0xdc00 || low > 0xdfff {
+                throw Error.Syntax(cursor);
+            }
+            let scalar = 0x10000 + ((high - 0xd800) << 10) + (low - 0xdc00);
+            push_rune(out, scalar);
+            continue;
+        }
+        if high >= 0xdc00 && high <= 0xdfff {
+            throw Error.Syntax(cursor);
+        }
+        push_rune(out, high);
+    }
+    throw Error.Syntax(cursor);
+}
+
+func parse_number(source string, cursor inout usize) string throws Error {
+    let start = cursor;
+    if source[cursor] == 45 {
+        cursor += 1;
+    }
+    if cursor >= text.len(source) {
+        throw Error.Syntax(start);
+    }
+    if source[cursor] == 48 {
+        cursor += 1;
+    } else if is_digit(source[cursor]) {
+        cursor += 1;
+        for cursor < text.len(source) && is_digit(source[cursor]) {
+            cursor += 1;
+        }
+    } else {
+        throw Error.Syntax(cursor);
+    }
+    if cursor < text.len(source) && source[cursor] == 46 {
+        cursor += 1;
+        if cursor >= text.len(source) || !is_digit(source[cursor]) {
+            throw Error.Syntax(cursor);
+        }
+        for cursor < text.len(source) && is_digit(source[cursor]) {
+            cursor += 1;
+        }
+    }
+    if cursor < text.len(source) && (source[cursor] == 101 || source[cursor] == 69) {
+        cursor += 1;
+        if cursor < text.len(source) && (source[cursor] == 43 || source[cursor] == 45) {
+            cursor += 1;
+        }
+        if cursor >= text.len(source) || !is_digit(source[cursor]) {
+            throw Error.Syntax(cursor);
+        }
+        for cursor < text.len(source) && is_digit(source[cursor]) {
+            cursor += 1;
+        }
+    }
+    return source[start:cursor];
+}
+
+func match_word(source string, cursor inout usize, word string) bool {
+    let length = text.len(word);
+    if length > text.len(source) - cursor {
+        return false;
+    }
+    if source[cursor:cursor + length] == word {
+        cursor += length;
+        return true;
+    }
+    return false;
+}
+
+func parse_array(source string, cursor inout usize, depth usize) Value throws Error {
+    cursor += 1;
+    let items = vec.empty[Value]();
+    skip_whitespace(source, inout cursor);
+    if cursor >= text.len(source) {
+        throw Error.Syntax(cursor);
+    }
+    if source[cursor] == 93 {
+        cursor += 1;
+        return Value.Array(items);
+    }
+    for true {
+        let item = parse_value(source, inout cursor, depth + 1);
+        vec.push(items, item);
+        skip_whitespace(source, inout cursor);
+        if cursor >= text.len(source) {
+            throw Error.Syntax(cursor);
+        }
+        if source[cursor] == 44 {
+            cursor += 1;
+            skip_whitespace(source, inout cursor);
+            continue;
+        }
+        if source[cursor] == 93 {
+            cursor += 1;
+            return Value.Array(items);
+        }
+        throw Error.Syntax(cursor);
+    }
+    throw Error.Syntax(cursor);
+}
+
+func parse_object(source string, cursor inout usize, depth usize) Value throws Error {
+    cursor += 1;
+    let members = vec.empty[Member]();
+    skip_whitespace(source, inout cursor);
+    if cursor >= text.len(source) {
+        throw Error.Syntax(cursor);
+    }
+    if source[cursor] == 125 {
+        cursor += 1;
+        return Value.Object(members);
+    }
+    for true {
+        if cursor >= text.len(source) || source[cursor] != 34 {
+            throw Error.Syntax(cursor);
+        }
+        let name = parse_string(source, inout cursor);
+        skip_whitespace(source, inout cursor);
+        if cursor >= text.len(source) || source[cursor] != 58 {
+            throw Error.Syntax(cursor);
+        }
+        cursor += 1;
+        skip_whitespace(source, inout cursor);
+        let member_value = parse_value(source, inout cursor, depth + 1);
+        var replaced = false;
+        for var index usize = 0; index < vec.len(members); index += 1 {
+            if members[index].name == name {
+                members[index].value = member_value;
+                replaced = true;
+                break;
+            }
+        }
+        if !replaced {
+            vec.push(members, Member(name: name, value: member_value));
+        }
+        skip_whitespace(source, inout cursor);
+        if cursor >= text.len(source) {
+            throw Error.Syntax(cursor);
+        }
+        if source[cursor] == 44 {
+            cursor += 1;
+            skip_whitespace(source, inout cursor);
+            continue;
+        }
+        if source[cursor] == 125 {
+            cursor += 1;
+            return Value.Object(members);
+        }
+        throw Error.Syntax(cursor);
+    }
+    throw Error.Syntax(cursor);
+}
+
+func parse_value(source string, cursor inout usize, depth usize) Value throws Error {
+    if cursor >= text.len(source) {
+        throw Error.Syntax(cursor);
+    }
+    let rune = source[cursor];
+    if rune == 91 || rune == 123 {
+        if depth >= MAX_DEPTH {
+            throw Error.DepthLimit;
+        }
+        if rune == 91 {
+            return parse_array(source, inout cursor, depth);
+        }
+        return parse_object(source, inout cursor, depth);
+    }
+    if rune == 34 {
+        return Value.String(parse_string(source, inout cursor));
+    }
+    if rune == 45 || is_digit(rune) {
+        return Value.Number(parse_number(source, inout cursor));
+    }
+    let start = cursor;
+    if rune == 116 && match_word(source, inout cursor, "true") {
+        return Value.Bool(true);
+    }
+    if rune == 102 && match_word(source, inout cursor, "false") {
+        return Value.Bool(false);
+    }
+    if rune == 110 && match_word(source, inout cursor, "null") {
+        return Value.Null;
+    }
+    throw Error.Syntax(start);
+}
+
+pub func parse(source string) Value throws Error {
+    var cursor usize = 0;
+    skip_whitespace(source, inout cursor);
+    let value = parse_value(source, inout cursor, 0);
+    skip_whitespace(source, inout cursor);
+    if cursor != text.len(source) {
+        throw Error.Syntax(cursor);
+    }
+    return value;
+}
+
+func valid_number(token string) bool {
+    if text.len(token) == 0 {
+        return false;
+    }
+    var cursor usize = 0;
+    try {
+        let parsed = parse_number(token, inout cursor);
+        return cursor == text.len(token);
+    } catch error Error {
+        return false;
+    }
+}
+
+func push_ascii(out Vec[u8], value string) {
+    for rune in value {
+        push_byte(out, rune);
+    }
+}
+
+func push_hex4(out Vec[u8], value u32) {
+    push_byte(out, 92);
+    push_byte(out, 117);
+    push_byte(out, 48);
+    push_byte(out, 48);
+    let high = (value >> 4) & 0x0f;
+    let low = value & 0x0f;
+    if high < 10 { push_byte(out, 48 + high); } else { push_byte(out, 87 + high); }
+    if low < 10 { push_byte(out, 48 + low); } else { push_byte(out, 87 + low); }
+}
+
+func write_string(out Vec[u8], value string) {
+    push_byte(out, 34);
+    for rune in value {
+        if rune == 34 {
+            push_byte(out, 92);
+            push_byte(out, 34);
+        } else if rune == 92 {
+            push_byte(out, 92);
+            push_byte(out, 92);
+        } else if rune == 8 {
+            push_byte(out, 92);
+            push_byte(out, 98);
+        } else if rune == 12 {
+            push_byte(out, 92);
+            push_byte(out, 102);
+        } else if rune == 10 {
+            push_byte(out, 92);
+            push_byte(out, 110);
+        } else if rune == 13 {
+            push_byte(out, 92);
+            push_byte(out, 114);
+        } else if rune == 9 {
+            push_byte(out, 92);
+            push_byte(out, 116);
+        } else if rune < 0x20 {
+            push_hex4(out, rune);
+        } else {
+            push_rune(out, rune);
+        }
+    }
+    push_byte(out, 34);
+}
+
+func write_value(out Vec[u8], value Value, depth usize) throws Error {
+    switch value {
+        case Value.Null: push_ascii(out, "null");
+        case Value.Bool(item): if item { push_ascii(out, "true"); } else { push_ascii(out, "false"); }
+        case Value.String(item): write_string(out, item);
+        case Value.Number(token): {
+            if !valid_number(token) {
+                throw Error.InvalidNumber;
+            }
+            push_ascii(out, token);
+        }
+        case Value.Array(items): {
+            if depth >= MAX_DEPTH {
+                throw Error.DepthLimit;
+            }
+            push_byte(out, 91);
+            for var index usize = 0; index < vec.len(items); index += 1 {
+                if index != 0 { push_byte(out, 44); }
+                write_value(out, items[index], depth + 1);
+            }
+            push_byte(out, 93);
+        }
+        case Value.Object(members): {
+            if depth >= MAX_DEPTH {
+                throw Error.DepthLimit;
+            }
+            push_byte(out, 123);
+            for var index usize = 0; index < vec.len(members); index += 1 {
+                if index != 0 { push_byte(out, 44); }
+                write_string(out, members[index].name);
+                push_byte(out, 58);
+                write_value(out, members[index].value, depth + 1);
+            }
+            push_byte(out, 125);
+        }
+    }
+}
+
+pub func serialize(value Value) string throws Error {
+    let out = vec.empty[u8]();
+    write_value(out, value, 0);
+    return decode_utf8(out, 0);
+}
+
+// field returns the value of an object member, using the parser's duplicate
+// policy (the stored value is already the last one parsed).
+pub func field(value Value, name string) option.Option[Value] {
+    switch value {
+        case Value.Object(members): {
+            for var index usize = 0; index < vec.len(members); index += 1 {
+                if members[index].name == name {
+                    return option.Option[Value].Some(members[index].value);
+                }
+            }
+            return option.Option[Value].None;
+        }
+        case _: return option.Option[Value].None;
+    }
+}
+
+// index returns an array element when position is in range.
+pub func index(value Value, position usize) option.Option[Value] {
+    switch value {
+        case Value.Array(items): {
+            if position < vec.len(items) {
+                return option.Option[Value].Some(items[position]);
+            }
+            return option.Option[Value].None;
+        }
+        case _: return option.Option[Value].None;
+    }
+}
+
+pub func number_text(value Value) option.Option[string] {
+    switch value {
+        case Value.Number(token): return option.Option[string].Some(token);
+        case _: return option.Option[string].None;
+    }
+}
+
+pub func as_i64(value Value) i64 throws Error {
+    switch value {
+        case Value.Number(token): {
+            if !valid_number(token) { throw Error.InvalidNumber; }
+            try {
+                return strconv.parse_i64(token);
+            } catch error strconv.Error {
+                throw Error.NumberRange;
+            }
+        }
+        case _: throw Error.InvalidNumber;
+    }
+}
+
+pub func as_u64(value Value) u64 throws Error {
+    switch value {
+        case Value.Number(token): {
+            if !valid_number(token) { throw Error.InvalidNumber; }
+            try {
+                return strconv.parse_u64(token);
+            } catch error strconv.Error {
+                throw Error.NumberRange;
+            }
+        }
+        case _: throw Error.InvalidNumber;
+    }
+}
+
+pub func as_f64(value Value) f64 throws Error {
+    switch value {
+        case Value.Number(token): {
+            if !valid_number(token) { throw Error.InvalidNumber; }
+            try {
+                return strconv.parse_f64(token);
+            } catch error strconv.Error {
+                throw Error.NumberRange;
+            }
+        }
+        case _: throw Error.InvalidNumber;
+    }
+}

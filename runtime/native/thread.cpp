@@ -8,7 +8,7 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
 #if defined(__x86_64__) && defined(__linux__)
 namespace {
 constexpr uint64_t kPage = 4096;
-constexpr uint64_t kStackBytes = 1024 * 1024;
+constexpr uint64_t kStackBytes = LANG_THREAD_STACK_BYTES;
 constexpr uint64_t kStackMappingBytes = kPage + kStackBytes + kPage;
 constexpr int64_t kEintr = -4, kAgain = -11, kDeadlock = -35;
 static_assert(sizeof(LangHandle) == 24 && offsetof(LangHandle, refs) == 0 &&
@@ -80,6 +80,7 @@ struct alignas(16) ThreadState {
   int64_t error, result;
   uint32_t done;
   int32_t tid;
+  int64_t process_id;
 };
 static_assert(sizeof(ThreadState) % 16 == 0);
 void *context(ThreadState *state) noexcept {
@@ -91,7 +92,7 @@ void destroy_thread(LangHandle *handle) noexcept {
 }
 void validate_handle(const LangHandle *handle) noexcept {
   if (!handle || !handle->destroy || handle->kind < LangHandleKind::thread ||
-      handle->kind > LangHandleKind::atomic_i64)
+      handle->kind > LangHandleKind::ipc)
     lang_handle_panic_v1();
 }
 ThreadState *thread(LangHandle *handle) noexcept {
@@ -191,7 +192,7 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry entry,
   const uint64_t bytes = (sizeof(ThreadState) + size + kPage - 1) & ~(kPage - 1);
   auto *state = static_cast<ThreadState *>(mapping(bytes, 3));
   *state = {{2, LangHandleKind::thread, destroy_thread}, bytes, nullptr,
-            entry, drop, 0, 0, 0, 0};
+            entry, drop, 0, 0, 0, 0, syscall0(39)};
   void *stack_mapping = mapping(kStackMappingBytes, 0);
   auto *stack = static_cast<unsigned char *>(stack_mapping) + kPage;
   if (syscall3(10, reinterpret_cast<long>(stack), kStackBytes + kPage, 3) < 0)
@@ -199,6 +200,8 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry entry,
   auto *tcb = reinterpret_cast<uintptr_t *>(stack + kStackBytes);
   tcb[0] = reinterpret_cast<uintptr_t>(tcb);
   __asm__ volatile("movq %%fs:0x28, %0" : "=r"(tcb[5]));
+  tcb[6] = reinterpret_cast<uintptr_t>(state);
+  tcb[7] = 0x575a544342763031ULL;
   state->stack_mapping = stack_mapping;
   auto *destination = static_cast<volatile unsigned char *>(context(state));
   const auto *source = static_cast<const volatile unsigned char *>(argument);
@@ -227,6 +230,7 @@ extern "C" int64_t lang_thread_wait_v1(LangHandle *handle) noexcept {
   if (state->error) return state->error;
   for (;;) {
     if (__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) return 0;
+    if (__atomic_load_n(&state->process_id, __ATOMIC_RELAXED) != syscall0(39)) return -3;
     const long current = syscall0(186);
     if (current < 0) return current;
     if (current == __atomic_load_n(&state->tid, __ATOMIC_ACQUIRE)) {
@@ -243,4 +247,17 @@ extern "C" int64_t lang_thread_result_v1(LangHandle *handle) noexcept {
     lang_handle_panic_v1();
   return state->result;
 }
+extern "C" void lang_thread_fork_child_v1() noexcept {
+  // This slot belongs to our own TCB only. The main startup TCB has zero here.
+  uintptr_t marker;
+  __asm__ volatile("movq %%fs:0x38, %0" : "=r"(marker));
+  if (marker != 0x575a544342763031ULL) return;
+  ThreadState *current;
+  __asm__ volatile("movq %%fs:0x30, %0" : "=r"(current));
+  if (current) {
+    __atomic_store_n(&current->process_id, syscall0(39), __ATOMIC_RELAXED);
+    __atomic_store_n(&current->tid, static_cast<int32_t>(syscall0(186)), __ATOMIC_RELAXED);
+  }
+}
+
 #endif

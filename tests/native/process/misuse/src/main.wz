@@ -1,0 +1,9 @@
+package app;
+import "std/ipc" as ipc;
+import "std/os" as os;
+func main() i32 throws os.Error {
+    let memory = ipc.map_anon(4096,3);
+    let mutex = ipc.mutex_init(memory,0);
+    ipc.mutex_unlock(mutex);
+    return 0;
+}

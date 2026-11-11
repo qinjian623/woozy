@@ -1,0 +1,11 @@
+package vec;
+import "std/option" as option;
+pub func empty[T]() Vec[T] { return __woozy_vec_empty[T](); }
+pub func make[T](length usize, fill T) Vec[T] { return __woozy_vec_make[T](length,fill); }
+pub func len[T](values Vec[T]) usize { return __woozy_vec_len[T](values); }
+pub func capacity[T](values Vec[T]) usize { return __woozy_vec_capacity[T](values); }
+pub func reserve[T](values Vec[T], minimum usize) { __woozy_vec_reserve[T](values,minimum); }
+pub func push[T](values Vec[T], value T) { __woozy_vec_push[T](values,value); }
+pub func pop[T](values Vec[T]) option.Option[T] { return __woozy_vec_pop[T](values); }
+pub func resize[T](values Vec[T], length usize, fill T) { __woozy_vec_resize[T](values,length,fill); }
+pub func clear[T](values Vec[T]) { __woozy_vec_clear[T](values); }

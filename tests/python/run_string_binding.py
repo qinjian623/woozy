@@ -7,7 +7,7 @@ import shutil
 import subprocess
 from pathlib import Path
 
-EXPECTED = '宿\0主😀'.encode('utf-8')
+EXPECTED = '宿\0主😀e\u0301'.encode('utf-8')
 
 
 def sha(path):
@@ -63,7 +63,7 @@ def main():
         names = {s['source_name']: s['generated'] for s in metadata['symbols']
                  if s['source_name'].startswith('probe_host')}
         assert set(names) == {'probe_host', 'probe_host_enum', 'probe_host_vec',
-                              'probe_host_release'}, names
+                              'probe_host_release', 'probe_host_value'}, names
         report['generated_identical'] = all(
             (cli_out / name).read_bytes() == (helper_out / name).read_bytes()
             for name in ('program.py', 'langrt.py'))

@@ -1,0 +1,141 @@
+package app;
+import "std/text" as text;
+import "std/vec" as vec;
+import "std/option" as option;
+import "std/result" as result;
+
+struct Box[T] { value T; }
+struct Empty {}
+enum Error { Message(value string); }
+func unit() {}
+func identity[T](value T) T { return value; }
+func fail(value string) throws Error { throw Error.Message(value + "!"); }
+func decoded() string throws text.Error {
+    return text.from_bytes([65, 228, 184, 173, 240, 159, 152, 128]);
+}
+func tail() string {
+    let local = "A" + "中😀";
+    return local[1:];
+}
+func main() i32 throws text.Error {
+    const literal Box[string] = Box[string](value: "constant");
+    if literal.value != "constant" { return 1; }
+    let base = decoded();
+    var value = identity[string](base) + "e\u{301}\0";
+    if text.len(value) != 6 || text.byte_len(value) != 12 { return 2; }
+    if value[0] != 65 || value[1] != 0x4e2d || value[2] != 0x1f600 ||
+       value[4] != 0x301 || value[5] != 0 { return 3; }
+    if value[1:3] != "中😀" || value[:1] != "A" || value[5:] != "\0" ||
+       value[:] != value || value[6:6] != "" { return 4; }
+    value += "Z";
+    if value != "A中😀e\u{301}\0Z" || base != "A中😀" { return 5; }
+    if !(base < value && base <= value && value > base && value >= base &&
+         base == base && base != value && "😀" > "\u{ffff}") { return 6; }
+    let exported = text.bytes(value);
+    if vec.len[u8](exported) != 13 { return 7; }
+    exported[0] = 66;
+    if value[0] != 65 { return 8; }
+    if text.from_rune(0x1f600) != "😀" || text.from_rune(0) != "\0" { return 9; }
+    var invalid = false;
+    try { let rejected = text.from_bytes([192, 128]); }
+    catch error text.Error { invalid = true; }
+    if !invalid { return 10; }
+    invalid = false;
+    try { let rejected = text.from_rune(0xd800); }
+    catch error text.Error { invalid = true; }
+    if !invalid { return 11; }
+
+    var count usize = 0;
+    var iterated = value;
+    for rune in iterated {
+        iterated = "";
+        count += 1;
+        if rune == 0 { continue; }
+    }
+    if count != 7 { return 12; }
+    for rune in value { if rune != 65 { return 13; } break; }
+    let aggregate = Box[string](value: value[1:3]);
+    if tail() != aggregate.value { return 14; }
+    let append = func(value string) string { return value + "!"; };
+    if append(aggregate.value) != "中😀!" { return 14; }
+    var fresh = "中" + "😀";
+    var fresh_count usize = 0;
+    for rune in fresh {
+        fresh = "";
+        fresh_count += 1;
+    }
+    if fresh_count != 2 { return 14; }
+    try { fail(aggregate.value); }
+    catch error Error {
+        switch error {
+            case Error.Message(message): if message != "中😀!" { return 14; }
+        }
+    }
+    defer { let kept = aggregate.value; }
+
+    let values = vec.make[string](2, aggregate.value);
+    let alias = values;
+    if vec.len[string](values) != 2 || vec.capacity[string](values) != 2 { return 15; }
+    vec.push[string](values, values[0]);
+    if vec.len[string](alias) != 3 || vec.capacity[string](values) != 4 { return 16; }
+    vec.resize[string](values, 5, values[0]);
+    if vec.len[string](values) != 5 || values[4] != "中😀" { return 17; }
+    vec.reserve[string](values, 9);
+    if vec.capacity[string](values) != 16 { return 18; }
+    switch vec.pop[string](values) {
+        case option.Option.Some(popped): {
+            vec.clear[string](values);
+            if popped != "中😀" { return 19; }
+        }
+        case option.Option.None: return 20;
+    }
+    if vec.len[string](alias) != 0 || vec.capacity[string](values) != 16 { return 21; }
+    switch vec.pop[string](values) {
+        case option.Option.Some(popped): return 22;
+        case option.Option.None: {}
+    }
+    vec.resize[string](values, 3, value);
+    vec.resize[string](values, 1, "unused");
+    if values[0] != value || vec.len[string](values) != 1 { return 23; }
+    for item in values {
+        vec.reserve[string](values, 16);
+        vec.resize[string](values, 1, "unused");
+        if item != value { return 24; }
+    }
+    let boxes = vec.empty[Box[string]]();
+    vec.push[Box[string]](boxes, aggregate);
+    switch vec.pop[Box[string]](boxes) {
+        case option.Option.Some(box): if box.value != "中😀" { return 25; }
+        case option.Option.None: return 26;
+    }
+    let nested = vec.make[Vec[string]](2, values);
+    vec.push[Vec[string]](nested, nested[0]);
+    switch vec.pop[Vec[string]](nested) {
+        case option.Option.Some(inner): {
+            vec.clear[Vec[string]](nested);
+            if inner[0] != value { return 27; }
+        }
+        case option.Option.None: return 27;
+    }
+    if values[0] != value { return 27; }
+    let stored result.Result[string, i32] = result.Result[string, i32].Ok(value);
+    switch stored {
+        case result.Result.Ok(message): if message != value { return 28; }
+        case result.Result.Err(code): return 29;
+    }
+    let empties = vec.make[Empty](2, Empty());
+    vec.push[Empty](empties, Empty());
+    switch vec.pop[Empty](empties) {
+        case option.Option.Some(item): {}
+        case option.Option.None: return 30;
+    }
+    vec.resize[Empty](empties, 5, Empty());
+    vec.clear[Empty](empties);
+    let units = vec.make[Unit](2, unit());
+    switch vec.pop[Unit](units) {
+        case option.Option.Some(item): {}
+        case option.Option.None: return 30;
+    }
+    switch value { case "A中😀e\u{301}\0Z": {} default: return 30; }
+    return 0;
+}

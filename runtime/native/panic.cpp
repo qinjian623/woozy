@@ -139,6 +139,85 @@ static_assert(kVecHeaderBytes >= sizeof(LangVec),
 static_assert(kVecHeaderBytes % 16 == 0,
               "Vec payload must remain 16-byte aligned");
 
+constexpr uint64_t kMaxU64 = ~uint64_t{0};
+
+// A non-empty inline payload begins immediately after the rounded descriptor.
+// Any other non-null data pointer is a separately allocated buffer.
+bool separate_payload(LangVec *v) noexcept {
+  return v->data != nullptr &&
+         v->data != reinterpret_cast<unsigned char *>(v) + kVecHeaderBytes;
+}
+
+uint64_t checked_payload_bytes(uint64_t capacity, uint64_t stride) noexcept {
+  if (!stride || capacity > kMaxU64 / stride) vec_panic(6);
+  return capacity * stride;
+}
+
+// Overlap-safe byte copy without libc. Structural moves still transfer element
+// ownership bit-for-bit; this helper never invokes copy or drop callbacks.
+void copy_bytes(void *destination, const void *source, uint64_t count) noexcept {
+  if (!count) return;
+  auto *dst = static_cast<unsigned char *>(destination);
+  const auto *src = static_cast<const unsigned char *>(source);
+  if (dst == src) return;
+  if (reinterpret_cast<uintptr_t>(dst) < reinterpret_cast<uintptr_t>(src)) {
+    for (uint64_t i = 0; i < count; ++i) dst[i] = src[i];
+  } else {
+    for (uint64_t i = count; i > 0; --i) dst[i - 1] = src[i - 1];
+  }
+}
+
+bool aliases_payload(LangVec *v, const void *pointer) noexcept {
+  if (!v->data || !pointer || !v->capacity || !v->stride) return false;
+  const uintptr_t begin = reinterpret_cast<uintptr_t>(v->data);
+  const uintptr_t address = reinterpret_cast<uintptr_t>(pointer);
+  if (v->capacity > kMaxU64 / v->stride) return address >= begin;
+  return address >= begin && address - begin < v->capacity * v->stride;
+}
+
+uint64_t grown_capacity(uint64_t current, uint64_t minimum) noexcept {
+  uint64_t capacity = current ? current : 1;
+  while (capacity < minimum) {
+    if (capacity > kMaxU64 / 2) return minimum;
+    capacity *= 2;
+  }
+  return capacity;
+}
+
+// Caller has already rejected active iterations and checked for overflow.
+void grow_storage(LangVec *v, uint64_t minimum) noexcept {
+  const uint64_t capacity = grown_capacity(v->capacity, minimum);
+  const uint64_t bytes = checked_payload_bytes(capacity, v->stride);
+  void *data = lang_alloc_v1(bytes, 16);
+  if (!data) vec_panic(5);
+  if (v->initialized) {
+    const uint64_t initialized_bytes =
+        checked_payload_bytes(v->initialized, v->stride);
+    copy_bytes(data, v->data, initialized_bytes);
+  }
+  // The inline allocation belongs to the descriptor and stays until final
+  // release. Only an earlier separate buffer is freed here.
+  if (separate_payload(v)) lang_free_v1(v->data);
+  v->data = data;
+  v->capacity = capacity;
+}
+
+// Preserve an argument that points into storage which may be reallocated.
+void *protect_alias(LangVec *v, const void *value) noexcept {
+  if (!aliases_payload(v, value)) return nullptr;
+  void *scratch = lang_alloc_v1(v->stride, 16);
+  if (!scratch) vec_panic(5);
+  copy_bytes(scratch, value, v->stride);
+  return scratch;
+}
+
+void drop_initialized_to(LangVec *v, uint64_t length) noexcept {
+  while (v->initialized > length) {
+    const uint64_t index = --v->initialized;
+    if (v->drop) v->drop(element(v, index));
+  }
+}
+
 }
 
 extern "C" LangVec *lang_vec_new_v1(uint64_t length, uint64_t stride,
@@ -151,7 +230,7 @@ extern "C" LangVec *lang_vec_new_v1(uint64_t length, uint64_t stride,
   if (!v) vec_panic(5);
   auto *data = length ? reinterpret_cast<unsigned char *>(v) + kVecHeaderBytes
                       : nullptr;
-  *v = {1, length, 0, stride, 0, data, copy, drop};
+  *v = {1, length, 0, stride, 0, data, copy, drop, length};
   observe(1, v, length);
   return v;
 }
@@ -196,8 +275,9 @@ extern "C" void lang_vec_release_v1(LangVec *v) noexcept {
     }
   }
   observe(5, v);
-  // The descriptor and payload share this allocation; the payload is interior
-  // storage and is never freed by itself.
+  // A separate payload, when present, is freed before the descriptor that
+  // owns the inline allocation. The inline payload itself is interior storage.
+  if (separate_payload(v)) lang_free_v1(v->data);
   lang_free_v1(v);
 }
 extern "C" void lang_vec_init_v1(LangVec *v, const void *value) noexcept {
@@ -256,6 +336,73 @@ extern "C" void lang_vec_end_v1(LangVec *v) noexcept {
   }
 }
 extern "C" uint64_t lang_vec_length_v1(LangVec *v) noexcept { return v->length; }
+extern "C" uint64_t lang_vec_capacity_v1(LangVec *v) noexcept {
+  return v->capacity;
+}
+extern "C" void lang_vec_reserve_v1(LangVec *v, uint64_t minimum) noexcept {
+  // Reserving within existing capacity is not a structural change.
+  if (minimum <= v->capacity) return;
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  grow_storage(v, minimum);
+}
+extern "C" void lang_vec_push_v1(LangVec *v, const void *value) noexcept {
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  if (v->length == kMaxU64) vec_panic(6);
+  const uint64_t length = v->length + 1;
+  void *scratch = nullptr;
+  if (length > v->capacity) {
+    // A self-aliased value may live in a separate buffer that growth frees.
+    scratch = protect_alias(v, value);
+    grow_storage(v, length);
+  }
+  copy_bytes(element(v, v->length), scratch ? scratch : value, v->stride);
+  if (v->initialized < length) v->initialized = length;
+  v->length = length;
+  if (scratch) lang_free_v1(scratch);
+}
+extern "C" bool lang_vec_pop_v1(LangVec *v, void *out) noexcept {
+  // An empty pop performs no structural change and leaves out untouched.
+  if (!v->length) return false;
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  const uint64_t last = v->length - 1;
+  if (out) copy_bytes(out, element(v, last), v->stride);
+  v->length = last;
+  if (v->initialized > last) v->initialized = last;
+  return true;
+}
+extern "C" void lang_vec_resize_v1(LangVec *v, uint64_t length,
+                                    const void *fill) noexcept {
+  const uint64_t old_length = v->length;
+  if (length == old_length) return;
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  if (length < old_length) {
+    // fill is intentionally not read while shrinking.
+    drop_initialized_to(v, length);
+    v->length = length;
+    return;
+  }
+  void *scratch = nullptr;
+  if (length > v->capacity) {
+    // fill may point into the old separate buffer; retain its bytes first.
+    scratch = protect_alias(v, fill);
+    grow_storage(v, length);
+  }
+  const void *source = scratch ? scratch : fill;
+  for (uint64_t index = old_length; index < length; ++index) {
+    void *target = element(v, index);
+    copy_bytes(target, source, v->stride);
+    if (v->copy) v->copy(target);
+  }
+  v->initialized = length;
+  v->length = length;
+  if (scratch) lang_free_v1(scratch);
+}
+extern "C" void lang_vec_clear_v1(LangVec *v) noexcept {
+  if (!v->length && !v->initialized) return;
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
+  drop_initialized_to(v, 0);
+  v->length = 0;
+}
 extern "C" void lang_vec_check_resize_v1(LangVec *v) noexcept {
   // Structural changes still require caller synchronization against new iterations.
   if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);

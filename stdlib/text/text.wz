@@ -1,0 +1,139 @@
+package text;
+import "std/result" as result;
+import "std/vec" as vec;
+import "std/option" as option;
+pub enum Error { InvalidUtf8; InvalidScalar(value u32); }
+pub func len(value string) usize { return __woozy_text_len(value); }
+pub func byte_len(value string) usize { return __woozy_text_byte_len(value); }
+pub func from_bytes(value Vec[u8]) string throws Error {
+    switch __woozy_text_from_bytes(value) {
+        case result.Result.Ok(text): return text;
+        case result.Result.Err(error): throw Error.InvalidUtf8;
+    }
+}
+pub func from_rune(value u32) string throws Error {
+    switch __woozy_text_from_rune(value) {
+        case result.Result.Ok(text): return text;
+        case result.Result.Err(error): throw Error.InvalidScalar(value);
+    }
+}
+pub func bytes(value string) Vec[u8] { return __woozy_text_bytes(value); }
+
+pub func runes(value string) Vec[u32] {
+    let out = vec.empty[u32]();
+    vec.reserve(out,len(value));
+    for rune in value { vec.push(out,rune); }
+    return out;
+}
+pub func starts_with(value string, prefix string) bool {
+    return len(prefix) <= len(value) && value[:len(prefix)] == prefix;
+}
+pub func ends_with(value string, suffix string) bool {
+    return len(suffix) <= len(value) && value[len(value)-len(suffix):] == suffix;
+}
+pub func find_from(value string, needle string, start usize) option.Option[usize] {
+    if start > len(value) || len(needle) > len(value)-start { return option.Option[usize].None; }
+    for var index = start; index <= len(value)-len(needle); index += 1 {
+        if value[index:index+len(needle)] == needle { return option.Option[usize].Some(index); }
+    }
+    return option.Option[usize].None;
+}
+pub func find(value string, needle string) option.Option[usize] {
+    return find_from(value,needle,0);
+}
+pub func contains(value string, needle string) bool {
+    switch find(value,needle) {
+        case option.Option.Some(index): return true;
+        case option.Option.None: return false;
+    }
+}
+pub func split(value string, separator string) Vec[string] {
+    let out = vec.empty[string]();
+    if len(separator) == 0 {
+        for var index usize = 0; index < len(value); index += 1 {
+            vec.push(out,value[index:index+1]);
+        }
+        return out;
+    }
+    var start usize = 0;
+    for true {
+        switch find_from(value,separator,start) {
+            case option.Option.Some(index): {
+                vec.push(out,value[start:index]);
+                start = index+len(separator);
+            }
+            case option.Option.None: {
+                vec.push(out,value[start:]);
+                return out;
+            }
+        }
+    }
+}
+pub func join(values Vec[string], separator string) string {
+    var out = "";
+    var first = true;
+    for value in values {
+        if !first { out += separator; }
+        out += value;
+        first = false;
+    }
+    return out;
+}
+pub func replace(value string, old string, replacement string) string {
+    if len(old) == 0 {
+        var out = replacement;
+        for var index usize = 0; index < len(value); index += 1 {
+            out += value[index:index+1];
+            out += replacement;
+        }
+        return out;
+    }
+    return join(split(value,old),replacement);
+}
+pub func repeat(value string, count usize) string {
+    var out = "";
+    var block = value;
+    var remaining = count;
+    for remaining != 0 {
+        if (remaining & 1) != 0 { out += block; }
+        remaining = remaining >> 1;
+        if remaining != 0 { block += block; }
+    }
+    return out;
+}
+pub func is_space(rune u32) bool {
+    return (rune >= 9 && rune <= 13) || rune == 32 || rune == 0x85 ||
+        rune == 0xa0 || rune == 0x1680 || (rune >= 0x2000 && rune <= 0x200a) ||
+        rune == 0x2028 || rune == 0x2029 || rune == 0x202f || rune == 0x205f || rune == 0x3000;
+}
+pub func trim(value string) string {
+    var start usize = 0;
+    var end = len(value);
+    for start < end && is_space(value[start]) { start += 1; }
+    for start < end && is_space(value[end-1]) { end -= 1; }
+    return value[start:end];
+}
+pub func ascii_lower(value string) string {
+    var out = "";
+    let alphabet = "abcdefghijklmnopqrstuvwxyz";
+    for var index usize = 0; index < len(value); index += 1 {
+        let rune = value[index];
+        if rune >= 65 && rune <= 90 {
+            let offset = usize(rune-65);
+            out += alphabet[offset:offset+1];
+        } else { out += value[index:index+1]; }
+    }
+    return out;
+}
+pub func ascii_upper(value string) string {
+    var out = "";
+    let alphabet = "ABCDEFGHIJKLMNOPQRSTUVWXYZ";
+    for var index usize = 0; index < len(value); index += 1 {
+        let rune = value[index];
+        if rune >= 97 && rune <= 122 {
+            let offset = usize(rune-97);
+            out += alphabet[offset:offset+1];
+        } else { out += value[index:index+1]; }
+    }
+    return out;
+}

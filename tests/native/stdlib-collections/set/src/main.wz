@@ -1,0 +1,132 @@
+package app;
+
+import "std/hash" as hash;
+import "std/set" as set;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct PairKey {
+    left i32;
+    right i32;
+}
+
+impl hash.Hash for PairKey {
+    func hash(value Self) u64 {
+        return hash.combine(u64(value.left), u64(value.right));
+    }
+    func equals(left Self, right Self) bool {
+        return left.left == right.left && left.right == right.right;
+    }
+}
+
+struct CollisionKey {
+    id i32;
+}
+
+impl hash.Hash for CollisionKey {
+    func hash(value Self) u64 { return 11; }
+    func equals(left Self, right Self) bool { return left.id == right.id; }
+}
+
+func main() i32 {
+    let basic = set.new[i32]();
+    if !set.add(basic, 1) { return 1; }
+    if set.add(basic, 1) { return 2; }
+    let alias = basic;
+    if !set.add(alias, 2) { return 3; }
+    if set.len(basic) != 2 || set.len(alias) != 2 { return 4; }
+    if !set.contains(basic, 1) || set.contains(basic, 3) { return 5; }
+    let snapshot = set.values(basic);
+    if vec.len(snapshot) != 2 { return 6; }
+    if !set.remove(basic, 1) { return 7; }
+    if set.remove(basic, 1) { return 8; }
+    if set.contains(basic, 1) || !set.contains(basic, 2) { return 9; }
+    if set.len(alias) != 1 { return 10; }
+    if vec.len(snapshot) != 2 { return 11; }
+    if !set.add(alias, 3) { return 12; }
+    if vec.len(snapshot) != 2 { return 13; }
+
+    // Custom struct keys and collision-only keys.
+    let pairs = set.new[PairKey]();
+    if !set.add(pairs, PairKey(left: 1, right: 2)) { return 14; }
+    if set.add(pairs, PairKey(left: 1, right: 2)) { return 15; }
+    if !set.contains(pairs, PairKey(left: 1, right: 2)) { return 16; }
+    if set.contains(pairs, PairKey(left: 2, right: 1)) { return 17; }
+    if !set.remove(pairs, PairKey(left: 1, right: 2)) { return 18; }
+    if set.len(pairs) != 0 { return 19; }
+
+    let collisions = set.new[CollisionKey]();
+    var index i32 = 0;
+    for index < 150 {
+        if !set.add(collisions, CollisionKey(id: index)) { return 20; }
+        if set.add(collisions, CollisionKey(id: index)) { return 21; }
+        index += 1;
+    }
+    if set.len(collisions) != 150 { return 22; }
+    index = 0;
+    for index < 150 {
+        if !set.contains(collisions, CollisionKey(id: index)) { return 23; }
+        index += 1;
+    }
+    index = 0;
+    for index < 150 {
+        if !set.remove(collisions, CollisionKey(id: index)) { return 24; }
+        index += 2;
+    }
+    if set.len(collisions) != 75 { return 25; }
+    index = 0;
+    for index < 150 {
+        let present = set.contains(collisions, CollisionKey(id: index));
+        if index % 2 == 0 {
+            if present { return 26; }
+        } else {
+            if !present { return 27; }
+        }
+        index += 1;
+    }
+    index = 0;
+    for index < 150 {
+        if !set.add(collisions, CollisionKey(id: index)) { return 28; }
+        index += 2;
+    }
+    if set.len(collisions) != 150 { return 29; }
+
+    // Large Unicode string keys.
+    let strings = set.new[string]();
+    let big_key = text.repeat("值", 1500) + text.repeat("z", 1500);
+    if !set.add(strings, big_key) { return 30; }
+    if set.add(strings, big_key) { return 31; }
+    if !set.contains(strings, text.repeat("值", 1500) + text.repeat("z", 1500)) { return 32; }
+    if !set.remove(strings, big_key) { return 33; }
+    if set.len(strings) != 0 { return 34; }
+
+    // 2000-key set exercises repeated growth and snapshot iteration.
+    let large = set.new[i32]();
+    index = 0;
+    for index < 2000 {
+        if !set.add(large, index) { return 35; }
+        index += 1;
+    }
+    if set.len(large) != 2000 { return 36; }
+    let values = set.values(large);
+    if vec.len(values) != 2000 { return 37; }
+    index = 0;
+    for index < 2000 {
+        if !set.contains(large, index) { return 38; }
+        index += 1;
+    }
+    index = 0;
+    for index < 2000 {
+        if !set.remove(large, index) { return 39; }
+        index += 3;
+    }
+    if set.len(large) != 1333 { return 40; }
+    if vec.len(values) != 2000 { return 41; }
+
+    // clear affects every alias, not prior snapshots.
+    set.clear(alias);
+    if set.len(basic) != 0 || set.len(alias) != 0 { return 42; }
+    if set.contains(basic, 2) || set.contains(alias, 3) { return 43; }
+    if vec.len(snapshot) != 2 { return 44; }
+    return 0;
+}

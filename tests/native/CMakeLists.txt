@@ -241,3 +241,111 @@ endif()
 target_compile_options(lang_native_thread_runtime_test PRIVATE -fstack-protector-strong)
 
 target_link_options(lang_native_sync_runtime_test PRIVATE -Wl,--wrap=lang_free_v1)
+
+add_executable(lang_native_vec_growth_test vec_growth_test.cpp)
+target_compile_features(lang_native_vec_growth_test PRIVATE cxx_std_20)
+target_link_libraries(lang_native_vec_growth_test PRIVATE lang_native_runtime)
+target_link_options(lang_native_vec_growth_test PRIVATE -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
+add_test(NAME native.vec_growth COMMAND lang_native_vec_growth_test)
+set_tests_properties(native.vec_growth PROPERTIES TIMEOUT 60)
+foreach(part IN ITEMS text system)
+  add_executable(lang_native_${part}_runtime_test ${part}_runtime_test.cpp)
+  target_compile_features(lang_native_${part}_runtime_test PRIVATE cxx_std_20)
+  target_link_libraries(lang_native_${part}_runtime_test PRIVATE lang_native_runtime Threads::Threads)
+  add_test(NAME native.${part}_runtime COMMAND lang_native_${part}_runtime_test)
+  set_tests_properties(native.${part}_runtime PROPERTIES TIMEOUT 60)
+endforeach()
+add_executable(lang_native_system_buffers_test system_buffers_test.cpp)
+target_compile_features(lang_native_system_buffers_test PRIVATE cxx_std_20)
+target_link_libraries(lang_native_system_buffers_test PRIVATE lang_native_runtime)
+add_test(NAME native.system_buffers COMMAND lang_native_system_buffers_test)
+
+add_executable(lang_native_value_library_test value_library_test.cpp)
+target_link_libraries(lang_native_value_library_test PRIVATE lang_sema lang_native_ir)
+add_test(NAME native.value_library_ir COMMAND lang_native_value_library_test ${LANG_SOURCE_ROOT})
+if(LANG_TEST_PYTHON AND LANG_PYTHON312)
+  add_test(NAME native.value_library COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_value_library.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --runtime $<TARGET_FILE:lang_native_runtime>
+    --python ${LANG_PYTHON312} --out ${CMAKE_CURRENT_BINARY_DIR}/value-library-results)
+  set_tests_properties(native.value_library PROPERTIES TIMEOUT 240)
+endif()
+foreach(part IN ITEMS network numbers)
+  add_executable(lang_native_${part}_runtime_test ${part}_runtime_test.cpp)
+  target_compile_features(lang_native_${part}_runtime_test PRIVATE cxx_std_20)
+  target_link_libraries(lang_native_${part}_runtime_test PRIVATE lang_native_runtime Threads::Threads)
+  add_test(NAME native.${part}_runtime COMMAND lang_native_${part}_runtime_test)
+  set_tests_properties(native.${part}_runtime PROPERTIES TIMEOUT 60)
+endforeach()
+target_link_options(lang_native_network_runtime_test PRIVATE -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
+
+add_executable(lang_native_math_runtime_test math_runtime_test.cpp)
+target_compile_features(lang_native_math_runtime_test PRIVATE cxx_std_20)
+target_link_libraries(lang_native_math_runtime_test PRIVATE lang_native_runtime m)
+add_test(NAME native.math_runtime COMMAND lang_native_math_runtime_test)
+set_tests_properties(native.math_runtime PROPERTIES TIMEOUT 60)
+
+if(LANG_TEST_PYTHON AND LANG_PYTHON312)
+  add_test(NAME native.stdlib COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_stdlib.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --runtime $<TARGET_FILE:lang_native_runtime>
+    --python ${LANG_PYTHON312} --out ${CMAKE_CURRENT_BINARY_DIR}/stdlib-results)
+  set_tests_properties(native.stdlib PROPERTIES TIMEOUT 300)
+endif()
+
+add_executable(lang_native_dns_runtime_test dns_runtime_test.cpp)
+target_compile_features(lang_native_dns_runtime_test PRIVATE cxx_std_20)
+target_link_libraries(lang_native_dns_runtime_test PRIVATE lang_native_runtime)
+target_link_options(lang_native_dns_runtime_test PRIVATE -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
+add_test(NAME native.dns_runtime COMMAND lang_native_dns_runtime_test)
+set_tests_properties(native.dns_runtime PROPERTIES TIMEOUT 60)
+
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.runtime_symbols COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/check_runtime_symbols.py
+    --archive $<TARGET_FILE:lang_native_runtime> --nm ${CMAKE_NM})
+endif()
+
+foreach(part IN ITEMS process ipc)
+  add_executable(lang_native_${part}_runtime_test ${part}_runtime_test.cpp)
+  target_compile_features(lang_native_${part}_runtime_test PRIVATE cxx_std_20)
+  target_link_libraries(lang_native_${part}_runtime_test PRIVATE lang_native_runtime Threads::Threads)
+  add_test(NAME native.${part}_runtime COMMAND lang_native_${part}_runtime_test)
+  set_tests_properties(native.${part}_runtime PROPERTIES TIMEOUT 90)
+endforeach()
+
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.process COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/process/run_process.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/process-results)
+  set_tests_properties(native.process PROPERTIES TIMEOUT 300)
+endif()
+
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.stdlib_io_errors COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/stdlib-io-errors/run_io_errors.py
+    --cli $<TARGET_FILE:woozyc> --root ${LANG_SOURCE_ROOT}
+    --out ${CMAKE_CURRENT_BINARY_DIR}/stdlib-io-errors-results)
+  set_tests_properties(native.stdlib_io_errors PROPERTIES TIMEOUT 180)
+endif()
+
+if(LANG_TEST_PYTHON AND LANG_PYTHON312)
+  add_test(NAME native.collections COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_collections.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --python ${LANG_PYTHON312}
+    --out ${CMAKE_CURRENT_BINARY_DIR}/collections-results)
+  set_tests_properties(native.collections PROPERTIES TIMEOUT 600)
+endif()
+
+if(LANG_PYTHON312)
+  add_test(NAME python.recursive_json COMMAND ${LANG_PYTHON312}
+    ${LANG_SOURCE_ROOT}/tests/python/recursive_json_test.py --cli $<TARGET_FILE:woozyc>
+    --python ${LANG_PYTHON312} --out ${CMAKE_CURRENT_BINARY_DIR}/recursive-json-results)
+  set_tests_properties(python.recursive_json PROPERTIES TIMEOUT 300)
+  add_test(NAME generics.map_budget COMMAND ${LANG_PYTHON312}
+    ${LANG_SOURCE_ROOT}/tests/generics/map_budget/run.py --cli $<TARGET_FILE:woozyc>
+    --python ${LANG_PYTHON312} --out ${CMAKE_CURRENT_BINARY_DIR}/map-budget-results --native)
+  set_tests_properties(generics.map_budget PROPERTIES TIMEOUT 300)
+endif()

@@ -1,0 +1,21 @@
+package result;
+pub enum Result[T,E] { Ok(value T); Err(error E); }
+pub func is_ok[T,E](value Result[T,E]) bool {
+    switch value { case Result.Ok(item): return true; case Result.Err(error): return false; }
+}
+pub func is_err[T,E](value Result[T,E]) bool { return !is_ok(value); }
+pub func unwrap_or[T,E](value Result[T,E], fallback T) T {
+    switch value { case Result.Ok(item): return item; case Result.Err(error): return fallback; }
+}
+pub func map[A,B,E](value Result[A,E], transform func(A) B) Result[B,E] {
+    switch value {
+        case Result.Ok(item): return Result[B,E].Ok(transform(item));
+        case Result.Err(error): return Result[B,E].Err(error);
+    }
+}
+pub func map_err[T,A,B](value Result[T,A], transform func(A) B) Result[T,B] {
+    switch value {
+        case Result.Ok(item): return Result[T,B].Ok(item);
+        case Result.Err(error): return Result[T,B].Err(transform(error));
+    }
+}

@@ -28,7 +28,8 @@ enum class TypeKind {
   ThreadHandle,
   MutexHandle,
   CondvarHandle,
-  AtomicI64Handle
+  AtomicI64Handle,
+  IpcHandle
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -61,6 +62,9 @@ public:
   size_t size() const { return entries_.size(); }
 };
 TypeId system_operation_signature(TypeContext &, SystemOperation,
+                                 const std::vector<TypeId> &args = {});
+struct HirModule;
+TypeId system_operation_signature(TypeContext &, const HirModule &, SystemOperation,
                                  const std::vector<TypeId> &args = {});
 enum class Backend { native, python };
 struct Config {
@@ -559,7 +563,8 @@ enum class ValueKind {
   foreign_error,
   // An owning compiler-private thread/mutex/condvar/atomic handle. The source
   // std modules expose it only through ordinary nominal wrappers.
-  runtime_handle
+  runtime_handle,
+  string
 };
 struct ValueField {
   std::optional<SymbolId> variant;

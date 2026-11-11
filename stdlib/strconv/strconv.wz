@@ -1,0 +1,19 @@
+package strconv;
+import "std/result" as result;
+pub enum Error { InvalidSyntax; OutOfRange; }
+func checked[T](value result.Result[T,i32]) T throws Error {
+    switch value {
+        case result.Result.Ok(item): return item;
+        case result.Result.Err(code):
+            if code == 34 { throw Error.OutOfRange; }
+            throw Error.InvalidSyntax;
+    }
+}
+pub func parse_i64(value string) i64 throws Error { return checked(__woozy_num_parse_i64(value)); }
+pub func format_i64(value i64) string { return __woozy_num_format_i64(value); }
+pub func parse_u64(value string) u64 throws Error { return checked(__woozy_num_parse_u64(value)); }
+pub func format_u64(value u64) string { return __woozy_num_format_u64(value); }
+pub func parse_f32(value string) f32 throws Error { return checked(__woozy_num_parse_f32(value)); }
+pub func format_f32(value f32) string { return __woozy_num_format_f32(value); }
+pub func parse_f64(value string) f64 throws Error { return checked(__woozy_num_parse_f64(value)); }
+pub func format_f64(value f64) string { return __woozy_num_format_f64(value); }

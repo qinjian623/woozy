@@ -1,0 +1,17 @@
+package app;
+import "std/io" as io;
+import "std/os" as os;
+func main() i32 throws os.Error {
+    let output = io.writer(os.stdout());
+    io.write_text(output,"ABCDE");
+    var caught = false;
+    try { io.flush(output); }
+    catch error os.Error {
+        switch error { case os.Error.WouldBlock(code,completed): caught = code == 11 && completed == 2; default: {} }
+    }
+    if !caught { return 1; }
+    io.write_text(output,"FG");
+    io.flush(output);
+    io.flush(output);
+    return 0;
+}

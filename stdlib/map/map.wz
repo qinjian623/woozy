@@ -1,0 +1,200 @@
+// Hash map with separate chaining and independent Vec buckets.
+// With well-distributed hashes, insert/get/remove take amortized O(1) time;
+// doubling and rehashing keep the load factor at or below 0.75.
+//
+// Map is a value struct, but all mutable state lives behind shared Vec
+// handles (state[0] holds the bucket vector and the size cell). Copying a
+// Map therefore shares the same logical map, matching the language rule for
+// Vec identity. Operations read state[0] at entry, so replacing the bucket
+// vector after growth is visible through every Map alias.
+//
+// Keys are compared with hash.Hash.equals. Hash functions are
+// non-cryptographic (see std/hash) and are not a security boundary.
+package map;
+
+import "std/hash" as hash;
+import "std/option" as option;
+import "std/vec" as vec;
+
+const INITIAL_CAPACITY usize = 8;
+
+pub struct Entry[K,V] {
+    pub key K;
+    pub value V;
+}
+
+struct State[K hash.Hash,V] {
+    buckets Vec[Vec[Entry[K,V]]];
+    size Vec[usize];
+}
+
+pub struct Map[K hash.Hash,V] {
+    state Vec[State[K,V]];
+}
+
+func empty_buckets[K hash.Hash,V](capacity usize) Vec[Vec[Entry[K,V]]] {
+    // vec.make with a Vec fill would share one inner Vec across every slot,
+    // because copying a Vec handle aliases the same container. Build each
+    // bucket with its own vec.empty call instead.
+    let buckets = vec.empty[Vec[Entry[K,V]]]();
+    vec.reserve(buckets, capacity);
+    for var index usize = 0; index < capacity; index += 1 {
+        vec.push(buckets, vec.empty[Entry[K,V]]());
+    }
+    return buckets;
+}
+
+func make_state[K hash.Hash,V]() State[K,V] {
+    return State[K,V](buckets: empty_buckets[K,V](INITIAL_CAPACITY), size: vec.make[usize](1, 0));
+}
+
+// new creates an empty map with an initial capacity of eight buckets.
+pub func new[K hash.Hash,V]() Map[K,V] {
+    return Map[K,V](state: vec.make[State[K,V]](1, make_state[K,V]()));
+}
+
+pub func len[K hash.Hash,V](values Map[K,V]) usize {
+    return values.state[0].size[0];
+}
+
+func bucket_index[K hash.Hash](key K, capacity usize) usize {
+    return usize(K.hash(key) % u64(capacity));
+}
+
+func find_index[K hash.Hash,V](bucket Vec[Entry[K,V]], key K) option.Option[usize] {
+    // Index loop: an element is replaced only after this loop has ended.
+    for var index usize = 0; index < vec.len(bucket); index += 1 {
+        if K.equals(bucket[index].key, key) {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func grow[K hash.Hash,V](values Map[K,V], state State[K,V]) {
+    let capacity = vec.len(state.buckets);
+    let larger = capacity * 2;
+    let buckets = empty_buckets[K,V](larger);
+    for var index usize = 0; index < capacity; index += 1 {
+        let bucket = state.buckets[index];
+        for var position usize = 0; position < vec.len(bucket); position += 1 {
+            let entry = bucket[position];
+            let target = bucket_index(entry.key, larger);
+            vec.push(buckets[target], entry);
+        }
+    }
+    // Replace the shared state cell; the size cell keeps its identity.
+    values.state[0] = State[K,V](buckets: buckets, size: state.size);
+}
+
+// insert replaces an existing value or adds a new entry. It returns the
+// previous value when the key was already present.
+pub func insert[K hash.Hash,V](values Map[K,V], key K, value V) option.Option[V] {
+    let state = values.state[0];
+    let capacity = vec.len(state.buckets);
+    let bucket = state.buckets[bucket_index(key, capacity)];
+    switch find_index(bucket, key) {
+        case option.Option.Some(position): {
+            let previous = bucket[position].value;
+            bucket[position].value = value;
+            return option.Option[V].Some(previous);
+        }
+        case option.Option.None: {
+            vec.push(bucket, Entry[K,V](key: key, value: value));
+            state.size[0] = state.size[0] + 1;
+            if state.size[0] > capacity - capacity / 4 {
+                grow(values, state);
+            }
+            return option.Option[V].None;
+        }
+    }
+}
+
+// get returns a copy of the stored value; owned values are retained by the
+// returned Option and can outlive the map.
+pub func get[K hash.Hash,V](values Map[K,V], key K) option.Option[V] {
+    let state = values.state[0];
+    let bucket = state.buckets[bucket_index(key, vec.len(state.buckets))];
+    switch find_index(bucket, key) {
+        case option.Option.Some(position): return option.Option[V].Some(bucket[position].value);
+        case option.Option.None: return option.Option[V].None;
+    }
+}
+
+pub func contains[K hash.Hash,V](values Map[K,V], key K) bool {
+    switch get(values, key) {
+        case option.Option.Some(found): return true;
+        case option.Option.None: return false;
+    }
+}
+
+// remove deletes an entry and returns the removed value. Removal uses
+// swap-with-last inside the bucket, so it is O(bucket length). Capacity is
+// not shrunk.
+pub func remove[K hash.Hash,V](values Map[K,V], key K) option.Option[V] {
+    let state = values.state[0];
+    let bucket = state.buckets[bucket_index(key, vec.len(state.buckets))];
+    switch find_index(bucket, key) {
+        case option.Option.Some(position): {
+            let removed = bucket[position].value;
+            let last = vec.len(bucket) - 1;
+            if position != last {
+                bucket[position] = bucket[last];
+            }
+            let discarded = vec.pop(bucket);
+            state.size[0] = state.size[0] - 1;
+            return option.Option[V].Some(removed);
+        }
+        case option.Option.None: return option.Option[V].None;
+    }
+}
+
+// clear removes all entries and resets the bucket array to the initial
+// capacity. Existing aliases observe the cleared map.
+pub func clear[K hash.Hash,V](values Map[K,V]) {
+    let state = values.state[0];
+    state.size[0] = 0;
+    let buckets = empty_buckets[K,V](INITIAL_CAPACITY);
+    values.state[0] = State[K,V](buckets: buckets, size: state.size);
+}
+
+// keys, values and entries return snapshots. Mutating the map afterwards
+// does not invalidate the returned Vec.
+pub func keys[K hash.Hash,V](values Map[K,V]) Vec[K] {
+    let out = vec.empty[K]();
+    vec.reserve(out, len(values));
+    let state = values.state[0];
+    for var index usize = 0; index < vec.len(state.buckets); index += 1 {
+        let bucket = state.buckets[index];
+        for var position usize = 0; position < vec.len(bucket); position += 1 {
+            vec.push(out, bucket[position].key);
+        }
+    }
+    return out;
+}
+
+pub func values[K hash.Hash,V](values Map[K,V]) Vec[V] {
+    let out = vec.empty[V]();
+    vec.reserve(out, len(values));
+    let state = values.state[0];
+    for var index usize = 0; index < vec.len(state.buckets); index += 1 {
+        let bucket = state.buckets[index];
+        for var position usize = 0; position < vec.len(bucket); position += 1 {
+            vec.push(out, bucket[position].value);
+        }
+    }
+    return out;
+}
+
+pub func entries[K hash.Hash,V](values Map[K,V]) Vec[Entry[K,V]] {
+    let out = vec.empty[Entry[K,V]]();
+    vec.reserve(out, len(values));
+    let state = values.state[0];
+    for var index usize = 0; index < vec.len(state.buckets); index += 1 {
+        let bucket = state.buckets[index];
+        for var position usize = 0; position < vec.len(bucket); position += 1 {
+            vec.push(out, bucket[position]);
+        }
+    }
+    return out;
+}

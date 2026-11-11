@@ -1,0 +1,54 @@
+package app;
+
+import "std/hash" as hash;
+
+func equal_hash[T hash.Hash](left T, right T) bool {
+    if T.hash(left) != T.hash(right) { return false; }
+    return T.equals(left, right);
+}
+
+func distinct[T hash.Hash](left T, right T) bool {
+    return !T.equals(left, right);
+}
+
+func main() i32 {
+    // Equal values must hash equally for every builtin implementation.
+    if !equal_hash[string]("abc", "ab" + "c") { return 1; }
+    if !equal_hash[string]("", "") { return 2; }
+    if !equal_hash[string]("键\0😀", "键" + "\0" + "😀") { return 3; }
+    if !equal_hash[bool](true, true) { return 4; }
+    if !equal_hash[bool](false, false) { return 5; }
+    if !equal_hash[i8](-128, -128) { return 6; }
+    if !equal_hash[i16](-32768, -32768) { return 7; }
+    if !equal_hash[i32](-2147483648, -2147483648) { return 8; }
+    if !equal_hash[i64](-9223372036854775807 - 1, -9223372036854775807 - 1) { return 9; }
+    if !equal_hash[isize](-9, -9) { return 10; }
+    if !equal_hash[u8](255, 255) { return 11; }
+    if !equal_hash[u16](65535, 65535) { return 12; }
+    if !equal_hash[u32](4294967295, 4294967295) { return 13; }
+    if !equal_hash[u64](18446744073709551615, 18446744073709551615) { return 14; }
+    if !equal_hash[usize](12345, 12345) { return 15; }
+
+    // Distinct keys normally differ; only equals is part of the contract.
+    if !distinct[bool](true, false) { return 16; }
+    if !distinct[i64](-1, 1) { return 17; }
+    if !distinct[u64](0, 1) { return 18; }
+    if !distinct[string]("a", "b") { return 19; }
+    let seven = 7;
+    let eight = 8;
+    if !seven.equals(seven) { return 20; }
+    if seven.equals(eight) { return 21; }
+    if seven.hash() != seven.hash() { return 22; }
+
+    // combine is deterministic and order-sensitive.
+    let one = 1;
+    let two = 2;
+    let first = hash.combine(hash.combine(0, one.hash()), two.hash());
+    let second = hash.combine(hash.combine(0, one.hash()), two.hash());
+    let swapped = hash.combine(hash.combine(0, two.hash()), one.hash());
+    if first != second { return 23; }
+    if first == swapped { return 24; }
+    if hash.avalanche(0) != hash.avalanche(0) { return 25; }
+    if hash.avalanche(0) == hash.avalanche(1) { return 26; }
+    return 0;
+}

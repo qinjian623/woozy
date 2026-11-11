@@ -53,7 +53,7 @@ struct Instruction {
   SymbolId variant; // enum declaration identity; enum_test produces bool
   uint64_t bits = 0;
   // Only string_literal: validated UTF-8 bytes in immortal read-only storage.
-  // Length is utf8.size(), never a terminator scan; no dynamic ownership here.
+  // Exact decoded UTF-8 bytes; literal storage has no dynamic owner.
   std::string utf8;
   std::optional<ExitSite> exit; // exit_begin only: immutable HIR plan identity
   std::optional<HirNodeId> cleanup; // cleanup_begin/end: defer registration

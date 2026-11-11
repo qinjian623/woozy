@@ -5,6 +5,8 @@
 
 extern "C" int main();
 extern "C" uintptr_t __stack_chk_guard;
+extern "C" void lang_process_init_v1(uint64_t, const char *const *,
+                                      const char *const *) noexcept __attribute__((weak));
 
 #if defined(__x86_64__) && defined(__linux__)
 alignas(64) static uintptr_t initial_tcb[8];
@@ -37,6 +39,10 @@ void lang_init_tcb(const uintptr_t *stack) noexcept {
     : "a"(__NR_arch_prctl), "D"(ARCH_SET_FS), "S"(initial_tcb)
     : "rcx", "r11", "memory");
   if (result != 0) startup_failure();
+  if (lang_process_init_v1) {
+    auto *argv = reinterpret_cast<const char *const *>(stack + 1);
+    lang_process_init_v1(*stack, argv, argv + *stack + 1);
+  }
 }
 
 extern "C" __attribute__((naked, no_stack_protector, visibility("default"))) void _start() {

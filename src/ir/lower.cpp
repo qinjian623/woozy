@@ -395,10 +395,12 @@ class Lower {
       for (auto child : n.children) take(child);
       return emit(i);
     case hir::NodeKind::index_read:
+      i.origin = id;
       i.op = Op::vec_read;
       i.inputs = {expr(n.children[0]), expr(n.children[1])};
       return emit(i);
     case hir::NodeKind::vec_slice:
+      i.origin = id;
       i.op = Op::vec_slice;
       for (auto child : n.children) i.inputs.push_back(expr(child));
       i.bits = (std::get<hir::VecSlice>(n.data).start ? 1 : 0) |
@@ -445,6 +447,7 @@ class Lower {
       i.inputs = {expr(n.children[0])};
       return emit(i);
     case hir::NodeKind::binary: {
+      i.origin = id;
       i.op = Op::binary;
       i.binary = std::get<hir::Binary>(n.data).op;
       auto lhs = expr(n.children[0]);
@@ -711,11 +714,13 @@ class Lower {
         i.op = Op::binary;
         i.type = place.type;
         i.binary = *compound;
+        i.origin = id;
         i.inputs = {*lhs, rhs};
         i.source = s;
         rhs = emit(i);
       }
-      take(n.children[1]);
+      if (!compound || h.types.find(place.type)->kind != hir::TypeKind::String)
+        take(n.children[1]);
       if (auto binding = std::get_if<hir::Place>(&place.data); binding && owning(place.type))
         effect(Op::destroy, slots.at(binding->symbol), s);
       Instruction write;
@@ -825,7 +830,11 @@ class Lower {
       Instruction cmp; cmp.op = Op::iteration_test; cmp.type = boolean; cmp.slot = hidden; cmp.source = s;
       end(Exit::conditional, {emit(cmp)}, {body, done}, s);
       current = body;
-      auto element_type = h.types.find(node(n.children[0]).type)->type_args[0];
+      auto element_type = h.types.find(node(n.children[0]).type)->type_args.empty()
+                              ? TypeId{} : h.types.find(node(n.children[0]).type)->type_args[0];
+      if (h.types.find(node(n.children[0]).type)->kind == hir::TypeKind::String)
+        for (const auto &local : h.ownership.locals)
+          if (local.symbol == fi.element) element_type = local.type;
       Instruction read; read.op = Op::iteration_read; read.type = element_type;
       read.slot = hidden; read.source = s;
       auto element = emit(read);

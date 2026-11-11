@@ -288,4 +288,11 @@ extern "C" void lang_free_v1(void *ptr) noexcept {
   }
 }
 
+extern "C" void lang_alloc_fork_prepare_v1() noexcept { pool_lock_acquire(); }
+extern "C" void lang_alloc_fork_parent_v1() noexcept { pool_lock_release(); }
+extern "C" void lang_alloc_fork_child_v1() noexcept {
+  __atomic_store_n(&g_lock_next, 0u, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_lock_serving, 0u, __ATOMIC_RELAXED);
+}
+
 #endif

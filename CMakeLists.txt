@@ -21,7 +21,7 @@ target_link_libraries(lang_modules PUBLIC lang_frontend
   PRIVATE tomlplusplus::tomlplusplus json-c::json-c)
 target_compile_definitions(lang_modules PRIVATE
   LANG_STD_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/stdlib")
-add_library(lang_hir STATIC src/hir/hir.cpp src/hir/ownership.cpp
+add_library(lang_hir STATIC src/hir/hir.cpp src/hir/system_operation.cpp src/hir/ownership.cpp
   src/hir/pattern_analysis.cpp src/hir/literal_value.cpp src/hir/constant_value.cpp)
 target_link_libraries(lang_hir PUBLIC lang_modules)
 find_package(PkgConfig REQUIRED)
@@ -56,6 +56,9 @@ if(BUILD_TESTING)
     src/ir/lower.cpp src/ir/verify.cpp)
   target_link_libraries(lang_concurrency_frontend_test PRIVATE lang_sema)
   add_test(NAME sema.concurrency COMMAND lang_concurrency_frontend_test ${CMAKE_CURRENT_SOURCE_DIR})
+  add_executable(lang_value_library_test tests/sema/value_library_test.cpp)
+  target_link_libraries(lang_value_library_test PRIVATE lang_sema)
+  add_test(NAME sema.value_library COMMAND lang_value_library_test ${CMAKE_CURRENT_SOURCE_DIR})
   add_executable(lang_system_frontend_test tests/sema/system_test.cpp)
   target_link_libraries(lang_system_frontend_test PRIVATE lang_sema)
   add_test(NAME sema.system COMMAND lang_system_frontend_test)

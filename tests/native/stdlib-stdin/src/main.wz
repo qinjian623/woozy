@@ -1,0 +1,15 @@
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+func main() i32 throws os.Error {
+    let input = io.reader(os.stdin());
+    switch io.read_line(input) { case option.Option.Some(value): io.println(value); case option.Option.None: return 1; }
+    switch io.read_line(input) { case option.Option.Some(value): io.println(value); case option.Option.None: return 2; }
+    switch io.read_line(input) { case option.Option.Some(value): io.println(value); case option.Option.None: return 3; }
+    if option.is_some(io.read_line(input)) { return 4; }
+    io.println(i8(-8)); io.println(i16(-16)); io.println(i32(-32)); io.println(i64(-64)); io.println(isize(-1));
+    io.println(u8(8)); io.println(u16(16)); io.println(u32(32)); io.println(u64(64)); io.println(usize(1));
+    io.println(f32(1.5)); io.println(f64(-0.0)); io.println(true);
+    return 0;
+}

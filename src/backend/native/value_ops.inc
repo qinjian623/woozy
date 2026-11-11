@@ -175,10 +175,21 @@
     if (t.kind == hir::TypeKind::Vec) {
       auto *value = builder.CreateLoad(builder.getPtrTy(), address);
       builder.CreateCall(vec_rc(copy), {value});
+    } else if (t.kind == hir::TypeKind::String) {
+      auto *value = builder.CreateLoad(lower_type(id), address);
+      auto *owner = builder.CreateExtractValue(value, {3});
+      auto *present = llvm::BasicBlock::Create(context, "text.owner", fn);
+      auto *done = llvm::BasicBlock::Create(context, "text.done", fn);
+      builder.CreateCondBr(builder.CreateICmpNE(owner,
+          llvm::ConstantPointerNull::get(builder.getPtrTy())), present, done);
+      builder.SetInsertPoint(present);
+      runtime(copy ? "lang_handle_retain_v1" : "lang_handle_release_v1", builder.getVoidTy(), {owner});
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
     } else if (t.kind == hir::TypeKind::ThreadHandle ||
                t.kind == hir::TypeKind::MutexHandle ||
                t.kind == hir::TypeKind::CondvarHandle ||
-               t.kind == hir::TypeKind::AtomicI64Handle) {
+               t.kind == hir::TypeKind::AtomicI64Handle || t.kind == hir::TypeKind::IpcHandle) {
       runtime(copy ? "lang_handle_retain_v1" : "lang_handle_release_v1",
               builder.getVoidTy(), {builder.CreateLoad(builder.getPtrTy(), address)});
     } else if (t.kind == hir::TypeKind::NominalStruct) {
