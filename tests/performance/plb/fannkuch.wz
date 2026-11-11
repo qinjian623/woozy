@@ -1,0 +1,129 @@
+// The Computer Language Benchmarks Game
+// https://salsa.debian.org/benchmarksgame-team/benchmarksgame/
+//
+// Contributed by Andrei Simion (with patch from Vincent Yu)
+// Based on "fannkuch-redux C++ g++ #5", contributed by Dave Compton,
+// which in turn was based on the C program by Jeremy Zerfasm
+// which in turn was based on the Ada program by Jonathan Parker and
+// Georg Bauhaus which in turn was based on code by Dave Fladebo,
+// Eckehard Berns, Heiner Marxen, Hongwei Xi, and The Anh Tran and
+// also the Java program by Oleg Mazurov.
+//
+// Portable scalar single-thread rewrite for the PLB comparison: no SIMD,
+// no OpenMP, and no block/thread partitioning. The three working arrays are
+// allocated from the runtime N, and the count-array permutation walk plus
+// prefix flips keep the upstream order. The preparation-only visit hook is
+// dropped.
+package app;
+
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct FannkuchResult {
+    checksum i64;
+    maximum i32;
+}
+
+func fannkuch(n i32) FannkuchResult {
+    // The only three working arrays for one complete fannkuch call.
+    var perm Vec[i32] = vec.make[i32](usize(n), 0);
+    var perm1 Vec[i32] = vec.make[i32](usize(n), 0);
+    var count Vec[i32] = vec.make[i32](usize(n), 0);
+
+    var max_flips i32 = 0;
+    var checksum i64 = 0;
+    var permutation_index u64 = 0;
+    var r i32 = n;
+
+    for var i i32 = 0; i < n; i += 1 {
+        perm1[i] = i;
+    }
+
+    for {
+        for r != 1 {
+            count[r - 1] = r;
+            r -= 1;
+        }
+
+        for var i i32 = 0; i < n; i += 1 {
+            perm[i] = perm1[i];
+        }
+
+        var flips i32 = 0;
+        for perm[0] != 0 {
+            let k i32 = perm[0] + 1;
+            var left i32 = 0;
+            var right i32 = k - 1;
+            for left < right {
+                let saved i32 = perm[left];
+                perm[left] = perm[right];
+                perm[right] = saved;
+                left += 1;
+                right -= 1;
+            }
+            flips += 1;
+        }
+
+        if flips > max_flips {
+            max_flips = flips;
+        }
+        if permutation_index % 2 == 0 {
+            checksum += i64(flips);
+        } else {
+            checksum -= i64(flips);
+        }
+        permutation_index += 1;
+
+        for {
+            if r == n {
+                break;
+            }
+            let perm0 i32 = perm1[0];
+            var i i32 = 0;
+            for i < r {
+                let j i32 = i + 1;
+                perm1[i] = perm1[j];
+                i = j;
+            }
+            perm1[r] = perm0;
+            count[r] -= 1;
+            if count[r] > 0 {
+                break;
+            }
+            r += 1;
+        }
+        if r == n {
+            break;
+        }
+    }
+
+    return FannkuchResult(checksum: checksum, maximum: max_flips);
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) != 2 {
+        io.eprintln("usage: fannkuch-redux N");
+        return 2;
+    }
+
+    var n i64 = 0;
+    var parsed bool = true;
+    try {
+        n = strconv.parse_i64(arguments[1]);
+    } catch error strconv.Error {
+        parsed = false;
+    }
+    if !parsed || n < 1 || n > 16 {
+        io.eprintln("fannkuch-redux: N must be an integer between 1 and 16");
+        return 2;
+    }
+
+    let result = fannkuch(i32(n));
+    io.println(result.checksum);
+    io.println("Pfannkuchen(" + strconv.format_i64(n) + ") = " + strconv.format_i64(i64(result.maximum)));
+    return 0;
+}

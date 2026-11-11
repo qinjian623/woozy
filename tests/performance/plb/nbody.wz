@@ -1,0 +1,188 @@
+// The Computer Language Benchmarks Game
+// https://salsa.debian.org/benchmarksgame-team/benchmarksgame/
+//
+// contributed by Jeffrey Beu
+//
+// Woozy port of upstream bench/algorithm/nbody/1.cpp at commit
+// ad18b203dd1769724f4eea94fc3ac1e99f6593e0.  Single-threaded scalar C++-style
+// algorithm; no template/tuple recursion from the upstream entry.
+//
+// Representation: the five upstream value structs are kept in one flat
+// Vec[f64] with the per-body layout [x, y, z, vx, vy, vz, mass] (7 f64 per
+// body, 35 values total) because a value struct holding Vec fields would be
+// copied by value on every helper call.  nbody.cpp uses the identical flat
+// std::vector<double> layout, so both sides run the same 10 pair updates per
+// dt step, apply the same per-body advance, and evaluate energy in the same
+// order (kinetic for body i, then its potentials with every j > i).
+//
+// Interface: one runtime decimal argument, read with std/process.args and
+// std/strconv.parse_i64.  Two stdout lines: initial and final energy, printed
+// with io.println(f64) (shortest round-trip form) instead of printf "%.9f";
+// the comparison runner parses them numerically.  Invalid arguments print a
+// message on stderr and exit 2.  No fast-math and no noalias.
+package app;
+
+import "std/io" as io;
+import "std/math" as math;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+const PI f64 = 3.141592653589793;
+const SOLAR_MASS f64 = 4.0 * PI * PI;
+const DAYS_PER_YEAR f64 = 365.24;
+const DT f64 = 0.01;
+
+const BODIES i64 = 5;
+const STRIDE i64 = 7;
+const PX i64 = 0;
+const PY i64 = 1;
+const PZ i64 = 2;
+const VX i64 = 3;
+const VY i64 = 4;
+const VZ i64 = 5;
+const MASS i64 = 6;
+
+// Stores one body at flat index `index` using the upstream field order.
+func put(b Vec[f64], index i64, x f64, y f64, z f64, vx f64, vy f64, vz f64, mass f64) {
+    let base i64 = index * STRIDE;
+    b[base + PX] = x;
+    b[base + PY] = y;
+    b[base + PZ] = z;
+    b[base + VX] = vx;
+    b[base + VY] = vy;
+    b[base + VZ] = vz;
+    b[base + MASS] = mass;
+}
+
+// Sun, Jupiter, Saturn, Uranus, Neptune with the upstream constants.
+func bodies() Vec[f64] {
+    let b Vec[f64] = vec.make[f64](usize(BODIES * STRIDE), 0.0);
+    put(b, 0, 0.0, 0.0, 0.0, 0.0, 0.0, 0.0, SOLAR_MASS);
+    put(b, 1,
+        4.84143144246472090e+00,
+        -1.16032004402742839e+00,
+        -1.03622044471123109e-01,
+        1.66007664274403694e-03 * DAYS_PER_YEAR,
+        7.69901118419740425e-03 * DAYS_PER_YEAR,
+        -6.90460016972063023e-05 * DAYS_PER_YEAR,
+        9.54791938424326609e-04 * SOLAR_MASS);
+    put(b, 2,
+        8.34336671824457987e+00,
+        4.12479856412430479e+00,
+        -4.03523417114321381e-01,
+        -2.76742510726862411e-03 * DAYS_PER_YEAR,
+        4.99852801234917238e-03 * DAYS_PER_YEAR,
+        2.30417297573763929e-05 * DAYS_PER_YEAR,
+        2.85885980666130812e-04 * SOLAR_MASS);
+    put(b, 3,
+        1.28943695621391310e+01,
+        -1.51111514016986312e+01,
+        -2.23307578892655734e-01,
+        2.96460137564761618e-03 * DAYS_PER_YEAR,
+        2.37847173959480950e-03 * DAYS_PER_YEAR,
+        -2.96589568540237556e-05 * DAYS_PER_YEAR,
+        4.36624404335156298e-05 * SOLAR_MASS);
+    put(b, 4,
+        1.53796971148509165e+01,
+        -2.59193146099879641e+01,
+        1.79258772950371181e-01,
+        2.68067772490389322e-03 * DAYS_PER_YEAR,
+        1.62824170038242295e-03 * DAYS_PER_YEAR,
+        -9.51592254519715870e-05 * DAYS_PER_YEAR,
+        5.15138902046611451e-05 * SOLAR_MASS);
+    return b;
+}
+
+// Same total momentum offset as the upstream `offset` visitor.
+func offset(b Vec[f64]) {
+    var px f64 = 0.0;
+    var py f64 = 0.0;
+    var pz f64 = 0.0;
+    for var i i64 = 0; i < BODIES; i += 1 {
+        let base i64 = i * STRIDE;
+        px += b[base + VX] * b[base + MASS];
+        py += b[base + VY] * b[base + MASS];
+        pz += b[base + VZ] * b[base + MASS];
+    }
+    b[VX] = -px / SOLAR_MASS;
+    b[VY] = -py / SOLAR_MASS;
+    b[VZ] = -pz / SOLAR_MASS;
+}
+
+// Upstream energy order: kinetic term for body i, then one potential term for
+// every j > i; scalars only.
+func energy(b Vec[f64]) f64 {
+    var e f64 = 0.0;
+    for var i i64 = 0; i < BODIES; i += 1 {
+        let ib i64 = i * STRIDE;
+        e += 0.5 * b[ib + MASS] *
+            (b[ib + VX] * b[ib + VX] + b[ib + VY] * b[ib + VY] + b[ib + VZ] * b[ib + VZ]);
+        for var j i64 = i + 1; j < BODIES; j += 1 {
+            let jb i64 = j * STRIDE;
+            let dx f64 = b[ib + PX] - b[jb + PX];
+            let dy f64 = b[ib + PY] - b[jb + PY];
+            let dz f64 = b[ib + PZ] - b[jb + PZ];
+            let distance f64 = math.sqrt(dx * dx + dy * dy + dz * dz);
+            e -= (b[ib + MASS] * b[jb + MASS]) / distance;
+        }
+    }
+    return e;
+}
+
+// One upstream `advance`: all 10 i<j pair velocity updates, then all
+// positions advanced by dt * velocity.
+func advance(b Vec[f64]) {
+    for var i i64 = 0; i < BODIES; i += 1 {
+        let ib i64 = i * STRIDE;
+        for var j i64 = i + 1; j < BODIES; j += 1 {
+            let jb i64 = j * STRIDE;
+            let dx f64 = b[ib + PX] - b[jb + PX];
+            let dy f64 = b[ib + PY] - b[jb + PY];
+            let dz f64 = b[ib + PZ] - b[jb + PZ];
+            let distance f64 = math.sqrt(dx * dx + dy * dy + dz * dz);
+            let mag f64 = DT / (distance * distance * distance);
+            b[ib + VX] -= dx * b[jb + MASS] * mag;
+            b[ib + VY] -= dy * b[jb + MASS] * mag;
+            b[ib + VZ] -= dz * b[jb + MASS] * mag;
+            b[jb + VX] += dx * b[ib + MASS] * mag;
+            b[jb + VY] += dy * b[ib + MASS] * mag;
+            b[jb + VZ] += dz * b[ib + MASS] * mag;
+        }
+    }
+    for var i i64 = 0; i < BODIES; i += 1 {
+        let base i64 = i * STRIDE;
+        b[base + PX] += DT * b[base + VX];
+        b[base + PY] += DT * b[base + VY];
+        b[base + PZ] += DT * b[base + VZ];
+    }
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) != 2 {
+        io.eprintln("usage: nbody <n>");
+        return 2;
+    }
+    var steps i64 = 0;
+    try {
+        steps = strconv.parse_i64(arguments[1]);
+    } catch error strconv.Error {
+        io.eprintln("nbody: n must be a non-negative integer");
+        return 2;
+    }
+    if steps < 0 {
+        io.eprintln("nbody: n must be a non-negative integer");
+        return 2;
+    }
+
+    let system = bodies();
+    offset(system);
+    io.println(energy(system));
+    for var step i64 = 0; step < steps; step += 1 {
+        advance(system);
+    }
+    io.println(energy(system));
+    return 0;
+}

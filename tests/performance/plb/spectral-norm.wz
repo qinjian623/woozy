@@ -1,0 +1,100 @@
+// The Computer Language Benchmarks Game
+// https://salsa.debian.org/benchmarksgame-team/benchmarksgame/
+//
+// Original C contributed by Sebastien Loisel
+// Conversion to C++ by Jon Harrop
+// OpenMP parallelize by The Anh Tran
+// Add SSE by The Anh Tran
+// Additional SSE optimization by Krzysztof Jakubowski
+// Converted to AVX and rewritten by Bela Pecsek
+//
+// Portable scalar single-thread rewrite for the PLB comparison: no OpenMP,
+// no intrinsics, and no N x N matrix. Three N-element Vec[f64] arrays hold u,
+// v, and the intermediate vector. The denominator recurrence keeps the
+// EvalA/EvalAt order of 8.cpp, so both implementations use the same scalar
+// operation sequence. Automatic compiler optimization is left unchanged.
+package app;
+
+import "std/io" as io;
+import "std/math" as math;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+// dst = A * src, where A(i, j) = 1 / ((i+j)*(i+j+1)/2 + i + 1).
+// For a fixed row i the denominator grows by i+j, matching 8.cpp's EvalA.
+func eval_atimes_u(src Vec[f64], dst Vec[f64], n i32) {
+    for var i i32 = 0; i < n; i += 1 {
+        let fi f64 = f64(i);
+        var denominator f64 = fi * (fi + 1.0) * 0.5 + fi + 1.0;
+        var sum f64 = src[0] / denominator;
+        for var j i32 = 1; j < n; j += 1 {
+            denominator = denominator + fi + f64(j);
+            sum = sum + src[j] / denominator;
+        }
+        dst[i] = sum;
+    }
+}
+
+// dst = A^T * src: the same matrix with the row and column arguments swapped.
+func eval_at_times_u(src Vec[f64], dst Vec[f64], n i32) {
+    for var i i32 = 0; i < n; i += 1 {
+        let fi f64 = f64(i);
+        var denominator f64 = fi * (fi + 1.0) * 0.5 + 1.0;
+        var sum f64 = src[0] / denominator;
+        for var j i32 = 1; j < n; j += 1 {
+            denominator = denominator + (fi + 1.0) + f64(j);
+            sum = sum + src[j] / denominator;
+        }
+        dst[i] = sum;
+    }
+}
+
+func spectral_norm(n i32) f64 {
+    var u Vec[f64] = vec.make[f64](usize(n), 0.0);
+    var v Vec[f64] = vec.make[f64](usize(n), 0.0);
+    var tmp Vec[f64] = vec.make[f64](usize(n), 0.0);
+
+    for var i i32 = 0; i < n; i += 1 {
+        u[i] = 1.0;
+    }
+
+    for var ite i32 = 0; ite < 10; ite += 1 {
+        eval_atimes_u(u, tmp, n);
+        eval_at_times_u(tmp, v, n);
+        eval_atimes_u(v, tmp, n);
+        eval_at_times_u(tmp, u, n);
+    }
+
+    var vbv f64 = 0.0;
+    var vv f64 = 0.0;
+    for var i i32 = 0; i < n; i += 1 {
+        vbv += u[i] * v[i];
+        vv += v[i] * v[i];
+    }
+    return math.sqrt(vbv / vv);
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) != 2 {
+        io.eprintln("usage: spectral-norm N");
+        return 2;
+    }
+
+    var n i64 = 0;
+    var parsed bool = true;
+    try {
+        n = strconv.parse_i64(arguments[1]);
+    } catch error strconv.Error {
+        parsed = false;
+    }
+    if !parsed || n < 1 || n > 1000000 {
+        io.eprintln("spectral-norm: N must be an integer between 1 and 1000000");
+        return 2;
+    }
+
+    io.println(spectral_norm(i32(n)));
+    return 0;
+}

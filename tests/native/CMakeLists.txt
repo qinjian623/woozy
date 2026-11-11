@@ -357,4 +357,7 @@ if(LANG_TEST_PYTHON)
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld
     --runtime $<TARGET_FILE:lang_native_runtime>)
   set_tests_properties(native.chat PROPERTIES TIMEOUT 300)
+  add_test(NAME performance.plb_output_checks COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/performance/run_plb.py selftest)
+  set_tests_properties(performance.plb_output_checks PROPERTIES TIMEOUT 30)
 endif()

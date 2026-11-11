@@ -1,0 +1,15 @@
+package app;
+import "std/process" as process;
+import "std/os" as os;
+import "std/vec" as vec;
+import "std/io" as io;
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 2 {
+        io.print("Hello world!");
+    } else {
+        io.print("Hello world " + arguments[1] + "!");
+    }
+    return 0;
+}

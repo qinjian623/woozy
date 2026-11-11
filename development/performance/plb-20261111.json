@@ -1,0 +1,6120 @@
+{
+  "schema": "woozy/plb-local-comparison/1",
+  "date": "2026-11-11",
+  "compiler_source_commit": "0c3b332f4d248d27e2dea20ce3c5b2f5905690c6",
+  "source_manifest": "tests/performance/plb/source-manifest.json",
+  "host": {
+    "cpu_model": "AMD Ryzen 7 8745HS w/ Radeon 780M Graphics",
+    "machine": "x86_64",
+    "system": "Linux",
+    "release": "7.2.15-1-omarchy",
+    "nproc": 16
+  },
+  "compiler_version": "woozyc 0.1.0-bootstrap (compiler-dev/1)\n",
+  "cpp_version": "clang version 22.1.8 (https://github.com/llvm/llvm-project ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)\nTarget: x86_64-unknown-linux-gnu\nThread model: posix\nInstalledDir: /home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin\n",
+  "primary_cpu": 1,
+  "original_cpus": [
+    1,
+    0,
+    2,
+    3
+  ],
+  "cpp_flags": [
+    "--target=x86_64-unknown-linux-gnu",
+    "-march=x86-64",
+    "-mtune=generic",
+    "-fno-fast-math",
+    "-fno-lto",
+    "-ffp-contract=off",
+    "-std=c++20",
+    "-O2"
+  ],
+  "upstream_flags": [
+    "-pipe",
+    "-Wall",
+    "-O3",
+    "-fomit-frame-pointer",
+    "-march=broadwell",
+    "-std=c++20",
+    "-static-libstdc++",
+    "-fopenmp",
+    "-pthread"
+  ],
+  "openmp_environment": {
+    "OMP_THREAD_LIMIT": "4",
+    "OMP_NUM_THREADS": "4",
+    "OMP_DYNAMIC": "FALSE"
+  },
+  "method": "whole-process batches, including process launch and stdout",
+  "idle_required": false,
+  "load_before": [
+    3.173828125,
+    3.4658203125,
+    3.26123046875
+  ],
+  "load_after": [
+    4.62646484375,
+    4.6298828125,
+    3.97998046875
+  ],
+  "limitations": [
+    "Whole-process batches include launch, argument parsing, allocation and stdout; hello uses R=1.",
+    "No samples were discarded/replaced; host was not required to be idle.",
+    "Portable O2 one-CPU ratios are separate from upstream O3 Broadwell SIMD/OpenMP four-CPU times.",
+    "These measurements do not change the historical sixteen-workload target."
+  ],
+  "cases": [
+    {
+      "name": "helloworld",
+      "input": "QwQ",
+      "expected": "Hello world QwQ!",
+      "rounds": 1,
+      "median_ms": {
+        "woozy": 1.869209,
+        "cpp": 3.306147
+      },
+      "ratio": 0.5653738324399973,
+      "load_before": [
+        3.60009765625,
+        3.49462890625,
+        3.31396484375
+      ],
+      "load_after": [
+        3.60009765625,
+        3.49462890625,
+        3.31396484375
+      ],
+      "program_sha256": {
+        "woozy": "8534dcc410bdc3cda97a95f41f5c8a2144e3f8f4995e8a8ac570bff8c360ae2a",
+        "cpp": "2be36bd86d5ec31c5aa098c938c70304174f81a3c33de5c61c622f88c5e22af1"
+      },
+      "calibration": [],
+      "double_round_controls": {},
+      "samples": [
+        {
+          "rounds": 1,
+          "elapsed_ns": 2061811,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            2061811
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2697956,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            2697956
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3537672,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            3537672
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2820365,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            2820365
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2540400,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            2540400
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 4016661,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            4016661
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3616701,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            3616701
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2995163,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            2995163
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2402090,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            2402090
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3772073,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            3772073
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3467331,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            3467331
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1816601,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            1816601
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1869209,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            1869209
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2730337,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            2730337
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3306147,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            3306147
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1732121,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            1732121
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1564017,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            1564017
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2917258,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            2917258
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2709757,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            2709757
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1760125,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            1760125
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2578462,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            2578462
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3002317,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            3002317
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fannkuch",
+      "input": "10",
+      "expected": [
+        73196,
+        38
+      ],
+      "rounds": 4,
+      "median_ms": {
+        "woozy": 164.695048,
+        "cpp": 173.31642225
+      },
+      "ratio": 0.9502564492269285,
+      "load_before": [
+        3.60009765625,
+        3.49462890625,
+        3.31396484375
+      ],
+      "load_after": [
+        4.6015625,
+        3.73095703125,
+        3.3974609375
+      ],
+      "program_sha256": {
+        "woozy": "8646c5d6c2fc9180bd4653cba226cbbb168d8ed6ce9fc8b31dba2bc7b1f10228",
+        "cpp": "49a5f2b18b1330526208bea01e429bec4ba20792396662ce3e464ec490f94bc6"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 169668183,
+              "process_ns": [
+                169668183
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 168232777,
+              "process_ns": [
+                168232777
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 168121399,
+              "process_ns": [
+                168121399
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 2,
+          "trials": [
+            {
+              "rounds": 2,
+              "elapsed_ns": 343302171,
+              "process_ns": [
+                168720353,
+                174581818
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 342474307,
+              "process_ns": [
+                172288423,
+                170185884
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 342239437,
+              "process_ns": [
+                172142759,
+                170096678
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 4,
+          "trials": [
+            {
+              "rounds": 4,
+              "elapsed_ns": 684619358,
+              "process_ns": [
+                170356996,
+                169227386,
+                166834512,
+                178200464
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 680971993,
+              "process_ns": [
+                175440562,
+                169930356,
+                168652126,
+                166948949
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 674727890,
+              "process_ns": [
+                169268303,
+                167811077,
+                166732192,
+                170916318
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 8,
+          "elapsed_ns": 1368706812,
+          "process_ns": [
+            169062738,
+            173314921,
+            172362313,
+            168761122,
+            171411749,
+            169858453,
+            168461310,
+            175474206
+          ]
+        },
+        "woozy": {
+          "rounds": 8,
+          "elapsed_ns": 1328544192,
+          "process_ns": [
+            172058584,
+            177034266,
+            168836314,
+            162826350,
+            160753358,
+            162889559,
+            159292525,
+            164853236
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 4,
+          "elapsed_ns": 654979453,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            166484850,
+            165895404,
+            164252088,
+            158347111
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 665668703,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            166791316,
+            165673116,
+            165725084,
+            167479187
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 667656718,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            166053320,
+            166829398,
+            165813731,
+            168960269
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 636807160,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            157974533,
+            157545298,
+            157799835,
+            163487494
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 648198219,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            163142055,
+            160352639,
+            160460792,
+            164242733
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 694972539,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            174676492,
+            172022619,
+            170679087,
+            177594341
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 700228360,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            179172644,
+            175894120,
+            174819852,
+            170341744
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 661830529,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            163510118,
+            167279646,
+            165598068,
+            165442697
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 658780192,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            162098738,
+            167487907,
+            164230170,
+            164963377
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 685587577,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            171572126,
+            171114065,
+            170176375,
+            172725011
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 700840318,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            181210943,
+            174581978,
+            172874482,
+            172172915
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 652687510,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            163618884,
+            162604219,
+            164948922,
+            161515485
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 667611020,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            161736470,
+            161733284,
+            182766756,
+            161374510
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 702778172,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            172721886,
+            177242344,
+            176405784,
+            176408158
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 691296656,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            172156475,
+            172923355,
+            170885309,
+            175331517
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 665174662,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            167292804,
+            167176045,
+            163148693,
+            167557120
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 664019796,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            167305208,
+            166251920,
+            166500427,
+            163962241
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 693265689,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            175734945,
+            170725480,
+            175415266,
+            171389998
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 682745678,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            171293216,
+            174050854,
+            171153104,
+            166248504
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 639807880,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            161912283,
+            159874597,
+            156908228,
+            161112772
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 625890632,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            156385767,
+            156584330,
+            156032855,
+            156887680
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 662679397,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            166567324,
+            165301287,
+            164630919,
+            166179867
+          ]
+        }
+      ]
+    },
+    {
+      "name": "fannkuch",
+      "input": "11",
+      "expected": [
+        556355,
+        51
+      ],
+      "rounds": 1,
+      "median_ms": {
+        "woozy": 1920.162633,
+        "cpp": 1976.048346
+      },
+      "ratio": 0.9717184485323316,
+      "load_before": [
+        4.6015625,
+        3.73095703125,
+        3.3974609375
+      ],
+      "load_after": [
+        4.513671875,
+        3.81640625,
+        3.44384765625
+      ],
+      "program_sha256": {
+        "woozy": "8646c5d6c2fc9180bd4653cba226cbbb168d8ed6ce9fc8b31dba2bc7b1f10228",
+        "cpp": "49a5f2b18b1330526208bea01e429bec4ba20792396662ce3e464ec490f94bc6"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 1974078327,
+              "process_ns": [
+                1974078327
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 1978996036,
+              "process_ns": [
+                1978996036
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 1965126470,
+              "process_ns": [
+                1965126470
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 2,
+          "elapsed_ns": 3943317546,
+          "process_ns": [
+            1977890952,
+            1965426594
+          ]
+        },
+        "woozy": {
+          "rounds": 2,
+          "elapsed_ns": 3799718609,
+          "process_ns": [
+            1904111381,
+            1895607228
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 1,
+          "elapsed_ns": 1923116685,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            1923116685
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1980680444,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            1980680444
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1982111536,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            1982111536
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1882912899,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            1882912899
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1927999801,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            1927999801
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1967706332,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            1967706332
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1961043034,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            1961043034
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1940991689,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            1940991689
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1914278744,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            1914278744
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1955376699,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            1955376699
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1990110713,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            1990110713
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1908950461,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            1908950461
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1911215417,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            1911215417
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 2010158280,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            2010158280
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1976048346,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            1976048346
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1883938029,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            1883938029
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1920162633,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            1920162633
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1980366335,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            1980366335
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1976229141,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            1976229141
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1932256032,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            1932256032
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1920967197,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            1920967197
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 1954941618,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            1954941618
+          ]
+        }
+      ]
+    },
+    {
+      "name": "nbody",
+      "input": "500000",
+      "expected": [
+        -0.16907516382852447,
+        -0.16909656666615247
+      ],
+      "rounds": 32,
+      "median_ms": {
+        "woozy": 80.542064625,
+        "cpp": 30.764402125
+      },
+      "ratio": 2.6180279498930776,
+      "load_before": [
+        4.513671875,
+        3.81640625,
+        3.44384765625
+      ],
+      "load_after": [
+        5.92333984375,
+        4.37353515625,
+        3.66064453125
+      ],
+      "program_sha256": {
+        "woozy": "e647d4549206ca66c20f645f0f682779a5fcacf1576efdd46857bfa49573b044",
+        "cpp": "51eb4012a2a75f4f6c502f83cfcb109eb21b7b7927866cf79677ca13e2492522"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 29288438,
+              "process_ns": [
+                29288438
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 29697315,
+              "process_ns": [
+                29697315
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 29624288,
+              "process_ns": [
+                29624288
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 2,
+          "trials": [
+            {
+              "rounds": 2,
+              "elapsed_ns": 61836016,
+              "process_ns": [
+                30939778,
+                30896238
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 62807341,
+              "process_ns": [
+                32433575,
+                30373766
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 58548363,
+              "process_ns": [
+                28874661,
+                29673702
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 4,
+          "trials": [
+            {
+              "rounds": 4,
+              "elapsed_ns": 120851666,
+              "process_ns": [
+                28907654,
+                29240948,
+                29180846,
+                33522218
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 116732864,
+              "process_ns": [
+                29345115,
+                29434703,
+                28883268,
+                29069778
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 117795888,
+              "process_ns": [
+                29727473,
+                29147864,
+                29083112,
+                29837439
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 8,
+          "trials": [
+            {
+              "rounds": 8,
+              "elapsed_ns": 233835779,
+              "process_ns": [
+                29374870,
+                29502390,
+                28626816,
+                29910015,
+                28680647,
+                28788820,
+                29431617,
+                29520604
+              ]
+            },
+            {
+              "rounds": 8,
+              "elapsed_ns": 247224911,
+              "process_ns": [
+                30477561,
+                31290377,
+                33603260,
+                30967662,
+                30420384,
+                30241948,
+                30182547,
+                30041172
+              ]
+            },
+            {
+              "rounds": 8,
+              "elapsed_ns": 238097693,
+              "process_ns": [
+                30700330,
+                29524872,
+                29811400,
+                29687197,
+                30623325,
+                28938761,
+                29511998,
+                29299810
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 16,
+          "trials": [
+            {
+              "rounds": 16,
+              "elapsed_ns": 475363284,
+              "process_ns": [
+                30360041,
+                30458996,
+                29546633,
+                29340456,
+                29042266,
+                29647352,
+                29226903,
+                29088844,
+                30354611,
+                29857687,
+                29110654,
+                28945203,
+                28983766,
+                30933827,
+                30067472,
+                30398573
+              ]
+            },
+            {
+              "rounds": 16,
+              "elapsed_ns": 497095167,
+              "process_ns": [
+                29678560,
+                31220456,
+                30161318,
+                31116270,
+                29137866,
+                29400929,
+                29110504,
+                35109358,
+                32265838,
+                31493709,
+                31464735,
+                31900433,
+                30287153,
+                31837805,
+                30106995,
+                32803238
+              ]
+            },
+            {
+              "rounds": 16,
+              "elapsed_ns": 483880737,
+              "process_ns": [
+                29805119,
+                32555182,
+                29440032,
+                29684903,
+                29660227,
+                29994484,
+                29809796,
+                29770363,
+                29494776,
+                30065497,
+                29091358,
+                29127637,
+                30984193,
+                31486145,
+                30601684,
+                32309341
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 32,
+          "trials": [
+            {
+              "rounds": 32,
+              "elapsed_ns": 990008584,
+              "process_ns": [
+                29174314,
+                29928250,
+                33140181,
+                30180133,
+                29488715,
+                30583000,
+                31154432,
+                30663730,
+                33917061,
+                33637084,
+                32035837,
+                30347427,
+                29759973,
+                29443850,
+                30098570,
+                29229147,
+                29735788,
+                31564162,
+                30626511,
+                30561339,
+                32630674,
+                30753680,
+                32968408,
+                33491470,
+                30206522,
+                31953593,
+                30867273,
+                30111554,
+                28974279,
+                30081006,
+                31408430,
+                31292191
+              ]
+            },
+            {
+              "rounds": 32,
+              "elapsed_ns": 1010963058,
+              "process_ns": [
+                30593880,
+                31060636,
+                29925815,
+                29699370,
+                30178520,
+                30964746,
+                29373898,
+                32718078,
+                29043087,
+                36559312,
+                32399551,
+                31988509,
+                31291219,
+                31711197,
+                32581383,
+                33742132,
+                31426043,
+                30783837,
+                32887868,
+                34259873,
+                34368187,
+                31641457,
+                31994220,
+                38549920,
+                31658259,
+                29915777,
+                29701474,
+                31014760,
+                29679032,
+                29655798,
+                29473296,
+                30121924
+              ]
+            },
+            {
+              "rounds": 32,
+              "elapsed_ns": 980093466,
+              "process_ns": [
+                31294565,
+                29887714,
+                31127192,
+                29799569,
+                29685233,
+                30464868,
+                29695242,
+                29608169,
+                32206679,
+                33001121,
+                34384769,
+                30215750,
+                31844109,
+                29872796,
+                30712522,
+                29608019,
+                30681915,
+                30207224,
+                30159876,
+                29759543,
+                30539828,
+                30153603,
+                30336196,
+                29271757,
+                29488134,
+                31719874,
+                29685995,
+                34727693,
+                30348329,
+                30318323,
+                29625551,
+                29661308
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 64,
+          "elapsed_ns": 1975469215,
+          "process_ns": [
+            30374438,
+            31119126,
+            29221423,
+            29760555,
+            29788838,
+            30215359,
+            30490085,
+            30393174,
+            30478764,
+            31471117,
+            31683676,
+            30184822,
+            36419309,
+            31755010,
+            31036641,
+            30739974,
+            30547994,
+            31478912,
+            31742017,
+            32297289,
+            30390107,
+            30252609,
+            30941543,
+            29869680,
+            30545469,
+            29826139,
+            31561246,
+            30719806,
+            31051991,
+            29854161,
+            29287517,
+            29528960,
+            29994714,
+            31235655,
+            33306063,
+            30225759,
+            30016436,
+            29734467,
+            29750517,
+            30117716,
+            31002187,
+            31895715,
+            31466479,
+            31259941,
+            37139202,
+            34099482,
+            31929678,
+            31370498,
+            30164433,
+            30875509,
+            31813531,
+            31160234,
+            30186585,
+            29563235,
+            29916719,
+            29915546,
+            31895986,
+            30462303,
+            30167570,
+            29859050,
+            30122436,
+            30586056,
+            29991339,
+            29216423
+          ]
+        },
+        "woozy": {
+          "rounds": 64,
+          "elapsed_ns": 5041905504,
+          "process_ns": [
+            75253364,
+            77723883,
+            77011505,
+            81468023,
+            80950341,
+            81116895,
+            85337921,
+            89993504,
+            81136010,
+            81320046,
+            96744620,
+            83467358,
+            73873233,
+            73928796,
+            74010760,
+            73490934,
+            72806259,
+            76605873,
+            85124711,
+            81482150,
+            73450448,
+            77745394,
+            74727236,
+            74595288,
+            74328808,
+            73893741,
+            76767847,
+            73779856,
+            73797229,
+            73800977,
+            73253398,
+            75052818,
+            73464044,
+            78501884,
+            76587329,
+            75726913,
+            73937313,
+            75819297,
+            76075168,
+            76588852,
+            76318164,
+            81751587,
+            78762434,
+            80373649,
+            91998319,
+            78166886,
+            79758965,
+            85443831,
+            80172932,
+            89147646,
+            77205911,
+            77483683,
+            79729119,
+            78722449,
+            77306360,
+            80955432,
+            81331609,
+            79608314,
+            78481918,
+            76812703,
+            82238021,
+            83348897,
+            81710590,
+            80336059
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 32,
+          "elapsed_ns": 2563593164,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            82105112,
+            83598846,
+            76845254,
+            78549305,
+            77306861,
+            79036920,
+            86775561,
+            75945424,
+            79985712,
+            81930804,
+            77964095,
+            76668793,
+            78897278,
+            77167409,
+            75556965,
+            79767992,
+            79149322,
+            76149889,
+            76931877,
+            76487523,
+            77011687,
+            78293084,
+            82216050,
+            85574417,
+            77152782,
+            77710149,
+            78558331,
+            77183229,
+            81061914,
+            108284834,
+            79048813,
+            84676932
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 984481971,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            29955642,
+            30695031,
+            32762042,
+            30706513,
+            31244223,
+            29836048,
+            29813115,
+            30224077,
+            30625320,
+            32174840,
+            29524233,
+            31851393,
+            31420403,
+            30090034,
+            29415168,
+            31392931,
+            29192770,
+            32055225,
+            30183410,
+            32190068,
+            30751888,
+            29587772,
+            29415088,
+            29584015,
+            30964687,
+            31877903,
+            34499665,
+            30605683,
+            30484105,
+            30755214,
+            31428479,
+            29174986
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 996597402,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            33080621,
+            29571462,
+            29544451,
+            32200869,
+            32513737,
+            30508210,
+            31449108,
+            30082020,
+            32387229,
+            32891576,
+            34974357,
+            31527324,
+            30465821,
+            34299962,
+            30901609,
+            29509976,
+            30779219,
+            32271612,
+            32422706,
+            31390497,
+            30270223,
+            30100024,
+            29449843,
+            30439432,
+            30630971,
+            29532879,
+            29865854,
+            30646851,
+            31439178,
+            30247992,
+            30573082,
+            30628707
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2558995419,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            81754965,
+            81625291,
+            78018689,
+            76371226,
+            77895137,
+            79513937,
+            79179209,
+            84463662,
+            77665045,
+            80198813,
+            78998759,
+            84429097,
+            78880367,
+            86654967,
+            85317174,
+            81533900,
+            81533029,
+            80572144,
+            76974118,
+            82610021,
+            77801171,
+            75642097,
+            76574948,
+            79647198,
+            82358680,
+            76213961,
+            76507111,
+            76275315,
+            76725761,
+            78878103,
+            87678980,
+            80502544
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2567545791,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            86168133,
+            80102443,
+            80729451,
+            81476293,
+            116170445,
+            85782529,
+            80340329,
+            78989633,
+            77804828,
+            84017756,
+            100346429,
+            78847797,
+            80193033,
+            94668616,
+            73406609,
+            84629214,
+            80693884,
+            74786029,
+            73524420,
+            74503989,
+            74164372,
+            75049233,
+            77827060,
+            73212264,
+            74264741,
+            75604276,
+            81579918,
+            72893667,
+            74157199,
+            73816560,
+            73457224,
+            74337417
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 951419951,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            28270199,
+            32120648,
+            28219413,
+            28352994,
+            28604265,
+            29810330,
+            29886944,
+            29560592,
+            28849726,
+            29260378,
+            29364474,
+            29129383,
+            28964923,
+            28367321,
+            28425720,
+            28165953,
+            29234900,
+            29098824,
+            31533837,
+            30303607,
+            29920016,
+            31690872,
+            31109129,
+            31123446,
+            30808354,
+            30606816,
+            29714461,
+            31683368,
+            29578455,
+            29551956,
+            29458690,
+            30649957
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 984460868,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            29360405,
+            29812174,
+            31165305,
+            31343530,
+            29832702,
+            30418983,
+            29728377,
+            29558899,
+            29487033,
+            29428674,
+            30356125,
+            30596547,
+            29820349,
+            29400732,
+            29664627,
+            29476524,
+            30055902,
+            32213483,
+            32634574,
+            32344560,
+            30431317,
+            31419953,
+            31278096,
+            32319954,
+            31191844,
+            31962441,
+            32352074,
+            32433557,
+            31522807,
+            31116193,
+            30979876,
+            30753251
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2600969409,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            100502453,
+            79632301,
+            81839256,
+            79355712,
+            86149109,
+            80969503,
+            81407846,
+            87018762,
+            76068118,
+            76602882,
+            76738016,
+            84801508,
+            80122772,
+            75668157,
+            84238120,
+            78283939,
+            78086048,
+            86342092,
+            85161405,
+            78593060,
+            76004720,
+            82784782,
+            79018198,
+            76480202,
+            77259506,
+            75836423,
+            77516439,
+            75794735,
+            76454785,
+            93257859,
+            93234455,
+            79746246
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2553874943,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            88203117,
+            81386196,
+            86537720,
+            77614894,
+            80267435,
+            77326843,
+            75863184,
+            75118024,
+            77702518,
+            77479990,
+            75687745,
+            76814621,
+            76876608,
+            80004000,
+            84106093,
+            85309845,
+            83900788,
+            77891553,
+            84669852,
+            81027232,
+            80233561,
+            76991703,
+            86414489,
+            76590700,
+            79709767,
+            75818831,
+            78468917,
+            80803412,
+            77522861,
+            79546481,
+            78470501,
+            79515462
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 978792722,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            29959151,
+            31460160,
+            33321165,
+            29901382,
+            29349386,
+            33290607,
+            32879906,
+            29936618,
+            29635654,
+            29639150,
+            29204734,
+            30894257,
+            29475483,
+            30227475,
+            29927291,
+            29836209,
+            29752553,
+            30600995,
+            31647130,
+            30524191,
+            31890568,
+            30068627,
+            30151592,
+            29942910,
+            29297800,
+            30621785,
+            29439695,
+            30900378,
+            29730802,
+            30471523,
+            32990043,
+            31823502
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 1001707248,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            30555891,
+            30237384,
+            31823963,
+            31397662,
+            32230336,
+            31445081,
+            32952011,
+            31047965,
+            31004814,
+            32252979,
+            31212775,
+            33885915,
+            29843494,
+            31930273,
+            32755953,
+            29864814,
+            30782657,
+            31216172,
+            30672520,
+            31005366,
+            30881904,
+            30399478,
+            30904697,
+            31979876,
+            30581059,
+            34325680,
+            29787027,
+            29815562,
+            31076299,
+            31968124,
+            30905208,
+            30964309
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2570341143,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            80749682,
+            79754553,
+            109221410,
+            84997057,
+            79733723,
+            94954948,
+            86213893,
+            77810542,
+            77858482,
+            76197362,
+            85748249,
+            76297621,
+            80887490,
+            81122462,
+            81481776,
+            77640553,
+            77189757,
+            79870641,
+            78934503,
+            77194816,
+            83524142,
+            78553026,
+            88793457,
+            74389038,
+            76794084,
+            75894865,
+            73458309,
+            75746165,
+            74709899,
+            74233024,
+            76513648,
+            73871966
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2589512380,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            104018489,
+            76882870,
+            76169020,
+            79838361,
+            76313982,
+            78395461,
+            75780059,
+            78732043,
+            75556099,
+            78352711,
+            76627892,
+            83421661,
+            75035602,
+            74240248,
+            75459628,
+            81728651,
+            76097176,
+            87034475,
+            81827196,
+            86823389,
+            85074164,
+            83041266,
+            78055544,
+            76922515,
+            81117293,
+            97755468,
+            78768482,
+            79036495,
+            94708005,
+            77042772,
+            78165870,
+            81489493
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 977529622,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            30462296,
+            29948131,
+            29499619,
+            30256770,
+            29634803,
+            29803228,
+            30114433,
+            31632914,
+            31506918,
+            30873168,
+            30559279,
+            29362111,
+            29377088,
+            29990240,
+            31495106,
+            29307037,
+            29438444,
+            30660659,
+            29868891,
+            29921381,
+            29670870,
+            31887754,
+            32875919,
+            31081920,
+            33779546,
+            29697801,
+            29566955,
+            35810830,
+            29411103,
+            29816163,
+            30019434,
+            30198811
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 1025673489,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            31173302,
+            29426331,
+            36886481,
+            29360037,
+            31261417,
+            32822459,
+            30637635,
+            33167837,
+            38020240,
+            33113986,
+            31242843,
+            30863340,
+            31700531,
+            31848550,
+            30505067,
+            32454929,
+            32865038,
+            37121842,
+            37214086,
+            31908312,
+            29549733,
+            33068441,
+            30304901,
+            29844757,
+            29505170,
+            31595204,
+            29338836,
+            33226037,
+            30686959,
+            30080209,
+            32873154,
+            32005825
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2578055857,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            82954634,
+            86276783,
+            79578103,
+            85411739,
+            81575184,
+            81958364,
+            77832234,
+            81812028,
+            87147919,
+            78455094,
+            77282893,
+            90376563,
+            77374215,
+            80507630,
+            83920369,
+            79130534,
+            77935499,
+            77216308,
+            78447541,
+            79153486,
+            77091644,
+            80419784,
+            83309812,
+            80888986,
+            77844167,
+            78597342,
+            77650233,
+            82027113,
+            77571094,
+            76081427,
+            83549201,
+            78677934
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2664973174,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            84620223,
+            76153543,
+            79681639,
+            81784918,
+            80895288,
+            88624954,
+            79342432,
+            77996865,
+            80212265,
+            77434458,
+            81912769,
+            82720726,
+            85112969,
+            95463286,
+            91306610,
+            90480138,
+            78591401,
+            81447005,
+            75791704,
+            77288876,
+            76553384,
+            95737832,
+            79260969,
+            82706519,
+            76167079,
+            81615761,
+            76303174,
+            84056355,
+            78068270,
+            101415625,
+            80768701,
+            105457436
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 1004414235,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            29819851,
+            34113644,
+            34350700,
+            31189683,
+            30042067,
+            30814419,
+            30873440,
+            31008874,
+            32150647,
+            31109092,
+            31106727,
+            35268814,
+            30896202,
+            31272017,
+            31664565,
+            30638498,
+            31236621,
+            31490317,
+            32609200,
+            30765086,
+            33733590,
+            29726095,
+            31455332,
+            31319277,
+            29857792,
+            30439995,
+            32224747,
+            29493217,
+            31936365,
+            29473680,
+            30577153,
+            31756528
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 971110038,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            29788122,
+            29407747,
+            29973549,
+            30651382,
+            31306773,
+            29589989,
+            30289854,
+            32706652,
+            32989202,
+            33240063,
+            29928846,
+            30422563,
+            32544858,
+            30631405,
+            31132376,
+            29936340,
+            28523136,
+            30658356,
+            30792868,
+            28453565,
+            32118418,
+            29444777,
+            29222409,
+            29847904,
+            28849548,
+            29478740,
+            29802038,
+            28776411,
+            28695860,
+            29377690,
+            32354170,
+            30174427
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2532988440,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            78185410,
+            77535159,
+            77799445,
+            80443621,
+            80162353,
+            76473906,
+            79177643,
+            82651066,
+            82078822,
+            73262555,
+            73481606,
+            74631707,
+            81042846,
+            74646384,
+            74519105,
+            74451679,
+            87431915,
+            73508447,
+            77578210,
+            76180786,
+            79362651,
+            79931199,
+            83517014,
+            86254494,
+            77447635,
+            79964482,
+            84656142,
+            89297880,
+            79377499,
+            79167044,
+            75397925,
+            83371810
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 2577346068,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            76341368,
+            77004182,
+            76648775,
+            78948544,
+            75227666,
+            76443660,
+            77117987,
+            82586176,
+            77570836,
+            80958219,
+            83447743,
+            78519198,
+            76837290,
+            77105052,
+            76991429,
+            80484719,
+            83673858,
+            82004523,
+            89093546,
+            80944543,
+            79611750,
+            88887870,
+            84843715,
+            82607145,
+            79801286,
+            82905896,
+            80835107,
+            83018097,
+            82729525,
+            80493927,
+            77894375,
+            85768061
+          ]
+        },
+        {
+          "rounds": 32,
+          "elapsed_ns": 993196797,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            29373223,
+            31409857,
+            31059069,
+            29924298,
+            31308507,
+            34436902,
+            30027091,
+            30714191,
+            29239321,
+            29762173,
+            30432091,
+            33079854,
+            30032360,
+            29409331,
+            30641394,
+            32300220,
+            29402117,
+            31134110,
+            30612640,
+            29874073,
+            32950471,
+            30412264,
+            29944897,
+            31624140,
+            31180316,
+            29954014,
+            31095507,
+            31583463,
+            35370365,
+            31401021,
+            31737202,
+            31770315
+          ]
+        }
+      ]
+    },
+    {
+      "name": "nbody",
+      "input": "5000000",
+      "expected": [
+        -0.16907516382852447,
+        -0.1690831339787865
+      ],
+      "rounds": 2,
+      "median_ms": {
+        "woozy": 746.6834225,
+        "cpp": 260.297602
+      },
+      "ratio": 2.8685758791585028,
+      "load_before": [
+        5.92333984375,
+        4.37353515625,
+        3.66064453125
+      ],
+      "load_after": [
+        5.42138671875,
+        4.4013671875,
+        3.69384765625
+      ],
+      "program_sha256": {
+        "woozy": "e647d4549206ca66c20f645f0f682779a5fcacf1576efdd46857bfa49573b044",
+        "cpp": "51eb4012a2a75f4f6c502f83cfcb109eb21b7b7927866cf79677ca13e2492522"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 265559799,
+              "process_ns": [
+                265559799
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 263012476,
+              "process_ns": [
+                263012476
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 263098648,
+              "process_ns": [
+                263098648
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 2,
+          "trials": [
+            {
+              "rounds": 2,
+              "elapsed_ns": 538900133,
+              "process_ns": [
+                270607219,
+                268292914
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 525002935,
+              "process_ns": [
+                260429977,
+                264572958
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 525827174,
+              "process_ns": [
+                263908741,
+                261918433
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 4,
+          "elapsed_ns": 1062830579,
+          "process_ns": [
+            258462002,
+            266254506,
+            269502347,
+            268611724
+          ]
+        },
+        "woozy": {
+          "rounds": 4,
+          "elapsed_ns": 2994394714,
+          "process_ns": [
+            765325306,
+            767284457,
+            735450896,
+            726334055
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 2,
+          "elapsed_ns": 1525554057,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            753741048,
+            771813009
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 527956855,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            267502786,
+            260454069
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 557294140,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            270369900,
+            286924240
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1497734324,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            740357961,
+            757376363
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1540983874,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            779476870,
+            761507004
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 520813535,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            259063911,
+            261749624
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 559262113,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            278471198,
+            280790915
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1479583194,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            752091065,
+            727492129
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1474357677,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            739424260,
+            734933417
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 512432331,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            260742376,
+            251689955
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 506863013,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            253548757,
+            253314256
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1437249788,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            711081526,
+            726168262
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1493366845,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            730805452,
+            762561393
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 519138010,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            255474806,
+            263663204
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 529395747,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            261177507,
+            268218240
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1505938828,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            743691889,
+            762246939
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1456430506,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            727158503,
+            729272003
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 520595204,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            262567309,
+            258027895
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 521173793,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            261158876,
+            260014917
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1547439999,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            758630224,
+            788809775
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 1565429253,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            789858077,
+            775571176
+          ]
+        },
+        {
+          "rounds": 2,
+          "elapsed_ns": 502750948,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            251439234,
+            251311714
+          ]
+        }
+      ]
+    },
+    {
+      "name": "nsieve",
+      "input": "10",
+      "expected": [
+        [
+          10240000,
+          679461
+        ],
+        [
+          5120000,
+          356244
+        ],
+        [
+          2560000,
+          187134
+        ]
+      ],
+      "rounds": 16,
+      "median_ms": {
+        "woozy": 57.5690719375,
+        "cpp": 50.331600375
+      },
+      "ratio": 1.1437957765812448,
+      "load_before": [
+        5.42138671875,
+        4.4013671875,
+        3.69384765625
+      ],
+      "load_after": [
+        5.64404296875,
+        4.55517578125,
+        3.7685546875
+      ],
+      "program_sha256": {
+        "woozy": "1cdcdcca8e002c12c12fae8176e42d2c2880aebef1f482f45ba83bf6ecb58ad8",
+        "cpp": "3017e66ca74ba14e5c288075fb532b88e432e7c04665795ac4545711bee6b710"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 44500606,
+              "process_ns": [
+                44500606
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 45880037,
+              "process_ns": [
+                45880037
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 45149645,
+              "process_ns": [
+                45149645
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 2,
+          "trials": [
+            {
+              "rounds": 2,
+              "elapsed_ns": 99547589,
+              "process_ns": [
+                48603041,
+                50944548
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 91495967,
+              "process_ns": [
+                46192854,
+                45303113
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 93669570,
+              "process_ns": [
+                46496264,
+                47173306
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 4,
+          "trials": [
+            {
+              "rounds": 4,
+              "elapsed_ns": 195346166,
+              "process_ns": [
+                48467606,
+                51367082,
+                47620535,
+                47890943
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 203591003,
+              "process_ns": [
+                48989787,
+                48263794,
+                54860073,
+                51477349
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 210225772,
+              "process_ns": [
+                50158883,
+                52220485,
+                53592311,
+                54254093
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 8,
+          "trials": [
+            {
+              "rounds": 8,
+              "elapsed_ns": 407131690,
+              "process_ns": [
+                48920877,
+                52661874,
+                51472239,
+                48336430,
+                49030093,
+                48375965,
+                54535283,
+                53798929
+              ]
+            },
+            {
+              "rounds": 8,
+              "elapsed_ns": 392206921,
+              "process_ns": [
+                48820519,
+                47556094,
+                46730585,
+                49640109,
+                48023352,
+                53654038,
+                49194973,
+                48587251
+              ]
+            },
+            {
+              "rounds": 8,
+              "elapsed_ns": 391127934,
+              "process_ns": [
+                46699897,
+                47393279,
+                49514843,
+                48131916,
+                48255558,
+                48980059,
+                48126827,
+                54025555
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 16,
+          "trials": [
+            {
+              "rounds": 16,
+              "elapsed_ns": 839243618,
+              "process_ns": [
+                53993926,
+                48041647,
+                52439516,
+                55594161,
+                66067381,
+                50648843,
+                73035577,
+                49845364,
+                46890766,
+                49327672,
+                50490595,
+                48268282,
+                47363514,
+                49256789,
+                49454240,
+                48525345
+              ]
+            },
+            {
+              "rounds": 16,
+              "elapsed_ns": 838738414,
+              "process_ns": [
+                56941632,
+                47640745,
+                49081379,
+                55404785,
+                52850489,
+                50157791,
+                48528471,
+                54416109,
+                54213488,
+                72002117,
+                51017135,
+                49974909,
+                49856756,
+                47846901,
+                49614391,
+                49191316
+              ]
+            },
+            {
+              "rounds": 16,
+              "elapsed_ns": 863166204,
+              "process_ns": [
+                52291478,
+                52425571,
+                48485471,
+                51648631,
+                56372253,
+                50073082,
+                52411464,
+                50290400,
+                53363863,
+                56094191,
+                58447490,
+                58070172,
+                55248402,
+                53268554,
+                58824428,
+                55850754
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 32,
+          "elapsed_ns": 1598784576,
+          "process_ns": [
+            47495040,
+            49334104,
+            51920922,
+            50234966,
+            48377418,
+            51247929,
+            48203562,
+            49811581,
+            48637627,
+            48009688,
+            48342082,
+            51413379,
+            46920442,
+            48732876,
+            48066003,
+            48311564,
+            49318976,
+            48015218,
+            48844124,
+            46726879,
+            49988394,
+            51555036,
+            49655979,
+            50270654,
+            54700775,
+            55362507,
+            49130752,
+            47964472,
+            48323887,
+            55676696,
+            55478033,
+            52713011
+          ]
+        },
+        "woozy": {
+          "rounds": 32,
+          "elapsed_ns": 1844021106,
+          "process_ns": [
+            56507707,
+            58839768,
+            59456456,
+            57692873,
+            53682942,
+            64636555,
+            58567186,
+            57296739,
+            58994979,
+            55679373,
+            59066934,
+            56734624,
+            53650651,
+            55723184,
+            55719377,
+            59693070,
+            56696472,
+            58129113,
+            54841449,
+            56757567,
+            56176115,
+            55197648,
+            55203419,
+            58697831,
+            60086870,
+            57419159,
+            55568714,
+            56302282,
+            59150020,
+            61981929,
+            61118507,
+            58751593
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 16,
+          "elapsed_ns": 970792058,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            57579020,
+            70441156,
+            63388321,
+            62890686,
+            62364036,
+            65557985,
+            62729984,
+            55583402,
+            56322560,
+            59738947,
+            57930961,
+            61049588,
+            55459770,
+            59264816,
+            63836322,
+            56654504
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 847653500,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            52946188,
+            50608709,
+            49850906,
+            58282051,
+            48137537,
+            49541815,
+            49735799,
+            50935042,
+            50286855,
+            48029485,
+            52381238,
+            57171605,
+            71520194,
+            53522491,
+            53478248,
+            51225337
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 808738235,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            48833306,
+            52072789,
+            48402856,
+            50777576,
+            67739011,
+            48968769,
+            48470883,
+            47019788,
+            47533023,
+            51718844,
+            55666087,
+            50216112,
+            49906350,
+            50392804,
+            45184221,
+            45835816
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 884182653,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            52875576,
+            52998147,
+            55304899,
+            56568112,
+            54365636,
+            54843723,
+            56466841,
+            55109713,
+            55233806,
+            56103910,
+            54407063,
+            55878216,
+            62965217,
+            52929749,
+            51977881,
+            56154164
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 913735256,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            52904832,
+            64561444,
+            63804863,
+            55865502,
+            57002919,
+            60825307,
+            60238275,
+            57629946,
+            54130574,
+            54706395,
+            53923204,
+            54946847,
+            53656483,
+            55486711,
+            56636901,
+            57415053
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 811023255,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            50753922,
+            52146479,
+            48932952,
+            54665107,
+            48535476,
+            60583324,
+            49123270,
+            50792284,
+            47645995,
+            48687060,
+            46818000,
+            49555121,
+            50432409,
+            49119022,
+            51268218,
+            51964616
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 833776866,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            50634448,
+            46901558,
+            47143683,
+            56985185,
+            50445503,
+            51152532,
+            48710054,
+            47929639,
+            50707355,
+            58579129,
+            53373393,
+            51350624,
+            50515104,
+            57794185,
+            52238381,
+            59316093
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 943716090,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            57362225,
+            64529154,
+            66320689,
+            60329667,
+            58294866,
+            57714476,
+            69865557,
+            58117022,
+            57908630,
+            58269658,
+            57338740,
+            54660059,
+            55943540,
+            55326772,
+            55439243,
+            56295792
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 922077942,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            60446086,
+            59495852,
+            55732834,
+            61893435,
+            58962890,
+            62909173,
+            58635175,
+            59552047,
+            58875026,
+            54585690,
+            54655260,
+            55138227,
+            57791911,
+            53966486,
+            55756228,
+            53681622
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 805305606,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            50197197,
+            51970397,
+            52687605,
+            48040938,
+            49525225,
+            48666993,
+            50677880,
+            48394803,
+            48227839,
+            54334026,
+            51438779,
+            52421966,
+            54145603,
+            47891477,
+            47310736,
+            49374142
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 796307971,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            50345956,
+            48090030,
+            51580956,
+            55740538,
+            48250792,
+            47809413,
+            46691755,
+            50238535,
+            48961958,
+            49759896,
+            48597984,
+            49398688,
+            50759934,
+            49376086,
+            50100937,
+            50604513
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 956234866,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            57758609,
+            56527617,
+            63163590,
+            62986237,
+            57790078,
+            54806224,
+            55881764,
+            60752441,
+            64864585,
+            55966623,
+            70836532,
+            63742277,
+            58206811,
+            57199298,
+            57430042,
+            58322138
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 945074290,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            57589222,
+            59102593,
+            54824569,
+            70124253,
+            64012335,
+            55718618,
+            60617198,
+            58584280,
+            63051801,
+            62067943,
+            58144453,
+            56732662,
+            57527265,
+            54826833,
+            53368784,
+            58781481
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 794098556,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            50201716,
+            48255270,
+            55584406,
+            48568299,
+            50699451,
+            51134538,
+            50576470,
+            48097053,
+            47198857,
+            49613081,
+            50718988,
+            50332803,
+            47388383,
+            48981976,
+            49309200,
+            47438065
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 812356705,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            47748488,
+            47870508,
+            48820582,
+            50770414,
+            67359161,
+            51423251,
+            55684634,
+            49308809,
+            48819740,
+            49378440,
+            48616610,
+            49575820,
+            50123049,
+            49049883,
+            49562075,
+            48245241
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 905633708,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            58703574,
+            54692431,
+            57195482,
+            54612641,
+            56236862,
+            56350505,
+            57339222,
+            58307530,
+            55463960,
+            55068608,
+            56690674,
+            58718142,
+            55222415,
+            55024584,
+            58885606,
+            57121472
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 884061299,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            57337660,
+            62274091,
+            55880382,
+            55252654,
+            54524425,
+            56516317,
+            53442734,
+            52785689,
+            54687431,
+            56819717,
+            54693192,
+            54507855,
+            53198075,
+            54050636,
+            53538945,
+            54551496
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 790660938,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            48022142,
+            49271229,
+            60727967,
+            47531271,
+            53581726,
+            46418091,
+            51416399,
+            48570272,
+            48109808,
+            49906091,
+            47935250,
+            47553262,
+            52033968,
+            46841126,
+            46775653,
+            45966683
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 778292912,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            46026867,
+            46044911,
+            46614519,
+            47158631,
+            46215560,
+            45855855,
+            47334192,
+            47848326,
+            48472329,
+            47681975,
+            48808781,
+            47392841,
+            50128079,
+            56084295,
+            52323943,
+            54301808
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 914462974,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            66585839,
+            58441853,
+            57414664,
+            56553226,
+            56378658,
+            55880593,
+            55122499,
+            56416049,
+            55887858,
+            54865566,
+            54413638,
+            60341872,
+            58542884,
+            57173732,
+            55159499,
+            55284544
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 921105151,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            55432201,
+            57764912,
+            55763964,
+            55995510,
+            58418930,
+            59518115,
+            57810558,
+            57821789,
+            60195628,
+            55445946,
+            55041808,
+            54029286,
+            59927895,
+            61975962,
+            56274473,
+            59688174
+          ]
+        },
+        {
+          "rounds": 16,
+          "elapsed_ns": 808884555,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            60236204,
+            49573568,
+            55570361,
+            52413942,
+            51040733,
+            50518241,
+            50071904,
+            49214854,
+            48271813,
+            49332565,
+            47830064,
+            48240785,
+            49361078,
+            47861823,
+            51269373,
+            48077247
+          ]
+        }
+      ]
+    },
+    {
+      "name": "nsieve",
+      "input": "12",
+      "expected": [
+        [
+          40960000,
+          2488465
+        ],
+        [
+          20480000,
+          1299069
+        ],
+        [
+          10240000,
+          679461
+        ]
+      ],
+      "rounds": 4,
+      "median_ms": {
+        "woozy": 256.20761425,
+        "cpp": 224.313153
+      },
+      "ratio": 1.1421872093697512,
+      "load_before": [
+        5.64404296875,
+        4.55517578125,
+        3.7685546875
+      ],
+      "load_after": [
+        5.8173828125,
+        4.69482421875,
+        3.84130859375
+      ],
+      "program_sha256": {
+        "woozy": "1cdcdcca8e002c12c12fae8176e42d2c2880aebef1f482f45ba83bf6ecb58ad8",
+        "cpp": "3017e66ca74ba14e5c288075fb532b88e432e7c04665795ac4545711bee6b710"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 201274258,
+              "process_ns": [
+                201274258
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 205136763,
+              "process_ns": [
+                205136763
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 235895944,
+              "process_ns": [
+                235895944
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 2,
+          "trials": [
+            {
+              "rounds": 2,
+              "elapsed_ns": 450748496,
+              "process_ns": [
+                218495974,
+                232252522
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 465742848,
+              "process_ns": [
+                207122623,
+                258620225
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 493323239,
+              "process_ns": [
+                245054055,
+                248269184
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 4,
+          "trials": [
+            {
+              "rounds": 4,
+              "elapsed_ns": 845581555,
+              "process_ns": [
+                203319791,
+                233708737,
+                202310906,
+                206242121
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 867581959,
+              "process_ns": [
+                213710548,
+                208361652,
+                214039896,
+                231469863
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 875371201,
+              "process_ns": [
+                235232981,
+                199300283,
+                223773479,
+                217064458
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 8,
+          "elapsed_ns": 1840830621,
+          "process_ns": [
+            238235912,
+            213121383,
+            271370426,
+            213748570,
+            231074852,
+            230040170,
+            209958702,
+            233280606
+          ]
+        },
+        "woozy": {
+          "rounds": 8,
+          "elapsed_ns": 1840564190,
+          "process_ns": [
+            224734625,
+            223758462,
+            221272984,
+            244733568,
+            233378590,
+            244866678,
+            220776061,
+            227043222
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 4,
+          "elapsed_ns": 1000177883,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            252917930,
+            250538611,
+            251881163,
+            244840179
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 903871536,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            223912664,
+            234650051,
+            211744810,
+            233564011
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 876188791,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            204796108,
+            243524539,
+            208878156,
+            218989988
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 1060188184,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            256762954,
+            277102035,
+            254804927,
+            271518268
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 1060530130,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            247935976,
+            271128216,
+            272562641,
+            268903297
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 903908104,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            228792421,
+            212910942,
+            231621606,
+            230583135
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 924159892,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            234045377,
+            233611903,
+            222268068,
+            234234544
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 1024830457,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            259527539,
+            245426144,
+            259570631,
+            260306143
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 1013202719,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            251715477,
+            248713649,
+            263192584,
+            249581009
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 897252612,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            255210772,
+            203774184,
+            211826729,
+            226440927
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 837948949,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            245478795,
+            214852622,
+            188661149,
+            188956383
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 927115246,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            252153462,
+            226525517,
+            224017356,
+            224418911
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 976437116,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            235345603,
+            238864373,
+            229271636,
+            272955504
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 848870758,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            215057929,
+            220247346,
+            200945944,
+            212619539
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 903552535,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            215354286,
+            243374354,
+            225147460,
+            219676435
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 1035540423,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            269106486,
+            264950490,
+            248979613,
+            252503834
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 1034894122,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            266268567,
+            273409179,
+            248156337,
+            247060039
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 855099957,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            204491275,
+            217341861,
+            202480638,
+            230786183
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 880565942,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            220009553,
+            238468273,
+            218555061,
+            203533055
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 1085677927,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            260267027,
+            250599869,
+            298937791,
+            275873240
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 988564697,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            244678198,
+            262461790,
+            249590996,
+            231833713
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 904045848,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            214852017,
+            222393020,
+            218240121,
+            248560690
+          ]
+        }
+      ]
+    },
+    {
+      "name": "spectral-norm",
+      "input": "2000",
+      "expected": [
+        1.274224152228617
+      ],
+      "rounds": 4,
+      "median_ms": {
+        "woozy": 224.10904,
+        "cpp": 224.06065775
+      },
+      "ratio": 1.000215933714048,
+      "load_before": [
+        5.75146484375,
+        4.7001953125,
+        3.84765625
+      ],
+      "load_after": [
+        5.87255859375,
+        4.83251953125,
+        3.916015625
+      ],
+      "program_sha256": {
+        "woozy": "72f0e54cc4d7b12e032569553ff831089e752aa59c682acfdd8fa973fd8fd42d",
+        "cpp": "5f96681236ff894545f1efd40e9921bce3b9c002c490fb34c909fe461c3bb6a4"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 222315015,
+              "process_ns": [
+                222315015
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 223093718,
+              "process_ns": [
+                223093718
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 229752134,
+              "process_ns": [
+                229752134
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 2,
+          "trials": [
+            {
+              "rounds": 2,
+              "elapsed_ns": 437694485,
+              "process_ns": [
+                220010458,
+                217684027
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 437588026,
+              "process_ns": [
+                219559601,
+                218028425
+              ]
+            },
+            {
+              "rounds": 2,
+              "elapsed_ns": 437486535,
+              "process_ns": [
+                219068719,
+                218417816
+              ]
+            }
+          ]
+        },
+        {
+          "rounds": 4,
+          "trials": [
+            {
+              "rounds": 4,
+              "elapsed_ns": 874287785,
+              "process_ns": [
+                217843138,
+                218094800,
+                217986707,
+                220363140
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 884236063,
+              "process_ns": [
+                219581964,
+                220689814,
+                221789751,
+                222174534
+              ]
+            },
+            {
+              "rounds": 4,
+              "elapsed_ns": 902554963,
+              "process_ns": [
+                222869159,
+                222906038,
+                223900686,
+                232879080
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 8,
+          "elapsed_ns": 1810815348,
+          "process_ns": [
+            223441123,
+            225782801,
+            224680672,
+            233040484,
+            232130645,
+            224689398,
+            222249717,
+            224800508
+          ]
+        },
+        "woozy": {
+          "rounds": 8,
+          "elapsed_ns": 1781603940,
+          "process_ns": [
+            222647543,
+            222649618,
+            222626875,
+            220588367,
+            222085208,
+            227410321,
+            222302316,
+            221293692
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 4,
+          "elapsed_ns": 897846900,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            228047307,
+            225020031,
+            224884957,
+            219894605
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 898514278,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            220026703,
+            224240598,
+            228148599,
+            226098378
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 895778559,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            222420249,
+            225367124,
+            225180744,
+            222810442
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 891946434,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            221561487,
+            221771030,
+            223317956,
+            225295961
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 896436160,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            233997115,
+            224690635,
+            220811559,
+            216936851
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 873301569,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            217762543,
+            218116688,
+            217878831,
+            219543507
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 877831208,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            218122229,
+            218545123,
+            219591207,
+            221572649
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 879752569,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            218463620,
+            219768330,
+            220002100,
+            221518519
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 897838182,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            223496384,
+            223390926,
+            221292174,
+            229658698
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 900793805,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            231135873,
+            224830480,
+            222331336,
+            222496116
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 897215626,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            224509567,
+            223320795,
+            224088027,
+            225297237
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 903508569,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            228218615,
+            230933845,
+            223435612,
+            220920497
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 892396118,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            223280621,
+            223150526,
+            221520484,
+            224444487
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 907106781,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            221917220,
+            229399765,
+            226615565,
+            229174231
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 899362668,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            224432094,
+            223028368,
+            226261380,
+            225640826
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 900259514,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            225486034,
+            227318747,
+            225002526,
+            222452207
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 890719928,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            224188648,
+            222216634,
+            222236802,
+            222077844
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 880874486,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            222332502,
+            220831563,
+            218510924,
+            219199497
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 876963632,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            219315355,
+            218381952,
+            219920081,
+            219346244
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 870763699,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            216153186,
+            217220511,
+            217145050,
+            220244952
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 901676388,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            229029924,
+            224630000,
+            222252324,
+            225764140
+          ]
+        },
+        {
+          "rounds": 4,
+          "elapsed_ns": 896242631,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            226829000,
+            223427110,
+            223520566,
+            222465955
+          ]
+        }
+      ]
+    },
+    {
+      "name": "spectral-norm",
+      "input": "4000",
+      "expected": [
+        1.2742241527467106
+      ],
+      "rounds": 1,
+      "median_ms": {
+        "woozy": 874.888845,
+        "cpp": 880.021708
+      },
+      "ratio": 0.9941673450173572,
+      "load_before": [
+        5.87255859375,
+        4.83251953125,
+        3.916015625
+      ],
+      "load_after": [
+        5.4130859375,
+        4.8173828125,
+        3.93994140625
+      ],
+      "program_sha256": {
+        "woozy": "72f0e54cc4d7b12e032569553ff831089e752aa59c682acfdd8fa973fd8fd42d",
+        "cpp": "5f96681236ff894545f1efd40e9921bce3b9c002c490fb34c909fe461c3bb6a4"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 885391062,
+              "process_ns": [
+                885391062
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 881548677,
+              "process_ns": [
+                881548677
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 881113372,
+              "process_ns": [
+                881113372
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 2,
+          "elapsed_ns": 1822681414,
+          "process_ns": [
+            905135055,
+            917546359
+          ]
+        },
+        "woozy": {
+          "rounds": 2,
+          "elapsed_ns": 1739350728,
+          "process_ns": [
+            872598193,
+            866752535
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 1,
+          "elapsed_ns": 869834215,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            869834215
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 864844824,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            864844824
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 864115447,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            864115447
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 869962361,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            869962361
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 872353605,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            872353605
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 874063378,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            874063378
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 879004321,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            879004321
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 880529869,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            880529869
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 877289123,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            877289123
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 880021708,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            880021708
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 880133249,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            880133249
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 879982579,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            879982579
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 872517939,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            872517939
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 882275008,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            882275008
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 863798714,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            863798714
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 860474413,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            860474413
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 870488735,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            870488735
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 870191469,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            870191469
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 881823219,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            881823219
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 874888845,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            874888845
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 894944490,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            894944490
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 881546546,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            881546546
+          ]
+        }
+      ]
+    },
+    {
+      "name": "spectral-norm",
+      "input": "8000",
+      "expected": [
+        1.2742241528118825
+      ],
+      "rounds": 1,
+      "median_ms": {
+        "woozy": 3443.348449,
+        "cpp": 3443.597989
+      },
+      "ratio": 0.9999275350953285,
+      "load_before": [
+        5.4130859375,
+        4.8173828125,
+        3.93994140625
+      ],
+      "load_after": [
+        4.1923828125,
+        4.5546875,
+        3.9345703125
+      ],
+      "program_sha256": {
+        "woozy": "72f0e54cc4d7b12e032569553ff831089e752aa59c682acfdd8fa973fd8fd42d",
+        "cpp": "5f96681236ff894545f1efd40e9921bce3b9c002c490fb34c909fe461c3bb6a4"
+      },
+      "calibration": [
+        {
+          "rounds": 1,
+          "trials": [
+            {
+              "rounds": 1,
+              "elapsed_ns": 3458899993,
+              "process_ns": [
+                3458899993
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 3437001788,
+              "process_ns": [
+                3437001788
+              ]
+            },
+            {
+              "rounds": 1,
+              "elapsed_ns": 3448238392,
+              "process_ns": [
+                3448238392
+              ]
+            }
+          ]
+        }
+      ],
+      "double_round_controls": {
+        "cpp": {
+          "rounds": 2,
+          "elapsed_ns": 6878988087,
+          "process_ns": [
+            3440659664,
+            3438328423
+          ]
+        },
+        "woozy": {
+          "rounds": 2,
+          "elapsed_ns": 6869436906,
+          "process_ns": [
+            3436345836,
+            3433091070
+          ]
+        }
+      },
+      "samples": [
+        {
+          "rounds": 1,
+          "elapsed_ns": 3415994101,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            3415994101
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3438164454,
+          "phase": "warmup",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            3438164454
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3440270145,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            3440270145
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3427261176,
+          "phase": "warmup",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            3427261176
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3438283406,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "woozy",
+          "process_ns": [
+            3438283406
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3440241741,
+          "phase": "measured",
+          "pair": 0,
+          "implementation": "cpp",
+          "process_ns": [
+            3440241741
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3448367011,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "cpp",
+          "process_ns": [
+            3448367011
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3438490684,
+          "phase": "measured",
+          "pair": 1,
+          "implementation": "woozy",
+          "process_ns": [
+            3438490684
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3444633769,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "woozy",
+          "process_ns": [
+            3444633769
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3443597989,
+          "phase": "measured",
+          "pair": 2,
+          "implementation": "cpp",
+          "process_ns": [
+            3443597989
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3430022724,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "cpp",
+          "process_ns": [
+            3430022724
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3444798775,
+          "phase": "measured",
+          "pair": 3,
+          "implementation": "woozy",
+          "process_ns": [
+            3444798775
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3446144940,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "woozy",
+          "process_ns": [
+            3446144940
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3434198953,
+          "phase": "measured",
+          "pair": 4,
+          "implementation": "cpp",
+          "process_ns": [
+            3434198953
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3462051320,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "cpp",
+          "process_ns": [
+            3462051320
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3443348449,
+          "phase": "measured",
+          "pair": 5,
+          "implementation": "woozy",
+          "process_ns": [
+            3443348449
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3427150996,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "woozy",
+          "process_ns": [
+            3427150996
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3438544004,
+          "phase": "measured",
+          "pair": 6,
+          "implementation": "cpp",
+          "process_ns": [
+            3438544004
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3470546227,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "cpp",
+          "process_ns": [
+            3470546227
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3422437023,
+          "phase": "measured",
+          "pair": 7,
+          "implementation": "woozy",
+          "process_ns": [
+            3422437023
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3456105766,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "woozy",
+          "process_ns": [
+            3456105766
+          ]
+        },
+        {
+          "rounds": 1,
+          "elapsed_ns": 3460073263,
+          "phase": "measured",
+          "pair": 8,
+          "implementation": "cpp",
+          "process_ns": [
+            3460073263
+          ]
+        }
+      ]
+    }
+  ],
+  "originals": [
+    {
+      "name": "helloworld",
+      "input": "QwQ",
+      "source": "helloworld/1.cpp",
+      "expected": "Hello world QwQ!",
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 2046545
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 2015116
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2341108
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2198570
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2070150
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2039631
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2133969
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2185736
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2143598
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2255216
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 2045764
+        }
+      ],
+      "median_ms": 2.143598,
+      "program_sha256": "ed3a0e9668751ddbc56a26131469f1647d37eb643ca3e92182e1c65f7d28e4fe"
+    },
+    {
+      "name": "fannkuch",
+      "input": "10",
+      "source": "fannkuch-redux/1-im.cpp",
+      "expected": [
+        73196,
+        38
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 33884907
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 29542849
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 29932802
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 43359496
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 28620287
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 28868774
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 28362502
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 28431392
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 34258989
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 29098655
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 29700447
+        }
+      ],
+      "median_ms": 29.098655,
+      "program_sha256": "c2cb302763ff984b2d961144875ca88551e9f1856b98184bfa32f81a27b7b4f5"
+    },
+    {
+      "name": "fannkuch",
+      "input": "11",
+      "source": "fannkuch-redux/1-im.cpp",
+      "expected": [
+        556355,
+        51
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 290722428
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 286749545
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 298329489
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 292297978
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 288371602
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 290428998
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 288237871
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 290401797
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 296928127
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 305828679
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 305117292
+        }
+      ],
+      "median_ms": 292.297978,
+      "program_sha256": "c2cb302763ff984b2d961144875ca88551e9f1856b98184bfa32f81a27b7b4f5"
+    },
+    {
+      "name": "nbody",
+      "input": "500000",
+      "source": "nbody/1.cpp",
+      "expected": [
+        -0.16907516382852447,
+        -0.16909656666615247
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 16055442
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 16674886
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16050372
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16701767
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16241952
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16740900
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 15951858
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16362189
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16587291
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16705744
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 16564909
+        }
+      ],
+      "median_ms": 16.564909,
+      "program_sha256": "ca8dc3ce76eb7bb7acdea113e5cb2f317433977fb70d44d9ee9c53017f8bbc4e"
+    },
+    {
+      "name": "nbody",
+      "input": "5000000",
+      "source": "nbody/1.cpp",
+      "expected": [
+        -0.16907516382852447,
+        -0.1690831339787865
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 145054173
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 144553453
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 145020140
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 150219367
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 145198695
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 144409473
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 142836938
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 142548546
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 143551782
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 143091877
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 141295302
+        }
+      ],
+      "median_ms": 143.551782,
+      "program_sha256": "ca8dc3ce76eb7bb7acdea113e5cb2f317433977fb70d44d9ee9c53017f8bbc4e"
+    },
+    {
+      "name": "nbody",
+      "input": "500000",
+      "source": "nbody/0-i.cpp",
+      "expected": [
+        -0.16907516382852447,
+        -0.16909656666615247
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 13673728
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 13531972
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13494130
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13898039
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13459295
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13492026
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 14363293
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13927405
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13935660
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13718732
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 13713372
+        }
+      ],
+      "median_ms": 13.718732,
+      "program_sha256": "6526e37acfa99cc4588806336a9e5d3162fa2fdf50bf33a9dbeec8ce85cff984"
+    },
+    {
+      "name": "nbody",
+      "input": "5000000",
+      "source": "nbody/0-i.cpp",
+      "expected": [
+        -0.16907516382852447,
+        -0.1690831339787865
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 115455499
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 114282316
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 113483514
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 112333163
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 118572635
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 117817225
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 118243777
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 116288594
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 116216519
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 113997550
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 112917822
+        }
+      ],
+      "median_ms": 116.216519,
+      "program_sha256": "6526e37acfa99cc4588806336a9e5d3162fa2fdf50bf33a9dbeec8ce85cff984"
+    },
+    {
+      "name": "nsieve",
+      "input": "10",
+      "source": "nsieve/1.cpp",
+      "expected": [
+        [
+          10240000,
+          679461
+        ],
+        [
+          5120000,
+          356244
+        ],
+        [
+          2560000,
+          187134
+        ]
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 52687381
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 54747190
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 55824244
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 54572392
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 54997391
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 53337322
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 52740700
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 53639529
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 52388830
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 52429968
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 53865093
+        }
+      ],
+      "median_ms": 53.639529,
+      "program_sha256": "4e16de79a75359e1981aa823863160cd8907dcfcf506a920a6812b7e0f59c579"
+    },
+    {
+      "name": "nsieve",
+      "input": "12",
+      "source": "nsieve/1.cpp",
+      "expected": [
+        [
+          40960000,
+          2488465
+        ],
+        [
+          20480000,
+          1299069
+        ],
+        [
+          10240000,
+          679461
+        ]
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 234973162
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 240343700
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 231494476
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 226779779
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 218628456
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 211130620
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 218824504
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 211154364
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 205937635
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 202007902
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 207286408
+        }
+      ],
+      "median_ms": 211.154364,
+      "program_sha256": "4e16de79a75359e1981aa823863160cd8907dcfcf506a920a6812b7e0f59c579"
+    },
+    {
+      "name": "spectral-norm",
+      "input": "2000",
+      "source": "spectral-norm/8.cpp",
+      "expected": [
+        1.274224152228617
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 19144916
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 18458177
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 19383876
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 18646389
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 18596967
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 19530972
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 19620661
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 19776753
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 19623767
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 21807890
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 24981181
+        }
+      ],
+      "median_ms": 19.620661,
+      "program_sha256": "8e7cb608972185f768b50afd3e3c96438bf2bd4347423552a6761f500d8fb4e9"
+    },
+    {
+      "name": "spectral-norm",
+      "input": "4000",
+      "source": "spectral-norm/8.cpp",
+      "expected": [
+        1.2742241527467106
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 66837955
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 67042920
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 66453673
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 66235083
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 68883738
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 65931442
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 67507353
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 66658228
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 76901121
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 66448604
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 68707177
+        }
+      ],
+      "median_ms": 66.658228,
+      "program_sha256": "8e7cb608972185f768b50afd3e3c96438bf2bd4347423552a6761f500d8fb4e9"
+    },
+    {
+      "name": "spectral-norm",
+      "input": "8000",
+      "source": "spectral-norm/8.cpp",
+      "expected": [
+        1.2742241528118825
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 258995614
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 257359750
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 250250564
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 250571268
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 274925381
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 254019746
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 251956420
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 251218123
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 252391037
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 249456093
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 252354097
+        }
+      ],
+      "median_ms": 251.95642,
+      "program_sha256": "8e7cb608972185f768b50afd3e3c96438bf2bd4347423552a6761f500d8fb4e9"
+    },
+    {
+      "name": "spectral-norm",
+      "input": "2000",
+      "source": "spectral-norm/6-im.cpp",
+      "expected": [
+        1.274224152228617
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 36303772
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 35160334
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 34803504
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 34927537
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 35607916
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 36451019
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 35298083
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 38065062
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 36598166
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 37926351
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 36780508
+        }
+      ],
+      "median_ms": 36.451019,
+      "program_sha256": "245d7e56f13c86cc7a5be22b527123ccb4f59217676173fefd01b0a496d4b1f7"
+    },
+    {
+      "name": "spectral-norm",
+      "input": "4000",
+      "source": "spectral-norm/6-im.cpp",
+      "expected": [
+        1.2742241527467106
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 123358399
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 128579537
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 125687094
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 128557887
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 128082694
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 133057190
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 127354035
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 124677046
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 125170343
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 127140525
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 124988692
+        }
+      ],
+      "median_ms": 127.140525,
+      "program_sha256": "245d7e56f13c86cc7a5be22b527123ccb4f59217676173fefd01b0a496d4b1f7"
+    },
+    {
+      "name": "spectral-norm",
+      "input": "8000",
+      "source": "spectral-norm/6-im.cpp",
+      "expected": [
+        1.2742241528118825
+      ],
+      "samples": [
+        {
+          "phase": "warmup",
+          "elapsed_ns": 483188441
+        },
+        {
+          "phase": "warmup",
+          "elapsed_ns": 482355807
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 501390668
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 485975479
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 471448447
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 465233452
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 466157598
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 472001808
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 480087078
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 492196248
+        },
+        {
+          "phase": "measured",
+          "elapsed_ns": 493301895
+        }
+      ],
+      "median_ms": 480.087078,
+      "program_sha256": "245d7e56f13c86cc7a5be22b527123ccb4f59217676173fefd01b0a496d4b1f7"
+    }
+  ],
+  "frozen_benchmark_sources": {
+    "tests/performance/plb/source-manifest.json": "0552f6c78c7dc8fa28dfaa8ec76747443440ba85859a5637d3c9ccdfcf1ae7a2",
+    "tests/performance/plb/helloworld.wz": "e1d9f2be908316fd0dfa9eaa73c3d84ee99003911fbc3f79745bb0552c665439",
+    "tests/performance/plb/BSD-LICENSE.txt": "bfd9b81845e9d987f6c5a9061d2d756acc29e3e05f122d080bcb9788fd49b2db",
+    "tests/performance/plb/nbody.cpp": "3d520160e41bc04c3cc11f5ea4a86ac9e75908a87b9625d4c0485afae6805489",
+    "tests/performance/plb/nbody.wz": "0d4a0b87b07bbb876422fa16dd67d506d80988ebc4036b8ad4bdca43c4f93ba2",
+    "tests/performance/plb/nsieve.cpp": "4791c714ade28657391255144ce0d401231b6f09d628dd60896554ca60ddbc8d",
+    "tests/performance/plb/nsieve.wz": "0258db7d589f56bfcb6fda7fc408111a04299c3009a9ba9e68a954e8b2505b50",
+    "tests/performance/plb/fannkuch.cpp": "8e4845e99775c4ebc4ee092a83a376c8de3b547360d8a02e6adb0446a5cdd2d3",
+    "tests/performance/plb/fannkuch.wz": "648abef806890ea16b65f0bc6f7432ac6c51f54ebe6975137b82e09345e69a18",
+    "tests/performance/plb/spectral-norm.cpp": "6298dc55ae9d5ae959c479c3ae1833c36a62b92dd14dc1ebbb9874754189b037",
+    "tests/performance/plb/spectral-norm.wz": "f455a2c89324dd3205c21f0f8f63c0520aa1780f6c5d8b1ffe7391c5617aab42",
+    "tests/performance/plb/vendor/LICENSE": "6adf6a58cbf7a5649462b8585959c037eaba94d394e176fb7a62acb52a326f84",
+    "tests/performance/plb/vendor/README.md": "99e82098d41fb218997cdbad41fa9fda4fac651e29fd28dd12aa4b2be30d0162",
+    "tests/performance/plb/vendor/bench/bench.yaml": "7d37aa013bbdc80b6e4b3e2891f503574581d15133763ea49a3c0cc6e5e6abfb",
+    "tests/performance/plb/vendor/bench/bench_cpp.yaml": "a97977b5bd463116c2fbb70ee49800b919bf19370bffdf6c43993780d7e74a1f",
+    "tests/performance/plb/vendor/bench/include/cpp/app.rsp": "3efe78b4d5afb6e024cc68607566b265478fb8190dca630ee094c64af6f82ac2",
+    "tests/performance/plb/vendor/bench/algorithm/fannkuch-redux/1-im.cpp": "da1d7918e240d7972bcbc1ce1e1818ef11ac4430c75ad5c682131b2ed6ee1f37",
+    "tests/performance/plb/vendor/bench/algorithm/fannkuch-redux/7_out": "2dc0a3cd4a547ba69389f97f3b447bd4d487fe6216c3cacd2f9bf8c908dc127f",
+    "tests/performance/plb/vendor/bench/algorithm/fannkuch-redux/10_out": "80c9d0f6d18a341dad107db19b7e302fcc984087a79debe5d4dec3bee950256c",
+    "tests/performance/plb/vendor/bench/algorithm/helloworld/1.cpp": "6fc5c2171d16b6939092c183deefd085d3293ac2beb6216d830f3e9118a5a715",
+    "tests/performance/plb/vendor/bench/algorithm/helloworld/QwQ_out": "8c4799d7815f06e6a43e00b9d31f5447f073b775b6d88681252d1a8ab181f7ab",
+    "tests/performance/plb/vendor/bench/algorithm/helloworld/T_T_out": "3e635da1db577a04e472640453f7e57b424bc41e34256ec52600a0bfe1ac4d28",
+    "tests/performance/plb/vendor/bench/algorithm/nbody/1.cpp": "3493d085a965089bb6a32d51fe94bdd7938d3c13267e9c5b077f68b8e576ec99",
+    "tests/performance/plb/vendor/bench/algorithm/nbody/0-i.cpp": "d6511e88de16979382c34ca900ef33455c028beea4f0dd4434d174657e2d6a23",
+    "tests/performance/plb/vendor/bench/algorithm/nbody/10000_out": "f4188900db92329603b17d928ada6fdbbf2c21f29c056e0e86df82d010d74648",
+    "tests/performance/plb/vendor/bench/algorithm/nbody/1000_out": "76de83d6d51a74f82828547423f516e7815cfe8cfea6290a2831aa173f806de7",
+    "tests/performance/plb/vendor/bench/algorithm/spectral-norm/8.cpp": "185af1d2ffce4854a8b95ff9410229c79890ba38be2af9985312d0198940c917",
+    "tests/performance/plb/vendor/bench/algorithm/spectral-norm/6-im.cpp": "3781ba8d6cd15b4e5cbd3ec2f6858af1e9b156bc6c33931ace8f379b5f63e83f",
+    "tests/performance/plb/vendor/bench/algorithm/spectral-norm/100_out": "a95e11fa07f7b196ef488e73f67afbbbc16cf6a2c6de5f8d54ea49821fe604e6",
+    "tests/performance/plb/vendor/bench/algorithm/nsieve/1.cpp": "b886f4e0a566c5d5f70b5fb5aa955d1daed39f5188d51e8dfd63b77c31fa82cb",
+    "tests/performance/plb/vendor/bench/algorithm/nsieve/4_out": "4538d56ea88a3159f5870d9c90748d0398ef4ce833e2040c921f5fb1b2f77e26",
+    "tests/performance/plb/vendor/bench/algorithm/nsieve/5_out": "21c58728553082c6d7112a928ede86ad43f4dc7df28dec535fca5d4b3de8683d",
+    "tests/performance/run_plb.py": "9fdbb21282e2ca6e5e88bef5d9de66326b6a1cfe20f18260a7b9213c2685b7c9",
+    "tests/performance/run_native.py": "2d18bbbe183444222aabc3fd4b0b840b83d022263e196153a5a2e530a2a6ad27",
+    "tests/performance/run_sort.py": "d2227a2af4ba6ca7c781c9b8f94b961d70002245dbae0b6f9ad23423139f6694",
+    "stdlib/os/os.wz": "8da755004f0fc628479c2ec488832b7abb297d52308fbe55733287e494494a35",
+    "stdlib/sync/sync.wz": "e43eb3b5a419645915e060185d70a94afab359ad5411aed661ea1b5edd28b9fb",
+    "stdlib/thread/thread.wz": "d216f07a096c396274cc0c0a1c6af11de76fc3c032d57d4918e2b509d50f0355",
+    "stdlib/result/result.wz": "510220642467a92453ee551b5c7c448be34f0035cfb3cbecccb33181565a1c6e",
+    "stdlib/option/option.wz": "d28e67852f6699e9a7cbb933850d1bb9cee37501523347f11c470ee246e69268",
+    "stdlib/vec/vec.wz": "7481ea9c72d120de864d6d89d5697c5df0279ec86a1682f215fb931a67f3732c",
+    "stdlib/text/text.wz": "30ef1c5307aed0039d3138fbcd5e74d2229d744124f28128ce025ec46ea5f7d8",
+    "stdlib/strconv/strconv.wz": "01e1ddacab4fda51993fd2ed6a342385141c0faaeba7d77fb954248a792c67d4",
+    "stdlib/path/path.wz": "6b3e0a5589e9d1515261e93b660bc2d244f39fcef056eee22f0fd6942b932123",
+    "stdlib/io/io.wz": "e2778d1b04456b75e14ccf3ac7af311c14efdf15a281bc1e53159dbbfafb25e4",
+    "stdlib/fs/fs.wz": "4b475e207213bfc8da1f22352b311516142aef1691f4eb6f866b3091da25bee8",
+    "stdlib/net/net.wz": "e327c2e50ade280f5518259b6c15cfe4c839e5866a000df3c199e7aa0e52cf5d",
+    "stdlib/math/math.wz": "f28bd88e8a5f26715076f5827e0e8b66f1d04bc964344a1a2156a3be860f1822",
+    "stdlib/time/time.wz": "1e8c1d0e3be48f3d64150bae71422f24cc632733bd834d5c53537456f7145797",
+    "stdlib/random/random.wz": "336a68133215e868e9637b4d87760d2d0926c6e74bf3253c7c710a8ee22f8b93",
+    "stdlib/process/process.wz": "024ffc8c1a6a95af67a5d4269ece3ea5d0b9364dbac8a3a89a0201d230931c0f",
+    "stdlib/signal/signal.wz": "dcb08959acb924d57e02bf2c63a7b3691ca32e616f5bc584f14d13cacbfe4756",
+    "stdlib/ipc/ipc.wz": "ee7ba557feaaf04135245d3bba6576a6c161cdff34c1f6dea3c18dc613bfe016",
+    "stdlib/hash/hash.wz": "52b9eceb3c2005a0bde24ec389b210b7e895b99a2b0b22f6b2a1ac350f941d16",
+    "stdlib/map/map.wz": "c18a4cce6723dbf63e965b2e0e450b9458931c47fee42e7e9f8cea7ffb33c662",
+    "stdlib/set/set.wz": "0f86fb44b15e05eb82f2b066d3e4fff6eb6508835a0168ecc974209dccc7b909",
+    "stdlib/json/json.wz": "2d269e99e33a8a907f2cc7654ce0ef17cfd69c95cc7d59134c585f6198b8115f"
+  },
+  "evidence_sha256": {
+    "preparation-final.json": "acc5b2917200b63f83a7b11d02ecb369e5c9c181a2fdad327a418864a36230ed",
+    "run-final/results.json": "5907331b808da57b452b3dfbd31973688b3b4db8add7a8df60fd7a49434281db",
+    "work-review.json": "52b2f3cd54cdf11d0df412be187e614930dd8b8233ba34d4fe84356a8dc46c32",
+    "algorithm-review.json": "d71d1163a9dccdf950bd07b2d6848bdf7f67eb3f9f4000c49d103fbd7c4dcce3",
+    "invalid-inputs.json": "52a3f49efec080818d7aefdf88582e2b46b2d7ceaea7c0a45fd15b5722bafff1",
+    "openmp-thread-preflight.json": "3167286c970e5acddf883df36f0c8d0775d7343352d9851333b7eb1b98aa2c3b",
+    "timing-review.json": "de899b56c04ab8f830e278c4ad27b66886745d7595d2eb39d1c204cc527a4211",
+    "nbody-ir-notes.md": "77583f5d2cb44437a694e858a124c07d35abc64a176c71a399ffc6ddaadfdf8d",
+    "verify_samples.py": "dd465641d8a89a52a20541166478b41596c7a6df023e9cff4ce3f4d0121b7802"
+  },
+  "tool_sha256": {
+    "woozyc": "f3f3ea25e8364df8a95dded36247f40dfaac11f189b4cb4f4d432a2cdff8fbad",
+    "native_helper": "f5a26ff52ce3e7c044ef89e0b75fe5f86ddbce0bd4d45b2a1213de9bb3b4dc68",
+    "native_runtime": "5d9d5309864a90c78e807ae139790240de3046782e743e2f9106888a2ab0a20e",
+    "clang++": "31a40dc31f3c15a47aa119aa148f339bf363d8f61202ddbdacbd3f24b71ba113",
+    "OpenMP": "bed4495bf5821b0acdba90d671512859b381c5d2caa029f6c3b82f1337da614e"
+  },
+  "verification": {
+    "status": "accepted",
+    "total_commands": 2376,
+    "frozen_files": 136,
+    "counts": {
+      "warmup_processes": 264,
+      "warmup_batches": 40,
+      "measured_processes": 1188,
+      "measured_batches": 180,
+      "calibration_processes": 363,
+      "calibration_batches": 75,
+      "double_round_processes": 260,
+      "double_round_batches": 18,
+      "original_warmup_processes": 30,
+      "original_measured_processes": 135
+    }
+  }
+}

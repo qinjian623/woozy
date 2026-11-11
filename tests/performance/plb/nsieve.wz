@@ -1,0 +1,86 @@
+// The Computer Language Shootout
+// http://shootout.alioth.debian.org/
+// Precedent C entry modified by bearophile for speed and size, 31 Jan 2006
+// Converted to C++ by Paul Kitchin
+//
+// Woozy port of upstream bench/algorithm/nsieve/1.cpp at commit
+// ad18b203dd1769724f4eea94fc3ac1e99f6593e0.  Same single-threaded sieve,
+// same three rounds of 10000 << (n-i), and marking starts at 2 * value.
+//
+// Upstream stores composites in std::vector<bool>, i.e. one bit per value.
+// To avoid an unfair byte-per-flag allocation, this program packs bits in a
+// Vec[u8] (word = value >> 3, bit = 1u << (value & 7)); nsieve.cpp uses the
+// same explicit std::vector<std::uint8_t> bitset.  The vector is allocated
+// once and reused across the three rounds; exactly (max + 7) / 8 bytes are
+// cleared before each round, which is the packed equivalent of upstream's
+// flags.assign(max, false).
+//
+// Interface: one runtime decimal argument, read with std/process.args and
+// std/strconv.parse_i64.  Three stdout lines "Primes up to <N> <count>"
+// (plain spaces instead of std::setw(8); the runner splits and compares
+// fields).  Invalid arguments print a message on stderr and exit 2.  No
+// fast-math and no noalias.
+package app;
+
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+const ROUNDS i64 = 3;
+const BASE i64 = 10000;
+
+// Returns the number of primes below `max`, reusing `flags` as packed bits.
+func sieve(flags Vec[u8], max i64) u64 {
+    let bytes i64 = (max + 7) / 8;
+    if i64(vec.len(flags)) < bytes {
+        vec.resize(flags, usize(bytes), u8(0));
+    }
+    for var index i64 = 0; index < bytes; index += 1 {
+        flags[index] = 0;
+    }
+
+    var count u64 = 0;
+    for var value i64 = 2; value < max; value += 1 {
+        let word i64 = value >> 3;
+        let mask u8 = u8(1) << (value & 7);
+        if (flags[word] & mask) == 0 {
+            count += 1;
+            for var multiple i64 = value * 2; multiple < max; multiple += value {
+                let target i64 = multiple >> 3;
+                let bit u8 = u8(1) << (multiple & 7);
+                flags[target] = flags[target] | bit;
+            }
+        }
+    }
+    return count;
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) != 2 {
+        io.eprintln("usage: nsieve <n>");
+        return 2;
+    }
+    var count i64 = 0;
+    try {
+        count = strconv.parse_i64(arguments[1]);
+    } catch error strconv.Error {
+        io.eprintln("nsieve: n must be an integer between 2 and 20");
+        return 2;
+    }
+    // The three upstream rounds shift by n, n-1 and n-2.
+    if count < 2 || count > 20 {
+        io.eprintln("nsieve: n must be an integer between 2 and 20");
+        return 2;
+    }
+
+    let flags Vec[u8] = vec.empty[u8]();
+    for var i i64 = 0; i < ROUNDS; i += 1 {
+        let max i64 = BASE << (count - i);
+        let primes u64 = sieve(flags, max);
+        io.println("Primes up to " + strconv.format_i64(max) + " " + strconv.format_u64(primes));
+    }
+    return 0;
+}
