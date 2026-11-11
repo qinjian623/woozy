@@ -10,6 +10,13 @@ Woozy 是一门编译型语言，提供 Native 和 Python 两个后端。本仓�
 
 ## 从哪里开始
 
+学习和使用语言：
+
+- [教程](docs/TUTORIAL.md)：从第一个项目开始，逐步学习函数、Vec、结构体、错误处理、模块和泛型。
+- [快速入门](docs/QUICKSTART.md)：面向有编程经验的读者，列出构建、运行命令和与其他语言容易混淆的规则。
+
+参与编译器开发：
+
 1. 阅读 [DEVELOPMENT.md](DEVELOPMENT.md)，了解目标、架构和交付边界。
 2. 阅读 [AGENTS.md](AGENTS.md) 和 [语义约定](docs/SEMANTICS.md)，避免不同 agent 自行选择不同语言行为。
 3. 从 [任务清单](contracts/tasks.json) 选择依赖已完成的任务，结合 [实施计划](docs/IMPLEMENTATION_PLAN.md) 开始开发。
@@ -19,6 +26,8 @@ Woozy 是一门编译型语言，提供 Native 和 Python 两个后端。本仓�
 
 | 路径 | 内容 |
 | --- | --- |
+| `docs/TUTORIAL.md` | 逐步编写、检查和运行 Woozy 程序 |
+| `docs/QUICKSTART.md` | 面向有编程经验读者的命令与语法速查 |
 | `DEVELOPMENT.md` | 总体开发说明、范围、接口责任、实施决策 |
 | `AGENTS.md` | agent 工作规则、分工和交接格式 |
 | `docs/SEMANTICS.md` | 数值、模块、所有权、错误与清理的实施默认语义 |
