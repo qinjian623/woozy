@@ -8,6 +8,9 @@ using LangValueOp = void (*)(void *);
 struct LangVec {
   // Element bytes never overlap a live LangVec descriptor. Payloads of
   // aliased Vec values may still share element storage.
+  // refs and iterations use atomic builtins without changing this layout.
+  // Retain requires an existing live reference. Element access and structural
+  // updates still require caller synchronization.
   uint64_t refs, length, initialized, stride, iterations;
   void *data;
   LangValueOp copy, drop;

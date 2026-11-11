@@ -285,6 +285,12 @@ let measured = measure(counter);    // 7
 
 trait 是名义类型约束，需要显式实现，不按方法“长得像”自动满足。当前使用静态分派，不支持动态 trait 对象、关联类型、特化、非类型或变参模板参数。类型参数和约束规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
 
+## 线程与同步
+
+Linux x86_64 Native 程序可以使用 `std/thread` 的 `spawn[A](func(A) i64, A)` 与 `join(Thread) i64`，二者都声明 `throws os.Error`。线程函数不捕获局部变量，入口内部自行处理 typed errors。Thread 按引用共享；未 join 就清理句柄不会取消线程，main 返回会结束整个进程。
+
+`std/sync` 提供非递归 Mutex、Condvar 和顺序一致的 AtomicI64。正常锁操作不抛错，错误解锁等误用 Panic。允许在线程间共享 Vec 等对象，由程序员同步读写；原子 ARC 只保证计数安全。示例见 [线程与同步](CONCURRENCY.md)。
+
 ## 包与导入
 
 每个文件声明 `package`，同一个包中的顶层声明互相可见。`pub` 控制跨包访问，导入别名只在当前文件有效。下面两个文件组成一个小项目，`app` 表示项目源码根。

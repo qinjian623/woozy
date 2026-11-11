@@ -94,6 +94,10 @@ class Emitter {
       return t.bits == 32 ? builder.getFloatTy() : builder.getDoubleTy();
     case hir::TypeKind::Function:
     case hir::TypeKind::Vec:
+    case hir::TypeKind::ThreadHandle:
+    case hir::TypeKind::MutexHandle:
+    case hir::TypeKind::CondvarHandle:
+    case hir::TypeKind::AtomicI64Handle:
       return builder.getPtrTy();
     case hir::TypeKind::String: {
       auto *layout = llvm::StructType::get(
@@ -165,6 +169,10 @@ class Emitter {
       }
       return key;
     }
+    case hir::TypeKind::ThreadHandle: return "std/thread.Thread";
+    case hir::TypeKind::MutexHandle: return "std/sync.Mutex";
+    case hir::TypeKind::CondvarHandle: return "std/sync.Condvar";
+    case hir::TypeKind::AtomicI64Handle: return "std/sync.AtomicI64";
     case hir::TypeKind::Vec:
       return "Vec[" + type_key(t.type_args[0]) + "]";
     case hir::TypeKind::Function: {
@@ -471,6 +479,7 @@ class Emitter {
     return value;
   }
 #include "value_ops.inc"
+#include "concurrency.inc"
   void emit_vec_check(llvm::Value *vec, llvm::Value *index, SourceSpan source) {
     auto *length = vec_field(vec, 1, builder.getInt64Ty());
     auto *init = vec_field(vec, 2, builder.getInt64Ty());
@@ -529,6 +538,45 @@ class Emitter {
       return call("lang_vec_length_v1", i64, args);
     case SystemOperation::text_length:
       return text_length(0);
+    case SystemOperation::thread_spawn:
+      return thread_spawn(i, args);
+    case SystemOperation::thread_error:
+      return call("lang_thread_error_v1", i64, args);
+    case SystemOperation::thread_wait:
+      return call("lang_thread_wait_v1", i64, args);
+    case SystemOperation::thread_result:
+      return call("lang_thread_result_v1", i64, args);
+    case SystemOperation::mutex_new:
+      return call("lang_mutex_new_v1", builder.getPtrTy(), args);
+    case SystemOperation::condvar_new:
+      return call("lang_condvar_new_v1", builder.getPtrTy(), args);
+    case SystemOperation::atomic_i64_new:
+      return call("lang_atomic_i64_new_v1", builder.getPtrTy(), args);
+    case SystemOperation::atomic_i64_load:
+      return call("lang_atomic_i64_load_v1", i64, args);
+    case SystemOperation::atomic_i64_fetch_add:
+      return call("lang_atomic_i64_fetch_add_v1", i64, args);
+    case SystemOperation::atomic_i64_compare_exchange:
+      return call("lang_atomic_i64_compare_exchange_v1", builder.getInt1Ty(), args);
+    case SystemOperation::mutex_lock:
+    case SystemOperation::mutex_unlock:
+    case SystemOperation::condvar_wait:
+    case SystemOperation::condvar_notify_one:
+    case SystemOperation::condvar_notify_all:
+    case SystemOperation::atomic_i64_store: {
+      const char *name = nullptr;
+      switch (*i.system) {
+      case SystemOperation::mutex_lock: name = "lang_mutex_lock_v1"; break;
+      case SystemOperation::mutex_unlock: name = "lang_mutex_unlock_v1"; break;
+      case SystemOperation::condvar_wait: name = "lang_condvar_wait_v1"; break;
+      case SystemOperation::condvar_notify_one: name = "lang_condvar_notify_one_v1"; break;
+      case SystemOperation::condvar_notify_all: name = "lang_condvar_notify_all_v1"; break;
+      case SystemOperation::atomic_i64_store: name = "lang_atomic_i64_store_v1"; break;
+      default: fail("invalid synchronization operation");
+      }
+      call(name, builder.getVoidTy(), args);
+      return builder.getInt8(0);
+    }
     }
     fail("unknown system operation");
     return nullptr;

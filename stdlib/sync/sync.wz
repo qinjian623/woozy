@@ -1,0 +1,61 @@
+package sync;
+
+pub struct Mutex {
+    state __woozy_Mutex;
+}
+
+pub struct Condvar {
+    state __woozy_Condvar;
+}
+
+pub struct AtomicI64 {
+    state __woozy_AtomicI64;
+}
+
+pub func mutex() Mutex {
+    return Mutex(state: __woozy_mutex_new());
+}
+
+pub func lock(m Mutex) {
+    __woozy_mutex_lock(m.state);
+}
+
+pub func unlock(m Mutex) {
+    __woozy_mutex_unlock(m.state);
+}
+
+pub func condvar() Condvar {
+    return Condvar(state: __woozy_condvar_new());
+}
+
+pub func wait(c Condvar, m Mutex) {
+    __woozy_condvar_wait(c.state, m.state);
+}
+
+pub func notify_one(c Condvar) {
+    __woozy_condvar_notify_one(c.state);
+}
+
+pub func notify_all(c Condvar) {
+    __woozy_condvar_notify_all(c.state);
+}
+
+pub func atomic_i64(value i64) AtomicI64 {
+    return AtomicI64(state: __woozy_atomic_i64_new(value));
+}
+
+pub func load(a AtomicI64) i64 {
+    return __woozy_atomic_i64_load(a.state);
+}
+
+pub func store(a AtomicI64, value i64) {
+    __woozy_atomic_i64_store(a.state, value);
+}
+
+pub func fetch_add(a AtomicI64, value i64) i64 {
+    return __woozy_atomic_i64_fetch_add(a.state, value);
+}
+
+pub func compare_exchange(a AtomicI64, expected i64, desired i64) bool {
+    return __woozy_atomic_i64_compare_exchange(a.state, expected, desired);
+}

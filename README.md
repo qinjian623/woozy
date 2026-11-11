@@ -18,6 +18,7 @@ func main() throws os.Error {
 - [语言规则](docs/SEMANTICS.md)：名称、求值顺序、数值、复制、所有权、错误和清理的详细定义。
 - [词法与语法](baseline/LEXICAL_SYNTAX.md)：关键字、字面量、表达式和声明形式。
 - [系统接口](docs/OS.md)：标准输出、文件读写、目录和进程退出。
+- [线程与同步](docs/CONCURRENCY.md)：线程参数、等待、共享数据、锁、条件变量和原子整数。
 - [示例](examples/)：函数、数值、错误处理和参数传递。
 
 ## 主要规则
@@ -37,6 +38,8 @@ func main() throws os.Error {
 已有整数与浮点、字符串值、函数与非捕获函数值、struct/enum、Vec、受约束泛型、模块、typed throws 和块级 defer。程序可以生成 Native 代码或 Python 代码；语言规则不会随所选后端改变。
 
 `std/os` 为 Linux x86_64 Native 程序提供标准输出、文件读写、目录操作和进程退出，使用 C 风格名称与参数顺序，失败时抛出 `os.Error`。不开放原始 syscall 接口。
+
+`std/thread` 支持无捕获函数加明确参数的线程创建与等待，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员同步，原子 ARC 只保护引用计数。它们同样限于 Linux x86_64 Native 程序。
 
 完整标准库、捕获闭包、默认参数、Map、通用 Slice 和 Ptr 尚未提供。
 

@@ -1,0 +1,24 @@
+package thread;
+
+import "std/os" as os;
+
+pub struct Thread {
+    state __woozy_Thread;
+}
+
+pub func spawn[A](entry func(A) i64, argument A) Thread throws os.Error {
+    let handle = __woozy_thread_spawn[A](entry, argument);
+    let error = __woozy_thread_error(handle);
+    if error < 0 {
+        throw os.Error.System(code: i32(-error), completed: 0);
+    }
+    return Thread(state: handle);
+}
+
+pub func join(worker Thread) i64 throws os.Error {
+    let status = __woozy_thread_wait(worker.state);
+    if status < 0 {
+        throw os.Error.System(code: i32(-status), completed: 0);
+    }
+    return __woozy_thread_result(worker.state);
+}

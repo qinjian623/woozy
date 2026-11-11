@@ -214,3 +214,30 @@ if(LANG_TEST_PYTHON)
 else()
   message(STATUS "native.vec_negative_runtime: not_run (test Python not found)")
 endif()
+
+find_package(Threads REQUIRED)
+foreach(part IN ITEMS arc alloc)
+  add_executable(lang_native_${part}_concurrency_test ${part}_concurrency_test.cpp)
+  target_compile_features(lang_native_${part}_concurrency_test PRIVATE cxx_std_20)
+  target_link_libraries(lang_native_${part}_concurrency_test PRIVATE lang_native_runtime Threads::Threads)
+  add_test(NAME native.${part}_concurrency COMMAND lang_native_${part}_concurrency_test)
+  set_tests_properties(native.${part}_concurrency PROPERTIES TIMEOUT 60)
+endforeach()
+foreach(part IN ITEMS sync thread)
+  add_executable(lang_native_${part}_runtime_test ${part}_runtime_test.cpp)
+  target_compile_features(lang_native_${part}_runtime_test PRIVATE cxx_std_20)
+  target_link_libraries(lang_native_${part}_runtime_test PRIVATE lang_native_runtime Threads::Threads)
+  add_test(NAME native.${part}_runtime COMMAND lang_native_${part}_runtime_test)
+  set_tests_properties(native.${part}_runtime PROPERTIES TIMEOUT 60)
+endforeach()
+
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.concurrency COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_concurrency.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/concurrency-results)
+  set_tests_properties(native.concurrency PROPERTIES TIMEOUT 240)
+endif()
+
+target_compile_options(lang_native_thread_runtime_test PRIVATE -fstack-protector-strong)
+
+target_link_options(lang_native_sync_runtime_test PRIVATE -Wl,--wrap=lang_free_v1)

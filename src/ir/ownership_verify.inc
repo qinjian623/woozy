@@ -154,7 +154,8 @@
     auto produces_owner = [](Op op) {
       return op == Op::copy || op == Op::move || op == Op::struct_init ||
              op == Op::enum_init || op == Op::vec_init || op == Op::vec_read ||
-             op == Op::vec_slice || op == Op::iteration_read || op == Op::call;
+             op == Op::vec_slice || op == Op::iteration_read ||
+             op == Op::call || op == Op::system_call;
     };
     for (const auto &block : f.blocks) {
       for (const auto &p : block.parameters)

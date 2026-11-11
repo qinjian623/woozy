@@ -75,6 +75,35 @@ struct ClassState {
   uint32_t empty_count;
 };
 
+// Pool metadata is shared between threads; direct mmap allocations do not
+// touch it. This lock needs no allocation, libc, or per-thread state.
+uint32_t g_lock_next;
+uint32_t g_lock_serving;
+
+static inline void cpu_pause() noexcept {
+#if defined(__x86_64__) || defined(__i386__)
+  __asm__ volatile ("pause" ::: "memory");
+#endif
+}
+
+static inline void pool_lock_acquire() noexcept {
+  const uint32_t ticket =
+      __atomic_fetch_add(&g_lock_next, 1u, __ATOMIC_RELAXED);
+  while (__atomic_load_n(&g_lock_serving, __ATOMIC_ACQUIRE) != ticket)
+    cpu_pause();
+}
+
+static inline void pool_lock_release() noexcept {
+  __atomic_fetch_add(&g_lock_serving, 1u, __ATOMIC_RELEASE);
+}
+
+struct PoolLockGuard {
+  PoolLockGuard() noexcept { pool_lock_acquire(); }
+  ~PoolLockGuard() noexcept { pool_lock_release(); }
+  PoolLockGuard(const PoolLockGuard &) = delete;
+  PoolLockGuard &operator=(const PoolLockGuard &) = delete;
+};
+
 // Zero-initialized POD state; there is no static destructor or dynamic setup.
 ClassState g_classes[kSmallClassCount];
 
@@ -111,6 +140,8 @@ static inline uint32_t class_for(uint64_t size) noexcept {
   return kSmallClassCount;
 }
 
+// Caller holds the pool lock: both the mapping and the class bookkeeping are
+// shared-state updates, and the empty-page budget is checked under the lock.
 static PoolPage *new_pool_page(uint32_t class_index) noexcept {
   const uint64_t slot_size = kSmallClassSizes[class_index];
   void *base = sys_mmap(nullptr, kPoolPageSize,
@@ -155,6 +186,7 @@ static void *small_alloc(uint64_t size) noexcept {
   if (class_index == kSmallClassCount)
     return nullptr;
 
+  PoolLockGuard guard;
   ClassState &state = g_classes[class_index];
   PoolPage *page = state.nonfull;
   if (!page) {
@@ -227,6 +259,7 @@ extern "C" void lang_free_v1(void *ptr) noexcept {
   const uintptr_t owner = hdr->owner;
   if (owner & 1) {
     auto *page = reinterpret_cast<PoolPage *>(owner & ~static_cast<uintptr_t>(1));
+    PoolLockGuard guard;
     ClassState &state = g_classes[page->class_index];
     const bool was_full = page->active == page->slot_count;
     --page->active;

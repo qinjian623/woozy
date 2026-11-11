@@ -119,6 +119,7 @@
                                 false));
     auto *fast = llvm::BasicBlock::Create(context, "fast", fn);
     auto *slow = llvm::BasicBlock::Create(context, "runtime", fn);
+    auto *check = llvm::BasicBlock::Create(context, "check", fn);
     auto *update = llvm::BasicBlock::Create(context, "update", fn);
     auto *done = llvm::BasicBlock::Create(context, "done", fn);
     builder.CreateCondBr(
@@ -126,7 +127,15 @@
             observer_decl, llvm::ConstantPointerNull::get(builder.getPtrTy())),
         slow, fast);
     builder.SetInsertPoint(fast);
-    auto *refs = vec_field(vec, 0, builder.getInt64Ty());
+    auto *address = builder.CreateStructGEP(vec_type, vec, 0);
+    auto *initial = builder.CreateLoad(builder.getInt64Ty(), address);
+    initial->setAlignment(llvm::Align(8));
+    initial->setAtomic(llvm::AtomicOrdering::Monotonic);
+    vec_memory(initial, true);
+    builder.CreateBr(check);
+    builder.SetInsertPoint(check);
+    auto *refs = builder.CreatePHI(builder.getInt64Ty(), 2);
+    refs->addIncoming(initial, fast);
     auto *defer =
         retain ? builder.CreateICmpEQ(
                      refs, llvm::ConstantInt::get(builder.getInt64Ty(),
@@ -136,10 +145,13 @@
     builder.SetInsertPoint(update);
     auto *next = retain ? builder.CreateAdd(refs, builder.getInt64(1))
                         : builder.CreateSub(refs, builder.getInt64(1));
-    vec_memory(builder.CreateStore(
-                   next, builder.CreateStructGEP(vec_type, vec, 0)),
-               true);
-    builder.CreateBr(done);
+    auto *exchange = builder.CreateAtomicCmpXchg(
+        address, refs, next, llvm::Align(8),
+        retain ? llvm::AtomicOrdering::Monotonic : llvm::AtomicOrdering::Release,
+        llvm::AtomicOrdering::Monotonic);
+    vec_memory(exchange, true);
+    refs->addIncoming(builder.CreateExtractValue(exchange, 0), update);
+    builder.CreateCondBr(builder.CreateExtractValue(exchange, 1), done, check);
     builder.SetInsertPoint(slow);
     builder.CreateCall(runtime_fn, {vec});
     builder.CreateBr(done);
@@ -163,6 +175,12 @@
     if (t.kind == hir::TypeKind::Vec) {
       auto *value = builder.CreateLoad(builder.getPtrTy(), address);
       builder.CreateCall(vec_rc(copy), {value});
+    } else if (t.kind == hir::TypeKind::ThreadHandle ||
+               t.kind == hir::TypeKind::MutexHandle ||
+               t.kind == hir::TypeKind::CondvarHandle ||
+               t.kind == hir::TypeKind::AtomicI64Handle) {
+      runtime(copy ? "lang_handle_retain_v1" : "lang_handle_release_v1",
+              builder.getVoidTy(), {builder.CreateLoad(builder.getPtrTy(), address)});
     } else if (t.kind == hir::TypeKind::NominalStruct) {
       auto fields = aggregates.fields(id);
       for (size_t n = 0; n < fields.size(); ++n) {

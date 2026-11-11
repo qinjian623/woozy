@@ -1090,6 +1090,25 @@ class Checker {
     if (kind != modules::SymbolKind::builtin_type)
       reject(r, "name does not denote a value type", "E_NAME_KIND");
     const auto name = symbol(*s).name;
+    if (private_runtime_type_name(name)) {
+      if (!private_runtime_type_module(
+              m.resolved->project->module(r.module).logical_path))
+        reject(r, "private runtime type is only available to its std module",
+               "E_PRIVATE_ACCESS");
+      if (!args.empty())
+        reject(r, "private runtime type does not accept type arguments",
+               "E_CALL_ARGUMENT");
+      Type t;
+      if (name == "__woozy_Thread")
+        t.kind = TypeKind::ThreadHandle;
+      else if (name == "__woozy_Mutex")
+        t.kind = TypeKind::MutexHandle;
+      else if (name == "__woozy_Condvar")
+        t.kind = TypeKind::CondvarHandle;
+      else
+        t.kind = TypeKind::AtomicI64Handle;
+      return m.types.intern(t);
+    }
     if (name == "Vec") {
       if (args.size() != 1)
         reject(r, "Vec requires one element type");
@@ -1571,7 +1590,8 @@ class Checker {
       auto k = symbol(*s).kind;
       if (k == modules::SymbolKind::builtin_function &&
           system_operation_spec(symbol(*s).name))
-        unavailable(r, "system operations can only be called directly from std/os");
+        unavailable(r, "system operations can only be called directly from "
+                       "their owner std module");
       if (k == modules::SymbolKind::function) {
         auto it = signatures.find(s->value);
         if (it == signatures.end())
@@ -2348,14 +2368,27 @@ class Checker {
     }
     return result;
   }
-  Expr system_call(Ref r, SymbolId target, const SystemOperationSpec &spec) {
-    if (m.resolved->project->module(r.module).logical_path != "std/os")
-      unavailable(r, "system operations can only be called from std/os");
+  Expr system_call(Ref r, Ref callee, SymbolId target,
+                   const SystemOperationSpec &spec) {
+    if (m.resolved->project->module(r.module).logical_path != spec.owner)
+      unavailable(r, "system operations can only be called from their owner "
+                     "std module");
+    std::vector<TypeId> type_args;
+    if (ast(callee).kind == AstKind::NeutralBracket)
+      for (size_t i = 1; i < ast(callee).children.size(); ++i)
+        type_args.push_back(parse_type(child(callee, i)));
+    const size_t required_type_args =
+        system_operation_has_type_arguments(spec.operation) ? 1 : 0;
+    if (type_args.size() != required_type_args)
+      reject(r, "wrong number of system operation type arguments",
+             "E_CALL_ARGUMENT");
     Call call;
     call.kind = CalleeKind::system;
     call.system = spec.operation;
     call.direct_symbol = target;
-    call.signature = system_operation_signature(m.types, spec.operation);
+    call.type_args = type_args;
+    call.signature =
+        system_operation_signature(m.types, spec.operation, type_args);
     const auto signature = type(call.signature);
     if (ast(r).children.size() != spec.count + 1)
       reject(r, "wrong number of system operation arguments", "E_CALL_ARGUMENT");
@@ -2442,19 +2475,17 @@ class Checker {
   }
   Expr call(Ref r, std::optional<TypeId> expected) {
     auto callee_ref = child(r, 0);
-    auto system_target = callee_ref;
-    while (ast(system_target).kind == AstKind::Parenthesized)
-      system_target = child(system_target, 0);
-    const bool system_type_arguments = ast(system_target).kind == AstKind::NeutralBracket;
-    if (system_type_arguments)
-      system_target = child(system_target, 0);
+    auto system_callee = callee_ref;
+    while (ast(system_callee).kind == AstKind::Parenthesized)
+      system_callee = child(system_callee, 0);
+    const bool system_type_arguments =
+        ast(system_callee).kind == AstKind::NeutralBracket;
+    auto system_target =
+        system_type_arguments ? child(system_callee, 0) : system_callee;
     if (auto sid = occurrence(system_target);
         sid && symbol(*sid).kind == modules::SymbolKind::builtin_function)
-      if (const auto *spec = system_operation_spec(symbol(*sid).name)) {
-        if (system_type_arguments)
-          reject(r, "system operations do not accept type arguments", "E_CALL_ARGUMENT");
-        return system_call(r, *sid, *spec);
-      }
+      if (const auto *spec = system_operation_spec(symbol(*sid).name))
+        return system_call(r, system_callee, *sid, *spec);
     if (auto sid = occurrence(callee_ref))
       if (auto ex = m.resolved->foreign_export(*sid); ex && !ex->candidates.empty())
         return foreign_call(r, callee_ref, ex->candidates);

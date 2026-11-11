@@ -48,6 +48,7 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t cause,
                      : cause == 7 ? "reference-count-overflow"
                      : cause == 8 ? "active-iteration"
                      : cause == 9 ? "vec-slice"
+                     : cause == 10 ? "runtime-handle-misuse"
                                   : "invalid-cause";
 
   size_t len = 0;
@@ -155,15 +156,34 @@ extern "C" LangVec *lang_vec_new_v1(uint64_t length, uint64_t stride,
   return v;
 }
 extern "C" void lang_vec_retain_v1(LangVec *v) noexcept {
-  if (v->refs == 0xFFFFFFFFFFFFFFFFULL) vec_panic(7);
-  ++v->refs;
-  observe(2, v, v->refs);
+  // An existing live reference supplies ownership; this increment needs no acquire.
+  uint64_t refs = __atomic_load_n(&v->refs, __ATOMIC_RELAXED);
+  for (;;) {
+    if (refs == 0xFFFFFFFFFFFFFFFFULL) vec_panic(7);
+    if (__atomic_compare_exchange_n(&v->refs, &refs, refs + 1, false,
+                                    __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+      break;
+  }
+  observe(2, v, refs + 1);
 }
 extern "C" void lang_vec_release_v1(LangVec *v) noexcept {
-  if (!v->refs) vec_panic(7);
-  observe(3, v, v->refs - 1);
-  if (--v->refs) return;
-  if (v->iterations) vec_panic(8);
+  // Release each owner; acquire prior releases before the final cleanup.
+  uint64_t refs = __atomic_load_n(&v->refs, __ATOMIC_RELAXED);
+  if (!refs) vec_panic(7);
+  observe(3, v, refs - 1);
+  // Observers may retain the live object, so reload after the callback.
+  refs = __atomic_load_n(&v->refs, __ATOMIC_RELAXED);
+  for (;;) {
+    if (!refs) vec_panic(7);
+    const uint64_t next = refs - 1;
+    if (__atomic_compare_exchange_n(&v->refs, &refs, next, false,
+                                    __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+      if (next) return;
+      break;
+    }
+  }
+  __atomic_thread_fence(__ATOMIC_ACQUIRE);
+  if (__atomic_load_n(&v->iterations, __ATOMIC_RELAXED)) vec_panic(8);
   if (!v->drop && !lang_vec_observe_v1) {
     // Trivial elements have no cleanup and no observer needs per-element
     // events.
@@ -211,17 +231,32 @@ extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
   return result;
 }
 extern "C" uint64_t lang_vec_begin_v1(LangVec *v) noexcept {
-  if (v->iterations == 0xFFFFFFFFFFFFFFFFULL) vec_panic(8);
-  ++v->iterations;
-  observe(6, v, v->iterations);
+  // Concurrent read-only loops share this counter, not their element accesses.
+  uint64_t iterations = __atomic_load_n(&v->iterations, __ATOMIC_RELAXED);
+  for (;;) {
+    if (iterations == 0xFFFFFFFFFFFFFFFFULL) vec_panic(8);
+    if (__atomic_compare_exchange_n(&v->iterations, &iterations,
+                                    iterations + 1, false, __ATOMIC_RELAXED,
+                                    __ATOMIC_RELAXED))
+      break;
+  }
+  observe(6, v, iterations + 1);
   return v->length;
 }
 extern "C" void lang_vec_end_v1(LangVec *v) noexcept {
-  if (!v->iterations) vec_panic(8);
-  --v->iterations;
-  observe(7, v, v->iterations);
+  uint64_t iterations = __atomic_load_n(&v->iterations, __ATOMIC_RELAXED);
+  for (;;) {
+    if (!iterations) vec_panic(8);
+    const uint64_t next = iterations - 1;
+    if (__atomic_compare_exchange_n(&v->iterations, &iterations, next, false,
+                                    __ATOMIC_RELEASE, __ATOMIC_RELAXED)) {
+      observe(7, v, next);
+      return;
+    }
+  }
 }
 extern "C" uint64_t lang_vec_length_v1(LangVec *v) noexcept { return v->length; }
 extern "C" void lang_vec_check_resize_v1(LangVec *v) noexcept {
-  if (v->iterations) vec_panic(8);
+  // Structural changes still require caller synchronization against new iterations.
+  if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
 }

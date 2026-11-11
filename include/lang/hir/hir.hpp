@@ -21,7 +21,14 @@ enum class TypeKind {
   ForeignOpaque,
   Error,
   Vec,
-  ForeignCallable
+  ForeignCallable,
+  // Compiler-private owning runtime handles. These are canonical leaves: no
+  // parameters, declaration, binding or type arguments. Public std modules
+  // wrap them in ordinary nominal structs.
+  ThreadHandle,
+  MutexHandle,
+  CondvarHandle,
+  AtomicI64Handle
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -53,7 +60,8 @@ public:
   const Type *find(TypeId) const;
   size_t size() const { return entries_.size(); }
 };
-TypeId system_operation_signature(TypeContext &, SystemOperation);
+TypeId system_operation_signature(TypeContext &, SystemOperation,
+                                 const std::vector<TypeId> &args = {});
 enum class Backend { native, python };
 struct Config {
   Backend backend = Backend::native;
@@ -548,7 +556,10 @@ enum class ValueKind {
   unsupported,
   foreign_reference,
   foreign_callable,
-  foreign_error
+  foreign_error,
+  // An owning compiler-private thread/mutex/condvar/atomic handle. The source
+  // std modules expose it only through ordinary nominal wrappers.
+  runtime_handle
 };
 struct ValueField {
   std::optional<SymbolId> variant;

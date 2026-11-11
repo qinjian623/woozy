@@ -179,6 +179,11 @@ void complete_function(HirModule &m, const HirFunction &function,
 
 ValueKind provisional_kind(const Type &t) {
   switch (t.kind) {
+  case TypeKind::ThreadHandle:
+  case TypeKind::MutexHandle:
+  case TypeKind::CondvarHandle:
+  case TypeKind::AtomicI64Handle:
+    return ValueKind::runtime_handle;
   case TypeKind::Vec:
     return ValueKind::vec;
   case TypeKind::NominalStruct:
@@ -221,6 +226,11 @@ class Classifier {
     const auto &t = ty(m, id);
     if (t.kind == TypeKind::TypeParameter)
       return {ValueKind::dependent, {}};
+    if (t.kind == TypeKind::ThreadHandle ||
+        t.kind == TypeKind::MutexHandle ||
+        t.kind == TypeKind::CondvarHandle ||
+        t.kind == TypeKind::AtomicI64Handle)
+      return {ValueKind::runtime_handle, {}};
     if (t.kind == TypeKind::ForeignOpaque ||
         t.kind == TypeKind::ForeignCallable) {
       if (t.kind == TypeKind::ForeignCallable)
@@ -302,6 +312,11 @@ class Classifier {
     const auto &t = ty(m, id);
     if (t.kind == TypeKind::Vec)
       return true;
+    if (t.kind == TypeKind::ThreadHandle ||
+        t.kind == TypeKind::MutexHandle ||
+        t.kind == TypeKind::CondvarHandle ||
+        t.kind == TypeKind::AtomicI64Handle)
+      return true;
     if (t.kind == TypeKind::ForeignOpaque ||
         t.kind == TypeKind::ForeignCallable)
       return true;
@@ -348,6 +363,14 @@ public:
     const auto &t = ty(m, id);
     if (t.kind == TypeKind::TypeParameter) {
       out.kind = ValueKind::dependent;
+      return out;
+    }
+    if (t.kind == TypeKind::ThreadHandle ||
+        t.kind == TypeKind::MutexHandle ||
+        t.kind == TypeKind::CondvarHandle ||
+        t.kind == TypeKind::AtomicI64Handle) {
+      out.kind = ValueKind::runtime_handle;
+      out.needs_drop = true;
       return out;
     }
     if (t.kind == TypeKind::ForeignOpaque ||

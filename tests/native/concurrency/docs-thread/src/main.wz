@@ -1,0 +1,11 @@
+package main;
+import "std/os" as os;
+import "std/thread" as thread;
+
+func calculate(value i64) i64 { return value * 2; }
+
+func main() i32 throws os.Error {
+    let job = thread.spawn[i64](calculate, 21);
+    if !(thread.join(job) == 42) { return 1; }
+    return 0;
+}

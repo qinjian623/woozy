@@ -75,6 +75,10 @@ TypeId TypeContext::intern(Type t) {
   case TypeKind::TypeParameter:
   case TypeKind::ForeignOpaque:
   case TypeKind::ForeignCallable:
+  case TypeKind::ThreadHandle:
+  case TypeKind::MutexHandle:
+  case TypeKind::CondvarHandle:
+  case TypeKind::AtomicI64Handle:
   case TypeKind::Error:
     break;
   default:
@@ -103,13 +107,42 @@ TypeId TypeContext::intern(Type t) {
   entries_.push_back(std::move(t));
   return TypeId{entries_.size()};
 }
-TypeId system_operation_signature(TypeContext &types, SystemOperation operation) {
+TypeId system_operation_signature(TypeContext &types, SystemOperation operation,
+                                 const std::vector<TypeId> &args) {
   const auto *spec = system_operation_spec(operation);
   if (!spec)
     throw std::invalid_argument("unknown system operation");
-  auto value_type = [&](std::string_view name) {
+  const size_t required_args =
+      system_operation_has_type_arguments(operation) ? 1 : 0;
+  if (args.size() != required_args)
+    throw std::invalid_argument("wrong system operation type argument count");
+  for (auto arg : args)
+    if (!types.find(arg))
+      throw std::invalid_argument("system operation type argument is not public");
+  auto i64_type = [&] {
+    Type t;
+    t.kind = TypeKind::SignedInt;
+    t.bits = 64;
+    return types.intern(t);
+  };
+  auto value_type = [&](std::string_view name) -> TypeId {
+    if (name == "A") {
+      if (args.size() != 1)
+        throw std::invalid_argument("system operation A without type argument");
+      return args.front();
+    }
+    if (name == "func(A) i64") {
+      if (args.size() != 1)
+        throw std::invalid_argument("system operation callback without A");
+      Type fn;
+      fn.kind = TypeKind::Function;
+      fn.result = i64_type();
+      fn.parameters.push_back({ParamMode::ordinary, args.front()});
+      return types.intern(fn);
+    }
     Type t;
     if (name == "Unit") t.kind = TypeKind::Unit;
+    else if (name == "bool") t.kind = TypeKind::Bool;
     else if (name == "string") t.kind = TypeKind::String;
     else if (name == "usize") t.kind = TypeKind::Usize;
     else if (name == "Vec[u8]") {
@@ -119,7 +152,11 @@ TypeId system_operation_signature(TypeContext &types, SystemOperation operation)
     } else if (name == "i32" || name == "i64" || name == "u32") {
       t.kind = name[0] == 'i' ? TypeKind::SignedInt : TypeKind::UnsignedInt;
       t.bits = name == "i64" ? 64 : 32;
-    } else throw std::invalid_argument("unknown system operation type");
+    } else if (name == "__woozy_Thread") t.kind = TypeKind::ThreadHandle;
+    else if (name == "__woozy_Mutex") t.kind = TypeKind::MutexHandle;
+    else if (name == "__woozy_Condvar") t.kind = TypeKind::CondvarHandle;
+    else if (name == "__woozy_AtomicI64") t.kind = TypeKind::AtomicI64Handle;
+    else throw std::invalid_argument("unknown system operation type");
     return types.intern(t);
   };
   Type signature;
@@ -1999,8 +2036,12 @@ class Verifier {
       offset = 1;
     } else if (c.kind == CalleeKind::system) {
       const auto *spec = system_operation_spec(*c.system);
-      need(spec && c.direct_symbol && !c.callee && c.type_args.empty(),
+      need(spec && c.direct_symbol && !c.callee,
            "system operation target metadata");
+      const size_t type_arg_count =
+          system_operation_has_type_arguments(*c.system) ? 1 : 0;
+      need(c.type_args.size() == type_arg_count,
+           "system operation type argument count");
       const auto &target = symbol(*c.direct_symbol);
       need(target.kind == modules::SymbolKind::builtin_function &&
                target.name == spec->name && !target.definition &&
@@ -2013,9 +2054,11 @@ class Verifier {
                         }) == 1,
            "system operation builtin identity is ambiguous");
       const auto &mod = m.resolved->project->module(n.source.node.module);
-      need(mod.logical_path == "std/os" && !mod.binding,
-           "system operation source is outside std/os");
-      need(c.signature == system_operation_signature(substituted, *c.system),
+      need(mod.logical_path == spec->owner && !mod.binding,
+           std::string("system operation source is outside ") +
+               std::string(spec->owner));
+      need(c.signature ==
+               system_operation_signature(substituted, *c.system, c.type_args),
            "system operation fixed signature mismatch");
       const auto &file = *mod.files.at(n.source.node.file);
       const auto &call = file.node(n.source.node.node);
@@ -2027,10 +2070,32 @@ class Verifier {
       while (file.node(callee.node).kind == AstKind::Parenthesized)
         callee.node = file.node(callee.node).children.at(0);
       const auto &syntax_target = file.node(callee.node);
-      need(syntax_target.kind == AstKind::Name &&
-               file.tokens.at(syntax_target.token_begin).spelling == spec->name &&
-               resolved_source(callee) == c.direct_symbol,
-           "system operation differs from resolved source builtin");
+      if (type_arg_count) {
+        need(syntax_target.kind == AstKind::NeutralBracket &&
+                 syntax_target.children.size() == 2,
+             "system operation source type argument shape");
+        auto base = callee;
+        base.node = syntax_target.children.front();
+        while (file.node(base.node).kind == AstKind::Parenthesized)
+          base.node = file.node(base.node).children.at(0);
+        const auto &syntax_base = file.node(base.node);
+        need(syntax_base.kind == AstKind::Name &&
+                 file.tokens.at(syntax_base.token_begin).spelling == spec->name &&
+                 resolved_source(base) == c.direct_symbol,
+             "system operation differs from resolved source builtin");
+        auto source_argument = callee;
+        source_argument.node = syntax_target.children.back();
+        auto source_type =
+            source_type_in_function(source_argument, scope(n.scope).function);
+        valid_type(source_type, allowed(scope(n.scope).function));
+        need(source_type == c.type_args.front(),
+             "system operation source type argument differs from Call");
+      } else {
+        need(syntax_target.kind == AstKind::Name &&
+                 file.tokens.at(syntax_target.token_begin).spelling == spec->name &&
+                 resolved_source(callee) == c.direct_symbol,
+             "system operation differs from resolved source builtin");
+      }
       for (size_t i = 0; i < c.args.size(); ++i) {
         const auto &argument = file.node(call.children[i + 1]);
         need(argument.kind == AstKind::Argument && argument.children.size() == 1 &&
@@ -2540,7 +2605,23 @@ class Verifier {
     } else {
       need(s.kind == modules::SymbolKind::builtin_type,
            "type syntax symbol kind");
-      if (s.name == "Vec") {
+      if (private_runtime_type_name(s.name)) {
+        need(private_runtime_type_module(
+                 m.resolved->project->module(r.module).logical_path),
+             "private runtime type spelled outside its std module");
+        const bool type_arguments =
+            (n.kind == AstKind::NeutralBracket && n.children.size() > 1) ||
+            (n.kind == AstKind::NamedType && !n.children.empty());
+        need(!type_arguments, "private runtime type does not accept arguments");
+        if (s.name == "__woozy_Thread")
+          t.kind = TypeKind::ThreadHandle;
+        else if (s.name == "__woozy_Mutex")
+          t.kind = TypeKind::MutexHandle;
+        else if (s.name == "__woozy_Condvar")
+          t.kind = TypeKind::CondvarHandle;
+        else
+          t.kind = TypeKind::AtomicI64Handle;
+      } else if (s.name == "Vec") {
         t.kind = TypeKind::Vec;
         if (n.kind == AstKind::NeutralBracket)
           for (size_t i = 1; i < n.children.size(); ++i)
@@ -6015,6 +6096,13 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         m.config.word_bits == 64;
     const bool foreign_values =
         m.config.backend == Backend::python && m.config.word_bits == 64;
+    const bool runtime_handle_values =
+        m.config.backend == Backend::native && m.config.word_bits == 64;
+    auto runtime_handle = [](TypeKind kind) {
+      return kind == TypeKind::ThreadHandle || kind == TypeKind::MutexHandle ||
+             kind == TypeKind::CondvarHandle ||
+             kind == TypeKind::AtomicI64Handle;
+    };
     TypeContext storage_types = m.types;
     std::set<uint64_t> checked_types;
     bool type_budget_exceeded = false;
@@ -6029,6 +6117,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       if (!found)
         return false;
       const auto t = *found;
+      if (runtime_handle(t.kind))
+        return runtime_handle_values;
       if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable)
         return foreign_values;
       if (!checked_types.insert(id.value).second)
@@ -6086,6 +6176,11 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
           if (!current_found)
             return false;
           const auto value = *current_found;
+          if (runtime_handle(value.kind)) {
+            if (!runtime_handle_values)
+              return false;
+            continue;
+          }
           if (value.kind == TypeKind::ForeignOpaque ||
               value.kind == TypeKind::ForeignCallable) {
             if (!foreign_values)

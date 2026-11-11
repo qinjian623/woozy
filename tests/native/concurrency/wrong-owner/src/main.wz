@@ -1,0 +1,11 @@
+package main;
+import "std/os" as os;
+import "std/thread" as thread;
+import "std/sync" as sync;
+func worker(lock sync.Mutex) i64 { sync.unlock(lock); return 0; }
+func main() i32 throws os.Error {
+    let lock = sync.mutex(); sync.lock(lock);
+    let child = thread.spawn[sync.Mutex](worker,lock);
+    thread.join(child);
+    return 0;
+}

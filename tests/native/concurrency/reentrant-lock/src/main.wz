@@ -1,0 +1,3 @@
+package main;
+import "std/sync" as sync;
+func main() i32 { let lock = sync.mutex(); sync.lock(lock); sync.lock(lock); return 0; }

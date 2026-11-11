@@ -553,6 +553,12 @@ func smaller[T Ordered](left T, right T) T {
 
 当前不支持 C++ 模板特化、常量泛型、关联类型或动态 trait 对象。更多规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
 
+## 15. 线程与共享数据
+
+线程入口使用无捕获函数，工作数据通过参数传入。`thread.spawn[A](function, argument)` 创建线程，`thread.join(job)` 等待并取得 i64 结果；创建和等待可能抛出 `os.Error`。
+
+Vec 传给线程后仍共享容器。多个线程读写同一份可变数据时，用 `std/sync` 的 Mutex 保护访问；Condvar 用于等待共享条件，AtomicI64 用于原子计数。引用计数的原子操作不会代替这些同步。完整示例和接口见 [线程与同步](CONCURRENCY.md)。
+
 ## 继续阅读
 
 [快速入门](QUICKSTART.md) 按有经验读者常遇到的差异组织内容。[SEMANTICS.md](SEMANTICS.md) 规定数值、复制、错误和清理的精确行为；[词法与语法](../baseline/LEXICAL_SYNTAX.md) 可查字面量与声明写法，[系统接口](OS.md) 介绍输出、文件读写与进程操作。

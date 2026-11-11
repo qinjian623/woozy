@@ -1,0 +1,36 @@
+package main;
+import "std/os" as os;
+import "std/thread" as thread;
+import "std/sync" as sync;
+struct Work { mutex sync.Mutex; ready sync.Condvar; data Vec[i64]; count sync.AtomicI64; }
+func worker(work Work) i64 {
+    for var i i32 = 0; i < 2000; i += 1 {
+        let scratch Vec[i64] = [i64(i), 1, 2, 3];
+        sync.lock(work.mutex);
+        work.data[0] += scratch[1];
+        sync.unlock(work.mutex);
+        sync.fetch_add(work.count, 1);
+    }
+    sync.lock(work.mutex);
+    work.data[1] += 1;
+    sync.notify_all(work.ready);
+    sync.unlock(work.mutex);
+    return 2000;
+}
+func main() i32 throws os.Error {
+    let work = Work(mutex: sync.mutex(), ready: sync.condvar(), data: [0,0], count: sync.atomic_i64(0));
+    sync.lock(work.mutex);
+    let workers = [thread.spawn[Work](worker,work), thread.spawn[Work](worker,work),
+                   thread.spawn[Work](worker,work), thread.spawn[Work](worker,work)];
+    for work.data[1] < 4 { sync.wait(work.ready, work.mutex); }
+    if !(work.data[0] == 8000) { return 1; }
+    sync.unlock(work.mutex);
+    for child in workers { if !(thread.join(child) == 2000) { return 1; } }
+    if !(sync.load(work.count) == 8000) { return 1; }
+    if !(sync.compare_exchange(work.count,8000,8001)) { return 1; }
+    if !(!sync.compare_exchange(work.count,8000,0)) { return 1; }
+    sync.store(work.count,-3);
+    if !(sync.fetch_add(work.count,5) == -3) { return 1; }
+    if !(sync.load(work.count) == 2) { return 1; }
+    return 0;
+}
