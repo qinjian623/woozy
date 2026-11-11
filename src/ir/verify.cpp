@@ -20,6 +20,10 @@ bool integer(hir::TypeKind k) {
   return k == hir::TypeKind::SignedInt || k == hir::TypeKind::UnsignedInt ||
          k == hir::TypeKind::Isize || k == hir::TypeKind::Usize;
 }
+bool same_span(SourceSpan a, SourceSpan b) {
+  return a.snapshot == b.snapshot && a.begin_byte == b.begin_byte &&
+         a.end_byte == b.end_byte;
+}
 struct Bad {
   std::string message;
   SourceSpan span;
@@ -319,12 +323,94 @@ class Verifier {
         }
       }
     }
+    // Fixed operations are effects: individually valid calls may not be
+    // reordered. HIR children retain source evaluation order; use postorder
+    // so nested arguments precede their enclosing operation.
+    std::map<HirNodeId, size_t> system_order;
+    std::vector<SourceSpan> system_loop_sources;
+    auto hir_function = std::find_if(
+        m.hir.module().functions.begin(), m.hir.module().functions.end(),
+        [&](const auto &candidate) { return candidate.symbol == f.symbol; });
+    need(hir_function != m.hir.module().functions.end(),
+         "native function has no HIR body", s);
+    std::vector<std::pair<HirNodeId, bool>> pending{{hir_function->body, false}};
+    size_t sequence = 0;
+    while (!pending.empty()) {
+      auto [id, visited] = pending.back();
+      pending.pop_back();
+      const auto &node = m.hir.module().nodes.at(id.value);
+      if (!visited) {
+        pending.push_back({id, true});
+        if (node.kind() == hir::NodeKind::for_) {
+          system_loop_sources.push_back(node.source.span);
+          // HIR stores step before body; execution performs body first.
+          for (auto child : {node.children.at(2), node.children.at(3),
+                             node.children.at(1), node.children.at(0)})
+            pending.push_back({child, false});
+        } else {
+          if (node.kind() == hir::NodeKind::for_in)
+            system_loop_sources.push_back(node.source.span);
+          for (auto it = node.children.rbegin(); it != node.children.rend(); ++it)
+            pending.push_back({*it, false});
+        }
+      } else if (const auto *call = std::get_if<hir::Call>(&node.data);
+                 call && call->kind == hir::CalleeKind::system) {
+        system_order.emplace(id, sequence++);
+      }
+    }
+    // Carry the order through ordinary CFG edges. A dominating loop header
+    // starts another iteration, and defer markers start/end a cleanup context.
+    // Splitting a block must not make reordered effects acceptable.
+    auto backedge = [&](size_t from, size_t to) {
+      if (!dom[from].contains(to)) return false;
+      const auto source = f.blocks[from].terminator.source;
+      need(std::any_of(system_loop_sources.begin(), system_loop_sources.end(),
+                       [&](SourceSpan loop) { return same_span(loop, source); }),
+           "system operation loop edge has no HIR loop", source);
+      return true;
+    };
+    std::vector<std::optional<size_t>> system_in(f.blocks.size()),
+        system_out(f.blocks.size());
+    if (!system_order.empty()) {
+      changed = true;
+      while (changed) {
+        changed = false;
+        for (auto b : reachable) {
+          std::optional<size_t> previous;
+          for (auto pred : predecessors[b])
+            if (!backedge(pred, b) && system_out[pred] &&
+                (!previous || *system_out[pred] > *previous))
+              previous = system_out[pred];
+          if (system_in[b] != previous) {
+            system_in[b] = previous;
+            changed = true;
+          }
+          for (const auto &instruction : f.blocks[b].instructions) {
+            if (instruction.op == Op::cleanup_begin || instruction.op == Op::cleanup_end)
+              previous.reset();
+            if (instruction.op == Op::system_call && instruction.origin) {
+              auto position = system_order.find(*instruction.origin);
+              if (position != system_order.end()) previous = position->second;
+            }
+          }
+          if (system_out[b] != previous) {
+            system_out[b] = previous;
+            changed = true;
+          }
+        }
+      }
+    }
     for (size_t b = 0; b < f.blocks.size(); ++b) {
+      std::optional<size_t> previous_system = system_in[b];
       Set initialized = in[b];
       const auto &bb = f.blocks[b];
       for (size_t p = 0; p < bb.instructions.size(); ++p) {
         const auto &i = bb.instructions[p];
+        if (i.op == Op::cleanup_begin || i.op == Op::cleanup_end)
+          previous_system.reset(); // Each defer body has its own order.
         const auto &t = type(i.type, i.source);
+        need(i.op == Op::system_call || !i.system,
+             "system metadata on a non-system instruction", i.source);
         need(i.op == Op::string_literal || i.utf8.empty(),
              "string bytes on a non-string instruction", i.source);
         std::vector<Def> args;
@@ -694,10 +780,6 @@ class Verifier {
           // its SourceSpan. Follow only the existing transparent copy/borrow
           // wrappers, keyed by the real ValueId chain; do not use block/slot
           // depth as a proxy for value identity.
-          auto same_span = [](SourceSpan a, SourceSpan b) {
-            return a.snapshot == b.snapshot && a.begin_byte == b.begin_byte &&
-                   a.end_byte == b.end_byte;
-          };
           ValueId operand_value = i.inputs[0];
           std::set<ValueId> visited;
           for (;;) {
@@ -721,7 +803,59 @@ class Verifier {
           }
           break;
         }
+        case Op::system_call: {
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "system call without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes[i.origin->value];
+          const auto *call = std::get_if<hir::Call>(&source.data);
+          need(call && call->kind == hir::CalleeKind::system && call->system &&
+                   i.system == call->system && call->signature == i.signature &&
+                   m.hir.module().scopes.at(source.scope.value).function == f.symbol,
+               "system operation/signature differs from verified HIR", i.source);
+          need(same_span(i.source, source.source.span),
+               "system operation source differs from HIR", i.source);
+          auto position = system_order.find(*i.origin);
+          need(position != system_order.end() &&
+                   (!previous_system || position->second > *previous_system),
+               "system operation order differs from HIR evaluation", i.source);
+          previous_system = position->second;
+          const auto &cs = type(i.signature, i.source);
+          need(cs.kind == hir::TypeKind::Function && !cs.throws_type &&
+                   i.type == cs.result,
+               "invalid system call signature/result", i.source);
+          arity(cs.parameters.size());
+          for (size_t a = 0; a < cs.parameters.size(); ++a) {
+            value(a);
+            need(cs.parameters[a].mode == hir::ParamMode::ordinary &&
+                     args[a].type == cs.parameters[a].type && !args[a].address,
+                 "system argument type/mode mismatch", i.source);
+            const auto &argument = call->args.at(a);
+            need(argument.parameter_index == a,
+                 "system argument order differs from HIR", i.source);
+            ValueId operand = i.inputs[a];
+            std::set<ValueId> visited;
+            for (;;) {
+              need(visited.insert(operand).second,
+                   "system argument value cycle", i.source);
+              auto definition = instructions.find(operand);
+              if (definition != instructions.end() &&
+                  (definition->second->op == Op::copy ||
+                   definition->second->op == Op::borrow)) {
+                need(definition->second->inputs.size() == 1,
+                     "invalid system argument copy/borrow", i.source);
+                operand = definition->second->inputs.front();
+                continue;
+              }
+              break;
+            }
+            need(same_span(defs.at(operand).source,
+                           m.hir.module().nodes.at(argument.expression.value).source.span),
+                 "system argument value differs from HIR operand", i.source);
+          }
+          break;
+        }
         case Op::call: {
+          need(!i.system, "system metadata on ordinary call", i.source);
           need(i.origin && i.origin->value < m.hir.module().nodes.size(),
                "call without HIR origin", i.source);
           const auto &source = m.hir.module().nodes[i.origin->value];
@@ -1017,7 +1151,7 @@ class Verifier {
                    "instruction moved across cleanup bodies", i.source);
             }
         }
-        if (i.op == Op::call && !impossible.contains(b))
+        if ((i.op == Op::call || i.op == Op::system_call) && !impossible.contains(b))
           ++actual.calls[{context(state), *i.origin}];
         if (i.op == Op::exit_begin) {
           const auto &site = *i.exit;
@@ -1246,7 +1380,7 @@ std::string dump(const Module &m) {
             "enum_test",     "enum_payload",  "string_literal",
             "exit_begin",    "cleanup_begin", "cleanup_end",
             "copy", "move", "take", "destroy", "borrow", "end_borrow", "save_output",
-            "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check", "vec_element_address"};
+            "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check", "vec_element_address", "system_call"};
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;
@@ -1264,8 +1398,10 @@ std::string dump(const Module &m) {
           out << " op=" << static_cast<unsigned>(i.unary);
         if (i.op == Op::binary)
           out << " op=" << static_cast<unsigned>(i.binary);
-        if (i.op == Op::call)
+        if (i.op == Op::call || i.op == Op::system_call)
           out << " signature=" << i.signature.value;
+        if (i.system)
+          out << " system=" << static_cast<unsigned>(*i.system);
         if (i.op == Op::field_read || i.op == Op::field_address ||
             i.op == Op::enum_payload)
           out << " field=@" << i.field.value;

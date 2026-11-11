@@ -14,7 +14,7 @@
     "function_forward_reference": {
       "expected": "accept",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "6.2 声明收集和依赖",
         "clause": "由此支持同一包内函数前向引用和相互递归"
       }
@@ -22,7 +22,7 @@
     "mutual_function_recursion": {
       "expected": "accept",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "6.2 声明收集和依赖",
         "clause": "由此支持同一包内函数前向引用和相互递归"
       }
@@ -78,7 +78,7 @@
     "cross_package_pub_visible": {
       "expected": "accept",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "6.3 名字空间",
         "clause": "`pub` 明确导出"
       }
@@ -86,7 +86,7 @@
     "cross_package_private_hidden": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "6.3 名字空间",
         "clause": "跨包读取私有声明报错"
       }
@@ -110,7 +110,7 @@
     "invalid_logical_import_path": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "6.1 模块解析",
         "clause": "禁止绝对路径、反斜线、`..`、空段和非 ASCII 标识符段"
       }
@@ -126,7 +126,7 @@
     "const_dependency_cycle": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "6.2 声明收集和依赖",
         "clause": "常量依赖另外检测循环"
       }
@@ -166,7 +166,7 @@
     "discard_not_readable": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "6.3 名字空间",
         "clause": "`_` 在绑定和模式中表示丢弃，不创建可读取符号"
       }

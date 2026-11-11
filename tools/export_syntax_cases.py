@@ -75,7 +75,7 @@ def export_once() -> bytes:
         actual = "accept" if checker["check_file"](path)["accepted"] else "reject"
         if actual != expected:
             fail(f"baseline classification mismatch: {relative}")
-        stem = relative[:-5] if relative.endswith(".lang") else relative
+        stem = relative[:-3] if relative.endswith(".wz") else relative
         if stem.startswith("samples/"):
             stem = stem[8:]
         entry = {"name": "baseline/" + stem, "path": "baseline/" + relative,

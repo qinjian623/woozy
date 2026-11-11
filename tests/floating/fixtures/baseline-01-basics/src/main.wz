@@ -1,6 +1,6 @@
 package main;
 
-// v0.1 草案示例；.lang 是临时扩展名。
+// v0.1 示例；正式源文件后缀为 .wz。
 // 本文件展示词法、初始化、值构造和两种 for。
 
 struct Point {

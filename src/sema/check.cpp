@@ -1569,6 +1569,9 @@ class Checker {
         break;
       }
       auto k = symbol(*s).kind;
+      if (k == modules::SymbolKind::builtin_function &&
+          system_operation_spec(symbol(*s).name))
+        unavailable(r, "system operations can only be called directly from std/os");
       if (k == modules::SymbolKind::function) {
         auto it = signatures.find(s->value);
         if (it == signatures.end())
@@ -2345,6 +2348,36 @@ class Checker {
     }
     return result;
   }
+  Expr system_call(Ref r, SymbolId target, const SystemOperationSpec &spec) {
+    if (m.resolved->project->module(r.module).logical_path != "std/os")
+      unavailable(r, "system operations can only be called from std/os");
+    Call call;
+    call.kind = CalleeKind::system;
+    call.system = spec.operation;
+    call.direct_symbol = target;
+    call.signature = system_operation_signature(m.types, spec.operation);
+    const auto signature = type(call.signature);
+    if (ast(r).children.size() != spec.count + 1)
+      reject(r, "wrong number of system operation arguments", "E_CALL_ARGUMENT");
+    std::vector<HirNodeId> children;
+    for (size_t i = 0; i < spec.count; ++i) {
+      auto ar = child(r, i + 1);
+      if (token(ar, 1) == ":")
+        reject(ar, "system operations do not accept argument labels", "E_CALL_ARGUMENT");
+      auto argument = argument_mode(ar);
+      if (argument.has_marker || argument.requested != ParamMode::ordinary)
+        reject(ar, "system operations require ordinary arguments", "E_CALL_ARGUMENT");
+      auto value = expression(argument.value, signature.parameters[i].type);
+      if (m.nodes[value.id.value].kind() == NodeKind::move)
+        reject(ar, "system operations require ordinary arguments", "E_CALL_ARGUMENT");
+      match(ar, value.value.type, signature.parameters[i].type);
+      call.args.push_back({uint32_t(i), uint32_t(i), {}, ParamMode::ordinary, value.id});
+      children.push_back(value.id);
+    }
+    check_call_borrows(r, call.args, children);
+    return {node(r, signature.result, std::move(call), std::move(children)),
+            {signature.result, {}, {}}};
+  }
   Expr foreign_call(Ref r, Ref target, const std::vector<ForeignBindingId> &candidates,
                     std::optional<Expr> receiver = {}) {
     std::vector<std::optional<std::string>> labels;
@@ -2409,6 +2442,19 @@ class Checker {
   }
   Expr call(Ref r, std::optional<TypeId> expected) {
     auto callee_ref = child(r, 0);
+    auto system_target = callee_ref;
+    while (ast(system_target).kind == AstKind::Parenthesized)
+      system_target = child(system_target, 0);
+    const bool system_type_arguments = ast(system_target).kind == AstKind::NeutralBracket;
+    if (system_type_arguments)
+      system_target = child(system_target, 0);
+    if (auto sid = occurrence(system_target);
+        sid && symbol(*sid).kind == modules::SymbolKind::builtin_function)
+      if (const auto *spec = system_operation_spec(symbol(*sid).name)) {
+        if (system_type_arguments)
+          reject(r, "system operations do not accept type arguments", "E_CALL_ARGUMENT");
+        return system_call(r, *sid, *spec);
+      }
     if (auto sid = occurrence(callee_ref))
       if (auto ex = m.resolved->foreign_export(*sid); ex && !ex->candidates.empty())
         return foreign_call(r, callee_ref, ex->candidates);

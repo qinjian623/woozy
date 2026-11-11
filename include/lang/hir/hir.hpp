@@ -1,4 +1,5 @@
 #pragma once
+#include "lang/hir/system_operation.hpp"
 #include "lang/modules/resolve.hpp"
 #include <variant>
 
@@ -52,6 +53,7 @@ public:
   const Type *find(TypeId) const;
   size_t size() const { return entries_.size(); }
 };
+TypeId system_operation_signature(TypeContext &, SystemOperation);
 enum class Backend { native, python };
 struct Config {
   Backend backend = Backend::native;
@@ -152,7 +154,7 @@ struct IntegerConvert {
    // every f32/f64 pair. f32->f64 widening is exact; f64->f32 narrows once
    // with RNE, overflowing finite values to signed infinity and never using
    // the float->integer Panic rule.
-enum class CalleeKind { direct, function_value, foreign };
+enum class CalleeKind { direct, function_value, foreign, system };
 struct CallArg {
   uint32_t source_index = 0, parameter_index = 0;
   std::optional<std::string> label;
@@ -168,6 +170,7 @@ struct Call {
   std::vector<TypeId> type_args;
   std::optional<ForeignBindingId> binding;
   std::vector<uint32_t> omitted; // declaration indices, sorted; no value slots
+  std::optional<SystemOperation> system;
   // children: [callee when function_value], then args in source order.
 };
 struct Block {};               // children: statements in execution order; Unit

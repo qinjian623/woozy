@@ -10,7 +10,7 @@
   "negative_count": 9,
   "sample_results": [
     {
-      "path": "samples/01_basics.lang",
+      "path": "samples/01_basics.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -37,7 +37,7 @@
         },
         "files": [
           {
-            "path": "samples/01_basics.lang",
+            "path": "samples/01_basics.wz",
             "accepted": true,
             "token_count": 216,
             "diagnostics": []
@@ -46,7 +46,7 @@
       }
     },
     {
-      "path": "samples/02_generics.lang",
+      "path": "samples/02_generics.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -73,7 +73,7 @@
         },
         "files": [
           {
-            "path": "samples/02_generics.lang",
+            "path": "samples/02_generics.wz",
             "accepted": true,
             "token_count": 127,
             "diagnostics": []
@@ -82,7 +82,7 @@
       }
     },
     {
-      "path": "samples/03_errors.lang",
+      "path": "samples/03_errors.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -109,7 +109,7 @@
         },
         "files": [
           {
-            "path": "samples/03_errors.lang",
+            "path": "samples/03_errors.wz",
             "accepted": true,
             "token_count": 331,
             "diagnostics": []
@@ -118,7 +118,7 @@
       }
     },
     {
-      "path": "samples/04_numpy_torch.lang",
+      "path": "samples/04_numpy_torch.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -145,7 +145,7 @@
         },
         "files": [
           {
-            "path": "samples/04_numpy_torch.lang",
+            "path": "samples/04_numpy_torch.wz",
             "accepted": true,
             "token_count": 304,
             "diagnostics": []
@@ -154,7 +154,7 @@
       }
     },
     {
-      "path": "samples/05_traits.lang",
+      "path": "samples/05_traits.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -181,7 +181,7 @@
         },
         "files": [
           {
-            "path": "samples/05_traits.lang",
+            "path": "samples/05_traits.wz",
             "accepted": true,
             "token_count": 99,
             "diagnostics": []
@@ -190,7 +190,7 @@
       }
     },
     {
-      "path": "samples/06_control_flow.lang",
+      "path": "samples/06_control_flow.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -217,7 +217,7 @@
         },
         "files": [
           {
-            "path": "samples/06_control_flow.lang",
+            "path": "samples/06_control_flow.wz",
             "accepted": true,
             "token_count": 118,
             "diagnostics": []
@@ -226,7 +226,7 @@
       }
     },
     {
-      "path": "samples/07_functions.lang",
+      "path": "samples/07_functions.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -253,7 +253,7 @@
         },
         "files": [
           {
-            "path": "samples/07_functions.lang",
+            "path": "samples/07_functions.wz",
             "accepted": true,
             "token_count": 153,
             "diagnostics": []
@@ -262,7 +262,7 @@
       }
     },
     {
-      "path": "samples/negative/01_missing_semicolon.lang",
+      "path": "samples/negative/01_missing_semicolon.wz",
       "expected_syntax": "reject",
       "actual_syntax": "reject",
       "matches_expected": true,
@@ -289,7 +289,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/01_missing_semicolon.lang",
+            "path": "samples/negative/01_missing_semicolon.wz",
             "accepted": false,
             "diagnostics": [
               {
@@ -306,7 +306,7 @@
       }
     },
     {
-      "path": "samples/negative/02_invalid_string_escape.lang",
+      "path": "samples/negative/02_invalid_string_escape.wz",
       "expected_syntax": "reject",
       "actual_syntax": "reject",
       "matches_expected": true,
@@ -333,7 +333,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/02_invalid_string_escape.lang",
+            "path": "samples/negative/02_invalid_string_escape.wz",
             "accepted": false,
             "diagnostics": [
               {
@@ -350,7 +350,7 @@
       }
     },
     {
-      "path": "samples/negative/03_positional_after_named.lang",
+      "path": "samples/negative/03_positional_after_named.wz",
       "expected_syntax": "reject",
       "actual_syntax": "reject",
       "matches_expected": true,
@@ -377,7 +377,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/03_positional_after_named.lang",
+            "path": "samples/negative/03_positional_after_named.wz",
             "accepted": false,
             "diagnostics": [
               {
@@ -394,7 +394,7 @@
       }
     },
     {
-      "path": "samples/negative/04_unhandled_throws.lang",
+      "path": "samples/negative/04_unhandled_throws.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -421,7 +421,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/04_unhandled_throws.lang",
+            "path": "samples/negative/04_unhandled_throws.wz",
             "accepted": true,
             "token_count": 35,
             "diagnostics": []
@@ -430,7 +430,7 @@
       }
     },
     {
-      "path": "samples/negative/05_type_mismatch.lang",
+      "path": "samples/negative/05_type_mismatch.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -457,7 +457,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/05_type_mismatch.lang",
+            "path": "samples/negative/05_type_mismatch.wz",
             "accepted": true,
             "token_count": 19,
             "diagnostics": []
@@ -466,7 +466,7 @@
       }
     },
     {
-      "path": "samples/negative/06_uninitialized_binding.lang",
+      "path": "samples/negative/06_uninitialized_binding.wz",
       "expected_syntax": "reject",
       "actual_syntax": "reject",
       "matches_expected": true,
@@ -493,7 +493,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/06_uninitialized_binding.lang",
+            "path": "samples/negative/06_uninitialized_binding.wz",
             "accepted": false,
             "diagnostics": [
               {
@@ -510,7 +510,7 @@
       }
     },
     {
-      "path": "samples/negative/07_result_is_not_unwrapped.lang",
+      "path": "samples/negative/07_result_is_not_unwrapped.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -537,7 +537,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/07_result_is_not_unwrapped.lang",
+            "path": "samples/negative/07_result_is_not_unwrapped.wz",
             "accepted": true,
             "token_count": 75,
             "diagnostics": []
@@ -546,7 +546,7 @@
       }
     },
     {
-      "path": "samples/negative/08_throwing_cleanup.lang",
+      "path": "samples/negative/08_throwing_cleanup.wz",
       "expected_syntax": "accept",
       "actual_syntax": "accept",
       "matches_expected": true,
@@ -573,7 +573,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/08_throwing_cleanup.lang",
+            "path": "samples/negative/08_throwing_cleanup.wz",
             "accepted": true,
             "token_count": 39,
             "diagnostics": []
@@ -582,7 +582,7 @@
       }
     },
     {
-      "path": "samples/negative/09_ambiguous_function_return_type.lang",
+      "path": "samples/negative/09_ambiguous_function_return_type.wz",
       "expected_syntax": "reject",
       "actual_syntax": "reject",
       "matches_expected": true,
@@ -609,7 +609,7 @@
         },
         "files": [
           {
-            "path": "samples/negative/09_ambiguous_function_return_type.lang",
+            "path": "samples/negative/09_ambiguous_function_return_type.wz",
             "accepted": false,
             "diagnostics": [
               {

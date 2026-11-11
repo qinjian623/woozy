@@ -196,7 +196,7 @@ try:
         'environment_cuda_unavailable': environment['cuda_available'] is False,
         'binding_info_contract': binding_info['contract'] == 'compiler-dev/1',
         'binding_info_sha': binding_info['sha256'] ==
-            '44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f',
+            'c118c3e4912234dc752355fd8f41b6274433c86a3448fdc53dcdb63d7aa2cd71',
         'binding_info_draft': binding_info['review_status'] ==
             'draft_requires_conformance',
     }

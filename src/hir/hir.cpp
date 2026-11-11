@@ -103,6 +103,32 @@ TypeId TypeContext::intern(Type t) {
   entries_.push_back(std::move(t));
   return TypeId{entries_.size()};
 }
+TypeId system_operation_signature(TypeContext &types, SystemOperation operation) {
+  const auto *spec = system_operation_spec(operation);
+  if (!spec)
+    throw std::invalid_argument("unknown system operation");
+  auto value_type = [&](std::string_view name) {
+    Type t;
+    if (name == "Unit") t.kind = TypeKind::Unit;
+    else if (name == "string") t.kind = TypeKind::String;
+    else if (name == "usize") t.kind = TypeKind::Usize;
+    else if (name == "Vec[u8]") {
+      Type element; element.kind = TypeKind::UnsignedInt; element.bits = 8;
+      t.kind = TypeKind::Vec;
+      t.type_args = {types.intern(element)};
+    } else if (name == "i32" || name == "i64" || name == "u32") {
+      t.kind = name[0] == 'i' ? TypeKind::SignedInt : TypeKind::UnsignedInt;
+      t.bits = name == "i64" ? 64 : 32;
+    } else throw std::invalid_argument("unknown system operation type");
+    return types.intern(t);
+  };
+  Type signature;
+  signature.kind = TypeKind::Function;
+  signature.result = value_type(spec->result);
+  for (size_t i = 0; i < spec->count; ++i)
+    signature.parameters.push_back({ParamMode::ordinary, value_type(spec->parameters[i])});
+  return types.intern(signature);
+}
 TypeId substitute(TypeId id, const Substitutions &sub, TypeContext &ctx) {
   std::map<uint64_t, TypeId> cache;
   std::function<TypeId(TypeId)> visit = [&](TypeId current) {
@@ -1942,6 +1968,8 @@ class Verifier {
          "trait prototype method value has a fake executable body");
   }
   void check_call(const HirNode &n, const Call &c) const {
+    need((c.kind == CalleeKind::system) == c.system.has_value(),
+         "system operation metadata on wrong call kind");
     if (c.kind == CalleeKind::foreign) {
       foreign_call(n, c);
       return;
@@ -1969,6 +1997,58 @@ class Verifier {
       need(expr(*c.callee).type == c.signature,
            "function value signature mismatch");
       offset = 1;
+    } else if (c.kind == CalleeKind::system) {
+      const auto *spec = system_operation_spec(*c.system);
+      need(spec && c.direct_symbol && !c.callee && c.type_args.empty(),
+           "system operation target metadata");
+      const auto &target = symbol(*c.direct_symbol);
+      need(target.kind == modules::SymbolKind::builtin_function &&
+               target.name == spec->name && !target.definition &&
+               !target.declaration && !target.exported && !target.target && !target.foreign,
+           "system operation target is not the real builtin");
+      need(std::count_if(m.resolved->symbols.begin(), m.resolved->symbols.end(),
+                        [&](const auto &s) {
+                          return s.kind == modules::SymbolKind::builtin_function &&
+                                 s.name == spec->name;
+                        }) == 1,
+           "system operation builtin identity is ambiguous");
+      const auto &mod = m.resolved->project->module(n.source.node.module);
+      need(mod.logical_path == "std/os" && !mod.binding,
+           "system operation source is outside std/os");
+      need(c.signature == system_operation_signature(substituted, *c.system),
+           "system operation fixed signature mismatch");
+      const auto &file = *mod.files.at(n.source.node.file);
+      const auto &call = file.node(n.source.node.node);
+      need(call.kind == AstKind::Call && call.children.size() == spec->count + 1 &&
+               c.args.size() == spec->count,
+           "system operation source call/arity");
+      auto callee = n.source.node;
+      callee.node = call.children.front();
+      while (file.node(callee.node).kind == AstKind::Parenthesized)
+        callee.node = file.node(callee.node).children.at(0);
+      const auto &syntax_target = file.node(callee.node);
+      need(syntax_target.kind == AstKind::Name &&
+               file.tokens.at(syntax_target.token_begin).spelling == spec->name &&
+               resolved_source(callee) == c.direct_symbol,
+           "system operation differs from resolved source builtin");
+      for (size_t i = 0; i < c.args.size(); ++i) {
+        const auto &argument = file.node(call.children[i + 1]);
+        need(argument.kind == AstKind::Argument && argument.children.size() == 1 &&
+                 file.tokens.at(argument.token_begin + 1).spelling != ":" &&
+                 !c.args[i].label && c.args[i].mode == ParamMode::ordinary,
+             "system operation source argument label/mode");
+        auto ref = n.source.node;
+        ref.node = argument.children.front();
+        ref = unwrapped(ref);
+        const auto &value = file.node(ref.node);
+        need(!(value.kind == AstKind::Unary &&
+               (file.tokens.at(value.token_begin).spelling == "move" ||
+                file.tokens.at(value.token_begin).spelling == "inout")),
+             "system operation source argument marker");
+        need(expr(c.args[i].expression).kind() != NodeKind::move &&
+                 same_ref(unwrapped(expr(c.args[i].expression).source.node), ref),
+             "system operation argument differs from source");
+      }
     } else
       fail("unsupported callee kind");
     need(c.args.size() == sig.parameters.size() &&
@@ -6085,6 +6165,12 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         auto id = todo.back();
         todo.pop_back();
         const auto &n = m.nodes[id.value];
+        if (const auto *call = std::get_if<Call>(&n.data);
+            call && call->kind == CalleeKind::system &&
+            (m.config.backend != Backend::native || m.config.word_bits != 64)) {
+          unavailable(n.source, "system operations require the Native/64 profile");
+          return r;
+        }
         if (n.kind() == NodeKind::foreign_read ||
             (std::holds_alternative<Call>(n.data) &&
              std::get<Call>(n.data).kind == CalleeKind::foreign)) {
@@ -6546,6 +6632,7 @@ std::string dump(const HirModule &m) {
             for (auto t : data.type_args)
               s << " type_arg=" << t.value;
             if (data.binding) s << " binding=" << data.binding->value;
+            if (data.system) s << " system=" << int(*data.system);
             for (auto p : data.omitted) s << " omitted=" << p;
             s << " callee_kind=" << int(data.kind)
               << " signature=" << data.signature.value << " direct=";

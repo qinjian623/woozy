@@ -32,8 +32,8 @@
 
 ```sh
 python3 tools/check_syntax.py --self-test
-python3 tools/check_syntax.py samples/*.lang
-python3 tools/check_syntax.py --json samples/negative/04_unhandled_throws.lang
+python3 tools/check_syntax.py samples/*.wz
+python3 tools/check_syntax.py --json samples/negative/04_unhandled_throws.wz
 ```
 
 第三条命令应接受语法；它不代表未声明的错误传播是合法的。

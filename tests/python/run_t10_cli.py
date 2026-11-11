@@ -21,7 +21,7 @@ sys.dont_write_bytecode = True
 THREAD_ENV = ('OMP_NUM_THREADS', 'MKL_NUM_THREADS', 'OPENBLAS_NUM_THREADS',
               'NUMEXPR_NUM_THREADS', 'VECLIB_MAXIMUM_THREADS')
 ORIGINAL04_SHA = 'beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797'
-BINDING_SHA = '44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f'
+BINDING_SHA = 'c118c3e4912234dc752355fd8f41b6274433c86a3448fdc53dcdb63d7aa2cd71'
 
 
 def sha(path):
@@ -148,7 +148,7 @@ def main():
         args.native_helper = args.native_helper.resolve()
     args.out.mkdir(parents=True, exist_ok=True)
     require(sha(args.binding) == BINDING_SHA, sha(args.binding))
-    require(sha(args.root / 'baseline/samples/04_numpy_torch.lang') == ORIGINAL04_SHA,
+    require(sha(args.root / 'baseline/samples/04_numpy_torch.wz') == ORIGINAL04_SHA,
             'original 04 changed')
     r = Runner(args)
 
@@ -156,7 +156,7 @@ def main():
     original = args.out / 'projects' / 'original-04'
     r.fresh(original)
     write(original / 'src/main.wz',
-          (args.root / 'baseline/samples/04_numpy_torch.lang').read_text())
+          (args.root / 'baseline/samples/04_numpy_torch.wz').read_text())
     write(original / 'lang.toml', f'''schema_version = 1
 [package]
 name = "app"
@@ -225,7 +225,7 @@ word_bits = 64
              '--std-binding', binding],
             [args.langc, 'check', '--project', manifest, '--std-binding=' + binding],
             [args.langc, 'check', '--syntax-only',
-             args.root / 'baseline/samples/04_numpy_torch.lang',
+             args.root / 'baseline/samples/04_numpy_torch.wz',
              '--std-binding', binding],
             [args.langc, 'build', '--project', manifest, '--out-dir',
              args.out / 'argument-errors', '--std-binding'],
@@ -650,7 +650,7 @@ host_package = "numpy"
             'native_helper': None if not args.native_helper else str(args.native_helper),
             'binding': str(args.binding),
             'binding_sha256': sha(args.binding),
-            'original04_sha256': sha(args.root / 'baseline/samples/04_numpy_torch.lang'),
+            'original04_sha256': sha(args.root / 'baseline/samples/04_numpy_torch.wz'),
             'reference_sha256': sha(args.reference),
         },
     }

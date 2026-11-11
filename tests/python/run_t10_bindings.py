@@ -1360,7 +1360,7 @@ word_bits = 64
     r.add('real-host-exception', real_error_case)
 
     def original04_case(row):
-        source = args.root / 'baseline/samples/04_numpy_torch.lang'
+        source = args.root / 'baseline/samples/04_numpy_torch.wz'
         expected_sha = 'beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797'
         require(sha(source) == expected_sha, sha(source))
         project = args.out / 'projects' / 'original-04'

@@ -478,6 +478,61 @@ class Emitter {
                                  builder.CreateICmpUGE(index, init));
     guard(bad, 4, source);
   }
+  llvm::Value *system_call(const ir::Instruction &i,
+                           llvm::ArrayRef<llvm::Value *> args) {
+    using hir::SystemOperation;
+    if (!i.system) fail("system operation missing");
+    auto call = [&](llvm::StringRef name, llvm::Type *result,
+                    llvm::ArrayRef<llvm::Value *> actual) -> llvm::Value * {
+      llvm::SmallVector<llvm::Type *, 8> types;
+      for (auto *value : actual) types.push_back(value->getType());
+      auto target = module.getOrInsertFunction(
+          name, llvm::FunctionType::get(result, types, false));
+      return builder.CreateCall(target, actual);
+    };
+    auto text_pointer = [&](unsigned index) {
+      return builder.CreateExtractValue(args[index], {0});
+    };
+    auto text_length = [&](unsigned index) {
+      return builder.CreateExtractValue(args[index], {1});
+    };
+    auto *i64 = builder.getInt64Ty();
+    switch (*i.system) {
+    case SystemOperation::read:
+      return call("lang_os_read_vec_v1", i64, {args[0], args[1], args[2]});
+    case SystemOperation::write:
+      return call("lang_os_write_vec_v1", i64,
+                  {args[0], args[1], args[2], args[3]});
+    case SystemOperation::write_text:
+      return call("lang_os_write_text_v1", i64,
+                  {args[0], text_pointer(1), text_length(1), args[2], args[3]});
+    case SystemOperation::open:
+      return call("lang_os_open_v1", i64,
+                  {text_pointer(0), text_length(0), args[1], args[2]});
+    case SystemOperation::close:
+      return call("lang_os_close_v1", i64, args);
+    case SystemOperation::seek:
+      return call("lang_os_seek_v1", i64, args);
+    case SystemOperation::unlink:
+      return call("lang_os_unlink_v1", i64, {text_pointer(0), text_length(0)});
+    case SystemOperation::mkdir:
+      return call("lang_os_mkdir_v1", i64,
+                  {text_pointer(0), text_length(0), args[1]});
+    case SystemOperation::rmdir:
+      return call("lang_os_rmdir_v1", i64, {text_pointer(0), text_length(0)});
+    case SystemOperation::getpid:
+      return call("lang_os_getpid_v1", i64, {});
+    case SystemOperation::exit:
+      call("lang_os_exit_v1", builder.getVoidTy(), args);
+      return builder.getInt8(0); // Unit; the process does not return here.
+    case SystemOperation::vec_length:
+      return call("lang_vec_length_v1", i64, args);
+    case SystemOperation::text_length:
+      return text_length(0);
+    }
+    fail("unknown system operation");
+    return nullptr;
+  }
   void instruction(const ir::Instruction &i) {
     std::vector<llvm::Value *> args;
     for (auto v : i.inputs)
@@ -736,6 +791,9 @@ class Emitter {
       break;
     case ir::Op::convert:
       v = convert(i, args[0]);
+      break;
+    case ir::Op::system_call:
+      v = system_call(i, args);
       break;
     case ir::Op::call: {
       llvm::SmallVector<llvm::Value *, 8> actual(args.begin() + 1, args.end());

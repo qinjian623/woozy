@@ -1,0 +1,13 @@
+package main;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    defer {
+        try { os.write_all_text(os.stdout(), "DEFER\n"); }
+        catch error os.Error { }
+    }
+    os.write_all_text(os.stdout(), "before\n");
+    os.exit(23);
+    os.write_all_text(os.stdout(), "after\n");
+    return 77;
+}

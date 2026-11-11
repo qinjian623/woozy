@@ -474,11 +474,15 @@ class Lower {
     }
     case hir::NodeKind::call: {
       const auto &c = std::get<hir::Call>(n.data);
-      i.op = Op::call;
+      const bool system = c.kind == hir::CalleeKind::system;
+      i.op = system ? Op::system_call : Op::call;
+      i.system = c.system;
       i.origin = id;
       i.signature = c.signature;
       ValueId callee;
-      if (c.callee)
+      if (system) {
+        // Fixed typed operation; there is no source-level function pointer.
+      } else if (c.callee)
         callee = expr(*c.callee);
       else {
         Instruction fn;
@@ -488,12 +492,13 @@ class Lower {
         fn.source = i.source;
         callee = emit(fn);
       }
-      i.inputs.resize(c.args.size() + 1);
-      i.inputs[0] = callee;
+      const size_t argument_offset = system ? 0 : 1;
+      i.inputs.resize(c.args.size() + argument_offset);
+      if (!system) i.inputs[0] = callee;
       // Evaluation follows source order. Only the saved values are reordered.
       for (const auto &arg : c.args) {
         auto value = expr(arg.expression);
-        i.inputs[arg.parameter_index + 1] = value;
+        i.inputs[arg.parameter_index + argument_offset] = value;
         bool lifetime = false;
         for (const auto &call : h.ownership.calls) if (call.node == id) lifetime = true;
         if (lifetime && arg.mode != hir::ParamMode::move) {

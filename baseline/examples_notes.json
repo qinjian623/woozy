@@ -1,16 +1,16 @@
 {
   "schema_version": "0.1",
   "status": "language_design_draft",
-  "extension": ".lang",
+  "extension": ".wz",
   "executable_language_compiler_available": false,
   "syntax_validation_status": "passed_against_expected_accept_reject_classification",
   "semantic_validation_status": "not_implemented",
   "assumptions": [
     "Each sample is an independent module; sample files must not be concatenated.",
-    "Every complete .lang file begins with package main; in these independent examples; imports follow the package declaration.",
+    "Every complete .wz file begins with package main; in these independent examples; imports follow the package declaration.",
     "An explicitly declared enum may be used as a throws error type without a separate Error trait implementation in this draft.",
     "Result and Option are ordinary type names rather than reserved unwrapping syntax.",
-    "02_generics.lang defines its own Ordered trait and instantiates less only for i32; its generic function returns bool rather than a borrowed generic value.",
+    "02_generics.wz defines its own Ordered trait and instantiates less only for i32; its generic function returns bool rather than a borrowed generic value.",
     "Vec[T] is the proposed standard vector type; list literals may obtain their element type from context.",
     "Default integer and floating literals are i64 and f64 when no more specific context applies.",
     "std/py is a language bridge module; its import is not translated into an ordinary Python import of std.py.",
@@ -20,7 +20,7 @@
   ],
   "positive_examples": [
     {
-      "path": "samples/01_basics.lang",
+      "path": "samples/01_basics.wz",
       "proposed_profile": "core",
       "focus": [
         "literals",
@@ -35,7 +35,7 @@
       "execution_status": "not_executed_no_language_compiler"
     },
     {
-      "path": "samples/02_generics.lang",
+      "path": "samples/02_generics.wz",
       "proposed_profile": "core",
       "focus": [
         "trait_constraint",
@@ -48,7 +48,7 @@
       "execution_status": "not_executed_no_language_compiler"
     },
     {
-      "path": "samples/03_errors.lang",
+      "path": "samples/03_errors.wz",
       "proposed_profile": "core",
       "focus": [
         "enum_error",
@@ -63,7 +63,7 @@
       "execution_status": "not_executed_no_language_compiler"
     },
     {
-      "path": "samples/04_numpy_torch.lang",
+      "path": "samples/04_numpy_torch.wz",
       "proposed_profile": "python",
       "focus": [
         "python_bindings",
@@ -77,7 +77,7 @@
       "execution_status": "not_executed_no_language_compiler_and_torch_unavailable"
     },
     {
-      "path": "samples/05_traits.lang",
+      "path": "samples/05_traits.wz",
       "proposed_profile": "core",
       "focus": [
         "trait",
@@ -90,7 +90,7 @@
       "execution_status": "not_executed_no_language_compiler"
     },
     {
-      "path": "samples/06_control_flow.lang",
+      "path": "samples/06_control_flow.wz",
       "proposed_profile": "core",
       "focus": [
         "inout",
@@ -104,7 +104,7 @@
       "execution_status": "not_executed_no_language_compiler"
     },
     {
-      "path": "samples/07_functions.lang",
+      "path": "samples/07_functions.wz",
       "proposed_profile": "core",
       "focus": [
         "function_literal",
@@ -119,55 +119,55 @@
   ],
   "negative_examples": [
     {
-      "path": "samples/negative/01_missing_semicolon.lang",
+      "path": "samples/negative/01_missing_semicolon.wz",
       "expected_syntax": "reject",
       "rejection_phase": "syntax",
       "reason": "binding declaration is missing its terminating semicolon"
     },
     {
-      "path": "samples/negative/02_invalid_string_escape.lang",
+      "path": "samples/negative/02_invalid_string_escape.wz",
       "expected_syntax": "reject",
       "rejection_phase": "lexical",
       "reason": "string contains unsupported escape \\q"
     },
     {
-      "path": "samples/negative/03_positional_after_named.lang",
+      "path": "samples/negative/03_positional_after_named.wz",
       "expected_syntax": "reject",
       "rejection_phase": "syntax_call_form",
       "reason": "a positional argument follows a named argument"
     },
     {
-      "path": "samples/negative/04_unhandled_throws.lang",
+      "path": "samples/negative/04_unhandled_throws.wz",
       "expected_syntax": "accept",
       "rejection_phase": "static_effect",
       "reason": "a nonthrowing function neither catches nor declares the called function's error"
     },
     {
-      "path": "samples/negative/05_type_mismatch.lang",
+      "path": "samples/negative/05_type_mismatch.wz",
       "expected_syntax": "accept",
       "rejection_phase": "type",
       "reason": "a string is assigned to i32"
     },
     {
-      "path": "samples/negative/06_uninitialized_binding.lang",
+      "path": "samples/negative/06_uninitialized_binding.wz",
       "expected_syntax": "reject",
       "rejection_phase": "syntax",
       "reason": "let declarations require an initializer"
     },
     {
-      "path": "samples/negative/07_result_is_not_unwrapped.lang",
+      "path": "samples/negative/07_result_is_not_unwrapped.wz",
       "expected_syntax": "accept",
       "rejection_phase": "type",
       "reason": "Result[i32, Problem] is not implicitly unwrapped to i32, including inside a throws function"
     },
     {
-      "path": "samples/negative/08_throwing_cleanup.lang",
+      "path": "samples/negative/08_throwing_cleanup.wz",
       "expected_syntax": "accept",
       "rejection_phase": "static_cleanup_effect",
       "reason": "defer cleanup cannot propagate an unhandled recoverable error"
     },
     {
-      "path": "samples/negative/09_ambiguous_function_return_type.lang",
+      "path": "samples/negative/09_ambiguous_function_return_type.wz",
       "expected_syntax": "reject",
       "rejection_phase": "syntax",
       "reason": "a function used as a return type must be parenthesized to disambiguate throws ownership"

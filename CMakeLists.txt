@@ -19,6 +19,8 @@ find_package(json-c CONFIG REQUIRED)
 add_library(lang_modules STATIC src/modules/resolve.cpp src/modules/project.cpp)
 target_link_libraries(lang_modules PUBLIC lang_frontend
   PRIVATE tomlplusplus::tomlplusplus json-c::json-c)
+target_compile_definitions(lang_modules PRIVATE
+  LANG_STD_SOURCE_ROOT="${CMAKE_CURRENT_SOURCE_DIR}/stdlib")
 add_library(lang_hir STATIC src/hir/hir.cpp src/hir/ownership.cpp
   src/hir/pattern_analysis.cpp src/hir/literal_value.cpp src/hir/constant_value.cpp)
 target_link_libraries(lang_hir PUBLIC lang_modules)
@@ -50,6 +52,9 @@ if(BUILD_TESTING)
   add_subdirectory(tests/cleanup)
   add_subdirectory(tests/ownership)
   add_subdirectory(tests/bindings)
+  add_executable(lang_system_frontend_test tests/sema/system_test.cpp)
+  target_link_libraries(lang_system_frontend_test PRIVATE lang_sema)
+  add_test(NAME sema.system COMMAND lang_system_frontend_test)
   add_executable(lang_check_test tests/sema/check_test.cpp)
   target_link_libraries(lang_check_test PRIVATE lang_sema json-c::json-c)
   add_test(NAME sema.scalar COMMAND lang_check_test ${CMAKE_CURRENT_SOURCE_DIR})

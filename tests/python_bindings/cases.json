@@ -14,7 +14,7 @@
     "future_execution_status": "not_run for every case and baseline reference"
   },
   "baseline_reference": {
-    "path": "baseline/samples/04_numpy_torch.lang",
+    "path": "baseline/samples/04_numpy_torch.wz",
     "sha256": "beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797",
     "git_head_blob_sha256": "beb672124e6ccc697c8c129d2f7aa3bf21640de0b4af7a058eefa907fc6e6797",
     "unchanged": true,
@@ -47,7 +47,7 @@
     },
     "example_bundle": {
       "path": "contracts/python_bindings.example.json",
-      "sha256": "44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f",
+      "sha256": "c118c3e4912234dc752355fd8f41b6274433c86a3448fdc53dcdb63d7aa2cd71",
       "review_status": "draft_requires_conformance"
     },
     "note": "所有正例只引用示例绑定中已存在的模块、类型、值和 callable；U01 暴露 schema 没有属性/下标表达的问题，未新增绑定。"
@@ -73,7 +73,7 @@
     "compiler_version": "langc 0.1.0-bootstrap (compiler-dev/1)",
     "compiler_artifact": "/tmp/language-t10-binding-fixtures-20261104/build/langc",
     "tooling_read": [
-      "docs/TOOLING.md §3",
+      "development/docs/TOOLING.md §3",
       "langc --help",
       "langc check --syntax-only"
     ],
@@ -127,7 +127,7 @@
           "claim": "检查器只解析纯声明绑定，不导入真实 Python 包；外部类型由绑定声明。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A03",
           "claim": "仅依赖纯声明绑定时，即使 Python 包未安装，静态检查仍可完成。"
         },
@@ -181,7 +181,7 @@
           "claim": "参数名、位置/关键字限定、返回类型和 storage 契约。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A08",
           "claim": "NumPy x、y 形状为 (128, 1)，dtype 为 float32，y = 2x + 1；数据转换显式使用 torch.tensor。"
         },
@@ -238,7 +238,7 @@
           "claim": "签名、命名参数、effects 和 receiver_escapes。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A08",
           "claim": "用 Module 调用 hook 观察 model(x)；计数 backward 与 optimizer.step；保留 autograd。"
         },
@@ -283,12 +283,12 @@
       ],
       "spec": [
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A08",
           "claim": "训练返回真实零维 Tensor；requires_grad/grad_fn 符合本例 autograd 路径；产物不插入 detach/item/cpu/numpy。"
         },
         {
-          "path": "docs/IMPLEMENTATION_PLAN.md",
+          "path": "development/docs/IMPLEMENTATION_PLAN.md",
           "section": "T10",
           "claim": "保留真实 Tensor 和 autograd 图；不能通过隐式 detach/item 修复类型问题。"
         },
@@ -354,7 +354,7 @@
           "claim": "expand_dims 声明 throws lang.py.Error；axis 是运行时约束。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A08",
           "claim": "独立小例验证抛出 Python 异常时的桥接行为。"
         }
@@ -410,7 +410,7 @@
           "claim": "in_features/out_features 为 positional_or_keyword，device/dtype 为 keyword_only。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A03",
           "claim": "包含副作用和中途抛错的用例能观察到命名实参的源码求值顺序。"
         }
@@ -575,7 +575,7 @@
           "claim": "变量、实参和返回值不做隐式类型混合。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A03",
           "claim": "字符串赋给 i32 等类型错误必须拒绝；外部类型同样按声明检查。"
         }
@@ -624,7 +624,7 @@
           "claim": "借用参数不得逃逸或无故转移所有权。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A07",
           "claim": "借用参数不会无故转移所有权；move 必须按规定消耗整个拥有绑定。"
         },
@@ -674,12 +674,12 @@
           "claim": "inout 首版只接受可证明无别名的 var 整体平凡值；引用容器、外部对象、字段/索引位置明确报未支持。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "14",
           "claim": "inout 只允许首版平凡值整体绑定；拒绝共享 Vec 或外部对象的 inout。"
         },
         {
-          "path": "docs/IMPLEMENTATION_PLAN.md",
+          "path": "development/docs/IMPLEMENTATION_PLAN.md",
           "section": "T09/T10",
           "claim": "外部 Python 对象遵循绑定 ownership；不把外部共享对象图误标成深层独占。"
         },
@@ -733,7 +733,7 @@
           "claim": "tensor[i, j] 的多项下标是否允许由类型/绑定决定；方括号保留候选。"
         },
         {
-          "path": "docs/ACCEPTANCE.md",
+          "path": "development/docs/ACCEPTANCE.md",
           "section": "A08",
           "claim": "还需独立小例验证 ndarray/Tensor 透传身份、原地修改、参数顺序和异常桥接。"
         },

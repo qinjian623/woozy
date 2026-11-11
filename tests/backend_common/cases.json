@@ -123,7 +123,7 @@
           "clause": "| 数值、bool、Unit、非捕获函数值 | 复制值 |"
         },
         {
-          "path": "docs/FRONTEND.md",
+          "path": "development/docs/FRONTEND.md",
           "section": "7.2 调用检查",
           "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
         }
@@ -183,7 +183,7 @@
           "clause": "命名实参先按书写顺序求值到临时值，再按签名排列。重排参数不能重排副作用。"
         },
         {
-          "path": "docs/FRONTEND.md",
+          "path": "development/docs/FRONTEND.md",
           "section": "7.2 调用检查",
           "clause": "**实参匹配顺序与求值顺序分开保存。** `f(second: a(), first: b())` 必须先求值 `a()` 再求值 `b()`，最后按形参位置传递临时结果；不能把表达式按标签排序后执行。若 `a()` 抛错，`b()` 不执行。调用对象及接收者也只求值一次。"
         }
@@ -198,7 +198,7 @@
           "clause": "- `inout` 参数独占可写存储访问，不得逃逸、保存到对象或被捕获。第一版仅接受可证明无别名的 `var` 整体绑定，类型限定为数值/bool 或递归只含平凡值的 struct/enum；引用容器、外部对象、字段/索引位置的 inout 明确报未支持。独占约束不扩展为未知外部共享对象图的深层 noalias 证明。"
         },
         {
-          "path": "docs/FRONTEND.md",
+          "path": "development/docs/FRONTEND.md",
           "section": "7.3 Place 与模式",
           "clause": "第一版 `inout` 仅接受可写的平凡值整变量绑定（类型限制见 SEMANTICS），不接受引用容器、外部对象、字段、索引或带复杂别名的位置；独占、逃逸和 `move` 规则见 `SEMANTICS.md`。"
         }

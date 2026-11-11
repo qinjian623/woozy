@@ -138,7 +138,7 @@
     "call_required_arguments": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "7.2 调用检查",
         "clause": "检查缺失参数、未知标签、重复提供同一形参、参数模式、泛型约束和外部可省略参数。"
       },
@@ -147,7 +147,7 @@
     "call_known_labels": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "7.2 调用检查",
         "clause": "检查缺失参数、未知标签、重复提供同一形参、参数模式、泛型约束和外部可省略参数。"
       },
@@ -156,7 +156,7 @@
     "call_unique_parameter_binding": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "7.2 调用检查",
         "clause": "检查缺失参数、未知标签、重复提供同一形参、参数模式、泛型约束和外部可省略参数。"
       },
@@ -165,7 +165,7 @@
     "direct_named_arguments": {
       "expected": "accept",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "7.2 调用检查",
         "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
       },
@@ -174,7 +174,7 @@
     "function_value_positional_calls": {
       "expected": "accept",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "7.2 调用检查",
         "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
       },
@@ -183,7 +183,7 @@
     "function_value_no_named_labels": {
       "expected": "reject",
       "source": {
-        "path": "docs/FRONTEND.md",
+        "path": "development/docs/FRONTEND.md",
         "section": "7.2 调用检查",
         "clause": "函数值调用只能使用位置参数；直接解析到声明的函数、方法、构造器和有绑定的外部可调用对象可以使用命名参数。"
       },
@@ -208,7 +208,7 @@
       "reason": "A let binding is known not to be a writable var whole binding. FRONTEND 7.3 makes this a static place/writability rejection in T04; T09 covers alias, escape and ARC, not this known-unwritable argument.",
       "supporting_sources": [
         {
-          "path": "docs/FRONTEND.md",
+          "path": "development/docs/FRONTEND.md",
           "section": "7.3 Place 与模式",
           "clause": "第一版 `inout` 仅接受可写的平凡值整变量绑定（类型限制见 SEMANTICS），不接受引用容器、外部对象、字段、索引或带复杂别名的位置；独占、逃逸和 `move` 规则见 `SEMANTICS.md`。"
         }
@@ -218,7 +218,7 @@
       "expected": "unavailable",
       "eventual": "accept",
       "source": {
-        "path": "docs/IMPLEMENTATION_PLAN.md",
+        "path": "development/docs/IMPLEMENTATION_PLAN.md",
         "section": "T07 泛型与聚合类型",
         "clause": "native 第一版采用单态化，缓存键包括泛型声明身份和规范化类型实参。"
       },
@@ -228,7 +228,7 @@
       "expected": "unavailable",
       "eventual": "accept",
       "source": {
-        "path": "docs/IMPLEMENTATION_PLAN.md",
+        "path": "development/docs/IMPLEMENTATION_PLAN.md",
         "section": "T09 所有权与 ARC",
         "clause": "增加 native Vec 与包含拥有成员的聚合类型清理；资源失败注入必须覆盖部分构造状态。"
       },
@@ -238,7 +238,7 @@
       "expected": "unavailable",
       "eventual": "accept",
       "source": {
-        "path": "docs/IMPLEMENTATION_PLAN.md",
+        "path": "development/docs/IMPLEMENTATION_PLAN.md",
         "section": "T08 错误与清理",
         "clause": "`throws` 属于函数类型；函数值与直接调用使用一致的效果检查。"
       },

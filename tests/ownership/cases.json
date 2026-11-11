@@ -46,7 +46,7 @@
     {
       "id": "vec-shared-index",
       "purpose": "两个 Vec 绑定共享同一容器；经 right 的索引写入对 left 可见。",
-      "specification": "docs/SEMANTICS.md §7.1 复制与对象身份（Vec 逻辑复制、索引写入所有别名可见）；docs/ACCEPTANCE.md A07 所有权和 ARC；DEVELOPMENT.md D10",
+      "specification": "docs/SEMANTICS.md §7.1 复制与对象身份（Vec 逻辑复制、索引写入所有别名可见）；development/docs/ACCEPTANCE.md A07 所有权和 ARC；development/DEVELOPMENT.md D10",
       "expected_static": {
         "status": "accept",
         "reason": "left 与 right 是同一容器的两个拥有句柄；right[0]=9 修改共享容器，left[0] 必须观察到 9。let 只禁止改绑定/值字段，允许 Vec 的已声明索引写入。"
@@ -87,7 +87,7 @@
     {
       "id": "slice-copy-scalars",
       "purpose": "切片返回新 Vec，i32 元素按逻辑复制取得；修改 part 不改变 base 元素。",
-      "specification": "docs/SEMANTICS.md §7.1 值、容器与 ARC（切片新容器、左闭右开、元素逻辑 copy）；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.1 值、容器与 ARC（切片新容器、左闭右开、元素逻辑 copy）；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "base[1:3] 产生新 Vec，元素 i32 按值复制；part[0]=9 只修改 part 自己的槽，base[1] 仍为 2。"
@@ -131,7 +131,7 @@
     {
       "id": "slice-shares-elements",
       "purpose": "切片复制元素的逻辑值；元素类型为 Vec 时复制句柄，内层容器仍共享。",
-      "specification": "docs/SEMANTICS.md §7.1 复制表（Vec 共享同一容器）及切片规则；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.1 复制表（Vec 共享同一容器）及切片规则；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "outer 的元素是 Vec[i32] 句柄；outer[0:1] 复制该句柄而不是深复制内层元素。part[0][0]=7 对 inner 和 outer[0][0] 都可见。"
@@ -172,7 +172,7 @@
     {
       "id": "struct-copy-shares-vec",
       "purpose": "struct 值复制递归复制标量字段，Vec 字段共享容器；字段修改与共享写入分别可观察。",
-      "specification": "docs/SEMANTICS.md §7.1 struct 按字段递归 copy、Vec 共享容器；docs/SEMANTICS.md §7.2 值字段修改限制；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.1 struct 按字段递归 copy、Vec 共享容器；docs/SEMANTICS.md §7.2 值字段修改限制；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "copy=original 复制 marker 的值并新增 items 的 Vec 句柄；copy.marker=9 只改副本字段，copy.items[0]=8 通过共享容器对 original.items 与 inner 可见。"
@@ -214,7 +214,7 @@
     {
       "id": "ordinary-param-return",
       "purpose": "普通参数不消费调用者拥有值；返回 Vec 参数时取得合法共享 copy/retain，调用者继续可读。",
-      "specification": "docs/SEMANTICS.md §7.2 参数模式和移动；docs/SEMANTICS.md §7.1 Vec 逻辑复制；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.2 参数模式和移动；docs/SEMANTICS.md §7.1 Vec 逻辑复制；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "first/keep 的普通参数均为借用；keep 返回 values 时必须生成合法 copy/retain，新持有者 kept 与调用者 values 共享同一容器。main 未 move values。"
@@ -256,7 +256,7 @@
     {
       "id": "move-reinitialize",
       "purpose": "显式 move 整个 Vec 拥有绑定后读取被禁止；重新初始化后恢复可读。",
-      "specification": "docs/SEMANTICS.md §7.2 move 消费整个拥有绑定、未重建不得读；docs/SEMANTICS.md §9 被移动值不销毁；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.2 move 消费整个拥有绑定、未重建不得读；docs/SEMANTICS.md §9 被移动值不销毁；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "take(move values) 在实参求值时把 values 的所有权转移到 move 参数；随后 values=[7,8] 重新初始化，再读取 values[0] 合法。"
@@ -297,7 +297,7 @@
     {
       "id": "branch-reinit-merge",
       "purpose": "分支一侧 move 后重新初始化、另一侧保留；合流后两种路径都拥有有效绑定。",
-      "specification": "docs/SEMANTICS.md §7.2 移动后的有效状态；docs/ACCEPTANCE.md A07 分支一侧移动、另一侧保留的合流检查",
+      "specification": "docs/SEMANTICS.md §7.2 移动后的有效状态；development/docs/ACCEPTANCE.md A07 分支一侧移动、另一侧保留的合流检查",
       "expected_static": {
         "status": "accept",
         "reason": "flag=true 时 local 先 move 给 take，随后赋 [2] 重新初始化；flag=false 时未 move。合流后 local 在两条路径都已初始化，return local[0] 合法。"
@@ -338,7 +338,7 @@
     {
       "id": "defer-before-destroy",
       "purpose": "块退出先执行 defer，再销毁仍拥有的局部 Vec；defer 用显式 i64 转换读取 i32 元素。",
-      "specification": "docs/SEMANTICS.md §3 已定整数位宽不得隐式混合（显式 i64(...) 转换）；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/SEMANTICS.md §7.1 Vec 销毁；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §3 已定整数位宽不得隐式混合（显式 i64(...) 转换）；docs/SEMANTICS.md §9 defer 和销毁顺序；docs/SEMANTICS.md §7.1 Vec 销毁；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "probe 的 defer 在 values 仍存活时读取 values[0]；i32 元素经显式 i64(values[0]) 转为 i64，避免与 log 的 i64 混合位宽。defer 执行后块退出，values 才按局部销毁规则释放。"
@@ -379,7 +379,7 @@
     {
       "id": "error-arg-interrupt",
       "purpose": "实参从左到右求值；先 move 的实参在后续实参抛错时由调用前清理销毁，后续实参不执行，源绑定不恢复。",
-      "specification": "docs/SEMANTICS.md §5 求值与控制流（实参失败清理、move 不恢复）；docs/SEMANTICS.md §7.2 move；docs/SEMANTICS.md §8 typed throws；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §5 求值与控制流（实参失败清理、move 不恢复）；docs/SEMANTICS.md §7.2 move；docs/SEMANTICS.md §8 typed throws；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "consume 的第一个实参 move values 在求值时转移；第二个 bad 记 2 后抛 E，第三个 later 不求值；move 临时值在调用前清理销毁；main 不读取 values，因此通过所有权检查。"
@@ -425,7 +425,7 @@
     {
       "id": "for-in-element-copy",
       "purpose": "for-in 每轮取得当前元素逻辑副本；写当前槽后 value 不变；首轮改 values[1] 使后续迭代必须读到新值。",
-      "specification": "docs/SEMANTICS.md §7.1 Vec 遍历（入口长度、每轮读取当前索引元素的逻辑拥有值、元素写入可观察、长度修改前 Panic）；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.1 Vec 遍历（入口长度、每轮读取当前索引元素的逻辑拥有值、元素写入可观察、长度修改前 Panic）；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "每轮先把 value 保存到 before；values[index]=value+10 后断言 value==before，证明写槽没有把本轮 value 变成槽引用；index==0 时写 values[1]=20，下一轮读取当前索引必须得到 20。正确迭代值为 1、20、3，sum=24，最终槽为 11、30、13。"
@@ -479,7 +479,7 @@
     {
       "id": "reject-read-after-move",
       "purpose": "move 后未重建就读取源绑定。",
-      "specification": "docs/SEMANTICS.md §7.2 被移动绑定在重新初始化前不可读；docs/ACCEPTANCE.md A07 移动后读取",
+      "specification": "docs/SEMANTICS.md §7.2 被移动绑定在重新初始化前不可读；development/docs/ACCEPTANCE.md A07 移动后读取",
       "expected_static": {
         "status": "reject",
         "code": "E_OWNERSHIP_USE_AFTER_MOVE",
@@ -506,7 +506,7 @@
     {
       "id": "reject-double-move",
       "purpose": "同一绑定在重建前重复 move。",
-      "specification": "docs/SEMANTICS.md §7.2 move 消费整个拥有绑定；docs/ACCEPTANCE.md A07 重复移动",
+      "specification": "docs/SEMANTICS.md §7.2 move 消费整个拥有绑定；development/docs/ACCEPTANCE.md A07 重复移动",
       "expected_static": {
         "status": "reject",
         "code": "E_OWNERSHIP_USE_AFTER_MOVE",
@@ -533,7 +533,7 @@
     {
       "id": "reject-move-ordinary-param",
       "purpose": "普通参数只是借用，不能直接 move。",
-      "specification": "docs/SEMANTICS.md §7.2 普通参数不消费调用者拥有值、默认借用不能被 move；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.2 普通参数不消费调用者拥有值、默认借用不能被 move；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "reject",
         "code": null,
@@ -587,7 +587,7 @@
     {
       "id": "reject-error-does-not-restore",
       "purpose": "后续实参抛错不会恢复先前 move 的源绑定；catch 中读取必须拒绝。",
-      "specification": "docs/SEMANTICS.md §5 move 在求值时转移、后续实参失败不恢复源绑定；docs/SEMANTICS.md §7.2；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §5 move 在求值时转移、后续实参失败不恢复源绑定；docs/SEMANTICS.md §7.2；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "reject",
         "code": "E_OWNERSHIP_USE_AFTER_MOVE",
@@ -614,7 +614,7 @@
     {
       "id": "reject-inout-vec",
       "purpose": "首版 inout 只接受平凡数值/bool 整体绑定，Vec 共享容器不支持。",
-      "specification": "docs/SEMANTICS.md §7.2 inout 类型限制（引用容器明确未支持）；docs/ACCEPTANCE.md A07；DEVELOPMENT.md 阶段未覆盖使用 E_CAPABILITY_UNAVAILABLE",
+      "specification": "docs/SEMANTICS.md §7.2 inout 类型限制（引用容器明确未支持）；development/docs/ACCEPTANCE.md A07；development/DEVELOPMENT.md 阶段未覆盖使用 E_CAPABILITY_UNAVAILABLE",
       "expected_static": {
         "status": "reject",
         "code": "E_CAPABILITY_UNAVAILABLE",
@@ -641,7 +641,7 @@
     {
       "id": "reject-branch-maybe-moved",
       "purpose": "分支一侧 move 后未重建、另一侧保留，合流读取可能已移动的绑定。",
-      "specification": "docs/SEMANTICS.md §7.2 移动后的有效状态；docs/ACCEPTANCE.md A07 分支一侧移动、另一侧保留",
+      "specification": "docs/SEMANTICS.md §7.2 移动后的有效状态；development/docs/ACCEPTANCE.md A07 分支一侧移动、另一侧保留",
       "expected_static": {
         "status": "reject",
         "code": "E_OWNERSHIP_USE_AFTER_MOVE",
@@ -668,7 +668,7 @@
     {
       "id": "panic-vec-index",
       "purpose": "Vec 动态索引 1 越界于长度 1；运行时 Panic，不是 typed error，也不保证清理。",
-      "specification": "docs/SEMANTICS.md §7.1 原生 Vec 非负索引、越界 Panic；docs/SEMANTICS.md §8 Panic 无清理保证；docs/ACCEPTANCE.md A07",
+      "specification": "docs/SEMANTICS.md §7.1 原生 Vec 非负索引、越界 Panic；docs/SEMANTICS.md §8 Panic 无清理保证；development/docs/ACCEPTANCE.md A07",
       "expected_static": {
         "status": "accept",
         "reason": "values 长度为 1，动态 index=1 越界；源本身通过类型/所有权检查，运行时必须产生 Panic。"

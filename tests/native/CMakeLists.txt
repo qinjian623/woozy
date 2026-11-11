@@ -7,6 +7,14 @@ if(CMAKE_SOURCE_DIR STREQUAL CMAKE_CURRENT_SOURCE_DIR)
   add_subdirectory(${LANG_SOURCE_ROOT} frontend)
   return()
 endif()
+add_executable(lang_os_runtime_test os_runtime_test.cpp
+  ${LANG_SOURCE_ROOT}/runtime/native/os.cpp)
+target_compile_features(lang_os_runtime_test PRIVATE cxx_std_20)
+add_test(NAME native.os_runtime COMMAND lang_os_runtime_test)
+set_tests_properties(native.os_runtime PROPERTIES TIMEOUT 30)
+add_executable(lang_native_system_ir_test system_ir_test.cpp)
+target_link_libraries(lang_native_system_ir_test PRIVATE lang_sema lang_native)
+add_test(NAME native.system_ir COMMAND lang_native_system_ir_test)
 add_executable(lang_native_ir_test ir_test.cpp)
 target_link_libraries(lang_native_ir_test PRIVATE lang_sema lang_native)
 add_test(NAME native.ir COMMAND lang_native_ir_test ${LANG_SOURCE_ROOT}/tests/fixtures/core/lang.toml
@@ -40,6 +48,12 @@ target_include_directories(lang_native_string_probe SYSTEM PRIVATE ${LLVM_INCLUD
 target_compile_options(lang_native_string_probe PRIVATE -fno-rtti)
 target_link_libraries(lang_native_string_probe PRIVATE lang_sema lang_native ${LANG_NATIVE_TEST_LLVM_LIBS})
 if(LANG_TEST_PYTHON)
+  add_test(NAME native.os COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/run_os.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld --runtime $<TARGET_FILE:lang_native_runtime>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/os-results)
+  set_tests_properties(native.os PROPERTIES TIMEOUT 180)
   foreach(fixture IN ITEMS strings string-constants string-aggregates string-vec-aggregates aggregate-constants)
     add_test(NAME native.${fixture} COMMAND ${LANG_TEST_PYTHON}
       ${CMAKE_CURRENT_LIST_DIR}/run_strings.py --cli $<TARGET_FILE:woozyc>

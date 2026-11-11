@@ -1,0 +1,6 @@
+package main;
+import "std/os" as os;
+
+func main() throws os.Error {
+    os.write_all_text(os.stdout(), "Hello, world!\n");
+}

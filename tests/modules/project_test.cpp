@@ -117,7 +117,7 @@ kind="python"
 binding="binding.json"
 host_package="torch"
 )");
-  write(root / "src/main.wz", read(repo / "baseline/samples/04_numpy_torch.lang"));
+  write(root / "src/main.wz", read(repo / "baseline/samples/04_numpy_torch.wz"));
   write(root / "binding.json", original);
   SourceManager sm;
   ProjectOptions opts{root / "lang.toml", {}, root / "binding.json"};
@@ -132,7 +132,7 @@ host_package="torch"
           "original six imported modules");
   const auto &bundle = project->bindings.front();
   require(bundle.modules.size() == 6 && bundle.declarations.size() == 26 &&
-          bundle.sha256 == "44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f" &&
+          bundle.sha256 == "c118c3e4912234dc752355fd8f41b6274433c86a3448fdc53dcdb63d7aa2cd71" &&
           bundle.json == original && bundle.path == fs::canonical(root / "binding.json") &&
           bundle.schema_version == 1 && bundle.contract == "compiler-dev/1" &&
           bundle.review_status == "draft_requires_conformance" &&
@@ -558,9 +558,12 @@ host_package="host"
     auto undeclared = run("package demo; import \"secret\"; func main() {}");
     require(!undeclared.success() && code(undeclared, "E_IMPORT_NOT_FOUND"),
             "bundle must not open undeclared modules");
+    auto bundled_std = run("package demo; import \"std/os\"; func main() {}");
+    require(bundled_std.success() && bundled_std.value->modules.size() == 2,
+            "bundled source std is available without explicit configuration");
     auto no_std = run("package demo; import \"std/io\"; func main() {}");
     require(!no_std.success() && code(no_std, "E_IMPORT_NOT_FOUND"),
-            "explicit std required");
+            "an absent bundled std module still fails");
     write(root / "stdlib/io/io.wz", "package io; pub func print() {}");
     opts.std_source_root = root / "stdlib";
     auto with_std = modules::load_project(opts, sm);

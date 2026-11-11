@@ -2702,7 +2702,7 @@ void extra(const fs::path &root) {
   write(baseline.path / "lang.toml",
         "schema_version=1\n[package]\nname=\"app\"\nsource_root=\"src\"\nentry="
         "\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-  fs::copy_file(root / "baseline/samples/05_traits.lang",
+  fs::copy_file(root / "baseline/samples/05_traits.wz",
                 baseline.path / "src/main.wz");
   auto traits = check(baseline.path / "lang.toml");
   need(traits.success(),

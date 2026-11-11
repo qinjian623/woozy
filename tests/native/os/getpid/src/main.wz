@@ -1,0 +1,9 @@
+package main;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    let pid = u32(os.getpid());
+    let bytes Vec[u8] = [u8(pid & 255), u8((pid >> 8) & 255), u8((pid >> 16) & 255), u8((pid >> 24) & 255)];
+    os.write_all(os.stdout(), bytes);
+    return 0;
+}

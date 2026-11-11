@@ -1,0 +1,21 @@
+package main;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    let data Vec[u8] = [65, 0, 66, 10];
+    let file = os.open("io.bin", os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o600);
+    if os.write(file, data, 4) != 4 { return 1; }
+    if os.lseek(file, 0, os.SEEK_SET) != 0 { return 2; }
+    let buffer Vec[u8] = [255, 255, 255, 255];
+    let alias = buffer;
+    if os.read(file, buffer, 4) != 4 { return 3; }
+    if alias[0] != 65 || alias[1] != 0 || alias[2] != 66 || alias[3] != 10 { return 4; }
+    if os.read(file, buffer, 4) != 0 { return 5; }
+    os.close(file);
+    let captured = os.open("captured.bin", os.O_CREAT | os.O_TRUNC | os.O_RDWR, 0o600);
+    os.write_all(captured, alias);
+    os.close(captured);
+    os.write_all(os.stdout(), alias);
+    os.unlink("io.bin");
+    return 0;
+}

@@ -1,0 +1,31 @@
+package main;
+import "std/os" as os;
+
+func vector_case() bool {
+    try { os.write_all(os.stdout(), [65, 0, 66, 67, 10]); }
+    catch error os.Error {
+        switch error {
+            case os.Error.NoProgress(completed): return completed == 2;
+            case _: return false;
+        }
+    }
+    return false;
+}
+
+func text_case() bool {
+    try { os.write_all_text(os.stderr(), "text\0!\n"); }
+    catch error os.Error {
+        switch error {
+            case os.Error.NoProgress(completed): return completed == 3;
+            case _: return false;
+        }
+    }
+    return false;
+}
+
+func main() i32 throws os.Error {
+    if !vector_case() { return 1; }
+    if !text_case() { return 2; }
+    if os.write_text(os.stderr(), "MOCK-OK\n") != 8 { return 3; }
+    return 0;
+}

@@ -1,7 +1,7 @@
 # 词法与语法设计草案 v0.1
 
 日期：2026-11-03  
-状态：供评审的语法快照。语言名称与正式文件扩展名未定；示例暂用 `.lang`。
+状态：供评审的语法快照。语言名称与正式文件扩展名未定；示例暂用 `.wz`。
 
 目标是用接近 Go/C 的表层语法表达静态类型程序，同时支持 LLVM 原生后端和 Python 后端。Python 后端优先接入 NumPy 与 PyTorch。常见代码使用类型推断；公开接口、泛型约束和错误传播保持可检查。
 
@@ -43,8 +43,8 @@
 | --- | --- |
 | `LEXICAL_SYNTAX.md` | 本规范，包含规则、理由和示例说明 |
 | `grammar.ebnf` | 对应的表层文法 |
-| `samples/*.lang` | 完整的正例源文件，各自独立 |
-| `samples/negative/*.lang` | 预期拒绝的词法、语法或静态语义示例 |
+| `samples/*.wz` | 完整的正例源文件，各自独立 |
+| `samples/negative/*.wz` | 预期拒绝的词法、语法或静态语义示例 |
 | `samples/numpy_torch_reference.py` | 手写的 Python 对照程序，不是编译器产物 |
 | `tools/check_syntax.py` | 词法与语法检查原型 |
 | `VALIDATION.md` | 本次实际完成的验证与尚未验证的能力 |
@@ -779,7 +779,7 @@ func train_step(
 }
 ```
 
-这是声明片段；完整导入、数据准备和训练样例见 `samples/04_numpy_torch.lang`。`nn.Linear` 的调用签名明确为 Tensor 到 Tensor；不把任意 `nn.Module` 都假定为这个签名。
+这是声明片段；完整导入、数据准备和训练样例见 `samples/04_numpy_torch.wz`。`nn.Linear` 的调用签名明确为 Tensor 到 Tensor；不把任意 `nn.Module` 都假定为这个签名。
 
 绑定必须明确下列行为：
 

@@ -54,7 +54,7 @@ except Exception as _exc:  # keep the evidence instead of hiding the host error
     _THREAD_SETUP_ERROR = f"{type(_exc).__module__}.{type(_exc).__qualname__}: {_exc}"
 
 
-FROZEN_BUNDLE_SHA256 = "44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f"
+FROZEN_BUNDLE_SHA256 = "c118c3e4912234dc752355fd8f41b6274433c86a3448fdc53dcdb63d7aa2cd71"
 OPERATION_ID = "language-t10-cpu-conformance-20261104-correction"
 
 EXPECTED_CALLABLES = {
@@ -1204,11 +1204,11 @@ def input_hashes(repo_root: Path) -> dict[str, str]:
     paths = [
         "contracts/python-bindings.schema.json",
         "contracts/python_bindings.example.json",
-        "baseline/samples/04_numpy_torch.lang",
+        "baseline/samples/04_numpy_torch.wz",
         "baseline/samples/numpy_torch_reference.py",
-        "docs/T10_BINDING_PROPOSAL.md",
-        "docs/INTEROP.md",
-        "docs/ACCEPTANCE.md",
+        "development/docs/T10_BINDING_PROPOSAL.md",
+        "development/docs/INTEROP.md",
+        "development/docs/ACCEPTANCE.md",
         "docs/SEMANTICS.md",
     ]
     return {path: sha256_file(repo_root / path) for path in paths}

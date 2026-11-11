@@ -7,11 +7,11 @@ bracket suffixes without deciding whether they instantiate a generic or index a
 value. It reports the first lexical/syntax problem per file.
 
 Usage:
-    python3 tools/check_syntax.py samples/01_basics.lang
-    python3 tools/check_syntax.py --json samples/01_basics.lang
+    python3 tools/check_syntax.py samples/01_basics.wz
+    python3 tools/check_syntax.py --json samples/01_basics.wz
     python3 tools/check_syntax.py --self-test
 
-Directory arguments recurse through *.lang, INCLUDING negative examples.
+Directory arguments recurse through *.wz, INCLUDING negative examples.
 Exit codes: 0 = accepted / self-tests passed; 1 = rejected / test failed;
 2 = command-line, filesystem, or reference-checker resource problem.
 """
@@ -855,7 +855,7 @@ def self_test() -> dict:
 
 def main(argv: Optional[list[str]] = None) -> int:
     argument_parser = argparse.ArgumentParser(description=__doc__, formatter_class=argparse.RawDescriptionHelpFormatter)
-    argument_parser.add_argument("paths", nargs="*", help="source files or directories (directories include every *.lang)")
+    argument_parser.add_argument("paths", nargs="*", help="source files or directories (directories include every *.wz)")
     argument_parser.add_argument("--json", action="store_true", help="emit structured results and an explicit scope statement")
     argument_parser.add_argument("--self-test", action="store_true", help="run embedded lexical/syntax regression cases")
     args = argument_parser.parse_args(argv)
@@ -867,7 +867,7 @@ def main(argv: Optional[list[str]] = None) -> int:
     for name in args.paths:
         path = Path(name)
         if path.is_dir():
-            paths.extend(sorted(path.rglob("*.lang")))
+            paths.extend(sorted(path.rglob("*.wz")))
         else:
             paths.append(path)
     paths = list(dict.fromkeys(paths))

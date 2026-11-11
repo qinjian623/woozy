@@ -85,7 +85,7 @@
         "generate": true,
         "execute": true
       },
-      "notes": "已验证native/64 O0/O2和Python/64 3.12.15的平凡值及字面量字符串；拥有值留待T09。Python生成控制深度与缩进超范围时build拒绝，check可通过。见tests/native/T08_EXECUTION.md和docs/PYTHON_T08_EXECUTION.md。"
+      "notes": "已验证native/64 O0/O2和Python/64 3.12.15的平凡值及字面量字符串；拥有值留待T09。Python生成控制深度与缩进超范围时build拒绝，check可通过。见development/tests/native/T08_EXECUTION.md和development/docs/PYTHON_T08_EXECUTION.md。"
     },
     {
       "name": "managed_vec_and_move",
@@ -103,7 +103,7 @@
         "generate": true,
         "execute": true
       },
-      "notes": "仅已验证的64位有限无环Vec/拥有struct与enum；native为Linux x86_64 O0/O2，Python为CPython3.12.15。完整ARC、动态字符串、循环拥有图、非平凡inout和外部对象仍不支持；没有公开长度修改API。见docs/T09_EXECUTION.md。"
+      "notes": "仅已验证的64位有限无环Vec/拥有struct与enum；native为Linux x86_64 O0/O2，Python为CPython3.12.15。完整ARC、动态字符串、循环拥有图、非平凡inout和外部对象仍不支持；没有公开长度修改API。见development/docs/T09_EXECUTION.md。"
     },
     {
       "name": "native_arc",
@@ -120,7 +120,7 @@
         "generate": true,
         "execute": true
       },
-      "notes": "仅已验证的64位有限无环Vec/拥有struct与enum；native为Linux x86_64 O0/O2，Python为CPython3.12.15。完整ARC、动态字符串、循环拥有图、非平凡inout和外部对象仍不支持；没有公开长度修改API。见docs/T09_EXECUTION.md。"
+      "notes": "仅已验证的64位有限无环Vec/拥有struct与enum；native为Linux x86_64 O0/O2，Python为CPython3.12.15。完整ARC、动态字符串、循环拥有图、非平凡inout和外部对象仍不支持；没有公开长度修改API。见development/docs/T09_EXECUTION.md。"
     },
     {
       "name": "python_numpy_torch",
@@ -262,6 +262,23 @@
         "execute": true
       },
       "notes": "当前支持同宽f32/f64四则、neg和六比较，无FMA；native/64 Linux x86_64的RNE/FTZ/DAZ环境及Python/64 CPython3.12.15已验证。浮点整数转换与浮点宽度转换仍未支持；NaN不承诺payload或sign。"
+    },
+    {
+      "name": "linux_typed_os",
+      "task": "T11",
+      "planned_backends": [
+        "native"
+      ],
+      "implemented": true,
+      "verified": true,
+      "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
+      "stages": {
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
+      },
+      "notes": "Linux x86_64 Native/64: std/os标准句柄、open/read/write/close/lseek、字节与UTF-8全量写入、unlink/mkdir/rmdir、getpid/exit；C风格名称和参数顺序，失败throws os.Error。Native O0/O2真实文件与输出检查，以及明确标为模拟的EINTR/短写/NoProgress/WouldBlock检查通过。Python、其他平台、原始syscall和C++包装未因本项开放。见docs/OS.md。"
     }
   ],
   "rule": "parser覆盖不等于语义/生成/执行支持；实际编译器的capabilities命令必须从已实现能力生成"

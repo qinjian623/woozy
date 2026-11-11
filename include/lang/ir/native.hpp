@@ -31,7 +31,8 @@ enum class Op {
   vec_length, iteration_test, iteration_read, iteration_next, ownership_begin, ownership_end, replace_indirect, begin_borrow, vec_check,
   // Appended: an address of one already bounds-checked Vec element. It is
   // confined to the field replacement of the assignment identified by origin.
-  vec_element_address
+  vec_element_address,
+  system_call
 };
 struct ExitSite {
   HirNodeId origin;
@@ -47,6 +48,7 @@ struct Instruction {
   LocalSlotId slot;
   SymbolId function;
   TypeId signature;
+  std::optional<hir::SystemOperation> system; // system_call only
   SymbolId field;   // resolved declaration identity, never a source name
   SymbolId variant; // enum declaration identity; enum_test produces bool
   uint64_t bits = 0;

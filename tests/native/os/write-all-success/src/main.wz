@@ -1,0 +1,9 @@
+package main;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    os.write_all(os.stdout(), [65, 0, 66, 67, 10]);
+    os.write_all_text(os.stderr(), "text\0!\n");
+    if os.write_text(os.stderr(), "MOCK-OK\n") != 8 { return 1; }
+    return 0;
+}

@@ -702,7 +702,7 @@
     }
   ],
   "conformance_required": [
-    "只覆盖baseline/samples/04_numpy_torch.lang所需有限重载，不是完整库stub",
+    "只覆盖baseline/samples/04_numpy_torch.wz所需有限重载，不是完整库stub",
     "确认参数名/位置/省略行为与锁定版本一致",
     "opaque_protocol是声明类型，不要求不存在的宿主同名类",
     "constructor签名附着同名类型符号，不建立重复普通函数绑定",

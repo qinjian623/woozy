@@ -107,7 +107,12 @@ struct Loader {
   std::map<std::string, SourceSpan> binding_spans;
   Loader(SourceManager &manager, std::stop_token token,
          const ProjectOptions &opts)
-      : sm(manager), stop(token), options(opts) {}
+      : sm(manager), stop(token), options(opts) {
+#ifdef LANG_STD_SOURCE_ROOT
+    if (!options.std_source_root && !options.std_binding_bundle)
+      options.std_source_root = fs::path(LANG_STD_SOURCE_ROOT);
+#endif
+  }
   void error(std::string code, std::string msg,
              std::optional<SourceSpan> span = {},
              FailureKind kind = FailureKind::source) {
@@ -651,6 +656,8 @@ struct Loader {
       if (!options.std_source_root)
         fail("E_IMPORT_NOT_FOUND", "std source is not configured", where);
       root = *options.std_source_root;
+      if (!fs::is_directory(root / suffix))
+        fail("E_IMPORT_NOT_FOUND", "standard module is not provided: " + name, where);
     } else {
       auto it = c.deps.find(head);
       if (it == c.deps.end())

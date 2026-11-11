@@ -4,7 +4,7 @@
   "json_files": 30,
   "schema_instance_pairs": 3,
   "schema_engine": "standard_library_subset_for_keywords_used_in_this_package",
-  "markdown_files": 69,
+  "markdown_files": 73,
   "tasks": 13,
   "baseline_files_unchanged": 25,
   "bindings": {
@@ -18,82 +18,82 @@
     "matched": 21,
     "details": [
       {
-        "path": "baseline/samples/01_basics.lang",
+        "path": "baseline/samples/01_basics.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/02_generics.lang",
+        "path": "baseline/samples/02_generics.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/03_errors.lang",
+        "path": "baseline/samples/03_errors.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/04_numpy_torch.lang",
+        "path": "baseline/samples/04_numpy_torch.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/05_traits.lang",
+        "path": "baseline/samples/05_traits.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/06_control_flow.lang",
+        "path": "baseline/samples/06_control_flow.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/07_functions.lang",
+        "path": "baseline/samples/07_functions.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/negative/01_missing_semicolon.lang",
+        "path": "baseline/samples/negative/01_missing_semicolon.wz",
         "expected": "reject",
         "actual": "reject"
       },
       {
-        "path": "baseline/samples/negative/02_invalid_string_escape.lang",
+        "path": "baseline/samples/negative/02_invalid_string_escape.wz",
         "expected": "reject",
         "actual": "reject"
       },
       {
-        "path": "baseline/samples/negative/03_positional_after_named.lang",
+        "path": "baseline/samples/negative/03_positional_after_named.wz",
         "expected": "reject",
         "actual": "reject"
       },
       {
-        "path": "baseline/samples/negative/04_unhandled_throws.lang",
+        "path": "baseline/samples/negative/04_unhandled_throws.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/negative/05_type_mismatch.lang",
+        "path": "baseline/samples/negative/05_type_mismatch.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/negative/06_uninitialized_binding.lang",
+        "path": "baseline/samples/negative/06_uninitialized_binding.wz",
         "expected": "reject",
         "actual": "reject"
       },
       {
-        "path": "baseline/samples/negative/07_result_is_not_unwrapped.lang",
+        "path": "baseline/samples/negative/07_result_is_not_unwrapped.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/negative/08_throwing_cleanup.lang",
+        "path": "baseline/samples/negative/08_throwing_cleanup.wz",
         "expected": "accept",
         "actual": "accept"
       },
       {
-        "path": "baseline/samples/negative/09_ambiguous_function_return_type.lang",
+        "path": "baseline/samples/negative/09_ambiguous_function_return_type.wz",
         "expected": "reject",
         "actual": "reject"
       },

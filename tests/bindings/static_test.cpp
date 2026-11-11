@@ -142,7 +142,7 @@ int main(int argc, char **argv) try {
   static_assert(int(TypeKind::Vec)==14 && int(TypeKind::ForeignCallable)==15);
   static_assert(int(NodeKind::for_in)==38 && int(NodeKind::foreign_read)==39);
   static_assert(int(CalleeKind::function_value)==1 && int(CalleeKind::foreign)==2);
-  auto baseline=accepted(read(repo/"baseline/samples/04_numpy_torch.lang"), "original-04");
+  auto baseline=accepted(read(repo/"baseline/samples/04_numpy_torch.wz"), "original-04");
   for (const auto &entry:fs::directory_iterator(repo/"tests/python_bindings/fixtures")) {
     auto name=entry.path().filename().string();
     if (name.substr(0,2)>="01" && name.substr(0,2)<="06") accepted(read(entry.path()),name);
@@ -363,9 +363,9 @@ int main(int argc, char **argv) try {
   rejected(imports+"func f(x torch.Tensor) Unit { x[0]; }","foreign-index","E_CAPABILITY_UNAVAILABLE");
   rejected(imports+"func f(x torch.Tensor) Unit { x.device; }","foreign-data-member","E_CAPABILITY_UNAVAILABLE");
   rejected(imports+"func f(x torch.Tensor) Unit { x = x; }","ordinary-parameter-reassign","E_TYPE_MISMATCH");
-  auto native=sema::check_types(resolve(read(repo/"baseline/samples/04_numpy_torch.lang"),"native-original", "", "native"));
+  auto native=sema::check_types(resolve(read(repo/"baseline/samples/04_numpy_torch.wz"),"native-original", "", "native"));
   need(!native.success()&&has(native,"E_CAPABILITY_UNAVAILABLE"),"native external source");
-  auto resolved=resolve(read(repo/"baseline/samples/04_numpy_torch.lang"),"project-api");
+  auto resolved=resolve(read(repo/"baseline/samples/04_numpy_torch.wz"),"project-api");
   need(sema::check_project(resolved,{}, {}, VerifyMode::static_only).success(),"shared check_project static");
   auto default_checked=sema::check_project(resolved); need(default_checked.success(),"default backend check_project for supported Python 04");
   PhaseResult<modules::ResolvedProject> phase; phase.state=PhaseState::complete; phase.value=*resolved;

@@ -90,7 +90,7 @@
     "binding_bundle": {
       "repository_path": "contracts/python_bindings.example.json",
       "contract": "compiler-dev/1",
-      "sha256": "44924c3c33c5acff0e604f126fa1dcb346472fa0a7966de14dd0a5b4a10adb5f",
+      "sha256": "c118c3e4912234dc752355fd8f41b6274433c86a3448fdc53dcdb63d7aa2cd71",
       "declared_review_status": "draft_requires_conformance"
     },
     "roots": [
@@ -182,7 +182,7 @@
       "host_conformance_report_sha256": "332d00e1e98187d35ac6acb0cbb2bcc118cf3f9e5378a3f10730033c85c72696",
       "api_integration_revision": "889577800cebcabada07edba2ee6cf3487289d67",
       "api_review_sha256": "d90f3738dc16293df905b58f5a20aed53ce069deb094e45fd9494c93658ab5a0",
-      "report": "docs/T10_CPU_VERIFICATION.md",
+      "report": "development/docs/T10_CPU_VERIFICATION.md",
       "cli_original04_report_sha256": "86dce63e4b65c70f664b8b4c0b07255491001ad7b018748534ee913b0e9155ac",
       "material_check_report_sha256": "79d0fb3cdcb578b4e662d2fa47bc578eee3277f2e82c2cb980545006361c83e6",
       "status": "passed",

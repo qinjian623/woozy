@@ -1,4 +1,5 @@
 #include "lang/modules/resolve.hpp"
+#include "lang/hir/system_operation.hpp"
 #include <algorithm>
 #include <map>
 
@@ -471,6 +472,8 @@ public:
                            "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Result"})
         add(prelude, s, SymbolKind::builtin_type);
       for (const auto *s : {"assert", "panic", "share"}) add(prelude, s, SymbolKind::builtin_function);
+      for (const auto &spec : hir::system_operations)
+        add(prelude, std::string(spec.name), SymbolKind::builtin_function);
       collect();
       for (const auto &m : out.project->modules) {
         module = m.id;

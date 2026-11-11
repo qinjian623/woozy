@@ -1,0 +1,104 @@
+package os;
+
+pub struct File {
+    descriptor i32;
+}
+
+pub enum Error {
+    Interrupted(code i32, completed usize);
+    WouldBlock(code i32, completed usize);
+    System(code i32, completed usize);
+    NoProgress(completed usize);
+}
+
+pub const O_RDONLY i32 = 0;
+pub const O_WRONLY i32 = 1;
+pub const O_RDWR i32 = 2;
+pub const O_CREAT i32 = 64;
+pub const O_EXCL i32 = 128;
+pub const O_TRUNC i32 = 512;
+pub const O_APPEND i32 = 1024;
+pub const O_NONBLOCK i32 = 2048;
+pub const O_CLOEXEC i32 = 524288;
+pub const SEEK_SET i32 = 0;
+pub const SEEK_CUR i32 = 1;
+pub const SEEK_END i32 = 2;
+
+pub func stdin() File { return File(descriptor: 0); }
+pub func stdout() File { return File(descriptor: 1); }
+pub func stderr() File { return File(descriptor: 2); }
+
+func checked(result i64, completed usize) usize throws Error {
+    if result < 0 {
+        let code = i32(-result);
+        if code == 4 { throw Error.Interrupted(code, completed); }
+        if code == 11 { throw Error.WouldBlock(code, completed); }
+        throw Error.System(code, completed);
+    }
+    return usize(result);
+}
+
+pub func open(path string, flags i32, mode u32) File throws Error {
+    let descriptor = checked(__woozy_os_open(path, flags, mode), 0);
+    return File(descriptor: i32(descriptor));
+}
+
+pub func close(file File) throws Error {
+    let result = checked(__woozy_os_close(file.descriptor), 0);
+}
+
+pub func read(file File, data Vec[u8], count usize) usize throws Error {
+    return checked(__woozy_os_read(file.descriptor, data, count), 0);
+}
+
+pub func write(file File, data Vec[u8], count usize) usize throws Error {
+    return checked(__woozy_os_write(file.descriptor, data, 0, count), 0);
+}
+
+pub func write_all(file File, data Vec[u8]) throws Error {
+    let length = __woozy_os_vec_length(data);
+    var completed usize = 0;
+    for completed < length {
+        let result = __woozy_os_write(file.descriptor, data, completed, length - completed);
+        if result == -4 { continue; }
+        if result == 0 { throw Error.NoProgress(completed); }
+        completed += checked(result, completed);
+    }
+}
+
+pub func write_text(file File, text string) usize throws Error {
+    let length = __woozy_os_text_length(text);
+    return checked(__woozy_os_write_text(file.descriptor, text, 0, length), 0);
+}
+
+pub func write_all_text(file File, text string) throws Error {
+    let length = __woozy_os_text_length(text);
+    var completed usize = 0;
+    for completed < length {
+        let result = __woozy_os_write_text(file.descriptor, text, completed, length - completed);
+        if result == -4 { continue; }
+        if result == 0 { throw Error.NoProgress(completed); }
+        completed += checked(result, completed);
+    }
+}
+
+pub func lseek(file File, offset i64, whence i32) i64 throws Error {
+    let result = __woozy_os_seek(file.descriptor, offset, whence);
+    let checked_offset = checked(result, 0);
+    return i64(checked_offset);
+}
+
+pub func unlink(path string) throws Error {
+    let result = checked(__woozy_os_unlink(path), 0);
+}
+
+pub func mkdir(path string, mode u32) throws Error {
+    let result = checked(__woozy_os_mkdir(path, mode), 0);
+}
+
+pub func rmdir(path string) throws Error {
+    let result = checked(__woozy_os_rmdir(path), 0);
+}
+
+pub func getpid() i32 { return i32(__woozy_os_getpid()); }
+pub func exit(status i32) { __woozy_os_exit(status); }
