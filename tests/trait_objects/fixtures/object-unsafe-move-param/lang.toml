@@ -1,0 +1,10 @@
+schema_version = 1
+
+[package]
+name = "trait_object_unsafe_move_param"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "native"
+word_bits = 64

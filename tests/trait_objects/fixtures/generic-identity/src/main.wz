@@ -1,0 +1,30 @@
+package main;
+
+struct Tag { number i32; }
+
+trait Convert[T] {
+    func value(self Self, fallback T) T;
+}
+
+impl Convert[i32] for Tag {
+    func value(self Tag, fallback i32) i32 {
+        return self.number;
+    }
+}
+
+impl Convert[bool] for Tag {
+    func value(self Tag, fallback bool) bool {
+        return fallback;
+    }
+}
+
+func main() i32 {
+    let tag = Tag(number: 7);
+    let number dyn Convert[i32] = tag;
+    let flag dyn Convert[bool] = tag;
+    if number.value(0) != 7 { return 1; }
+    if !flag.value(true) { return 2; }
+    let numbers Vec[dyn Convert[i32]] = [tag, Tag(number: 3)];
+    if numbers[1].value(0) != 3 { return 3; }
+    return 0;
+}

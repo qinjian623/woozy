@@ -1,0 +1,14 @@
+package app;
+import "std/vec" as vec;
+trait Touch {func run(self Self) i32;}
+struct Mutator {values Vec[i32];}
+impl Touch for Mutator {
+    func run(self Mutator) i32 {vec.reserve(self.values,4096);return 0;}
+}
+func change(slot inout i32,other dyn Touch) {other.run();slot=7;}
+func main() i32 {
+    let items Vec[i32]=[1];
+    let other dyn Touch=Mutator(values:items);
+    change(inout items[0],other);
+    return 0;
+}

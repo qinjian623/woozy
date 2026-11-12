@@ -16,7 +16,8 @@ inline std::optional<SymbolId> private_interface_type(
   if (!found)
     return {};
   const Type &t = *found;
-  if (t.kind == TypeKind::NominalStruct || t.kind == TypeKind::NominalEnum) {
+  if (t.kind == TypeKind::NominalStruct || t.kind == TypeKind::NominalEnum ||
+      t.kind == TypeKind::TraitObject) {
     if (t.declaration.value >= resolved.symbols.size())
       return {};
     const auto &s = resolved.symbols[t.declaration.value];

@@ -198,7 +198,8 @@
              op == Op::vec_slice || op == Op::iteration_read ||
              op == Op::call || op == Op::system_call ||
              op == Op::foreign_call || op == Op::binary ||
-             op == Op::function;
+             op == Op::function || op == Op::trait_object ||
+             op == Op::trait_call;
     };
     for (const auto &block : f.blocks) {
       for (const auto &p : block.parameters)

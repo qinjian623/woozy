@@ -1,0 +1,19 @@
+package main;
+
+struct Tag { number i32; }
+
+trait UnsafeClone {
+    func clone(self Self) Self;
+}
+
+impl UnsafeClone for Tag {
+    func clone(self Tag) Tag {
+        return self;
+    }
+}
+
+func main() i32 {
+    let tag = Tag(number: 1);
+    let object dyn UnsafeClone = tag;
+    return 0;
+}

@@ -1,0 +1,28 @@
+package main;
+
+import "std/vec" as vec;
+
+trait Item {
+    func value(self Self) i32;
+}
+
+struct Link {
+    values Vec[dyn Item];
+}
+
+impl Item for Link {
+    func value(self Link) i32 { return 1; }
+}
+
+func make_cycle() {
+    let values Vec[dyn Item] = [];
+    let item dyn Item = Link(values: values);
+    vec.push(values, item);
+}
+
+func main() i32 {
+    for var i i32 = 0; i < 384; i += 1 {
+        make_cycle();
+    }
+    return 0;
+}

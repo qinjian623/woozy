@@ -1,4 +1,6 @@
   std::map<std::pair<TypeId, bool>, llvm::Function *> value_ops;
+  std::map<std::pair<uint64_t, uint64_t>, llvm::GlobalVariable *> trait_vtables;
+  std::map<uint64_t, llvm::Function *> trait_drop_fns, trait_clone_fns;
   llvm::Function *vec_retain_fast = nullptr, *vec_release_fast = nullptr;
   std::vector<llvm::Value *> active;
   llvm::AllocaInst *storage(llvm::Type *type) {
@@ -282,6 +284,28 @@
             cffi::release_symbol(t.c_type),
             llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false)), {value});
       }
+    } else if (t.kind == hir::TypeKind::TraitObject) {
+      auto *value = builder.CreateLoad(dyn_type, address);
+      auto *data = builder.CreateExtractValue(value, {0});
+      auto *vtable = builder.CreateExtractValue(value, {1});
+      auto *slot = builder.CreateGEP(
+          builder.getPtrTy(), vtable,
+          builder.getInt32(copy ? 1u : 0u));
+      auto *callback = builder.CreateLoad(builder.getPtrTy(), slot);
+      if (copy) {
+        auto *clone =
+            builder.CreateCall(llvm::FunctionType::get(builder.getPtrTy(),
+                                                       {builder.getPtrTy()},
+                                                       false),
+                               callback, {data});
+        auto *next = builder.CreateInsertValue(value, clone, {0});
+        builder.CreateStore(next, address);
+      } else {
+        builder.CreateCall(
+            llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                    false),
+            callback, {data});
+      }
     } else if (t.kind == hir::TypeKind::NominalStruct) {
       auto fields = aggregates.fields(id);
       for (size_t n = 0; n < fields.size(); ++n) {
@@ -313,6 +337,108 @@
       builder.SetInsertPoint(done);
     }
     builder.CreateRetVoid(); builder.restoreIP(ip); return fn;
+  }
+  llvm::Function *trait_box_op(TypeId concrete, bool clone) {
+    auto &cache = clone ? trait_clone_fns : trait_drop_fns;
+    if (auto it = cache.find(concrete.value); it != cache.end())
+      return it->second;
+    auto *fn = llvm::Function::Create(
+        llvm::FunctionType::get(
+            clone ? static_cast<llvm::Type *>(builder.getPtrTy())
+                  : static_cast<llvm::Type *>(builder.getVoidTy()),
+            {builder.getPtrTy()}, false),
+        llvm::GlobalValue::InternalLinkage,
+        std::string(clone ? "lang.trait.clone." : "lang.trait.drop.") +
+            std::to_string(concrete.value),
+        module);
+    cache.emplace(concrete.value, fn);
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    auto *data = fn->getArg(0);
+    auto *call = runtime(clone ? "lang_trait_box_clone_v1"
+                              : "lang_trait_box_release_v1",
+                         clone ? static_cast<llvm::Type *>(builder.getPtrTy())
+                               : static_cast<llvm::Type *>(builder.getVoidTy()),
+                         {data});
+    if (clone)
+      builder.CreateRet(call);
+    else
+      builder.CreateRetVoid();
+    builder.restoreIP(ip);
+    return fn;
+  }
+  llvm::Function *trait_method_thunk(TypeId dyn, TypeId concrete,
+                                     SymbolId target) {
+    const auto *hf = hir_functions.at(target);
+    const auto target_sig = type(hf->signature);
+    std::vector<llvm::Type *> parameters{builder.getPtrTy()};
+    for (size_t i = 1; i < target_sig.parameters.size(); ++i)
+      parameters.push_back(lower_type(target_sig.parameters[i].type));
+    auto *fn = llvm::Function::Create(
+        llvm::FunctionType::get(lower_type(target_sig.result), parameters,
+                                false),
+        llvm::GlobalValue::InternalLinkage,
+        "lang.trait.method." + std::to_string(dyn.value) + "." +
+            std::to_string(concrete.value) + "." +
+            std::to_string(target.value),
+        module);
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    auto *data = fn->getArg(0);
+    auto *loaded = builder.CreateLoad(lower_type(concrete), data);
+    llvm::Value *receiver = loaded;
+    llvm::AllocaInst *receiver_copy = nullptr;
+    if (owning(concrete)) {
+      receiver_copy = storage(lower_type(concrete));
+      builder.CreateStore(loaded, receiver_copy);
+      builder.CreateCall(value_op(concrete, true), {receiver_copy});
+      receiver = builder.CreateLoad(lower_type(concrete), receiver_copy);
+    }
+    std::vector<llvm::Value *> actual{receiver};
+    for (unsigned i = 1; i < fn->arg_size(); ++i)
+      actual.push_back(fn->getArg(i));
+    auto *result = builder.CreateCall(functions.at(target), actual);
+    if (receiver_copy)
+      builder.CreateCall(value_op(concrete, false), {receiver_copy});
+    builder.CreateRet(result);
+    builder.restoreIP(ip);
+    return fn;
+  }
+  llvm::GlobalVariable *
+  trait_vtable(TypeId dyn, TypeId concrete,
+               const std::vector<SymbolId> &methods) {
+    auto key = std::pair<uint64_t, uint64_t>{dyn.value, concrete.value};
+    if (auto it = trait_vtables.find(key); it != trait_vtables.end())
+      return it->second;
+    const auto *tr = [&]() -> const hir::TraitDecl * {
+      for (const auto &candidate : input.hir.module().traits)
+        if (candidate.symbol == type(dyn).declaration)
+          return &candidate;
+      return nullptr;
+    }();
+    if (!tr || tr->methods.size() != methods.size())
+      fail("trait object vtable has no matching trait declaration");
+    std::vector<llvm::Type *> fields(2 + methods.size(), builder.getPtrTy());
+    auto *layout = llvm::StructType::create(
+        context, fields,
+        "lang.trait.vtable." + std::to_string(dyn.value) + "." +
+            std::to_string(concrete.value));
+    std::vector<llvm::Constant *> entries;
+    entries.push_back(llvm::ConstantExpr::getBitCast(
+        trait_box_op(concrete, false), builder.getPtrTy()));
+    entries.push_back(llvm::ConstantExpr::getBitCast(
+        trait_box_op(concrete, true), builder.getPtrTy()));
+    for (auto target : methods)
+      entries.push_back(llvm::ConstantExpr::getBitCast(
+          trait_method_thunk(dyn, concrete, target), builder.getPtrTy()));
+    auto *table = new llvm::GlobalVariable(
+        module, layout, true, llvm::GlobalValue::PrivateLinkage,
+        llvm::ConstantStruct::get(layout, entries),
+        "lang.trait.vtable.data." + std::to_string(dyn.value) + "." +
+            std::to_string(concrete.value));
+    table->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::Global);
+    trait_vtables.emplace(key, table);
+    return table;
   }
   llvm::Value *copy_value(TypeId id, llvm::Value *value) {
     if (owning(id)) {

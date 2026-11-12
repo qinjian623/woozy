@@ -1,0 +1,17 @@
+package main;
+
+struct V { x i32; }
+
+trait T {
+    func f() i32;
+}
+
+impl T for V {
+    func f() i32 { return 1; }
+}
+
+func main() i32 {
+    let v = V(x: 1);
+    let d dyn T = v;
+    return 0;
+}

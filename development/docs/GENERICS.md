@@ -368,7 +368,7 @@ Native 以 LLVM 聚合值和调用者存储指针降低；Python 的 writable `C
 
 FunctionValue 的目标本身是 impl 方法或 raw prototype 时，来源检查不再依赖 Source 能否解析为方法成员。真实 Source 必须是方法成员，或经一层或多层顶层 const 初始化器追到方法成员；非方法整数、自由函数或函数字面量 Source 不能跳过身份检查。const 别名按既有 Binding/AST 和常量符号恢复，不新增公共字段或伪函数体。raw prototype 例外始终还原所属 template、T 的真实完整有序 bound、prototype 归属、method-own 实参及完整函数模式/返回/throws，不能仅因 owner 是 template 就放行。普通 free function Name/FunctionLiteral、const 自由函数值和函数字段/Vec 读取保持原路由。
 
-`tests/generics/unbound-method-values/` 和 `generics.unbound_method_values_runtime` 覆盖两后端 check、Native O0/O2、Python3.12.15、局部/参数/返回/struct/Vec 保存、静态工厂、impl 与方法两层泛型、期望函数类型推断、phantom 显式、完整两种同签名 trait 应用、跨包 public/private、ordinary/move/inout Self、非 Self move/inout、throws/后参失败/defer、真实 Vec 分配与释放、string UTF-8 嵌入 NUL，以及拒绝构建不改写旧输出。原生观察使用 test-only allocator wrapper 核对真实 alloc/free，不以 Vec 的 event 5 代替物理释放；Python 另观察语言引用。捕获 `h.method`、字段/索引 inout、Vec/string/拥有聚合 inout、动态 trait 对象和完整 ARC 仍未开放；T07/T09 保持 in_progress。
+`tests/generics/unbound-method-values/` 和 `generics.unbound_method_values_runtime` 覆盖两后端 check、Native O0/O2、Python3.12.15、局部/参数/返回/struct/Vec 保存、静态工厂、impl 与方法两层泛型、期望函数类型推断、phantom 显式、完整两种同签名 trait 应用、跨包 public/private、ordinary/move/inout Self、非 Self move/inout、throws/后参失败/defer、真实 Vec 分配与释放、string UTF-8 嵌入 NUL，以及拒绝构建不改写旧输出。原生观察使用 test-only allocator wrapper 核对真实 alloc/free，不以 Vec 的 event 5 代替物理释放；Python 另观察语言引用。捕获 `h.method`、字段/索引 inout、Vec/string/拥有聚合 inout 和完整 ARC 仍未开放；动态 trait 对象见 [TRAIT_OBJECTS.md](TRAIT_OBJECTS.md)。T07/T09 保持 in_progress。
 
 公开 const 方法值也检查最终函数类型：参数、返回或 throws 中的私有类型会报 `E_PRIVATE_TYPE_LEAK`；方法内部的 phantom 特化实参不算公开签名。持续测试包含跨包私有 phantom 方法值、96层别名，以及三种真实泄漏的拒绝构建。方法值运行测试复用 `tests/native/alloc_observer.cpp`，按真实指针核对分配/释放。
 

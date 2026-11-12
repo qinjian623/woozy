@@ -125,6 +125,10 @@ class Emitter {
   // value ops are unchanged.
   llvm::StructType *weak_type = llvm::StructType::get(
       context, {builder.getPtrTy(), builder.getPtrTy()});
+  // dyn Trait fat pointer {data_ptr, vtable_ptr}. The vtable itself is a
+  // private structure of pointer-sized callbacks, never a source value.
+  llvm::StructType *dyn_type = llvm::StructType::get(
+      context, {builder.getPtrTy(), builder.getPtrTy()});
   // LangHandle prefix {refs, kind, destroy, weak_control}. Handles stay opaque
   // pointers in lowered values; this layout only addresses the canonical Weak
   // slot at byte offset 24.
@@ -205,6 +209,8 @@ class Emitter {
       return fn_type;
     case hir::TypeKind::Weak:
       return weak_type;
+    case hir::TypeKind::TraitObject:
+      return dyn_type;
     case hir::TypeKind::Vec:
     case hir::TypeKind::ThreadHandle:
     case hir::TypeKind::MutexHandle:
@@ -372,6 +378,24 @@ class Emitter {
       return "Slice[" + type_key(t.type_args[0]) + "]";
     case hir::TypeKind::Weak:
       return "Weak[" + type_key(t.type_args.at(0)) + "]";
+    case hir::TypeKind::TraitObject: {
+      const auto &resolved = *input.hir.module().resolved;
+      const auto &symbol = resolved.symbols.at(t.declaration.value);
+      std::string key =
+          "dyn " +
+          resolved.project->modules.at(symbol.module.value).logical_path +
+          "." + symbol.name;
+      if (!t.type_args.empty()) {
+        key += "[";
+        for (size_t a = 0; a < t.type_args.size(); ++a) {
+          if (a)
+            key += ",";
+          key += type_key(t.type_args[a]);
+        }
+        key += "]";
+      }
+      return key;
+    }
     case hir::TypeKind::Function: {
       std::string key = "func(";
       for (size_t a = 0; a < t.parameters.size(); ++a) {
@@ -1616,6 +1640,67 @@ class Emitter {
         address = builder.CreateGEP(c_lower_type(element), data, index);
       }
       builder.CreateStore(to_c_storage(element, args[2]), address);
+      break;
+    }
+    case ir::Op::trait_object: {
+      const auto concrete = value_types.at(i.inputs[0]);
+      if (type(concrete).kind == hir::TypeKind::TraitObject)
+        fail("trait object constructor received another trait object");
+      llvm::Value *copy = nullptr, *drop = nullptr;
+      if (owning(concrete)) {
+        copy = value_op(concrete, true);
+        drop = value_op(concrete, false);
+      }
+      auto *vec = runtime(
+          "lang_vec_new_v1", builder.getPtrTy(),
+          {builder.getInt64(1), builder.getInt64(stride(concrete)),
+           copy ? copy
+                : static_cast<llvm::Value *>(
+                      llvm::ConstantPointerNull::get(builder.getPtrTy())),
+           drop ? drop
+                : static_cast<llvm::Value *>(
+                      llvm::ConstantPointerNull::get(builder.getPtrTy()))});
+      llvm::AllocaInst *scratch = nullptr;
+      auto *address = element_storage(concrete, args[0], scratch);
+      runtime("lang_vec_init_v1", builder.getVoidTy(), {vec, address});
+      if (owning(concrete)) {
+        auto *element =
+            runtime("lang_vec_at_v1", builder.getPtrTy(),
+                    {vec, builder.getInt64(0)});
+        builder.CreateCall(value_op(concrete, true), {element});
+      }
+      gc_register_vec(vec, concrete);
+      auto *data = runtime("lang_vec_at_v1", builder.getPtrTy(),
+                           {vec, builder.getInt64(0)});
+      auto *table = trait_vtable(i.type, concrete, i.methods);
+      llvm::Value *fat = llvm::UndefValue::get(dyn_type);
+      fat = builder.CreateInsertValue(fat, data, {0});
+      fat = builder.CreateInsertValue(fat, table, {1});
+      v = fat;
+      break;
+    }
+    case ir::Op::trait_call: {
+      const auto receiver = value_types.at(i.inputs[0]);
+      if (type(receiver).kind != hir::TypeKind::TraitObject)
+        fail("trait call receiver is not a trait object");
+      auto *data = builder.CreateExtractValue(args[0], {0});
+      auto *vtable = builder.CreateExtractValue(args[0], {1});
+      auto *slot = builder.CreateGEP(
+          builder.getPtrTy(), vtable,
+          builder.getInt64(2 + static_cast<uint64_t>(i.bits)));
+      auto *code = builder.CreateLoad(builder.getPtrTy(), slot);
+      const auto &abi = type(i.signature);
+      if (abi.kind != hir::TypeKind::Function || abi.throws_type)
+        fail("trait call ABI is not a nonthrowing function");
+      std::vector<llvm::Type *> parameters{builder.getPtrTy()};
+      for (const auto &p : abi.parameters)
+        parameters.push_back(lower_type(p.type));
+      std::vector<llvm::Value *> actual{data};
+      for (size_t a = 1; a < args.size(); ++a)
+        actual.push_back(args[a]);
+      v = builder.CreateCall(
+          llvm::FunctionType::get(lower_type(abi.result), parameters, false),
+          code, actual);
       break;
     }
     case ir::Op::call: {

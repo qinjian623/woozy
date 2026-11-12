@@ -29,6 +29,10 @@
     case hir::TypeKind::Function:
     case hir::TypeKind::Slice:
       return true;
+    case hir::TypeKind::TraitObject:
+      // The trait box is itself a one-element Vec registered under its
+      // descriptor address; tracing it reaches the boxed concrete value.
+      return true;
     case hir::TypeKind::NominalStruct:
     case hir::TypeKind::NominalEnum: {
       if (!active.insert(id.value).second) return false;
@@ -96,6 +100,14 @@
     case hir::TypeKind::Slice: {
       auto *owner = builder.CreateLoad(
           builder.getPtrTy(), builder.CreateStructGEP(slice_type, address, 0));
+      gc_visitor_call(owner, visitor, visit_context);
+      return;
+    }
+    case hir::TypeKind::TraitObject: {
+      auto *fat = builder.CreateLoad(dyn_type, address);
+      auto *data = builder.CreateExtractValue(fat, {0});
+      auto *owner = runtime("lang_trait_box_target_v1",
+                            builder.getPtrTy(), {data});
       gc_visitor_call(owner, visitor, visit_context);
       return;
     }

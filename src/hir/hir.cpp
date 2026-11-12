@@ -108,6 +108,13 @@ TypeId TypeContext::intern(Type t) {
     if (t.type_args.size() != 2)
       bad();
     break;
+  case TypeKind::TraitObject:
+    // Trait argument arity is checked against the real declaration by HIR
+    // verification. Interning only enforces the structural fat-pointer shape.
+    if (!t.declaration.value || t.bits || t.binding.value || t.c_type ||
+        t.parameters.size() || t.result.value || t.throws_type)
+      bad();
+    break;
   case TypeKind::CForeignPointer:
   case TypeKind::CForeignBuffer:
     if (t.type_args.size() != 1 || t.bits > 1 || t.c_type)
@@ -154,7 +161,8 @@ TypeId TypeContext::intern(Type t) {
       t.kind != TypeKind::Float && t.kind != TypeKind::CForeignPointer &&
       t.kind != TypeKind::CForeignBuffer && t.bits)
     bad();
-  if (!nominal(t.kind) && t.kind != TypeKind::ForeignOpaque &&
+  if (!nominal(t.kind) && t.kind != TypeKind::TraitObject &&
+      t.kind != TypeKind::ForeignOpaque &&
       t.kind != TypeKind::ForeignCallable &&
       (t.declaration.value || t.binding.value))
     bad();
@@ -163,6 +171,7 @@ TypeId TypeContext::intern(Type t) {
   if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum &&
       t.kind != TypeKind::Vec && t.kind != TypeKind::Slice &&
       t.kind != TypeKind::Weak && t.kind != TypeKind::Task &&
+      t.kind != TypeKind::TraitObject &&
       t.kind != TypeKind::CForeignPointer &&
       t.kind != TypeKind::CForeignBuffer && !t.type_args.empty())
     bad();
@@ -516,6 +525,8 @@ class Verifier {
     case NodeKind::foreign_read:
     case NodeKind::c_field_read:
     case NodeKind::await_:
+    case NodeKind::trait_object_init:
+    case NodeKind::trait_dispatch:
       return foreign_access_read(n) || !foreign_access_place(n);
     default:
       return false;
@@ -628,6 +639,18 @@ class Verifier {
       // itself never carries a nested callable or inout slot.
       for (auto a : t.type_args)
         valid_type(a, allowed, depth + 1);
+    }
+    if (t.kind == TypeKind::TraitObject) {
+      const TraitDecl *tr = trait_declaration(t.declaration);
+      need(tr != nullptr, "dyn type has no real trait declaration");
+      need(t.type_args.size() == tr->params.size(),
+           "dyn trait application arity");
+      need(!t.bits && !t.binding.value && !t.c_type &&
+               t.parameters.empty() && !t.result.value && !t.throws_type,
+           "dyn type shape");
+      for (auto a : t.type_args)
+        valid_type(a, allowed, depth + 1);
+      check_object_safe(t.declaration, SourceSpan{SourceSnapshotId(0), 0, 0});
     }
     if (t.kind == TypeKind::Function) {
       if (t.throws_type)
@@ -836,6 +859,57 @@ class Verifier {
         return &t;
     return nullptr;
   }
+  bool mentions_self(TypeId id, SymbolId self) const {
+    std::vector<TypeId> pending{id};
+    std::set<uint64_t> seen;
+    while (!pending.empty()) {
+      auto current = pending.back();
+      pending.pop_back();
+      if (!seen.insert(current.value).second)
+        continue;
+      const auto &t = type(current);
+      if (t.kind == TypeKind::TypeParameter && t.declaration == self)
+        return true;
+      pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+      for (const auto &p : t.parameters)
+        pending.push_back(p.type);
+      if (t.kind == TypeKind::Function) {
+        pending.push_back(t.result);
+        if (t.throws_type)
+          pending.push_back(*t.throws_type);
+      }
+    }
+    return false;
+  }
+  void check_object_safe(SymbolId trait_symbol, SourceSpan span) const {
+    auto require = [&](bool ok, std::string_view message) {
+      if (!ok)
+        fail(std::string(message), span);
+    };
+    const TraitDecl *tr = trait_declaration(trait_symbol);
+    require(tr != nullptr, "dyn trait declaration is missing");
+    for (const auto &proto : tr->methods) {
+      require(source_parameters(proto.source).empty(),
+              "dyn trait method has generic type parameters");
+      const auto &sig = type(proto.signature);
+      require(!sig.parameters.empty() &&
+                  sig.parameters.front().mode == ParamMode::ordinary &&
+                  type(sig.parameters.front().type).kind ==
+                      TypeKind::TypeParameter &&
+                  type(sig.parameters.front().type).declaration == tr->self,
+              "dyn trait method has no ordinary Self receiver");
+      require(!sig.throws_type, "dyn trait method throws");
+      require(!mentions_self(sig.result, tr->self),
+              "dyn trait method returns Self");
+      for (size_t i = 1; i < sig.parameters.size(); ++i) {
+        require(sig.parameters[i].mode == ParamMode::ordinary,
+                "dyn trait method has a move/inout parameter");
+        require(!mentions_self(sig.parameters[i].type, tr->self),
+                "dyn trait method uses Self in a data parameter");
+      }
+    }
+  }
+
   std::optional<std::pair<const TraitDecl *, const MethodPrototype *>>
   trait_prototype(SymbolId method) const {
     for (const auto &t : m.traits)
@@ -1740,7 +1814,8 @@ class Verifier {
         return true;
       const Type t = *found;
       if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
-          t.kind == TypeKind::Weak || t.kind == TypeKind::Function ||
+          t.kind == TypeKind::Weak || t.kind == TypeKind::TraitObject ||
+          t.kind == TypeKind::Function ||
           t.kind == TypeKind::TypeParameter || t.kind == TypeKind::Task)
         return true;
       if (t.kind != TypeKind::NominalStruct &&
@@ -2800,6 +2875,145 @@ class Verifier {
       check_explicit_method_arguments(n, c);
     }
   }
+  void trait_object_shape(const HirNode &n) const {
+    need(n.children.size() == 1, "trait object construction arity");
+    const auto &init = std::get<TraitObjectInit>(n.data);
+    const auto &want = type(n.type);
+    need(want.kind == TypeKind::TraitObject,
+         "trait object construction destination is not dyn");
+    need(init.trait.declaration == want.declaration &&
+             init.trait.args == want.type_args,
+         "trait object construction application differs from its type");
+    const auto *tr = trait_declaration(init.trait.declaration);
+    need(tr != nullptr, "trait object construction has no trait declaration");
+    check_object_safe(init.trait.declaration, n.source.span);
+    const auto &concrete = expr(n.children[0]);
+    need(init.concrete == concrete.type &&
+             type(concrete.type).kind != TypeKind::TraitObject &&
+             !type_contains_parameter(m, concrete.type),
+         "trait object construction concrete type mismatch");
+    need(init.methods.size() == tr->methods.size(),
+         "trait object vtable method count");
+    const ImplDecl *impl = nullptr;
+    for (const auto &candidate : m.impls) {
+      if (!candidate.trait ||
+          candidate.trait->declaration != init.trait.declaration ||
+          candidate.trait->args.size() != init.trait.args.size())
+        continue;
+      Substitutions sub;
+      if (!matches(candidate.self_type, concrete.type, sub))
+        continue;
+      bool matched = true;
+      for (size_t i = 0; i < init.trait.args.size(); ++i)
+        if (!matches(candidate.trait->args[i], init.trait.args[i], sub)) {
+          matched = false;
+          break;
+        }
+      if (!matched)
+        continue;
+      need(impl == nullptr, "ambiguous trait object implementation");
+      impl = &candidate;
+    }
+    need(impl != nullptr, "trait object construction has no implementation");
+    for (size_t i = 0; i < tr->methods.size(); ++i) {
+      const auto &proto = tr->methods[i];
+      auto target = init.methods[i];
+      SymbolId origin = target;
+      for (const auto &instance : m.instances)
+        if (instance.symbol == target)
+          origin = instance.origin;
+      std::optional<SymbolId> expected;
+      for (auto method : impl->methods)
+        if (symbol(method).name == symbol(proto.symbol).name) {
+          need(!expected, "duplicate trait object implementation method");
+          expected = method;
+        }
+      need(expected && origin == *expected,
+           "trait object method target differs from the unique implementation");
+      (void)function(target);
+      need(!templates.count(target.value),
+           "trait object method target is not concrete");
+      need(init.method_args.size() == init.methods.size(),
+           "trait object method argument metadata");
+      for (const auto &instance : m.instances)
+        if (instance.symbol == target)
+          need(instance.type_args == init.method_args[i],
+               "trait object method instance arguments differ");
+    }
+  }
+  void trait_dispatch_shape(const HirNode &n) const {
+    const auto &dispatch = std::get<TraitDispatch>(n.data);
+    need(!n.children.empty(), "trait dispatch has no receiver");
+    const auto &receiver_type = type(expr(n.children[0]).type);
+    need(receiver_type.kind == TypeKind::TraitObject,
+         "trait dispatch receiver is not dyn");
+    need(dispatch.trait.declaration == receiver_type.declaration &&
+             dispatch.trait.args == receiver_type.type_args,
+         "trait dispatch application differs from its receiver");
+    const auto *tr = trait_declaration(dispatch.trait.declaration);
+    need(tr != nullptr, "trait dispatch has no trait declaration");
+    check_object_safe(dispatch.trait.declaration, n.source.span);
+    need(dispatch.index < tr->methods.size(),
+         "trait dispatch vtable index");
+    const auto &proto = tr->methods[dispatch.index];
+    need(proto.symbol == dispatch.method,
+         "trait dispatch vtable method differs from its prototype");
+    Substitutions sub;
+    Type self_type;
+    self_type.kind = TypeKind::TraitObject;
+    self_type.declaration = receiver_type.declaration;
+    self_type.type_args = receiver_type.type_args;
+    auto receiver_id = substituted.intern(std::move(self_type));
+    sub.push_back({tr->self, receiver_id});
+    for (size_t i = 0; i < tr->params.size(); ++i)
+      sub.push_back({tr->params[i].symbol, dispatch.trait.args[i]});
+    const auto full = substitute(proto.signature, sub, substituted);
+    const auto &full_type = type(full);
+    need(full_type.kind == TypeKind::Function && !full_type.throws_type,
+         "trait dispatch prototype is not a nonthrowing function");
+    Type abi;
+    abi.kind = TypeKind::Function;
+    abi.result = full_type.result;
+    for (size_t i = 1; i < full_type.parameters.size(); ++i)
+      abi.parameters.push_back(full_type.parameters[i]);
+    const auto abi_id = substituted.intern(std::move(abi));
+    need(dispatch.signature == abi_id,
+         "trait dispatch ABI signature mismatch");
+    const auto &abi_type = type(dispatch.signature);
+    need(n.type == abi_type.result, "trait dispatch result type");
+    need(dispatch.args.size() == n.children.size() &&
+             dispatch.args.size() == full_type.parameters.size(),
+         "trait dispatch argument count");
+    const auto &receiver = dispatch.args[0];
+    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+             !receiver.label && receiver.mode == ParamMode::ordinary &&
+             receiver.expression == n.children[0],
+         "trait dispatch receiver mapping");
+    bool named = false;
+    std::set<uint32_t> seen;
+    for (size_t i = 0; i < dispatch.args.size(); ++i) {
+      const auto &a = dispatch.args[i];
+      need(a.source_index == i && a.expression == n.children[i] &&
+               a.parameter_index < full_type.parameters.size() &&
+               seen.insert(a.parameter_index).second &&
+               a.mode == ParamMode::ordinary,
+           "trait dispatch argument mapping/mode");
+      if (i > 0) {
+        need(node(a.expression).type ==
+                 full_type.parameters[a.parameter_index].type,
+             "trait dispatch argument type");
+        expr(a.expression);
+      }
+      if (a.label) {
+        named = true;
+        need(*a.label == proto.parameters[a.parameter_index].label,
+             "trait dispatch argument label");
+      } else {
+        need(!named && a.parameter_index == i,
+             "trait dispatch positional argument order");
+      }
+    }
+  }
   void shape(HirNodeId id) const {
     check_cancelled(stop);
     const auto &n = node(id);
@@ -3013,6 +3227,12 @@ class Verifier {
     case NodeKind::call:
       check_call(n, std::get<Call>(n.data));
       break;
+    case NodeKind::trait_object_init:
+      trait_object_shape(n);
+      break;
+    case NodeKind::trait_dispatch:
+      trait_dispatch_shape(n);
+      break;
     case NodeKind::block:
       unit(n);
       for (auto c : ch)
@@ -3209,6 +3429,31 @@ class Verifier {
       return source_type(cr(n.children.at(0)));
     if (n.kind == AstKind::FunctionType)
       return source_signature(r);
+    if (n.kind == AstKind::TraitObjectType) {
+      need(n.children.size() == 1, "dyn type source arity");
+      auto inner_ref = cr(n.children[0]);
+      const auto &inner = file.node(inner_ref.node);
+      need(inner.kind == AstKind::NamedType, "dyn type source is not a trait");
+      std::optional<SymbolId> sid;
+      for (const auto &o : m.resolved->occurrences)
+        if (same_ref(o.source, inner_ref))
+          sid = o.symbol;
+      need(sid && symbol(*sid).kind == modules::SymbolKind::trait,
+           "dyn source name is not a trait");
+      const auto *tr = trait_declaration(*sid);
+      need(tr != nullptr, "dyn source trait has no declaration");
+      Type t;
+      t.kind = TypeKind::TraitObject;
+      t.declaration = *sid;
+      for (auto child : inner.children) {
+        auto arg = inner_ref;
+        arg.node = child;
+        t.type_args.push_back(source_type(arg));
+      }
+      need(t.type_args.size() == tr->params.size(),
+           "dyn source trait argument count");
+      return substituted.intern(std::move(t));
+    }
     // A type-qualified method call writes its qualifier as an expression
     // Name/Member rather than a NamedType. Accept those source forms too so
     // the verifier can reconstruct the same TypeId without guessing from the
@@ -7391,6 +7636,14 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
           return false;
         return supported(t.type_args.at(0), depth + 1);
       }
+      if (t.kind == TypeKind::TraitObject) {
+        if (!ownership_values)
+          return false;
+        for (auto arg : t.type_args)
+          if (!storage_types.find(arg) || !supported(arg, depth + 1))
+            return false;
+        return true;
+      }
       if (t.kind == TypeKind::NominalStruct ||
           t.kind == TypeKind::NominalEnum) {
         const auto d = std::find_if(
@@ -7600,6 +7853,15 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         case NodeKind::field_read:
         case NodeKind::field_place:
         case NodeKind::switch_:
+        case NodeKind::trait_object_init:
+        case NodeKind::trait_dispatch:
+          if (n.kind() == NodeKind::trait_object_init ||
+              n.kind() == NodeKind::trait_dispatch)
+            if (!ownership_values) {
+              unavailable(n.source,
+                          "backend has not implemented dyn trait objects");
+              return r;
+            }
           break;
         case NodeKind::try_:
         case NodeKind::defer_:
@@ -8036,6 +8298,26 @@ std::string dump(const HirModule &m) {
             for (const auto &a : data.args)
               s << " arg=" << a.source_index << ':' << a.parameter_index << ':'
                 << a.expression.value;
+          } else if constexpr (std::is_same_v<T, TraitObjectInit>) {
+            s << " trait=";
+            trait_ref(data.trait);
+            s << " concrete=" << data.concrete.value << " methods=";
+            for (size_t i = 0; i < data.methods.size(); ++i) {
+              s << data.methods[i].value << ':';
+              if (i < data.method_args.size())
+                for (auto a : data.method_args[i])
+                  s << a.value << ',';
+              s << ';';
+            }
+          } else if constexpr (std::is_same_v<T, TraitDispatch>) {
+            s << " trait=";
+            trait_ref(data.trait);
+            s << " method=" << data.method.value
+              << " signature=" << data.signature.value
+              << " vtable_index=" << data.index;
+            for (const auto &a : data.args)
+              s << " arg=" << a.source_index << ':' << a.parameter_index
+                << ':' << int(a.mode) << ':' << a.expression.value;
           } else if constexpr (std::is_same_v<T, ForeignRead>) {
             s << " foreign_read=" << data.binding.value;
           } else if constexpr (std::is_same_v<T, CFieldRead>) {

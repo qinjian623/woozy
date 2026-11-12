@@ -385,6 +385,24 @@ extern "C" void *lang_vec_at_v1(LangVec *v, uint64_t i) noexcept {
   if (i >= v->length || i >= v->initialized) vec_panic(4);
   return element(v, i);
 }
+// dyn Trait boxes are one-element Vecs whose payload pointer is the fat
+// pointer's data field. These two helpers recover the descriptor without
+// exposing LangVec layout to generated code. They are only valid for the
+// compiler-created one-element box whose payload is inline.
+static inline LangVec *trait_box_owner(void *data) noexcept {
+  return reinterpret_cast<LangVec *>(static_cast<unsigned char *>(data) -
+                                     kVecHeaderBytes);
+}
+extern "C" void lang_trait_box_release_v1(void *data) noexcept {
+  lang_vec_release_v1(trait_box_owner(data));
+}
+extern "C" void *lang_trait_box_clone_v1(void *data) noexcept {
+  lang_vec_retain_v1(trait_box_owner(data));
+  return data;
+}
+extern "C" void *lang_trait_box_target_v1(void *data) noexcept {
+  return trait_box_owner(data);
+}
 extern "C" void lang_vec_set_v1(LangVec *v, uint64_t i, const void *value) noexcept {
   void *target = lang_vec_at_v1(v, i);
   if (!has_owner_ops(v)) {

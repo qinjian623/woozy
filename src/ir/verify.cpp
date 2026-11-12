@@ -1227,6 +1227,55 @@ class Verifier {
                "C indexed write differs from HIR", i.source);
           break;
         }
+        case Op::trait_object: {
+          arity(1);
+          value(0);
+          need(t.kind == hir::TypeKind::TraitObject,
+               "trait object constructor type", i.source);
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "trait object constructor without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes[i.origin->value];
+          const auto *init = std::get_if<hir::TraitObjectInit>(&source.data);
+          need(init && source.kind() == hir::NodeKind::trait_object_init &&
+                   m.hir.module().scopes.at(source.scope.value).function ==
+                       f.symbol &&
+                   init->trait.declaration == i.variant &&
+                   init->concrete == args[0].type &&
+                   init->methods == i.methods &&
+                   m.hir.module().types.find(i.type)->type_args ==
+                       init->trait.args &&
+                   same_span(source.source.span, i.source),
+               "trait object constructor differs from HIR", i.source);
+          break;
+        }
+        case Op::trait_call: {
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "trait call without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes[i.origin->value];
+          const auto *dispatch = std::get_if<hir::TraitDispatch>(&source.data);
+          need(dispatch && source.kind() == hir::NodeKind::trait_dispatch &&
+                   m.hir.module().scopes.at(source.scope.value).function ==
+                       f.symbol,
+               "trait call origin differs from HIR", i.source);
+          const auto &cs = type(i.signature, i.source);
+          need(cs.kind == hir::TypeKind::Function && !cs.throws_type &&
+                   dispatch->signature == i.signature &&
+                   dispatch->index == i.bits &&
+                   dispatch->method == i.field &&
+                   i.type == cs.result,
+               "trait call ABI signature differs from HIR", i.source);
+          need(value(0).kind == hir::TypeKind::TraitObject,
+               "trait call receiver is not dyn", i.source);
+          arity(cs.parameters.size() + 1);
+          for (size_t a = 0; a < cs.parameters.size(); ++a)
+            need(args[a + 1].type == cs.parameters[a].type &&
+                     !args[a + 1].address &&
+                     cs.parameters[a].mode == hir::ParamMode::ordinary,
+                 "trait call argument type/mode", i.source);
+          need(same_span(source.source.span, i.source),
+               "trait call source span differs from HIR", i.source);
+          break;
+        }
         case Op::call: {
           need(!i.system, "system metadata on ordinary call", i.source);
           need(i.origin && i.origin->value < m.hir.module().nodes.size(),
@@ -1844,7 +1893,10 @@ std::string dump(const Module &m) {
             "exit_begin",    "cleanup_begin", "cleanup_end",
             "copy", "move", "take", "destroy", "borrow", "end_borrow", "save_output",
             "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check", "vec_element_address", "system_call",
-            "foreign_call", "c_field_read", "c_ptr_read", "c_ptr_write", "c_buffer_read", "c_buffer_write"};
+            "foreign_call", "c_field_read", "c_ptr_read", "c_ptr_write", "c_buffer_read", "c_buffer_write",
+            "trait_object", "trait_call"};
+        static_assert(sizeof(names) / sizeof(names[0]) ==
+                      static_cast<unsigned>(Op::trait_call) + 1);
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;

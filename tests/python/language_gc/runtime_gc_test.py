@@ -18,6 +18,30 @@ def capture_of(value=0):
 
 
 class RuntimeLanguageGC(unittest.TestCase):
+    def test_dyn_alias_is_retired_before_any_white_row_callback(self):
+        observed = []
+        test = self
+
+        class Payload:
+            def drop(self):
+                observed.append((boxed._dead, value.refs))
+                test.assertTrue(boxed._dead)
+                boxed.drop()
+                with test.assertRaises(rt.Panic):
+                    boxed.copy()
+                with test.assertRaises(rt.Panic):
+                    boxed.call(0, [])
+
+        row = rt.ValueType('struct', fields=(rt.ValueType('dyn'),
+                                            rt.ValueType('error')))
+        value = rt.Vec.create(row, [])
+        boxed = rt.DynObject.create(rt.ValueType('vec'), value, ())
+        value.items.append((boxed, Payload()))
+        value.release()
+        self.assertTrue(rt.collect_cycles())
+        self.assertEqual(observed, [(True, 0)])
+        self.assertTrue(value._dead)
+
     def assert_live(self, value):
         self.assertFalse(value._dead)
         self.assertGreater(value.refs, 0)

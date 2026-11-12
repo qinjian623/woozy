@@ -102,8 +102,8 @@
     {
       "id": "LANG02",
       "title": "Dynamic trait objects",
-      "status": "planned",
-      "owner": "unassigned",
+      "status": "in_progress",
+      "owner": "Pi correction after Root review",
       "depends_on": [
         "LANG01",
         "MEM02"

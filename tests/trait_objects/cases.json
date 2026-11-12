@@ -1,0 +1,180 @@
+{
+  "schema": "compiler-dev/trait-objects-fixtures/1",
+  "contract": "compiler-dev/1",
+  "cases": [
+    {
+      "id": "basic",
+      "manifest": "tests/trait_objects/fixtures/basic/lang.toml",
+      "purpose": "dyn Trait construction, scalar/composite dispatch, function parameter/result and move",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "heterogeneous",
+      "manifest": "tests/trait_objects/fixtures/heterogeneous/lang.toml",
+      "purpose": "Vec[dyn Trait] with two concrete implementations, alias/copy/slice, replacement and for-in",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "generic-identity",
+      "manifest": "tests/trait_objects/fixtures/generic-identity/lang.toml",
+      "purpose": "dyn Convert[i32] and dyn Convert[bool] remain distinct applications",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "value-move-drop",
+      "manifest": "tests/trait_objects/fixtures/value-move-drop/lang.toml",
+      "purpose": "copy/move of owning dyn objects, struct fields, replacement and drop",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "object-unsafe-generic",
+      "manifest": "tests/trait_objects/fixtures/object-unsafe-generic/lang.toml",
+      "purpose": "generic trait method cannot be used through dyn",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_OBJECT_UNSAFE"
+      ]
+    },
+    {
+      "id": "object-unsafe-self-return",
+      "manifest": "tests/trait_objects/fixtures/object-unsafe-self-return/lang.toml",
+      "purpose": "bare Self return cannot be used through dyn",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_OBJECT_UNSAFE"
+      ]
+    },
+    {
+      "id": "ambiguous-impl",
+      "manifest": "tests/trait_objects/fixtures/ambiguous-impl/lang.toml",
+      "purpose": "overlapping/ambiguous implementations are rejected before dyn construction",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_TYPE_MISMATCH"
+      ]
+    },
+    {
+      "id": "dyn-cycle",
+      "manifest": "tests/trait_objects/fixtures/dyn-cycle/lang.toml",
+      "purpose": "pure-Woozy Vec[dyn Trait] self cycle is collected by the language GC without duplicate release; Python runs with host GC disabled",
+      "expected": "accept",
+      "main_return": 0,
+      "python_observer": "observe_dyn_cycle.py"
+    },
+    {
+      "id": "closure-dyn",
+      "manifest": "tests/trait_objects/fixtures/closure-dyn/lang.toml",
+      "purpose": "captured dyn object survives closure copying and repeated calls",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "generic-impl",
+      "manifest": "tests/trait_objects/fixtures/generic-impl/lang.toml",
+      "purpose": "generic impl produces concrete vtable methods for distinct trait applications",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "generic-dyn-function",
+      "manifest": "tests/trait_objects/fixtures/generic-dyn-function/lang.toml",
+      "purpose": "dyn type arguments survive a generic function boundary",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "move-concrete",
+      "manifest": "tests/trait_objects/fixtures/move-concrete/lang.toml",
+      "purpose": "explicit move of a concrete owner into a dyn box",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "owning-return-error",
+      "manifest": "tests/trait_objects/fixtures/owning-return-error/lang.toml",
+      "purpose": "owning dyn return value and typed-error argument cleanup keep Weak observability",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "argument-error",
+      "manifest": "tests/trait_objects/fixtures/argument-error/lang.toml",
+      "purpose": "throwing argument cleanup does not consume the dyn receiver",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "empty-trait-with-impl",
+      "manifest": "tests/trait_objects/fixtures/empty-trait-with-impl/lang.toml",
+      "purpose": "marker trait with a real impl can be used through dyn",
+      "expected": "accept",
+      "main_return": 0
+    },
+    {
+      "id": "empty-trait-noimpl",
+      "manifest": "tests/trait_objects/fixtures/empty-trait-noimpl/lang.toml",
+      "purpose": "marker trait without an impl is rejected by sema, not invalid HIR",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_TYPE_MISMATCH"
+      ]
+    },
+    {
+      "id": "dyn-retire",
+      "manifest": "tests/trait_objects/fixtures/dyn-retire/lang.toml",
+      "purpose": "pure-Woozy dyn cycle whose concrete value owns a capturing function and a Slice; language GC retirement must traverse dyn and retire both wrappers before callbacks",
+      "expected": "accept",
+      "main_return": 0,
+      "python_observer": "observe_dyn_cycle.py"
+    },
+    {
+      "id": "object-unsafe-throws",
+      "manifest": "tests/trait_objects/fixtures/object-unsafe-throws/lang.toml",
+      "purpose": "throwing trait method is rejected for dyn",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_OBJECT_UNSAFE"
+      ]
+    },
+    {
+      "id": "object-unsafe-move-self",
+      "manifest": "tests/trait_objects/fixtures/object-unsafe-move-self/lang.toml",
+      "purpose": "move Self receiver is rejected for dyn",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_OBJECT_UNSAFE"
+      ]
+    },
+    {
+      "id": "object-unsafe-move-param",
+      "manifest": "tests/trait_objects/fixtures/object-unsafe-move-param/lang.toml",
+      "purpose": "move argument is rejected for dyn",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_OBJECT_UNSAFE"
+      ]
+    },
+    {
+      "id": "object-unsafe-no-self",
+      "manifest": "tests/trait_objects/fixtures/object-unsafe-no-self/lang.toml",
+      "purpose": "method without Self receiver is rejected for dyn",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_OBJECT_UNSAFE"
+      ]
+    },
+    {
+      "id": "object-unsafe-self-param",
+      "manifest": "tests/trait_objects/fixtures/object-unsafe-self-param/lang.toml",
+      "purpose": "Self in a non-receiver parameter is rejected for dyn",
+      "expected": "reject",
+      "diagnostic_codes": [
+        "E_OBJECT_UNSAFE"
+      ]
+    }
+  ]
+}

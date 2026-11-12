@@ -59,7 +59,11 @@ enum class AstKind {
   BindPattern,
   LiteralPattern,
   VariantPattern,
-  Error
+  Error,
+  // `dyn Trait` / `dyn Trait[A]`. The child is one NamedType naming the trait
+  // and carrying its ordered type arguments; the trait keyword is not a new
+  // language keyword. Appended to preserve published AST kind values.
+  TraitObjectType
 };
 struct AstNode {
   // BracketItem children are syntactic candidates only. Even when a child is

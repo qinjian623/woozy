@@ -104,6 +104,19 @@ class Parser {
       signature(c);
       return node(AstKind::FunctionType, s, c);
     }
+    if (!named && at("dyn")) {
+      advance();
+      size_t q = p;
+      ident();
+      while (eat("."))
+        ident();
+      std::vector<AstNodeId> args;
+      if (eat("["))
+        comma("]", [&] { args.push_back(type()); }, false);
+      auto named_type = node(AstKind::NamedType, q, std::move(args));
+      c.push_back(named_type);
+      return node(AstKind::TraitObjectType, s, c);
+    }
     do {
       ident();
       if (eat("["))
@@ -620,7 +633,8 @@ SignatureSyntax split_signature(const AstFile &file, AstNodeId id) {
     if (c.kind == AstKind::Parameter)
       result.parameters.push_back(child);
     else if (c.kind == AstKind::NamedType || c.kind == AstKind::FunctionType ||
-             c.kind == AstKind::ParenthesizedType) {
+             c.kind == AstKind::ParenthesizedType ||
+             c.kind == AstKind::TraitObjectType) {
       if (!c.token_begin || c.token_end > file.tokens.size())
         throw std::invalid_argument("invalid signature type token range");
       auto &slot = file.tokens[c.token_begin - 1].spelling == "throws"

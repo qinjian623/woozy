@@ -1,0 +1,25 @@
+package main;
+
+trait View {
+    func get(self Self) i32;
+}
+
+struct P {
+    values Vec[i32];
+}
+
+impl View for P {
+    func get(self P) i32 { return self.values[0]; }
+}
+
+func make() (func() i32) {
+    let object dyn View = P(values: [7]);
+    return func() i32 { return object.get(); };
+}
+
+func main() i32 {
+    let f = make();
+    let copied = f;
+    if copied() != 7 { return 1; }
+    return 0;
+}

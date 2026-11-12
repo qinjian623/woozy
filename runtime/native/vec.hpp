@@ -35,6 +35,12 @@ void lang_vec_retain_v1(LangVec *) noexcept;
 void lang_vec_release_v1(LangVec *) noexcept;
 void lang_vec_init_v1(LangVec *, const void *) noexcept;
 void *lang_vec_at_v1(LangVec *, uint64_t) noexcept;
+// Private dyn Trait box helpers. The box is a one-element LangVec whose
+// element storage is the fat pointer's data field; clone retains the same box
+// and release drops it once the last owner is gone.
+void lang_trait_box_release_v1(void *) noexcept;
+void *lang_trait_box_clone_v1(void *) noexcept;
+void *lang_trait_box_target_v1(void *) noexcept;
 void lang_vec_set_v1(LangVec *, uint64_t, const void *) noexcept;
 LangVec *lang_vec_slice_v1(LangVec *, uint64_t, uint64_t) noexcept;
 uint64_t lang_vec_begin_v1(LangVec *) noexcept;

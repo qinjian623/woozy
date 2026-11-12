@@ -1,0 +1,54 @@
+package main;
+
+struct Point {
+    x i32;
+    y i32;
+}
+
+struct Square {
+    side i32;
+}
+
+trait SquaredNorm {
+    func squared_norm(self Self) i32;
+    func as_point(self Self) Point;
+}
+
+impl SquaredNorm for Point {
+    func squared_norm(self Point) i32 {
+        return self.x * self.x + self.y * self.y;
+    }
+    func as_point(self Point) Point {
+        return Point(x: self.x, y: self.y);
+    }
+}
+
+impl SquaredNorm for Square {
+    func squared_norm(self Square) i32 {
+        return self.side * self.side;
+    }
+    func as_point(self Square) Point {
+        return Point(x: self.side, y: self.side);
+    }
+}
+
+func score(value dyn SquaredNorm) i32 {
+    return value.squared_norm();
+}
+
+func make(side i32) dyn SquaredNorm {
+    return Square(side: side);
+}
+
+func main() i32 {
+    let point = Point(x: 3, y: 4);
+    let object dyn SquaredNorm = point;
+    if object.squared_norm() != 25 { return 1; }
+    let projected = object.as_point();
+    if projected.x != 3 || projected.y != 4 { return 2; }
+    if score(Square(side: 5)) != 25 { return 3; }
+    if make(6).squared_norm() != 36 { return 4; }
+    let moved = move object;
+    if moved.squared_norm() != 25 { return 5; }
+    return 0;
+}

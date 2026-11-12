@@ -214,7 +214,8 @@ class Resolver {
       if (c.kind == AstKind::Parameter) {
         for (auto t : c.children) type(t, scope, exported);
       } else if (c.kind == AstKind::NamedType || c.kind == AstKind::FunctionType ||
-                 c.kind == AstKind::ParenthesizedType) type(child, scope, exported);
+                 c.kind == AstKind::ParenthesizedType ||
+                 c.kind == AstKind::TraitObjectType) type(child, scope, exported);
     }
     for (auto child : n.children) {
       const auto &c = node(child);
@@ -261,7 +262,8 @@ class Resolver {
       for (auto child : n.children) {
         if (node(child).kind == AstKind::NamedType ||
             node(child).kind == AstKind::ParenthesizedType ||
-            node(child).kind == AstKind::FunctionType) type(child, scope);
+            node(child).kind == AstKind::FunctionType ||
+            node(child).kind == AstKind::TraitObjectType) type(child, scope);
         else pattern(child, scope);
       }
     }
@@ -270,7 +272,8 @@ class Resolver {
     check_cancelled(stop);
     const auto &n = node(id);
     switch (n.kind) {
-    case AstKind::NamedType: case AstKind::ParenthesizedType: case AstKind::FunctionType:
+    case AstKind::NamedType: case AstKind::ParenthesizedType:
+    case AstKind::FunctionType: case AstKind::TraitObjectType:
       type(id, scope); return;
     case AstKind::Name: case AstKind::Member: case AstKind::FunctionLiteral:
       expression(id, scope); return;
@@ -384,7 +387,8 @@ class Resolver {
       active_const = it->second;
       for (auto c : n.children) {
         if (node(c).kind == AstKind::NamedType || node(c).kind == AstKind::FunctionType ||
-            node(c).kind == AstKind::ParenthesizedType) type(c, scope, exported);
+            node(c).kind == AstKind::ParenthesizedType ||
+            node(c).kind == AstKind::TraitObjectType) type(c, scope, exported);
         else visit(c, scope);
       }
       active_const.reset();

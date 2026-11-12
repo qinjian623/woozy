@@ -599,7 +599,7 @@ func smaller[T Ordered](left T, right T) T {
 
 `smaller[i32](12, 18)` 得到 `12`。泛型 enum 构造也要写完整类型实参，例如 `option.Option[i32].Some(1)`；跨包匹配写 `option.Option.Some(value)`。`std/option.Option` 和 `std/result.Result` 都是普通泛型 enum；在 `std/option` 包内部才可以省略成 `Option.Some(value)`。类型必须显式实现对应 trait，仅有同名方法不够。每个类型参数最多一个具名约束；泛型 trait 可以带类型参数。同一类型可实现不同实参的同一个 trait，调用存在歧义时会报错，不根据预期返回类型猜测。
 
-当前不支持 C++ 模板特化、常量泛型、关联类型或动态 trait 对象。更多规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
+当前不支持 C++ 模板特化、常量泛型或关联类型。需要运行时多态时可以使用 `dyn Trait`；对象安全与表示规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
 
 ## 15. 线程与共享数据
 

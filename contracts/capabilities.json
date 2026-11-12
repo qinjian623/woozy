@@ -219,17 +219,21 @@
     },
     {
       "name": "dynamic_trait",
-      "task": "future",
-      "planned_backends": [],
-      "implemented": false,
+      "task": "LANG02",
+      "planned_backends": [
+        "native",
+        "python"
+      ],
+      "implemented": true,
       "verified": false,
       "unsupported_diagnostic": "E_CAPABILITY_UNAVAILABLE",
       "stages": {
-        "parse": false,
-        "check": false,
-        "generate": false,
-        "execute": false
-      }
+        "parse": true,
+        "check": true,
+        "generate": true,
+        "execute": true
+      },
+      "notes": "Correction candidate: dyn Trait / dyn Trait[Args], object-safety diagnostics, Native fat-pointer/vtable, Python DynObject and dyn-aware GC retirement. tests/trait_objects covers Native O0/O2, Python 3.12 with host GC disabled, freestanding ELF, cycle cleanup and empty-trait rejection. Pending Root acceptance."
     },
     {
       "name": "concurrent_arc",

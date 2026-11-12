@@ -1,0 +1,38 @@
+package main;
+
+struct Payload {
+    values Vec[i32];
+}
+
+trait PayloadView {
+    func first(self Self) i32;
+}
+
+impl PayloadView for Payload {
+    func first(self Payload) i32 {
+        return self.values[0];
+    }
+}
+
+struct Holder {
+    inner dyn PayloadView;
+}
+
+func read(holder Holder) i32 {
+    return holder.inner.first();
+}
+
+func main() i32 {
+    var value = Payload(values: [4, 5]);
+    let object dyn PayloadView = value;
+    let copied = object;
+    let moved = move object;
+    if copied.first() != 4 || moved.first() != 4 { return 1; }
+    if value.first() != 4 { return 2; }
+    let holder = Holder(inner: Payload(values: [8]));
+    if read(holder) != 8 { return 3; }
+    var cell dyn PayloadView = Payload(values: [1]);
+    cell = Payload(values: [6]);
+    if cell.first() != 6 { return 4; }
+    return 0;
+}

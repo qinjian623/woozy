@@ -1,0 +1,19 @@
+package main;
+
+struct Tag { number i32; }
+
+trait UnsafeGeneric {
+    func convert[T](self Self, value T) T;
+}
+
+impl UnsafeGeneric for Tag {
+    func convert[T](self Tag, value T) T {
+        return value;
+    }
+}
+
+func main() i32 {
+    let tag = Tag(number: 1);
+    let object dyn UnsafeGeneric = tag;
+    return 0;
+}

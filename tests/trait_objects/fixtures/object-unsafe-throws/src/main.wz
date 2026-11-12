@@ -1,0 +1,18 @@
+package main;
+
+struct V { x i32; }
+enum E { Bad; }
+
+trait T {
+    func f(self Self) i32 throws E;
+}
+
+impl T for V {
+    func f(self V) i32 throws E { return 1; }
+}
+
+func main() i32 {
+    let v = V(x: 1);
+    let d dyn T = v;
+    return 0;
+}

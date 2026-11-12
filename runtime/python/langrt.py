@@ -453,6 +453,56 @@ class FunctionValue:
         self._dead = True
 
 
+class DynObject:
+    """Boxed concrete value plus the method table for one dyn Trait value.
+
+    Copying creates an independent boxed copy through the concrete ValueType.
+    A method call borrows a temporary copy of the receiver, so an ordinary
+    Self never consumes or exposes the box's stored owner.  The wrapper is
+    explicitly retired before any collector callback: an old alias must never
+    drop or reanimate an edge whose strong count the collector already
+    released.
+    """
+    __slots__ = ('ops', 'value', 'methods', '_dead')
+
+    def __init__(self, ops, value, methods):
+        self.ops, self.value, self.methods = ops, value, methods
+        self._dead = False
+
+    @classmethod
+    def create(cls, ops, value, methods):
+        return cls(ops, ops.copy(value), methods)
+
+    def copy(self):
+        if self._dead:
+            raise Panic('copy of inactive DynObject')
+        return DynObject(self.ops, self.ops.copy(self.value), self.methods)
+
+    def _take_for_drop(self):
+        if self._dead:
+            return None, None
+        ops, value = self.ops, self.value
+        self.ops, self.value, self._dead = None, None, True
+        return ops, value
+
+    def _retire_counted(self):
+        return self._take_for_drop()
+
+    def drop(self):
+        ops, value = self._take_for_drop()
+        if ops is not None:
+            ops.drop(value)
+
+    def call(self, index, args):
+        if self._dead:
+            raise Panic('call of inactive DynObject')
+        receiver = self.ops.copy(self.value)
+        try:
+            return self.methods[index](receiver, *args)
+        finally:
+            self.ops.drop(receiver)
+
+
 class Weak:
     """Private weak handle for Vec and immortal no-capture function values.
 
@@ -551,6 +601,8 @@ class ValueType:
             return value.copy()
         if self.kind == 'function':
             return value.copy() if isinstance(value, FunctionValue) else value
+        if self.kind == 'dyn':
+            return value.copy()
         if self.kind in ('foreign', 'error', 'weak'):
             # A language copy keeps the same host object.  For errors this is
             # the declared error_payload_copy relation, not a deep copy.
@@ -584,6 +636,8 @@ class ValueType:
         elif self.kind == 'function':
             if isinstance(value, FunctionValue):
                 value.drop()
+        elif self.kind == 'dyn':
+            value.drop()
         elif self.kind == 'error':
             value.drop()
         elif self.kind in ('foreign', 'weak'):
@@ -625,6 +679,9 @@ class ValueType:
             elif ops.kind == 'function':
                 if isinstance(item, FunctionValue) and item.environment is not None:
                     visit(item.environment)
+            elif ops.kind == 'dyn':
+                if isinstance(item, DynObject) and not item._dead:
+                    pending.append((item.ops, item.value))
             elif ops.kind in ('struct', 'enum'):
                 fields, values = ((ops.fields, item) if ops.kind == 'struct'
                                   else (ops.variants[item[0]], item[1]))
@@ -1178,6 +1235,9 @@ def _retire_released_functions(element, items):
         if ops.kind == 'function':
             if isinstance(value, FunctionValue):
                 value._abandon_counted_environment()
+        elif ops.kind == 'dyn':
+            if isinstance(value, DynObject) and not value._dead:
+                pending.append((value.ops, value.value))
         elif ops.kind in ('struct', 'enum'):
             fields, values = ((ops.fields, value) if ops.kind == 'struct'
                               else (ops.variants[value[0]], value[1]))
@@ -1194,13 +1254,35 @@ def _retire_released_slices(element, items):
         if ops.kind == 'slice':
             if isinstance(value, Slice):
                 value._retire_counted_edge()
+        elif ops.kind == 'dyn':
+            if isinstance(value, DynObject) and not value._dead:
+                pending.append((value.ops, value.value))
         elif ops.kind in ('struct', 'enum'):
             fields, values = ((ops.fields, value) if ops.kind == 'struct'
                               else (ops.variants[value[0]], value[1]))
             pending.extend(zip(fields, values))
 
 
-def _drop_released_value(ops, value):
+
+def _retire_released_dyn(element, items, snapshots):
+    """Detach every white-row box before a destructor can revisit its aliases."""
+    pending = [(element, value) for value in items]
+    while pending:
+        ops, value = pending.pop()
+        if not isinstance(ops, ValueType):
+            continue
+        if ops.kind == 'dyn' and isinstance(value, DynObject):
+            inner_ops, inner_value = value._retire_counted()
+            if inner_ops is not None:
+                snapshots[value] = (inner_ops, inner_value)
+                pending.append((inner_ops, inner_value))
+        elif ops.kind in ('struct', 'enum'):
+            fields, values = ((ops.fields, value) if ops.kind == 'struct'
+                              else (ops.variants[value[0]], value[1]))
+            pending.extend(zip(fields, values))
+
+
+def _drop_released_value(ops, value, snapshots):
     """Drop a row whose strong Slice/Vec/function counts were released."""
     if not isinstance(ops, ValueType):
         ops.drop(value)
@@ -1208,6 +1290,12 @@ def _drop_released_value(ops, value):
     if ops.kind in ('vec', 'function', 'slice'):
         # This edge was counted down in the collector's clear phase.  The
         # object itself is released by that phase, not again by this drop.
+        return
+    if ops.kind == 'dyn':
+        if isinstance(value, DynObject):
+            inner_ops, inner_value = snapshots.pop(value, (None, None))
+            if inner_ops is not None:
+                _drop_released_value(inner_ops, inner_value, snapshots)
         return
     if ops.kind == 'error':
         value.drop()
@@ -1224,14 +1312,14 @@ def _drop_released_value(ops, value):
                                   else (current.variants[item[0]], item[1]))
                 pending.extend(zip(fields, values))
             else:
-                _drop_released_value(current, item)
+                _drop_released_value(current, item, snapshots)
         return
     ops.drop(value)
 
 
-def _drop_released_rows(element, items):
+def _drop_released_rows(element, items, snapshots):
     for value in reversed(items):
-        _drop_released_value(element, value)
+        _drop_released_value(element, value, snapshots)
 
 
 def _update_collector_threshold():
@@ -1341,10 +1429,14 @@ def collect_cycles(force=False):
         for value, old in pending:
             _retire_released_slices(value.element, old)
 
+        snapshots = {}
+        for value, old in pending:
+            _retire_released_dyn(value.element, old, snapshots)
+
         freed = len(white)
         _GC.active = False
         for value, old in pending:
-            _drop_released_rows(value.element, old)
+            _drop_released_rows(value.element, old, snapshots)
             old.clear()
         _GC.collections += 1
         _GC.last_collected = freed

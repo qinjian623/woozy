@@ -198,6 +198,8 @@ ValueKind provisional_kind(const Type &t) {
     return ValueKind::slice;
   case TypeKind::Function:
     return ValueKind::function;
+  case TypeKind::TraitObject:
+    return ValueKind::trait_object;
   case TypeKind::NominalStruct:
     return ValueKind::structure;
   case TypeKind::NominalEnum:
@@ -286,6 +288,8 @@ class Classifier {
     // environment. It is never trivial, including as an aggregate member.
     if (t.kind == TypeKind::Function)
       return {ValueKind::function, {}};
+    if (t.kind == TypeKind::TraitObject)
+      return {ValueKind::trait_object, {}};
     if (t.kind == TypeKind::Error)
       return {ValueKind::unsupported,
               "dynamic string/foreign/error value ownership is not supported"};
@@ -376,6 +380,8 @@ class Classifier {
       return true;
     if (t.kind == TypeKind::Function)
       return true;
+    if (t.kind == TypeKind::TraitObject)
+      return true;
     if (t.kind == TypeKind::CForeignPointer ||
         t.kind == TypeKind::CForeignBuffer ||
         t.kind == TypeKind::CForeignRecord ||
@@ -460,6 +466,12 @@ public:
     }
     if (t.kind == TypeKind::Function) {
       out.kind = ValueKind::function;
+      out.needs_drop = true;
+      out.pod_inout = false;
+      return out;
+    }
+    if (t.kind == TypeKind::TraitObject) {
+      out.kind = ValueKind::trait_object;
       out.needs_drop = true;
       out.pod_inout = false;
       return out;
@@ -853,6 +865,8 @@ class Analysis {
       return &c->args;
     if (auto c = std::get_if<ConstraintCall>(&x.data))
       return &c->args;
+    if (auto c = std::get_if<TraitDispatch>(&x.data))
+      return &c->args;
     return nullptr;
   }
   std::optional<HirNodeId> call_callee(const HirNode &x) const {
@@ -1140,6 +1154,7 @@ class Analysis {
       return ty(m, c->signature).throws_type;
     if (auto c = std::get_if<ConstraintCall>(&x.data))
       return ty(m, c->signature).throws_type;
+    // TraitDispatch carries an ABI signature without a throws clause.
     if (auto r = std::get_if<ForeignRead>(&x.data))
       return m.foreign_bindings.at(r->binding.value).read_error;
     if (x.kind() == NodeKind::throw_)
@@ -1842,6 +1857,7 @@ bool ordinary_copyable(const HirModule &m, TypeId root,
     case TypeKind::IpcHandle:
     case TypeKind::Task:
     case TypeKind::Function:
+    case TypeKind::TraitObject:
     case TypeKind::ForeignOpaque:
     case TypeKind::ForeignCallable:
     case TypeKind::CForeignPointer:
@@ -1924,6 +1940,7 @@ bool owning_value(const HirModule &m, TypeId root, std::stop_token stop) {
         t.kind == TypeKind::ForeignCallable ||
         t.kind == TypeKind::CForeignResource ||
         t.kind == TypeKind::Function ||
+        t.kind == TypeKind::TraitObject ||
         t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
         t.kind == TypeKind::CondvarHandle ||

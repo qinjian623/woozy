@@ -4,6 +4,14 @@
   "status": "registry_includes_T00_T07_implemented_components",
   "codes": [
     {
+      "code": "E_AWAIT_CONTEXT",
+      "severity": "error"
+    },
+    {
+      "code": "E_AWAIT_NOT_TASK",
+      "severity": "error"
+    },
+    {
       "code": "E_BINDING_INVALID",
       "severity": "error"
     },
@@ -97,6 +105,10 @@
     },
     {
       "code": "E_NAME_NOT_FOUND",
+      "severity": "error"
+    },
+    {
+      "code": "E_OBJECT_UNSAFE",
       "severity": "error"
     },
     {

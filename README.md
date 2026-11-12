@@ -38,7 +38,7 @@ func main() throws os.Error {
 
 `throws E` 声明可传播的错误，调用者捕获或继续声明同类错误。`defer` 在当前词法块退出时执行，后注册的先执行。整数除零、越界等 Panic 不能用 typed catch 恢复。
 
-泛型使用 `[T]` 和 `[T Trait]`，trait 必须显式实现。没有模板特化、关联类型或动态 trait 对象。
+泛型使用 `[T]` 和 `[T Trait]`，trait 必须显式实现。`dyn Trait` 与 `dyn Trait[Args]` 是显式 trait object 类型，支持对象安全方法的动态分派、`Vec[dyn Trait]`、复制/移动/销毁以及泛型 trait 应用身份（如 `Convert[i32]` 与 `Convert[bool]` 不同）。没有模板特化或关联类型。
 
 ## 当前范围
 

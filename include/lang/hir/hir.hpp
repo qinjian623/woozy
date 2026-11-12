@@ -51,7 +51,12 @@ enum class TypeKind {
   // Task[R,E]: an owning handle to a suspended async computation. type_args
   // are exactly {result, error}; Unit in slot 1 means the task cannot fail
   // through its await. The value is a compiler-private runtime handle.
-  Task
+  Task,
+  // dyn Trait[A]. declaration is the real trait SymbolId and type_args are the
+  // ordered generic trait arguments, so Trait[A] and Trait[B] have distinct
+  // TypeIds. The native value is a fat pointer {data_ptr, vtable_ptr}; Python
+  // uses a boxed dynamic proxy.
+  TraitObject
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -342,6 +347,30 @@ struct Throw {}; // child: error value, saved before executing any cleanup
 // runs the same defers/drops as a normal scope exit before the frame is
 // released.
 struct Await {};
+// Constructs one trait object from a concrete value. The child is the concrete
+// value; `concrete` records its type and `methods` are the already selected
+// concrete implementation symbols in trait declaration order. Ownership is
+// transferred to the box (the source value is copied under value semantics).
+struct TraitObjectInit {
+  TraitRef trait;
+  TypeId concrete;
+  std::vector<SymbolId> methods;
+  // Complete concrete type arguments for each method target. A template target
+  // is replaced by its instance during the concrete-body transform; the
+  // published HIR always contains executable method symbols.
+  std::vector<std::vector<TypeId>> method_args;
+};
+// Dynamic method dispatch through a trait object. `signature` is a Function
+// Type with the explicit (non-receiver) arguments and the result; the receiver
+// is the first CallArg/child. `index` is the vtable method slot, and `method`
+// names the trait prototype for verification.
+struct TraitDispatch {
+  TraitRef trait;
+  SymbolId method;
+  TypeId signature;
+  uint32_t index = 0;
+  std::vector<CallArg> args; // receiver first, then explicit source-order args
+};
 struct Move {
   std::optional<SymbolId> binding; // otherwise one newly computed child
 };
@@ -494,7 +523,7 @@ using NodeData = std::variant<
     Break, Continue, Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
     Switch, ConstraintCall, Try, Defer, Throw, Move, VecInit, IndexRead,
     IndexPlace, VecSlice, ForIn, ForeignRead, ConstantLiteral, CFieldRead,
-    Await>;
+    Await, TraitObjectInit, TraitDispatch>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -538,7 +567,9 @@ enum class NodeKind {
   foreign_read,
   constant_literal,
   c_field_read,
-  await_
+  await_,
+  trait_object_init,
+  trait_dispatch
 };
 struct HirNode {
   TypeId type;
@@ -676,7 +707,10 @@ enum class ValueKind {
   // Appended for the reference-values schema. Function values own an optional
   // shared environment; Weak owns a control edge. Both are non-POD.
   function,
-  weak
+  weak,
+  // A dyn trait object owns one boxed concrete value and a vtable. Copy shares
+  // the box by retaining its reference count; drop releases it exactly once.
+  trait_object
 };
 struct ValueField {
   std::optional<SymbolId> variant;

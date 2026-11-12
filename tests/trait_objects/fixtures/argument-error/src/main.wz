@@ -1,0 +1,29 @@
+package main;
+
+enum E {
+    Bad;
+}
+
+trait Add {
+    func add(self Self, value i32) i32;
+}
+
+struct Payload {
+    values Vec[i32];
+}
+
+impl Add for Payload {
+    func add(self Payload, value i32) i32 { return self.values[0] + value; }
+}
+
+func fail() i32 throws E { throw E.Bad; }
+
+func main() i32 {
+    let object dyn Add = Payload(values: [7]);
+    try {
+        let unused = object.add(fail());
+        return 1;
+    } catch e E {}
+    if object.add(3) != 10 { return 2; }
+    return 0;
+}

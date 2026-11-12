@@ -1,0 +1,41 @@
+package main;
+
+import "std/weak" as weak;
+import "std/option" as option;
+
+enum E {
+    Bad;
+}
+
+trait Get {
+    func get(self Self) Vec[i32];
+    func add(self Self, value i32) i32;
+}
+
+struct P {
+    values Vec[i32];
+}
+
+impl Get for P {
+    func get(self P) Vec[i32] { return self.values; }
+    func add(self P, value i32) i32 { return self.values[0] + value; }
+}
+
+func fail() i32 throws E { throw E.Bad; }
+
+func main() i32 {
+    var watched Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    try {
+        let values Vec[i32] = [7];
+        watched = weak.downgrade(values);
+        let object dyn Get = P(values: values);
+        let returned = object.get();
+        if returned[0] != 7 { return 1; }
+        let unused = object.add(fail());
+        return 2;
+    } catch e E {}
+    switch weak.upgrade(watched) {
+    case option.Option.Some(value): return 3;
+    case option.Option.None: return 0;
+    }
+}

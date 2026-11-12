@@ -1,0 +1,23 @@
+package main;
+
+trait Read[T] {
+    func get(self Self) T;
+}
+
+struct Cell[T] {
+    value T;
+}
+
+impl[T] Read[T] for Cell[T] {
+    func get(self Cell[T]) T { return self.value; }
+}
+
+func identity[T](value dyn Read[T]) (dyn Read[T]) {
+    return value;
+}
+
+func main() i32 {
+    let a dyn Read[i32] = Cell[i32](value: 7);
+    if identity(a).get() != 7 { return 1; }
+    return 0;
+}

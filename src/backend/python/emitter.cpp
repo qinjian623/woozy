@@ -232,11 +232,15 @@ class Emitter {
       desc = "_rt.ValueType('function')";
     else if (t.kind == TypeKind::Weak)
       desc = "_rt.ValueType('weak')";
+    else if (t.kind == TypeKind::TraitObject)
+      desc = "_rt.ValueType('dyn')";
 
     if (v.kind == ValueKind::function)
       desc = "_rt.ValueType('function')";
     if (v.kind == ValueKind::weak)
       desc = "_rt.ValueType('weak')";
+    if (v.kind == ValueKind::trait_object)
+      desc = "_rt.ValueType('dyn')";
     if (v.kind == ValueKind::foreign_reference ||
         v.kind == ValueKind::foreign_callable)
       desc = "_rt.ValueType('foreign')";
@@ -596,6 +600,22 @@ class Emitter {
       return "Vec[" + type_key(t.type_args[0], error_position) + "]";
     case TypeKind::Slice:
       return "Slice[" + type_key(t.type_args[0], error_position) + "]";
+    case TypeKind::TraitObject: {
+      const auto &s = m.resolved->symbols.at(t.declaration.value);
+      std::string key =
+          "dyn " + m.resolved->project->module(s.module).logical_path + "." +
+          s.name;
+      if (!t.type_args.empty()) {
+        key += "[";
+        for (size_t i = 0; i < t.type_args.size(); ++i) {
+          if (i)
+            key += ",";
+          key += type_key(t.type_args[i], false);
+        }
+        key += "]";
+      }
+      return key;
+    }
     case TypeKind::ForeignOpaque: {
       const auto &d = m.resolved->project->foreign_binding(t.binding);
       const auto *binding = std::get_if<modules::BindingType>(&d.detail);
@@ -978,6 +998,38 @@ class Emitter {
       return save(suite, name(std::get<Place>(n.data).symbol), n);
     case NodeKind::function_value:
       return function_value_expression(n, id, suite);
+    case NodeKind::trait_object_init: {
+      const auto &init = std::get<TraitObjectInit>(n.data);
+      auto concrete = expression(n.children[0], suite);
+      std::vector<std::string> methods;
+      for (auto method : init.methods)
+        methods.push_back(function_name(method));
+      return value_save(
+          suite,
+          "_rt.DynObject.create(" + ops(init.concrete) + ", " + concrete +
+              ", " + tuple(methods) + ")",
+          id);
+    }
+    case NodeKind::trait_dispatch: {
+      const auto &dispatch = std::get<TraitDispatch>(n.data);
+      auto receiver = expression(n.children[0], suite);
+      std::vector<std::string> arguments(dispatch.args.size() - 1);
+      for (size_t i = 1; i < dispatch.args.size(); ++i) {
+        const auto &argument = dispatch.args[i];
+        if (argument.parameter_index == 0 ||
+            argument.parameter_index > arguments.size())
+          throw std::logic_error("trait dispatch argument index");
+        arguments[argument.parameter_index - 1] =
+            expression(argument.expression, suite);
+      }
+      auto value = value_save(
+          suite, receiver + ".call(" + std::to_string(dispatch.index) + ", " +
+                     tuple(arguments) + ")", id);
+      for (const auto &lifetime : m.ownership.calls)
+        if (lifetime.node == id)
+          steps(lifetime.on_return, suite, n);
+      return value;
+    }
     case NodeKind::struct_init: {
       const auto &init = std::get<StructInit>(n.data);
       std::vector<std::string> values(init.fields.size());

@@ -2,7 +2,7 @@
   "schema": "compiler-dev/inout-places-fixtures/1",
   "contract": "compiler-dev/1",
   "description": "LANG03 field/index inout places: positive native/Python write-back and rejected overlapping or escaping uses.",
-  "case_count": 20,
+  "case_count": 21,
   "cases": [
     {
       "id": "nested-field",
@@ -163,6 +163,14 @@
       "manifest": "tests/inout_places/nested-disjoint-index/lang.toml",
       "source": "tests/inout_places/nested-disjoint-index/src/main.wz",
       "expected_main_return": 0
+    },
+    {
+      "id": "reject-dyn-alias",
+      "kind": "reject",
+      "purpose": "A trait object can retain and resize the Vec behind a borrowed element",
+      "manifest": "tests/inout_places/reject-dyn-alias/lang.toml",
+      "source": "tests/inout_places/reject-dyn-alias/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
     }
   ]
 }

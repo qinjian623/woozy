@@ -1,0 +1,20 @@
+package main;
+
+trait Get {
+    func get(self Self) i32;
+}
+
+struct P {
+    values Vec[i32];
+}
+
+impl Get for P {
+    func get(self P) i32 { return self.values[0]; }
+}
+
+func main() i32 {
+    let p = P(values: [7]);
+    let object dyn Get = move p;
+    if object.get() != 7 { return 1; }
+    return 0;
+}

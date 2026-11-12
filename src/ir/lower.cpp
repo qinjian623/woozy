@@ -574,6 +574,46 @@ class Lower {
         return constant(unit, 0, i.source);
       return value;
     }
+    case hir::NodeKind::trait_object_init: {
+      const auto &init = std::get<hir::TraitObjectInit>(n.data);
+      i.op = Op::trait_object;
+      i.origin = id;
+      i.variant = init.trait.declaration;
+      i.methods = init.methods;
+      i.inputs = {expr(n.children[0])};
+      return emit(i);
+    }
+    case hir::NodeKind::trait_dispatch: {
+      const auto &dispatch = std::get<hir::TraitDispatch>(n.data);
+      i.op = Op::trait_call;
+      i.origin = id;
+      i.signature = dispatch.signature;
+      i.bits = dispatch.index;
+      i.field = dispatch.method;
+      i.inputs.resize(dispatch.args.size());
+      // Evaluation follows source order, but the vtable ABI receives formals
+      // in declaration order even when named arguments were reordered.
+      for (const auto &a : dispatch.args) {
+        auto value = expr(a.expression);
+        i.inputs[a.parameter_index] = value;
+        for (const auto &u : h.ownership.uses)
+          if (u.consumer == id && !u.destination &&
+              u.operand == a.source_index &&
+              (u.kind == hir::UseKind::borrow ||
+               u.kind == hir::UseKind::inout)) {
+            if (u.root)
+              begin_borrow({hir::OwnerKind::binding, u.root->value}, value,
+                           i.source);
+            else if (owning(u.type))
+              begin_borrow({hir::OwnerKind::temporary, a.expression.value},
+                           value, i.source);
+            break;
+          }
+      }
+      auto result = emit(i);
+      call_end(id);
+      return result;
+    }
     case hir::NodeKind::call: {
       const auto &c = std::get<hir::Call>(n.data);
       const bool system = c.kind == hir::CalleeKind::system;

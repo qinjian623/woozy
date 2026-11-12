@@ -1,0 +1,21 @@
+package main;
+
+struct Tag { number i32; }
+
+trait Show {
+    func show(self Self) i32;
+}
+
+impl Show for Tag {
+    func show(self Tag) i32 { return 1; }
+}
+
+impl Show for Tag {
+    func show(self Tag) i32 { return 2; }
+}
+
+func main() i32 {
+    let tag = Tag(number: 1);
+    let object dyn Show = tag;
+    return object.show();
+}

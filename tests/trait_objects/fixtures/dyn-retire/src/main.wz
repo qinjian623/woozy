@@ -1,0 +1,37 @@
+package main;
+
+import "std/vec" as vec;
+import "std/slice" as slice;
+
+trait Item {
+    func value(self Self) i32;
+}
+
+struct Link {
+    values Vec[dyn Item];
+    view Slice[i32];
+    callback func() i32;
+}
+
+impl Item for Link {
+    func value(self Link) i32 {
+        return self.callback() + self.view[0];
+    }
+}
+
+func make_cycle() {
+    let values Vec[dyn Item] = [];
+    let backing Vec[i32] = [3];
+    let view Slice[i32] = slice.view[i32](backing, 0, 1);
+    let extra i32 = 4;
+    let callback func() i32 = func() i32 { return extra; };
+    let item dyn Item = Link(values: values, view: view, callback: callback);
+    vec.push(values, item);
+}
+
+func main() i32 {
+    for var i i32 = 0; i < 384; i += 1 {
+        make_cycle();
+    }
+    return 0;
+}

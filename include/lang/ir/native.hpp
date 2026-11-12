@@ -41,7 +41,15 @@ enum class Op {
   c_ptr_read,
   c_ptr_write,
   c_buffer_read,
-  c_buffer_write
+  c_buffer_write,
+  // dyn Trait construction: inputs = {concrete value}; `methods` are the
+  // concrete implementation symbols in trait declaration order and `variant`
+  // is the real trait declaration identity.
+  trait_object,
+  // dynamic dispatch: inputs = {receiver fat pointer, explicit args};
+  // signature is the receiver-free ABI Function type, bits is the vtable
+  // method slot.
+  trait_call
 };
 struct ExitSite {
   HirNodeId origin;
@@ -59,6 +67,8 @@ struct Instruction {
   TypeId signature;
   std::optional<hir::SystemOperation> system; // system_call only
   std::optional<uint32_t> c_callable; // foreign_call: 1-based callable index
+  // trait_object only: concrete implementation targets in trait order.
+  std::vector<SymbolId> methods;
   uint32_t c_type = 0;                // C named type/record index
   uint32_t c_field = 0;               // C record field index
   SymbolId field;   // resolved declaration identity, never a source name

@@ -224,6 +224,87 @@ class Checker {
         return &t;
     return nullptr;
   }
+  bool mentions_self(TypeId id, SymbolId self) const {
+    std::vector<TypeId> pending{id};
+    std::set<uint64_t> seen;
+    while (!pending.empty()) {
+      auto current = pending.back();
+      pending.pop_back();
+      if (!seen.insert(current.value).second)
+        continue;
+      const auto &t = type(current);
+      if (t.kind == TypeKind::TypeParameter && t.declaration == self)
+        return true;
+      pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+      for (const auto &p : t.parameters)
+        pending.push_back(p.type);
+      if (t.kind == TypeKind::Function) {
+        pending.push_back(t.result);
+        if (t.throws_type)
+          pending.push_back(*t.throws_type);
+      }
+    }
+    return false;
+  }
+  // A dyn Trait application has one stable vtable ABI. Every method must have
+  // an ordinary value receiver and ordinary, concrete data parameters. A
+  // method-own generic parameter cannot have a single vtable slot, and Self in
+  // any result/argument data cannot be reconstructed without knowing the
+  // concrete implementation.
+  void require_object_safe(Ref r, SymbolId trait_symbol) const {
+    const TraitDecl *tr = trait_decl(trait_symbol);
+    if (!tr)
+      reject(r, "dyn requires a real trait declaration", "E_OBJECT_UNSAFE");
+    for (const auto &proto : tr->methods) {
+      auto own = method_own_parameters(proto.symbol);
+      if (!own.empty())
+        reject(r,
+               "trait method '" + symbol(proto.symbol).name +
+                   "' has generic type parameters and is not object-safe",
+               "E_OBJECT_UNSAFE");
+      const auto &sig = type(proto.signature);
+      if (sig.parameters.empty())
+        reject(r,
+               "trait method '" + symbol(proto.symbol).name +
+                   "' has no Self receiver and is not object-safe",
+               "E_OBJECT_UNSAFE");
+      if (sig.parameters.front().mode != ParamMode::ordinary)
+        reject(r,
+               "trait method '" + symbol(proto.symbol).name +
+                   "' does not use an ordinary Self receiver",
+               "E_OBJECT_UNSAFE");
+      const auto &self_type = type(sig.parameters.front().type);
+      if (self_type.kind != TypeKind::TypeParameter ||
+          self_type.declaration != tr->self)
+        reject(r,
+               "trait method '" + symbol(proto.symbol).name +
+                   "' does not receive Self as its first parameter",
+               "E_OBJECT_UNSAFE");
+      if (sig.throws_type)
+        reject(r,
+               "throwing trait method '" + symbol(proto.symbol).name +
+                   "' is not object-safe",
+               "E_OBJECT_UNSAFE");
+      if (mentions_self(sig.result, tr->self))
+        reject(r,
+               "trait method '" + symbol(proto.symbol).name +
+                   "' returns Self and is not object-safe",
+               "E_OBJECT_UNSAFE");
+      for (size_t i = 1; i < sig.parameters.size(); ++i) {
+        const auto &p = sig.parameters[i];
+        if (p.mode != ParamMode::ordinary)
+          reject(r,
+                 "trait method '" + symbol(proto.symbol).name +
+                     "' uses an owning/inout dispatch parameter",
+                 "E_OBJECT_UNSAFE");
+        if (mentions_self(p.type, tr->self))
+          reject(r,
+                 "trait method '" + symbol(proto.symbol).name +
+                     "' uses Self in a non-receiver parameter",
+                 "E_OBJECT_UNSAFE");
+      }
+    }
+  }
   TraitRef check_trait_application(Ref r, SymbolId declaration,
                                    std::vector<TypeId> args) const {
     auto found = trait_parameters.find(declaration.value);
@@ -1100,6 +1181,28 @@ class Checker {
     if (n.kind == AstKind::ParenthesizedType ||
         n.kind == AstKind::Parenthesized || n.kind == AstKind::BracketItem)
       return parse_type(child(r, 0), trait_self, trait_self_callback);
+    if (n.kind == AstKind::TraitObjectType) {
+      if (n.children.size() != 1)
+        reject(r, "dyn requires one trait application", "E_OBJECT_UNSAFE");
+      auto named = child(r, 0);
+      if (ast(named).kind != AstKind::NamedType)
+        reject(r, "dyn requires a trait name", "E_OBJECT_UNSAFE");
+      auto declaration = occurrence(named);
+      if (!declaration ||
+          symbol(*declaration).kind != modules::SymbolKind::trait)
+        reject(named, "dyn requires a trait name", "E_NAME_KIND");
+      std::vector<TypeId> args;
+      for (auto c : ast(named).children)
+        args.push_back(parse_type(at(named, c)));
+      auto application =
+          check_trait_application(named, *declaration, std::move(args));
+      require_object_safe(r, *declaration);
+      Type t;
+      t.kind = TypeKind::TraitObject;
+      t.declaration = *declaration;
+      t.type_args = std::move(application.args);
+      return m.types.intern(t);
+    }
     if (n.kind == AstKind::FunctionType)
       return signature(r, trait_self, true, trait_self_callback);
     std::optional<SymbolId> s;
@@ -1387,6 +1490,55 @@ class Checker {
   void match(Ref r, TypeId actual, std::optional<TypeId> expected) const {
     if (expected && actual != *expected)
       reject(r, "value type does not match the expected type");
+  }
+  // One declared dyn destination accepts a concrete value only when that
+  // concrete type has exactly one implementation of the complete trait
+  // application. The selected methods are instantiated here so HIR carries
+  // real executable targets, never a source name lookup performed by a
+  // backend.
+  Expr convert_to(Ref r, Expr value, std::optional<TypeId> expected) {
+    if (!expected || *expected == value.value.type)
+      return value;
+    const auto want = type(*expected);
+    if (want.kind != TypeKind::TraitObject)
+      return value;
+    const auto actual = type(value.value.type);
+    if (actual.kind == TypeKind::TraitObject || actual.kind == TypeKind::Error)
+      return value;
+    if (contains_parameter(value.value.type))
+      unavailable(r, "dyn construction from a generic type parameter is not "
+                     "implemented");
+    require_object_safe(r, want.declaration);
+    const auto *tr = trait_decl(want.declaration);
+    TraitRef trait{want.declaration, want.type_args};
+    // A marker trait has no method to select, but conversion still requires a
+    // real implementation of the complete application. Without this check an
+    // empty trait would publish a vtable with no impl and fail only later as
+    // invalid HIR.
+    if (!satisfies(r, value.value.type, trait))
+      reject(r,
+             "dyn conversion requires exactly one implementation of the "
+             "complete trait application");
+    std::vector<SymbolId> methods;
+    std::vector<std::vector<TypeId>> method_args;
+    for (const auto &proto : tr->methods) {
+      auto selected =
+          select_method(r, value.value.type, symbol(proto.symbol).name, trait);
+      if (symbol(selected.method).name != symbol(proto.symbol).name)
+        reject(r, "trait method maps to a different implementation method",
+               "E_TYPE_MISMATCH");
+      auto args = finish_arguments(r, generic_params[selected.method.value],
+                                   selected.substitutions);
+      auto target = selected.method;
+      if (template_ids.count(target.value))
+        target = instantiate(target, args, r);
+      methods.push_back(target);
+      method_args.push_back(std::move(args));
+    }
+    TraitObjectInit init{trait, value.value.type, std::move(methods),
+                          std::move(method_args)};
+    return {node(r, *expected, std::move(init), {value.id}),
+            {*expected, {}, {}}};
   }
   bool contextual(Ref r) const {
     const auto &n = ast(r);
@@ -1696,6 +1848,8 @@ class Checker {
           break;
         }
         auto base = expression(base_ref);
+        if (type(base.value.type).kind == TypeKind::TraitObject)
+          unavailable(r, "dyn trait methods can only be called directly");
         if (type(base.value.type).kind == TypeKind::ForeignOpaque) {
           auto name = file(r).tokens[n.token_end - 1].spelling;
           auto property = foreign_property(base.value.type, name);
@@ -1898,8 +2052,10 @@ class Checker {
               (l.writable && symbol(*sid).definition &&
                ast(*symbol(*sid).definition).kind == AstKind::Parameter))
             reject(r, "borrowed parameter cannot be moved", "E_CALL_ARGUMENT");
-          match(r, l.type, expected);
-          return {node(r, l.type, Move{sid}), {l.type, {}, {}}};
+          Expr moved{node(r, l.type, Move{sid}), {l.type, {}, {}}};
+          auto converted = convert_to(er, std::move(moved), expected);
+          match(r, converted.value.type, expected);
+          return converted;
         }
         if (ast(er).kind == AstKind::Member ||
             ast(er).kind == AstKind::NeutralBracket)
@@ -2231,6 +2387,7 @@ class Checker {
       unavailable(r, "this expression requires aggregate, ownership, or "
                      "external-call support");
     }
+    result = convert_to(r, std::move(result), expected);
     match(r, result.value.type, expected);
     return result;
   }
@@ -2355,7 +2512,8 @@ class Checker {
         return true;
       const Type t = *found;
       if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
-          t.kind == TypeKind::Weak || t.kind == TypeKind::Function ||
+          t.kind == TypeKind::Weak || t.kind == TypeKind::TraitObject ||
+          t.kind == TypeKind::Function ||
           t.kind == TypeKind::TypeParameter)
         return true;
       if (t.kind == TypeKind::Task)
@@ -2933,6 +3091,98 @@ class Checker {
             {sig, {}, {}}};
   }
 
+  // A dyn receiver has no static impl. The trait prototype fixes the vtable
+  // slot and the explicit argument types; the concrete implementation is
+  // selected by the construction node, not by this call site.
+  Expr trait_object_call(Ref r, Ref member_ref, Expr receiver,
+                         bool explicit_type_arguments,
+                         std::optional<TypeId> expected) {
+    if (explicit_type_arguments)
+      reject(member_ref,
+             "generic trait methods are not object-safe and cannot be called "
+             "through dyn",
+             "E_OBJECT_UNSAFE");
+    const auto dyn = type(receiver.value.type);
+    const TraitDecl *tr = trait_decl(dyn.declaration);
+    if (!tr)
+      reject(member_ref, "dyn receiver has no trait declaration",
+             "E_OBJECT_UNSAFE");
+    require_object_safe(member_ref, dyn.declaration);
+    const auto name = std::string(file(member_ref).tokens[
+        ast(member_ref).token_end - 1].spelling);
+    const MethodPrototype *prototype = nullptr;
+    uint32_t index = 0;
+    for (uint32_t i = 0; i < tr->methods.size(); ++i) {
+      if (symbol(tr->methods[i].symbol).name == name) {
+        if (prototype)
+          reject(member_ref, "ambiguous dyn trait method", "E_TYPE_MISMATCH");
+        prototype = &tr->methods[i];
+        index = i;
+      }
+    }
+    if (!prototype)
+      reject(member_ref, "method is not declared by the dyn trait",
+             "E_NAME_NOT_FOUND");
+    Substitutions sub{{tr->self, receiver.value.type}};
+    for (size_t i = 0; i < tr->params.size(); ++i)
+      sub.push_back({tr->params[i].symbol, dyn.type_args.at(i)});
+    auto full = substitute(prototype->signature, sub, m.types);
+    const auto ft = type(full);
+    if (ft.parameters.empty() ||
+        ft.parameters.front().mode != ParamMode::ordinary)
+      reject(member_ref, "dyn dispatch requires an ordinary Self receiver",
+             "E_OBJECT_UNSAFE");
+    if (expected)
+      infer(r, ft.result, *expected, sub);
+    const size_t explicit_count = ast(r).children.size() - 1;
+    if (explicit_count + 1 != ft.parameters.size())
+      reject(r, "wrong number of arguments", "E_CALL_ARGUMENT");
+    std::vector<CallArg> arguments;
+    std::vector<HirNodeId> children{receiver.id};
+    arguments.push_back(
+        {0, 0, {}, ParamMode::ordinary, receiver.id});
+    std::vector<bool> seen(ft.parameters.size());
+    seen[0] = true;
+    for (size_t i = 0; i < explicit_count; ++i) {
+      auto ar = child(r, i + 1);
+      size_t pi = i + 1;
+      std::optional<std::string> label;
+      if (token(ar, 1) == ":") {
+        label = std::string(token(ar));
+        pi = 0;
+        while (pi < prototype->parameters.size() &&
+               prototype->parameters[pi].label != *label)
+          ++pi;
+        if (pi == 0)
+          reject(ar, "unknown argument label", "E_CALL_ARGUMENT");
+      }
+      if (pi >= ft.parameters.size() || seen[pi])
+        reject(ar, "unknown or duplicate argument", "E_CALL_ARGUMENT");
+      seen[pi] = true;
+      const auto &parameter = ft.parameters[pi];
+      if (parameter.mode != ParamMode::ordinary)
+        reject(ar, "dyn dispatch supports ordinary arguments only",
+               "E_OBJECT_UNSAFE");
+      auto value = expression(child(ar, 0), parameter.type);
+      match(ar, value.value.type, parameter.type);
+      arguments.push_back({uint32_t(i + 1), uint32_t(pi), label,
+                           ParamMode::ordinary, value.id});
+      children.push_back(value.id);
+    }
+    Type abi;
+    abi.kind = TypeKind::Function;
+    abi.result = ft.result;
+    for (size_t i = 1; i < ft.parameters.size(); ++i)
+      abi.parameters.push_back(ft.parameters[i]);
+    auto abi_id = m.types.intern(std::move(abi));
+    check_call_borrows(r, arguments, children, false);
+    return {node(r, ft.result,
+                 TraitDispatch{TraitRef{dyn.declaration, dyn.type_args},
+                               prototype->symbol, abi_id, index,
+                               std::move(arguments)},
+                 std::move(children)),
+            {ft.result, {}, {}}};
+  }
   std::optional<TypeId> type_expression(Ref r) {
     if (ast(r).kind == AstKind::Parenthesized)
       return type_expression(child(r, 0));
@@ -3797,6 +4047,9 @@ class Checker {
         if (candidates.empty()) unavailable(r, "external member is not declared");
         return foreign_call(r, method_ref, candidates, receiver);
       }
+      if (type(receiver.value.type).kind == TypeKind::TraitObject)
+        return trait_object_call(r, method_ref, receiver, method_explicit,
+                                 expected);
       if (type(receiver.value.type).kind == TypeKind::NominalStruct)
         for (const auto &f : nominal(receiver.value.type).fields)
           if (symbol(f.symbol).name == name) {
@@ -5875,6 +6128,17 @@ class Checker {
     if (auto v = std::get_if<FunctionValue>(&n.data); v && v->bound &&
         instance_sub)
       v->bound->type = substitute(v->bound->type, *instance_sub, m.types);
+    if (auto init = std::get_if<TraitObjectInit>(&n.data)) {
+      for (size_t i = 0; i < init->methods.size(); ++i) {
+        if (!template_ids.count(init->methods[i].value))
+          continue;
+        if (i >= init->method_args.size())
+          throw std::invalid_argument(
+              "trait object template method lacks concrete arguments");
+        init->methods[i] =
+            instantiate(init->methods[i], init->method_args[i], n.source.node);
+      }
+    }
     if (auto c = std::get_if<ConstraintCall>(&n.data)) {
       auto name = symbol(c->method).name;
       auto selected = select_method(n.source.node, c->receiver, name, c->trait);
@@ -6053,6 +6317,20 @@ class Checker {
       if (auto c = std::get_if<ConstraintCall>(&n.data)) {
         c->signature = substitute(c->signature, sub, m.types);
         c->receiver = substitute(c->receiver, sub, m.types);
+        for (auto &t : c->trait.args)
+          t = substitute(t, sub, m.types);
+        update_args(c->args);
+      }
+      if (auto c = std::get_if<TraitObjectInit>(&n.data)) {
+        c->concrete = substitute(c->concrete, sub, m.types);
+        for (auto &t : c->trait.args)
+          t = substitute(t, sub, m.types);
+        for (auto &args : c->method_args)
+          for (auto &t : args)
+            t = substitute(t, sub, m.types);
+      }
+      if (auto c = std::get_if<TraitDispatch>(&n.data)) {
+        c->signature = substitute(c->signature, sub, m.types);
         for (auto &t : c->trait.args)
           t = substitute(t, sub, m.types);
         update_args(c->args);
