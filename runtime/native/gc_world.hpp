@@ -104,6 +104,49 @@ void lang_gc_world_leave_critical_v1(void) LANG_GC_WORLD_NOEXCEPT;
 // threads return false (they are not auto-registered).
 bool lang_gc_world_can_collect_v1(void) LANG_GC_WORLD_NOEXCEPT;
 
+// One explicit stack token per callback enter scope. The caller must provide a
+// distinct, zero-initialized token for each enter, keep it on the same thread's
+// stack until the matching leave, and not copy or reuse it while active.
+// Nested callbacks must leave in LIFO order. The fields are private to the
+// world runtime; callers must not inspect or modify them.
+//
+// Callback enter is for a foreign C callback that is about to touch the Wz
+// object graph. If the current thread is unregistered it registers it (and
+// remembers that this scope owns the new registration). If it is an existing Wz
+// thread, all nested SAFE depth is saved in the token, the node becomes ACTIVE,
+// and the function waits out any pending stop before returning. A callback from
+// an active collector, from a critical region, or from a nested callback whose
+// outer graph work is ACTIVE while a stop is pending is a terminal Panic.
+//
+// Callback leave must be called after all graph cleanup and after leaving any
+// callback-local SAFE/critical regions. It restores the exact saved SAFE depth
+// and ACTIVE/SAFE state. If this entry created the registration and it is the
+// outermost callback, leave removes that registration; it never removes an
+// existing language-thread registration. Outer leaves never park a nested
+// callback mid graph work; an outermost saved-ACTIVE leave parks if a stop is
+// pending, while a saved-SAFE leave restores SAFE.
+//
+// The token may survive a fork executed by the same callback thread; the world
+// fork-child hook preserves callback depth, token references and the container.
+// The child must still execute the same callback leave scope. Copied tokens,
+// tokens used after leave, tokens from another thread, non-LIFO leaves, and a
+// callback that never returns through its scope are misuse (Panic or leaked
+// process-exit state, never a silent removal of another registration). A
+// callback should not call unregister (Panic) or stop (BUSY -16).
+typedef struct LangGcWorldCallbackToken {
+  void *node;
+  void *previous;
+  uint32_t saved_safe_depth;
+  uint32_t created_registration;
+  uint32_t magic;
+  uint32_t reserved;
+} LangGcWorldCallbackToken;
+
+void lang_gc_world_callback_enter_v1(
+    LangGcWorldCallbackToken *token) LANG_GC_WORLD_NOEXCEPT;
+void lang_gc_world_callback_leave_v1(
+    LangGcWorldCallbackToken *token) LANG_GC_WORLD_NOEXCEPT;
+
 // Stop all other registered mutators. timeout_ns:
 //   -1  wait without a deadline
 //    0  try once

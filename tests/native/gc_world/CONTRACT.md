@@ -18,14 +18,17 @@ Declared in `runtime/native/gc_world.hpp`, implemented in
 | Symbol | Signature | Meaning |
 | --- | --- | --- |
 | `lang_gc_world_register_v1` | `bool(void)` | Register current gettid. Returns true only when this call created the registration. Idempotent otherwise. During an active stop a new registration is inserted PARKED and the call waits for resume. |
-| `lang_gc_world_unregister_v1` | `bool(void)` | Remove the current thread's registration. Returns true only when this call removed it. False if the thread was not registered. Panic for the active collector or from inside SAFE or critical. |
+| `lang_gc_world_unregister_v1` | `bool(void)` | Remove the current thread's registration. Returns true only when this call removed it. False if the thread was not registered. Panic for the active collector or from inside SAFE, critical, or an active callback token. |
 | `lang_gc_world_poll_v1` | `void(void)` | Safepoint poll. No-request fast path is one atomic load. Slow path looks up gettid. With a request it parks and waits for resume unless the thread is in SAFE or a critical region; critical defers the stop. |
 | `lang_gc_world_enter_safe_v1` | `void(void)` | Enter one nesting level of a SAFE region. Panic while any critical region is active. |
 | `lang_gc_world_leave_safe_v1` | `void(void)` | Leave one nesting level. The outermost leave reacquires mutator eligibility; if a request is active it parks instead of becoming ACTIVE. |
 | `lang_gc_world_enter_critical_v1` | `void(void)` | Enter one nested graph-modification region. Allowed only for a registered ACTIVE thread outside SAFE and not parked; Panic on misuse or depth overflow. |
 | `lang_gc_world_leave_critical_v1` | `void(void)` | Leave one critical level. Inner leaves never park. The outermost leave is a safepoint and parks if a request is still active. |
 | `lang_gc_world_can_collect_v1` | `bool(void)` | Query only. True only when no stop is owned, the current thread is registered and ACTIVE, and safe_depth and critical_depth are zero. False for unregistered threads and never auto-registers. |
-| `lang_gc_world_stop_v1` | `int64_t(int64_t timeout_ns)` | Stop all other registered mutators. Caller must be registered and outside SAFE and critical. On success the caller is the recorded collector. A critical caller gets -16 without any request change. |
+| `LangGcWorldCallbackToken` | 32-byte stack token | Private token for one callback enter/leave scope. Zero-initialize, keep on the same thread stack, do not copy or reuse while active, and leave in LIFO order. |
+| `lang_gc_world_callback_enter_v1` | `void(LangGcWorldCallbackToken *)` | Enter a foreign callback into the Wz graph. Registers only if absent; saves all SAFE depth; rejects critical; waits out pending stops; returns only when ACTIVE and graph access is allowed. |
+| `lang_gc_world_callback_leave_v1` | `void(LangGcWorldCallbackToken *)` | Restore the exact saved SAFE depth/state. Created registrations are removed only by the outermost such scope; existing Wz registrations are never removed. Outer leaves park if the saved state was ACTIVE and a stop is pending. |
+| `lang_gc_world_stop_v1` | `int64_t(int64_t timeout_ns)` | Stop all other registered mutators. Caller must be registered and outside SAFE and critical; an active callback also may not become collector. On success the caller is the recorded collector. A critical or active-callback caller gets -16 without any request change. |
 | `lang_gc_world_resume_v1` | `void(void)` | Only the successful stop caller may resume. Others Panic. |
 | `lang_gc_world_fork_prepare_v1` | `void(void)` | Acquire the registry lock and validate fork preconditions. Lock stays held across `fork()`. |
 | `lang_gc_world_fork_parent_v1` | `void(void)` | Release the inherited/held registry lock in the parent. |
@@ -71,6 +74,10 @@ Each registered kernel tid has one node:
   the resume epoch.
 * `safe_depth` counts nested SAFE entries; `critical_depth` counts nested
   critical entries. They are never both nonzero.
+* `callback_depth` counts active callback enter scopes, and `callback_token`
+  points at the top stack token. Callback entry temporarily clears saved SAFE
+  depth so the callback is ACTIVE graph work. A callback may itself enter SAFE
+  or critical regions; leave requires those depths back at zero.
 
 Transitions are serialized by the registry lock:
 
@@ -93,6 +100,14 @@ Transitions are serialized by the registry lock:
 | leave critical, depth > 1 | ACTIVE | ACTIVE, critical-- (never parks) |
 | leave critical, depth 1 -> 0, request active | ACTIVE | PARKED, wait |
 | leave critical, depth 1 -> 0, no request | ACTIVE | ACTIVE |
+| callback enter, no request | ACTIVE or SAFE(depth N) | ACTIVE, callback_depth++, token pushed; saved N in token |
+| callback enter, request active, state SAFE | SAFE(depth N) | SAFE, wait for resume/timeout without token; then ACTIVE |
+| callback enter, request active, state ACTIVE, callback_depth=0 | ACTIVE | PARKED, wait; then ACTIVE and token push |
+| callback enter, request active, state ACTIVE, callback_depth>0 | ACTIVE | Panic (outer callback graph work must not be parked) |
+| callback leave, saved N>0 | ACTIVE/callback | SAFE(depth N), callback_depth--; notify if request active |
+| callback leave, saved 0, callback_depth still >0 | ACTIVE | ACTIVE, callback_depth-- (do not park outer graph work) |
+| callback leave, saved 0, outermost, request active | ACTIVE | PARKED, wait, callback_depth--; registered thread remains |
+| callback leave, created registration, outermost | ACTIVE | node removed, callback_depth--; no park |
 | resume wake | PARKED | ACTIVE, under the registry lock only if no request is active |
 
 The resume-to-ACTIVE transition is performed while holding the registry lock
@@ -161,9 +176,15 @@ Consequences, stated so no caller relies on an unprovided guarantee:
 * `unregister` from inside critical is Panic for the same reason: the graph is
   still being modified. Leave the outermost critical level first. That leave
   may park during a stop; unregister only after it returns.
+* `unregister` from inside an active callback token is Panic
+  `unregister-in-callback`; callback leave owns the only permitted removal for a
+  registration created by that callback scope.
 * Repeated `register` on a thread that is already registered and critical does
   not park that thread, even if a stop request is active. It returns false and
   the critical region must finish normally.
+* Repeated `register` on a thread with `callback_depth != 0` likewise returns
+  false without parking. Registration is not a callback safepoint; parking
+  here would let a stop succeed on a half-written callback graph update.
 * The active collector cannot unregister during its stop; doing so is Panic.
   It must `resume` first.
 
@@ -184,9 +205,9 @@ own node, then under the registry lock:
 
 1. If another collector owns an active stop (including a self-reentrant call),
    return `-16` without changing state.
-2. If the caller's `critical_depth != 0`, return `-16` without setting the
-   request or changing an existing stop. A critical region cannot become a
-   collector.
+2. If the caller's `critical_depth != 0` or `callback_depth != 0`, return
+   `-16` without setting the request or changing an existing stop. A critical
+   region or active foreign callback cannot become a collector.
 3. Record the collector tid, set `g_stop_active`, atomically set the request
    bit, and notify waiters.
 4. Scan the registry. A stop is successful only when every node other than the
@@ -247,15 +268,75 @@ true result is a snapshot that can become stale immediately, and callers still
 need the ordinary request-bit poll for stop participation. It is not a
 registration API and must not be used to attach an unknown foreign thread.
 
+### 6.2 Foreign callback entry and leave
+
+`lang_gc_world_callback_enter_v1`/`leave_v1` are the minimal bridge for a C
+callback that is about to access the Wz graph. The caller supplies one distinct
+zero-initialized `LangGcWorldCallbackToken` on the current thread's stack. Tokens
+are private: do not inspect, copy, or reuse them while active, and leave nested
+callbacks in LIFO order. A token from another thread or a non-top token is
+rejected.
+
+Entry behavior:
+
+1. If the tid is unregistered, call the normal world register path. The token
+   records `created_registration=1`; the callback must not remove an existing
+   language registration.
+2. Take a node reference and validate that the node exists, belongs to this tid,
+   is not PARKED, and has `critical_depth == 0`. Entry from critical is a
+   terminal Panic before any graph access.
+3. If a stop request is active:
+   * an existing SAFE node (including an outer callback currently in C SAFE)
+     remains SAFE and waits for resume/timeout without holding a lock;
+   * an ACTIVE node with no outer callback becomes PARKED and waits;
+   * an ACTIVE node with `callback_depth>0` is rejected (`callback-nested-pending-stop`)
+     because parking would interrupt outer callback graph work.
+   An active collector is rejected (`callback-in-collector`); a foreign callback
+   must not run while this thread owns a stopped world.
+4. With no request, save the complete `safe_depth` in the token, clear it, set
+   the node ACTIVE, push the token on the node's callback stack, and return.
+   The callback may now touch the graph. `poll`/SAFE/critical still work inside
+   the callback; the callback cannot become the collector or unregister itself.
+   A repeated `register` inside the active callback returns false without
+   parking, even if a stop request is pending; the outermost callback leave is
+   the next callback safepoint.
+
+Leave behavior:
+
+* The callback must first leave all callback-local SAFE/critical regions
+  (`callback-left-safe`/`callback-left-critical` otherwise). The token must be
+  the current top (`callback-token-order`).
+* Save-N callbacks restore exactly `SAFE(depth=N)`. If a stop request is active,
+  the transition ACTIVE->SAFE notifies the collector; the callback returns into
+  its prior C SAFE scope and does not park.
+* A saved-ACTIVE nested leave with an outer callback still active returns
+  ACTIVE and never parks the outer callback.
+* The outermost saved-ACTIVE leave with a request active becomes PARKED and
+  waits for resume. A leave that created the registration removes only that
+  current node instead of parking; existing Wz registrations are never removed.
+* A callback can fork from its current thread scope; the world child hook
+  preserves callback_depth, the token stack pointer, and one node reference per
+  active token. The child must still execute the same LIFO leaves. Copied
+  tokens, tokens used after leave, a callback that never returns through its
+  scope, or a nonexistent node are misuse; terminal Panic or process-exit
+  leakage, never silent removal of another registration. Forking from inside a
+  kernel clear/trace callback is handled by the controller/fork restrictions,
+  not this token API.
+
+No thread-local storage is used. Callback depth and the token stack live in the
+registry node; waiting never holds the registry lock, an allocator lock or a
+runtime user lock.
+
 ## 7. Registry internals and lifetime
 
 * Global state is zero-initialized POD: a singly linked node list, a ticket
   lock, the request word, an epoch futex word, stop/collector fields, and fork
   state. There are no static constructors.
 * Nodes come from `lang_alloc_v1(sizeof(Node), alignof(Node))`. Each node has an
-  atomic `refs` count, tid, state, safe depth, critical depth, and next pointer.
-  The critical depth is registry-local state; no TLS, Root TCB layout, or
-  per-thread native TLS is added.
+  atomic `refs` count, tid, state, safe depth, critical depth, callback depth,
+  callback token top, and next pointer. The critical/callback state is
+  registry-local; no TLS, Root TCB layout, or per-thread native TLS is added.
+  Each active callback token holds one node reference.
 * The registry owns one reference. Lookups under the lock add a reference;
   `unregister` removes the node under the lock and drops the registry reference
   after unlocking. The last release calls `lang_free_v1` outside the lock.
@@ -311,6 +392,12 @@ Prepare preconditions and constraints:
   stop; the parent keeps it.
 * Forking from inside SAFE is allowed only when no foreign collector owns a
   stop. The child keeps the surviving thread's SAFE depth.
+* Forking from a callback is allowed only if the normal prepare constraints
+  above hold (a callback that is not critical is rejected while another
+  collector owns a pending stop). The child preserves callback depth, the token
+  stack pointer, and one node reference per active token; both processes must
+  execute the same callback LIFO leaves. A copied/abandoned token is misuse, not
+  a silent drop of another registration.
 * Prepare keeps the registry lock held until exactly one of the parent/child
   hooks runs. Do not call registry or allocator entry points between prepare
   and that matching hook; they would wait on the held locks.
@@ -350,17 +437,23 @@ Reasons implemented here: `allocation-failed`, `clock-failed`,
 `safe-depth-overflow`, `safe-while-parked`, `leave-without-enter`,
 `critical-unregistered`, `critical-in-safe`, `critical-while-parked`,
 `critical-depth-overflow`, `safe-in-critical`, `unregister-in-critical`,
-`leave-critical-without-enter`, `stop-unregistered`, `stop-in-safe`,
-`stop-parked`, `unregister-collector`, `unregister-in-safe`,
-`unregister-parked`, `resume-unregistered`, `resume-not-owner`,
-`fork-unregistered`, `fork-active-stop`, `fork-parked`, `fork-hook-misuse`,
-`fork-no-current`.
+`leave-critical-without-enter`, `callback-null-token`, `callback-token-active`,
+`callback-token-invalid`, `callback-token-order`, `callback-node-mismatch`,
+`callback-node-lost`, `callback-register-lost`, `callback-in-critical`,
+`callback-while-parked`, `callback-in-collector`,
+`callback-nested-pending-stop`, `callback-depth-overflow`,
+`callback-unbalanced`, `callback-left-critical`, `callback-left-safe`,
+`callback-created-safe`, `callback-created-nested`, `fork-callback-corruption`,
+`stop-unregistered`, `stop-in-safe`, `stop-parked`, `unregister-collector`,
+`unregister-in-safe`, `unregister-in-callback`, `unregister-parked`,
+`resume-unregistered`, `resume-not-owner`, `fork-unregistered`,
+`fork-active-stop`, `fork-parked`, `fork-hook-misuse`, `fork-no-current`.
 
-`stop` returns `-16` (EBUSY) for collector competition/self-reentry or when the
-caller is inside a critical region, `-22` (EINVAL) for `timeout_ns < -1`, and
-`-110` (ETIMEDOUT) after a complete retraction. The critical `-16` path does not
-set or change the request. Unexpected futex/clock failures are terminal Panic
-rather than a silent spin.
+`stop` returns `-16` (EBUSY) for collector competition/self-reentry, when the
+caller is inside a critical region, or when it is an active foreign callback;
+`-22` (EINVAL) for `timeout_ns < -1`; and `-110` (ETIMEDOUT) after a complete
+retraction. The critical/callback `-16` paths do not set or change the request.
+Unexpected futex/clock failures are terminal Panic rather than a silent spin.
 
 `can_collect` is a boolean query, not a Panic path for unregistered threads:
 an unknown tid returns false and is left unregistered. A gettid failure is still
@@ -384,7 +477,10 @@ The following are `not_run` and must not be reported as integrated behavior:
   registry support and ABI; the write sites are not instrumented.
 * Automatic SAFE annotation around runtime blocking operations (file I/O,
   network, condition waits, process waits, etc.).
-* A hosted foreign-C-thread auto-attach entry point. Foreign threads must call
+* A hosted foreign-C-thread auto-attach entry point and Root's Native C
+  callback trampoline. The private callback API registers an absent callback
+  thread itself, but compiler/emitter insertion of callback enter/leave and the
+  Root trampoline are not wired yet. Other foreign threads must still call
   `lang_gc_world_register_v1` explicitly, and unregistered slow-path misuse
   Panics.
 * Wiring the fork hooks into `runtime/native/process.cpp` or any language
@@ -393,7 +489,8 @@ The following are `not_run` and must not be reported as integrated behavior:
   or claims that memory is automatically reclaimed.
 * Non-Linux or non-x86_64 ports.
 * Async-signal-safe use of the registry. A signal handler must not call
-  registry/SAFE APIs while the interrupted thread may hold the registry lock.
+  registry/SAFE/critical/callback APIs while the interrupted thread may hold
+  the registry lock or an active callback token.
 
 ## 11. Verification evidence
 
@@ -456,9 +553,66 @@ rerun with the fixed toolchain:
 ```bash
 CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
 LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
-GC_WORLD_BUILD_DIR=/tmp/gc-world-critical-20261112 \
+GC_WORLD_BUILD_DIR=/tmp/gc-world-regression-callback-20261112 \
 bash tests/native/gc_world/run_all.sh
+# SUMMARY pass=42 fail=0 skip=0
 ```
+
+New callback-API suite:
+
+```bash
+CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
+LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+GC_WORLD_CALLBACK_BUILD_DIR=/tmp/gc-world-callback-20261112 \
+bash tests/native/gc_world/run_callback_all.sh
+# SUMMARY pass=26 fail=0 skip=0
+```
+
+Fixed callback O2 output:
+
+```text
+GC_WORLD_CALLBACK_EXTERNAL_OK
+GC_WORLD_CALLBACK_ACTIVE_OK
+GC_WORLD_CALLBACK_SAFE3_OK
+GC_WORLD_CALLBACK_NESTED_OK
+GC_WORLD_CALLBACK_REGISTER_ACTIVE_OK stop=0
+GC_WORLD_CALLBACK_PENDING_OK
+GC_WORLD_CALLBACK_ACTIVE_PENDING_OK
+GC_WORLD_CALLBACK_ACTIVE_STOP_OK
+GC_WORLD_CALLBACK_EXTERNAL_PENDING_OK
+GC_WORLD_CALLBACK_TIMEOUT_OK
+GC_WORLD_CALLBACK_FORK_OK
+GC_WORLD_CALLBACK_HOST_OK allocations=21
+```
+
+Independent F1 rerun against the current source:
+
+```bash
+CXX=/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang++ \
+LD_LIBRARY_PATH=/home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9/usr/lib \
+$CXX -std=c++20 -pthread -Wall -Wextra -Werror -I runtime/native -O2 -g \
+  /tmp/gc-callback-independent-pi-20261112/repro_register_in_callback.cpp \
+  runtime/native/gc_world.cpp runtime/native/alloc.cpp \
+  -o /tmp/gc-callback-independent-pi-20261112/repro_register_in_callback_current
+# stop_result=0 stopped_with_half_written_graph=0 (exit 0)
+```
+
+The independent probe matrix was rebuilt against the current worktree with its
+`ROOT` pointed at this source tree and run unchanged: `SUMMARY pass=42 fail=0`.
+The `register-in-active-callback` probe now reports
+`PROBE_REGISTER_IN_CALLBACK stop=0 returned_before_resume=1
+stopped_with_stale_checksum=0`; `direct-nested-pending` remains the documented
+exit-101 Panic.
+
+The callback suite covers an external pthread with created-registration
+cleanup, an existing ACTIVE Wz caller, exact N=3 SAFE restore, nested
+callback/C-SAFE/callback scopes, repeated register inside an ACTIVE callback
+during a pending stop (Pair a/b/sum regression), a SAFE worker during a held stop, an external
+unregistered pthread waiting on a held stop, an ACTIVE caller parked on a held
+stop, an active callback blocking a stop rather than hiding behind SAFE, timeout
+withdrawal, eight misuse Panics, nested callback tokens across fork, O0/O2/
+ASAN+UBSAN, and a no-libc static ELF with no INTERP/NEEDED/undefined symbols.
+The world 42 suite and its existing static ELF remain unchanged.
 
 ## 12. Correction history
 
@@ -475,6 +629,21 @@ New `gc_world_seccomp_test.cpp` modes reproduce both faults in isolated
 processes and also verify the 100,000-iteration idle fast path never issues
 gettid.
 
+2026-11-12 F1 correction (independent callback review
+`/tmp/gc-callback-independent-pi-20261112/review.json`): the existing-node
+`lang_gc_world_register_v1` park condition checked `critical_depth` but not
+`callback_depth`. A repeated register inside an ACTIVE callback with a pending
+stop parked the callback mid graph update and let the collector stop on a
+half-written Pair. The condition now also requires `callback_depth == 0`;
+repeated register returns false without parking. A permanent real-pthread
+Pair regression writes `a`, waits for the request, calls register, writes
+`b/sum`, leaves the callback, and verifies a successful stop sees only the
+complete pair. The regression never reads the plain payload on a stop timeout
+until after join. Fixed-world and callback suites, the independent repro, and
+the independent probe matrix were rerun; the repro now prints
+`stop_result=0 stopped_with_half_written_graph=0` and the probe prints
+`returned_before_resume=1 stopped_with_stale_checksum=0`.
+
 ## 13. Critical-region integration step
 
 2026-11-12: Added the registry-side nested critical region described in
@@ -488,3 +657,19 @@ writes, does not emit critical regions from the compiler, does not claim that a
 half-written graph is automatically repaired, and does not change the Root TCB
 or add thread-local storage. The critical depth lives in the allocated registry
 node and is reached by the same gettid lookup as the rest of the registry.
+
+## 14. Foreign callback integration step
+
+2026-11-12: Added `LangGcWorldCallbackToken` plus
+`lang_gc_world_callback_enter_v1`/`leave_v1` and the registry-side
+`callback_depth`/`callback_token` stack. Entry saves the complete prior SAFE
+depth, rejects critical/collector/parked misuse, waits out stops while SAFE or
+parks a not-yet-entered ACTIVE caller, and only then exposes ACTIVE graph
+access. Leave restores exact SAFE/ACTIVE state, never removes an existing Wz
+registration, and removes only a registration created by that outermost
+callback scope.
+
+This is still only a private runtime API and tests. Root must still add the
+Native C callback trampoline, compiler/emitter insertion around foreign calls,
+hosted callback registration composition, and the main/thread/process startup
+hooks. No MEM02/SourceNativeGC completion is claimed.

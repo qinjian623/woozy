@@ -47,6 +47,14 @@ constexpr uint32_t kCriticalDepthMax = LANG_GC_WORLD_TEST_CRITICAL_MAX;
 constexpr uint32_t kCriticalDepthMax = 0xffffffffu;
 #endif
 
+// Callback depth plus the registry reference must fit in Node::refs. The
+// maximum callback depth is therefore UINT32_MAX - 1.
+constexpr uint32_t kCallbackDepthMax = 0xffffffffu - 1;
+constexpr uint32_t kCallbackTokenMagic = 0x47435754u; // "GCWT"
+
+static_assert(sizeof(LangGcWorldCallbackToken) == 32,
+              "callback token must remain two pointers plus four words");
+
 struct Node {
   Node *next;
   int32_t tid;
@@ -54,6 +62,8 @@ struct Node {
   uint32_t state;
   uint32_t safe_depth;
   uint32_t critical_depth;
+  uint32_t callback_depth;
+  void *callback_token;
 };
 
 struct KernelTimespec {
@@ -224,6 +234,8 @@ Node *allocate_node(int32_t tid) noexcept {
   node->state = kStateActive;
   node->safe_depth = 0;
   node->critical_depth = 0;
+  node->callback_depth = 0;
+  node->callback_token = nullptr;
   return node;
 }
 
@@ -310,6 +322,24 @@ void wait_until_resumed(Node *node) noexcept {
   }
 }
 
+// Wait while the node remains SAFE. Used only by callback entry for a Wz
+// thread that was already in SAFE when a stop was pending. The registry lock is
+// not held while sleeping; the collector may complete its stop and later resume.
+void wait_while_world_request_active() noexcept {
+  const Deadline infinite{true, {0, 0}};
+  for (;;) {
+    registry_lock();
+    if (!request_active_locked()) {
+      registry_unlock();
+      return;
+    }
+    const uint32_t epoch =
+        __atomic_load_n(&g_epoch, __ATOMIC_ACQUIRE);
+    registry_unlock();
+    (void)wait_on_epoch(epoch, infinite);
+  }
+}
+
 bool all_stopped_locked(int32_t collector_tid) noexcept {
   for (Node *node = g_nodes; node; node = node->next) {
     if (node->tid == collector_tid)
@@ -358,7 +388,10 @@ extern "C" bool lang_gc_world_register_v1(void) noexcept {
       const bool requested = request_active_locked();
       const bool collector = is_active_collector_locked(tid);
       if (requested && !collector && existing->state == kStateActive &&
-          existing->critical_depth == 0) {
+          existing->critical_depth == 0 && existing->callback_depth == 0) {
+        // Idempotent register is not a callback safepoint. An ACTIVE callback
+        // may be midway through a graph update; returning false without
+        // parking preserves that work for the collector to wait on.
         existing->state = kStateParked;
         wait = true;
         notify = true;
@@ -436,6 +469,11 @@ extern "C" bool lang_gc_world_unregister_v1(void) noexcept {
       registry_unlock();
       node_release(node);
       gc_panic("unregister-in-critical");
+    }
+    if (node->callback_depth != 0) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("unregister-in-callback");
     }
     if (node->state == kStateParked) {
       registry_unlock();
@@ -667,6 +705,229 @@ extern "C" void lang_gc_world_leave_critical_v1(void) noexcept {
   node_release(node);
 }
 
+extern "C" void lang_gc_world_callback_enter_v1(
+    LangGcWorldCallbackToken *token) noexcept {
+  if (!token)
+    gc_panic("callback-null-token");
+  // Tokens are distinct, zero-initialized stack objects. A token that is still
+  // active is being reused before its matching leave.
+  if (token->magic == kCallbackTokenMagic)
+    gc_panic("callback-token-active");
+  token->node = nullptr;
+  token->previous = nullptr;
+  token->saved_safe_depth = 0;
+  token->created_registration = 0;
+  token->magic = 0;
+  token->reserved = 0;
+
+  const int32_t tid = current_tid();
+  Node *node = find_and_acquire(tid);
+  bool created = false;
+  if (!node) {
+    created = lang_gc_world_register_v1();
+    node = find_and_acquire(tid);
+    if (!node)
+      gc_panic("callback-register-lost");
+  }
+
+  for (;;) {
+    bool park_notified = false;
+    registry_lock();
+    Node **link = &g_nodes;
+    while (*link && *link != node)
+      link = &(*link)->next;
+    if (*link != node) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("callback-node-lost");
+    }
+    if (node->tid != tid) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("callback-node-mismatch");
+    }
+    if (node->callback_depth == kCallbackDepthMax) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("callback-depth-overflow");
+    }
+    if (node->critical_depth != 0) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("callback-in-critical");
+    }
+    if (node->state == kStateParked) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("callback-while-parked");
+    }
+    if (node->state == kStateSafe) {
+      if (node->safe_depth == 0) {
+        registry_unlock();
+        node_release(node);
+        gc_panic("state-corruption");
+      }
+    } else if (node->state == kStateActive) {
+      if (node->safe_depth != 0) {
+        registry_unlock();
+        node_release(node);
+        gc_panic("state-corruption");
+      }
+    } else {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
+
+    const bool requested = request_active_locked();
+    if (requested && is_active_collector_locked(tid)) {
+      // A foreign callback must not enter Wz while this thread is the active
+      // stop owner; the world is stopped and must not run foreign callbacks.
+      registry_unlock();
+      node_release(node);
+      gc_panic("callback-in-collector");
+    }
+    if (requested) {
+      if (node->state == kStateSafe) {
+        // The caller was SAFE (possibly an outer callback in a C SAFE block).
+        // Keep it SAFE and wait for the collector to resume/timeout before
+        // exposing graph access. Do not hold any lock while waiting.
+        registry_unlock();
+        wait_while_world_request_active();
+        continue;
+      }
+      // The caller was ACTIVE and has not touched the graph yet. Park it, but
+      // only if no outer callback is already doing active graph work.
+      if (node->callback_depth != 0) {
+        registry_unlock();
+        node_release(node);
+        gc_panic("callback-nested-pending-stop");
+      }
+      node->state = kStateParked;
+      park_notified = true;
+      registry_unlock();
+      if (park_notified)
+        notify_waiters();
+      wait_until_resumed(node);
+      continue;
+    }
+
+    // No pending request: save all prior SAFE depth and become ACTIVE before
+    // returning to the callback body.
+    const uint32_t saved_safe_depth = node->safe_depth;
+    if (node->state == kStateSafe) {
+      node->safe_depth = 0;
+      node->state = kStateActive;
+    }
+    token->node = node;
+    token->previous = node->callback_token;
+    token->saved_safe_depth = saved_safe_depth;
+    token->created_registration = created ? 1u : 0u;
+    token->magic = kCallbackTokenMagic;
+    node->callback_token = token;
+    ++node->callback_depth;
+    registry_unlock();
+    return;
+  }
+}
+
+extern "C" void lang_gc_world_callback_leave_v1(
+    LangGcWorldCallbackToken *token) noexcept {
+  if (!token || token->magic != kCallbackTokenMagic || !token->node)
+    gc_panic("callback-token-invalid");
+  const int32_t tid = current_tid();
+  Node *node = static_cast<Node *>(token->node);
+
+  bool park = false;
+  bool notify = false;
+  bool removed = false;
+  registry_lock();
+  Node **link = &g_nodes;
+  while (*link && *link != node)
+    link = &(*link)->next;
+  if (*link != node) {
+    registry_unlock();
+    gc_panic("callback-node-lost");
+  }
+  if (node->tid != tid) {
+    registry_unlock();
+    gc_panic("callback-node-mismatch");
+  }
+  if (node->callback_depth == 0) {
+    registry_unlock();
+    gc_panic("callback-unbalanced");
+  }
+  if (node->callback_token != token) {
+    registry_unlock();
+    gc_panic("callback-token-order");
+  }
+  if (node->critical_depth != 0) {
+    registry_unlock();
+    gc_panic("callback-left-critical");
+  }
+  if (node->safe_depth != 0) {
+    registry_unlock();
+    gc_panic("callback-left-safe");
+  }
+  if (node->state != kStateActive) {
+    registry_unlock();
+    gc_panic("state-corruption");
+  }
+
+  --node->callback_depth;
+  node->callback_token = token->previous;
+  const uint32_t saved_safe_depth = token->saved_safe_depth;
+  const bool created = token->created_registration != 0;
+
+  token->node = nullptr;
+  token->previous = nullptr;
+  token->saved_safe_depth = 0;
+  token->created_registration = 0;
+  token->magic = 0;
+  token->reserved = 0;
+
+  if (saved_safe_depth != 0) {
+    if (created) {
+      registry_unlock();
+      gc_panic("callback-created-safe");
+    }
+    node->safe_depth = saved_safe_depth;
+    node->state = kStateSafe;
+    notify = request_active_locked();
+  } else if (created) {
+    if (node->callback_depth != 0) {
+      registry_unlock();
+      gc_panic("callback-created-nested");
+    }
+    // This callback scope created the registration. It is now done; remove
+    // only this node and let any waiting collector proceed.
+    *link = node->next;
+    node->next = nullptr;
+    removed = true;
+    notify = request_active_locked();
+  } else if (node->callback_depth != 0) {
+    // An outer callback is still active. Returning to it must not park here;
+    // the outer scope owns the next safepoint/leave.
+    node->state = kStateActive;
+  } else if (request_active_locked() &&
+             !is_active_collector_locked(tid)) {
+    node->state = kStateParked;
+    park = true;
+    notify = true;
+  } else {
+    node->state = kStateActive;
+  }
+  registry_unlock();
+
+  if (notify)
+    notify_waiters();
+  if (park)
+    wait_until_resumed(node);
+  node_release(node); // token reference
+  if (removed)
+    node_release(node); // registry reference
+}
+
 extern "C" bool lang_gc_world_can_collect_v1(void) noexcept {
   const int32_t tid = current_tid();
   Node *node = find_and_acquire(tid);
@@ -714,6 +975,13 @@ extern "C" int64_t lang_gc_world_stop_v1(int64_t timeout_ns) noexcept {
   if (self->critical_depth != 0) {
     // Do not set a request from a mid-modification region. In particular this
     // must not disturb an already-owned stop or leave a pending old request.
+    registry_unlock();
+    node_release(self);
+    return kEbusy;
+  }
+  if (self->callback_depth != 0) {
+    // A callback is active graph work; it must not become the collector and
+    // then try to collect a graph it is still modifying.
     registry_unlock();
     node_release(self);
     return kEbusy;
@@ -859,7 +1127,13 @@ extern "C" void lang_gc_world_fork_child_v1(void) noexcept {
   // Only the surviving thread is registered. Its old parent tid was valid only
   // in the parent; the child has a new kernel tid.
   keep->tid = child_tid;
-  __atomic_store_n(&keep->refs, 1u, __ATOMIC_RELAXED);
+  if (keep->callback_depth != 0 && !keep->callback_token)
+    gc_panic("fork-callback-corruption");
+  // The surviving callback tokens are stack-scoped references held by this
+  // thread. Preserve exactly one registry reference plus one per active token;
+  // callback leave will release them. callback_depth/token themselves stay
+  // unchanged.
+  __atomic_store_n(&keep->refs, 1u + keep->callback_depth, __ATOMIC_RELAXED);
   // critical_depth is copied unchanged. A critical region is still ACTIVE
   // (not SAFE); only safe_depth changes the state classification.
   if (keep->safe_depth == 0)
