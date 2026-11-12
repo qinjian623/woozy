@@ -1,0 +1,17 @@
+package app;
+
+func make_reader[T](value T) (func() T) {
+    return func() T { return value; };
+}
+
+func main() i32 {
+    let read_i32 = make_reader[i32](42);
+    let read_vec = make_reader[Vec[i32]]([7]);
+    if read_i32() != 42 { return 1; }
+    let values = read_vec();
+    if values[0] != 7 { return 2; }
+    values[0] = 8;
+    let again = read_vec();
+    if again[0] != 8 { return 3; }
+    return 0;
+}

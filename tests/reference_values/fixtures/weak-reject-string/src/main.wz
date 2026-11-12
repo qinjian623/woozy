@@ -1,0 +1,10 @@
+package app;
+
+import "std/weak" as weak;
+
+func main() i32 {
+    let text string = "not a weak target";
+    // A string is an immutable value, not a shared reference-counted target.
+    let weak_value Weak[string] = weak.downgrade[string](text);
+    return 0;
+}

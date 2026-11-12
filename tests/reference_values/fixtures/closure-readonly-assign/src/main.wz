@@ -1,0 +1,12 @@
+package app;
+
+func main() i32 {
+    var x i32 = 1;
+    let bad = func() i32 {
+        // A capture binding is read-only. Replacing the captured name is
+        // rejected even though the creator's binding is a var.
+        x = 2;
+        return x;
+    };
+    return bad();
+}

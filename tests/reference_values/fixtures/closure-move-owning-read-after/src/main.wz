@@ -1,0 +1,11 @@
+package app;
+
+func main() i32 {
+    var values Vec[i32] = [41];
+    let read = move func() i32 { return values[0]; };
+
+    // The owning capture was moved into the function value. Reading the
+    // original binding after this point must be rejected.
+    let illegal = values[0];
+    return read() + illegal;
+}

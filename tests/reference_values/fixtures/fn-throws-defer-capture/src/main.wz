@@ -1,0 +1,34 @@
+package app;
+
+import "std/box" as box;
+
+enum Failure { Bad; }
+
+func mark(cell box.Box[i64], digit i64) {
+    box.set(cell, box.get(cell) * 10 + digit);
+}
+
+func make(log box.Box[i64], base i32) (func(i32) i32 throws Failure) {
+    return func(value i32) i32 throws Failure {
+        defer { mark(log, 9); }
+        mark(log, 1);
+        if value < 0 { throw Failure.Bad; }
+        return base + value;
+    };
+}
+
+func main() i32 throws Failure {
+    let log = box.new[i64](0);
+    let run = make(log, 10);
+    try {
+        if run(4) != 14 { return 1; }
+        let ignored = run(-1);
+        return 2;
+    } catch error Failure {
+        mark(log, 2);
+    }
+    if box.get(log) != 19192 { return 3; }
+    if run(6) != 16 { return 4; }
+    if box.get(log) != 1919219 { return 5; }
+    return 0;
+}

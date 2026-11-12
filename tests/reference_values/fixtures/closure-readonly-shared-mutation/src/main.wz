@@ -1,0 +1,19 @@
+package app;
+
+import "std/box" as box;
+
+func main() i32 {
+    let values Vec[i32] = [3];
+    let cell = box.new[i32](10);
+    let update = func() i32 {
+        values[0] = values[0] + 1;
+        box.set(cell, box.get(cell) + 5);
+        return values[0] + box.get(cell);
+    };
+
+    if update() != 19 { return 1; }
+    if update() != 25 { return 2; }
+    if values[0] != 5 { return 3; }
+    if box.get(cell) != 20 { return 4; }
+    return 0;
+}

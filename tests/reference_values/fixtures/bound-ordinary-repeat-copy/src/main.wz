@@ -1,0 +1,29 @@
+package app;
+
+struct Counter {
+    base i32;
+    values Vec[i32];
+}
+
+impl Counter {
+    func read(self Self) i32 { return self.base; }
+    func total(self Self) i32 { return self.base + self.values[0]; }
+}
+
+func main() i32 {
+    var counter = Counter(base: 7, values: [1]);
+    let read = counter.read;
+    let copied = read;
+    counter.base = 9;
+    counter.values[0] = 5;
+
+    if read() != 7 { return 1; }
+    if copied() != 7 { return 2; }
+
+    let fresh = counter.read;
+    if fresh() != 9 { return 3; }
+
+    let total = counter.total;
+    if total() != 14 { return 4; }
+    return 0;
+}

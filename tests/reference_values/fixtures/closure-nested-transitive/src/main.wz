@@ -1,0 +1,18 @@
+package app;
+
+func make(seed i32) (func(i32) i32) {
+    let base i32 = seed;
+    return func(delta i32) i32 {
+        let nested = func(extra i32) i32 { return base + delta + extra; };
+        return nested(1);
+    };
+}
+
+func main() i32 {
+    let first = make(40);
+    let second = make(10);
+    if first(1) != 42 { return 1; }
+    if second(2) != 13 { return 2; }
+    if first(0) != 41 { return 3; }
+    return 0;
+}

@@ -1,0 +1,13 @@
+package app;
+
+func main() i32 {
+    var scalar i32 = 40;
+    let values Vec[i32] = [2];
+    let read = func(delta i32) i32 { return scalar + values[0] + delta; };
+
+    scalar = 100;
+    values[0] = 3;
+    if read(0) != 43 { return 1; }
+    if read(7) != 50 { return 2; }
+    return 0;
+}

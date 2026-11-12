@@ -1,0 +1,13 @@
+package app;
+
+import "std/os" as os;
+import "std/thread" as thread;
+
+func main() i32 throws os.Error {
+    let values Vec[i64] = [40];
+    let entry = func(delta i64) i64 { return values[0] + delta; };
+    let worker = thread.spawn[i64](entry, 2);
+    if !thread.wait_for(worker, 5_000_000_000) { return 1; }
+    if thread.join(worker) != 42 { return 2; }
+    return 0;
+}

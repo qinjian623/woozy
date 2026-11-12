@@ -1,0 +1,950 @@
+{
+  "schema": "compiler-dev/reference-values-source-fixtures/1",
+  "contract": "compiler-dev/1",
+  "operation_id": "woozy-reference-source-cases-20261112",
+  "root_base": "9f1ab40",
+  "root_cli": "/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/woozyc",
+  "feature_status": "planned / not implemented at the recorded base",
+  "summary": "Independent source fixtures and expected values for capturing closures, bound method values, function values, indirect callee cleanup, thread capture, and source Weak. Syntax is validated with the existing Root CLI; no compiler, runtime, shared CMake, stdlib, or RED-test registration is changed.",
+  "case_count": 24,
+  "runtime_case_count": 18,
+  "reject_case_count": 6,
+  "pending_case_count": 3,
+  "stage_policy": {
+    "syntax": "Executed after the correction with the read-only Root CLI at source revision 68b3cde (candidate worktree base 9f1ab40): every fixture is accepted by `woozyc check --syntax-only --format json`, exit 0 and status=ok. Syntax acceptance proves only that the intended source spelling parses.",
+    "project_check": "Executed after the correction as a baseline only. At Root CLI 68b3cde the closure cases report E_CAPABILITY_UNAVAILABLE (capturing a local binding is unavailable) and all Weak cases report E_IMPORT_NOT_FOUND (std/weak is not provided). Bound-method cases currently report E_TYPE_MISMATCH (unknown struct field) because method values are not implemented. These failures are not expected-negative results and are not evidence of feature support.",
+    "runtime": "Not run and not claimed. No fixture has been built or executed by Native or Python because the feature is not implemented at this base. The expected results below are the future target, not a pass record.",
+    "reject": "Only the cases with kind=reject are expected to fail compilation after the feature exists. A runner must require the stated rejection behavior (capture read-only/move ownership, bound inout, or Weak target eligibility) and must not mark an arbitrary compile failure as a passing negative.",
+    "backends": "All source is backend-neutral. Manifests select native/64; Python/64 is intended to run the same project through the existing CLI with --backend python. Native O0/O2 and Python results are planned, not executed.",
+    "timeouts": "Thread fixtures use a finite std/thread.wait_for timeout. Weak liveness assertions rely on deterministic final strong-handle drop at lexical block exit for acyclic values; they do not assume collection of strong cycles.",
+    "no_io_assertions": "Positive cases assert main return 0 and scalar/container checks. They do not parse stdout. A panic or build failure is not accepted as a normal result."
+  },
+  "rules": {
+    "capture_snapshot": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "已确定、尚待实现的闭包与 Weak 规则",
+          "clause": "闭包捕获创建时的逻辑值，捕获绑定只读；Vec 等共享对象的内容仍可通过已有接口修改。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "4 捕获、所有权与 lowering",
+          "clause": "creator 的普通 Read 产生一次拥有副本；FunctionValue child 用 take 一次把该结果装入 env。"
+        }
+      ],
+      "summary": "Each lambda captures the value visible at its own creation point. Later assignment to a scalar creator binding does not rewrite an earlier capture. Sibling lambdas are independent snapshots."
+    },
+    "capture_readonly_shared": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "已确定、尚待实现的闭包与 Weak 规则",
+          "clause": "捕获绑定只读；Vec 等共享对象的内容仍可通过已有接口修改。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "4 捕获、所有权与 lowering",
+          "clause": "lambda body 中 capture local 作为入口已初始化的 ordinary borrowed 值；赋值、Move、whole-binding inout 拒绝。Vec/Box 等共享对象内容仍按普通别名规则可修改。"
+        }
+      ],
+      "summary": "The captured name cannot be rebound or moved, but mutating a shared Vec or Box through that captured handle is ordinary aliasing and stays legal."
+    },
+    "move_func_captures": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "已确定、尚待实现的闭包与 Weak 规则",
+          "clause": "普通 func 复制捕获值，move func(...) 移动全部实际捕获的拥有值，不提供逐变量捕获列表。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "Root 补充：字段交接与未具体化类型",
+          "clause": "move func 的移动意图保存在父节点 move_capture；实例化后按实际类型重新决定：标量复制不消耗原绑定，拥有值移动并消耗原绑定。"
+        }
+      ],
+      "summary": "A move func consumes owning captures (Vec/Box/Fn/etc.) but only copies scalar captures. Reading a moved owning binding is an ownership error; the scalar binding remains readable and assignable."
+    },
+    "capture_nested_transitive": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "4 捕获、所有权与 lowering",
+          "clause": "source 首次使用、深度优先、包含嵌套 literal body；外层 literal 的遍历把嵌套 literal 的 grandparent 引用也纳入，形成传递捕获。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "4 捕获、所有权与 lowering",
+          "clause": "每个 lambda 都重新按 origin 查自己的 local；中间 lambda 与内部 lambda 各自有 local。"
+        }
+      ],
+      "summary": "A nested lambda may reference a grandparent binding through an intermediate lambda. Each lambda instance has its own local capture identity while origin remains the original declaration."
+    },
+    "generic_capture_instances": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "4 捕获、所有权与 lowering",
+          "clause": "creator 的 CaptureSource.source/type 用 creator 的 renamed/substitution；lambda 的 CaptureBinding.local/type 用 lambda 自己的 renamed/substitution；origin 保持原声明 SymbolId。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "8 测试与原生 IR 负测试",
+          "clause": "泛型两实例（origin 稳定、local 分别 rename）。"
+        }
+      ],
+      "summary": "The same generic creator instantiated with i32 and Vec[i32] must produce independent capture types and lambdas while keeping the capture origin stable."
+    },
+    "function_value_storage": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "5 Fn 调用、IR 与 Native/Python",
+          "clause": "Fn 的 copy/drop 只对非 null env retain/release；即使 env 内含不可复制资源，Fn 本身仍可复制（共享 env）。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.1 复制与对象身份",
+          "clause": "数值、bool、Unit、非捕获函数值复制值；引用容器复制共享同一容器对象。"
+        }
+      ],
+      "summary": "A returned capturing Fn can be stored in a struct field or Vec element, copied, and called through each copy. Copies share the environment, not a new capture snapshot."
+    },
+    "function_throws_defer": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "9 defer 和销毁顺序",
+          "clause": "defer 注册在当前词法块，退出时后注册先执行；正常退出、return、break、continue、typed throw 都按实际退出的块执行该过程。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "8 typed throws 与 Panic",
+          "clause": "成功仅初始化 value，失败仅初始化 error；非活动侧禁止读取或销毁。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "5 Fn 调用、IR 与 Native/Python",
+          "clause": "间接 callee 是拥有临时值时，lower 在 callee 求值后、args 之前 begin_borrow；成功/错误退出用既有 ExitPlan/full-expression end_borrow。"
+        }
+      ],
+      "summary": "A capturing Fn that throws must run its registered defer on the typed-error path, keep the capture environment reusable after the throw, and not run normal-return cleanup twice."
+    },
+    "bound_ordinary": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "6 Bound method 与 Weak/Box",
+          "clause": "value.method 普通 Self 在创建时普通复制 receiver；两种都要求 receiver ordinary_copyable。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "已确定、尚待实现的闭包与 Weak 规则",
+          "clause": "绑定 move Self 方法产生的函数值可复制、可重复调用。每次调用先按普通规则复制接收者，再把该副本移交给方法；不能复制的接收者禁止绑定。"
+        }
+      ],
+      "summary": "An ordinary-Self bound method copies the receiver at binding creation. Repeated calls and Fn copies see that snapshot; a newly bound method sees the current receiver. Vec/Box handles inside the receiver still share their objects."
+    },
+    "bound_move": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "2 C1--C7 缺陷修正",
+          "clause": "move-Self bound 方法每次调用先从 env 取 receiver，按普通复制得到独立拥有副本，再把副本交给 move Self；适配器不 take/清空 env 字段。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "6 Bound method 与 Weak/Box",
+          "clause": "Native adapter R adapter(void *env, remaining args...)：move Self 每次调用先 copy_value(receiver_type, env_field)，把独立副本交给 move Self，绝不 take/清空 env 字段。"
+        }
+      ],
+      "summary": "A move-Self bound Fn retains its receiver in the environment. Every call, including calls through a copied Fn, makes a fresh ordinary copy before invoking the move-Self method; the environment is not emptied."
+    },
+    "bound_inout_reject": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "2 C1--C7 缺陷修正",
+          "clause": "inout Self 禁止绑定为逃逸函数值。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.2 参数模式和移动",
+          "clause": "inout 参数独占可写存储访问，不得逃逸、保存到对象或被捕获。"
+        }
+      ],
+      "summary": "An inout-Self method cannot be bound into a repeatable function value because the exclusive borrow would escape. The binding must be rejected at source-check time."
+    },
+    "indirect_callee_cleanup": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "2 C1--C7 缺陷修正",
+          "clause": "C4 间接 callee 求值并保存为拥有临时值后、任何实参求值前，登记该临时值的 begin_borrow；成功和 typed-error 分支都执行现有对应 end_borrow。拥有 callee 的释放留到完整表达式结束。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "5 求值与控制流",
+          "clause": "调用实参求值中发生 typed error 时，已创建临时值按逆序清理，未求值的实参不执行。"
+        }
+      ],
+      "summary": "When an indirectly called Fn is an owned temporary, its borrow starts before argument evaluation and ends on both success and typed-error exits. A throwing argument must not enter the Fn body and must leave the callee's release to the full-expression end. The source log uses a shared Box so no inout parameter is captured and no capture name is passed as a whole-binding inout."
+    },
+    "thread_capture": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "5 Fn 调用、IR 与 Native/Python",
+          "clause": "thread/task：thread context 第一个字段是 LangFn，第二个是 A；entry 调 fn.code(fn.env,arg)。thread_bridge 的 copy/drop 无论 A 是否 owning 都要生成并分别处理 Fn env 与 A；当前只看 owning(argument) 会漏掉 scalar A 的 capturing entry。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.3 运行库边界",
+          "clause": "std/thread.spawn[A] 先支持无捕获的 func(A) i64 加明确参数，不接受 throws 入口。"
+        }
+      ],
+      "summary": "A capturing entry passed to thread.spawn with a scalar A must still copy/drop the Fn environment. The worker must return the captured value plus the scalar argument, and the main thread must use a finite wait."
+    },
+    "weak_api_encoding": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "6 Bound method 与 Weak/Box",
+          "clause": "builtin Weak[T]；std/weak.empty[T]() Weak[T]、downgrade[T](T) Weak[T]、upgrade[T](Weak[T]) Option[T]。没有 is_alive/is_empty；空/失效通过 upgrade 返回 None 观察。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "6 Bound method 与 Weak/Box",
+          "clause": "Weak[Fn]：env == null 时 {null, code} immortal；env != null 且 downgrade 返回 null 时 {null,null} dead；原 env != null 且 control 非 null 时 {control,code}。"
+        }
+      ],
+      "summary": "Only empty/downgrade/upgrade are public. Upgrade yields Option; dead upgrades yield None and must never call captured code. Non-capturing Fn values are immortal, while a captured Fn with no strong environment left is dead."
+    },
+    "weak_targets": {
+      "sources": [
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "已确定、尚待实现的闭包与 Weak 规则",
+          "clause": "Weak 接受 Vec、函数值、有引用计数的共享句柄和 Box[T]。普通按值 struct/enum、string、File/Socket 描述符及外部 Python/C 对象不直接作为目标。"
+        },
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "6 Bound method 与 Weak/Box",
+          "clause": "拒绝 Slice、string、fd 包装、foreign Python/C 对象、普通 struct/enum，以及 std/ipc.Mutex/Condvar/Semaphore 这类多字段 wrapper。"
+        }
+      ],
+      "summary": "Vec, Box, and Fn are canonical Weak targets. Ordinary structs, strings, descriptor wrappers such as os.File, and foreign objects must be rejected explicitly rather than accepted by layout."
+    },
+    "weak_liveness": {
+      "sources": [
+        {
+          "path": "development/plans/REFERENCE_VALUES.md",
+          "section": "6 Bound method 与 Weak/Box",
+          "clause": "原 env != null, downgrade 返回 null → GC closed/失败 → {null,null} dead → upgrade None，不得调用 code。"
+        },
+        {
+          "path": "docs/SEMANTICS.md",
+          "section": "7.3 运行库边界",
+          "clause": "引用计数为 0 时调用类型专用 drop，再释放对象存储。"
+        }
+      ],
+      "summary": "While a strong target handle exists, upgrade returns Some and observes shared mutation. After the last strong handle is dropped, upgrade returns None. Weak itself is not a strong edge and must not keep the target alive."
+    }
+  },
+  "cases": [
+    {
+      "id": "closure-copy-at-creation-sibling",
+      "manifest": "tests/reference_values/fixtures/closure-copy-at-creation-sibling/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "capture_snapshot"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "first() immediately after x=2",
+            "equals": 1,
+            "reason": "first was created while x held 1 and captured that logical value."
+          },
+          {
+            "expression": "second() after x=2",
+            "equals": 2,
+            "reason": "second was created after x was assigned 2, so its own capture is 2."
+          },
+          {
+            "expression": "first() again after x=3",
+            "equals": 1,
+            "reason": "Later creator mutation does not rewrite first's environment."
+          },
+          {
+            "expression": "x after the three calls",
+            "equals": 3,
+            "reason": "Captures are copies; the creator binding remains 3."
+          }
+        ]
+      }
+    },
+    {
+      "id": "closure-move-owning-and-scalar",
+      "manifest": "tests/reference_values/fixtures/closure-move-owning-and-scalar/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "move_func_captures"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "scalar immediately after the move func is created, before scalar=2",
+            "equals": 1,
+            "reason": "The scalar capture is copied, not consumed. Reading scalar here is legal and still sees the creation value 1; this check precedes any assignment so an incorrect move of the scalar cannot be hidden by reinitialization."
+          },
+          {
+            "expression": "read() after scalar was reassigned to 2",
+            "equals": 42,
+            "reason": "Captured scalar is the creation value 1; captured Vec still holds 41; 41+1=42."
+          },
+          {
+            "expression": "scalar after the move func was created",
+            "equals": 2,
+            "reason": "A scalar capture is copied, so it is not consumed and the later assignment is legal."
+          }
+        ]
+      },
+      "notes": "The pre-assignment scalar read proves the move func did not consume the scalar. The owning Vec binding is moved into the move func and must not be read afterwards; the separate read-after fixture asserts that rejection."
+    },
+    {
+      "id": "closure-move-owning-read-after",
+      "manifest": "tests/reference_values/fixtures/closure-move-owning-read-after/lang.toml",
+      "kind": "reject",
+      "covers": [
+        "move_func_captures"
+      ],
+      "expected": {
+        "compile": "reject",
+        "required_behavior": "Reading values[0] after values was moved into the move func must be rejected by the ownership/read-only check; a program must not be emitted.",
+        "must_not": "must not emit a program and must not be reported as a passing negative merely because the current checker fails for an unrelated unimplemented feature"
+      },
+      "notes": "This is an explicit expected rejection after the capture/ownership feature exists, not a generic parse or missing-feature failure."
+    },
+    {
+      "id": "closure-readonly-shared-mutation",
+      "manifest": "tests/reference_values/fixtures/closure-readonly-shared-mutation/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "capture_readonly_shared"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "update() first call",
+            "equals": 19,
+            "reason": "values[0] becomes 4 and Box becomes 15; 4+15=19."
+          },
+          {
+            "expression": "update() second call",
+            "equals": 25,
+            "reason": "Capture is read-only but shared contents mutate: values[0]=5 and Box=20; 5+20=25."
+          },
+          {
+            "expression": "values[0] through the creator alias",
+            "equals": 5,
+            "reason": "Both the lambda and creator see the same Vec object."
+          },
+          {
+            "expression": "box.get(cell) through the creator alias",
+            "equals": 20,
+            "reason": "Both the lambda and creator see the same Box cell."
+          }
+        ]
+      }
+    },
+    {
+      "id": "closure-readonly-assign",
+      "manifest": "tests/reference_values/fixtures/closure-readonly-assign/lang.toml",
+      "kind": "reject",
+      "covers": [
+        "capture_readonly_shared"
+      ],
+      "expected": {
+        "compile": "reject",
+        "required_behavior": "Assigning to the captured name x inside the lambda must be rejected; the lambda body may only read the capture binding. Mutating shared contents through a captured Vec/Box remains legal.",
+        "must_not": "must not emit a program and must not be reported as a passing negative merely because the current checker fails for an unrelated unimplemented feature"
+      },
+      "notes": "This is an explicit expected rejection after closure capture exists. The current checker's capture-unavailable diagnostic is not the target rejection."
+    },
+    {
+      "id": "closure-two-capture-types",
+      "manifest": "tests/reference_values/fixtures/closure-two-capture-types/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "capture_snapshot",
+        "capture_readonly_shared"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "read(0) after scalar=100 and values[0]=3",
+            "equals": 43,
+            "reason": "scalar is the creation snapshot 40; the Vec capture points at the same container and observes 3; 40+3+0=43."
+          },
+          {
+            "expression": "read(7)",
+            "equals": 50,
+            "reason": "40+3+7=50; both captures are read from the correct environment slots."
+          }
+        ]
+      },
+      "notes": "This exercises one environment row with an i32 slot and a Vec slot in that creation order; Python must index row[0] and row[1] without swapping or re-copying the borrowed row."
+    },
+    {
+      "id": "closure-nested-transitive",
+      "manifest": "tests/reference_values/fixtures/closure-nested-transitive/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "capture_nested_transitive"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "first(1) with seed 40",
+            "equals": 42,
+            "reason": "first's nested lambda reads grandparent base 40, parameter delta 1, and extra 1: 40+1+1=42."
+          },
+          {
+            "expression": "second(2) with seed 10",
+            "equals": 13,
+            "reason": "A separate creator instance has base 10: 10+2+1=13."
+          },
+          {
+            "expression": "first(0) again",
+            "equals": 41,
+            "reason": "Creates a fresh nested lambda per outer call while retaining the outer capture base=40: 40+0+1=41."
+          }
+        ]
+      }
+    },
+    {
+      "id": "closure-creator-scope-escape",
+      "manifest": "tests/reference_values/fixtures/closure-creator-scope-escape/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "capture_snapshot",
+        "function_value_storage"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "read() after make_reader returned",
+            "equals": 81,
+            "reason": "The returned Fn outlives the creator scope and reads captured Vec 20,21 and Box 40: 20+21+40=81."
+          }
+        ],
+        "drop_condition": "After read() returns, the returned Fn still owns its environment. When the Fn is dropped at main exit, the captured Vec and Box handles are released exactly once."
+      }
+    },
+    {
+      "id": "closure-generic-two-instances",
+      "manifest": "tests/reference_values/fixtures/closure-generic-two-instances/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "generic_capture_instances",
+        "function_value_storage"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "read_i32() for the i32 instance",
+            "equals": 42,
+            "reason": "The i32 instance captures the concrete value 42."
+          },
+          {
+            "expression": "read_vec()[0] for the Vec[i32] instance",
+            "equals": 7,
+            "reason": "The Vec instance captures a shared Vec handle whose element is 7."
+          },
+          {
+            "expression": "read_vec()[0] after mutating the first returned Vec",
+            "equals": 8,
+            "reason": "Both reads share the captured Vec object; the second call observes the mutation."
+          }
+        ]
+      }
+    },
+    {
+      "id": "fn-return-field-vec",
+      "manifest": "tests/reference_values/fixtures/fn-return-field-vec/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "function_value_storage",
+        "capture_snapshot"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "functions[0](5)",
+            "equals": 15,
+            "reason": "The returned Fn captures base=10: 10+5=15."
+          },
+          {
+            "expression": "holder.callback(7)",
+            "equals": 17,
+            "reason": "The same Fn stored in a struct field is callable: 10+7=17."
+          },
+          {
+            "expression": "copied(8) from functions[1]",
+            "equals": 18,
+            "reason": "A copy of the Fn shares its environment and remains callable: 10+8=18."
+          }
+        ],
+        "drop_condition": "The returned Fn is copied into a struct field and a Vec element; each owning slot must release the shared environment once at scope exit, not once per call."
+      }
+    },
+    {
+      "id": "fn-throws-defer-capture",
+      "manifest": "tests/reference_values/fixtures/fn-throws-defer-capture/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "function_throws_defer",
+        "function_value_storage"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "run(4)",
+            "equals": 14,
+            "reason": "Body marks 1, returns 10+4=14, then defer marks 9; log becomes 19."
+          },
+          {
+            "expression": "run(-1) typed throw",
+            "equals": "Failure.Bad",
+            "reason": "The call must throw Failure.Bad after marking 1 and running its defer; the catch runs afterwards."
+          },
+          {
+            "expression": "log after success, failure, and catch",
+            "equals": 19192,
+            "reason": "Trace: 0 -> 1 -> 19 (success) -> 191 -> 1919 (throw + defer) -> 19192 (catch marker)."
+          },
+          {
+            "expression": "run(6) after the throw",
+            "equals": 16,
+            "reason": "The Fn environment remains valid and reusable after a typed throw: 10+6=16, then defer marks 9. main declares throws Failure, so calling the throwing Fn type outside the try is legal."
+          },
+          {
+            "expression": "log after the post-throw success",
+            "equals": 1919219,
+            "reason": "Trace continues 19192 -> 191921 -> 1919219."
+          }
+        ],
+        "drop_condition": "The captured Box is held by the Fn environment across the throw. Defer runs once per invocation on both normal and typed-error exits; the environment is not dropped or duplicated by the error path."
+      },
+      "notes": "main declares `throws Failure` so the post-catch `run(6)` call outside the try is a legal same-effect boundary. The value 6 does not throw at runtime; the declaration only satisfies the static effect rule for the Fn type. Expected values and log sequence are unchanged."
+    },
+    {
+      "id": "bound-ordinary-repeat-copy",
+      "manifest": "tests/reference_values/fixtures/bound-ordinary-repeat-copy/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "bound_ordinary"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "read() after counter.base changed to 9",
+            "equals": 7,
+            "reason": "The bound receiver was copied when read was created, so it holds base=7."
+          },
+          {
+            "expression": "copied() from the Fn copy",
+            "equals": 7,
+            "reason": "Copying the bound Fn copies the same captured receiver snapshot."
+          },
+          {
+            "expression": "fresh() bound after the change",
+            "equals": 9,
+            "reason": "A new binding sees the current receiver base=9."
+          },
+          {
+            "expression": "total() bound after base=9 and values[0]=5",
+            "equals": 14,
+            "reason": "9+5=14; the Vec handle in the copied receiver still shares the same container."
+          }
+        ]
+      }
+    },
+    {
+      "id": "bound-move-repeat-copy",
+      "manifest": "tests/reference_values/fixtures/bound-move-repeat-copy/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "bound_move"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "take() first call",
+            "equals": 0,
+            "reason": "The method sees cell 0, returns 0, and sets the shared cell to 1."
+          },
+          {
+            "expression": "take() second call",
+            "equals": 1,
+            "reason": "The adapter must copy the environment receiver again instead of taking it; the cell is now 2."
+          },
+          {
+            "expression": "copied() through a copied bound Fn",
+            "equals": 2,
+            "reason": "Fn copy shares the receiver environment and still produces a fresh receiver copy; cell becomes 3."
+          },
+          {
+            "expression": "take() fourth call",
+            "equals": 3,
+            "reason": "The original bound Fn is still callable; cell becomes 4."
+          },
+          {
+            "expression": "box.get(cell) after four calls",
+            "equals": 4,
+            "reason": "All calls operate on the same shared Box cell and none is lost to an emptied environment."
+          }
+        ],
+        "drop_condition": "The receiver remains in the bound environment after every call. The method's move-Self parameter owns only the per-call copy; dropping it must not clear the environment field. The final environment release and the caller's cell alias must produce exactly one final cell release."
+      }
+    },
+    {
+      "id": "bound-inout-reject",
+      "manifest": "tests/reference_values/fixtures/bound-inout-reject/lang.toml",
+      "kind": "reject",
+      "covers": [
+        "bound_inout_reject"
+      ],
+      "expected": {
+        "compile": "reject",
+        "required_behavior": "Binding counter.bump where bump has first parameter self inout Self must be rejected with a source capability/argument diagnostic; no callable Fn value may escape with the exclusive borrow.",
+        "must_not": "must not emit a program and must not be reported as a passing negative merely because the current checker fails for an unrelated unimplemented feature"
+      },
+      "notes": "This is an explicit expected rejection after bound-method support exists. The current checker reports an unrelated unknown-field error for all bound-method syntax, which cannot count as this rejection."
+    },
+    {
+      "id": "indirect-callee-arg-throw",
+      "manifest": "tests/reference_values/fixtures/indirect-callee-arg-throw/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "indirect_callee_cleanup",
+        "function_throws_defer"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "box.get(log) after make/fail/catch",
+            "equals": 1234,
+            "reason": "make marks 1 in the shared Box; fail marks 2, runs defer 3, then throws; catch marks 4. The Fn body mark 5 must not run. Shared Box value is 1234."
+          },
+          {
+            "expression": "ok from make(...)(5) on the success path",
+            "equals": 15,
+            "reason": "The callee is created (shared Box mark 1) and the Fn body (shared Box mark 5) returns 10+5=15."
+          },
+          {
+            "expression": "box.get(log) after the success path",
+            "equals": 123415,
+            "reason": "Shared Box goes 1234 -> 12341 (callee creation) -> 123415 (Fn body)."
+          }
+        ],
+        "drop_condition": "The indirectly called Fn is an owned temporary. Its borrow must begin before argument evaluation and end on both the typed-error and success exits; its environment is released at the end of the full expression. The shared Box value verifies the body is skipped on the error path; IR ownership checks must cover the borrow/drop pairing."
+      },
+      "notes": "All function parameters are ordinary shared values. `log` is a Box[i32] created in main and copied into make/fail/mark and into the closure environment; no inout parameter is captured and no capture name is passed as inout. The shared Box carries the event log. Root also declares main throws Failure because the successful indirect call outside try has that declared effect."
+    },
+    {
+      "id": "thread-capture-scalar-arg",
+      "manifest": "tests/reference_values/fixtures/thread-capture-scalar-arg/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "thread_capture",
+        "capture_snapshot"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "thread.wait_for(worker, 5s)",
+            "equals": true,
+            "reason": "The worker must finish within the finite timeout."
+          },
+          {
+            "expression": "thread.join(worker)",
+            "equals": 42,
+            "reason": "The capturing entry reads captured Vec[0]=40 and adds scalar argument A=2; 40+2=42."
+          }
+        ],
+        "drop_condition": "The thread context must hold both the Fn environment and the scalar A. The entry copy retains the captured Vec for the worker, and the thread release path drops the Fn environment even though A is a scalar."
+      },
+      "notes": "The captured Vec is only read concurrently, so no lock is required. The finite wait prevents an unbounded hanging test; a timeout returns a nonzero main code. Planned per REFERENCE_VALUES.md §5 thread handoff. docs/SEMANTICS.md §7.3 still records the earlier non-capturing-entry limit; if the integrator keeps that limit for this round, mark this case unsupported instead of passed."
+    },
+    {
+      "id": "weak-empty-upgrade-none",
+      "manifest": "tests/reference_values/fixtures/weak-empty-upgrade-none/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "weak_api_encoding"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "upgrade(empty)",
+            "equals": "None",
+            "reason": "weak.empty produces a Weak with no target; upgrade must return Option.None."
+          }
+        ]
+      }
+    },
+    {
+      "id": "weak-vec-lifecycle",
+      "manifest": "tests/reference_values/fixtures/weak-vec-lifecycle/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "weak_liveness",
+        "capture_readonly_shared"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "upgrade(w) while the Vec strong handle is in scope",
+            "equals": "Some",
+            "reason": "The upgraded Vec observes the mutation values[0]=7."
+          },
+          {
+            "expression": "strong[0] from the upgraded Vec",
+            "equals": 7,
+            "reason": "The weak edge does not block or copy the Vec contents."
+          },
+          {
+            "expression": "upgrade(w) after the strong Vec binding leaves the block",
+            "equals": "None",
+            "reason": "Dropping the last strong Vec handle closes the Weak slot; upgrade must return None."
+          }
+        ],
+        "drop_condition": "The strong Vec is dropped at block exit. Weak is not a strong edge, so the object's final release must invalidate the Weak control and the later upgrade must not resurrect it."
+      }
+    },
+    {
+      "id": "weak-box-lifecycle",
+      "manifest": "tests/reference_values/fixtures/weak-box-lifecycle/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "weak_liveness",
+        "weak_targets"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "upgrade(w) while cell/alias are strong",
+            "equals": "Some",
+            "reason": "Box shares its private Vec cell, so the Weak targets that shared cell."
+          },
+          {
+            "expression": "box.get(strong) after box.set(alias, 8)",
+            "equals": 8,
+            "reason": "The upgraded Box observes the same shared cell."
+          },
+          {
+            "expression": "upgrade(w) after both Box aliases leave the block",
+            "equals": "None",
+            "reason": "The last strong Box handle releases the cell and closes the Weak slot."
+          }
+        ],
+        "drop_condition": "Both Box copies are strong handles to the same cell. Only after the last one is dropped may the cell be released and the Weak slot invalidated."
+      }
+    },
+    {
+      "id": "weak-fn-captured-dead",
+      "manifest": "tests/reference_values/fixtures/weak-fn-captured-dead/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "weak_api_encoding",
+        "weak_liveness"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "upgrade(w) while the capturing Fn is strong",
+            "equals": "Some",
+            "reason": "The upgraded Fn is callable and reads the captured scalar 41."
+          },
+          {
+            "expression": "strong() while alive",
+            "equals": 41,
+            "reason": "This proves the Weak refers to the captured Fn environment."
+          },
+          {
+            "expression": "upgrade(w) after the last capturing Fn handle leaves the block",
+            "equals": "None",
+            "reason": "The dead encoding may not be mistaken for immortal; captured code must not be called."
+          }
+        ],
+        "drop_condition": "With env != null, the Fn Weak stores control+code while alive. After the last strong Fn handle releases env, downgrade state is dead; a later upgrade returns None and never calls the captured code."
+      }
+    },
+    {
+      "id": "weak-fn-immortal",
+      "manifest": "tests/reference_values/fixtures/weak-fn-immortal/lang.toml",
+      "kind": "runtime",
+      "covers": [
+        "weak_api_encoding",
+        "weak_liveness"
+      ],
+      "expected": {
+        "compile": "accept",
+        "status": "return",
+        "main_return": 0,
+        "checks": [
+          {
+            "expression": "first upgrade after the original plain Fn binding left scope",
+            "equals": "Some",
+            "reason": "A non-capturing Fn has env==null, so its Weak is immortal {null,code}."
+          },
+          {
+            "expression": "first upgraded call",
+            "equals": 42,
+            "reason": "The immortal code is callable without an environment."
+          },
+          {
+            "expression": "second upgrade",
+            "equals": "Some",
+            "reason": "Immortal Weak never transitions to dead."
+          },
+          {
+            "expression": "second upgraded call",
+            "equals": 42,
+            "reason": "Repeated upgrades return a callable Fn with the same code."
+          }
+        ],
+        "drop_condition": "There is no environment to retain or release. The Weak must not treat a null env as a failure or manufacture a dead slot."
+      }
+    },
+    {
+      "id": "weak-reject-user-struct",
+      "manifest": "tests/reference_values/fixtures/weak-reject-user-struct/lang.toml",
+      "kind": "reject",
+      "covers": [
+        "weak_targets"
+      ],
+      "expected": {
+        "compile": "reject",
+        "required_behavior": "Weak[Payload] for an ordinary by-value struct must be rejected explicitly; layout or field count must not make it eligible. No program is emitted.",
+        "must_not": "must not emit a program and must not be reported as a passing negative merely because the current checker fails for an unrelated unimplemented feature"
+      },
+      "notes": "This is the explicit expected rejection. Current failure is E_IMPORT_NOT_FOUND for the absent std/weak and is only a baseline."
+    },
+    {
+      "id": "weak-reject-string",
+      "manifest": "tests/reference_values/fixtures/weak-reject-string/lang.toml",
+      "kind": "reject",
+      "covers": [
+        "weak_targets"
+      ],
+      "expected": {
+        "compile": "reject",
+        "required_behavior": "Weak[string] must be rejected explicitly; string is an immutable value, not a shared reference-counted Weak target. No program is emitted.",
+        "must_not": "must not emit a program and must not be reported as a passing negative merely because the current checker fails for an unrelated unimplemented feature"
+      },
+      "notes": "This is the explicit expected rejection. Current failure is E_IMPORT_NOT_FOUND for the absent std/weak and is only a baseline."
+    },
+    {
+      "id": "weak-reject-file",
+      "manifest": "tests/reference_values/fixtures/weak-reject-file/lang.toml",
+      "kind": "reject",
+      "covers": [
+        "weak_targets"
+      ],
+      "expected": {
+        "compile": "reject",
+        "required_behavior": "Weak[os.File] must be rejected explicitly as a descriptor wrapper; Weak must not unwrap it or accept it by layout. No program is emitted.",
+        "must_not": "must not emit a program and must not be reported as a passing negative merely because the current checker fails for an unrelated unimplemented feature"
+      },
+      "notes": "This is the explicit expected rejection. Current failure is E_IMPORT_NOT_FOUND for the absent std/weak and is only a baseline."
+    }
+  ],
+  "pending_cabi_or_binding_cases": [
+    {
+      "id": "capture-noncopyable-c-resource",
+      "kind": "pending_cabi_fixture",
+      "covers": [
+        "capture_snapshot",
+        "move_func_captures"
+      ],
+      "required_behavior": "An ordinary func that copies a C resource receiver/capture whose CTypeDecl has no retain_symbol must be rejected. A move func may consume an owning resource capture only where the ownership rules allow it.",
+      "reason": "The repository does not yet contain a simple C ABI binding fixture with a CForeignResource lacking retain_symbol, and this task must not fabricate a mock C ABI or new binding/config. The case is listed here for a later CABI-owned fixture."
+    },
+    {
+      "id": "bound-noncopyable-c-resource",
+      "kind": "pending_cabi_fixture",
+      "covers": [
+        "bound_ordinary"
+      ],
+      "required_behavior": "Binding value.method is rejected when the concrete receiver type is not ordinary_copyable, including a C resource without retain_symbol and aggregates containing one.",
+      "reason": "Requires a real CABI-owned external fixture and concrete type declaration. Not fabricated in this source-only task."
+    },
+    {
+      "id": "weak-foreign-python-object",
+      "kind": "pending_binding_fixture",
+      "covers": [
+        "weak_targets"
+      ],
+      "required_behavior": "Weak[T] for a foreign Python/C object, an ndarray/Tensor, or another host-managed object must be rejected explicitly; it must not be accepted by layout or silently delegated to the host weakref.",
+      "reason": "Requires the Python foreign binding fixture and declared external type; this task does not add an external binding or runtime API."
+    }
+  ],
+  "correction_operation_id": "woozy-reference-source-cases-correction-20261112",
+  "candidate_worktree_base": "9f1ab40",
+  "root_cli_source_revision": "68b3cde4a6bb8bd3015a19a81ea635b15fd72e92",
+  "root_cli_sha256": "d5e418c8264510107ba415425fac8ee58056447eb059f6ef13af2538ca5b8b4f"
+}

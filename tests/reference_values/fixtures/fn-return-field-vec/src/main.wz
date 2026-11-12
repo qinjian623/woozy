@@ -1,0 +1,20 @@
+package app;
+
+struct Holder {
+    callback func(i32) i32;
+}
+
+func make(base i32) (func(i32) i32) {
+    return func(value i32) i32 { return base + value; };
+}
+
+func main() i32 {
+    let add = make(10);
+    let holder = Holder(callback: add);
+    let functions Vec[func(i32) i32] = [add, holder.callback];
+    if functions[0](5) != 15 { return 1; }
+    if holder.callback(7) != 17 { return 2; }
+    let copied = functions[1];
+    if copied(8) != 18 { return 3; }
+    return 0;
+}

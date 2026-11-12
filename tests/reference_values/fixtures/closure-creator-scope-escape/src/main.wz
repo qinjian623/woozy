@@ -1,0 +1,15 @@
+package app;
+
+import "std/box" as box;
+
+func make_reader(seed i32) (func() i32) {
+    let values Vec[i32] = [seed, seed + 1];
+    let cell = box.new[i32](seed * 2);
+    return func() i32 { return values[0] + values[1] + box.get(cell); };
+}
+
+func main() i32 {
+    let read = make_reader(20);
+    if read() != 81 { return 1; }
+    return 0;
+}

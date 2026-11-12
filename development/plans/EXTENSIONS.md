@@ -19,11 +19,11 @@ Python 已自动回收纯 Woozy 强引用循环，包括经 Slice 与 Box 字段
 
 ## 正在做和未实现的部分
 
-Weak 的真实 Vec/共享句柄 slot、最后释放和 fork 已合入，完整 CTest 136/136（259.77 秒）通过。Root 修正了测试观察器的原子计数和释放完成记账；独立 4×20000 精确计数及七种配置均通过。Source Weak、捕获闭包与绑定方法、动态 trait、自定义 Iterator、更广的 inout、async/await 和保留型 C 回调尚未完成。
+Weak 的真实 Vec/共享句柄 slot、最后释放和 fork 已合入，完整 CTest 136/136（259.77 秒）通过；加入共用 HIR 字段后，完整 CTest 137/137（257.95 秒）也通过。Root 修正了测试观察器的原子计数和释放完成记账；独立 4×20000 精确计数及七种配置均通过。Source Weak、捕获闭包与绑定方法、动态 trait、自定义 Iterator、更广的 inout、async/await 和保留型 C 回调尚未完成。
 
 Native GC、线程暂停、修改区间、压力控制器及外部回调恢复已在独立测试中通过，尚未接入真实源码自动回收。源码压力目标继续如实报告未实现。接入顺序见 [MEMORY_INTEGRATION.md](MEMORY_INTEGRATION.md)，真实对象的 Weak 修改点见 [WEAK_HANDLE_SITES.md](WEAK_HANDLE_SITES.md)。
 
-闭包实现遵守用户确定的按值捕获、只读捕获绑定、move func 和每次复制 move-Self 接收者规则。函数表示和捕获身份方案已经修正并审查，共用 HIR 字段已接入；新字段尚未有真实源码/所有权验证时仍明确拒绝。下一步按同一字段定义分别实现前端、Native 和 Python。
+闭包实现遵守用户确定的按值捕获、只读捕获绑定、move func 和每次复制 move-Self 接收者规则。函数表示和捕获身份方案已经修正并审查，共用 HIR 字段已接入；新字段尚未有真实源码/所有权验证时仍明确拒绝。前端/Sema/所有权/IR 已分给独立 Flash worker；Native、Python 在前端验证后分别接入。另一 worker 接入 GC 生命周期、线程/阻塞与 fork；24 个独立源码用例已返回待审，未宣称运行通过。
 
 ## 分工与自举
 

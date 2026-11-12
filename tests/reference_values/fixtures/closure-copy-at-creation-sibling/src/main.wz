@@ -1,0 +1,15 @@
+package app;
+
+func main() i32 {
+    var x i32 = 1;
+    let first = func() i32 { return x; };
+    x = 2;
+    let second = func() i32 { return x; };
+    x = 3;
+
+    if first() != 1 { return 1; }
+    if second() != 2 { return 2; }
+    if first() != 1 { return 3; }
+    if x != 3 { return 4; }
+    return 0;
+}

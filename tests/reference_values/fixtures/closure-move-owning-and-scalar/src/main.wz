@@ -1,0 +1,18 @@
+package app;
+
+func main() i32 {
+    var values Vec[i32] = [41];
+    var scalar i32 = 1;
+    let read = move func() i32 { return values[0] + scalar; };
+
+    // Read the scalar before reassigning it. A move func must copy scalar
+    // captures rather than consuming them, so this check is legal here.
+    if scalar != 1 { return 1; }
+
+    // The owning Vec capture is consumed by the move func; the scalar capture
+    // is an ordinary copy, so this assignment is still allowed.
+    scalar = 2;
+    if read() != 42 { return 2; }
+    if scalar != 2 { return 3; }
+    return 0;
+}
