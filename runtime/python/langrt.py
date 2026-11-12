@@ -547,6 +547,8 @@ class ValueType:
         if self.kind == 'vec':
             value.retain()
             return value
+        if self.kind == 'slice':
+            return value.copy()
         if self.kind == 'function':
             return value.copy() if isinstance(value, FunctionValue) else value
         if self.kind in ('foreign', 'error', 'weak'):
@@ -577,6 +579,8 @@ class ValueType:
     def drop(self, value):
         if self.kind == 'vec':
             value.release()
+        elif self.kind == 'slice':
+            value.drop()
         elif self.kind == 'function':
             if isinstance(value, FunctionValue):
                 value.drop()
@@ -612,6 +616,12 @@ class ValueType:
                 continue
             if ops.kind == 'vec':
                 visit(item)
+            elif ops.kind == 'slice':
+                # A Slice is an inline descriptor, not a graph node.  Its one
+                # immediate strong edge is the owner Vec; element contents
+                # belong to that Vec and are traced from the Vec row instead.
+                if item.owner is not None:
+                    visit(item.owner)
             elif ops.kind == 'function':
                 if isinstance(item, FunctionValue) and item.environment is not None:
                     visit(item.environment)
@@ -938,6 +948,201 @@ class Vec:
             self.element.drop(value)
 
 
+class Slice:
+    """A private borrowed view over one Vec's initialized element range.
+
+    A Slice is an inline language value, not a separate heap graph node.  It
+    owns one strong reference to ``owner`` and holds one active iteration pin
+    for its whole lifetime, including an empty range.  ``owner``, ``start``
+    and ``length`` are the descriptor fields; ``length`` is always
+    ``end - start`` for the half-open range [start, end).
+    """
+
+    __slots__ = ('owner', 'start', 'length', '_dead')
+
+    @staticmethod
+    def blank():
+        """Create the only owner-less descriptor, which holds no edge/pin."""
+        result = object.__new__(Slice)
+        result.owner, result.start, result.length = None, 0, 0
+        result._dead = False
+        return result
+
+    @staticmethod
+    def _bound(value, fallback, label):
+        if value is None:
+            return fallback
+        if not isinstance(value, int) or value < 0:
+            raise Panic(label + ' out of bounds')
+        return value
+
+    @staticmethod
+    def create(owner, start, end):
+        """Borrow owner[start:end] and install one retain plus one begin pin."""
+        if not isinstance(owner, Vec):
+            raise Panic('Slice owner must be a Vec')
+        start = Slice._bound(start, 0, 'Slice start')
+        end = Slice._bound(end, len(owner.items), 'Slice end')
+        if start > end:
+            raise Panic('Slice range out of bounds')
+        if owner._dead:
+            raise Panic('Slice owner is inactive')
+        if end > len(owner.items):
+            raise Panic('Slice range out of bounds')
+        # The descriptor object exists before any owner edge is installed, so
+        # allocation failure cannot leave a half-created retain or pin.
+        result = object.__new__(Slice)
+        result.owner, result.start, result.length = owner, start, end - start
+        result._dead = False
+        owner.retain()
+        try:
+            owner.begin()
+        except BaseException:
+            owner.release()
+            raise
+        return result
+
+    def _require_live(self):
+        if self._dead:
+            raise Panic('inactive Slice')
+        owner = self.owner
+        if owner is None:
+            if self.start or self.length:
+                raise Panic('malformed Slice handle')
+            return False
+        if not isinstance(owner, Vec):
+            raise Panic('Slice owner is not a Vec')
+        if owner._dead:
+            raise Panic('Slice owner is inactive')
+        start, length = self.start, self.length
+        if (not isinstance(start, int) or not isinstance(length, int) or
+                start < 0 or length < 0):
+            raise Panic('malformed Slice handle')
+        if start > len(owner.items) or length > len(owner.items) - start:
+            raise Panic('Slice range out of bounds')
+        return True
+
+    def _take_descriptor(self):
+        owner, start, length = self.owner, self.start, self.length
+        self.owner, self.start, self.length = None, 0, 0
+        self._dead = True
+        return owner, start, length
+
+    def copy(self):
+        """Return an independent descriptor with its own retain and pin."""
+        if self._dead:
+            raise Panic('copy of inactive Slice')
+        if not self._require_live():
+            return Slice.blank()
+        owner, start, length = self.owner, self.start, self.length
+        result = object.__new__(Slice)
+        result.owner, result.start, result.length = owner, start, length
+        result._dead = False
+        owner.retain()
+        try:
+            owner.begin()
+        except BaseException:
+            owner.release()
+            raise
+        return result
+
+    def drop(self):
+        """Zero this descriptor, then end its pin and release its owner."""
+        if self._dead:
+            return
+        owner, start, length = self._take_descriptor()
+        if owner is None:
+            if start or length:
+                raise Panic('malformed Slice handle')
+            return
+        if not isinstance(owner, Vec):
+            raise Panic('Slice owner is not a Vec')
+        if (not isinstance(start, int) or not isinstance(length, int) or
+                start < 0 or length < 0):
+            raise Panic('malformed Slice handle')
+        if start > len(owner.items) or length > len(owner.items) - start:
+            raise Panic('Slice range out of bounds')
+        # End the pin before the release: a final release rejects active
+        # iterations, and element callbacks must not observe this view.
+        owner.end()
+        owner.release()
+
+    def _retire_counted_edge(self):
+        """Detach a white-row descriptor whose strong edge was counted down."""
+        if self._dead:
+            return
+        owner, start, length = self._take_descriptor()
+        if owner is None:
+            if start or length:
+                raise Panic('malformed Slice handle')
+            return
+        if not isinstance(owner, Vec):
+            raise Panic('Slice owner is not a Vec')
+        # The collector already released this descriptor's strong edge, but
+        # the owner may already be white/detached.  Ending the pin is the only
+        # remaining operation; never release the owner a second time.
+        owner.end()
+
+    def __len__(self):
+        if not self._require_live():
+            return 0
+        return self.length
+
+    def len(self):
+        return len(self)
+
+    def sub(self, start, end):
+        """Create an independently pinned view relative to this view."""
+        live = self._require_live()
+        length = self.length if live else 0
+        start = Slice._bound(start, 0, 'Slice start')
+        end = Slice._bound(end, length, 'Slice end')
+        if start > end or end > length:
+            raise Panic('Slice range out of bounds')
+        if not live:
+            return Slice.blank()
+        absolute_start = self.start + start
+        absolute_end = self.start + end
+        return Slice.create(self.owner, absolute_start, absolute_end)
+
+    def index(self, index):
+        if not self._require_live():
+            raise Panic('Slice index out of bounds')
+        if not isinstance(index, int) or index < 0 or index >= self.length:
+            raise Panic('Slice index out of bounds')
+        return index
+
+    def get(self, index):
+        index = self.index(index)
+        return self.owner.items[self.start + index]
+
+    def set(self, index, value):
+        index = self.index(index)
+        self.owner.set(self.start + index, value)
+
+    def at(self, index):
+        """Return the element place for a slice-relative index."""
+        return Index(self, index)
+
+    @property
+    def element(self):
+        if not self._require_live():
+            raise Panic('blank Slice has no element type')
+        return self.owner.element
+
+    def to_vec(self):
+        """Copy the range into a new independently owned Vec."""
+        if not self._require_live():
+            return Vec.create(ValueType(), [])
+        owner, start, length = self.owner, self.start, self.length
+        try:
+            values = [owner.element.copy(owner.items[start + index])
+                      for index in range(length)]
+            return Vec.create(owner.element, values)
+        except (MemoryError, OverflowError):
+            raise Panic('Vec allocation failed') from None
+
+
 
 def _collector_edges(source):
     """Snapshot one live Vec's immediate strong Wz edges, duplicates included."""
@@ -973,12 +1178,28 @@ def _retire_released_functions(element, items):
             pending.extend(zip(fields, values))
 
 
+def _retire_released_slices(element, items):
+    """Blank every white-row Slice descriptor before any row callback."""
+    pending = [(element, value) for value in items]
+    while pending:
+        ops, value = pending.pop()
+        if not isinstance(ops, ValueType):
+            continue
+        if ops.kind == 'slice':
+            if isinstance(value, Slice):
+                value._retire_counted_edge()
+        elif ops.kind in ('struct', 'enum'):
+            fields, values = ((ops.fields, value) if ops.kind == 'struct'
+                              else (ops.variants[value[0]], value[1]))
+            pending.extend(zip(fields, values))
+
+
 def _drop_released_value(ops, value):
-    """Drop a row whose strong Vec/function counts were already released."""
+    """Drop a row whose strong Slice/Vec/function counts were released."""
     if not isinstance(ops, ValueType):
         ops.drop(value)
         return
-    if ops.kind in ('vec', 'function'):
+    if ops.kind in ('vec', 'function', 'slice'):
         # This edge was counted down in the collector's clear phase.  The
         # object itself is released by that phase, not again by this drop.
         return
@@ -1078,13 +1299,15 @@ def collect_cycles(force=False):
         _GC.weak_dead += _invalidate_white_weak(white_ids)
 
         # clear-all: detach every old row from the traceable graph first.
+        # Keep the active pin count until every white-row Slice has ended its
+        # pin below; resetting it here would reject the detached descriptor's
+        # legitimate end-pin.
         pending = []
         for value in white:
             old = value.items
             value.items = []
             value._reserved.clear()
             value.capacity = 0
-            value.iterations = 0
             value._dead = True
             _LIVE_VECS.discard(value)
             pending.append((value, old))
@@ -1103,9 +1326,14 @@ def collect_cycles(force=False):
                 raise Panic('cycle collector released a live root')
 
         # A callback from any old row may hold a physical reference to a
-        # function in another white Vec.  Retire all wrappers before callbacks.
+        # function or Slice in another white Vec.  Retire every wrapper and
+        # end every white-row Slice pin before any callback runs.  Slice strong
+        # edges were already counted down above, so retirement must not
+        # release those owners again.
         for value, old in pending:
             _retire_released_functions(value.element, old)
+        for value, old in pending:
+            _retire_released_slices(value.element, old)
 
         freed = len(white)
         _GC.active = False
