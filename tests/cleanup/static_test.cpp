@@ -799,10 +799,10 @@ void unsafe_probes() {
   rejected_clean("enum E{Bad;}func main(){unsafe{throw E.Bad;}}",
                  "E_EFFECT_UNHANDLED");
   rejected_clean("struct S{a i32;}func bump(x inout i32){}"
-                 "func main(){var s=S(a:1);unsafe{bump(inout s.a);}}",
-                 "E_CAPABILITY_UNAVAILABLE");
-  rejected_clean("func bump(x inout i32){}"
-                 "func main(){var v Vec[i32]=[1];unsafe{bump(inout v[0]);}}",
+                 "func main(){let s=S(a:1);unsafe{bump(inout s.a);}}",
+                 "E_TYPE_MISMATCH");
+  rejected_clean("func bump(x inout Vec[i32]){}"
+                 "func main(){var v Vec[i32]=[1];unsafe{bump(inout v);}}",
                  "E_CAPABILITY_UNAVAILABLE");
   auto rejected_resolve = [&](const std::string &body, std::string_view code) {
     for (auto backend : {Backend::native, Backend::python}) {

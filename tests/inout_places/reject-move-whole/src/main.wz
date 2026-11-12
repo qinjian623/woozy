@@ -1,0 +1,16 @@
+package app;
+
+struct State {
+    a i32;
+    b i32;
+}
+
+func take(slot inout i32, owner move State) {
+    slot = slot + 1;
+}
+
+func main() i32 {
+    var state = State(a: 1, b: 2);
+    take(inout state.a, move state);
+    return 0;
+}

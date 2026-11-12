@@ -1,0 +1,25 @@
+package app;
+
+import "std/vec" as vec;
+
+enum Holder {
+    V(values Vec[i32]);
+    N;
+}
+
+func consume(slot inout i32, other Holder) {
+    switch other {
+    case Holder.V(values):
+        vec.reserve[i32](values, 4096);
+    case Holder.N:
+        break;
+    }
+    slot = 7;
+}
+
+func main() i32 {
+    let items Vec[i32] = [1];
+    let holder = Holder.V(values: items);
+    consume(inout items[0], holder);
+    return 0;
+}

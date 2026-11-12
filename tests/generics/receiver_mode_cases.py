@@ -43,12 +43,12 @@ REJECTS = {
         "E_CALL_ARGUMENT",
     ),
     "field-inout": (
-        PAIR + "struct S{p Pair;}func main(){var x=S(p:Pair(value:1));(inout x.p).change(2);}",
-        "E_CAPABILITY_UNAVAILABLE",
+        PAIR + "struct S{p Pair;}func main(){let x=S(p:Pair(value:1));(inout x.p).change(2);}",
+        "E_TYPE_MISMATCH",
     ),
     "index-inout": (
-        PAIR + "func main(){let xs Vec[Pair]=[Pair(value:1)];(inout xs[0]).change(2);}",
-        "E_CAPABILITY_UNAVAILABLE",
+        PAIR + "func main(){var xs Vec[Pair]=[Pair(value:1)];(inout xs[0]).change(xs[0].value);}",
+        "E_CALL_ARGUMENT",
     ),
     "partial-move": (
         BOX + "struct S{b Box;}func main(){var x=S(b:Box(items:[1]));let y=(move x.b).take(2);}",

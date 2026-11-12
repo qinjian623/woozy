@@ -778,6 +778,21 @@ class Analysis {
            !full_effects().count(root.value);
   }
 
+  // Ascends only through storage places. Index reads are value expressions,
+  // not borrowable storage: an ordinary `text[i]` argument must not borrow
+  // the string binding. An inout index place, however, is rooted in its
+  // receiver even when that receiver is itself an indexed element.
+  std::optional<SymbolId> place_borrow_root(HirNodeId id) const {
+    const auto &x = n(id);
+    if (auto r = std::get_if<Read>(&x.data))
+      return r->symbol;
+    if (auto r = std::get_if<Place>(&x.data))
+      return r->symbol;
+    if (x.kind() == NodeKind::field_read || x.kind() == NodeKind::field_place ||
+        x.kind() == NodeKind::index_read || x.kind() == NodeKind::index_place)
+      return place_borrow_root(x.children[0]);
+    return {};
+  }
   std::optional<SymbolId> borrow_root(HirNodeId id) const {
     const auto &x = n(id);
     if (auto r = std::get_if<Read>(&x.data))
@@ -786,6 +801,22 @@ class Analysis {
       return r->symbol;
     if (x.kind() == NodeKind::field_read || x.kind() == NodeKind::field_place)
       return borrow_root(x.children[0]);
+    if (x.kind() == NodeKind::index_place)
+      return place_borrow_root(x.children[0]);
+    return {};
+  }
+  // Assignment targets keep the old direct-field protection: an indexed
+  // field's receiver and index are evaluated before the RHS and the element
+  // address is already fixed, so moving the container there is not an active
+  // borrow of the target storage. Inout argument borrows use borrow_root.
+  std::optional<SymbolId> assignment_field_root(HirNodeId id) const {
+    const auto &x = n(id);
+    if (auto r = std::get_if<Read>(&x.data))
+      return r->symbol;
+    if (auto r = std::get_if<Place>(&x.data))
+      return r->symbol;
+    if (x.kind() == NodeKind::field_read || x.kind() == NodeKind::field_place)
+      return assignment_field_root(x.children[0]);
     return {};
   }
   std::vector<CleanupStep>
@@ -872,12 +903,14 @@ class Analysis {
           active_borrows.push_back({CleanupKind::end_borrow,
                                     {OwnerKind::temporary, a.expression.value},
                                     n(a.expression).type});
-        else if (a.mode == ParamMode::inout)
-          active_borrows.push_back(
-              {CleanupKind::end_borrow,
-               {OwnerKind::binding,
-                std::get<Place>(n(a.expression).data).symbol.value},
-               n(a.expression).type});
+        else if (a.mode == ParamMode::inout) {
+          auto root = borrow_root(a.expression);
+          if (root)
+            active_borrows.push_back(
+                {CleanupKind::end_borrow,
+                 {OwnerKind::binding, root->value},
+                 n(a.expression).type});
+        }
       }
       std::vector<CleanupStep> ends;
       for (size_t i = active_borrows.size(); i > floor; --i)
@@ -988,7 +1021,7 @@ class Analysis {
       }
       expr_records(x.children[0], id, live);
       if (n(x.children[0]).kind() == NodeKind::field_place) {
-        auto root = borrow_root(x.children[0]);
+        auto root = assignment_field_root(x.children[0]);
         if (root)
           active_borrows.push_back({CleanupKind::end_borrow,
                                     {OwnerKind::binding, root->value},
@@ -1451,7 +1484,7 @@ class Analysis {
         if (n(x.children[0]).kind() == NodeKind::field_place ||
             (std::get<Assign>(x.data).compound &&
              ty(m, n(x.children[0]).type).kind == TypeKind::String))
-          if (auto root = borrow_root(x.children[0]))
+          if (auto root = assignment_field_root(x.children[0]))
             protected_root.insert(root->value);
         auto rhs = expression(x.children[1], *f.normal, protected_root);
         edges(f, rhs);

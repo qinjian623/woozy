@@ -1,0 +1,14 @@
+package app;
+
+import "std/vec" as vec;
+
+func main() i32 {
+    let items Vec[i32] = [1];
+    let alias = items;
+    let callback = func(slot inout i32) {
+        vec.reserve[i32](alias, 4096);
+        slot = 7;
+    };
+    callback(inout items[0]);
+    return 0;
+}

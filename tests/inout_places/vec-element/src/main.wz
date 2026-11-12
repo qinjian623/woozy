@@ -1,0 +1,57 @@
+package app;
+
+struct Pair {
+    x i32;
+    y i32;
+}
+
+struct Box {
+    value i32;
+    items Vec[i32];
+    other Vec[i32];
+}
+
+func bump(slot inout i32) {
+    slot = slot + 1;
+}
+
+func bump_pair(slot inout Pair) {
+    slot.x = slot.x + 5;
+    slot.y = slot.y + 6;
+}
+
+func main() i32 {
+    var values Vec[i32] = [1, 2, 3];
+    bump(inout values[2]);
+    if values[0] != 1 || values[1] != 2 || values[2] != 4 {
+        return 1;
+    }
+    var pairs Vec[Pair] = [Pair(x: 1, y: 2), Pair(x: 3, y: 4)];
+    bump_pair(inout pairs[1]);
+    if pairs[0].x != 1 || pairs[0].y != 2 {
+        return 2;
+    }
+    if pairs[1].x != 8 || pairs[1].y != 10 {
+        return 3;
+    }
+    bump(inout pairs[0].x);
+    if pairs[0].x != 2 || pairs[0].y != 2 {
+        return 4;
+    }
+    if pairs[1].x != 8 || pairs[1].y != 10 {
+        return 5;
+    }
+    var boxes Vec[Box] = [Box(value: 1, items: [2], other: [3])];
+    bump(inout boxes[0].value);
+    if boxes[0].value != 2 {
+        return 6;
+    }
+    if boxes[0].items[0] != 2 || boxes[0].other[0] != 3 {
+        return 7;
+    }
+    boxes[0].items[0] = 9;
+    if boxes[0].items[0] != 9 || boxes[0].other[0] != 3 {
+        return 8;
+    }
+    return 0;
+}

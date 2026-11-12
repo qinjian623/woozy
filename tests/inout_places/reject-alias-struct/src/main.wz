@@ -1,0 +1,20 @@
+package app;
+
+import "std/vec" as vec;
+
+struct Holder {
+    values Vec[i32];
+    tag i32;
+}
+
+func consume(slot inout i32, other Holder) {
+    vec.reserve[i32](other.values, 4096);
+    slot = 7;
+}
+
+func main() i32 {
+    let items Vec[i32] = [1];
+    let holder = Holder(values: items, tag: 0);
+    consume(inout items[0], holder);
+    return 0;
+}

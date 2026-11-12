@@ -1,0 +1,21 @@
+package app;
+
+func swap(first inout i32, second inout i32) {
+    let temporary = first;
+    first = second;
+    second = temporary;
+}
+
+func store(slot inout i32, value i32) {
+    slot = value;
+}
+
+func main() i32 {
+    var values Vec[i32] = [1, 2, 3];
+    swap(inout values[0], inout values[2]);
+    store(inout values[0], values[1]);
+    if values[0] != 2 || values[1] != 2 || values[2] != 1 {
+        return 1;
+    }
+    return 0;
+}

@@ -1,0 +1,12 @@
+package app;
+
+func consume(slot inout i32, other i32) {
+    slot = other;
+}
+
+func main() i32 {
+    var items Vec[i32] = [1, 2];
+    let alias = items;
+    consume(inout items[0], alias[0]);
+    return 0;
+}

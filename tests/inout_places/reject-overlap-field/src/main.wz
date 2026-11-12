@@ -1,0 +1,18 @@
+package app;
+
+struct State {
+    a i32;
+    b i32;
+}
+
+func swap(first inout i32, second inout i32) {
+    let temporary = first;
+    first = second;
+    second = temporary;
+}
+
+func main() i32 {
+    var state = State(a: 1, b: 2);
+    swap(inout state.a, inout state.a);
+    return 0;
+}

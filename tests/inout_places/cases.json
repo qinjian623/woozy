@@ -1,0 +1,168 @@
+{
+  "schema": "compiler-dev/inout-places-fixtures/1",
+  "contract": "compiler-dev/1",
+  "description": "LANG03 field/index inout places: positive native/Python write-back and rejected overlapping or escaping uses.",
+  "case_count": 20,
+  "cases": [
+    {
+      "id": "nested-field",
+      "kind": "accept",
+      "purpose": "Deeply nested struct field inout mutates only the selected field; a nested POD aggregate field keeps sibling fields intact.",
+      "manifest": "tests/inout_places/nested-field/lang.toml",
+      "source": "tests/inout_places/nested-field/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "vec-element",
+      "kind": "accept",
+      "purpose": "Vec scalar and struct element inout write back through the shared container without copying the container.",
+      "manifest": "tests/inout_places/vec-element/lang.toml",
+      "source": "tests/inout_places/vec-element/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "loop",
+      "kind": "accept",
+      "purpose": "inout field and Vec element places work inside a loop with one borrow per call.",
+      "manifest": "tests/inout_places/loop/lang.toml",
+      "source": "tests/inout_places/loop/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "disjoint-fields",
+      "kind": "accept",
+      "purpose": "Two non-overlapping fields of one aggregate may be active inout places in the same call.",
+      "manifest": "tests/inout_places/disjoint-fields/lang.toml",
+      "source": "tests/inout_places/disjoint-fields/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "disjoint-index",
+      "kind": "accept",
+      "purpose": "Distinct literal indexes and a disjoint ordinary indexed read remain legal while another index place is borrowed.",
+      "manifest": "tests/inout_places/disjoint-index/lang.toml",
+      "source": "tests/inout_places/disjoint-index/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "borrowed-error-cleanup",
+      "kind": "accept",
+      "purpose": "A typed throw after an inout field/index write ends the borrow and runs lexical cleanup without dropping the borrowed storage twice.",
+      "manifest": "tests/inout_places/borrowed-error-cleanup/lang.toml",
+      "source": "tests/inout_places/borrowed-error-cleanup/src/main.wz",
+      "expected_main_return": 0
+    },
+    {
+      "id": "reject-overlap-field",
+      "kind": "reject",
+      "purpose": "The same field path cannot be passed to two inout parameters in one call.",
+      "manifest": "tests/inout_places/reject-overlap-field/lang.toml",
+      "source": "tests/inout_places/reject-overlap-field/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-alias-container",
+      "kind": "reject",
+      "purpose": "The whole container cannot be observed by another argument while one of its elements is borrowed as inout.",
+      "manifest": "tests/inout_places/reject-alias-container/lang.toml",
+      "source": "tests/inout_places/reject-alias-container/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-move-whole",
+      "kind": "reject",
+      "purpose": "Moving the aggregate while one of its fields is an active inout place is rejected.",
+      "manifest": "tests/inout_places/reject-move-whole/lang.toml",
+      "source": "tests/inout_places/reject-move-whole/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-move-param",
+      "kind": "reject",
+      "purpose": "An inout parameter is borrowed storage and cannot be moved out of the callee.",
+      "manifest": "tests/inout_places/reject-move-param/lang.toml",
+      "source": "tests/inout_places/reject-move-param/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-alias-reserve",
+      "kind": "reject",
+      "purpose": "A Vec handle copied into another binding cannot be passed to a callee that may reserve/resize it while an element is borrowed.",
+      "manifest": "tests/inout_places/reject-alias-reserve/lang.toml",
+      "source": "tests/inout_places/reject-alias-reserve/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-hidden-index-reserve",
+      "kind": "reject",
+      "purpose": "An alias hidden inside another argument's index expression must still be discovered before the element address is used.",
+      "manifest": "tests/inout_places/reject-hidden-index-reserve/lang.toml",
+      "source": "tests/inout_places/reject-hidden-index-reserve/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-aliased-same-index",
+      "kind": "reject",
+      "purpose": "Different source bindings with the same literal element index are not assumed to denote different Vec objects.",
+      "manifest": "tests/inout_places/reject-aliased-same-index/lang.toml",
+      "source": "tests/inout_places/reject-aliased-same-index/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-alias-struct",
+      "kind": "reject",
+      "purpose": "A Vec handle hidden in a struct field cannot be passed alongside an element inout borrow.",
+      "manifest": "tests/inout_places/reject-alias-struct/lang.toml",
+      "source": "tests/inout_places/reject-alias-struct/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-alias-enum",
+      "kind": "reject",
+      "purpose": "A Vec handle hidden in an enum payload cannot be passed alongside an element inout borrow.",
+      "manifest": "tests/inout_places/reject-alias-enum/lang.toml",
+      "source": "tests/inout_places/reject-alias-enum/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-returned-alias",
+      "kind": "reject",
+      "purpose": "A function returning the same Vec handle cannot be used to pass an alias alongside an element inout borrow.",
+      "manifest": "tests/inout_places/reject-returned-alias/lang.toml",
+      "source": "tests/inout_places/reject-returned-alias/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-capture-alias",
+      "kind": "reject",
+      "purpose": "A closure capturing a Vec alias cannot be passed to a callee while an element of that Vec is borrowed.",
+      "manifest": "tests/inout_places/reject-capture-alias/lang.toml",
+      "source": "tests/inout_places/reject-capture-alias/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-indirect-callee",
+      "kind": "reject",
+      "purpose": "An indirect callee with an unknown captured environment cannot take an element inout place.",
+      "manifest": "tests/inout_places/reject-indirect-callee/lang.toml",
+      "source": "tests/inout_places/reject-indirect-callee/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "reject-nested-alias-index",
+      "kind": "reject",
+      "purpose": "Shared inner Vec identity uses final element offset for inout overlap",
+      "manifest": "tests/inout_places/reject-nested-alias-index/lang.toml",
+      "source": "tests/inout_places/reject-nested-alias-index/src/main.wz",
+      "expected_code": "E_CALL_ARGUMENT"
+    },
+    {
+      "id": "nested-disjoint-index",
+      "kind": "accept",
+      "purpose": "Shared inner Vec identity uses final element offset for inout overlap",
+      "manifest": "tests/inout_places/nested-disjoint-index/lang.toml",
+      "source": "tests/inout_places/nested-disjoint-index/src/main.wz",
+      "expected_main_return": 0
+    }
+  ]
+}

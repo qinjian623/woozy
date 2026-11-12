@@ -1,0 +1,29 @@
+package app;
+
+struct Counter {
+    value i32;
+}
+
+func bump(slot inout i32, delta i32) {
+    slot = slot + delta;
+}
+
+func main() i32 {
+    var values Vec[i32] = [0, 10];
+    var counter = Counter(value: 0);
+    for var i i32 = 0; i < 3; i = i + 1 {
+        bump(inout values[0], 1);
+        bump(inout values[1], 2);
+        bump(inout counter.value, 4);
+    }
+    if values[0] != 3 {
+        return 1;
+    }
+    if values[1] != 16 {
+        return 2;
+    }
+    if counter.value != 12 {
+        return 3;
+    }
+    return 0;
+}

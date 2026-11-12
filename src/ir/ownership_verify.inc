@@ -61,8 +61,15 @@
       auto it = definitions.find(v); if (it == definitions.end()) return {};
       const auto &i = *it->second;
       if (i.op == Op::load || i.op == Op::address || i.op == Op::move) return i.slot;
-      if ((i.op == Op::field_read || i.op == Op::field_address || i.op == Op::borrow) && !i.inputs.empty())
+      if ((i.op == Op::field_read || i.op == Op::field_address ||
+           i.op == Op::borrow || i.op == Op::copy ||
+           i.op == Op::vec_element_address) && !i.inputs.empty())
         return root(i.inputs[0]);
+      if (i.op == Op::vec_read && !i.inputs.empty()) {
+        const auto kind = types.find(i.type)->kind;
+        if (kind == hir::TypeKind::Vec || kind == hir::TypeKind::Slice)
+          return root(i.inputs[0]);
+      }
       return {};
     };
     // A move argument is transferred at actual callee entry. A take moved

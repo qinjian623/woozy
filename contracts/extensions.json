@@ -118,7 +118,7 @@
       "id": "LANG03",
       "title": "Slice views, typed pointers and richer mutable places",
       "status": "in_progress",
-      "owner": "Root native/Python Slice integrated; richer inout pending",
+      "owner": "Root field/index POD integration and nested shared-container correction; owning non-POD inout pending",
       "depends_on": [
         "MEM01",
         "FFI01"

@@ -1,0 +1,26 @@
+package app;
+
+import "std/vec" as vec;
+
+struct Row {
+    value i32;
+}
+
+func prepare(items Vec[i32]) usize {
+    vec.reserve[i32](items, 4096);
+    return 0;
+}
+
+func consume(slot inout i32, value i32) {
+    slot = value;
+}
+
+func main() i32 {
+    let items Vec[i32] = [1];
+    let rows Vec[Row] = [Row(value: 7)];
+    consume(inout items[0], rows[prepare(items)].value);
+    if items[0] != 7 {
+        return 1;
+    }
+    return 0;
+}

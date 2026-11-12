@@ -1,0 +1,18 @@
+package app;
+
+import "std/vec" as vec;
+
+func consume(slot inout i32, other Vec[i32]) {
+    vec.reserve[i32](other, 4096);
+    slot = 7;
+}
+
+func main() i32 {
+    let items Vec[i32] = [1];
+    let alias = items;
+    consume(inout items[0], alias);
+    if items[0] != 7 {
+        return 1;
+    }
+    return 0;
+}

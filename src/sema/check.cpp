@@ -2234,14 +2234,262 @@ class Checker {
     match(r, result.value.type, expected);
     return result;
   }
+  // The storage root of a writable place. Field/index chains keep the same
+  // binding; an inout index receiver must be rooted in real storage so the
+  // caller cannot pass a temporary container element by address.
+  std::optional<SymbolId> place_root(HirNodeId id) const {
+    const auto &n = m.nodes.at(id.value);
+    if (auto r = std::get_if<Read>(&n.data))
+      return r->symbol;
+    if (auto p = std::get_if<Place>(&n.data))
+      return p->symbol;
+    if (n.kind() == NodeKind::field_place || n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::index_place || n.kind() == NodeKind::index_read)
+      return place_root(n.children[0]);
+    return {};
+  }
+  void check_inout_place_type(Ref r, TypeId t) const {
+    if (!aggregate_inout_type(t) && !template_inout_type(t))
+      unavailable(r, "inout requires a trivial numeric/bool or POD aggregate "
+                     "place");
+  }
+  struct PlacePath {
+    bool index = false;
+    bool known = true;
+    uint64_t value = 0;
+  };
+  std::vector<PlacePath> place_path(HirNodeId id) const {
+    const auto &n = m.nodes.at(id.value);
+    if (n.kind() == NodeKind::field_place || n.kind() == NodeKind::field_read) {
+      auto path = place_path(n.children[0]);
+      auto field = n.kind() == NodeKind::field_place
+                       ? std::get<FieldPlace>(n.data).field
+                       : std::get<FieldRead>(n.data).field;
+      path.push_back({false, true, field.value});
+      return path;
+    }
+    if (n.kind() == NodeKind::index_place || n.kind() == NodeKind::index_read) {
+      auto path = place_path(n.children[0]);
+      const auto &index = m.nodes.at(n.children[1].value);
+      const bool known = index.kind() == NodeKind::integer_literal;
+      path.push_back({true, known,
+                      known ? std::get<IntegerLiteral>(index.data).bits
+                            : n.children[1].value});
+      return path;
+    }
+    return {};
+  }
+  static bool paths_overlap(const std::vector<PlacePath> &a,
+                            const std::vector<PlacePath> &b) {
+    size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+      if (a[i].index || b[i].index) {
+        if (!a[i].index || !b[i].index)
+          return true;
+        if (a[i].known && b[i].known && a[i].value == b[i].value)
+          continue;
+        if (a[i].known && b[i].known)
+          return false;
+        return true;
+      }
+      if (a[i].value != b[i].value)
+        return false;
+    }
+    return true;
+  }
+  // A Vec/Slice handle can be copied through any number of bindings, fields or
+  // enum payloads. A field selection before an index chooses a handle and
+  // proves nothing about object identity; only index literals and the field
+  // suffix after the last index identify storage inside the referenced object.
+  struct ContainerPath {
+    std::vector<PlacePath> indexes;
+    std::vector<uint64_t> fields;
+  };
+  static ContainerPath container_path(const std::vector<PlacePath> &path) {
+    ContainerPath result;
+    for (const auto &part : path) {
+      if (part.index) {
+        result.indexes.push_back(part);
+        result.fields.clear();
+      } else if (!result.indexes.empty()) {
+        result.fields.push_back(part.value);
+      }
+    }
+    return result;
+  }
+  static bool container_overlap(const ContainerPath &a,
+                                const ContainerPath &b) {
+    if (a.indexes.size() != b.indexes.size())
+      return true;
+    // Ancestor elements may contain copies of the same inner Vec handle.
+    // Only the final element offset can prove that two places are disjoint.
+    const auto &left = a.indexes.back();
+    const auto &right = b.indexes.back();
+    if (!left.known || !right.known)
+      return true;
+    if (left.value != right.value)
+      return false;
+    size_t n = std::min(a.fields.size(), b.fields.size());
+    for (size_t i = 0; i < n; ++i)
+      if (a.fields[i] != b.fields[i])
+        return false;
+    return true;
+  }
+  static bool places_overlap(SymbolId root_a,
+                             const std::vector<PlacePath> &a, SymbolId root_b,
+                             const std::vector<PlacePath> &b) {
+    auto ca = container_path(a), cb = container_path(b);
+    if (!ca.indexes.empty() && !cb.indexes.empty())
+      return container_overlap(ca, cb);
+    return root_a == root_b && paths_overlap(a, b);
+  }
+  // True when a value of this type may carry a shared Vec/Slice/Weak handle or
+  // a callable environment. Such a value passed alongside a container-element
+  // inout borrow cannot prove that it does not alias and resize the storage.
+  bool may_hold_shared(TypeId root) const {
+    TypeContext types = m.types;
+    std::set<uint64_t> active;
+    std::function<bool(TypeId)> visit = [&](TypeId id) -> bool {
+      const Type *found = types.find(id);
+      if (!found)
+        return true;
+      const Type t = *found;
+      if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
+          t.kind == TypeKind::Weak || t.kind == TypeKind::Function ||
+          t.kind == TypeKind::TypeParameter)
+        return true;
+      if (t.kind == TypeKind::Task)
+        return true;
+      if (t.kind != TypeKind::NominalStruct &&
+          t.kind != TypeKind::NominalEnum)
+        return false;
+      const NominalDecl *decl = nullptr;
+      for (const auto &d : m.nominals)
+        if (d.symbol == t.declaration) {
+          decl = &d;
+          break;
+        }
+      if (!decl || t.type_args.size() != decl->params.size())
+        return true;
+      if (!active.insert(id.value).second)
+        return false;
+      Substitutions sub;
+      for (size_t i = 0; i < decl->params.size(); ++i)
+        sub.push_back({decl->params[i].symbol, t.type_args[i]});
+      auto fields = [&](const auto &fs) {
+        for (const auto &field : fs) {
+          auto concrete = substitute(field.type, sub, types);
+          if (visit(concrete))
+            return true;
+        }
+        return false;
+      };
+      bool result = fields(decl->fields);
+      for (const auto &variant : decl->variants)
+        result = result || fields(variant.payload);
+      active.erase(id.value);
+      return result;
+    };
+    return visit(root);
+  }
+  // Records value-producing storage reads that may carry a shared handle.
+  // Rooted field/index receivers are not rescanned as whole containers: their
+  // index expressions are scanned instead, so `items[1]` remains a disjoint
+  // scalar read while `rows[prepare(items)].value` still exposes `items`.
+  void collect_alias_risks(HirNodeId id, std::vector<TypeId> &out) const {
+    const auto &n = m.nodes.at(id.value);
+    const bool storage =
+        n.kind() == NodeKind::read || n.kind() == NodeKind::place ||
+        n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place ||
+        n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place;
+    if ((storage || n.kind() == NodeKind::function_value ||
+         (n.kind() == NodeKind::move &&
+          std::get<Move>(n.data).binding)) &&
+        may_hold_shared(n.type))
+      out.push_back(n.type);
+    if (n.kind() == NodeKind::read || n.kind() == NodeKind::place ||
+        n.kind() == NodeKind::function_value ||
+        (n.kind() == NodeKind::move && std::get<Move>(n.data).binding))
+      return;
+    if (n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place ||
+        n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place) {
+      if (place_root(id)) {
+        collect_place_index_risks(id, out);
+        return;
+      }
+    }
+    for (auto c : n.children)
+      collect_alias_risks(c, out);
+  }
+  void collect_place_index_risks(HirNodeId id,
+                                 std::vector<TypeId> &out) const {
+    const auto &n = m.nodes.at(id.value);
+    if (n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place) {
+      collect_place_index_risks(n.children[0], out);
+      return;
+    }
+    if (n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place) {
+      collect_place_index_risks(n.children[0], out);
+      collect_alias_risks(n.children[1], out);
+    }
+  }
+  using PlaceAccess = std::pair<SymbolId, std::vector<PlacePath>>;
+  void collect_access_paths(HirNodeId id,
+                            std::vector<PlaceAccess> &out) const {
+    const auto &n = m.nodes.at(id.value);
+    if (n.kind() == NodeKind::read || n.kind() == NodeKind::place) {
+      if (auto root = place_root(id))
+        out.emplace_back(*root, std::vector<PlacePath>{});
+      return;
+    }
+    if (n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place) {
+      if (auto root = place_root(id))
+        out.emplace_back(*root, place_path(id));
+      return;
+    }
+    if (n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place) {
+      if (auto root = place_root(id))
+        out.emplace_back(*root, place_path(id));
+      collect_access_paths(n.children[1], out);
+      return;
+    }
+    if (auto mv = std::get_if<Move>(&n.data); mv && mv->binding) {
+      out.emplace_back(*mv->binding, std::vector<PlacePath>{});
+      return;
+    }
+    for (auto c : n.children)
+      collect_access_paths(c, out);
+  }
+  void collect_place_index_paths(HirNodeId id,
+                                 std::vector<PlaceAccess> &out) const {
+    const auto &n = m.nodes.at(id.value);
+    if (n.kind() == NodeKind::field_place ||
+        n.kind() == NodeKind::field_read) {
+      collect_place_index_paths(n.children[0], out);
+      return;
+    }
+    if (n.kind() == NodeKind::index_place ||
+        n.kind() == NodeKind::index_read) {
+      collect_place_index_paths(n.children[0], out);
+      collect_access_paths(n.children[1], out);
+    }
+  }
   Expr place(Ref r, bool inout) {
     if (ast(r).kind == AstKind::Parenthesized)
       return place(child(r, 0), inout);
     if (ast(r).kind == AstKind::NeutralBracket) {
-      if (inout)
-        unavailable(r, "indexed inout is not supported");
       auto base = expression(child(r, 0));
       if (type(base.value.type).kind == TypeKind::ForeignOpaque) {
+        if (inout)
+          unavailable(r, "external indexed inout is not supported");
         if (ast(r).children.size() != 2)
           reject(r, "external indexing requires exactly one index");
         auto index_id = foreign_indexer(base.value.type);
@@ -2262,6 +2510,8 @@ class Checker {
       const auto receiver_kind = type(base.value.type).kind;
       if (receiver_kind == TypeKind::CForeignPointer ||
           receiver_kind == TypeKind::CForeignBuffer) {
+        if (inout)
+          unavailable(r, "C pointer/buffer inout is not supported");
         if (!unsafe_depth)
           reject(r, "C pointer/buffer indexing requires unsafe");
         if (!type(base.value.type).bits)
@@ -2285,6 +2535,12 @@ class Checker {
       if (!integer(index.value.type))
         reject(r, "index must be integer");
       auto t = type(base.value.type).type_args.at(0);
+      if (inout) {
+        if (!place_root(base.id))
+          reject(r, "inout index receiver must be binding-backed",
+                 "E_CALL_ARGUMENT");
+        check_inout_place_type(r, t);
+      }
       return {node(r, t, IndexPlace{}, {base.id, index.id}), {t, {}, {}}};
     }
     if (ast(r).kind == AstKind::Slice) {
@@ -2326,10 +2582,10 @@ class Checker {
       return {node(r, t, access, values), {t, {}, {}}};
     }
     if (ast(r).kind == AstKind::Member) {
-      if (inout)
-        unavailable(r, "field inout is not implemented");
       if (auto base_type = peek_type(child(r, 0));
           base_type && type(*base_type).kind == TypeKind::ForeignOpaque) {
+        if (inout)
+          unavailable(r, "external property inout is not supported");
         auto base = expression(child(r, 0));
         auto name = file(r).tokens[ast(r).token_end - 1].spelling;
         auto property = foreign_property(base.value.type, name);
@@ -2347,6 +2603,12 @@ class Checker {
       auto base = place(child(r, 0), false);
       auto f = find_field(r, base.value.type);
       auto t = field_type(base.value.type, f);
+      if (inout) {
+        if (!place_root(base.id))
+          reject(r, "inout field receiver must be binding-backed",
+                 "E_CALL_ARGUMENT");
+        check_inout_place_type(r, t);
+      }
       return {node(r, t, FieldPlace{f.symbol}, {base.id}), {t, {}, {}}};
     }
     if (ast(r).kind != AstKind::Name)
@@ -2379,10 +2641,8 @@ class Checker {
     if (!l.writable)
       reject(r, "let/const bindings are not writable",
              inout ? "E_CALL_ARGUMENT" : "E_TYPE_MISMATCH");
-    if (inout && !aggregate_inout_type(l.type) &&
-        !template_inout_type(l.type))
-      unavailable(r, "inout requires a whole trivial numeric/bool or POD "
-                     "aggregate binding");
+    if (inout)
+      check_inout_place_type(r, l.type);
     return {node(r, l.type, Place{*s}), {l.type, {}, {}}};
   }
   bool contains_parameter(TypeId id) const {
@@ -3250,7 +3510,7 @@ class Checker {
       call.args.push_back({uint32_t(i), uint32_t(i), {}, ParamMode::ordinary, value.id});
       children.push_back(value.id);
     }
-    check_call_borrows(r, call.args, children);
+    check_call_borrows(r, call.args, children, false);
     return {node(r, signature.result, std::move(call), std::move(children)),
             {signature.result, {}, {}}};
   }
@@ -3628,44 +3888,64 @@ class Checker {
     return scalar_call(r);
   }
   void check_call_borrows(Ref r, const std::vector<CallArg> &args,
-                          const std::vector<HirNodeId> &children) const {
-    // In the supported scalar subset each binding identifies its entire
-    // storage. Include nested reads/places in arguments and the callee.
-    std::set<uint64_t> borrowed;
+                          const std::vector<HirNodeId> &children,
+                          bool indirect_callee) const {
+    // Inout arguments borrow a field/index path rooted in one binding. Two
+    // named fields and distinct literal indexes may be non-overlapping. A
+    // Vec/Slice handle copied through another binding, field, enum payload or
+    // closure can still denote the same object, so different source bindings
+    // are never assumed to be distinct when the borrowed storage is inside a
+    // container.
+    std::vector<PlaceAccess> borrowed;
+    bool container_borrow = false;
     for (const auto &a : args)
       if (a.mode == ParamMode::inout) {
-        auto id =
-            std::get<Place>(m.nodes[a.expression.value].data).symbol.value;
-        if (!borrowed.insert(id).second)
-          reject(r, "same binding borrowed by inout twice", "E_CALL_ARGUMENT");
-      }
-    for (auto root : children) {
-      std::vector<HirNodeId> todo{root};
-      while (!todo.empty()) {
-        auto id = todo.back();
-        todo.pop_back();
-        const auto &n = m.nodes[id.value];
-        if (auto p = std::get_if<Read>(&n.data);
-            p && borrowed.count(p->symbol.value))
-          reject(r, "inout binding is also read by this call",
+        auto root = place_root(a.expression);
+        if (!root)
+          reject(r, "inout place has no binding-backed storage root",
                  "E_CALL_ARGUMENT");
-        if (auto p = std::get_if<Move>(&n.data);
-            p && p->binding && borrowed.count(p->binding->value))
-          reject(r, "inout binding is also moved by this call",
-                 "E_CALL_ARGUMENT");
-        if (auto p = std::get_if<Place>(&n.data);
-            p && borrowed.count(p->symbol.value)) {
-          bool top = false;
-          for (auto &a : args)
-            if (a.mode == ParamMode::inout && a.expression == id)
-              top = true;
-          if (!top)
-            reject(r, "nested call aliases an inout argument",
+        auto path = place_path(a.expression);
+        container_borrow = container_borrow || !container_path(path).indexes.empty();
+        for (const auto &prior : borrowed)
+          if (places_overlap(prior.first, prior.second, *root, path))
+            reject(r, "overlapping or possibly aliased inout storage in call",
                    "E_CALL_ARGUMENT");
-        }
-        todo.insert(todo.end(), n.children.begin(), n.children.end());
+        borrowed.emplace_back(*root, std::move(path));
+      }
+    if (container_borrow && indirect_callee)
+      reject(r, "indirect callee may retain or resize the borrowed Vec storage",
+             "E_CALL_ARGUMENT");
+    auto check = [&](const std::vector<PlaceAccess> &accesses) {
+      for (const auto &access : accesses)
+        for (const auto &borrow : borrowed)
+          if (places_overlap(borrow.first, borrow.second, access.first,
+                             access.second))
+            reject(r, "inout binding is also accessed by this call",
+                   "E_CALL_ARGUMENT");
+    };
+    std::vector<TypeId> risks;
+    for (auto root : children) {
+      bool inout_place = false;
+      for (const auto &a : args)
+        if (a.mode == ParamMode::inout && a.expression == root)
+          inout_place = true;
+      std::vector<PlaceAccess> accesses;
+      if (inout_place) {
+        collect_place_index_paths(root, accesses);
+        check(accesses);
+        if (container_borrow)
+          collect_place_index_risks(root, risks);
+      } else {
+        collect_access_paths(root, accesses);
+        check(accesses);
+        if (container_borrow)
+          collect_alias_risks(root, risks);
       }
     }
+    if (!risks.empty())
+      reject(r, "argument may alias a shared container while its element is "
+                "borrowed by inout",
+             "E_CALL_ARGUMENT");
   }
   Expr typed_call(Ref r, SymbolId target,
                   std::optional<TypeId> signature_override, Substitutions sub,
@@ -3884,7 +4164,7 @@ class Checker {
                       modes[i], e.id});
       children.push_back(e.id);
     }
-    check_call_borrows(r, args, children);
+    check_call_borrows(r, args, children, false);
     if (constraint)
       return {node(r, ft.result,
                    ConstraintCall{*constraint, target, *constraint_receiver,
@@ -4079,7 +4359,8 @@ class Checker {
       c.args.push_back({uint32_t(i - 1), uint32_t(pi), label, pm, e.id});
       children.push_back(e.id);
     }
-    check_call_borrows(r, c.args, children);
+    check_call_borrows(r, c.args, children,
+                       c.kind == CalleeKind::function_value);
     return {node(r, sig.result, std::move(c), std::move(children)),
             {sig.result, {}, {}}};
   }

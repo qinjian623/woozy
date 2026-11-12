@@ -35,7 +35,7 @@ REJECTS = {
     'reject-owning-self-inout': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-trait-owning-inout': {'E_CAPABILITY_UNAVAILABLE'},
     'reject-alias-inout': {'E_CALL_ARGUMENT'},
-    'reject-field-inout': {'E_CAPABILITY_UNAVAILABLE'},
+    'reject-field-inout': {'E_TYPE_MISMATCH'},
     'reject-index-inout': {'E_CAPABILITY_UNAVAILABLE'},
 }
 STRING_EXPECTED = {

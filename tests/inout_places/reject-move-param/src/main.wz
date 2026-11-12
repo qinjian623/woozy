@@ -1,0 +1,11 @@
+package app;
+
+func steal(slot inout i32) i32 {
+    let value = move slot;
+    return value;
+}
+
+func main() i32 {
+    var value i32 = 1;
+    return steal(inout value);
+}

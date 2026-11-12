@@ -1531,14 +1531,14 @@ void constrained_free_inout(const fs::path &root) {
       "func swap[T V](a inout T,b inout T){} "
       "func main(){var x i32=1;let f=swap[i32];f(inout x,inout x);}",
       "E_CALL_ARGUMENT");
-  unsupported("trait V{} impl V for i32{} struct S{x i32;} "
-              "func swap[T V](a inout T,b inout T){} "
-              "func main(){var s S=S(x:1);var y i32=2;"
-              "swap(inout s.x,inout y);}");
-  unsupported("trait V{} impl V for i32{} "
-              "func swap[T V](a inout T,b inout T){} "
-              "func main(){var v Vec[i32]=[1];var y i32=2;"
-              "swap(inout v[0],inout y);}");
+  good("trait V{} impl V for i32{} struct S{x i32;} "
+       "func swap[T V](a inout T,b inout T){} "
+       "func main(){var s S=S(x:1);var y i32=2;"
+       "swap(inout s.x,inout y);}");
+  good("trait V{} impl V for i32{} "
+       "func swap[T V](a inout T,b inout T){} "
+       "func main(){var v Vec[i32]=[1];var y i32=2;"
+       "swap(inout v[0],inout y);}");
   bad("trait V{} impl V for i32{} "
       "func swap[T V](a inout T,b inout T){} "
       "func main(x i32){var y i32=2;swap(inout x,inout y);}",
@@ -1676,14 +1676,12 @@ void generic_inout(const fs::path &root) {
                   "func main(){var x Unit=make();var y Unit=make();"
                   "swap(inout x,inout y);}",
               "E_CAPABILITY_UNAVAILABLE");
-  unsupported("struct S { x i32; } " + swap +
-                  "func main(){var s S=S(x:1);var y i32=2;"
-                  "swap(inout s.x,inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
-  unsupported("func swap[T](a inout T,b inout T){} "
-              "func main(){var v Vec[i32]=[1];var y i32=2;"
-              "swap(inout v[0],inout y);}",
-              "E_CAPABILITY_UNAVAILABLE");
+  good("struct S { x i32; } " + swap +
+       "func main(){var s S=S(x:1);var y i32=2;"
+       "swap(inout s.x,inout y);}");
+  good("func swap[T](a inout T,b inout T){} "
+       "func main(){var v Vec[i32]=[1];var y i32=2;"
+       "swap(inout v[0],inout y);}");
   auto constrained_direct = good("trait V{} impl V for i32{} "
        "func swap[T V](a inout T,b inout T){} "
        "func main(){var x i32=1;var y i32=2;"
@@ -2372,12 +2370,14 @@ return 0;}
       "E_CALL_ARGUMENT");
   unsupported("impl i32{func bump(self Self,slot inout i32){slot+=1;}} "
               "func main(){var x i32=1;x.bump(inout 1);}");
-  unsupported("struct H{marker i32;} impl H{"
-              "func bump(self Self,slot inout i32){slot+=1;}} "
-              "func main(){let h=H(marker:1);h.bump(inout h.marker);}");
-  unsupported("struct H{items Vec[i32];} impl H{"
-              "func bump(self Self,slot inout i32){slot+=1;}} "
-              "func main(){let h=H(items:[1]);h.bump(inout h.items[0]);}");
+  bad("struct H{marker i32;} impl H{"
+      "func bump(self Self,slot inout i32){slot+=1;}} "
+      "func main(){let h=H(marker:1);h.bump(inout h.marker);}",
+      "E_TYPE_MISMATCH");
+  bad("struct H{items Vec[i32];} impl H{"
+      "func bump(self Self,slot inout i32){slot+=1;}} "
+      "func main(){let h=H(items:[1]);h.bump(inout h.items[0]);}",
+      "E_CALL_ARGUMENT");
   bad("struct H{marker i32;} impl H{"
       "func bump(self Self,slot inout i32){slot+=1;}} "
       "func use(h H,x i32){h.bump(inout x);} "
@@ -5805,11 +5805,12 @@ void constrained_inherent_inout(const fs::path &root) {
               "value U)U{let old=slot;slot=value;return old;}} "
               "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
               "var v Vec[i32]=[1];b.replace(inout v,[2]);return 0;}");
-  unsupported("trait V{} impl V for i32{} " + box +
-              "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
-              "value U)U{let old=slot;slot=value;return old;}} "
-              "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-              "var x i32=1;b.replace(inout b.items[0],2);return 0;}");
+  bad("trait V{} impl V for i32{} " + box +
+          "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
+          "value U)U{let old=slot;slot=value;return old;}} "
+          "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+          "var x i32=1;b.replace(inout b.items[0],2);return 0;}",
+      "E_CALL_ARGUMENT");
   bad("trait V{} impl V for i32{} " + box +
           "impl[T V] Box[T]{func replace[U V](self Self,slot inout U,"
           "value U)U{let old=slot;slot=value;return old;}} "
@@ -6791,10 +6792,10 @@ impl Exchange for i32 {
                  "r.replace(inout x,2);}", "E_CALL_ARGUMENT");
   bad(exchange + "func f(x i32){let r i32=0;r.replace(inout x,2);} "
                  "func main(){f(1);}", "E_CALL_ARGUMENT");
-  unsupported(exchange + "struct S{x i32;} func main(){let r i32=0;"
-              "var s S=S(x:1);r.replace(inout s.x,2);}");
-  unsupported(exchange + "func main(){let r i32=0;var v Vec[i32]=[1];"
-              "r.replace(inout v[0],2);}");
+  good(exchange + "struct S{x i32;} func main(){let r i32=0;"
+       "var s S=S(x:1);r.replace(inout s.x,2);}");
+  good(exchange + "func main(){let r i32=0;var v Vec[i32]=[1];"
+       "r.replace(inout v[0],2);}");
   unsupported(exchange + "func main(){let r i32=0;r.replace(inout 1,2);}");
   bad(exchange + "struct S{x i32;} func main(){let s S=S(x:1);"
                  "var x i32=1;s.replace(inout x,2);}", "E_TYPE_MISMATCH");
@@ -12259,9 +12260,9 @@ void generic_trait_method_modes(const fs::path &root) {
   reject(edit + "func main()i32{let h=Pair(value:0);let x i32=1;"
                 "let r=h.edit[i32](inout x,2);return 0;}",
          "E_CALL_ARGUMENT");
-  reject(edit + "func main()i32{let h=Pair(value:0);var x=Pair(value:1);"
+  reject(edit + "func main()i32{let h=Pair(value:0);let x=Pair(value:1);"
                 "let r=h.edit[i32](inout x.value,2);return 0;}",
-         "E_CAPABILITY_UNAVAILABLE", FailureKind::unsupported);
+         "E_TYPE_MISMATCH");
   reject("trait Edit[A]{func edit[U](owner Self,a inout U,b inout U);}"
          "struct Host{} impl Edit[bool] for Host{"
          "func edit[V](owner Self,a inout V,b inout V){}}"

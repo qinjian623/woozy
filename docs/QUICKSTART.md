@@ -213,7 +213,7 @@ increment(inout answer);       // answer 是 10
 
 普通参数不消耗调用者的值；返回或保存参数时按其类型复制或保留共享引用。`move` 转移整个拥有值，原绑定在重新初始化前不可读；普通参数不能直接移动，要先建立本地副本。
 
-`inout` 接受整体可写 `var` 或已有 `inout` 参数，限数值、bool 和只含平凡值的有限 struct/enum。`let`、临时值、字段、索引、Vec 等引用容器不能作为 `inout` 实参；同一调用也不能一边独占写某存储，一边再次读写它。
+`inout` 接受可写 `var`、已有 `inout` 参数、其字段链和可绑定容器元素，例如 `bump(inout obj.nested.value)` 或 `bump(inout items[0])`。位置类型限数值、bool 和只含平凡值的有限 struct/enum；Vec/Slice 本身、string、外部对象、函数值和含拥有字段的聚合仍不能按 `inout` 传递。同一次调用中不同具名字段或可证明不同的字面量索引可以同时借用，重叠路径、整容器访问、动态索引冲突和不属于本地/参数的临时位置会被拒绝。Vec/Slice 句柄复制到其他绑定、struct/enum、函数返回值或闭包后仍可能指向同一对象；元素 `inout` 借用期间，其他可能携带该容器的实参或未知间接 callee 会保守报错。
 
 方法不会自动移动或取得可写访问。首位 Self 参数声明为 `move` 或 `inout` 时，值调用分别写 `(move value).take()`、`(inout value).change()`；类型名调用则继续明确传入全部参数。
 

@@ -1,8 +1,13 @@
 package app;
 struct S { x i32; }
-func replace(slot inout S) {}
+func replace(slot inout i32) {
+    slot = 9;
+}
 func main() i32 {
     var value = S(x: 1);
     replace(inout value.x);
+    if value.x != 9 {
+        return 1;
+    }
     return 0;
 }

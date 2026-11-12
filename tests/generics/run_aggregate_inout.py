@@ -17,7 +17,11 @@ import sys
 sys.dont_write_bytecode = True
 
 POSITIVE = ('values', 'routes', 'correction-positive',
-            'reject-correction/generic-dependent-callback')
+            'reject-correction/generic-dependent-callback',
+            'reject-alias/field-place', 'reject-alias/index-place')
+# These two former alias-rejection cases are now legal field/index inout places
+# and are executed as positive controls instead of being checked as rejects.
+PLACE_POSITIVE = {'reject-alias/field-place', 'reject-alias/index-place'}
 # Approved C5: Function is owning and never POD inout. This former positive
 # fixture contains a concrete Function field inside the inout aggregate.
 C5_UNSUPPORTED = ('fixed-callback-function-cycle',)
@@ -198,6 +202,9 @@ def main():
                 if case == 'reject-correction/generic-dependent-callback':
                     # The former template rejection is now a positive control;
                     # the owning-data rejections below keep this loop covered.
+                    continue
+                if case in PLACE_POSITIVE:
+                    # Field/index inout is covered above as a positive case.
                     continue
                 project = manifest.parent
                 hashes = source_hashes(project)

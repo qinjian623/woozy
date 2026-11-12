@@ -1,0 +1,36 @@
+package app;
+
+enum Failure {
+    Bad;
+}
+
+struct Node {
+    value i32;
+}
+
+func update(slot inout i32) i32 throws Failure {
+    slot = slot + 1;
+    throw Failure.Bad;
+}
+
+func main() i32 {
+    var node = Node(value: 5);
+    var values Vec[i32] = [9];
+    try {
+        let ignored = update(inout node.value);
+        return 1;
+    } catch err Failure {
+        if node.value != 6 {
+            return 2;
+        }
+    }
+    try {
+        let ignored = update(inout values[0]);
+        return 3;
+    } catch err Failure {
+        if values[0] != 10 {
+            return 4;
+        }
+    }
+    return 0;
+}

@@ -425,7 +425,7 @@ func changed() i32 {
 }
 ```
 
-`inout` 接受整体 `var` 绑定，已有 `inout` 参数也能继续转交。当前限数值、bool 和递归只含平凡值的有限 struct/enum；字段、索引、Vec 和 string 不能作为 `inout` 实参。同一次调用不能对同一存储同时做 `inout` 和另一种访问。
+`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置类型限数值、bool 和递归只含平凡值的有限 struct/enum；Vec/Slice 容器本身、string、外部对象和含拥有字段的聚合仍不能作为 `inout` 实参。同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝。Vec/Slice 句柄可能通过绑定复制、struct/enum、返回函数或闭包共享同一对象，元素 `inout` 借用期间这些未知别名会被保守拒绝。
 
 转交一个拥有值时使用 `move`：
 

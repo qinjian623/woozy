@@ -1219,10 +1219,10 @@ class Verifier {
       need(same_span(value.source.span,
                      actual.node(value.source.node.node).span),
            "explicit receiver source span differs from its complete AST node");
-      need(value.kind() ==
-               (mode == ParamMode::move ? NodeKind::move : NodeKind::place),
-           "explicit receiver must keep its Move or whole Place");
-      if (mode == ParamMode::inout) {
+      need(mode == ParamMode::move ? value.kind() == NodeKind::move
+                                   : inout_place(value),
+           "explicit receiver must keep its Move or writable Place");
+      if (mode == ParamMode::inout && value.kind() == NodeKind::place) {
         auto binding = resolved_source(input);
         need(binding.has_value(), "inout receiver has no source binding");
         for (const auto &instance : m.instances)
@@ -1619,41 +1619,314 @@ class Verifier {
            "foreign argument parameter index/type");
     }
   }
-  // Whole local scalar bindings cannot alias each other. An inout parameter
-  // is also unique because every caller is checked by this same rule. Scan
-  // nested argument expressions too: f(inout x, g(x)) must not read x while
-  // f's exclusive access is active, and g(inout x) must not borrow it again.
-  // Call and ConstraintCall share this check after collecting their own
-  // top-level inout storage; no other argument condition is relaxed here.
-  void check_call_aliases(const std::vector<CallArg> &args,
-                          const std::set<uint64_t> &borrowed) const {
-    for (const auto &a : args) {
-      if (a.mode == ParamMode::inout)
-        continue;
-      std::vector<HirNodeId> pending{a.expression};
-      std::set<uint64_t> visited;
-      while (!pending.empty()) {
-        check_cancelled(stop);
-        auto id = pending.back();
-        pending.pop_back();
-        need(visited.insert(id.value).second,
-             "cycle/shared child in call argument");
-        const auto &part = node(id);
-        if (part.kind() == NodeKind::read || part.kind() == NodeKind::place ||
-            (part.kind() == NodeKind::move &&
-             std::get<Move>(part.data).binding)) {
-          auto storage = part.kind() == NodeKind::read
-                             ? std::get<Read>(part.data).symbol
-                         : part.kind() == NodeKind::place
-                             ? std::get<Place>(part.data).symbol
-                             : *std::get<Move>(part.data).binding;
-          need(!borrowed.contains(storage.value),
-               "inout storage is also accessed by another argument");
-        }
-        pending.insert(pending.end(), part.children.begin(),
-                       part.children.end());
+  bool inout_place(const HirNode &n) const {
+    return n.kind() == NodeKind::place ||
+           n.kind() == NodeKind::field_place ||
+           n.kind() == NodeKind::index_place;
+  }
+  // Root binding and field/index path of a place. A path segment is either a
+  // named field or an index expression. Index segments are treated as an
+  // unknown offset, so two different dynamic indexes into one container are
+  // conservatively overlapping; distinct named fields are disjoint.
+  struct PathSegment {
+    bool index = false;
+    bool known = true;
+    // SymbolId for a field; a literal value or HirNodeId for an index.
+    uint64_t value = 0;
+  };
+  std::optional<SymbolId> place_root(HirNodeId id) const {
+    const auto &n = node(id);
+    if (auto r = std::get_if<Read>(&n.data))
+      return r->symbol;
+    if (auto p = std::get_if<Place>(&n.data))
+      return p->symbol;
+    if (n.kind() == NodeKind::field_place || n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::index_place || n.kind() == NodeKind::index_read)
+      return place_root(n.children[0]);
+    return {};
+  }
+  std::vector<PathSegment> place_path(HirNodeId id) const {
+    const auto &n = node(id);
+    if (n.kind() == NodeKind::field_place || n.kind() == NodeKind::field_read) {
+      auto path = place_path(n.children[0]);
+      auto field = n.kind() == NodeKind::field_place
+                       ? std::get<FieldPlace>(n.data).field
+                       : std::get<FieldRead>(n.data).field;
+      path.push_back({false, true, field.value});
+      return path;
+    }
+    if (n.kind() == NodeKind::index_place || n.kind() == NodeKind::index_read) {
+      auto path = place_path(n.children[0]);
+      const auto &index = m.nodes.at(n.children[1].value);
+      const bool known = index.kind() == NodeKind::integer_literal;
+      path.push_back({true, known,
+                      known ? std::get<IntegerLiteral>(index.data).bits
+                            : n.children[1].value});
+      return path;
+    }
+    return {};
+  }
+  static bool paths_overlap(const std::vector<PathSegment> &a,
+                            const std::vector<PathSegment> &b) {
+    size_t n = std::min(a.size(), b.size());
+    for (size_t i = 0; i < n; ++i) {
+      if (a[i].index || b[i].index) {
+        if (!a[i].index || !b[i].index)
+          return true; // field vs element of the same container
+        if (a[i].known && b[i].known && a[i].value == b[i].value)
+          continue;
+        if (a[i].known && b[i].known)
+          return false; // distinct literal indexes are disjoint
+        return true;    // unknown dynamic index may alias
+      }
+      if (a[i].value != b[i].value)
+        return false;
+    }
+    return true;
+  }
+  using PlaceAccess = std::pair<SymbolId, std::vector<PathSegment>>;
+  // A Vec/Slice handle can be copied through bindings, fields and enum
+  // payloads. Field selections before an index choose a handle and prove no
+  // object identity; index literals plus the field suffix after the last index
+  // identify storage within the referenced object.
+  struct ContainerPath {
+    std::vector<PathSegment> indexes;
+    std::vector<uint64_t> fields;
+  };
+  static ContainerPath container_path(const std::vector<PathSegment> &path) {
+    ContainerPath result;
+    for (const auto &part : path) {
+      if (part.index) {
+        result.indexes.push_back(part);
+        result.fields.clear();
+      } else if (!result.indexes.empty()) {
+        result.fields.push_back(part.value);
       }
     }
+    return result;
+  }
+  static bool container_overlap(const ContainerPath &a,
+                                const ContainerPath &b) {
+    if (a.indexes.size() != b.indexes.size())
+      return true;
+    // Ancestor elements may contain copies of the same inner Vec handle.
+    // Only the final element offset can prove that two places are disjoint.
+    const auto &left = a.indexes.back();
+    const auto &right = b.indexes.back();
+    if (!left.known || !right.known)
+      return true;
+    if (left.value != right.value)
+      return false;
+    size_t n = std::min(a.fields.size(), b.fields.size());
+    for (size_t i = 0; i < n; ++i)
+      if (a.fields[i] != b.fields[i])
+        return false;
+    return true;
+  }
+  static bool places_overlap(SymbolId root_a,
+                             const std::vector<PathSegment> &a, SymbolId root_b,
+                             const std::vector<PathSegment> &b) {
+    auto ca = container_path(a), cb = container_path(b);
+    if (!ca.indexes.empty() && !cb.indexes.empty())
+      return container_overlap(ca, cb);
+    return root_a == root_b && paths_overlap(a, b);
+  }
+  bool may_hold_shared(TypeId root) const {
+    TypeContext types = m.types;
+    std::set<uint64_t> active;
+    std::function<bool(TypeId)> visit = [&](TypeId id) -> bool {
+      const Type *found = types.find(id);
+      if (!found)
+        return true;
+      const Type t = *found;
+      if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
+          t.kind == TypeKind::Weak || t.kind == TypeKind::Function ||
+          t.kind == TypeKind::TypeParameter || t.kind == TypeKind::Task)
+        return true;
+      if (t.kind != TypeKind::NominalStruct &&
+          t.kind != TypeKind::NominalEnum)
+        return false;
+      const NominalDecl *decl = nullptr;
+      for (const auto &d : m.nominals)
+        if (d.symbol == t.declaration) {
+          decl = &d;
+          break;
+        }
+      if (!decl || t.type_args.size() != decl->params.size())
+        return true;
+      if (!active.insert(id.value).second)
+        return false;
+      Substitutions sub;
+      for (size_t i = 0; i < decl->params.size(); ++i)
+        sub.push_back({decl->params[i].symbol, t.type_args[i]});
+      auto fields = [&](const auto &fs) {
+        for (const auto &field : fs) {
+          auto concrete = substitute(field.type, sub, types);
+          if (visit(concrete))
+            return true;
+        }
+        return false;
+      };
+      bool result = fields(decl->fields);
+      for (const auto &variant : decl->variants)
+        result = result || fields(variant.payload);
+      active.erase(id.value);
+      return result;
+    };
+    return visit(root);
+  }
+  // Rooted field/index receivers are not rescanned as whole containers; their
+  // index expressions are scanned instead. This keeps `items[1]` a disjoint
+  // scalar read while `rows[prepare(items)].value` still exposes `items`.
+  void collect_alias_risks(HirNodeId id, std::vector<TypeId> &out) const {
+    const auto &n = node(id);
+    const bool storage =
+        n.kind() == NodeKind::read || n.kind() == NodeKind::place ||
+        n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place ||
+        n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place;
+    if ((storage || n.kind() == NodeKind::function_value ||
+         (n.kind() == NodeKind::move &&
+          std::get<Move>(n.data).binding)) &&
+        may_hold_shared(n.type))
+      out.push_back(n.type);
+    if (n.kind() == NodeKind::read || n.kind() == NodeKind::place ||
+        n.kind() == NodeKind::function_value ||
+        (n.kind() == NodeKind::move && std::get<Move>(n.data).binding))
+      return;
+    if (n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place ||
+        n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place) {
+      if (place_root(id)) {
+        collect_place_index_risks(id, out);
+        return;
+      }
+    }
+    for (auto c : n.children)
+      collect_alias_risks(c, out);
+  }
+  void collect_place_index_risks(HirNodeId id,
+                                 std::vector<TypeId> &out) const {
+    const auto &n = node(id);
+    if (n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place) {
+      collect_place_index_risks(n.children[0], out);
+      return;
+    }
+    if (n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place) {
+      collect_place_index_risks(n.children[0], out);
+      collect_alias_risks(n.children[1], out);
+    }
+  }
+  // Collects the maximal storage paths read by an expression. A field/index
+  // receiver is represented by its complete path, while every index
+  // expression in that receiver chain is scanned separately because it can
+  // read unrelated bindings.
+  void collect_access_paths(HirNodeId id,
+                            std::vector<PlaceAccess> &out) const {
+    const auto &n = node(id);
+    if (n.kind() == NodeKind::read || n.kind() == NodeKind::place) {
+      if (auto root = place_root(id))
+        out.emplace_back(*root, std::vector<PathSegment>{});
+      return;
+    }
+    if (n.kind() == NodeKind::field_read ||
+        n.kind() == NodeKind::field_place) {
+      auto root = place_root(id);
+      if (root)
+        out.emplace_back(*root, place_path(id));
+      if (root)
+        collect_place_index_paths(id, out);
+      else
+        collect_access_paths(n.children[0], out);
+      return;
+    }
+    if (n.kind() == NodeKind::index_read ||
+        n.kind() == NodeKind::index_place) {
+      auto root = place_root(id);
+      if (root) {
+        out.emplace_back(*root, place_path(id));
+        collect_place_index_paths(id, out);
+      } else {
+        for (auto c : n.children)
+          collect_access_paths(c, out);
+      }
+      return;
+    }
+    if (auto m = std::get_if<Move>(&n.data); m && m->binding) {
+      out.emplace_back(*m->binding, std::vector<PathSegment>{});
+      return;
+    }
+    for (auto c : n.children)
+      collect_access_paths(c, out);
+  }
+  void collect_place_index_paths(HirNodeId id,
+                                 std::vector<PlaceAccess> &out) const {
+    const auto &n = node(id);
+    if (n.kind() == NodeKind::field_place ||
+        n.kind() == NodeKind::field_read) {
+      collect_place_index_paths(n.children[0], out);
+      return;
+    }
+    if (n.kind() == NodeKind::index_place ||
+        n.kind() == NodeKind::index_read) {
+      collect_place_index_paths(n.children[0], out);
+      collect_access_paths(n.children[1], out);
+    }
+  }
+  // Whole local scalar bindings cannot alias each other. An inout parameter
+  // is also unique because every caller is checked by this same rule. Shared
+  // Vec/Slice handles copied through other bindings, fields, enum payloads or
+  // closures are never assumed distinct merely because their SymbolIds differ.
+  void check_call_aliases(const std::vector<CallArg> &args,
+                          bool indirect_callee) const {
+    std::vector<PlaceAccess> borrowed;
+    bool container_borrow = false;
+    for (const auto &a : args) {
+      if (a.mode != ParamMode::inout)
+        continue;
+      auto root = place_root(a.expression);
+      need(root.has_value(),
+           "inout place has no binding-backed storage root");
+      auto path = place_path(a.expression);
+      container_borrow =
+          container_borrow || !container_path(path).indexes.empty();
+      for (const auto &prior : borrowed)
+        need(!places_overlap(prior.first, prior.second, *root, path),
+             "overlapping or possibly aliased inout storage in call");
+      borrowed.emplace_back(*root, std::move(path));
+    }
+    if (container_borrow && indirect_callee)
+      fail("indirect callee may retain or resize the borrowed Vec storage");
+    auto check = [&](const std::vector<PlaceAccess> &accesses) {
+      for (const auto &access : accesses)
+        for (const auto &borrow : borrowed)
+          need(!places_overlap(borrow.first, borrow.second, access.first,
+                               access.second),
+               "inout storage is also accessed by another argument");
+    };
+    std::vector<TypeId> risks;
+    for (const auto &a : args) {
+      if (a.mode == ParamMode::inout) {
+        std::vector<PlaceAccess> indexes;
+        collect_place_index_paths(a.expression, indexes);
+        check(indexes);
+        if (container_borrow)
+          collect_place_index_risks(a.expression, risks);
+      } else {
+        std::vector<PlaceAccess> accesses;
+        collect_access_paths(a.expression, accesses);
+        check(accesses);
+        if (container_borrow)
+          collect_alias_risks(a.expression, risks);
+      }
+    }
+    need(risks.empty(),
+         "argument may alias a shared container while its element is borrowed "
+         "by inout");
   }
   // A type parameter spelling is only a real bounded template `T` when it is
   // an actual parameter of the enclosing template (or that template's
@@ -2487,7 +2760,6 @@ class Verifier {
       }
     }
     std::vector<bool> seen(sig.parameters.size());
-    std::set<uint64_t> borrowed;
     const auto owner_allowed = allowed(scope(n.scope).function);
     bool named = false;
     for (size_t i = 0; i < c.args.size(); ++i) {
@@ -2504,12 +2776,9 @@ class Verifier {
       need(a.mode == p.mode && argument.type == p.type,
            "call argument mode/type");
       if (p.mode == ParamMode::inout) {
-        need(argument.kind() == NodeKind::place &&
+        need(inout_place(argument) &&
                  inout_data_type(m, p.type, owner_allowed),
-             "inout requires a whole trivial place");
-        need(
-            borrowed.insert(std::get<Place>(argument.data).symbol.value).second,
-            "duplicate inout storage in call");
+             "inout requires a trivial numeric/bool or POD aggregate place");
       } else {
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
              "unsupported argument mode");
@@ -2525,7 +2794,7 @@ class Verifier {
              "positional argument index/order");
       }
     }
-    check_call_aliases(c.args, borrowed);
+    check_call_aliases(c.args, c.callee.has_value());
     if (c.kind == CalleeKind::direct) {
       check_qualified_method_source(n, c);
       check_explicit_method_arguments(n, c);
@@ -4082,7 +4351,6 @@ class Verifier {
                n.children.size() == c.args.size(),
            "trait-static call arity/children");
       std::set<uint32_t> seen;
-      std::set<uint64_t> borrowed;
       bool named = false;
       for (size_t i = 0; i < c.args.size(); ++i) {
         const auto &a = c.args[i];
@@ -4097,13 +4365,9 @@ class Verifier {
         need(a.mode == p.mode && argument.type == p.type,
              "trait-static argument type/mode");
         if (p.mode == ParamMode::inout) {
-          need(argument.kind() == NodeKind::place &&
+          need(inout_place(argument) &&
                    inout_data_type(m, p.type, owner_allowed),
-               "trait-static inout requires a whole trivial place");
-          need(borrowed
-                   .insert(std::get<Place>(argument.data).symbol.value)
-                   .second,
-               "duplicate trait-static inout storage");
+               "trait-static inout requires a trivial POD place");
         } else {
           need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
                "unsupported trait-static argument mode");
@@ -4118,7 +4382,7 @@ class Verifier {
                "trait-static positional argument index/order");
         }
       }
-      check_call_aliases(c.args, borrowed);
+      check_call_aliases(c.args, false);
       return;
     }
     if (written->base_symbol) {
@@ -4157,13 +4421,11 @@ class Verifier {
     check_receiver_source(n, c.args, written->base,
                           prototype.parameters.front().mode);
     std::set<uint32_t> seen{0};
-    std::set<uint64_t> borrowed;
     if (receiver.mode == ParamMode::inout) {
       const auto &place = node(receiver.expression);
-      need(place.kind() == NodeKind::place &&
+      need(inout_place(place) &&
                inout_data_type(m, place.type, owner_allowed),
-           "constraint receiver inout requires a whole trivial place");
-      borrowed.insert(std::get<Place>(place.data).symbol.value);
+           "constraint receiver inout requires a trivial POD place");
     } else {
       expr(receiver.expression);
     }
@@ -4192,14 +4454,10 @@ class Verifier {
             type(raw.type).kind == TypeKind::TypeParameter &&
             type(raw.type).declaration == tr->self &&
             p.type == c.receiver;
-        need(argument.kind() == NodeKind::place &&
+        need(inout_place(argument) &&
                  (inout_data_type(m, p.type, owner_allowed) ||
                   trait_self_slot),
-             "constraint inout requires a whole trivial place");
-        need(borrowed
-                 .insert(std::get<Place>(argument.data).symbol.value)
-                 .second,
-             "duplicate inout storage in constraint call");
+             "constraint inout requires a trivial POD place");
       } else {
         need(p.mode == ParamMode::ordinary || p.mode == ParamMode::move,
              "unsupported constraint argument mode");
@@ -4214,7 +4472,7 @@ class Verifier {
              "constraint positional argument index/order");
       }
     }
-    check_call_aliases(c.args, borrowed);
+    check_call_aliases(c.args, false);
   }
   void instance_body(const HirFunction &origin, const HirFunction &f,
                      const Substitutions &sub,

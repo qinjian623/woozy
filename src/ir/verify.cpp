@@ -232,12 +232,14 @@ class Verifier {
         if (auto root = resolve_address(value))
           address_roots.emplace(value, *root);
     std::map<ValueId, size_t> address_writes;
+    std::set<ValueId> address_inout_roots;
     auto address_use = [&](const Instruction &consumer, ValueId value,
-                           SourceSpan source) {
+                           size_t operand, SourceSpan source) {
       auto found = address_roots.find(value);
       if (found == address_roots.end())
         return;
-      if (consumer.op == Op::field_address)
+      if (consumer.op == Op::field_address ||
+          consumer.op == Op::begin_borrow)
         return;
       if (consumer.op == Op::load_indirect ||
           consumer.op == Op::store_indirect ||
@@ -248,21 +250,46 @@ class Verifier {
           ++address_writes[found->second.first];
         return;
       }
-      need(false, "Vec element address escapes its field replacement", source);
+      if (consumer.op == Op::call) {
+        const auto &cs = type(consumer.signature, source);
+        need(operand > 0 && operand - 1 < cs.parameters.size() &&
+                 cs.parameters[operand - 1].mode == hir::ParamMode::inout,
+             "Vec element address escapes through an ordinary call argument",
+             source);
+        address_inout_roots.insert(found->second.first);
+        return;
+      }
+      need(false, "Vec element address escapes its field replacement or "
+                  "inout argument",
+           source);
     };
     for (const auto &bb : f.blocks) {
       for (const auto &i : bb.instructions)
-        for (auto value : i.inputs)
-          address_use(i, value, i.source);
-      for (auto value : bb.terminator.inputs)
-        need(!address_roots.contains(value),
+        for (size_t operand = 0; operand < i.inputs.size(); ++operand)
+          address_use(i, i.inputs[operand], operand, i.source);
+      const auto &term = bb.terminator;
+      for (size_t operand = 0; operand < term.inputs.size(); ++operand) {
+        auto value = term.inputs[operand];
+        auto found = address_roots.find(value);
+        if (found == address_roots.end())
+          continue;
+        need(term.kind == Exit::try_call && operand > 0,
              "Vec element address escapes through a terminator",
-             bb.terminator.source);
+             term.source);
+        const auto &cs = type(term.signature, term.source);
+        need(operand - 1 < cs.parameters.size() &&
+                 cs.parameters[operand - 1].mode == hir::ParamMode::inout,
+             "Vec element address escapes through an ordinary TryCall argument",
+             term.source);
+        address_inout_roots.insert(found->second.first);
+      }
     }
     for (auto [root, info] : address_roots)
       if (info.second == 0)
-        need(address_writes[root] == 1,
-             "Vec element address does not perform exactly one field write",
+        need(address_writes[root] == 1 ||
+                 address_inout_roots.contains(root),
+             "Vec element address does not perform exactly one field write "
+             "or direct inout call",
              f.source);
     Set reachable;
     std::function<void(size_t)> visit = [&](size_t b) {

@@ -1,0 +1,11 @@
+package app;
+
+func bump(slot inout i32, whole Vec[i32]) {
+    slot = slot + 1;
+}
+
+func main() i32 {
+    var values Vec[i32] = [1, 2];
+    bump(inout values[0], values);
+    return 0;
+}

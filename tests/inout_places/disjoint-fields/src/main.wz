@@ -1,0 +1,31 @@
+package app;
+
+struct State {
+    a i32;
+    b i32;
+    c i32;
+}
+
+func swap(first inout i32, second inout i32) {
+    let temporary = first;
+    first = second;
+    second = temporary;
+}
+
+func add_pair(first inout i32, third inout i32) {
+    first = first + 10;
+    third = third + 30;
+}
+
+func main() i32 {
+    var state = State(a: 1, b: 2, c: 3);
+    swap(inout state.a, inout state.b);
+    if state.a != 2 || state.b != 1 || state.c != 3 {
+        return 1;
+    }
+    add_pair(inout state.a, inout state.c);
+    if state.a != 12 || state.b != 1 || state.c != 33 {
+        return 2;
+    }
+    return 0;
+}

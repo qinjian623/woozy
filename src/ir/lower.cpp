@@ -464,6 +464,23 @@ class Lower {
       for (const auto &a : args) take(a.expression);
       return emit(i);
     }
+    case hir::NodeKind::index_place: {
+      // An inout index place is a direct address into the container storage.
+      // The receiver and index are evaluated once in source order, and the
+      // bounds check is part of forming the place, before the callee runs.
+      const auto receiver_kind = ty(n.children[0]).kind;
+      if (receiver_kind != hir::TypeKind::Vec &&
+          receiver_kind != hir::TypeKind::Slice)
+        throw std::logic_error("non-Vec/Slice index place in expression");
+      auto receiver = expr(n.children[0]);
+      auto index = expr(n.children[1]);
+      effect(Op::vec_check, LocalSlotId{0}, node(n.children[1]).source.span,
+             {receiver, index}, {}, id);
+      i.op = Op::vec_element_address;
+      i.origin = id;
+      i.inputs = {receiver, index};
+      return emit(i);
+    }
     case hir::NodeKind::field_read:
     case hir::NodeKind::field_place:
       i.op = n.kind() == hir::NodeKind::field_read ? Op::field_read

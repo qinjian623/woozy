@@ -1,0 +1,18 @@
+package app;
+
+import "std/vec" as vec;
+
+func consume(slot inout i32, callback func() Unit) {
+    callback();
+    slot = 7;
+}
+
+func main() i32 {
+    let items Vec[i32] = [1];
+    let alias = items;
+    let callback = func() {
+        vec.reserve[i32](alias, 4096);
+    };
+    consume(inout items[0], callback);
+    return 0;
+}
