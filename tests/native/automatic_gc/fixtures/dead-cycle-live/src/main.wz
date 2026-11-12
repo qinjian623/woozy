@@ -1,0 +1,76 @@
+package app;
+
+// A dead cycle keeps one strong edge to a Vec that main still roots. The
+// pressure phase between marker_a and marker_b follows the Root policy: it
+// creates 8192 dead ~1 KiB garbage cycles without calling collect. The live
+// root is read every round and checked every 1024 rounds, so a premature
+// collection breaks the source result. A normal single-thread main-return
+// final collection may reclaim the watched dead cycle; this test therefore
+// checks final cleanup and the 2 MiB live-payload budget, not collection
+// before a particular source marker.
+
+struct Node {
+    value i64;
+    self_ref Vec[Node];
+    shared Vec[i64];
+}
+
+func payload(seed i64) Vec[i64] {
+    return [seed, 1, 2, 3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15, 16, 17, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 32, 33, 34, 35, 36, 37, 38, 39, 40, 41, 42, 43, 44, 45, 46, 47, 48, 49, 50, 51, 52, 53, 54, 55, 56, 57, 58, 59, 60, 61, 62, 63, 64, 65, 66, 67, 68, 69, 70, 71, 72, 73, 74, 75, 76, 77, 78, 79, 80, 81, 82, 83, 84, 85, 86, 87, 88, 89, 90, 91, 92, 93, 94, 95, 96, 97, 98, 99, 100, 101, 102, 103, 104, 105, 106, 107, 108, 109, 110, 111, 112, 113, 114, 115, 116, 117, 118, 119, 120, 121, 122, 123, 124, 125, 126, 127];
+}
+
+func main() i32 {
+    var live Vec[i64] = [41, 42, 43, 44, 45, 46, 47, 48, 49];
+    {
+        var dead Vec[Node] = [
+        Node(value: 0, self_ref: [], shared: []),
+        Node(value: 0, self_ref: [], shared: []),
+        Node(value: 0, self_ref: [], shared: []),
+        Node(value: 0, self_ref: [], shared: []),
+        Node(value: 0, self_ref: [], shared: []),
+        Node(value: 0, self_ref: [], shared: []),
+        Node(value: 0, self_ref: [], shared: [])
+    ];
+        dead[0] = Node(value: 1, self_ref: dead, shared: live);
+        if dead[0].self_ref[0].value != 1 {
+            return 1;
+        }
+        if dead[0].shared[0] != 41 {
+            return 1;
+        }
+    }
+    var marker_a Vec[i64] = [7, 8, 9];
+    var checksum i64 = 0;
+    for var i i32 = 0; i < 8192; i += 1 {
+        var bytes Vec[i64] = payload(i64(i));
+        var ring Vec[Node] = [Node(value: i64(i), self_ref: [], shared: [])];
+        ring[0] = Node(value: i64(i + 1), self_ref: ring, shared: bytes);
+        if live[0] != 41 || live[8] != 49 {
+            return 2;
+        }
+        if ring[0].shared[127] != 127 {
+            return 3;
+        }
+        checksum += live[4] + ring[0].shared[0];
+        if i % 1024 == 0 {
+            if live[0] != 41 || live[8] != 49 {
+                return 4;
+            }
+        }
+        if i % 2 == 0 {
+            continue;
+        }
+        checksum += 1;
+    }
+    var marker_b Vec[i64] = [5, 6, 7, 8, 9];
+    if live[0] != 41 || live[4] != 45 || live[8] != 49 {
+        return 5;
+    }
+    if marker_a[0] != 7 || marker_b[0] != 5 {
+        return 6;
+    }
+    if checksum != 33923072 {
+        return 7;
+    }
+    return 0;
+}

@@ -1,0 +1,21 @@
+package app;
+
+// A single Vec[Node] whose only element points back at its own container.
+// Source-level check: the cycle is still readable while it is rooted.
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+func main() i32 {
+    var cycle Vec[Node] = [Node(value: 1, children: [])];
+    cycle[0] = Node(value: 2, children: cycle);
+    if cycle[0].value != 2 {
+        return 1;
+    }
+    if cycle[0].children[0].value != 2 {
+        return 2;
+    }
+    return 0;
+}

@@ -1,0 +1,45 @@
+package app;
+
+// Typed-error unwind with defer: the dead cycle is created, a defer marks that
+// cleanup ran, and a typed error escapes to main's handler. The observer must
+// show the same defer/typed-error behavior while a future collector reclaims
+// the unreachable cycle created on the error path.
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+enum Failure {
+    Boom(value i32);
+}
+
+func build(log inout i64, seed i32) i32 throws Failure {
+    log = log * 10 + 1;
+    var cycle Vec[Node] = [Node(value: seed, children: [])];
+    cycle[0] = Node(value: seed + 1, children: cycle);
+    defer {
+        log = log * 10 + 7;
+    }
+    log = log * 10 + 2;
+    throw Failure.Boom(value: seed);
+}
+
+func main() i32 {
+    var log i64 = 0;
+    var caught i32 = 0;
+    try {
+        let value = build(inout log, 3);
+        return 1;
+    } catch error Failure {
+        switch error {
+            case Failure.Boom(value):
+                caught = value;
+        }
+        log = log * 10 + 9;
+    }
+    if caught != 3 || log != 1279 {
+        return 2;
+    }
+    return 0;
+}

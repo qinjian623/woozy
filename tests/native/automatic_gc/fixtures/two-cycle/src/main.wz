@@ -1,0 +1,23 @@
+package app;
+
+// Two containers pointing at each other. Neither is reachable after main's
+// locals die, and neither can be reclaimed by plain reference counting alone.
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+func main() i32 {
+    var first Vec[Node] = [Node(value: 1, children: [])];
+    var second Vec[Node] = [Node(value: 2, children: [])];
+    first[0] = Node(value: 3, children: second);
+    second[0] = Node(value: 4, children: first);
+    if first[0].children[0].value != 4 {
+        return 1;
+    }
+    if second[0].children[0].value != 3 {
+        return 2;
+    }
+    return 0;
+}

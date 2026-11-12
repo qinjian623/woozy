@@ -1,0 +1,23 @@
+package app;
+
+// Acyclic control: nested Vec ownership without any strong cycle. Existing
+// ARC must free every allocation before main returns; the same observer that
+// reports the cycle leaks must not report a leak here.
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+func main() i32 {
+    var tree Vec[Node] = [Node(value: 1, children: [])];
+    tree[0] = Node(value: 2, children: [Node(value: 3, children: [])]);
+    if tree[0].children[0].value != 3 {
+        return 1;
+    }
+    tree[0].children[0].value = 4;
+    if tree[0].children[0].value != 4 {
+        return 2;
+    }
+    return 0;
+}

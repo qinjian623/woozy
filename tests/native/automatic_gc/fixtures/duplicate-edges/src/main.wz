@@ -1,0 +1,20 @@
+package app;
+
+// The same container is stored twice in the cycle: the element has two strong
+// edges back to the container. A collector must not treat duplicate edges as
+// one, and ARC must not release the object while either edge remains.
+
+struct Node {
+    value i32;
+    left Vec[Node];
+    right Vec[Node];
+}
+
+func main() i32 {
+    var cycle Vec[Node] = [Node(value: 1, left: [], right: [])];
+    cycle[0] = Node(value: 2, left: cycle, right: cycle);
+    if cycle[0].left[0].value != 2 || cycle[0].right[0].value != 2 {
+        return 1;
+    }
+    return 0;
+}

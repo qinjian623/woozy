@@ -1,0 +1,29 @@
+package app;
+
+// Aggregate depth: the container edge is hidden inside an enum payload that is
+// itself a struct field. Collection must trace struct -> enum -> Vec, not only
+// direct Vec elements.
+
+enum Link {
+    End;
+    Next(children Vec[Node]);
+}
+
+struct Node {
+    label i32;
+    link Link;
+}
+
+func main() i32 {
+    var cycle Vec[Node] = [Node(label: 1, link: Link.End)];
+    cycle[0] = Node(label: 2, link: Link.Next(children: cycle));
+    switch cycle[0].link {
+        case Link.End:
+            return 1;
+        case Link.Next(children):
+            if children[0].label != 2 {
+                return 2;
+            }
+    }
+    return 0;
+}

@@ -1,0 +1,255 @@
+{
+  "schema": "woozy/native-automatic-gc-baseline-pins/1",
+  "operation_id": "woozy-native-auto-gc-tests-20261112",
+  "mode": "baseline-only",
+  "status": "expected_failure",
+  "gc_test_result": "not_implemented",
+  "expected_failure": true,
+  "not_implemented": true,
+  "mem02_complete": false,
+  "feature_claim": "cycles_not_reclaimed",
+  "suite_scope": {
+    "mode": "full",
+    "selected_case_ids": [
+      "control-empty",
+      "control-acyclic",
+      "self-cycle",
+      "duplicate-edges",
+      "two-cycle",
+      "enum-nested-cycle",
+      "dead-cycle-live",
+      "loop-continue",
+      "typed-throw-defer"
+    ],
+    "selected_opt_levels": [
+      0,
+      2
+    ],
+    "full_case_set": true
+  },
+  "coverage": {
+    "controls": true,
+    "cycles": true,
+    "pressure": true,
+    "full_case_set": true,
+    "opt_levels": [
+      0,
+      2
+    ],
+    "not_covered": [
+      "Weak references",
+      "capturing closures",
+      "concurrent collection",
+      "runtime blocking-call SAFE integration",
+      "threads, fork, channels and foreign cycles"
+    ]
+  },
+  "source_hashes": {
+    "cases.json": "a8e2cb9c55e01a37d517cae7ae08e5301e58397dbf38efe3e26eaaa7a0c30f61",
+    "run_automatic_gc.py": "86a147649502c0155b171f8a19a885f67b88e77d81dc4b9cde33af4a22886eb4",
+    "selftest_checks.py": "1826bc7b86be2aa0fa9bd94b705459bebb30864befa8de1e3ca2321ee3c7614a",
+    "CONTRACT.md": "dcc7753c2b922b7070c13586d38f96ad2e40e996b5b6624f6204e6538ec8e93b",
+    "observe_gc.cpp": "122b601464ad0dcd3b2d818fa89e6a0244c84580320e10dbb4ccd56c04d65e54",
+    "fixtures": {
+      "fixtures/control-acyclic/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/control-acyclic/src/main.wz": "e70b8dc15a98539aa24bddade87b57ff56fff2128f5d8b730f32cfdb6ba56ada",
+      "fixtures/control-empty/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/control-empty/src/main.wz": "b3f6b27e8aa393aaf20c0a91a659dc3e5944109e41ea4655c57842f522bf3e69",
+      "fixtures/dead-cycle-live/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/dead-cycle-live/src/main.wz": "0168a6d0d970b3c960ef81506fd7c0c0e43038b42cde3f73ada7cb8c6c7f977e",
+      "fixtures/duplicate-edges/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/duplicate-edges/src/main.wz": "496f54874301dd98c7ced0b0e2b823bccd7c184874d15b3a4e740d61b84e661e",
+      "fixtures/enum-nested-cycle/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/enum-nested-cycle/src/main.wz": "0d4dd222bb81690093b15526e70c8906692026142ed433d81b19b394e3869d5f",
+      "fixtures/loop-continue/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/loop-continue/src/main.wz": "9888f69dbb195495da62561b39cd29f2fac66e60038ff9ca7885303140b22553",
+      "fixtures/self-cycle/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/self-cycle/src/main.wz": "ff4c0455da9e3bc7653da15438761c6f31780e843dfcc732a0a0f8c20a1921de",
+      "fixtures/two-cycle/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/two-cycle/src/main.wz": "1c296e2df6f877f048703cfc947312c4ff6832245a69126cfdb797450ec7a5f0",
+      "fixtures/typed-throw-defer/lang.toml": "ce4510889a8102a9f8996fe3d87b5ac34e3537b0ecb54f66df541e33151e58fb",
+      "fixtures/typed-throw-defer/src/main.wz": "9507c9d8b5e20140afc2986b6a36d4d2050c25fc2ad964a2323c75300ca97359"
+    }
+  },
+  "note": "Compact baseline pins and metrics only. Full per-command summary and raw observation streams are external (/tmp/native-auto-gc-correction-20261112/baseline/). baseline=pinned current no-GC behavior, not a GC pass.",
+  "tool_pin": {
+    "expected": {
+      "cli": "63727015aa4f68c701c386f3b2fc35ed25bc2ca67bff57970bc7974e1a4d0391",
+      "helper": "ebc252fa4b315fd3f737ae8aa022c07a197d2411751be0178fe3a92cd814e52f",
+      "runtime": "5ef6fdc9c9e1b9a308e4723d9e93eedaca635f45f1635d269c536b3dacd0f71b",
+      "clang": "31a40dc31f3c15a47aa119aa148f339bf363d8f61202ddbdacbd3f24b71ba113",
+      "readelf": "338c233bc2419b0abdb8f0344912504c26eeab1cd671d6651f4bb8405bb48385"
+    },
+    "paths": {
+      "cli": "/tmp/woozy-auto-gc-pin-20261112/woozyc",
+      "helper": "/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/native/lang_native_helper",
+      "runtime": "/home/qin/Work/language-dev-20261103/compiler/build/woozy-stdlib-native/native/liblang_native_runtime.a",
+      "clang": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/clang",
+      "readelf": "/home/qin/Work/language-dev-20261103/toolchains/llvm-22.1.8/bin/llvm-readelf"
+    }
+  },
+  "runs": [
+    {
+      "id": "control-empty",
+      "opt": 0,
+      "vec_allocations": 0,
+      "vec_frees": 0,
+      "live_vecs_at_exit": 0,
+      "peak_live_payload_bytes": 0,
+      "final_live_payload_bytes": 0
+    },
+    {
+      "id": "control-empty",
+      "opt": 2,
+      "vec_allocations": 0,
+      "vec_frees": 0,
+      "live_vecs_at_exit": 0,
+      "peak_live_payload_bytes": 0,
+      "final_live_payload_bytes": 0
+    },
+    {
+      "id": "control-acyclic",
+      "opt": 0,
+      "vec_allocations": 4,
+      "vec_frees": 4,
+      "live_vecs_at_exit": 0,
+      "peak_live_payload_bytes": 32,
+      "final_live_payload_bytes": 0
+    },
+    {
+      "id": "control-acyclic",
+      "opt": 2,
+      "vec_allocations": 4,
+      "vec_frees": 4,
+      "live_vecs_at_exit": 0,
+      "peak_live_payload_bytes": 32,
+      "final_live_payload_bytes": 0
+    },
+    {
+      "id": "self-cycle",
+      "opt": 0,
+      "vec_allocations": 2,
+      "vec_frees": 1,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 16,
+      "final_live_payload_bytes": 16
+    },
+    {
+      "id": "self-cycle",
+      "opt": 2,
+      "vec_allocations": 2,
+      "vec_frees": 1,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 16,
+      "final_live_payload_bytes": 16
+    },
+    {
+      "id": "duplicate-edges",
+      "opt": 0,
+      "vec_allocations": 3,
+      "vec_frees": 2,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 24,
+      "final_live_payload_bytes": 24
+    },
+    {
+      "id": "duplicate-edges",
+      "opt": 2,
+      "vec_allocations": 3,
+      "vec_frees": 2,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 24,
+      "final_live_payload_bytes": 24
+    },
+    {
+      "id": "two-cycle",
+      "opt": 0,
+      "vec_allocations": 4,
+      "vec_frees": 2,
+      "live_vecs_at_exit": 2,
+      "peak_live_payload_bytes": 32,
+      "final_live_payload_bytes": 32
+    },
+    {
+      "id": "two-cycle",
+      "opt": 2,
+      "vec_allocations": 4,
+      "vec_frees": 2,
+      "live_vecs_at_exit": 2,
+      "peak_live_payload_bytes": 32,
+      "final_live_payload_bytes": 32
+    },
+    {
+      "id": "enum-nested-cycle",
+      "opt": 0,
+      "vec_allocations": 1,
+      "vec_frees": 0,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 24,
+      "final_live_payload_bytes": 24
+    },
+    {
+      "id": "enum-nested-cycle",
+      "opt": 2,
+      "vec_allocations": 1,
+      "vec_frees": 0,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 24,
+      "final_live_payload_bytes": 24
+    },
+    {
+      "id": "dead-cycle-live",
+      "opt": 0,
+      "vec_allocations": 32786,
+      "vec_frees": 16388,
+      "live_vecs_at_exit": 16398,
+      "peak_live_payload_bytes": 8585520,
+      "final_live_payload_bytes": 8585456
+    },
+    {
+      "id": "dead-cycle-live",
+      "opt": 2,
+      "vec_allocations": 32786,
+      "vec_frees": 16388,
+      "live_vecs_at_exit": 16398,
+      "peak_live_payload_bytes": 8585520,
+      "final_live_payload_bytes": 8585456
+    },
+    {
+      "id": "loop-continue",
+      "opt": 0,
+      "vec_allocations": 32769,
+      "vec_frees": 16385,
+      "live_vecs_at_exit": 16384,
+      "peak_live_payload_bytes": 8585280,
+      "final_live_payload_bytes": 8585216
+    },
+    {
+      "id": "loop-continue",
+      "opt": 2,
+      "vec_allocations": 32769,
+      "vec_frees": 16385,
+      "live_vecs_at_exit": 16384,
+      "peak_live_payload_bytes": 8585280,
+      "final_live_payload_bytes": 8585216
+    },
+    {
+      "id": "typed-throw-defer",
+      "opt": 0,
+      "vec_allocations": 2,
+      "vec_frees": 1,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 16,
+      "final_live_payload_bytes": 16
+    },
+    {
+      "id": "typed-throw-defer",
+      "opt": 2,
+      "vec_allocations": 2,
+      "vec_frees": 1,
+      "live_vecs_at_exit": 1,
+      "peak_live_payload_bytes": 16,
+      "final_live_payload_bytes": 16
+    }
+  ]
+}

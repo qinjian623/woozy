@@ -1,0 +1,408 @@
+{
+  "schema": "woozy/native-automatic-gc-cases/1",
+  "operation_id": "woozy-native-auto-gc-tests-20261112",
+  "language_contract": "compiler-dev/1",
+  "notes": [
+    "Identity is (allocation address, per-address generation); legal address reuse must not overwrite earlier history.",
+    "Collector metadata allocations are raw blocks: they are reported and must be freed by exit in the current runtime, but are excluded from Vec payload bytes and from live-Vec free ordering.",
+    "Pressure target follows development/plans/MEMORY_INTEGRATION.md: initial 128 successful registrations, then max(128, 2*live) budget, handled at stable function/loop heads, with a normal single-thread main-return final collection. It is an implementation choice, not a source scope/marker guarantee.",
+    "The 2 MiB payload budget counts Vec payload bytes (allocation size minus the runtime Vec header) for live Vec generations only. RSS, page cache and raw metadata bytes are not used.",
+    "The small cycle fixtures may be reclaimed by the normal final collection; no eager per-scope collection is required."
+  ],
+  "cases": [
+    {
+      "id": "control-empty",
+      "kind": "control",
+      "purpose": "Blank control: startup and scalar control flow must not allocate through the observed Native allocator.",
+      "manifest": "fixtures/control-empty/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "vec_allocations": 0,
+        "vec_frees": 0,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [],
+        "block_allocations": 0,
+        "all_blocks_freed": true,
+        "header_bytes": null,
+        "peak_live_payload_bytes": 0,
+        "final_live_payload_bytes": 0
+      },
+      "target": {
+        "vec_allocations": 0,
+        "vec_frees": 0,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [],
+        "checks": [],
+        "final_live_payload_bytes": 0
+      }
+    },
+    {
+      "id": "control-acyclic",
+      "kind": "control",
+      "purpose": "Acyclic control: nested Vec ownership is fully released by existing ARC and no live root is lost.",
+      "manifest": "fixtures/control-acyclic/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "vec_allocations": 4,
+        "vec_frees": 4,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "block_allocations": 4,
+        "all_blocks_freed": true,
+        "header_bytes": 80,
+        "peak_live_payload_bytes": 32,
+        "final_live_payload_bytes": 0
+      },
+      "target": {
+        "vec_allocations": 4,
+        "vec_frees": 4,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "checks": [
+          "root_values_preserved"
+        ],
+        "final_live_payload_bytes": 0,
+        "header_bytes": 80
+      }
+    },
+    {
+      "id": "self-cycle",
+      "kind": "cycle",
+      "purpose": "One Vec[Node] points at itself. The cycle root stays readable while rooted; after main it is unreachable.",
+      "manifest": "fixtures/self-cycle/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "vec_allocations": 2,
+        "vec_frees": 1,
+        "live_vecs_at_exit": 1,
+        "refs_at_exit": [
+          1
+        ],
+        "freed_lengths": [
+          0
+        ],
+        "block_allocations": 2,
+        "all_blocks_freed": false,
+        "header_bytes": 80,
+        "peak_live_payload_bytes": 16,
+        "final_live_payload_bytes": 16
+      },
+      "target": {
+        "vec_allocations": 2,
+        "vec_frees": 2,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [
+          0,
+          1
+        ],
+        "checks": [
+          "cycle_reclaimed",
+          "root_values_preserved"
+        ],
+        "final_live_payload_bytes": 0,
+        "header_bytes": 80
+      }
+    },
+    {
+      "id": "duplicate-edges",
+      "kind": "cycle",
+      "purpose": "The same Vec is stored twice inside its own element, so two strong edges keep the cycle alive.",
+      "manifest": "fixtures/duplicate-edges/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "vec_allocations": 3,
+        "vec_frees": 2,
+        "live_vecs_at_exit": 1,
+        "refs_at_exit": [
+          2
+        ],
+        "freed_lengths": [
+          0,
+          0
+        ],
+        "block_allocations": 3,
+        "all_blocks_freed": false,
+        "header_bytes": 80,
+        "peak_live_payload_bytes": 24,
+        "final_live_payload_bytes": 24
+      },
+      "target": {
+        "vec_allocations": 3,
+        "vec_frees": 3,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [
+          0,
+          0,
+          1
+        ],
+        "checks": [
+          "cycle_reclaimed",
+          "root_values_preserved"
+        ],
+        "final_live_payload_bytes": 0,
+        "header_bytes": 80
+      }
+    },
+    {
+      "id": "two-cycle",
+      "kind": "cycle",
+      "purpose": "Two containers point at each other; no single object can reach a zero count without collection.",
+      "manifest": "fixtures/two-cycle/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "vec_allocations": 4,
+        "vec_frees": 2,
+        "live_vecs_at_exit": 2,
+        "refs_at_exit": [
+          1,
+          1
+        ],
+        "freed_lengths": [
+          0,
+          0
+        ],
+        "block_allocations": 4,
+        "all_blocks_freed": false,
+        "header_bytes": 80,
+        "peak_live_payload_bytes": 32,
+        "final_live_payload_bytes": 32
+      },
+      "target": {
+        "vec_allocations": 4,
+        "vec_frees": 4,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [
+          0,
+          0,
+          1,
+          1
+        ],
+        "checks": [
+          "cycle_reclaimed",
+          "root_values_preserved"
+        ],
+        "final_live_payload_bytes": 0,
+        "header_bytes": 80
+      }
+    },
+    {
+      "id": "enum-nested-cycle",
+      "kind": "cycle",
+      "purpose": "The strong edge is a Vec inside an enum payload stored in a struct field; struct/enum/Vec edges must all be traced.",
+      "manifest": "fixtures/enum-nested-cycle/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "vec_allocations": 1,
+        "vec_frees": 0,
+        "live_vecs_at_exit": 1,
+        "refs_at_exit": [
+          1
+        ],
+        "freed_lengths": [],
+        "block_allocations": 1,
+        "all_blocks_freed": false,
+        "header_bytes": 80,
+        "peak_live_payload_bytes": 24,
+        "final_live_payload_bytes": 24
+      },
+      "target": {
+        "vec_allocations": 1,
+        "vec_frees": 1,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [
+          1
+        ],
+        "checks": [
+          "cycle_reclaimed",
+          "root_values_preserved"
+        ],
+        "final_live_payload_bytes": 0,
+        "header_bytes": 80
+      }
+    },
+    {
+      "id": "dead-cycle-live",
+      "kind": "cycle",
+      "purpose": "A dead cycle holds a strong edge to a still-rooted Vec. Between two source markers the same 8192-round ~1 KiB garbage pressure runs while the live root is read every round. Under the Root policy a normal single-thread main-return final collection may reclaim the watched dead cycle, so the target checks final cleanup, the live-payload budget and the edge release, not collection before a marker.",
+      "manifest": "fixtures/dead-cycle-live/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "header_bytes": 80,
+        "vec_allocations": 32786,
+        "vec_frees": 16388,
+        "live_vecs_at_exit": 16398,
+        "refs_at_exit": null,
+        "live_ref_histogram": {
+          "1": 16398
+        },
+        "freed_lengths": null,
+        "freed_length_histogram": {
+          "0": 16386,
+          "3": 1,
+          "5": 1
+        },
+        "live_length_histogram": {
+          "0": 12,
+          "1": 8192,
+          "7": 1,
+          "9": 1,
+          "128": 8192
+        },
+        "block_allocations": 32786,
+        "raw_allocations": 0,
+        "all_blocks_freed": false,
+        "peak_live_payload_bytes": 8585520,
+        "final_live_payload_bytes": 8585456
+      },
+      "target": {
+        "header_bytes": 80,
+        "vec_allocations": 32786,
+        "vec_frees": 32786,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "live_ref_histogram": {},
+        "freed_lengths": null,
+        "freed_length_histogram": {
+          "0": 16398,
+          "1": 8192,
+          "3": 1,
+          "5": 1,
+          "7": 1,
+          "9": 1,
+          "128": 8192
+        },
+        "live_length_histogram": {},
+        "peak_live_payload_bytes": {
+          "max": 2097152
+        },
+        "final_live_payload_bytes": 0,
+        "checks": [
+          "cycle_reclaimed",
+          "pressure_budget",
+          "dead_cycle_live_edge_release",
+          "root_values_preserved"
+        ]
+      },
+      "iterations": 8192,
+      "payload_budget_bytes": 2097152,
+      "timeout_seconds": 120
+    },
+    {
+      "id": "loop-continue",
+      "kind": "cycle",
+      "purpose": "Sustained automatic-reclamation pressure: 8192 rounds, each creating an unreachable pure-Woozy self-cycle plus a ~1 KiB Vec[i64] payload, with an explicit continue on even rounds and no collect call. A fixed live root is checked every 1024 rounds and after the loop. The target bounds live Vec payload bytes by 2 MiB and requires final cleanup; it does not require collection before a marker or in every round.",
+      "manifest": "fixtures/loop-continue/lang.toml",
+      "main_return": 0,
+      "iterations": 8192,
+      "iteration_bound": 8,
+      "baseline": {
+        "header_bytes": 80,
+        "vec_allocations": 32769,
+        "vec_frees": 16385,
+        "live_vecs_at_exit": 16384,
+        "refs_at_exit": null,
+        "live_ref_histogram": {
+          "1": 16384
+        },
+        "freed_lengths": null,
+        "freed_length_histogram": {
+          "0": 16384,
+          "8": 1
+        },
+        "live_length_histogram": {
+          "1": 8192,
+          "128": 8192
+        },
+        "block_allocations": 32769,
+        "raw_allocations": 0,
+        "all_blocks_freed": false,
+        "peak_live_payload_bytes": 8585280,
+        "final_live_payload_bytes": 8585216
+      },
+      "target": {
+        "header_bytes": 80,
+        "vec_allocations": 32769,
+        "vec_frees": 32769,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "live_ref_histogram": {},
+        "freed_lengths": null,
+        "freed_length_histogram": {
+          "0": 16384,
+          "1": 8192,
+          "8": 1,
+          "128": 8192
+        },
+        "live_length_histogram": {},
+        "peak_live_payload_bytes": {
+          "max": 2097152
+        },
+        "final_live_payload_bytes": 0,
+        "checks": [
+          "cycle_reclaimed",
+          "pressure_budget",
+          "root_values_preserved"
+        ]
+      },
+      "payload_budget_bytes": 2097152,
+      "timeout_seconds": 120
+    },
+    {
+      "id": "typed-throw-defer",
+      "kind": "cycle",
+      "purpose": "A dead cycle is created on the typed-error path, defer runs, and main catches the error. Collection must not change defer order or discard rooted content.",
+      "manifest": "fixtures/typed-throw-defer/lang.toml",
+      "main_return": 0,
+      "baseline": {
+        "vec_allocations": 2,
+        "vec_frees": 1,
+        "live_vecs_at_exit": 1,
+        "refs_at_exit": [
+          1
+        ],
+        "freed_lengths": [
+          0
+        ],
+        "block_allocations": 2,
+        "all_blocks_freed": false,
+        "header_bytes": 80,
+        "peak_live_payload_bytes": 16,
+        "final_live_payload_bytes": 16
+      },
+      "target": {
+        "vec_allocations": 2,
+        "vec_frees": 2,
+        "live_vecs_at_exit": 0,
+        "refs_at_exit": [],
+        "freed_lengths": [
+          0,
+          1
+        ],
+        "checks": [
+          "cycle_reclaimed",
+          "root_values_preserved"
+        ],
+        "final_live_payload_bytes": 0,
+        "header_bytes": 80
+      }
+    }
+  ]
+}
