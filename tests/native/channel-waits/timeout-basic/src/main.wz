@@ -1,0 +1,57 @@
+package app;
+import "std/channel" as channel;
+func main() i32 {
+    let pipe = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](pipe,7,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 1;
+    }
+    switch channel.send_timeout[i64](pipe,8,0) {
+        case channel.SendWaitResult.Timeout: {}
+        default: return 2;
+    }
+    switch channel.receive_timeout[i64](pipe,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 7 { return 3; }
+        default: return 4;
+    }
+    switch channel.receive_timeout[i64](pipe,0) {
+        case channel.ReceiveWaitResult.Timeout: {}
+        default: return 5;
+    }
+
+    switch channel.send_timeout[i64](pipe,9,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 6;
+    }
+    switch channel.send_timeout[i64](pipe,10,20_000_000) {
+        case channel.SendWaitResult.Timeout: {}
+        default: return 7;
+    }
+    switch channel.receive_timeout[i64](pipe,20_000_000) {
+        case channel.ReceiveWaitResult.Item(value): if value != 9 { return 8; }
+        default: return 9;
+    }
+    switch channel.receive_timeout[i64](pipe,20_000_000) {
+        case channel.ReceiveWaitResult.Timeout: {}
+        default: return 10;
+    }
+
+    switch channel.send_timeout[i64](pipe,11,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 11;
+    }
+    channel.close(pipe);
+    switch channel.receive_timeout[i64](pipe,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 11 { return 12; }
+        default: return 13;
+    }
+    switch channel.receive_timeout[i64](pipe,0) {
+        case channel.ReceiveWaitResult.Closed: {}
+        default: return 14;
+    }
+    switch channel.send_timeout[i64](pipe,12,0) {
+        case channel.SendWaitResult.Closed: {}
+        default: return 15;
+    }
+    return 0;
+}

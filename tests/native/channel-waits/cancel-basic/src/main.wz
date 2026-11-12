@@ -1,0 +1,71 @@
+package app;
+import "std/cancel" as cancel;
+import "std/channel" as channel;
+func main() i32 {
+    let token = cancel.new();
+    let pipe = channel.bounded[i64](1);
+    switch channel.send_cancel[i64](pipe,1,token) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 1;
+    }
+    cancel.request(token);
+    cancel.request(token);
+    switch channel.receive_cancel[i64](pipe,token) {
+        case channel.ReceiveWaitResult.Item(value): if value != 1 { return 2; }
+        default: return 3;
+    }
+    switch channel.receive_cancel[i64](pipe,token) {
+        case channel.ReceiveWaitResult.Cancelled: {}
+        default: return 4;
+    }
+    switch channel.send_cancel[i64](pipe,2,token) {
+        case channel.SendWaitResult.Cancelled: {}
+        default: return 5;
+    }
+    switch channel.receive_timeout[i64](pipe,0) {
+        case channel.ReceiveWaitResult.Timeout: {}
+        default: return 6;
+    }
+
+    let committed = channel.bounded[i64](1);
+    let open = cancel.new();
+    switch channel.send_cancel[i64](committed,3,open) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 7;
+    }
+    cancel.request(open);
+    switch channel.receive_cancel[i64](committed,open) {
+        case channel.ReceiveWaitResult.Item(value): if value != 3 { return 8; }
+        default: return 9;
+    }
+    switch channel.receive_cancel[i64](committed,open) {
+        case channel.ReceiveWaitResult.Cancelled: {}
+        default: return 10;
+    }
+
+    let closed = channel.bounded[i64](1);
+    channel.close(closed);
+    let uncancelled = cancel.new();
+    switch channel.send_cancel[i64](closed,4,uncancelled) {
+        case channel.SendWaitResult.Closed: {}
+        default: return 11;
+    }
+    switch channel.receive_cancel[i64](closed,uncancelled) {
+        case channel.ReceiveWaitResult.Closed: {}
+        default: return 12;
+    }
+    let cancelled = cancel.new();
+    cancel.request(cancelled);
+    switch channel.send_cancel[i64](closed,5,cancelled) {
+        case channel.SendWaitResult.Cancelled: {}
+        default: return 13;
+    }
+    switch channel.receive_cancel[i64](closed,cancelled) {
+        case channel.ReceiveWaitResult.Cancelled: {}
+        default: return 14;
+    }
+    channel.close(closed);
+    cancel.request(cancelled);
+    if !cancel.is_cancelled(cancelled) { return 15; }
+    return 0;
+}

@@ -1,0 +1,200 @@
+package app;
+import "std/cancel" as cancel;
+import "std/channel" as channel;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+struct SendWork {
+    pipe channel.Channel[i64];
+    token cancel.Token;
+    entered sync.AtomicI64;
+}
+struct ReceiveWork {
+    pipe channel.Channel[i64];
+    token cancel.Token;
+    entered sync.AtomicI64;
+}
+
+func send_waiter(work SendWork) i64 {
+    sync.fetch_add(work.entered,1);
+    switch channel.send_cancel[i64](work.pipe,1,work.token) {
+        case channel.SendWaitResult.Sent: return 4;
+        case channel.SendWaitResult.Closed: return 2;
+        case channel.SendWaitResult.Timeout: return 3;
+        case channel.SendWaitResult.Cancelled: return 1;
+    }
+}
+func receive_waiter(work ReceiveWork) i64 {
+    sync.fetch_add(work.entered,1);
+    switch channel.receive_cancel[i64](work.pipe,work.token) {
+        case channel.ReceiveWaitResult.Item(value): return 10 + value;
+        case channel.ReceiveWaitResult.Closed: return 2;
+        case channel.ReceiveWaitResult.Timeout: return 3;
+        case channel.ReceiveWaitResult.Cancelled: return 1;
+    }
+}
+func wait_entered(value sync.AtomicI64, expected i64) bool {
+    for var spin i64 = 0; spin < 100_000_000; spin += 1 {
+        if sync.load(value) == expected { return true; }
+    }
+    return false;
+}
+func wait_subscriptions(token cancel.Token) bool {
+    for var spin i64 = 0; spin < 100_000_000; spin += 1 {
+        if cancel.subscription_count(token) == 1 { return true; }
+    }
+    return false;
+}
+
+func main() i32 throws os.Error {
+    let full = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](full,100,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 1;
+    }
+    let entered = sync.atomic_i64(0);
+    let tokens = vec.empty[cancel.Token]();
+    let senders = vec.empty[thread.Thread]();
+    for var index i32 = 0; index < 8; index += 1 {
+        let token = cancel.new();
+        vec.push(tokens,token);
+        vec.push(senders,thread.spawn[SendWork](send_waiter,
+            SendWork(pipe: full,token: token,entered: entered)));
+    }
+    if !wait_entered(entered,8) { return 2; }
+    for token in tokens {
+        if !wait_subscriptions(token) { return 3; }
+    }
+    for token in tokens { cancel.request(token); }
+    for sender in senders {
+        if thread.join(sender) != 1 { return 4; }
+    }
+    for token in tokens {
+        if cancel.subscription_count(token) != 0 { return 30; }
+    }
+    switch channel.receive_timeout[i64](full,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 100 { return 5; }
+        default: return 6;
+    }
+    switch channel.receive_timeout[i64](full,0) {
+        case channel.ReceiveWaitResult.Timeout: {}
+        default: return 7;
+    }
+
+    let shared = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](shared,200,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 8;
+    }
+    let shared_token = cancel.new();
+    let shared_entered = sync.atomic_i64(0);
+    let shared_waiters = vec.empty[thread.Thread]();
+    for var index i32 = 0; index < 4; index += 1 {
+        vec.push(shared_waiters,thread.spawn[SendWork](send_waiter,
+            SendWork(pipe: shared,token: shared_token,entered: shared_entered)));
+    }
+    if !wait_entered(shared_entered,4) { return 9; }
+    for var spin i64 = 0; spin < 100_000_000; spin += 1 {
+        if cancel.subscription_count(shared_token) == 4 { break; }
+    }
+    if cancel.subscription_count(shared_token) != 4 { return 10; }
+    cancel.request(shared_token);
+    for waiter in shared_waiters {
+        if thread.join(waiter) != 1 { return 11; }
+    }
+    if cancel.subscription_count(shared_token) != 0 { return 31; }
+    switch channel.receive_timeout[i64](shared,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 200 { return 12; }
+        default: return 13;
+    }
+
+    let empty = channel.bounded[i64](1);
+    let receive_entered = sync.atomic_i64(0);
+    let receive_tokens = vec.empty[cancel.Token]();
+    let receivers = vec.empty[thread.Thread]();
+    for var index i32 = 0; index < 8; index += 1 {
+        let token = cancel.new();
+        vec.push(receive_tokens,token);
+        vec.push(receivers,thread.spawn[ReceiveWork](receive_waiter,
+            ReceiveWork(pipe: empty,token: token,entered: receive_entered)));
+    }
+    if !wait_entered(receive_entered,8) { return 14; }
+    for token in receive_tokens {
+        if !wait_subscriptions(token) { return 15; }
+    }
+    for token in receive_tokens { cancel.request(token); }
+    for receiver in receivers {
+        if thread.join(receiver) != 1 { return 16; }
+    }
+    for token in receive_tokens {
+        if cancel.subscription_count(token) != 0 { return 32; }
+    }
+    switch channel.send_timeout[i64](empty,300,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 17;
+    }
+    switch channel.receive_timeout[i64](empty,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 300 { return 18; }
+        default: return 19;
+    }
+
+    let close_full = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](close_full,400,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 20;
+    }
+    let close_send_entered = sync.atomic_i64(0);
+    let close_send_tokens = vec.empty[cancel.Token]();
+    let close_senders = vec.empty[thread.Thread]();
+    for var index i32 = 0; index < 4; index += 1 {
+        let token = cancel.new();
+        vec.push(close_send_tokens,token);
+        vec.push(close_senders,thread.spawn[SendWork](send_waiter,
+            SendWork(pipe: close_full,token: token,entered: close_send_entered)));
+    }
+    if !wait_entered(close_send_entered,4) { return 21; }
+    for token in close_send_tokens {
+        if !wait_subscriptions(token) { return 22; }
+    }
+    channel.close(close_full);
+    for sender in close_senders {
+        if thread.join(sender) != 2 { return 23; }
+    }
+    for token in close_send_tokens {
+        if cancel.subscription_count(token) != 0 { return 33; }
+    }
+    switch channel.receive_timeout[i64](close_full,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 400 { return 24; }
+        default: return 25;
+    }
+    switch channel.receive_timeout[i64](close_full,0) {
+        case channel.ReceiveWaitResult.Closed: {}
+        default: return 26;
+    }
+
+    let close_empty = channel.bounded[i64](1);
+    let close_receive_entered = sync.atomic_i64(0);
+    let close_receive_tokens = vec.empty[cancel.Token]();
+    let close_receivers = vec.empty[thread.Thread]();
+    for var index i32 = 0; index < 4; index += 1 {
+        let token = cancel.new();
+        vec.push(close_receive_tokens,token);
+        vec.push(close_receivers,thread.spawn[ReceiveWork](receive_waiter,
+            ReceiveWork(pipe: close_empty,token: token,entered: close_receive_entered)));
+    }
+    if !wait_entered(close_receive_entered,4) { return 27; }
+    for token in close_receive_tokens {
+        if !wait_subscriptions(token) { return 28; }
+    }
+    channel.close(close_empty);
+    for receiver in close_receivers {
+        if thread.join(receiver) != 2 { return 29; }
+    }
+    for token in close_receive_tokens {
+        if cancel.subscription_count(token) != 0 { return 34; }
+    }
+    channel.close(close_empty);
+    return 0;
+}

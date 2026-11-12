@@ -1,0 +1,113 @@
+package app;
+
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/task" as task;
+import "std/vec" as vec;
+
+enum Kind {
+    Data(weight i64);
+    Control(code i32);
+}
+
+struct Job {
+    id i64;
+    text string;
+}
+
+struct Payload {
+    id i64;
+    label string;
+    values Vec[i64];
+    kind Kind;
+}
+
+func build(job Job) Payload {
+    let label = job.text + ":" + strconv.format_i64(job.id);
+    let values = [job.id, job.id + 1, job.id + 2];
+    if job.id % 2 == 0 {
+        return Payload(id: job.id, label: label, values: values,
+                       kind: Kind.Data(weight: job.id * 10));
+    }
+    return Payload(id: job.id, label: label, values: values,
+                   kind: Kind.Control(code: i32(job.id)));
+}
+
+func decorate(text string) string { return text + "!"; }
+func make_row(value i64) Vec[i64] { return [value, value + 1, value + 2]; }
+
+func main() i32 throws task.Error {
+    let payloads = task.new[Job,Payload](build, 2, 4);
+    let first = task.submit(payloads, Job(id: 1, text: "one"));
+    let second = task.submit(payloads, Job(id: 2, text: "two"));
+    let third = task.submit(payloads, Job(id: 3, text: "three"));
+    task.close(payloads);
+    task.join(payloads);
+
+    if !task.ready(first) { return 19; }
+    switch task.poll(first) {
+        case option.Option.Some(payload): if payload.id != 1 { return 20; }
+        case option.Option.None: return 21;
+    }
+    let one = task.get(first);
+    if one.id != 1 || one.label != "one:1" { return 1; }
+    if !(vec.len(one.values) == 3) { return 2; }
+    if one.values[0] != 1 || one.values[1] != 2 || one.values[2] != 3 { return 3; }
+    switch one.kind {
+        case Kind.Data(weight): return 4;
+        case Kind.Control(code): if i64(code) != 1 { return 5; }
+    }
+
+    // A local copy can rebind its scalar/string/Vec fields without changing
+    // the result retained by the Future.
+    var local = task.get(first);
+    local.id = -1;
+    local.label = "changed";
+    local.values = [99];
+    let again = task.get(first);
+    if again.id != 1 || again.label != "one:1" { return 6; }
+    if again.values[0] != 1 || again.values[1] != 2 || again.values[2] != 3 { return 7; }
+
+    // Vec fields follow ordinary ARC copy semantics: element mutation through
+    // one copy is visible through another copy of the same result.
+    let two = task.get(second);
+    if two.id != 2 || two.label != "two:2" { return 8; }
+    switch two.kind {
+        case Kind.Data(weight): if weight != 20 { return 9; }
+        case Kind.Control(code): return 10;
+    }
+    two.values[0] = 222;
+    let two_again = task.get(second);
+    if two_again.values[0] != 222 { return 11; }
+
+    let three = task.get(third);
+    switch three.kind {
+        case Kind.Data(weight): return 12;
+        case Kind.Control(code): if i64(code) != 3 { return 13; }
+    }
+
+    let words = task.new[string,string](decorate, 1, 2);
+    let word = task.submit(words, "alpha");
+    task.close(words);
+    task.join(words);
+    let first_word = task.get(word);
+    let second_word = task.get(word);
+    if first_word != "alpha!" || second_word != "alpha!" { return 14; }
+    var rebound = first_word;
+    rebound = "changed";
+    if task.get(word) != "alpha!" { return 15; }
+
+    let rows = task.new[i64,Vec[i64]](make_row, 1, 2);
+    let row = task.submit(rows, 5);
+    task.close(rows);
+    task.join(rows);
+    let first_row = task.get(row);
+    if first_row[0] != 5 || first_row[1] != 6 || first_row[2] != 7 { return 16; }
+    var row_copy = task.get(row);
+    row_copy = [70, 71];
+    let stored_row = task.get(row);
+    if stored_row[0] != 5 || stored_row[1] != 6 || stored_row[2] != 7 { return 17; }
+    first_row[0] = 555;
+    if task.get(row)[0] != 555 { return 18; }
+    return 0;
+}

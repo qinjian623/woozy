@@ -369,6 +369,16 @@ if(LANG_TEST_PYTHON)
     ${LANG_SOURCE_ROOT}/tests/native/channels/run_channels.py --cli $<TARGET_FILE:woozyc>
     --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/channel-results)
   set_tests_properties(native.channel PROPERTIES TIMEOUT 300)
+  add_test(NAME native.channel_waits COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/channel-wait-results
+    ${LANG_SOURCE_ROOT}/tests/native/channel-waits/run.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT})
+  set_tests_properties(native.channel_waits PROPERTIES TIMEOUT 300)
+  add_test(NAME native.threadpool COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/threadpool-results
+    ${LANG_SOURCE_ROOT}/tests/native/threadpool/run_threadpool.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT})
+  set_tests_properties(native.threadpool PROPERTIES TIMEOUT 300)
   add_test(NAME native.concurrency_timeouts COMMAND ${LANG_TEST_PYTHON}
     ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/concurrency-timeout-results
     ${LANG_SOURCE_ROOT}/tests/native/concurrency-timeouts/run.py --cli $<TARGET_FILE:woozyc>

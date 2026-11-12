@@ -1,0 +1,90 @@
+package app;
+import "std/cancel" as cancel;
+import "std/channel" as channel;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/time" as time;
+
+struct TimedWork {
+    pipe channel.Channel[i64];
+    timeout i64;
+    entered sync.AtomicI64;
+}
+struct CancelWork {
+    pipe channel.Channel[i64];
+    token cancel.Token;
+    entered sync.AtomicI64;
+}
+
+func timed_sender(work TimedWork) i64 {
+    sync.fetch_add(work.entered,1);
+    switch channel.send_timeout[i64](work.pipe,1,work.timeout) {
+        case channel.SendWaitResult.Timeout: return 3;
+        case channel.SendWaitResult.Sent: return 1;
+        case channel.SendWaitResult.Closed: return 2;
+        case channel.SendWaitResult.Cancelled: return 4;
+    }
+}
+func cancel_sender(work CancelWork) i64 {
+    sync.fetch_add(work.entered,1);
+    switch channel.send_cancel[i64](work.pipe,9,work.token) {
+        case channel.SendWaitResult.Cancelled: return 1;
+        case channel.SendWaitResult.Closed: return 2;
+        case channel.SendWaitResult.Sent: return 4;
+        case channel.SendWaitResult.Timeout: return 3;
+    }
+}
+func wait_entered(value sync.AtomicI64) {
+    for var spin i64 = 0; spin < 100_000_000; spin += 1 {
+        if sync.load(value) != 0 { return; }
+    }
+}
+func wait_subscription(token cancel.Token) bool {
+    for var spin i64 = 0; spin < 100_000_000; spin += 1 {
+        if cancel.subscription_count(token) == 1 { return true; }
+    }
+    return false;
+}
+
+func main() i32 throws os.Error {
+    let full = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](full,500,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 1;
+    }
+
+    let target_entered = sync.atomic_i64(0);
+    let target = thread.spawn[TimedWork](timed_sender,
+        TimedWork(pipe: full,timeout: 600_000_000,entered: target_entered));
+    wait_entered(target_entered);
+    time.sleep_ms(20);
+
+    let start = time.monotonic();
+    for var index i32 = 0; index < 10; index += 1 {
+        let token = cancel.new();
+        let entered = sync.atomic_i64(0);
+        let waiter = thread.spawn[CancelWork](cancel_sender,
+            CancelWork(pipe: full,token: token,entered: entered));
+        wait_entered(entered);
+        if !wait_subscription(token) { return 2; }
+        cancel.request(token);
+        if thread.join(waiter) != 1 { return 3; }
+    }
+    if thread.join(target) != 3 { return 4; }
+    let end = time.monotonic();
+    let elapsed = (end.seconds - start.seconds) * 1_000_000_000 +
+                  (end.nanoseconds - start.nanoseconds);
+    if elapsed >= 2_500_000_000 { return 5; }
+
+    channel.close(full);
+    switch channel.receive_timeout[i64](full,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 500 { return 6; }
+        default: return 7;
+    }
+    switch channel.receive_timeout[i64](full,0) {
+        case channel.ReceiveWaitResult.Closed: {}
+        default: return 8;
+    }
+    return 0;
+}

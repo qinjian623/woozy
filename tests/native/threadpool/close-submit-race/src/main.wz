@@ -1,0 +1,138 @@
+package app;
+
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/task" as task;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+const SUBMITTERS i32 = 4;
+const PER_SUBMITTER i64 = 100;
+const SEED i64 = 16;
+const RACE_TOTAL i64 = 400;
+const SEEN usize = 1400;
+const ID_BASE i64 = 1000;
+
+struct Shared {
+    pool task.Pool[i64,i64];
+    futures Vec[task.Future[i64]];
+    futures_lock sync.Mutex;
+    accepted sync.AtomicI64;
+    rejected sync.AtomicI64;
+    begin sync.AtomicI64;
+}
+
+struct SubmitWork {
+    shared Shared;
+    base i64;
+}
+
+func fast(value i64) i64 { return value + 1; }
+
+func submit_race(work SubmitWork) i64 {
+    for sync.load(work.shared.begin) == 0 {}
+    for var index i64 = 0; index < PER_SUBMITTER; index += 1 {
+        let argument = work.base + index;
+        try {
+            let future = task.submit(work.shared.pool, argument);
+            sync.lock(work.shared.futures_lock);
+            vec.push(work.shared.futures, future);
+            sync.unlock(work.shared.futures_lock);
+            sync.fetch_add(work.shared.accepted, 1);
+        } catch error task.Error {
+            switch error {
+                case task.Error.Closed: sync.fetch_add(work.shared.rejected, 1);
+                default: return 2;
+            }
+        }
+    }
+    return 0;
+}
+
+func close_pool(shared Shared) i64 {
+    for sync.load(shared.begin) == 0 {}
+    task.close(shared.pool);
+    return 0;
+}
+
+func spawn_thread[A](entry func(A) i64, argument A) thread.Thread {
+    try {
+        return thread.spawn[A](entry, argument);
+    } catch error os.Error {
+        let empty = vec.empty[thread.Thread]();
+        return empty[0];
+    }
+}
+
+func join_thread(worker thread.Thread) i64 {
+    try {
+        return thread.join(worker);
+    } catch error os.Error {
+        return -1;
+    }
+}
+
+func main() i32 throws task.Error {
+    let shared = Shared(
+        pool: task.new[i64,i64](fast, 3, 4),
+        futures: vec.empty[task.Future[i64]](),
+        futures_lock: sync.mutex(),
+        accepted: sync.atomic_i64(0),
+        rejected: sync.atomic_i64(0),
+        begin: sync.atomic_i64(0));
+
+    // Seed work before the race so close always has committed tasks to drain.
+    for var id i64 = 0; id < SEED; id += 1 {
+        let future = task.submit(shared.pool, id);
+        sync.lock(shared.futures_lock);
+        vec.push(shared.futures, future);
+        sync.unlock(shared.futures_lock);
+    }
+
+    let submitters = [
+        spawn_thread(submit_race, SubmitWork(shared: shared, base: ID_BASE)),
+        spawn_thread(submit_race, SubmitWork(shared: shared, base: ID_BASE + 100)),
+        spawn_thread(submit_race, SubmitWork(shared: shared, base: ID_BASE + 200)),
+        spawn_thread(submit_race, SubmitWork(shared: shared, base: ID_BASE + 300))];
+    let closer = spawn_thread(close_pool, shared);
+    sync.store(shared.begin, 1);
+
+    for job in submitters {
+        if !(join_thread(job) == 0) { return 1; }
+    }
+    if !(join_thread(closer) == 0) { return 2; }
+    if !(sync.load(shared.accepted) + sync.load(shared.rejected) ==
+         i64(SUBMITTERS) * PER_SUBMITTER) { return 3; }
+
+    // close won the intake race at some point; join must drain every Future
+    // that submit returned and leave none waiting forever.
+    task.join(shared.pool);
+    if !(vec.len(shared.futures) == usize(SEED + sync.load(shared.accepted))) { return 4; }
+
+    let seen = vec.make[bool](SEEN, false);
+    var count i64 = 0;
+    for future in shared.futures {
+        let value = task.get(future);
+        let argument = value - 1;
+        if argument < 0 || argument >= i64(SEEN) { return 5; }
+        let position = usize(argument);
+        if seen[position] { return 6; }
+        seen[position] = true;
+        count += 1;
+    }
+    if !(count == SEED + sync.load(shared.accepted)) { return 7; }
+
+    var rejected = false;
+    try {
+        let never = task.submit(shared.pool, 9999);
+    } catch error task.Error {
+        switch error {
+            case task.Error.Closed: rejected = true;
+            default: {}
+        }
+    }
+    if !rejected { return 8; }
+    task.close(shared.pool);
+    task.join(shared.pool);
+    return 0;
+}

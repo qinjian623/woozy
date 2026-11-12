@@ -1,0 +1,41 @@
+package app;
+
+import "std/task" as task;
+
+func identity(value i64) i64 { return value + 1; }
+
+func main() i32 {
+    var workers_rejected = false;
+    try {
+        let pool = task.new[i64,i64](identity, 0, 4);
+    } catch error task.Error {
+        switch error {
+            case task.Error.InvalidWorkers: workers_rejected = true;
+            default: {}
+        }
+    }
+    if !workers_rejected { return 1; }
+
+    var capacity_rejected = false;
+    try {
+        let pool = task.new[i64,i64](identity, 2, 0);
+    } catch error task.Error {
+        switch error {
+            case task.Error.InvalidCapacity: capacity_rejected = true;
+            default: {}
+        }
+    }
+    if !capacity_rejected { return 2; }
+
+    var both_rejected = false;
+    try {
+        let pool = task.new[i64,i64](identity, 0, 0);
+    } catch error task.Error {
+        switch error {
+            case task.Error.InvalidWorkers: both_rejected = true;
+            default: {}
+        }
+    }
+    if !both_rejected { return 3; }
+    return 0;
+}

@@ -1,30 +1,119 @@
 // Cooperative cancellation shared by copied Tokens. request is idempotent and
 // never interrupts a running thread; code that can be cancelled checks the
 // token at safe points and decides when to return.
+//
+// For library waits, Token also keeps a registry of subscriptions. Each
+// subscription holds one gate Mutex and the Condvar to wake, not the waiting
+// channel state or a back-reference to the token. subscribe/unsubscribe are
+// internal bridge functions used by std/channel; user code only needs
+// new/request/is_cancelled/check.
 package cancel;
 
 import "std/sync" as sync;
+import "std/vec" as vec;
 
 pub enum Error {
     Cancelled;
 }
 
+struct Subscription {
+    id i64;
+    gate sync.Mutex;
+    signal sync.Condvar;
+}
+
+struct Registry {
+    lock sync.Mutex;
+    cancelled sync.AtomicI64;
+    next_id Vec[i64];
+    subscriptions Vec[Subscription];
+}
+
 pub struct Token {
-    state sync.AtomicI64;
+    state Vec[Registry];
 }
 
 pub func new() Token {
-    return Token(state: sync.atomic_i64(0));
+    return Token(state: [Registry(
+        lock: sync.mutex(),
+        cancelled: sync.atomic_i64(0),
+        next_id: vec.make[i64](1,0),
+        subscriptions: vec.empty[Subscription]())]);
 }
 
 pub func request(token Token) {
-    sync.store(token.state, 1);
+    let state = token.state[0];
+    sync.lock(state.lock);
+    if sync.load(state.cancelled) != 0 {
+        sync.unlock(state.lock);
+        return;
+    }
+    sync.store(state.cancelled,1);
+
+    // Copy the subscription Vec and its structs while holding the token lock.
+    // The snapshot owns a new container; releasing the token lock below leaves
+    // only this snapshot while gates are acquired and notified.
+    let snapshot = vec.empty[Subscription]();
+    vec.reserve(snapshot,vec.len(state.subscriptions));
+    for subscription in state.subscriptions {
+        vec.push(snapshot,subscription);
+    }
+    sync.unlock(state.lock);
+
+    // Never hold the token lock while taking a channel gate. The waiter may
+    // hold that gate while registering/unregistering and briefly waiting for
+    // the token lock, so this order is the only safe one.
+    for subscription in snapshot {
+        sync.lock(subscription.gate);
+        sync.notify_all(subscription.signal);
+        sync.unlock(subscription.gate);
+    }
 }
 
 pub func is_cancelled(token Token) bool {
-    return sync.load(token.state) != 0;
+    return sync.load(token.state[0].cancelled) != 0;
 }
 
 pub func check(token Token) throws Error {
     if is_cancelled(token) { throw Error.Cancelled; }
+}
+
+// Library-internal: returns -1 without registering when already cancelled.
+pub func subscribe(token Token, gate sync.Mutex, signal sync.Condvar) i64 {
+    let state = token.state[0];
+    sync.lock(state.lock);
+    if sync.load(state.cancelled) != 0 {
+        sync.unlock(state.lock);
+        return -1;
+    }
+    let id = state.next_id[0];
+    state.next_id[0] = id + 1;
+    vec.push(state.subscriptions,Subscription(id: id,gate: gate,signal: signal));
+    sync.unlock(state.lock);
+    return id;
+}
+
+// Library-internal coordination for channel tests and diagnostics.
+pub func subscription_count(token Token) i64 {
+    let state = token.state[0];
+    sync.lock(state.lock);
+    let count = i64(vec.len(state.subscriptions));
+    sync.unlock(state.lock);
+    return count;
+}
+
+// Library-internal: removes the registration by id. A request snapshot may
+// still hold copied gate/condition handles and send one harmless extra notify.
+pub func unsubscribe(token Token, id i64) {
+    let state = token.state[0];
+    sync.lock(state.lock);
+    for var index usize = 0; index < vec.len(state.subscriptions); index += 1 {
+        if state.subscriptions[index].id == id {
+            let last = vec.len(state.subscriptions) - 1;
+            if index != last { state.subscriptions[index] = state.subscriptions[last]; }
+            let removed = vec.pop(state.subscriptions);
+            break;
+        }
+    }
+    sync.unlock(state.lock);
 }

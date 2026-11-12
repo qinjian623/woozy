@@ -1,0 +1,106 @@
+package app;
+
+import "std/os" as os;
+import "std/task" as task;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+const TASKS i64 = 100;
+
+struct JoinWork {
+    pool task.Pool[i64,i64];
+}
+
+func triple(value i64) i64 { return value * 3; }
+
+func do_join(work JoinWork) i64 {
+    try {
+        task.join(work.pool);
+        return 0;
+    } catch error task.Error {
+        switch error {
+            case task.Error.SelfJoin: return 2;
+            case task.Error.JoinFailed(code): return 3;
+            default: return 4;
+        }
+    }
+}
+
+func spawn_thread[A](entry func(A) i64, argument A) thread.Thread {
+    try {
+        return thread.spawn[A](entry, argument);
+    } catch error os.Error {
+        let empty = vec.empty[thread.Thread]();
+        return empty[0];
+    }
+}
+
+func join_thread(worker thread.Thread) i64 {
+    try {
+        return thread.join(worker);
+    } catch error os.Error {
+        return -1;
+    }
+}
+
+func main() i32 throws task.Error {
+    let pool = task.new[i64,i64](triple, 3, 4);
+    let futures = vec.empty[task.Future[i64]]();
+    for var value i64 = 0; value < TASKS; value += 1 {
+        vec.push(futures, task.submit(pool, value));
+    }
+    let alias = pool;
+    task.close(alias);
+    task.close(alias);
+
+    // Concurrent joiners are allowed; the Thread handles are explicitly
+    // documented as safe for repeated/concurrent joins.
+    let joiners = [
+        spawn_thread(do_join, JoinWork(pool: pool)),
+        spawn_thread(do_join, JoinWork(pool: alias)),
+        spawn_thread(do_join, JoinWork(pool: pool)),
+        spawn_thread(do_join, JoinWork(pool: alias))];
+    for job in joiners {
+        if !(join_thread(job) == 0) { return 1; }
+    }
+    task.join(pool);
+    task.join(alias);
+
+    let seen = vec.make[bool](usize(TASKS), false);
+    for future in futures {
+        let value = task.get(future);
+        if value % 3 != 0 { return 2; }
+        let index = value / 3;
+        if index < 0 || index >= TASKS { return 3; }
+        let position = usize(index);
+        if seen[position] { return 4; }
+        seen[position] = true;
+    }
+    for present in seen {
+        if !present { return 5; }
+    }
+
+    // join without a prior close is a terminal close+join.
+    let direct = task.new[i64,i64](triple, 2, 2);
+    let direct_futures = vec.empty[task.Future[i64]]();
+    for var value i64 = 0; value < 20; value += 1 {
+        vec.push(direct_futures, task.submit(direct, value));
+    }
+    task.join(direct);
+    for var value i64 = 0; value < 20; value += 1 {
+        if !(task.get(direct_futures[usize(value)]) == value * 3) { return 6; }
+    }
+    var rejected = false;
+    try {
+        let never = task.submit(direct, 21);
+    } catch error task.Error {
+        switch error {
+            case task.Error.Closed: rejected = true;
+            default: {}
+        }
+    }
+    if !rejected { return 7; }
+    task.close(direct);
+    task.shutdown(direct);
+    return 0;
+}

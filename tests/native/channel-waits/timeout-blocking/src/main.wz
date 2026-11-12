@@ -1,0 +1,136 @@
+package app;
+import "std/channel" as channel;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/time" as time;
+
+struct SendWork {
+    pipe channel.Channel[i64];
+    value i64;
+    timeout i64;
+    entered sync.AtomicI64;
+}
+struct ReceiveWork {
+    pipe channel.Channel[i64];
+    timeout i64;
+    entered sync.AtomicI64;
+}
+
+func timed_sender(work SendWork) i64 {
+    sync.fetch_add(work.entered,1);
+    switch channel.send_timeout[i64](work.pipe,work.value,work.timeout) {
+        case channel.SendWaitResult.Sent: return 1;
+        case channel.SendWaitResult.Closed: return 2;
+        case channel.SendWaitResult.Timeout: return 3;
+        case channel.SendWaitResult.Cancelled: return 4;
+    }
+}
+func timed_receiver(work ReceiveWork) i64 {
+    sync.fetch_add(work.entered,1);
+    switch channel.receive_timeout[i64](work.pipe,work.timeout) {
+        case channel.ReceiveWaitResult.Item(value): return 10 + value;
+        case channel.ReceiveWaitResult.Closed: return 2;
+        case channel.ReceiveWaitResult.Timeout: return 3;
+        case channel.ReceiveWaitResult.Cancelled: return 4;
+    }
+}
+func wait_entered(value sync.AtomicI64) {
+    for var spin i64 = 0; spin < 100_000_000; spin += 1 {
+        if sync.load(value) != 0 { return; }
+    }
+}
+
+func main() i32 throws os.Error {
+    let filled = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](filled,1,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 1;
+    }
+    let entered = sync.atomic_i64(0);
+    let sender = thread.spawn[SendWork](timed_sender,
+        SendWork(pipe: filled,value: 2,timeout: 2_000_000_000,entered: entered));
+    wait_entered(entered);
+    time.sleep_ms(10);
+    switch channel.try_send[i64](filled,99) {
+        case channel.SendResult.Full: {}
+        default: return 2;
+    }
+    switch channel.receive_timeout[i64](filled,-1) {
+        case channel.ReceiveWaitResult.Item(value): if value != 1 { return 3; }
+        default: return 4;
+    }
+    if thread.join(sender) != 1 { return 5; }
+    switch channel.receive_timeout[i64](filled,-1) {
+        case channel.ReceiveWaitResult.Item(value): if value != 2 { return 6; }
+        default: return 7;
+    }
+
+    switch channel.send_timeout[i64](filled,3,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 8;
+    }
+    let infinite_entered = sync.atomic_i64(0);
+    let infinite = thread.spawn[SendWork](timed_sender,
+        SendWork(pipe: filled,value: 4,timeout: -1,entered: infinite_entered));
+    wait_entered(infinite_entered);
+    time.sleep_ms(10);
+    switch channel.receive_timeout[i64](filled,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 3 { return 9; }
+        default: return 10;
+    }
+    if thread.join(infinite) != 1 { return 11; }
+    switch channel.receive_timeout[i64](filled,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 4 { return 12; }
+        default: return 13;
+    }
+
+    let empty = channel.bounded[i64](1);
+    let receive_entered = sync.atomic_i64(0);
+    let receiver = thread.spawn[ReceiveWork](timed_receiver,
+        ReceiveWork(pipe: empty,timeout: -1,entered: receive_entered));
+    wait_entered(receive_entered);
+    time.sleep_ms(10);
+    switch channel.send_timeout[i64](empty,7,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 14;
+    }
+    if thread.join(receiver) != 17 { return 15; }
+
+    let receive_timeout_entered = sync.atomic_i64(0);
+    let timed_out = thread.spawn[ReceiveWork](timed_receiver,
+        ReceiveWork(pipe: empty,timeout: 30_000_000,entered: receive_timeout_entered));
+    wait_entered(receive_timeout_entered);
+    if thread.join(timed_out) != 3 { return 16; }
+
+    let close_send = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](close_send,5,0) {
+        case channel.SendWaitResult.Sent: {}
+        default: return 17;
+    }
+    let close_entered = sync.atomic_i64(0);
+    let blocked_sender = thread.spawn[SendWork](timed_sender,
+        SendWork(pipe: close_send,value: 6,timeout: 2_000_000_000,entered: close_entered));
+    wait_entered(close_entered);
+    time.sleep_ms(10);
+    channel.close(close_send);
+    if thread.join(blocked_sender) != 2 { return 18; }
+    switch channel.receive_timeout[i64](close_send,0) {
+        case channel.ReceiveWaitResult.Item(value): if value != 5 { return 19; }
+        default: return 20;
+    }
+    switch channel.receive_timeout[i64](close_send,0) {
+        case channel.ReceiveWaitResult.Closed: {}
+        default: return 21;
+    }
+
+    let close_receive = channel.bounded[i64](1);
+    let close_receive_entered = sync.atomic_i64(0);
+    let blocked_receiver = thread.spawn[ReceiveWork](timed_receiver,
+        ReceiveWork(pipe: close_receive,timeout: 2_000_000_000,entered: close_receive_entered));
+    wait_entered(close_receive_entered);
+    time.sleep_ms(10);
+    channel.close(close_receive);
+    if thread.join(blocked_receiver) != 2 { return 22; }
+    return 0;
+}

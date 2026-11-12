@@ -1,0 +1,17 @@
+package app;
+
+import "std/task" as task;
+
+func explode(value i64) i64 {
+    let zero = value - value;
+    return value / zero;
+}
+
+func main() i32 throws task.Error {
+    let pool = task.new[i64,i64](explode, 1, 1);
+    let future = task.submit(pool, 5);
+    if !(task.get(future) == 0) { return 1; }
+    task.close(pool);
+    task.join(pool);
+    return 0;
+}

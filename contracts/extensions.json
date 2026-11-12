@@ -54,11 +54,10 @@
     {
       "id": "CON02",
       "title": "Channels and thread pools",
-      "status": "in_progress",
+      "status": "complete",
       "owner": "pi-channel-waits; pi-taskpool; root review",
       "depends_on": [
-        "CON01",
-        "LANG01"
+        "CON01"
       ],
       "acceptance": [
         "Typed bounded and unbounded channels with documented close, drain, timeout and cancellation behavior",

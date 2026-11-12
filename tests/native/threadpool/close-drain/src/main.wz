@@ -1,0 +1,92 @@
+package app;
+
+import "std/option" as option;
+import "std/sync" as sync;
+import "std/task" as task;
+import "std/vec" as vec;
+
+const TASKS i64 = 10;
+
+struct Work {
+    id i64;
+    started sync.AtomicI64;
+    release sync.AtomicI64;
+}
+
+func gated(work Work) i64 {
+    sync.fetch_add(work.started, 1);
+    for sync.load(work.release) == 0 {}
+    return work.id * 2;
+}
+
+func double(value i64) i64 { return value * 2; }
+
+func main() i32 throws task.Error {
+    let pool = task.new[Work,i64](gated, 3, 8);
+    let started = sync.atomic_i64(0);
+    let release = sync.atomic_i64(0);
+    let futures = vec.empty[task.Future[i64]]();
+    for var id i64 = 0; id < TASKS; id += 1 {
+        let future = task.submit(pool, Work(id: id, started: started, release: release));
+        vec.push(futures, future);
+    }
+    for sync.load(started) < 3 {}
+
+    // Three workers are blocked and the remaining tasks are queued. close
+    // stops intake but must not discard those committed tasks.
+    task.close(pool);
+    task.close(pool);
+    var rejected = false;
+    try {
+        let never = task.submit(pool, Work(id: 99, started: started, release: release));
+    } catch error task.Error {
+        switch error {
+            case task.Error.Closed: rejected = true;
+            default: {}
+        }
+    }
+    if !rejected { return 1; }
+    for future in futures {
+        switch task.poll(future) {
+            case option.Option.Some(value): return 2;
+            case option.Option.None: {}
+        }
+    }
+
+    sync.store(release, 1);
+    // Results are observable through Futures before the workers are joined.
+    for future in futures {
+        for !task.ready(future) {}
+    }
+    let seen = vec.make[bool](usize(TASKS), false);
+    for future in futures {
+        let value = task.get(future);
+        if value % 2 != 0 { return 3; }
+        let index = value / 2;
+        if index < 0 || index >= TASKS { return 4; }
+        let position = usize(index);
+        if seen[position] { return 5; }
+        seen[position] = true;
+    }
+    for present in seen {
+        if !present { return 6; }
+    }
+
+    task.join(pool);
+    task.join(pool);
+    task.close(pool);
+
+    // shutdown is close + join and preserves completed results.
+    let second = task.new[i64,i64](double, 2, 4);
+    let second_futures = vec.empty[task.Future[i64]]();
+    for var value i64 = 0; value < 5; value += 1 {
+        vec.push(second_futures, task.submit(second, value));
+    }
+    task.shutdown(second);
+    for var value i64 = 0; value < 5; value += 1 {
+        if !(task.get(second_futures[usize(value)]) == value * 2) { return 7; }
+    }
+    task.close(second);
+    task.join(second);
+    return 0;
+}

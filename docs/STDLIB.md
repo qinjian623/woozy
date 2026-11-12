@@ -1,6 +1,6 @@
 # Woozy 标准库
 
-标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。
+标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。
 
 下面先给出一个完整程序，后面的模块说明不再重复它的导入和 `main`。
 
@@ -35,7 +35,7 @@ func main() throws os.Error {
 
 ## 错误和资源
 
-各模块用 `throws` 标明错误。`os`、`fs`、`io`、`net`、`thread`、`process`、`signal`、`ipc`（创建和数据访问）、`time`（系统调用部分）和 `random` 主要抛出 `os.Error`；`text`、`strconv`、`time`、`timezone`、`option`、`cancel`、`channel` 和 `http` 另有自己的错误枚举。`math` 和 `unicode` 不抛错。`sync`、`rwlock` 和 `ipc` 的锁误用产生 Panic，不通过 typed catch 处理。
+各模块用 `throws` 标明错误。`os`、`fs`、`io`、`net`、`thread`、`process`、`signal`、`ipc`（创建和数据访问）、`time`（系统调用部分）和 `random` 主要抛出 `os.Error`；`text`、`strconv`、`time`、`timezone`、`option`、`cancel`、`channel`、`task` 和 `http` 另有自己的错误枚举。`math` 和 `unicode` 不抛错。`sync`、`rwlock` 和 `ipc` 的锁误用产生 Panic，不通过 typed catch 处理。
 
 `os.File` 和 `net.Socket` 只是描述符包装。复制 `File` 或 `Socket` 不会调用 `dup`，副本指向同一个描述符；离开作用域不会自动关闭。显式 `close` 一次后，其他副本也不能继续使用。需要独立描述符时用 `os.dup`。`net.file(socket)` 取得同一个描述符的 `os.File`，不要把它和 `Socket` 分别当成两个资源关闭。
 
@@ -591,7 +591,9 @@ func first(lock rwlock.ReadWriteLock, values Vec[i64]) i64 {
 | `is_cancelled(token Token) bool` | 查询是否已请求取消 |
 | `check(token Token) throws Error` | 已取消时抛出 `Error.Cancelled`，否则正常返回 |
 
-Token 的副本共享状态。request 不会中断线程或唤醒其他模块的阻塞调用；工作函数需要主动查询或调用 check，再决定何时返回。传给 thread.spawn 的入口仍不能声明 throws，因此其中调用 check 时须处理 `cancel.Error`，不能把取消异常直接带出线程入口。
+Token 的副本共享状态。`request` 标记取消并唤醒在这个 token 上等待的 `send_cancel`/`receive_cancel`；它不会强制停止线程，也不会打断普通的 `send`、`receive`、`sync.wait` 或正在运行的任务。工作函数需要在安全位置主动查询 `is_cancelled` 或调用 `check`，再决定何时返回。传给 `thread.spawn` 的入口仍不能声明 throws，因此其中调用 `check` 时须处理 `cancel.Error`，不能把取消异常直接带出线程入口。
+
+`subscribe`/`unsubscribe`/`subscription_count` 是 `std/channel` 使用的内部登记接口。普通代码只创建 token 并把它传给 `*_cancel` 等待，不要自己登记或注销订阅。
 
 ## std/channel
 
@@ -607,7 +609,7 @@ Token 的副本共享状态。request 不会中断线程或唤醒其他模块的
 | `try_receive[T](pipe Channel[T]) ReceiveResult[T]` | 不等待，返回 `Item(value)`、`Empty` 或 `Closed` |
 | `close[T](pipe Channel[T])` | 幂等关闭，唤醒等待中的发送者和接收者 |
 
-关闭不丢弃已经排队的值：receive 继续返回 Some，排空后才返回 None；try_receive 同样先返回 Item，排空后才返回 Closed。关闭后的 send 不再接受新值，try_send 优先返回 Closed。最后一个句柄清理不会代替显式 close；有其他线程等待时，应先关闭再 join。当前没有 channel 限时等待、取消等待或 select 接口。
+关闭不丢弃已经排队的值：receive 继续返回 Some，排空后才返回 None；try_receive 同样先返回 Item，排空后才返回 Closed。关闭后的 send 不再接受新值，try_send 优先返回 Closed。最后一个句柄清理不会代替显式 close；有其他线程等待时，应先关闭再 join。
 
 下面是完整程序，两个线程传递字符串；队列关闭后主线程结束接收。退出码为 0：
 
@@ -645,6 +647,168 @@ func main() i32 throws os.Error {
     return i32(text.len(joined)) - 10;
 }
 ```
+
+### 限时和取消等待
+
+`send_timeout`、`receive_timeout` 在有限时间内等待，`send_cancel`、`receive_cancel` 等待数据、空间、关闭或 token 取消。它们不通过 `throws` 返回错误，结束原因放在结果枚举里：
+
+```wz
+pub enum SendWaitResult { Sent; Closed; Timeout; Cancelled; }
+pub enum ReceiveWaitResult[T] { Item(value T); Closed; Timeout; Cancelled; }
+```
+
+| 接口 | 说明 |
+| --- | --- |
+| `send_timeout[T](pipe Channel[T], value T, timeout_ns i64) SendWaitResult` | 等待可写空间；成功入队返回 `Sent`，关闭返回 `Closed`，截止时间到返回 `Timeout` |
+| `receive_timeout[T](pipe Channel[T], timeout_ns i64) ReceiveWaitResult[T]` | 有数据返回 `Item`；关闭且空返回 `Closed`；截止时间到返回 `Timeout` |
+| `send_cancel[T](pipe Channel[T], value T, token cancel.Token) SendWaitResult` | token 已取消返回 `Cancelled`，关闭返回 `Closed`，成功入队返回 `Sent` |
+| `receive_cancel[T](pipe Channel[T], token cancel.Token) ReceiveWaitResult[T]` | 有数据先返回 `Item`；无数据时已取消返回 `Cancelled`，关闭返回 `Closed` |
+
+`timeout_ns == -1` 无限等待，`0` 只立即检查一次、不睡眠，正数按纳秒等待。小于 `-1` 与 `sync.wait_for` 一样按同步误用 Panic，不会返回 `Timeout`。每个正数 timeout 调用只计算一次绝对的 `CLOCK_MONOTONIC` 截止时间；被唤醒后只用剩余时间重试，EINTR、伪唤醒、close 或其他通知都不会重新开始计时。正数过大时饱和而不是回绕；单调时钟读取失败产生 Panic。
+
+结果判定顺序是固定的，并且一次成功提交或取出不会被后来的超时、取消回滚：
+
+- `send_timeout`：`Closed` > 可写空间 `Sent` > `Timeout`。已关闭时即使 timeout 为 0 也返回 `Closed`。
+- `receive_timeout`：已排队 `Item` > `Closed`（关闭且空） > `Timeout`。close 不丢弃已排队数据。
+- `send_cancel`：`Cancelled` > `Closed` > `Sent`。取消优先于关闭和新出现的空间；已经返回 `Sent` 的值不会被之后的取消撤回。
+- `receive_cancel`：已排队 `Item` > `Cancelled`（无数据） > `Closed`。数据优先于取消；取消与数据同时发生时可能取走已提交的 `Item`，但不会丢失或重复。
+
+下面的程序先等待 50ms 超时，再发送和取出一个值，最后验证关闭优先于超时：
+
+```wz
+package main;
+import "std/channel" as channel;
+
+func main() i32 {
+    let pipe = channel.bounded[string](1);
+
+    switch channel.receive_timeout(pipe, 50_000_000) {
+        case channel.ReceiveWaitResult.Timeout: {}
+        default: { return 1; }
+    }
+
+    switch channel.send_timeout(pipe, "done", 0) {
+        case channel.SendWaitResult.Sent: {}
+        default: { return 2; }
+    }
+
+    switch channel.receive_timeout(pipe, 1_000_000) {
+        case channel.ReceiveWaitResult.Item(value): {
+            if value != "done" { return 3; }
+        }
+        default: { return 4; }
+    }
+
+    channel.close(pipe);
+    switch channel.send_timeout(pipe, "late", 0) {
+        case channel.SendWaitResult.Closed: {}
+        default: { return 5; }
+    }
+    return 0;
+}
+```
+
+`send_cancel`/`receive_cancel` 的 token 来自 `std/cancel`。取消是协作式的：`request` 只唤醒在这些调用上登记的等待，不终止线程，也不打断普通 `send`/`receive`。已经取消的 token 上，`send_cancel` 不再睡眠；`receive_cancel` 仍先取走队列中已提交的数据。等待的订阅登记由 `std/channel` 完成，用户只传 token，不要调用 `std/cancel` 的 `subscribe`/`unsubscribe`。
+
+下面的程序让一个线程等待一个空 channel，主线程取消后取得 `Cancelled`；随后即使 token 已取消，已提交的值 7 仍先从 `receive_cancel` 返回：
+
+```wz
+package main;
+import "std/cancel" as cancel;
+import "std/channel" as channel;
+import "std/os" as os;
+import "std/thread" as thread;
+
+struct WaitJob { pipe channel.Channel[i64]; token cancel.Token; }
+
+func wait(job WaitJob) i64 {
+    switch channel.receive_cancel(job.pipe, job.token) {
+        case channel.ReceiveWaitResult.Item(value): return value;
+        case channel.ReceiveWaitResult.Cancelled: return -1;
+        case channel.ReceiveWaitResult.Closed: return -2;
+        case channel.ReceiveWaitResult.Timeout: return -3;
+    }
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.bounded[i64](1);
+    let token = cancel.new();
+    let job = WaitJob(pipe: pipe, token: token);
+    let worker = thread.spawn[WaitJob](wait, job);
+
+    cancel.request(token);
+    if thread.join(worker) != -1 { return 1; }
+
+    switch channel.try_send(pipe, 7) {
+        case channel.SendResult.Sent: {}
+        default: { return 2; }
+    }
+    switch channel.receive_cancel(pipe, token) {
+        case channel.ReceiveWaitResult.Item(value): {
+            if value != 7 { return 3; }
+        }
+        default: { return 4; }
+    }
+    channel.close(pipe);
+    return 0;
+}
+```
+
+这些接口不能组合成 `select`；当前不提供 select 或异步运行时。
+
+## std/task
+
+固定工作线程数的有类型线程池和 Future，建立在 `std/thread`、`std/sync` 与 `std/channel` 上，目前用于 Linux x86_64 Native。工作线程入口必须是无捕获的 `func(A) R`；`A` 和 `R` 在创建池时确定，所有任务共用同一个入口。多个参数放进 struct，捕获闭包仍不受支持。
+
+| 接口 | 说明 |
+| --- | --- |
+| `new[A,R](entry func(A) R, workers usize, capacity usize) Pool[A,R] throws Error` | 创建固定入口、固定工作线程数和有界任务队列的池 |
+| `submit[A,R](pool Pool[A,R], argument A) Future[R] throws Error` | 提交一个任务并返回对应 Future；队列满时阻塞，关闭后抛 `Error.Closed` |
+| `get[R](future Future[R]) R` | 阻塞到该任务完成并返回结果；可重复调用 |
+| `poll[R](future Future[R]) option.Option[R]` | 不阻塞；已完成返回 `Some(R)`，否则 `None` |
+| `ready[R](future Future[R]) bool` | 不阻塞；已完成返回 true |
+| `close[A,R](pool Pool[A,R])` | 停止接收新任务，立即返回；已提交任务继续排空；幂等 |
+| `join[A,R](pool Pool[A,R]) throws Error` | 先幂等 close，再等待所有工作线程退出；可重复调用 |
+| `shutdown[A,R](pool Pool[A,R]) throws Error` | `join` 的显式别名 |
+
+`Error` 包含 `Closed`、`InvalidWorkers`、`InvalidCapacity`、`SpawnFailed(code i32)`、`SelfJoin` 和 `JoinFailed(code i32)`。`Pool` 和 `Future` 的副本共享同一状态，可以由多个线程提交或等待。
+
+下面的程序用两个工作线程计算两个平方，读取各自 Future 后显式 `shutdown`；退出码为 0：
+
+```wz
+package main;
+import "std/os" as os;
+import "std/task" as task;
+
+func square(value i64) i64 { return value * value; }
+
+func main() i32 throws task.Error {
+    let pool = task.new[i64,i64](square, 2, 4);
+    let first = task.submit(pool, 7);
+    let second = task.submit(pool, 9);
+    let a = task.get(first);
+    let b = task.get(second);
+    task.shutdown(pool);
+    if a + b == 130 { return 0; }
+    return 1;
+}
+```
+
+`submit` 的队列容量只统计已提交但尚未被工作线程取走的任务。close 与新 submit 竞争时只有两种结果：submit 在关闭前成功提交并返回 Future，或抛 `Error.Closed` 且不返回 Future；不会留下永远没有结果的 Future。Future 与任务的完成顺序无关，`get` 只等待自己的那次提交。`get` 可被多个线程、多个 Future 副本重复调用，每次按 `R` 的普通复制规则返回：标量/struct 按字段复制，`string`/`Vec` 保留 ARC 共享引用。结果是共享的，`get` 不会清空它。
+
+工作线程入口不能声明 throws。任务需要返回可处理的错误时，让 `R` 为 `Result[T,E]`，由调用方检查 `Ok`/`Err`；池不捕获错误，也不会把错误擦除成 `task.Error` 或 `Any`。任务内发生 Panic 按语言规则终止进程，不会转成 Future 结果。
+
+`new` 先检查参数：`workers == 0` 抛 `Error.InvalidWorkers`，`capacity == 0` 抛 `Error.InvalidCapacity`，两者都在创建线程和队列之前检查；两者都为 0 时先报 `InvalidWorkers`。创建工作线程失败抛 `Error.SpawnFailed(code)`，已创建的工作线程会先关闭队列并 join，不会留下后台线程。
+
+生命周期必须显式管理，没有自动析构：
+
+- `close` 只停止接收，不等待；已提交任务仍会被工作线程排空，排空后工作线程退出。适合先 close、继续读取已提交的 Future，最后再 join。
+- `join`/`shutdown` 先做一次幂等 close，再等待所有工作线程退出。
+- 在池自己的工作线程内调用 `join`/`shutdown` 返回 `Error.SelfJoin`；该检查发生在 close 之前，所以不会顺带关闭池。
+- `join` 只检测当前池的工作线程自等待。跨池等待循环，以及工作线程等待自己池中需要全部工作线程才能推进的 Future，不会被检测，仍可能死等。
+- 清理最后一个 Pool 句柄**不会**停止工作线程、close 队列或 join。不显式 `shutdown`（或 close 后 join）时，工作线程可能继续运行并让状态存活。进程退出会结束线程，但这不是资源回收保证。
+
+当前不提供任务取消、Future 超时、优先级或抢占；需要取消时在任务内部用 `std/cancel` 协作检查。完整用法和任务返回错误的示例见 [线程与同步](CONCURRENCY.md#线程池与-future)。
 
 ## std/process
 

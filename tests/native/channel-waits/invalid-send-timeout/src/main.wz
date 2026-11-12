@@ -1,0 +1,9 @@
+package app;
+import "std/channel" as channel;
+func main() i32 {
+    let pipe = channel.bounded[i64](1);
+    switch channel.send_timeout[i64](pipe,1,-2) {
+        case channel.SendWaitResult.Sent: return 1;
+        default: return 2;
+    }
+}

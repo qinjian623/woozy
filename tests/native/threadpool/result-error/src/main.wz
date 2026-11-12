@@ -1,0 +1,59 @@
+package app;
+
+import "std/result" as result;
+import "std/task" as task;
+
+enum JobError {
+    Negative;
+    TooLarge;
+}
+
+func checked(value i64) result.Result[i64,JobError] {
+    if value < 0 { return result.Result[i64,JobError].Err(JobError.Negative); }
+    if value > 1000 { return result.Result[i64,JobError].Err(JobError.TooLarge); }
+    return result.Result[i64,JobError].Ok(value * 2);
+}
+
+func main() i32 throws task.Error {
+    let pool = task.new[i64,result.Result[i64,JobError]](checked, 2, 4);
+    let negative = task.submit(pool, -1);
+    let valid = task.submit(pool, 5);
+    let large = task.submit(pool, 1001);
+    task.close(pool);
+    task.join(pool);
+
+    switch task.get(negative) {
+        case result.Result.Ok(value): return 1;
+        case result.Result.Err(error): {
+            switch error {
+                case JobError.Negative: {}
+                case JobError.TooLarge: return 2;
+            }
+        }
+    }
+    switch task.get(valid) {
+        case result.Result.Ok(value): if value != 10 { return 3; }
+        case result.Result.Err(error): return 4;
+    }
+    switch task.get(large) {
+        case result.Result.Ok(value): return 5;
+        case result.Result.Err(error): {
+            switch error {
+                case JobError.Negative: return 6;
+                case JobError.TooLarge: {}
+            }
+        }
+    }
+
+    // Typed task failure is ordinary R data, not a task.Error throw.
+    switch task.get(negative) {
+        case result.Result.Ok(value): return 7;
+        case result.Result.Err(error): {
+            switch error {
+                case JobError.Negative: {}
+                case JobError.TooLarge: return 8;
+            }
+        }
+    }
+    return 0;
+}

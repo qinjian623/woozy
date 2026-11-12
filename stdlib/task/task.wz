@@ -1,0 +1,258 @@
+// Fixed-worker typed thread pool with futures, built only from std/channel,
+// std/thread and std/sync.
+//
+// A Pool is a value struct whose queue, worker function, handles and registry
+// live in shared Vec storage. A Future is also a shared value: get, poll and
+// ready may be called from any thread and from any number of Future copies.
+//
+// The task queue is bounded. submit blocks while it is full and throws Closed
+// when close wins the race. close stops intake but workers drain every task
+// that was already committed. join/shutdown close idempotently and then join
+// every worker. There is no automatic destructor: dropping the last Pool
+// handle does not stop workers; callers must close/join or exit the process.
+package task;
+
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+pub enum Error {
+    Closed;
+    InvalidWorkers;
+    InvalidCapacity;
+    SpawnFailed(code i32);
+    SelfJoin;
+    JoinFailed(code i32);
+}
+
+struct FutureState[R] {
+    lock sync.Mutex;
+    changed sync.Condvar;
+    done Vec[bool];
+    values Vec[R];
+}
+
+pub struct Future[R] {
+    state Vec[FutureState[R]];
+}
+
+struct Task[A,R] {
+    argument A;
+    future Future[R];
+}
+
+struct PoolState[A,R] {
+    tasks channel.Channel[Task[A,R]];
+    entry func(A) R;
+    workers Vec[thread.Thread];
+    // Live worker thread ids, guarded by registry. Workers remove their entry
+    // before returning so a later unrelated thread cannot be mistaken for a
+    // pool worker merely because the OS reused a tid.
+    tids Vec[i64];
+    registry sync.Mutex;
+}
+
+pub struct Pool[A,R] {
+    state Vec[PoolState[A,R]];
+}
+
+func make_future[R]() Future[R] {
+    return Future[R](state: [
+        FutureState[R](
+            lock: sync.mutex(),
+            changed: sync.condvar(),
+            done: vec.make[bool](1, false),
+            values: vec.empty[R]())]);
+}
+
+// complete is called only by a pool worker. The first completion wins; a
+// task is never retried and a worker entry cannot throw a typed error.
+func complete[R](future Future[R], value R) {
+    let state = future.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    if state.done[0] { return; }
+    vec.push(state.values, value);
+    state.done[0] = true;
+    sync.notify_all(state.changed);
+}
+
+pub func get[R](future Future[R]) R {
+    let state = future.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    for state.done[0] == false {
+        sync.wait(state.changed, state.lock);
+    }
+    return state.values[0];
+}
+
+pub func poll[R](future Future[R]) option.Option[R] {
+    let state = future.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    if state.done[0] {
+        return option.Option[R].Some(state.values[0]);
+    }
+    return option.Option[R].None;
+}
+
+pub func ready[R](future Future[R]) bool {
+    let state = future.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    return state.done[0];
+}
+
+func current_tid() i64 {
+    try {
+        return i64(os.gettid());
+    } catch error os.Error {
+        // gettid is not expected to fail. A zero fallback keeps the worker
+        // functional; self-join detection still works if both calls fail.
+        return 0;
+    }
+}
+
+func os_code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(code, completed): return code;
+        case os.Error.WouldBlock(code, completed): return code;
+        case os.Error.System(code, completed): return code;
+        case os.Error.NoProgress(completed): return -1;
+    }
+}
+
+func register_worker[A,R](state PoolState[A,R], tid i64) {
+    sync.lock(state.registry);
+    defer { sync.unlock(state.registry); }
+    vec.push(state.tids, tid);
+}
+
+func unregister_worker[A,R](state PoolState[A,R], tid i64) {
+    sync.lock(state.registry);
+    defer { sync.unlock(state.registry); }
+    for var index usize = 0; index < vec.len(state.tids); index += 1 {
+        if state.tids[index] == tid {
+            let last = vec.len(state.tids) - 1;
+            if index != last { state.tids[index] = state.tids[last]; }
+            let removed = vec.pop(state.tids);
+            return;
+        }
+    }
+}
+
+func is_worker[A,R](state PoolState[A,R], tid i64) bool {
+    sync.lock(state.registry);
+    defer { sync.unlock(state.registry); }
+    for var index usize = 0; index < vec.len(state.tids); index += 1 {
+        if state.tids[index] == tid { return true; }
+    }
+    return false;
+}
+
+func worker_main[A,R](state PoolState[A,R]) i64 {
+    let tid = current_tid();
+    register_worker(state, tid);
+    for {
+        switch channel.receive(state.tasks) {
+            case option.Option.Some(task): {
+                let value = state.entry(task.argument);
+                complete(task.future, value);
+            }
+            case option.Option.None: {
+                unregister_worker(state, tid);
+                return 0;
+            }
+        }
+    }
+}
+
+pub func new[A,R](entry func(A) R, workers usize, capacity usize) Pool[A,R] throws Error {
+    if workers == 0 { throw Error.InvalidWorkers; }
+    if capacity == 0 { throw Error.InvalidCapacity; }
+
+    let state = PoolState[A,R](
+        tasks: channel.bounded[Task[A,R]](capacity),
+        entry: entry,
+        workers: vec.empty[thread.Thread](),
+        tids: vec.empty[i64](),
+        registry: sync.mutex());
+
+    for var index usize = 0; index < workers; index += 1 {
+        var failed = false;
+        var code i32 = -1;
+        try {
+            let handle = thread.spawn[PoolState[A,R]](worker_main[A,R], state);
+            vec.push(state.workers, handle);
+        } catch error os.Error {
+            failed = true;
+            code = os_code(error);
+        }
+        if failed {
+            // Clean up already-created workers before reporting construction
+            // failure. No Pool value escapes and no task was accepted.
+            channel.close(state.tasks);
+            for handle in state.workers {
+                try { let ignored = thread.join(handle); } catch error os.Error {}
+            }
+            throw Error.SpawnFailed(code);
+        }
+    }
+    return Pool[A,R](state: [state]);
+}
+
+pub func submit[A,R](pool Pool[A,R], argument A) Future[R] throws Error {
+    let state = pool.state[0];
+    let future = make_future[R]();
+    let task = Task[A,R](argument: argument, future: future);
+    try {
+        channel.send(state.tasks, task);
+    } catch error channel.Error {
+        switch error {
+            case channel.Error.Closed: throw Error.Closed;
+        }
+    }
+    // The future is returned only after the task was committed. A closed or
+    // interrupted submit therefore never produces a Future that waits forever.
+    return future;
+}
+
+pub func close[A,R](pool Pool[A,R]) {
+    let state = pool.state[0];
+    channel.close(state.tasks);
+}
+
+pub func join[A,R](pool Pool[A,R]) throws Error {
+    let state = pool.state[0];
+    if is_worker(state, current_tid()) { throw Error.SelfJoin; }
+
+    // join is terminal submission-wise. close is idempotent and committed
+    // tasks remain in the queue for the workers to drain.
+    channel.close(state.tasks);
+
+    var failed = false;
+    var code i32 = -1;
+    for handle in state.workers {
+        try {
+            let ignored = thread.join(handle);
+        } catch error os.Error {
+            let current = os_code(error);
+            // Pre-registration checks should catch this, but keep the EDEADLK
+            // path typed and non-deadlocking if a race reaches the runtime.
+            if current == 35 { throw Error.SelfJoin; }
+            if failed == false {
+                failed = true;
+                code = current;
+            }
+        }
+    }
+    if failed { throw Error.JoinFailed(code); }
+}
+
+pub func shutdown[A,R](pool Pool[A,R]) throws Error {
+    return join(pool);
+}

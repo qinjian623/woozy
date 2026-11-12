@@ -94,4 +94,172 @@ sync.unlock(work.lock);
 
 原子整数适合计数器、标志和明确设计过的发布操作。多个字段需要一起读写时，使用 Mutex 更直接。
 
-暂不提供捕获闭包、线程取消、带超时的等待、递归锁和读写锁。Python 后端会拒绝这些线程和同步接口。
+## 线程池与 Future
+
+`std/task` 用固定数量的工作线程执行同一种无捕获函数 `func(A) R`。`A` 是每次提交的参数类型，`R` 是结果类型；多个参数放进 struct。Pool 创建后工作线程数固定，任务进入有界队列，不会为每个任务临时新建线程。
+
+```wz
+package main;
+import "std/os" as os;
+import "std/task" as task;
+
+func square(value i64) i64 { return value * value; }
+
+func main() i32 throws task.Error {
+    let pool = task.new[i64,i64](square, 2, 4);
+    let first = task.submit(pool, 7);
+    let second = task.submit(pool, 9);
+    let a = task.get(first);
+    let b = task.get(second);
+    task.shutdown(pool);
+    if a + b == 130 { return 0; }
+    return 1;
+}
+```
+
+`submit` 在队列满时阻塞；容量只算已提交但尚未被工作线程取走的任务。`get` 阻塞到该 Future 完成，可重复调用；`poll` 返回 `Option[R]`，`ready` 返回 bool，两者都不阻塞。结果属于各自的 Future，与完成顺序无关；多个线程可以等待同一个 Future。
+
+`close` 只停止接收新任务，已提交的任务继续执行，随后工作线程退出；新 `submit` 抛 `task.Error.Closed`。`join`/`shutdown` 会先幂等 close，再等待所有工作线程。只想先停止接单、再逐个读取 Future 时，可以只 `close`，最后 `join`。
+
+**没有自动析构**：清理最后一个 Pool 句柄不会停止工作线程、close 队列或 join。必须显式 `shutdown`（或 `close` 后 `join`）；不这样做时工作线程可能继续等待任务并让池状态存活。`main` 返回或 `os.exit` 会结束进程，但这不是资源回收保证。
+
+在池自己的工作线程里 `join`/`shutdown` 返回 `task.Error.SelfJoin`，且不会关闭池。`join` 不检测跨池等待循环，也不检测工作线程等待自己池中需要全部工作线程才能完成的任务。
+
+工作线程入口不能声明 throws。任务需要返回可处理的错误时，把 `R` 写成 `Result[T,E]`：
+
+```wz
+package main;
+import "std/os" as os;
+import "std/result" as result;
+import "std/task" as task;
+
+enum JobError { Negative; }
+
+func checked(value i64) result.Result[i64,JobError] {
+    if value < 0 { return result.Result[i64,JobError].Err(JobError.Negative); }
+    return result.Result[i64,JobError].Ok(value * 2);
+}
+
+func main() i32 throws task.Error {
+    let pool = task.new[i64,result.Result[i64,JobError]](checked, 2, 4);
+    let good = task.submit(pool, 21);
+    let bad = task.submit(pool, -1);
+    var doubled i64 = 0;
+    switch task.get(good) {
+        case result.Result.Ok(value): doubled = value;
+        case result.Result.Err(error): return 1;
+    }
+    var rejected = false;
+    switch task.get(bad) {
+        case result.Result.Ok(value): return 2;
+        case result.Result.Err(error): {
+            switch error { case JobError.Negative: rejected = true; }
+        }
+    }
+    task.shutdown(pool);
+    if doubled == 42 && rejected { return 0; }
+    return 3;
+}
+```
+
+`Ok`/`Err` 是普通 Future 结果，不会被转换成 `task.Error`。任务内发生 Panic 仍按语言规则终止进程。`workers == 0` 抛 `InvalidWorkers`，`capacity == 0` 抛 `InvalidCapacity`，都在创建线程前检查；创建线程失败抛 `SpawnFailed(code)` 并清理已创建的工作线程。当前不提供任务取消、Future 超时和优先级。
+
+## 超时和取消等待
+
+`std/channel` 的 `send_timeout`/`receive_timeout` 在给定时间内等待，`send_cancel`/`receive_cancel` 等待数据、空间、关闭或 token 取消。结果用 `SendWaitResult` / `ReceiveWaitResult[T]` 区分，不通过 `throws` 返回错误。
+
+```wz
+package main;
+import "std/channel" as channel;
+
+func main() i32 {
+    let pipe = channel.bounded[string](1);
+
+    // 50ms 内没有数据：Timeout。
+    switch channel.receive_timeout(pipe, 50_000_000) {
+        case channel.ReceiveWaitResult.Timeout: {}
+        default: { return 1; }
+    }
+
+    // 有空位，timeout 0 只检查一次，成功入队。
+    switch channel.send_timeout(pipe, "done", 0) {
+        case channel.SendWaitResult.Sent: {}
+        default: { return 2; }
+    }
+
+    // 已有数据：优先返回 Item，而不是 Timeout/Closed。
+    switch channel.receive_timeout(pipe, 1_000_000) {
+        case channel.ReceiveWaitResult.Item(value): {
+            if value != "done" { return 3; }
+        }
+        default: { return 4; }
+    }
+
+    channel.close(pipe);
+    // 已关闭优先于超时：返回 Closed，不会接受 "late"。
+    switch channel.send_timeout(pipe, "late", 0) {
+        case channel.SendWaitResult.Closed: {}
+        default: { return 5; }
+    }
+    return 0;
+}
+```
+
+`timeout_ns == -1` 无限等待，`0` 只立即检查一次，正数按纳秒。小于 `-1` 与 `sync.wait_for` 一样按同步误用 Panic，不会返回 `Timeout`。每个正数 timeout 调用只计算一次绝对的 `CLOCK_MONOTONIC` 截止时间，被唤醒后继续用剩余时间等待；EINTR、伪唤醒、close 和数据通知都不会重置计时。过大的正数会饱和。
+
+判定顺序固定：
+
+- `send_timeout`：`Closed` > `Sent` > `Timeout`。
+- `receive_timeout`：`Item` > `Closed` > `Timeout`。close 不丢弃已排队数据。
+- `send_cancel`：`Cancelled` > `Closed` > `Sent`。已经 `Sent` 的值不会被后来的取消撤回。
+- `receive_cancel`：`Item` > `Cancelled` > `Closed`。数据优先于取消；同时发生时可能取走已提交的 `Item`，但不会丢失或重复。
+
+下面的程序让一个线程用 `receive_cancel` 等待空 channel，主线程 `request` 后等待返回 `Cancelled`；随后即使 token 已取消，已排队的 7 仍优先返回：
+
+```wz
+package main;
+import "std/cancel" as cancel;
+import "std/channel" as channel;
+import "std/os" as os;
+import "std/thread" as thread;
+
+struct WaitJob { pipe channel.Channel[i64]; token cancel.Token; }
+
+func wait(job WaitJob) i64 {
+    switch channel.receive_cancel(job.pipe, job.token) {
+        case channel.ReceiveWaitResult.Item(value): return value;
+        case channel.ReceiveWaitResult.Cancelled: return -1;
+        case channel.ReceiveWaitResult.Closed: return -2;
+        case channel.ReceiveWaitResult.Timeout: return -3;
+    }
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.bounded[i64](1);
+    let token = cancel.new();
+    let job = WaitJob(pipe: pipe, token: token);
+    let worker = thread.spawn[WaitJob](wait, job);
+
+    cancel.request(token);
+    if thread.join(worker) != -1 { return 1; }
+
+    switch channel.try_send(pipe, 7) {
+        case channel.SendResult.Sent: {}
+        default: { return 2; }
+    }
+    switch channel.receive_cancel(pipe, token) {
+        case channel.ReceiveWaitResult.Item(value): {
+            if value != 7 { return 3; }
+        }
+        default: { return 4; }
+    }
+    channel.close(pipe);
+    return 0;
+}
+```
+
+`std/cancel.request` 是协作式的：它设置取消标志并唤醒在这个 token 上登记的 channel 等待，但不会强杀线程，也不会打断普通的 `send`、`receive`、条件变量等待或正在运行的任务。任务要在安全位置调用 `is_cancelled` 或 `check` 自己决定退出。Token 副本共享状态；channel 等待的 subscribe/unsubscribe 是库内部接口，用户只传 token。
+
+这些等待接口不能组合成 select；当前不提供多个 channel 的原子选择。
+
+暂不提供捕获闭包、强制线程取消、channel select 和异步运行时；取消只有 `std/cancel` 的协作式请求、检查与 channel 等待唤醒。Python 后端会拒绝这些线程和同步接口。

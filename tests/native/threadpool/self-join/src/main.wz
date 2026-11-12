@@ -1,0 +1,71 @@
+package app;
+
+import "std/sync" as sync;
+import "std/task" as task;
+import "std/vec" as vec;
+
+struct SelfArg {
+    pool task.Pool[SelfArg,i64];
+    observed sync.AtomicI64;
+    mode i64;
+}
+
+func check_self_join(arg SelfArg) i64 {
+    try {
+        if arg.mode == 0 {
+            task.join(arg.pool);
+        } else {
+            task.shutdown(arg.pool);
+        }
+        sync.store(arg.observed, -1);
+        return 1;
+    } catch error task.Error {
+        switch error {
+            case task.Error.SelfJoin: {
+                sync.store(arg.observed, arg.mode + 1);
+                return arg.mode * 10 + 7;
+            }
+            default: {
+                sync.store(arg.observed, -2);
+                return 2;
+            }
+        }
+    }
+}
+
+func main() i32 throws task.Error {
+    let cell = vec.empty[task.Pool[SelfArg,i64]]();
+    let pool = task.new[SelfArg,i64](check_self_join, 1, 2);
+    vec.push(cell, pool);
+
+    let first_observed = sync.atomic_i64(0);
+    let first = task.submit(pool, SelfArg(pool: cell[0], observed: first_observed, mode: 0));
+    if !(task.get(first) == 7) { return 1; }
+    if sync.load(first_observed) != 1 { return 2; }
+
+    // shutdown reaches the same join path and must also report SelfJoin.
+    let second_observed = sync.atomic_i64(0);
+    let second = task.submit(pool, SelfArg(pool: cell[0], observed: second_observed, mode: 1));
+    if !(task.get(second) == 17) { return 3; }
+    if sync.load(second_observed) != 2 { return 4; }
+
+    // A rejected self-join is not allowed to close intake as a side effect.
+    let third_observed = sync.atomic_i64(0);
+    let third = task.submit(pool, SelfArg(pool: cell[0], observed: third_observed, mode: 0));
+    if !(task.get(third) == 7) { return 5; }
+    if sync.load(third_observed) != 1 { return 6; }
+
+    task.join(pool);
+    task.join(pool);
+    var rejected = false;
+    try {
+        let never = task.submit(pool, SelfArg(pool: cell[0], observed: third_observed, mode: 0));
+    } catch error task.Error {
+        switch error {
+            case task.Error.Closed: rejected = true;
+            default: {}
+        }
+    }
+    if !rejected { return 7; }
+    return 0;
+}

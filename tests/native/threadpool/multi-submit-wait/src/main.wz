@@ -1,0 +1,138 @@
+package app;
+
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/task" as task;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+const SUBMITTERS i32 = 4;
+const PER_SUBMITTER i64 = 50;
+const TOTAL i64 = 200;
+const WAITERS i32 = 4;
+
+struct Shared {
+    pool task.Pool[i64,i64];
+    futures Vec[task.Future[i64]];
+    futures_lock sync.Mutex;
+}
+
+struct SubmitWork {
+    shared Shared;
+    base i64;
+}
+
+struct WaitWork {
+    future task.Future[i64];
+    slot usize;
+    results Vec[i64];
+}
+
+func triple(value i64) i64 { return value * 3; }
+
+func submit_all(work SubmitWork) i64 {
+    for var index i64 = 0; index < PER_SUBMITTER; index += 1 {
+        try {
+            let future = task.submit(work.shared.pool, work.base + index);
+            sync.lock(work.shared.futures_lock);
+            vec.push(work.shared.futures, future);
+            sync.unlock(work.shared.futures_lock);
+        } catch error task.Error {
+            switch error {
+                case task.Error.Closed: return 2;
+                default: return 3;
+            }
+        }
+    }
+    return 0;
+}
+
+func wait_one(work WaitWork) i64 {
+    work.results[work.slot] = task.get(work.future);
+    return 0;
+}
+
+func spawn_thread[A](entry func(A) i64, argument A) thread.Thread {
+    try {
+        return thread.spawn[A](entry, argument);
+    } catch error os.Error {
+        let empty = vec.empty[thread.Thread]();
+        return empty[0];
+    }
+}
+
+func join_thread(worker thread.Thread) i64 {
+    try {
+        return thread.join(worker);
+    } catch error os.Error {
+        return -1;
+    }
+}
+
+func main() i32 throws task.Error {
+    let shared = Shared(
+        pool: task.new[i64,i64](triple, 4, 4),
+        futures: vec.empty[task.Future[i64]](),
+        futures_lock: sync.mutex());
+
+    let submitters = [
+        spawn_thread(submit_all, SubmitWork(shared: shared, base: 0)),
+        spawn_thread(submit_all, SubmitWork(shared: shared, base: 50)),
+        spawn_thread(submit_all, SubmitWork(shared: shared, base: 100)),
+        spawn_thread(submit_all, SubmitWork(shared: shared, base: 150))];
+    for job in submitters {
+        if !(join_thread(job) == 0) { return 1; }
+    }
+    if !(vec.len(shared.futures) == usize(TOTAL)) { return 2; }
+
+    // Four independent waiter threads share one Future value. They may start
+    // before the chosen task completes and must all receive the same result.
+    let chosen = shared.futures[0];
+    let results = vec.make[i64](usize(WAITERS), -1);
+    let waiters = [
+        spawn_thread(wait_one, WaitWork(future: chosen, slot: 0, results: results)),
+        spawn_thread(wait_one, WaitWork(future: chosen, slot: 1, results: results)),
+        spawn_thread(wait_one, WaitWork(future: chosen, slot: 2, results: results)),
+        spawn_thread(wait_one, WaitWork(future: chosen, slot: 3, results: results))];
+    let expected = task.get(chosen);
+    for job in waiters {
+        if !(join_thread(job) == 0) { return 3; }
+    }
+    for value in results {
+        if value != expected { return 4; }
+    }
+
+    task.close(shared.pool);
+    task.join(shared.pool);
+
+    // Futures, not completion order, define the mapping. Mark results by
+    // argument index and require every one exactly once.
+    let seen = vec.make[bool](usize(TOTAL), false);
+    var count i64 = 0;
+    for future in shared.futures {
+        let value = task.get(future);
+        if value % 3 != 0 { return 5; }
+        let index = value / 3;
+        if index < 0 || index >= TOTAL { return 6; }
+        let position = usize(index);
+        if seen[position] { return 7; }
+        seen[position] = true;
+        count += 1;
+    }
+    if !(count == TOTAL) { return 8; }
+    for present in seen {
+        if !present { return 9; }
+    }
+
+    var rejected = false;
+    try {
+        let never = task.submit(shared.pool, 999);
+    } catch error task.Error {
+        switch error {
+            case task.Error.Closed: rejected = true;
+            default: {}
+        }
+    }
+    if !rejected { return 10; }
+    return 0;
+}

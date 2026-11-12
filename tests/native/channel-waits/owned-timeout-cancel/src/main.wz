@@ -1,0 +1,99 @@
+package app;
+import "std/cancel" as cancel;
+import "std/channel" as channel;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+const PRODUCERS i32 = 2;
+const CONSUMERS i32 = 2;
+const PER_PRODUCER i64 = 150;
+const TOTAL i64 = 300;
+const CAPACITY usize = 3;
+
+struct Payload {
+    id i64;
+    label string;
+    values Vec[i64];
+}
+struct ProducerWork {
+    pipe channel.Channel[Payload];
+    base i64;
+}
+struct ConsumerWork {
+    pipe channel.Channel[Payload];
+    token cancel.Token;
+    count sync.AtomicI64;
+    sum sync.AtomicI64;
+}
+
+func make_payload(id i64) Payload {
+    return Payload(id: id,label: "id:" + strconv.format_i64(id),
+                   values: [id,id + 1,id + 2]);
+}
+func produce(work ProducerWork) i64 {
+    for var index i64 = 0; index < PER_PRODUCER; index += 1 {
+        let id = work.base + index;
+        switch channel.send_timeout[Payload](work.pipe,make_payload(id),2_000_000_000) {
+            case channel.SendWaitResult.Sent: {}
+            default: return 1;
+        }
+    }
+    return 0;
+}
+func consume(work ConsumerWork) i64 {
+    for {
+        switch channel.receive_cancel[Payload](work.pipe,work.token) {
+            case channel.ReceiveWaitResult.Item(payload): {
+                if payload.id < 0 || payload.id >= TOTAL { return 2; }
+                if payload.label != "id:" + strconv.format_i64(payload.id) { return 3; }
+                if vec.len(payload.values) != 3 { return 4; }
+                if payload.values[0] != payload.id ||
+                   payload.values[1] != payload.id + 1 ||
+                   payload.values[2] != payload.id + 2 { return 5; }
+                sync.fetch_add(work.count,1);
+                sync.fetch_add(work.sum,payload.id);
+            }
+            case channel.ReceiveWaitResult.Closed: return 0;
+            case channel.ReceiveWaitResult.Timeout: return 6;
+            case channel.ReceiveWaitResult.Cancelled: return 7;
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.bounded[Payload](CAPACITY);
+    let count = sync.atomic_i64(0);
+    let sum = sync.atomic_i64(0);
+    let first_token = cancel.new();
+    let second_token = cancel.new();
+    let consumers = [
+        thread.spawn[ConsumerWork](consume,
+            ConsumerWork(pipe: pipe,token: first_token,count: count,sum: sum)),
+        thread.spawn[ConsumerWork](consume,
+            ConsumerWork(pipe: pipe,token: second_token,count: count,sum: sum))];
+    let producers = [
+        thread.spawn[ProducerWork](produce,
+            ProducerWork(pipe: pipe,base: 0)),
+        thread.spawn[ProducerWork](produce,
+            ProducerWork(pipe: pipe,base: PER_PRODUCER))];
+    for producer in producers {
+        if thread.join(producer) != 0 { return 1; }
+    }
+    channel.close(pipe);
+    for consumer in consumers {
+        if thread.join(consumer) != 0 { return 2; }
+    }
+    if sync.load(count) != TOTAL { return 3; }
+    if sync.load(sum) != 44_850 { return 4; }
+    cancel.request(first_token);
+    cancel.request(second_token);
+    channel.close(pipe);
+    switch channel.receive_timeout[Payload](pipe,0) {
+        case channel.ReceiveWaitResult.Closed: {}
+        default: return 5;
+    }
+    return 0;
+}

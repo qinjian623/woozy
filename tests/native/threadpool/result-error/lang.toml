@@ -1,0 +1,8 @@
+schema_version=1
+[package]
+name="threadpool_result_error"
+source_root="src"
+entry="app"
+[build]
+backend="native"
+word_bits=64

@@ -1,0 +1,90 @@
+package app;
+import "std/option" as option;
+
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/task" as task;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+struct Work {
+    id i64;
+    started sync.AtomicI64;
+    active sync.AtomicI64;
+    max_active sync.AtomicI64;
+    gate sync.AtomicI64;
+}
+
+func bump_max(value sync.AtomicI64, observed i64) {
+    var current = sync.load(value);
+    for current < observed {
+        if sync.compare_exchange(value, current, observed) { return; }
+        current = sync.load(value);
+    }
+}
+
+func running(work Work) i64 {
+    sync.fetch_add(work.started, 1);
+    let current = sync.fetch_add(work.active, 1) + 1;
+    bump_max(work.max_active, current);
+    for sync.load(work.gate) == 0 {}
+    sync.fetch_add(work.active, -1);
+    return work.id * 10;
+}
+
+func spawn_thread[A](entry func(A) i64, argument A) thread.Thread {
+    try {
+        return thread.spawn[A](entry, argument);
+    } catch error os.Error {
+        let empty = vec.empty[thread.Thread]();
+        return empty[0];
+    }
+}
+
+func join_thread(worker thread.Thread) i64 {
+    try {
+        return thread.join(worker);
+    } catch error os.Error {
+        return -1;
+    }
+}
+
+func main() i32 throws task.Error {
+    let pool = task.new[Work,i64](running, 2, 8);
+    let started = sync.atomic_i64(0);
+    let active = sync.atomic_i64(0);
+    let max_active = sync.atomic_i64(0);
+    let gate_first = sync.atomic_i64(0);
+    let gate_second = sync.atomic_i64(0);
+
+    let first = task.submit(pool, Work(id: 1, started: started, active: active,
+        max_active: max_active, gate: gate_first));
+    let second = task.submit(pool, Work(id: 2, started: started, active: active,
+        max_active: max_active, gate: gate_second));
+
+    // Wait until two tasks have actually overlapped. A serial pool would
+    // never satisfy this condition; the harness timeout bounds the failure.
+    for sync.load(max_active) < 2 {}
+    if sync.load(started) < 2 { return 1; }
+    switch task.poll(first) {
+        case option.Option.Some(value): return 2;
+        case option.Option.None: {}
+    }
+    switch task.poll(second) {
+        case option.Option.Some(value): return 3;
+        case option.Option.None: {}
+    }
+
+    // Complete the second Future while the first task is still blocked. The
+    // result is usable before join, and each Future keeps its own argument.
+    sync.store(gate_second, 1);
+    for !task.ready(second) {}
+    if !(task.get(second) == 20) { return 4; }
+    if task.ready(first) { return 5; }
+
+    sync.store(gate_first, 1);
+    if !(task.get(first) == 10) { return 6; }
+    task.close(pool);
+    task.join(pool);
+    return 0;
+}

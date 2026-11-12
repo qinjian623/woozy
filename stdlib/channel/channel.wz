@@ -13,7 +13,9 @@
 // one-element Vec cells so they are shared by every Channel alias.
 package channel;
 
+import "std/cancel" as cancel;
 import "std/option" as option;
+import "std/os" as os;
 import "std/sync" as sync;
 import "std/vec" as vec;
 
@@ -22,6 +24,14 @@ pub enum Error { Closed; }
 pub enum SendResult { Sent; Full; Closed; }
 
 pub enum ReceiveResult[T] { Item(value T); Empty; Closed; }
+
+// Timed/cancel results distinguish every terminal reason from a queued item.
+pub enum SendWaitResult { Sent; Closed; Timeout; Cancelled; }
+pub enum ReceiveWaitResult[T] { Item(value T); Closed; Timeout; Cancelled; }
+
+const NANOSECONDS i64 = 1_000_000_000;
+const MAX_SECONDS i64 = 9_223_372_036_854_775_807;
+const MAX_WAIT_SECONDS i64 = 9_000_000_000;
 
 struct State[T] {
     lock sync.Mutex;
@@ -118,6 +128,69 @@ func dequeue[T](state State[T]) option.Option[T] {
     return item;
 }
 
+
+func now_monotonic() os.Timespec {
+    try {
+        return os.clock_gettime(os.CLOCK_MONOTONIC);
+    } catch error os.Error {
+        // A broken monotonic clock is a runtime failure, not a typed channel
+        // result. Keep the ordinary channel Panic path rather than inventing a
+        // fake timeout or an unbounded retry.
+        let empty = vec.empty[i32]();
+        let index = usize(os.getpid());
+        let value = empty[index];
+        if value != 0 { }
+        return os.Timespec(seconds: 0,nanoseconds: 0);
+    }
+}
+
+func deadline_after(timeout_ns i64) os.Timespec {
+    let now = now_monotonic();
+    let whole = timeout_ns / NANOSECONDS;
+    let part = timeout_ns % NANOSECONDS;
+    if whole > MAX_SECONDS - now.seconds {
+        return os.Timespec(seconds: MAX_SECONDS,nanoseconds: NANOSECONDS - 1);
+    }
+    var seconds = now.seconds + whole;
+    var nanoseconds = now.nanoseconds + part;
+    if nanoseconds >= NANOSECONDS {
+        if seconds == MAX_SECONDS {
+            nanoseconds = NANOSECONDS - 1;
+        } else {
+            seconds += 1;
+            nanoseconds -= NANOSECONDS;
+        }
+    }
+    return os.Timespec(seconds: seconds,nanoseconds: nanoseconds);
+}
+
+func deadline_remaining(end os.Timespec) i64 {
+    let now = now_monotonic();
+    if now.seconds > end.seconds ||
+       (now.seconds == end.seconds && now.nanoseconds >= end.nanoseconds) {
+        return 0;
+    }
+    var seconds = end.seconds - now.seconds;
+    var nanoseconds = end.nanoseconds - now.nanoseconds;
+    if nanoseconds < 0 {
+        seconds -= 1;
+        nanoseconds += NANOSECONDS;
+    }
+    if seconds < 0 || (seconds == 0 && nanoseconds == 0) { return 0; }
+    if seconds > MAX_WAIT_SECONDS { return MAX_WAIT_SECONDS * NANOSECONDS; }
+    return seconds * NANOSECONDS + nanoseconds;
+}
+
+// `<-1` is synchronization misuse, matching sync.wait_for. Calling the runtime
+// helper here Panics before it unlocks or waits.
+func reject_invalid_timeout(lock sync.Mutex, readable sync.Condvar,
+                            timeout_ns i64) {
+    if timeout_ns < -1 {
+        let invalid = sync.wait_for(readable,lock,timeout_ns);
+        if invalid { }
+    }
+}
+
 // send appends value, blocking while a bounded channel is full. It throws
 // Error.Closed after close; values already accepted by earlier sends remain
 // queued and are still delivered.
@@ -190,4 +263,113 @@ pub func close[T](pipe Channel[T]) {
     state.closed[0] = true;
     sync.notify_all(state.readable);
     sync.notify_all(state.writable);
+}
+
+// send_timeout waits for writable space until one absolute monotonic deadline.
+// Closed wins over space and timeout; an already-closed channel never accepts a
+// value. timeout_ns 0 only checks once, -1 waits indefinitely.
+pub func send_timeout[T](pipe Channel[T], value T, timeout_ns i64) SendWaitResult {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    reject_invalid_timeout(state.lock,state.readable,timeout_ns);
+
+    var deadline = os.Timespec(seconds: 0,nanoseconds: 0);
+    if timeout_ns > 0 { deadline = deadline_after(timeout_ns); }
+    for {
+        if state.closed[0] { return SendWaitResult.Closed; }
+        if !is_full(state) {
+            enqueue(state,value);
+            sync.notify_one(state.readable);
+            return SendWaitResult.Sent;
+        }
+        if timeout_ns == 0 { return SendWaitResult.Timeout; }
+        if timeout_ns > 0 {
+            let remaining = deadline_remaining(deadline);
+            if remaining <= 0 { return SendWaitResult.Timeout; }
+            let woken = sync.wait_for(state.writable,state.lock,remaining);
+            if woken { }
+        } else {
+            sync.wait(state.writable,state.lock);
+        }
+    }
+}
+
+// receive_timeout drains committed data before reporting Closed. Timeout is
+// returned only when the channel is open and empty at the fixed deadline.
+pub func receive_timeout[T](pipe Channel[T], timeout_ns i64) ReceiveWaitResult[T] {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    reject_invalid_timeout(state.lock,state.readable,timeout_ns);
+
+    var deadline = os.Timespec(seconds: 0,nanoseconds: 0);
+    if timeout_ns > 0 { deadline = deadline_after(timeout_ns); }
+    for {
+        if state.size[0] > 0 {
+            let item = dequeue(state);
+            sync.notify_one(state.writable);
+            switch item {
+                case option.Option.Some(value): return ReceiveWaitResult[T].Item(value);
+                case option.Option.None: {}
+            }
+        }
+        if state.closed[0] { return ReceiveWaitResult[T].Closed; }
+        if timeout_ns == 0 { return ReceiveWaitResult[T].Timeout; }
+        if timeout_ns > 0 {
+            let remaining = deadline_remaining(deadline);
+            if remaining <= 0 { return ReceiveWaitResult[T].Timeout; }
+            let woken = sync.wait_for(state.readable,state.lock,remaining);
+            if woken { }
+        } else {
+            sync.wait(state.readable,state.lock);
+        }
+    }
+}
+
+// send_cancel checks cancellation before close and before free space. A value
+// committed by an earlier Sent is not retracted by a later cancel.
+pub func send_cancel[T](pipe Channel[T], value T, token cancel.Token) SendWaitResult {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    for {
+        if cancel.is_cancelled(token) { return SendWaitResult.Cancelled; }
+        if state.closed[0] { return SendWaitResult.Closed; }
+        if !is_full(state) {
+            enqueue(state,value);
+            sync.notify_one(state.readable);
+            return SendWaitResult.Sent;
+        }
+        let registration = cancel.subscribe(token,state.lock,state.writable);
+        if registration < 0 { return SendWaitResult.Cancelled; }
+        sync.wait(state.writable,state.lock);
+        cancel.unsubscribe(token,registration);
+    }
+}
+
+// receive_cancel takes already-queued data before considering cancellation, so
+// close-drain and committed values cannot be lost. With no data, cancellation
+// wins over closed; an already-cancelled registration returns immediately.
+pub func receive_cancel[T](pipe Channel[T], token cancel.Token) ReceiveWaitResult[T] {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    for {
+        if state.size[0] > 0 {
+            let item = dequeue(state);
+            sync.notify_one(state.writable);
+            switch item {
+                case option.Option.Some(value): return ReceiveWaitResult[T].Item(value);
+                case option.Option.None: {}
+            }
+        }
+        if cancel.is_cancelled(token) { return ReceiveWaitResult[T].Cancelled; }
+        if state.closed[0] { return ReceiveWaitResult[T].Closed; }
+
+        let registration = cancel.subscribe(token,state.lock,state.readable);
+        if registration < 0 { return ReceiveWaitResult[T].Cancelled; }
+        sync.wait(state.readable,state.lock);
+        cancel.unsubscribe(token,registration);
+    }
 }
