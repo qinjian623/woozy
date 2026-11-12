@@ -1,0 +1,32 @@
+package app;
+
+// The closure environment is a heap Vec. It captures the ring Vec, while the
+// ring's element stores the closure. The resulting cycle is:
+// ring Vec -> Node.callback -> closure env Vec -> captured ring Vec.
+struct Node {
+    value i32;
+    callback func() i32;
+    next Vec[Node];
+}
+
+func make_cycle() Vec[Node] {
+    var ring Vec[Node] = [Node(value: 0, callback: func() i32 { return 0; }, next: [])];
+    let captured = ring;
+    let callback = func() i32 { return captured[0].value; };
+    ring[0] = Node(value: 7, callback: callback, next: ring);
+    return ring;
+}
+
+func main() i32 {
+    var ring Vec[Node] = make_cycle();
+    if ring[0].value != 7 {
+        return 1;
+    }
+    if ring[0].next[0].value != 7 {
+        return 2;
+    }
+    if ring[0].callback() != 7 {
+        return 3;
+    }
+    return 0;
+}

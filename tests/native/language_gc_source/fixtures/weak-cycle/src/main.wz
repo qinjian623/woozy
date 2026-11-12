@@ -1,0 +1,42 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+// Weak is not a strong edge. The cycle becomes garbage, pressure from the
+// junk rounds reclaims it, and the canonical Weak slot must already be closed
+// before the next successful upgrade could observe it.
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+
+func main() i32 {
+    var link Weak[Vec[Node]] = weak.empty[Vec[Node]]();
+    {
+        var cycle Vec[Node] = [Node(value: 1, children: [])];
+        cycle[0] = Node(value: 2, children: cycle);
+        link = weak.downgrade[Vec[Node]](cycle);
+        switch weak.upgrade(link) {
+        case option.Option.Some(strong):
+            if strong[0].value != 2 {
+                return 1;
+            }
+        case option.Option.None:
+            return 2;
+        }
+    }
+    for var i i32 = 0; i < 512; i += 1 {
+        var junk Vec[Node] = [Node(value: i, children: [])];
+        junk[0] = Node(value: i + 1, children: junk);
+        if junk[0].children[0].value != i + 1 {
+            return 3;
+        }
+    }
+    switch weak.upgrade(link) {
+    case option.Option.Some(ignored):
+        return 4;
+    case option.Option.None:
+        return 0;
+    }
+}

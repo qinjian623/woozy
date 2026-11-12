@@ -85,6 +85,7 @@ class Emitter {
   std::map<ValueId, llvm::Value *> values;
   std::map<ValueId, TypeId> value_types;
   std::vector<llvm::Value *> slots;
+  std::optional<SymbolId> gc_entry_symbol;
   llvm::StructType *vec_type = llvm::StructType::get(
       context,
       {builder.getInt64Ty(),
@@ -581,6 +582,7 @@ class Emitter {
 #include "process_ops.inc"
 #include "text_values.inc"
 #include "weak_ops.inc"
+#include "gc_ops.inc"
   std::string id_list(const std::vector<TypeId> &fields) const {
     std::string key;
     for (auto id : fields) {
@@ -658,6 +660,7 @@ class Emitter {
     vec_memory(builder.CreateStore(builder.getInt64(1),
                                    builder.CreateStructGEP(vec_type, env, 2)),
                true);
+    gc_register_fields(env, fields);
     return env;
   }
   // Cache one env-ignoring thunk per noncapturing function. Stored/indirect
@@ -891,8 +894,10 @@ class Emitter {
       auto *start = builder.CreateExtractValue(args[0], {1});
       auto *length = builder.CreateExtractValue(args[0], {2});
       auto *end = builder.CreateAdd(start, length);
-      return runtime("lang_vec_slice_v1", builder.getPtrTy(),
-                     {owner, start, end});
+      auto *result = runtime("lang_vec_slice_v1", builder.getPtrTy(),
+                             {owner, start, end});
+      gc_register_vec(result, type(i.type).type_args[0]);
+      return result;
     }
     case SystemOperation::read:
       return call("lang_os_read_vec_v1", i64, {args[0], args[1], args[2]});
@@ -1083,7 +1088,11 @@ class Emitter {
     call_args.push_back(out ? static_cast<llvm::Value *>(out)
                             : llvm::ConstantPointerNull::get(builder.getPtrTy()));
     call_args.insert(call_args.end(), actual.begin(), actual.end());
+    // An external call can block or synchronously re-enter Woozy. All graph
+    // writes (argument stores above) are complete and no runtime lock is held.
+    auto *safe = gc_enter_safe();
     builder.CreateCall(adapter, call_args);
+    gc_leave_safe(safe);
     if (!out) return builder.getInt8(0);
     return from_c_storage(sig.result,
                           builder.CreateLoad(c_lower_type(sig.result), out));
@@ -1176,6 +1185,7 @@ class Emitter {
       }
       if (constants) {
         constant_vec_init(v, element, constant_args);
+        gc_register_vec(v, element);
         break;
       }
       // The constructor's storage is fresh and every argument has already
@@ -1186,6 +1196,10 @@ class Emitter {
       auto *data = vec_field(v, 5, builder.getPtrTy());
       const uint64_t element_stride = stride(element);
       llvm::AllocaInst *scratch = nullptr;
+      // Publish the initialized prefix as one graph-stable interval. The
+      // arguments are already owned values and no copy/drop callback runs in
+      // this loop. The Vec is not registered until the prefix is complete.
+      auto *critical = gc_enter_critical();
       for (size_t n = 0; n < args.size(); ++n) {
         auto *address = element_storage(element, args[n], scratch);
         auto *target = builder.CreateGEP(
@@ -1199,6 +1213,8 @@ class Emitter {
                        builder.CreateStructGEP(vec_type, v, 2)),
                    true);
       }
+      gc_leave_critical(critical);
+      gc_register_vec(v, element);
       break;
     }
     case ir::Op::vec_check: {
@@ -1306,7 +1322,10 @@ class Emitter {
         runtime("lang_slice_sub_v1", builder.getVoidTy(),
                 {out, source_address, start, end});
         v = builder.CreateLoad(lower_type(i.type), out);
-      } else v = runtime("lang_vec_slice_v1", builder.getPtrTy(), {args[0], start, end});
+      } else {
+        v = runtime("lang_vec_slice_v1", builder.getPtrTy(), {args[0], start, end});
+        gc_register_vec(v, type(i.type).type_args[0]);
+      }
       break;
     }
     case ir::Op::begin_borrow:
@@ -1358,10 +1377,18 @@ class Emitter {
     case ir::Op::address:
       v = slots.at(i.slot.value);
       break;
-    case ir::Op::store:
-      builder.CreateStore(args[0], slots.at(i.slot.value));
+    case ir::Op::store: {
+      const auto slot_type = current_function->slots.at(i.slot.value).type;
+      if (owning(slot_type)) {
+        auto *critical = gc_enter_critical();
+        builder.CreateStore(args[0], slots.at(i.slot.value));
+        gc_leave_critical(critical);
+      } else {
+        builder.CreateStore(args[0], slots.at(i.slot.value));
+      }
       if (active.at(i.slot.value)) builder.CreateStore(builder.getTrue(), active.at(i.slot.value));
       break;
+    }
     case ir::Op::struct_init:
     case ir::Op::enum_init: {
       v = llvm::Constant::getNullValue(lower_type(i.type));
@@ -1391,12 +1418,32 @@ class Emitter {
     case ir::Op::load_indirect:
       v = builder.CreateLoad(lower_type(i.type), args[0]);
       break;
-    case ir::Op::replace_indirect:
-      builder.CreateCall(value_op(value_types.at(i.inputs[0]), false), {args[0]});
-      builder.CreateStore(args[1], args[0]);
+    case ir::Op::replace_indirect: {
+      const auto value_type = value_types.at(i.inputs[0]);
+      if (owning(value_type)) {
+        // Move the old owner aside, publish the complete new field in one
+        // graph-stable interval, then drop the old owner outside it. A
+        // reentrant destructor must never observe a half-replaced field.
+        auto *old = storage(lower_type(value_type));
+        builder.CreateStore(
+            builder.CreateLoad(lower_type(value_type), args[0]), old);
+        auto *critical = gc_enter_critical();
+        builder.CreateStore(args[1], args[0]);
+        gc_leave_critical(critical);
+        builder.CreateCall(value_op(value_type, false), {old});
+      } else {
+        builder.CreateStore(args[1], args[0]);
+      }
       break;
+    }
     case ir::Op::store_indirect:
-      builder.CreateStore(args[1], args[0]);
+      if (owning(value_types.at(i.inputs[0]))) {
+        auto *critical = gc_enter_critical();
+        builder.CreateStore(args[1], args[0]);
+        gc_leave_critical(critical);
+      } else {
+        builder.CreateStore(args[1], args[0]);
+      }
       break;
     case ir::Op::enum_test: {
       auto index =
@@ -1519,6 +1566,8 @@ class Emitter {
     for (size_t b = 0; b < f.blocks.size(); ++b)
       blocks.push_back(
           llvm::BasicBlock::Create(context, "b" + std::to_string(b), fn));
+    const auto [poll_headers, loop_exits] = gc_loop_safepoints(f);
+    const bool gc_entry = gc_entry_symbol && *gc_entry_symbol == f.symbol;
     builder.SetInsertPoint(blocks[0]);
     for (const auto &slot : f.slots) {
       llvm::Value *storage;
@@ -1622,6 +1671,11 @@ class Emitter {
                                : llvm::ConstantInt::get(lower_type(p.type), 0));
         value_types.emplace(p.value, p.type);
       }
+      // Stable safepoint: function entry, loop headers and loop exits. The runtime
+      // controller checks a pending world request and then graph pressure;
+      // with neither pending it performs only atomic loads/branches.
+      if (b == 0 || poll_headers.contains(b)) gc_poll();
+      if (gc_entry && loop_exits.contains(b)) gc_collect_loop_exit();
       for (const auto &i : f.blocks[b].instructions)
         instruction(i);
       const auto &t = f.blocks[b].terminator;
@@ -1757,16 +1811,47 @@ public:
           (result.kind == hir::TypeKind::SignedInt && result.bits == 32)))
       unsupported(
           "executable entry requires no parameters and i32 or Unit result");
+    gc_entry_symbol = entry;
     for (auto &f : input.functions)
       function(f);
     auto *main = llvm::Function::Create(
         llvm::FunctionType::get(builder.getInt32Ty(), {}, false),
         llvm::GlobalValue::ExternalLinkage, "main", module);
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", main));
+    // Outermost lifecycle wrapper: enable the integration guards before any
+    // source code runs, and finish only after all wrapper cleanup. Panic and
+    // an explicit source process exit do not reach the finish path.
+    auto init = module.getOrInsertFunction(
+        "lang_gc_program_init_v1",
+        llvm::FunctionType::get(builder.getInt64Ty(), {}, false));
+    auto finish = module.getOrInsertFunction(
+        "lang_gc_program_finish_v1",
+        llvm::FunctionType::get(builder.getInt64Ty(), {}, false));
+    auto *init_status = builder.CreateCall(init, {});
+    auto *init_failed =
+        llvm::BasicBlock::Create(context, "main.gc.init_failed", main);
+    auto *run = llvm::BasicBlock::Create(context, "main.gc.run", main);
+    builder.CreateCondBr(builder.CreateICmpNE(init_status, builder.getInt64(0)),
+                         init_failed, run);
+    builder.SetInsertPoint(init_failed);
+    {
+      auto report = module.getOrInsertFunction(
+          "lang_native_typed_error_v1",
+          llvm::FunctionType::get(builder.getVoidTy(),
+                                  {builder.getPtrTy(), builder.getInt64Ty()},
+                                  false));
+      constexpr llvm::StringLiteral key = "lang-gc-program-init";
+      builder.CreateCall(report, {builder.CreateGlobalString(key),
+                                  builder.getInt64(key.size())});
+      builder.CreateRet(builder.getInt32(1));
+    }
+    builder.SetInsertPoint(run);
     if (!sig.throws_type) {
       llvm::Value *value = builder.CreateCall(chosen->second);
-      builder.CreateRet(result.kind == hir::TypeKind::Unit ? builder.getInt32(0)
-                                                           : value);
+      llvm::Value *result_value =
+          result.kind == hir::TypeKind::Unit ? builder.getInt32(0) : value;
+      builder.CreateCall(finish, {});
+      builder.CreateRet(result_value);
     } else {
       llvm::SmallVector<llvm::Value *, 2> outputs;
       llvm::Value *value = nullptr;
@@ -1780,9 +1865,12 @@ public:
       auto *error = llvm::BasicBlock::Create(context, "main.error", main);
       builder.CreateCondBr(success, ok, error);
       builder.SetInsertPoint(ok);
-      builder.CreateRet(value ? static_cast<llvm::Value *>(builder.CreateLoad(
-                                    lower_type(sig.result), value))
-                              : builder.getInt32(0));
+      llvm::Value *result_value =
+          value ? static_cast<llvm::Value *>(builder.CreateLoad(
+                      lower_type(sig.result), value))
+                : builder.getInt32(0);
+      builder.CreateCall(finish, {});
+      builder.CreateRet(result_value);
       builder.SetInsertPoint(error);
       auto report = module.getOrInsertFunction(
           "lang_native_typed_error_v1",
@@ -1793,6 +1881,7 @@ public:
       builder.CreateCall(report, {builder.CreateGlobalString(key),
                                   builder.getInt64(key.size())});
       if (owning(*sig.throws_type)) builder.CreateCall(value_op(*sig.throws_type, false), {outputs.back()});
+      builder.CreateCall(finish, {});
       builder.CreateRet(builder.getInt32(1));
     }
     if (!used_c_callables.empty())

@@ -79,6 +79,7 @@
                             {builder.getInt64(0), builder.getInt64(stride(t)), callback(true), callback(false)});
       if (*i.system == SystemOperation::vec_make)
         runtime("lang_vec_resize_v1", builder.getVoidTy(), {value, args[0], element_storage(t, args[1])});
+      gc_register_vec(value, t);
       return value;
     }
     case SystemOperation::vec_len: return vec_field(args[0], 1, builder.getInt64Ty());

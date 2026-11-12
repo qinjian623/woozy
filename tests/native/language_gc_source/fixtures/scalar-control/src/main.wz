@@ -1,0 +1,22 @@
+package app;
+
+// No Vec here has an element type that can hold a strong Wz edge, so the
+// backend must not register any object or generate a trace callback.
+struct Scalar {
+    left i64;
+    right f64;
+}
+
+func main() i32 {
+    var numbers Vec[i64] = [1, 2, 3, 4];
+    var scalars Vec[Scalar] = [Scalar(left: 5, right: 6.5), Scalar(left: 7, right: 8.5)];
+    var total i64 = 0;
+    for var i i32 = 0; i < 4; i += 1 {
+        total += numbers[i];
+    }
+    total += scalars[0].left + scalars[1].left;
+    if total != 22 {
+        return 1;
+    }
+    return 0;
+}
