@@ -2,18 +2,277 @@
   "schema_version": 1,
   "contract": "compiler-dev/1",
   "positive": [
-    {"name": "basic", "exit": 0, "stdout": "42\n"},
-    {"name": "nested", "exit": 0, "stdout": "12\ncaught\n3\n"},
-    {"name": "cancel", "exit": 0, "stdout": "true\ntrue\nchild.cleanup\nworker.cleanup\n"},
-    {"name": "io", "exit": 0, "stdout": "4\ntrue\n"},
-    {"name": "order", "exit": 0, "stdout": "fast\nslow\n"},
-    {"name": "shutdown-fd", "exit": 0, "stdout": "true\nfd.cleanup\n"}
+    {
+      "name": "basic",
+      "exit": 0,
+      "stdout": "42\n"
+    },
+    {
+      "name": "bare-main",
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "name": "repeat-await",
+      "exit": 0,
+      "stdout": "42\n42\n"
+    },
+    {
+      "name": "never-started-body",
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "name": "never-started",
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "name": "owned-error-entry",
+      "exit": 1,
+      "stdout": ""
+    },
+    {
+      "name": "owned-error-repeat",
+      "exit": 0,
+      "stdout": "42\n42\n"
+    },
+    {
+      "name": "nested",
+      "exit": 0,
+      "stdout": "12\ncaught\n3\n"
+    },
+    {
+      "name": "cancel",
+      "exit": 0,
+      "stdout": "true\ntrue\nchild.cleanup\nworker.cleanup\n"
+    },
+    {
+      "name": "io",
+      "exit": 0,
+      "stdout": "4\ntrue\n"
+    },
+    {
+      "name": "order",
+      "exit": 0,
+      "stdout": "fast\nslow\n"
+    },
+    {
+      "name": "shutdown-fd",
+      "exit": 0,
+      "stdout": "true\nfd.cleanup\n"
+    },
+    {
+      "name": "never-started-move-vec",
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "name": "never-started-move-struct",
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "name": "never-started-move-fn",
+      "exit": 0,
+      "stdout": ""
+    },
+    {
+      "name": "cancel-queued-move-vec",
+      "exit": 0,
+      "stdout": ""
+    }
   ],
   "reject": [
-    {"name": "await-outside", "code": "E_AWAIT_CONTEXT"},
-    {"name": "await-not-task", "code": "E_AWAIT_NOT_TASK"},
-    {"name": "async-method", "code": "E_CAPABILITY_UNAVAILABLE"},
-    {"name": "async-value", "code": "E_CAPABILITY_UNAVAILABLE"},
-    {"name": "undeclared-error", "code": "E_EFFECT_UNHANDLED"}
+    {
+      "name": "await-outside",
+      "code": "E_AWAIT_CONTEXT"
+    },
+    {
+      "name": "await-not-task",
+      "code": "E_AWAIT_NOT_TASK"
+    },
+    {
+      "name": "async-method",
+      "code": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "async-value",
+      "code": "E_CAPABILITY_UNAVAILABLE"
+    },
+    {
+      "name": "undeclared-error",
+      "code": "E_EFFECT_UNHANDLED"
+    },
+    {
+      "name": "async-inout",
+      "code": "E_CAPABILITY_UNAVAILABLE"
+    }
+  ],
+  "observed": [
+    {
+      "name": "bare-main",
+      "exit": 0,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "task_retain": 0,
+        "task_release": 1,
+        "bad_frame_free": 0,
+        "vec_new": 0,
+        "vec_free": 0,
+        "vec_retain": 0,
+        "vec_release": 0
+      }
+    },
+    {
+      "name": "repeat-await",
+      "exit": 0,
+      "stdout": "42\n42\n",
+      "counts": {
+        "future_new": 3,
+        "future_free": 3,
+        "frame_new": 2,
+        "frame_free": 2,
+        "task_retain": 2,
+        "task_release": 5,
+        "bad_frame_free": 0,
+        "vec_new": 1,
+        "vec_free": 1,
+        "vec_retain": 2,
+        "vec_release": 3
+      }
+    },
+    {
+      "name": "never-started-body",
+      "exit": 0,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "task_retain": 0,
+        "task_release": 1,
+        "bad_frame_free": 0,
+        "vec_new": 0,
+        "vec_free": 0,
+        "vec_retain": 0,
+        "vec_release": 0
+      }
+    },
+    {
+      "name": "never-started",
+      "exit": 0,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "task_retain": 0,
+        "task_release": 1,
+        "bad_frame_free": 0,
+        "vec_new": 0,
+        "vec_free": 0,
+        "vec_retain": 0,
+        "vec_release": 0
+      }
+    },
+    {
+      "name": "owned-error-entry",
+      "exit": 1,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "task_retain": 0,
+        "task_release": 1,
+        "bad_frame_free": 0,
+        "vec_new": 1,
+        "vec_free": 1,
+        "vec_retain": 0,
+        "vec_release": 1
+      }
+    },
+    {
+      "name": "owned-error-repeat",
+      "exit": 0,
+      "stdout": "42\n42\n",
+      "counts": {
+        "future_new": 3,
+        "future_free": 3,
+        "frame_new": 2,
+        "frame_free": 2,
+        "task_retain": 2,
+        "task_release": 5,
+        "bad_frame_free": 0,
+        "vec_new": 1,
+        "vec_free": 1,
+        "vec_retain": 6,
+        "vec_release": 7
+      }
+    },
+    {
+      "name": "never-started-move-vec",
+      "exit": 0,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "bad_frame_free": 0,
+        "vec_new": 1,
+        "vec_free": 1
+      }
+    },
+    {
+      "name": "never-started-move-struct",
+      "exit": 0,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "bad_frame_free": 0,
+        "vec_new": 1,
+        "vec_free": 1
+      }
+    },
+    {
+      "name": "never-started-move-fn",
+      "exit": 0,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "bad_frame_free": 0,
+        "vec_new": 2,
+        "vec_free": 2
+      }
+    },
+    {
+      "name": "cancel-queued-move-vec",
+      "exit": 0,
+      "stdout": "",
+      "counts": {
+        "future_new": 1,
+        "future_free": 1,
+        "frame_new": 1,
+        "frame_free": 1,
+        "bad_frame_free": 0,
+        "vec_new": 1,
+        "vec_free": 1
+      }
+    }
   ]
 }

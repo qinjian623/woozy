@@ -1,0 +1,3 @@
+package app;
+async func change(value inout i32) { value = 2; }
+func main() i32 { return 0; }

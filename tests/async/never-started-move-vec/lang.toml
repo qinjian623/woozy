@@ -1,0 +1,8 @@
+schema_version=1
+[package]
+name="review_never_started_move_vec"
+source_root="src"
+entry="app"
+[build]
+backend="native"
+word_bits=64

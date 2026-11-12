@@ -1,0 +1,36 @@
+// CON03: awaiting the same failing Task twice copies the promise-owned owning
+// error each time; both catches see a live Vec and every reference is dropped.
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+enum Failure { Bad(values Vec[i32]); }
+
+async func get() i32 throws Failure {
+    await a.sleep(1);
+    throw Failure.Bad(values: [42]);
+}
+
+async func main() i32 throws os.Error {
+    let task = get();
+    {
+        try {
+            await task;
+        } catch error Failure {
+            switch error {
+                case Failure.Bad(values): io.println(values[0]);
+            }
+        }
+    }
+    {
+        try {
+            await task;
+        } catch error Failure {
+            switch error {
+                case Failure.Bad(values): io.println(values[0]);
+            }
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,7 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+struct Holder {values Vec[i32];}
+async func take(value move Holder) i32 {return value.values[0];}
+func main() i32 {let value=Holder(values:[42]);let task=take(move value);return 0;}

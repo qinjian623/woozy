@@ -1,0 +1,7 @@
+// CON03: an async main without a throws clause has a Unit error channel, so
+// the generated promise has no error slot and must not address one.
+package app;
+
+async func main() i32 {
+    return 0;
+}

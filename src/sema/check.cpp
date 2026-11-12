@@ -5336,6 +5336,9 @@ class Checker {
                        "function instead");
       async_functions.insert(id.value);
       const auto &declared = type(signatures[id.value]);
+      for (const auto &parameter : declared.parameters)
+        if (parameter.mode == ParamMode::inout)
+          unavailable(r, "async functions cannot retain an inout parameter");
       Type task;
       task.kind = TypeKind::Task;
       task.type_args = {declared.result,

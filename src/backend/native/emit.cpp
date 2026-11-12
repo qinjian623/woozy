@@ -1729,6 +1729,13 @@ class Emitter {
   const ir::Function *current_function = nullptr;
   void function(const ir::Function &f) {
     current_function = &f;
+    auto drop_async_parameters = [&] {
+      for (size_t s = f.slots.size(); s > 0; --s) {
+        const auto &slot = f.slots[s - 1];
+        if (slot.parameter && slot.owner && !slot.inout)
+          destroy_slot(s - 1, slot.type);
+      }
+    };
     active.clear(); iteration_lengths.clear(); iteration_indices.clear();
     values.clear();
     value_types.clear();
@@ -1923,9 +1930,17 @@ class Emitter {
       // handle and a resume function returns to its caller until resumed.
       async_suspend_return =
           llvm::BasicBlock::Create(context, "async.suspend.return", fn);
+      // Destroying a never-started task resumes the initial suspend with
+      // value 1. It must release the allocated frame directly: no source body
+      // has run, no defer is registered and the promise result/error slots are
+      // still uninitialized.
+      auto *initial_cleanup =
+          llvm::BasicBlock::Create(context, "async.initial.cleanup", fn);
+      auto *initial_free =
+          llvm::BasicBlock::Create(context, "async.initial.free", fn);
       auto *dispatch = builder.CreateSwitch(suspended, async_suspend_return);
       dispatch->addCase(builder.getInt8(0), body);
-      dispatch->addCase(builder.getInt8(1), body);
+      dispatch->addCase(builder.getInt8(1), initial_cleanup);
       {
         llvm::IRBuilderBase::InsertPointGuard guard(builder);
         auto *coro_end_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
@@ -1936,6 +1951,23 @@ class Emitter {
                             builder.getInt1(false),
                             llvm::ConstantTokenNone::get(context)});
         builder.CreateRetVoid();
+        auto *coro_free_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+            &module, llvm::Intrinsic::coro_free);
+        builder.SetInsertPoint(initial_cleanup);
+        drop_async_parameters();
+        auto *memory =
+            builder.CreateCall(coro_free_intrinsic, {coro_token, coro_handle});
+        auto *present = builder.CreateICmpNE(
+            memory, llvm::ConstantPointerNull::get(builder.getPtrTy()));
+        builder.CreateCondBr(present, initial_free, async_suspend_return);
+        builder.SetInsertPoint(initial_free);
+        builder.CreateCall(
+            module.getOrInsertFunction(
+                "lang_async_frame_free_v1",
+                llvm::FunctionType::get(builder.getVoidTy(),
+                                        {builder.getPtrTy()}, false)),
+            {memory});
+        builder.CreateBr(async_suspend_return);
       }
       async_final = llvm::BasicBlock::Create(context, "async.final", fn);
       // First-resume cancellation check: a task queued and cancelled before it
@@ -2086,31 +2118,27 @@ class Emitter {
         builder.SetInsertPoint(ready);
         if (!unit_payload) {
           auto *promise = builder.CreateCall(promise_of, {future});
-          builder.CreateStore(
-              builder.CreateLoad(lower_type(payload),
-                                 builder.CreateStructGEP(
-                                     layout, promise,
-                                     static_cast<unsigned>(result_slot))),
-              incoming.at(t.targets[0].value));
-          auto *claimed = builder.CreateLoad(
-              builder.getInt32Ty(), builder.CreateStructGEP(layout, promise, 1));
-          builder.CreateStore(builder.CreateOr(claimed, builder.getInt32(1)),
-                              builder.CreateStructGEP(layout, promise, 1));
+          auto *origin = builder.CreateStructGEP(
+              layout, promise, static_cast<unsigned>(result_slot));
+          // Every await observes the promise-owned value without consuming it,
+          // so a second await of the same Task still sees a live value. Owning
+          // payloads are retained into the awaiter's slot and released by that
+          // slot's normal cleanup; the promise keeps its own reference.
+          if (owning(payload))
+            builder.CreateCall(value_op(payload, true), {origin});
+          builder.CreateStore(builder.CreateLoad(lower_type(payload), origin),
+                              incoming.at(t.targets[0].value));
         }
         builder.CreateBr(blocks[t.targets[0].value]);
         builder.SetInsertPoint(failed);
         if (!unit_error) {
           auto *promise = builder.CreateCall(promise_of, {future});
-          builder.CreateStore(
-              builder.CreateLoad(lower_type(error_type),
-                                 builder.CreateStructGEP(
-                                     layout, promise,
-                                     static_cast<unsigned>(error_slot))),
-              incoming.at(t.targets[1].value));
-          auto *claimed = builder.CreateLoad(
-              builder.getInt32Ty(), builder.CreateStructGEP(layout, promise, 1));
-          builder.CreateStore(builder.CreateOr(claimed, builder.getInt32(2)),
-                              builder.CreateStructGEP(layout, promise, 1));
+          auto *origin = builder.CreateStructGEP(
+              layout, promise, static_cast<unsigned>(error_slot));
+          if (owning(error_type))
+            builder.CreateCall(value_op(error_type, true), {origin});
+          builder.CreateStore(builder.CreateLoad(lower_type(error_type), origin),
+                              incoming.at(t.targets[1].value));
         }
         builder.CreateBr(blocks[t.targets[1].value]);
         builder.SetInsertPoint(cancelled);
@@ -2128,6 +2156,12 @@ class Emitter {
           builder.CreateStore(builder.getInt32(1),
                               builder.CreateStructGEP(promise_layout,
                                                       promise_ptr, 0));
+          // No error value was produced; mark only that slot as claimed so the
+          // future release never drops uninitialized storage. The result slot
+          // stays promise-owned for every awaiter and the final release.
+          builder.CreateStore(builder.getInt32(2),
+                              builder.CreateStructGEP(promise_layout,
+                                                      promise_ptr, 1));
           builder.CreateBr(async_final);
         } else if (sig.throws_type) {
           if (type(sig.result).kind != hir::TypeKind::Unit)
@@ -2186,6 +2220,7 @@ class Emitter {
       auto *coro_free = llvm::Intrinsic::getOrInsertDeclaration(
           &module, llvm::Intrinsic::coro_free);
       builder.SetInsertPoint(async_final);
+      drop_async_parameters();
       auto *save = builder.CreateCall(coro_save, {coro_handle});
       auto *suspended =
           builder.CreateCall(coro_suspend, {save, builder.getInt1(true)});
@@ -2520,29 +2555,30 @@ public:
       builder.CreateCall(finish, {});
       builder.CreateRet(value);
       builder.SetInsertPoint(error);
-      auto *promise = builder.CreateCall(promise_of, {future});
-      auto *error_value = builder.CreateLoad(
-          lower_type(error_type),
-          builder.CreateStructGEP(layout, promise,
-                                  static_cast<unsigned>(error_slot)));
-      auto *claimed = builder.CreateLoad(
-          builder.getInt32Ty(), builder.CreateStructGEP(layout, promise, 1));
-      builder.CreateStore(builder.CreateOr(claimed, builder.getInt32(2)),
-                          builder.CreateStructGEP(layout, promise, 1));
-      builder.CreateCall(shutdown);
-      builder.CreateCall(release, {future});
-      auto report = module.getOrInsertFunction(
-          "lang_native_typed_error_v1",
-          llvm::FunctionType::get(builder.getVoidTy(),
-                                  {builder.getPtrTy(), builder.getInt64Ty()},
-                                  false));
-      const auto key = type_key(error_type);
-      builder.CreateCall(report, {builder.CreateGlobalString(key),
-                                  builder.getInt64(key.size())});
-      if (owning(error_type))
-        builder.CreateCall(value_op(error_type, false), {error_value});
-      builder.CreateCall(finish, {});
-      builder.CreateRet(builder.getInt32(1));
+      if (error_slot >= 0) {
+        // The error payload stays promise-owned. The future release runs the
+        // promise release hook before destroying the frame, so dropping the
+        // owning error here would either use a loaded aggregate as a drop
+        // argument or free it twice.
+        builder.CreateCall(shutdown);
+        builder.CreateCall(release, {future});
+        auto report = module.getOrInsertFunction(
+            "lang_native_typed_error_v1",
+            llvm::FunctionType::get(builder.getVoidTy(),
+                                    {builder.getPtrTy(), builder.getInt64Ty()},
+                                    false));
+        const auto key = type_key(error_type);
+        builder.CreateCall(report, {builder.CreateGlobalString(key),
+                                    builder.getInt64(key.size())});
+        builder.CreateCall(finish, {});
+        builder.CreateRet(builder.getInt32(1));
+      } else {
+        // A Unit error has no payload slot and no reportable error value.
+        builder.CreateCall(shutdown);
+        builder.CreateCall(release, {future});
+        builder.CreateCall(finish, {});
+        builder.CreateRet(builder.getInt32(1));
+      }
       builder.SetInsertPoint(cancelled);
       builder.CreateCall(shutdown);
       builder.CreateCall(release, {future});

@@ -1,0 +1,25 @@
+// CON03: awaiting the same Task twice observes the promise-owned result each
+// time. The first await must retain a copy instead of moving the value out of
+// the promise, so the second await still reads a live Vec.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+
+async func get() Vec[i32] {
+    await a.sleep(1);
+    return [42];
+}
+
+async func main() i32 throws os.Error {
+    let task = get();
+    {
+        let first = await task;
+        io.println(first[0]);
+    }
+    {
+        let second = await task;
+        io.println(second[0]);
+    }
+    return 0;
+}

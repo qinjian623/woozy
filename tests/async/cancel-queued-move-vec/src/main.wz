@@ -1,0 +1,6 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+async func take(values move Vec[i32]) i32 {return values[0];}
+func main() i32 {let values Vec[i32]=[42];let task=take(move values);a.spawn(task);a.cancel(task);a.run_until(task);return 0;}

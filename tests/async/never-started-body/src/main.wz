@@ -1,0 +1,16 @@
+// CON03: dropping a Task that was never spawned or awaited destroys the
+// initial coroutine suspend directly. It must not run the source body, register
+// defers, or leave the coroutine frame allocated.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+
+async func get() i32 throws os.Error {
+    io.println("BODY RAN");
+    return 42;
+}
+
+func main() i32 {
+    let task = get();
+    return 0;
+}

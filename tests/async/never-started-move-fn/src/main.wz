@@ -1,0 +1,6 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+async func take(action move (func() i32)) i32 {return action();}
+func main() i32 {let values Vec[i32]=[42];let action=move func() i32 {return values[0];};let task=take(move action);return 0;}

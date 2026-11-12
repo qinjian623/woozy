@@ -7370,6 +7370,10 @@ public:
              "function signature differs from real source declaration");
       need(sig.parameters.size() == f.parameters.size(),
            "function parameter count");
+      if (f.async)
+        for (const auto &parameter : sig.parameters)
+          need(parameter.mode != ParamMode::inout,
+               "async function retains inout parameter storage");
       need(scope(f.scope).function == f.symbol && !scope(f.scope).parent,
            "function scope ownership");
       std::set<std::string> labels;

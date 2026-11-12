@@ -1,0 +1,15 @@
+// CON03: an unspawned Task with a suspension point is still frame-only: the
+// initial destroy edge frees the frame without creating the awaited timer or
+// running any body cleanup.
+package app;
+import "std/async" as a;
+
+async func get() Vec[i32] {
+    await a.sleep(1);
+    return [42];
+}
+
+func main() i32 {
+    let task = get();
+    return 0;
+}

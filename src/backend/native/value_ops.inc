@@ -269,6 +269,13 @@
                t.kind == hir::TypeKind::AtomicI64Handle || t.kind == hir::TypeKind::IpcHandle) {
       runtime(copy ? "lang_handle_retain_v1" : "lang_handle_release_v1",
               builder.getVoidTy(), {builder.CreateLoad(builder.getPtrTy(), address)});
+    } else if (t.kind == hir::TypeKind::Task) {
+      // A Task handle owns one executor reference. Copies retain it and every
+      // owning slot releases exactly once; the promise value stays alive until
+      // the last handle is gone, independent of how often it was awaited.
+      runtime(copy ? "lang_async_task_retain_v1" : "lang_async_task_release_v1",
+              builder.getVoidTy(),
+              {builder.CreateLoad(builder.getPtrTy(), address)});
     } else if (t.kind == hir::TypeKind::CForeignResource) {
       const auto &decl = input.hir.module().resolved->project->c_type(t.c_type);
       auto *value = builder.CreateLoad(builder.getPtrTy(), address);

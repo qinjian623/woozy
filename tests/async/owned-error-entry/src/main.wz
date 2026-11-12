@@ -1,0 +1,11 @@
+// CON03: an async main that fails with an owning typed error reports the error
+// type, then lets the future release drop the promise-owned payload exactly
+// once after the frame is still valid.
+package app;
+import "std/os" as os;
+
+enum Failure { Bad(values Vec[i32]); }
+
+async func main() i32 throws Failure {
+    throw Failure.Bad(values: [42]);
+}
