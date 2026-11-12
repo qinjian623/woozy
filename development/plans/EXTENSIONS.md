@@ -23,6 +23,8 @@ hosted 启动、线程/fork 和 OpenSSL TLS 的底层接口也有独立 O0/O2 �
 
 线程池和 Channel 超时取消已经完成独立检查，整合后五项相关 CTest 通过，随后完整 CTest 通过 124/124（228.11 秒），日志为 `checks/extensions-20261111/full-ctest-124-fixedenv.log`。线程池使用无捕获函数与明确参数，不依赖捕获闭包；需要明确调用 shutdown。
 
-GC/Weak 配合独立检查通过；GC 线程暂停的两处错误处理问题已修复，独立复测 34/34 通过。Python 后端自动循环回收正在修正三处独立发现的问题；并发文档已整合。其余 worker 分别实现修改区间、Native 自动回收压力测试、TLS/HTTPS 公共库、C 调用指南和 Native Slice 源接口。共享 Core 目前由 Slice worker 单独修改，Python emitter/runtime 另有负责人。Weak 源接口、Native 自动回收，以及 Slice 的 Python 接入尚未完成。闭包的捕获绑定是否只读、移动捕获写法，以及 Weak 的目标类型等待用户答复；动态 trait、用户 Iterator 和 async/await 仍未实现。完整范围继续以任务表为准。
+GC/Weak 配合独立检查通过；GC 线程暂停及修改区间独立复测 42/42 通过。Python 循环回收经 Root 修正析构重入和深层释放后，17 个运行库测试（含 24 个退休顺序子用例）及 8 个真实 Wz 用例通过；后者禁用了 CPython GC。完整 128 项首次有两处 JSON 清理失败，修正后补跑四项相关检查全部通过，没有将分开的结果写成一次 128/128。日志为 `checks/extensions-20261111/python-gc-final-targeted2.log`。旧 JSON 自环测试从“保留一环”改为“清理为零且实际收集数增加”，对应本轮新增功能。
+
+Native 回收压力控制器、自动回收压力测试、TLS/HTTPS 公共库和 Native Slice 源接口的候选均已返回，分别交给独立检查；C 调用指南已整合。共享 Core 仍由 Slice 任务单独修改，检查通过后再交接。Weak 源接口、Native 自动回收，以及 Slice 的 Python 接入尚未完成。闭包的捕获绑定是否只读、移动捕获写法，以及 Weak 的目标类型等待用户答复；动态 trait、用户 Iterator 和 async/await 仍未实现。完整范围继续以任务表为准。
 
 循环回收接入的修改区间、Weak 失效、外部析构与线程/fork 顺序见 [MEMORY_INTEGRATION.md](MEMORY_INTEGRATION.md)。这些是待实现要求，不能据此将 MEM02 标为完成。

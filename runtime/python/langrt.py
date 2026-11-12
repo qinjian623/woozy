@@ -5,8 +5,9 @@ import re
 import struct
 import sys
 import traceback
+import weakref
 
-RUNTIME_VERSION = 'compiler-dev/1-python-values/8'
+RUNTIME_VERSION = 'compiler-dev/1-python-values/9'
 PANIC_MARKER = 'LANG_PANIC: '
 PANIC_EXIT_CODE = 101
 TYPED_ERROR_MARKER = 'LANG_TYPED_ERROR: '
@@ -338,7 +339,10 @@ def float_binary(op, a, b, bits):
 
 def run(main):
     try:
-        result = main()
+        try:
+            result = main()
+        finally:
+            _final_collect()
     except Panic as error:
         print(PANIC_MARKER + str(error), file=sys.stderr)
         raise SystemExit(PANIC_EXIT_CODE) from None
@@ -347,14 +351,189 @@ def run(main):
         if isinstance(error.value, Error):
             print(HOST_ERROR_MARKER + error.value.describe(), file=sys.stderr)
         error.drop()
+        # Releasing a typed payload can make its last owned cycle rootless.
+        _final_collect()
         raise SystemExit(1) from None
     raise SystemExit(0 if result is None else result)
+
+
+def _final_collect():
+    """Best-effort process-exit collection; never mask the program result."""
+    try:
+        if not _GC.active:
+            collect_cycles()
+    except Panic:
+        # Final cleanup is not a source-language operation.  Keep the
+        # original program exception/result and let Python reclaim the rest.
+        pass
 
 
 # These are language owners. Python references and garbage collection do not
 # increment/decrement the language count, and no __del__ performs language work.
 _DEAD = object()
 _MAX_COUNT = (1 << 64) - 1
+
+# A single-mutator language cycle collector.  _LIVE_VECS is a physical Python
+# owner for every Vec that still has a language owner; it never changes refs.
+_LIVE_VECS = set()
+_GC_INITIAL_THRESHOLD = 128
+
+
+class _CollectorState:
+    __slots__ = ('active', 'collections', 'allocations', 'since_collection',
+                 'polls', 'last_collected', 'total_collected', 'busy',
+                 'threshold', 'peak_live', 'white_ids', 'weak_dead')
+
+    def __init__(self):
+        self.active = False
+        self.collections = 0
+        self.allocations = 0
+        self.since_collection = 0
+        self.polls = 0
+        self.last_collected = 0
+        self.total_collected = 0
+        self.busy = 0
+        self.threshold = _GC_INITIAL_THRESHOLD
+        self.peak_live = 0
+        self.white_ids = set()
+        self.weak_dead = 0
+
+
+_GC = _CollectorState()
+
+
+class FunctionValue:
+    """A callable plus an optional owned capture environment.
+
+    ``environment`` is consumed (transferred), not retained.  A Vec element
+    type is applied by the caller when the environment is created; copying a
+    FunctionValue retains the environment Vec, dropping releases it.  With no
+    environment, the original immutable Python function is the value itself.
+    """
+    __slots__ = ('code', 'environment', '_dead')
+
+    def __init__(self, code, environment=None):
+        if environment is not None and not isinstance(environment, Vec):
+            raise TypeError('FunctionValue environment must be a Vec or None')
+        self.code, self.environment, self._dead = code, environment, False
+
+    def __call__(self, *args):
+        if self._dead:
+            raise Panic('call of inactive FunctionValue')
+        if self.environment is None:
+            return self.code(*args)
+        return self.code(self.environment, *args)
+
+    def copy(self):
+        if self._dead:
+            raise Panic('copy of inactive FunctionValue')
+        result = object.__new__(FunctionValue)
+        result.code = self.code
+        result._dead = False
+        if self.environment is None:
+            result.environment = None
+        else:
+            self.environment.retain()
+            result.environment = self.environment
+        return result
+
+    def drop(self):
+        if self._dead:
+            return
+        environment, self.environment = self.environment, None
+        self._dead = True
+        if environment is not None:
+            environment.release()
+
+    def _abandon_counted_environment(self):
+        """Retire a wrapper whose environment edge was already released."""
+        if self._dead:
+            return
+        self.environment = None
+        self._dead = True
+
+
+class Weak:
+    """Private weak handle for Vec and immortal no-capture function values.
+
+    Ordinary Python references do not make a language-dead Vec upgradeable.
+    During collection all white Vec handles are invalidated before storage is
+    cleared, and a cleanup callback cannot install a new upgradeable handle to
+    an object that is already white or language-dead.
+    """
+    __slots__ = ('_ref', '_immortal', '_code', '_invalid', '_empty',
+                 '_target_id', '__weakref__')
+
+    def __init__(self, target=None):
+        self._ref = None
+        self._immortal = None
+        self._code = None
+        self._invalid = False
+        self._empty = target is None
+        self._target_id = None
+        if target is None:
+            return
+        if isinstance(target, FunctionValue):
+            if target._dead:
+                # A dropped wrapper must never turn into immortal code merely
+                # because its environment field became None.
+                self._invalid = True
+            elif target.environment is None:
+                self._immortal = target.code
+            else:
+                self._code = target.code
+                self._ref = weakref.ref(target.environment)
+                self._target_id = id(target.environment)
+                self._invalid = not _vec_upgradeable(target.environment)
+        elif isinstance(target, Vec):
+            self._ref = weakref.ref(target)
+            self._target_id = id(target)
+            self._invalid = not _vec_upgradeable(target)
+        elif callable(target):
+            # Native immortal code has no language environment to reclaim.
+            self._immortal = target
+        else:
+            raise TypeError('Weak target must be Vec, FunctionValue or callable')
+        if self._ref is not None:
+            _WEAK_HANDLES.add(self)
+
+    def upgrade(self):
+        if self._immortal is not None:
+            return self._immortal
+        if self._invalid or self._empty or self._ref is None:
+            return None
+        target = self._ref()
+        if not _vec_upgradeable(target):
+            self._invalid = True
+            return None
+        target.retain()
+        if self._code is not None:
+            return FunctionValue(self._code, target)
+        return target
+
+    def is_empty(self):
+        if self._immortal is not None:
+            return False
+        if self._invalid or self._empty or self._ref is None:
+            return True
+        return not _vec_upgradeable(self._ref())
+
+
+_WEAK_HANDLES = weakref.WeakSet()
+
+
+def _vec_upgradeable(value):
+    return (isinstance(value, Vec) and not value._dead and value.refs > 0 and
+            id(value) not in _GC.white_ids)
+
+
+def _invalidate_white_weak(white_ids):
+    invalidated = 0
+    for handle in list(_WEAK_HANDLES):
+        if handle._target_id in white_ids and not handle._invalid:
+            handle._invalid = True
+            invalidated += 1
+    return invalidated
 
 
 class ValueType:
@@ -368,7 +547,9 @@ class ValueType:
         if self.kind == 'vec':
             value.retain()
             return value
-        if self.kind in ('foreign', 'error'):
+        if self.kind == 'function':
+            return value.copy() if isinstance(value, FunctionValue) else value
+        if self.kind in ('foreign', 'error', 'weak'):
             # A language copy keeps the same host object.  For errors this is
             # the declared error_payload_copy relation, not a deep copy.
             return value
@@ -396,9 +577,12 @@ class ValueType:
     def drop(self, value):
         if self.kind == 'vec':
             value.release()
+        elif self.kind == 'function':
+            if isinstance(value, FunctionValue):
+                value.drop()
         elif self.kind == 'error':
             value.drop()
-        elif self.kind == 'foreign':
+        elif self.kind in ('foreign', 'weak'):
             # Dropping a language owner does not promise immediate host
             # destruction or release a host reference held elsewhere.
             pass
@@ -412,6 +596,30 @@ class ValueType:
                     pending.extend(zip(fields, values))
                 else:
                     ops.drop(item)
+
+    def trace(self, value, visit):
+        """Visit immediate strong Wz object edges contained in one value.
+
+        A Vec is itself the graph node, so this visits it and does not walk
+        its items here.  Struct/enum fields recurse; a function contributes
+        only its environment Vec; foreign, error and weak values have no Wz
+        strong edge.  Duplicate fields are intentionally visited twice.
+        """
+        pending = [(self, value)]
+        while pending:
+            ops, item = pending.pop()
+            if not isinstance(ops, ValueType):
+                continue
+            if ops.kind == 'vec':
+                visit(item)
+            elif ops.kind == 'function':
+                if isinstance(item, FunctionValue) and item.environment is not None:
+                    visit(item.environment)
+            elif ops.kind in ('struct', 'enum'):
+                fields, values = ((ops.fields, item) if ops.kind == 'struct'
+                                  else (ops.variants[item[0]], item[1]))
+                pending.extend(zip(fields, values))
+            # trivial, foreign, error and weak values never form a strong edge.
 
 
 class Owner:
@@ -576,7 +784,8 @@ def _allocate_vec():
 
 
 class Vec:
-    __slots__ = ('element', 'items', 'refs', 'iterations', 'capacity', '_reserved')
+    __slots__ = ('element', 'items', 'refs', 'iterations', 'capacity',
+                 '_reserved', '_dead', '__weakref__')
 
     @staticmethod
     def create(element, values):
@@ -586,24 +795,38 @@ class Vec:
             result.items = _allocate_elements(values)
             result.element, result.refs, result.iterations = element, 1, 0
             result.capacity, result._reserved = len(values), []
+            result._dead = False
+            # The registry is a physical Python owner only.  It never changes
+            # refs and is not itself a language strong edge/root.
+            _LIVE_VECS.add(result)
+            _GC.allocations += 1
+            _GC.since_collection += 1
             return result
         except (MemoryError, OverflowError):
             raise Panic('Vec allocation failed') from None
 
     def retain(self):
-        if not 0 < self.refs < _MAX_COUNT:
+        if self._dead or not 0 < self.refs < _MAX_COUNT:
             raise Panic('Vec reference count overflow or inactive object')
         self.refs += 1
 
     def release(self):
-        if self.refs <= 0:
+        if self._dead or self.refs <= 0:
             raise RuntimeError('duplicate Vec release')
         self.refs -= 1
-        if self.refs == 0:
-            for value in reversed(self.items):
-                self.element.drop(value)
-            self.items.clear()
-            self._reserved.clear()
+        if self.refs != 0:
+            return
+
+        # Normal ARC exhaustion: remove the registry pin and detach every
+        # owned row before any element drop can observe this container.
+        _LIVE_VECS.discard(self)
+        self._dead = True
+        items, self.items = self.items, []
+        self._reserved.clear()
+        self.capacity = 0
+        self.iterations = 0
+        for value in reversed(items):
+            self.element.drop(value)
 
     def index(self, index):
         if not 0 <= index < len(self.items):
@@ -683,9 +906,12 @@ class Vec:
         if self.iterations:
             raise Panic('Vec length changes during iteration')
         if length < previous:
-            for value in reversed(self.items[length:]):
-                self.element.drop(value)
+            # Detach the old owned rows from the live container first; a drop
+            # may recurse into another Vec before this call returns.
+            removed = self.items[length:]
             del self.items[length:]
+            for value in reversed(removed):
+                self.element.drop(value)
             return
         self.reserve(length)
         try:
@@ -710,6 +936,223 @@ class Vec:
         self.capacity = max(self.capacity, len(replacement))
         for value in reversed(old):
             self.element.drop(value)
+
+
+
+def _collector_edges(source):
+    """Snapshot one live Vec's immediate strong Wz edges, duplicates included."""
+    tracer = getattr(source.element, 'trace', None)
+    if tracer is None:
+        # A private test/non-language element type has no Wz object edges.
+        return []
+    edges = []
+
+    def visit(target):
+        if not isinstance(target, Vec):
+            raise Panic('cycle trace found a non-Vec strong edge')
+        edges.append(target)
+
+    for item in source.items:
+        tracer(item, visit)
+    return edges
+
+
+def _retire_released_functions(element, items):
+    """Retire every owned function wrapper without dropping any old row."""
+    pending = [(element, value) for value in items]
+    while pending:
+        ops, value = pending.pop()
+        if not isinstance(ops, ValueType):
+            continue
+        if ops.kind == 'function':
+            if isinstance(value, FunctionValue):
+                value._abandon_counted_environment()
+        elif ops.kind in ('struct', 'enum'):
+            fields, values = ((ops.fields, value) if ops.kind == 'struct'
+                              else (ops.variants[value[0]], value[1]))
+            pending.extend(zip(fields, values))
+
+
+def _drop_released_value(ops, value):
+    """Drop a row whose strong Vec/function counts were already released."""
+    if not isinstance(ops, ValueType):
+        ops.drop(value)
+        return
+    if ops.kind in ('vec', 'function'):
+        # This edge was counted down in the collector's clear phase.  The
+        # object itself is released by that phase, not again by this drop.
+        return
+    if ops.kind == 'error':
+        value.drop()
+        return
+    if ops.kind in ('foreign', 'weak', 'trivial'):
+        return
+    if ops.kind in ('struct', 'enum'):
+        pending = [(ops, value)]
+        while pending:
+            current, item = pending.pop()
+            if isinstance(current, ValueType) and current.kind in ('struct', 'enum'):
+                fields, values = ((current.fields, item)
+                                  if current.kind == 'struct'
+                                  else (current.variants[item[0]], item[1]))
+                pending.extend(zip(fields, values))
+            else:
+                _drop_released_value(current, item)
+        return
+    ops.drop(value)
+
+
+def _drop_released_rows(element, items):
+    for value in reversed(items):
+        _drop_released_value(element, value)
+
+
+def _update_collector_threshold():
+    live = len(_LIVE_VECS)
+    _GC.peak_live = max(_GC.peak_live, live)
+    # A scan costs O(live + edges).  Growing the pressure budget with the live
+    # set avoids a fixed 128-allocation O(n^2) rescan of a growing graph.
+    _GC.threshold = max(_GC_INITIAL_THRESHOLD, live * 2)
+
+
+def collect_cycles(force=False):
+    """Collect unreachable pure-Wz strong cycles.
+
+    The algorithm is trial deletion: compute incoming strong edges from the
+    snapshot, keep external>0 roots and everything reachable from them black,
+    invalidate Weak handles for the remaining white objects, detach and count
+    down every white outgoing edge, then release the old rows only after the
+    collector is no longer active.  A reentrant call reports busy.
+    """
+    if _GC.active:
+        _GC.busy += 1
+        return False
+    _GC.active = True
+    _GC.since_collection = 0
+    white_ids = None
+    try:
+        white_ids = set()
+        live = list(value for value in _LIVE_VECS
+                    if not value._dead and value.refs > 0)
+        live_ids = {id(value): value for value in live}
+        incoming = {id(value): 0 for value in live}
+        edges = {}
+        for source in live:
+            source_edges = _collector_edges(source)
+            for target in source_edges:
+                if id(target) not in live_ids:
+                    raise Panic('cycle collector found a non-live strong edge')
+            edges[id(source)] = source_edges
+            for target in source_edges:
+                incoming[id(target)] += 1
+
+        external = {}
+        for value in live:
+            count = value.refs - incoming[id(value)]
+            if count < 0:
+                raise Panic('cycle collector refs/incoming mismatch')
+            external[id(value)] = count
+
+        black = set()
+        pending_roots = list(value for value in live
+                             if external[id(value)] > 0)
+        while pending_roots:
+            value = pending_roots.pop()
+            key = id(value)
+            if key in black:
+                continue
+            black.add(key)
+            pending_roots.extend(edges[key])
+
+        white = list(value for value in live if id(value) not in black)
+        if not white:
+            _GC.collections += 1
+            _GC.last_collected = 0
+            _update_collector_threshold()
+            return True
+
+        white_ids = set(id(value) for value in white)
+        _GC.white_ids.update(white_ids)
+        # Weak handles are dead before any storage is cleared.  Python object
+        # liveness alone never makes a refs==0/dead object upgradeable.
+        _GC.weak_dead += _invalidate_white_weak(white_ids)
+
+        # clear-all: detach every old row from the traceable graph first.
+        pending = []
+        for value in white:
+            old = value.items
+            value.items = []
+            value._reserved.clear()
+            value.capacity = 0
+            value.iterations = 0
+            value._dead = True
+            _LIVE_VECS.discard(value)
+            pending.append((value, old))
+
+        # release-all counting phase: each duplicate edge decrements once.
+        for value in white:
+            for target in edges[id(value)]:
+                if target.refs <= 0:
+                    raise Panic('cycle collector released a dead strong edge')
+                target.refs -= 1
+        for value in white:
+            if value.refs != 0:
+                raise Panic('cycle collector left a phantom white reference')
+        for key in black:
+            if live_ids[key].refs <= 0:
+                raise Panic('cycle collector released a live root')
+
+        # A callback from any old row may hold a physical reference to a
+        # function in another white Vec.  Retire all wrappers before callbacks.
+        for value, old in pending:
+            _retire_released_functions(value.element, old)
+
+        freed = len(white)
+        _GC.active = False
+        for value, old in pending:
+            _drop_released_rows(value.element, old)
+            old.clear()
+        _GC.collections += 1
+        _GC.last_collected = freed
+        _GC.total_collected += freed
+        _update_collector_threshold()
+        return True
+    except (MemoryError, OverflowError):
+        raise Panic('cycle collector allocation failed') from None
+    finally:
+        _GC.active = False
+        if white_ids:
+            _GC.white_ids.difference_update(white_ids)
+
+
+def _gc_poll(force=False):
+    """Generated-program safe point; cheap unless the pressure budget is hit."""
+    if _GC.active:
+        return False
+    _GC.polls += 1
+    if force or _GC.since_collection >= _GC.threshold:
+        return collect_cycles()
+    return False
+
+
+def _gc_stats():
+    return {
+        'runtime_version': RUNTIME_VERSION,
+        'active': _GC.active,
+        'live': len(_LIVE_VECS),
+        'allocations': _GC.allocations,
+        'since_collection': _GC.since_collection,
+        'collections': _GC.collections,
+        'polls': _GC.polls,
+        'last_collected': _GC.last_collected,
+        'total_collected': _GC.total_collected,
+        'busy': _GC.busy,
+        'threshold': _GC.threshold,
+        'peak_live': _GC.peak_live,
+        'white': len(_GC.white_ids),
+        'weak_dead': _GC.weak_dead,
+    }
+
 
 
 class Index:

@@ -13,7 +13,7 @@ spec.loader.exec_module(rt)
 
 class Runtime(unittest.TestCase):
     def test_version_and_panic(self):
-        self.assertEqual(rt.RUNTIME_VERSION, 'compiler-dev/1-python-values/8')
+        self.assertEqual(rt.RUNTIME_VERSION, 'compiler-dev/1-python-values/9')
         self.assertTrue(issubclass(rt.Panic, BaseException))
         self.assertFalse(issubclass(rt.Panic, Exception))
 

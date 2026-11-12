@@ -1,5 +1,6 @@
 #pragma once
 #include <string_view>
 namespace lang::backend::python::detail {
-inline constexpr std::string_view runtime = R"LANGRT(@LANG_PYTHON_RUNTIME@)LANGRT";
+inline constexpr char runtime_data[] = R"LANGRT(@LANG_PYTHON_RUNTIME@)LANGRT";
+inline constexpr std::string_view runtime{runtime_data, sizeof(runtime_data) - 1};
 }

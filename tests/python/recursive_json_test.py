@@ -123,8 +123,12 @@ func main() i32 {
 }
 '''
 OBSERVER = '''
-import json, runpy, sys
+import gc, json, runpy, sys
 import langrt as rt
+gc.disable()
+def forbid_host_collection(*args, **kwargs):
+    raise AssertionError('recursive JSON cleanup must not use CPython gc.collect')
+gc.collect = forbid_host_collection
 allocated = []
 create = rt.Vec.create
 def observe(element, values):
@@ -141,7 +145,10 @@ assert sys.getrecursionlimit() == limit
 alive = sum(item.refs > 0 for item in allocated)
 assert alive == int(sys.argv[2]), (alive, [(i, item.refs) for i, item in enumerate(allocated) if item.refs])
 assert all(item.refs > 0 or not item.items for item in allocated)
-print(json.dumps(dict(allocated=len(allocated), alive=alive, recursionlimit=limit)))
+collected = rt._gc_stats()['total_collected']
+assert collected >= int(sys.argv[3]), collected
+print(json.dumps(dict(allocated=len(allocated), alive=alive,
+                      collected=collected, recursionlimit=limit)))
 '''
 
 
@@ -170,7 +177,8 @@ def main():
         enum, member = declarations.strip().split('\n')
         cases[f'member-first-{index}'] = VALUE_PROGRAM.format(declarations=member + '\n' + enum), 0
     cases['json-depth-256'] = JSON_DEPTH, 0
-    cases['json-cycle'] = JSON_CYCLE, 1
+    # The normal Python runner now reclaims pure-Woozy strong cycles.
+    cases['json-cycle'] = JSON_CYCLE, 0
     report = {}
     for name, (source, alive) in cases.items():
         directory = args.out.resolve() / name
@@ -186,7 +194,8 @@ def main():
         observer = output / 'observe.py'
         observer.write_text(OBSERVER)
         report[name] = json.loads(command([args.python, '-s', observer,
-                                          output / 'program.py', alive], 20))
+                                          output / 'program.py', alive,
+                                          int(name == 'json-cycle')], 20))
     args.out.mkdir(parents=True, exist_ok=True)
     (args.out / 'results.json').write_text(json.dumps(report, indent=2) + '\n')
     print(json.dumps(report))

@@ -1439,6 +1439,10 @@ class Emitter {
       break_targets.pop_back();
       loops.pop_back();
       loop_body(std::move(body), loop.body, completed_loop, n);
+      // Safe point at the iteration header, before the step, condition or
+      // body. A source continue reaches this line on the next iteration.
+      loop.body.insert(loop.body.begin(),
+                       {"_rt._gc_poll()", n.source.span, false, {}, {}});
       for_scope.push_back(std::move(loop));
       scope_wrap(n.scope, std::move(for_scope), suite, n);
       break;
@@ -1494,6 +1498,8 @@ class Emitter {
       Suite cleanup;
       if (!text) line(cleanup, collection + ".end()", n);
       line(cleanup, "_frame.drop(" + iteration_key + ")", n);
+      loop.body.insert(loop.body.begin(),
+                       {"_rt._gc_poll()", n.source.span, false, {}, {}});
       guarded({std::move(loop)}, std::move(cleanup), suite, n);
       break;
     }
@@ -1826,6 +1832,9 @@ class Emitter {
                        true,
                        {},
                        {}};
+    // Source function entry is a safe point.  It is deliberately not added
+    // to expression-outlining helpers or generated copy/drop snippets.
+    line(function.body, "_rt._gc_poll()", node(f.body));
     line(function.body, "_frame = _rt.Frame()", node(f.body));
     for (size_t i = 0; i < f.parameters.size(); ++i) {
       const auto &p = f.parameters[i];

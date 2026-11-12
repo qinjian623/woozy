@@ -1,0 +1,78 @@
+package app;
+
+struct Node {
+    value i32;
+    children Vec[Node];
+}
+struct Rich {
+    value i32;
+    children Vec[Rich];
+    extra Vec[i32];
+}
+struct Nested {
+    nodes Vec[Node];
+    blocks Vec[Vec[i32]];
+}
+enum Failure { Bad; }
+
+func make_self() Vec[Node] {
+    var cycle Vec[Node] = [Node(value: 1, children: [])];
+    cycle[0] = Node(value: 2, children: cycle);
+    return cycle;
+}
+func make_pair() Vec[Node] {
+    var first Vec[Node] = [Node(value: 1, children: [])];
+    var second Vec[Node] = [Node(value: 2, children: [])];
+    first[0] = Node(value: 3, children: second);
+    second[0] = Node(value: 4, children: first);
+    return first;
+}
+func make_duplicate() Vec[Node] {
+    var child Vec[Node] = [Node(value: 7, children: [])];
+    var parent Vec[Node] = [Node(value: 8, children: child),
+                            Node(value: 9, children: child)];
+    child[0] = Node(value: 10, children: parent);
+    return parent;
+}
+func make_dead_to_live() Vec[i32] {
+    var child Vec[i32] = [11];
+    var parent Vec[Rich] = [Rich(value: 1, children: [], extra: [])];
+    parent[0] = Rich(value: 2, children: parent, extra: child);
+    return child;
+}
+func make_nested() Nested {
+    var node Vec[Node] = [Node(value: 1, children: [])];
+    node[0] = Node(value: 2, children: node);
+    return Nested(nodes: node, blocks: [[1, 2], [3]]);
+}
+func churn(count i32) i32 {
+    for var i i32 = 0; i < count; i += 1 {
+        var cycle Vec[Node] = [Node(value: i, children: [])];
+        cycle[0] = Node(value: i, children: cycle);
+    }
+    return 0;
+}
+func churn_continue(count i32) i32 {
+    for var i i32 = 0; i < count; i += 1 {
+        var cycle Vec[Node] = [Node(value: i, children: [])];
+        cycle[0] = Node(value: i, children: cycle);
+        continue;
+    }
+    return 0;
+}
+func exception_path(flag bool) i32 throws Failure {
+    var log i32 = 0;
+    defer { log += 1; }
+    try {
+        var cycle Vec[Node] = [Node(value: 1, children: [])];
+        cycle[0] = Node(value: 2, children: cycle);
+        if flag { throw Failure.Bad; }
+        log += 10;
+    } catch e Failure {
+        log += 100;
+    }
+    return log;
+}
+func main() i32 {
+    return 0;
+}

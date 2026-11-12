@@ -50,6 +50,8 @@ func main() throws os.Error {
 
 `std/thread` 支持无捕获函数加明确参数的线程创建与等待，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员同步，原子 ARC 只保护引用计数。
 
+Python 后端已支持纯 Woozy 强引用环的自动回收；Native 后端仍在接入，当前可能保留强引用环。
+
 `std/rwlock` 提供读写锁，`std/cancel` 提供协作取消。`std/channel` 提供有界或无界队列，以及超时和取消等待；`std/task` 提供固定工作线程的线程池与 Future，需要显式调用 shutdown。
 
 Native 程序可以声明并调用 C 库的有类型函数，传递自然布局的 C record、Ptr 和 Buffer，或使用同步的无捕获回调。指针和 Buffer 的索引访问放在 unsafe 块内；C 错误码不会自动转换成 Woozy 错误。需要 libc 的库必须明确选择 hosted 运行方式，普通程序继续独立运行。

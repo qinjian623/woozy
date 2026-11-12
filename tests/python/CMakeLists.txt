@@ -91,6 +91,15 @@ add_test(NAME python.ownership COMMAND "${LANG_PYTHON312}"
 set_tests_properties(python.ownership PROPERTIES TIMEOUT 180)
 add_test(NAME python.ownership_runtime COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/ownership_runtime_test.py")
+add_test(NAME python.language_gc_runtime COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/language_gc/runtime_gc_test.py")
+set_tests_properties(python.language_gc_runtime PROPERTIES TIMEOUT 60)
+add_test(NAME python.language_gc_source COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/language_gc/run_language_gc.py"
+  --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_PYTHON_TEST_ROOT}"
+  --out "${CMAKE_CURRENT_BINARY_DIR}/language-gc"
+  --python "${LANG_PYTHON312}")
+set_tests_properties(python.language_gc_source PROPERTIES TIMEOUT 180)
 add_executable(lang_python_ownership_ir_test ownership_ir_test.cpp)
 target_link_libraries(lang_python_ownership_ir_test PRIVATE lang_sema lang_backend_python)
 add_test(NAME python.ownership_ir COMMAND lang_python_ownership_ir_test)
