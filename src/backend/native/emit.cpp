@@ -84,6 +84,11 @@ class Emitter {
        builder.getPtrTy(),
        builder.getPtrTy(),
        builder.getInt64Ty()});
+  // Source Slice[T] is an inline 24-byte {owner, start, length} descriptor.
+  // The low-level runtime owns retain/pin/copy/drop; this is not a heap node.
+  llvm::StructType *slice_type = llvm::StructType::get(
+      context,
+      {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty()});
   hir::Type type(TypeId id) const { return *aggregates.types.find(id); }
   llvm::Type *lower_type(TypeId id) {
     if (auto found = layouts.find(id); found != layouts.end())
@@ -116,6 +121,8 @@ class Emitter {
       layouts.emplace(id, layout);
       return layout;
     }
+    case hir::TypeKind::Slice:
+      return slice_type;
     case hir::TypeKind::CForeignPointer:
     case hir::TypeKind::CForeignBuffer:
     case hir::TypeKind::CForeignRecord:
@@ -262,6 +269,8 @@ class Emitter {
     case hir::TypeKind::IpcHandle: return "std/ipc.Handle";
     case hir::TypeKind::Vec:
       return "Vec[" + type_key(t.type_args[0]) + "]";
+    case hir::TypeKind::Slice:
+      return "Slice[" + type_key(t.type_args[0]) + "]";
     case hir::TypeKind::Function: {
       std::string key = "func(";
       for (size_t a = 0; a < t.parameters.size(); ++a) {
@@ -571,6 +580,30 @@ class Emitter {
     case SystemOperation::ffi_buffer_len:
     case SystemOperation::ffi_buffer_len_mut:
       return builder.CreateExtractValue(args[0], {1});
+    case SystemOperation::slice_view:
+    case SystemOperation::slice_sub: {
+      auto *out = storage(lower_type(i.type));
+      auto *source_address =
+          value_address(type(i.signature).parameters[0].type, args[0]);
+      if (*i.system == SystemOperation::slice_view)
+        runtime("lang_slice_new_v1", builder.getVoidTy(),
+                {out, args[0], args[1], args[2]});
+      else
+        runtime("lang_slice_sub_v1", builder.getVoidTy(),
+                {out, source_address, args[1], args[2]});
+      return builder.CreateLoad(lower_type(i.type), out);
+    }
+    case SystemOperation::slice_len:
+      return runtime("lang_slice_length_v1", builder.getInt64Ty(),
+                     {value_address(type(i.signature).parameters[0].type, args[0])});
+    case SystemOperation::slice_to_vec: {
+      auto *owner = builder.CreateExtractValue(args[0], {0});
+      auto *start = builder.CreateExtractValue(args[0], {1});
+      auto *length = builder.CreateExtractValue(args[0], {2});
+      auto *end = builder.CreateAdd(start, length);
+      return runtime("lang_vec_slice_v1", builder.getPtrTy(),
+                     {owner, start, end});
+    }
     case SystemOperation::read:
       return call("lang_os_read_vec_v1", i64, {args[0], args[1], args[2]});
     case SystemOperation::write:
@@ -785,13 +818,18 @@ class Emitter {
       if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::Vec)
         runtime("lang_vec_end_v1", builder.getVoidTy(),
                 {builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value))});
+      // A Slice already owns an iteration pin for its whole lifetime; the
+      // loop adds no second pin and therefore has nothing to end here.
       break;
     case ir::Op::iteration_begin: {
       auto collection_type = current_function->slots.at(i.slot.value).type;
       auto *collection = builder.CreateLoad(lower_type(collection_type), slots.at(i.slot.value));
       auto *length = type(collection_type).kind == hir::TypeKind::String
                          ? builder.CreateExtractValue(collection, {2})
-                         : runtime("lang_vec_begin_v1", builder.getInt64Ty(), {collection});
+                         : type(collection_type).kind == hir::TypeKind::Slice
+                               ? runtime("lang_slice_length_v1", builder.getInt64Ty(),
+                                         {slots.at(i.slot.value)})
+                               : runtime("lang_vec_begin_v1", builder.getInt64Ty(), {collection});
       builder.CreateStore(length, iteration_lengths.at(i.slot.value));
       builder.CreateStore(builder.getInt64(0), iteration_indices.at(i.slot.value)); break;
     }
@@ -806,6 +844,10 @@ class Emitter {
       auto *index = builder.CreateLoad(builder.getInt64Ty(), iteration_indices.at(i.slot.value));
       if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::String) {
         v = runtime("lang_text_at_v1", builder.getInt32Ty(), {slots.at(i.slot.value), index});
+      } else if (type(current_function->slots.at(i.slot.value).type).kind == hir::TypeKind::Slice) {
+        auto *address = runtime("lang_slice_at_v1", builder.getPtrTy(),
+                                {slots.at(i.slot.value), index});
+        v = copy_value(i.type, builder.CreateLoad(lower_type(i.type), address));
       } else {
         auto *vec = builder.CreateLoad(builder.getPtrTy(), slots.at(i.slot.value));
         auto *address = runtime("lang_vec_at_v1", builder.getPtrTy(), {vec, index});
@@ -869,7 +911,11 @@ class Emitter {
     }
     case ir::Op::vec_check: {
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
-      emit_vec_check(args[0], index, i.source);
+      if (type(value_types.at(i.inputs[0])).kind == hir::TypeKind::Slice) {
+        auto *address = value_address(value_types.at(i.inputs[0]), args[0]);
+        auto *length = runtime("lang_slice_length_v1", builder.getInt64Ty(), {address});
+        guard(builder.CreateICmpUGE(index, length), 4, i.source);
+      } else emit_vec_check(args[0], index, i.source);
       break;
     }
     case ir::Op::vec_read: {
@@ -881,7 +927,13 @@ class Emitter {
         break;
       }
       auto element_type = type(receiver_type).type_args[0];
-      if (!owning(element_type)) {
+      if (type(receiver_type).kind == hir::TypeKind::Slice) {
+        auto *slice_address = value_address(receiver_type, args[0]);
+        auto *address = runtime("lang_slice_at_v1", builder.getPtrTy(),
+                                {slice_address, index});
+        auto *loaded = builder.CreateLoad(lower_type(element_type), address);
+        v = owning(element_type) ? copy_value(i.type, loaded) : loaded;
+      } else if (!owning(element_type)) {
         emit_vec_check(args[0], index, i.source);
         auto *data = vec_field(args[0], 5, builder.getPtrTy());
         auto *elem_addr = builder.CreateGEP(lower_type(element_type), data, index);
@@ -896,15 +948,36 @@ class Emitter {
     }
     case ir::Op::vec_element_address: {
       // The preceding verified vec_check fixed the panic location. Reuse the
-      // current Vec layout and its bounds-checking accessor for the address.
+      // current Vec/Slice bounds-checking accessor for the address.
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
-      v = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
+      auto receiver = value_types.at(i.inputs[0]);
+      if (type(receiver).kind == hir::TypeKind::Slice) {
+        auto *slice_address = value_address(receiver, args[0]);
+        v = runtime("lang_slice_at_v1", builder.getPtrTy(), {slice_address, index});
+      } else v = runtime("lang_vec_at_v1", builder.getPtrTy(), {args[0], index});
       break;
     }
     case ir::Op::vec_set: {
       auto *index = checked_index(args[1], value_types.at(i.inputs[1]), i.source, 4);
-      auto element_type = type(value_types.at(i.inputs[0])).type_args[0];
-      if (!owning(element_type)) {
+      auto receiver_type = value_types.at(i.inputs[0]);
+      auto element_type = type(receiver_type).type_args[0];
+      if (type(receiver_type).kind == hir::TypeKind::Slice) {
+        auto *slice_address = value_address(receiver_type, args[0]);
+        if (!owning(element_type)) {
+          auto *target = runtime("lang_slice_at_v1", builder.getPtrTy(),
+                                 {slice_address, index});
+          builder.CreateStore(args[2], target);
+        } else {
+          // Translate the relative index to the owner's absolute slot. The
+          // verified runtime setter drops the replaced element exactly once.
+          auto *owner = builder.CreateExtractValue(args[0], {0});
+          auto *start = builder.CreateExtractValue(args[0], {1});
+          auto *absolute = builder.CreateAdd(start, index);
+          auto *address = element_storage(value_types.at(i.inputs[2]), args[2]);
+          runtime("lang_vec_set_v1", builder.getVoidTy(),
+                  {owner, absolute, address});
+        }
+      } else if (!owning(element_type)) {
         emit_vec_check(args[0], index, i.source);
         auto *data = vec_field(args[0], 5, builder.getPtrTy());
         auto *elem_addr = builder.CreateGEP(lower_type(element_type), data, index);
@@ -920,15 +993,26 @@ class Emitter {
       auto *start = (i.bits & 1) ? checked_index(args[p], value_types.at(i.inputs[p]), i.source, 9)
                                : static_cast<llvm::Value *>(builder.getInt64(0));
       if (i.bits & 1) ++p;
-      auto *end = (i.bits & 2) ? checked_index(args[p], value_types.at(i.inputs[p]), i.source, 9)
-                             : type(i.type).kind == hir::TypeKind::String
-                                 ? builder.CreateExtractValue(args[0], {2})
-                                 : runtime("lang_vec_length_v1", builder.getInt64Ty(), {args[0]});
+      auto *end = (i.bits & 2)
+                      ? checked_index(args[p], value_types.at(i.inputs[p]), i.source, 9)
+                      : type(i.type).kind == hir::TypeKind::String
+                            ? builder.CreateExtractValue(args[0], {2})
+                            : type(i.type).kind == hir::TypeKind::Slice
+                                  ? static_cast<llvm::Value *>(builder.getInt64(0))
+                                  : runtime("lang_vec_length_v1", builder.getInt64Ty(), {args[0]});
       if (type(i.type).kind == hir::TypeKind::String) {
         guard(builder.CreateOr(builder.CreateICmpUGT(start, end),
                                 builder.CreateICmpUGT(end, builder.CreateExtractValue(args[0], {2}))), 9, i.source);
         auto *out = storage(lower_type(i.type));
         runtime("lang_text_slice_v1", builder.getVoidTy(), {out, value_address(i.type, args[0]), start, end});
+        v = builder.CreateLoad(lower_type(i.type), out);
+      } else if (type(i.type).kind == hir::TypeKind::Slice) {
+        auto *source_address = value_address(value_types.at(i.inputs[0]), args[0]);
+        if (!(i.bits & 2))
+          end = runtime("lang_slice_length_v1", builder.getInt64Ty(), {source_address});
+        auto *out = storage(lower_type(i.type));
+        runtime("lang_slice_sub_v1", builder.getVoidTy(),
+                {out, source_address, start, end});
         v = builder.CreateLoad(lower_type(i.type), out);
       } else v = runtime("lang_vec_slice_v1", builder.getPtrTy(), {args[0], start, end});
       break;

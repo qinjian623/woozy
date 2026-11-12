@@ -31,6 +31,20 @@ add_test(NAME native.aggregates COMMAND lang_native_aggregate_test ${LANG_SOURCE
 add_executable(lang_native_indexed_field_probe indexed_field_probe.cpp)
 target_link_libraries(lang_native_indexed_field_probe PRIVATE lang_sema lang_native)
 add_test(NAME native.indexed_field_ir COMMAND lang_native_indexed_field_probe ${LANG_SOURCE_ROOT})
+add_executable(lang_slice_forged_test slice_source/forged_test.cpp)
+target_link_libraries(lang_slice_forged_test PRIVATE lang_sema lang_native_ir)
+add_test(NAME native.slice_forged COMMAND lang_slice_forged_test
+  ${LANG_SOURCE_ROOT}/tests/native/slice_source/fixtures/core/lang.toml)
+set_tests_properties(native.slice_forged PROPERTIES TIMEOUT 60)
+if(LANG_TEST_PYTHON)
+  add_test(NAME native.slice_source COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/native/slice_source/run_slice_source.py
+    --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_native_helper>
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld
+    --runtime $<TARGET_FILE:lang_native_runtime> --root ${LANG_SOURCE_ROOT}
+    --out ${CMAKE_CURRENT_BINARY_DIR}/slice-source-results)
+  set_tests_properties(native.slice_source PROPERTIES TIMEOUT 600)
+endif()
 find_package(LLVM REQUIRED CONFIG)
 add_executable(lang_native_llvm_test llvm_test.cpp)
 target_include_directories(lang_native_llvm_test SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})

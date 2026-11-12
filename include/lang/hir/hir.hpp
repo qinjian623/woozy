@@ -39,7 +39,11 @@ enum class TypeKind {
   MutexHandle,
   CondvarHandle,
   AtomicI64Handle,
-  IpcHandle
+  IpcHandle,
+  // Borrowed view over a Vec. type_args[0] is the element type. The inline
+  // 24-byte {owner,start,length} value retains+pins its owner while live.
+  // Appended to preserve the published numeric TypeKind values.
+  Slice
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -611,7 +615,10 @@ enum class ValueKind {
   // An owning compiler-private thread/mutex/condvar/atomic handle. The source
   // std modules expose it only through ordinary nominal wrappers.
   runtime_handle,
-  string
+  string,
+  // A borrowed Slice inline value. It owns one strong Vec reference and one
+  // iteration pin; copy and drop use the private 24-byte runtime ABI.
+  slice
 };
 struct ValueField {
   std::optional<SymbolId> variant;

@@ -473,7 +473,7 @@ public:
         return result;
       }
       for (const auto *s : {"Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16",
-                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Result", "Ptr", "PtrMut",
+                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Slice", "Result", "Ptr", "PtrMut",
                            "Buffer", "BufferMut",
                            "__woozy_Thread", "__woozy_Mutex", "__woozy_Condvar",
                            "__woozy_AtomicI64", "__woozy_IpcHandle"})

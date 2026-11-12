@@ -1,0 +1,34 @@
+package app;
+import "std/slice" as slice;
+
+enum E { No; }
+
+func maybe(flag bool, values Vec[i32]) Slice[i32] throws E {
+    let s Slice[i32] = slice.view[i32](values, 0, 2);
+    if flag { throw E.No; }
+    return s;
+}
+
+func returning(values Vec[i32], log inout i64) Slice[i32] {
+    let s Slice[i32] = slice.view[i32](values, 0, 2);
+    defer { log = log * 10 + 1; }
+    return s;
+}
+
+func main() i32 throws E {
+    let v Vec[i32] = [1, 2, 3];
+    try {
+        let failed Slice[i32] = maybe(true, v);
+        return 1;
+    } catch e E {
+    }
+    let good Slice[i32] = maybe(false, v);
+    if slice.len(good) != 2 || good[0] != 1 || good[1] != 2 { return 2; }
+    let copy Slice[i32] = good;
+    copy[0] = 8;
+    if v[0] != 8 || good[0] != 8 { return 3; }
+    var log i64 = 0;
+    let kept Slice[i32] = returning(v, inout log);
+    if log != 1 || kept[0] != 8 || kept[1] != 2 { return 4; }
+    return 0;
+}

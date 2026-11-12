@@ -1,0 +1,10 @@
+schema_version = 1
+
+[package]
+name = "bounds_high"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "native"
+word_bits = 64

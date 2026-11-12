@@ -1,0 +1,44 @@
+package app;
+import "std/slice" as slice;
+
+struct Text { value string; n i32; }
+enum Node { Leaf(value string); Empty; }
+
+func main() i32 {
+    let texts Vec[string] = ["a", "bb", "ccc"];
+    let ts Slice[string] = slice.view[string](texts, 0, 2);
+    let copied Slice[string] = ts;
+    if ts[1] != "bb" || copied[1] != "bb" { return 1; }
+    ts[0] = ts[0];
+    if texts[0] != "a" || ts[0] != "a" { return 20; }
+    ts[0] = "zzz";
+    if texts[0] != "zzz" || copied[0] != "zzz" { return 2; }
+
+    let nested Vec[Vec[i32]] = [[1], [2, 3]];
+    let ns Slice[Vec[i32]] = slice.view[Vec[i32]](nested, 0, 2);
+    ns[1][0] = 9;
+    if nested[1][0] != 9 { return 3; }
+    ns[0] = [7, 8];
+    if nested[0][1] != 8 { return 4; }
+    let out Vec[Vec[i32]] = slice.to_vec[Vec[i32]](ns);
+    out[0] = [5, 6];
+    if nested[0][0] != 7 || out[0][0] != 5 { return 5; }
+
+    let structs Vec[Text] = [Text(value: "old", n: 1), Text(value: "keep", n: 2)];
+    let ss Slice[Text] = slice.view[Text](structs, 0, 2);
+    ss[0] = ss[0];
+    ss[0].value = ss[0].value;
+    ss[0].n = ss[0].n;
+    if structs[0].value != "old" || structs[0].n != 1 { return 21; }
+    ss[0] = Text(value: "new", n: 3);
+    if structs[0].value != "new" || structs[0].n != 3 || structs[1].n != 2 { return 6; }
+
+    let nodes Vec[Node] = [Node.Leaf(value: "x"), Node.Empty];
+    let es Slice[Node] = slice.view[Node](nodes, 0, 2);
+    es[0] = Node.Leaf(value: "y");
+    switch nodes[0] {
+    case Node.Leaf(value): if value != "y" { return 7; }
+    case Node.Empty: return 8;
+    }
+    return 0;
+}

@@ -1,0 +1,5 @@
+package app;
+func main() i32 {
+    let s Slice[i32, i64] = 0;
+    return 0;
+}

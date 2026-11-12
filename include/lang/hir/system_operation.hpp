@@ -33,7 +33,8 @@ enum class SystemOperation : uint16_t {
   process_args, process_args_bytes, process_environment, process_environment_bytes, process_getenv, process_getenv_bytes, process_setenv, process_unsetenv, process_execve, process_spawn, process_setenv_bytes, process_unsetenv_bytes, process_execve_bytes, process_spawn_bytes, process_fork, process_waitpid, signal_mask, signal_pending, signal_wait, signal_disposition, ipc_map_anon, ipc_map_file, ipc_shm_open, ipc_shm_unlink, ipc_read_bytes, ipc_write_bytes, ipc_read_i32, ipc_write_i32, ipc_read_i64, ipc_write_i64, ipc_atomic_load, ipc_atomic_store, ipc_atomic_add, ipc_atomic_compare, ipc_mutex_init, ipc_cond_init, ipc_sem_init, ipc_length, ipc_mutex_lock, ipc_mutex_unlock, ipc_mutex_destroy, ipc_cond_signal, ipc_cond_broadcast, ipc_cond_destroy, ipc_sem_post, ipc_sem_destroy, ipc_cond_wait, ipc_sem_wait, ipc_sem_trywait, ipc_sem_value,
   unicode_normalize, unicode_casefold, unicode_boundaries,
   thread_wait_for, condvar_wait_for,
-  ffi_buffer, ffi_buffer_mut, ffi_buffer_len, ffi_buffer_len_mut
+  ffi_buffer, ffi_buffer_mut, ffi_buffer_len, ffi_buffer_len_mut,
+  slice_view, slice_len, slice_sub, slice_to_vec
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -286,9 +287,22 @@ inline constexpr std::array<SystemOperationSpec, 4> ffi_system_operations{{
   {SystemOperation::ffi_buffer_len_mut, "__woozy_ffi_buffer_len_mut", "usize",
    {"BufferMut[A]"}, 1, "std/ffi", 1},
 }};
+// Source-level borrowed Slice operations. They are intentionally separate from
+// value_system_operations: the Python backend must reject std/slice explicitly
+// rather than silently copying a Vec.
+inline constexpr std::array<SystemOperationSpec, 4> slice_system_operations{{
+  {SystemOperation::slice_view, "__woozy_slice_view", "Slice[A]",
+   {"Vec[A]", "usize", "usize"}, 3, "std/slice", 1},
+  {SystemOperation::slice_len, "__woozy_slice_len", "usize",
+   {"Slice[A]"}, 1, "std/slice", 1},
+  {SystemOperation::slice_sub, "__woozy_slice_sub", "Slice[A]",
+   {"Slice[A]", "usize", "usize"}, 3, "std/slice", 1},
+  {SystemOperation::slice_to_vec, "__woozy_slice_to_vec", "Vec[A]",
+   {"Slice[A]"}, 1, "std/slice", 1},
+}};
 inline constexpr auto all_system_operations = [] {
   std::array<SystemOperationSpec, system_operations.size() +
-      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size()> all{};
+      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size() + slice_system_operations.size()> all{};
   std::size_t index = 0;
   for (const auto &spec : system_operations) all[index++] = spec;
   for (const auto &spec : concurrency_system_operations) all[index++] = spec;
@@ -297,6 +311,7 @@ inline constexpr auto all_system_operations = [] {
   for (const auto &spec : network_system_operations) all[index++] = spec;
   for (const auto &spec : process_system_operations) all[index++] = spec;
   for (const auto &spec : ffi_system_operations) all[index++] = spec;
+  for (const auto &spec : slice_system_operations) all[index++] = spec;
   return all;
 }();
 inline const SystemOperationSpec *system_operation_spec(SystemOperation operation) {

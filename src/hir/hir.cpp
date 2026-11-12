@@ -69,6 +69,7 @@ TypeId TypeContext::intern(Type t) {
       bad();
     break;
   case TypeKind::Vec:
+  case TypeKind::Slice:
     if (t.type_args.size() != 1)
       bad();
     break;
@@ -125,7 +126,8 @@ TypeId TypeContext::intern(Type t) {
   if (nominal(t.kind) && t.binding.value)
     bad();
   if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum &&
-      t.kind != TypeKind::Vec && t.kind != TypeKind::CForeignPointer &&
+      t.kind != TypeKind::Vec && t.kind != TypeKind::Slice &&
+      t.kind != TypeKind::CForeignPointer &&
       t.kind != TypeKind::CForeignBuffer && !t.type_args.empty())
     bad();
   if ((t.kind == TypeKind::CForeignRecord ||
@@ -570,8 +572,10 @@ class Verifier {
       for (auto a : t.type_args)
         valid_type(a, allowed, depth + 1);
     }
-    if (t.kind == TypeKind::Vec) {
-      need(t.type_args.size() == 1, "Vec element arity");
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
+      need(t.type_args.size() == 1,
+           t.kind == TypeKind::Vec ? "Vec element arity"
+                                   : "Slice element arity");
       valid_type(t.type_args[0], allowed, depth + 1);
     }
     if (t.kind == TypeKind::Function) {
@@ -678,7 +682,7 @@ class Verifier {
   }
   TypeId iteration_element(TypeId collection) const {
     const auto &t = type(collection);
-    if (t.kind == TypeKind::Vec)
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice)
       return t.type_args.at(0);
     need(t.kind == TypeKind::String, "iteration collection type");
     Type rune;
@@ -957,7 +961,7 @@ class Verifier {
         const Type t = *found;
         if (t.kind == TypeKind::TypeParameter)
           continue;
-        if (t.kind == TypeKind::Vec) {
+        if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
           if (visited.insert(id.value).second)
             for (auto a : t.type_args)
               visit(a, depth + 1);
@@ -2736,6 +2740,7 @@ class Verifier {
       const bool c_pointer = receiver.kind == TypeKind::CForeignPointer ||
                              receiver.kind == TypeKind::CForeignBuffer;
       need((receiver.kind == TypeKind::Vec ||
+            receiver.kind == TypeKind::Slice ||
             (text && n.kind() == NodeKind::index_read) || c_pointer) &&
                integer(type(expr(ch[1]).type).kind), "index types");
       if (c_pointer) {
@@ -2766,7 +2771,9 @@ class Verifier {
     case NodeKind::vec_slice: {
       const auto &sl = std::get<VecSlice>(n.data);
       need(ch.size() == 1 + bool(sl.start) + bool(sl.end), "slice arity");
-      need((type(n.type).kind == TypeKind::Vec || type(n.type).kind == TypeKind::String) &&
+      need((type(n.type).kind == TypeKind::Vec ||
+            type(n.type).kind == TypeKind::Slice ||
+            type(n.type).kind == TypeKind::String) &&
                expr(ch[0]).type == n.type, "slice receiver type");
       size_t i = 1;
       if (sl.start)
@@ -2782,6 +2789,7 @@ class Verifier {
       unit(n);
       const auto &fi = std::get<ForIn>(n.data);
       need((type(expr(ch[0]).type).kind == TypeKind::Vec ||
+            type(expr(ch[0]).type).kind == TypeKind::Slice ||
             type(expr(ch[0]).type).kind == TypeKind::String) && fi.body == ch[1] &&
                node(fi.body).kind() == NodeKind::block &&
                node(fi.body).scope == fi.body_scope,
@@ -2928,8 +2936,8 @@ class Verifier {
           t.kind = TypeKind::IpcHandle;
         else
           t.kind = TypeKind::AtomicI64Handle;
-      } else if (s.name == "Vec") {
-        t.kind = TypeKind::Vec;
+      } else if (s.name == "Vec" || s.name == "Slice") {
+        t.kind = s.name == "Vec" ? TypeKind::Vec : TypeKind::Slice;
         if (n.kind == AstKind::NeutralBracket)
           for (size_t i = 1; i < n.children.size(); ++i)
             t.type_args.push_back(source_type(cr(n.children[i])));
@@ -3433,6 +3441,7 @@ class Verifier {
                number(type(im.self_type).kind) ||
                type(im.self_type).kind == TypeKind::Bool ||
                type(im.self_type).kind == TypeKind::Vec ||
+               type(im.self_type).kind == TypeKind::Slice ||
                type(im.self_type).kind == TypeKind::String ||
                type(im.self_type).kind == TypeKind::Unit,
            "impl self type is not an implemented value type");
@@ -4911,7 +4920,8 @@ class Verifier {
           if (!indices.empty())
             return m.foreign_bindings[indices.front().value].type;
         }
-        if (base && type(*base).kind == TypeKind::Vec)
+        if (base && (type(*base).kind == TypeKind::Vec ||
+                     type(*base).kind == TypeKind::Slice))
           return type(*base).type_args.at(0);
       }
       if (a.kind == AstKind::Slice) {
@@ -4923,6 +4933,9 @@ class Verifier {
           if (!slices.empty())
             return m.foreign_bindings[slices.front().value].type;
         }
+        if (base && (type(*base).kind == TypeKind::Vec ||
+                     type(*base).kind == TypeKind::Slice))
+          return *base;
       }
       return {};
     };
@@ -6474,6 +6487,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         m.config.backend == Backend::python && m.config.word_bits == 64;
     const bool runtime_handle_values =
         m.config.backend == Backend::native && m.config.word_bits == 64;
+    const bool slice_values = runtime_handle_values;
     const bool c_values =
         m.config.backend == Backend::native && m.config.word_bits == 64;
     auto c_value = [](TypeKind kind) {
@@ -6515,7 +6529,9 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       }
       if (!checked_types.insert(id.value).second)
         return true;
-      if (t.kind == TypeKind::Vec) {
+      if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
+        if (t.kind == TypeKind::Slice && !slice_values)
+          return false;
         if (!ownership_values || t.type_args.size() != 1)
           return false;
         if (!storage_types.find(t.type_args.at(0)))
@@ -6579,7 +6595,9 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
               return false;
             continue;
           }
-          if (value.kind == TypeKind::Vec) {
+          if (value.kind == TypeKind::Vec || value.kind == TypeKind::Slice) {
+            if (value.kind == TypeKind::Slice && !slice_values)
+              return false;
             if (!ownership_values || value.type_args.size() != 1)
               return false;
             if (!storage_types.find(value.type_args.at(0)))
@@ -6622,7 +6640,8 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       }
       // Function fields are storage leaves. Do not expand their signatures
       // here (e.g. S[T].f: func() S[S[T]]); functions/calls are checked below.
-      return t.kind != TypeKind::Vec && t.kind != TypeKind::TypeParameter &&
+      return t.kind != TypeKind::Vec && t.kind != TypeKind::Slice &&
+             t.kind != TypeKind::TypeParameter &&
              t.kind != TypeKind::Error && t.kind != TypeKind::ForeignOpaque &&
              t.kind != TypeKind::ForeignCallable && !c_value(t.kind);
     };

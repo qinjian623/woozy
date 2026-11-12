@@ -51,9 +51,9 @@ TypeId build_signature(TypeContext &types, const HirModule *module,
       }
       if (nesting) return invalid();
     }
-    if (base == "Vec") {
+    if (base == "Vec" || base == "Slice") {
       if (parameters.size() != 1) return invalid();
-      t.kind = TypeKind::Vec;
+      t.kind = base == "Vec" ? TypeKind::Vec : TypeKind::Slice;
       t.type_args = std::move(parameters);
       return types.intern(t);
     }

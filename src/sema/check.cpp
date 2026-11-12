@@ -1129,6 +1129,14 @@ class Checker {
       t.type_args = args;
       return m.types.intern(t);
     }
+    if (name == "Slice") {
+      if (args.size() != 1)
+        reject(r, "Slice requires one element type");
+      Type t;
+      t.kind = TypeKind::Slice;
+      t.type_args = args;
+      return m.types.intern(t);
+    }
     if (name == "Ptr" || name == "PtrMut") {
       if (args.size() != 1)
         reject(r, name + " requires one pointee type");
@@ -1936,8 +1944,9 @@ class Checker {
         break;
       }
       if (type(base.value.type).kind != TypeKind::Vec &&
+          type(base.value.type).kind != TypeKind::Slice &&
           type(base.value.type).kind != TypeKind::String)
-        reject(r, "slice receiver must be Vec or string");
+        reject(r, "slice receiver must be Vec, Slice or string");
       for (size_t i = 1; i < n.children.size(); ++i) {
         auto e = expression(child(r, i));
         if (!integer(e.value.type))
@@ -2018,13 +2027,15 @@ class Checker {
           result = {node(r, t, IndexRead{}, {v.id, index.id}), {t, {}, {}}};
           break;
         }
-        if (receiver_kind != TypeKind::Vec && receiver_kind != TypeKind::String)
-          reject(r, "index receiver must be Vec or string");
+        if (receiver_kind != TypeKind::Vec &&
+            receiver_kind != TypeKind::Slice &&
+            receiver_kind != TypeKind::String)
+          reject(r, "index receiver must be Vec, Slice or string");
         if (n.children.size() != 2)
-          reject(r, "Vec requires one index");
+          reject(r, "indexing requires one index");
         auto index = expression(child(r, 1));
         if (!integer(index.value.type))
-          reject(r, "Vec index must be integer");
+          reject(r, "index must be integer");
         auto t = type(v.value.type).kind == TypeKind::String
                      ? scalar(TypeKind::UnsignedInt, 32)
                      : type(v.value.type).type_args.at(0);
@@ -2106,13 +2117,14 @@ class Checker {
           reject(r, "void pointer cannot be indexed");
         return {node(r, t, IndexPlace{}, {base.id, index.id}), {t, {}, {}}};
       }
-      if (type(base.value.type).kind != TypeKind::Vec)
-        reject(r, "index receiver must be Vec");
+      if (type(base.value.type).kind != TypeKind::Vec &&
+          type(base.value.type).kind != TypeKind::Slice)
+        reject(r, "index receiver must be Vec or Slice");
       if (ast(r).children.size() != 2)
-        reject(r, "Vec requires one index");
+        reject(r, "indexing requires one index");
       auto index = expression(child(r, 1));
       if (!integer(index.value.type))
-        reject(r, "Vec index must be integer");
+        reject(r, "index must be integer");
       auto t = type(base.value.type).type_args.at(0);
       return {node(r, t, IndexPlace{}, {base.id, index.id}), {t, {}, {}}};
     }
@@ -2691,7 +2703,9 @@ class Checker {
           return m.foreign_bindings.at(index->value).type;
         return {};
       }
-      if (type(*base).kind == TypeKind::Vec) return type(*base).type_args.at(0);
+      if (type(*base).kind == TypeKind::Vec ||
+          type(*base).kind == TypeKind::Slice)
+        return type(*base).type_args.at(0);
       if (type(*base).kind == TypeKind::String)
         return scalar(TypeKind::UnsignedInt, 32);
       return {};
@@ -2705,6 +2719,7 @@ class Checker {
         return {};
       }
       if (type(*base).kind == TypeKind::Vec ||
+          type(*base).kind == TypeKind::Slice ||
           type(*base).kind == TypeKind::String)
         return *base;
       return {};
@@ -4158,8 +4173,9 @@ class Checker {
     case AstKind::ForIn: {
       auto collection = expression(child(r, 0));
       if (type(collection.value.type).kind != TypeKind::Vec &&
+          type(collection.value.type).kind != TypeKind::Slice &&
           type(collection.value.type).kind != TypeKind::String)
-        reject(r, "for-in requires Vec or string");
+        reject(r, "for-in requires Vec, Slice or string");
       auto saved = scope;
       scope = new_scope(r, saved);
       auto id = node(r, unit, ForIn{definition(r), ScopeId{0}, HirNodeId{0}});

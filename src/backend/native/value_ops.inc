@@ -175,6 +175,11 @@
     if (t.kind == hir::TypeKind::Vec) {
       auto *value = builder.CreateLoad(builder.getPtrTy(), address);
       builder.CreateCall(vec_rc(copy), {value});
+    } else if (t.kind == hir::TypeKind::Slice) {
+      // The storage already holds a live 24-byte descriptor for copy; drop
+      // clears it before ending the pin and releasing the strong reference.
+      runtime(copy ? "lang_slice_copy_v1" : "lang_slice_drop_v1",
+              builder.getVoidTy(), {address});
     } else if (t.kind == hir::TypeKind::String) {
       auto *value = builder.CreateLoad(lower_type(id), address);
       auto *owner = builder.CreateExtractValue(value, {3});

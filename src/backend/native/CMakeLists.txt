@@ -34,7 +34,8 @@ add_library(lang_native_runtime STATIC
   ${LANG_NATIVE_ROOT}/runtime/native/dns.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/network_buffers.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/network.cpp
-  ${LANG_NATIVE_ROOT}/runtime/native/numbers.cpp)
+  ${LANG_NATIVE_ROOT}/runtime/native/numbers.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/slice.cpp)
 enable_language(C)
 include(${LANG_NATIVE_ROOT}/runtime/native/math/sources.cmake)
 lang_native_math_sources(lang_native_runtime)

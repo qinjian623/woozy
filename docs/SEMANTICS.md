@@ -140,7 +140,9 @@ struct 按字段声明逆序销毁，enum 按活动载荷字段逆序销毁，Ve
 
 `py.Error` 可作为 `Vec` 元素、struct 字段和 enum payload 保存，也可位于嵌套泛型值中；它支持普通复制、整体 move、返回、越过 catch 继续持有以及再次 `throw`/`catch`。复制共享同一个语言 Error 载荷和原 Python `Exception`、cause、traceback 对象，不做异常深复制；语言 drop 只释放该拥有槽，不承诺 Python 立即析构，也不依赖 `__del__` 执行语言清理。上述容器的既有复制/销毁顺序、move 后不可读和部分 move 限制不变。普通外部引用（如 ndarray/Tensor）和 `py.Error` 的聚合保存只在对应 Python 后端范围开放，不扩大 Native FFI；外部 callable 仍不能作为聚合成员保存。
 
-std/map、std/set 是以共享 Vec 实现的有类型容器，复制共享同一容器。std/json 的 Number 保存十进制原文，需要时显式转换；数组和对象最多嵌套256层。通用 Slice 仍未提供。Native C 绑定支持有类型的 Ptr/PtrMut 和 Buffer/BufferMut，指针与缓冲区索引必须在 unsafe 块中进行；Buffer 检查长度，Ptr 的有效地址和生命期由调用者保证。
+std/map、std/set 是以共享 Vec 实现的有类型容器，复制共享同一容器。std/json 的 Number 保存十进制原文，需要时显式转换；数组和对象最多嵌套256层。Native C 绑定支持有类型的 Ptr/PtrMut 和 Buffer/BufferMut，指针与缓冲区索引必须在 unsafe 块中进行；Buffer 检查长度，Ptr 的有效地址和生命期由调用者保证。
+
+Native/64 提供 `Slice[T]` 和 `std/slice` 的 `view`、`len`、`sub`、`to_vec`。视图使用半开区间，持有 owner Vec 并保护其存储；共享别名在视图存活时改变长度或扩容会先 Panic。Slice 切片产生子视图，Vec 切片继续复制元素；`to_vec` 新建容器并按普通规则复制元素。Python 源接口尚未接入，遇到 Slice 明确报告 `E_CAPABILITY_UNAVAILABLE`。字段、索引及拥有值的通用 inout 仍未完成。
 
 Native C 函数按绑定声明的固定签名调用，错误码是普通返回值，不自动转成 throws 或 py.Error。C resource 的每次拥有复制调用 retain_symbol，每个拥有副本清理时调用 release_symbol，由库决定最后一次引用释放时的析构；未声明 retain_symbol 的普通复制会被拒绝。借用指针和 C record 不自动释放目标。具体声明及限制见 [调用 C 库](FFI.md)。
 

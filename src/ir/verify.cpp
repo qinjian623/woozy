@@ -73,6 +73,13 @@ class Verifier {
     };
     std::map<ValueId, Def> defs;
     std::map<ValueId, const Instruction *> instructions;
+    struct RequiredCheck {
+      size_t block, position;
+      HirNodeId origin;
+      ValueId receiver, index;
+      SourceSpan source;
+    };
+    std::vector<RequiredCheck> required_checks;
     using ConstantKey = std::tuple<uint64_t, uint64_t, uint64_t, uint64_t>;
     std::multimap<ConstantKey, size_t> constant_roots;
     for (size_t h = 0; h < m.hir.module().nodes.size(); ++h) {
@@ -424,17 +431,36 @@ class Verifier {
         };
         auto source_inputs = [&](hir::NodeKind expected) -> const hir::HirNode & {
           need(i.origin && i.origin->value < m.hir.module().nodes.size(),
-               "text operation has no HIR origin", i.source);
+               "source operation has no HIR origin", i.source);
           const auto &node = m.hir.module().nodes.at(i.origin->value);
           need(node.kind() == expected && node.type == i.type &&
                    same_span(node.source.span, i.source) &&
                    m.hir.module().scopes.at(node.scope.value).function == f.symbol &&
                    node.children.size() == args.size(),
-               "text operation differs from verified HIR", i.source);
+               "source operation differs from verified HIR", i.source);
           for (size_t a = 0; a < args.size(); ++a)
             need(same_span(args[a].source,
                            m.hir.module().nodes.at(node.children[a].value).source.span),
-                 "text operation operand differs from source", i.source);
+                 "source operation operand differs from source", i.source);
+          return node;
+        };
+        // Index read/place operations carry the receiver and index in source
+        // order. Bind both operand definitions to the exact HIR children, not
+        // merely to a type or a nearby instruction. A Vec/Slice bounds check
+        // and write use the same IndexPlace origin.
+        auto index_source = [&](hir::NodeKind expected,
+                                bool source_is_origin) -> const hir::HirNode & {
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "index operation has no HIR origin", i.source);
+          const auto &node = m.hir.module().nodes.at(i.origin->value);
+          need(node.kind() == expected && node.children.size() == 2 &&
+                   m.hir.module().scopes.at(node.scope.value).function == f.symbol &&
+                   same_span(node.source.span, i.source) == source_is_origin,
+               "index operation differs from verified HIR", i.source);
+          for (size_t a = 0; a < 2; ++a)
+            need(same_span(args[a].source,
+                           m.hir.module().nodes.at(node.children[a].value).source.span),
+                 "index receiver/index differs from source HIR", i.source);
           return node;
         };
         // A pure HIR constant expands to existing scalar/aggregate ops. Bind
@@ -602,9 +628,25 @@ class Verifier {
         case Op::vec_set: {
           arity(i.op == Op::vec_set ? 3 : 2);
           const bool text = value(0).kind == hir::TypeKind::String;
-          need((value(0).kind == hir::TypeKind::Vec || (text && i.op == Op::vec_read)) &&
+          need((value(0).kind == hir::TypeKind::Vec ||
+                value(0).kind == hir::TypeKind::Slice ||
+                (text && i.op == Op::vec_read)) &&
                    integer(value(1).kind), "index receiver/type", i.source);
-          if (text) source_inputs(hir::NodeKind::index_read);
+          if (text) {
+            source_inputs(hir::NodeKind::index_read);
+          } else if (i.op == Op::vec_read) {
+            const bool compound =
+                i.origin && i.origin->value < m.hir.module().nodes.size() &&
+                m.hir.module().nodes[i.origin->value].kind() ==
+                    hir::NodeKind::index_place;
+            const auto &node = index_source(
+                compound ? hir::NodeKind::index_place
+                         : hir::NodeKind::index_read,
+                !compound);
+            need(node.type == i.type, "indexed read source type", i.source);
+          } else {
+            index_source(hir::NodeKind::index_place, false);
+          }
           if (i.op == Op::vec_read)
             need(text ? t.kind == hir::TypeKind::UnsignedInt && t.bits == 32
                       : type(args[0].type, i.source).type_args[0] == i.type,
@@ -613,25 +655,26 @@ class Verifier {
           else {
             value(2); need(type(args[0].type, i.source).type_args[0] == args[2].type &&
                           t.kind == hir::TypeKind::Unit, "Vec write type", i.source);
+            required_checks.push_back(
+                {b, p, *i.origin, i.inputs[0], i.inputs[1], i.source});
           }
           break;
         }
         case Op::vec_element_address: {
           arity(2);
-          need(value(0).kind == hir::TypeKind::Vec &&
+          need((value(0).kind == hir::TypeKind::Vec ||
+                value(0).kind == hir::TypeKind::Slice) &&
                    integer(value(1).kind) &&
                    type(args[0].type, i.source).type_args[0] == i.type,
-               "Vec element address type", i.source);
+               "Vec/Slice element address type", i.source);
           need(i.origin && i.origin->value < m.hir.module().nodes.size(),
                "Vec element address without HIR place", i.source);
           const auto &place = m.hir.module().nodes[i.origin->value];
           need(place.kind() == hir::NodeKind::index_place &&
                    place.type == i.type && place.children.size() == 2,
                "Vec element address origin is not the indexed place", i.source);
-          need(p > 0 && bb.instructions[p - 1].op == Op::vec_check &&
-                   bb.instructions[p - 1].inputs == i.inputs,
-               "Vec element address lacks the same receiver/index bounds check",
-               i.source);
+          required_checks.push_back(
+              {b, p, *i.origin, i.inputs[0], i.inputs[1], i.source});
           auto from_place = [&](ValueId value, HirNodeId source) {
             const auto &definition = defs.at(value);
             const auto &span = m.hir.module().nodes[source.value].source.span;
@@ -647,16 +690,18 @@ class Verifier {
           break;
         }
         case Op::vec_slice:
-          need((value(0).kind == hir::TypeKind::Vec || value(0).kind == hir::TypeKind::String) &&
+          need((value(0).kind == hir::TypeKind::Vec ||
+                value(0).kind == hir::TypeKind::Slice ||
+                value(0).kind == hir::TypeKind::String) &&
                    args[0].type == i.type && i.bits <= 3,
-               "Vec slice type", i.source);
+               "Vec/Slice slice type", i.source);
           arity(1 + bool(i.bits & 1) + bool(i.bits & 2));
           for (size_t a = 1; a < args.size(); ++a) need(integer(value(a).kind), "slice endpoint type", i.source);
-          if (value(0).kind == hir::TypeKind::String) {
+          {
             const auto &origin = source_inputs(hir::NodeKind::vec_slice);
             const auto &slice = std::get<hir::VecSlice>(origin.data);
             need(i.bits == (bool(slice.start) | (bool(slice.end) << 1)),
-                 "text slice endpoint presence differs from source", i.source);
+                 "slice endpoint presence differs from source", i.source);
           }
           break;
         case Op::iteration_begin:
@@ -667,6 +712,7 @@ class Verifier {
           need(i.slot.value < f.slots.size() && f.slots[i.slot.value].owner &&
                f.slots[i.slot.value].owner->kind == hir::OwnerKind::iteration &&
                (type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::Vec ||
+                type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::Slice ||
                 type(f.slots[i.slot.value].type, i.source).kind == hir::TypeKind::String),
                "iteration slot", i.source);
           if (i.op == Op::iteration_read)
@@ -678,7 +724,9 @@ class Verifier {
                     "iteration operation type", i.source);
           break;
         case Op::vec_length:
-          arity(1); need((value(0).kind == hir::TypeKind::Vec || value(0).kind == hir::TypeKind::String) &&
+          arity(1); need((value(0).kind == hir::TypeKind::Vec ||
+                         value(0).kind == hir::TypeKind::Slice ||
+                         value(0).kind == hir::TypeKind::String) &&
                          t.kind == hir::TypeKind::Usize,
                          "iteration/length type", i.source); break;
         case Op::exit_begin:
@@ -1241,6 +1289,36 @@ class Verifier {
             }))
           impossible.insert(b);
       }
+    // A Vec/Slice write and an indexed-field element address must be dominated
+    // by a bounds check with the same IndexPlace origin and the same receiver
+    // and index values. The check may be in a predecessor block when the RHS
+    // has an error edge (for example a throwing call), so dominance and real
+    // source identity are used instead of instruction adjacency.
+    for (const auto &required : required_checks) {
+      bool found = false;
+      for (size_t candidate_block : reachable) {
+        if (!dom[required.block].contains(candidate_block))
+          continue;
+        const auto &candidate_bb = f.blocks[candidate_block];
+        for (size_t c = 0; c < candidate_bb.instructions.size(); ++c) {
+          if (candidate_block == required.block && c >= required.position)
+            continue;
+          const auto &candidate = candidate_bb.instructions[c];
+          if (candidate.op == Op::vec_check && candidate.origin &&
+              *candidate.origin == required.origin &&
+              candidate.inputs.size() == 2 &&
+              candidate.inputs[0] == required.receiver &&
+              candidate.inputs[1] == required.index) {
+            found = true;
+            break;
+          }
+        }
+        if (found)
+          break;
+      }
+      need(found, "Vec/Slice write lacks matching source bounds check",
+           required.source);
+    }
     cleanup(f, dom, predecessors, impossible);
     ownership(f);
   }

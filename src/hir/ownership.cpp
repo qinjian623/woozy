@@ -85,10 +85,10 @@ void intern_members(HirModule &m, TypeId id, std::set<uint64_t> &active,
     return;
   budget.account(id, depth);
   auto t = ty(m, id);
-  if (t.kind == TypeKind::Vec) {
+  if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
     auto element = t.type_args.at(0);
-    // A Vec element that still contains a real TypeParameter is deferred to
-    // the concrete instance.  Vec itself already owns retain/release work.
+    // A Vec/Slice element that still contains a real TypeParameter is deferred
+    // to the concrete instance. Both already own retain/release work.
     if (!contains_type_parameter(m, element))
       intern_members(m, element, active, done, budget, depth + 1, stop);
     done.insert(id.value);
@@ -187,6 +187,8 @@ ValueKind provisional_kind(const Type &t) {
     return ValueKind::runtime_handle;
   case TypeKind::Vec:
     return ValueKind::vec;
+  case TypeKind::Slice:
+    return ValueKind::slice;
   case TypeKind::NominalStruct:
     return ValueKind::structure;
   case TypeKind::NominalEnum:
@@ -271,7 +273,8 @@ class Classifier {
     if (t.kind == TypeKind::Error)
       return {ValueKind::unsupported,
               "dynamic string/foreign/error value ownership is not supported"};
-    if (t.kind != TypeKind::Vec && t.kind != TypeKind::NominalStruct &&
+    if (t.kind != TypeKind::Vec && t.kind != TypeKind::Slice &&
+        t.kind != TypeKind::NominalStruct &&
         t.kind != TypeKind::NominalEnum)
       return {ValueKind::trivial, {}};
     if (support_seen.count(id.value))
@@ -280,21 +283,23 @@ class Classifier {
       throw std::invalid_argument(
           "concrete ownership type expansion budget exceeded");
     support_seen.insert(id.value);
-    if (t.kind == TypeKind::Vec) {
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
+      const auto container = t.kind == TypeKind::Vec ? ValueKind::vec
+                                                      : ValueKind::slice;
       auto element = t.type_args.at(0);
       if (contains_type_parameter(m, element))
-        return {ValueKind::vec, {}};
+        return {container, {}};
       auto e = support(element, depth + 1, nullptr);
-      // A declared py.Error is a finite owning reference: Vec copies share the
+      // A declared py.Error is a finite owning reference: copies share the
       // same runtime payload and release only the language element slot.
       // Foreign callables remain unavailable because they are not storable
       // source values and cannot be copied or dropped independently.
       if (e.kind == ValueKind::unsupported ||
           e.kind == ValueKind::foreign_callable)
         return {ValueKind::unsupported,
-                e.reason.empty() ? "external callable values in Vec are not supported"
+                e.reason.empty() ? "external callable values in Vec/Slice are not supported"
                                  : e.reason};
-      return {ValueKind::vec, {}};
+      return {container, {}};
     }
     const auto &d = decl(m, t.declaration);
     if (t.type_args.size() != d.params.size())
@@ -337,7 +342,8 @@ class Classifier {
       throw std::invalid_argument(
           "concrete ownership value dependency budget exceeded");
     const auto &t = ty(m, id);
-    if (t.kind == TypeKind::Vec || t.kind == TypeKind::String)
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
+        t.kind == TypeKind::String)
       return true;
     if (t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
@@ -437,7 +443,8 @@ public:
       out.reason = support_result.reason;
       return out;
     }
-    if (t.kind != TypeKind::Vec && t.kind != TypeKind::NominalStruct &&
+    if (t.kind != TypeKind::Vec && t.kind != TypeKind::Slice &&
+        t.kind != TypeKind::NominalStruct &&
         t.kind != TypeKind::NominalEnum) {
       out.kind = ValueKind::trivial;
       out.pod_inout = t.kind == TypeKind::Bool ||
@@ -449,7 +456,7 @@ public:
     }
     out.kind = support_result.kind;
     out.reason = support_result.reason;
-    if (t.kind == TypeKind::Vec) {
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
       out.needs_drop = out.kind != ValueKind::unsupported;
       return out;
     }

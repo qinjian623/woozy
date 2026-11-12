@@ -37,9 +37,12 @@ class Lower {
   std::map<HirNodeId, LocalSlotId> temporaries, iterations;
   bool owning(TypeId t) const { return hir::classify_value(h, t).needs_drop; }
   void effect(Op op, LocalSlotId slot, SourceSpan source,
-              std::vector<ValueId> inputs = {}, std::optional<hir::OwnerRef> owner = {}) {
+              std::vector<ValueId> inputs = {},
+              std::optional<hir::OwnerRef> owner = {},
+              std::optional<HirNodeId> origin = {}) {
     Instruction i; i.op = op; i.type = unit; i.slot = slot;
     i.inputs = std::move(inputs); i.source = source; i.owner = owner;
+    i.origin = origin;
     f.blocks[current.value].instructions.push_back(std::move(i));
   }
   LocalSlotId owner_slot(hir::OwnerRef ref) const {
@@ -651,7 +654,8 @@ class Lower {
         const auto &indexed = node(index_place);
         auto receiver = expr(indexed.children[0]);
         auto index = expr(indexed.children[1]);
-        effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index});
+        effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index}, {},
+               index_place);
         Instruction element;
         element.op = Op::vec_element_address;
         element.type = indexed.type;
@@ -729,11 +733,13 @@ class Lower {
           f.blocks[current.value].instructions.push_back(std::move(write));
           full(id); break;
         }
-        effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index});
+        effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index}, {},
+               n.children[0]);
         auto compound = std::get<hir::Assign>(n.data).compound;
         std::optional<ValueId> lhs;
         if (compound) {
           Instruction read; read.op = Op::vec_read; read.type = place.type;
+          read.origin = n.children[0];
           read.inputs = {receiver, index}; read.source = s;
           lhs = emit(read);
         }
@@ -744,7 +750,8 @@ class Lower {
           rhs = emit(op);
         }
         take(n.children[1]);
-        effect(Op::vec_set, LocalSlotId{0}, s, {receiver, index, rhs});
+        effect(Op::vec_set, LocalSlotId{0}, s, {receiver, index, rhs}, {},
+               n.children[0]);
         full(id); break;
       }
       auto target = expr(n.children[0]);

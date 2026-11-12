@@ -32,6 +32,7 @@ set(LANG_HOSTED_PUBLIC_SOURCES
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/network_buffers.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/network.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/numbers.cpp
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/slice.cpp
   # Unicode is public runtime functionality and must be present in hosted
   # links of std/unicode. The C adapter keeps the vendored utf8proc TU local to
   # this runtime and introduces no libc memory symbols.

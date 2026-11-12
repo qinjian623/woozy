@@ -1,0 +1,16 @@
+package slice;
+
+// Borrowed views over an existing Vec. A Slice keeps its owner alive and pins
+// its storage; start/end are half-open and relative to this view.
+pub func view[T](values Vec[T], start usize, end usize) Slice[T] {
+    return __woozy_slice_view[T](values, start, end);
+}
+pub func len[T](value Slice[T]) usize {
+    return __woozy_slice_len[T](value);
+}
+pub func sub[T](value Slice[T], start usize, end usize) Slice[T] {
+    return __woozy_slice_sub[T](value, start, end);
+}
+pub func to_vec[T](value Slice[T]) Vec[T] {
+    return __woozy_slice_to_vec[T](value);
+}

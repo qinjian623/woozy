@@ -1,0 +1,53 @@
+package app;
+import "std/slice" as slice;
+
+struct Holder { view Slice[i32]; tag i32; }
+enum Box { Empty; One(value Slice[i32]); }
+
+func make_view(values move Vec[i32]) Slice[i32] {
+    return slice.view[i32](values, 1, 4);
+}
+func pass_through(value Slice[i32]) Slice[i32] {
+    return value;
+}
+func measure[T](value Slice[T]) usize {
+    return slice.len(value);
+}
+func main() i32 {
+    let v Vec[i32] = [10, 20, 30, 40, 50];
+    let s Slice[i32] = slice.view[i32](v, 1, 4);
+    let a Slice[i32] = s;
+    let b Slice[i32] = pass_through(a);
+    if slice.len(s) != 3 || slice.len(b) != 3 || measure(s) != 3 { return 1; }
+    if s[0] != 20 || a[2] != 40 || b[1] != 30 { return 2; }
+    a[0] = 21;
+    if v[1] != 21 || b[0] != 21 { return 3; }
+    let sub Slice[i32] = s[1:2];
+    let sub2 Slice[i32] = sub[0:1];
+    if sub[0] != 30 || sub2[0] != 30 { return 4; }
+    let h Holder = Holder(view: s, tag: 7);
+    if h.view[2] != 40 || h.tag != 7 { return 5; }
+    let e Box = Box.One(value: s);
+    switch e {
+    case Box.One(value): if value[0] != 21 { return 6; }
+    case Box.Empty: return 7;
+    }
+    let vs Vec[Slice[i32]] = [s, sub];
+    vs[0] = vs[0];
+    if vs[0][2] != 40 || vs[1][0] != 30 { return 8; }
+    var total i32 = 0;
+    for x in s { total += x; }
+    if total != 91 { return 9; }
+    let empty Slice[i32] = slice.view[i32](v, 2, 2);
+    let empty2 Slice[i32] = empty[0:0];
+    if slice.len(empty) != 0 || slice.len(empty2) != 0 { return 10; }
+    let copied_vec Vec[i32] = v[0:2];
+    copied_vec[0] = 77;
+    if v[0] != 10 || copied_vec[0] != 77 { return 11; }
+    let outlives Slice[i32] = make_view(move v);
+    if outlives[0] != 21 || outlives[2] != 40 { return 12; }
+    let copied Vec[i32] = slice.to_vec(outlives);
+    copied[0] = 99;
+    if outlives[0] != 21 || copied[0] != 99 { return 13; }
+    return 0;
+}
