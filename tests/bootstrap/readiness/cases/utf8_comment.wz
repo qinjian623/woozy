@@ -1,0 +1,3 @@
+/* 中文🙂 */
+let value = 40 + 2;
+return value;

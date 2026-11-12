@@ -1,0 +1,1104 @@
+// Woozy self-hosting readiness probe.
+//
+// This is deliberately a small compiler-shaped program, not the Woozy
+// compiler. It accepts this restricted grammar:
+//
+//   { let NAME = EXPR ; } return EXPR ;
+//   EXPR := unary { (+|-|*|/|%) unary }
+//   unary := (+|-)? primary
+//   primary := INTEGER | NAME | ( EXPR )
+//
+// It lexes UTF-8 bytes, builds a Vec+ID AST, resolves names in a Map, emits
+// textual LLVM IR for x86_64 Linux, then invokes clang and ld.lld through the
+// Woozy process interface. The generated ELF uses only the Linux exit syscall
+// and is statically linked without libc.
+package main;
+
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/map" as map;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/time" as time;
+import "std/vec" as vec;
+
+const TK_EOF u8 = 0;
+const TK_LET u8 = 1;
+const TK_RETURN u8 = 2;
+const TK_IDENT u8 = 3;
+const TK_INT u8 = 4;
+const TK_PLUS u8 = 5;
+const TK_MINUS u8 = 6;
+const TK_STAR u8 = 7;
+const TK_SLASH u8 = 8;
+const TK_PERCENT u8 = 9;
+const TK_LPAREN u8 = 10;
+const TK_RPAREN u8 = 11;
+const TK_EQUAL u8 = 12;
+const TK_SEMI u8 = 13;
+const TK_INVALID u8 = 14;
+
+const EXPR_INT u8 = 0;
+const EXPR_INT_MIN u8 = 1;
+const EXPR_VAR u8 = 2;
+const EXPR_NEG u8 = 3;
+const EXPR_ADD u8 = 4;
+const EXPR_SUB u8 = 5;
+const EXPR_MUL u8 = 6;
+const EXPR_DIV u8 = 7;
+const EXPR_MOD u8 = 8;
+
+const I64_MIN_VALUE i64 = -9223372036854775808;
+const I64_MIN_MAGNITUDE u64 = 9_223_372_036_854_775_808;
+const U64_MAX_VALUE u64 = 18_446_744_073_709_551_615;
+
+struct Diagnostic {
+    code string;
+    line usize;
+    column usize;
+    start usize;
+    end usize;
+    message string;
+}
+
+struct Token {
+    kind u8;
+    line usize;
+    column usize;
+    start usize;
+    end usize;
+    value u64;
+    // 0: value fits i64, 1: magnitude is exactly 2^63, 2: too large.
+    literal_kind u8;
+    name string;
+}
+
+struct Expr {
+    kind u8;
+    left i64;
+    right i64;
+    value u64;
+    name string;
+    symbol usize;
+    line usize;
+    column usize;
+    start usize;
+    end usize;
+}
+
+struct LetDecl {
+    name string;
+    symbol usize;
+    expr i64;
+    line usize;
+    column usize;
+}
+
+struct State {
+    bytes Vec[u8];
+    tokens Vec[Token];
+    nodes Vec[Expr];
+    lets Vec[LetDecl];
+    diagnostics Vec[Diagnostic];
+    symbols map.Map[string,usize];
+    cursor Vec[usize];
+    next_symbol Vec[usize];
+    lines Vec[string];
+    next_temp Vec[usize];
+    operands Vec[string];
+}
+
+struct Utf8Check {
+    valid bool;
+    offset usize;
+    line usize;
+    column usize;
+}
+
+struct IntScan {
+    next usize;
+    value u64;
+    literal_kind u8;
+    ok bool;
+    code string;
+    message string;
+}
+
+func new_state(bytes Vec[u8]) State {
+    return State(
+        bytes: bytes,
+        tokens: vec.empty[Token](),
+        nodes: vec.empty[Expr](),
+        lets: vec.empty[LetDecl](),
+        diagnostics: vec.empty[Diagnostic](),
+        symbols: map.new[string,usize](),
+        cursor: vec.make[usize](1,0),
+        next_symbol: vec.make[usize](1,0),
+        lines: vec.empty[string](),
+        next_temp: vec.make[usize](1,0),
+        operands: vec.empty[string]()
+    );
+}
+
+func utf8_width(lead u8) usize {
+    if lead < 0x80 { return 1; }
+    if lead >= 0xC2 && lead <= 0xDF { return 2; }
+    if lead >= 0xE0 && lead <= 0xEF { return 3; }
+    if lead >= 0xF0 && lead <= 0xF4 { return 4; }
+    return 0;
+}
+
+func utf8_valid_at(bytes Vec[u8], at usize) bool {
+    let count = vec.len(bytes);
+    let lead = bytes[at];
+    let width = utf8_width(lead);
+    if width == 0 || at + width > count { return false; }
+    if width == 1 { return true; }
+    for var index usize = 1; index < width; index += 1 {
+        let next = bytes[at + index];
+        if (next & 0xC0) != 0x80 { return false; }
+    }
+    var code u32 = 0;
+    if width == 2 {
+        code = (u32(lead & 0x1F) << 6) | u32(bytes[at + 1] & 0x3F);
+        if code < 0x80 { return false; }
+    } else if width == 3 {
+        code = (u32(lead & 0x0F) << 12) |
+               (u32(bytes[at + 1] & 0x3F) << 6) |
+               u32(bytes[at + 2] & 0x3F);
+        if code < 0x800 { return false; }
+    } else {
+        code = (u32(lead & 0x07) << 18) |
+               (u32(bytes[at + 1] & 0x3F) << 12) |
+               (u32(bytes[at + 2] & 0x3F) << 6) |
+               u32(bytes[at + 3] & 0x3F);
+        if code < 0x10000 { return false; }
+    }
+    if code > 0x10FFFF { return false; }
+    if code >= 0xD800 && code <= 0xDFFF { return false; }
+    return true;
+}
+
+func validate_utf8(bytes Vec[u8]) Utf8Check {
+    let count = vec.len(bytes);
+    var index usize = 0;
+    var line usize = 1;
+    var column usize = 1;
+    if count >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF {
+        index = 3;
+    }
+    for index < count {
+        let byte = bytes[index];
+        if byte == 10 {
+            index += 1;
+            line += 1;
+            column = 1;
+        } else if byte == 13 {
+            if index + 1 < count && bytes[index + 1] == 10 {
+                index += 2;
+                line += 1;
+                column = 1;
+            } else {
+                index += 1;
+                column += 1;
+            }
+        } else if byte < 0x80 {
+            index += 1;
+            column += 1;
+        } else {
+            if !utf8_valid_at(bytes, index) {
+                return Utf8Check(valid: false, offset: index, line: line, column: column);
+            }
+            index += utf8_width(byte);
+            column += 1;
+        }
+    }
+    return Utf8Check(valid: true, offset: 0, line: line, column: column);
+}
+
+func digit_value(byte u8, base u64) u8 {
+    if byte >= 48 && byte <= 57 {
+        let value = byte - 48;
+        if u64(value) < base { return value; }
+        return 255;
+    }
+    if byte >= 97 && byte <= 102 {
+        let value = byte - 97 + 10;
+        if u64(value) < base { return value; }
+        return 255;
+    }
+    if byte >= 65 && byte <= 70 {
+        let value = byte - 65 + 10;
+        if u64(value) < base { return value; }
+        return 255;
+    }
+    return 255;
+}
+
+func scan_integer(bytes Vec[u8], start usize) IntScan {
+    let count = vec.len(bytes);
+    var index = start;
+    var base u64 = 10;
+    var digits usize = 0;
+    var value u64 = 0;
+    var overflow = false;
+    var last_underscore = false;
+    var code = "";
+    var message = "";
+    if bytes[index] == 48 && index + 1 < count {
+        let next = bytes[index + 1];
+        if next == 120 {
+            base = 16;
+            index += 2;
+        } else if next == 111 {
+            base = 8;
+            index += 2;
+        } else if next == 98 {
+            base = 2;
+            index += 2;
+        } else if next >= 48 && next <= 57 {
+            code = "WZP010";
+            message = "decimal literal must not have a leading zero";
+        }
+    }
+    for index < count {
+        let byte = bytes[index];
+        if byte == 95 {
+            if digits == 0 || last_underscore {
+                code = "WZP010";
+                message = "underscore must separate digits";
+            }
+            last_underscore = true;
+            index += 1;
+            continue;
+        }
+        let digit = digit_value(byte, base);
+        if digit == 255 { break; }
+        digits += 1;
+        last_underscore = false;
+        if !overflow {
+            if value > (U64_MAX_VALUE - u64(digit)) / base {
+                overflow = true;
+                value = U64_MAX_VALUE;
+            } else {
+                value = value * base + u64(digit);
+            }
+        }
+        index += 1;
+    }
+    if digits == 0 {
+        code = "WZP010";
+        message = "integer literal requires at least one digit";
+    }
+    if last_underscore {
+        code = "WZP010";
+        message = "integer literal cannot end with an underscore";
+    }
+    var literal_kind u8 = 0;
+    if overflow || value > I64_MIN_MAGNITUDE {
+        literal_kind = 2;
+    } else if value == I64_MIN_MAGNITUDE {
+        literal_kind = 1;
+    }
+    return IntScan(next: index, value: value, literal_kind: literal_kind,
+                   ok: code == "", code: code, message: message);
+}
+
+func slice_text(bytes Vec[u8], start usize, end usize) string {
+    try {
+        return text.from_bytes(bytes[start:end]);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func add_diag(state State, code string, line usize, column usize,
+              start usize, end usize, message string) {
+    vec.push(state.diagnostics, Diagnostic(
+        code: code, line: line, column: column,
+        start: start, end: end, message: message));
+}
+
+func add_token_diag(state State, code string, token Token, message string) {
+    add_diag(state, code, token.line, token.column,
+             token.start, token.end, message);
+}
+
+func push_token(state State, kind u8, line usize, column usize,
+                start usize, end usize, value u64, literal_kind u8, name string) {
+    vec.push(state.tokens, Token(
+        kind: kind, line: line, column: column, start: start, end: end,
+        value: value, literal_kind: literal_kind, name: name));
+}
+
+func lex(state State) {
+    let bytes = state.bytes;
+    let count = vec.len(bytes);
+    var index usize = 0;
+    var line usize = 1;
+    var column usize = 1;
+    if count >= 3 && bytes[0] == 0xEF && bytes[1] == 0xBB && bytes[2] == 0xBF {
+        index = 3;
+    }
+    for true {
+        if index >= count {
+            push_token(state, TK_EOF, line, column, count, count, 0, 0, "");
+            return;
+        }
+        let byte = bytes[index];
+        if byte == 32 || byte == 9 {
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 10 {
+            index += 1;
+            line += 1;
+            column = 1;
+            continue;
+        }
+        if byte == 13 {
+            if index + 1 < count && bytes[index + 1] == 10 {
+                index += 2;
+                line += 1;
+                column = 1;
+            } else {
+                add_diag(state, "WZP011", line, column, index, index + 1,
+                         "lone carriage return is not a line ending");
+                index += 1;
+                column += 1;
+            }
+            continue;
+        }
+        if byte == 0 {
+            add_diag(state, "WZP012", line, column, index, index + 1,
+                     "NUL byte is not allowed in source");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 47 && index + 1 < count && bytes[index + 1] == 47 {
+            index += 2;
+            column += 2;
+            for true {
+                if index >= count { break; }
+                let inner = bytes[index];
+                if inner == 10 || inner == 13 { break; }
+                if inner == 0 {
+                    add_diag(state, "WZP012", line, column, index, index + 1,
+                             "NUL byte is not allowed in source");
+                    index += 1;
+                    column += 1;
+                    continue;
+                }
+                if inner < 0x80 {
+                    index += 1;
+                    column += 1;
+                } else {
+                    var width = utf8_width(inner);
+                    if width == 0 { width = 1; }
+                    index += width;
+                    column += 1;
+                }
+            }
+            continue;
+        }
+        if byte == 47 && index + 1 < count && bytes[index + 1] == 42 {
+            let start = index;
+            let start_line = line;
+            let start_column = column;
+            index += 2;
+            column += 2;
+            var closed = false;
+            for true {
+                if index >= count { break; }
+                let inner = bytes[index];
+                if inner == 42 && index + 1 < count && bytes[index + 1] == 47 {
+                    index += 2;
+                    column += 2;
+                    closed = true;
+                    break;
+                }
+                if inner == 0 {
+                    add_diag(state, "WZP012", line, column, index, index + 1,
+                             "NUL byte is not allowed in source");
+                    index += 1;
+                    column += 1;
+                    continue;
+                }
+                if inner == 10 {
+                    index += 1;
+                    line += 1;
+                    column = 1;
+                } else if inner == 13 {
+                    if index + 1 < count && bytes[index + 1] == 10 {
+                        index += 2;
+                        line += 1;
+                        column = 1;
+                    } else {
+                        add_diag(state, "WZP011", line, column, index, index + 1,
+                                 "lone carriage return is not a line ending");
+                        index += 1;
+                        column += 1;
+                    }
+                } else if inner < 0x80 {
+                    index += 1;
+                    column += 1;
+                } else {
+                    var width = utf8_width(inner);
+                    if width == 0 { width = 1; }
+                    index += width;
+                    column += 1;
+                }
+            }
+            if !closed {
+                add_diag(state, "WZP013", start_line, start_column, start, count,
+                         "unterminated block comment");
+            }
+            continue;
+        }
+        if (byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) || byte == 95 {
+            let start = index;
+            let start_line = line;
+            let start_column = column;
+            index += 1;
+            column += 1;
+            for true {
+                if index >= count { break; }
+                let inner = bytes[index];
+                if (inner >= 65 && inner <= 90) || (inner >= 97 && inner <= 122) ||
+                   (inner >= 48 && inner <= 57) || inner == 95 {
+                    index += 1;
+                    column += 1;
+                } else {
+                    break;
+                }
+            }
+            let name = slice_text(bytes, start, index);
+            var kind u8 = TK_IDENT;
+            if name == "let" {
+                kind = TK_LET;
+            } else if name == "return" {
+                kind = TK_RETURN;
+            }
+            push_token(state, kind, start_line, start_column, start, index, 0, 0, name);
+            continue;
+        }
+        if byte >= 48 && byte <= 57 {
+            let start = index;
+            let start_line = line;
+            let start_column = column;
+            let scan = scan_integer(bytes, start);
+            if !scan.ok {
+                add_diag(state, scan.code, start_line, start_column, start, scan.next,
+                         scan.message);
+            }
+            push_token(state, TK_INT, start_line, start_column, start, scan.next,
+                       scan.value, scan.literal_kind, "");
+            column += scan.next - start;
+            index = scan.next;
+            continue;
+        }
+        if byte == 43 {
+            push_token(state, TK_PLUS, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 45 {
+            push_token(state, TK_MINUS, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 42 {
+            push_token(state, TK_STAR, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 47 {
+            push_token(state, TK_SLASH, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 37 {
+            push_token(state, TK_PERCENT, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 40 {
+            push_token(state, TK_LPAREN, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 41 {
+            push_token(state, TK_RPAREN, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 61 {
+            push_token(state, TK_EQUAL, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        if byte == 59 {
+            push_token(state, TK_SEMI, line, column, index, index + 1, 0, 0, "");
+            index += 1;
+            column += 1;
+            continue;
+        }
+        var width = utf8_width(byte);
+        if width == 0 { width = 1; }
+        add_diag(state, "WZP001", line, column, index, index + width,
+                 "invalid token (byte " + strconv.format_u64(u64(byte)) + ")");
+        index += width;
+        column += 1;
+    }
+}
+
+func peek_token(state State) Token {
+    let position = state.cursor[0];
+    if position >= vec.len(state.tokens) {
+        return state.tokens[vec.len(state.tokens) - 1];
+    }
+    return state.tokens[position];
+}
+
+func advance(state State) {
+    state.cursor[0] = state.cursor[0] + 1;
+}
+
+func expect_token(state State, kind u8, code string, message string) bool {
+    let token = peek_token(state);
+    if token.kind == kind {
+        advance(state);
+        return true;
+    }
+    add_token_diag(state, code, token, message);
+    return false;
+}
+
+func precedence(kind u8) u8 {
+    if kind == TK_PLUS || kind == TK_MINUS { return 1; }
+    if kind == TK_STAR || kind == TK_SLASH || kind == TK_PERCENT { return 2; }
+    return 0;
+}
+
+func binary_kind(kind u8) u8 {
+    if kind == TK_PLUS { return EXPR_ADD; }
+    if kind == TK_MINUS { return EXPR_SUB; }
+    if kind == TK_STAR { return EXPR_MUL; }
+    if kind == TK_SLASH { return EXPR_DIV; }
+    return EXPR_MOD;
+}
+
+func add_node(state State, node Expr) i64 {
+    vec.push(state.nodes, node);
+    return i64(vec.len(state.nodes)) - 1;
+}
+
+func parse_expr(state State, minimum u8) i64 {
+    var left = parse_unary(state);
+    if left < 0 { return -1; }
+    for true {
+        let token = peek_token(state);
+        let level = precedence(token.kind);
+        if level < minimum || level == 0 { break; }
+        advance(state);
+        let right = parse_expr(state, level + 1);
+        if right < 0 { return -1; }
+        left = add_node(state, Expr(
+            kind: binary_kind(token.kind), left: left, right: right,
+            value: 0, name: "", symbol: 0,
+            line: token.line, column: token.column,
+            start: token.start, end: token.end));
+    }
+    return left;
+}
+
+func parse_unary(state State) i64 {
+    let token = peek_token(state);
+    if token.kind == TK_MINUS {
+        advance(state);
+        let next = peek_token(state);
+        if next.kind == TK_INT && next.literal_kind == 1 {
+            advance(state);
+            return add_node(state, Expr(
+                kind: EXPR_INT_MIN, left: -1, right: -1,
+                value: I64_MIN_MAGNITUDE, name: "", symbol: 0,
+                line: token.line, column: token.column,
+                start: token.start, end: next.end));
+        }
+        let child = parse_unary(state);
+        if child < 0 { return -1; }
+        return add_node(state, Expr(
+            kind: EXPR_NEG, left: child, right: -1,
+            value: 0, name: "", symbol: 0,
+            line: token.line, column: token.column,
+            start: token.start, end: token.end));
+    }
+    if token.kind == TK_PLUS {
+        advance(state);
+        return parse_unary(state);
+    }
+    if token.kind == TK_INT {
+        advance(state);
+        if token.literal_kind == 2 {
+            add_token_diag(state, "WZP002", token,
+                           "integer literal is outside the i64 range");
+            return -1;
+        }
+        if token.literal_kind == 1 {
+            add_token_diag(state, "WZP002", token,
+                           "i64 minimum magnitude requires a leading unary minus");
+            return -1;
+        }
+        return add_node(state, Expr(
+            kind: EXPR_INT, left: -1, right: -1,
+            value: token.value, name: "", symbol: 0,
+            line: token.line, column: token.column,
+            start: token.start, end: token.end));
+    }
+    if token.kind == TK_IDENT {
+        advance(state);
+        switch map.get(state.symbols, token.name) {
+            case option.Option.Some(symbol):
+                return add_node(state, Expr(
+                    kind: EXPR_VAR, left: -1, right: -1,
+                    value: 0, name: token.name, symbol: symbol,
+                    line: token.line, column: token.column,
+                    start: token.start, end: token.end));
+            case option.Option.None:
+                add_token_diag(state, "WZP004", token,
+                               "unknown variable '" + token.name + "'");
+                return -1;
+        }
+    }
+    if token.kind == TK_LPAREN {
+        advance(state);
+        let inner = parse_expr(state, 1);
+        if inner < 0 { return -1; }
+        if !expect_token(state, TK_RPAREN, "WZP003", "expected ')'") {
+            return -1;
+        }
+        return inner;
+    }
+    add_token_diag(state, "WZP003", token, "expected an expression");
+    return -1;
+}
+
+func parse_program(state State) i64 {
+    for true {
+        if peek_token(state).kind != TK_LET { break; }
+        advance(state);
+        let name_token = peek_token(state);
+        if name_token.kind != TK_IDENT {
+            add_token_diag(state, "WZP003", name_token,
+                           "expected a variable name after 'let'");
+            return -1;
+        }
+        advance(state);
+        if !expect_token(state, TK_EQUAL, "WZP003", "expected '=' after variable name") {
+            return -1;
+        }
+        let initializer = parse_expr(state, 1);
+        if initializer < 0 { return -1; }
+        if !expect_token(state, TK_SEMI, "WZP003", "expected ';' after let declaration") {
+            return -1;
+        }
+        if map.contains(state.symbols, name_token.name) {
+            add_token_diag(state, "WZP005", name_token,
+                           "duplicate variable '" + name_token.name + "'");
+            return -1;
+        }
+        let symbol = state.next_symbol[0];
+        state.next_symbol[0] = symbol + 1;
+        map.insert(state.symbols, name_token.name, symbol);
+        vec.push(state.lets, LetDecl(
+            name: name_token.name, symbol: symbol, expr: initializer,
+            line: name_token.line, column: name_token.column));
+    }
+    if !expect_token(state, TK_RETURN, "WZP003", "expected 'return'") {
+        return -1;
+    }
+    let result = parse_expr(state, 1);
+    if result < 0 { return -1; }
+    if !expect_token(state, TK_SEMI, "WZP003", "expected ';' after return value") {
+        return -1;
+    }
+    let tail = peek_token(state);
+    if tail.kind != TK_EOF {
+        add_token_diag(state, "WZP006", tail,
+                       "unexpected token after the return statement");
+        return -1;
+    }
+    return result;
+}
+
+func new_temp(state State) string {
+    let number = state.next_temp[0];
+    state.next_temp[0] = number + 1;
+    return "%t" + strconv.format_u64(u64(number));
+}
+
+func emit_exit(state State, value string) {
+    vec.push(state.lines,
+        "  call void asm sideeffect \"syscall\", " +
+        "\"{rax},{rdi},~{rcx},~{r11},~{memory}\"(i64 60, i64 " + value + ")");
+}
+
+func join_lines(lines Vec[string]) string {
+    var out = "";
+    for line in lines {
+        out = out + line + "\n";
+    }
+    return out;
+}
+
+func emit_div(state State, kind u8, left string, right string) string {
+    let number = state.next_temp[0];
+    state.next_temp[0] = number + 1;
+    let suffix = strconv.format_u64(u64(number));
+    let zero = "%z" + suffix;
+    let is_min = "%min" + suffix;
+    let is_minus_one = "%m1" + suffix;
+    let special = "%special" + suffix;
+    let normal = "%r" + suffix;
+    let merged = "%t" + suffix;
+    let zero_block = "divzero" + suffix;
+    let check_block = "divcheck" + suffix;
+    let special_block = "divspecial" + suffix;
+    let normal_block = "divnormal" + suffix;
+    let merge_block = "divmerge" + suffix;
+    vec.push(state.lines, "  " + zero + " = icmp eq i64 " + right + ", 0");
+    vec.push(state.lines, "  br i1 " + zero + ", label %" + zero_block +
+                          ", label %" + check_block);
+    vec.push(state.lines, zero_block + ":");
+    emit_exit(state, "255");
+    vec.push(state.lines, "  unreachable");
+    vec.push(state.lines, check_block + ":");
+    vec.push(state.lines, "  " + is_min + " = icmp eq i64 " + left +
+                          ", -9223372036854775808");
+    vec.push(state.lines, "  " + is_minus_one + " = icmp eq i64 " + right + ", -1");
+    vec.push(state.lines, "  " + special + " = and i1 " + is_min + ", " + is_minus_one);
+    vec.push(state.lines, "  br i1 " + special + ", label %" + special_block +
+                          ", label %" + normal_block);
+    vec.push(state.lines, special_block + ":");
+    vec.push(state.lines, "  br label %" + merge_block);
+    vec.push(state.lines, normal_block + ":");
+    if kind == EXPR_DIV {
+        vec.push(state.lines, "  " + normal + " = sdiv i64 " + left + ", " + right);
+    } else {
+        vec.push(state.lines, "  " + normal + " = srem i64 " + left + ", " + right);
+    }
+    vec.push(state.lines, "  br label %" + merge_block);
+    vec.push(state.lines, merge_block + ":");
+    var special_value = left;
+    if kind == EXPR_MOD { special_value = "0"; }
+    vec.push(state.lines, "  " + merged + " = phi i64 [ " + special_value +
+                          ", %" + special_block + " ], [ " + normal +
+                          ", %" + normal_block + " ]");
+    return merged;
+}
+
+func emit_expr(state State, id i64) string {
+    if id < 0 {
+        add_diag(state, "WZP099", 1, 1, 0, 0, "internal error: missing AST node");
+        return "0";
+    }
+    let node = state.nodes[usize(id)];
+    if node.kind == EXPR_INT {
+        return strconv.format_u64(node.value);
+    }
+    if node.kind == EXPR_INT_MIN {
+        return "-9223372036854775808";
+    }
+    if node.kind == EXPR_VAR {
+        if node.symbol >= vec.len(state.operands) {
+            add_diag(state, "WZP099", node.line, node.column, node.start, node.end,
+                     "internal error: missing variable operand");
+            return "0";
+        }
+        return state.operands[node.symbol];
+    }
+    if node.kind == EXPR_NEG {
+        let child = emit_expr(state, node.left);
+        let temp = new_temp(state);
+        vec.push(state.lines, "  " + temp + " = sub i64 0, " + child);
+        return temp;
+    }
+    let left = emit_expr(state, node.left);
+    let right = emit_expr(state, node.right);
+    if node.kind == EXPR_DIV || node.kind == EXPR_MOD {
+        return emit_div(state, node.kind, left, right);
+    }
+    let temp = new_temp(state);
+    var operation = "add";
+    if node.kind == EXPR_SUB { operation = "sub"; }
+    if node.kind == EXPR_MUL { operation = "mul"; }
+    vec.push(state.lines, "  " + temp + " = " + operation + " i64 " + left + ", " + right);
+    return temp;
+}
+
+func emit_module(state State, root i64) string {
+    vec.push(state.lines, "target triple = \"x86_64-unknown-linux-gnu\"");
+    vec.push(state.lines, "");
+    vec.push(state.lines, "define void @_start() {");
+    vec.push(state.lines, "entry:");
+    for declaration in state.lets {
+        let operand = emit_expr(state, declaration.expr);
+        let name = "%v" + strconv.format_u64(u64(declaration.symbol));
+        vec.push(state.lines, "  " + name + " = add i64 " + operand + ", 0");
+        vec.push(state.operands, name);
+    }
+    let result = emit_expr(state, root);
+    let exit_value = new_temp(state);
+    vec.push(state.lines, "  " + exit_value + " = and i64 " + result + ", 255");
+    emit_exit(state, exit_value);
+    vec.push(state.lines, "  unreachable");
+    vec.push(state.lines, "}");
+    return join_lines(state.lines);
+}
+
+func eval_expr(state State, id i64, values Vec[i64], ok Vec[bool]) i64 {
+    if id < 0 {
+        ok[0] = false;
+        return 0;
+    }
+    let node = state.nodes[usize(id)];
+    if node.kind == EXPR_INT {
+        return i64(node.value);
+    }
+    if node.kind == EXPR_INT_MIN {
+        return I64_MIN_VALUE;
+    }
+    if node.kind == EXPR_VAR {
+        if node.symbol < vec.len(values) {
+            return values[node.symbol];
+        }
+        ok[0] = false;
+        return 0;
+    }
+    if node.kind == EXPR_NEG {
+        let child = eval_expr(state, node.left, values, ok);
+        return 0 - child;
+    }
+    let left = eval_expr(state, node.left, values, ok);
+    let right = eval_expr(state, node.right, values, ok);
+    if node.kind == EXPR_ADD { return left + right; }
+    if node.kind == EXPR_SUB { return left - right; }
+    if node.kind == EXPR_MUL { return left * right; }
+    if node.kind == EXPR_DIV {
+        if right == 0 {
+            ok[0] = false;
+            return 0;
+        }
+        if left == I64_MIN_VALUE && right == -1 { return I64_MIN_VALUE; }
+        return left / right;
+    }
+    if node.kind == EXPR_MOD {
+        if right == 0 {
+            ok[0] = false;
+            return 0;
+        }
+        if left == I64_MIN_VALUE && right == -1 { return 0; }
+        return left % right;
+    }
+    ok[0] = false;
+    return 0;
+}
+
+func print_diagnostics(path string, diagnostics Vec[Diagnostic]) throws os.Error {
+    for diagnostic in diagnostics {
+        io.eprintln(path + ":" + strconv.format_u64(u64(diagnostic.line)) + ":" +
+                    strconv.format_u64(u64(diagnostic.column)) + ": " +
+                    diagnostic.code + ": " + diagnostic.message + " (bytes [" +
+                    strconv.format_u64(u64(diagnostic.start)) + "," +
+                    strconv.format_u64(u64(diagnostic.end)) + "))");
+    }
+}
+
+// -1: spawn/wait failure or signal; -2: timeout. A normal exit returns 0..255.
+func run_tool(path string, arguments Vec[string], timeout_ms i64) i32 {
+    var pid i32 = -1;
+    try {
+        pid = process.spawn(path, arguments);
+    } catch error os.Error {
+        return -1;
+    }
+    var elapsed_ms i64 = 0;
+    for true {
+        var status = process.WaitStatus(pid: 0, status: 0);
+        try {
+            status = process.waitpid(pid, process.WNOHANG);
+        } catch error os.Error {
+            try { os.kill(pid, 9); } catch error os.Error {}
+            try { let ignored = process.wait(pid); } catch error os.Error {}
+            return -1;
+        }
+        if status.pid != 0 {
+            if !process.exited(status) { return -1; }
+            return process.exit_status(status);
+        }
+        if elapsed_ms >= timeout_ms {
+            // Linux x86_64: SIGKILL is 9. Reap the direct child.
+            try { os.kill(pid, 9); } catch error os.Error {}
+            try { let ignored = process.wait(pid); } catch error os.Error {}
+            return -2;
+        }
+        try {
+            time.sleep_ms(10);
+        } catch error os.Error {
+            try { os.kill(pid, 9); } catch error os.Error {}
+            try { let ignored = process.wait(pid); } catch error os.Error {}
+            return -1;
+        }
+        elapsed_ms += 10;
+    }
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) != 9 {
+        io.eprintln("usage: probe SOURCE IR OBJECT ELF CLANG LLD OPT(0|2) TIMEOUT_MS");
+        return 2;
+    }
+    let source_path = arguments[1];
+    let ir_path = arguments[2];
+    let object_path = arguments[3];
+    let elf_path = arguments[4];
+    let clang_path = arguments[5];
+    let lld_path = arguments[6];
+    let optimization = arguments[7];
+    let timeout_text = arguments[8];
+    if optimization != "0" && optimization != "2" {
+        io.eprintln("probe: optimization must be 0 or 2");
+        return 2;
+    }
+    var timeout_ms i64 = 0;
+    try {
+        timeout_ms = strconv.parse_i64(timeout_text);
+    } catch error strconv.Error {
+        io.eprintln("probe: timeout must be a positive integer");
+        return 2;
+    }
+    if timeout_ms <= 0 {
+        io.eprintln("probe: timeout must be positive");
+        return 2;
+    }
+
+    let bytes = fs.read_file(source_path);
+    let state = new_state(bytes);
+    let utf8 = validate_utf8(bytes);
+    if !utf8.valid {
+        add_diag(state, "WZP009", utf8.line, utf8.column,
+                 utf8.offset, utf8.offset + 1, "source is not valid UTF-8");
+        print_diagnostics(source_path, state.diagnostics);
+        return 1;
+    }
+
+    lex(state);
+    if vec.len(state.diagnostics) > 0 {
+        print_diagnostics(source_path, state.diagnostics);
+        return 1;
+    }
+    io.println("probe: lex-ok tokens=" + strconv.format_u64(u64(vec.len(state.tokens))));
+
+    let root = parse_program(state);
+    if vec.len(state.diagnostics) > 0 || root < 0 {
+        print_diagnostics(source_path, state.diagnostics);
+        return 1;
+    }
+    io.println("probe: parse-ok nodes=" + strconv.format_u64(u64(vec.len(state.nodes))) +
+               " lets=" + strconv.format_u64(u64(vec.len(state.lets))));
+
+    let values = vec.make[i64](vec.len(state.lets), 0);
+    let evaluation_ok = vec.make[bool](1, true);
+    for declaration in state.lets {
+        let value = eval_expr(state, declaration.expr, values, evaluation_ok);
+        if !evaluation_ok[0] { break; }
+        values[declaration.symbol] = value;
+    }
+    var expected_value i64 = 0;
+    if evaluation_ok[0] {
+        expected_value = eval_expr(state, root, values, evaluation_ok);
+    }
+    if !evaluation_ok[0] {
+        io.eprintln("probe: evaluation failed (division by zero)");
+        return 3;
+    }
+    let expected_exit = i32(expected_value & 255);
+
+    let ir = emit_module(state, root);
+    if vec.len(state.diagnostics) > 0 {
+        print_diagnostics(source_path, state.diagnostics);
+        return 3;
+    }
+    fs.write_text(ir_path, ir, 0o644);
+    io.println("probe: ir=" + ir_path);
+
+    let clang_arguments = vec.empty[string]();
+    vec.push(clang_arguments, "clang");
+    vec.push(clang_arguments, "--target=x86_64-unknown-linux-gnu");
+    vec.push(clang_arguments, "-O" + optimization);
+    vec.push(clang_arguments, "-c");
+    vec.push(clang_arguments, ir_path);
+    vec.push(clang_arguments, "-o");
+    vec.push(clang_arguments, object_path);
+    let clang_status = run_tool(clang_path, clang_arguments, timeout_ms);
+    if clang_status != 0 {
+        if clang_status == -2 {
+            io.eprintln("probe: clang timed out");
+        } else {
+            io.eprintln("probe: clang failed with status " + strconv.format_i64(i64(clang_status)));
+        }
+        return 3;
+    }
+    io.println("probe: clang=ok");
+
+    let lld_arguments = vec.empty[string]();
+    vec.push(lld_arguments, "ld.lld");
+    vec.push(lld_arguments, "-static");
+    vec.push(lld_arguments, "-o");
+    vec.push(lld_arguments, elf_path);
+    vec.push(lld_arguments, object_path);
+    let lld_status = run_tool(lld_path, lld_arguments, timeout_ms);
+    if lld_status != 0 {
+        if lld_status == -2 {
+            io.eprintln("probe: ld.lld timed out");
+        } else {
+            io.eprintln("probe: ld.lld failed with status " + strconv.format_i64(i64(lld_status)));
+        }
+        return 3;
+    }
+    io.println("probe: lld=ok");
+
+    let elf_arguments = vec.empty[string]();
+    vec.push(elf_arguments, "woozy-probe-elf");
+    let elf_status = run_tool(elf_path, elf_arguments, timeout_ms);
+    if elf_status < 0 {
+        if elf_status == -2 {
+            io.eprintln("probe: generated ELF timed out");
+        } else {
+            io.eprintln("probe: generated ELF did not exit normally");
+        }
+        return 3;
+    }
+    io.println("probe: elf-exit=" + strconv.format_i64(i64(elf_status)));
+    io.println("probe: expected=" + strconv.format_i64(i64(expected_exit)));
+    if i32(elf_status) != expected_exit {
+        io.eprintln("probe: ELF exit does not match evaluated value");
+        return 3;
+    }
+    io.println("probe: pass");
+    return 0;
+}

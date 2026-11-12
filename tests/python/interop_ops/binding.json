@@ -1,0 +1,715 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "review_status": "draft_requires_conformance",
+  "allowed_backends": [
+    "python"
+  ],
+  "package_requirements": [
+    {
+      "package": "interophost",
+      "version_policy": "test-only host fixture"
+    },
+    {
+      "package": "numpy",
+      "version_policy": "FFI02 conformance: f32 ndarray only"
+    },
+    {
+      "package": "torch",
+      "version_policy": "FFI02 conformance: float32 Tensor only"
+    }
+  ],
+  "modules": [
+    {
+      "logical_path": "std/py",
+      "host_module": "langrt",
+      "provider": "language_runtime"
+    },
+    {
+      "logical_path": "interophost",
+      "host_module": "interophost",
+      "provider": "python_package"
+    },
+    {
+      "logical_path": "numpy",
+      "host_module": "numpy",
+      "provider": "python_package"
+    },
+    {
+      "logical_path": "torch",
+      "host_module": "torch",
+      "provider": "python_package"
+    }
+  ],
+  "types": [
+    {
+      "id": "lang.py.Error",
+      "module": "std/py",
+      "name": "Error",
+      "kind": "runtime_error",
+      "host_attribute": [
+        "Error"
+      ],
+      "copy": "error_payload_copy"
+    },
+    {
+      "id": "py.numpy.ndarray",
+      "module": "numpy",
+      "name": "ndarray",
+      "kind": "host_reference",
+      "host_attribute": [
+        "ndarray"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.numpy.DTypeSpec",
+      "module": "numpy",
+      "name": "DTypeSpec",
+      "kind": "opaque_protocol",
+      "host_attribute": [],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.Tensor",
+      "module": "torch",
+      "name": "Tensor",
+      "kind": "host_reference",
+      "host_attribute": [
+        "Tensor"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "py.torch.dtype",
+      "module": "torch",
+      "name": "dtype",
+      "kind": "host_reference",
+      "host_attribute": [
+        "float32"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "interophost.Probe",
+      "module": "interophost",
+      "name": "Probe",
+      "kind": "host_reference",
+      "host_attribute": [
+        "Probe"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "interophost.NoIndex",
+      "module": "interophost",
+      "name": "NoIndex",
+      "kind": "host_reference",
+      "host_attribute": [
+        "NoIndex"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "interophost.Key",
+      "module": "interophost",
+      "name": "Key",
+      "kind": "host_reference",
+      "host_attribute": [
+        "Key"
+      ],
+      "copy": "shared_reference"
+    },
+    {
+      "id": "interophost.ReadOnlyBox",
+      "module": "interophost",
+      "name": "ReadOnlyBox",
+      "kind": "host_reference",
+      "host_attribute": [
+        "ReadOnlyBox"
+      ],
+      "copy": "shared_reference"
+    }
+  ],
+  "values": [
+    {
+      "module": "numpy",
+      "name": "float32",
+      "type": "py.numpy.DTypeSpec",
+      "host_attribute": [
+        "float32"
+      ]
+    },
+    {
+      "module": "torch",
+      "name": "float32",
+      "type": "py.torch.dtype",
+      "host_attribute": [
+        "float32"
+      ]
+    }
+  ],
+  "callables": [
+    {
+      "id": "numpy.linspace.scalar",
+      "module": "numpy",
+      "name": "linspace",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "linspace"
+      ],
+      "parameters": [
+        {
+          "name": "start",
+          "type": "f64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "stop",
+          "type": "f64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "num",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "dtype",
+          "type": "py.numpy.DTypeSpec",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.numpy.ndarray",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "copy"
+      },
+      "effects": [
+        "reads_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.tensor.ndarray",
+      "module": "torch",
+      "name": "tensor",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "tensor"
+      ],
+      "parameters": [
+        {
+          "name": "data",
+          "type": "py.numpy.ndarray",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "dtype",
+          "type": "py.torch.dtype",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        },
+        {
+          "name": "device",
+          "type": "string",
+          "kind": "keyword_only",
+          "optional": true,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "py.torch.Tensor",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "copy"
+      },
+      "effects": [
+        "reads_arguments"
+      ],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "torch.Tensor.item",
+      "module": "torch",
+      "name": "item",
+      "call_kind": "method",
+      "owner_type": "py.torch.Tensor",
+      "host_attribute": [
+        "item"
+      ],
+      "parameters": [],
+      "return_type": "f64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "no"
+    },
+    {
+      "id": "interophost.make",
+      "module": "interophost",
+      "name": "make",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "make"
+      ],
+      "parameters": [],
+      "return_type": "interophost.Probe",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.make_no_index",
+      "module": "interophost",
+      "name": "make_no_index",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "make_no_index"
+      ],
+      "parameters": [],
+      "return_type": "interophost.NoIndex",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.make_key",
+      "module": "interophost",
+      "name": "make_key",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "make_key"
+      ],
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "interophost.Key",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.probe_counts",
+      "module": "interophost",
+      "name": "probe_counts",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "probe_counts"
+      ],
+      "parameters": [
+        {
+          "name": "probe",
+          "type": "interophost.Probe",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.explode_count",
+      "module": "interophost",
+      "name": "explode_count",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "explode_count"
+      ],
+      "parameters": [
+        {
+          "name": "probe",
+          "type": "interophost.Probe",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.inspect",
+      "module": "interophost",
+      "name": "inspect",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "inspect"
+      ],
+      "parameters": [
+        {
+          "name": "error",
+          "type": "lang.py.Error",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.make_readonly",
+      "module": "interophost",
+      "name": "make_readonly",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "make_readonly"
+      ],
+      "parameters": [],
+      "return_type": "interophost.ReadOnlyBox",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "python_reference",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.note_i64",
+      "module": "interophost",
+      "name": "note_i64",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "note_i64"
+      ],
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "i64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    },
+    {
+      "id": "interophost.note_f64",
+      "module": "interophost",
+      "name": "note_f64",
+      "call_kind": "function",
+      "owner_type": null,
+      "host_attribute": [
+        "note_f64"
+      ],
+      "parameters": [
+        {
+          "name": "value",
+          "type": "f64",
+          "kind": "positional_or_keyword",
+          "optional": false,
+          "mode": "ordinary",
+          "escapes": "no"
+        }
+      ],
+      "return_type": "f64",
+      "error_type": "lang.py.Error",
+      "ownership": {
+        "return": "value",
+        "storage": "no_tensor_storage"
+      },
+      "effects": [],
+      "receiver_escapes": "not_applicable"
+    }
+  ],
+  "properties": [
+    {
+      "id": "interophost.Probe.value",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "value",
+      "type": "f64",
+      "getter": [
+        "value"
+      ],
+      "setter": [
+        "value"
+      ],
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.Probe.readonly",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "readonly",
+      "type": "i64",
+      "getter": [
+        "readonly"
+      ],
+      "setter": null,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.Probe.nested_value",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "nested_value",
+      "type": "i64",
+      "getter": [
+        "nested",
+        "value"
+      ],
+      "setter": [
+        "nested",
+        "value"
+      ],
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.Probe.explode",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "explode",
+      "type": "i64",
+      "getter": [
+        "explode"
+      ],
+      "setter": null,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.Probe.explode_set",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "explode_set",
+      "type": "i64",
+      "getter": [
+        "explode_set"
+      ],
+      "setter": [
+        "explode_set"
+      ],
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.Probe.bad_type",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "bad_type",
+      "type": "string",
+      "getter": [
+        "bad_type"
+      ],
+      "setter": null,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "py.numpy.ndarray.ndim",
+      "module": "numpy",
+      "owner_type": "py.numpy.ndarray",
+      "name": "ndim",
+      "type": "i64",
+      "getter": [
+        "ndim"
+      ],
+      "setter": null,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "py.torch.Tensor.ndim",
+      "module": "torch",
+      "owner_type": "py.torch.Tensor",
+      "name": "ndim",
+      "type": "i64",
+      "getter": [
+        "ndim"
+      ],
+      "setter": null,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.Probe.text",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "text",
+      "type": "string",
+      "getter": [
+        "text"
+      ],
+      "setter": [
+        "text"
+      ],
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.Probe.child",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "name": "child",
+      "type": "interophost.Probe",
+      "getter": [
+        "child"
+      ],
+      "setter": null,
+      "error_type": "lang.py.Error"
+    }
+  ],
+  "indexers": [
+    {
+      "id": "interophost.Probe.index",
+      "module": "interophost",
+      "owner_type": "interophost.Probe",
+      "index_type": "interophost.Key",
+      "result_type": "i64",
+      "readable": true,
+      "writable": true,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "py.numpy.ndarray.index",
+      "module": "numpy",
+      "owner_type": "py.numpy.ndarray",
+      "index_type": "i64",
+      "result_type": "f32",
+      "readable": true,
+      "writable": true,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "py.torch.Tensor.index",
+      "module": "torch",
+      "owner_type": "py.torch.Tensor",
+      "index_type": "i64",
+      "result_type": "py.torch.Tensor",
+      "readable": true,
+      "writable": true,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.ReadOnlyBox.index",
+      "module": "interophost",
+      "owner_type": "interophost.ReadOnlyBox",
+      "index_type": "i64",
+      "result_type": "i64",
+      "readable": true,
+      "writable": false,
+      "error_type": "lang.py.Error"
+    }
+  ],
+  "slices": [
+    {
+      "id": "py.numpy.ndarray.slice",
+      "module": "numpy",
+      "owner_type": "py.numpy.ndarray",
+      "start_type": "i64",
+      "end_type": "i64",
+      "result_type": "py.numpy.ndarray",
+      "readable": true,
+      "writable": true,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "py.torch.Tensor.slice",
+      "module": "torch",
+      "owner_type": "py.torch.Tensor",
+      "start_type": "i64",
+      "end_type": "i64",
+      "result_type": "py.torch.Tensor",
+      "readable": true,
+      "writable": true,
+      "error_type": "lang.py.Error"
+    },
+    {
+      "id": "interophost.ReadOnlyBox.slice",
+      "module": "interophost",
+      "owner_type": "interophost.ReadOnlyBox",
+      "start_type": "i64",
+      "end_type": "i64",
+      "result_type": "i64",
+      "readable": true,
+      "writable": false,
+      "error_type": "lang.py.Error"
+    }
+  ],
+  "conformance_required": [
+    "interophost property getter/setter call counts and exception cause/traceback",
+    "interophost side-effecting index key evaluates once",
+    "numpy f32 ndarray index/slice read and write",
+    "torch float32 Tensor index/slice read and write",
+    "read-only/undeclared/wrong-type negative diagnostics",
+    "old T10 binding and ownership control"
+  ]
+}

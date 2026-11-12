@@ -1578,8 +1578,24 @@ class Checker {
           break;
         }
         auto base = expression(base_ref);
-        if (type(base.value.type).kind == TypeKind::ForeignOpaque)
-          unavailable(r, "external data attributes and escaping method values are not supported");
+        if (type(base.value.type).kind == TypeKind::ForeignOpaque) {
+          auto name = file(r).tokens[n.token_end - 1].spelling;
+          auto property = foreign_property(base.value.type, name);
+          if (!property) {
+            // A declared method is still not a first-class value. Keep the
+            // old refusal for that specific source form, but an unknown name
+            // is a declaration error rather than a reflection fallback.
+            if (!foreign_members(base.value.type, name, "method").empty())
+              unavailable(r, "external method values cannot escape a call");
+            unavailable(r, "external property is not declared");
+          }
+          auto t = m.foreign_bindings.at(property->value).type;
+          result = {node(r, t,
+                         ForeignRead{*property, ForeignAccessKind::property_read, {}},
+                         {base.id}),
+                    {t, {}, {}}};
+          break;
+        }
         const auto f = find_field(r, base.value.type);
         auto t = field_type(base.value.type, f);
         result = {node(r, t, FieldRead{f.symbol}, {base.id}), {t, {}, {}}};
@@ -1836,11 +1852,6 @@ class Checker {
     }
     case AstKind::Slice: {
       auto base = expression(child(r, 0));
-      if (type(base.value.type).kind == TypeKind::ForeignOpaque)
-        unavailable(r, "external slicing is not supported");
-      if (type(base.value.type).kind != TypeKind::Vec &&
-          type(base.value.type).kind != TypeKind::String)
-        reject(r, "slice receiver must be Vec or string");
       std::vector<HirNodeId> values{base.id};
       VecSlice slice;
       // A start endpoint is a BracketItem; an end endpoint is a plain expr.
@@ -1851,6 +1862,36 @@ class Checker {
         colon = ast(child(r, 1)).token_end;
       if (file(r).tokens.at(colon).spelling != ":")
         reject(r, "invalid slice delimiter");
+      if (type(base.value.type).kind == TypeKind::ForeignOpaque) {
+        auto slice_id = foreign_slice(base.value.type);
+        if (!slice_id) unavailable(r, "external slicing is not declared");
+        const auto &declaration = std::get<modules::BindingSlice>(
+            m.resolved->project->foreign_binding(*slice_id).detail);
+        if (!declaration.readable)
+          unavailable(r, "external slicing is write-only");
+        ForeignRead access{*slice_id, ForeignAccessKind::slice_read, {}};
+        for (size_t i = 1; i < n.children.size(); ++i) {
+          bool start = ast(child(r, i)).token_begin < colon;
+          const auto &declared =
+              start ? declaration.start_type : declaration.end_type;
+          if (!declared)
+            reject(r, "external slice endpoint is not declared");
+          auto t = declared_foreign_type(*declared);
+          auto e = expression(child(r, i), t);
+          match(r, e.value.type, t);
+          values.push_back(e.id);
+          if (start)
+            access.start = e.id;
+          else
+            access.end = e.id;
+        }
+        auto t = m.foreign_bindings.at(slice_id->value).type;
+        result = {node(r, t, access, values), {t, {}, {}}};
+        break;
+      }
+      if (type(base.value.type).kind != TypeKind::Vec &&
+          type(base.value.type).kind != TypeKind::String)
+        reject(r, "slice receiver must be Vec or string");
       for (size_t i = 1; i < n.children.size(); ++i) {
         auto e = expression(child(r, i));
         if (!integer(e.value.type))
@@ -1895,8 +1936,26 @@ class Checker {
           }
         }
         auto v = expression(base);
-        if (type(v.value.type).kind == TypeKind::ForeignOpaque)
-          unavailable(r, "external indexing is not supported");
+        if (type(v.value.type).kind == TypeKind::ForeignOpaque) {
+          if (n.children.size() != 2)
+            reject(r, "external indexing requires exactly one index");
+          auto index_id = foreign_indexer(v.value.type);
+          if (!index_id) unavailable(r, "external indexing is not declared");
+          const auto &declaration =
+              std::get<modules::BindingIndexer>(
+                  m.resolved->project->foreign_binding(*index_id).detail);
+          if (!declaration.readable)
+            unavailable(r, "external indexing is write-only");
+          auto index_type = declared_foreign_type(declaration.index_type);
+          auto index = expression(child(r, 1), index_type);
+          match(r, index.value.type, index_type);
+          auto t = m.foreign_bindings.at(index_id->value).type;
+          result = {node(r, t,
+                         ForeignRead{*index_id, ForeignAccessKind::index_read, {}},
+                         {v.id, index.id}),
+                    {t, {}, {}}};
+          break;
+        }
         if (type(v.value.type).kind != TypeKind::Vec &&
             type(v.value.type).kind != TypeKind::String)
           reject(r, "index receiver must be Vec or string");
@@ -1951,6 +2010,24 @@ class Checker {
       if (inout)
         unavailable(r, "indexed inout is not supported");
       auto base = expression(child(r, 0));
+      if (type(base.value.type).kind == TypeKind::ForeignOpaque) {
+        if (ast(r).children.size() != 2)
+          reject(r, "external indexing requires exactly one index");
+        auto index_id = foreign_indexer(base.value.type);
+        if (!index_id) unavailable(r, "external indexing is not declared");
+        const auto &declaration = std::get<modules::BindingIndexer>(
+            m.resolved->project->foreign_binding(*index_id).detail);
+        if (!declaration.writable)
+          unavailable(r, "external indexing is read-only");
+        auto index_type = declared_foreign_type(declaration.index_type);
+        auto index = expression(child(r, 1), index_type);
+        match(r, index.value.type, index_type);
+        auto t = m.foreign_bindings.at(index_id->value).type;
+        return {node(r, t,
+                     ForeignRead{*index_id, ForeignAccessKind::index_place, {}},
+                     {base.id, index.id}),
+                {t, {}, {}}};
+      }
       if (type(base.value.type).kind != TypeKind::Vec)
         reject(r, "index receiver must be Vec");
       if (ast(r).children.size() != 2)
@@ -1961,9 +2038,63 @@ class Checker {
       auto t = type(base.value.type).type_args.at(0);
       return {node(r, t, IndexPlace{}, {base.id, index.id}), {t, {}, {}}};
     }
+    if (ast(r).kind == AstKind::Slice) {
+      if (inout)
+        unavailable(r, "slice inout is not supported");
+      auto base = expression(child(r, 0));
+      if (type(base.value.type).kind != TypeKind::ForeignOpaque)
+        unavailable(r, "slice assignment requires a declared external slice");
+      auto slice_id = foreign_slice(base.value.type);
+      if (!slice_id) unavailable(r, "external slicing is not declared");
+      const auto &declaration = std::get<modules::BindingSlice>(
+          m.resolved->project->foreign_binding(*slice_id).detail);
+      if (!declaration.writable)
+        unavailable(r, "external slicing is read-only");
+      size_t colon = ast(child(r, 0)).token_end + 1;
+      if (ast(r).children.size() > 1 &&
+          ast(child(r, 1)).kind == AstKind::BracketItem)
+        colon = ast(child(r, 1)).token_end;
+      if (file(r).tokens.at(colon).spelling != ":")
+        reject(r, "invalid slice delimiter");
+      std::vector<HirNodeId> values{base.id};
+      ForeignRead access{*slice_id, ForeignAccessKind::slice_place, {}};
+      for (size_t i = 1; i < ast(r).children.size(); ++i) {
+        bool start = ast(child(r, i)).token_begin < colon;
+        const auto &declared = start ? declaration.start_type
+                                     : declaration.end_type;
+        if (!declared)
+          reject(r, "external slice endpoint is not declared");
+        auto t = declared_foreign_type(*declared);
+        auto e = expression(child(r, i), t);
+        match(r, e.value.type, t);
+        values.push_back(e.id);
+        if (start)
+          access.start = e.id;
+        else
+          access.end = e.id;
+      }
+      auto t = m.foreign_bindings.at(slice_id->value).type;
+      return {node(r, t, access, values), {t, {}, {}}};
+    }
     if (ast(r).kind == AstKind::Member) {
       if (inout)
         unavailable(r, "field inout is not implemented");
+      if (auto base_type = peek_type(child(r, 0));
+          base_type && type(*base_type).kind == TypeKind::ForeignOpaque) {
+        auto base = expression(child(r, 0));
+        auto name = file(r).tokens[ast(r).token_end - 1].spelling;
+        auto property = foreign_property(base.value.type, name);
+        if (!property) unavailable(r, "external property is not declared");
+        const auto &declaration = std::get<modules::BindingProperty>(
+            m.resolved->project->foreign_binding(*property).detail);
+        if (declaration.setter.empty())
+          unavailable(r, "external property is read-only");
+        auto t = m.foreign_bindings.at(property->value).type;
+        return {node(r, t,
+                     ForeignRead{*property, ForeignAccessKind::property_place, {}},
+                     {base.id}),
+                {t, {}, {}}};
+      }
       auto base = place(child(r, 0), false);
       auto f = find_field(r, base.value.type);
       auto t = field_type(base.value.type, f);
@@ -2370,17 +2501,144 @@ class Checker {
     return {node(r, target, std::move(data), std::move(children)),
             {target, {}, {}}};
   }
+  const modules::BindingType &foreign_owner(TypeId owner) const {
+    const auto &d = m.resolved->project->foreign_binding(type(owner).binding);
+    return std::get<modules::BindingType>(d.detail);
+  }
   std::vector<ForeignBindingId> foreign_members(TypeId owner, std::string_view name,
                                                        std::string_view kind) const {
     std::vector<ForeignBindingId> result;
-    const auto &d = m.resolved->project->foreign_binding(type(owner).binding);
-    for (auto id : std::get<modules::BindingType>(d.detail).members) {
+    for (auto id : foreign_owner(owner).members) {
       const auto &member = m.resolved->project->foreign_binding(id);
       const auto &c = std::get<modules::BindingCallable>(member.detail);
       if (c.call_kind == kind && (kind == "callable" || member.name == name))
         result.push_back(id);
     }
     return result;
+  }
+  std::optional<ForeignBindingId> foreign_property(TypeId owner,
+                                                   std::string_view name) const {
+    for (auto id : foreign_owner(owner).properties)
+      if (m.resolved->project->foreign_binding(id).name == name) return id;
+    return {};
+  }
+  std::optional<ForeignBindingId> foreign_indexer(TypeId owner) const {
+    const auto &indices = foreign_owner(owner).indexers;
+    return indices.empty() ? std::nullopt
+                           : std::optional<ForeignBindingId>(indices.front());
+  }
+  std::optional<ForeignBindingId> foreign_slice(TypeId owner) const {
+    const auto &slices = foreign_owner(owner).slices;
+    return slices.empty() ? std::nullopt
+                          : std::optional<ForeignBindingId>(slices.front());
+  }
+  TypeId declared_foreign_type(const std::string &name) {
+    return hir::detail::binding_type(*m.resolved->project, m.types, name);
+  }
+  static bool foreign_place_kind(const HirNode &n) {
+    const auto *read = std::get_if<ForeignRead>(&n.data);
+    return read && read->access &&
+           (*read->access == ForeignAccessKind::property_place ||
+            *read->access == ForeignAccessKind::index_place ||
+            *read->access == ForeignAccessKind::slice_place);
+  }
+  std::optional<TypeId> peek_type(Ref r) {
+    if (ast(r).kind == AstKind::Parenthesized) return peek_type(child(r, 0));
+    if (ast(r).kind == AstKind::Name) {
+      auto s = occurrence(r);
+      if (!s) return {};
+      if (auto local = locals.find(s->value); local != locals.end())
+        return local->second.type;
+      if (auto ex = m.resolved->foreign_export(*s);
+          ex && ex->declaration && ex->declaration->value < m.foreign_bindings.size())
+        return m.foreign_bindings.at(ex->declaration->value).type;
+      return {};
+    }
+    if (ast(r).kind == AstKind::Member) {
+      if (occurrence(r)) return {};
+      auto base = peek_type(child(r, 0));
+      if (!base) return {};
+      auto member = file(r).tokens[ast(r).token_end - 1].spelling;
+      if (type(*base).kind == TypeKind::ForeignOpaque)
+        if (auto property = foreign_property(*base, member))
+          return m.foreign_bindings.at(property->value).type;
+      if (type(*base).kind == TypeKind::NominalStruct)
+        for (const auto &f : nominal(*base).fields)
+          if (symbol(f.symbol).name == member)
+            return field_type(*base, f);
+      return {};
+    }
+    if (ast(r).kind == AstKind::NeutralBracket) {
+      auto base = peek_type(child(r, 0));
+      if (!base) return {};
+      if (type(*base).kind == TypeKind::ForeignOpaque) {
+        if (auto index = foreign_indexer(*base))
+          return m.foreign_bindings.at(index->value).type;
+        return {};
+      }
+      if (type(*base).kind == TypeKind::Vec) return type(*base).type_args.at(0);
+      if (type(*base).kind == TypeKind::String)
+        return scalar(TypeKind::UnsignedInt, 32);
+      return {};
+    }
+    if (ast(r).kind == AstKind::Slice) {
+      auto base = peek_type(child(r, 0));
+      if (!base) return {};
+      if (type(*base).kind == TypeKind::ForeignOpaque) {
+        if (auto slice = foreign_slice(*base))
+          return m.foreign_bindings.at(slice->value).type;
+        return {};
+      }
+      if (type(*base).kind == TypeKind::Vec ||
+          type(*base).kind == TypeKind::String)
+        return *base;
+      return {};
+    }
+    if (ast(r).kind == AstKind::Call) {
+      auto callee = child(r, 0);
+      while (ast(callee).kind == AstKind::Parenthesized)
+        callee = child(callee, 0);
+      auto result_of = [&](const std::vector<ForeignBindingId> &ids)
+          -> std::optional<TypeId> {
+        std::optional<TypeId> result;
+        for (auto id : ids) {
+          const auto &signature = m.foreign_bindings.at(id.value).signature;
+          if (!signature) continue;
+          auto t = type(*signature).result;
+          if (result && *result != t) return {};
+          result = t;
+        }
+        return result;
+      };
+      if (auto s = occurrence(callee)) {
+        if (auto ex = m.resolved->foreign_export(*s);
+            ex && !ex->candidates.empty())
+          return result_of(ex->candidates);
+        if (auto sig = signatures.find(s->value); sig != signatures.end())
+          return type(sig->second).result;
+      }
+      if (ast(callee).kind == AstKind::Member && !occurrence(callee)) {
+        if (auto base = peek_type(child(callee, 0));
+            base && type(*base).kind == TypeKind::ForeignOpaque)
+          return result_of(foreign_members(
+              *base, file(callee).tokens[ast(callee).token_end - 1].spelling,
+              "method"));
+        return {};
+      }
+      if (auto callee_type = peek_type(callee)) {
+        if (type(*callee_type).kind == TypeKind::Function)
+          return type(*callee_type).result;
+        if (type(*callee_type).kind == TypeKind::ForeignCallable) {
+          auto signature =
+              m.foreign_bindings.at(type(*callee_type).binding.value).signature;
+          if (signature) return type(*signature).result;
+        }
+        if (type(*callee_type).kind == TypeKind::ForeignOpaque)
+          return result_of(foreign_members(*callee_type, "", "callable"));
+      }
+      return {};
+    }
+    return {};
   }
   Expr system_call(Ref r, Ref callee, SymbolId target,
                    const SystemOperationSpec &spec) {
@@ -3594,6 +3852,8 @@ class Checker {
     case AstKind::Assign: {
       auto p = place(child(r, 0), false);
       auto op = binary_token(r);
+      if (op != "=" && foreign_place_kind(m.nodes[p.id.value]))
+        unavailable(r, "compound assignment to an external property/index/slice is not supported");
       bool shift = op == "<<=" || op == ">>=";
       auto rhs = expression(child(r, 1),
                             shift ? std::nullopt : std::optional(p.value.type));

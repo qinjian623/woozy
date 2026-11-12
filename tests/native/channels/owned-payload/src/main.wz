@@ -1,0 +1,174 @@
+package app;
+
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+const PRODUCERS i32 = 4;
+const CONSUMERS i32 = 4;
+const PER_PRODUCER i64 = 250;
+const TOTAL i64 = 1000;
+const CAPACITY usize = 11;
+
+enum Kind {
+    Data(weight i64);
+    Control(code i32);
+}
+
+struct Payload {
+    id i64;
+    label string;
+    values Vec[i64];
+    kind Kind;
+}
+
+struct ProducerWork {
+    pipe channel.Channel[Payload];
+    base i64;
+}
+
+struct ConsumerWork {
+    pipe channel.Channel[Payload];
+    count sync.AtomicI64;
+    sum sync.AtomicI64;
+}
+
+func make_payload(id i64) Payload {
+    let label = "id:" + strconv.format_i64(id);
+    let values = [id, id + 1, id + 2, id + 3];
+    if id % 2 == 0 {
+        return Payload(id: id, label: label, values: values,
+                       kind: Kind.Data(weight: id * 10));
+    }
+    return Payload(id: id, label: label, values: values,
+                   kind: Kind.Control(code: i32(id % 1000)));
+}
+
+func send_value[T](pipe channel.Channel[T], value T) bool {
+    try {
+        channel.send(pipe, value);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: return false;
+        }
+    }
+    return true;
+}
+
+func produce(work ProducerWork) i64 {
+    for var index i64 = 0; index < PER_PRODUCER; index += 1 {
+        let id = work.base + index;
+        var payload = make_payload(id);
+        if !send_value(work.pipe, payload) { return 2; }
+
+        // send copies scalars and retains owned fields. Mutating this local
+        // payload afterwards must not change the queued copy.
+        payload.id = -1;
+        payload.label = "mutated";
+        if !(vec.len(payload.values) == 4) { return 3; }
+    }
+    return 0;
+}
+
+func consume(work ConsumerWork) i64 {
+    for {
+        switch channel.receive(work.pipe) {
+            case option.Option.Some(payload): {
+                if payload.id < 0 || payload.id >= TOTAL { return 2; }
+                if payload.label != "id:" + strconv.format_i64(payload.id) { return 3; }
+                if !(vec.len(payload.values) == 4) { return 4; }
+                if payload.values[0] != payload.id { return 5; }
+                if payload.values[1] != payload.id + 1 { return 6; }
+                if payload.values[2] != payload.id + 2 { return 7; }
+                if payload.values[3] != payload.id + 3 { return 8; }
+                switch payload.kind {
+                    case Kind.Data(weight): {
+                        if payload.id % 2 != 0 { return 9; }
+                        if weight != payload.id * 10 { return 10; }
+                    }
+                    case Kind.Control(code): {
+                        if payload.id % 2 != 1 { return 11; }
+                        if i64(code) != payload.id % 1000 { return 12; }
+                    }
+                }
+                sync.fetch_add(work.count, 1);
+                sync.fetch_add(work.sum, payload.id);
+            }
+            case option.Option.None: return 0;
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.bounded[Payload](CAPACITY);
+    let count = sync.atomic_i64(0);
+    let sum = sync.atomic_i64(0);
+
+    let consumers = [
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum))];
+    let producers = [
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 0)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 250)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 500)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 750))];
+
+    for job in producers {
+        if !(thread.join(job) == 0) { return 1; }
+    }
+    channel.close(pipe);
+    for job in consumers {
+        if !(thread.join(job) == 0) { return 2; }
+    }
+    if !(sync.load(count) == TOTAL) { return 3; }
+    if !(sync.load(sum) == 499_500) { return 4; }
+    switch channel.receive(pipe) {
+        case option.Option.Some(extra): return 5;
+        case option.Option.None: {}
+    }
+
+    // Direct string and Vec payloads instantiate the same generic channel.
+    let words = channel.bounded[string](2);
+    if !send_value(words, "alpha") { return 6; }
+    if !send_value(words, "beta\0😀") { return 7; }
+    channel.close(words);
+    switch channel.receive(words) {
+        case option.Option.Some(word): if word != "alpha" { return 8; }
+        case option.Option.None: return 9;
+    }
+    switch channel.receive(words) {
+        case option.Option.Some(word): if word != "beta\0😀" { return 10; }
+        case option.Option.None: return 11;
+    }
+    switch channel.receive(words) {
+        case option.Option.Some(extra): return 12;
+        case option.Option.None: {}
+    }
+
+    let rows = channel.unbounded[Vec[i64]]();
+    if !send_value(rows, [1, 2, 3]) { return 13; }
+    if !send_value(rows, [4]) { return 14; }
+    channel.close(rows);
+    switch channel.receive(rows) {
+        case option.Option.Some(row): {
+            if !(vec.len(row) == 3) { return 15; }
+            if row[0] != 1 || row[1] != 2 || row[2] != 3 { return 16; }
+        }
+        case option.Option.None: return 17;
+    }
+    switch channel.receive(rows) {
+        case option.Option.Some(row): if !(vec.len(row) == 1) || row[0] != 4 { return 18; }
+        case option.Option.None: return 19;
+    }
+    switch channel.receive(rows) {
+        case option.Option.Some(extra): return 20;
+        case option.Option.None: {}
+    }
+    return 0;
+}

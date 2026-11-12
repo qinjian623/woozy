@@ -22,3 +22,11 @@ pub func join(worker Thread) i64 throws os.Error {
     }
     return __woozy_thread_result(worker.state);
 }
+
+// -1 waits indefinitely, 0 only checks; positive values are nanoseconds.
+pub func wait_for(worker Thread, timeout_ns i64) bool throws os.Error {
+    let status = __woozy_thread_wait_for(worker.state,timeout_ns);
+    if status == -110 { return false; }
+    if status < 0 { throw os.Error.System(code:i32(-status),completed:0); }
+    return true;
+}

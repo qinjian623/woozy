@@ -515,6 +515,8 @@ class Emitter {
       return call("lang_thread_error_v1", i64, args);
     case SystemOperation::thread_wait:
       return call("lang_thread_wait_v1", i64, args);
+    case SystemOperation::thread_wait_for:
+      return call("lang_thread_wait_for_v1", i64, args);
     case SystemOperation::thread_result:
       return call("lang_thread_result_v1", i64, args);
     case SystemOperation::mutex_new:
@@ -529,6 +531,8 @@ class Emitter {
       return call("lang_atomic_i64_fetch_add_v1", i64, args);
     case SystemOperation::atomic_i64_compare_exchange:
       return call("lang_atomic_i64_compare_exchange_v1", builder.getInt1Ty(), args);
+    case SystemOperation::condvar_wait_for:
+      return call("lang_condvar_wait_for_v1", builder.getInt1Ty(), args);
     case SystemOperation::mutex_lock:
     case SystemOperation::mutex_unlock:
     case SystemOperation::condvar_wait:

@@ -1,0 +1,3 @@
+// The i64 minimum is representable only as a unary-minus literal.
+let x = -9223372036854775808;
+return x;

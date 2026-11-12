@@ -1,0 +1,3 @@
+// Value expression: multiplication binds tighter than addition.
+let value = 2 + 3 * 4;
+return value;

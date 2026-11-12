@@ -1,0 +1,60 @@
+package app;
+import "std/timezone" as tz;
+import "std/time" as time;
+import "std/os" as os;
+import "std/io" as io;
+import "std/text" as text;
+import "std/option" as option;
+import "std/strconv" as strconv;
+
+// Auxiliary test fixture: same input/output contract as ../src/main.wz, but
+// every zone name is loaded from cwd/fixtures.  It exists so generated TZif
+// files can exercise to_local/from_local without changing the frozen fixture.
+func execute(line string) string throws tz.Error {
+    let parts = text.split(line,"|");
+    var instant i64 = 0;
+    try { instant = strconv.parse_i64(parts[2]); }
+    catch error strconv.Error { throw tz.Error.OutOfRange; }
+    let zone = tz.load_from("fixtures",parts[1]);
+    if parts[0] == "name" { return tz.name(zone); }
+    if parts[0] == "utc" {
+        let result = tz.to_local(zone,os.Timespec(seconds:instant,nanoseconds:123));
+        let d = result.date;
+        var daylight = "0";
+        if result.daylight { daylight = "1"; }
+        return strconv.format_i64(d.year)+","+strconv.format_i64(d.month)+","+
+            strconv.format_i64(d.day)+","+strconv.format_i64(d.hour)+","+
+            strconv.format_i64(d.minute)+","+strconv.format_i64(d.second)+","+
+            strconv.format_i64(i64(result.offset_seconds))+","+daylight+","+result.abbreviation;
+    }
+    var date = time.DateTime(year:1970,month:1,day:1,hour:0,minute:0,second:0,nanoseconds:123);
+    try { date = time.from_timestamp(os.Timespec(seconds:instant,nanoseconds:123)); }
+    catch error time.Error { throw tz.Error.OutOfRange; }
+    var resolution = tz.Resolution.Reject;
+    if parts[0] == "earlier" { resolution = tz.Resolution.Earlier; }
+    if parts[0] == "later" { resolution = tz.Resolution.Later; }
+    return strconv.format_i64(tz.from_local(zone,date,resolution).seconds);
+}
+func main() i32 throws os.Error {
+    let reader = io.reader(os.stdin());
+    for true {
+        switch io.read_line(reader) {
+            case option.Option.None: return 0;
+            case option.Option.Some(line): {
+                try { io.println(execute(line)); }
+                catch error tz.Error {
+                    switch error {
+                        case tz.Error.Nonexistent: io.println("nonexistent");
+                        case tz.Error.Ambiguous(first,last): io.println("ambiguous:"+strconv.format_i64(first)+","+strconv.format_i64(last));
+                        case tz.Error.InvalidName: io.println("invalid-name");
+                        case tz.Error.InvalidData(offset): io.println("invalid-data");
+                        case tz.Error.OutOfRange: io.println("out-of-range");
+                        case tz.Error.UnsupportedLeapSeconds: io.println("leap-clock");
+                        case tz.Error.Io(cause): io.println("io-error");
+                    }
+                }
+            }
+        }
+    }
+    return 0;
+}

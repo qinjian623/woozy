@@ -41,6 +41,12 @@ inline std::vector<ForeignBinding> binding_records(const modules::Project &p,
       b.type = binding_type(p, ctx, d.identity);
     else if (auto v = std::get_if<modules::BindingValue>(&d.detail))
       b.type = binding_type(p, ctx, v->type);
+    else if (auto prop = std::get_if<modules::BindingProperty>(&d.detail))
+      b.type = binding_type(p, ctx, prop->type);
+    else if (auto index = std::get_if<modules::BindingIndexer>(&d.detail))
+      b.type = binding_type(p, ctx, index->result_type);
+    else if (auto slice = std::get_if<modules::BindingSlice>(&d.detail))
+      b.type = binding_type(p, ctx, slice->result_type);
     else {
       const auto &c = std::get<modules::BindingCallable>(d.detail);
       Type sig; sig.kind = TypeKind::Function;

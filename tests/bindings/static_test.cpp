@@ -431,6 +431,38 @@ int main(int argc, char **argv) try {
     }
     auto out=std::string(json_object_to_json_string_ext(json,JSON_C_TO_STRING_PRETTY));json_object_put(json);return out;
   };
+  // Access declarations share the same binding projection table.  This checks
+  // the extended foreign.hpp helper directly: property/indexer/slice records
+  // occupy their declaration slots and keep the declared result type.
+  auto access_bundle = [&] {
+    auto text=read(repo/"contracts/python_bindings.example.json");
+    auto json=json_tokener_parse(text.c_str()); need(json,"access JSON parse");
+    auto property=json_tokener_parse(R"({"id":"py.torch.Tensor.device.projection","module":"torch","owner_type":"py.torch.Tensor","name":"device","type":"string","getter":["device"],"setter":null,"error_type":"lang.py.Error"})");
+    auto properties=json_object_new_array(); json_object_array_add(properties,property);
+    json_object_object_add(json,"properties",properties);
+    auto indexer=json_tokener_parse(R"({"id":"py.torch.Tensor.index.projection","module":"torch","owner_type":"py.torch.Tensor","index_type":"i64","result_type":"py.torch.Tensor","readable":true,"writable":false,"error_type":"lang.py.Error"})");
+    auto indexers=json_object_new_array(); json_object_array_add(indexers,indexer);
+    json_object_object_add(json,"indexers",indexers);
+    auto slice=json_tokener_parse(R"({"id":"py.torch.Tensor.slice.projection","module":"torch","owner_type":"py.torch.Tensor","start_type":"i64","end_type":"i64","result_type":"py.torch.Tensor","readable":true,"writable":false,"error_type":"lang.py.Error"})");
+    auto slices=json_object_new_array(); json_object_array_add(slices,slice);
+    json_object_object_add(json,"slices",slices);
+    auto out=std::string(json_object_to_json_string_ext(json,JSON_C_TO_STRING_PRETTY));json_object_put(json);return out;
+  };
+  auto projection=accepted(imports+"func f(x torch.Tensor) Unit throws py.Error { let a=x[0]; let b=x[0:1]; let c=x.device; }","access-projection",access_bundle());
+  auto projected=detail::binding_records(*projection.resolved->project,projection.types);
+  need(projected.size()==projection.resolved->project->foreign_bindings.size(),"access projection size");
+  size_t access_records=0;
+  for(size_t i=0;i<projection.resolved->project->foreign_bindings.size();++i) {
+    const auto &d=projection.resolved->project->foreign_bindings[i];
+    if(std::holds_alternative<modules::BindingProperty>(d.detail) ||
+       std::holds_alternative<modules::BindingIndexer>(d.detail) ||
+       std::holds_alternative<modules::BindingSlice>(d.detail)) {
+      need(projected[i].type==projection.foreign_bindings[i].type,"access projection type");
+      need(!projected[i].signature && !projected[i].owner,"access projection signature/owner");
+      ++access_records;
+    }
+  }
+  need(access_records==3,"access projection record count");
   auto overload=accepted(imports+"func f() Unit throws py.Error { torch.manual_seed(7); }", "overload-integer",variant(false,false));
   need(overload.resolved->project->foreign_binding(*std::get<Call>(overload.nodes[foreign_call(overload,"torch.manual_seed")].data).binding).identity=="torch.manual_seed","selected overload identity");
   accepted(imports+"func f() Unit throws py.Error { torch.manual_seed(7.0); }", "overload-float",variant(false,false));

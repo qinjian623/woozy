@@ -1,0 +1,4 @@
+// The min/-1 division cases use the Woozy wrap rule, not LLVM poison.
+let m = -9223372036854775808;
+let n = -1;
+return m / n + m % n;

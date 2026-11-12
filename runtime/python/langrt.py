@@ -913,6 +913,12 @@ def value_call(operation, args, element=None, tags=None):
             return (tags['Err'], (error,)) if error else (tags['Ok'], (value,))
         if operation.startswith('num_format_'):
             return _format_number(args[0], operation[11:])
+        if operation == 'unicode_normalize':
+            return _unicode18_normalize(args[1], args[0])
+        if operation == 'unicode_casefold':
+            return _unicode18_casefold(args[0])
+        if operation == 'unicode_boundaries':
+            return Vec.create(element, _unicode18_boundaries(args[0]))
         if operation == 'text_len': return len(args[0])
         if operation == 'text_byte_len': return len(args[0].encode('utf-8'))
         if operation == 'text_from_bytes':

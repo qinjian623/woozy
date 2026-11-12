@@ -20,9 +20,17 @@ namespace {
 // freestanding runtime.
 constexpr long kSysFutex = 202;
 constexpr long kSysGettid = 186;
+constexpr long kSysClockGettime = 228;
+constexpr long kClockMonotonic = 1;
 constexpr long kFutexWait = 128; // FUTEX_WAIT_PRIVATE
 constexpr long kFutexWake = 129; // FUTEX_WAKE_PRIVATE
 constexpr long kErrIntr = -4;
+constexpr long kErrAgain = -11;
+constexpr int64_t kTimedOut = -110;
+constexpr int64_t kInvalidTimeout = -22;
+constexpr int64_t kNanoseconds = 1000000000;
+constexpr int64_t kMaxSeconds = 0x7fffffffffffffffLL;
+constexpr int64_t kMaxWaitSeconds = 9000000000LL;
 
 // Mutex word values. A waiter always leaves the word at 2 while it sleeps, so
 // an unlock that observes anything other than 1 must wake a sleeper.
@@ -65,6 +73,92 @@ inline long sys_futex(uint32_t *address, long operation,
                    : "rcx", "r11", "memory", "cc");
   return result;
 }
+struct KernelTime {
+  int64_t seconds;
+  int64_t nanoseconds;
+};
+inline long sys_time(long clock, KernelTime &out) noexcept {
+  long result;
+  __asm__ volatile("syscall"
+                   : "=a"(result)
+                   : "a"(kSysClockGettime), "D"(clock),
+                     "S"(reinterpret_cast<long>(&out))
+                   : "rcx", "r11", "memory", "cc");
+  return result;
+}
+inline long sys_futex_wait_until(uint32_t *address, uint32_t value,
+                                 const KernelTime *timeout) noexcept {
+  register long r10 __asm__("r10") = reinterpret_cast<long>(timeout);
+  register long r8 __asm__("r8") = 0;
+  register long r9 __asm__("r9") = 0;
+  long result;
+  __asm__ volatile("syscall"
+                   : "=a"(result)
+                   : "a"(kSysFutex), "D"(address), "S"(kFutexWait),
+                     "d"(static_cast<long>(value)), "r"(r10), "r"(r8), "r"(r9)
+                   : "rcx", "r11", "memory", "cc");
+  return result;
+}
+struct Deadline {
+  bool finite;
+  int64_t seconds;
+  int64_t nanoseconds;
+  int64_t init(int64_t timeout_ns) noexcept {
+    if (timeout_ns < -1) return kInvalidTimeout;
+    finite = timeout_ns >= 0;
+    if (!finite) return 0;
+    if (timeout_ns == 0) {
+      seconds = 0;
+      nanoseconds = 0;
+      return 0;
+    }
+    KernelTime now;
+    const long status = sys_time(kClockMonotonic, now);
+    if (status < 0) return status;
+    if (now.seconds < 0 || now.nanoseconds < 0 ||
+        now.nanoseconds >= kNanoseconds)
+      return kInvalidTimeout;
+    const int64_t whole = timeout_ns / kNanoseconds;
+    const int64_t part = timeout_ns % kNanoseconds;
+    if (whole > kMaxSeconds - now.seconds) {
+      seconds = kMaxSeconds;
+      nanoseconds = kNanoseconds - 1;
+      return 0;
+    }
+    seconds = now.seconds + whole;
+    nanoseconds = now.nanoseconds + part;
+    if (nanoseconds >= kNanoseconds) {
+      if (seconds == kMaxSeconds)
+        nanoseconds = kNanoseconds - 1;
+      else {
+        ++seconds;
+        nanoseconds -= kNanoseconds;
+      }
+    }
+    return 0;
+  }
+  int64_t remaining(KernelTime &out) noexcept {
+    KernelTime now;
+    const long status = sys_time(kClockMonotonic, now);
+    if (status < 0) return status;
+    if (now.seconds > seconds ||
+        (now.seconds == seconds && now.nanoseconds >= nanoseconds))
+      return kTimedOut;
+    int64_t whole = seconds - now.seconds;
+    int64_t part = nanoseconds - now.nanoseconds;
+    if (part < 0) {
+      --whole;
+      part += kNanoseconds;
+    }
+    if (whole < 0 || (whole == 0 && part == 0)) return kTimedOut;
+    if (whole > kMaxWaitSeconds) {
+      whole = kMaxWaitSeconds;
+      part = 0;
+    }
+    out = {whole, part};
+    return 0;
+  }
+};
 
 // Restart only on EINTR. EAGAIN means the futex word changed before sleep and
 // the caller's predicate loop must re-check it.
@@ -265,8 +359,9 @@ LangHandle *lang_condvar_new_v1() noexcept {
   return &object->handle;
 }
 
-void lang_condvar_wait_v1(LangHandle *condvar_handle,
-                          LangHandle *mutex_handle) noexcept {
+bool condvar_wait(LangHandle *condvar_handle, LangHandle *mutex_handle,
+                  int64_t timeout_ns) noexcept {
+  if (timeout_ns < -1) misuse_panic();
   auto *condvar =
       require<CondvarObject>(condvar_handle, LangHandleKind::condvar);
   auto *mutex = require<MutexObject>(mutex_handle, LangHandleKind::mutex);
@@ -275,6 +370,10 @@ void lang_condvar_wait_v1(LangHandle *condvar_handle,
   if (__atomic_load_n(&mutex->state.owner, __ATOMIC_RELAXED) != self ||
       __atomic_load_n(&mutex->state.lock, __ATOMIC_RELAXED) == kMutexFree)
     misuse_panic();
+
+  Deadline deadline{};
+  const int64_t initialized = deadline.init(timeout_ns);
+  if (initialized < 0) misuse_panic();
 
   Waiter waiter{0u, nullptr};
 
@@ -290,17 +389,42 @@ void lang_condvar_wait_v1(LangHandle *condvar_handle,
   ++condvar->state.waiters;
   spin_release(condvar->state.queue_lock);
 
+  // The contract always releases the external mutex before sleeping, even for
+  // a zero timeout, and reacquires it before returning on every path.
   lang_mutex_unlock_v1(mutex_handle);
 
-  // The futex word is checked under acquire. A notification stores it with
-  // release before waking, so a wakeup cannot be lost between the check and
-  // the sleep; EAGAIN/EINTR both return to this predicate.
-  while (!__atomic_load_n(&waiter.signalled, __ATOMIC_ACQUIRE))
-    futex_wait(&waiter.signalled, 0u);
+  bool wait_error = false;
+  for (;;) {
+    // The futex word is checked under acquire. A notification stores it with
+    // release before waking; EAGAIN/EINTR return to this predicate. Remaining
+    // time is recomputed from the fixed monotonic deadline, never restarted.
+    if (__atomic_load_n(&waiter.signalled, __ATOMIC_ACQUIRE)) break;
+    if (timeout_ns == 0) break;
+    long result;
+    if (deadline.finite) {
+      KernelTime remaining;
+      const int64_t status = deadline.remaining(remaining);
+      if (status == kTimedOut) break;
+      if (status < 0) {
+        wait_error = true;
+        break;
+      }
+      result = sys_futex_wait_until(&waiter.signalled, 0u, &remaining);
+    } else {
+      result = sys_futex(&waiter.signalled, kFutexWait, 0u);
+    }
+    if (result >= 0 || result == kErrIntr || result == kErrAgain ||
+        result == kTimedOut)
+      continue;
+    wait_error = true;
+    break;
+  }
 
   // A notifier may still hold the queue lock while it touches this stack
   // waiter. Reacquire it before removing links, decrementing the count or
   // returning, so the notifier never writes through a dead stack pointer.
+  // The signalled word is read under the same lock, which makes the final
+  // notification-versus-timeout decision race-free.
   spin_acquire(condvar->state.queue_lock);
   Waiter **link = &condvar->state.head;
   Waiter *previous = nullptr;
@@ -315,10 +439,25 @@ void lang_condvar_wait_v1(LangHandle *condvar_handle,
   }
   if (condvar->state.waiters != 0)
     --condvar->state.waiters;
+  const bool notified =
+      __atomic_load_n(&waiter.signalled, __ATOMIC_ACQUIRE) != 0;
   spin_release(condvar->state.queue_lock);
 
-  // The contract is that wait returns with the external mutex held.
+  // The contract is that wait returns with the external mutex held, including
+  // timeout and error cleanup paths.
   lang_mutex_lock_v1(mutex_handle);
+  if (wait_error) misuse_panic();
+  return notified;
+}
+void lang_condvar_wait_v1(LangHandle *condvar_handle,
+                          LangHandle *mutex_handle) noexcept {
+  (void)condvar_wait(condvar_handle, mutex_handle, -1);
+}
+
+bool lang_condvar_wait_for_v1(LangHandle *condvar_handle,
+                              LangHandle *mutex_handle,
+                              int64_t timeout_ns) noexcept {
+  return condvar_wait(condvar_handle, mutex_handle, timeout_ns);
 }
 
 void lang_condvar_notify_one_v1(LangHandle *handle) noexcept {

@@ -1,0 +1,232 @@
+{
+  "schema_version": 1,
+  "base_commit": "148db60b4be4f4b599bf1056d89a4d7d360f2dd8",
+  "objective": "Complete the six requested Woozy extension areas on Linux x86_64 and establish evidence-based compiler self-hosting readiness.",
+  "status": "in_progress",
+  "parallel_work": "No fixed three-worker bridge limit. Parallelize independent file owners within live provider/service limits; shared compiler files retain one writer.",
+  "decisions": {
+    "platform": "Linux x86_64; no other native target in this goal",
+    "external_dependencies": "Explicit opt-in; core executables remain freestanding, selected foreign libraries may require hosted dependencies",
+    "closures": "Creation-time value capture; managed references share objects; explicit move transfers ownership; no automatic borrowed captures",
+    "memory": "Weak references and automatic pure-Woozy strong-cycle collection; foreign Python/C cycles remain host-managed",
+    "generics": "Ordinary type parameters and trait constraints; no C++ template metaprogramming"
+  },
+  "tasks": [
+    {
+      "id": "NET01",
+      "title": "HTTP/1.1 codecs, client and server transport",
+      "status": "complete",
+      "owner": "pi-http",
+      "depends_on": [],
+      "acceptance": [
+        "Binary bodies, persistent reader and pipelining, chunked framing and trailers, bodyless responses",
+        "Reject conflicting framing, invalid headers, premature EOF and configured size limits before allocation",
+        "Real Woozy O0/O2 client/server tests and independent socket fixtures"
+      ]
+    },
+    {
+      "id": "NET02",
+      "title": "TLS and HTTPS with explicit dependencies",
+      "status": "in_progress",
+      "owner": "pi-tls-runtime; root source and HTTPS integration",
+      "depends_on": [
+        "FFI01",
+        "NET01"
+      ],
+      "acceptance": [
+        "Typed TLS client/server and HTTPS using a maintained TLS implementation",
+        "Certificate chain and hostname checks enabled by default; failure and nonblocking progress tested",
+        "Explicit library mode; standalone core ELF remains independent; real interoperable local client/server tests"
+      ]
+    },
+    {
+      "id": "CON01",
+      "title": "Timed waits, reader-writer locks and cooperative cancellation",
+      "status": "complete",
+      "owner": "pi-concurrency-primitives",
+      "depends_on": [],
+      "acceptance": [
+        "Timed thread join and condition wait distinguish timeout from completion",
+        "Reader-writer lock with defined ownership and progress rules",
+        "Cooperative cancellation preserves language cleanup and does not asynchronously kill a thread"
+      ]
+    },
+    {
+      "id": "CON02",
+      "title": "Channels and thread pools",
+      "status": "in_progress",
+      "owner": "pi-channel-waits; pi-taskpool; root review",
+      "depends_on": [
+        "CON01",
+        "LANG01"
+      ],
+      "acceptance": [
+        "Typed bounded and unbounded channels with documented close, drain, timeout and cancellation behavior",
+        "Thread pool with task results, bounded submission, shutdown and cleanup",
+        "Contention, error, close races and ownership checked with real source programs"
+      ]
+    },
+    {
+      "id": "CON03",
+      "title": "Async functions, await and task execution",
+      "status": "planned",
+      "owner": "unassigned",
+      "depends_on": [
+        "LANG01",
+        "MEM02",
+        "CON01"
+      ],
+      "acceptance": [
+        "Actual compiler lowering of async/await with typed errors and cleanup across suspension",
+        "Tasks run on a documented executor; cancellation and shutdown release suspended frames",
+        "Linux event waiting and asynchronous network operations exercised by real programs"
+      ]
+    },
+    {
+      "id": "LANG01",
+      "title": "Capturing closures and bound method values",
+      "status": "planned",
+      "owner": "root",
+      "depends_on": [
+        "MEM01"
+      ],
+      "acceptance": [
+        "Value and explicit-move capture semantics match user decisions",
+        "Escaping environments retain values correctly and clean exactly once on normal and error exits",
+        "Function values and bound receiver values work in containers, callbacks and threads"
+      ]
+    },
+    {
+      "id": "LANG02",
+      "title": "Dynamic trait objects",
+      "status": "planned",
+      "owner": "unassigned",
+      "depends_on": [
+        "LANG01",
+        "MEM02"
+      ],
+      "acceptance": [
+        "Declared trait object type, method dispatch, copy/move/drop and generic trait identities",
+        "Object-safe signatures checked; ambiguous implementations are rejected",
+        "Native and Python behavior and invalid HIR checks"
+      ]
+    },
+    {
+      "id": "LANG03",
+      "title": "Slice views, typed pointers and richer mutable places",
+      "status": "in_progress",
+      "owner": "unassigned",
+      "depends_on": [
+        "MEM01",
+        "FFI01"
+      ],
+      "acceptance": [
+        "Borrowed Slice views have explicit lifetime and mutation rules and cannot outlive storage",
+        "Typed Ptr access is restricted to explicit unsafe operations with defined ownership at FFI boundaries",
+        "Field/index inout and owning mutable places reject overlapping accesses and preserve error cleanup"
+      ]
+    },
+    {
+      "id": "LANG04",
+      "title": "User-defined iteration",
+      "status": "planned",
+      "owner": "unassigned",
+      "depends_on": [
+        "LANG03"
+      ],
+      "acceptance": [
+        "Iterator trait supports for-in for user-defined types and containers without forcing a Vec snapshot",
+        "Iteration type ambiguity, mutation and lifetime rules checked",
+        "Existing Vec/string iteration behavior preserved"
+      ]
+    },
+    {
+      "id": "MEM01",
+      "title": "Weak references",
+      "status": "in_progress",
+      "owner": "root",
+      "depends_on": [],
+      "acceptance": [
+        "Typed weak downgrade/upgrade with atomic liveness and no resurrection after destruction",
+        "Last strong/weak cleanup is correct across racing threads and nested values",
+        "Weak handles never keep the referent alive and cannot access reclaimed storage"
+      ]
+    },
+    {
+      "id": "MEM02",
+      "title": "Pure-Woozy cycle collection",
+      "status": "in_progress",
+      "owner": "root",
+      "depends_on": [
+        "MEM01",
+        "LANG01"
+      ],
+      "acceptance": [
+        "Automatically reclaim unreachable pure-Woozy cycles without collecting live roots",
+        "Trace container, aggregate and closure edges; synchronize with mutators and runtime blocking calls",
+        "Do not claim collection of foreign Python/C cycles; stress normal/error/thread/fork cleanup"
+      ]
+    },
+    {
+      "id": "FFI01",
+      "title": "Native C ABI and explicit hosted-library mode",
+      "status": "in_progress",
+      "owner": "root C ABI; pi-hosted-runtime",
+      "depends_on": [],
+      "acceptance": [
+        "Declared C ABI functions, supported aggregate layout and typed pointer/buffer arguments",
+        "Explicit linkage, correct libc startup/TLS/thread handling when hosted libraries are selected",
+        "Callbacks and foreign resources have defined ownership and error behavior; core no-libc tests remain unchanged",
+        "Independent C fixture and real external-library programs execute on Linux x86_64"
+      ]
+    },
+    {
+      "id": "FFI02",
+      "title": "Python properties, indexing and slicing",
+      "status": "complete",
+      "owner": "pi-python-interop",
+      "depends_on": [],
+      "acceptance": [
+        "Declared typed property/index/slice operations with no fallback to unknown Any",
+        "Host identity, setters, exceptions and escaping values obey source ownership rules",
+        "Independent NumPy/PyTorch and custom-host examples execute; unsupported undeclared operations still diagnose"
+      ]
+    },
+    {
+      "id": "BAS01",
+      "title": "Unicode normalization, case folding and graphemes",
+      "status": "complete",
+      "owner": "root Native API; pi-python-unicode",
+      "depends_on": [],
+      "acceptance": [
+        "NFC/NFD/NFKC/NFKD and complete default case folding with a pinned Unicode version",
+        "Stateful extended grapheme boundaries including emoji and embedded NUL; existing codepoint indexing unchanged",
+        "Official normalization/folding/grapheme data and real source-level APIs; native core remains freestanding"
+      ]
+    },
+    {
+      "id": "BAS02",
+      "title": "Named time zones and daylight saving",
+      "status": "complete",
+      "owner": "root",
+      "depends_on": [],
+      "acceptance": [
+        "Named zone loading and validated TZif parsing including post-table rules",
+        "UTC/local conversion, offsets and DST across historical/future transitions",
+        "Ambiguous and nonexistent local times have explicit behavior; compare independent zoneinfo fixtures"
+      ]
+    },
+    {
+      "id": "BOOT01",
+      "title": "Compiler self-hosting readiness and stage criteria",
+      "status": "complete",
+      "owner": "pi-selfhosting-readiness; root review",
+      "depends_on": [],
+      "acceptance": [
+        "Concrete source/library/tool requirements for writing the compiler in Woozy, distinguished from conveniences",
+        "Executable compiler-like probe exercises lexing, symbol data, file output and LLVM/tool invocation",
+        "Full self-hosting criterion is stage0 to stage1 to stage2 of the same Woozy compiler sources with semantic/regression comparison; a wrapper around the C++ compiler does not count"
+      ]
+    }
+  ]
+}

@@ -1,0 +1,90 @@
+package app;
+
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+
+struct SenderWork {
+    pipe channel.Channel[i64];
+    attempted sync.AtomicI64;
+    done sync.AtomicI64;
+}
+
+func blocked_send(work SenderWork) i64 {
+    try {
+        channel.send(work.pipe, 10);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: return 2;
+        }
+    }
+    sync.store(work.attempted, 1);
+    // The bounded channel is full here. This send must not return until the
+    // main thread removes the first value.
+    try {
+        channel.send(work.pipe, 20);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: return 3;
+        }
+    }
+    sync.store(work.done, 1);
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.bounded[i64](1);
+    let attempted = sync.atomic_i64(0);
+    let done = sync.atomic_i64(0);
+    let sender = thread.spawn[SenderWork](blocked_send,
+        SenderWork(pipe: pipe, attempted: attempted, done: done));
+
+    for sync.load(attempted) == 0 {}
+    if !(sync.load(done) == 0) { return 1; }
+    switch channel.try_send(pipe, 30) {
+        case channel.SendResult.Sent: return 2;
+        case channel.SendResult.Full: {}
+        case channel.SendResult.Closed: return 3;
+    }
+
+    switch channel.receive(pipe) {
+        case option.Option.Some(value): if value != 10 { return 4; }
+        case option.Option.None: return 5;
+    }
+    for sync.load(done) == 0 {}
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(value): if value != 20 { return 6; }
+        case channel.ReceiveResult.Empty: return 7;
+        case channel.ReceiveResult.Closed: return 8;
+    }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(extra): return 9;
+        case channel.ReceiveResult.Empty: {}
+        case channel.ReceiveResult.Closed: return 10;
+    }
+
+    if !(thread.join(sender) == 0) { return 11; }
+
+    channel.close(pipe);
+    var rejected = false;
+    try {
+        channel.send(pipe, 40);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: rejected = true;
+        }
+    }
+    if !rejected { return 12; }
+    switch channel.receive(pipe) {
+        case option.Option.Some(extra): return 13;
+        case option.Option.None: {}
+    }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(extra): return 14;
+        case channel.ReceiveResult.Empty: return 15;
+        case channel.ReceiveResult.Closed: {}
+    }
+    return 0;
+}

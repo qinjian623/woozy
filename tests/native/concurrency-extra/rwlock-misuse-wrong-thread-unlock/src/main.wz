@@ -1,0 +1,18 @@
+package main;
+import "std/os" as os;
+import "std/rwlock" as rwlock;
+import "std/thread" as thread;
+struct Shared { lock rwlock.ReadWriteLock; }
+func unlock(shared Shared) i64 {
+    rwlock.read_unlock(shared.lock);
+    return 0;
+}
+func main() i32 throws os.Error {
+    let lock = rwlock.new();
+    rwlock.read_lock(lock);
+    let shared = Shared(lock: lock);
+    let worker = thread.spawn[Shared](unlock,shared);
+    if thread.join(worker) != 0 { return 1; }
+    rwlock.read_unlock(lock);
+    return 0;
+}

@@ -1,0 +1,99 @@
+package app;
+
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+
+const PRODUCERS i32 = 4;
+const CONSUMERS i32 = 4;
+const PER_PRODUCER i64 = 750;
+
+struct ProducerWork {
+    pipe channel.Channel[i64];
+    base i64;
+}
+
+struct ConsumerWork {
+    pipe channel.Channel[i64];
+    gate sync.AtomicI64;
+    count sync.AtomicI64;
+    sum sync.AtomicI64;
+}
+
+func produce(work ProducerWork) i64 {
+    for var index i64 = 0; index < PER_PRODUCER; index += 1 {
+        let value = work.base + index;
+        try {
+            channel.send(work.pipe, value);
+        } catch failure channel.Error {
+            switch failure {
+                case channel.Error.Closed: return 2;
+            }
+        }
+    }
+    return 0;
+}
+
+func consume(work ConsumerWork) i64 {
+    // Hold consumers back until every producer has committed. This forces the
+    // unbounded ring to grow with thousands of owned values still resident.
+    for sync.load(work.gate) == 0 {}
+    for {
+        switch channel.receive(work.pipe) {
+            case option.Option.Some(value): {
+                sync.fetch_add(work.count, 1);
+                sync.fetch_add(work.sum, value);
+            }
+            case option.Option.None: return 0;
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.unbounded[i64]();
+    let gate = sync.atomic_i64(0);
+    let count = sync.atomic_i64(0);
+    let sum = sync.atomic_i64(0);
+
+    let consumers = [
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, gate: gate, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, gate: gate, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, gate: gate, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, gate: gate, count: count, sum: sum))];
+
+    let producers = [
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 4_000_000)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 5_000_000)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 6_000_000)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 7_000_000))];
+
+    for job in producers {
+        if !(thread.join(job) == 0) { return 1; }
+    }
+    sync.store(gate, 1);
+    channel.close(pipe);
+    for job in consumers {
+        if !(thread.join(job) == 0) { return 2; }
+    }
+
+    var expected_count i64 = 0;
+    var expected_sum i64 = 0;
+    for var producer i32 = 0; producer < PRODUCERS; producer += 1 {
+        for var index i64 = 0; index < PER_PRODUCER; index += 1 {
+            expected_count += 1;
+            expected_sum += (i64(producer) + 4) * 1_000_000 + index;
+        }
+    }
+    if !(sync.load(count) == expected_count) { return 3; }
+    if !(sync.load(sum) == expected_sum) { return 4; }
+
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(extra): return 5;
+        case channel.ReceiveResult.Empty: return 6;
+        case channel.ReceiveResult.Closed: {}
+    }
+    channel.close(pipe);
+    return 0;
+}

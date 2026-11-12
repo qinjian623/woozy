@@ -1,0 +1,116 @@
+package app;
+
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+
+const PRODUCERS i32 = 4;
+const CLOSERS i32 = 4;
+const CONSUMERS i32 = 4;
+const PER_PRODUCER i64 = 500;
+
+struct ProducerWork {
+    pipe channel.Channel[i64];
+    base i64;
+}
+
+struct CloserWork {
+    pipe channel.Channel[i64];
+}
+
+struct ConsumerWork {
+    pipe channel.Channel[i64];
+    count sync.AtomicI64;
+    sum sync.AtomicI64;
+}
+
+func produce(work ProducerWork) i64 {
+    for var index i64 = 0; index < PER_PRODUCER; index += 1 {
+        try {
+            channel.send(work.pipe, work.base + index);
+        } catch failure channel.Error {
+            switch failure {
+                case channel.Error.Closed: return 2;
+            }
+        }
+    }
+    return 0;
+}
+
+func closer(work CloserWork) i64 {
+    channel.close(work.pipe);
+    return 0;
+}
+
+func consume(work ConsumerWork) i64 {
+    for {
+        switch channel.receive(work.pipe) {
+            case option.Option.Some(value): {
+                sync.fetch_add(work.count, 1);
+                sync.fetch_add(work.sum, value);
+            }
+            case option.Option.None: return 0;
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.unbounded[i64]();
+    let count = sync.atomic_i64(0);
+    let sum = sync.atomic_i64(0);
+
+    let producers = [
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 0)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 1_000_000)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 2_000_000)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 3_000_000))];
+    for job in producers {
+        if !(thread.join(job) == 0) { return 1; }
+    }
+
+    // All values were committed before any close. Every alias may close
+    // concurrently; only the first transition matters and none may discard
+    // the queued data.
+    let closers = [
+        thread.spawn[CloserWork](closer, CloserWork(pipe: pipe)),
+        thread.spawn[CloserWork](closer, CloserWork(pipe: pipe)),
+        thread.spawn[CloserWork](closer, CloserWork(pipe: pipe)),
+        thread.spawn[CloserWork](closer, CloserWork(pipe: pipe))];
+    for job in closers {
+        if !(thread.join(job) == 0) { return 2; }
+    }
+
+    let consumers = [
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum)),
+        thread.spawn[ConsumerWork](consume, ConsumerWork(pipe: pipe, count: count, sum: sum))];
+    for job in consumers {
+        if !(thread.join(job) == 0) { return 3; }
+    }
+
+    var expected_count i64 = 0;
+    var expected_sum i64 = 0;
+    for var producer i32 = 0; producer < PRODUCERS; producer += 1 {
+        for var index i64 = 0; index < PER_PRODUCER; index += 1 {
+            expected_count += 1;
+            expected_sum += i64(producer) * 1_000_000 + index;
+        }
+    }
+    if !(sync.load(count) == expected_count) { return 4; }
+    if !(sync.load(sum) == expected_sum) { return 5; }
+
+    switch channel.receive(pipe) {
+        case option.Option.Some(extra): return 6;
+        case option.Option.None: {}
+    }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(extra): return 7;
+        case channel.ReceiveResult.Empty: return 8;
+        case channel.ReceiveResult.Closed: {}
+    }
+    channel.close(pipe);
+    return 0;
+}

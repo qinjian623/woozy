@@ -1,0 +1,223 @@
+{
+  "schema_version": 1,
+  "grammar": "{ let NAME = EXPR ; } return EXPR ;  with + - * / % and unary +/-",
+  "positive": [
+    {
+      "name": "value_expr",
+      "source": "value_expr.wz",
+      "expected_exit": 14,
+      "ir_must_contain": [
+        "%t0 = mul i64 3, 4",
+        "%t1 = add i64 2, %t0",
+        "%v0 = add i64 %t1, 0",
+        "and i64"
+      ]
+    },
+    {
+      "name": "variables",
+      "source": "variables.wz",
+      "expected_exit": 51,
+      "ir_must_contain": [
+        "%v0 = add i64 7, 0",
+        "%t0 = mul i64 %v0, %v0",
+        "%t1 = sub i64 %t0, 5",
+        "%v1 = add i64 %t1, 0",
+        "%t2 = add i64 %v1, %v0"
+      ]
+    },
+    {
+      "name": "precedence",
+      "source": "precedence.wz",
+      "expected_exit": 8,
+      "ir_must_contain": [
+        "sdiv i64",
+        "srem i64",
+        "phi i64",
+        "%t0 = mul i64 2, 3",
+        "and i64"
+      ]
+    },
+    {
+      "name": "unary_min",
+      "source": "unary_min.wz",
+      "expected_exit": 0,
+      "ir_must_contain": [
+        "%v0 = add i64 -9223372036854775808",
+        "and i64"
+      ]
+    },
+    {
+      "name": "wrap",
+      "source": "wrap.wz",
+      "expected_exit": 0,
+      "ir_must_contain": [
+        "%v0 = add i64 9223372036854775807",
+        "%t0 = add i64 %v0, 1",
+        "and i64"
+      ]
+    },
+    {
+      "name": "utf8_comment",
+      "source": "utf8_comment.wz",
+      "expected_exit": 42,
+      "ir_must_contain": [
+        "%t0 = add i64 40, 2",
+        "and i64"
+      ]
+    },
+    {
+      "name": "crlf",
+      "source": "crlf.wz",
+      "expected_exit": 30,
+      "ir_must_contain": [
+        "%v0 = add i64 5, 0",
+        "%t0 = mul i64 %v0, 6",
+        "and i64"
+      ]
+    },
+    {
+      "name": "div_min",
+      "source": "div_min.wz",
+      "expected_exit": 0,
+      "ir_must_contain": [
+        "sdiv i64",
+        "srem i64",
+        "icmp eq i64 %v0, -9223372036854775808",
+        "phi i64",
+        "and i64"
+      ]
+    },
+    {
+      "name": "bases",
+      "source": "bases.wz",
+      "expected_exit": 26,
+      "ir_must_contain": [
+        "%t0 = add i64 16, 2",
+        "%t1 = add i64 %t0, 8",
+        "and i64"
+      ]
+    },
+    {
+      "name": "underscores",
+      "source": "underscores.wz",
+      "expected_exit": 232,
+      "ir_must_contain": [
+        "%t0 = add i64 1000, 4096",
+        "%v0 = add i64 %t0, 0",
+        "and i64"
+      ]
+    }
+  ],
+  "negative": [
+    {
+      "name": "invalid_token_utf8_position",
+      "source": "invalid_token.wz",
+      "code": "WZP001",
+      "line": 1,
+      "column": 11,
+      "start": 17,
+      "end": 18,
+      "message_contains": "invalid token"
+    },
+    {
+      "name": "overflow_literal",
+      "source": "overflow_literal.wz",
+      "code": "WZP002",
+      "line": 1,
+      "column": 9,
+      "start": 8,
+      "end": 27,
+      "message_contains": "outside the i64 range"
+    },
+    {
+      "name": "min_magnitude_without_minus",
+      "source": "min_magnitude.wz",
+      "code": "WZP002",
+      "line": 1,
+      "column": 9,
+      "start": 8,
+      "end": 27,
+      "message_contains": "minimum magnitude"
+    },
+    {
+      "name": "redefinition",
+      "source": "redefinition.wz",
+      "code": "WZP005",
+      "line": 1,
+      "column": 16,
+      "start": 15,
+      "end": 16,
+      "message_contains": "duplicate variable"
+    },
+    {
+      "name": "unknown_variable",
+      "source": "unknown_variable.wz",
+      "code": "WZP004",
+      "line": 1,
+      "column": 19,
+      "start": 18,
+      "end": 19,
+      "message_contains": "unknown variable"
+    },
+    {
+      "name": "invalid_utf8",
+      "source": "invalid_utf8.wz",
+      "code": "WZP009",
+      "line": 1,
+      "column": 15,
+      "start": 14,
+      "end": 15,
+      "message_contains": "not valid UTF-8"
+    },
+    {
+      "name": "unterminated_comment",
+      "source": "unterminated_comment.wz",
+      "code": "WZP013",
+      "line": 1,
+      "column": 12,
+      "start": 11,
+      "end": 21,
+      "message_contains": "unterminated block comment"
+    },
+    {
+      "name": "missing_semicolon",
+      "source": "missing_semicolon.wz",
+      "code": "WZP003",
+      "line": 1,
+      "column": 11,
+      "start": 10,
+      "end": 16,
+      "message_contains": "expected ';'"
+    },
+    {
+      "name": "trailing_token",
+      "source": "trailing_token.wz",
+      "code": "WZP006",
+      "line": 1,
+      "column": 22,
+      "start": 21,
+      "end": 27,
+      "message_contains": "unexpected token"
+    },
+    {
+      "name": "empty_input",
+      "source": "empty_input.wz",
+      "code": "WZP003",
+      "line": 1,
+      "column": 1,
+      "start": 0,
+      "end": 0,
+      "message_contains": "expected 'return'"
+    },
+    {
+      "name": "bad_integer",
+      "source": "bad_integer.wz",
+      "code": "WZP010",
+      "line": 1,
+      "column": 9,
+      "start": 8,
+      "end": 12,
+      "message_contains": "underscore"
+    }
+  ]
+}

@@ -360,4 +360,35 @@ if(LANG_TEST_PYTHON)
   add_test(NAME performance.plb_output_checks COMMAND ${LANG_TEST_PYTHON}
     ${LANG_SOURCE_ROOT}/tests/performance/run_plb.py selftest)
   set_tests_properties(performance.plb_output_checks PROPERTIES TIMEOUT 30)
+  add_test(NAME native.timezone COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/timezone-results
+    ${LANG_SOURCE_ROOT}/tests/native/timezone/run.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT})
+  set_tests_properties(native.timezone PROPERTIES TIMEOUT 600)
+  add_test(NAME native.channel COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/native/channels/run_channels.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/channel-results)
+  set_tests_properties(native.channel PROPERTIES TIMEOUT 300)
+  add_test(NAME native.concurrency_timeouts COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/concurrency-timeout-results
+    ${LANG_SOURCE_ROOT}/tests/native/concurrency-timeouts/run.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT})
+  set_tests_properties(native.concurrency_timeouts PROPERTIES TIMEOUT 180)
+  add_test(NAME native.unicode_runtime COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/unicode-runtime-results
+    ${LANG_SOURCE_ROOT}/tests/native/unicode/run.py --root ${LANG_SOURCE_ROOT}
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --clangxx ${LLVM_TOOLS_BINARY_DIR}/clang++
+    --ar ${LLVM_TOOLS_BINARY_DIR}/llvm-ar)
+  set_tests_properties(native.unicode_runtime PROPERTIES TIMEOUT 300)
+endif()
+
+if(LANG_PYTHON312)
+  add_test(NAME python.unicode18 COMMAND ${LANG_PYTHON312}
+    ${LANG_SOURCE_ROOT}/tests/python/unicode18_test.py)
+  set_tests_properties(python.unicode18 PROPERTIES TIMEOUT 180)
+  add_test(NAME values.unicode_source COMMAND ${LANG_PYTHON312}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/unicode-source-results
+    ${LANG_SOURCE_ROOT}/tests/native/unicode/run_source.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --python ${LANG_PYTHON312})
+  set_tests_properties(values.unicode_source PROPERTIES TIMEOUT 300)
 endif()

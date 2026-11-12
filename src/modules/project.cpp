@@ -313,16 +313,23 @@ struct Loader {
     };
     visit("");
   }
-  void object(Json j, std::initializer_list<const char *> fields) {
+  void object(Json j, std::initializer_list<const char *> fields,
+              std::initializer_list<const char *> optional = {}) {
     if (!json_object_is_type(j.value, json_type_object)) invalid(j, "expected object");
     for (auto key : fields) {
       json_object *value = nullptr;
       if (!json_object_object_get_ex(j.value, key, &value))
         invalid(j, std::string("missing field: ") + key);
     }
+    auto known = [&](std::string_view key) {
+      return std::any_of(fields.begin(), fields.end(),
+                         [&](auto f) { return std::string_view(f) == key; }) ||
+             std::any_of(optional.begin(), optional.end(),
+                         [&](auto f) { return std::string_view(f) == key; });
+    };
     json_object_object_foreach(j.value, key, value) {
       (void)value;
-      if (std::none_of(fields.begin(), fields.end(), [&](auto f) { return std::string_view(f) == key; }))
+      if (!known(key))
         invalid({nullptr, j.pointer + "/" + pointer_part(key)}, "unknown field");
     }
   }
@@ -398,7 +405,9 @@ struct Loader {
     index_json();
     Json root{raw, ""};
     object(root, {"schema_version", "contract", "review_status", "allowed_backends",
-                  "package_requirements", "modules", "types", "values", "callables", "conformance_required"});
+                  "package_requirements", "modules", "types", "values", "callables",
+                  "conformance_required"},
+           {"properties", "indexers", "slices"});
     BindingBundle b;
     b.path = path; b.json = text; b.sha256 = sha256(text); b.source = span;
     auto version = field(root, "schema_version");
@@ -435,21 +444,39 @@ struct Loader {
     size_t bundle_id = project.bindings.size();
     std::vector<ForeignDeclaration> declarations;
     std::map<std::string, SourceSpan> ids;
-    for (auto category : {"types", "values", "callables"}) {
-      for (auto j : array(field(root, category))) {
+    for (auto category : {"types", "values", "callables", "properties", "indexers", "slices"}) {
+      json_object *list = nullptr;
+      // The first three categories are required by object(root, ...). The
+      // access arrays are additive and absent in every pre-FFI02 bundle.
+      // Use get_ex's return value: an explicit JSON null is present and must
+      // be rejected by array(), not treated as an omitted optional field.
+      if (!json_object_object_get_ex(root.value, category, &list))
+        continue;
+      for (auto j : array({list, "/" + std::string(category)})) {
         check_cancelled(stop);
         bool type = std::string_view(category) == "types", value = std::string_view(category) == "values";
+        bool callable = std::string_view(category) == "callables";
+        bool property = std::string_view(category) == "properties";
+        bool indexer = std::string_view(category) == "indexers";
+        bool slice = std::string_view(category) == "slices";
         if (type) object(j, {"id", "module", "name", "kind", "host_attribute", "copy"});
         else if (value) object(j, {"module", "name", "type", "host_attribute"});
-        else object(j, {"id", "module", "name", "call_kind", "owner_type", "host_attribute", "parameters",
+        else if (callable) object(j, {"id", "module", "name", "call_kind", "owner_type", "host_attribute", "parameters",
                          "return_type", "error_type", "ownership", "effects", "receiver_escapes"});
+        else if (property) object(j, {"id", "module", "owner_type", "name", "type", "getter", "setter", "error_type"});
+        else if (indexer) object(j, {"id", "module", "owner_type", "index_type", "result_type",
+                                      "readable", "writable", "error_type"});
+        else object(j, {"id", "module", "owner_type", "start_type", "end_type", "result_type",
+                         "readable", "writable", "error_type"});
         ForeignDeclaration d;
         d.id = ForeignBindingId(project.foreign_bindings.size() + declarations.size());
         d.bundle = bundle_id; d.source = location(j); d.json_pointer = j.pointer;
-        d.module = string(field(j, "module")); d.name = identifier(field(j, "name"));
+        d.module = string(field(j, "module"));
         if (!mods.contains(d.module)) invalid(field(j, "module"), "undeclared module");
+        if (!indexer && !slice) d.name = identifier(field(j, "name"));
         if (d.name == "_") invalid(field(j, "name"), "export cannot be _");
-        d.host_attribute = strings(field(j, "host_attribute"), true);
+        if (type || value || callable)
+          d.host_attribute = strings(field(j, "host_attribute"), true);
         d.identity = value ? d.module + "/" + d.name : identity(field(j, "id"));
         if (!value) {
           if (builtin(d.identity) || !ids.emplace(d.identity, d.source).second || binding_identities.contains(d.identity))
@@ -461,7 +488,37 @@ struct Loader {
           d.detail = BindingType{choice(field(j, "kind"), {"host_reference", "opaque_protocol", "runtime_error"}),
                                  choice(field(j, "copy"), {"shared_reference", "error_payload_copy"})};
         } else if (value) d.detail = BindingValue{identity(field(j, "type"))};
-        else {
+        else if (property) {
+          BindingProperty p;
+          p.owner_type = identity(field(j, "owner_type"));
+          p.name = identifier(field(j, "name"));
+          p.type = identity(field(j, "type"));
+          p.getter = strings(field(j, "getter"), true);
+          auto setter = field(j, "setter");
+          if (!json_object_is_type(setter.value, json_type_null)) {
+            p.setter = strings(setter, true);
+            if (p.setter.empty())
+              invalid(setter, "property setter path must not be empty");
+          }
+          p.error_type = identity(field(j, "error_type"));
+          d.name = p.name;
+          d.detail = std::move(p);
+        } else if (indexer) {
+          d.detail = BindingIndexer{identity(field(j, "owner_type")),
+                                    identity(field(j, "index_type")),
+                                    identity(field(j, "result_type")),
+                                    identity(field(j, "error_type")),
+                                    boolean(field(j, "readable")),
+                                    boolean(field(j, "writable"))};
+        } else if (slice) {
+          d.detail = BindingSlice{identity(field(j, "owner_type")),
+                                  identity(field(j, "result_type")),
+                                  identity(field(j, "error_type")),
+                                  nullable(field(j, "start_type")),
+                                  nullable(field(j, "end_type")),
+                                  boolean(field(j, "readable")),
+                                  boolean(field(j, "writable"))};
+        } else {
           BindingCallable c;
           c.call_kind = choice(field(j, "call_kind"), {"function", "constructor", "method", "callable"});
           c.owner_type = nullable(field(j, "owner_type"));
@@ -578,6 +635,93 @@ struct Loader {
       if ((c->receiver_escapes == "may_retain") != effects.contains("retains_receiver")) invalid(field(j, "effects"), "receiver escape/retains_receiver mismatch");
       if (!receiver && effects.contains("mutates_receiver")) invalid(field(j, "effects"), "mutates_receiver requires an owner");
     }
+    // Access declarations are validated after callables so property/method
+    // name conflicts and per-owner uniqueness are checked against the complete
+    // declaration set. No host module is imported or probed here.
+    auto access_owner = [&](const ForeignDeclaration &d, const std::string &owner_name,
+                            Json at) -> ForeignDeclaration * {
+      auto it = types.find(owner_name);
+      if (it == types.end()) invalid(at, "unknown owner type: " + owner_name);
+      if (it->second->module != d.module)
+        invalid(at, "owner type must be declared in the same module");
+      const auto &t = std::get<BindingType>(it->second->detail);
+      if (t.kind != "host_reference" && t.kind != "opaque_protocol")
+        invalid(at, "owner type must be a host object type");
+      return it->second;
+    };
+    auto access_value = [&](const std::string &name, Json at) {
+      if (builtin(name)) {
+        if (name == "Unit") invalid(at, "Unit is not a host access value type");
+        return;
+      }
+      auto it = types.find(name);
+      if (it == types.end()) invalid(at, "unknown type: " + name);
+      const auto &t = std::get<BindingType>(it->second->detail);
+      if (t.kind != "host_reference" && t.kind != "opaque_protocol")
+        invalid(at, "host access value must be scalar or host reference");
+    };
+    auto access_integer = [&](const std::string &name, Json at) {
+      static const std::set<std::string> integers{
+          "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64", "isize", "usize"};
+      if (!integers.contains(name)) invalid(at, "expected a builtin integer type");
+    };
+    auto access_index = [&](const std::string &name, Json at) {
+      if (builtin(name)) {
+        access_integer(name, at);
+        return;
+      }
+      auto it = types.find(name);
+      if (it == types.end()) invalid(at, "unknown type: " + name);
+      const auto &t = std::get<BindingType>(it->second->detail);
+      if (t.kind != "host_reference" && t.kind != "opaque_protocol")
+        invalid(at, "index type must be integer or a host object");
+    };
+    auto access_error = [&](const std::string &name, Json at) {
+      if (name != "lang.py.Error") invalid(at, "error_type must be lang.py.Error");
+      auto it = types.find(name);
+      if (it == types.end() || std::get<BindingType>(it->second->detail).kind != "runtime_error")
+        invalid(at, "error must reference runtime_error");
+    };
+    std::set<std::pair<std::string, std::string>> property_names;
+    for (auto &d : declarations) {
+      Json j{nullptr, d.json_pointer};
+      if (auto property = std::get_if<BindingProperty>(&d.detail)) {
+        auto owner = access_owner(d, property->owner_type, field(j, "owner_type"));
+        if (property->getter.empty())
+          invalid(field(j, "getter"), "property getter path must not be empty");
+        if (!property_names.emplace(property->owner_type, property->name).second)
+          invalid(field(j, "name"), "duplicate property declaration");
+        for (const auto &other : declarations)
+          if (auto call = std::get_if<BindingCallable>(&other.detail);
+              call && call->owner_type && *call->owner_type == property->owner_type &&
+              other.name == property->name)
+            invalid(field(j, "name"), "property conflicts with a callable");
+        access_value(property->type, field(j, "type"));
+        access_error(property->error_type, field(j, "error_type"));
+        std::get<BindingType>(owner->detail).properties.push_back(d.id);
+      } else if (auto index = std::get_if<BindingIndexer>(&d.detail)) {
+        auto owner = access_owner(d, index->owner_type, field(j, "owner_type"));
+        if (!index->readable && !index->writable)
+          invalid(field(j, "readable"), "indexer must be readable or writable");
+        access_index(index->index_type, field(j, "index_type"));
+        access_value(index->result_type, field(j, "result_type"));
+        access_error(index->error_type, field(j, "error_type"));
+        auto &indices = std::get<BindingType>(owner->detail).indexers;
+        if (!indices.empty()) invalid(j, "duplicate indexer for owner");
+        indices.push_back(d.id);
+      } else if (auto slice = std::get_if<BindingSlice>(&d.detail)) {
+        auto owner = access_owner(d, slice->owner_type, field(j, "owner_type"));
+        if (!slice->readable && !slice->writable)
+          invalid(field(j, "readable"), "slice must be readable or writable");
+        if (slice->start_type) access_integer(*slice->start_type, field(j, "start_type"));
+        if (slice->end_type) access_integer(*slice->end_type, field(j, "end_type"));
+        access_value(slice->result_type, field(j, "result_type"));
+        access_error(slice->error_type, field(j, "error_type"));
+        auto &slices = std::get<BindingType>(owner->detail).slices;
+        if (!slices.empty()) invalid(j, "duplicate slice for owner");
+        slices.push_back(d.id);
+      }
+    }
     project.bindings.push_back(std::move(b));
     for (auto &d : declarations) {
       project.bindings.back().declarations.push_back(d.id);
@@ -607,8 +751,11 @@ struct Loader {
     for (auto binding : bundle.declarations) {
       const auto &d = project.foreign_binding(binding);
       if (d.module != name) continue;
-      auto c = std::get_if<BindingCallable>(&d.detail);
-      if (c) continue;
+      if (std::holds_alternative<BindingCallable>(d.detail) ||
+          std::holds_alternative<BindingProperty>(d.detail) ||
+          std::holds_alternative<BindingIndexer>(d.detail) ||
+          std::holds_alternative<BindingSlice>(d.detail))
+        continue;
       bool type = std::holds_alternative<BindingType>(d.detail);
       exports.emplace(d.name, ForeignExport{d.name, d.stable_identity,
           type ? ForeignExportKind::type : ForeignExportKind::value, b, binding, {}});

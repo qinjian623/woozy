@@ -1,0 +1,163 @@
+package app;
+
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+const PRODUCERS i32 = 4;
+const PER_PRODUCER i64 = 150;
+const TOTAL i64 = 600;
+const TOTAL_INDEX usize = 600;
+
+enum Kind {
+    Data(weight i64);
+    Control(code i32);
+}
+
+struct Payload {
+    id i64;
+    label string;
+    values Vec[i64];
+    kind Kind;
+}
+
+struct ProducerWork {
+    pipe channel.Channel[Payload];
+    base i64;
+}
+
+func make_payload(id i64) Payload {
+    let label = "id:" + strconv.format_i64(id);
+    let values = [id, id + 1, id + 2, id + 3];
+    if id % 2 == 0 {
+        return Payload(id: id, label: label, values: values,
+                       kind: Kind.Data(weight: id * 10));
+    }
+    return Payload(id: id, label: label, values: values,
+                   kind: Kind.Control(code: i32(id % 1000)));
+}
+
+func valid_payload(payload Payload) bool {
+    if payload.id < 0 || payload.id >= TOTAL { return false; }
+    if payload.label != "id:" + strconv.format_i64(payload.id) { return false; }
+    if !(vec.len(payload.values) == 4) { return false; }
+    if payload.values[0] != payload.id { return false; }
+    if payload.values[1] != payload.id + 1 { return false; }
+    if payload.values[2] != payload.id + 2 { return false; }
+    if payload.values[3] != payload.id + 3 { return false; }
+    switch payload.kind {
+        case Kind.Data(weight): {
+            if payload.id % 2 != 0 { return false; }
+            return weight == payload.id * 10;
+        }
+        case Kind.Control(code): {
+            if payload.id % 2 != 1 { return false; }
+            return i64(code) == payload.id % 1000;
+        }
+    }
+}
+
+func send_payload(pipe channel.Channel[Payload], value Payload) bool {
+    try {
+        channel.send(pipe, value);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: return false;
+        }
+    }
+    return true;
+}
+
+func produce(work ProducerWork) i64 {
+    for var index i64 = 0; index < PER_PRODUCER; index += 1 {
+        let id = work.base + index;
+        var payload = make_payload(id);
+        if !send_payload(work.pipe, payload) { return 2; }
+        payload.id = -1;
+        payload.label = "mutated";
+        if !(vec.len(payload.values) == 4) { return 3; }
+    }
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    // First force growth with a nonzero ring head. Fill eight slots, consume
+    // five, refill every slot, then enqueue once more to double the ring.
+    let warm = channel.unbounded[Payload]();
+    for var id i64 = 0; id < 8; id += 1 {
+        if !send_payload(warm, make_payload(id)) { return 10; }
+    }
+    for var id i64 = 0; id < 5; id += 1 {
+        switch channel.receive(warm) {
+            case option.Option.Some(payload): if payload.id != id { return 11; }
+            case option.Option.None: return 12;
+        }
+    }
+    for var id i64 = 8; id < 14; id += 1 {
+        if !send_payload(warm, make_payload(id)) { return 13; }
+    }
+    channel.close(warm);
+    var warm_open = true;
+    var warm_count i64 = 0;
+    var warm_expected i64 = 5;
+    for warm_open {
+        switch channel.receive(warm) {
+            case option.Option.Some(payload): {
+                if !valid_payload(payload) { return 14; }
+                if payload.id != warm_expected { return 15; }
+                warm_expected += 1;
+                warm_count += 1;
+            }
+            case option.Option.None: warm_open = false;
+        }
+    }
+    if !(warm_count == 9) { return 16; }
+    switch channel.try_receive(warm) {
+        case channel.ReceiveResult.Item(extra): return 17;
+        case channel.ReceiveResult.Empty: return 18;
+        case channel.ReceiveResult.Closed: {}
+    }
+
+    let pipe = channel.unbounded[Payload]();
+    // No consumer runs until every producer has finished, so all 600 owned
+    // payloads are resident while the ring doubles and moves its elements.
+    let producers = [
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 0)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 150)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 300)),
+        thread.spawn[ProducerWork](produce, ProducerWork(pipe: pipe, base: 450))];
+    for job in producers {
+        if !(thread.join(job) == 0) { return 1; }
+    }
+    channel.close(pipe);
+
+    let seen = vec.make[bool](TOTAL_INDEX, false);
+    var open = true;
+    var count i64 = 0;
+    for open {
+        switch channel.receive(pipe) {
+            case option.Option.Some(payload): {
+                if !valid_payload(payload) { return 2; }
+                let index = usize(payload.id);
+                if seen[index] { return 3; }
+                seen[index] = true;
+                count += 1;
+            }
+            case option.Option.None: open = false;
+        }
+    }
+    if !(count == TOTAL) { return 4; }
+    for value in seen {
+        if !value { return 5; }
+    }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(extra): return 6;
+        case channel.ReceiveResult.Empty: return 7;
+        case channel.ReceiveResult.Closed: {}
+    }
+    channel.close(pipe);
+    return 0;
+}

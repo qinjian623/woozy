@@ -30,7 +30,9 @@ enum class SystemOperation : uint16_t {
   net_setsockopt_int, net_getsockopt_int, net_setsockopt_bytes, net_getsockopt_bytes,
   net_socketpair, net_poll, net_inet_pton, net_inet_ntop, net_lookup,
   math_fabs, math_floor, math_ceil, math_trunc, math_round, math_sqrt, math_sin, math_cos, math_tan, math_asin, math_acos, math_atan, math_exp, math_exp2, math_expm1, math_log, math_log2, math_log10, math_log1p, math_copysign, math_hypot, math_atan2, math_pow, math_fmod, math_remainder, math_fma, math_ldexp, math_frexp, math_isnan, math_isinf, math_isfinite, math_signbit,
-  process_args, process_args_bytes, process_environment, process_environment_bytes, process_getenv, process_getenv_bytes, process_setenv, process_unsetenv, process_execve, process_spawn, process_setenv_bytes, process_unsetenv_bytes, process_execve_bytes, process_spawn_bytes, process_fork, process_waitpid, signal_mask, signal_pending, signal_wait, signal_disposition, ipc_map_anon, ipc_map_file, ipc_shm_open, ipc_shm_unlink, ipc_read_bytes, ipc_write_bytes, ipc_read_i32, ipc_write_i32, ipc_read_i64, ipc_write_i64, ipc_atomic_load, ipc_atomic_store, ipc_atomic_add, ipc_atomic_compare, ipc_mutex_init, ipc_cond_init, ipc_sem_init, ipc_length, ipc_mutex_lock, ipc_mutex_unlock, ipc_mutex_destroy, ipc_cond_signal, ipc_cond_broadcast, ipc_cond_destroy, ipc_sem_post, ipc_sem_destroy, ipc_cond_wait, ipc_sem_wait, ipc_sem_trywait, ipc_sem_value
+  process_args, process_args_bytes, process_environment, process_environment_bytes, process_getenv, process_getenv_bytes, process_setenv, process_unsetenv, process_execve, process_spawn, process_setenv_bytes, process_unsetenv_bytes, process_execve_bytes, process_spawn_bytes, process_fork, process_waitpid, signal_mask, signal_pending, signal_wait, signal_disposition, ipc_map_anon, ipc_map_file, ipc_shm_open, ipc_shm_unlink, ipc_read_bytes, ipc_write_bytes, ipc_read_i32, ipc_write_i32, ipc_read_i64, ipc_write_i64, ipc_atomic_load, ipc_atomic_store, ipc_atomic_add, ipc_atomic_compare, ipc_mutex_init, ipc_cond_init, ipc_sem_init, ipc_length, ipc_mutex_lock, ipc_mutex_unlock, ipc_mutex_destroy, ipc_cond_signal, ipc_cond_broadcast, ipc_cond_destroy, ipc_sem_post, ipc_sem_destroy, ipc_cond_wait, ipc_sem_wait, ipc_sem_trywait, ipc_sem_value,
+  unicode_normalize, unicode_casefold, unicode_boundaries,
+  thread_wait_for, condvar_wait_for
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -60,13 +62,15 @@ inline constexpr std::array<SystemOperationSpec, 13> system_operations{{
 // New owning runtime operations are kept in a separate table so the original
 // std/os operation inventory (and its source tests) remains exact. Both tables
 // are searched by system_operation_spec and registered in the prelude.
-inline constexpr std::array<SystemOperationSpec, 16> concurrency_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 18> concurrency_system_operations{{
   {SystemOperation::thread_spawn, "__woozy_thread_spawn", "__woozy_Thread",
    {"func(A) i64", "A", "", ""}, 2, "std/thread", 1},
   {SystemOperation::thread_error, "__woozy_thread_error", "i64",
    {"__woozy_Thread", "", "", ""}, 1, "std/thread"},
   {SystemOperation::thread_wait, "__woozy_thread_wait", "i64",
    {"__woozy_Thread", "", "", ""}, 1, "std/thread"},
+  {SystemOperation::thread_wait_for, "__woozy_thread_wait_for", "i64",
+   {"__woozy_Thread", "i64", "", ""}, 2, "std/thread"},
   {SystemOperation::thread_result, "__woozy_thread_result", "i64",
    {"__woozy_Thread", "", "", ""}, 1, "std/thread"},
   {SystemOperation::mutex_new, "__woozy_mutex_new", "__woozy_Mutex",
@@ -79,6 +83,8 @@ inline constexpr std::array<SystemOperationSpec, 16> concurrency_system_operatio
    {"", "", "", ""}, 0, "std/sync"},
   {SystemOperation::condvar_wait, "__woozy_condvar_wait", "Unit",
    {"__woozy_Condvar", "__woozy_Mutex", "", ""}, 2, "std/sync"},
+  {SystemOperation::condvar_wait_for, "__woozy_condvar_wait_for", "bool",
+   {"__woozy_Condvar", "__woozy_Mutex", "i64", ""}, 3, "std/sync"},
   {SystemOperation::condvar_notify_one, "__woozy_condvar_notify_one", "Unit",
    {"__woozy_Condvar", "", "", ""}, 1, "std/sync"},
   {SystemOperation::condvar_notify_all, "__woozy_condvar_notify_all", "Unit",
@@ -95,7 +101,10 @@ inline constexpr std::array<SystemOperationSpec, 16> concurrency_system_operatio
    "__woozy_atomic_i64_compare_exchange", "bool",
    {"__woozy_AtomicI64", "i64", "i64", ""}, 3, "std/sync"},
 }};
-inline constexpr std::array<SystemOperationSpec, 54> value_system_operations{{
+inline constexpr std::array<SystemOperationSpec, 57> value_system_operations{{
+  {SystemOperation::unicode_normalize, "__woozy_unicode_normalize", "string", {"string", "i32"}, 2, "std/unicode"},
+  {SystemOperation::unicode_casefold, "__woozy_unicode_casefold", "string", {"string"}, 1, "std/unicode"},
+  {SystemOperation::unicode_boundaries, "__woozy_unicode_boundaries", "Vec[usize]", {"string"}, 1, "std/unicode"},
   {SystemOperation::text_len, "__woozy_text_len", "usize", {"string"}, 1, "std/text"},
   {SystemOperation::text_byte_len, "__woozy_text_byte_len", "usize", {"string"}, 1, "std/text"},
   {SystemOperation::text_from_bytes, "__woozy_text_from_bytes", "Result[string,i32]", {"Vec[u8]"}, 1, "std/text"},

@@ -35,6 +35,20 @@ bool nominal(TypeKind k) {
   return k == TypeKind::NominalStruct || k == TypeKind::NominalEnum ||
          k == TypeKind::TypeParameter;
 }
+bool foreign_access_read(const HirNode &n) {
+  const auto *r = std::get_if<ForeignRead>(&n.data);
+  return r && r->access &&
+         (*r->access == ForeignAccessKind::property_read ||
+          *r->access == ForeignAccessKind::index_read ||
+          *r->access == ForeignAccessKind::slice_read);
+}
+bool foreign_access_place(const HirNode &n) {
+  const auto *r = std::get_if<ForeignRead>(&n.data);
+  return r && r->access &&
+         (*r->access == ForeignAccessKind::property_place ||
+          *r->access == ForeignAccessKind::index_place ||
+          *r->access == ForeignAccessKind::slice_place);
+}
 } // namespace
 const Type *TypeContext::find(TypeId id) const {
   return id.value && id.value <= entries_.size() ? &entries_[id.value - 1]
@@ -441,7 +455,7 @@ class Verifier {
     case NodeKind::index_read:
     case NodeKind::vec_slice:
     case NodeKind::foreign_read:
-      return true;
+      return foreign_access_read(n) || !foreign_access_place(n);
     default:
       return false;
     }
@@ -454,7 +468,8 @@ class Verifier {
   bool statement(const HirNode &n) const {
     return !expression(n) && n.kind() != NodeKind::place &&
            n.kind() != NodeKind::field_place &&
-           n.kind() != NodeKind::index_place;
+           n.kind() != NodeKind::index_place &&
+           !foreign_access_place(n);
   }
   const HirFunction &function(SymbolId s) const {
     symbol(s);
@@ -1172,6 +1187,117 @@ class Verifier {
       need(ex && (b.signature ? std::find(ex->candidates.begin(), ex->candidates.end(), binding) != ex->candidates.end()
                              : ex->declaration == binding), "foreign read differs from resolved export");
     }
+  }
+  void foreign_access(HirNodeId id) const {
+    const auto &n = node(id);
+    const auto &access = std::get<ForeignRead>(n.data);
+    const auto &b = foreign_binding(access.binding);
+    const auto &d = m.resolved->project->foreign_binding(access.binding);
+    need(n.type == b.type, "foreign access result type");
+    need(n.children.size() >= 1, "foreign access receiver arity");
+    const auto &receiver = expr(n.children[0]);
+    need(type(receiver.type).kind == TypeKind::ForeignOpaque,
+         "foreign access receiver type");
+    need(type(receiver.type).binding.value < m.foreign_bindings.size(),
+         "foreign access receiver binding");
+    const auto &owner = m.resolved->project->foreign_binding(
+        type(receiver.type).binding);
+    const bool place = foreign_access_place(n);
+    const bool read = foreign_access_read(n);
+    need(read || place, "foreign access kind");
+    auto matches_declared = [&](TypeId actual, const std::string &name) {
+      TypeContext scratch = m.types;
+      auto expected = detail::binding_type(*m.resolved->project, scratch, name);
+      const auto *want = scratch.find(expected);
+      const auto *have = m.types.find(actual);
+      return want && have && *want == *have;
+    };
+    const auto &file = *m.resolved->project->module(n.source.node.module)
+                            .files.at(n.source.node.file);
+    const auto &ast = file.node(n.source.node.node);
+    auto source_child = [&](HirNodeId child, AstNodeId syntax) {
+      auto expected = n.source.node;
+      expected.node = syntax;
+      return same_ref(unwrapped(node(child).source.node), unwrapped(expected));
+    };
+    if (auto property = std::get_if<modules::BindingProperty>(&d.detail)) {
+      need(!access.start && !access.end, "property access endpoint");
+      need(n.children.size() == 1, "property receiver arity");
+      need(owner.identity == property->owner_type, "property owner identity");
+      need(place ? !property->setter.empty() : !property->getter.empty(),
+           "property access permission");
+      need(matches_declared(receiver.type, property->owner_type),
+           "property receiver declaration type");
+      need(ast.kind == AstKind::Member && ast.token_end > ast.token_begin &&
+               ast.token_end <= file.tokens.size(),
+           "property source is not a real Member");
+      need(file.tokens.at(ast.token_end - 1).spelling == property->name,
+           "property source name differs from declaration");
+      need(source_child(n.children[0], ast.children.at(0)),
+           "property receiver differs from source");
+      return;
+    }
+    if (auto index = std::get_if<modules::BindingIndexer>(&d.detail)) {
+      need(!access.start && !access.end, "index access endpoint");
+      need(n.children.size() == 2, "index access arity");
+      need(owner.identity == index->owner_type, "index owner identity");
+      need(place ? index->writable : index->readable,
+           "index access permission");
+      need(matches_declared(receiver.type, index->owner_type),
+           "index receiver declaration type");
+      need(matches_declared(expr(n.children[1]).type, index->index_type),
+           "index argument declaration type");
+      need(ast.kind == AstKind::NeutralBracket && ast.children.size() == 2,
+           "index source is not a real NeutralBracket");
+      need(ast.children.size() == n.children.size(), "index source arity");
+      need(source_child(n.children[0], ast.children[0]) &&
+               source_child(n.children[1], ast.children[1]),
+           "index receiver/key differs from source");
+      return;
+    }
+    auto slice = std::get_if<modules::BindingSlice>(&d.detail);
+    need(slice != nullptr, "foreign access declaration category");
+    need(owner.identity == slice->owner_type, "slice owner identity");
+    need(place ? slice->writable : slice->readable, "slice access permission");
+    need(matches_declared(receiver.type, slice->owner_type),
+         "slice receiver declaration type");
+    need(ast.kind == AstKind::Slice, "slice source is not a real Slice");
+    bool start_syntax =
+        ast.children.size() > 1 &&
+        file.node(ast.children[1]).kind == AstKind::BracketItem;
+    bool end_syntax =
+        ast.children.size() == 3 ||
+        (ast.children.size() == 2 && !start_syntax);
+    need(bool(access.start) == start_syntax &&
+             bool(access.end) == end_syntax,
+         "slice omitted endpoint differs from source");
+    need(n.children.size() == 1 + size_t(start_syntax) + size_t(end_syntax),
+         "slice child arity");
+    size_t next = 1;
+    if (access.start) {
+      need(n.children[next++] == *access.start, "slice start child");
+      if (slice->start_type)
+        need(matches_declared(expr(*access.start).type, *slice->start_type),
+             "slice start declaration type");
+      else
+        need(false, "slice start supplied without declaration");
+    }
+    if (access.end) {
+      need(n.children[next++] == *access.end, "slice end child");
+      if (slice->end_type)
+        need(matches_declared(expr(*access.end).type, *slice->end_type),
+             "slice end declaration type");
+      else
+        need(false, "slice end supplied without declaration");
+    }
+    need(source_child(n.children[0], ast.children[0]),
+         "slice receiver differs from source");
+    if (access.start)
+      need(source_child(*access.start, ast.children[1]),
+           "slice start differs from source");
+    if (access.end)
+      need(source_child(*access.end, ast.children.back()),
+           "slice end differs from source");
   }
   void foreign_call(const HirNode &n, const Call &c) const {
     need(c.binding.has_value() && c.callee.has_value() && !c.direct_symbol && c.type_args.empty(),
@@ -2237,7 +2363,8 @@ class Verifier {
       const auto &rhs = expr(ch[1]);
       need(lhs.kind() == NodeKind::place ||
                lhs.kind() == NodeKind::field_place ||
-               lhs.kind() == NodeKind::index_place,
+               lhs.kind() == NodeKind::index_place ||
+               foreign_access_place(lhs),
            "assignment requires writable place");
       auto op = std::get<Assign>(n.data).compound;
       if (op) {
@@ -2467,7 +2594,10 @@ class Verifier {
       break;
     }
     case NodeKind::foreign_read:
-      foreign_read(id);
+      if (std::get<ForeignRead>(n.data).access)
+        foreign_access(id);
+      else
+        foreign_read(id);
       break;
     case NodeKind::unsupported:
       fail("unsupported HIR node: " + std::get<Unsupported>(n.data).feature,
@@ -4203,7 +4333,7 @@ class Verifier {
           need(n.scope == p.scope,
                "node scope differs from enclosing construct");
         if (n.kind() == NodeKind::place || n.kind() == NodeKind::field_place ||
-            n.kind() == NodeKind::index_place) {
+            n.kind() == NodeKind::index_place || foreign_access_place(n)) {
           bool allowed = p.kind() == NodeKind::assign && p.children[0] == id;
           if (p.kind() == NodeKind::call ||
               p.kind() == NodeKind::constraint_call) {
@@ -4482,6 +4612,12 @@ class Verifier {
             auto candidates = method_candidates(*base, member_name(id));
             if (!candidates.empty())
               return m.foreign_bindings[candidates.front().value].type;
+            const auto &owner = m.resolved->project->foreign_binding(
+                type(*base).binding);
+            for (auto member : std::get<modules::BindingType>(owner.detail).properties)
+              if (m.resolved->project->foreign_binding(member).name ==
+                  member_name(id))
+                return m.foreign_bindings[member.value].type;
           }
           if (base && type(*base).kind == TypeKind::NominalStruct) {
             const auto &d = nominal_type(*base);
@@ -4533,6 +4669,29 @@ class Verifier {
         auto found = node_types.find(id.value);
         if (found != node_types.end() && found->second.size() == 1)
           return TypeId{*found->second.begin()};
+        return {};
+      }
+      if (a.kind == AstKind::NeutralBracket && a.children.size() == 2) {
+        auto base = ast_type(a.children.at(0), depth + 1);
+        if (base && type(*base).kind == TypeKind::ForeignOpaque) {
+          const auto &owner = m.resolved->project->foreign_binding(
+              type(*base).binding);
+          const auto &indices = std::get<modules::BindingType>(owner.detail).indexers;
+          if (!indices.empty())
+            return m.foreign_bindings[indices.front().value].type;
+        }
+        if (base && type(*base).kind == TypeKind::Vec)
+          return type(*base).type_args.at(0);
+      }
+      if (a.kind == AstKind::Slice) {
+        auto base = ast_type(a.children.at(0), depth + 1);
+        if (base && type(*base).kind == TypeKind::ForeignOpaque) {
+          const auto &owner = m.resolved->project->foreign_binding(
+              type(*base).binding);
+          const auto &slices = std::get<modules::BindingType>(owner.detail).slices;
+          if (!slices.empty())
+            return m.foreign_bindings[slices.front().value].type;
+        }
       }
       return {};
     };
@@ -4606,8 +4765,12 @@ class Verifier {
       const auto &n = node(pending.back());
       pending.pop_back();
       const auto kind = file.node(n.source.node.node).kind;
-      if (n.kind() == NodeKind::foreign_read)
-        actual_foreign_reads.insert(unwrapped(n.source.node).node.value);
+      if (n.kind() == NodeKind::foreign_read) {
+        const auto &read = std::get<ForeignRead>(n.data);
+        if (!read.access || *read.access == ForeignAccessKind::property_read ||
+            *read.access == ForeignAccessKind::property_place)
+          actual_foreign_reads.insert(unwrapped(n.source.node).node.value);
+      }
       if (auto call = std::get_if<Call>(&n.data);
           call && call->kind == CalleeKind::foreign)
         actual_foreign_calls.insert(n.source.node.node.value);
@@ -4622,12 +4785,25 @@ class Verifier {
                  (kind == AstKind::Defer && n.kind() == NodeKind::defer_) ||
                  (kind == AstKind::Throw && n.kind() == NodeKind::throw_) ||
                  (kind == AstKind::List && n.kind() == NodeKind::vec_init) ||
-                 (kind == AstKind::Slice && n.kind() == NodeKind::vec_slice) ||
+                 (kind == AstKind::Slice &&
+                  (n.kind() == NodeKind::vec_slice ||
+                   (n.kind() == NodeKind::foreign_read &&
+                    std::get<ForeignRead>(n.data).access &&
+                    (std::get<ForeignRead>(n.data).access ==
+                         ForeignAccessKind::slice_read ||
+                     std::get<ForeignRead>(n.data).access ==
+                         ForeignAccessKind::slice_place)))) ||
                  (kind == AstKind::ForIn && n.kind() == NodeKind::for_in) ||
                  (kind == AstKind::Unary && n.kind() == NodeKind::move) ||
                  (index_syntax(file.node(n.source.node.node)) &&
                   (n.kind() == NodeKind::index_read ||
-                   n.kind() == NodeKind::index_place)),
+                   n.kind() == NodeKind::index_place ||
+                   (n.kind() == NodeKind::foreign_read &&
+                    std::get<ForeignRead>(n.data).access &&
+                    (std::get<ForeignRead>(n.data).access ==
+                         ForeignAccessKind::index_read ||
+                     std::get<ForeignRead>(n.data).access ==
+                         ForeignAccessKind::index_place)))),
              "source effect construct was erased or replaced");
         ++actual[n.source.node.node.value];
       }
@@ -6241,7 +6417,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
              std::get<Call>(n.data).kind == CalleeKind::foreign)) {
           if (!foreign_values) {
             unavailable(n.source,
-                        "foreign reads/calls require the Python/64 profile");
+                        "foreign reads/calls/access require the Python/64 profile");
             return r;
           }
           auto binding = n.kind() == NodeKind::foreign_read
@@ -6269,6 +6445,24 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
                             "parameters only");
                 return r;
               }
+          }
+          if (const auto *property =
+                  std::get_if<modules::BindingProperty>(&declaration.detail);
+              property && property->error_type != "lang.py.Error") {
+            unavailable(n.source, "Python foreign property requires lang.py.Error");
+            return r;
+          }
+          if (const auto *index =
+                  std::get_if<modules::BindingIndexer>(&declaration.detail);
+              index && index->error_type != "lang.py.Error") {
+            unavailable(n.source, "Python foreign indexer requires lang.py.Error");
+            return r;
+          }
+          if (const auto *slice =
+                  std::get_if<modules::BindingSlice>(&declaration.detail);
+              slice && slice->error_type != "lang.py.Error") {
+            unavailable(n.source, "Python foreign slice requires lang.py.Error");
+            return r;
           }
         }
         switch (n.kind()) {

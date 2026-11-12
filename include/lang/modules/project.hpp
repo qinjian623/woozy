@@ -15,9 +15,30 @@ struct BindingParameter {
 struct BindingType {
   std::string kind, copy;
   std::vector<ForeignBindingId> members; // method/callable candidates, by owner
+  std::vector<ForeignBindingId> properties, indexers, slices;
 };
 struct BindingValue {
   std::string type;
+};
+// A declared host property. `getter` is a nonempty attribute path relative to
+// the owner value. An empty setter path means the property is read-only.
+struct BindingProperty {
+  std::string owner_type, name, type;
+  std::vector<std::string> getter, setter;
+  std::string error_type;
+};
+// A declared single-index operation. The fixed result type is both the read
+// type and the write value type; there is no runtime dtype inference.
+struct BindingIndexer {
+  std::string owner_type, index_type, result_type, error_type;
+  bool readable = false, writable = false;
+};
+// A declared Python slice. A null endpoint type means that endpoint cannot be
+// supplied in source; an omitted endpoint is passed as None.
+struct BindingSlice {
+  std::string owner_type, result_type, error_type;
+  std::optional<std::string> start_type, end_type;
+  bool readable = false, writable = false;
 };
 struct BindingCallable {
   std::string call_kind;
@@ -36,7 +57,9 @@ struct ForeignDeclaration {
   // Original id for types/callables; module/name for values (which have no id).
   std::string identity, module, name;
   std::vector<std::string> host_attribute;
-  std::variant<BindingType, BindingValue, BindingCallable> detail;
+  std::variant<BindingType, BindingValue, BindingCallable, BindingProperty,
+               BindingIndexer, BindingSlice>
+      detail;
   // Length-delimited contract, bundle SHA-256, module, category and identity.
   std::string stable_identity;
 };

@@ -1,6 +1,6 @@
 # Woozy 标准库
 
-标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/thread`、`std/sync`、`std/process`、`std/signal`、`std/ipc`、`std/time` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。
+标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。
 
 下面先给出一个完整程序，后面的模块说明不再重复它的导入和 `main`。
 
@@ -35,7 +35,7 @@ func main() throws os.Error {
 
 ## 错误和资源
 
-各模块用 `throws` 标明错误。`os`、`fs`、`io`、`net`、`thread`、`process`、`signal`、`ipc`（创建和数据访问）、`time`（系统调用部分）和 `random` 主要抛出 `os.Error`；`text`、`strconv`、`time`、`option` 另有自己的错误枚举。`math` 不抛错。`sync` 和 `ipc` 的锁误用产生 Panic，不通过 typed catch 处理。
+各模块用 `throws` 标明错误。`os`、`fs`、`io`、`net`、`thread`、`process`、`signal`、`ipc`（创建和数据访问）、`time`（系统调用部分）和 `random` 主要抛出 `os.Error`；`text`、`strconv`、`time`、`timezone`、`option`、`cancel`、`channel` 和 `http` 另有自己的错误枚举。`math` 和 `unicode` 不抛错。`sync`、`rwlock` 和 `ipc` 的锁误用产生 Panic，不通过 typed catch 处理。
 
 `os.File` 和 `net.Socket` 只是描述符包装。复制 `File` 或 `Socket` 不会调用 `dup`，副本指向同一个描述符；离开作用域不会自动关闭。显式 `close` 一次后，其他副本也不能继续使用。需要独立描述符时用 `os.dup`。`net.file(socket)` 取得同一个描述符的 `os.File`，不要把它和 `Socket` 分别当成两个资源关闭。
 
@@ -186,6 +186,32 @@ func main() throws os.Error {
 `Error` 有两个变体：`InvalidUtf8` 和 `InvalidScalar(value u32)`。`from_bytes` 遇到不完整或非法的 UTF-8 时抛出 `InvalidUtf8`；`from_rune` 遇到代理区或超出 Unicode 范围的码点时抛出 `InvalidScalar`。
 
 字符串本身可以用 `len`、索引和切片；这些操作都按码点计算，索引结果是 `u32`。字符串不自动做 Unicode 正规化，例如组合字符和预组合字符是不同的字节序列。需要按字节处理时先用 `bytes`，再显式转换回来。
+
+## std/unicode
+
+使用固定的 Unicode 18.0.0 数据进行正规化、完整默认大小写折叠和字素簇分段。`VERSION` 是 `"18.0.0"`。这些操作不改变普通字符串长度、索引和切片的定义：它们仍按 Unicode 码点计算；字素簇是另外提供的分段方式，也不等同于终端显示宽度。
+
+| 接口 | 说明 |
+| --- | --- |
+| `normalize(value string, form Form) string` | 按 `Form.NFC`、`NFD`、`NFKC` 或 `NFKD` 正规化 |
+| `nfc`、`nfd`、`nfkc`、`nfkd` | 对应正规化形式的简写，参数和结果都是 string |
+| `casefold(value string) string` | 完整默认大小写折叠，可把一个码点展开成多个；不按用户地区选择规则 |
+| `boundaries(value string) Vec[usize]` | 字素簇边界，按码点位置计，包含 0 和字符串末尾；空串返回 `[0]` |
+| `grapheme_count(value string) usize` | 字素簇数量；空串为 0 |
+| `graphemes(value string) Vec[string]` | 逐个字素簇拆分；空串返回空 Vec |
+
+以下片段位于函数内，需导入 `std/unicode` 为 `unicode`、`std/text` 为 `text`：
+
+```wz
+let value = "e\u{301}";
+let points = text.len(value);                 // 2 个码点
+let clusters = unicode.grapheme_count(value); // 1 个字素簇
+let composed = unicode.nfc(value);            // "é"
+let folded = unicode.casefold("Straße");      // "strasse"
+let bounds = unicode.boundaries("🇨🇳e\u{301}"); // [0, 2, 4]
+```
+
+正规化和 casefold 都需要主动调用；字符串比较不会自动执行它们。它们保留嵌入的 NUL。Native 和 Python 均支持这些接口，使用相同版本的数据。
 
 ## std/vec
 
@@ -346,6 +372,38 @@ func main() throws os.Error {
 
 运行后依次输出 `2024-02-29T12:00:00Z`、一个固定的随机数（种子为 7）和 `3`。
 
+## std/timezone
+
+从 TZif 时区文件读取转换规则，在 POSIX 时间戳和当地日期之间换算。`load(name)` 使用系统的 `/usr/share/zoneinfo`，不内嵌一份时区数据库；程序运行的机器需要安装所需数据。此模块目前用于 Linux x86_64 Native。
+
+| 接口 | 说明 |
+| --- | --- |
+| `load(name string) Zone throws Error` | 例如 `load("Asia/Shanghai")` |
+| `load_from(directory string, name string) Zone throws Error` | 从指定目录读取时区文件 |
+| `parse(name string, data Vec[u8]) Zone throws Error` | 从 TZif 字节建立 Zone；name 是保存的名称 |
+| `name(zone Zone) string` | 返回建立 Zone 时使用的名称 |
+| `to_local(zone Zone, instant os.Timespec) Local throws Error` | 时间戳转当地日期、UTC 偏移、夏令时标志和缩写 |
+| `from_local(zone Zone, date time.DateTime, resolution Resolution) os.Timespec throws Error` | 当地日期转时间戳，明确指定重复时刻如何选择 |
+
+`Local` 的公开字段是 `date time.DateTime`、`offset_seconds i32`、`daylight bool` 和 `abbreviation string`。偏移为当地时间减 UTC 的秒数。下面只有导入和函数声明；调用方须处理 `timezone.Error`：
+
+```wz
+import "std/os" as os;
+import "std/timezone" as timezone;
+
+func epoch_in_shanghai() timezone.Local throws timezone.Error {
+    let zone = timezone.load("Asia/Shanghai");
+    return timezone.to_local(zone, os.Timespec(seconds: 0, nanoseconds: 0));
+    // 当地日期为 1970-01-01 08:00:00，offset_seconds 为 28800。
+}
+```
+
+夏令时开始时，某些当地时刻不存在，转换抛出 `Error.Nonexistent`，不会把时间向前挪。结束时可能出现重复时刻：`Resolution.Reject` 抛出 `Error.Ambiguous(earliest, latest)`，两个载荷是候选 POSIX 秒数；`Earlier` 和 `Later` 分别选择较早和较晚的时间戳。没有歧义时三种选择结果相同。
+
+其他错误：`InvalidName` 表示 load/load_from 的名称无效；`InvalidData(offset)` 表示 TZif 数据不合法，位置按输入字节计；`Io(error os.Error)` 保留打开或读取失败；`OutOfRange` 表示日期、纳秒、计算范围或该时区的有效覆盖范围不满足要求。TZif 的 `-00` 缩写表示当地时间未定义，转换同样抛出 `OutOfRange`，不能当作 UTC。没有延续规则时，最后一个转换时刻及之后也不作猜测。
+
+解析支持 TZif v1/v2/v3/v4 和有效的 POSIX 尾部延续规则，文件大小最多 1 MiB。带闰秒记录的数据抛出 `UnsupportedLeapSeconds`；本模块使用 POSIX 秒，不提供闰秒时间轴。
+
 ## std/random
 
 随机字节和伪随机数。
@@ -416,6 +474,52 @@ func main() throws os.Error {
 
 运行后输出 `4` 和 `112`。
 
+## std/http
+
+HTTP/1.0、HTTP/1.1 消息的解析和编码，以及已连接 Socket 上的读写。目前用于 Linux x86_64 Native；建立连接、监听和关闭仍使用 `std/net`。
+
+| 接口 | 说明 |
+| --- | --- |
+| `reader(socket net.Socket, limits Limits) Reader` | 建立共享读取状态，保留未处理的字节；复制 Reader 共享状态 |
+| `read_request(reader Reader) Request throws Error` | 读取一个请求，保留后续消息的字节 |
+| `read_response(reader Reader, request_method string) Response throws Error` | 读取一个响应；须传对应请求方法，例如 `"GET"` 或 `"HEAD"` |
+| `parse_request(data Vec[u8]) Request throws Error`、`parse_response(data, request_method)` | 解析完整消息，多余字节报 `TrailingBytes`；另有带 Limits 的 `_limited` 版本 |
+| `encode_request(request Request) Vec[u8] throws Error`、`encode_response(response, request_method)` | 编码为字节，正文使用 Content-Length 定长发送 |
+| `write_request(socket, request) throws Error`、`write_response(socket, response, request_method)` | 编码后完整写出，系统错误包装为 `Error.Io(os.Error)` |
+
+`default_limits()` 限制初始头部为 8192 字节、解码后正文为 1 MiB、头字段总数为 100；用 `limits(head_bytes, body_bytes, header_count)` 修改。trailers 另受头部字节限制，并计入头字段总数。超过限制分别报 `HeadTooLarge`、`BodyTooLarge`、`TooManyHeaders`。
+
+`Header` 包含 `name string`、`value Vec[u8]`；`Response.reason`、请求和响应的 `body` 也都是字节。用 `text_header(name, value)` 从文本创建头字段；`header`/`header_values` 按不区分 ASCII 大小写的名称取字节值，`header_text`/`header_text_values` 和 `value_text` 才进行 UTF-8 解码，失败报 `InvalidUtf8`。
+
+解码支持定长和 chunked 正文；响应也支持读到连接关闭。`Request.trailers` 和 `Response.trailers` 独立保存 chunked 尾部字段，不混入 headers。编码暂不支持非空 trailers，明确抛出 `UnsupportedTrailers`；也不发送 chunked。HTTP/1.1 请求要求唯一且合法的 Host；缺少、重复或无效分别报 `MissingHost`、`DuplicateHost`、`InvalidHost`。同时包含 Transfer-Encoding 与 Content-Length 报 `TransferEncodingWithContentLength`。
+
+以下只有导入和普通函数声明，接收已连接的阻塞 Socket，处理一个请求后关闭。函数负责关闭，调用方不要再次关闭同一描述符：
+
+```wz
+import "std/http" as http;
+import "std/net" as net;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func serve_once(socket net.Socket) throws http.Error {
+    defer { try { net.close(socket); } catch error os.Error {} }
+    let input = http.reader(socket, http.default_limits());
+    let request = http.read_request(input);
+    var body = text.bytes("hello\n");
+    if request.method == "HEAD" { body = vec.empty[u8](); }
+    let response = http.Response(
+        version: "HTTP/1.1", status: 200, reason: text.bytes("OK"),
+        headers: [http.text_header("Connection", "close")],
+        body: body, trailers: vec.empty[http.Header]());
+    http.write_response(socket, response, request.method);
+}
+```
+
+非阻塞读取遇到 `Error.Io(os.Error.WouldBlock(...))` 时，保留同一个 Reader，等 `net.poll` 报告可读后重试同一种 read 操作；read_response 还须保留相同的 request_method。不要重新建立 Reader，否则会丢掉已读取的消息部分。消息进行中切换请求/响应读取会报 `ReaderBusy`。协议错误后应关闭连接，不继续使用该 Reader；消息尚未完成即结束报 `UnexpectedEof`。
+
+非阻塞写出遇到 WouldBlock 后，不能直接从头重调 write_request/write_response；若需恢复，应先 encode 并保留字节与已写偏移，结合错误中的 completed、`net.poll` 可写事件继续发送。当前尚未接入 TLS/HTTPS 公共接口。
+
 ## std/path
 
 不访问文件系统的路径处理。
@@ -437,7 +541,110 @@ func main() throws os.Error {
 
 `std/sync` 提供 `mutex`、`lock`、`unlock`、`condvar`、`wait`、`notify_one`、`notify_all`，以及 `atomic_i64`、`load`、`store`、`fetch_add`、`compare_exchange`。Mutex 不可递归；错误解锁等误用产生 Panic。共享 Vec 等可变数据仍由程序员用这些同步工具保护，原子引用计数只保护对象存活。
 
+两个模块还提供限时等待，时间单位为纳秒，正数使用单调时钟计算等待时限：
+
+| 接口 | 说明 |
+| --- | --- |
+| `thread.wait_for(worker Thread, timeout_ns i64) bool throws os.Error` | 线程完成返回 true，超时返回 false；不取出线程结果，也不取消线程 |
+| `sync.wait_for(c Condvar, m Mutex, timeout_ns i64) bool` | 收到通知返回 true，超时返回 false；返回前重新取得 m |
+
+`timeout_ns == -1` 无限等待，`0` 不等待通知或线程完成，正数按给定纳秒数限时等待。线程已经完成时，即使参数为 0 也返回 true。`thread.wait_for` 的参数小于 -1 时抛出 `os.Error.System(22,0)`；等待自身抛出 `System(35,0)`。fork 子进程等待仍未完成、但已不属于当前进程的线程句柄时抛出 `System(3,0)`。其他系统错误也通过 `os.Error.System` 返回。wait_for 超时后仍可再次等待或 join；join 取得缓存结果，不会用掉句柄。
+
+调用 `sync.wait` 或 `sync.wait_for` 前必须持有 m。等待会释放它，包括 timeout 为 0 的情况，返回前再取得它；重新取得锁所需的时间可能超过等待时限。小于 -1、未持锁或其他锁误用产生 Panic。收到通知不代表业务条件已经成立，超时也必须在重新持锁后检查条件。以下函数声明需导入 `std/sync` 为 `sync`：
+
+```wz
+func await_ready(ready Vec[bool], m sync.Mutex, changed sync.Condvar) bool {
+    sync.lock(m);
+    defer { sync.unlock(m); }
+    for !ready[0] {
+        let notified = sync.wait_for(changed, m, 100000000);
+        if !notified && !ready[0] { return false; }
+    }
+    return true;
+}
+```
+
+修改 `ready[0]` 的线程也须持有同一把锁，并通知 changed。上例每次等待分别计时；若要限制整个操作的总时长，调用方须记录截止时间并传入剩余时长。
+
 线程参数、等待和共享数据的完整示例见 [线程与同步](CONCURRENCY.md)。
+
+## std/rwlock 和 std/cancel
+
+`std/rwlock` 提供进程内、写者优先的读写锁，目前用于 Linux x86_64 Native。`new() ReadWriteLock` 创建锁；`read_lock`/`read_unlock` 和 `write_lock`/`write_unlock` 分别取得和释放读锁、写锁，参数都是 ReadWriteLock，不抛 typed error。锁的副本共享同一状态。
+
+多个线程可同时持读锁，写锁独占访问；已有写者等待时，新读者也要等待。它不可递归，不支持持锁升级或降级。同一线程重复取得读锁或写锁、持读锁再取写锁、持写锁再取读锁，以及非持有线程解锁，都产生 Panic。取得锁后可以用块级 defer 保证释放。以下只有函数声明，需导入 `std/rwlock` 为 `rwlock`：
+
+```wz
+func first(lock rwlock.ReadWriteLock, values Vec[i64]) i64 {
+    rwlock.read_lock(lock);
+    defer { rwlock.read_unlock(lock); }
+    return values[0];
+}
+```
+
+`std/cancel` 提供合作式取消，也用于 Linux x86_64 Native：
+
+| 接口 | 说明 |
+| --- | --- |
+| `new() Token` | 建立尚未取消的 token |
+| `request(token Token)` | 标记取消，重复调用没有额外效果 |
+| `is_cancelled(token Token) bool` | 查询是否已请求取消 |
+| `check(token Token) throws Error` | 已取消时抛出 `Error.Cancelled`，否则正常返回 |
+
+Token 的副本共享状态。request 不会中断线程或唤醒其他模块的阻塞调用；工作函数需要主动查询或调用 check，再决定何时返回。传给 thread.spawn 的入口仍不能声明 throws，因此其中调用 check 时须处理 `cancel.Error`，不能把取消异常直接带出线程入口。
+
+## std/channel
+
+进程内的泛型 FIFO 队列，支持多个发送和接收线程，目前用于 Linux x86_64 Native。Channel 的副本共享队列和关闭状态；发送值按普通复制规则保存，struct 的值字段独立，Vec 字段仍共享。发送后继续修改共享 Vec 时仍须自行同步。
+
+| 接口 | 说明 |
+| --- | --- |
+| `bounded[T](capacity usize) Channel[T]` | 建立固定容量队列；capacity 必须大于 0，零容量产生 Panic，不表示同步交接通道 |
+| `unbounded[T]() Channel[T]` | 没有固定容量上限，按需分配内存 |
+| `send[T](pipe Channel[T], value T) throws Error` | 有界队列满时等待；关闭后抛出 `Error.Closed` |
+| `receive[T](pipe Channel[T]) option.Option[T]` | 空且未关闭时等待；关闭并排空后返回 None |
+| `try_send[T](pipe Channel[T], value T) SendResult` | 不等待，返回 `Sent`、`Full` 或 `Closed` |
+| `try_receive[T](pipe Channel[T]) ReceiveResult[T]` | 不等待，返回 `Item(value)`、`Empty` 或 `Closed` |
+| `close[T](pipe Channel[T])` | 幂等关闭，唤醒等待中的发送者和接收者 |
+
+关闭不丢弃已经排队的值：receive 继续返回 Some，排空后才返回 None；try_receive 同样先返回 Item，排空后才返回 Closed。关闭后的 send 不再接受新值，try_send 优先返回 Closed。最后一个句柄清理不会代替显式 close；有其他线程等待时，应先关闭再 join。当前没有 channel 限时等待、取消等待或 select 接口。
+
+下面是完整程序，两个线程传递字符串；队列关闭后主线程结束接收。退出码为 0：
+
+```wz
+package main;
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/text" as text;
+import "std/thread" as thread;
+
+func produce(pipe channel.Channel[string]) i64 {
+    defer { channel.close(pipe); }
+    try {
+        channel.send(pipe, "hello");
+        channel.send(pipe, "world");
+    } catch error channel.Error {
+        return 1;
+    }
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let pipe = channel.bounded[string](2);
+    let worker = thread.spawn[channel.Channel[string]](produce, pipe);
+    var joined = "";
+    var done = false;
+    for !done {
+        switch channel.receive(pipe) {
+            case option.Option.Some(value): { joined += value; }
+            case option.Option.None: { done = true; }
+        }
+    }
+    if thread.join(worker) != 0 { return 1; }
+    return i32(text.len(joined)) - 10;
+}
+```
 
 ## std/process
 
@@ -551,7 +758,7 @@ func main() throws os.Error {
 
 输出完整整数 `9007199254740993`，写回的 JSON 也保留原数字文本。field/index 返回 Option[Value]。解析重复对象键时保留最后一个值，位置保持第一次出现的位置；序列化手工构造的 Member 列表时保留所有成员。
 
-解析检查数字、控制字符和 Unicode 转义，Syntax(offset) 的位置按码点计数。数组与对象最多嵌套 256 层，超过时抛 DepthLimit；循环容器序列化也会报错。ARC 不回收强引用循环，程序需要自行拆开它们。Error 还有 InvalidNumber 和 NumberRange。
+解析检查数字、控制字符和 Unicode 转义，Syntax(offset) 的位置按码点计数。数组与对象最多嵌套 256 层，超过时抛 DepthLimit；循环容器序列化也会报错。当前 ARC 不回收强引用循环，程序需要自行拆开它们；自动回收仍在开发。Error 还有 InvalidNumber 和 NumberRange。
 
 ## 尚未提供
 

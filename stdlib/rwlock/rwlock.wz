@@ -1,0 +1,145 @@
+// Writer-priority readers-writer lock built only from std/sync primitives and
+// ordinary shared Vec storage. A copied ReadWriteLock aliases the same state.
+//
+// The lock is non-recursive: a thread may not acquire read twice, write twice,
+// or upgrade/downgrade while holding the other mode. Those mistakes and
+// unlocking from a thread that does not hold the lock Panic immediately rather
+// than waiting for a deadlock.
+package rwlock;
+
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/vec" as vec;
+
+const WAITING_WRITERS usize = 0;
+const WAITING_READERS usize = 1;
+const ACTIVE_WRITER usize = 2;
+
+struct State {
+    gate sync.Mutex;
+    changed sync.Condvar;
+    // Linux thread ids currently holding read; one entry per thread.
+    readers Vec[i64];
+    // [waiting writers, waiting readers, active writer tid or 0].
+    cells Vec[i64];
+}
+
+pub struct ReadWriteLock {
+    state Vec[State];
+}
+
+func misuse() {
+    // There is no source-level panic primitive. Unlocking a fresh mutex is an
+    // existing runtime misuse path and terminates with the same
+    // runtime-handle-misuse Panic used by std/sync; typed catch cannot absorb it.
+    let unused = sync.mutex();
+    sync.unlock(unused);
+}
+
+func current_thread() i64 {
+    try {
+        return i64(os.gettid());
+    } catch error os.Error {
+        misuse();
+        return 0;
+    }
+}
+
+func reader_index(readers Vec[i64], tid i64) i64 {
+    for var index usize = 0; index < vec.len(readers); index += 1 {
+        if readers[index] == tid { return i64(index); }
+    }
+    return -1;
+}
+
+func remove_reader(readers Vec[i64], index usize) {
+    let last = vec.len(readers) - 1;
+    if index != last { readers[index] = readers[last]; }
+    let removed = vec.pop(readers);
+}
+
+pub func new() ReadWriteLock {
+    let readers = vec.empty[i64]();
+    let cells = vec.make[i64](3, 0);
+    return ReadWriteLock(state: [State(
+        gate: sync.mutex(),
+        changed: sync.condvar(),
+        readers: readers,
+        cells: cells)]);
+}
+
+pub func read_lock(lock ReadWriteLock) {
+    let tid = current_thread();
+    let state = lock.state[0];
+    sync.lock(state.gate);
+    if reader_index(state.readers, tid) >= 0 {
+        sync.unlock(state.gate);
+        misuse();
+    }
+    if state.cells[ACTIVE_WRITER] == tid {
+        sync.unlock(state.gate);
+        misuse();
+    }
+
+    state.cells[WAITING_READERS] += 1;
+    for state.cells[ACTIVE_WRITER] != 0 || state.cells[WAITING_WRITERS] != 0 {
+        sync.wait(state.changed, state.gate);
+    }
+    state.cells[WAITING_READERS] -= 1;
+    vec.push(state.readers, tid);
+    sync.unlock(state.gate);
+}
+
+pub func read_unlock(lock ReadWriteLock) {
+    let tid = current_thread();
+    let state = lock.state[0];
+    sync.lock(state.gate);
+    let index = reader_index(state.readers, tid);
+    if index < 0 {
+        sync.unlock(state.gate);
+        misuse();
+    }
+    remove_reader(state.readers, usize(index));
+    if vec.len(state.readers) == 0 &&
+       (state.cells[WAITING_WRITERS] != 0 || state.cells[WAITING_READERS] != 0) {
+        sync.notify_all(state.changed);
+    }
+    sync.unlock(state.gate);
+}
+
+pub func write_lock(lock ReadWriteLock) {
+    let tid = current_thread();
+    let state = lock.state[0];
+    sync.lock(state.gate);
+    if state.cells[ACTIVE_WRITER] == tid {
+        sync.unlock(state.gate);
+        misuse();
+    }
+    if reader_index(state.readers, tid) >= 0 {
+        sync.unlock(state.gate);
+        misuse();
+    }
+
+    state.cells[WAITING_WRITERS] += 1;
+    for state.cells[ACTIVE_WRITER] != 0 || vec.len(state.readers) != 0 {
+        sync.wait(state.changed, state.gate);
+    }
+    state.cells[WAITING_WRITERS] -= 1;
+    state.cells[ACTIVE_WRITER] = tid;
+    sync.unlock(state.gate);
+}
+
+pub func write_unlock(lock ReadWriteLock) {
+    let tid = current_thread();
+    let state = lock.state[0];
+    sync.lock(state.gate);
+    if state.cells[ACTIVE_WRITER] != tid {
+        sync.unlock(state.gate);
+        misuse();
+    }
+    state.cells[ACTIVE_WRITER] = 0;
+    if state.cells[WAITING_WRITERS] != 0 || state.cells[WAITING_READERS] != 0 {
+        sync.notify_all(state.changed);
+    }
+    sync.unlock(state.gate);
+}

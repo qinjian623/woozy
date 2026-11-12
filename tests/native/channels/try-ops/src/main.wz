@@ -1,0 +1,171 @@
+package app;
+
+import "std/channel" as channel;
+import "std/option" as option;
+
+func expect_item(value option.Option[i64], expected i64) bool {
+    switch value {
+        case option.Option.Some(item): return item == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func expect_none(value option.Option[i64]) bool {
+    switch value {
+        case option.Option.Some(item): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func send_ok(pipe channel.Channel[i64], value i64) bool {
+    try {
+        channel.send(pipe, value);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: return false;
+        }
+    }
+    return true;
+}
+
+func send_closed(pipe channel.Channel[i64]) bool {
+    try {
+        channel.send(pipe, 99);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: return true;
+        }
+    }
+    return false;
+}
+
+func main() i32 {
+    // Full/empty/closed status and close idempotence.
+    let pipe = channel.bounded[i64](2);
+    switch channel.try_send(pipe, 1) {
+        case channel.SendResult.Sent: {}
+        case channel.SendResult.Full: return 1;
+        case channel.SendResult.Closed: return 2;
+    }
+    switch channel.try_send(pipe, 2) {
+        case channel.SendResult.Sent: {}
+        case channel.SendResult.Full: return 3;
+        case channel.SendResult.Closed: return 4;
+    }
+    switch channel.try_send(pipe, 3) {
+        case channel.SendResult.Sent: return 5;
+        case channel.SendResult.Full: {}
+        case channel.SendResult.Closed: return 6;
+    }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(value): if value != 1 { return 7; }
+        case channel.ReceiveResult.Empty: return 8;
+        case channel.ReceiveResult.Closed: return 9;
+    }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(value): if value != 2 { return 10; }
+        case channel.ReceiveResult.Empty: return 11;
+        case channel.ReceiveResult.Closed: return 12;
+    }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(extra): return 13;
+        case channel.ReceiveResult.Empty: {}
+        case channel.ReceiveResult.Closed: return 14;
+    }
+    if !send_ok(pipe, 3) { return 15; }
+    if !expect_item(channel.receive(pipe), 3) { return 47; }
+    channel.close(pipe);
+    channel.close(pipe);
+    if !expect_none(channel.receive(pipe)) { return 16; }
+    switch channel.try_receive(pipe) {
+        case channel.ReceiveResult.Item(extra): return 17;
+        case channel.ReceiveResult.Empty: return 18;
+        case channel.ReceiveResult.Closed: {}
+    }
+    switch channel.try_send(pipe, 4) {
+        case channel.SendResult.Sent: return 19;
+        case channel.SendResult.Full: return 20;
+        case channel.SendResult.Closed: {}
+    }
+    if !send_closed(pipe) { return 21; }
+
+    // Close preserves values already committed and drains them in FIFO order.
+    let alias_source = channel.bounded[i64](3);
+    let alias = alias_source;
+    if !send_ok(alias_source, 10) { return 40; }
+    if !send_ok(alias, 11) { return 41; }
+    channel.close(alias_source);
+    if !expect_item(channel.receive(alias), 10) { return 22; }
+    channel.close(alias);
+    if !expect_item(channel.receive(alias_source), 11) { return 23; }
+    if !expect_none(channel.receive(alias)) { return 24; }
+
+    // Ring wraparound keeps FIFO order after head advances.
+    let ring = channel.bounded[i64](3);
+    if !send_ok(ring, 20) { return 42; }
+    if !send_ok(ring, 21) { return 43; }
+    if !send_ok(ring, 22) { return 44; }
+    if !expect_item(channel.receive(ring), 20) { return 25; }
+    if !expect_item(channel.receive(ring), 21) { return 26; }
+    if !send_ok(ring, 23) { return 45; }
+    if !send_ok(ring, 24) { return 46; }
+    channel.close(ring);
+    if !expect_item(channel.receive(ring), 22) { return 27; }
+    if !expect_item(channel.receive(ring), 23) { return 28; }
+    if !expect_item(channel.receive(ring), 24) { return 29; }
+    if !expect_none(channel.receive(ring)) { return 30; }
+
+    // Unbounded try_send never reports Full.
+    let grow = channel.unbounded[i64]();
+    for var index i64 = 0; index < 64; index += 1 {
+        switch channel.try_send(grow, index) {
+            case channel.SendResult.Sent: {}
+            case channel.SendResult.Full: return 31;
+            case channel.SendResult.Closed: return 32;
+        }
+    }
+    for var index i64 = 0; index < 64; index += 1 {
+        switch channel.try_receive(grow) {
+            case channel.ReceiveResult.Item(value): if value != index { return 33; }
+            case channel.ReceiveResult.Empty: return 34;
+            case channel.ReceiveResult.Closed: return 35;
+        }
+    }
+    switch channel.try_receive(grow) {
+        case channel.ReceiveResult.Item(extra): return 36;
+        case channel.ReceiveResult.Empty: {}
+        case channel.ReceiveResult.Closed: return 37;
+    }
+    channel.close(grow);
+    if !expect_none(channel.receive(grow)) { return 38; }
+    if !send_closed(grow) { return 39; }
+
+    // Closed takes precedence over Full: a closed full channel must reject
+    // sends immediately and still deliver its committed values.
+    let closed_full = channel.bounded[i64](2);
+    if !send_ok(closed_full, 70) { return 48; }
+    if !send_ok(closed_full, 71) { return 49; }
+    channel.close(closed_full);
+    switch channel.try_send(closed_full, 72) {
+        case channel.SendResult.Sent: return 50;
+        case channel.SendResult.Full: return 51;
+        case channel.SendResult.Closed: {}
+    }
+    if !send_closed(closed_full) { return 52; }
+    switch channel.try_receive(closed_full) {
+        case channel.ReceiveResult.Item(value): if value != 70 { return 53; }
+        case channel.ReceiveResult.Empty: return 54;
+        case channel.ReceiveResult.Closed: return 55;
+    }
+    switch channel.try_receive(closed_full) {
+        case channel.ReceiveResult.Item(value): if value != 71 { return 56; }
+        case channel.ReceiveResult.Empty: return 57;
+        case channel.ReceiveResult.Closed: return 58;
+    }
+    switch channel.try_receive(closed_full) {
+        case channel.ReceiveResult.Item(extra): return 59;
+        case channel.ReceiveResult.Empty: return 60;
+        case channel.ReceiveResult.Closed: {}
+    }
+    return 0;
+}

@@ -1,0 +1,193 @@
+// Bounded and unbounded T-typed channels.
+//
+// A Channel is a value struct whose state is held behind a shared Vec cell,
+// so copying a Channel aliases the same channel, Mutex and condition
+// variables. Values are copied by the normal source ownership rules: owned
+// payloads keep their ARC references while they are queued and when they are
+// returned.
+//
+// The queue is a ring buffer of Option[T]. Bounded channels allocate exactly
+// their capacity once. Unbounded channels start empty and double the ring
+// when it fills, copying queued owned values into the larger ring before the
+// old ring handle is released. Head, logical size and closed state live in
+// one-element Vec cells so they are shared by every Channel alias.
+package channel;
+
+import "std/option" as option;
+import "std/sync" as sync;
+import "std/vec" as vec;
+
+pub enum Error { Closed; }
+
+pub enum SendResult { Sent; Full; Closed; }
+
+pub enum ReceiveResult[T] { Item(value T); Empty; Closed; }
+
+struct State[T] {
+    lock sync.Mutex;
+    readable sync.Condvar;
+    writable sync.Condvar;
+    ring Vec[Vec[option.Option[T]]];
+    head Vec[usize];
+    size Vec[usize];
+    closed Vec[bool];
+    // Zero is the private unbounded sentinel; bounded never creates it.
+    capacity usize;
+}
+
+pub struct Channel[T] {
+    state Vec[State[T]];
+}
+
+func make_state[T](capacity usize) State[T] {
+    return State[T](
+        lock: sync.mutex(),
+        readable: sync.condvar(),
+        writable: sync.condvar(),
+        ring: vec.make[Vec[option.Option[T]]](1,
+            vec.make[option.Option[T]](capacity, option.Option[T].None)),
+        head: vec.make[usize](1, 0),
+        size: vec.make[usize](1, 0),
+        closed: vec.make[bool](1, false),
+        capacity: capacity);
+}
+
+// bounded creates a channel with room for exactly capacity queued values.
+// capacity must be greater than zero; zero produces a runtime Panic.
+pub func bounded[T](capacity usize) Channel[T] {
+    if capacity == 0 {
+        // Dynamic division by zero is the language's Panic path. Keeping the
+        // divisor in a variable prevents a compile-time literal diagnostic.
+        let invalid = usize(1) / capacity;
+    }
+    return Channel[T](state: vec.make[State[T]](1, make_state[T](capacity)));
+}
+
+// unbounded creates a channel with no fixed capacity. Its storage starts
+// empty and grows as needed while values are queued.
+pub func unbounded[T]() Channel[T] {
+    return Channel[T](state: vec.make[State[T]](1, make_state[T](0)));
+}
+
+func is_full[T](state State[T]) bool {
+    if state.capacity == 0 { return false; }
+    return state.size[0] == state.capacity;
+}
+
+// grow is called with the channel lock held and only for an unbounded ring
+// whose logical size equals its slot count. It builds a new ring in logical
+// order with head at zero, so no queued value moves or is dropped by the
+// modulus change.
+func grow[T](state State[T]) {
+    let old = state.ring[0];
+    let slots = vec.len(old);
+    var target usize = 8;
+    if slots != 0 { target = slots * 2; }
+    let larger = vec.make[option.Option[T]](target, option.Option[T].None);
+    let head = state.head[0];
+    let count = state.size[0];
+    for var index usize = 0; index < count; index += 1 {
+        larger[index] = old[(head + index) % slots];
+    }
+    state.ring[0] = larger;
+    state.head[0] = 0;
+}
+
+// enqueue is called with the channel lock held and a free slot available.
+func enqueue[T](state State[T], value T) {
+    let buffer = state.ring[0];
+    if state.capacity == 0 && state.size[0] == vec.len(buffer) {
+        grow(state);
+    }
+    let slots = vec.len(state.ring[0]);
+    let index = (state.head[0] + state.size[0]) % slots;
+    state.ring[0][index] = option.Option[T].Some(value);
+    state.size[0] = state.size[0] + 1;
+}
+
+// dequeue is called with the channel lock held and a nonempty queue. The
+// removed Option is copied first, then the slot is reset, so the returned
+// owned payload keeps its reference until the caller receives it.
+func dequeue[T](state State[T]) option.Option[T] {
+    let buffer = state.ring[0];
+    let index = state.head[0];
+    let item = buffer[index];
+    state.ring[0][index] = option.Option[T].None;
+    state.head[0] = (index + 1) % vec.len(buffer);
+    state.size[0] = state.size[0] - 1;
+    return item;
+}
+
+// send appends value, blocking while a bounded channel is full. It throws
+// Error.Closed after close; values already accepted by earlier sends remain
+// queued and are still delivered.
+pub func send[T](pipe Channel[T], value T) throws Error {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    for state.closed[0] == false && is_full(state) {
+        sync.wait(state.writable, state.lock);
+    }
+    if state.closed[0] { throw Error.Closed; }
+    enqueue(state, value);
+    sync.notify_one(state.readable);
+}
+
+// receive removes the oldest value. It blocks while the queue is empty and
+// open; after close it drains queued values and then returns None.
+pub func receive[T](pipe Channel[T]) option.Option[T] {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    for state.size[0] == 0 && state.closed[0] == false {
+        sync.wait(state.readable, state.lock);
+    }
+    if state.size[0] == 0 { return option.Option[T].None; }
+    let item = dequeue(state);
+    sync.notify_one(state.writable);
+    return item;
+}
+
+// try_send never blocks. It reports Closed before capacity so a closed
+// channel never accepts more values.
+pub func try_send[T](pipe Channel[T], value T) SendResult {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    if state.closed[0] { return SendResult.Closed; }
+    if is_full(state) { return SendResult.Full; }
+    enqueue(state, value);
+    sync.notify_one(state.readable);
+    return SendResult.Sent;
+}
+
+// try_receive never blocks. Queued values win over closed state, so close
+// followed by drain still returns Item for each queued value.
+pub func try_receive[T](pipe Channel[T]) ReceiveResult[T] {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    if state.size[0] > 0 {
+        let item = dequeue(state);
+        sync.notify_one(state.writable);
+        switch item {
+            case option.Option.Some(value): return ReceiveResult[T].Item(value);
+            case option.Option.None: {}
+        }
+    }
+    if state.closed[0] { return ReceiveResult[T].Closed; }
+    return ReceiveResult[T].Empty;
+}
+
+// close is idempotent. It wakes every blocked sender and receiver. Senders
+// that were already committed stay queued; later sends throw or report
+// Closed, and receives drain the queue before returning None/Closed.
+pub func close[T](pipe Channel[T]) {
+    let state = pipe.state[0];
+    sync.lock(state.lock);
+    defer { sync.unlock(state.lock); }
+    if state.closed[0] { return; }
+    state.closed[0] = true;
+    sync.notify_all(state.readable);
+    sync.notify_all(state.writable);
+}

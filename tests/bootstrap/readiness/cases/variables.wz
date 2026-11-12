@@ -1,0 +1,4 @@
+// Variables are resolved through the Map symbol table.
+let a = 7;
+let b = a * a - 5;
+return b + a;

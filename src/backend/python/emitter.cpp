@@ -108,6 +108,7 @@ class Emitter {
   std::vector<HirNodeId> break_targets;
   std::vector<HirNodeId> active_defers;
   bool uses_cleanup_guard = false;
+  bool uses_foreign_access = false;
   bool fallback = false, outlining = false, checking_only = false;
   uint64_t code_scope = 0, next_scope = 0, helper_count = 0;
   uint64_t capture_work = 0;
@@ -330,6 +331,118 @@ class Emitter {
            std::to_string(n.source.span.begin_byte) + ", " +
            std::to_string(n.source.span.end_byte) + ", " +
            string_literal(declaration.identity);
+  }
+  std::string host_access_invoke(HirNodeId id, const HirNode &n,
+                                 const std::string &call, bool unit,
+                                 Suite &suite) {
+    Suite invoke;
+    std::string value;
+    if (unit)
+      line(invoke, call, n);
+    else
+      value = value_save(invoke, call, id);
+    bool error = false;
+    Suite failure;
+    for (const auto &plan : n.exits)
+      if (plan.kind == ExitKind::error) {
+        steps(plan.actions, failure, n, true);
+        error = true;
+      }
+    if (error) {
+      suite.push_back({"try", n.source.span, true, std::move(invoke), {}});
+      line(failure, "raise", n);
+      suite.push_back(
+          {"except _rt.TypedError", n.source.span, true, std::move(failure), {}});
+    } else
+      suite.insert(suite.end(), std::make_move_iterator(invoke.begin()),
+                   std::make_move_iterator(invoke.end()));
+    return value;
+  }
+  void emit_foreign_access_helpers(Suite &program) {
+    auto function = [&](const std::string &header, Suite body) {
+      program.push_back({header, {}, true, std::move(body), {}});
+    };
+    function(
+        "def _lang_host_error(exc, file, begin_byte, end_byte, operation)",
+        {{"return _rt.TypedError(_rt.ERROR_TYPE_KEY, "
+          "_rt.Error(exc, file, begin_byte, end_byte, operation), "
+          "_rt.ERROR_OPS)",
+          {},
+          false,
+          {},
+          {}}});
+    function(
+        "def _lang_host_get(base, path, file, begin_byte, end_byte, operation, "
+        "returns_text)",
+        {{"try", {}, true,
+          {{"value = base", {}, false, {}, {}},
+           {"for attribute in path", {}, true,
+            {{"value = getattr(value, attribute)", {}, false, {}, {}}}, {}},
+           {"return _rt._host_text(value) if returns_text else value",
+            {}, false, {}, {}}},
+          {}},
+         {"except _rt.TypedError", {}, true, {{"raise", {}, false, {}, {}}}, {}},
+         {"except Exception as exc", {},
+          true,
+          {{"raise _lang_host_error(exc, file, begin_byte, end_byte, "
+            "operation) from exc",
+            {},
+            false,
+            {},
+            {}}},
+          {}}});
+    function(
+        "def _lang_host_set(base, path, value, file, begin_byte, end_byte, "
+        "operation)",
+        {{"try", {}, true,
+          {{"target = base", {}, false, {}, {}},
+           {"for attribute in path[:-1]", {}, true,
+            {{"target = getattr(target, attribute)", {}, false, {}, {}}}, {}},
+           {"setattr(target, path[-1], value)", {}, false, {}, {}}},
+          {}},
+         {"except _rt.TypedError", {}, true, {{"raise", {}, false, {}, {}}}, {}},
+         {"except Exception as exc", {},
+          true,
+          {{"raise _lang_host_error(exc, file, begin_byte, end_byte, "
+            "operation) from exc",
+            {},
+            false,
+            {},
+            {}}},
+          {}}});
+    function(
+        "def _lang_host_getitem(base, key, file, begin_byte, end_byte, "
+        "operation, returns_text)",
+        {{"try", {}, true,
+          {{"value = base[key]", {}, false, {}, {}},
+           {"return _rt._host_text(value) if returns_text else value",
+            {}, false, {}, {}}},
+          {}},
+         {"except _rt.TypedError", {}, true, {{"raise", {}, false, {}, {}}}, {}},
+         {"except Exception as exc", {},
+          true,
+          {{"raise _lang_host_error(exc, file, begin_byte, end_byte, "
+            "operation) from exc",
+            {},
+            false,
+            {},
+            {}}},
+          {}}});
+    function(
+        "def _lang_host_setitem(base, key, value, file, begin_byte, end_byte, "
+        "operation)",
+        {{"try", {}, true,
+          {{"base[key] = value", {}, false, {}, {}}}, {}},
+         {"except _rt.TypedError", {}, true, {{"raise", {}, false, {}, {}}}, {}},
+         {"except Exception as exc", {},
+          true,
+          {{"raise _lang_host_error(exc, file, begin_byte, end_byte, "
+            "operation) from exc",
+            {},
+            false,
+            {},
+            {}}},
+          {}}});
   }
   void check_signature(TypeId id, SourceSpan source) const {
     const auto &t = type(id);
@@ -799,7 +912,8 @@ class Emitter {
         std::string element = "None", tags = "{}";
         if (spec->operation == SystemOperation::vec_empty ||
             spec->operation == SystemOperation::vec_make ||
-            spec->operation == SystemOperation::text_bytes)
+            spec->operation == SystemOperation::text_bytes ||
+            spec->operation == SystemOperation::unicode_boundaries)
           element = ops(type(n.type).type_args.at(0));
         if (type(n.type).kind == TypeKind::NominalEnum) {
           std::vector<std::string> entries;
@@ -931,6 +1045,41 @@ class Emitter {
     case NodeKind::foreign_read: {
       const auto &read = std::get<ForeignRead>(n.data);
       const auto &declaration = foreign_declaration(read.binding);
+      if (read.access) {
+        const auto location = foreign_location(n, declaration);
+        const std::string text =
+            type(n.type).kind == TypeKind::String ? "True" : "False";
+        if (*read.access == ForeignAccessKind::property_read) {
+          const auto &property =
+              std::get<modules::BindingProperty>(declaration.detail);
+          auto base = expression(n.children[0], suite);
+          return host_access_invoke(
+              id, n,
+              "_lang_host_get(" + base + ", " + path_tuple(property.getter) +
+                  ", " + location + ", " + text + ")",
+              false, suite);
+        }
+        if (*read.access == ForeignAccessKind::index_read) {
+          auto base = expression(n.children[0], suite);
+          auto index = expression(n.children[1], suite);
+          return host_access_invoke(
+              id, n,
+              "_lang_host_getitem(" + base + ", " + index + ", " + location +
+                  ", " + text + ")",
+              false, suite);
+        }
+        if (*read.access == ForeignAccessKind::slice_read) {
+          auto base = expression(n.children[0], suite);
+          auto start = read.start ? expression(*read.start, suite) : "None";
+          auto end = read.end ? expression(*read.end, suite) : "None";
+          return host_access_invoke(
+              id, n,
+              "_lang_host_getitem(" + base + ", slice(" + start + ", " + end +
+                  "), " + location + ", " + text + ")",
+              false, suite);
+        }
+        throw std::logic_error("foreign access place in expression position");
+      }
       const auto &binding = m.foreign_bindings.at(read.binding.value);
       const modules::BindingCallable *declared = nullptr;
       if (binding.signature)
@@ -1176,6 +1325,44 @@ class Emitter {
       break;
     }
     case NodeKind::assign: {
+      const auto &place_node = node(n.children[0]);
+      if (const auto *read = std::get_if<ForeignRead>(&place_node.data);
+          read && read->access &&
+          (*read->access == ForeignAccessKind::property_place ||
+           *read->access == ForeignAccessKind::index_place ||
+           *read->access == ForeignAccessKind::slice_place)) {
+        const auto &declaration = foreign_declaration(read->binding);
+        const auto location = foreign_location(place_node, declaration);
+        std::string call;
+        if (*read->access == ForeignAccessKind::property_place) {
+          const auto &property =
+              std::get<modules::BindingProperty>(declaration.detail);
+          if (property.setter.empty())
+            throw std::logic_error("verified read-only property write");
+          auto base = expression(place_node.children[0], suite);
+          auto value = take(n.children[1], expression(n.children[1], suite));
+          call = "_lang_host_set(" + base + ", " +
+                 path_tuple(property.setter) + ", " + value + ", " +
+                 location + ")";
+        } else if (*read->access == ForeignAccessKind::index_place) {
+          auto base = expression(place_node.children[0], suite);
+          auto index = expression(place_node.children[1], suite);
+          auto value = take(n.children[1], expression(n.children[1], suite));
+          call = "_lang_host_setitem(" + base + ", " + index + ", " + value +
+                 ", " + location + ")";
+        } else {
+          auto base = expression(place_node.children[0], suite);
+          auto start =
+              read->start ? expression(*read->start, suite) : "None";
+          auto end = read->end ? expression(*read->end, suite) : "None";
+          auto value = take(n.children[1], expression(n.children[1], suite));
+          call = "_lang_host_setitem(" + base + ", slice(" + start + ", " +
+                 end + "), " + value + ", " + location + ")";
+        }
+        host_access_invoke(n.children[0], place_node, call, true, suite);
+        full(id, suite);
+        break;
+      }
       auto place = expression(n.children[0], suite);
       const auto &assign = std::get<Assign>(n.data);
       // Capture the old value before evaluating a potentially mutating RHS.
@@ -1747,6 +1934,9 @@ public:
         if (n.kind() == NodeKind::unsupported)
           throw Rejected{"Unsupported operation in Python value profile",
                          n.source.span};
+        if (const auto *read = std::get_if<ForeignRead>(&n.data);
+            read && read->access)
+          uses_foreign_access = true;
         pending.insert(pending.end(), n.children.begin(), n.children.end());
       }
     }
@@ -1770,6 +1960,8 @@ public:
          {}}};
     program.push_back(
         {"_LANG_BINDING_INFO = " + binding_info(), {}, false, {}, {}});
+    if (uses_foreign_access)
+      emit_foreign_access_helpers(program);
     std::set<uint64_t> emitted_types;
     for (auto t : value_types)
       emit_type(TypeId{t}, program, emitted_types);

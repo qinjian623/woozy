@@ -11,6 +11,14 @@ constexpr uint64_t kPage = 4096;
 constexpr uint64_t kStackBytes = LANG_THREAD_STACK_BYTES;
 constexpr uint64_t kStackMappingBytes = kPage + kStackBytes + kPage;
 constexpr int64_t kEintr = -4, kAgain = -11, kDeadlock = -35;
+constexpr int64_t kTimedOut = -110, kInvalidTimeout = -22;
+constexpr long kSysClockGettime = 228;
+constexpr long kClockMonotonic = 1;
+constexpr int64_t kNanoseconds = 1000000000;
+constexpr int64_t kMaxSeconds = 0x7fffffffffffffffLL;
+// Linux futex timespecs must stay representable as ktime_t. Clamp absurd
+// positive timeouts and keep recomputing from the fixed monotonic deadline.
+constexpr int64_t kMaxWaitSeconds = 9000000000LL;
 static_assert(sizeof(LangHandle) == 24 && offsetof(LangHandle, refs) == 0 &&
               offsetof(LangHandle, kind) == 8 && offsetof(LangHandle, destroy) == 16);
 
@@ -62,6 +70,88 @@ long futex(uint32_t *word, int operation, uint32_t value) noexcept {
                    : "rcx", "r11", "memory", "cc");
   return result;
 }
+struct KernelTime {
+  int64_t seconds;
+  int64_t nanoseconds;
+};
+long futex_wait_until(uint32_t *word, uint32_t value,
+                      const KernelTime *timeout) noexcept {
+  long result;
+  register long fourth __asm__("r10") = reinterpret_cast<long>(timeout);
+  register long fifth __asm__("r8") = 0;
+  register long sixth __asm__("r9") = 0;
+  __asm__ volatile("syscall" : "=a"(result)
+                   : "a"(202L), "D"(word), "S"(128L),
+                     "d"(static_cast<long>(value)), "r"(fourth), "r"(fifth),
+                     "r"(sixth)
+                   : "rcx", "r11", "memory", "cc");
+  return result;
+}
+struct Deadline {
+  bool finite;
+  int64_t seconds;
+  int64_t nanoseconds;
+  int64_t init(int64_t timeout_ns) noexcept {
+    if (timeout_ns < -1) return kInvalidTimeout;
+    finite = timeout_ns >= 0;
+    if (!finite) return 0;
+    if (timeout_ns == 0) {
+      seconds = 0;
+      nanoseconds = 0;
+      return 0;
+    }
+    KernelTime now;
+    const long status = syscall2(kSysClockGettime, kClockMonotonic,
+                                 reinterpret_cast<long>(&now));
+    if (status < 0) return status;
+    if (now.seconds < 0 || now.nanoseconds < 0 ||
+        now.nanoseconds >= kNanoseconds)
+      return kInvalidTimeout;
+    const int64_t whole = timeout_ns / kNanoseconds;
+    const int64_t part = timeout_ns % kNanoseconds;
+    if (whole > kMaxSeconds - now.seconds) {
+      seconds = kMaxSeconds;
+      nanoseconds = kNanoseconds - 1;
+      return 0;
+    }
+    seconds = now.seconds + whole;
+    nanoseconds = now.nanoseconds + part;
+    if (nanoseconds >= kNanoseconds) {
+      if (seconds == kMaxSeconds)
+        nanoseconds = kNanoseconds - 1;
+      else {
+        ++seconds;
+        nanoseconds -= kNanoseconds;
+      }
+    }
+    return 0;
+  }
+  // Returns 0 with the remaining duration, or -110 when the fixed deadline
+  // has passed. Every retry starts from the current monotonic time, so EINTR
+  // and spurious wakeups never restart the full timeout.
+  int64_t remaining(KernelTime &out) noexcept {
+    KernelTime now;
+    const long status = syscall2(kSysClockGettime, kClockMonotonic,
+                                 reinterpret_cast<long>(&now));
+    if (status < 0) return status;
+    if (now.seconds > seconds ||
+        (now.seconds == seconds && now.nanoseconds >= nanoseconds))
+      return kTimedOut;
+    int64_t whole = seconds - now.seconds;
+    int64_t part = nanoseconds - now.nanoseconds;
+    if (part < 0) {
+      --whole;
+      part += kNanoseconds;
+    }
+    if (whole < 0 || (whole == 0 && part == 0)) return kTimedOut;
+    if (whole > kMaxWaitSeconds) {
+      whole = kMaxWaitSeconds;
+      part = 0;
+    }
+    out = {whole, part};
+    return 0;
+  }
+};
 void block_signals() noexcept {
   const uint64_t all = ~uint64_t{0};
   long result;
@@ -225,9 +315,13 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry entry,
 extern "C" int64_t lang_thread_error_v1(LangHandle *handle) noexcept {
   return thread(handle)->error;
 }
-extern "C" int64_t lang_thread_wait_v1(LangHandle *handle) noexcept {
+int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
+  if (timeout_ns < -1) return kInvalidTimeout;
   auto *state = thread(handle);
   if (state->error) return state->error;
+  Deadline deadline{};
+  const int64_t initialized = deadline.init(timeout_ns);
+  if (initialized < 0) return initialized;
   for (;;) {
     if (__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) return 0;
     if (__atomic_load_n(&state->process_id, __ATOMIC_RELAXED) != syscall0(39)) return -3;
@@ -237,9 +331,31 @@ extern "C" int64_t lang_thread_wait_v1(LangHandle *handle) noexcept {
       if (__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) return 0;
       return kDeadlock;
     }
-    const long result = futex(&state->done, 128, 0);
-    if (result < 0 && result != kAgain && result != kEintr) return result;
+    if (deadline.finite && timeout_ns == 0) return kTimedOut;
+    long result;
+    if (deadline.finite) {
+      KernelTime remaining;
+      const int64_t status = deadline.remaining(remaining);
+      if (status == kTimedOut) {
+        if (__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) return 0;
+        return kTimedOut;
+      }
+      if (status < 0) return status;
+      result = futex_wait_until(&state->done, 0, &remaining);
+    } else {
+      result = futex(&state->done, 128, 0);
+    }
+    if (result < 0 && result != kAgain && result != kEintr &&
+        result != kTimedOut)
+      return result;
   }
+}
+extern "C" int64_t lang_thread_wait_v1(LangHandle *handle) noexcept {
+  return wait_thread(handle, -1);
+}
+extern "C" int64_t lang_thread_wait_for_v1(LangHandle *handle,
+                                           int64_t timeout_ns) noexcept {
+  return wait_thread(handle, timeout_ns);
 }
 extern "C" int64_t lang_thread_result_v1(LangHandle *handle) noexcept {
   auto *state = thread(handle);

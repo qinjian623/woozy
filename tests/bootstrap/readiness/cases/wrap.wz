@@ -1,0 +1,3 @@
+// Fixed-width addition wraps; no nsw/nuw is emitted.
+let max = 9223372036854775807;
+return max + 1;

@@ -1,0 +1,3 @@
+// Valid digit separators in decimal and hexadecimal literals.
+let value = 1_000 + 0x10_00;
+return value;

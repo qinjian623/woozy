@@ -1,0 +1,170 @@
+package main;
+import "std/os" as os;
+import "std/rwlock" as rwlock;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/time" as time;
+
+struct Shared {
+    lock rwlock.ReadWriteLock;
+    active_readers sync.AtomicI64;
+    max_readers sync.AtomicI64;
+    active_writers sync.AtomicI64;
+    overlap sync.AtomicI64;
+    release_readers sync.AtomicI64;
+    counter Vec[i64];
+    phase sync.AtomicI64;
+    writer_ready sync.AtomicI64;
+    writer_acquired sync.AtomicI64;
+    reader2_started sync.AtomicI64;
+    reader2_acquired sync.AtomicI64;
+}
+
+func bump_max(values sync.AtomicI64, observed i64) {
+    var current = sync.load(values);
+    for current < observed {
+        if sync.compare_exchange(values,current,observed) { return; }
+        current = sync.load(values);
+    }
+}
+
+func basic_reader(shared Shared) i64 {
+    rwlock.read_lock(shared.lock);
+    if sync.load(shared.active_writers) != 0 { sync.store(shared.overlap,1); }
+    let current = sync.fetch_add(shared.active_readers,1) + 1;
+    bump_max(shared.max_readers,current);
+    for sync.load(shared.release_readers) == 0 { }
+    let remaining = sync.fetch_add(shared.active_readers,-1) - 1;
+    if remaining < 0 { sync.store(shared.overlap,1); }
+    rwlock.read_unlock(shared.lock);
+    return 0;
+}
+
+func exclusive_writer(shared Shared) i64 {
+    for var iteration i32 = 0; iteration < 1000; iteration += 1 {
+        rwlock.write_lock(shared.lock);
+        if sync.load(shared.active_readers) != 0 || sync.load(shared.active_writers) != 0 {
+            sync.store(shared.overlap,1);
+        }
+        sync.fetch_add(shared.active_writers,1);
+        shared.counter[0] += 1;
+        sync.fetch_add(shared.active_writers,-1);
+        rwlock.write_unlock(shared.lock);
+    }
+    return 0;
+}
+
+func priority_reader(shared Shared) i64 {
+    rwlock.read_lock(shared.lock);
+    sync.fetch_add(shared.active_readers,1);
+    for sync.load(shared.phase) < 2 { }
+    sync.fetch_add(shared.active_readers,-1);
+    rwlock.read_unlock(shared.lock);
+    return 0;
+}
+
+func priority_writer(shared Shared) i64 {
+    sync.store(shared.writer_ready,1);
+    rwlock.write_lock(shared.lock);
+    sync.store(shared.writer_acquired,1);
+    for sync.load(shared.phase) < 3 { }
+    rwlock.write_unlock(shared.lock);
+    return 0;
+}
+
+func priority_reader2(shared Shared) i64 {
+    for sync.load(shared.writer_ready) == 0 { }
+    sync.store(shared.reader2_started,1);
+    rwlock.read_lock(shared.lock);
+    sync.store(shared.reader2_acquired,1);
+    rwlock.read_unlock(shared.lock);
+    return 0;
+}
+
+func wait_value(value sync.AtomicI64, expected i64) bool {
+    for var spin i64 = 0; spin < 100000000; spin += 1 {
+        if sync.load(value) == expected { return true; }
+    }
+    return false;
+}
+
+func empty_shared() Shared {
+    return Shared(
+        lock: rwlock.new(),
+        active_readers: sync.atomic_i64(0),
+        max_readers: sync.atomic_i64(0),
+        active_writers: sync.atomic_i64(0),
+        overlap: sync.atomic_i64(0),
+        release_readers: sync.atomic_i64(0),
+        counter: [0],
+        phase: sync.atomic_i64(0),
+        writer_ready: sync.atomic_i64(0),
+        writer_acquired: sync.atomic_i64(0),
+        reader2_started: sync.atomic_i64(0),
+        reader2_acquired: sync.atomic_i64(0));
+}
+
+func parallel_readers() i32 throws os.Error {
+    let shared = empty_shared();
+    let readers = [
+        thread.spawn[Shared](basic_reader,shared),
+        thread.spawn[Shared](basic_reader,shared),
+        thread.spawn[Shared](basic_reader,shared),
+        thread.spawn[Shared](basic_reader,shared)];
+    if !wait_value(shared.max_readers,4) { return 1; }
+    if sync.load(shared.active_readers) != 4 { return 2; }
+    sync.store(shared.release_readers,1);
+    for reader in readers {
+        if thread.join(reader) != 0 { return 3; }
+    }
+    if sync.load(shared.overlap) != 0 { return 4; }
+    return 0;
+}
+
+func exclusive_writers() i32 throws os.Error {
+    let shared = empty_shared();
+    let writers = [
+        thread.spawn[Shared](exclusive_writer,shared),
+        thread.spawn[Shared](exclusive_writer,shared),
+        thread.spawn[Shared](exclusive_writer,shared),
+        thread.spawn[Shared](exclusive_writer,shared)];
+    for writer in writers {
+        if thread.join(writer) != 0 { return 5; }
+    }
+    if sync.load(shared.overlap) != 0 { return 6; }
+    if shared.counter[0] != 4000 { return 7; }
+    return 0;
+}
+
+func writer_priority() i32 throws os.Error {
+    let shared = empty_shared();
+    let first = thread.spawn[Shared](priority_reader,shared);
+    if !wait_value(shared.active_readers,1) { return 8; }
+    let writer = thread.spawn[Shared](priority_writer,shared);
+    if !wait_value(shared.writer_ready,1) { return 9; }
+    time.sleep_ms(20);
+    let second = thread.spawn[Shared](priority_reader2,shared);
+    if !wait_value(shared.reader2_started,1) { return 10; }
+    time.sleep_ms(20);
+    if sync.load(shared.reader2_acquired) != 0 { return 11; }
+
+    sync.store(shared.phase,2);
+    if !wait_value(shared.writer_acquired,1) { return 12; }
+    if sync.load(shared.reader2_acquired) != 0 { return 13; }
+    sync.store(shared.phase,3);
+
+    if thread.join(writer) != 0 { return 14; }
+    if !wait_value(shared.reader2_acquired,1) { return 15; }
+    if thread.join(second) != 0 || thread.join(first) != 0 { return 16; }
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let readers = parallel_readers();
+    if readers != 0 { return readers; }
+    let writers = exclusive_writers();
+    if writers != 0 { return writers; }
+    let priority = writer_priority();
+    if priority != 0 { return priority; }
+    return 0;
+}

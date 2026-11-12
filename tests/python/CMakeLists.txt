@@ -111,6 +111,14 @@ endif()
 # a plain python3.12 without those packages is intentionally not substituted.
 set(LANG_T10_PYTHON "" CACHE FILEPATH "CPython 3.12 venv with NumPy/PyTorch CPU for T10")
 if(LANG_T10_PYTHON AND EXISTS "${LANG_T10_PYTHON}")
+  add_test(NAME python.interop_operations COMMAND "${LANG_T10_PYTHON}"
+    "${LANG_PYTHON_TEST_ROOT}/tests/run_isolated.py"
+    "${CMAKE_CURRENT_BINARY_DIR}/interop-operation-results"
+    "${CMAKE_CURRENT_LIST_DIR}/interop_ops/run_interop.py"
+    --woozyc $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
+    --root "${LANG_PYTHON_TEST_ROOT}" --python "${LANG_T10_PYTHON}"
+    --binding "${CMAKE_CURRENT_LIST_DIR}/interop_ops/binding.json")
+  set_tests_properties(python.interop_operations PROPERTIES TIMEOUT 300)
   add_test(NAME python.t10_bindings COMMAND "${LANG_T10_PYTHON}"
     "${CMAKE_CURRENT_LIST_DIR}/run_t10_bindings.py"
     --helper $<TARGET_FILE:lang_python_emit>

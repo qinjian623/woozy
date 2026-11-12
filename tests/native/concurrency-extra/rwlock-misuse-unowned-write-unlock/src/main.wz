@@ -1,0 +1,7 @@
+package main;
+import "std/rwlock" as rwlock;
+func main() i32 {
+    let lock = rwlock.new();
+    rwlock.write_unlock(lock);
+    return 0;
+}

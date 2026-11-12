@@ -288,9 +288,24 @@ struct ForIn {
   ScopeId body_scope;
   HirNodeId body;
 };
+// Declared host access. Read kinds are value expressions; place kinds are
+// writable assignment targets. No access is inferred from host reflection.
+// A null access keeps the original module-value/method/callable read.
+enum class ForeignAccessKind {
+  property_read,
+  property_place,
+  index_read,
+  index_place,
+  slice_read,
+  slice_place
+};
 struct ForeignRead {
   ForeignBindingId binding;
-  // A method/callable has one receiver child. Module exports have none.
+  std::optional<ForeignAccessKind> access;
+  std::optional<HirNodeId> start, end; // slice children, source order
+  // A method/callable has one receiver child. Module exports have none, and
+  // an access read/place has exactly the declared receiver/key/endpoint
+  // children.
 };
 // Typed projection of Project.foreign_bindings, at the same zero-based index.
 // Identity, host attributes, parameter restrictions, ownership and effects are

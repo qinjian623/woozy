@@ -32,6 +32,11 @@ pub func wait(c Condvar, m Mutex) {
     __woozy_condvar_wait(c.state, m.state);
 }
 
+// Always returns holding m. Callers must recheck their condition after wakeup.
+pub func wait_for(c Condvar, m Mutex, timeout_ns i64) bool {
+    return __woozy_condvar_wait_for(c.state,m.state,timeout_ns);
+}
+
 pub func notify_one(c Condvar) {
     __woozy_condvar_notify_one(c.state);
 }

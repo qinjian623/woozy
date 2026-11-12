@@ -32,6 +32,21 @@
     const auto sig = type(i.signature);
     auto pointer = [&](unsigned index) { return value_address(sig.parameters[index].type, args[index]); };
     switch (*i.system) {
+    case SystemOperation::unicode_normalize:
+    case SystemOperation::unicode_casefold: {
+      auto *out = storage(lower_type(i.type));
+      llvm::Value *status = nullptr;
+      if (*i.system == SystemOperation::unicode_normalize)
+        status = runtime("lang_unicode_normalize_v1", builder.getInt64Ty(),
+                         {out, pointer(0), args[1]});
+      else
+        status = runtime("lang_unicode_casefold_v1", builder.getInt64Ty(),
+                         {out, pointer(0)});
+      guard(builder.CreateICmpSLT(status, builder.getInt64(0)), 10, i.source);
+      return builder.CreateLoad(lower_type(i.type), out);
+    }
+    case SystemOperation::unicode_boundaries:
+      return runtime("lang_unicode_grapheme_boundaries_v1", builder.getPtrTy(), {pointer(0)});
     case SystemOperation::text_len: return builder.CreateExtractValue(args[0], {2});
     case SystemOperation::text_byte_len: return builder.CreateExtractValue(args[0], {1});
     case SystemOperation::text_bytes:

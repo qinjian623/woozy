@@ -1,0 +1,130 @@
+package app;
+
+import "std/channel" as channel;
+import "std/option" as option;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+
+const WAITERS i32 = 4;
+const CLOSERS i32 = 3;
+
+struct SenderWork {
+    pipe channel.Channel[i64];
+    entered sync.AtomicI64;
+    closed sync.AtomicI64;
+}
+
+struct ReceiverWork {
+    pipe channel.Channel[i64];
+    entered sync.AtomicI64;
+}
+
+struct CloserWork {
+    pipe channel.Channel[i64];
+}
+
+func blocked_send(work SenderWork) i64 {
+    sync.fetch_add(work.entered, 1);
+    try {
+        channel.send(work.pipe, 100);
+    } catch failure channel.Error {
+        switch failure {
+            case channel.Error.Closed: {
+                sync.fetch_add(work.closed, 1);
+                return 0;
+            }
+        }
+    }
+    return 3;
+}
+
+func blocked_receive(work ReceiverWork) i64 {
+    sync.fetch_add(work.entered, 1);
+    switch channel.receive(work.pipe) {
+        case option.Option.Some(extra): return 1;
+        case option.Option.None: return 0;
+    }
+}
+
+func closer(work CloserWork) i64 {
+    channel.close(work.pipe);
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let full = channel.bounded[i64](1);
+    switch channel.try_send(full, 777) {
+        case channel.SendResult.Sent: {}
+        case channel.SendResult.Full: return 15;
+        case channel.SendResult.Closed: return 16;
+    }
+    let empty = channel.bounded[i64](1);
+    let sender_entered = sync.atomic_i64(0);
+    let sender_closed = sync.atomic_i64(0);
+    let receiver_entered = sync.atomic_i64(0);
+
+    let senders = [
+        thread.spawn[SenderWork](blocked_send, SenderWork(pipe: full, entered: sender_entered, closed: sender_closed)),
+        thread.spawn[SenderWork](blocked_send, SenderWork(pipe: full, entered: sender_entered, closed: sender_closed)),
+        thread.spawn[SenderWork](blocked_send, SenderWork(pipe: full, entered: sender_entered, closed: sender_closed)),
+        thread.spawn[SenderWork](blocked_send, SenderWork(pipe: full, entered: sender_entered, closed: sender_closed))];
+    let receivers = [
+        thread.spawn[ReceiverWork](blocked_receive, ReceiverWork(pipe: empty, entered: receiver_entered)),
+        thread.spawn[ReceiverWork](blocked_receive, ReceiverWork(pipe: empty, entered: receiver_entered)),
+        thread.spawn[ReceiverWork](blocked_receive, ReceiverWork(pipe: empty, entered: receiver_entered)),
+        thread.spawn[ReceiverWork](blocked_receive, ReceiverWork(pipe: empty, entered: receiver_entered))];
+
+    for sync.load(sender_entered) < 4 {}
+    for sync.load(receiver_entered) < 4 {}
+
+    let full_closers = [
+        thread.spawn[CloserWork](closer, CloserWork(pipe: full)),
+        thread.spawn[CloserWork](closer, CloserWork(pipe: full)),
+        thread.spawn[CloserWork](closer, CloserWork(pipe: full))];
+    let empty_closers = [
+        thread.spawn[CloserWork](closer, CloserWork(pipe: empty)),
+        thread.spawn[CloserWork](closer, CloserWork(pipe: empty)),
+        thread.spawn[CloserWork](closer, CloserWork(pipe: empty))];
+    for job in full_closers {
+        if !(thread.join(job) == 0) { return 2; }
+    }
+    for job in empty_closers {
+        if !(thread.join(job) == 0) { return 3; }
+    }
+    for job in senders {
+        if !(thread.join(job) == 0) { return 4; }
+    }
+    for job in receivers {
+        if !(thread.join(job) == 0) { return 5; }
+    }
+    if !(sync.load(sender_closed) == 4) { return 6; }
+
+    // The pre-close value survives; blocked sends must not add values after
+    // close and every blocked receiver must return None.
+    switch channel.receive(full) {
+        case option.Option.Some(value): if value != 777 { return 7; }
+        case option.Option.None: return 8;
+    }
+    switch channel.receive(full) {
+        case option.Option.Some(extra): return 9;
+        case option.Option.None: {}
+    }
+    switch channel.try_receive(full) {
+        case channel.ReceiveResult.Item(extra): return 10;
+        case channel.ReceiveResult.Empty: return 11;
+        case channel.ReceiveResult.Closed: {}
+    }
+    switch channel.receive(empty) {
+        case option.Option.Some(extra): return 12;
+        case option.Option.None: {}
+    }
+    switch channel.try_receive(empty) {
+        case channel.ReceiveResult.Item(extra): return 13;
+        case channel.ReceiveResult.Empty: return 14;
+        case channel.ReceiveResult.Closed: {}
+    }
+    channel.close(full);
+    channel.close(empty);
+    return 0;
+}

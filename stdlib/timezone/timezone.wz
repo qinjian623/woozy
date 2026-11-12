@@ -1,0 +1,446 @@
+package timezone;
+import "std/os" as os;
+import "std/time" as time;
+import "std/vec" as vec;
+import "std/text" as text;
+
+pub enum Error {
+    InvalidName;
+    InvalidData(offset usize);
+    Io(error os.Error);
+    OutOfRange;
+    Nonexistent;
+    Ambiguous(earliest i64, latest i64);
+    UnsupportedLeapSeconds;
+}
+pub enum Resolution { Reject; Earlier; Later; }
+pub struct Local {
+    pub date time.DateTime;
+    pub offset_seconds i32;
+    pub daylight bool;
+    pub abbreviation string;
+}
+struct LocalType { offset i32; daylight bool; abbreviation string; }
+struct Rule { kind i32; a i64; b i64; c i64; seconds i64; basis i32; }
+struct Recurring {
+    present bool; daylight bool;
+    standard LocalType; summer LocalType;
+    start Rule; end Rule;
+}
+pub struct Zone {
+    name string;
+    transitions Vec[i64];
+    indices Vec[usize];
+    types Vec[LocalType];
+    recurring Recurring;
+}
+struct Reader { data Vec[u8]; cursor Vec[usize]; }
+struct Header {
+    version u8; ut usize; standard usize; leaps usize;
+    times usize; types usize; chars usize;
+}
+const MAX_FILE usize = 1048576;
+
+func zero_rule() Rule { return Rule(kind:0,a:0,b:0,c:0,seconds:7200,basis:0); }
+func empty_recurring() Recurring {
+    let base = LocalType(offset:0,daylight:false,abbreviation:"");
+    return Recurring(present:false,daylight:false,standard:base,summer:base,
+        start:zero_rule(),end:zero_rule());
+}
+func byte(reader Reader) u8 throws Error {
+    let position = reader.cursor[0];
+    if position >= vec.len(reader.data) { throw Error.InvalidData(position); }
+    reader.cursor[0] = position+1;
+    return reader.data[position];
+}
+func skip(reader Reader, count usize) throws Error {
+    if count > vec.len(reader.data)-reader.cursor[0] { throw Error.InvalidData(reader.cursor[0]); }
+    reader.cursor[0] += count;
+}
+func unsigned(reader Reader, width usize) u64 throws Error {
+    var value u64 = 0;
+    for var index usize = 0; index < width; index += 1 { value = (value << 8) | u64(byte(reader)); }
+    return value;
+}
+func signed(reader Reader, width usize) i64 throws Error {
+    let value = unsigned(reader,width);
+    if width == 4 {
+        if value >= 2147483648 { return i64(value)-4294967296; }
+        return i64(value);
+    }
+    if (value & 0x8000000000000000) != 0 {
+        return i64(value & 0x7fffffffffffffff)-9223372036854775807-1;
+    }
+    return i64(value);
+}
+func header(reader Reader) Header throws Error {
+    let start = reader.cursor[0];
+    if byte(reader) != 84 || byte(reader) != 90 || byte(reader) != 105 || byte(reader) != 102 {
+        throw Error.InvalidData(start);
+    }
+    let version = byte(reader);
+    if version != 0 && version != 50 && version != 51 && version != 52 { throw Error.InvalidData(start+4); }
+    for var index usize = 0; index < 15; index += 1 {
+        if byte(reader) != 0 { throw Error.InvalidData(reader.cursor[0]-1); }
+    }
+    let ut = usize(unsigned(reader,4));
+    let standard = usize(unsigned(reader,4));
+    let leaps = usize(unsigned(reader,4));
+    let times = usize(unsigned(reader,4));
+    let types = usize(unsigned(reader,4));
+    let chars = usize(unsigned(reader,4));
+    if types == 0 || types > 256 || chars == 0 ||
+       (standard != 0 && standard != types) || (ut != 0 && ut != types) {
+        throw Error.InvalidData(start);
+    }
+    return Header(version:version,ut:ut,standard:standard,leaps:leaps,times:times,types:types,chars:chars);
+}
+func block_size(h Header, width usize) usize {
+    // Header counts are u32, so this sum cannot overflow Linux usize/u64.
+    return h.times*(width+1)+h.types*6+h.chars+h.leaps*(width+4)+h.standard+h.ut;
+}
+func utf8(data Vec[u8], start usize, end usize) string throws Error {
+    try { return text.from_bytes(data[start:end]); }
+    catch error text.Error { throw Error.InvalidData(start); }
+}
+func peek(reader Reader) u32 {
+    if reader.cursor[0] == vec.len(reader.data) { return 0; }
+    return u32(reader.data[reader.cursor[0]]);
+}
+func digit(value u32) bool { return value >= 48 && value <= 57; }
+func number(reader Reader, maximum i64) i64 throws Error {
+    let start = reader.cursor[0];
+    var value i64 = 0;
+    for digit(peek(reader)) {
+        let next = i64(byte(reader))-48;
+        if value > (maximum-next)/10 || next > maximum { throw Error.InvalidData(start); }
+        value = value*10+next;
+    }
+    if start == reader.cursor[0] || value > maximum { throw Error.InvalidData(start); }
+    return value;
+}
+func expect(reader Reader, wanted u8) throws Error {
+    if byte(reader) != wanted { throw Error.InvalidData(reader.cursor[0]-1); }
+}
+func abbreviation(reader Reader) string throws Error {
+    var start = reader.cursor[0];
+    if peek(reader) == 60 {
+        let ignored = byte(reader);
+        start += 1;
+        for peek(reader) != 62 {
+            let rune = peek(reader);
+            if !((rune >= 65 && rune <= 90) || (rune >= 97 && rune <= 122) ||
+                 digit(rune) || rune == 43 || rune == 45) { throw Error.InvalidData(reader.cursor[0]); }
+            let ignored_byte = byte(reader);
+        }
+        let end = reader.cursor[0];
+        let ignored_end = byte(reader);
+        if end-start < 3 { throw Error.InvalidData(start); }
+        return utf8(reader.data,start,end);
+    }
+    for (peek(reader) >= 65 && peek(reader) <= 90) || (peek(reader) >= 97 && peek(reader) <= 122) {
+        let ignored = byte(reader);
+    }
+    if reader.cursor[0]-start < 3 { throw Error.InvalidData(start); }
+    return utf8(reader.data,start,reader.cursor[0]);
+}
+func seconds(reader Reader, maximum_hour i64, allow_negative bool) i64 throws Error {
+    var sign i64 = 1;
+    if peek(reader) == 45 || peek(reader) == 43 {
+        if !allow_negative { throw Error.InvalidData(reader.cursor[0]); }
+        if byte(reader) == 45 { sign = -1; }
+    }
+    let hours = number(reader,maximum_hour);
+    var minutes i64 = 0;
+    var seconds_value i64 = 0;
+    if peek(reader) == 58 {
+        let ignored = byte(reader);
+        minutes = number(reader,59);
+        if peek(reader) == 58 {
+            let ignored_second = byte(reader);
+            seconds_value = number(reader,59);
+        }
+    }
+    return sign*(hours*3600+minutes*60+seconds_value);
+}
+func rule(reader Reader, version u8) Rule throws Error {
+    var kind i32 = 0;
+    var a i64 = 0;
+    var b i64 = 0;
+    var c i64 = 0;
+    if peek(reader) == 77 {
+        let ignored = byte(reader);
+        kind = 2;
+        a = number(reader,12); expect(reader,46);
+        b = number(reader,5); expect(reader,46);
+        c = number(reader,6);
+        if a == 0 || b == 0 { throw Error.InvalidData(reader.cursor[0]); }
+    } else {
+        if peek(reader) == 74 { kind = 1; let ignored = byte(reader); }
+        a = number(reader,365);
+        if kind == 1 && a == 0 { throw Error.InvalidData(reader.cursor[0]); }
+    }
+    var at i64 = 7200;
+    if peek(reader) == 47 {
+        let ignored = byte(reader);
+        if version >= 51 { at = seconds(reader,167,true); }
+        else { at = seconds(reader,24,false); }
+    }
+    return Rule(kind:kind,a:a,b:b,c:c,seconds:at,basis:0);
+}
+func footer(data Vec[u8], version u8) Recurring throws Error {
+    if vec.len(data) == 0 { return empty_recurring(); }
+    let reader = Reader(data:data,cursor:[0]);
+    let standard_name = abbreviation(reader);
+    let standard_offset = i32(-seconds(reader,24,true));
+    let standard = LocalType(offset:standard_offset,daylight:false,abbreviation:standard_name);
+    if reader.cursor[0] == vec.len(data) {
+        return Recurring(present:true,daylight:false,standard:standard,summer:standard,start:zero_rule(),end:zero_rule());
+    }
+    let summer_name = abbreviation(reader);
+    var summer_offset = standard_offset+3600;
+    if peek(reader) != 44 { summer_offset = i32(-seconds(reader,24,true)); }
+    expect(reader,44);
+    let start = rule(reader,version); expect(reader,44);
+    let end = rule(reader,version);
+    if reader.cursor[0] != vec.len(data) { throw Error.InvalidData(reader.cursor[0]); }
+    return Recurring(present:true,daylight:true,standard:standard,
+        summer:LocalType(offset:summer_offset,daylight:true,abbreviation:summer_name),start:start,end:end);
+}
+
+pub func parse(name string, data Vec[u8]) Zone throws Error {
+    if vec.len(data) > MAX_FILE { throw Error.InvalidData(0); }
+    let reader = Reader(data:data,cursor:[0]);
+    var h = header(reader);
+    var width usize = 4;
+    if h.version != 0 {
+        skip(reader,block_size(h,4));
+        let version = h.version;
+        h = header(reader);
+        if h.version != version { throw Error.InvalidData(reader.cursor[0]-44); }
+        width = 8;
+    }
+    if block_size(h,width) > vec.len(data)-reader.cursor[0] { throw Error.InvalidData(reader.cursor[0]); }
+    // time.DateTime and os.Timespec use POSIX seconds, not leap-aware clocks.
+    if h.leaps != 0 { throw Error.UnsupportedLeapSeconds; }
+    let transitions = vec.empty[i64]();
+    for var index usize = 0; index < h.times; index += 1 {
+        let instant = signed(reader,width);
+        if index != 0 && instant <= transitions[index-1] { throw Error.InvalidData(reader.cursor[0]-width); }
+        vec.push(transitions,instant);
+    }
+    let indices = vec.empty[usize]();
+    for var index usize = 0; index < h.times; index += 1 {
+        let value = usize(byte(reader));
+        if value >= h.types { throw Error.InvalidData(reader.cursor[0]-1); }
+        vec.push(indices,value);
+    }
+    let offsets = vec.empty[i32]();
+    let daylight = vec.empty[bool]();
+    let names = vec.empty[usize]();
+    for var index usize = 0; index < h.types; index += 1 {
+        let offset = i32(signed(reader,4));
+        let dst = byte(reader);
+        let name_offset = usize(byte(reader));
+        if dst > 1 || name_offset >= h.chars || offset == -2147483648 { throw Error.InvalidData(reader.cursor[0]-6); }
+        vec.push(offsets,offset); vec.push(daylight,dst == 1); vec.push(names,name_offset);
+    }
+    let names_start = reader.cursor[0]; skip(reader,h.chars);
+    if data[reader.cursor[0]-1] != 0 { throw Error.InvalidData(reader.cursor[0]-1); }
+    let types = vec.empty[LocalType]();
+    for var index usize = 0; index < h.types; index += 1 {
+        let start = names_start+names[index];
+        var end = start;
+        for end < names_start+h.chars && data[end] != 0 { end += 1; }
+        if end == names_start+h.chars { throw Error.InvalidData(start); }
+        vec.push(types,LocalType(offset:offsets[index],daylight:daylight[index],abbreviation:utf8(data,start,end)));
+    }
+    let standards = vec.make[u8](h.types,0);
+    for var index usize = 0; index < h.standard; index += 1 {
+        let value = byte(reader);
+        if value > 1 { throw Error.InvalidData(reader.cursor[0]-1); }
+        standards[index] = value;
+    }
+    for var index usize = 0; index < h.ut; index += 1 {
+        let value = byte(reader);
+        if value > 1 || (value == 1 && standards[index] != 1) { throw Error.InvalidData(reader.cursor[0]-1); }
+    }
+    var recurring = empty_recurring();
+    if h.version != 0 {
+        expect(reader,10);
+        let start = reader.cursor[0];
+        for reader.cursor[0] < vec.len(data) && peek(reader) != 10 {
+            let value = byte(reader);
+            if value == 0 || value > 127 { throw Error.InvalidData(reader.cursor[0]-1); }
+        }
+        let end = reader.cursor[0]; expect(reader,10);
+        recurring = footer(data[start:end],h.version);
+    }
+    if reader.cursor[0] != vec.len(data) { throw Error.InvalidData(reader.cursor[0]); }
+    if recurring.present && vec.len(transitions) != 0 {
+        let last = vec.len(transitions)-1;
+        let stored = types[indices[last]];
+        let continued = recurring_type(recurring,transitions[last]);
+        if stored.offset != continued.offset || stored.daylight != continued.daylight ||
+           stored.abbreviation != continued.abbreviation { throw Error.InvalidData(reader.cursor[0]); }
+    }
+    return Zone(name:name,transitions:transitions,indices:indices,types:types,recurring:recurring);
+}
+
+func valid_name(name string) bool {
+    if text.len(name) == 0 || name[0] == 47 { return false; }
+    for part in text.split(name,"/") {
+        if part == "" || part == "." || part == ".." { return false; }
+        for rune in part {
+            if !((rune >= 65 && rune <= 90) || (rune >= 97 && rune <= 122) ||
+                 digit(rune) || rune == 95 || rune == 45 || rune == 43) { return false; }
+        }
+    }
+    return true;
+}
+pub func load_from(directory string, name string) Zone throws Error {
+    if !valid_name(name) { throw Error.InvalidName; }
+    var file = os.stdin();
+    try { file = os.open(directory+"/"+name,os.O_RDONLY | os.O_CLOEXEC,0); }
+    catch error os.Error { throw Error.Io(error); }
+    defer { try { os.close(file); } catch ignored os.Error {} }
+    let out = vec.empty[u8]();
+    let buffer = vec.make[u8](4096,0);
+    for true {
+        var count usize = 0;
+        try { count = os.read(file,buffer,vec.len(buffer)); }
+        catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): continue;
+                default: throw Error.Io(error);
+            }
+        }
+        if count == 0 { break; }
+        if count > MAX_FILE-vec.len(out) { throw Error.InvalidData(vec.len(out)); }
+        for var index usize = 0; index < count; index += 1 { vec.push(out,buffer[index]); }
+    }
+    return parse(name,out);
+}
+pub func load(name string) Zone throws Error { return load_from("/usr/share/zoneinfo",name); }
+pub func name(zone Zone) string { return zone.name; }
+
+func plus(value i64, delta i64) i64 throws Error {
+    if (delta > 0 && value > 9223372036854775807-delta) ||
+       (delta < 0 && value < -9223372036854775808-delta) { throw Error.OutOfRange; }
+    return value+delta;
+}
+func timestamp(date time.DateTime) os.Timespec throws Error {
+    try { return time.to_timestamp(date); }
+    catch error time.Error { throw Error.OutOfRange; }
+}
+func civil(instant os.Timespec) time.DateTime throws Error {
+    try { return time.from_timestamp(instant); }
+    catch error time.Error { throw Error.OutOfRange; }
+}
+func transition(rule Rule, year i64, previous_offset i32) i64 throws Error {
+    var date = time.DateTime(year:year,month:1,day:1,hour:0,minute:0,second:0,nanoseconds:0);
+    var day = rule.a;
+    if rule.kind == 1 {
+        day -= 1;
+        if time.is_leap(year) && rule.a >= 60 { day += 1; }
+    } else if rule.kind == 2 {
+        date.month = rule.a;
+        var weekday i64 = 0;
+        try { weekday = time.weekday(date); }
+        catch error time.Error { throw Error.OutOfRange; }
+        var month_day = 1+(rule.c-weekday+7)%7+7*(rule.b-1);
+        if month_day > time.days_in_month(year,rule.a) { month_day -= 7; }
+        date.day = month_day;
+        day = 0;
+    }
+    return plus(plus(timestamp(date).seconds,day*86400),rule.seconds-i64(previous_offset));
+}
+func recurring_type(recurring Recurring, instant i64) LocalType throws Error {
+    if !recurring.daylight { return recurring.standard; }
+    let date = civil(os.Timespec(seconds:instant,nanoseconds:0));
+    for var delta i64 = -1; delta <= 1; delta += 1 {
+        let year = date.year+delta;
+        // Gregorian dates and weekdays repeat every 400 years. Compare in a
+        // nearby safe cycle so transition arithmetic cannot overflow i64 epochs.
+        let proxy = 2000+(year%400+400)%400;
+        var mapped = date;
+        mapped.year = proxy+(date.year-year);
+        let probe = timestamp(mapped).seconds;
+        let start = transition(recurring.start,proxy,recurring.standard.offset);
+        var end = transition(recurring.end,proxy,recurring.summer.offset);
+        if start >= end { end = transition(recurring.end,proxy+1,recurring.summer.offset); }
+        if probe >= start && probe < end { return recurring.summer; }
+    }
+    return recurring.standard;
+}
+func active(zone Zone, instant i64) LocalType throws Error {
+    let count = vec.len(zone.transitions);
+    if zone.recurring.present && (count == 0 || instant >= zone.transitions[count-1]) {
+        let selected = recurring_type(zone.recurring,instant);
+        if selected.abbreviation == "-00" { throw Error.OutOfRange; }
+        return selected;
+    }
+    if count != 0 && instant >= zone.transitions[count-1] { throw Error.OutOfRange; }
+    var low usize = 0;
+    var high = count;
+    for low < high {
+        let middle = low+(high-low)/2;
+        if zone.transitions[middle] <= instant { low = middle+1; }
+        else { high = middle; }
+    }
+    var index usize = 0;
+    if low != 0 { index = zone.indices[low-1]; }
+    let selected = zone.types[index];
+    if selected.abbreviation == "-00" { throw Error.OutOfRange; }
+    return selected;
+}
+pub func to_local(zone Zone, instant os.Timespec) Local throws Error {
+    if instant.nanoseconds < 0 || instant.nanoseconds >= 1000000000 { throw Error.OutOfRange; }
+    let selected = active(zone,instant.seconds);
+    let local = civil(os.Timespec(seconds:plus(instant.seconds,i64(selected.offset)),nanoseconds:instant.nanoseconds));
+    return Local(date:local,offset_seconds:selected.offset,daylight:selected.daylight,abbreviation:selected.abbreviation);
+}
+func same(a time.DateTime, b time.DateTime) bool {
+    return a.year == b.year && a.month == b.month && a.day == b.day &&
+        a.hour == b.hour && a.minute == b.minute && a.second == b.second && a.nanoseconds == b.nanoseconds;
+}
+pub func from_local(zone Zone, date time.DateTime, resolution Resolution) os.Timespec throws Error {
+    let naive = timestamp(date);
+    let offsets = vec.empty[i32]();
+    for kind in zone.types { vec.push(offsets,kind.offset); }
+    if zone.recurring.present {
+        vec.push(offsets,zone.recurring.standard.offset);
+        vec.push(offsets,zone.recurring.summer.offset);
+    }
+    let candidates = vec.empty[i64]();
+    var covered = false;
+    for offset in offsets {
+        try {
+            let candidate = plus(naive.seconds,-i64(offset));
+            let found = to_local(zone,os.Timespec(seconds:candidate,nanoseconds:date.nanoseconds));
+            covered = true;
+            if same(date,found.date) {
+                var duplicate = false;
+                for previous in candidates { if previous == candidate { duplicate = true; } }
+                if !duplicate { vec.push(candidates,candidate); }
+            }
+        } catch error Error {
+            switch error { case Error.OutOfRange: {} default: throw error; }
+        }
+    }
+    if vec.len(candidates) == 0 {
+        if !covered { throw Error.OutOfRange; }
+        throw Error.Nonexistent;
+    }
+    var earliest = candidates[0];
+    var latest = candidates[0];
+    for value in candidates { if value < earliest { earliest = value; } if value > latest { latest = value; } }
+    if earliest != latest {
+        switch resolution {
+            case Resolution.Reject: throw Error.Ambiguous(earliest,latest);
+            case Resolution.Earlier: return os.Timespec(seconds:earliest,nanoseconds:date.nanoseconds);
+            case Resolution.Later: return os.Timespec(seconds:latest,nanoseconds:date.nanoseconds);
+        }
+    }
+    return os.Timespec(seconds:earliest,nanoseconds:date.nanoseconds);
+}

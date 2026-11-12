@@ -1,0 +1,30 @@
+package app;
+import "std/unicode" as unicode;
+import "std/vec" as vec;
+
+func main() i32 {
+    if unicode.VERSION != "18.0.0" { return 1; }
+    let input = "\u{e9}\0\u{ac00}";
+    if unicode.nfd(input) != "e\u{301}\0\u{1100}\u{1161}" { return 2; }
+    if unicode.nfc(unicode.nfd(input)) != input { return 3; }
+    if unicode.nfkc("\u{fb03}\u{ff21}") != "ffiA" { return 4; }
+    if unicode.nfkd("\u{fb03}\u{c5}") != "ffiA\u{30a}" { return 5; }
+    if unicode.casefold("StraßeİΣ") != "strassei\u{307}σ" { return 6; }
+    let sequence = "👩‍👩‍👧‍👦🇨🇳e\u{301}";
+    let boundaries = unicode.boundaries(sequence);
+    if vec.len(boundaries) != 4 || boundaries[0] != 0 || boundaries[1] != 7 ||
+       boundaries[2] != 9 || boundaries[3] != 11 { return 7; }
+    if unicode.grapheme_count(sequence) != 3 { return 8; }
+    let graphemes = unicode.graphemes(sequence);
+    if vec.len(graphemes) != 3 || graphemes[0] != "👩‍👩‍👧‍👦" ||
+       graphemes[1] != "🇨🇳" || graphemes[2] != "e\u{301}" { return 9; }
+    if unicode.grapheme_count("") != 0 || vec.len(unicode.boundaries("")) != 1 ||
+       vec.len(unicode.graphemes("")) != 0 { return 10; }
+    if unicode.grapheme_count("\0\r\n") != 2 { return 11; }
+    let captured = vec.empty[string]();
+    for var index i32 = 0; index < 100; index += 1 {
+        vec.push(captured,unicode.nfc("e\u{301}"));
+    }
+    if vec.len(captured) != 100 || captured[99] != "é" { return 12; }
+    return 0;
+}

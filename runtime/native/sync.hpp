@@ -17,6 +17,14 @@ void lang_mutex_unlock_v1(LangHandle *mutex) noexcept;
 
 LangHandle *lang_condvar_new_v1() noexcept;
 void lang_condvar_wait_v1(LangHandle *condvar, LangHandle *mutex) noexcept;
+// -1 waits forever, 0 checks once, and values below -1 are invalid. The
+// external mutex is released before sleeping and reacquired on every return.
+// Returns true when notified and false only when the monotonic deadline
+// expired; spurious wakeups are absorbed without restarting the deadline.
+// Misuse and other runtime errors Panic after that same unlock/wait/reacquire
+// contract.
+bool lang_condvar_wait_for_v1(LangHandle *condvar, LangHandle *mutex,
+                              int64_t timeout_ns) noexcept;
 void lang_condvar_notify_one_v1(LangHandle *condvar) noexcept;
 void lang_condvar_notify_all_v1(LangHandle *condvar) noexcept;
 

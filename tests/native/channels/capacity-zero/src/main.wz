@@ -1,0 +1,8 @@
+package app;
+
+import "std/channel" as channel;
+
+func main() i32 {
+    let pipe = channel.bounded[i64](0);
+    return 1;
+}

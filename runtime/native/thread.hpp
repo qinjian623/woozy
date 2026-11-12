@@ -14,6 +14,11 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry, const void *,
                                             LangValueOp context_drop) noexcept;
 extern "C" int64_t lang_thread_error_v1(LangHandle *) noexcept;
 extern "C" int64_t lang_thread_wait_v1(LangHandle *) noexcept;
+// -1 waits forever, 0 polls once, and values below -1 are invalid.
+// Returns 0 after completion, -110 at the monotonic deadline, or the existing
+// creation/process/self-join error. -1 keeps lang_thread_wait_v1 semantics.
+extern "C" int64_t lang_thread_wait_for_v1(LangHandle *,
+                                           int64_t timeout_ns) noexcept;
 extern "C" int64_t lang_thread_result_v1(LangHandle *) noexcept;
 
 // Called only in the fork child, before returning to language code.

@@ -1,0 +1,29 @@
+package unicode;
+import "std/vec" as vec;
+
+pub const VERSION string = "18.0.0";
+pub enum Form { NFC; NFD; NFKC; NFKD; }
+
+pub func normalize(value string, form Form) string {
+    switch form {
+        case Form.NFC: return __woozy_unicode_normalize(value,0);
+        case Form.NFD: return __woozy_unicode_normalize(value,1);
+        case Form.NFKC: return __woozy_unicode_normalize(value,2);
+        case Form.NFKD: return __woozy_unicode_normalize(value,3);
+    }
+}
+pub func nfc(value string) string { return normalize(value,Form.NFC); }
+pub func nfd(value string) string { return normalize(value,Form.NFD); }
+pub func nfkc(value string) string { return normalize(value,Form.NFKC); }
+pub func nfkd(value string) string { return normalize(value,Form.NFKD); }
+pub func casefold(value string) string { return __woozy_unicode_casefold(value); }
+pub func boundaries(value string) Vec[usize] { return __woozy_unicode_boundaries(value); }
+pub func grapheme_count(value string) usize { return vec.len(boundaries(value))-1; }
+pub func graphemes(value string) Vec[string] {
+    let points = boundaries(value);
+    let out = vec.empty[string]();
+    for var index usize = 1; index < vec.len(points); index += 1 {
+        vec.push(out,value[points[index-1]:points[index]]);
+    }
+    return out;
+}

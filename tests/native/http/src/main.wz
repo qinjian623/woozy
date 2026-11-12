@@ -1,0 +1,1153 @@
+package app;
+
+import "std/http" as http;
+import "std/io" as io;
+import "std/net" as net;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func say(value string) {
+    try { io.println(value); }
+    catch error os.Error {}
+}
+
+func arguments() Vec[string] throws http.Error {
+    try { return process.args(); }
+    catch error os.Error { throw http.Error.Io(error); }
+}
+
+func close_quiet(socket net.Socket) {
+    try { net.close(socket); }
+    catch error os.Error {}
+}
+
+func bytes_equal(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func bytes_text(data Vec[u8], value string) bool {
+    return bytes_equal(data,text.bytes(value));
+}
+
+func with_body(prefix string, body Vec[u8]) Vec[u8] {
+    let out = text.bytes(prefix);
+    for byte in body { vec.push(out,byte); }
+    return out;
+}
+
+func contains_bytes(data Vec[u8], needle string) bool {
+    let target = text.bytes(needle);
+    if vec.len(target) == 0 { return true; }
+    if vec.len(target) > vec.len(data) { return false; }
+    for var start usize = 0; start <= vec.len(data)-vec.len(target); start += 1 {
+        var matches = true;
+        for var offset usize = 0; offset < vec.len(target); offset += 1 {
+            if data[start+offset] != target[offset] {
+                matches = false;
+                break;
+            }
+        }
+        if matches { return true; }
+    }
+    return false;
+}
+
+func count_bytes(data Vec[u8], needle string) usize {
+    let target = text.bytes(needle);
+    if vec.len(target) == 0 { return 0; }
+    var count usize = 0;
+    if vec.len(target) > vec.len(data) { return 0; }
+    for var start usize = 0; start <= vec.len(data)-vec.len(target); start += 1 {
+        var matches = true;
+        for var offset usize = 0; offset < vec.len(target); offset += 1 {
+            if data[start+offset] != target[offset] {
+                matches = false;
+                break;
+            }
+        }
+        if matches { count += 1; }
+    }
+    return count;
+}
+
+func check(name string, condition bool) bool {
+    if !condition { say("FAIL "+name); }
+    return condition;
+}
+
+func new_request(
+    method string,
+    target string,
+    version string,
+    headers Vec[http.Header],
+    body Vec[u8]) http.Request {
+    return http.Request(
+        method:method,
+        target:target,
+        version:version,
+        headers:headers,
+        body:body,
+        trailers:vec.empty[http.Header]());
+}
+
+func new_response(
+    version string,
+    status i32,
+    reason string,
+    headers Vec[http.Header],
+    body Vec[u8]) http.Response {
+    return http.Response(
+        version:version,
+        status:status,
+        reason:text.bytes(reason),
+        headers:headers,
+        body:body,
+        trailers:vec.empty[http.Header]());
+}
+
+func header_is(headers Vec[http.Header], name string, expected string) bool throws http.Error {
+    switch http.header_text(headers,name) {
+        case option.Option.Some(value): return value == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func raw_header_is(headers Vec[http.Header], name string, expected Vec[u8]) bool {
+    switch http.header(headers,name) {
+        case option.Option.Some(value): return bytes_equal(value,expected);
+        case option.Option.None: return false;
+    }
+}
+
+func error_name(value http.Error) string {
+    switch value {
+        case http.Error.Io(error): return "Io";
+        case http.Error.ReaderBusy: return "ReaderBusy";
+        case http.Error.UnexpectedEof: return "UnexpectedEof";
+        case http.Error.TrailingBytes: return "TrailingBytes";
+        case http.Error.HeadTooLarge: return "HeadTooLarge";
+        case http.Error.BodyTooLarge: return "BodyTooLarge";
+        case http.Error.TooManyHeaders: return "TooManyHeaders";
+        case http.Error.LengthOverflow: return "LengthOverflow";
+        case http.Error.InvalidRequestLine: return "InvalidRequestLine";
+        case http.Error.InvalidMethod: return "InvalidMethod";
+        case http.Error.InvalidTarget: return "InvalidTarget";
+        case http.Error.InvalidStatusLine: return "InvalidStatusLine";
+        case http.Error.InvalidStatus: return "InvalidStatus";
+        case http.Error.InvalidReason: return "InvalidReason";
+        case http.Error.UnsupportedVersion: return "UnsupportedVersion";
+        case http.Error.InvalidHeaderLine: return "InvalidHeaderLine";
+        case http.Error.InvalidHeaderName: return "InvalidHeaderName";
+        case http.Error.InvalidHeaderValue: return "InvalidHeaderValue";
+        case http.Error.InvalidUtf8: return "InvalidUtf8";
+        case http.Error.ObsoleteLineFolding: return "ObsoleteLineFolding";
+        case http.Error.InvalidContentLength: return "InvalidContentLength";
+        case http.Error.ConflictingContentLength: return "ConflictingContentLength";
+        case http.Error.TransferEncodingWithContentLength: return "TransferEncodingWithContentLength";
+        case http.Error.UnsupportedTransferEncoding: return "UnsupportedTransferEncoding";
+        case http.Error.InvalidChunkSize: return "InvalidChunkSize";
+        case http.Error.ChunkLineTooLong: return "ChunkLineTooLong";
+        case http.Error.InvalidChunkExtension: return "InvalidChunkExtension";
+        case http.Error.InvalidChunkTerminator: return "InvalidChunkTerminator";
+        case http.Error.InvalidTrailer: return "InvalidTrailer";
+        case http.Error.ForbiddenTrailer: return "ForbiddenTrailer";
+        case http.Error.MissingHost: return "MissingHost";
+        case http.Error.DuplicateHost: return "DuplicateHost";
+        case http.Error.InvalidHost: return "InvalidHost";
+        case http.Error.UnexpectedBody: return "UnexpectedBody";
+        case http.Error.UnexpectedFraming: return "UnexpectedFraming";
+        case http.Error.UnsupportedTrailers: return "UnsupportedTrailers";
+    }
+    return "Unknown";
+}
+
+func request_error_limited(data Vec[u8], limits http.Limits, expected string) bool {
+    try {
+        let value = http.parse_request_limited(data,limits);
+        say("unexpected request success: "+value.method);
+    } catch error http.Error {
+        return check("request error "+expected,error_name(error) == expected);
+    }
+    return check("request error "+expected,false);
+}
+
+func request_error(data Vec[u8], expected string) bool {
+    return request_error_limited(data,http.default_limits(),expected);
+}
+
+func response_error_limited(
+    data Vec[u8],
+    method string,
+    limits http.Limits,
+    expected string) bool {
+    try {
+        let value = http.parse_response_limited(data,method,limits);
+        say("unexpected response success: "+strconv.format_i64(i64(value.status)));
+    } catch error http.Error {
+        return check("response error "+expected,error_name(error) == expected);
+    }
+    return check("response error "+expected,false);
+}
+
+func response_error(data Vec[u8], method string, expected string) bool {
+    return response_error_limited(data,method,http.default_limits(),expected);
+}
+
+func encode_request_error(request http.Request, expected string) bool {
+    try { let data = http.encode_request(request); }
+    catch error http.Error {
+        return check("encode request error "+expected,error_name(error) == expected);
+    }
+    return check("encode request error "+expected,false);
+}
+
+func encode_response_error(response http.Response, method string, expected string) bool {
+    try { let data = http.encode_response(response,method); }
+    catch error http.Error {
+        return check("encode response error "+expected,error_name(error) == expected);
+    }
+    return check("encode response error "+expected,false);
+}
+
+func binary_body() Vec[u8] {
+    return [u8(0),u8(1),u8(2),u8(255),u8(254),u8(10),u8(13)];
+}
+
+func codec_request() bool throws http.Error {
+    let headers = vec.empty[http.Header]();
+    vec.push(headers,http.text_header("Host","fixture.example"));
+    vec.push(headers,http.text_header("X-Dup","one"));
+    vec.push(headers,http.text_header("X-Dup","two"));
+    vec.push(headers,http.text_header("X-Unicode","中😀 / ok"));
+    let request = new_request(
+        method:"POST",
+        target:"/upload?name=中😀",
+        version:"HTTP/1.1",
+        headers:headers,
+        body:binary_body());
+    let encoded = http.encode_request(request);
+    let parsed = http.parse_request(encoded);
+    if !check("request method",parsed.method == "POST") { return false; }
+    if !check("request target unicode",parsed.target == "/upload?name=中😀") { return false; }
+    if !check("request version",parsed.version == "HTTP/1.1") { return false; }
+    if !check("request binary body",bytes_equal(parsed.body,binary_body())) { return false; }
+    if !check("request header lookup case-insensitive",header_is(parsed.headers,"host","fixture.example")) {
+        return false;
+    }
+    if !check("request unicode header",header_is(parsed.headers,"x-unicode","中😀 / ok")) { return false; }
+    let duplicates = http.header_text_values(parsed.headers,"X-DUP");
+    if !check("request duplicate count",vec.len(duplicates) == 2) { return false; }
+    if !check("request duplicate order",duplicates[0] == "one" && duplicates[1] == "two") { return false; }
+    if !check("request missing header",!http.has_header(parsed.headers,"X-Absent")) { return false; }
+    if !check("request one content length",count_bytes(encoded,"Content-Length:") == 1) { return false; }
+    if !check("request content length body",contains_bytes(encoded,"Content-Length: 7\r\n")) { return false; }
+
+    let same = text.bytes(
+        "POST /same HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nContent-Length: 3\r\n\r\nabc");
+    let same_request = http.parse_request(same);
+    if !check("duplicate equal content length",bytes_text(same_request.body,"abc")) { return false; }
+
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\nContent-Length: 3\r\n\r\nabc"),
+        "TransferEncodingWithContentLength") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\nContent-Length: 4\r\n\r\nabc"),
+        "ConflictingContentLength") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 18446744073709551616\r\n\r\n"),
+        "LengthOverflow") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: +3\r\n\r\nabc"),
+        "InvalidContentLength") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3, 3, 4\r\n\r\nabc"),
+        "ConflictingContentLength") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 3\r\n\r\nab"),
+        "UnexpectedEof") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 0\r\n\r\nextra"),
+        "TrailingBytes") { return false; }
+
+    let old_request = http.parse_request(text.bytes(
+        "GET /old HTTP/1.0\r\nHost: x\r\n\r\n"));
+    if !check("HTTP/1.0 request",old_request.version == "HTTP/1.0" &&
+        old_request.target == "/old" && vec.len(old_request.body) == 0) { return false; }
+    let old_encoded = http.encode_request(new_request(
+        method:"POST",target:"/old",version:"HTTP/1.0",
+        headers:vec.empty[http.Header](),body:[u8(1),u8(2)]));
+    let old_reparsed = http.parse_request(old_encoded);
+    if !check("HTTP/1.0 encoded body",old_reparsed.version == "HTTP/1.0" &&
+        bytes_equal(old_reparsed.body,[u8(1),u8(2)])) { return false; }
+
+    let tiny_body = http.limits(128,4,8);
+    if !request_error_limited(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nabcde"),
+        tiny_body,"BodyTooLarge") { return false; }
+    let tiny_headers = http.limits(128,64,1);
+    if !request_error_limited(text.bytes(
+        "GET / HTTP/1.1\r\nHost: x\r\nX-Second: y\r\n\r\n"),
+        tiny_headers,"TooManyHeaders") { return false; }
+    let tiny_head = http.limits(32,64,8);
+    if !request_error_limited(text.bytes(
+        "GET /a/really/long/path HTTP/1.1\r\nHost: fixture.example\r\n\r\n"),
+        tiny_head,"HeadTooLarge") { return false; }
+    return true;
+}
+
+func codec_chunked() bool throws http.Error {
+    let data = text.bytes(
+        "POST /chunk HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "4;foo=bar\r\nWiki\r\n5;quoted=\"a b\"\r\npedia\r\n"+
+        "0;end=yes\r\nX-Trailer: done\r\nAuthorization: secret\r\n"+
+        "X-Dup: t1\r\nX-Dup: t2\r\n\r\n");
+    let request = http.parse_request(data);
+    if !check("chunked body",bytes_text(request.body,"Wikipedia")) { return false; }
+    if !check("chunked trailer not initial",!http.has_header(request.headers,"X-Trailer")) {
+        return false;
+    }
+    if !check("chunked trailer separate",header_is(request.trailers,"x-trailer","done")) {
+        return false;
+    }
+    if !check("authorization trailer not initial",
+        !http.has_header(request.headers,"Authorization")) { return false; }
+    if !check("authorization trailer",header_is(request.trailers,"Authorization","secret")) {
+        return false;
+    }
+    let trailers = http.header_text_values(request.trailers,"X-Dup");
+    if !check("chunked duplicate trailers",vec.len(trailers) == 2) { return false; }
+    if !check("chunked trailer order",trailers[0] == "t1" && trailers[1] == "t2") { return false; }
+    if !encode_request_error(request,"UnsupportedTrailers") { return false; }
+
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "4\r\nWiki\r\n0\r\nContent-Length: 1\r\n\r\n"),
+        "ForbiddenTrailer") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n5\r\nabc"),
+        "UnexpectedEof") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n4\r\nWiki\r\n"),
+        "UnexpectedEof") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "10000000000000000\r\n"),
+        "LengthOverflow") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "4;=x\r\nWiki\r\n0\r\n\r\n"),
+        "InvalidChunkExtension") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n1\r\nxZZ"),
+        "InvalidChunkTerminator") { return false; }
+    let tiny_body = http.limits(256,4,8);
+    if !request_error_limited(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "5\r\nabcde\r\n0\r\n\r\n"),
+        tiny_body,"BodyTooLarge") { return false; }
+    if !request_error(text.bytes(
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: gzip, chunked\r\n\r\n0\r\n\r\n"),
+        "UnsupportedTransferEncoding") { return false; }
+    return true;
+}
+
+func codec_response() bool throws http.Error {
+    let response_data = with_body(
+        "HTTP/1.1 200 OK\r\nContent-Length: 4\r\nX-Dup: a\r\nX-Dup: b\r\n\r\n",
+        [u8(0),u8(255),u8(1),u8(2)]);
+    let response = http.parse_response(response_data,"GET");
+    if !check("response status",response.status == 200) { return false; }
+    if !check("response binary body",bytes_equal(response.body,[u8(0),u8(255),u8(1),u8(2)])) {
+        return false;
+    }
+    let response_headers = http.header_text_values(response.headers,"x-dup");
+    if !check("response duplicate headers",vec.len(response_headers) == 2) { return false; }
+    let duplicate_response = http.parse_response(text.bytes(
+        "HTTP/1.1 200 OK\r\nContent-Length: 3\r\nContent-Length: 3\r\n\r\nabc"),"GET");
+    if !check("response duplicate equal content length",bytes_text(duplicate_response.body,"abc")) {
+        return false;
+    }
+    let chunked_response = http.parse_response(text.bytes(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "3;note=yes\r\nabc\r\n0\r\nX-End: yes\r\n\r\n"),"GET");
+    if !check("response chunked body",bytes_text(chunked_response.body,"abc")) { return false; }
+    if !check("response chunked trailer not initial",
+        !http.has_header(chunked_response.headers,"X-End")) { return false; }
+    if !check("response chunked trailer",header_is(chunked_response.trailers,"X-End","yes")) {
+        return false;
+    }
+
+    let head_data = text.bytes("HTTP/1.1 200 OK\r\nContent-Length: 123\r\n\r\n");
+    let head = http.parse_response(head_data,"HEAD");
+    if !check("head has no body",vec.len(head.body) == 0) { return false; }
+    let tiny_head = http.limits(256,1,8);
+    let head_with_large_representation = http.parse_response_limited(head_data,"HEAD",tiny_head);
+    if !check("head representation length is not body capped",
+        vec.len(head_with_large_representation.body) == 0) { return false; }
+    if !response_error(head_data,"GET","UnexpectedEof") { return false; }
+
+    let not_modified = http.parse_response(
+        text.bytes("HTTP/1.1 304 Not Modified\r\nContent-Length: 50\r\n\r\n"),"GET");
+    if !check("304 no body",vec.len(not_modified.body) == 0) { return false; }
+    let not_modified_te = http.parse_response(
+        text.bytes("HTTP/1.1 304 Not Modified\r\nTransfer-Encoding: chunked\r\n\r\n"),"GET");
+    if !check("304 transfer header no body",vec.len(not_modified_te.body) == 0) { return false; }
+    if !response_error(text.bytes(
+        "HTTP/1.1 204 No Content\r\nContent-Length: 0\r\n\r\n"),"GET","UnexpectedFraming") {
+        return false;
+    }
+    let no_content = http.parse_response(
+        text.bytes("HTTP/1.1 204 No Content\r\n\r\n"),"GET");
+    if !check("204 no body",vec.len(no_content.body) == 0) { return false; }
+    let interim = http.parse_response(
+        text.bytes("HTTP/1.1 100 Continue\r\n\r\n"),"GET");
+    if !check("100 status",interim.status == 100 && vec.len(interim.body) == 0) { return false; }
+    if !response_error(text.bytes(
+        "HTTP/1.1 100 Continue\r\nContent-Length: 0\r\n\r\n"),"GET","UnexpectedFraming") {
+        return false;
+    }
+    if !response_error(text.bytes(
+        "HTTP/1.1 200 OK\r\nContent-Length: 1\r\n\r\na"),"HEAD","TrailingBytes") { return false; }
+    if !response_error(text.bytes(
+        "HTTP/1.1 204 No Content\r\n\r\nx"),"GET","TrailingBytes") { return false; }
+    if !response_error(text.bytes(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: chunked\r\nContent-Length: 2\r\n\r\n"),
+        "GET","TransferEncodingWithContentLength") { return false; }
+    if !response_error(text.bytes(
+        "HTTP/1.1 200 OK\r\nTransfer-Encoding: gzip\r\n\r\n"),"GET",
+        "UnsupportedTransferEncoding") { return false; }
+    if !response_error(text.bytes(
+        "HTTP/1.1 200 OK\r\nContent-Length: 2\r\nContent-Length: 3\r\n\r\nabc"),
+        "GET","ConflictingContentLength") { return false; }
+
+    let close_data = text.bytes("HTTP/1.0 200 OK\r\nConnection: close\r\n\r\nclosed-body");
+    let close_response = http.parse_response(close_data,"GET");
+    if !check("close-delimited response",bytes_text(close_response.body,"closed-body")) {
+        return false;
+    }
+    let close_11 = http.parse_response(text.bytes("HTTP/1.1 200 OK\r\n\r\nimplicit-close"),"GET");
+    if !check("HTTP/1.1 close-delimited response",bytes_text(close_11.body,"implicit-close")) {
+        return false;
+    }
+    let tiny_body = http.limits(256,4,8);
+    if !response_error_limited(text.bytes(
+        "HTTP/1.1 200 OK\r\nContent-Length: 5\r\n\r\nabcde"),
+        "GET",tiny_body,"BodyTooLarge") { return false; }
+
+    let headers = vec.empty[http.Header]();
+    vec.push(headers,http.text_header("Content-Length","3"));
+    vec.push(headers,http.text_header("Content-Length","3"));
+    vec.push(headers,http.text_header("X-Dup","a"));
+    vec.push(headers,http.text_header("X-Dup","b"));
+    let encoded_response = http.encode_response(new_response(
+        version:"HTTP/1.1",
+        status:201,
+        reason:"Created 😀",
+        headers:headers,
+        body:[u8(9),u8(8),u8(7)]),"POST");
+    if !check("response encoder one content length",
+        count_bytes(encoded_response,"Content-Length:") == 1) { return false; }
+    if !check("response encoder canonical length",
+        contains_bytes(encoded_response,"Content-Length: 3\r\n")) { return false; }
+    let reparsed = http.parse_response(encoded_response,"POST");
+    if !check("response encoder reason unicode",bytes_text(reparsed.reason,"Created 😀")) { return false; }
+    if !check("response encoder body",bytes_equal(reparsed.body,[u8(9),u8(8),u8(7)])) {
+        return false;
+    }
+
+    let head_headers = vec.empty[http.Header]();
+    vec.push(head_headers,http.text_header("Content-Length","123"));
+    let encoded_head = http.encode_response(new_response(
+        version:"HTTP/1.1",
+        status:200,
+        reason:"OK",
+        headers:head_headers,
+        body:vec.empty[u8]()),"HEAD");
+    if !check("head encoder keeps representation length",
+        contains_bytes(encoded_head,"Content-Length: 123\r\n")) { return false; }
+    let reparsed_head = http.parse_response(encoded_head,"HEAD");
+    if !check("head encoder no body",vec.len(reparsed_head.body) == 0) { return false; }
+    if !encode_response_error(new_response(
+        version:"HTTP/1.1",status:204,reason:"No Content",
+        headers:[http.text_header("Content-Length","0")],
+        body:vec.empty[u8]()),"GET","UnexpectedFraming") { return false; }
+    if !encode_response_error(new_response(
+        version:"HTTP/1.1",status:204,reason:"No Content",
+        headers:vec.empty[http.Header](),
+        body:[u8(1)]),"GET","UnexpectedBody") { return false; }
+    if !encode_response_error(new_response(
+        version:"HTTP/1.1",status:304,reason:"Not Modified",
+        headers:vec.empty[http.Header](),
+        body:[u8(1)]),"GET","UnexpectedBody") { return false; }
+    if !encode_response_error(new_response(
+        version:"HTTP/1.1",status:200,reason:"OK",
+        headers:[http.text_header("Transfer-Encoding","chunked")],
+        body:vec.empty[u8]()),"GET","UnsupportedTransferEncoding") { return false; }
+    return true;
+}
+
+func codec_strict() bool throws http.Error {
+    if !request_error(text.bytes("GET / HTTP/1.1\nHost: x\n\n"),"UnexpectedEof") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.1\r\nHost: x\nBad: y\r\n\r\n"),"InvalidHeaderValue") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.1\r\nHost: x\rBad: y\r\n\r\n"),"InvalidHeaderValue") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.1\r\nHost: x\r\n folded\r\n\r\n"),"ObsoleteLineFolding") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.1\r\nBad Name: x\r\n\r\n"),"InvalidHeaderName") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.1\r\nX: a\u{1}b\r\n\r\n"),"InvalidHeaderValue") { return false; }
+    if !request_error(text.bytes(
+        "GET  / HTTP/1.1\r\nHost: x\r\n\r\n"),"InvalidRequestLine") { return false; }
+    if !request_error(text.bytes(
+        "GE T / HTTP/1.1\r\nHost: x\r\n\r\n"),"InvalidRequestLine") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.2\r\nHost: x\r\n\r\n"),"UnsupportedVersion") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.1\r\nHost: x\r\nBad Header: y\r\n\r\n"),"InvalidHeaderName") {
+        return false;
+    }
+    if !response_error(text.bytes(
+        "HTTP/1.1 600 Weird\r\nContent-Length: 0\r\n\r\n"),"GET","InvalidStatus") { return false; }
+    if !response_error(text.bytes(
+        "HTTP/1.1 99 Weird\r\nContent-Length: 0\r\n\r\n"),"GET","InvalidStatusLine") {
+        return false;
+    }
+    if !response_error(text.bytes(
+        "HTTP/1.1 200 a\u{1}b\r\nContent-Length: 0\r\n\r\n"),"GET","InvalidReason") {
+        return false;
+    }
+    if !response_error(text.bytes(
+        "HTTP/2.0 200 OK\r\nContent-Length: 0\r\n\r\n"),"GET","UnsupportedVersion") {
+        return false;
+    }
+    let injection = new_request(
+        method:"GET",
+        target:"/",
+        version:"HTTP/1.1",
+        headers:[http.text_header("Host","x"),
+            http.Header(name:"X-Test",value:text.bytes("ok\r\nInjected: yes"))],
+        body:vec.empty[u8]());
+    if !encode_request_error(injection,"InvalidHeaderValue") { return false; }
+    let bad_method = new_request(
+        method:"GE T",target:"/",version:"HTTP/1.1",
+        headers:vec.empty[http.Header](),body:vec.empty[u8]());
+    if !encode_request_error(bad_method,"InvalidMethod") { return false; }
+    let bad_target = new_request(
+        method:"GET",target:"bad target",version:"HTTP/1.1",
+        headers:vec.empty[http.Header](),body:vec.empty[u8]());
+    if !encode_request_error(bad_target,"InvalidTarget") { return false; }
+    let bad_version = new_request(
+        method:"GET",target:"/",version:"HTTP/1.2",
+        headers:vec.empty[http.Header](),body:vec.empty[u8]());
+    if !encode_request_error(bad_version,"UnsupportedVersion") { return false; }
+    let te_request = new_request(
+        method:"POST",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","x"),
+            http.text_header("Transfer-Encoding","chunked")],
+        body:[u8(1)]);
+    if !encode_request_error(te_request,"UnsupportedTransferEncoding") { return false; }
+    return true;
+}
+
+
+func request_ok_host(host string) bool throws http.Error {
+    let request = http.parse_request(text.bytes(
+        "GET / HTTP/1.1\r\nHost: "+host+"\r\n\r\n"));
+    return request.version == "HTTP/1.1";
+}
+
+func request_host_error(host string, expected string) bool {
+    return request_error(text.bytes(
+        "GET / HTTP/1.1\r\nHost: "+host+"\r\n\r\n"),expected);
+}
+
+func codec_host() bool throws http.Error {
+    let valid_hosts = [
+        "example.com",
+        "example.com:8080",
+        "example.com.",
+        "localhost",
+        "127.0.0.1",
+        "255.255.255.255",
+        "127.0.0.1:80",
+        "[::1]",
+        "[2001:db8::1]:443",
+        "[::ffff:127.0.0.1]:80",
+        "", "host:", "[::1]:", "host:99999", "bad_host", "example~name",
+        "xn--example", "%E4%B8%AD.example", "a!$&'()*+,;=b", "[v1.example:service]",
+        "256.1.1.1", "999.999.999.999"];
+    for host in valid_hosts {
+        if !check("valid host "+host,request_ok_host(host)) { return false; }
+    }
+    let invalid_hosts = [
+        "user@example.com",
+        "example.com/path",
+        "example.com:80:90",
+        "host:bad", "host%", "host%2", "host%GG", "[v1.]", "[v.example]",
+        "exa mple",
+        "[not-ipv6]",
+        "[::1]extra",
+        "[::1%25eth0]", ":80"];
+    for host in invalid_hosts {
+        if !request_host_error(host,"InvalidHost") { return false; }
+    }
+    if !request_error(text.bytes("GET / HTTP/1.1\r\n\r\n"),"MissingHost") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.1\r\nHost: one.example\r\nHost: two.example\r\n\r\n"),
+        "DuplicateHost") { return false; }
+    let old = http.parse_request(text.bytes("GET / HTTP/1.0\r\n\r\n"));
+    if !check("HTTP/1.0 optional Host",old.version == "HTTP/1.0") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.0\r\nHost: bad/host\r\n\r\n"),"InvalidHost") { return false; }
+    if !request_error(text.bytes(
+        "GET / HTTP/1.0\r\nHost: a\r\nHost: a\r\n\r\n"),"DuplicateHost") { return false; }
+
+    if !encode_request_error(new_request(
+        method:"GET",target:"/",version:"HTTP/1.1",
+        headers:vec.empty[http.Header](),body:vec.empty[u8]()),"MissingHost") {
+        return false;
+    }
+    if !encode_request_error(new_request(
+        method:"GET",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","a.example"),
+            http.text_header("Host","b.example")],
+        body:vec.empty[u8]()),"DuplicateHost") { return false; }
+    if !encode_request_error(new_request(
+        method:"GET",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","user@example.com")],
+        body:vec.empty[u8]()),"InvalidHost") { return false; }
+    let encoded = http.encode_request(new_request(
+        method:"GET",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","example.com:8080")],
+        body:vec.empty[u8]()));
+    let reparsed = http.parse_request(encoded);
+    if !check("encoded Host",header_is(reparsed.headers,"Host","example.com:8080")) {
+        return false;
+    }
+    return true;
+}
+
+func value_text_error(value Vec[u8], expected string) bool {
+    try { let decoded = http.value_text(value); }
+    catch error http.Error {
+        return check("value_text error "+expected,error_name(error) == expected);
+    }
+    return check("value_text error "+expected,false);
+}
+
+func header_text_error(
+    headers Vec[http.Header],
+    name string,
+    expected string) bool {
+    try {
+        switch http.header_text(headers,name) {
+            case option.Option.Some(value): say("unexpected header text: "+value);
+            case option.Option.None: {}
+        }
+    } catch error http.Error {
+        return check("header_text error "+expected,error_name(error) == expected);
+    }
+    return check("header_text error "+expected,false);
+}
+
+func codec_bytes() bool throws http.Error {
+    let obs = [u8(128),u8(255)];
+    let headers = vec.empty[http.Header]();
+    vec.push(headers,http.text_header("Host","x"));
+    vec.push(headers,http.Header(name:"X-Obs",value:obs));
+    vec.push(headers,http.text_header("X-Text","中😀"));
+    let request = new_request(
+        method:"POST",target:"/bytes",version:"HTTP/1.1",
+        headers:headers,body:[u8(0),u8(1),u8(255)]);
+    let encoded = http.encode_request(request);
+    let parsed = http.parse_request(encoded);
+    if !check("obs-text 0x80/0xff roundtrip",raw_header_is(parsed.headers,"X-Obs",obs)) {
+        return false;
+    }
+    if !check("text header helper",header_is(parsed.headers,"X-Text","中😀")) { return false; }
+    if !check("binary body after byte headers",
+        bytes_equal(parsed.body,[u8(0),u8(1),u8(255)])) { return false; }
+    if !value_text_error(obs,"InvalidUtf8") { return false; }
+    if !header_text_error(parsed.headers,"X-Obs","InvalidUtf8") { return false; }
+    let text_value = http.value_text(http.text_header("X-Text","中😀").value);
+    if !check("value_text roundtrip",text_value == "中😀") { return false; }
+
+    let nul_request = new_request(
+        method:"GET",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","x"),
+            http.text_header("X-Nul","a\u{0}b")],
+        body:vec.empty[u8]());
+    if !encode_request_error(nul_request,"InvalidHeaderValue") { return false; }
+    let crlf_request = new_request(
+        method:"GET",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","x"),
+            http.text_header("X-Crlf","a\r\nb")],
+        body:vec.empty[u8]());
+    if !encode_request_error(crlf_request,"InvalidHeaderValue") { return false; }
+    let bad_name_request = new_request(
+        method:"GET",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","x"),
+            http.text_header("Bad Name","value")],
+        body:vec.empty[u8]());
+    if !encode_request_error(bad_name_request,"InvalidHeaderName") { return false; }
+
+    let nul_wire = text.bytes("GET / HTTP/1.1\r\nHost: x\r\nX-Nul: ");
+    vec.push(nul_wire,0);
+    for byte in text.bytes("\r\n\r\n") { vec.push(nul_wire,byte); }
+    if !request_error(nul_wire,"InvalidHeaderValue") { return false; }
+
+    let raw_reason = [u8(128),u8(255)];
+    let raw_response = http.Response(
+        version:"HTTP/1.1",status:200,reason:raw_reason,
+        headers:vec.empty[http.Header](),body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    let encoded_response = http.encode_response(raw_response,"GET");
+    let parsed_response = http.parse_response(encoded_response,"GET");
+    if !check("obs-text reason roundtrip",
+        bytes_equal(parsed_response.reason,raw_reason)) { return false; }
+    if !value_text_error(parsed_response.reason,"InvalidUtf8") { return false; }
+    let nul_reason = http.Response(
+        version:"HTTP/1.1",status:200,reason:[u8(0)],
+        headers:vec.empty[http.Header](),body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    if !encode_response_error(nul_reason,"GET","InvalidReason") { return false; }
+    let crlf_reason = http.Response(
+        version:"HTTP/1.1",status:200,reason:[u8(13),u8(10)],
+        headers:vec.empty[http.Header](),body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    if !encode_response_error(crlf_reason,"GET","InvalidReason") { return false; }
+
+    let chunked_data = text.bytes(
+        "POST /chunkbytes HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n"+
+        "1;name=\"");
+    vec.push(chunked_data,128);
+    vec.push(chunked_data,255);
+    for byte in text.bytes("\"\r\na\r\n0\r\n\r\n") { vec.push(chunked_data,byte); }
+    let chunked_request = http.parse_request(chunked_data);
+    if !check("quoted chunk extension obs-text",bytes_text(chunked_request.body,"a")) {
+        return false;
+    }
+
+    let trailer_request = http.Request(
+        method:"POST",target:"/",version:"HTTP/1.1",
+        headers:[http.text_header("Host","x")],
+        body:vec.empty[u8](),
+        trailers:[http.text_header("X-Trailer","yes")]);
+    if !encode_request_error(trailer_request,"UnsupportedTrailers") { return false; }
+    let trailer_response = http.Response(
+        version:"HTTP/1.1",status:200,reason:text.bytes("OK"),
+        headers:vec.empty[http.Header](),body:vec.empty[u8](),
+        trailers:[http.text_header("X-Trailer","yes")]);
+    if !encode_response_error(trailer_response,"GET","UnsupportedTrailers") { return false; }
+    return true;
+}
+
+func is_would_block(value http.Error) bool {
+    switch value {
+        case http.Error.Io(inner):
+            switch inner {
+                case os.Error.WouldBlock(code,completed): return true;
+                default: return false;
+            }
+        default: return false;
+    }
+}
+
+func socketpair_nonblocking() net.Pair throws http.Error {
+    try {
+        return net.socketpair(
+            net.AF_UNIX,
+            net.SOCK_STREAM | net.SOCK_NONBLOCK | net.SOCK_CLOEXEC,
+            0);
+    } catch error os.Error { throw http.Error.Io(error); }
+}
+
+func send_text(socket net.Socket, value string) throws http.Error {
+    try { net.send_all(socket,text.bytes(value),0); }
+    catch error os.Error { throw http.Error.Io(error); }
+}
+
+func poll_readable(socket net.Socket, name string) bool throws http.Error {
+    let rows = [net.PollFd(fd:net.fd(socket),events:net.POLLIN,revents:0)];
+    try {
+        let ready = net.poll(rows,2000);
+        return check(name,ready > 0);
+    } catch error os.Error { throw http.Error.Io(error); }
+}
+
+func request_would_block(reader http.Reader, name string) bool {
+    try {
+        let request = http.read_request(reader);
+        say("unexpected request retry success: "+request.target);
+    } catch error http.Error {
+        return check(name,is_would_block(error));
+    }
+    return check(name,false);
+}
+
+func response_would_block(reader http.Reader, name string) bool {
+    try {
+        let response = http.read_response(reader,"GET");
+        say("unexpected response retry success: "+strconv.format_i64(i64(response.status)));
+    } catch error http.Error {
+        return check(name,is_would_block(error));
+    }
+    return check(name,false);
+}
+
+func nonblocking_header_case() bool throws http.Error {
+    let pair = socketpair_nonblocking();
+    defer { close_quiet(pair.first); close_quiet(pair.second); }
+    let reader = http.reader(pair.second,http.default_limits());
+    send_text(pair.first,"GET /header HTTP/1.1\r\nHost: x");
+    if !request_would_block(reader,"header nonblocking first batch") { return false; }
+    send_text(pair.first,"\r\n\r\n");
+    if !poll_readable(pair.second,"header poll after second batch") { return false; }
+    let request = http.read_request(reader);
+    return check("header retry target",request.target == "/header");
+}
+
+func nonblocking_chunked_case() bool throws http.Error {
+    let pair = socketpair_nonblocking();
+    defer { close_quiet(pair.first); close_quiet(pair.second); }
+    let reader = http.reader(pair.second,http.default_limits());
+    send_text(pair.first,
+        "POST / HTTP/1.1\r\nHost: x\r\nTransfer-Encoding: chunked\r\n\r\n1\r\na\r\n");
+    if !request_would_block(reader,"chunked nonblocking first batch") { return false; }
+    send_text(pair.first,"0\r\n\r\n");
+    if !poll_readable(pair.second,"chunked poll after second batch") { return false; }
+    let request = http.read_request(reader);
+    return check("chunked retry body",bytes_text(request.body,"a")) &&
+        check("chunked retry no trailers",vec.len(request.trailers) == 0);
+}
+
+func nonblocking_fixed_case() bool throws http.Error {
+    let pair = socketpair_nonblocking();
+    defer { close_quiet(pair.first); close_quiet(pair.second); }
+    let reader = http.reader(pair.second,http.default_limits());
+    send_text(pair.first,
+        "POST /fixed HTTP/1.1\r\nHost: x\r\nContent-Length: 5\r\n\r\nab");
+    if !request_would_block(reader,"fixed nonblocking first batch") { return false; }
+    send_text(pair.first,"cde");
+    if !poll_readable(pair.second,"fixed poll after second batch") { return false; }
+    let request = http.read_request(reader);
+    return check("fixed retry body",bytes_text(request.body,"abcde"));
+}
+
+func nonblocking_close_case() bool throws http.Error {
+    let pair = socketpair_nonblocking();
+    defer { close_quiet(pair.first); close_quiet(pair.second); }
+    let reader = http.reader(pair.second,http.default_limits());
+    send_text(pair.first,"HTTP/1.0 200 OK\r\n\r\nab");
+    if !response_would_block(reader,"close nonblocking first batch") { return false; }
+    send_text(pair.first,"cde");
+    try { net.shutdown(pair.first,net.SHUT_WR); }
+    catch error os.Error { throw http.Error.Io(error); }
+    if !poll_readable(pair.second,"close poll after second batch") { return false; }
+    let response = http.read_response(reader,"GET");
+    return check("close retry body",bytes_text(response.body,"abcde"));
+}
+
+func codec_nonblocking() bool throws http.Error {
+    if !nonblocking_header_case() { return false; }
+    if !nonblocking_chunked_case() { return false; }
+    if !nonblocking_fixed_case() { return false; }
+    if !nonblocking_close_case() { return false; }
+    return true;
+}
+
+func selftest() i32 throws http.Error {
+    if !codec_request() { return 1; }
+    if !codec_chunked() { return 2; }
+    if !codec_response() { return 3; }
+    if !codec_strict() { return 4; }
+    if !codec_host() { return 5; }
+    if !codec_bytes() { return 6; }
+    if !codec_nonblocking() { return 7; }
+    say("http-selftest: ok");
+    return 0;
+}
+
+func listen_loopback() net.Socket throws http.Error {
+    try {
+        let listener = net.socket(
+            net.AF_INET,
+            net.SOCK_STREAM | net.SOCK_CLOEXEC,
+            0);
+        net.setsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+        net.bind(listener,net.ip("127.0.0.1",0));
+        net.listen(listener,4);
+        return listener;
+    } catch error os.Error {
+        throw http.Error.Io(error);
+    }
+}
+
+func accepted(listener net.Socket) net.Socket throws http.Error {
+    try { return net.accept(listener,0).socket; }
+    catch error os.Error { throw http.Error.Io(error); }
+}
+
+func connect_loopback(port u16) net.Socket throws http.Error {
+    try {
+        let socket = net.socket(
+            net.AF_INET,
+            net.SOCK_STREAM | net.SOCK_CLOEXEC,
+            0);
+        net.connect(socket,net.ip("127.0.0.1",port));
+        return socket;
+    } catch error os.Error {
+        throw http.Error.Io(error);
+    }
+}
+
+func announce(listener net.Socket) u16 throws http.Error {
+    var port u16 = 0;
+    try { port = net.getsockname(listener).port; }
+    catch error os.Error { throw http.Error.Io(error); }
+    say("LISTENING "+strconv.format_u64(u64(port)));
+    return port;
+}
+
+func parse_port(value string) u16 throws http.Error {
+    try { return u16(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw http.Error.InvalidTarget; }
+}
+
+func serve_roundtrip() i32 throws http.Error {
+    let listener = listen_loopback();
+    defer { close_quiet(listener); }
+    let port = announce(listener);
+    let socket = accepted(listener);
+    defer { close_quiet(socket); }
+    let reader = http.reader(socket,http.default_limits());
+    let request = http.read_request(reader);
+    if !check("roundtrip method",request.method == "POST") { say("RESULT FAIL"); return 1; }
+    if !check("roundtrip target",request.target == "/upload?x=1") { say("RESULT FAIL"); return 1; }
+    if !check("roundtrip body",bytes_equal(request.body,binary_body())) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("roundtrip unicode header",
+        header_is(request.headers,"X-Unicode","中😀 / ok")) { say("RESULT FAIL"); return 1; }
+    let multiples = http.header_text_values(request.headers,"X-Multi");
+    if !check("roundtrip duplicate headers",vec.len(multiples) == 2 &&
+        multiples[0] == "one" && multiples[1] == "two") { say("RESULT FAIL"); return 1; }
+    let content_lengths = http.header_text_values(request.headers,"Content-Length");
+    if !check("roundtrip duplicate equal CL",vec.len(content_lengths) == 2 &&
+        content_lengths[0] == "7" && content_lengths[1] == "7") {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("roundtrip obs-text header",
+        raw_header_is(request.headers,"X-Obs",[u8(128),u8(255)])) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !header_text_error(request.headers,"X-Obs","InvalidUtf8") {
+        say("RESULT FAIL");
+        return 1;
+    }
+    let reply_headers = vec.empty[http.Header]();
+    vec.push(reply_headers,http.text_header("X-Reply","中😀"));
+    vec.push(reply_headers,http.text_header("X-Reply","second"));
+    vec.push(reply_headers,http.Header(name:"X-Obs",value:[u8(128),u8(255)]));
+    let response = new_response(
+        version:"HTTP/1.1",
+        status:201,
+        reason:"Created 😀",
+        headers:reply_headers,
+        body:[u8(9),u8(8),u8(0),u8(255)]);
+    http.write_response(socket,response,request.method);
+    say("RESULT OK");
+    return 0;
+}
+
+func serve_pipeline() i32 throws http.Error {
+    let listener = listen_loopback();
+    defer { close_quiet(listener); }
+    let port = announce(listener);
+    let socket = accepted(listener);
+    defer { close_quiet(socket); }
+    let reader = http.reader(socket,http.default_limits());
+    let first = http.read_request(reader);
+    if !check("pipeline first method",first.method == "POST") { say("RESULT FAIL"); return 1; }
+    if !check("pipeline first target",first.target == "/first") { say("RESULT FAIL"); return 1; }
+    if !check("pipeline first body",bytes_text(first.body,"Wikipedia")) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("pipeline trailer not initial",!http.has_header(first.headers,"X-Trailer")) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("pipeline trailer",header_is(first.trailers,"X-Trailer","done")) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("pipeline authorization not initial",
+        !http.has_header(first.headers,"Authorization")) { say("RESULT FAIL"); return 1; }
+    if !check("pipeline authorization trailer",
+        header_is(first.trailers,"Authorization","secret")) { say("RESULT FAIL"); return 1; }
+    let second = http.read_request(reader);
+    if !check("pipeline second method",second.method == "GET") { say("RESULT FAIL"); return 1; }
+    if !check("pipeline second target",second.target == "/second") { say("RESULT FAIL"); return 1; }
+    if !check("pipeline second body",vec.len(second.body) == 0) { say("RESULT FAIL"); return 1; }
+    if !check("pipeline second header",header_is(second.headers,"X-Second","yes")) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    http.write_response(socket,new_response(
+        version:"HTTP/1.1",status:200,reason:"First",
+        headers:vec.empty[http.Header](),body:text.bytes("first-ok")),"POST");
+    http.write_response(socket,new_response(
+        version:"HTTP/1.1",status:200,reason:"Second",
+        headers:vec.empty[http.Header](),body:text.bytes("second-ok")),"GET");
+    say("RESULT OK");
+    return 0;
+}
+
+func error_profile(name string) http.Limits {
+    if name == "tiny" { return http.limits(64,16,4); }
+    if name == "headers" { return http.limits(256,64,2); }
+    return http.default_limits();
+}
+
+func serve_error(expected string, profile string) i32 throws http.Error {
+    let listener = listen_loopback();
+    defer { close_quiet(listener); }
+    let port = announce(listener);
+    let socket = accepted(listener);
+    defer { close_quiet(socket); }
+    let reader = http.reader(socket,error_profile(profile));
+    try {
+        let request = http.read_request(reader);
+        say("RESULT OK "+request.method);
+        return 1;
+    } catch error http.Error {
+        let name = error_name(error);
+        say("RESULT "+name);
+        if name == expected { return 0; }
+        return 1;
+    }
+}
+
+func client_mode(port u16) i32 throws http.Error {
+    let socket = connect_loopback(port);
+    defer { close_quiet(socket); }
+    let reader = http.reader(socket,http.default_limits());
+    let request_headers = vec.empty[http.Header]();
+    vec.push(request_headers,http.text_header("Host","fixture"));
+    vec.push(request_headers,http.text_header("X-Unicode","中😀"));
+    vec.push(request_headers,http.text_header("X-Multi","one"));
+    vec.push(request_headers,http.text_header("X-Multi","two"));
+    vec.push(request_headers,http.text_header("Content-Type","application/octet-stream"));
+    vec.push(request_headers,http.Header(name:"X-Obs",value:[u8(128),u8(255)]));
+    http.write_request(socket,new_request(
+        method:"POST",
+        target:"/client-upload",
+        version:"HTTP/1.1",
+        headers:request_headers,
+        body:[u8(0),u8(255),u8(1),u8(254)]));
+    let response = http.read_response(reader,"POST");
+    if !check("client response status",response.status == 200) { say("RESULT FAIL"); return 1; }
+    if !check("client raw reason",
+        bytes_equal(response.reason,[u8(128),u8(255)])) { say("RESULT FAIL"); return 1; }
+    if !value_text_error(response.reason,"InvalidUtf8") { say("RESULT FAIL"); return 1; }
+    if !check("client obs-text header",
+        raw_header_is(response.headers,"X-Obs",[u8(128),u8(255)])) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !header_text_error(response.headers,"X-Obs","InvalidUtf8") {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("client chunked binary body",bytes_text(response.body,"chunk-ok")) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("client response trailer not initial",
+        !http.has_header(response.headers,"X-Trailer")) { say("RESULT FAIL"); return 1; }
+    if !check("client response trailer",header_is(response.trailers,"X-Trailer","yes")) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    if !check("client response unicode header",
+        header_is(response.headers,"X-Reply","中😀")) { say("RESULT FAIL"); return 1; }
+
+    let head_headers = vec.empty[http.Header]();
+    vec.push(head_headers,http.text_header("Host","fixture"));
+    http.write_request(socket,new_request(
+        method:"HEAD",
+        target:"/head",
+        version:"HTTP/1.1",
+        headers:head_headers,
+        body:vec.empty[u8]()));
+    let interim = http.read_response(reader,"HEAD");
+    if !check("client 1xx status",interim.status == 100 && vec.len(interim.body) == 0) {
+        say("RESULT FAIL");
+        return 1;
+    }
+    let head = http.read_response(reader,"HEAD");
+    if !check("client HEAD status",head.status == 200) { say("RESULT FAIL"); return 1; }
+    if !check("client HEAD body",vec.len(head.body) == 0) { say("RESULT FAIL"); return 1; }
+    if !check("client HEAD representation length",
+        header_is(head.headers,"X-Repr","yes")) { say("RESULT FAIL"); return 1; }
+    let no_content = http.read_response(reader,"GET");
+    if !check("client 204 status",no_content.status == 204) { say("RESULT FAIL"); return 1; }
+    if !check("client 204 body",vec.len(no_content.body) == 0) { say("RESULT FAIL"); return 1; }
+    let final = http.read_response(reader,"GET");
+    if !check("client final status",final.status == 200) { say("RESULT FAIL"); return 1; }
+    if !check("client final body",bytes_text(final.body,"ok")) { say("RESULT FAIL"); return 1; }
+
+    let close_headers = vec.empty[http.Header]();
+    vec.push(close_headers,http.text_header("Host","fixture"));
+    http.write_request(socket,new_request(
+        method:"GET",
+        target:"/close",
+        version:"HTTP/1.1",
+        headers:close_headers,
+        body:vec.empty[u8]()));
+    let closed = http.read_response(reader,"GET");
+    if !check("client close version",closed.version == "HTTP/1.0") { say("RESULT FAIL"); return 1; }
+    if !check("client close body",bytes_text(closed.body,"closed")) { say("RESULT FAIL"); return 1; }
+    say("RESULT OK");
+    return 0;
+}
+
+func main() i32 throws http.Error {
+    let args = arguments();
+    if vec.len(args) < 2 {
+        say("usage: http-test selftest|nonblocking-retry|serve-roundtrip|serve-pipeline|serve-error EXPECTED PROFILE|client PORT");
+        return 2;
+    }
+    if args[1] == "selftest" { return selftest(); }
+    if args[1] == "nonblocking-retry" {
+        if !codec_nonblocking() { return 1; }
+        say("nonblocking-retry: ok");
+        return 0;
+    }
+    if args[1] == "serve-roundtrip" { return serve_roundtrip(); }
+    if args[1] == "serve-pipeline" { return serve_pipeline(); }
+    if args[1] == "serve-error" {
+        if vec.len(args) != 4 { say("usage error"); return 2; }
+        return serve_error(args[2],args[3]);
+    }
+    if args[1] == "client" {
+        if vec.len(args) != 3 { say("usage error"); return 2; }
+        return client_mode(parse_port(args[2]));
+    }
+    say("unknown mode");
+    return 2;
+}

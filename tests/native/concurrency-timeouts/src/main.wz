@@ -1,0 +1,207 @@
+package main;
+
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/vec" as vec;
+
+// Every polling helper has a monotonic deadline. No sleep establishes an order.
+func clock_ns() i64 {
+    try {
+        let stamp = os.clock_gettime(os.CLOCK_MONOTONIC);
+        return stamp.seconds * 1000000000 + stamp.nanoseconds;
+    } catch error os.Error { return -1; }
+}
+
+func await_value(value sync.AtomicI64, expected i64) bool {
+    let start = clock_ns();
+    if start < 0 { return false; }
+    var current = start;
+    for current >= start && current - start < 5000000000 {
+        if sync.load(value) == expected { return true; }
+        current = clock_ns();
+    }
+    return false;
+}
+
+func wait_error(worker thread.Thread, duration i64, expected i32) bool {
+    try {
+        let finished = thread.wait_for(worker, duration);
+        return false;
+    } catch error os.Error {
+        switch error {
+            case os.Error.System(code, completed):
+                return code == expected && completed == 0;
+            default: return false;
+        }
+    }
+}
+
+struct Gate {
+    mutex sync.Mutex;
+    changed sync.Condvar;
+    released Vec[bool];
+}
+
+func gated(work Gate) i64 {
+    sync.lock(work.mutex);
+    defer { sync.unlock(work.mutex); }
+    for !work.released[0] { sync.wait(work.changed, work.mutex); }
+    return 73;
+}
+
+struct SelfProbe {
+    mutex sync.Mutex;
+    changed sync.Condvar;
+    handles Vec[thread.Thread];
+}
+
+func self_probe(work SelfProbe) i64 {
+    sync.lock(work.mutex);
+    for vec.len(work.handles) == 0 { sync.wait(work.changed, work.mutex); }
+    let own = work.handles[0];
+    sync.unlock(work.mutex);
+    // A self-join must remain EDEADLK, even when the requested duration is 0.
+    if !wait_error(own, 0, 35) { return 1; }
+    if !wait_error(own, 1000000, 35) { return 2; }
+    if !wait_error(own, -1, 35) { return 3; }
+    return 0;
+}
+
+func thread_cases() i32 throws os.Error {
+    let gate = Gate(mutex: sync.mutex(), changed: sync.condvar(), released: [false]);
+    let worker = thread.spawn[Gate](gated, gate);
+    // Completion is impossible until this thread changes the protected flag.
+    if thread.wait_for(worker, 0) { return 11; }
+    if thread.wait_for(worker, 2000000) { return 12; }
+    if !wait_error(worker, -2, 22) { return 13; }
+    sync.lock(gate.mutex);
+    gate.released[0] = true;
+    sync.notify_one(gate.changed);
+    sync.unlock(gate.mutex);
+    if !thread.wait_for(worker, -1) { return 14; }
+    if !thread.wait_for(worker, 0) { return 15; }
+    if !thread.wait_for(worker, 1) { return 16; }
+    if !wait_error(worker, -2, 22) { return 17; }
+    if thread.join(worker) != 73 { return 18; }
+
+    let probe = SelfProbe(mutex: sync.mutex(), changed: sync.condvar(),
+                          handles: vec.empty[thread.Thread]());
+    let self = thread.spawn[SelfProbe](self_probe, probe);
+    sync.lock(probe.mutex);
+    vec.push(probe.handles, self);
+    sync.notify_one(probe.changed);
+    sync.unlock(probe.mutex);
+    if !thread.wait_for(self, 5000000000) { return 19; }
+    if thread.join(self) != 0 { return 20; }
+    vec.clear(probe.handles);
+    return 0;
+}
+
+struct Notice {
+    mutex sync.Mutex;
+    changed sync.Condvar;
+    predicate Vec[bool];
+}
+
+func publish(work Notice) i64 {
+    sync.lock(work.mutex);
+    work.predicate[0] = true;
+    sync.notify_one(work.changed);
+    sync.unlock(work.mutex);
+    return 0;
+}
+
+func notify_case(duration i64) i32 throws os.Error {
+    let notice = Notice(mutex: sync.mutex(), changed: sync.condvar(), predicate: [false]);
+    sync.lock(notice.mutex);
+    // publish cannot take the mutex until wait_for has registered its waiter.
+    let worker = thread.spawn[Notice](publish, notice);
+    let notified = sync.wait_for(notice.changed, notice.mutex, duration);
+    let observed = notice.predicate[0];
+    sync.unlock(notice.mutex); // Also verifies wait_for returned owning the mutex.
+    if !thread.wait_for(worker, 5000000000) { return 31; }
+    if thread.join(worker) != 0 { return 32; }
+    if !notified || !observed { return 33; }
+    return 0;
+}
+
+struct FalseNotices {
+    mutex sync.Mutex;
+    changed sync.Condvar;
+    request sync.AtomicI64;
+    predicate Vec[bool];
+}
+
+func false_notifier(work FalseNotices) i64 {
+    for var phase i64 = 1; phase <= 3; phase += 1 {
+        if !await_value(work.request, phase) { return 1; }
+        sync.lock(work.mutex);
+        // This notification deliberately does not make the predicate true.
+        sync.notify_one(work.changed);
+        sync.unlock(work.mutex);
+    }
+    return 0;
+}
+
+func remaining_deadline() i32 throws os.Error {
+    let work = FalseNotices(mutex: sync.mutex(), changed: sync.condvar(),
+                           request: sync.atomic_i64(0), predicate: [false]);
+    sync.lock(work.mutex);
+    let worker = thread.spawn[FalseNotices](false_notifier, work);
+    let start = clock_ns();
+    let deadline = start + 1000000000;
+    var wakes i64 = 0;
+    var timed_out = false;
+    var previous i64 = 1000000001;
+    var decreasing = true;
+    for !work.predicate[0] {
+        let remaining = deadline - clock_ns();
+        if remaining <= 0 { timed_out = true; break; }
+        if remaining >= previous { decreasing = false; }
+        previous = remaining;
+        sync.store(work.request, wakes + 1);
+        if !sync.wait_for(work.changed, work.mutex, remaining) {
+            timed_out = true;
+            break;
+        }
+        wakes += 1;
+        if wakes > 3 { break; }
+    }
+    let finish = clock_ns();
+    let predicate = work.predicate[0];
+    sync.unlock(work.mutex);
+    if !thread.wait_for(worker, 5000000000) { return 41; }
+    if thread.join(worker) != 0 { return 42; }
+    if start < 0 || finish < 0 { return 43; }
+    if predicate || !timed_out || wakes != 3 || !decreasing { return 44; }
+    if finish - start < 1000000000 { return 45; }
+    return 0;
+}
+
+func condvar_cases() i32 throws os.Error {
+    let mutex = sync.mutex();
+    let changed = sync.condvar();
+    sync.lock(mutex);
+    let zero = sync.wait_for(changed, mutex, 0);
+    sync.unlock(mutex);
+    if zero { return 51; }
+    sync.lock(mutex);
+    let start = clock_ns();
+    let finite = sync.wait_for(changed, mutex, 2000000);
+    let finish = clock_ns();
+    sync.unlock(mutex);
+    if finite { return 52; }
+    if start < 0 || finish - start < 2000000 { return 53; }
+    let finite_notice = notify_case(5000000000);
+    if finite_notice != 0 { return finite_notice; }
+    let indefinite_notice = notify_case(-1);
+    if indefinite_notice != 0 { return indefinite_notice; }
+    return remaining_deadline();
+}
+
+func main() i32 throws os.Error {
+    let workers = thread_cases();
+    if workers != 0 { return workers; }
+    return condvar_cases();
+}

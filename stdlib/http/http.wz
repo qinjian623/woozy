@@ -1,0 +1,1412 @@
+// Strict HTTP/1.1 message codec over the existing std/net byte stream.
+//
+// Header field values and response reason phrases are byte strings. Use the
+// explicit text_header/value_text/header_text helpers when UTF-8 text is
+// intended. See README.contract.md for the public contract and error list.
+package http;
+
+import "std/net" as net;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub const DEFAULT_HEAD_BYTES usize = 8192;
+pub const DEFAULT_BODY_BYTES usize = 1048576;
+pub const DEFAULT_HEADER_COUNT usize = 100;
+
+const READ_CHUNK usize = 4096;
+pub const MAX_CHUNK_LINE_BYTES usize = 4096;
+const U64_MAX u64 = 18446744073709551615;
+
+const FRAMING_NONE i32 = 0;
+const FRAMING_LENGTH i32 = 1;
+const FRAMING_CHUNKED i32 = 2;
+const FRAMING_CLOSE i32 = 3;
+
+const CHUNK_SIZE i32 = 0;
+const CHUNK_DATA i32 = 1;
+const CHUNK_DATA_END i32 = 2;
+const CHUNK_TRAILERS i32 = 3;
+const CHUNK_DONE i32 = 4;
+
+const ACTIVE_NONE u64 = 0;
+const ACTIVE_REQUEST u64 = 1;
+const ACTIVE_RESPONSE u64 = 2;
+const STAGE_HEAD u64 = 0;
+const STAGE_BODY u64 = 1;
+
+const RS_ACTIVE usize = 0;
+const RS_STAGE usize = 1;
+const RS_BODY usize = 2;
+const RS_STATUS usize = 3;
+const RS_REMAINING usize = 4;
+const RS_CHUNK_PHASE usize = 5;
+const RS_CHUNK_CURSOR usize = 6;
+const RS_CHUNK_TRAILER_START usize = 7;
+const RS_HEAD_SCAN usize = 8;
+const RS_STATE_COUNT usize = 9;
+
+pub enum Error {
+    Io(value os.Error);
+    ReaderBusy;
+    UnexpectedEof;
+    TrailingBytes;
+    HeadTooLarge;
+    BodyTooLarge;
+    TooManyHeaders;
+    LengthOverflow;
+    InvalidRequestLine;
+    InvalidMethod;
+    InvalidTarget;
+    InvalidStatusLine;
+    InvalidStatus;
+    InvalidReason;
+    UnsupportedVersion;
+    InvalidHeaderLine;
+    InvalidHeaderName;
+    InvalidHeaderValue;
+    InvalidUtf8;
+    ObsoleteLineFolding;
+    InvalidContentLength;
+    ConflictingContentLength;
+    TransferEncodingWithContentLength;
+    UnsupportedTransferEncoding;
+    InvalidChunkSize;
+    ChunkLineTooLong;
+    InvalidChunkExtension;
+    InvalidChunkTerminator;
+    InvalidTrailer;
+    ForbiddenTrailer;
+    MissingHost;
+    DuplicateHost;
+    InvalidHost;
+    UnexpectedBody;
+    UnexpectedFraming;
+    UnsupportedTrailers;
+}
+
+pub struct Header {
+    pub name string;
+    pub value Vec[u8];
+}
+
+pub struct Request {
+    pub method string;
+    pub target string;
+    pub version string;
+    pub headers Vec[Header];
+    pub body Vec[u8];
+    pub trailers Vec[Header];
+}
+
+pub struct Response {
+    pub version string;
+    pub status i32;
+    pub reason Vec[u8];
+    pub headers Vec[Header];
+    pub body Vec[u8];
+    pub trailers Vec[Header];
+}
+
+pub struct Limits {
+    pub head_bytes usize;
+    pub body_bytes usize;
+    pub header_count usize;
+}
+
+pub struct Reader {
+    socket net.Socket;
+    buffer Vec[u8];
+    limits Limits;
+    state Vec[u64];
+    parts Vec[string];
+    headers Vec[Header];
+    trailers Vec[Header];
+    body Vec[u8];
+    reason Vec[u8];
+}
+
+struct Found {
+    pub found bool;
+    pub index usize;
+}
+
+struct Span {
+    pub start usize;
+    pub end usize;
+}
+
+struct HeaderBlock {
+    pub headers Vec[Header];
+    pub body_start usize;
+}
+
+struct RequestLine {
+    pub method string;
+    pub target string;
+    pub version string;
+}
+
+struct StatusLine {
+    pub version string;
+    pub status i32;
+    pub reason Vec[u8];
+}
+
+struct RequestHead {
+    pub method string;
+    pub target string;
+    pub version string;
+    pub headers Vec[Header];
+    pub body_start usize;
+}
+
+struct ResponseHead {
+    pub version string;
+    pub status i32;
+    pub reason Vec[u8];
+    pub headers Vec[Header];
+    pub body_start usize;
+}
+
+struct Framing {
+    pub kind i32;
+    pub length usize;
+}
+
+struct RawMessage {
+    pub method string;
+    pub target string;
+    pub version string;
+    pub status i32;
+    pub reason Vec[u8];
+    pub headers Vec[Header];
+    pub body Vec[u8];
+    pub trailers Vec[Header];
+}
+
+pub func default_limits() Limits {
+    return Limits(
+        head_bytes:DEFAULT_HEAD_BYTES,
+        body_bytes:DEFAULT_BODY_BYTES,
+        header_count:DEFAULT_HEADER_COUNT);
+}
+
+pub func limits(head_bytes usize, body_bytes usize, header_count usize) Limits {
+    return Limits(head_bytes:head_bytes,body_bytes:body_bytes,header_count:header_count);
+}
+
+func state_vector() Vec[u64] {
+    let out = vec.empty[u64]();
+    for var index usize = 0; index < RS_STATE_COUNT; index += 1 { vec.push(out,0); }
+    return out;
+}
+
+pub func reader(socket net.Socket, limits Limits) Reader {
+    return Reader(
+        socket:socket,
+        buffer:vec.empty[u8](),
+        limits:limits,
+        state:state_vector(),
+        parts:vec.empty[string](),
+        headers:vec.empty[Header](),
+        trailers:vec.empty[Header](),
+        body:vec.empty[u8](),
+        reason:vec.empty[u8]());
+}
+
+pub func pending(reader Reader) usize {
+    return vec.len(reader.buffer);
+}
+
+func min_usize(left usize, right usize) usize {
+    if left < right { return left; }
+    return right;
+}
+
+func ascii_fold(byte u8) u8 {
+    if byte >= 65 && byte <= 90 { return byte + 32; }
+    return byte;
+}
+
+func name_equal(left string, right string) bool {
+    if text.byte_len(left) != text.byte_len(right) { return false; }
+    let left_bytes = text.bytes(left);
+    let right_bytes = text.bytes(right);
+    for var index usize = 0; index < vec.len(left_bytes); index += 1 {
+        if ascii_fold(left_bytes[index]) != ascii_fold(right_bytes[index]) { return false; }
+    }
+    return true;
+}
+
+func bytes_equal(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func bytes_equal_literal(bytes Vec[u8], value string) bool {
+    let target = text.bytes(value);
+    return bytes_equal(bytes,target);
+}
+
+func ascii_range_equal_literal(
+    bytes Vec[u8],
+    start usize,
+    end usize,
+    value string) bool {
+    let target = text.bytes(value);
+    if end - start != vec.len(target) { return false; }
+    for var index usize = 0; index < vec.len(target); index += 1 {
+        if ascii_fold(bytes[start+index]) != ascii_fold(target[index]) { return false; }
+    }
+    return true;
+}
+
+pub func header(headers Vec[Header], name string) option.Option[Vec[u8]] {
+    for item in headers {
+        if name_equal(item.name,name) {
+            return option.Option[Vec[u8]].Some(item.value);
+        }
+    }
+    return option.Option[Vec[u8]].None;
+}
+
+pub func header_values(headers Vec[Header], name string) Vec[Vec[u8]] {
+    let out = vec.empty[Vec[u8]]();
+    for item in headers {
+        if name_equal(item.name,name) { vec.push(out,item.value); }
+    }
+    return out;
+}
+
+pub func has_header(headers Vec[Header], name string) bool {
+    for item in headers {
+        if name_equal(item.name,name) { return true; }
+    }
+    return false;
+}
+
+pub func value_text(value Vec[u8]) string throws Error {
+    try { return text.from_bytes(value); }
+    catch error text.Error { throw Error.InvalidUtf8; }
+}
+
+pub func text_header(name string, value string) Header {
+    return Header(name:name,value:text.bytes(value));
+}
+
+pub func header_text(headers Vec[Header], name string) option.Option[string] throws Error {
+    switch header(headers,name) {
+        case option.Option.Some(value): return option.Option[string].Some(value_text(value));
+        case option.Option.None: return option.Option[string].None;
+    }
+}
+
+pub func header_text_values(headers Vec[Header], name string) Vec[string] throws Error {
+    let out = vec.empty[string]();
+    for value in header_values(headers,name) { vec.push(out,value_text(value)); }
+    return out;
+}
+
+func is_token_byte(byte u8) bool {
+    if byte >= 48 && byte <= 57 { return true; }
+    if byte >= 65 && byte <= 90 { return true; }
+    if byte >= 97 && byte <= 122 { return true; }
+    if byte == 33 || byte == 35 || byte == 36 || byte == 37 || byte == 38 ||
+       byte == 39 || byte == 42 || byte == 43 || byte == 45 || byte == 46 ||
+       byte == 94 || byte == 95 || byte == 96 || byte == 124 || byte == 126 {
+        return true;
+    }
+    return false;
+}
+
+func valid_token_bytes(value Vec[u8]) bool {
+    if vec.len(value) == 0 { return false; }
+    for byte in value {
+        if !is_token_byte(byte) { return false; }
+    }
+    return true;
+}
+
+func valid_token(value string) bool {
+    return valid_token_bytes(text.bytes(value));
+}
+
+func valid_target(value string) bool {
+    if text.len(value) == 0 { return false; }
+    let bytes = text.bytes(value);
+    for byte in bytes {
+        if byte <= 32 || byte == 127 { return false; }
+    }
+    return true;
+}
+
+func valid_field_bytes(value Vec[u8]) bool {
+    for byte in value {
+        if byte == 9 { continue; }
+        if byte < 32 || byte == 127 { return false; }
+    }
+    return true;
+}
+
+func is_ows(byte u8) bool { return byte == 32 || byte == 9; }
+
+func trim_ows_span(value Vec[u8]) Span {
+    var start usize = 0;
+    var end = vec.len(value);
+    for start < end && is_ows(value[start]) { start += 1; }
+    for end > start && is_ows(value[end-1]) { end -= 1; }
+    return Span(start:start,end:end);
+}
+
+func find_byte_from(data Vec[u8], byte u8, start usize) Found {
+    var index = start;
+    for index < vec.len(data) {
+        if data[index] == byte { return Found(found:true,index:index); }
+        index += 1;
+    }
+    return Found(found:false,index:0);
+}
+
+func find_crlf(data Vec[u8], start usize) Found {
+    var index = start;
+    for index + 1 < vec.len(data) {
+        if data[index] == 13 && data[index+1] == 10 {
+            return Found(found:true,index:index);
+        }
+        index += 1;
+    }
+    return Found(found:false,index:0);
+}
+
+func find_head_end_from(data Vec[u8], start usize, limit usize) Found {
+    let length = vec.len(data);
+    var index = start;
+    for index + 3 < length && index + 4 <= limit {
+        if data[index] == 13 && data[index+1] == 10 &&
+           data[index+2] == 13 && data[index+3] == 10 {
+            return Found(found:true,index:index+4);
+        }
+        index += 1;
+    }
+    return Found(found:false,index:0);
+}
+
+func decode_bytes(value Vec[u8], failure Error) string throws Error {
+    try { return text.from_bytes(value); }
+    catch error text.Error { throw failure; }
+}
+
+func parse_header_line(line Vec[u8]) Header throws Error {
+    if vec.len(line) == 0 { throw Error.InvalidHeaderLine; }
+    let first = line[0];
+    if first == 32 || first == 9 { throw Error.ObsoleteLineFolding; }
+    let colon = find_byte_from(line,58,0);
+    if !colon.found { throw Error.InvalidHeaderLine; }
+    let name_bytes = line[:colon.index];
+    if !valid_token_bytes(name_bytes) { throw Error.InvalidHeaderName; }
+    let value_span = trim_ows_span(line[colon.index+1:]);
+    let value = line[colon.index+1+value_span.start:colon.index+1+value_span.end];
+    if !valid_field_bytes(value) { throw Error.InvalidHeaderValue; }
+    let name = decode_bytes(name_bytes,Error.InvalidHeaderName);
+    return Header(name:name,value:value);
+}
+
+func parse_header_block(data Vec[u8], head_end usize, limits Limits) HeaderBlock throws Error {
+    let first = find_crlf(data,0);
+    if !first.found || first.index + 2 > head_end { throw Error.InvalidHeaderLine; }
+    let headers = vec.empty[Header]();
+    var cursor = first.index + 2;
+    let header_end = head_end - 2;
+    for cursor < header_end {
+        let line = find_crlf(data,cursor);
+        if !line.found || line.index + 2 > header_end { throw Error.InvalidHeaderLine; }
+        let item = parse_header_line(data[cursor:line.index]);
+        if vec.len(headers) >= limits.header_count { throw Error.TooManyHeaders; }
+        vec.push(headers,item);
+        cursor = line.index + 2;
+    }
+    if cursor != header_end { throw Error.InvalidHeaderLine; }
+    return HeaderBlock(headers:headers,body_start:head_end);
+}
+
+func parse_version(value Vec[u8]) string throws Error {
+    if bytes_equal_literal(value,"HTTP/1.1") { return "HTTP/1.1"; }
+    if bytes_equal_literal(value,"HTTP/1.0") { return "HTTP/1.0"; }
+    throw Error.UnsupportedVersion;
+}
+
+func parse_request_line(line Vec[u8]) RequestLine throws Error {
+    var spaces usize = 0;
+    for byte in line { if byte == 32 { spaces += 1; } }
+    if spaces != 2 { throw Error.InvalidRequestLine; }
+    let first = find_byte_from(line,32,0);
+    let second = find_byte_from(line,32,first.index+1);
+    if !first.found || !second.found || first.index == 0 || second.index == first.index+1 {
+        throw Error.InvalidRequestLine;
+    }
+    if second.index + 1 >= vec.len(line) { throw Error.InvalidRequestLine; }
+    let method_bytes = line[:first.index];
+    let target_bytes = line[first.index+1:second.index];
+    let version_bytes = line[second.index+1:];
+    if !valid_token_bytes(method_bytes) { throw Error.InvalidMethod; }
+    if vec.len(target_bytes) == 0 { throw Error.InvalidRequestLine; }
+    for byte in target_bytes {
+        if byte <= 32 || byte == 127 { throw Error.InvalidTarget; }
+    }
+    let method = decode_bytes(method_bytes,Error.InvalidMethod);
+    let target = decode_bytes(target_bytes,Error.InvalidTarget);
+    let version = parse_version(version_bytes);
+    return RequestLine(method:method,target:target,version:version);
+}
+
+func parse_status_code(value Vec[u8]) i32 throws Error {
+    if vec.len(value) != 3 { throw Error.InvalidStatusLine; }
+    let first = value[0];
+    let second = value[1];
+    let third = value[2];
+    if first < 48 || first > 57 || second < 48 || second > 57 || third < 48 || third > 57 {
+        throw Error.InvalidStatusLine;
+    }
+    let status = i32(first-48)*100 + i32(second-48)*10 + i32(third-48);
+    if status < 100 || status > 599 { throw Error.InvalidStatus; }
+    return status;
+}
+
+func parse_status_line(line Vec[u8]) StatusLine throws Error {
+    let first = find_byte_from(line,32,0);
+    if !first.found || first.index == 0 { throw Error.InvalidStatusLine; }
+    let second = find_byte_from(line,32,first.index+1);
+    if !second.found || second.index == first.index+1 { throw Error.InvalidStatusLine; }
+    let version = parse_version(line[:first.index]);
+    let status = parse_status_code(line[first.index+1:second.index]);
+    let reason = line[second.index+1:];
+    if !valid_field_bytes(reason) { throw Error.InvalidReason; }
+    return StatusLine(version:version,status:status,reason:reason);
+}
+
+func all_digits(value Vec[u8], start usize, end usize) bool {
+    if start >= end { return false; }
+    for var index usize = start; index < end; index += 1 {
+        if value[index] < 48 || value[index] > 57 { return false; }
+    }
+    return true;
+}
+
+// Host follows URI syntax; DNS lookup and socket port ranges are separate.
+func valid_port_bytes(value Vec[u8], start usize, end usize) bool {
+    if start == end { return true; }
+    return all_digits(value,start,end);
+}
+
+func uri_unreserved(byte u8) bool {
+    return (byte >= 48 && byte <= 57) || (byte >= 65 && byte <= 90) ||
+        (byte >= 97 && byte <= 122) || byte == 45 || byte == 46 || byte == 95 || byte == 126;
+}
+func uri_subdelim(byte u8) bool {
+    return byte == 33 || byte == 36 || byte == 38 || byte == 39 || byte == 40 ||
+        byte == 41 || byte == 42 || byte == 43 || byte == 44 || byte == 59 || byte == 61;
+}
+func valid_reg_name(value Vec[u8]) bool {
+    var index usize = 0;
+    for index < vec.len(value) {
+        let byte = value[index];
+        if byte == 37 {
+            if vec.len(value)-index < 3 || !is_hex_digit(value[index+1]) ||
+               !is_hex_digit(value[index+2]) { return false; }
+            index += 3;
+        } else {
+            if !uri_unreserved(byte) && !uri_subdelim(byte) { return false; }
+            index += 1;
+        }
+    }
+    return true;
+}
+func valid_ip_literal(value Vec[u8]) bool {
+    if vec.len(value) == 0 { return false; }
+    if value[0] == 118 || value[0] == 86 {
+        var index usize = 1;
+        for index < vec.len(value) && is_hex_digit(value[index]) { index += 1; }
+        if index == 1 || index+1 >= vec.len(value) || value[index] != 46 { return false; }
+        index += 1;
+        for index < vec.len(value) {
+            let byte = value[index];
+            if !uri_unreserved(byte) && !uri_subdelim(byte) && byte != 58 { return false; }
+            index += 1;
+        }
+        return true;
+    }
+    var address = "";
+    try { address = text.from_bytes(value); }
+    catch error text.Error { return false; }
+    try { let ignored = net.inet_pton(net.AF_INET6,address); }
+    catch error os.Error { return false; }
+    return true;
+}
+
+func valid_host(value Vec[u8]) bool {
+    if vec.len(value) == 0 { return true; }
+    if value[0] == 91 {
+        let close = find_byte_from(value,93,1);
+        if !close.found || close.index == 1 { return false; }
+        if !valid_ip_literal(value[1:close.index]) { return false; }
+        if close.index + 1 == vec.len(value) { return true; }
+        if value[close.index+1] != 58 { return false; }
+        return valid_port_bytes(value,close.index+2,vec.len(value));
+    }
+    let colon = find_byte_from(value,58,0);
+    var host_end = vec.len(value);
+    if colon.found {
+        host_end = colon.index;
+        if !valid_port_bytes(value,colon.index+1,vec.len(value)) { return false; }
+    }
+    let host = value[:host_end];
+    if vec.len(host) == 0 { return false; }
+    return valid_reg_name(host);
+}
+
+func validate_host(headers Vec[Header], version string) throws Error {
+    let hosts = header_values(headers,"Host");
+    if vec.len(hosts) == 0 {
+        if version == "HTTP/1.1" { throw Error.MissingHost; }
+        return;
+    }
+    if vec.len(hosts) > 1 { throw Error.DuplicateHost; }
+    if !valid_host(hosts[0]) { throw Error.InvalidHost; }
+}
+
+func parse_request_head(data Vec[u8], head_end usize, limits Limits) RequestHead throws Error {
+    let first = find_crlf(data,0);
+    if !first.found || first.index + 2 > head_end { throw Error.InvalidRequestLine; }
+    let line = parse_request_line(data[:first.index]);
+    let block = parse_header_block(data,head_end,limits);
+    validate_host(block.headers,line.version);
+    return RequestHead(
+        method:line.method,
+        target:line.target,
+        version:line.version,
+        headers:block.headers,
+        body_start:block.body_start);
+}
+
+func parse_response_head(data Vec[u8], head_end usize, limits Limits) ResponseHead throws Error {
+    let first = find_crlf(data,0);
+    if !first.found || first.index + 2 > head_end { throw Error.InvalidStatusLine; }
+    let line = parse_status_line(data[:first.index]);
+    let block = parse_header_block(data,head_end,limits);
+    return ResponseHead(
+        version:line.version,
+        status:line.status,
+        reason:line.reason,
+        headers:block.headers,
+        body_start:block.body_start);
+}
+
+func parse_decimal_range(value Vec[u8], start usize, end usize) u64 throws Error {
+    if start >= end { throw Error.InvalidContentLength; }
+    var number u64 = 0;
+    for var index usize = start; index < end; index += 1 {
+        let byte = value[index];
+        if byte < 48 || byte > 57 { throw Error.InvalidContentLength; }
+        let digit = u64(byte - 48);
+        if number > (U64_MAX - digit) / 10 { throw Error.LengthOverflow; }
+        number = number * 10 + digit;
+    }
+    return number;
+}
+
+func parse_content_length(values Vec[Vec[u8]], maximum u64) u64 throws Error {
+    var selected u64 = 0;
+    var have = false;
+    for value in values {
+        var start usize = 0;
+        for var index usize = 0; index <= vec.len(value); index += 1 {
+            if index == vec.len(value) || value[index] == 44 {
+                var begin = start;
+                var end = index;
+                for begin < end && is_ows(value[begin]) { begin += 1; }
+                for end > begin && is_ows(value[end-1]) { end -= 1; }
+                if begin == end { throw Error.InvalidContentLength; }
+                let number = parse_decimal_range(value,begin,end);
+                if have && number != selected { throw Error.ConflictingContentLength; }
+                selected = number;
+                have = true;
+                start = index + 1;
+            }
+        }
+    }
+    if !have { throw Error.InvalidContentLength; }
+    if selected > maximum { throw Error.BodyTooLarge; }
+    return selected;
+}
+
+func validate_transfer_encoding(values Vec[Vec[u8]]) throws Error {
+    var count usize = 0;
+    for value in values {
+        var start usize = 0;
+        for var index usize = 0; index <= vec.len(value); index += 1 {
+            if index == vec.len(value) || value[index] == 44 {
+                var begin = start;
+                var end = index;
+                for begin < end && is_ows(value[begin]) { begin += 1; }
+                for end > begin && is_ows(value[end-1]) { end -= 1; }
+                if begin == end { throw Error.UnsupportedTransferEncoding; }
+                if !ascii_range_equal_literal(value,begin,end,"chunked") {
+                    throw Error.UnsupportedTransferEncoding;
+                }
+                count += 1;
+                if count > 1 { throw Error.UnsupportedTransferEncoding; }
+                start = index + 1;
+            }
+        }
+    }
+    if count != 1 { throw Error.UnsupportedTransferEncoding; }
+}
+
+func body_permitted(status i32, request_method string) bool {
+    if request_method == "HEAD" { return false; }
+    if status >= 100 && status < 200 { return false; }
+    if status == 204 || status == 304 { return false; }
+    return true;
+}
+
+func parse_framing(
+    headers Vec[Header],
+    limits Limits,
+    is_response bool,
+    status i32,
+    request_method string) Framing throws Error {
+    let transfer = header_values(headers,"Transfer-Encoding");
+    let content_lengths = header_values(headers,"Content-Length");
+    let has_transfer = vec.len(transfer) != 0;
+    let has_length = vec.len(content_lengths) != 0;
+    if has_transfer && has_length { throw Error.TransferEncodingWithContentLength; }
+    if has_transfer { validate_transfer_encoding(transfer); }
+    var length_value u64 = 0;
+    if has_length { length_value = parse_content_length(content_lengths,U64_MAX); }
+    if is_response {
+        if status >= 100 && status < 200 || status == 204 {
+            if has_transfer || has_length { throw Error.UnexpectedFraming; }
+            return Framing(kind:FRAMING_NONE,length:0);
+        }
+        if !body_permitted(status,request_method) {
+            return Framing(kind:FRAMING_NONE,length:0);
+        }
+        if has_transfer { return Framing(kind:FRAMING_CHUNKED,length:0); }
+        if has_length {
+            if length_value > u64(limits.body_bytes) { throw Error.BodyTooLarge; }
+            return Framing(kind:FRAMING_LENGTH,length:usize(length_value));
+        }
+        return Framing(kind:FRAMING_CLOSE,length:0);
+    }
+    if has_transfer { return Framing(kind:FRAMING_CHUNKED,length:0); }
+    if has_length {
+        if length_value > u64(limits.body_bytes) { throw Error.BodyTooLarge; }
+        return Framing(kind:FRAMING_LENGTH,length:usize(length_value));
+    }
+    return Framing(kind:FRAMING_NONE,length:0);
+}
+
+func is_hex_digit(byte u8) bool {
+    return byte >= 48 && byte <= 57 || byte >= 65 && byte <= 70 || byte >= 97 && byte <= 102;
+}
+
+func hex_value(byte u8) u8 {
+    if byte <= 57 { return byte - 48; }
+    if byte <= 70 { return byte - 55; }
+    return byte - 87;
+}
+
+func scan_token(bytes Vec[u8], cursor inout usize) bool {
+    let start = cursor;
+    for cursor < vec.len(bytes) && is_token_byte(bytes[cursor]) { cursor += 1; }
+    return cursor > start;
+}
+
+func scan_quoted(bytes Vec[u8], cursor inout usize) bool {
+    if cursor >= vec.len(bytes) || bytes[cursor] != 34 { return false; }
+    cursor += 1;
+    for cursor < vec.len(bytes) {
+        let byte = bytes[cursor];
+        if byte == 34 {
+            cursor += 1;
+            return true;
+        }
+        if byte == 92 {
+            cursor += 1;
+            if cursor >= vec.len(bytes) { return false; }
+            let escaped = bytes[cursor];
+            if escaped != 9 && (escaped < 32 || escaped == 127) { return false; }
+            cursor += 1;
+            continue;
+        }
+        if byte == 9 || byte == 32 || byte >= 33 && byte != 34 && byte != 92 && byte != 127 {
+            cursor += 1;
+            continue;
+        }
+        return false;
+    }
+    return false;
+}
+
+func valid_chunk_extensions(bytes Vec[u8]) bool {
+    var cursor usize = 0;
+    for cursor < vec.len(bytes) {
+        for cursor < vec.len(bytes) && is_ows(bytes[cursor]) { cursor += 1; }
+        if cursor >= vec.len(bytes) { return true; }
+        if bytes[cursor] != 59 { return false; }
+        cursor += 1;
+        for cursor < vec.len(bytes) && is_ows(bytes[cursor]) { cursor += 1; }
+        if !scan_token(bytes,inout cursor) { return false; }
+        for cursor < vec.len(bytes) && is_ows(bytes[cursor]) { cursor += 1; }
+        if cursor < vec.len(bytes) && bytes[cursor] == 61 {
+            cursor += 1;
+            for cursor < vec.len(bytes) && is_ows(bytes[cursor]) { cursor += 1; }
+            if cursor >= vec.len(bytes) { return false; }
+            if bytes[cursor] == 34 {
+                if !scan_quoted(bytes,inout cursor) { return false; }
+            } else {
+                if !scan_token(bytes,inout cursor) { return false; }
+            }
+            for cursor < vec.len(bytes) && is_ows(bytes[cursor]) { cursor += 1; }
+            if cursor < vec.len(bytes) && bytes[cursor] != 59 { return false; }
+        }
+    }
+    return true;
+}
+
+func parse_chunk_size(line Vec[u8], maximum u64) usize throws Error {
+    let semicolon = find_byte_from(line,59,0);
+    var size_end = vec.len(line);
+    var have_extensions = false;
+    if semicolon.found {
+        size_end = semicolon.index;
+        have_extensions = true;
+    }
+    for size_end > 0 && is_ows(line[size_end-1]) { size_end -= 1; }
+    if size_end == 0 { throw Error.InvalidChunkSize; }
+    if have_extensions && !valid_chunk_extensions(line[semicolon.index:]) {
+        throw Error.InvalidChunkExtension;
+    }
+    var number u64 = 0;
+    for var index usize = 0; index < size_end; index += 1 {
+        let byte = line[index];
+        if !is_hex_digit(byte) { throw Error.InvalidChunkSize; }
+        let digit = u64(hex_value(byte));
+        if number > (U64_MAX - digit) / 16 { throw Error.LengthOverflow; }
+        number = number * 16 + digit;
+    }
+    if number > maximum { throw Error.BodyTooLarge; }
+    return usize(number);
+}
+
+func forbidden_trailer(name string) bool {
+    return name_equal(name,"Content-Length") ||
+        name_equal(name,"Transfer-Encoding") ||
+        name_equal(name,"Host") ||
+        name_equal(name,"Connection") ||
+        name_equal(name,"Trailer") ||
+        name_equal(name,"TE") ||
+        name_equal(name,"Upgrade") ||
+        name_equal(name,"Keep-Alive") ||
+        name_equal(name,"Proxy-Connection");
+}
+
+// Returns 0 when more input is required, and 1 when the terminating trailer
+// line has been consumed. cursor/phase/remaining are advanced only over
+// complete grammar elements.
+func chunk_step(
+    data Vec[u8],
+    cursor inout usize,
+    phase inout i32,
+    remaining inout usize,
+    body Vec[u8],
+    trailers Vec[Header],
+    initial_header_count usize,
+    limits Limits,
+    trailer_start inout usize) i32 throws Error {
+    for true {
+        if phase == CHUNK_SIZE {
+            let line = find_crlf(data,cursor);
+            if !line.found {
+                if vec.len(data) - cursor > MAX_CHUNK_LINE_BYTES { throw Error.ChunkLineTooLong; }
+                return 0;
+            }
+            if line.index - cursor > MAX_CHUNK_LINE_BYTES { throw Error.ChunkLineTooLong; }
+            let maximum = u64(limits.body_bytes - vec.len(body));
+            let size = parse_chunk_size(data[cursor:line.index],maximum);
+            cursor = line.index + 2;
+            if size == 0 {
+                phase = CHUNK_TRAILERS;
+                trailer_start = cursor;
+                continue;
+            }
+            remaining = size;
+            phase = CHUNK_DATA;
+            continue;
+        }
+        if phase == CHUNK_DATA {
+            let available = vec.len(data) - cursor;
+            if available == 0 { return 0; }
+            let take = min_usize(available,remaining);
+            for var index usize = 0; index < take; index += 1 {
+                vec.push(body,data[cursor+index]);
+            }
+            cursor += take;
+            remaining -= take;
+            if remaining != 0 { return 0; }
+            phase = CHUNK_DATA_END;
+            continue;
+        }
+        if phase == CHUNK_DATA_END {
+            if vec.len(data) - cursor < 2 { return 0; }
+            if data[cursor] != 13 || data[cursor+1] != 10 {
+                throw Error.InvalidChunkTerminator;
+            }
+            cursor += 2;
+            phase = CHUNK_SIZE;
+            continue;
+        }
+        if phase == CHUNK_TRAILERS {
+            let line = find_crlf(data,cursor);
+            if !line.found {
+                if vec.len(data) - trailer_start > limits.head_bytes { throw Error.HeadTooLarge; }
+                return 0;
+            }
+            let section_bytes = (line.index + 2) - trailer_start;
+            if section_bytes > limits.head_bytes { throw Error.HeadTooLarge; }
+            if line.index == cursor {
+                cursor = line.index + 2;
+                phase = CHUNK_DONE;
+                return 1;
+            }
+            let item = parse_header_line(data[cursor:line.index]);
+            if forbidden_trailer(item.name) { throw Error.ForbiddenTrailer; }
+            if initial_header_count >= limits.header_count { throw Error.TooManyHeaders; }
+            if vec.len(trailers) >= limits.header_count - initial_header_count {
+                throw Error.TooManyHeaders;
+            }
+            vec.push(trailers,item);
+            cursor = line.index + 2;
+            continue;
+        }
+        return 1;
+    }
+    return 1;
+}
+
+func checked_total(start usize, length usize) usize throws Error {
+    if u64(start) > U64_MAX - u64(length) { throw Error.BodyTooLarge; }
+    return start + length;
+}
+
+pub func parse_request(data Vec[u8]) Request throws Error {
+    return parse_request_limited(data,default_limits());
+}
+
+pub func parse_request_limited(data Vec[u8], limits Limits) Request throws Error {
+    let head = find_head_end_from(data,0,limits.head_bytes);
+    if !head.found {
+        if vec.len(data) >= limits.head_bytes { throw Error.HeadTooLarge; }
+        throw Error.UnexpectedEof;
+    }
+    let parsed = parse_request_head(data,head.index,limits);
+    let framing = parse_framing(parsed.headers,limits,false,0,"");
+    var body = vec.empty[u8]();
+    let trailers = vec.empty[Header]();
+    var used = parsed.body_start;
+    if framing.kind == FRAMING_LENGTH {
+        if vec.len(data) - parsed.body_start < framing.length { throw Error.UnexpectedEof; }
+        let end = checked_total(parsed.body_start,framing.length);
+        body = data[parsed.body_start:end];
+        used = end;
+    } else if framing.kind == FRAMING_CHUNKED {
+        var cursor = parsed.body_start;
+        var phase = CHUNK_SIZE;
+        var remaining usize = 0;
+        var trailer_start = parsed.body_start;
+        for true {
+            let done = chunk_step(
+                data,
+                inout cursor,
+                inout phase,
+                inout remaining,
+                body,
+                trailers,
+                vec.len(parsed.headers),
+                limits,
+                inout trailer_start);
+            if done == 1 { break; }
+            throw Error.UnexpectedEof;
+        }
+        used = cursor;
+    }
+    if used != vec.len(data) { throw Error.TrailingBytes; }
+    return Request(
+        method:parsed.method,
+        target:parsed.target,
+        version:parsed.version,
+        headers:parsed.headers,
+        body:body,
+        trailers:trailers);
+}
+
+pub func parse_response(data Vec[u8], request_method string) Response throws Error {
+    return parse_response_limited(data,request_method,default_limits());
+}
+
+pub func parse_response_limited(
+    data Vec[u8],
+    request_method string,
+    limits Limits) Response throws Error {
+    let head = find_head_end_from(data,0,limits.head_bytes);
+    if !head.found {
+        if vec.len(data) >= limits.head_bytes { throw Error.HeadTooLarge; }
+        throw Error.UnexpectedEof;
+    }
+    let parsed = parse_response_head(data,head.index,limits);
+    let framing = parse_framing(parsed.headers,limits,true,parsed.status,request_method);
+    var body = vec.empty[u8]();
+    let trailers = vec.empty[Header]();
+    var used = parsed.body_start;
+    if framing.kind == FRAMING_LENGTH {
+        if vec.len(data) - parsed.body_start < framing.length { throw Error.UnexpectedEof; }
+        let end = checked_total(parsed.body_start,framing.length);
+        body = data[parsed.body_start:end];
+        used = end;
+    } else if framing.kind == FRAMING_CHUNKED {
+        var cursor = parsed.body_start;
+        var phase = CHUNK_SIZE;
+        var remaining usize = 0;
+        var trailer_start = parsed.body_start;
+        for true {
+            let done = chunk_step(
+                data,
+                inout cursor,
+                inout phase,
+                inout remaining,
+                body,
+                trailers,
+                vec.len(parsed.headers),
+                limits,
+                inout trailer_start);
+            if done == 1 { break; }
+            throw Error.UnexpectedEof;
+        }
+        used = cursor;
+    } else if framing.kind == FRAMING_CLOSE {
+        if vec.len(data) - parsed.body_start > limits.body_bytes { throw Error.BodyTooLarge; }
+        body = data[parsed.body_start:];
+        used = vec.len(data);
+    }
+    if used != vec.len(data) { throw Error.TrailingBytes; }
+    return Response(
+        version:parsed.version,
+        status:parsed.status,
+        reason:parsed.reason,
+        headers:parsed.headers,
+        body:body,
+        trailers:trailers);
+}
+
+func receive_append(reader Reader, wanted usize, eof_ok bool) bool throws Error {
+    var count_request = wanted;
+    if count_request == 0 { count_request = 1; }
+    let temporary = vec.make[u8](count_request,0);
+    for true {
+        var count usize = 0;
+        try {
+            count = net.recv(reader.socket,temporary,count_request,0);
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): continue;
+                default: throw Error.Io(error);
+            }
+        }
+        if count == 0 {
+            if eof_ok { return false; }
+            throw Error.UnexpectedEof;
+        }
+        for var index usize = 0; index < count; index += 1 {
+            vec.push(reader.buffer,temporary[index]);
+        }
+        return true;
+    }
+    return false;
+}
+
+func state_get(reader Reader, index usize) u64 {
+    return reader.state[index];
+}
+
+func state_set(reader Reader, index usize, value u64) {
+    reader.state[index] = value;
+}
+
+func clear_progress(reader Reader) {
+    for var index usize = 0; index < RS_STATE_COUNT; index += 1 {
+        reader.state[index] = 0;
+    }
+    vec.clear(reader.parts);
+    vec.clear(reader.headers);
+    vec.clear(reader.trailers);
+    vec.clear(reader.body);
+    vec.clear(reader.reason);
+}
+
+func begin_message(reader Reader, kind u64) throws Error {
+    let active = state_get(reader,RS_ACTIVE);
+    if active != ACTIVE_NONE {
+        if active != kind { throw Error.ReaderBusy; }
+        return;
+    }
+    clear_progress(reader);
+    state_set(reader,RS_ACTIVE,kind);
+    state_set(reader,RS_STAGE,STAGE_HEAD);
+    state_set(reader,RS_BODY,u64(FRAMING_NONE));
+    return;
+}
+
+func ensure_head_stateful(reader Reader) usize throws Error {
+    for true {
+        let start = usize(state_get(reader,RS_HEAD_SCAN));
+        let found = find_head_end_from(reader.buffer,start,reader.limits.head_bytes);
+        if found.found {
+            state_set(reader,RS_HEAD_SCAN,0);
+            return found.index;
+        }
+        let length = vec.len(reader.buffer);
+        if length >= reader.limits.head_bytes { throw Error.HeadTooLarge; }
+        var next_scan usize = 0;
+        if length > 3 { next_scan = length - 3; }
+        state_set(reader,RS_HEAD_SCAN,u64(next_scan));
+        let room = reader.limits.head_bytes - length;
+        receive_append(reader,min_usize(room,READ_CHUNK),false);
+    }
+    return 0;
+}
+
+func consume(reader Reader, count usize) {
+    if count >= vec.len(reader.buffer) {
+        vec.clear(reader.buffer);
+        return;
+    }
+    let tail = reader.buffer[count:];
+    vec.clear(reader.buffer);
+    vec.reserve(reader.buffer,vec.len(tail));
+    for byte in tail { vec.push(reader.buffer,byte); }
+}
+
+func compact_processed(reader Reader, cursor inout usize, trailer_start inout usize) {
+    if cursor == 0 { return; }
+    if cursor >= vec.len(reader.buffer) {
+        vec.clear(reader.buffer);
+    } else {
+        let tail = reader.buffer[cursor:];
+        vec.clear(reader.buffer);
+        vec.reserve(reader.buffer,vec.len(tail));
+        for byte in tail { vec.push(reader.buffer,byte); }
+    }
+    cursor = 0;
+    trailer_start = 0;
+}
+
+func copy_headers(headers Vec[Header]) Vec[Header] {
+    let out = vec.empty[Header]();
+    for item in headers { vec.push(out,item); }
+    return out;
+}
+
+func copy_bytes(bytes Vec[u8]) Vec[u8] {
+    let out = vec.empty[u8]();
+    for byte in bytes { vec.push(out,byte); }
+    return out;
+}
+
+func finish_message(reader Reader, kind u64) RawMessage {
+    var method = "";
+    var target = "";
+    var version = "";
+    var status i32 = 0;
+    if kind == ACTIVE_REQUEST {
+        method = reader.parts[0];
+        target = reader.parts[1];
+        version = reader.parts[2];
+    } else {
+        version = reader.parts[0];
+        status = i32(state_get(reader,RS_STATUS));
+    }
+    let reason = copy_bytes(reader.reason);
+    let headers = copy_headers(reader.headers);
+    let body = copy_bytes(reader.body);
+    let trailers = copy_headers(reader.trailers);
+    clear_progress(reader);
+    return RawMessage(
+        method:method,
+        target:target,
+        version:version,
+        status:status,
+        reason:reason,
+        headers:headers,
+        body:body,
+        trailers:trailers);
+}
+
+func read_fixed_state(reader Reader) RawMessage throws Error {
+    for true {
+        let remaining = usize(state_get(reader,RS_REMAINING));
+        if remaining == 0 { return finish_message(reader,state_get(reader,RS_ACTIVE)); }
+        if vec.len(reader.buffer) != 0 {
+            let take = min_usize(vec.len(reader.buffer),remaining);
+            for var index usize = 0; index < take; index += 1 {
+                vec.push(reader.body,reader.buffer[index]);
+            }
+            consume(reader,take);
+            state_set(reader,RS_REMAINING,u64(remaining-take));
+            continue;
+        }
+        receive_append(reader,min_usize(remaining,READ_CHUNK),false);
+    }
+    return finish_message(reader,state_get(reader,RS_ACTIVE));
+}
+
+func read_close_state(reader Reader) RawMessage throws Error {
+    for true {
+        let available = vec.len(reader.buffer);
+        if available != 0 {
+            if available > reader.limits.body_bytes - vec.len(reader.body) {
+                throw Error.BodyTooLarge;
+            }
+            for byte in reader.buffer { vec.push(reader.body,byte); }
+            vec.clear(reader.buffer);
+        }
+        if vec.len(reader.body) > reader.limits.body_bytes { throw Error.BodyTooLarge; }
+        let more = receive_append(reader,READ_CHUNK,true);
+        if !more { return finish_message(reader,state_get(reader,RS_ACTIVE)); }
+    }
+    return finish_message(reader,state_get(reader,RS_ACTIVE));
+}
+
+func read_chunk_state(reader Reader) RawMessage throws Error {
+    for true {
+        var cursor = usize(state_get(reader,RS_CHUNK_CURSOR));
+        var phase = i32(state_get(reader,RS_CHUNK_PHASE));
+        var remaining = usize(state_get(reader,RS_REMAINING));
+        var trailer_start = usize(state_get(reader,RS_CHUNK_TRAILER_START));
+        let done = chunk_step(
+            reader.buffer,
+            inout cursor,
+            inout phase,
+            inout remaining,
+            reader.body,
+            reader.trailers,
+            vec.len(reader.headers),
+            reader.limits,
+            inout trailer_start);
+        state_set(reader,RS_CHUNK_CURSOR,u64(cursor));
+        state_set(reader,RS_CHUNK_PHASE,u64(phase));
+        state_set(reader,RS_REMAINING,u64(remaining));
+        state_set(reader,RS_CHUNK_TRAILER_START,u64(trailer_start));
+        if done == 1 {
+            consume(reader,cursor);
+            return finish_message(reader,state_get(reader,RS_ACTIVE));
+        }
+        if phase != CHUNK_TRAILERS && phase != CHUNK_DONE {
+            compact_processed(reader,inout cursor,inout trailer_start);
+            state_set(reader,RS_CHUNK_CURSOR,0);
+            state_set(reader,RS_CHUNK_TRAILER_START,0);
+        }
+        receive_append(reader,READ_CHUNK,false);
+    }
+    return finish_message(reader,state_get(reader,RS_ACTIVE));
+}
+
+func read_raw(reader Reader, kind u64, request_method string) RawMessage throws Error {
+    begin_message(reader,kind);
+    if state_get(reader,RS_STAGE) == STAGE_HEAD {
+        let head_end = ensure_head_stateful(reader);
+        if kind == ACTIVE_REQUEST {
+            let parsed = parse_request_head(reader.buffer,head_end,reader.limits);
+            let framing = parse_framing(parsed.headers,reader.limits,false,0,"");
+            vec.push(reader.parts,parsed.method);
+            vec.push(reader.parts,parsed.target);
+            vec.push(reader.parts,parsed.version);
+            for item in parsed.headers { vec.push(reader.headers,item); }
+            state_set(reader,RS_BODY,u64(framing.kind));
+            state_set(reader,RS_REMAINING,u64(framing.length));
+            state_set(reader,RS_CHUNK_PHASE,u64(CHUNK_SIZE));
+            state_set(reader,RS_CHUNK_CURSOR,0);
+            state_set(reader,RS_CHUNK_TRAILER_START,0);
+            consume(reader,head_end);
+        } else {
+            let parsed = parse_response_head(reader.buffer,head_end,reader.limits);
+            let framing = parse_framing(
+                parsed.headers,
+                reader.limits,
+                true,
+                parsed.status,
+                request_method);
+            vec.push(reader.parts,parsed.version);
+            for byte in parsed.reason { vec.push(reader.reason,byte); }
+            for item in parsed.headers { vec.push(reader.headers,item); }
+            state_set(reader,RS_STATUS,u64(parsed.status));
+            state_set(reader,RS_BODY,u64(framing.kind));
+            state_set(reader,RS_REMAINING,u64(framing.length));
+            state_set(reader,RS_CHUNK_PHASE,u64(CHUNK_SIZE));
+            state_set(reader,RS_CHUNK_CURSOR,0);
+            state_set(reader,RS_CHUNK_TRAILER_START,0);
+            consume(reader,head_end);
+        }
+        state_set(reader,RS_STAGE,STAGE_BODY);
+        state_set(reader,RS_HEAD_SCAN,0);
+    }
+    let body_kind = i32(state_get(reader,RS_BODY));
+    if body_kind == FRAMING_NONE { return finish_message(reader,kind); }
+    if body_kind == FRAMING_LENGTH { return read_fixed_state(reader); }
+    if body_kind == FRAMING_CHUNKED { return read_chunk_state(reader); }
+    if body_kind == FRAMING_CLOSE { return read_close_state(reader); }
+    throw Error.UnexpectedFraming;
+}
+
+pub func read_request(reader Reader) Request throws Error {
+    let raw = read_raw(reader,ACTIVE_REQUEST,"");
+    return Request(
+        method:raw.method,
+        target:raw.target,
+        version:raw.version,
+        headers:raw.headers,
+        body:raw.body,
+        trailers:raw.trailers);
+}
+
+pub func read_response(reader Reader, request_method string) Response throws Error {
+    let raw = read_raw(reader,ACTIVE_RESPONSE,request_method);
+    return Response(
+        version:raw.version,
+        status:raw.status,
+        reason:raw.reason,
+        headers:raw.headers,
+        body:raw.body,
+        trailers:raw.trailers);
+}
+
+func append_text(out Vec[u8], value string) {
+    let bytes = text.bytes(value);
+    for byte in bytes { vec.push(out,byte); }
+}
+
+func append_header_bytes(out Vec[u8], value Vec[u8]) {
+    for byte in value { vec.push(out,byte); }
+}
+
+func append_headers(
+    out Vec[u8],
+    headers Vec[Header],
+    drop_framing bool) throws Error {
+    for item in headers {
+        if !valid_token(item.name) { throw Error.InvalidHeaderName; }
+        if !valid_field_bytes(item.value) { throw Error.InvalidHeaderValue; }
+        if drop_framing &&
+           (name_equal(item.name,"Content-Length") || name_equal(item.name,"Transfer-Encoding")) {
+            continue;
+        }
+        append_text(out,item.name+": ");
+        append_header_bytes(out,item.value);
+        append_text(out,"\r\n");
+    }
+}
+
+func validate_version(version string) throws Error {
+    if version != "HTTP/1.1" && version != "HTTP/1.0" { throw Error.UnsupportedVersion; }
+}
+
+pub func encode_request(request Request) Vec[u8] throws Error {
+    validate_version(request.version);
+    if !valid_token(request.method) { throw Error.InvalidMethod; }
+    if !valid_target(request.target) { throw Error.InvalidTarget; }
+    if vec.len(request.trailers) != 0 { throw Error.UnsupportedTrailers; }
+    validate_host(request.headers,request.version);
+    let transfer = header_values(request.headers,"Transfer-Encoding");
+    if vec.len(transfer) != 0 { throw Error.UnsupportedTransferEncoding; }
+    let lengths = header_values(request.headers,"Content-Length");
+    if vec.len(lengths) != 0 {
+        let supplied = parse_content_length(lengths,U64_MAX);
+        if supplied != u64(vec.len(request.body)) { throw Error.InvalidContentLength; }
+    }
+    let out = vec.empty[u8]();
+    append_text(out,request.method+" "+request.target+" "+request.version+"\r\n");
+    append_headers(out,request.headers,true);
+    append_text(out,"Content-Length: "+strconv.format_u64(u64(vec.len(request.body)))+"\r\n");
+    append_text(out,"\r\n");
+    for byte in request.body { vec.push(out,byte); }
+    return out;
+}
+
+pub func encode_response(response Response, request_method string) Vec[u8] throws Error {
+    validate_version(response.version);
+    if response.status < 100 || response.status > 599 { throw Error.InvalidStatus; }
+    if !valid_field_bytes(response.reason) { throw Error.InvalidReason; }
+    if vec.len(response.trailers) != 0 { throw Error.UnsupportedTrailers; }
+    let no_body = !body_permitted(response.status,request_method);
+    if no_body && vec.len(response.body) != 0 { throw Error.UnexpectedBody; }
+    let transfer = header_values(response.headers,"Transfer-Encoding");
+    let lengths = header_values(response.headers,"Content-Length");
+    let has_transfer = vec.len(transfer) != 0;
+    let has_length = vec.len(lengths) != 0;
+    if response.status >= 100 && response.status < 200 || response.status == 204 {
+        if has_transfer || has_length { throw Error.UnexpectedFraming; }
+    } else if has_transfer {
+        throw Error.UnsupportedTransferEncoding;
+    }
+    var emit_length = false;
+    var content_length u64 = 0;
+    if no_body {
+        if has_length {
+            content_length = parse_content_length(lengths,U64_MAX);
+            emit_length = true;
+        }
+    } else {
+        if has_length {
+            content_length = parse_content_length(lengths,U64_MAX);
+            if content_length != u64(vec.len(response.body)) { throw Error.InvalidContentLength; }
+        } else {
+            content_length = u64(vec.len(response.body));
+        }
+        emit_length = true;
+    }
+    let out = vec.empty[u8]();
+    append_text(out,response.version+" "+
+        strconv.format_i64(i64(response.status))+" ");
+    append_header_bytes(out,response.reason);
+    append_text(out,"\r\n");
+    append_headers(out,response.headers,true);
+    if emit_length {
+        append_text(out,"Content-Length: "+strconv.format_u64(content_length)+"\r\n");
+    }
+    append_text(out,"\r\n");
+    for byte in response.body { vec.push(out,byte); }
+    return out;
+}
+
+pub func write_request(socket net.Socket, request Request) throws Error {
+    let data = encode_request(request);
+    try {
+        net.send_all(socket,data,0);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+}
+
+pub func write_response(socket net.Socket, response Response, request_method string) throws Error {
+    let data = encode_response(response,request_method);
+    try {
+        net.send_all(socket,data,0);
+    } catch error os.Error {
+        throw Error.Io(error);
+    }
+}

@@ -1,0 +1,30 @@
+// Cooperative cancellation shared by copied Tokens. request is idempotent and
+// never interrupts a running thread; code that can be cancelled checks the
+// token at safe points and decides when to return.
+package cancel;
+
+import "std/sync" as sync;
+
+pub enum Error {
+    Cancelled;
+}
+
+pub struct Token {
+    state sync.AtomicI64;
+}
+
+pub func new() Token {
+    return Token(state: sync.atomic_i64(0));
+}
+
+pub func request(token Token) {
+    sync.store(token.state, 1);
+}
+
+pub func is_cancelled(token Token) bool {
+    return sync.load(token.state) != 0;
+}
+
+pub func check(token Token) throws Error {
+    if is_cancelled(token) { throw Error.Cancelled; }
+}
