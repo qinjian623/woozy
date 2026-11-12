@@ -1,0 +1,24 @@
+package app;
+
+import "std/os" as os;
+import "std/thread" as thread;
+
+struct Node {
+    value i64;
+    next Vec[Node];
+}
+
+func read_ring(ring Vec[Node]) i64 {
+    return ring[0].next[0].value;
+}
+
+func main() i32 throws os.Error {
+    var ring Vec[Node] = [Node(value: 1, next: [])];
+    ring[0] = Node(value: 7, next: ring);
+    let handle = thread.spawn[Vec[Node]](read_ring, ring);
+    let result = thread.join(handle);
+    if result != 7 {
+        return 1;
+    }
+    return 0;
+}

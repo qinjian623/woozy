@@ -16,6 +16,13 @@
   std::map<std::string, llvm::GlobalVariable *> gc_ops_globals;
   llvm::StructType *gc_ops_record = nullptr;
   llvm::Function *gc_invalidate_callback = nullptr;
+  // True only when this compiled module can actually register a GC graph
+  // node. The main wrapper uses it to skip lang_gc_program_init_v1 (and its
+  // world/registry allocation) for pure string/scalar-Vec programs. Every GC
+  // registration entry point must route through gc_register_object or set this
+  // flag explicitly. A future Task FrameGcOps generator that emits
+  // lang_gc_program_register_v1 must set gc_program_required too.
+  bool gc_program_required = false;
 
   bool has_strong_edge(TypeId id) {
     std::set<uint64_t> active;
@@ -280,6 +287,7 @@
     return global;
   }
   void gc_register_object(llvm::Value *object, llvm::GlobalVariable *ops) {
+    gc_program_required = true;
     auto callee = module.getOrInsertFunction(
         "lang_gc_program_register_v1",
         llvm::FunctionType::get(builder.getInt1Ty(),

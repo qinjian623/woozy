@@ -1,0 +1,22 @@
+package app;
+
+struct Scalar {
+    left i64;
+    right f64;
+}
+
+func main() i32 {
+    var bytes Vec[u8] = [65, 66, 67];
+    var scalars Vec[Scalar] = [Scalar(left: 1, right: 2.5)];
+    let text = "abc";
+    if bytes[0] != 65 || bytes[2] != 67 {
+        return 1;
+    }
+    if text != "abc" {
+        return 2;
+    }
+    if scalars[0].left != 1 || scalars[0].right != 2.5 {
+        return 3;
+    }
+    return 0;
+}

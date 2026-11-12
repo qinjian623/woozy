@@ -495,3 +495,5 @@ if(LANG_PYTHON312)
     --root ${LANG_SOURCE_ROOT} --python ${LANG_PYTHON312})
   set_tests_properties(values.unicode_source PROPERTIES TIMEOUT 300)
 endif()
+
+add_subdirectory(gc_activation)

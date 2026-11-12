@@ -2432,7 +2432,14 @@ public:
     auto finish = module.getOrInsertFunction(
         "lang_gc_program_finish_v1",
         llvm::FunctionType::get(builder.getInt64Ty(), {}, false));
-    auto *init_status = builder.CreateCall(init, {});
+    // A module with no graph registration cannot use cycle collection, so do
+    // not activate the GC world or allocate its thread metadata. Keep the
+    // declaration and finish call for existing IR consumers; the disabled
+    // finish path is a no-op. Graph-capable modules still use the full
+    // lifecycle below and keep all safepoints/critical regions unchanged.
+    llvm::Value *init_status = builder.getInt64(0);
+    if (gc_program_required)
+      init_status = builder.CreateCall(init, {});
     auto *init_failed =
         llvm::BasicBlock::Create(context, "main.gc.init_failed", main);
     auto *run = llvm::BasicBlock::Create(context, "main.gc.run", main);
