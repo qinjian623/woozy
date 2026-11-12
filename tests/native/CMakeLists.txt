@@ -188,6 +188,13 @@ add_test(NAME native.gc_program
     "GC_PROGRAM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}/gc-program-results"
     bash ${CMAKE_CURRENT_LIST_DIR}/gc_program/run_all.sh)
 set_tests_properties(native.gc_program PROPERTIES TIMEOUT 600)
+add_test(NAME native.vec_graph_publish
+  COMMAND ${CMAKE_COMMAND} -E env
+    "CXX=${LLVM_TOOLS_BINARY_DIR}/clang++"
+    "LANG_LLVM_ROOT=${LLVM_TOOLS_BINARY_DIR}/.."
+    "VEC_GRAPH_PUBLISH_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}/vec-graph-results"
+    bash ${CMAKE_CURRENT_LIST_DIR}/vec_graph_publish/run_all.sh)
+set_tests_properties(native.vec_graph_publish PROPERTIES TIMEOUT 300)
 add_executable(lang_native_startup_test startup_test.cpp)
 target_compile_features(lang_native_startup_test PRIVATE cxx_std_20)
 add_test(NAME native.startup COMMAND lang_native_startup_test)

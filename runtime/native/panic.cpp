@@ -189,6 +189,43 @@ uint64_t grown_capacity(uint64_t current, uint64_t minimum) noexcept {
   return capacity;
 }
 
+bool has_owner_ops(const LangVec *v) noexcept {
+  return v->copy != nullptr || v->drop != nullptr;
+}
+
+// Small stage for one owning element or a short removed prefix. Avoiding the
+// allocator for the common small case matters because existing release and
+// set paths are allocation-counted by the Vec regression tests. A larger
+// prefix uses one allocator block, never one allocation per element.
+constexpr uint64_t kInlineStageBytes = 64;
+class StageBuffer {
+ public:
+  StageBuffer() noexcept = default;
+  StageBuffer(const StageBuffer &) = delete;
+  StageBuffer &operator=(const StageBuffer &) = delete;
+  ~StageBuffer() noexcept {
+    if (heap_) lang_free_v1(heap_);
+  }
+
+  bool reserve(uint64_t bytes) noexcept {
+    if (bytes <= kInlineStageBytes) {
+      data_ = inline_bytes_;
+      return true;
+    }
+    heap_ = lang_alloc_v1(bytes, 16);
+    if (!heap_) return false;
+    data_ = static_cast<unsigned char *>(heap_);
+    return true;
+  }
+
+  unsigned char *data() const noexcept { return data_; }
+
+ private:
+  alignas(16) unsigned char inline_bytes_[kInlineStageBytes] = {};
+  void *heap_ = nullptr;
+  unsigned char *data_ = inline_bytes_;
+};
+
 // Caller has already rejected active iterations and checked for overflow.
 void grow_storage(LangVec *v, uint64_t minimum) noexcept {
   const uint64_t capacity = grown_capacity(v->capacity, minimum);
@@ -200,11 +237,23 @@ void grow_storage(LangVec *v, uint64_t minimum) noexcept {
         checked_payload_bytes(v->initialized, v->stride);
     copy_bytes(data, v->data, initialized_bytes);
   }
-  // The inline allocation belongs to the descriptor and stays until final
-  // release. Only an earlier separate buffer is freed here.
-  if (separate_payload(v)) lang_free_v1(v->data);
-  v->data = data;
-  v->capacity = capacity;
+  // Publish the complete new storage before releasing the old separate buffer.
+  // An owning Vec uses a short graph-critical window so a pending stop cannot
+  // park between the payload swap and its publication. The inline allocation
+  // belongs to the descriptor and stays until final release. Trivial numeric
+  // Vecs keep the cheap path with no critical region or gettid.
+  const bool old_separate = separate_payload(v);
+  void *old_data = v->data;
+  if (has_owner_ops(v)) {
+    lang::native::gc_program::CriticalGuard guard;
+    v->data = data;
+    v->capacity = capacity;
+    if (old_separate) lang_free_v1(old_data);
+  } else {
+    v->data = data;
+    v->capacity = capacity;
+    if (old_separate) lang_free_v1(old_data);
+  }
 }
 
 // Preserve an argument that points into storage which may be reallocated.
@@ -216,11 +265,26 @@ void *protect_alias(LangVec *v, const void *value) noexcept {
   return scratch;
 }
 
-void drop_initialized_to(LangVec *v, uint64_t length) noexcept {
-  while (v->initialized > length) {
-    const uint64_t index = --v->initialized;
-    if (v->drop) v->drop(element(v, index));
-  }
+// Stage removed owning values by moving their bytes into independent storage.
+// The caller publishes the new length/initialized prefix first, then invokes
+// drop callbacks outside any graph-critical region. Keeping the removed values
+// in the stage means a destructor may re-enter the same Vec (including a
+// structural push) without invalidating the remaining owners.
+uint64_t stage_prefix(LangVec *v, uint64_t keep, StageBuffer &stage) noexcept {
+  const uint64_t count = v->initialized > keep ? v->initialized - keep : 0;
+  if (!count || !v->drop) return count;
+  const uint64_t bytes = checked_payload_bytes(count, v->stride);
+  if (!stage.reserve(bytes)) vec_panic(5);
+  for (uint64_t index = 0; index < count; ++index)
+    copy_bytes(stage.data() + index * v->stride,
+               element(v, keep + index), v->stride);
+  return count;
+}
+
+void drop_staged(LangVec *v, const StageBuffer &stage, uint64_t count) noexcept {
+  if (!v->drop) return;
+  for (uint64_t index = count; index > 0; --index)
+    v->drop(stage.data() + (index - 1) * v->stride);
 }
 
 }
@@ -282,29 +346,40 @@ extern "C" void lang_vec_release_v1(LangVec *v) noexcept {
   // Detach the canonical slot before payload cleanup and descriptor free; the
   // slot is never read again after this point.
   lang_weak_detach_v1(v->weak_control);
-  if (!v->drop && !lang_vec_observe_v1) {
-    // Trivial elements have no cleanup and no observer needs per-element
-    // events.
-    v->initialized = 0;
-  } else {
-    while (v->initialized) {
-      auto i = --v->initialized;
-      observe(4, v, i);
-      if (v->drop) v->drop(element(v, i));
+  // Final cleanup publishes an empty descriptor and moves the old payload out
+  // before any arbitrary element drop can re-enter Woozy. The old storage is
+  // kept alive until the loop finishes, so a drop callback still sees a valid
+  // object header and a stable element address. Weak is already closed.
+  const bool old_separate = separate_payload(v);
+  unsigned char *old_data = static_cast<unsigned char *>(v->data);
+  const uint64_t old_initialized = v->initialized;
+  const uint64_t old_stride = v->stride;
+  const LangValueOp drop = v->drop;
+  v->length = 0;
+  v->initialized = 0;
+  v->data = nullptr;
+  v->capacity = 0;
+  if (drop || lang_vec_observe_v1) {
+    for (uint64_t index = old_initialized; index > 0; --index) {
+      const uint64_t element_index = index - 1;
+      observe(4, v, element_index);
+      if (drop)
+        drop(old_data + element_index * old_stride);
     }
   }
   observe(5, v);
   // A separate payload, when present, is freed before the descriptor that
   // owns the inline allocation. The inline payload itself is interior storage.
-  if (separate_payload(v)) lang_free_v1(v->data);
+  if (old_separate) lang_free_v1(old_data);
   lang_free_v1(v);
 }
 extern "C" void lang_vec_init_v1(LangVec *v, const void *value) noexcept {
   if (v->initialized >= v->length) vec_panic(4);
-  unsigned char *target = static_cast<unsigned char *>(element(v, v->initialized++));
-  const unsigned char *src = static_cast<const unsigned char *>(value);
-  for (uint64_t i = 0; i < v->stride; ++i)
-    target[i] = src[i];
+  // Copy bytes before publishing the new initialized prefix. A Vec trace must
+  // never observe a slot whose element bytes are not yet complete.
+  const uint64_t index = v->initialized;
+  copy_bytes(element(v, index), value, v->stride);
+  v->initialized = index + 1;
 }
 extern "C" void *lang_vec_at_v1(LangVec *v, uint64_t i) noexcept {
   if (i >= v->length || i >= v->initialized) vec_panic(4);
@@ -312,21 +387,69 @@ extern "C" void *lang_vec_at_v1(LangVec *v, uint64_t i) noexcept {
 }
 extern "C" void lang_vec_set_v1(LangVec *v, uint64_t i, const void *value) noexcept {
   void *target = lang_vec_at_v1(v, i);
-  if (v->drop) v->drop(target);
-  unsigned char *dst = static_cast<unsigned char *>(target);
-  const unsigned char *src = static_cast<const unsigned char *>(value);
-  for (uint64_t k = 0; k < v->stride; ++k)
-    dst[k] = src[k];
+  if (!has_owner_ops(v)) {
+    // Trivial numeric elements have no callback and no owning edge.
+    copy_bytes(target, value, v->stride);
+    return;
+  }
+  // Set is a transfer of a pre-copied value, including when the caller passes
+  // the destination slot itself after retaining its owner. Do not special-case
+  // aliases: stage the old owner and the incoming bytes so publishing and the
+  // old-owner drop stay balanced.
+  StageBuffer staged_old;
+  if (v->drop) {
+    if (!staged_old.reserve(v->stride)) vec_panic(5);
+    copy_bytes(staged_old.data(), target, v->stride);
+  }
+  // Keep the incoming bytes valid if they alias storage the publication can
+  // overwrite. This is a byte move, not a second logical copy.
+  void *alias = aliases_payload(v, value) ? protect_alias(v, value) : nullptr;
+  const void *source = alias ? alias : value;
+  {
+    // Short graph-critical publish of the complete new element. No copy or
+    // drop callback runs inside this region.
+    lang::native::gc_program::CriticalGuard guard;
+    copy_bytes(target, source, v->stride);
+  }
+  if (v->drop) v->drop(staged_old.data());
+  if (alias) lang_free_v1(alias);
 }
 extern "C" LangVec *lang_vec_slice_v1(LangVec *v, uint64_t start,
                                       uint64_t end) noexcept {
   if (start > end || end > v->length) vec_panic(9);
   auto *result = lang_vec_new_v1(end-start, v->stride, v->copy, v->drop);
-  for (uint64_t i = start; i < end; ++i) {
-    lang_vec_init_v1(result, lang_vec_at_v1(v, i));
-    if (result->copy)
-      result->copy(element(result, result->initialized - 1));
+  // A copy callback may call arbitrary C retain code. Snapshot and retain each
+  // source element before publishing the complete result prefix after all
+  // callback work. Pin the source only when that callback exists, so a
+  // structural re-entry cannot relocate the source slots underneath it.
+  // Trivial numeric slices keep the cheap path with no pin and no gettid.
+  bool pinned = false;
+  if (v->copy) {
+    (void)lang_vec_begin_v1(v);
+    pinned = true;
   }
+  // Snapshot one complete element before each copy callback. A callback may
+  // legally set the source slot to a different ARC object; the result must own
+  // exactly the retained raw snapshot, never a later re-read of the source.
+  StageBuffer snapshot;
+  if (result->copy && !snapshot.reserve(v->stride)) vec_panic(5);
+  for (uint64_t i = start; i < end; ++i) {
+    void *source = lang_vec_at_v1(v, i);
+    if (result->copy) {
+      copy_bytes(snapshot.data(), source, v->stride);
+      result->copy(snapshot.data());
+      copy_bytes(element(result, i - start), snapshot.data(), v->stride);
+    } else {
+      copy_bytes(element(result, i - start), source, v->stride);
+    }
+  }
+  if (has_owner_ops(result)) {
+    lang::native::gc_program::CriticalGuard guard;
+    result->initialized = end - start;
+  } else {
+    result->initialized = end - start;
+  }
+  if (pinned) lang_vec_end_v1(v);
   return result;
 }
 extern "C" uint64_t lang_vec_begin_v1(LangVec *v) noexcept {
@@ -374,9 +497,16 @@ extern "C" void lang_vec_push_v1(LangVec *v, const void *value) noexcept {
     scratch = protect_alias(v, value);
     grow_storage(v, length);
   }
+  // Push is a transfer of an already pre-copied value: no copy callback.
   copy_bytes(element(v, v->length), scratch ? scratch : value, v->stride);
-  if (v->initialized < length) v->initialized = length;
-  v->length = length;
+  if (has_owner_ops(v)) {
+    lang::native::gc_program::CriticalGuard guard;
+    if (v->initialized < length) v->initialized = length;
+    v->length = length;
+  } else {
+    if (v->initialized < length) v->initialized = length;
+    v->length = length;
+  }
   if (scratch) lang_free_v1(scratch);
 }
 extern "C" bool lang_vec_pop_v1(LangVec *v, void *out) noexcept {
@@ -384,9 +514,17 @@ extern "C" bool lang_vec_pop_v1(LangVec *v, void *out) noexcept {
   if (!v->length) return false;
   if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
   const uint64_t last = v->length - 1;
+  // Pop moves one owner out; it must not drop it. Publish the shorter prefix
+  // before returning the transferred bytes to the caller.
   if (out) copy_bytes(out, element(v, last), v->stride);
-  v->length = last;
-  if (v->initialized > last) v->initialized = last;
+  if (has_owner_ops(v)) {
+    lang::native::gc_program::CriticalGuard guard;
+    v->length = last;
+    if (v->initialized > last) v->initialized = last;
+  } else {
+    v->length = last;
+    if (v->initialized > last) v->initialized = last;
+  }
   return true;
 }
 extern "C" void lang_vec_resize_v1(LangVec *v, uint64_t length,
@@ -395,32 +533,82 @@ extern "C" void lang_vec_resize_v1(LangVec *v, uint64_t length,
   if (length == old_length) return;
   if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
   if (length < old_length) {
-    // fill is intentionally not read while shrinking.
-    drop_initialized_to(v, length);
-    v->length = length;
+    // fill is intentionally not read while shrinking. Move every removed
+    // owner aside, publish the shorter prefix, then drop from the stage so a
+    // destructor can re-enter the same Vec without invalidating later owners.
+    const uint64_t keep = v->initialized > length ? length : v->initialized;
+    StageBuffer stage;
+    const uint64_t removed = stage_prefix(v, keep, stage);
+    if (has_owner_ops(v)) {
+      lang::native::gc_program::CriticalGuard guard;
+      v->initialized = keep;
+      v->length = length;
+    } else {
+      v->initialized = keep;
+      v->length = length;
+    }
+    drop_staged(v, stage, removed);
     return;
   }
+  // Growing performs logical copies. Snapshot each iteration's raw fill bytes
+  // before the copy callback, retain that snapshot, and publish exactly the
+  // snapshot. A callback may set the source slot to another ARC object; it must
+  // not change which owner this new element receives. The callback never runs
+  // inside the graph-critical publication window.
   void *scratch = nullptr;
   if (length > v->capacity) {
-    // fill may point into the old separate buffer; retain its bytes first.
+    // fill may point into the old separate buffer; retain its bytes first so
+    // growth can free the old storage safely.
     scratch = protect_alias(v, fill);
-    grow_storage(v, length);
   }
   const void *source = scratch ? scratch : fill;
-  for (uint64_t index = old_length; index < length; ++index) {
-    void *target = element(v, index);
-    copy_bytes(target, source, v->stride);
-    if (v->copy) v->copy(target);
+  bool pinned = false;
+  if (v->copy) {
+    (void)lang_vec_begin_v1(v);
+    pinned = true;
   }
-  v->initialized = length;
-  v->length = length;
+  if (length > v->capacity) grow_storage(v, length);
+  StageBuffer snapshot;
+  if (v->copy && !snapshot.reserve(v->stride)) vec_panic(5);
+  for (uint64_t index = old_length; index < length; ++index) {
+    if (v->copy) {
+      // Retain the source owner from this iteration's independent snapshot
+      // before its bytes become a published Vec edge.
+      copy_bytes(snapshot.data(), source, v->stride);
+      v->copy(snapshot.data());
+      copy_bytes(element(v, index), snapshot.data(), v->stride);
+    } else {
+      copy_bytes(element(v, index), source, v->stride);
+    }
+  }
+  if (has_owner_ops(v)) {
+    lang::native::gc_program::CriticalGuard guard;
+    v->initialized = length;
+    v->length = length;
+  } else {
+    v->initialized = length;
+    v->length = length;
+  }
+  if (pinned) lang_vec_end_v1(v);
   if (scratch) lang_free_v1(scratch);
 }
 extern "C" void lang_vec_clear_v1(LangVec *v) noexcept {
   if (!v->length && !v->initialized) return;
   if (__atomic_load_n(&v->iterations, __ATOMIC_ACQUIRE)) vec_panic(8);
-  drop_initialized_to(v, 0);
-  v->length = 0;
+  // Move the removed owning prefix aside before publishing an empty Vec. The
+  // old owners stay valid while every destructor runs outside the critical
+  // region; storage and capacity themselves stay published/unchanged.
+  StageBuffer stage;
+  const uint64_t removed = stage_prefix(v, 0, stage);
+  if (has_owner_ops(v)) {
+    lang::native::gc_program::CriticalGuard guard;
+    v->initialized = 0;
+    v->length = 0;
+  } else {
+    v->initialized = 0;
+    v->length = 0;
+  }
+  drop_staged(v, stage, removed);
 }
 extern "C" void lang_vec_check_resize_v1(LangVec *v) noexcept {
   // Structural changes still require caller synchronization against new iterations.
