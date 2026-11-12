@@ -1,9 +1,12 @@
 package app;
+import "std/async" as tasks;
 import "fixture/lib" as fixture;
 import "libc/libc" as libc;
 import "libc/crypto" as crypto;
 
 func main() i32 {
+    tasks.run_until(tasks.sleep(1));
+    tasks.shutdown();
     let name = fixture.cf_env_name();
     let value = libc.getenv(name);
     if fixture.cf_strlen_nonempty(value) != 1 { return 1; }

@@ -25,6 +25,7 @@ set(LANG_HOSTED_PUBLIC_SOURCES
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/gc_world.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/gc_runtime.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/gc_program.cpp
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/async.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/os.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/os_buffers.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/sync.cpp
