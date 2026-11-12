@@ -12,7 +12,8 @@
     "generics": "Ordinary type parameters and trait constraints; no C++ template metaprogramming",
     "capture_bindings": "Read-only captured bindings; shared referenced objects remain mutable through their APIs",
     "move_capture_syntax": "move func(...) { ... }; move every actually captured owning value, ordinary func copies",
-    "weak_targets": "Vec, function values, ARC shared handles and std/box.Box[T]; exclude value structs/enums, string, fd wrappers and foreign Python/C objects"
+    "weak_targets": "Vec, function values, ARC shared handles and std/box.Box[T]; exclude value structs/enums, string, fd wrappers and foreign Python/C objects",
+    "bound_move_receiver": "Bound move-Self methods are repeatable: copy receiver by ordinary value rules before every call, then transfer that copy; reject noncopyable receivers; no once-only function type"
   },
   "tasks": [
     {
@@ -30,8 +31,8 @@
     {
       "id": "NET02",
       "title": "TLS and HTTPS with explicit dependencies",
-      "status": "in_progress",
-      "owner": "pi-tls-runtime; root source and HTTPS integration",
+      "status": "complete",
+      "owner": "Pi implementation; Root cleanup/token fixes; independent review and integration",
       "depends_on": [
         "FFI01",
         "NET01"
@@ -117,7 +118,7 @@
       "id": "LANG03",
       "title": "Slice views, typed pointers and richer mutable places",
       "status": "in_progress",
-      "owner": "unassigned",
+      "owner": "Root native/Python Slice integrated; richer inout pending",
       "depends_on": [
         "MEM01",
         "FFI01"

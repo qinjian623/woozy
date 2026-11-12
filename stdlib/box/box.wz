@@ -1,0 +1,30 @@
+// A shared mutable value cell.
+//
+// Box[T] stores exactly one T in a private one-element Vec[T].  Copying a Box
+// copies the Vec handle by the ordinary value rules, so every copy refers to
+// the same cell.  The field is private: callers can only observe the cell
+// through new, get and set.  There is no public API for its raw storage or for
+// changing the cell length.
+package box;
+
+import "std/vec" as vec;
+
+pub struct Box[T] {
+    cell Vec[T];
+}
+
+// new creates a cell holding one ordinary copy of value.
+pub func new[T](value T) Box[T] {
+    return Box[T](cell: vec.make[T](1, value));
+}
+
+// get returns an ordinary owned copy of the current value.
+pub func get[T](value Box[T]) T {
+    return value.cell[0];
+}
+
+// set replaces the current value with an ordinary copy of next.  Vec element
+// assignment drops the previous element exactly once and installs that copy.
+pub func set[T](value Box[T], next T) {
+    value.cell[0] = next;
+}

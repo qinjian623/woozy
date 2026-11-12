@@ -1,0 +1,127 @@
+package app;
+
+import "std/http" as http;
+import "std/https" as https;
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/tls" as tls;
+import "std/vec" as vec;
+
+func say(value string) {
+    try { io.println(value); }
+    catch error os.Error {}
+}
+
+func parse_port(value string) u16 throws os.Error {
+    try { return u16(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw os.Error.System(22,0); }
+}
+
+func payload(size usize) Vec[u8] {
+    let out = vec.empty[u8]();
+    for var index usize = 0; index < size; index += 1 {
+        vec.push(out,u8((index * 37 + 11) % 256));
+    }
+    return out;
+}
+
+func make_context(certificate string, key string) tls.Context throws os.Error {
+    try { return tls.server(certificate,key); }
+    catch error tls.Error { throw os.Error.System(1,0); }
+}
+
+func make_server(context tls.Context, host string, port u16) https.Server throws os.Error {
+    try { return https.listen(context,net.ip(host,port),8); }
+    catch error https.Error { throw os.Error.System(1,0); }
+}
+
+func accept_connection(server https.Server) https.Connection throws os.Error {
+    try { return https.accept(server); }
+    catch error https.Error { throw os.Error.System(1,0); }
+}
+
+func local_address(server https.Server) net.Address throws os.Error {
+    try { return https.local_address(server); }
+    catch error https.Error { throw os.Error.System(1,0); }
+}
+
+func respond(connection https.Connection, response http.Response, method string) throws os.Error {
+    try { https.respond(connection,response,method); }
+    catch error https.Error { throw os.Error.System(1,0); }
+}
+
+func response_for(request http.Request) http.Response {
+    if request.target == "/single" {
+        return http.Response(
+            version:"HTTP/1.1",status:200,reason:text.bytes("Single"),
+            headers:[],body:payload(4096),trailers:[]);
+    }
+    if request.target == "/first" {
+        return http.Response(
+            version:"HTTP/1.1",status:200,reason:text.bytes("First"),
+            headers:[],body:payload(8),trailers:[]);
+    }
+    if request.target == "/second" {
+        return http.Response(
+            version:"HTTP/1.1",status:204,reason:text.bytes("No Content"),
+            headers:[],body:vec.empty[u8](),trailers:[]);
+    }
+    return http.Response(
+        version:"HTTP/1.1",status:200,reason:text.bytes("ChunkReply"),
+        headers:[http.text_header("X-Reply","chunk-ok")],
+        body:request.body,
+        trailers:[]);
+}
+
+func close_quiet(connection https.Connection) {
+    try { https.close(connection); }
+    catch error https.Error { let ignored = error; }
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 5 {
+        say("usage: https_server CERT KEY HOST PORT");
+        return 2;
+    }
+    let certificate = arguments[1];
+    let key = arguments[2];
+    let host = arguments[3];
+    let port = parse_port(arguments[4]);
+    let context = make_context(certificate,key);
+    let server = make_server(context,host,port);
+    let address = local_address(server);
+    say("LISTENING "+strconv.format_u64(u64(address.port)));
+    let connection = accept_connection(server);
+    say("ACCEPT ok");
+    var served = 0;
+    for served < 2 {
+        var request = http.Request(
+            method:"",target:"",version:"",
+            headers:vec.empty[http.Header](),
+            body:vec.empty[u8](),
+            trailers:vec.empty[http.Header]());
+        var readable = true;
+        try {
+            request = https.receive_request(connection);
+        } catch error https.Error {
+            readable = false;
+        }
+        if !readable { break; }
+        say("REQUEST method="+request.method+" target="+request.target+
+            " body="+strconv.format_u64(u64(vec.len(request.body)))+
+            " trailers="+strconv.format_u64(u64(vec.len(request.trailers))));
+        let response = response_for(request);
+        respond(connection,response,request.method);
+        say("RESPONSE status="+strconv.format_i64(i64(response.status))+
+            " body="+strconv.format_u64(u64(vec.len(response.body))));
+        served += 1;
+    }
+    close_quiet(connection);
+    say("RESULT ok served="+strconv.format_u64(u64(served)));
+    return 0;
+}

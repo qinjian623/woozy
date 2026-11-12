@@ -1,0 +1,9 @@
+package app;
+
+import "std/box" as box;
+
+func main() i32 {
+    let cell = box.new[i32](1);
+    let storage = cell.cell;
+    return 0;
+}

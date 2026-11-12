@@ -1,0 +1,26 @@
+package app;
+
+import "std/box" as box;
+import "std/option" as option;
+
+struct Node {
+    value i32;
+    labels Vec[string];
+    next option.Option[box.Box[Node]];
+}
+
+func make_cycle() box.Box[Node] {
+    var cell = box.new[Node](
+        Node(value: 0, labels: ["idle"],
+             next: option.Option[box.Box[Node]].None));
+    let node = Node(
+        value: 7,
+        labels: ["cycle"],
+        next: option.Option[box.Box[Node]].Some(cell));
+    box.set(cell, node);
+    return cell;
+}
+
+func main() i32 {
+    return 0;
+}

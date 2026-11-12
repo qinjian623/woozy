@@ -189,7 +189,7 @@ class Emitter {
     if (!value_types.insert(id.value).second)
       return;
     const auto &t = type(id);
-    if (t.kind == TypeKind::Vec)
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice)
       collect_type(t.type_args[0]);
     auto v = classify_value(m, id);
     for (auto f : v.fields)
@@ -203,6 +203,8 @@ class Emitter {
     std::string desc = "_rt.ValueType()";
     if (t.kind == TypeKind::Vec)
       desc = "_rt.ValueType('vec')";
+    else if (t.kind == TypeKind::Slice)
+      desc = "_rt.ValueType('slice')";
     else if (t.kind == TypeKind::String)
       desc = "_rt.ValueType('string', stride=32)";
     else if (t.kind == TypeKind::Bool || t.kind == TypeKind::Unit)
@@ -223,7 +225,7 @@ class Emitter {
     // Recursive aggregates must share the same descriptor object before any
     // of their field/variant descriptors can refer back to it.
     program.push_back({ops(id) + " = " + desc, {}, false, {}, {}});
-    if (t.kind == TypeKind::Vec)
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice)
       emit_type(t.type_args[0], program, done);
     for (auto f : v.fields)
       emit_type(f.type, program, done);
@@ -501,6 +503,8 @@ class Emitter {
     }
     case TypeKind::Vec:
       return "Vec[" + type_key(t.type_args[0], error_position) + "]";
+    case TypeKind::Slice:
+      return "Slice[" + type_key(t.type_args[0], error_position) + "]";
     case TypeKind::ForeignOpaque: {
       const auto &d = m.resolved->project->foreign_binding(t.binding);
       const auto *binding = std::get_if<modules::BindingType>(&d.detail);
@@ -825,7 +829,9 @@ class Emitter {
       return value_save(suite,
           type(n.type).kind == TypeKind::String
               ? "_rt.text_slice(" + receiver + ", " + start + ", " + end + ")"
-              : receiver + ".slice(" + start + ", " + end + ")", id);
+              : type(node(n.children[0]).type).kind == TypeKind::Slice
+                    ? receiver + ".sub(" + start + ", " + end + ")"
+                    : receiver + ".slice(" + start + ", " + end + ")", id);
     }
     case NodeKind::unary: {
       auto operand = expression(n.children[0], suite);
@@ -924,9 +930,27 @@ class Emitter {
                                   ": " + std::to_string(variant.symbol.value));
           tags = "{" + join(entries) + "}";
         }
-        auto value = value_save(suite,
-            "_rt.value_call(" + string_literal(spec->name.substr(8)) + ", " + tuple(args) +
-            ", " + element + ", " + tags + ")", id);
+        std::string call;
+        switch (spec->operation) {
+        case SystemOperation::slice_view:
+          call = "_rt.Slice.create(" + join(args) + ")";
+          break;
+        case SystemOperation::slice_sub:
+          call = args.at(0) + ".sub(" + args.at(1) + ", " + args.at(2) + ")";
+          break;
+        case SystemOperation::slice_len:
+          call = args.at(0) + ".len()";
+          break;
+        case SystemOperation::slice_to_vec:
+          call = args.at(0) + ".to_vec(" +
+                 ops(type(n.type).type_args.at(0)) + ")";
+          break;
+        default:
+          call = "_rt.value_call(" + string_literal(spec->name.substr(8)) +
+                 ", " + tuple(args) + ", " + element + ", " + tags + ")";
+          break;
+        }
+        auto value = value_save(suite, call, id);
         for (const auto &lifetime : m.ownership.calls)
           if (lifetime.node == id) steps(lifetime.on_return, suite, n);
         return value;
@@ -1458,7 +1482,12 @@ class Emitter {
            n);
       full(id, suite);
       const bool text = type(node(n.children[0]).type).kind == TypeKind::String;
-      auto length = save(suite, text ? "len(" + collection + ")" : collection + ".begin()", n);
+      const bool slice = type(node(n.children[0]).type).kind == TypeKind::Slice;
+      auto length = save(suite,
+                         text ? "len(" + collection + ")"
+                              : slice ? collection + ".len()"
+                                      : collection + ".begin()",
+                         n);
       auto index = save(suite, "0", n);
       auto first = save(suite, "True", n);
       Statement loop{"while True", n.source.span, true,
@@ -1496,7 +1525,7 @@ class Emitter {
       break_targets.pop_back();
       loop_body(std::move(body), loop.body, completed_loop, n);
       Suite cleanup;
-      if (!text) line(cleanup, collection + ".end()", n);
+      if (!text && !slice) line(cleanup, collection + ".end()", n);
       line(cleanup, "_frame.drop(" + iteration_key + ")", n);
       loop.body.insert(loop.body.begin(),
                        {"_rt._gc_poll()", n.source.span, false, {}, {}});

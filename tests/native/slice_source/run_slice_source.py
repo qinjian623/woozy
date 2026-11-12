@@ -37,8 +37,10 @@ PANIC = {
     "bounds-high": "vec-slice",
     "sub-bounds": "vec-slice",
 }
+# The former "python-slice" entry is now positive Python coverage in
+# tests/python/slice_source/fixtures/python-slice. Its source is retained here
+# so this Native fixture set continues to pin the same program text.
 NEGATIVE = {
-    "python-slice": ("python", "E_CAPABILITY_UNAVAILABLE"),
     "type-mismatch": ("native", "E_TYPE_MISMATCH"),
     "wrong-arity": ("native", "E_TYPE_MISMATCH"),
     "wrong-len": ("native", "E_TYPE_MISMATCH"),

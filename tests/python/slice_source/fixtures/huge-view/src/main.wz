@@ -1,0 +1,8 @@
+package app;
+import "std/slice" as slice;
+func main() i32 {
+    let v Vec[i32] = [1, 2, 3];
+    let i usize = 18446744073709551615;
+    let s Slice[i32] = slice.view[i32](v, 0, i);
+    return s[0];
+}

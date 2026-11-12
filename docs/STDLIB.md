@@ -1,6 +1,6 @@
 # Woozy 标准库
 
-标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。
+标准库模块用 `import "std/模块名" as 别名;` 导入。`std/io`、`std/os`、`std/fs`、`std/net`、`std/http`、`std/thread`、`std/sync`、`std/rwlock`、`std/cancel`、`std/channel`、`std/task`、`std/process`、`std/signal`、`std/ipc`、`std/time`、`std/timezone` 和 `std/random` 使用 Linux 系统接口，目前用于 Linux x86_64 Native 程序。`std/text`、`std/vec`、`std/slice`、`std/box`、`std/option`、`std/result`、`std/strconv`、`std/math`、`std/path`、`std/hash`、`std/map`、`std/set` 和 `std/json` 不依赖这些接口，Native 和 Python 后端都可以使用。`std/unicode` 也支持这两个后端。`std/tls` 和 `std/https` 用于明确选择 hosted 运行库和 OpenSSL 附加库的 Native 程序，配置见下文。
 
 下面先给出一个完整程序，后面的模块说明不再重复它的导入和 `main`。
 
@@ -232,6 +232,35 @@ Vec 的长度、容量和可变操作。
 Vec 赋值共享同一个容器；`push`、`pop`、`resize` 和 `clear` 会改变所有别名。切片建立新的 Vec，复制选中的元素。`pop` 在空 Vec 上返回 `option.Option.None`。
 
 遍历 Vec 时只能修改已有元素，不能改变长度或存储。循环里不要调用 `push`、`pop`、`resize`、`clear` 或 `reserve`。
+
+## std/slice
+
+`Slice[T]` 是已有 Vec 的视图，Native 和 Python 后端都支持。视图保留底层 Vec，使它在原变量离开作用域后仍然存活；复制 Slice 也共享这些元素。
+
+| 接口 | 说明 |
+| --- | --- |
+| `view[T](values Vec[T], start usize, end usize) Slice[T]` | 建立半开区间 `[start, end)` 的视图 |
+| `sub[T](value Slice[T], start usize, end usize) Slice[T]` | 按当前视图的相对位置建立子视图 |
+| `len[T](value Slice[T]) usize` | 视图的元素个数 |
+| `to_vec[T](value Slice[T]) Vec[T]` | 建立独立 Vec，按普通规则复制视图中的元素 |
+
+Slice 可索引、修改已有元素和遍历；修改会被原 Vec 及其他视图看到。`s[start:end]` 在 Slice 上产生子视图，在 Vec 上则复制元素到新的 Vec。`to_vec` 也只按普通规则复制元素，元素中的 Vec 等引用对象仍共享底层对象。
+
+范围须满足 `start <= end <= len`，索引和范围越界产生 Panic。视图存活期间，任何 Vec 别名改变长度或扩容都会产生 Panic；空视图也保留这个限制。最后一份相关视图释放后，Vec 才能再次改变长度或扩容。
+
+## std/box
+
+`Box[T]` 是保存一个可修改值的共享单元，Native 和 Python 后端都支持。字段不公开，公开操作只有：
+
+| 接口 | 说明 |
+| --- | --- |
+| `new[T](value T) Box[T]` | 建立单元并按普通规则复制 value |
+| `get[T](value Box[T]) T` | 返回当前值的普通副本 |
+| `set[T](value Box[T], next T)` | 保存 next 的普通副本，清理原先保存的值 |
+
+复制 Box 后，两个变量共享同一单元，通过任何副本调用 `set` 都能被其他副本看到。`get` 不执行深复制，返回值里的 Vec 等引用对象仍共享底层对象。给一个 Box 变量重新赋值，只改变该变量指向的单元，不改变其他别名。
+
+跨线程访问同一可修改单元时，程序需要自行加锁。Box 不增加自动同步，也不提供弱引用接口；Native 中的强引用循环暂未自动回收。
 
 ## std/option 和 std/result
 
@@ -518,7 +547,55 @@ func serve_once(socket net.Socket) throws http.Error {
 
 非阻塞读取遇到 `Error.Io(os.Error.WouldBlock(...))` 时，保留同一个 Reader，等 `net.poll` 报告可读后重试同一种 read 操作；read_response 还须保留相同的 request_method。不要重新建立 Reader，否则会丢掉已读取的消息部分。消息进行中切换请求/响应读取会报 `ReaderBusy`。协议错误后应关闭连接，不继续使用该 Reader；消息尚未完成即结束报 `UnexpectedEof`。
 
-非阻塞写出遇到 WouldBlock 后，不能直接从头重调 write_request/write_response；若需恢复，应先 encode 并保留字节与已写偏移，结合错误中的 completed、`net.poll` 可写事件继续发送。当前尚未接入 TLS/HTTPS 公共接口。
+非阻塞写出遇到 WouldBlock 后，不能直接从头重调 write_request/write_response；若需恢复，应先 encode 并保留字节与已写偏移，结合错误中的 completed、`net.poll` 可写事件继续发送。TLS 连接使用下面的 `std/https`；它通过 `reader_external`、`write_request_on` 和 `write_response_on` 使用同一个 HTTP 解析器和读取状态。
+
+## std/tls 和 std/https
+
+这两个模块用于 Linux x86_64 Native，使用 OpenSSL 3。项目须选择 hosted 运行库，并明确声明 TLS 附加库；普通 freestanding 程序不会因此依赖 OpenSSL 或 C++ 运行库：
+
+```toml
+[build.native]
+runtime = "hosted"
+
+[dependencies.woozy_tls]
+kind = "native"
+binding = "<Woozy目录>/stdlib/tls/bindings/tls.json"
+libraries = ["ssl", "crypto", "stdc++"]
+library_dirs = ["<包含libwoozy_tls.a的目录>"]
+```
+
+TLS 附加库的编译方法见 [stdlib/tls/addon/README.md](../stdlib/tls/addon/README.md)。它单独编译，不加入默认运行库。
+
+`std/tls` 包装调用方已有的 Socket。`Context` 和 `Stream` 的普通复制共享同一个对象，最后一份释放 TLS 对象；Socket 始终由调用方关闭，包括调用 `tls.close` 之后。
+
+| 接口 | 说明 |
+| --- | --- |
+| `client_default() Context throws Error`、`client_with_ca(ca_file string)` | 使用系统默认信任库或指定 PEM CA 文件 |
+| `server(certificate_chain_file string, private_key_file string) Context throws Error` | 加载服务端证书链和私钥 |
+| `client(context, socket, name, kind) Stream throws Error`、`server_stream(context, socket)` | 创建 TLS 流，尚未握手 |
+| `connect(context, socket, name, kind) Stream throws Error`、`handshake_all(stream)` | 使用 `net.poll` 等待并完成握手 |
+| `handshake(stream)`、`shutdown(stream)` | 返回 `Status.Ok`、`WantRead`、`WantWrite` 或 `Eof`；错误抛出 `tls.Error` |
+| `read(stream, data, capacity) Transfer throws Error`、`write(stream, data, offset, length)` | 读写字节，返回状态和本次完成的字节数；缓冲区长度须足够 |
+| `wait(stream, status)`、`write_all(stream, data)`、`close(stream)` | 等待重试、完整写出、双向正常关闭；均可能抛出 `tls.Error` |
+
+客户端始终检查证书链、有效期和服务端身份，没有跳过验证的接口。`NameKind.Auto` 区分 IP 字面量与 DNS 名；DNS 使用 SNI，IP 验证不发送 SNI。只接受 TLS 1.2 及以上版本。主机名和文件名拒绝空值、内嵌 NUL；主机名还限制为 255 字节。
+
+`WantRead`/`WantWrite` 后保留同一流和未完成的数据，调用 `wait` 后重试；只按成功写入的字节数推进偏移。`Eof` 表示收到正常的 `close_notify`；未收到它就结束 TCP 连接会抛出 `UnexpectedEof`。正常 `close` 等待对端完成关闭。
+
+`tls.token(stream)` 返回经过表查询验证的借用编号，供 HTTP 传输回调使用；它不持有 Stream，使用期间必须保留至少一份 Stream。`transport_read_token` 和 `transport_write_token` 收到未知或已释放编号时抛出 typed `os.Error`，不会把编号当作内存地址。复制 Stream 和临时取得引用只保护对象存活，不保证同一 TLS 流可以并发读写；程序仍需同步这些操作。
+
+`std/https` 负责它创建或接收的 Socket，并复用 `std/http` 的头字段、正文、trailers 和大小限制。
+
+| 接口 | 说明 |
+| --- | --- |
+| `connect(context tls.Context, host string, port u16) Connection throws Error` | 解析地址、连接并完成证书和身份验证 |
+| `send(connection, request)`、`receive(connection, request_method)` | 在同一连接上收发 HTTP 消息，保留后续消息的读取状态 |
+| `request(context, host, port, request) http.Response throws Error` | 完成一次请求后关闭连接 |
+| `listen(context, address, backlog) Server throws Error`、`accept(server)` | 监听并完成新连接的 TLS 握手 |
+| `receive_request(connection)`、`respond(connection, response, request_method)` | 服务端收发请求与响应 |
+| `local_address(server)`、`close(connection)`、`close_server(server)` | 查询监听地址，或关闭模块拥有的连接、监听 Socket |
+
+这些操作抛出 `https.Error`，分别包装 TLS、网络和 HTTP 错误。Connection 的复制共享同一连接，整个连接只关闭一次，不要通过两个别名重复关闭。`request` 收发失败时只关闭拥有的 Socket 并继续抛出原错误，不等待 TLS 正常关闭；成功后执行正常的双向关闭。
 
 ## std/path
 

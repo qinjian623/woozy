@@ -1,0 +1,22 @@
+package app;
+import "std/slice" as slice;
+
+func keep(value move Slice[i32]) Slice[i32] {
+    return value;
+}
+
+func build(values move Vec[i32]) Slice[i32] {
+    return slice.view[i32](values, 1, 3);
+}
+
+func main() i32 {
+    let v Vec[i32] = [4, 5, 6, 7];
+    let a Slice[i32] = slice.view[i32](v, 0, 2);
+    let b Slice[i32] = keep(move a);
+    if b[0] != 4 || b[1] != 5 { return 1; }
+    let c Slice[i32] = build(move v);
+    if c[0] != 5 || c[1] != 6 || slice.len(c) != 2 { return 2; }
+    b[0] = 40;
+    if c[0] != 5 { return 3; }
+    return 0;
+}

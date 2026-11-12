@@ -1,0 +1,127 @@
+package app;
+
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/tls" as tls;
+import "std/vec" as vec;
+
+func say(value string) {
+    try { io.println(value); }
+    catch error os.Error {}
+}
+
+func arg(args Vec[string], index usize) string {
+    if index < vec.len(args) { return args[index]; }
+    return "";
+}
+
+func parse_port(value string) u16 throws os.Error {
+    try { return u16(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw os.Error.System(22,0); }
+}
+
+func parse_size(value string) usize throws os.Error {
+    try { return usize(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw os.Error.System(22,0); }
+}
+
+func close_quiet(socket net.Socket) {
+    try { net.close(socket); }
+    catch error os.Error { let ignored = error; }
+}
+
+func read_size(stream tls.Stream, size usize) Vec[u8] throws tls.Error {
+    let out = vec.empty[u8]();
+    let chunk = vec.make[u8](65536,0);
+    for vec.len(out) < size {
+        let result = tls.read(stream,chunk,vec.len(chunk));
+        switch result.status {
+            case tls.Status.Ok: {
+                if result.count == 0 { throw tls.Error.NoProgress(completed:vec.len(out)); }
+                var take = result.count;
+                if take > size - vec.len(out) { take = size - vec.len(out); }
+                for var index usize = 0; index < take; index += 1 {
+                    vec.push(out,chunk[index]);
+                }
+            }
+            case tls.Status.WantRead: tls.wait(stream,result.status);
+            case tls.Status.WantWrite: tls.wait(stream,result.status);
+            case tls.Status.Eof: throw tls.Error.UnexpectedEof(info:tls.ErrorInfo(
+                category:tls.CATEGORY_UNEXPECTED_EOF,
+                system_errno:0,
+                ssl_error:0,
+                verify_result:0,
+                openssl_error:0,
+                openssl_error_count:0));
+        }
+    }
+    return out;
+}
+
+func report_failure(prefix string, error tls.Error) {
+    let details = tls.error_info(error);
+    say(prefix+" category="+strconv.format_i64(i64(details.category))+
+        " verify="+strconv.format_i64(details.verify_result));
+}
+
+func make_context(certificate string, key string) tls.Context throws os.Error {
+    try { return tls.server(certificate,key); }
+    catch error tls.Error {
+        report_failure("TLSFAIL",error);
+        throw os.Error.System(1,0);
+    }
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 6 {
+        say("usage: tls_server CERT KEY HOST PORT SIZE");
+        return 2;
+    }
+    let certificate = arguments[1];
+    let key = arguments[2];
+    let host = arguments[3];
+    let port = parse_port(arguments[4]);
+    let size = parse_size(arguments[5]);
+    let context = make_context(certificate,key);
+    let address = net.ip(host,port);
+    let listener = net.socket(address.family,net.SOCK_STREAM | net.SOCK_CLOEXEC,0);
+    try {
+        net.setsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+        net.bind(listener,address);
+        net.listen(listener,4);
+    } catch error os.Error {
+        close_quiet(listener);
+        throw error;
+    }
+    let bound = net.getsockname(listener);
+    say("LISTENING "+strconv.format_u64(u64(bound.port)));
+    var accepted = net.Accepted(socket:net.from_fd(-1),address:net.any4(0));
+    try {
+        accepted = net.accept(listener,u32(net.SOCK_CLOEXEC));
+    } catch error os.Error {
+        close_quiet(listener);
+        throw error;
+    }
+    close_quiet(listener);
+    try {
+        let stream = tls.server_stream(context,accepted.socket);
+        tls.handshake_all(stream);
+        say("HANDSHAKE ok");
+        let data = read_size(stream,size);
+        say("RECEIVED bytes="+strconv.format_u64(u64(vec.len(data))));
+        tls.write_all(stream,data);
+        say("ECHO bytes="+strconv.format_u64(u64(vec.len(data))));
+        tls.close(stream);
+        close_quiet(accepted.socket);
+        say("RESULT ok");
+        return 0;
+    } catch error tls.Error {
+        close_quiet(accepted.socket);
+        report_failure("TLSFAIL",error);
+        return 1;
+    }
+}

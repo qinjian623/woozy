@@ -1,0 +1,9 @@
+package app;
+import "std/slice" as slice;
+import "std/vec" as vec;
+func main() i32 {
+    let v Vec[i32] = [1, 2, 3];
+    let s Slice[i32] = slice.view[i32](v, 0, 2);
+    vec.resize[i32](v, 4, 8);
+    return s[0];
+}

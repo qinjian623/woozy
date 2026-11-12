@@ -97,6 +97,12 @@ set_tests_properties(python.language_gc_runtime PROPERTIES TIMEOUT 60)
 add_test(NAME python.slice_runtime COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/slice_runtime/runtime_slice_test.py")
 set_tests_properties(python.slice_runtime PROPERTIES TIMEOUT 60)
+add_test(NAME python.slice_source COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/slice_source/run_slice_source.py"
+  --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
+  --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/slice-source"
+  --python "${LANG_PYTHON312}")
+set_tests_properties(python.slice_source PROPERTIES TIMEOUT 180)
 add_test(NAME python.language_gc_source COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/language_gc/run_language_gc.py"
   --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_PYTHON_TEST_ROOT}"

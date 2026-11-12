@@ -1,0 +1,41 @@
+package app;
+
+import "std/http" as http;
+import "std/https" as https;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/tls" as tls;
+import "std/vec" as vec;
+
+func parse_port(value string) u16 throws os.Error {
+    try { return u16(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw os.Error.System(22,0); }
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 3 { return 2; }
+    let port = parse_port(arguments[1]);
+    let request = http.Request(
+        method:"GET",
+        target:"/",
+        version:"HTTP/1.1",
+        headers:[http.text_header("Host","127.0.0.1")],
+        body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    try {
+        let context = tls.client_with_ca(arguments[2]);
+        try {
+            let response = https.request(context,"127.0.0.1",port,request);
+            io.println("RESPONSE status="+strconv.format_i64(i64(response.status)));
+            return 0;
+        } catch error https.Error {
+            io.println("HTTPS_ERROR");
+            return 0;
+        }
+    } catch error tls.Error {
+        return 3;
+    }
+}

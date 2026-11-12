@@ -1,0 +1,38 @@
+package app;
+
+import "std/box" as box;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+
+struct Work {
+    lock sync.Mutex;
+    cell box.Box[i64];
+    rounds i64;
+}
+
+func worker(work Work) i64 {
+    for var i i64 = 0; i < work.rounds; i += 1 {
+        sync.lock(work.lock);
+        box.set(work.cell, box.get(work.cell) + 1);
+        sync.unlock(work.lock);
+    }
+    return work.rounds;
+}
+
+func main() i32 throws os.Error {
+    let rounds i64 = 2000;
+    let cell = box.new[i64](0);
+    let work = Work(lock: sync.mutex(), cell: cell, rounds: rounds);
+    let workers = [
+        thread.spawn[Work](worker, work),
+        thread.spawn[Work](worker, work),
+        thread.spawn[Work](worker, work),
+        thread.spawn[Work](worker, work)
+    ];
+    for child in workers {
+        if !(thread.join(child) == rounds) { return 1; }
+    }
+    if !(box.get(cell) == 8000) { return 2; }
+    return 0;
+}

@@ -1,0 +1,8 @@
+schema_version=1
+[package]
+name="box_python_cycle"
+source_root="src"
+entry="app"
+[build]
+backend="python"
+word_bits=64

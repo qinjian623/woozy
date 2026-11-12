@@ -1,0 +1,15 @@
+schema_version = 1
+[package]
+name = "tls_source_request_probe"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[build.native]
+runtime = "hosted"
+[dependencies.woozy_tls]
+kind = "native"
+binding = "../../../../../stdlib/tls/bindings/tls.json"
+libraries = ["ssl", "crypto", "stdc++"]
+library_dirs = ["../../.build/addon"]

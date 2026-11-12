@@ -1,0 +1,41 @@
+package app;
+
+import "std/box" as box;
+
+struct Payload {
+    value i32;
+}
+
+enum Failure {
+    Bad;
+}
+
+func update(cell box.Box[Payload], delta i32, fail bool) i32 throws Failure {
+    var log i32 = 0;
+    defer {
+        box.set(cell, Payload(value: box.get(cell).value + 100));
+    }
+    let alias = cell;
+    box.set(alias, Payload(value: box.get(alias).value + delta));
+    if fail {
+        throw Failure.Bad;
+    }
+    return log;
+}
+
+func main() i32 throws Failure {
+    let cell = box.new[Payload](Payload(value: 0));
+    var caught = false;
+    try {
+        let ignored = update(cell, 1, true);
+    } catch error Failure {
+        caught = true;
+    }
+    if !caught { return 1; }
+    if !(box.get(cell).value == 101) { return 2; }
+
+    let completed = update(cell, 1, false);
+    if !(completed == 0) { return 3; }
+    if !(box.get(cell).value == 202) { return 4; }
+    return 0;
+}

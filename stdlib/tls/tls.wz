@@ -1,0 +1,497 @@
+// Explicitly selected hosted TLS over the accepted lang-tls/1 C ABI.
+//
+// A program using this module must declare a native dependency named
+// `woozy_tls` whose binding is stdlib/tls/bindings/tls.json, must select
+// [build.native] runtime = "hosted", and must link the addon library plus
+// OpenSSL/libstdc++ (see README.md).  The freestanding runtime does
+// not import this module and does not link libssl/libcrypto.
+package tls;
+
+import "woozy_tls/native" as native;
+import "std/net" as net;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub const STATUS_OK i32 = 0;
+pub const STATUS_WANT_READ i32 = 1;
+pub const STATUS_WANT_WRITE i32 = 2;
+pub const STATUS_EOF i32 = 3;
+pub const STATUS_ERROR i32 = 4;
+
+pub const CATEGORY_NONE i32 = 0;
+pub const CATEGORY_INVALID_ARGUMENT i32 = 1;
+pub const CATEGORY_CONTEXT i32 = 2;
+pub const CATEGORY_CERTIFICATE i32 = 3;
+pub const CATEGORY_HANDSHAKE i32 = 4;
+pub const CATEGORY_PROTOCOL i32 = 5;
+pub const CATEGORY_IO i32 = 6;
+pub const CATEGORY_UNEXPECTED_EOF i32 = 7;
+pub const CATEGORY_SHUTDOWN i32 = 8;
+pub const CATEGORY_INTERNAL i32 = 9;
+
+const NAME_AUTO i32 = 0;
+const NAME_DNS i32 = 1;
+const NAME_IP i32 = 2;
+const MAX_NAME_BYTES usize = 255;
+
+pub enum NameKind { Auto; Dns; Ip; }
+
+pub enum Status { Ok; WantRead; WantWrite; Eof; }
+
+pub struct ErrorInfo {
+    pub category i32;
+    pub system_errno i32;
+    pub ssl_error i32;
+    pub verify_result i64;
+    pub openssl_error u64;
+    pub openssl_error_count u64;
+}
+
+pub enum Error {
+    InvalidArgument(info ErrorInfo);
+    Context(info ErrorInfo);
+    Certificate(info ErrorInfo);
+    Handshake(info ErrorInfo);
+    Protocol(info ErrorInfo);
+    Io(info ErrorInfo);
+    UnexpectedEof(info ErrorInfo);
+    ShutdownFailed(info ErrorInfo);
+    Internal(info ErrorInfo);
+    Wait(error os.Error);
+    NoProgress(completed usize);
+}
+
+pub struct Context { handle native.Context; }
+
+pub struct Stream {
+    handle native.Stream;
+    pub descriptor i32;
+}
+
+pub struct Transfer {
+    pub status Status;
+    pub count usize;
+}
+
+func zero_info() ErrorInfo {
+    return ErrorInfo(
+        category:CATEGORY_NONE,
+        system_errno:0,
+        ssl_error:0,
+        verify_result:0,
+        openssl_error:0,
+        openssl_error_count:0);
+}
+
+func invalid_info() ErrorInfo {
+    return ErrorInfo(
+        category:CATEGORY_INVALID_ARGUMENT,
+        system_errno:0,
+        ssl_error:0,
+        verify_result:0,
+        openssl_error:0,
+        openssl_error_count:0);
+}
+
+func internal_info() ErrorInfo {
+    return ErrorInfo(
+        category:CATEGORY_INTERNAL,
+        system_errno:0,
+        ssl_error:0,
+        verify_result:0,
+        openssl_error:0,
+        openssl_error_count:0);
+}
+
+func info(storage native.ErrorStorage) ErrorInfo {
+    return ErrorInfo(
+        category:native.wts_error_category(storage),
+        system_errno:native.wts_error_system_errno(storage),
+        ssl_error:native.wts_error_ssl_error(storage),
+        verify_result:native.wts_error_verify_result(storage),
+        openssl_error:native.wts_error_openssl_error(storage),
+        openssl_error_count:native.wts_error_openssl_error_count(storage));
+}
+
+func classify(storage native.ErrorStorage) Error {
+    let details = info(storage);
+    switch details.category {
+        case 1: return Error.InvalidArgument(info:details);
+        case 2: return Error.Context(info:details);
+        case 3: return Error.Certificate(info:details);
+        case 4: return Error.Handshake(info:details);
+        case 5: return Error.Protocol(info:details);
+        case 6: return Error.Io(info:details);
+        case 7: return Error.UnexpectedEof(info:details);
+        case 8: return Error.ShutdownFailed(info:details);
+        default: return Error.Internal(info:details);
+    }
+}
+
+pub func error_info(error Error) ErrorInfo {
+    switch error {
+        case Error.InvalidArgument(info): return info;
+        case Error.Context(info): return info;
+        case Error.Certificate(info): return info;
+        case Error.Handshake(info): return info;
+        case Error.Protocol(info): return info;
+        case Error.Io(info): return info;
+        case Error.UnexpectedEof(info): return info;
+        case Error.ShutdownFailed(info): return info;
+        case Error.Internal(info): return info;
+        case Error.Wait(value): return ErrorInfo(
+            category:CATEGORY_IO,
+            system_errno:error_code(value),
+            ssl_error:0,
+            verify_result:0,
+            openssl_error:0,
+            openssl_error_count:0);
+        case Error.NoProgress(completed): return internal_info();
+    }
+}
+
+func error_code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(code,completed): return code;
+        case os.Error.WouldBlock(code,completed): return code;
+        case os.Error.System(code,completed): return code;
+        case os.Error.NoProgress(completed): return 5;
+    }
+}
+
+func status(value i32) Status throws Error {
+    switch value {
+        case 0: return Status.Ok;
+        case 1: return Status.WantRead;
+        case 2: return Status.WantWrite;
+        case 3: return Status.Eof;
+        default: throw Error.Internal(info:internal_info());
+    }
+}
+
+func kind_code(kind NameKind) i32 {
+    switch kind {
+        case NameKind.Auto: return NAME_AUTO;
+        case NameKind.Dns: return NAME_DNS;
+        case NameKind.Ip: return NAME_IP;
+    }
+}
+
+func bytes_from_vec(data Vec[u8]) native.Bytes throws Error {
+    let storage = native.wts_bytes_new(u64(vec.len(data)));
+    if native.wts_bytes_failed(storage) != 0 { throw Error.Internal(info:internal_info()); }
+    let pointer = native.wts_bytes_data_mut(storage);
+    unsafe {
+        for var index usize = 0; index < vec.len(data); index += 1 {
+            pointer[index] = data[index];
+        }
+    }
+    native.wts_bytes_set_length(storage,u64(vec.len(data)));
+    return storage;
+}
+
+func bytes_from_text(value string) native.Bytes throws Error {
+    return bytes_from_vec(text.bytes(value));
+}
+
+func valid_text_bytes(value string, maximum usize) bool {
+    let bytes = text.bytes(value);
+    let length = vec.len(bytes);
+    if length == 0 { return false; }
+    if maximum != 0 && length > maximum { return false; }
+    for byte in bytes {
+        if byte == 0 { return false; }
+    }
+    return true;
+}
+
+func name_bytes(value string) native.Bytes throws Error {
+    if !valid_text_bytes(value,MAX_NAME_BYTES) { throw Error.InvalidArgument(info:invalid_info()); }
+    return bytes_from_text(value);
+}
+
+func path_bytes(value string) native.Bytes throws Error {
+    if !valid_text_bytes(value,0) { throw Error.InvalidArgument(info:invalid_info()); }
+    return bytes_from_text(value);
+}
+
+pub func client_default() Context throws Error {
+    let error = native.wts_error_new();
+    let handle = native.wts_context_client_default(error);
+    if native.wts_context_is_null(handle) != 0 { throw classify(error); }
+    return Context(handle:handle);
+}
+
+pub func client_with_ca(ca_file string) Context throws Error {
+    let path = path_bytes(ca_file);
+    let error = native.wts_error_new();
+    let handle = native.wts_context_client(path,error);
+    if native.wts_context_is_null(handle) != 0 { throw classify(error); }
+    return Context(handle:handle);
+}
+
+pub func server(certificate_chain_file string, private_key_file string) Context throws Error {
+    let certificate = path_bytes(certificate_chain_file);
+    let key = path_bytes(private_key_file);
+    let error = native.wts_error_new();
+    let handle = native.wts_context_server(certificate,key,error);
+    if native.wts_context_is_null(handle) != 0 { throw classify(error); }
+    return Context(handle:handle);
+}
+
+pub func client(context Context, socket net.Socket, name string, kind NameKind) Stream throws Error {
+    let name_data = name_bytes(name);
+    let error = native.wts_error_new();
+    let descriptor = net.fd(socket);
+    let handle = native.wts_stream_client(
+        context.handle,
+        descriptor,
+        kind_code(kind),
+        name_data,
+        error);
+    if native.wts_stream_is_null(handle) != 0 { throw classify(error); }
+    return Stream(handle:handle,descriptor:descriptor);
+}
+
+pub func server_stream(context Context, socket net.Socket) Stream throws Error {
+    let error = native.wts_error_new();
+    let descriptor = net.fd(socket);
+    let handle = native.wts_stream_server(context.handle,descriptor,error);
+    if native.wts_stream_is_null(handle) != 0 { throw classify(error); }
+    return Stream(handle:handle,descriptor:descriptor);
+}
+
+pub func handshake(stream Stream) Status throws Error {
+    let error = native.wts_error_new();
+    let result = native.wts_handshake(stream.handle,error);
+    if result == STATUS_ERROR { throw classify(error); }
+    return status(result);
+}
+
+func poll_for(descriptor i32, events i16) throws Error {
+    let rows = [net.PollFd(fd:descriptor,events:events,revents:0)];
+    try {
+        let ready = net.poll(rows,-1);
+        if ready < 0 { throw Error.Wait(error:os.Error.System(5,0)); }
+    } catch error os.Error {
+        throw Error.Wait(error:error);
+    }
+}
+
+pub func wait(stream Stream, current Status) throws Error {
+    switch current {
+        case Status.WantRead: poll_for(stream.descriptor,net.POLLIN);
+        case Status.WantWrite: poll_for(stream.descriptor,net.POLLOUT);
+        case Status.Ok: return;
+        case Status.Eof: return;
+    }
+}
+
+pub func handshake_all(stream Stream) throws Error {
+    for true {
+        let current = handshake(stream);
+        switch current {
+            case Status.Ok: return;
+            case Status.Eof: throw Error.UnexpectedEof(info:internal_info());
+            case Status.WantRead: poll_for(stream.descriptor,net.POLLIN);
+            case Status.WantWrite: poll_for(stream.descriptor,net.POLLOUT);
+        }
+    }
+}
+
+pub func connect(context Context, socket net.Socket, name string, kind NameKind) Stream throws Error {
+    let stream = client(context,socket,name,kind);
+    handshake_all(stream);
+    return stream;
+}
+
+pub func read(stream Stream, data Vec[u8], capacity usize) Transfer throws Error {
+    if capacity > vec.len(data) { throw Error.InvalidArgument(info:invalid_info()); }
+    let storage = native.wts_bytes_new(u64(capacity));
+    if native.wts_bytes_failed(storage) != 0 { throw Error.Internal(info:internal_info()); }
+    let count = native.wts_count_new();
+    if native.wts_count_is_null(count) != 0 { throw Error.Internal(info:internal_info()); }
+    let error = native.wts_error_new();
+    let pointer = native.wts_bytes_data_mut(storage);
+    let result = native.wts_read(stream.handle,pointer,u64(capacity),count,error);
+    if result == STATUS_ERROR { throw classify(error); }
+    let produced = native.wts_count_value(count);
+    if result == STATUS_OK && produced > u64(capacity) {
+        throw Error.Internal(info:internal_info());
+    }
+    if produced != 0 {
+        unsafe {
+            for var index usize = 0; index < usize(produced); index += 1 {
+                data[index] = pointer[index];
+            }
+        }
+    }
+    return Transfer(status:status(result),count:usize(produced));
+}
+
+pub func write(stream Stream, data Vec[u8], offset usize, length usize) Transfer throws Error {
+    if offset > vec.len(data) || length > vec.len(data) - offset {
+        throw Error.InvalidArgument(info:invalid_info());
+    }
+    let storage = native.wts_bytes_new(u64(length));
+    if native.wts_bytes_failed(storage) != 0 { throw Error.Internal(info:internal_info()); }
+    let pointer = native.wts_bytes_data_mut(storage);
+    unsafe {
+        for var index usize = 0; index < length; index += 1 {
+            pointer[index] = data[offset + index];
+        }
+    }
+    native.wts_bytes_set_length(storage,u64(length));
+    let count = native.wts_count_new();
+    if native.wts_count_is_null(count) != 0 { throw Error.Internal(info:internal_info()); }
+    let error = native.wts_error_new();
+    let result = native.wts_write(stream.handle,pointer,u64(length),count,error);
+    if result == STATUS_ERROR { throw classify(error); }
+    let produced = native.wts_count_value(count);
+    if produced > u64(length) { throw Error.Internal(info:internal_info()); }
+    return Transfer(status:status(result),count:usize(produced));
+}
+
+pub func write_all(stream Stream, data Vec[u8]) throws Error {
+    var completed usize = 0;
+    for completed < vec.len(data) {
+        let current = write(stream,data,completed,vec.len(data)-completed);
+        switch current.status {
+            case Status.Ok: {
+                if current.count == 0 { throw Error.NoProgress(completed:completed); }
+                completed += current.count;
+            }
+            case Status.WantRead: poll_for(stream.descriptor,net.POLLIN);
+            case Status.WantWrite: poll_for(stream.descriptor,net.POLLOUT);
+            case Status.Eof: throw Error.UnexpectedEof(info:internal_info());
+        }
+    }
+}
+
+pub func shutdown(stream Stream) Status throws Error {
+    let error = native.wts_error_new();
+    let result = native.wts_shutdown(stream.handle,error);
+    if result == STATUS_ERROR { throw classify(error); }
+    return status(result);
+}
+
+pub func close(stream Stream) throws Error {
+    for true {
+        let current = shutdown(stream);
+        switch current {
+            case Status.Ok: return;
+            case Status.WantRead: poll_for(stream.descriptor,net.POLLIN);
+            case Status.WantWrite: poll_for(stream.descriptor,net.POLLOUT);
+            case Status.Eof: return;
+        }
+    }
+}
+
+pub func token(stream Stream) u64 {
+    return native.wts_stream_token(stream.handle);
+}
+
+func transport_error(details ErrorInfo) os.Error {
+    var code = details.category;
+    if code == 0 { code = CATEGORY_INTERNAL; }
+    var completed usize = 0;
+    if details.system_errno != 0 { completed = usize(details.system_errno); }
+    else if details.verify_result != 0 { completed = usize(details.verify_result); }
+    return os.Error.System(code,completed);
+}
+
+func poll_os(descriptor i32, events i16) throws os.Error {
+    let rows = [net.PollFd(fd:descriptor,events:events,revents:0)];
+    for true {
+        try {
+            let ready = net.poll(rows,-1);
+            if ready < 0 { throw os.Error.System(5,0); }
+            return;
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): continue;
+                default: throw error;
+            }
+        }
+    }
+}
+
+pub func transport_read_token(current u64, data Vec[u8], capacity usize) usize throws os.Error {
+    if capacity > vec.len(data) { throw os.Error.System(22,0); }
+    let descriptor = native.wts_transport_fd(current);
+    let storage = native.wts_bytes_new(u64(capacity));
+    if native.wts_bytes_failed(storage) != 0 { throw os.Error.System(12,0); }
+    let count = native.wts_count_new();
+    if native.wts_count_is_null(count) != 0 { throw os.Error.System(12,0); }
+    let error = native.wts_error_new();
+    let pointer = native.wts_bytes_data_mut(storage);
+    for true {
+        let result = native.wts_transport_read(current,pointer,u64(capacity),count,error);
+        if result == STATUS_OK {
+            let produced = native.wts_count_value(count);
+            if produced > u64(capacity) { throw os.Error.System(9,0); }
+            unsafe {
+                for var index usize = 0; index < usize(produced); index += 1 {
+                    data[index] = pointer[index];
+                }
+            }
+            return usize(produced);
+        }
+        if result == STATUS_EOF { return 0; }
+        if result == STATUS_WANT_READ {
+            poll_os(descriptor,net.POLLIN);
+            continue;
+        }
+        if result == STATUS_WANT_WRITE {
+            poll_os(descriptor,net.POLLOUT);
+            continue;
+        }
+        throw transport_error(info(error));
+    }
+}
+
+pub func transport_read(stream Stream, data Vec[u8], capacity usize) usize throws os.Error {
+    return transport_read_token(token(stream),data,capacity);
+}
+
+pub func transport_write_token(current u64, data Vec[u8], offset usize, length usize) usize throws os.Error {
+    if offset > vec.len(data) || length > vec.len(data) - offset {
+        throw os.Error.System(22,offset);
+    }
+    let descriptor = native.wts_transport_fd(current);
+    let storage = native.wts_bytes_new(u64(length));
+    if native.wts_bytes_failed(storage) != 0 { throw os.Error.System(12,0); }
+    let pointer = native.wts_bytes_data_mut(storage);
+    unsafe {
+        for var index usize = 0; index < length; index += 1 {
+            pointer[index] = data[offset + index];
+        }
+    }
+    native.wts_bytes_set_length(storage,u64(length));
+    let count = native.wts_count_new();
+    if native.wts_count_is_null(count) != 0 { throw os.Error.System(12,0); }
+    let error = native.wts_error_new();
+    for true {
+        let result = native.wts_transport_write(current,pointer,u64(length),count,error);
+        if result == STATUS_OK {
+            let produced = native.wts_count_value(count);
+            if produced > u64(length) { throw os.Error.System(9,0); }
+            return usize(produced);
+        }
+        if result == STATUS_EOF { throw os.Error.System(CATEGORY_UNEXPECTED_EOF,0); }
+        if result == STATUS_WANT_READ {
+            poll_os(descriptor,net.POLLIN);
+            continue;
+        }
+        if result == STATUS_WANT_WRITE {
+            poll_os(descriptor,net.POLLOUT);
+            continue;
+        }
+        throw transport_error(info(error));
+    }
+}
+
+pub func transport_write(stream Stream, data Vec[u8], offset usize, length usize) usize throws os.Error {
+    return transport_write_token(token(stream),data,offset,length);
+}

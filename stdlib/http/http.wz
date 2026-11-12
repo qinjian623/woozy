@@ -116,8 +116,24 @@ pub struct Limits {
     pub header_count usize;
 }
 
-pub struct Reader {
+// A Reader owns its framing state and a transport selector.  Socket readers
+// use the original std/net path; external readers call a function pair supplied
+// by another package (std/https uses this for a TLS stream) without importing
+// TLS into std/http.  The framing, limits, headers, trailers and persistent
+// buffer are identical for both transports.
+const SOURCE_SOCKET u64 = 0;
+const SOURCE_EXTERNAL u64 = 1;
+
+pub struct Source {
+    mode u64;
     socket net.Socket;
+    token u64;
+    receive func(u64, Vec[u8], usize) usize throws os.Error;
+    send func(u64, Vec[u8], usize, usize) usize throws os.Error;
+}
+
+pub struct Reader {
+    source Source;
     buffer Vec[u8];
     limits Limits;
     state Vec[u64];
@@ -204,9 +220,22 @@ func state_vector() Vec[u64] {
     return out;
 }
 
+func unused_receive(token u64, data Vec[u8], count usize) usize throws os.Error {
+    throw os.Error.System(22,0);
+}
+
+func unused_send(token u64, data Vec[u8], offset usize, count usize) usize throws os.Error {
+    throw os.Error.System(22,0);
+}
+
 pub func reader(socket net.Socket, limits Limits) Reader {
     return Reader(
-        socket:socket,
+        source:Source(
+            mode:SOURCE_SOCKET,
+            socket:socket,
+            token:0,
+            receive:unused_receive,
+            send:unused_send),
         buffer:vec.empty[u8](),
         limits:limits,
         state:state_vector(),
@@ -215,6 +244,43 @@ pub func reader(socket net.Socket, limits Limits) Reader {
         trailers:vec.empty[Header](),
         body:vec.empty[u8](),
         reason:vec.empty[u8]());
+}
+
+pub func reader_external(
+    token u64,
+    receive func(u64, Vec[u8], usize) usize throws os.Error,
+    send func(u64, Vec[u8], usize, usize) usize throws os.Error,
+    limits Limits) Reader {
+    return Reader(
+        source:Source(
+            mode:SOURCE_EXTERNAL,
+            socket:net.from_fd(-1),
+            token:token,
+            receive:receive,
+            send:send),
+        buffer:vec.empty[u8](),
+        limits:limits,
+        state:state_vector(),
+        parts:vec.empty[string](),
+        headers:vec.empty[Header](),
+        trailers:vec.empty[Header](),
+        body:vec.empty[u8](),
+        reason:vec.empty[u8]());
+}
+
+func source_receive(source Source, data Vec[u8], count usize) usize throws os.Error {
+    if source.mode == SOURCE_SOCKET {
+        return net.recv(source.socket,data,count,0);
+    }
+    return source.receive(source.token,data,count);
+}
+
+func source_send(source Source, data Vec[u8], offset usize, count usize) usize throws os.Error {
+    if source.mode == SOURCE_SOCKET {
+        let slice = data[offset:offset+count];
+        return net.send(source.socket,slice,count,0);
+    }
+    return source.send(source.token,data,offset,count);
 }
 
 pub func pending(reader Reader) usize {
@@ -1021,7 +1087,7 @@ func receive_append(reader Reader, wanted usize, eof_ok bool) bool throws Error 
     for true {
         var count usize = 0;
         try {
-            count = net.recv(reader.socket,temporary,count_request,0);
+            count = source_receive(reader.source,temporary,count_request);
         } catch error os.Error {
             switch error {
                 case os.Error.Interrupted(code,completed): continue;
@@ -1393,20 +1459,41 @@ pub func encode_response(response Response, request_method string) Vec[u8] throw
     return out;
 }
 
+func send_all_source(source Source, data Vec[u8]) throws Error {
+    var completed usize = 0;
+    let length = vec.len(data);
+    for completed < length {
+        try {
+            let count = source_send(source,data,completed,length-completed);
+            if count == 0 { throw Error.Io(os.Error.NoProgress(completed)); }
+            completed += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,count): continue;
+                case os.Error.WouldBlock(code,count): throw Error.Io(os.Error.WouldBlock(code,completed));
+                case os.Error.System(code,count): throw Error.Io(os.Error.System(code,completed));
+                case os.Error.NoProgress(count): throw Error.Io(error);
+            }
+        }
+    }
+}
+
 pub func write_request(socket net.Socket, request Request) throws Error {
     let data = encode_request(request);
-    try {
-        net.send_all(socket,data,0);
-    } catch error os.Error {
-        throw Error.Io(error);
-    }
+    send_all_source(reader(socket,default_limits()).source,data);
 }
 
 pub func write_response(socket net.Socket, response Response, request_method string) throws Error {
     let data = encode_response(response,request_method);
-    try {
-        net.send_all(socket,data,0);
-    } catch error os.Error {
-        throw Error.Io(error);
-    }
+    send_all_source(reader(socket,default_limits()).source,data);
+}
+
+pub func write_request_on(reader Reader, request Request) throws Error {
+    let data = encode_request(request);
+    send_all_source(reader.source,data);
+}
+
+pub func write_response_on(reader Reader, response Response, request_method string) throws Error {
+    let data = encode_response(response,request_method);
+    send_all_source(reader.source,data);
 }

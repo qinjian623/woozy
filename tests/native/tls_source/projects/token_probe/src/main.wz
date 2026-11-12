@@ -1,0 +1,55 @@
+package app;
+import "std/tls" as tls;
+import "std/net" as net;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func rejected(token u64) bool {
+    try {
+        let ignored = tls.transport_read_token(token,vec.empty[u8](),0);
+        return false;
+    } catch error os.Error { return true; }
+}
+
+func capacity_rejected(stream tls.Stream, capacity usize, use_token bool) bool {
+    try {
+        if use_token {
+            let ignored = tls.transport_read_token(tls.token(stream),vec.empty[u8](),capacity);
+        } else {
+            let ignored = tls.transport_read(stream,vec.empty[u8](),capacity);
+        }
+        return false;
+    } catch error os.Error {
+        switch error {
+            case os.Error.System(code,completed): return code == 22 && completed == 0;
+            default: return false;
+        }
+    }
+}
+
+func expired(socket net.Socket) u64 throws tls.Error {
+    let context = tls.client_default();
+    let stream = tls.client(context,socket,"localhost",tls.NameKind.Dns);
+    return tls.token(stream);
+}
+
+func main() i32 throws os.Error {
+    if !rejected(0) || !rejected(1) || !rejected(18446744073709551615) {
+        return 1;
+    }
+    let socket = net.socket(net.AF_INET,net.SOCK_STREAM,0);
+    defer {
+        try { net.close(socket); } catch error os.Error {}
+    }
+    try {
+        let token = expired(socket);
+        if !rejected(token) { return 2; }
+        let context = tls.client_default();
+        let stream = tls.client(context,socket,"localhost",tls.NameKind.Dns);
+        if !capacity_rejected(stream,1,true) { return 4; }
+        if !capacity_rejected(stream,18446744073709551615,true) { return 5; }
+        if !capacity_rejected(stream,1,false) { return 6; }
+        if !capacity_rejected(stream,18446744073709551615,false) { return 7; }
+    } catch error tls.Error { return 3; }
+    return 0;
+}

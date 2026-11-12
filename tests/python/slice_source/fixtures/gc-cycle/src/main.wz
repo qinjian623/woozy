@@ -1,0 +1,25 @@
+package app;
+import "std/slice" as slice;
+
+enum Link { None; Some(value Slice[Node]); }
+struct Node { link Link; }
+
+func main() i32 {
+    var nodes Vec[Node] = [Node(link: Link.None)];
+    let s Slice[Node] = slice.view[Node](nodes, 0, 1);
+    nodes[0].link = Link.Some(value: s);
+    switch nodes[0].link {
+    case Link.Some(value): if slice.len(value) != 1 { return 1; }
+    case Link.None: return 2;
+    }
+    var seen i32 = 0;
+    for node in s {
+        switch node.link {
+        case Link.Some(value): if slice.len(value) != 1 { return 3; }
+        case Link.None: return 4;
+        }
+        seen += 1;
+    }
+    if seen != 1 { return 5; }
+    return 0;
+}

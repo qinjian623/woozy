@@ -1130,10 +1130,16 @@ class Slice:
             raise Panic('blank Slice has no element type')
         return self.owner.element
 
-    def to_vec(self):
-        """Copy the range into a new independently owned Vec."""
+    def to_vec(self, element=None):
+        """Copy the range into a new independently owned Vec.
+
+        ``element`` is only fallback metadata for the owner-less blank
+        descriptor. A live view always uses ``owner.element``, which is the
+        authoritative copy/drop/trace metadata emitted for that Vec; an
+        equivalent or unrelated Python ValueType object must not replace it.
+        """
         if not self._require_live():
-            return Vec.create(ValueType(), [])
+            return Vec.create(ValueType() if element is None else element, [])
         owner, start, length = self.owner, self.start, self.length
         try:
             values = [owner.element.copy(owner.items[start + index])

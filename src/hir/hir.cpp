@@ -6487,7 +6487,10 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         m.config.backend == Backend::python && m.config.word_bits == 64;
     const bool runtime_handle_values =
         m.config.backend == Backend::native && m.config.word_bits == 64;
-    const bool slice_values = runtime_handle_values;
+    const bool slice_values =
+        (m.config.backend == Backend::native ||
+         m.config.backend == Backend::python) &&
+        m.config.word_bits == 64;
     const bool c_values =
         m.config.backend == Backend::native && m.config.word_bits == 64;
     auto c_value = [](TypeKind kind) {
@@ -6675,7 +6678,10 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
             call && call->kind == CalleeKind::system &&
             (m.config.backend != Backend::native || m.config.word_bits != 64) &&
             std::none_of(value_system_operations.begin(), value_system_operations.end(),
-                         [&](const auto &spec) { return spec.operation == *call->system; })) {
+                         [&](const auto &spec) { return spec.operation == *call->system; }) &&
+            !(slice_values &&
+              std::any_of(slice_system_operations.begin(), slice_system_operations.end(),
+                          [&](const auto &spec) { return spec.operation == *call->system; }))) {
           unavailable(n.source, "system operations require the Native/64 profile");
           return r;
         }

@@ -142,7 +142,7 @@ struct 按字段声明逆序销毁，enum 按活动载荷字段逆序销毁，Ve
 
 std/map、std/set 是以共享 Vec 实现的有类型容器，复制共享同一容器。std/json 的 Number 保存十进制原文，需要时显式转换；数组和对象最多嵌套256层。Native C 绑定支持有类型的 Ptr/PtrMut 和 Buffer/BufferMut，指针与缓冲区索引必须在 unsafe 块中进行；Buffer 检查长度，Ptr 的有效地址和生命期由调用者保证。
 
-Native/64 提供 `Slice[T]` 和 `std/slice` 的 `view`、`len`、`sub`、`to_vec`。视图使用半开区间，持有 owner Vec 并保护其存储；共享别名在视图存活时改变长度或扩容会先 Panic。Slice 切片产生子视图，Vec 切片继续复制元素；`to_vec` 新建容器并按普通规则复制元素。Python 源接口尚未接入，遇到 Slice 明确报告 `E_CAPABILITY_UNAVAILABLE`。字段、索引及拥有值的通用 inout 仍未完成。
+Native/64 和 Python/64 提供 `Slice[T]` 和 `std/slice` 的 `view`、`len`、`sub`、`to_vec`。视图使用半开区间，持有 owner Vec 并保护其存储；共享别名在视图存活时改变长度或扩容会先 Panic。Slice 切片产生子视图，Vec 切片继续复制元素；`to_vec` 新建容器并按普通规则复制元素。两后端均按普通规则复制和清理 Slice；Python 还会在循环回收时处理视图持有的 owner。字段、索引及拥有值的通用 inout 仍未完成。
 
 Native C 函数按绑定声明的固定签名调用，错误码是普通返回值，不自动转成 throws 或 py.Error。C resource 的每次拥有复制调用 retain_symbol，每个拥有副本清理时调用 release_symbol，由库决定最后一次引用释放时的析构；未声明 retain_symbol 的普通复制会被拒绝。借用指针和 C record 不自动释放目标。具体声明及限制见 [调用 C 库](FFI.md)。
 
@@ -214,4 +214,6 @@ ndarray/Tensor 的 shape、device、动态 dtype 和运行状态默认是运行�
 
 闭包捕获创建时的逻辑值，捕获绑定只读；Vec 等共享对象的内容仍可通过已有接口修改。普通 `func` 复制捕获值，`move func(...) { ... }` 移动全部实际捕获的拥有值，不提供逐变量捕获列表。
 
-Weak 接受 Vec、函数值、有引用计数的共享句柄和 Box[T]。普通按值 struct/enum、string、File/Socket 描述符及外部 Python/C 对象不直接作为目标。Box 是共享的可变值单元，复制 Box 保持同一个单元的身份。这些规则已经确认，源码实现与两后端检查尚未完成。
+绑定 `move Self` 方法产生的函数值可复制、可重复调用。每次调用先按普通规则复制接收者，再把该副本移交给方法；不能复制的接收者禁止绑定。不增加只能调用一次的函数类型。
+
+Weak 接受 Vec、函数值、有引用计数的共享句柄和 Box[T]。普通按值 struct/enum、string、File/Socket 描述符及外部 Python/C 对象不直接作为目标。Box 是共享的可变值单元，复制 Box 保持同一个单元的身份。Box 的 `new`、`get`、`set` 已支持 Native 和 Python；Weak 源接口与闭包捕获尚未完成。

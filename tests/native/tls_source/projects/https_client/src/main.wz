@@ -1,0 +1,117 @@
+package app;
+
+import "std/http" as http;
+import "std/https" as https;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/tls" as tls;
+import "std/vec" as vec;
+
+func say(value string) {
+    try { io.println(value); }
+    catch error os.Error {}
+}
+
+func arg(args Vec[string], index usize) string {
+    if index < vec.len(args) { return args[index]; }
+    return "";
+}
+
+func parse_port(value string) u16 throws os.Error {
+    try { return u16(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw os.Error.System(22,0); }
+}
+
+func payload(size usize) Vec[u8] {
+    let out = vec.empty[u8]();
+    for var index usize = 0; index < size; index += 1 {
+        vec.push(out,u8((index * 37 + 11) % 256));
+    }
+    return out;
+}
+
+func equal_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func make_request(method string, target string, host string, body Vec[u8]) http.Request {
+    return http.Request(
+        method:method,
+        target:target,
+        version:"HTTP/1.1",
+        headers:[http.text_header("Host",host),http.text_header("X-Test","source")],
+        body:body,
+        trailers:[]);
+}
+
+func check_response(name string, response http.Response, expected_status i32, expected Vec[u8]) bool {
+    say(name+" status="+strconv.format_i64(i64(response.status))+
+        " body="+strconv.format_u64(u64(vec.len(response.body))));
+    if response.status != expected_status { return false; }
+    return equal_bytes(response.body,expected);
+}
+
+func single(context tls.Context, host string, port u16) i32 throws os.Error {
+    try {
+        let connection = https.connect(context,host,port);
+        https.send(connection,make_request("GET","/single",host,vec.empty[u8]()));
+        let response = https.receive(connection,"GET");
+        let ok = check_response("RESPONSE single",response,200,payload(4096));
+        https.close(connection);
+        if !ok { say("RESULT mismatch"); return 1; }
+        say("RESULT ok");
+        return 0;
+    } catch error https.Error {
+        say("HTTPSFAIL");
+        return 1;
+    }
+}
+
+func reuse(context tls.Context, host string, port u16) i32 throws os.Error {
+    try {
+        let connection = https.connect(context,host,port);
+        let first_body = payload(128);
+        https.send(connection,make_request("POST","/first",host,first_body));
+        let first = https.receive(connection,"POST");
+        let first_ok = check_response("RESPONSE first",first,200,payload(8));
+        https.send(connection,make_request("GET","/second",host,vec.empty[u8]()));
+        let second = https.receive(connection,"GET");
+        let second_ok = check_response("RESPONSE second",second,204,vec.empty[u8]());
+        https.close(connection);
+        if !first_ok || !second_ok { say("RESULT mismatch"); return 1; }
+        say("RESULT ok reuse");
+        return 0;
+    } catch error https.Error {
+        say("HTTPSFAIL");
+        return 1;
+    }
+}
+
+func make_context(ca_file string) tls.Context throws os.Error {
+    try { return tls.client_with_ca(ca_file); }
+    catch error tls.Error { throw os.Error.System(1,0); }
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 6 {
+        say("usage: https_client HOST PORT CA NAME single|reuse");
+        return 2;
+    }
+    let host = arguments[1];
+    let port = parse_port(arguments[2]);
+    let ca_file = arguments[3];
+    let name = arguments[4];
+    let mode = arguments[5];
+    let context = make_context(ca_file);
+    if mode == "single" { return single(context,host,port); }
+    if mode == "reuse" { return reuse(context,host,port); }
+    say("unknown mode");
+    return 2;
+}

@@ -1,0 +1,384 @@
+package app;
+
+import "std/io" as io;
+import "std/net" as net;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/tls" as tls;
+import "std/vec" as vec;
+
+func say(value string) {
+    try { io.println(value); }
+    catch error os.Error {}
+}
+
+func arg(args Vec[string], index usize) string {
+    if index < vec.len(args) { return args[index]; }
+    return "";
+}
+
+func parse_port(value string) u16 throws os.Error {
+    try { return u16(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw os.Error.System(22,0); }
+}
+
+func parse_size(value string) usize throws os.Error {
+    try { return usize(strconv.parse_u64(value)); }
+    catch error strconv.Error { throw os.Error.System(22,0); }
+}
+
+func number(value i64) string {
+    return strconv.format_i64(value);
+}
+
+func payload(size usize) Vec[u8] {
+    let out = vec.empty[u8]();
+    for var index usize = 0; index < size; index += 1 {
+        vec.push(out,u8((index * 37 + 11) % 256));
+    }
+    return out;
+}
+
+func equal_bytes(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func close_quiet(socket net.Socket) {
+    try { net.close(socket); }
+    catch error os.Error { let ignored = error; }
+}
+
+func make_context(ca_file string) tls.Context throws tls.Error {
+    if ca_file == "default" { return tls.client_default(); }
+    return tls.client_with_ca(ca_file);
+}
+
+func make_kind(value string) tls.NameKind {
+    if value == "ip" { return tls.NameKind.Ip; }
+    if value == "dns" { return tls.NameKind.Dns; }
+    return tls.NameKind.Auto;
+}
+
+func connect_socket(host string, port u16, nonblocking bool) net.Socket throws os.Error {
+    let address = net.ip(host,port);
+    var kind = net.SOCK_STREAM | net.SOCK_CLOEXEC;
+    if nonblocking { kind = kind | net.SOCK_NONBLOCK; }
+    let socket = net.socket(address.family,kind,0);
+    if !nonblocking {
+        net.connect(socket,address);
+        return socket;
+    }
+    try {
+        net.connect(socket,address);
+        return socket;
+    } catch error os.Error {
+        switch error {
+            case os.Error.WouldBlock(code,completed): {
+                let rows = [net.PollFd(fd:net.fd(socket),events:net.POLLOUT,revents:0)];
+                net.poll(rows,-1);
+                let failure = net.getsockopt_int(socket,net.SOL_SOCKET,net.SO_ERROR);
+                if failure != 0 { throw os.Error.System(failure,0); }
+                return socket;
+            }
+            case os.Error.System(code,completed): {
+                if code == 115 || code == 114 || code == 11 {
+                    let rows = [net.PollFd(fd:net.fd(socket),events:net.POLLOUT,revents:0)];
+                    net.poll(rows,-1);
+                    let failure = net.getsockopt_int(socket,net.SOL_SOCKET,net.SO_ERROR);
+                    if failure != 0 { throw os.Error.System(failure,0); }
+                    return socket;
+                }
+                close_quiet(socket);
+                throw error;
+            }
+            default: {
+                close_quiet(socket);
+                throw error;
+            }
+        }
+    }
+}
+
+func read_size(stream tls.Stream, size usize) Vec[u8] throws tls.Error {
+    let out = vec.empty[u8]();
+    let chunk = vec.make[u8](65536,0);
+    for vec.len(out) < size {
+        let result = tls.read(stream,chunk,vec.len(chunk));
+        switch result.status {
+            case tls.Status.Ok: {
+                if result.count == 0 { throw tls.Error.Internal(info:tls.error_info(tls.Error.NoProgress(completed:vec.len(out)))); }
+                var take = result.count;
+                if take > size - vec.len(out) { take = size - vec.len(out); }
+                for var index usize = 0; index < take; index += 1 {
+                    vec.push(out,chunk[index]);
+                }
+            }
+            case tls.Status.WantRead: tls.wait(stream,result.status);
+            case tls.Status.WantWrite: tls.wait(stream,result.status);
+            case tls.Status.Eof: {
+                throw tls.Error.UnexpectedEof(info:tls.ErrorInfo(
+                    category:tls.CATEGORY_UNEXPECTED_EOF,
+                    system_errno:0,
+                    ssl_error:0,
+                    verify_result:0,
+                    openssl_error:0,
+                    openssl_error_count:0));
+            }
+        }
+    }
+    return out;
+}
+
+func write_remaining(stream tls.Stream, data Vec[u8], start usize) throws tls.Error {
+    var completed = start;
+    for completed < vec.len(data) {
+        let result = tls.write(stream,data,completed,vec.len(data)-completed);
+        switch result.status {
+            case tls.Status.Ok: {
+                if result.count == 0 { throw tls.Error.NoProgress(completed:completed); }
+                completed += result.count;
+            }
+            case tls.Status.WantRead: tls.wait(stream,result.status);
+            case tls.Status.WantWrite: tls.wait(stream,result.status);
+            case tls.Status.Eof: {
+                throw tls.Error.UnexpectedEof(info:tls.ErrorInfo(
+                    category:tls.CATEGORY_UNEXPECTED_EOF,
+                    system_errno:0,
+                    ssl_error:0,
+                    verify_result:0,
+                    openssl_error:0,
+                    openssl_error_count:0));
+            }
+        }
+    }
+}
+
+func report_failure(prefix string, error tls.Error) {
+    let details = tls.error_info(error);
+    say(prefix+" category="+number(i64(details.category))+
+        " verify="+number(details.verify_result)+
+        " ssl="+number(i64(details.ssl_error))+
+        " errno="+number(i64(details.system_errno)));
+}
+
+func python_mode(args Vec[string]) i32 throws os.Error {
+    let host = arg(args,1);
+    let port = parse_port(arg(args,2));
+    let ca_file = arg(args,3);
+    let name = arg(args,4);
+    let kind = make_kind(arg(args,5));
+    let expectation = arg(args,6);
+    let size = parse_size(arg(args,7));
+    let socket = connect_socket(host,port,false);
+    try {
+        let context = make_context(ca_file);
+        let stream = tls.connect(context,socket,name,kind);
+        say("HANDSHAKE ok");
+        if expectation == "certificate" {
+            say("UNEXPECTED certificate success");
+            tls.close(stream);
+            close_quiet(socket);
+            return 1;
+        }
+        if expectation == "truncate" {
+            let expected = payload(size);
+            let received = read_size(stream,size);
+            if !equal_bytes(received,expected) {
+                say("PAYLOAD mismatch");
+                close_quiet(socket);
+                return 1;
+            }
+            say("PAYLOAD ok bytes="+strconv.format_u64(u64(size)));
+            for true {
+                let chunk = vec.make[u8](4096,0);
+                let result = tls.read(stream,chunk,vec.len(chunk));
+                switch result.status {
+                    case tls.Status.Ok: continue;
+                    case tls.Status.WantRead: tls.wait(stream,result.status);
+                    case tls.Status.WantWrite: tls.wait(stream,result.status);
+                    case tls.Status.Eof: {
+                        say("UNEXPECTED clean-eof");
+                        close_quiet(socket);
+                        return 1;
+                    }
+                }
+            }
+        }
+        let expected = payload(size);
+        let received = read_size(stream,size);
+        if !equal_bytes(received,expected) {
+            say("PAYLOAD mismatch");
+            close_quiet(socket);
+            return 1;
+        }
+        say("PAYLOAD ok bytes="+strconv.format_u64(u64(size)));
+        tls.close(stream);
+        close_quiet(socket);
+        say("RESULT ok");
+        return 0;
+    } catch error tls.Error {
+        close_quiet(socket);
+        report_failure("TLSFAIL",error);
+        let details = tls.error_info(error);
+        if expectation == "certificate" && details.category == tls.CATEGORY_CERTIFICATE {
+            say("RESULT expected-certificate");
+            return 0;
+        }
+        if expectation == "truncate" && details.category == tls.CATEGORY_UNEXPECTED_EOF {
+            say("RESULT expected-truncation");
+            return 0;
+        }
+        say("RESULT tls-error");
+        return 1;
+    }
+}
+
+func nonblock_mode(args Vec[string], nonblocking bool) i32 throws os.Error {
+    let host = arg(args,1);
+    let port = parse_port(arg(args,2));
+    let ca_file = arg(args,3);
+    let name = arg(args,4);
+    let size = parse_size(arg(args,5));
+    let socket = connect_socket(host,port,nonblocking);
+    try {
+        let context = make_context(ca_file);
+        let stream = tls.client(context,socket,name,tls.NameKind.Dns);
+        var wants_read = 0;
+        var wants_write = 0;
+        var handshake_done = false;
+        for !handshake_done {
+            let current = tls.handshake(stream);
+            switch current {
+                case tls.Status.Ok: {
+                    handshake_done = true;
+                    say("HANDSHAKE ok wants_read="+strconv.format_u64(u64(wants_read))+" wants_write="+strconv.format_u64(u64(wants_write)));
+                }
+                case tls.Status.WantRead: { wants_read += 1; tls.wait(stream,current); }
+                case tls.Status.WantWrite: { wants_write += 1; tls.wait(stream,current); }
+                case tls.Status.Eof: { say("HANDSHAKE eof"); close_quiet(socket); return 1; }
+            }
+        }
+        let data = payload(size);
+        let first = tls.write(stream,data,0,vec.len(data));
+        switch first.status {
+            case tls.Status.Ok: {
+                say("FIRSTWRITE count="+strconv.format_u64(u64(first.count)));
+                if first.count < vec.len(data) { say("PARTIAL yes"); }
+                write_remaining(stream,data,first.count);
+            }
+            case tls.Status.WantRead: {
+                say("FIRSTWRITE want-read");
+                tls.wait(stream,first.status);
+                write_remaining(stream,data,0);
+            }
+            case tls.Status.WantWrite: {
+                say("FIRSTWRITE want-write");
+                tls.wait(stream,first.status);
+                write_remaining(stream,data,0);
+            }
+            case tls.Status.Eof: {
+                say("FIRSTWRITE eof");
+                close_quiet(socket);
+                return 1;
+            }
+        }
+        let received = read_size(stream,size);
+        if !equal_bytes(received,data) {
+            say("ECHO mismatch");
+            close_quiet(socket);
+            return 1;
+        }
+        say("ECHO ok bytes="+strconv.format_u64(u64(size)));
+        tls.close(stream);
+        close_quiet(socket);
+        say("RESULT ok");
+        return 0;
+    } catch error tls.Error {
+        close_quiet(socket);
+        report_failure("TLSFAIL",error);
+        return 1;
+    }
+}
+
+func context_for(ca_file string) tls.Context throws os.Error {
+    try { return make_context(ca_file); }
+    catch error tls.Error { throw os.Error.System(1,0); }
+}
+
+func client_for(context tls.Context, socket net.Socket, name string) tls.Stream throws os.Error {
+    try { return tls.client(context,socket,name,tls.NameKind.Dns); }
+    catch error tls.Error { throw os.Error.System(1,0); }
+}
+
+func nul_name() string throws os.Error {
+    try { return text.from_bytes([0]); }
+    catch error text.Error { throw os.Error.System(22,0); }
+}
+
+func rejected_name(context tls.Context, socket net.Socket, name string) bool throws os.Error {
+    try {
+        let stream = tls.client(context,socket,name,tls.NameKind.Dns);
+        let ignored = stream;
+        return false;
+    } catch error tls.Error {
+        return tls.error_info(error).category == tls.CATEGORY_INVALID_ARGUMENT;
+    }
+}
+
+func invalid_mode(args Vec[string]) i32 throws os.Error {
+    let ca_file = arg(args,1);
+    let context = context_for(ca_file);
+    let pair = net.socketpair(net.AF_UNIX,net.SOCK_STREAM,0);
+    let empty_ok = rejected_name(context,pair.second,"");
+    let nul_ok = rejected_name(context,pair.second,nul_name());
+    close_quiet(pair.first);
+    close_quiet(pair.second);
+    if !empty_ok { say("EMPTY-NAME unexpected"); return 1; }
+    if !nul_ok { say("NUL-NAME unexpected"); return 1; }
+    say("RESULT invalid-names");
+    return 0;
+}
+
+func resources_mode(args Vec[string]) i32 throws os.Error {
+    let ca_file = arg(args,1);
+    let context = context_for(ca_file);
+    for var round usize = 0; round < 256; round += 1 {
+        let pair = net.socketpair(net.AF_UNIX,net.SOCK_STREAM,0);
+        let stream = client_for(context,pair.second,"localhost");
+        let stream_copy = stream;
+        let context_copy = context;
+        if stream_copy.descriptor != net.fd(pair.second) {
+            say("DESCRIPTOR mismatch");
+            close_quiet(pair.first);
+            close_quiet(pair.second);
+            return 1;
+        }
+        close_quiet(pair.first);
+        close_quiet(pair.second);
+    }
+    say("RESULT resources");
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 2 {
+        say("usage: tls_client python|echo|nonblock|invalid|resources ...");
+        return 2;
+    }
+    let args = arguments[1:];
+    let mode = arg(args,0);
+    if mode == "python" { return python_mode(args); }
+    if mode == "echo" { return nonblock_mode(args,false); }
+    if mode == "nonblock" { return nonblock_mode(args,true); }
+    if mode == "invalid" { return invalid_mode(args); }
+    if mode == "resources" { return resources_mode(args); }
+    say("usage: tls_client python|echo|nonblock|invalid|resources ...");
+    return 2;
+}

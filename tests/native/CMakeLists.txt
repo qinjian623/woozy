@@ -37,6 +37,13 @@ add_test(NAME native.slice_forged COMMAND lang_slice_forged_test
   ${LANG_SOURCE_ROOT}/tests/native/slice_source/fixtures/core/lang.toml)
 set_tests_properties(native.slice_forged PROPERTIES TIMEOUT 60)
 if(LANG_TEST_PYTHON)
+  add_test(NAME native.tls_source COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/tls-source-results
+    ${LANG_SOURCE_ROOT}/tests/native/tls_source/run_tls_source.py
+    --cli $<TARGET_FILE:woozyc> --cxx ${LLVM_TOOLS_BINARY_DIR}/clang++
+    --cc ${LLVM_TOOLS_BINARY_DIR}/clang --python ${LANG_TEST_PYTHON}
+    --http-regression)
+  set_tests_properties(native.tls_source PROPERTIES TIMEOUT 900)
   add_test(NAME native.slice_source COMMAND ${LANG_TEST_PYTHON}
     ${LANG_SOURCE_ROOT}/tests/native/slice_source/run_slice_source.py
     --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_native_helper>
@@ -44,6 +51,17 @@ if(LANG_TEST_PYTHON)
     --runtime $<TARGET_FILE:lang_native_runtime> --root ${LANG_SOURCE_ROOT}
     --out ${CMAKE_CURRENT_BINARY_DIR}/slice-source-results)
   set_tests_properties(native.slice_source PROPERTIES TIMEOUT 600)
+endif()
+if(LANG_TEST_PYTHON AND LANG_PYTHON312)
+  add_test(NAME native.box_source COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/box_source/run_box_source.py
+    --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_native_helper>
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --lld ${LLVM_TOOLS_BINARY_DIR}/ld.lld
+    --runtime $<TARGET_FILE:lang_native_runtime> --root ${LANG_SOURCE_ROOT}
+    --python ${LANG_PYTHON312}
+    --python-helper $<TARGET_FILE:lang_python_emit>
+    --out ${CMAKE_CURRENT_BINARY_DIR}/box-source-results)
+  set_tests_properties(native.box_source PROPERTIES TIMEOUT 600)
 endif()
 find_package(LLVM REQUIRED CONFIG)
 add_executable(lang_native_llvm_test llvm_test.cpp)

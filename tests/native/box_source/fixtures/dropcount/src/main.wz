@@ -1,0 +1,52 @@
+package app;
+
+import "std/box" as box;
+
+struct Owned {
+    text string;
+    values Vec[i32];
+}
+
+enum Item {
+    Empty;
+    Payload(value Owned);
+}
+
+func main() i32 {
+    let list_cell = box.new[Vec[i32]]([1, 2, 3]);
+    let list_alias = list_cell;
+    for var i i32 = 0; i < 64; i += 1 {
+        box.set(list_alias, [i, i + 1, i + 2]);
+    }
+    let list = box.get(list_cell);
+    if !(list[0] == 63) { return 1; }
+
+    let owned_cell = box.new[Owned](Owned(text: "first", values: [1, 2]));
+    for var i i32 = 0; i < 32; i += 1 {
+        box.set(owned_cell, Owned(text: "next", values: [i, i + 1]));
+    }
+    let owned = box.get(owned_cell);
+    if !(owned.values[0] == 31) { return 2; }
+
+    let item_cell = box.new[Item](
+        Item.Payload(value: Owned(text: "first", values: [1])));
+    for var i i32 = 0; i < 32; i += 1 {
+        box.set(item_cell, Item.Payload(
+            value: Owned(text: "next", values: [i])));
+    }
+    switch box.get(item_cell) {
+        case Item.Payload(value):
+            if !(value.values[0] == 31) { return 3; }
+        case Item.Empty:
+            return 4;
+    }
+
+    let outer = box.new[box.Box[i32]](box.new[i32](1));
+    let outer_alias = outer;
+    for var i i32 = 0; i < 32; i += 1 {
+        box.set(outer_alias, box.new[i32](i));
+    }
+    if !(box.get(box.get(outer)) == 31) { return 5; }
+
+    return 0;
+}

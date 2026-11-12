@@ -1,0 +1,23 @@
+package app;
+import "std/slice" as slice;
+import "std/vec" as vec;
+
+func main() i32 {
+    let nested Vec[Vec[i32]] = [[1], [2, 3]];
+    let s Slice[Vec[i32]] = slice.view[Vec[i32]](nested, 0, 2);
+    let out Vec[Vec[i32]] = slice.to_vec[Vec[i32]](s);
+    let extra Vec[i32] = [10];
+    vec.push[Vec[i32]](out, extra);
+    if out[2][0] != 10 { return 1; }
+    extra[0] = 11;
+    if out[2][0] != 11 { return 2; }
+    var total i32 = 0;
+    for inner in s { total += inner[0]; }
+    if total != 3 { return 3; }
+    for inner in s { inner[0] += 10; }
+    if nested[0][0] != 11 || nested[1][0] != 12 { return 4; }
+    if out[1][0] != 12 { return 5; }
+    out[0] = [7, 8];
+    if nested[0][0] != 11 || out[0][1] != 8 { return 6; }
+    return 0;
+}

@@ -1,0 +1,9 @@
+package app;
+
+func never(pointer Ptr[u8], length usize) i32 {
+    return 0;
+}
+
+func main() i32 {
+    return 0;
+}

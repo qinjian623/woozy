@@ -1,0 +1,222 @@
+// HTTP/1.1 over the std/tls stream.
+//
+// This module reuses std/http's existing framing, limits, header/trailer parser
+// and persistent Reader through http.reader_external().  It does not implement
+// a second HTTP parser.  A program using it must select hosted runtime and
+// declare the `woozy_tls` native dependency documented by std/tls.
+package https;
+
+import "std/http" as http;
+import "std/net" as net;
+import "std/os" as os;
+import "std/tls" as tls;
+import "std/vec" as vec;
+
+pub enum Error {
+    Tls(error tls.Error);
+    Net(error os.Error);
+    Http(error http.Error);
+    Closed;
+}
+
+pub struct Connection {
+    socket net.Socket;
+    stream tls.Stream;
+    reader http.Reader;
+}
+
+pub struct Server {
+    listener net.Socket;
+    context tls.Context;
+}
+
+func receive_tls(token u64, data Vec[u8], count usize) usize throws os.Error {
+    return tls.transport_read_token(token,data,count);
+}
+
+func send_tls(token u64, data Vec[u8], offset usize, count usize) usize throws os.Error {
+    return tls.transport_write_token(token,data,offset,count);
+}
+
+func close_socket_quiet(socket net.Socket) {
+    try {
+        net.close(socket);
+    } catch error os.Error {
+        let ignored = error;
+    }
+}
+
+func make_connection(socket net.Socket, stream tls.Stream) Connection {
+    let reader = http.reader_external(
+        tls.token(stream),
+        receive_tls,
+        send_tls,
+        http.default_limits());
+    return Connection(socket:socket,stream:stream,reader:reader);
+}
+
+func connect_socket(host string, port u16) net.Socket throws Error {
+    var addresses = vec.empty[net.Address]();
+    try {
+        addresses = net.getaddrinfo(host,port,net.AF_UNSPEC);
+    } catch error os.Error {
+        throw Error.Net(error:error);
+    }
+    if vec.len(addresses) == 0 { throw Error.Net(error:os.Error.System(2,0)); }
+    var last = os.Error.System(111,0);
+    for address in addresses {
+        var socket = net.from_fd(-1);
+        try {
+            socket = net.socket(address.family,net.SOCK_STREAM,0);
+        } catch error os.Error {
+            last = error;
+            continue;
+        }
+        try {
+            net.connect(socket,address);
+            return socket;
+        } catch error os.Error {
+            last = error;
+            close_socket_quiet(socket);
+        }
+    }
+    throw Error.Net(error:last);
+}
+
+pub func connect(context tls.Context, host string, port u16) Connection throws Error {
+    let socket = connect_socket(host,port);
+    try {
+        let stream = tls.connect(context,socket,host,tls.NameKind.Auto);
+        return make_connection(socket,stream);
+    } catch error tls.Error {
+        close_socket_quiet(socket);
+        throw Error.Tls(error:error);
+    }
+}
+
+pub func send(connection Connection, request http.Request) throws Error {
+    try {
+        http.write_request_on(connection.reader,request);
+    } catch error http.Error {
+        throw Error.Http(error:error);
+    }
+}
+
+pub func receive_request(connection Connection) http.Request throws Error {
+    try {
+        return http.read_request(connection.reader);
+    } catch error http.Error {
+        throw Error.Http(error:error);
+    }
+}
+
+pub func receive(connection Connection, request_method string) http.Response throws Error {
+    try {
+        return http.read_response(connection.reader,request_method);
+    } catch error http.Error {
+        throw Error.Http(error:error);
+    }
+}
+
+pub func request(
+    context tls.Context,
+    host string,
+    port u16,
+    request http.Request) http.Response throws Error {
+    let connection = connect(context,host,port);
+    var response = http.Response(
+        version:"",status:0,reason:vec.empty[u8](),
+        headers:vec.empty[http.Header](),body:vec.empty[u8](),
+        trailers:vec.empty[http.Header]());
+    try {
+        send(connection,request);
+        response = receive(connection,request.method);
+    } catch error Error {
+        // The HTTP/TLS stream is already failed.  Close only the socket this
+        // module owns; do not attempt SSL_shutdown or wait for the peer.  The
+        // Stream resource release below drops the TLS object without closing
+        // the borrowed descriptor again.
+        close_socket_quiet(connection.socket);
+        throw error;
+    }
+    // A normal close is graceful and bidirectional.  Its failure is not caught
+    // here: close() already closes exactly once on a TLS shutdown error.
+    close(connection);
+    return response;
+}
+
+pub func close(connection Connection) throws Error {
+    try {
+        tls.close(connection.stream);
+    } catch error tls.Error {
+        close_socket_quiet(connection.socket);
+        throw Error.Tls(error:error);
+    }
+    try {
+        net.close(connection.socket);
+    } catch error os.Error {
+        throw Error.Net(error:error);
+    }
+}
+
+pub func listen(context tls.Context, address net.Address, backlog i32) Server throws Error {
+    var socket = net.from_fd(-1);
+    try {
+        socket = net.socket(address.family,net.SOCK_STREAM,0);
+    } catch error os.Error {
+        throw Error.Net(error:error);
+    }
+    try {
+        net.setsockopt_int(socket,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+        net.bind(socket,address);
+        net.listen(socket,backlog);
+    } catch error os.Error {
+        close_socket_quiet(socket);
+        throw Error.Net(error:error);
+    }
+    return Server(listener:socket,context:context);
+}
+
+pub func close_server(server Server) throws Error {
+    try {
+        net.close(server.listener);
+    } catch error os.Error {
+        throw Error.Net(error:error);
+    }
+}
+
+pub func local_address(server Server) net.Address throws Error {
+    try {
+        return net.getsockname(server.listener);
+    } catch error os.Error {
+        throw Error.Net(error:error);
+    }
+}
+
+pub func accept(server Server) Connection throws Error {
+    var accepted = net.Accepted(socket:net.from_fd(-1),address:net.any4(0));
+    try {
+        accepted = net.accept(server.listener,u32(net.SOCK_CLOEXEC));
+    } catch error os.Error {
+        throw Error.Net(error:error);
+    }
+    try {
+        let stream = tls.server_stream(server.context,accepted.socket);
+        tls.handshake_all(stream);
+        return make_connection(accepted.socket,stream);
+    } catch error tls.Error {
+        close_socket_quiet(accepted.socket);
+        throw Error.Tls(error:error);
+    }
+}
+
+pub func respond(
+    connection Connection,
+    response http.Response,
+    request_method string) throws Error {
+    try {
+        http.write_response_on(connection.reader,response,request_method);
+    } catch error http.Error {
+        throw Error.Http(error:error);
+    }
+}

@@ -1,0 +1,410 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {
+      "logical_path": "woozy_tls/native",
+      "provider": "native_library",
+      "library": "woozy_tls"
+    }
+  ],
+  "types": [
+    {
+      "id": "woozy_tls.ErrorStorage",
+      "module": "woozy_tls/native",
+      "name": "ErrorStorage",
+      "kind": "resource",
+      "release_symbol": "wts_error_release",
+      "retain_symbol": "wts_error_retain"
+    },
+    {
+      "id": "woozy_tls.CountStorage",
+      "module": "woozy_tls/native",
+      "name": "CountStorage",
+      "kind": "resource",
+      "release_symbol": "wts_count_release",
+      "retain_symbol": "wts_count_retain"
+    },
+    {
+      "id": "woozy_tls.Bytes",
+      "module": "woozy_tls/native",
+      "name": "Bytes",
+      "kind": "resource",
+      "release_symbol": "wts_bytes_release",
+      "retain_symbol": "wts_bytes_retain"
+    },
+    {
+      "id": "woozy_tls.Context",
+      "module": "woozy_tls/native",
+      "name": "Context",
+      "kind": "resource",
+      "release_symbol": "wts_context_release",
+      "retain_symbol": "wts_context_retain"
+    },
+    {
+      "id": "woozy_tls.Stream",
+      "module": "woozy_tls/native",
+      "name": "Stream",
+      "kind": "resource",
+      "release_symbol": "wts_stream_release",
+      "retain_symbol": "wts_stream_retain"
+    }
+  ],
+  "callables": [
+    {
+      "id": "woozy_tls.wts_error_new",
+      "module": "woozy_tls/native",
+      "name": "wts_error_new",
+      "symbol": "wts_error_new",
+      "parameters": [],
+      "result": {"type": "woozy_tls.ErrorStorage", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_error_reset",
+      "module": "woozy_tls/native",
+      "name": "wts_error_reset",
+      "symbol": "wts_error_reset",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "Unit", "ownership": "unit"}
+    },
+    {
+      "id": "woozy_tls.wts_error_is_null",
+      "module": "woozy_tls/native",
+      "name": "wts_error_is_null",
+      "symbol": "wts_error_is_null",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_error_category",
+      "module": "woozy_tls/native",
+      "name": "wts_error_category",
+      "symbol": "wts_error_category",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_error_system_errno",
+      "module": "woozy_tls/native",
+      "name": "wts_error_system_errno",
+      "symbol": "wts_error_system_errno",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_error_ssl_error",
+      "module": "woozy_tls/native",
+      "name": "wts_error_ssl_error",
+      "symbol": "wts_error_ssl_error",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_error_verify_result",
+      "module": "woozy_tls/native",
+      "name": "wts_error_verify_result",
+      "symbol": "wts_error_verify_result",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "i64", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_error_openssl_error",
+      "module": "woozy_tls/native",
+      "name": "wts_error_openssl_error",
+      "symbol": "wts_error_openssl_error",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "u64", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_error_openssl_error_count",
+      "module": "woozy_tls/native",
+      "name": "wts_error_openssl_error_count",
+      "symbol": "wts_error_openssl_error_count",
+      "parameters": [{"name": "storage", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "u64", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_count_new",
+      "module": "woozy_tls/native",
+      "name": "wts_count_new",
+      "symbol": "wts_count_new",
+      "parameters": [],
+      "result": {"type": "woozy_tls.CountStorage", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_count_value",
+      "module": "woozy_tls/native",
+      "name": "wts_count_value",
+      "symbol": "wts_count_value",
+      "parameters": [{"name": "storage", "type": "woozy_tls.CountStorage"}],
+      "result": {"type": "u64", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_count_set",
+      "module": "woozy_tls/native",
+      "name": "wts_count_set",
+      "symbol": "wts_count_set",
+      "parameters": [
+        {"name": "storage", "type": "woozy_tls.CountStorage"},
+        {"name": "value", "type": "u64"}
+      ],
+      "result": {"type": "Unit", "ownership": "unit"}
+    },
+    {
+      "id": "woozy_tls.wts_count_is_null",
+      "module": "woozy_tls/native",
+      "name": "wts_count_is_null",
+      "symbol": "wts_count_is_null",
+      "parameters": [{"name": "storage", "type": "woozy_tls.CountStorage"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_new",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_new",
+      "symbol": "wts_bytes_new",
+      "parameters": [{"name": "capacity", "type": "u64"}],
+      "result": {"type": "woozy_tls.Bytes", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_capacity",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_capacity",
+      "symbol": "wts_bytes_capacity",
+      "parameters": [{"name": "storage", "type": "woozy_tls.Bytes"}],
+      "result": {"type": "u64", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_length",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_length",
+      "symbol": "wts_bytes_length",
+      "parameters": [{"name": "storage", "type": "woozy_tls.Bytes"}],
+      "result": {"type": "u64", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_set_length",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_set_length",
+      "symbol": "wts_bytes_set_length",
+      "parameters": [
+        {"name": "storage", "type": "woozy_tls.Bytes"},
+        {"name": "length", "type": "u64"}
+      ],
+      "result": {"type": "Unit", "ownership": "unit"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_failed",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_failed",
+      "symbol": "wts_bytes_failed",
+      "parameters": [{"name": "storage", "type": "woozy_tls.Bytes"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_data_mut",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_data_mut",
+      "symbol": "wts_bytes_data_mut",
+      "parameters": [{"name": "storage", "type": "woozy_tls.Bytes"}],
+      "result": {"type": "PtrMut[u8]", "ownership": "borrowed"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_data",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_data",
+      "symbol": "wts_bytes_data",
+      "parameters": [{"name": "storage", "type": "woozy_tls.Bytes"}],
+      "result": {"type": "Ptr[u8]", "ownership": "borrowed"}
+    },
+    {
+      "id": "woozy_tls.wts_bytes_resize",
+      "module": "woozy_tls/native",
+      "name": "wts_bytes_resize",
+      "symbol": "wts_bytes_resize",
+      "parameters": [
+        {"name": "storage", "type": "woozy_tls.Bytes"},
+        {"name": "capacity", "type": "u64"}
+      ],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_context_client_default",
+      "module": "woozy_tls/native",
+      "name": "wts_context_client_default",
+      "symbol": "wts_context_client_default",
+      "parameters": [{"name": "error", "type": "woozy_tls.ErrorStorage"}],
+      "result": {"type": "woozy_tls.Context", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_context_client",
+      "module": "woozy_tls/native",
+      "name": "wts_context_client",
+      "symbol": "wts_context_client",
+      "parameters": [
+        {"name": "ca_file", "type": "woozy_tls.Bytes"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "woozy_tls.Context", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_context_server",
+      "module": "woozy_tls/native",
+      "name": "wts_context_server",
+      "symbol": "wts_context_server",
+      "parameters": [
+        {"name": "certificate_chain", "type": "woozy_tls.Bytes"},
+        {"name": "private_key", "type": "woozy_tls.Bytes"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "woozy_tls.Context", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_context_is_null",
+      "module": "woozy_tls/native",
+      "name": "wts_context_is_null",
+      "symbol": "wts_context_is_null",
+      "parameters": [{"name": "context", "type": "woozy_tls.Context"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_stream_client",
+      "module": "woozy_tls/native",
+      "name": "wts_stream_client",
+      "symbol": "wts_stream_client",
+      "parameters": [
+        {"name": "context", "type": "woozy_tls.Context"},
+        {"name": "fd", "type": "i32"},
+        {"name": "name_kind", "type": "i32"},
+        {"name": "name", "type": "woozy_tls.Bytes"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "woozy_tls.Stream", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_stream_server",
+      "module": "woozy_tls/native",
+      "name": "wts_stream_server",
+      "symbol": "wts_stream_server",
+      "parameters": [
+        {"name": "context", "type": "woozy_tls.Context"},
+        {"name": "fd", "type": "i32"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "woozy_tls.Stream", "ownership": "owned"}
+    },
+    {
+      "id": "woozy_tls.wts_stream_is_null",
+      "module": "woozy_tls/native",
+      "name": "wts_stream_is_null",
+      "symbol": "wts_stream_is_null",
+      "parameters": [{"name": "stream", "type": "woozy_tls.Stream"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_stream_descriptor",
+      "module": "woozy_tls/native",
+      "name": "wts_stream_descriptor",
+      "symbol": "wts_stream_descriptor",
+      "parameters": [{"name": "stream", "type": "woozy_tls.Stream"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_stream_token",
+      "module": "woozy_tls/native",
+      "name": "wts_stream_token",
+      "symbol": "wts_stream_token",
+      "parameters": [{"name": "stream", "type": "woozy_tls.Stream"}],
+      "result": {"type": "u64", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_handshake",
+      "module": "woozy_tls/native",
+      "name": "wts_handshake",
+      "symbol": "wts_handshake",
+      "parameters": [
+        {"name": "stream", "type": "woozy_tls.Stream"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_read",
+      "module": "woozy_tls/native",
+      "name": "wts_read",
+      "symbol": "wts_read",
+      "parameters": [
+        {"name": "stream", "type": "woozy_tls.Stream"},
+        {"name": "data", "type": "PtrMut[u8]"},
+        {"name": "capacity", "type": "u64"},
+        {"name": "count", "type": "woozy_tls.CountStorage"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_write",
+      "module": "woozy_tls/native",
+      "name": "wts_write",
+      "symbol": "wts_write",
+      "parameters": [
+        {"name": "stream", "type": "woozy_tls.Stream"},
+        {"name": "data", "type": "Ptr[u8]"},
+        {"name": "length", "type": "u64"},
+        {"name": "count", "type": "woozy_tls.CountStorage"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_shutdown",
+      "module": "woozy_tls/native",
+      "name": "wts_shutdown",
+      "symbol": "wts_shutdown",
+      "parameters": [
+        {"name": "stream", "type": "woozy_tls.Stream"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_transport_fd",
+      "module": "woozy_tls/native",
+      "name": "wts_transport_fd",
+      "symbol": "wts_transport_fd",
+      "parameters": [{"name": "token", "type": "u64"}],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_transport_read",
+      "module": "woozy_tls/native",
+      "name": "wts_transport_read",
+      "symbol": "wts_transport_read",
+      "parameters": [
+        {"name": "token", "type": "u64"},
+        {"name": "data", "type": "PtrMut[u8]"},
+        {"name": "capacity", "type": "u64"},
+        {"name": "count", "type": "woozy_tls.CountStorage"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "i32", "ownership": "value"}
+    },
+    {
+      "id": "woozy_tls.wts_transport_write",
+      "module": "woozy_tls/native",
+      "name": "wts_transport_write",
+      "symbol": "wts_transport_write",
+      "parameters": [
+        {"name": "token", "type": "u64"},
+        {"name": "data", "type": "Ptr[u8]"},
+        {"name": "length", "type": "u64"},
+        {"name": "count", "type": "woozy_tls.CountStorage"},
+        {"name": "error", "type": "woozy_tls.ErrorStorage"}
+      ],
+      "result": {"type": "i32", "ownership": "value"}
+    }
+  ]
+}

@@ -1,0 +1,49 @@
+package app;
+import "std/slice" as slice;
+
+enum E { Stop; }
+
+func first_match(s Slice[i32], target i32) i32 {
+    for x in s {
+        if x == target { return x; }
+    }
+    return 0 - 1;
+}
+
+func fail_on(s Slice[i32], target i32) i32 throws E {
+    for x in s {
+        if x == target { throw E.Stop; }
+    }
+    return 0;
+}
+
+func sums(s Slice[i32]) i32 {
+    var total i32 = 0;
+    var skip i32 = 0;
+    for x in s {
+        skip += 1;
+        if skip == 1 { continue; }
+        if x == 4 { break; }
+        total += x;
+    }
+    return total;
+}
+
+func main() i32 {
+    let v Vec[i32] = [1, 2, 3, 4, 5];
+    let s Slice[i32] = slice.view[i32](v, 0, 5);
+    if first_match(s, 3) != 3 || first_match(s, 9) != 0 - 1 { return 1; }
+    if sums(s) != 5 { return 2; }
+    var caught i32 = 0;
+    try {
+        let x i32 = fail_on(s, 4);
+        return 3;
+    } catch e E {
+        caught = 1;
+    }
+    if caught != 1 { return 4; }
+    var total i32 = 0;
+    for x in slice.view[i32](v, 1, 4) { total += x; }
+    if total != 9 { return 5; }
+    return 0;
+}

@@ -1,0 +1,87 @@
+package app;
+
+import "std/box" as box;
+
+struct Pair {
+    left i32;
+    right i32;
+}
+
+enum Choice {
+    Number(value i32);
+    Text(value string);
+}
+
+func bump(cell box.Box[i32]) {
+    box.set(cell, box.get(cell) + 1);
+}
+
+func main() i32 {
+    let original = box.new[i32](10);
+    let alias = original;
+    box.set(alias, 20);
+    if !(box.get(original) == 20) { return 1; }
+
+    let snapshot = box.get(original);
+    box.set(original, 30);
+    if !(snapshot == 20) { return 2; }
+    if !(box.get(alias) == 30) { return 3; }
+
+    let scoped = box.new[i32](0);
+    {
+        let inner = scoped;
+        box.set(inner, 7);
+    }
+    if !(box.get(scoped) == 7) { return 4; }
+    bump(scoped);
+    if !(box.get(scoped) == 8) { return 5; }
+
+    let pair = box.new[Pair](Pair(left: 1, right: 2));
+    let pair_alias = pair;
+    var pair_copy = box.get(pair_alias);
+    pair_copy.left = 9;
+    if !(box.get(pair).left == 1) { return 6; }
+    box.set(pair, Pair(left: 3, right: 4));
+    if !(box.get(pair_alias).right == 4) { return 7; }
+    if !(pair_copy.left == 9) { return 8; }
+
+    let choice = box.new[Choice](Choice.Text(value: "keep"));
+    let choice_alias = choice;
+    let old_choice = box.get(choice_alias);
+    box.set(choice, Choice.Number(value: 5));
+    switch old_choice {
+        case Choice.Text(value):
+            if !(value == "keep") { return 9; }
+        case Choice.Number(value):
+            return 10;
+    }
+    switch box.get(choice_alias) {
+        case Choice.Number(value):
+            if !(value == 5) { return 11; }
+        case Choice.Text(value):
+            return 12;
+    }
+
+    let text = box.new[string]("one");
+    let text_alias = text;
+    let old_text = box.get(text_alias);
+    box.set(text, "two");
+    if !(old_text == "one") { return 13; }
+    if !(box.get(text_alias) == "two") { return 14; }
+
+    let list = box.new[Vec[i32]]([1, 2]);
+    let list_alias = list;
+    let old_list = box.get(list_alias);
+    box.set(list, [3, 4]);
+    if !(old_list[0] == 1 && old_list[1] == 2) { return 15; }
+    let current_list = box.get(list_alias);
+    if !(current_list[0] == 3 && current_list[1] == 4) { return 16; }
+
+    let self_list = box.new[Vec[i32]]([5]);
+    let self_alias = self_list;
+    box.set(self_list, box.get(self_alias));
+    let self_value = box.get(self_list);
+    if !(self_value[0] == 5) { return 17; }
+
+    return 0;
+}

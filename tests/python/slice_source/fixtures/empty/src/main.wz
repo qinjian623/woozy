@@ -1,0 +1,28 @@
+package app;
+import "std/slice" as slice;
+import "std/vec" as vec;
+
+func make_view(values move Vec[i32]) Slice[i32] {
+    return slice.view[i32](values, 0, 2);
+}
+
+func main() i32 {
+    let v Vec[i32] = [1, 2, 3];
+    let empty Slice[i32] = slice.view[i32](v, 1, 1);
+    let empty2 Slice[i32] = empty[0:0];
+    if slice.len(empty) != 0 || slice.len(empty2) != 0 { return 1; }
+    var seen i32 = 0;
+    for x in empty { seen += 1; }
+    if seen != 0 { return 2; }
+    let out Vec[i32] = slice.to_vec[i32](empty);
+    if vec.len[i32](out) != 0 { return 3; }
+    vec.push[i32](out, 9);
+    if out[0] != 9 { return 4; }
+    let kept Slice[i32] = make_view(move v);
+    if kept[0] != 1 || kept[1] != 2 || slice.len(kept) != 2 { return 5; }
+    let prefix Slice[i32] = kept[:1];
+    let suffix Slice[i32] = kept[1:];
+    if slice.len(prefix) != 1 || prefix[0] != 1 { return 6; }
+    if slice.len(suffix) != 1 || suffix[0] != 2 { return 7; }
+    return 0;
+}
