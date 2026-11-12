@@ -19,16 +19,26 @@
 // Contract for the integrating compiler/runtime:
 //   * target points at an object whose first member is an atomic u64 strong
 //     count that reaches zero exactly once in the final release.
-//   * owner_slot is zero-initialized before the object is published and is not
-//     modified except by lang_weak_downgrade_v1. Reusing the storage for a new
-//     object requires re-initializing the slot to null first.
+//   * owner_slot is zero-initialized before the object is published.  It is
+//     modified only by lang_weak_downgrade_v1 and
+//     lang_weak_invalidate_slot_v1.  Reusing the storage for a new object
+//     requires re-initializing the slot to null first.
 //   * lang_weak_downgrade_v1 is called while the caller holds a strong
-//     reference. The returned pointer owns one real Weak reference.
+//     reference. The returned pointer owns one real Weak reference.  A slot
+//     invalidated by the cycle collector is permanently closed: later calls
+//     return null and never install a new control block.
 //   * The final strong release calls lang_weak_detach_v1 exactly once before
-//     destroying/freeing target. After detach returns, no code may read the
-//     target slot (the target may be freed immediately after detach returns).
+//     destroying/freeing target.  The slot may already hold the closed tag;
+//     detach must accept it as a harmless no-op.  After detach returns, no code
+//     may read the target slot (the target may be freed immediately after
+//     detach returns).
 //   * Every Weak retain has a matching release. Null control pointers are
 //     accepted as empty Weak values.
+//
+// The closed-slot representation is private to weak.cpp: the canonical slot
+// holds either null, a naturally aligned LangWeakControl pointer, or the
+// impossible pointer value 1.  Value 1 is a permanent tag, never a control
+// block, and must not be passed to retain/release/upgrade as a real Weak.
 //
 // These functions use only atomic builtins, the native allocator and the
 // terminal Panic entry. They do not call libc, pthreads or target payload
@@ -66,8 +76,23 @@ bool lang_weak_alive_v1(LangWeakControl *control) noexcept;
 // Called once by the final strong release, before target destruction. Clears
 // target under the Weak lock and then drops the implicit alive-target Weak
 // reference. The target storage must not be freed before this function
-// returns. A second call on the same control block is harmless.
+// returns. A second call on the same control block is harmless. Null and the
+// private closed-slot tag are harmless no-ops, so final release can call this
+// after the cycle collector has invalidated the slot.
 void lang_weak_detach_v1(LangWeakControl *control) noexcept;
+
+// Cycle-collector integration.  The caller must hold a strong reference to the
+// target (the collector pins every candidate first).  Atomically and
+// permanently closes *owner_slot, clears the installed control block's target,
+// and releases its implicit alive-target Weak reference.  The slot is tagged
+// before any control can be freed, so a concurrent downgrade either observes
+// the tag and returns null or already owns a real Weak reference.
+//
+// This callback must not run user code.  It is idempotent, accepts a null slot
+// pointer, and never allocates, frees, or panics while holding the Weak lock.
+// Existing real Weak owners remain copyable/droppable; their upgrade/alive
+// operations observe the cleared target as dead.
+void lang_weak_invalidate_slot_v1(LangWeakControl **owner_slot) noexcept;
 
 // Fork integration. prepare acquires this file's dedicated lock before fork;
 // the parent releases it (even when fork fails), while the child resets the

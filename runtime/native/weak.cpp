@@ -15,6 +15,21 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t cause,
 namespace {
 
 constexpr uint64_t kMaxU64 = ~uint64_t{0};
+// Value 1 is impossible for a naturally aligned control allocation.  It is a
+// permanent closed-slot tag, never exposed as a real Weak control block.
+constexpr uintptr_t kClosedSlotTag = 1;
+
+inline LangWeakControl *closed_slot() noexcept {
+  return reinterpret_cast<LangWeakControl *>(kClosedSlotTag);
+}
+
+inline bool is_closed(const LangWeakControl *control) noexcept {
+  return reinterpret_cast<uintptr_t>(control) == kClosedSlotTag;
+}
+
+inline bool is_real_control(const LangWeakControl *control) noexcept {
+  return control && !is_closed(control);
+}
 
 // This lock is used only for reading/CASing target and for detach. It is never
 // held across lang_alloc_v1, lang_free_v1, a Panic, or any payload destructor.
@@ -71,46 +86,84 @@ LangWeakControl *new_control(void *target) noexcept {
   return control;
 }
 
+// Lock-held retain helper.  It reports overflow instead of Panicking so the
+// caller can release the Weak lock before entering the terminal Panic path.
+bool try_retain_control(LangWeakControl *control) noexcept {
+  uint64_t weak_refs = __atomic_load_n(&control->weak_refs, __ATOMIC_RELAXED);
+  for (;;) {
+    if (weak_refs == kMaxU64) return false;
+    if (__atomic_compare_exchange_n(&control->weak_refs, &weak_refs,
+                                    weak_refs + 1, false, __ATOMIC_RELAXED,
+                                    __ATOMIC_RELAXED))
+      return true;
+  }
+}
+
 } // namespace
 
 extern "C" LangWeakControl *
 lang_weak_downgrade_v1(void *target, LangWeakControl **owner_slot) noexcept {
   if (!target || !owner_slot) return nullptr;
 
-  // A live target is protected by the caller's strong reference, so an
-  // already-installed control block cannot be detached/freed during retain.
-  auto *existing = __atomic_load_n(owner_slot, __ATOMIC_ACQUIRE);
-  if (existing) {
-    lang_weak_retain_v1(existing);
-    return existing;
+  for (;;) {
+    LangWeakControl *observed =
+        __atomic_load_n(owner_slot, __ATOMIC_ACQUIRE);
+    if (is_closed(observed)) return nullptr;
+
+    if (!observed) {
+      // Allocate outside the Weak lock.  The candidate may lose the race or
+      // discover that the collector closed the slot while it was allocating;
+      // it is then freed without ever becoming visible.
+      LangWeakControl *candidate = new_control(target);
+      weak_lock_acquire();
+      LangWeakControl *current =
+          __atomic_load_n(owner_slot, __ATOMIC_RELAXED);
+      if (is_closed(current)) {
+        weak_lock_release();
+        lang_free_v1(candidate);
+        return nullptr;
+      }
+      if (current) {
+        const bool retained = try_retain_control(current);
+        weak_lock_release();
+        lang_free_v1(candidate);
+        if (!retained) reference_count_panic();
+        return current;
+      }
+      __atomic_store_n(owner_slot, candidate, __ATOMIC_RELEASE);
+      weak_lock_release();
+      return candidate;
+    }
+
+    // Re-read and retain under the Weak lock.  The collector may have cleared
+    // the control target and freed the implicit reference before this point;
+    // retaining the stale pointer outside the lock would be a UAF.  The slot
+    // is tagged before such a free, so a closed tag is always safe to return.
+    weak_lock_acquire();
+    LangWeakControl *current =
+        __atomic_load_n(owner_slot, __ATOMIC_RELAXED);
+    if (is_closed(current)) {
+      weak_lock_release();
+      return nullptr;
+    }
+    if (!current) {
+      weak_lock_release();
+      continue;
+    }
+    const bool retained = try_retain_control(current);
+    weak_lock_release();
+    if (!retained) reference_count_panic();
+    return current;
   }
-
-  LangWeakControl *candidate = new_control(target);
-  LangWeakControl *expected = nullptr;
-  if (__atomic_compare_exchange_n(owner_slot, &expected, candidate, false,
-                                  __ATOMIC_RELEASE, __ATOMIC_ACQUIRE))
-    return candidate;
-
-  // Another caller won. Never publish the losing allocation.
-  lang_free_v1(candidate);
-  lang_weak_retain_v1(expected);
-  return expected;
 }
 
 extern "C" void lang_weak_retain_v1(LangWeakControl *control) noexcept {
-  if (!control) return;
-  uint64_t weak_refs = __atomic_load_n(&control->weak_refs, __ATOMIC_RELAXED);
-  for (;;) {
-    if (weak_refs == kMaxU64) reference_count_panic();
-    if (__atomic_compare_exchange_n(&control->weak_refs, &weak_refs,
-                                    weak_refs + 1, false, __ATOMIC_RELAXED,
-                                    __ATOMIC_RELAXED))
-      return;
-  }
+  if (!is_real_control(control)) return;
+  if (!try_retain_control(control)) reference_count_panic();
 }
 
 extern "C" void lang_weak_release_v1(LangWeakControl *control) noexcept {
-  if (!control) return;
+  if (!is_real_control(control)) return;
   uint64_t weak_refs = __atomic_load_n(&control->weak_refs, __ATOMIC_RELAXED);
   for (;;) {
     if (!weak_refs) reference_count_panic();
@@ -129,7 +182,7 @@ extern "C" void lang_weak_release_v1(LangWeakControl *control) noexcept {
 }
 
 extern "C" void *lang_weak_upgrade_v1(LangWeakControl *control) noexcept {
-  if (!control) return nullptr;
+  if (!is_real_control(control)) return nullptr;
 
   weak_lock_acquire();
   void *target = __atomic_load_n(&control->target, __ATOMIC_RELAXED);
@@ -157,7 +210,7 @@ extern "C" void *lang_weak_upgrade_v1(LangWeakControl *control) noexcept {
 }
 
 extern "C" bool lang_weak_alive_v1(LangWeakControl *control) noexcept {
-  if (!control) return false;
+  if (!is_real_control(control)) return false;
   // Reading target is only a liveness hint; it must still happen under the lock
   // because detach/free may be concurrent with this call.
   weak_lock_acquire();
@@ -168,7 +221,10 @@ extern "C" bool lang_weak_alive_v1(LangWeakControl *control) noexcept {
 }
 
 extern "C" void lang_weak_detach_v1(LangWeakControl *control) noexcept {
-  if (!control) return;
+  // Null, the closed-slot tag, and a second detach are harmless.  In
+  // particular a final release must be able to pass the tag without reading a
+  // control block that the collector already freed.
+  if (!is_real_control(control)) return;
 
   weak_lock_acquire();
   void *target = __atomic_load_n(&control->target, __ATOMIC_RELAXED);
@@ -179,6 +235,37 @@ extern "C" void lang_weak_detach_v1(LangWeakControl *control) noexcept {
   // Do not hold the Weak lock across the implicit release: the last release
   // calls lang_free_v1. Detach returns only after target has been unpinned,
   // so the caller may free target immediately afterwards.
+  if (target) lang_weak_release_v1(control);
+}
+
+extern "C" void lang_weak_invalidate_slot_v1(
+    LangWeakControl **owner_slot) noexcept {
+  if (!owner_slot) return;
+
+  LangWeakControl *control = nullptr;
+  void *target = nullptr;
+  weak_lock_acquire();
+  control = __atomic_load_n(owner_slot, __ATOMIC_RELAXED);
+  if (is_closed(control)) {
+    weak_lock_release();
+    return;
+  }
+
+  // Tag first.  A concurrent downgrade either already retained the real
+  // control under this same lock, or it observes the permanent tag and cannot
+  // install a new control.  No stale control pointer is left in the slot.
+  __atomic_store_n(owner_slot, closed_slot(), __ATOMIC_RELEASE);
+  if (control) {
+    target = __atomic_load_n(&control->target, __ATOMIC_RELAXED);
+    if (target)
+      __atomic_store_n(&control->target, nullptr, __ATOMIC_RELEASE);
+  }
+  weak_lock_release();
+
+  // Release the implicit alive-target Weak reference outside the lock.  The
+  // control block is guaranteed alive until this release because the implicit
+  // reference was still present while target was non-null.  detach/another
+  // invalidate sees target == null and does not release it a second time.
   if (target) lang_weak_release_v1(control);
 }
 

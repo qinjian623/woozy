@@ -166,3 +166,54 @@ run exit: 0
 调用顺序、对象槽位前提、最终强释放顺序、fork 钩子组合和限制见
 `tests/native/weak/README.md`。Root 接入后应重新运行本目录测试，并补充
 Vec/Handle/真实 Weak 语言路径的集成回归；不能把本报告当作 MEM01 整体完成证据。
+
+## 2026-11-12 Weak invalidation / GC integration update
+
+范围：在本已 accepted 的 16-byte Weak 控制块上增加 GC white-candidate
+invalidation，并验证与已 accepted GC kernel 的组合顺序。仍不代表源码级
+`Weak[T]`、自动 GC 或整个 MEM02 完成。
+
+固定工具链：
+
+```text
+clang++: clang version 22.1.8 (ca7933e47d3a3451d81e72ac174dcb5aa28b59d1)
+ld.lld:  LLD 22.1.8 (same LLVM build)
+legacy:  /home/qin/Work/language-dev-20261103/toolchains/libxml2-legacy-2.13.9
+```
+
+新增行为：`lang_weak_invalidate_slot_v1` 在 Weak 锁内把 canonical slot 换成
+永久 closed tag（不可能的自然对齐指针值 1），清空旧 control target，锁外释放
+隐含 Weak 引用。closed slot 后续 downgrade 返回 null、不会重装；旧真实 Weak
+仍可 copy/drop，但 alive/upgrade 为 dead；final release 遇 tag 的 detach 是
+无害 no-op。downgrade 的旧 control load+retain 已改为 Weak 锁内重读并 retain，
+避免 invalidate 释放隐含引用后对已 free control 的 UAF；锁内不分配、不 free、
+不 Panic。
+
+实际运行：
+
+```sh
+LANG_WEAK_BUILD_DIR=/tmp/gcweak-all-weak LANG_WEAK_KEEP_BUILD=1 \
+  timeout 900s /home/qin/.local/state/cli-agent-bridge/worktrees/7ef7d7b0ec1c290ef3f51ece/tests/native/weak/run.sh
+```
+
+结果：O2 host、O0 host、ASAN/UBSAN、O2 `-nostdlib` 静态 ELF、O0
+`-nostdlib` 静态 ELF 全部通过。新增阶段输出：
+
+```text
+invalidate-empty-slot: PASS
+invalidate-live-control: PASS
+invalidate-address-reuse: PASS
+invalidate-concurrent: PASS
+weak_test: PASS (control blocks live=0)
+```
+
+同一更新还运行了 GC kernel 与真实 GC+Weak 集成测试；完整命令、源 hash 与
+集成结果见本轮交接报告。weak.o 的未定义符号仍恰好为：
+
+```text
+U lang_alloc_v1
+U lang_free_v1
+U lang_native_panic_v1
+```
+
+静态 ELF 均检查为 `EXEC`、无 `INTERP`、无 `NEEDED`、无强未定义符号。

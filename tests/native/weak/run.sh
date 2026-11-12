@@ -16,6 +16,7 @@ NM="${NM:-${LLVM_ROOT}/bin/llvm-nm}"
 READELF="${READELF:-${LLVM_ROOT}/bin/llvm-readelf}"
 LLD="${LLD:-${LLVM_ROOT}/bin/ld.lld}"
 BUILD_DIR="${LANG_WEAK_BUILD_DIR:-$(mktemp -d "${TMPDIR:-/tmp}/lang-weak.XXXXXX")}"
+mkdir -p "${BUILD_DIR}"
 
 # The fixed LLVM release's lld was built against the legacy libxml2 artifact.
 export PATH="${LLVM_ROOT}/bin:${PATH}"
@@ -134,6 +135,31 @@ if [[ "${ACTUAL_UNDEFINED}" != "${EXPECTED_UNDEFINED}" ]]; then
 fi
 
 # ---------------------------------------------------------------------------
+# Production-flags host concurrency test at O0 as well as O2.  The same source
+# and freestanding runtime flags are used; only the optimization level changes.
+# ---------------------------------------------------------------------------
+RUNTIME_FLAGS_O0=("${RUNTIME_FLAGS[@]/-O2/-O0}")
+HOST_FLAGS_O0=("${HOST_FLAGS[@]/-O2/-O0}")
+run_limited 120 "${CXX}" "${RUNTIME_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/weak.cpp" -o "${BUILD_DIR}/weak_o0.o"
+run_limited 120 "${CXX}" "${RUNTIME_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/alloc.cpp" -o "${BUILD_DIR}/alloc_o0.o"
+run_limited 120 "${CXX}" "${RUNTIME_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/panic.cpp" -o "${BUILD_DIR}/panic_o0.o"
+run_limited 120 "${CXX}" "${HOST_FLAGS_O0[@]}" \
+  -c "${SOURCE_ROOT}/tests/native/weak/weak_test.cpp" \
+  -o "${BUILD_DIR}/weak_test_o0.o"
+run_limited 120 "${CXX}" "${HOST_FLAGS_O0[@]}" \
+  -c "${SOURCE_ROOT}/tests/native/weak/weak_alloc_observer.cpp" \
+  -o "${BUILD_DIR}/weak_alloc_observer_o0.o"
+run_limited 120 "${CXX}" "${LINK_FLAGS[@]}" "${HOST_FLAGS_O0[@]}" \
+  "${BUILD_DIR}/weak_test_o0.o" "${BUILD_DIR}/weak_o0.o" \
+  "${BUILD_DIR}/alloc_o0.o" "${BUILD_DIR}/panic_o0.o" \
+  "${BUILD_DIR}/weak_alloc_observer_o0.o" "${WRAP_FLAGS[@]}" \
+  -o "${BUILD_DIR}/weak_test_o0"
+run_limited 120 "${BUILD_DIR}/weak_test_o0"
+
+# ---------------------------------------------------------------------------
 # ASAN/UBSAN oracle. weak.cpp keeps the freestanding code model but drops only
 # -fno-sanitize=all so released control blocks can be checked. alloc.cpp and
 # panic.cpp remain the production objects.
@@ -204,12 +230,16 @@ run_limited 120 "${CXX}" "${NOSTD_FLAGS[@]}" "${RUNTIME_INCLUDES[@]}" \
   -c "${SOURCE_ROOT}/runtime/native/panic.cpp" \
   -o "${BUILD_DIR}/panic_nostdlib.o"
 run_limited 120 "${CXX}" "${NOSTD_FLAGS[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/freestanding.cpp" \
+  -o "${BUILD_DIR}/freestanding_nostdlib.o"
+run_limited 120 "${CXX}" "${NOSTD_FLAGS[@]}" "${RUNTIME_INCLUDES[@]}" \
   -c "${SOURCE_ROOT}/tests/native/weak/nostdlib_test.cpp" \
   -o "${BUILD_DIR}/nostdlib_test.o"
 run_limited 120 "${CXX}" "${LINK_FLAGS[@]}" -nostdlib -static \
   -Wl,-e,_start -Wl,--no-undefined -Wl,-z,noexecstack -Wl,--build-id=none \
   "${BUILD_DIR}/nostdlib_test.o" "${BUILD_DIR}/weak_nostdlib.o" \
   "${BUILD_DIR}/alloc_nostdlib.o" "${BUILD_DIR}/panic_nostdlib.o" \
+  "${BUILD_DIR}/freestanding_nostdlib.o" \
   -o "${BUILD_DIR}/weak_nostdlib"
 NOSTD_UNDEFINED="$("${NM}" -u "${BUILD_DIR}/weak_nostdlib")"
 printf '\nnostdlib ELF undefined symbols:\n%s\n' "${NOSTD_UNDEFINED:-<none>}"
@@ -223,6 +253,56 @@ if "${READELF}" -d "${BUILD_DIR}/weak_nostdlib" 2>&1 | grep -q NEEDED; then
   printf 'nostdlib ELF unexpectedly has a dynamic dependency\n' >&2
   exit 1
 fi
+if "${READELF}" -l "${BUILD_DIR}/weak_nostdlib" 2>&1 | grep -q INTERP; then
+  printf 'nostdlib ELF unexpectedly has INTERP\n' >&2
+  exit 1
+fi
+if ! "${READELF}" -h "${BUILD_DIR}/weak_nostdlib" | grep -q 'Type:.*EXEC'; then
+  printf 'nostdlib ELF is not EXEC\n' >&2
+  exit 1
+fi
 run_limited 20 "${BUILD_DIR}/weak_nostdlib"
+
+# ---------------------------------------------------------------------------
+# The same -nostdlib static ELF at O0, so both optimization levels have direct
+# freestanding evidence rather than relying on the host O0 run alone.
+# ---------------------------------------------------------------------------
+NOSTD_FLAGS_O0=("${RUNTIME_FLAGS_O0[@]}" -fno-pie)
+run_limited 120 "${CXX}" "${NOSTD_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/weak.cpp" \
+  -o "${BUILD_DIR}/weak_nostdlib_o0.o"
+run_limited 120 "${CXX}" "${NOSTD_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/alloc.cpp" \
+  -o "${BUILD_DIR}/alloc_nostdlib_o0.o"
+run_limited 120 "${CXX}" "${NOSTD_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/panic.cpp" \
+  -o "${BUILD_DIR}/panic_nostdlib_o0.o"
+run_limited 120 "${CXX}" "${NOSTD_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/runtime/native/freestanding.cpp" \
+  -o "${BUILD_DIR}/freestanding_nostdlib_o0.o"
+run_limited 120 "${CXX}" "${NOSTD_FLAGS_O0[@]}" "${RUNTIME_INCLUDES[@]}" \
+  -c "${SOURCE_ROOT}/tests/native/weak/nostdlib_test.cpp" \
+  -o "${BUILD_DIR}/nostdlib_test_o0.o"
+run_limited 120 "${CXX}" "${LINK_FLAGS[@]}" -nostdlib -static \
+  -Wl,-e,_start -Wl,--no-undefined -Wl,-z,noexecstack -Wl,--build-id=none \
+  "${BUILD_DIR}/nostdlib_test_o0.o" "${BUILD_DIR}/weak_nostdlib_o0.o" \
+  "${BUILD_DIR}/alloc_nostdlib_o0.o" "${BUILD_DIR}/panic_nostdlib_o0.o" \
+  "${BUILD_DIR}/freestanding_nostdlib_o0.o" \
+  -o "${BUILD_DIR}/weak_nostdlib_o0"
+NOSTD_UNDEFINED_O0="$("${NM}" -u "${BUILD_DIR}/weak_nostdlib_o0")"
+printf '\nnostdlib O0 ELF undefined symbols:\n%s\n' "${NOSTD_UNDEFINED_O0:-<none>}"
+if grep -qE '[[:space:]]U ' <<<"${NOSTD_UNDEFINED_O0}"; then
+  printf 'nostdlib O0 ELF unexpectedly has strong undefined symbols\n' >&2
+  exit 1
+fi
+if "${READELF}" -d "${BUILD_DIR}/weak_nostdlib_o0" 2>&1 | grep -q NEEDED; then
+  printf 'nostdlib O0 ELF unexpectedly has a dynamic dependency\n' >&2
+  exit 1
+fi
+if "${READELF}" -l "${BUILD_DIR}/weak_nostdlib_o0" 2>&1 | grep -q INTERP; then
+  printf 'nostdlib O0 ELF unexpectedly has INTERP\n' >&2
+  exit 1
+fi
+run_limited 20 "${BUILD_DIR}/weak_nostdlib_o0"
 
 printf '\nall Weak isolated checks passed\n'

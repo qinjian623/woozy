@@ -36,8 +36,15 @@ target    = 目标对象地址；detach 在 Weak 全局锁内清空
 - `lang_weak_alive_v1`：仅提示，不保证随后升级成功。
 - `lang_weak_detach_v1`：最终强释放调用一次。先在 Weak 全局锁内清空 target，
   再释放隐含 Weak 引用；目标内存只能在 detach 返回后 free。重复调用无害。
+  null 和 closed tag 都是无害 no-op，因此 final release 可以直接传入已被 GC
+  invalidate 的槽值，而不会读取已释放 control。
+- `lang_weak_invalidate_slot_v1`：GC 白色候选专用。调用者必须持有强引用（GC
+  已先 pin 全部候选）。在 Weak 全局锁内原子地把 canonical slot 换成永久 closed
+  tag（指针值 1），清空旧 control 的 target，锁外释放隐含 Weak 引用。之后同槽
+  downgrade 返回 null，不会安装新 control；旧真实 Weak 仍可 copy/drop，但
+  upgrade/alive 为 dead。重复 invalidate 和无 control 的空槽都幂等。
 - 目标槽位属于目标。detach 不负责清槽；目标释放后不得再读取该槽位。存储复用时
-  必须先写入 null。
+  必须先写入 null。closed tag 只在存储复用并重新构造后才被 null 替换。
 
 Weak 全局锁只保护 target 指针读取/CAS 和 detach。分配、free、Panic、payload
 析构都不在锁内；因此不存在 Weak 锁 -> allocator 锁的反向持有。锁是 ticket
@@ -90,6 +97,15 @@ if (weak_control) lang_weak_detach_v1(weak_control);
 detach 返回后才能 free。目标活着时槽位指向的控制块一定活着（隐含引用）；
 detach 之后目标即将释放，不得再读槽位。
 
+### 4.1 GC 白色候选顺序
+
+GC 必须先把全部候选 retain pin 住，再对全部候选调用对象的
+`invalidate_weak`（内部只执行
+`lang_weak_invalidate_slot_v1(&object.weak_control)`），最后才执行第一个
+`clear`。不能边 clear 边 invalidate：否则 `clear(A)` 可能通过 Weak upgrade
+复活尚未 clear 的白色 B，并逃逸出可观察的强引用。closed tag 的最终 detach
+是无害 no-op。
+
 ### 5. Fork 钩子
 
 Root 把 Weak 钩子接到现有 `process.cpp` 的集中 fork 路径。推荐顺序：
@@ -138,13 +154,15 @@ LANG_LLVM_ROOT LANG_LIBXML2_ROOT CXX NM READELF LLD LANG_WEAK_BUILD_DIR
 
 每次编译、链接和运行都有独立 timeout。三套验证：
 
-1. 被测 `weak.cpp` 按生产 freestanding flags 单独编译；host harness 使用
-   std::thread/std::barrier，最终 release 调 detach 后 `munmap` 目标。
+1. 被测 `weak.cpp` 按生产 freestanding flags 单独编译，host harness 分别在
+   `-O0`/`-O2` 运行；使用 std::thread/std::barrier，最终 release 调 detach 后
+   `munmap` 目标。
 2. ASAN/UBSAN oracle：`weak.cpp` 仍按 freestanding 代码模型编译，只去掉
    `-fno-sanitize=all`；分配观察器对已释放控制块做 ASAN 毒化。这是额外的
    oracle，不是生产编译标志。
-3. `-nostdlib -static` ELF：链接生产 `weak.cpp`、`alloc.cpp`、`panic.cpp`，
-   检查无强未定义符号、无 `NEEDED`、ELF 为静态 `EXEC`，并从 `_start` 直接运行。
+3. `-nostdlib -static` ELF：`-O0`/`-O2` 均链接生产 `weak.cpp`、`alloc.cpp`、
+   `panic.cpp`、`freestanding.cpp`，检查无强未定义符号、无 `NEEDED`、ELF 为
+   静态 `EXEC`，并从 `_start` 直接运行。
 
 当前覆盖：
 
@@ -152,6 +170,10 @@ LANG_LLVM_ROOT LANG_LIBXML2_ROOT CXX NM READELF LLD LANG_WEAK_BUILD_DIR
 - 基本生命周期、控制块唯一安装、真实 Weak 计数和隐含引用。
 - 同一 `owner_slot` 的多线程 downgrade/upgrade/copy/drop 竞争。
 - 多线程 upgrade 与最终强释放/detach 的竞争。
+- empty slot/live control 的 invalidate、closed slot 重复 invalidate、closed
+  slot 后续 downgrade 不重装、final release 遇 tag 无害、地址复用后重新构造。
+- invalidate 与并发 downgrade/upgrade 的边界，包括旧 control 只剩隐含
+  引用时被 invalidate 立即释放的路径。
 - dead Weak 的 copy/drop 和升级失败。
 - `munmap` 后 `MAP_FIXED` 地址复用，验证旧控制块不会 ABA 到新对象。
 - 与 allocator 钩子组合的 fork prepare/parent/child。
@@ -162,6 +184,7 @@ LANG_LLVM_ROOT LANG_LIBXML2_ROOT CXX NM READELF LLD LANG_WEAK_BUILD_DIR
 
 - 不实现源码级 `Weak[T]`、类型检查、编译器 lowering 或标准库 API。
 - 不修改 `LangVec`/`LangHandle` 布局、allocator、process.cpp、CMake 或编译器。
-- 不实现 GC trace、自动强环收集或整 MEM01 验收；这些留给 Root 及后续任务。
+- 不实现编译器 GC trace/自动强环触发；跨模块的 GC+Weak 顺序由
+  `tests/native/cycle_gc/` 的集成测试验证，Root 仍负责 safepoint/自动触发。
 - 底层运行时目标当前仍是 Linux x86_64（allocator 限定）；Weak 的 pause 指令有
   aarch64 分支，但本任务未声称跨平台运行。

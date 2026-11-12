@@ -77,6 +77,10 @@ bool fixture_intact(const Fixture *fixture) {
   return fixture->magic == kFixtureMagic && fixture_payload_ok(fixture);
 }
 
+bool slot_is_closed(const LangWeakControl *slot) {
+  return reinterpret_cast<uintptr_t>(slot) == 1;
+}
+
 Fixture *fixture_create() {
   void *memory = mmap(nullptr, kPageSize, PROT_READ | PROT_WRITE,
                       MAP_PRIVATE | MAP_ANONYMOUS, -1, 0);
@@ -686,6 +690,220 @@ bool test_address_reuse() {
   return ok;
 }
 
+bool test_invalidate_empty_slot() {
+  bool ok = begin_test("invalidate-empty-slot");
+  Fixture *fixture = fixture_create();
+  if (!fixture) return false;
+
+  lang_weak_invalidate_slot_v1(&fixture->weak_slot);
+  ok &= check(slot_is_closed(fixture->weak_slot),
+              "invalidate did not install the permanent closed tag");
+  ok &= check(lang_weak_test_allocations() == 0,
+              "invalidating an empty slot allocated a control block");
+  ok &= check(lang_weak_downgrade_v1(fixture, &fixture->weak_slot) == nullptr,
+              "downgrade installed a control in a closed slot");
+  ok &= check(slot_is_closed(fixture->weak_slot),
+              "failed downgrade changed the closed tag");
+  lang_weak_invalidate_slot_v1(&fixture->weak_slot); // idempotent
+  lang_weak_invalidate_slot_v1(nullptr);             // accepted no-op
+  lang_weak_detach_v1(fixture->weak_slot);           // tag is harmless
+  ok &= check(lang_weak_test_allocations() == 0,
+              "repeated invalidate allocated a control block");
+
+  // Final release sees the tag, detach is a no-op, and the target is freed
+  // without ever reading a control block.
+  fixture_release(fixture);
+  ok &= allocator_clean("invalidate-empty-slot");
+  ok &= check(g_fixture_errors.load(std::memory_order_relaxed) == 0,
+              "empty-slot invalidation fixture observed an error");
+  return ok;
+}
+
+bool test_invalidate_live_control() {
+  bool ok = begin_test("invalidate-live-control");
+  Fixture *fixture = fixture_create();
+  if (!fixture) return false;
+
+  LangWeakControl *keeper =
+      lang_weak_downgrade_v1(fixture, &fixture->weak_slot);
+  if (!keeper) {
+    ok &= check(false, "invalidation test could not install Weak");
+    fixture_release(fixture);
+    return ok;
+  }
+  ok &= check(lang_weak_alive_v1(keeper), "new Weak was not alive");
+
+  lang_weak_invalidate_slot_v1(&fixture->weak_slot);
+  ok &= check(slot_is_closed(fixture->weak_slot),
+              "live control invalidation did not close the slot");
+  ok &= check(!lang_weak_alive_v1(keeper),
+              "invalidated Weak still reported alive");
+  ok &= check(lang_weak_upgrade_v1(keeper) == nullptr,
+              "invalidated Weak still upgraded");
+  ok &= check(keeper->target == nullptr,
+              "invalidated control retained a target pointer");
+  ok &= check(keeper->weak_refs == 1,
+              "invalidation did not release exactly the implicit Weak reference");
+  ok &= check(fixture_intact(fixture),
+              "invalidation damaged the still strongly-held target");
+
+  // A real Weak owner can still copy/drop the dead control, but the canonical
+  // slot can never be reopened.
+  lang_weak_retain_v1(keeper);
+  lang_weak_release_v1(keeper);
+  LangWeakControl *reinstall =
+      lang_weak_downgrade_v1(fixture, &fixture->weak_slot);
+  ok &= check(reinstall == nullptr && slot_is_closed(fixture->weak_slot),
+              "closed slot was reopened by downgrade");
+  lang_weak_invalidate_slot_v1(&fixture->weak_slot);
+  ok &= check(lang_weak_test_allocations() == 1,
+              "closed slot installed a second control block");
+
+  // The tag survives final release and makes detach/target cleanup harmless.
+  fixture_release(fixture);
+  ok &= check(!lang_weak_alive_v1(keeper) &&
+                  lang_weak_upgrade_v1(keeper) == nullptr,
+              "dead Weak revived after target release");
+  lang_weak_release_v1(keeper);
+
+  ok &= check(lang_weak_test_allocations() == 1,
+              "live-control invalidation allocated an extra control block");
+  ok &= check(lang_weak_test_frees() == 1,
+              "live-control invalidation did not free the control exactly once");
+  ok &= allocator_clean("invalidate-live-control");
+  ok &= check(g_fixture_errors.load(std::memory_order_relaxed) == 0,
+              "live-control invalidation fixture observed an error");
+  return ok;
+}
+
+bool test_invalidate_address_reuse() {
+  bool ok = begin_test("invalidate-address-reuse");
+  Fixture *first = fixture_create();
+  if (!first) return false;
+  void *const address = first;
+  LangWeakControl *old_weak =
+      lang_weak_downgrade_v1(first, &first->weak_slot);
+  if (!old_weak) {
+    ok &= check(false, "address-reuse could not install first Weak");
+    fixture_release(first);
+    return ok;
+  }
+
+  lang_weak_invalidate_slot_v1(&first->weak_slot);
+  fixture_release(first); // slot is tagged, detach is a harmless no-op
+
+  void *remapped =
+      mmap(address, kPageSize, PROT_READ | PROT_WRITE,
+           MAP_PRIVATE | MAP_ANONYMOUS | MAP_FIXED, -1, 0);
+  if (remapped != address) {
+    ok &= check(false, "MAP_FIXED did not reuse the invalidated fixture address");
+    if (remapped != MAP_FAILED) munmap(remapped, kPageSize);
+    lang_weak_release_v1(old_weak);
+    return ok;
+  }
+
+  auto *second = std::construct_at(static_cast<Fixture *>(remapped));
+  second->strong_refs = 1;
+  second->weak_slot = nullptr; // normal reconstruction reopens the slot
+  second->magic = kFixtureMagic;
+  for (std::size_t index = 0; index < kPayloadBytes; ++index)
+    second->payload[index] = payload_byte(index);
+
+  LangWeakControl *new_weak =
+      lang_weak_downgrade_v1(second, &second->weak_slot);
+  ok &= check(new_weak != nullptr && new_weak != old_weak,
+              "reused storage did not get a fresh control block");
+  ok &= check(!lang_weak_alive_v1(old_weak) &&
+                  lang_weak_upgrade_v1(old_weak) == nullptr,
+              "old invalidated Weak revived through address reuse");
+  void *upgraded = lang_weak_upgrade_v1(new_weak);
+  ok &= check(upgraded == second,
+              "new Weak after address reuse failed to upgrade");
+  if (upgraded) fixture_release(static_cast<Fixture *>(upgraded));
+
+  fixture_release(second);
+  lang_weak_retain_v1(old_weak);
+  lang_weak_release_v1(old_weak);
+  lang_weak_release_v1(old_weak);
+  lang_weak_release_v1(new_weak);
+
+  ok &= allocator_clean("invalidate-address-reuse");
+  ok &= check(g_fixture_errors.load(std::memory_order_relaxed) == 0,
+              "invalidated address-reuse fixture observed an error");
+  return ok;
+}
+
+struct InvalidateRace {
+  explicit InvalidateRace(Fixture *target)
+      : fixture(target), start(2), errors(0) {}
+
+  Fixture *fixture;
+  std::barrier<> start;
+  std::atomic<uint64_t> errors;
+};
+
+void run_invalidate_racer(InvalidateRace *race) {
+  race->start.arrive_and_wait();
+  for (uint64_t iteration = 0; iteration < 20000; ++iteration) {
+    LangWeakControl *control =
+        lang_weak_downgrade_v1(race->fixture, &race->fixture->weak_slot);
+    if (!control) break; // the slot has been permanently closed
+    void *upgraded = lang_weak_upgrade_v1(control);
+    if (upgraded) {
+      auto *as_fixture = static_cast<Fixture *>(upgraded);
+      if (as_fixture != race->fixture || !fixture_intact(as_fixture))
+        race->errors.fetch_add(1, std::memory_order_relaxed);
+      fixture_release(as_fixture);
+    }
+    if ((iteration & 7u) == 0) {
+      lang_weak_retain_v1(control);
+      lang_weak_release_v1(control);
+    }
+    lang_weak_release_v1(control);
+  }
+}
+
+bool test_invalidate_concurrent_downgrade_upgrade() {
+  constexpr unsigned kRounds = 256;
+  bool ok = begin_test("invalidate-concurrent");
+  for (unsigned round = 0; round < kRounds; ++round) {
+    Fixture *fixture = fixture_create();
+    if (!fixture) {
+      ok = false;
+      break;
+    }
+
+    // Install a control with only the implicit alive-target reference.  This
+    // is the dangerous downgrade path: after invalidate drops that implicit
+    // reference the old control may be freed immediately.
+    LangWeakControl *seed =
+        lang_weak_downgrade_v1(fixture, &fixture->weak_slot);
+    if (!seed) {
+      ok &= check(false, "invalidate race could not seed control");
+      fixture_release(fixture);
+      break;
+    }
+    lang_weak_release_v1(seed);
+
+    InvalidateRace race(fixture);
+    std::thread worker(run_invalidate_racer, &race);
+    race.start.arrive_and_wait();
+    lang_weak_invalidate_slot_v1(&fixture->weak_slot);
+    worker.join();
+
+    ok &= check(slot_is_closed(fixture->weak_slot),
+                "invalidate race did not leave the slot closed");
+    ok &= check(race.errors.load(std::memory_order_relaxed) == 0,
+                "invalidate/downgrade/upgrade race saw an invalid target");
+    fixture_release(fixture);
+    ok &= allocator_clean("invalidate-concurrent round");
+    ok &= check(g_fixture_errors.load(std::memory_order_relaxed) == 0,
+                "invalidate race fixture observed an error");
+    if (!ok) break;
+  }
+  return ok;
+}
+
 void panic_weak_overflow() {
   LangWeakControl control{};
   control.weak_refs = kMaxU64;
@@ -796,6 +1014,10 @@ int main() {
   run("basic-lifecycle", test_basic_lifecycle);
   run("concurrent-downgrade", test_concurrent_downgrade);
   run("upgrade-vs-final-release", test_upgrade_vs_final_release);
+  run("invalidate-empty-slot", test_invalidate_empty_slot);
+  run("invalidate-live-control", test_invalidate_live_control);
+  run("invalidate-address-reuse", test_invalidate_address_reuse);
+  run("invalidate-concurrent", test_invalidate_concurrent_downgrade_upgrade);
   run("address-reuse", test_address_reuse);
   run("fork-hooks", test_fork_hooks);
   run("panic-contracts", test_panic_contracts);
