@@ -217,7 +217,7 @@ let mixed = add(2, right: 3);            // 5
 
 普通参数的绑定只读。需要改一个数值时，先建局部 `var`；修改调用者变量的 `inout` 会在后面介绍。
 
-函数也能作为值传递。下面的声明和调用展示了函数类型及不捕获外部变量的函数字面量：
+函数也能作为值传递。下面的声明和调用展示了函数类型及函数字面量：
 
 ```wz
 func apply(operation func(i32) i32, value i32) i32 {
@@ -232,7 +232,54 @@ func calculate() i32 {
 }
 ```
 
-函数类型记录参数类型、参数模式、返回类型和错误类型，不保留参数标签；通过函数值调用时只能使用位置实参。当前不支持捕获局部变量的闭包。
+函数类型记录参数类型、参数模式、返回类型和错误类型，不保留参数标签；通过函数值调用时只能使用位置实参。
+
+函数字面量可以捕获创建它的函数中的局部变量。捕获发生在创建时：数值等直接值保存当时的副本，Vec、Box 等共享对象仍指向同一个对象。捕获绑定在函数值内只读，但可以通过已有接口修改共享对象的内容。下面的函数返回的读取器离开创建它的作用域后仍然可用：
+
+```wz
+func make_reader(seed i32) (func() i32) {
+    let values Vec[i32] = [seed, seed + 1];
+    return func() i32 { return values[0] + values[1]; };
+}
+
+func read_value() i32 {
+    let read = make_reader(20);
+    return read();  // 41
+}
+```
+
+普通 `func` 复制捕获值；`move func(...) { ... }` 会移动所有实际捕获的拥有值，例如 Vec，而数值等直接值仍按普通规则复制。被移动的原绑定在重新初始化前不能读取：
+
+```wz
+func moved_capture() i32 {
+    var values Vec[i32] = [41];
+    var scalar i32 = 1;
+    let read = move func() i32 { return values[0] + scalar; };
+    scalar = 2;
+    return read();  // 42
+}
+```
+
+方法也可以保存为函数值。创建 `value.method` 时会保存接收者的逻辑副本。之后重新绑定原变量，或替换普通按值字段，不会改变已保存的函数值；但 Vec 等引用字段仍共享同一对象，修改其内容会被看到。move-Self 方法同样可以绑定，绑定值可复制并重复调用，每次调用先复制保存的接收者，再把副本交给方法：
+
+```wz
+struct Counter {
+    value i32;
+}
+
+impl Counter {
+    func read(self move Counter) i32 { return self.value; }
+}
+
+func repeat_bound() i32 {
+    let counter = Counter(value: 7);
+    let read = (move counter).read;
+    let copied = read;
+    return read() + copied();  // 14
+}
+```
+
+inout-Self 方法不能作为函数值保存。捕获的值会随函数值一起复制和释放。
 
 ## 6. 分支与循环
 
@@ -323,6 +370,52 @@ vec.clear(items);          // 长度为 0，容量保留
 `vec.pop` 在空 Vec 上返回 `None`。`resize` 变大时用给定值填充，变小时截断。`clear` 不释放容量。Vec 赋值共享同一个容器，这些操作会改变所有别名看到的内容。
 
 Vec 没有负索引。越界下标、非法切片会产生 Panic。遍历期间可以修改已有元素，不能改变正在遍历的 Vec 的长度或存储；不要在循环里 push、pop、resize、clear 或 reserve。
+
+### 共享单元与弱引用
+
+`std/box.Box[T]` 保存一个可修改的值。复制 Box 会得到指向同一个单元的句柄，`box.get` 读取当前值，`box.set` 替换它：
+
+```wz
+import "std/box" as box;
+
+func shared_cell() i32 {
+    let cell = box.new[i32](5);
+    let alias = cell;
+    box.set(alias, 8);
+    return box.get(cell);  // 8
+}
+```
+
+`Weak[T]` 是内建类型，保存不延长目标寿命的弱引用；`std/weak` 只提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄；普通 struct/enum 值、string、文件/套接字描述符和外部 Python/C 对象不能直接作为目标。`weak.empty[T]()` 建立空弱引用，`weak.downgrade[T](value)` 从现有强引用建立，`weak.upgrade(w)` 返回 `option.Option[T]`。目标已经没有强引用时升级得到 `None`：
+
+```wz
+import "std/option" as option;
+import "std/weak" as weak;
+
+func observe_values() i32 {
+    var saved Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    {
+        let values Vec[i32] = [7];
+        saved = weak.downgrade[Vec[i32]](values);
+        switch weak.upgrade(saved) {
+        case option.Option.Some(strong):
+            if strong[0] != 7 { return 1; }
+        case option.Option.None:
+            return 2;
+        }
+    }
+    switch weak.upgrade(saved) {
+    case option.Option.Some(strong):
+        return 3;
+    case option.Option.None:
+        return 0;
+    }
+}
+```
+
+Weak 可以保存到 struct、enum、Vec 和泛型值中，但不能把普通按值聚合当成可弱引用的对象。接口见 [标准库](STDLIB.md)。
+
+由 Vec、Box 和闭包形成的纯 Woozy 强引用环会自动回收；涉及任务或协程帧的环尚未完成，具体范围见 [开发记录](../development/docs/LANGUAGE_DOC_FACTS.md)。
 
 ## 8. 结构体与方法
 
@@ -425,7 +518,7 @@ func changed() i32 {
 }
 ```
 
-`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置类型限数值、bool 和递归只含平凡值的有限 struct/enum；Vec/Slice 容器本身、string、外部对象和含拥有字段的聚合仍不能作为 `inout` 实参。同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝。Vec/Slice 句柄可能通过绑定复制、struct/enum、返回函数或闭包共享同一对象，元素 `inout` 借用期间这些未知别名会被保守拒绝。
+`inout` 接受可写 `var` 绑定、已有 `inout` 参数、其字段链和容器元素，例如 `swap(inout state.left, inout state.right)`、`bump(inout values[0])` 或 `grow(inout items[1].count)`。位置类型限数值、bool 和递归只含直接值的有限 struct/enum；Vec/Slice 容器本身、string、外部对象和包含 Vec 等需要清理字段的 struct/enum 仍不能作为 `inout` 实参。同一次调用可以对不同具名字段或可证明不同的字面量索引分别借用；重叠路径、整容器访问和动态索引冲突仍会拒绝。Vec/Slice 句柄可能通过绑定复制、struct/enum、返回函数或闭包共享同一对象，元素 `inout` 借用期间这些未知别名会被保守拒绝。
 
 转交一个拥有值时使用 `move`：
 
@@ -599,7 +692,29 @@ func smaller[T Ordered](left T, right T) T {
 
 `smaller[i32](12, 18)` 得到 `12`。泛型 enum 构造也要写完整类型实参，例如 `option.Option[i32].Some(1)`；跨包匹配写 `option.Option.Some(value)`。`std/option.Option` 和 `std/result.Result` 都是普通泛型 enum；在 `std/option` 包内部才可以省略成 `Option.Some(value)`。类型必须显式实现对应 trait，仅有同名方法不够。每个类型参数最多一个具名约束；泛型 trait 可以带类型参数。同一类型可实现不同实参的同一个 trait，调用存在歧义时会报错，不根据预期返回类型猜测。
 
-当前不支持 C++ 模板特化、常量泛型或关联类型。需要运行时多态时可以使用 `dyn Trait`；对象安全与表示规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
+当前不支持 C++ 模板特化、常量泛型或关联类型。需要运行时多态时，可以让具体值转换成一个 `dyn Trait` 值，再通过 trait 方法调用：
+
+```wz
+trait Area {
+    func area(self Self) i32;
+}
+
+struct Square {
+    side i32;
+}
+
+impl Area for Square {
+    func area(self Square) i32 { return self.side * self.side; }
+}
+
+func area_of_shape() i32 {
+    let square = Square(side: 3);
+    let shape dyn Area = square;
+    return shape.area();  // 9
+}
+```
+
+`dyn Trait` 的方法必须是普通 `self Self` 接收者，所有非接收者参数必须是普通按值参数；`move` 或 `inout` 参数（例如 `move i32`）同样不能用于 dyn。方法不能有自身的泛型参数，也不能返回 `Self`、抛出错误或在非接收者参数中使用 `Self`。每个具体值必须有恰好一个完整 trait 实现。`Vec[dyn Trait]` 可以保存不同具体类型的值。完整规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
 
 ## 15. 线程与共享数据
 

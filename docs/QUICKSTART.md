@@ -29,7 +29,7 @@ Woozy 的几个规则值得先记住：
 | 调用 | 普通参数只读且不消耗实参；`move`、`inout` 要明确写出 |
 | 错误 | `throws E` 自动传播未捕获错误，不逐次写 `?` |
 | 清理 | `defer` 在当前词法块退出时执行，后注册先执行 |
-| 类型约束 | 泛型使用 `[T]`，trait 需要显式 `impl`，方法静态选择 |
+| 类型约束 | 泛型使用 `[T]`，trait 需要显式 `impl`；可使用静态调用或 `dyn Trait` |
 
 下面分别标注“顶层声明”和“函数体片段”。顶层声明放在 `package` 之后；函数体片段放在 `main` 或其他函数内部，需要用到的声明在相邻代码块中给出。
 
@@ -102,7 +102,38 @@ let doubled = twice(4);                  // 8
 
 直接调用可以使用参数名，位置实参必须在命名实参之前。实参始终按书写顺序求值，命名参数重排不会重排副作用。函数类型不保存参数标签，通过函数值调用只使用位置实参。
 
-无捕获函数字面量可以保存、返回和传参；引用外部局部变量的捕获闭包尚未支持。
+函数字面量可以捕获创建时的外层局部绑定。捕获绑定只读，Vec、Box 等共享对象的内容仍可通过原有接口修改。普通 `func` 复制捕获值，`move func(...) { ... }` 移动实际捕获的拥有值；数值等直接值仍复制。
+
+```wz
+func make_reader(seed i32) (func() i32) {
+    let values Vec[i32] = [seed, seed + 1];
+    return func() i32 { return values[0] + values[1]; };
+}
+
+func read_value() i32 {
+    let read = make_reader(20);
+    return read();  // 41
+}
+```
+
+方法值 `value.method` 在创建时保存接收者的逻辑副本；之后重新绑定原变量或替换普通按值字段，不会改变保存的函数值，但 Vec 等引用字段仍共享对象内容。move-Self 方法的绑定值可以复制并重复调用，每次调用先复制保存的接收者，再把副本交给方法；inout-Self 方法不能保存为函数值。
+
+```wz
+struct Counter {
+    value i32;
+}
+
+impl Counter {
+    func read(self move Counter) i32 { return self.value; }
+}
+
+func repeat_bound() i32 {
+    let counter = Counter(value: 7);
+    let read = (move counter).read;
+    let copied = read;
+    return read() + copied();  // 14
+}
+```
 
 ## 控制流
 
@@ -173,7 +204,7 @@ let value = unpack(reading);       // 4
 
 struct 构造使用命名字段，必须提供全部字段；enum 变体可以带载荷。struct/enum 按字段递归复制，字段中的引用值仍遵守其自身的共享规则。
 
-`Self` 指当前 impl 或 trait 的类型。值方法调用会提供声明中的首位 Self 参数；`Point.shifted(original, 3)` 则明确传入全部参数。保存 `Point.shifted` 得到无捕获函数值；保存绑定了对象的 `original.shifted` 尚未支持。
+`Self` 指当前 impl 或 trait 的类型。值方法调用会提供声明中的首位 Self 参数；`Point.shifted(original, 3)` 则明确传入全部参数。`Point.shifted` 得到未绑定接收者的函数值，`original.shifted` 得到保存了创建时接收者副本的绑定方法值。
 
 ## Vec 共享与参数模式
 
@@ -190,6 +221,8 @@ slice[0] = 7;              // left[0] 仍是 9
 Vec 赋值共享同一个容器，没有隐式深复制；`let` 不禁止修改元素。切片建立新的 Vec 并复制元素的逻辑值，引用元素仍可共享。下标必须非负，越界产生 Panic，不接受 Python 式负索引。
 
 `std/vec` 提供 `empty`、`make`、`len`、`capacity`、`reserve`、`push`、`pop`、`resize` 和 `clear`。`pop` 返回 `Option[T]`；`resize` 变大时用给定值填充，变小时截断；`clear` 保留容量。Vec 赋值共享容器，这些调用会影响所有别名。遍历期间不要 push、pop、resize、clear 或 reserve，只修改已有元素。
+
+`std/box.Box[T]` 是共享的可变值单元；复制 Box 得到同一个单元，`box.get` 读取，`box.set` 替换。`Weak[T]` 是内建类型，保存不延长目标寿命的弱引用；`std/weak` 只提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄；普通 struct/enum 值、string、文件/套接字描述符和外部 Python/C 对象不能直接作为目标。`weak.empty[T]()` 建立空弱引用，`weak.downgrade[T](value)` 从现有强引用建立，`weak.upgrade(w)` 返回 `option.Option[T]`，目标已无强引用时得到 `None`。Weak 可以放在 struct、enum、Vec 和泛型值中。接口见 [标准库](STDLIB.md)。
 
 顶层声明：
 
@@ -213,7 +246,7 @@ increment(inout answer);       // answer 是 10
 
 普通参数不消耗调用者的值；返回或保存参数时按其类型复制或保留共享引用。`move` 转移整个拥有值，原绑定在重新初始化前不可读；普通参数不能直接移动，要先建立本地副本。
 
-`inout` 接受可写 `var`、已有 `inout` 参数、其字段链和可绑定容器元素，例如 `bump(inout obj.nested.value)` 或 `bump(inout items[0])`。位置类型限数值、bool 和只含平凡值的有限 struct/enum；Vec/Slice 本身、string、外部对象、函数值和含拥有字段的聚合仍不能按 `inout` 传递。同一次调用中不同具名字段或可证明不同的字面量索引可以同时借用，重叠路径、整容器访问、动态索引冲突和不属于本地/参数的临时位置会被拒绝。Vec/Slice 句柄复制到其他绑定、struct/enum、函数返回值或闭包后仍可能指向同一对象；元素 `inout` 借用期间，其他可能携带该容器的实参或未知间接 callee 会保守报错。
+`inout` 接受可写 `var`、已有 `inout` 参数、其字段链和可绑定容器元素，例如 `bump(inout obj.nested.value)` 或 `bump(inout items[0])`。位置类型限数值、bool 和只含直接值的有限 struct/enum；Vec/Slice 本身、string、外部对象、函数值和包含 Vec 等需要清理字段的 struct/enum 仍不能按 `inout` 传递。同一次调用中不同具名字段或可证明不同的字面量索引可以同时借用，重叠路径、整容器访问、动态索引冲突和不属于本地/参数的临时位置会被拒绝。Vec/Slice 句柄复制到其他绑定、struct/enum、函数返回值或闭包后仍可能指向同一对象；元素 `inout` 借用期间，其他可能携带该容器的实参或未知间接 callee 会保守报错。
 
 方法不会自动移动或取得可写访问。首位 Self 参数声明为 `move` 或 `inout` 时，值调用分别写 `(move value).take()`、`(inout value).change()`；类型名调用则继续明确传入全部参数。
 
@@ -286,7 +319,7 @@ let measured = measure(counter);    // 7
 
 类型参数使用 `[T]`，约束写成 `[T Measure]`；泛型类型、泛型方法和带类型实参的 trait 也使用方括号。函数体按声明约束检查，使用具体类型时生成相应代码。
 
-trait 是名义类型约束，需要显式实现，不按方法“长得像”自动满足。默认使用静态分派；需要运行时多态时写 `dyn Trait` 或 `dyn Trait[Args]`，对象安全的方法通过 vtable 分派，具体值在唯一实现下自动转换。不支持关联类型、特化、非类型或变参模板参数。类型参数和约束规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
+trait 是名义类型约束，需要显式实现，不按方法“长得像”自动满足。默认使用静态分派；需要运行时多态时写 `dyn Trait` 或 `dyn Trait[Args]`，对象安全的方法在运行时按具体实现分派，具体值在唯一实现下自动转换。不支持关联类型、特化、非类型或变参模板参数。类型参数和约束规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
 
 ## 线程与同步
 

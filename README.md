@@ -36,13 +36,15 @@ func main() throws os.Error {
 
 普通参数不消耗实参，参数名只读。转交拥有值使用 `move`，修改调用者的变量使用 `inout`，调用处都要明确写出。
 
+函数值可以捕获创建时的局部绑定。捕获绑定只读；Vec、Box 等共享对象的内容仍可通过接口修改。普通 `func` 复制捕获值，`move func(...) { ... }` 转移实际捕获的拥有值。保存 `value.method` 会保存接收者的逻辑副本；重新绑定或替换普通按值字段不会改变它，Vec 等引用字段仍共享内容。
+
 `throws E` 声明可传播的错误，调用者捕获或继续声明同类错误。`defer` 在当前词法块退出时执行，后注册的先执行。整数除零、越界等 Panic 不能用 typed catch 恢复。
 
-泛型使用 `[T]` 和 `[T Trait]`，trait 必须显式实现。`dyn Trait` 与 `dyn Trait[Args]` 是显式 trait object 类型，支持对象安全方法的动态分派、`Vec[dyn Trait]`、复制/移动/销毁以及泛型 trait 应用身份（如 `Convert[i32]` 与 `Convert[bool]` 不同）。没有模板特化或关联类型。
+泛型使用 `[T]` 和 `[T Trait]`，trait 必须显式实现。`dyn Trait` 与 `dyn Trait[Args]` 是显式的动态 trait 类型，支持对象安全方法的动态分派、`Vec[dyn Trait]`、复制/移动/销毁以及泛型 trait 应用身份（如 `Convert[i32]` 与 `Convert[bool]` 不同）。没有模板特化或关联类型。
 
 ## 当前范围
 
-已有整数与浮点、字符串值、函数与非捕获函数值、struct/enum、Vec、受约束泛型、模块、typed throws 和块级 defer。程序可以生成 Native 代码或 Python 代码；语言规则不会随所选后端改变。
+已有整数与浮点、字符串值、函数值与捕获闭包、struct/enum、Vec、Slice、受约束泛型、trait 与 `dyn Trait`、模块、typed throws 和块级 defer。程序可以生成 Native 代码或 Python 代码；语言规则不会随所选后端改变。
 
 标准库提供输入输出、文件系统、字符串与容器、JSON、数学、时间、随机数、网络、进程与并发接口，见 [标准库](docs/STDLIB.md)。系统接口面向 Linux x86_64 Native 程序，使用 C 风格名称与参数顺序，失败时抛出声明的错误，锁误用产生 Panic。不开放原始 syscall 接口。
 
@@ -50,14 +52,16 @@ func main() throws os.Error {
 
 `std/thread` 支持无捕获函数加明确参数的线程创建与等待，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员同步，原子 ARC 只保护引用计数。
 
-Python 后端已支持纯 Woozy 强引用环的自动回收；Native 后端仍在接入，当前可能保留强引用环。
+Native 与 Python 都会自动回收由 Vec、Box 和闭包环境形成的纯 Woozy 强引用环，在分配压力和程序正常退出时处理。涉及任务或协程帧的环和异步调用的普通参数保活尚未完成；异步函数与 await 仍在修正，暂不作为稳定范围。外部 Python/C 对象自身的环由宿主管理。
 
 `std/rwlock` 提供读写锁，`std/cancel` 提供协作取消。`std/channel` 提供有界或无界队列，以及超时和取消等待；`std/task` 提供固定工作线程的线程池与 Future，需要显式调用 shutdown。
+
+`std/box` 提供共享可变单元 `Box[T]`；`Weak[T]` 是内建弱引用类型，`std/weak` 提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄，弱引用不延长目标寿命，升级结果用 `Option[T]` 表示。
 
 Native 程序可以声明并调用 C 库的有类型函数，传递自然布局的 C record、Ptr 和 Buffer，或使用同步的无捕获回调。指针和 Buffer 的索引访问放在 unsafe 块内；C 错误码不会自动转换成 Woozy 错误。需要 libc 的库必须明确选择 hosted 运行方式，普通程序继续独立运行。
 
 `std/process` 支持 spawn、exec、wait、参数和环境，`std/signal` 支持同步信号等待，`std/ipc` 支持共享内存及跨进程同步。多线程 fork 后只保留调用线程，业务锁由程序员处理，子进程通常应尽快 exec。
 
-捕获闭包、默认参数、模板特化和通用 Slice 尚未提供。
+默认参数和模板特化尚未提供。
 
 编译器编译、实现、测试和开发协作资料统一放在 [development/](development/README.md)。
