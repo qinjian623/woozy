@@ -137,6 +137,14 @@ if(LANG_TEST_PYTHON)
     --root ${LANG_SOURCE_ROOT}
     --out ${CMAKE_CURRENT_BINARY_DIR}/weak-source-results)
   set_tests_properties(native.weak_source PROPERTIES TIMEOUT 900)
+  add_test(NAME native.language_gc_source COMMAND ${LANG_TEST_PYTHON}
+    ${LANG_SOURCE_ROOT}/tests/run_isolated.py ${CMAKE_CURRENT_BINARY_DIR}/language-gc-source-results
+    ${CMAKE_CURRENT_LIST_DIR}/language_gc_source/run_language_gc_source.py
+    --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_native_helper>
+    --runtime $<TARGET_FILE:lang_native_runtime>
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang --readelf ${LLVM_TOOLS_BINARY_DIR}/llvm-readelf
+    --root ${LANG_SOURCE_ROOT} --out @RUN_OUT@)
+  set_tests_properties(native.language_gc_source PROPERTIES TIMEOUT 600)
 endif()
 add_executable(lang_native_float_probe float_probe.cpp)
 target_include_directories(lang_native_float_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
