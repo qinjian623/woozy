@@ -4,6 +4,9 @@
 #include "linux.hpp"
 #include <cstddef>
 #include <initializer_list>
+#if defined(LANG_RUNTIME_HOSTED)
+#include "../hosted/process.hpp"
+#endif
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t,uint64_t,uint64_t,uint64_t) noexcept;
 namespace {
@@ -17,12 +20,37 @@ const char *const *startup_argv;
 const char *const *startup_environment;
 uint32_t environment_lock;
 uint32_t launch_lock;
+#if defined(LANG_RUNTIME_HOSTED)
+// Only libc-managed threads use TLS. The freestanding branch must not access
+// C++ TLS through its private FS/TCB.
+thread_local bool hosted_launch_owned;
+thread_local bool hosted_fork_owns_launch;
+thread_local bool hosted_fork_locks_held;
+#endif
 void launch_acquire() noexcept {
   while(__atomic_exchange_n(&launch_lock,1u,__ATOMIC_ACQUIRE))
     while(__atomic_load_n(&launch_lock,__ATOMIC_RELAXED))__asm__ volatile("pause");
+#if defined(LANG_RUNTIME_HOSTED)
+  hosted_launch_owned=true;
+#endif
 }
-void launch_release() noexcept {__atomic_store_n(&launch_lock,0u,__ATOMIC_RELEASE);}
-struct LaunchGuard {LaunchGuard() noexcept {launch_acquire();} ~LaunchGuard(){launch_release();}};
+void launch_release() noexcept {
+#if defined(LANG_RUNTIME_HOSTED)
+  hosted_launch_owned=false;
+#endif
+  __atomic_store_n(&launch_lock,0u,__ATOMIC_RELEASE);
+}
+struct LaunchGuard {
+  LaunchGuard() noexcept {launch_acquire();}
+  ~LaunchGuard(){
+#if defined(LANG_RUNTIME_HOSTED)
+    // The child handler clears this thread's ownership. Do not unlock a lock
+    // subsequently acquired by another thread in the child.
+    if(!hosted_launch_owned)return;
+#endif
+    launch_release();
+  }
+};
 LangVec *environment;
 void lock() noexcept {
   while(__atomic_exchange_n(&environment_lock,1u,__ATOMIC_ACQUIRE))
@@ -30,6 +58,21 @@ void lock() noexcept {
 }
 void unlock() noexcept {__atomic_store_n(&environment_lock,0u,__ATOMIC_RELEASE);}
 struct Guard {Guard() noexcept {lock();} ~Guard(){unlock();}};
+#if defined(LANG_RUNTIME_HOSTED)
+// Per-thread state makes a failed-fork fallback idempotent even when another
+// thread has already entered its own atfork prepare handler.
+void hosted_fork_parent_release() noexcept {
+  if (hosted_fork_locks_held) {
+    hosted_fork_locks_held=false;
+    lang_alloc_fork_parent_v1();
+    unlock();
+  }
+  if(hosted_fork_owns_launch) {
+    hosted_fork_owns_launch=false;
+    launch_release();
+  }
+}
+#endif
 uint64_t size(const char *s) noexcept {uint64_t n=0;while(s[n])++n;return n;}
 void copy(void *out,const void *in,uint64_t n) noexcept {
   auto *a=static_cast<volatile uint8_t *>(out);
@@ -133,6 +176,23 @@ int64_t setenv(Bytes name,Bytes value,int32_t overwrite,bool remove) noexcept {
   lang_vec_release_v1(environment);environment=next;return 0;
 }
 int64_t fork_process() noexcept {
+#if defined(LANG_RUNTIME_HOSTED)
+  // libc fork runs glibc's internal handlers and the atfork hooks registered
+  // by runtime/hosted/process.cpp.  The hooks acquire/release our environment
+  // and allocator locks; launch is held by the caller (spawn or
+  // lang_process_fork_v1).  Only the calling thread survives in the child.
+  auto pid=lang_hosted_fork_v1();
+  if(pid<0) {
+    hosted_fork_parent_release();
+    return pid;
+  }
+  if(!pid) {
+    // The child handler already reset the locks, before user child handlers.
+    // Resetting again here could release a lock acquired after that reset.
+    lang_thread_fork_child_v1();
+  }
+  return pid;
+#else
   lock();lang_alloc_fork_prepare_v1();
   auto pid=sys(57);
   if(!pid) {
@@ -142,6 +202,7 @@ int64_t fork_process() noexcept {
     lang_thread_fork_child_v1();
   } else {lang_alloc_fork_parent_v1();unlock();}
   return pid;
+#endif
 }
 int64_t row(const LangVec *v,uint64_t i,bool raw,Bytes &out) noexcept {
   const uint64_t stride=raw?sizeof(LangVec *):sizeof(LangText);
@@ -247,6 +308,30 @@ cleanup:
   return status;
 }
 } // namespace
+#if defined(LANG_RUNTIME_HOSTED)
+extern "C" void lang_hosted_process_atfork_prepare_v1() noexcept {
+  // Language fork/spawn already holds launch through pipe cleanup. Direct
+  // libc fork must also wait until those temporary descriptors are closed.
+  if(!hosted_launch_owned) {
+    launch_acquire();
+    hosted_fork_owns_launch=true;
+  }
+  lock();
+  lang_alloc_fork_prepare_v1();
+  hosted_fork_locks_held=true;
+}
+extern "C" void lang_hosted_process_atfork_parent_v1() noexcept {
+  hosted_fork_parent_release();
+}
+extern "C" void lang_hosted_process_atfork_child_v1() noexcept {
+  hosted_fork_locks_held=false;
+  hosted_fork_owns_launch=false;
+  hosted_launch_owned=false;
+  lang_alloc_fork_child_v1();
+  __atomic_store_n(&environment_lock,0u,__ATOMIC_RELAXED);
+  __atomic_store_n(&launch_lock,0u,__ATOMIC_RELAXED);
+}
+#endif
 extern "C" void lang_process_init_v1(uint64_t argc,const char *const *argv,const char *const *env) noexcept {
   startup_argc=argc;startup_argv=argv;startup_environment=env;
 }
