@@ -9,7 +9,10 @@
     "external_dependencies": "Explicit opt-in; core executables remain freestanding, selected foreign libraries may require hosted dependencies",
     "closures": "Creation-time value capture; managed references share objects; explicit move transfers ownership; no automatic borrowed captures",
     "memory": "Weak references and automatic pure-Woozy strong-cycle collection; foreign Python/C cycles remain host-managed",
-    "generics": "Ordinary type parameters and trait constraints; no C++ template metaprogramming"
+    "generics": "Ordinary type parameters and trait constraints; no C++ template metaprogramming",
+    "capture_bindings": "Read-only captured bindings; shared referenced objects remain mutable through their APIs",
+    "move_capture_syntax": "move func(...) { ... }; move every actually captured owning value, ordinary func copies",
+    "weak_targets": "Vec, function values, ARC shared handles and std/box.Box[T]; exclude value structs/enums, string, fd wrappers and foreign Python/C objects"
   },
   "tasks": [
     {
@@ -84,8 +87,8 @@
     {
       "id": "LANG01",
       "title": "Capturing closures and bound method values",
-      "status": "planned",
-      "owner": "root",
+      "status": "in_progress",
+      "owner": "root shared ABI; Pi implementation after published representation",
       "depends_on": [
         "MEM01"
       ],

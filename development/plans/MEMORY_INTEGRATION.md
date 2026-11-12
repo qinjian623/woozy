@@ -58,4 +58,6 @@ Native 控制器采用初始 128 次成功对象登记的压力预算；每轮�
 - return、typed throw、defer、continue、线程退出、外部回调重入，以及 fork/exec。对照准确 drop 次数，检查 Weak 在第一次 clear 前已全部失效。
 - Native O0/O2、Python，线程竞争与 sanitizer，默认程序仍无 libc/libstdc++ 依赖；未接入的后端明确保持未完成。
 
-源码级 Weak 可接受哪些类型尚待确定。struct/enum 是按值复制，string 没有已声明的对象身份，不能因为底层恰好有指针就擅自开放 Weak。捕获绑定和 move 捕获语法也继续等待用户答复。
+用户已确定 Weak 接受 Vec、函数值、拥有原子引用计数的共享句柄，以及新增 Box[T]。普通按值 struct/enum、string、File/Socket 描述符与外部 Python/C 对象不直接作为目标。Box 可以用私有的单元素 Vec 保存值，复制共享同一个单元；实现前仍须验证所有权和 Weak 身份。
+
+闭包捕获绑定只读，引用对象内容仍可通过已有可变操作修改。普通 func 按创建时的值复制；move func(...) { ... } 移动全部实际捕获的拥有值，不添加逐变量捕获列表。

@@ -29,6 +29,6 @@ Native 回收压力控制器独立检查 25/25 通过，另有四个线程分配
 
 TLS/HTTPS 候选发现重复关闭 fd 和错误清理等待对端两处问题，原 worker 正在修复；Native Slice 候选有六种同类型 IR 操作数与 HIR 不符仍被接受的情况，也交回原 worker 修正。共享 Core 仍由 Slice 任务单独修改，检查通过后再交接。另两项独立工作为 GC 外部回调的 SAFE 深度恢复和 Python Slice 运行库；后者尚不提供源码接口。线程池候选测试超时已定位为 Debug 编译累计超过 300 秒，未复现死锁或 Slice 特有的编译退化。
 
-Weak 源接口、Native 自动回收，以及 Slice 的 Python 源接口尚未完成。闭包的捕获绑定是否只读、移动捕获写法，以及 Weak 的目标类型等待用户答复；动态 trait、用户 Iterator 和 async/await 仍未实现。完整范围继续以任务表为准。
+Weak 源接口、Native 自动回收，以及 Slice 的 Python 源接口尚未完成。用户已确定捕获绑定只读、`move func` 移动全部实际捕获的拥有值，Weak 支持 Vec、函数值、ARC 共享句柄和 Box[T]；动态 trait、用户 Iterator 和 async/await 仍未实现。完整范围继续以任务表为准。
 
 循环回收接入的修改区间、Weak 失效、外部析构与线程/fork 顺序见 [MEMORY_INTEGRATION.md](MEMORY_INTEGRATION.md)。这些是待实现要求，不能据此将 MEM02 标为完成。
