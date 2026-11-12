@@ -175,7 +175,13 @@ class Parser {
     Guard g(*this);
     size_t s = p;
     AstNodeId left;
-    if (at("+") || at("-") || at("!") || at("~") || at("move") || at("inout")) {
+    if (eat("await")) {
+      // await binds to the complete postfix expression to its right, so
+      // `await f(x).field` awaits one value and `await a + b` is `(await a) +
+      // b`. Binary operators keep their ordinary precedence relative to it.
+      left = node(AstKind::Await, s, {expr(11)});
+    } else if (at("+") || at("-") || at("!") || at("~") || at("move") ||
+               at("inout")) {
       advance();
       left = node(AstKind::Unary, s, {expr(11)});
     } else {
@@ -418,8 +424,18 @@ class Parser {
     return x;
   }
   bool top_start() const {
-    return at("pub") || at("func") || at("struct") || at("enum") ||
-           at("trait") || at("impl") || binding_start();
+    return at("pub") || at("async") || at("func") || at("struct") ||
+           at("enum") || at("trait") || at("impl") || binding_start();
+  }
+  // Reads an optional `async` marker before a function declaration. Returns
+  // true when the keyword was present and records the marker in children.
+  bool async_marker(std::vector<AstNodeId> &c) {
+    if (!at("async"))
+      return false;
+    size_t s = p;
+    advance();
+    c.push_back(node(AstKind::Async, s));
+    return true;
   }
   AstNodeId block() {
     Guard g(*this);
@@ -427,7 +443,7 @@ class Parser {
     expect("{");
     std::vector<AstNodeId> c;
     while (!end() && !at("}")) {
-      if (at("func") && text(1) != "(")
+      if ((at("func") || at("async")) && text(1) != "(")
         fail("nested declaration or missing closing brace");
       size_t q = p;
       try {
@@ -450,6 +466,7 @@ class Parser {
     size_t s = p;
     eat("pub");
     std::vector<AstNodeId> c;
+    const bool async = async_marker(c);
     if (binding_start()) {
       auto x = binding();
       expect(";");
@@ -468,6 +485,8 @@ class Parser {
       c.push_back(block());
       return node(AstKind::Function, s, c);
     }
+    if (async)
+      fail("expected 'func' after 'async'");
     if (eat("struct"))
       k = AstKind::Struct;
     else if (eat("enum"))
@@ -510,9 +529,10 @@ class Parser {
         expect(";");
         c.push_back(node(AstKind::Variant, q, cc));
       } else {
+        std::vector<AstNodeId> cc;
+        async_marker(cc);
         expect("func");
         ident();
-        std::vector<AstNodeId> cc;
         generics(cc);
         params(cc);
         if (k == AstKind::Trait)

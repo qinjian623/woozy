@@ -59,6 +59,12 @@ TypeId build_signature(TypeContext &types, const HirModule *module,
       t.type_args = std::move(parameters);
       return types.intern(t);
     }
+    if (base == "Task") {
+      if (parameters.size() != 2) return invalid();
+      t.kind = TypeKind::Task;
+      t.type_args = std::move(parameters);
+      return types.intern(t);
+    }
     if (base == "Ptr" || base == "PtrMut") {
       if (parameters.size() != 1) return invalid();
       t.kind = TypeKind::CForeignPointer;

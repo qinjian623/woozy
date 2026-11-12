@@ -512,6 +512,51 @@ class Lower {
       current = join;
       return access(Op::load, result, i.source);
     }
+    case hir::NodeKind::await_: {
+      // The awaited child evaluates to an owning Task value. It stays owned by
+      // the enclosing full expression; the await only borrows the handle.
+      const auto task = node(n.children[0]).type;
+      const auto &task_type = *h.types.find(task);
+      if (task_type.kind != hir::TypeKind::Task ||
+          task_type.type_args.size() != 2)
+        throw std::logic_error("await child is not a Task");
+      const auto result_type = task_type.type_args[0];
+      const auto error_type = task_type.type_args[1];
+      const bool unit_result =
+          h.types.find(result_type)->kind == hir::TypeKind::Unit;
+      const bool unit_error =
+          h.types.find(error_type)->kind == hir::TypeKind::Unit;
+      const auto future = expr(n.children[0]);
+      auto ready = block(), fail = block(), cancelled = block();
+      const ValueId value{next_value++}, error_value{next_value++};
+      if (!unit_result)
+        f.blocks[ready.value].parameters.push_back(
+            {value, result_type, id, false});
+      if (!unit_error)
+        f.blocks[fail.value].parameters.push_back(
+            {error_value, error_type, id, true});
+      end(Exit::await_, {future}, {ready, fail, cancelled}, i.source);
+      f.blocks[current.value].terminator.signature = task;
+      f.blocks[current.value].terminator.origin = id;
+      current = fail;
+      if (unit_error)
+        end(Exit::unreachable, {}, {}, i.source);
+      else
+        error(id, error_type, error_value);
+      // Cancellation runs the recorded cancel exit plan: defers and owning
+      // locals/temporaries of every exited scope, then a no-value return.
+      current = cancelled;
+      {
+        ExitSite site{id, hir::ExitKind::cancel, {}};
+        clean(site);
+        end(Exit::cancel_return, {}, {}, i.source);
+        finish(site);
+      }
+      current = ready;
+      if (unit_result)
+        return constant(unit, 0, i.source);
+      return value;
+    }
     case hir::NodeKind::call: {
       const auto &c = std::get<hir::Call>(n.data);
       const bool system = c.kind == hir::CalleeKind::system;
@@ -991,6 +1036,7 @@ public:
     }
     f.symbol = fn.symbol;
     f.signature = fn.signature;
+    f.async = fn.async;
     f.source = fn.source.span;
     const auto &signature = *h.types.find(fn.signature);
     for (uint32_t p = 0; p < fn.parameters.size(); ++p) {
@@ -1016,7 +1062,12 @@ public:
     current = block();
     stmt(fn.body);
     if (live()) {
-      if (h.types.find(signature.result)->kind == hir::TypeKind::Unit)
+      // The implicit final return produces the Task payload for an async
+      // function, not the Task handle itself.
+      TypeId result = signature.result;
+      if (fn.async)
+        result = h.types.find(result)->type_args.at(0);
+      if (h.types.find(result)->kind == hir::TypeKind::Unit)
         end(Exit::return_, {constant(unit, 0, fn.source.span)}, {},
             fn.source.span);
       else

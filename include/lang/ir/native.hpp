@@ -83,7 +83,14 @@ enum class Exit {
   return_,
   unreachable,
   try_call,
-  error_return
+  error_return,
+  // await: inputs = {future}; targets = {ready, error, cancel}. The emitter
+  // polls the child and suspends the current coroutine until it completes.
+  // ready may carry the transferred result parameter, error the typed error.
+  await_,
+  // Cancellation exit after the await's cancel cleanup plan has run. No value
+  // is produced; the coroutine reports a cancelled status to the executor.
+  cancel_return
 };
 struct Terminator {
   Exit kind = Exit::missing;
@@ -127,6 +134,10 @@ struct Handler {
 struct Function {
   SymbolId symbol;
   TypeId signature;
+  // Async functions are lowered to a resumable state machine. The signature
+  // result is Task[R,E]; await terminators are the only suspension points and
+  // every slot below becomes a field of the coroutine frame.
+  bool async = false;
   std::vector<Slot> slots;
   std::vector<BasicBlock> blocks; // block 0 is entry
   SourceSpan source{SourceSnapshotId{0}, 0, 0};

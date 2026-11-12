@@ -114,11 +114,12 @@ PhaseResult<TokenBuffer> lex(std::shared_ptr<const SourceSnapshot> source,
         kind = member(" as  break  case  catch  const  continue  default  "
                       "defer  else  enum  false  for  func  if  impl  import  "
                       "in  inout  let  move  package  pub  return  struct  "
-                      "switch  throw  throws  trait  true  try  unsafe  var ",
+                      "switch  throw  throws  trait  true  try  unsafe  var  "
+                      "async  await ",
                       word)
                    ? TokenKind::keyword
                    : TokenKind::identifier;
-        bad = member(" async  await  class  extends  extern  operator ", word);
+        bad = member(" class  extends  extern  operator ", word);
       } else if (digit(peek())) {
         literal = true;
         while (letter(peek()) || digit(peek()) ||

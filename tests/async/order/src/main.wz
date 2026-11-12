@@ -1,0 +1,22 @@
+// CON03: timer deadlines order independent tasks; run() drains them.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+import "std/vec" as vec;
+
+async func job(name string, delay i64, log Vec[string]) Unit {
+    await a.sleep(delay);
+    vec.push(log, name);
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    a.spawn(job("slow", 20, log));
+    a.spawn(job("fast", 5, log));
+    a.run();
+    for line in log {
+        io.println(line);
+    }
+    return 0;
+}

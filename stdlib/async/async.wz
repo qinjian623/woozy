@@ -1,0 +1,68 @@
+// Cooperative task execution for async functions.
+//
+// An `async func` call returns Task[R,E]. The task is created suspended; it
+// runs when it is spawned or awaited. `run`/`run_until`/`shutdown` drive the
+// process-wide executor on the calling thread. `shutdown` cancels every
+// pending task and releases its suspended frame after the cancel exit plan
+// has run; it must not be called from inside a running task.
+package asynclib;
+
+// Submit a task to the executor without waiting for it. Spawning an already
+// started task is a no-op.
+pub func spawn[T,E](task Task[T,E]) {
+    __woozy_async_spawn[T,E](task);
+}
+
+// Request cooperative cancellation. A queued task is cancelled before it
+// starts; a suspended task resumes once to run its cancellation cleanup.
+pub func cancel[T,E](task Task[T,E]) {
+    __woozy_async_cancel[T,E](task);
+}
+
+// True after the task completed normally, with a typed error, or cancelled.
+pub func finished[T,E](task Task[T,E]) bool {
+    return __woozy_async_finished[T,E](task);
+}
+
+// Run the executor until every pending task has completed.
+pub func run() {
+    __woozy_async_run();
+}
+
+// Run the executor until the given task completes. Other tasks stay pending.
+pub func run_until[T,E](task Task[T,E]) {
+    __woozy_async_run_until[T,E](task);
+}
+
+// Cancel all pending tasks, run their cleanup exits and release their frames.
+pub func shutdown() {
+    __woozy_async_shutdown();
+}
+
+// A task that completes after the given monotonic delay. Await it from an
+// async function; the executor sleeps in epoll_wait rather than spinning.
+pub func sleep(milliseconds i64) Task[Unit,Unit] {
+    return __woozy_async_sleep(milliseconds);
+}
+
+// A task that completes when the descriptor is readable/writable. The
+// descriptor remains owned by the caller; the task never reads or writes it.
+pub func readable(descriptor i32) Task[Unit,Unit] {
+    return __woozy_async_wait_readable(descriptor);
+}
+
+pub func writable(descriptor i32) Task[Unit,Unit] {
+    return __woozy_async_wait_writable(descriptor);
+}
+
+// Await a task from another async function, preserving its typed error.
+pub async func join[T,E](task Task[T,E]) T throws E {
+    return await task;
+}
+
+// Await a list of tasks in order; the first typed error stops the wait.
+pub async func join_all[T,E](tasks Vec[Task[T,E]]) Unit throws E {
+    for task in tasks {
+        await task;
+    }
+}

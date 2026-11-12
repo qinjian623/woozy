@@ -35,6 +35,14 @@ class Resolver {
   size_t start(const AstNode &n) const {
     return n.token_begin + (token(n.token_begin).spelling == "pub");
   }
+  // Index of the declared name token: `pub` and an optional `async` marker
+  // precede `func`/`struct`/`enum`.
+  size_t name_token(const AstNode &n) const {
+    size_t p = start(n);
+    if (n.kind == AstKind::Function && token(p).spelling == "async")
+      ++p;
+    return p + 1;
+  }
   void error(std::string code, std::string message, SourceSpan span,
              std::optional<SourceSpan> previous = {}) {
     Diagnostic d{std::move(code), "resolve", "error", std::move(message), span};
@@ -353,7 +361,7 @@ class Resolver {
           case AstKind::Binding: kind = SymbolKind::constant; break;
           default: continue;
           }
-          const auto &t = token(p + 1);
+          const auto &t = token(name_token(n));
           if (t.spelling == "_" && n.kind != AstKind::Binding) {
             error("E_NAME_KIND", "named top-level declaration cannot be _", t.span);
             continue;
@@ -395,7 +403,7 @@ class Resolver {
       const auto &c = node(child);
       if (c.kind == AstKind::GenericParameter) continue;
       if (c.kind == AstKind::Function) {
-        const auto &t = token(start(c) + 1);
+        const auto &t = token(name_token(c));
         add(members, std::string(t.spelling), SymbolKind::function, ref(child),
             t.span, token(c.token_begin).spelling == "pub");
         function_body(child, inner, exported || token(c.token_begin).spelling == "pub");
@@ -470,7 +478,7 @@ public:
         return result;
       }
       for (const auto *s : {"Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16",
-                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Slice", "Weak", "Result", "Ptr", "PtrMut",
+                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Slice", "Weak", "Task", "Result", "Ptr", "PtrMut",
                            "Buffer", "BufferMut",
                            "__woozy_Thread", "__woozy_Mutex", "__woozy_Condvar",
                            "__woozy_AtomicI64", "__woozy_IpcHandle"})

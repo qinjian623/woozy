@@ -190,6 +190,7 @@ ValueKind provisional_kind(const Type &t) {
   case TypeKind::CondvarHandle:
   case TypeKind::AtomicI64Handle:
   case TypeKind::IpcHandle:
+  case TypeKind::Task:
     return ValueKind::runtime_handle;
   case TypeKind::Vec:
     return ValueKind::vec;
@@ -254,7 +255,8 @@ class Classifier {
     if (t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
         t.kind == TypeKind::CondvarHandle ||
-        t.kind == TypeKind::AtomicI64Handle || t.kind == TypeKind::IpcHandle)
+        t.kind == TypeKind::AtomicI64Handle ||
+        t.kind == TypeKind::IpcHandle || t.kind == TypeKind::Task)
       return {ValueKind::runtime_handle, {}};
     if (t.kind == TypeKind::ForeignOpaque ||
         t.kind == TypeKind::ForeignCallable) {
@@ -362,7 +364,8 @@ class Classifier {
     if (t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
         t.kind == TypeKind::CondvarHandle ||
-        t.kind == TypeKind::AtomicI64Handle || t.kind == TypeKind::IpcHandle)
+        t.kind == TypeKind::AtomicI64Handle ||
+        t.kind == TypeKind::IpcHandle || t.kind == TypeKind::Task)
       return true;
     if (t.kind == TypeKind::ForeignOpaque ||
         t.kind == TypeKind::ForeignCallable)
@@ -432,7 +435,8 @@ public:
     if (t.kind == TypeKind::ThreadHandle ||
         t.kind == TypeKind::MutexHandle ||
         t.kind == TypeKind::CondvarHandle ||
-        t.kind == TypeKind::AtomicI64Handle || t.kind == TypeKind::IpcHandle) {
+        t.kind == TypeKind::AtomicI64Handle ||
+        t.kind == TypeKind::IpcHandle || t.kind == TypeKind::Task) {
       out.kind = ValueKind::runtime_handle;
       out.needs_drop = true;
       return out;
@@ -1107,6 +1111,14 @@ class Analysis {
       return m.foreign_bindings.at(r->binding.value).read_error;
     if (x.kind() == NodeKind::throw_)
       return n(x.children[0]).type;
+    if (x.kind() == NodeKind::await_) {
+      const auto &task = ty(m, n(x.children[0]).type);
+      if (task.type_args.size() != 2)
+        throw std::invalid_argument("await task arity");
+      const auto error = task.type_args[1];
+      if (ty(m, error).kind != TypeKind::Unit)
+        return error;
+    }
     return {};
   }
   void exit_records(HirNodeId id) {
@@ -1239,6 +1251,11 @@ class Analysis {
     if (x.kind() == NodeKind::return_)
       emit(ExitKind::return_, FunctionExit{fun->symbol}, {}, {},
            !x.children.empty());
+    // Every await is a cancellation point. The plan unwinds this function's
+    // scopes (defers, move locals and pending temporaries) before the frame
+    // returns a cancelled status to the executor.
+    if (x.kind() == NodeKind::await_)
+      emit(ExitKind::cancel, FunctionExit{fun->symbol}, {}, {}, false);
     if (x.kind() == NodeKind::break_ || x.kind() == NodeKind::continue_) {
       auto dest = x.kind() == NodeKind::break_
                       ? std::get<Break>(x.data).loop
@@ -1352,6 +1369,12 @@ class Analysis {
     }
     if (auto e = error(x); e && out.normal)
       out.edges.push_back({ExitKind::error, 0, *e, *out.normal});
+    // An await can leave through cancellation at any time. The cancel edge
+    // carries the same live state as the error edge; the recorded cancel plan
+    // describes the defers/drops executed before the frame is released.
+    if (x.kind() == NodeKind::await_ && out.normal)
+      out.edges.push_back({ExitKind::cancel, fun->symbol.value, TypeId{0},
+                           *out.normal});
     return out;
   }
   void initialize_pattern(const Pattern &p, State &st) {
@@ -1784,6 +1807,7 @@ bool ordinary_copyable(const HirModule &m, TypeId root,
     case TypeKind::CondvarHandle:
     case TypeKind::AtomicI64Handle:
     case TypeKind::IpcHandle:
+    case TypeKind::Task:
     case TypeKind::Function:
     case TypeKind::ForeignOpaque:
     case TypeKind::ForeignCallable:

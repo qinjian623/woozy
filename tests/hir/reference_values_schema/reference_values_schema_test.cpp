@@ -58,6 +58,7 @@ static_assert(std::is_same_v<decltype(FunctionValue::bound),
                              std::optional<BoundReceiver>>);
 static_assert(std::is_same_v<decltype(HirFunction::captures),
                              std::vector<CaptureBinding>>);
+static_assert(std::is_same_v<decltype(HirFunction::async), bool>);
 static_assert(std::is_same_v<decltype(LocalLifetime::read_only_capture), bool>);
 
 static_assert(sizeof(CaptureBinding) == 24);
@@ -68,7 +69,7 @@ static_assert(sizeof(BoundReceiver) == 16);
 static_assert(alignof(BoundReceiver) == 8);
 static_assert(sizeof(FunctionValue) == 88);
 static_assert(alignof(FunctionValue) == 8);
-static_assert(sizeof(HirFunction) == 128);
+static_assert(sizeof(HirFunction) == 136);
 static_assert(alignof(HirFunction) == 8);
 static_assert(sizeof(LocalLifetime) == 40);
 static_assert(alignof(LocalLifetime) == 8);
@@ -87,6 +88,8 @@ static_assert(offsetof(LocalLifetime, read_only_capture) == 32);
 // Appended enum values preserve every published number.
 static_assert(static_cast<int>(TypeKind::Weak) ==
               static_cast<int>(TypeKind::Slice) + 1);
+static_assert(static_cast<int>(TypeKind::Task) ==
+              static_cast<int>(TypeKind::Weak) + 1);
 static_assert(static_cast<int>(ValueKind::function) ==
               static_cast<int>(ValueKind::slice) + 1);
 static_assert(static_cast<int>(ValueKind::weak) ==

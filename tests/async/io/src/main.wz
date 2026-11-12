@@ -1,0 +1,35 @@
+// CON03: a task waits on Linux epoll readability while another task is
+// suspended on a timer; the descriptor is never read before it is ready.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+import "std/net" as net;
+import "std/vec" as vec;
+
+async func writer(socket net.Socket) Unit throws os.Error {
+    await a.sleep(30);
+    let data = vec.make[u8](4, 0);
+    data[0] = 112;
+    data[1] = 105;
+    data[2] = 110;
+    data[3] = 103;
+    net.send_all(socket, data, 0);
+    net.close(socket);
+}
+
+async func main() i32 throws os.Error {
+    let pair = net.socketpair(1, 1, 0);
+    let worker = writer(pair.second);
+    a.spawn(worker);
+    await a.readable(net.fd(pair.first));
+    let buffer = vec.make[u8](16, 0);
+    let count = net.recv(pair.first, buffer, usize(16), 0);
+    net.close(pair.first);
+    let ok = count == 4 && buffer[0] == 112 && buffer[1] == 105 &&
+             buffer[2] == 110 && buffer[3] == 103;
+    io.println(count);
+    io.println(ok);
+    await worker;
+    return 0;
+}

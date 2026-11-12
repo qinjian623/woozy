@@ -1,0 +1,30 @@
+// CON03: shutdown cancels a frame suspended on a descriptor, removes its
+// epoll registration and runs the defer cleanup.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+import "std/net" as net;
+import "std/vec" as vec;
+
+async func waiter(socket net.Socket, log Vec[string]) Unit throws os.Error {
+    defer { vec.push(log, "fd.cleanup"); }
+    await a.readable(net.fd(socket));
+    vec.push(log, "fd.ready");
+}
+
+func main() i32 throws os.Error {
+    let pair = net.socketpair(1, 1, 0);
+    let log = vec.empty[string]();
+    let pending = waiter(pair.first, log);
+    a.spawn(pending);
+    a.run_until(a.sleep(5));
+    a.shutdown();
+    io.println(a.finished(pending));
+    for line in log {
+        io.println(line);
+    }
+    net.close(pair.first);
+    net.close(pair.second);
+    return 0;
+}

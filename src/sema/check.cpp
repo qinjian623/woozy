@@ -69,6 +69,13 @@ class Checker {
   SymbolId function{0};
   ScopeId scope{0};
   size_t cleanup_depth = 0;
+  // Set while checking an async function body. `current_result` is the
+  // declared source result (the Task payload), and `current_async_error` is
+  // the declared typed error of the task, if any. Both are needed because the
+  // published function signature returns Task[R,E] and has no throws clause.
+  bool async_function = false;
+  TypeId current_result{0};
+  std::optional<TypeId> current_async_error;
   unsigned unsafe_depth = 0;
   std::map<uint32_t, TypeId> c_named_types;
   TypeId unit{0}, boolean{0}, i64{0};
@@ -106,6 +113,7 @@ class Checker {
     std::vector<CaptureSource> sources;
     bool move = false;
   };
+  std::set<uint64_t> async_functions;
   std::map<uint64_t, ClosureInfo> closures;
   std::map<uint64_t, SymbolId> capture_by_origin;
   std::map<uint64_t, CaptureBinding> capture_by_local;
@@ -134,6 +142,15 @@ class Checker {
     return file(r).tokens.at(ast(r).token_begin + n).spelling;
   }
   std::string_view first(Ref r) const { return token(r, token(r) == "pub"); }
+  // An async declaration carries an AstKind::Async marker as its first
+  // child. The marker is not part of the signature and is ignored by
+  // split_signature.
+  bool has_async_marker(Ref r) const {
+    for (auto c : ast(r).children)
+      if (ast(at(r, c)).kind == AstKind::Async)
+        return true;
+    return false;
+  }
   Source source(Ref r) const { return {r, ast(r).span}; }
   [[noreturn]] void reject(Ref r, std::string message,
                            std::string code = "E_TYPE_MISMATCH") const {
@@ -1184,6 +1201,19 @@ class Checker {
       validate_weak_type(r, id);
       return id;
     }
+    if (name == "Task") {
+      if (args.size() != 2)
+        reject(r, "Task requires a result type and an error type");
+      if (type(args[1]).kind != TypeKind::Unit &&
+          (type(args[1]).kind == TypeKind::Vec ||
+           type(args[1]).kind == TypeKind::Function ||
+           type(args[1]).kind == TypeKind::Weak))
+        reject(r, "Task error type must be a plain error value type");
+      Type t;
+      t.kind = TypeKind::Task;
+      t.type_args = args;
+      return m.types.intern(t);
+    }
     if (name == "Ptr" || name == "PtrMut") {
       if (args.size() != 1)
         reject(r, name + " requires one pointee type");
@@ -1750,6 +1780,11 @@ class Checker {
         unavailable(r, "system operations can only be called directly from "
                        "their owner std module");
       if (k == modules::SymbolKind::function) {
+        if (async_functions.count(s->value))
+          reject(r,
+                 "an async function can only be called directly; taking its "
+                 "function value is not supported",
+                 "E_CAPABILITY_UNAVAILABLE");
         auto it = signatures.find(s->value);
         if (it == signatures.end())
           unavailable(r, "foreign function calls require T10/T11");
@@ -1804,6 +1839,24 @@ class Checker {
           m.nodes[result.id.value].data =
               StringLiteral{*result.value.string};
       }
+      break;
+    }
+    case AstKind::Await: {
+      // await is only meaningful inside an async function body. It may not
+      // appear in a defer body: cleanup must never suspend, otherwise a
+      // cancelled or error exit could re-enter the executor while unwinding.
+      if (!async_function)
+        reject(r, "await is only allowed inside an async function",
+               "E_AWAIT_CONTEXT");
+      if (cleanup_depth)
+        reject(r, "await is not allowed in a defer body",
+               "E_AWAIT_CONTEXT");
+      auto task = expression(child(r, 0));
+      const auto &tt = type(m.nodes.at(task.id.value).type);
+      if (tt.kind != TypeKind::Task)
+        reject(r, "await requires a Task value", "E_AWAIT_NOT_TASK");
+      result = {node(r, tt.type_args.at(0), Await{}, {task.id}),
+                {tt.type_args.at(0), {}, {}}};
       break;
     }
     case AstKind::Unary: {
@@ -4206,8 +4259,16 @@ class Checker {
       if (auto c = std::get_if<ConstraintCall>(&n.data))
         if (auto e = type(c->signature).throws_type)
           out.errors.insert(e->value);
-      if (auto r = std::get_if<ForeignRead>(&n.data))
-        out.errors.insert(m.foreign_bindings.at(r->binding.value).read_error.value);
+      if (auto fr = std::get_if<ForeignRead>(&n.data))
+        out.errors.insert(m.foreign_bindings.at(fr->binding.value).read_error.value);
+      if (std::holds_alternative<Await>(n.data)) {
+        const auto &task = type(m.nodes.at(n.children[0].value).type);
+        if (task.kind != TypeKind::Task)
+          throw std::invalid_argument("await child is not a Task");
+        const auto error = task.type_args.at(1);
+        if (type(error).kind != TypeKind::Unit)
+          out.errors.insert(error.value);
+      }
       if (n.kind() == NodeKind::throw_) {
         out.errors.insert(m.nodes.at(n.children[0].value).type.value);
         out.falls = false;
@@ -4517,7 +4578,7 @@ class Checker {
     case AstKind::Return: {
       if (cleanup_depth)
         reject(r, "return escapes defer body", "E_CLEANUP_ESCAPE");
-      auto result = type(signatures.at(function.value)).result;
+      auto result = current_result;
       std::vector<HirNodeId> children;
       if (n.children.empty())
         match(r, unit, result);
@@ -4687,7 +4748,8 @@ class Checker {
   void register_function(
       Ref r, std::vector<GenericParam> inherited, bool prototype = false,
       std::optional<SymbolId> trait_self = std::nullopt,
-      const std::vector<GenericParam> *environment = nullptr) {
+      const std::vector<GenericParam> *environment = nullptr,
+      bool member = false) {
     auto id = definition(r);
     // A trait prototype's own bound may name that trait's ordered parameters.
     // They belong to the surrounding trait, not to the method's own list or
@@ -4731,6 +4793,24 @@ class Checker {
         signature_parameters.insert(p.symbol.value);
     signatures[id.value] =
         signature(r, trait_self, false, trait_self_callback);
+    if (has_async_marker(r)) {
+      // Async declarations are free functions only. A trait or impl method
+      // would need an async-aware dispatch ABI, which this task does not
+      // define; reject it before publishing a callable signature.
+      if (trait_self || prototype || member)
+        unavailable(r, "async methods are not supported; use a free async "
+                       "function instead");
+      async_functions.insert(id.value);
+      const auto &declared = type(signatures[id.value]);
+      Type task;
+      task.kind = TypeKind::Task;
+      task.type_args = {declared.result,
+                        declared.throws_type.value_or(unit)};
+      Type callable = declared;
+      callable.result = m.types.intern(std::move(task));
+      callable.throws_type.reset();
+      signatures[id.value] = m.types.intern(std::move(callable));
+    }
     check_inout_graph(r, signatures[id.value], true, trait_self,
                       trait_self_callback);
     if (trait_self)
@@ -4893,7 +4973,7 @@ class Checker {
         for (auto id : ast(r).children)
           if (ast(at(r, id)).kind == AstKind::Function) {
             auto cr = at(r, id);
-            register_function(cr, {}, true, self, &tr.params);
+            register_function(cr, {}, true, self, &tr.params, true);
             auto method = definition(cr);
             tr.methods.push_back({method, signatures.at(method.value),
                                   parameters.at(method.value), source(cr)});
@@ -4968,7 +5048,7 @@ class Checker {
         for (auto c : ast(r).children)
           if (ast(at(r, c)).kind == AstKind::Function) {
             auto cr = at(r, c);
-            register_function(cr, ps);
+            register_function(cr, ps, false, std::nullopt, nullptr, true);
             im.methods.push_back(definition(cr));
           }
         for (const auto &previous : m.impls) {
@@ -5112,7 +5192,8 @@ class Checker {
       const auto ref = m.nodes.at(id.value).source.node;
       if (!cleanups.empty())
         reject(ref, "typed error escapes defer body", "E_CLEANUP_ESCAPE");
-      if (type(f.signature).throws_type != error)
+      if (type(f.signature).throws_type != error &&
+          current_async_error != error)
         reject(ref,
                "typed error is neither caught nor declared by this function",
                "E_EFFECT_UNHANDLED");
@@ -5220,6 +5301,14 @@ class Checker {
         own_error = type(c->signature).throws_type;
       if (auto r = std::get_if<ForeignRead>(&n.data))
         own_error = m.foreign_bindings.at(r->binding.value).read_error;
+      if (std::holds_alternative<Await>(n.data)) {
+        const auto &task = type(m.nodes.at(n.children[0].value).type);
+        if (task.kind != TypeKind::Task)
+          throw std::invalid_argument("await child is not a Task");
+        const auto error = task.type_args.at(1);
+        if (type(error).kind != TypeKind::Unit)
+          own_error = error;
+      }
       if (std::holds_alternative<Throw>(n.data))
         own_error = m.nodes.at(n.children[0].value).type;
       if (own_error) {
@@ -5289,15 +5378,28 @@ class Checker {
     scope = new_scope(r, {});
     auto ps = parameters.at(id.value);
     auto ft = type(sig);
+    async_function = has_async_marker(r);
+    current_async_error.reset();
+    if (async_function) {
+      const auto &task = type(ft.result);
+      current_result = task.type_args.at(0);
+      const auto error = task.type_args.at(1);
+      if (error != unit)
+        current_async_error = error;
+    } else {
+      current_result = ft.result;
+      current_async_error = ft.throws_type;
+    }
     for (size_t i = 0; i < ps.size(); ++i)
       locals[ps[i].symbol.value] = {
           ft.parameters[i].type, ft.parameters[i].mode == ParamMode::inout,
           ft.parameters[i].mode == ParamMode::ordinary};
     auto body = block(child(r, ast(r).children.size() - 1), true);
-    if (ft.result != unit && flow(body.id).falls)
+    if (current_result != unit && flow(body.id).falls)
       reject(r, "non-Unit function has a reachable normal exit without return");
     HirFunction f{id, sig, ps, body.id, scope, source(r)};
     f.captures = current_captures;
+    f.async = async_function;
     annotate(f);
     if (active_params.empty())
       m.functions.push_back(f);

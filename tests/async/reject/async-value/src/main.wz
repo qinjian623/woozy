@@ -1,0 +1,6 @@
+package app;
+async func work() i32 { return 1; }
+func main() i32 {
+    let f = work;
+    return 0;
+}

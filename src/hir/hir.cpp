@@ -104,6 +104,10 @@ TypeId TypeContext::intern(Type t) {
     if (t.type_args.size() != 1)
       bad();
     break;
+  case TypeKind::Task:
+    if (t.type_args.size() != 2)
+      bad();
+    break;
   case TypeKind::CForeignPointer:
   case TypeKind::CForeignBuffer:
     if (t.type_args.size() != 1 || t.bits > 1 || t.c_type)
@@ -158,7 +162,7 @@ TypeId TypeContext::intern(Type t) {
     bad();
   if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum &&
       t.kind != TypeKind::Vec && t.kind != TypeKind::Slice &&
-      t.kind != TypeKind::Weak &&
+      t.kind != TypeKind::Weak && t.kind != TypeKind::Task &&
       t.kind != TypeKind::CForeignPointer &&
       t.kind != TypeKind::CForeignBuffer && !t.type_args.empty())
     bad();
@@ -511,6 +515,7 @@ class Verifier {
     case NodeKind::vec_slice:
     case NodeKind::foreign_read:
     case NodeKind::c_field_read:
+    case NodeKind::await_:
       return foreign_access_read(n) || !foreign_access_place(n);
     default:
       return false;
@@ -616,6 +621,13 @@ class Verifier {
           !type_contains_parameter(m, t.type_args[0]))
         need(weak_target(m, t.type_args[0]),
              "Weak target is not a canonical source declaration");
+    }
+    if (t.kind == TypeKind::Task) {
+      need(t.type_args.size() == 2, "Task result/error arity");
+      // The frame stores status plus optional result and error; a Task value
+      // itself never carries a nested callable or inout slot.
+      for (auto a : t.type_args)
+        valid_type(a, allowed, depth + 1);
     }
     if (t.kind == TypeKind::Function) {
       if (t.throws_type)
@@ -2876,6 +2888,18 @@ class Verifier {
     case NodeKind::c_field_read:
       c_field_read(n);
       break;
+    case NodeKind::await_: {
+      arity(1);
+      const auto &task = type(expr(ch[0]).type);
+      need(task.kind == TypeKind::Task, "await child is not a Task");
+      need(n.type == task.type_args.at(0), "await result type");
+      const auto error = task.type_args.at(1);
+      bool listed = type(error).kind == TypeKind::Unit;
+      for (auto e : n.errors)
+        listed |= e == error;
+      need(listed, "await task error is missing from the node error set");
+      break;
+    }
     case NodeKind::unsupported:
       fail("unsupported HIR node: " + std::get<Unsupported>(n.data).feature,
            n.source.span);
@@ -3018,6 +3042,16 @@ class Verifier {
             if (n.kind == AstKind::NamedType)
               t.type_args.push_back(source_type(cr(c)));
         need(t.type_args.size() == 1, "container/Weak type arity");
+      } else if (s.name == "Task") {
+        t.kind = TypeKind::Task;
+        if (n.kind == AstKind::NeutralBracket)
+          for (size_t i = 1; i < n.children.size(); ++i)
+            t.type_args.push_back(source_type(cr(n.children[i])));
+        else
+          for (auto c : n.children)
+            if (n.kind == AstKind::NamedType)
+              t.type_args.push_back(source_type(cr(c)));
+        need(t.type_args.size() == 2, "Task result/error arity");
       } else if (s.name == "Ptr" || s.name == "PtrMut") {
         t.kind = TypeKind::CForeignPointer;
         t.bits = s.name == "PtrMut" ? 1 : 0;
@@ -3071,7 +3105,8 @@ class Verifier {
     t.kind = TypeKind::Function;
     Type u;
     u.kind = TypeKind::Unit;
-    t.result = substituted.intern(u);
+    const TypeId unit_id = substituted.intern(u);
+    t.result = unit_id;
     const auto parts = split_signature(file, r.node);
     for (auto c : parts.parameters) {
       auto cr = r;
@@ -3096,6 +3131,20 @@ class Verifier {
       auto cr = r;
       cr.node = *parts.throws_type;
       t.throws_type = source_type(cr);
+    }
+    bool async = false;
+    for (auto c : file.node(r.node).children)
+      async |= file.node(c).kind == AstKind::Async;
+    if (async) {
+      // The published source signature of an async declaration returns
+      // Task[R,E]; the declared throws clause moves into the Task.
+      Type task;
+      task.kind = TypeKind::Task;
+      task.type_args = {t.result, t.throws_type.value_or(unit_id)};
+      Type callable = t;
+      callable.result = substituted.intern(std::move(task));
+      callable.throws_type.reset();
+      t = callable;
     }
     return substituted.intern(t);
   }
@@ -4806,8 +4855,18 @@ class Verifier {
         need(std::get<Return>(n.data).function == f.symbol,
              "return target function mismatch");
         const auto &sig = type(f.signature);
-        need(n.children.empty() ? type(sig.result).kind == TypeKind::Unit
-                                : expr(n.children[0]).type == sig.result,
+        // An async function's source `return` produces the Task payload; the
+        // published signature result is the Task handle itself.
+        TypeId result_type = sig.result;
+        if (f.async) {
+          const auto &task = type(result_type);
+          need(task.kind == TypeKind::Task && task.type_args.size() == 2,
+               "async function result is not a Task");
+          result_type = task.type_args.at(0);
+        }
+        need(n.children.empty()
+                     ? type(result_type).kind == TypeKind::Unit
+                     : expr(n.children[0]).type == result_type,
              "function return type mismatch");
       }
       if (n.kind() == NodeKind::break_ || n.kind() == NodeKind::continue_) {
@@ -6362,6 +6421,14 @@ class Verifier {
         return m.foreign_bindings.at(r->binding.value).read_error;
       if (n.kind() == NodeKind::throw_)
         return node(n.children[0]).type;
+      if (n.kind() == NodeKind::await_) {
+        const auto &task = type(node(n.children[0]).type);
+        if (task.kind != TypeKind::Task || task.type_args.size() != 2)
+          throw std::invalid_argument("await child is not a Task");
+        const auto error = task.type_args.at(1);
+        if (type(error).kind != TypeKind::Unit)
+          return error;
+      }
       return {};
     };
     for (auto id : postorder) {
@@ -6479,7 +6546,17 @@ class Verifier {
                true);
         else {
           need(!enclosing_defer, "error crosses defer boundary");
-          need(type(function(owner).signature).throws_type == error,
+          const auto &fsig = type(function(owner).signature);
+          std::optional<TypeId> declared = fsig.throws_type;
+          if (!declared && function(owner).async) {
+            const auto &task = type(fsig.result);
+            if (task.kind == TypeKind::Task && task.type_args.size() == 2) {
+              const auto task_error = task.type_args.at(1);
+              if (type(task_error).kind != TypeKind::Unit)
+                declared = task_error;
+            }
+          }
+          need(declared == error,
                "unhandled typed error not declared by function");
           exit(ExitKind::error, FunctionExit{owner}, {}, error, true);
         }
@@ -6488,6 +6565,10 @@ class Verifier {
         need(!enclosing_defer, "return crosses defer boundary");
         exit(ExitKind::return_, FunctionExit{owner}, {}, {},
              !n.children.empty());
+      }
+      if (n.kind() == NodeKind::await_) {
+        need(!enclosing_defer, "await crosses defer boundary");
+        exit(ExitKind::cancel, FunctionExit{owner}, {}, {}, false);
       }
       if (n.kind() == NodeKind::break_ || n.kind() == NodeKind::continue_) {
         const auto target = n.kind() == NodeKind::break_
@@ -6694,10 +6775,18 @@ class Verifier {
         break;
       }
     }
-    for (const auto *fp : all_functions)
-      need(type(type(fp->signature).result).kind == TypeKind::Unit ||
+    for (const auto *fp : all_functions) {
+      TypeId result = type(fp->signature).result;
+      if (fp->async) {
+        const auto &task = type(result);
+        need(task.kind == TypeKind::Task && task.type_args.size() == 2,
+             "async function result is not a Task");
+        result = task.type_args.at(0);
+      }
+      need(type(result).kind == TypeKind::Unit ||
                !flows[fp->body.value].falls,
            "non-Unit function has a normal exit without return");
+    }
   }
 
 public:

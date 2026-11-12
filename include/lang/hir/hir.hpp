@@ -47,7 +47,11 @@ enum class TypeKind {
   // Weak[T]: type_args[0] is the target. Appended for the reference-values
   // schema. Source construction and the std/weak operations are verified by
   // the frontend; runtime emission remains a separate owner.
-  Weak
+  Weak,
+  // Task[R,E]: an owning handle to a suspended async computation. type_args
+  // are exactly {result, error}; Unit in slot 1 means the task cannot fail
+  // through its await. The value is a compiler-private runtime handle.
+  Task
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -331,6 +335,13 @@ struct Defer {
   std::vector<SymbolId> references;
 };
 struct Throw {}; // child: error value, saved before executing any cleanup
+// Suspends the enclosing async function until the Task child completes.
+// node.type is the task result; the task error (type_args[1] of the child)
+// is added to node.errors and receives an ordinary typed-error exit. The
+// ownership pass also records a cancellation exit here, so task cancellation
+// runs the same defers/drops as a normal scope exit before the frame is
+// released.
+struct Await {};
 struct Move {
   std::optional<SymbolId> binding; // otherwise one newly computed child
 };
@@ -447,7 +458,7 @@ struct Ownership {
   std::vector<CallLifetime> calls;
   bool operator==(const Ownership &) const = default;
 };
-enum class ExitKind { normal, return_, break_, continue_, error };
+enum class ExitKind { normal, return_, break_, continue_, error, cancel };
 struct ScopeExit {
   std::optional<ScopeId> scope; // resume in parent, or normal function end
   bool operator==(const ScopeExit &) const = default;
@@ -482,7 +493,8 @@ using NodeData = std::variant<
     IntegerConvert, Call, Block, ExpressionStatement, If, For, Noop, Return,
     Break, Continue, Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
     Switch, ConstraintCall, Try, Defer, Throw, Move, VecInit, IndexRead,
-    IndexPlace, VecSlice, ForIn, ForeignRead, ConstantLiteral, CFieldRead>;
+    IndexPlace, VecSlice, ForIn, ForeignRead, ConstantLiteral, CFieldRead,
+    Await>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -525,7 +537,8 @@ enum class NodeKind {
   for_in,
   foreign_read,
   constant_literal,
-  c_field_read
+  c_field_read,
+  await_
 };
 struct HirNode {
   TypeId type;
@@ -556,6 +569,10 @@ struct HirFunction {
   // function. Lambda bodies map their captured occurrence origins to the
   // read-only CaptureBinding.local symbols registered in this vector.
   std::vector<CaptureBinding> captures{};
+  // True for `async func` declarations. The published signature result is
+  // Task[R,E]; the body is lowered to a resumable state machine whose
+  // suspension points are NodeKind::await_ nodes.
+  bool async = false;
 };
 struct GenericParam {
   SymbolId symbol;

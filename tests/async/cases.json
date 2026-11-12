@@ -1,0 +1,19 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "positive": [
+    {"name": "basic", "exit": 0, "stdout": "42\n"},
+    {"name": "nested", "exit": 0, "stdout": "12\ncaught\n3\n"},
+    {"name": "cancel", "exit": 0, "stdout": "true\ntrue\nchild.cleanup\nworker.cleanup\n"},
+    {"name": "io", "exit": 0, "stdout": "4\ntrue\n"},
+    {"name": "order", "exit": 0, "stdout": "fast\nslow\n"},
+    {"name": "shutdown-fd", "exit": 0, "stdout": "true\nfd.cleanup\n"}
+  ],
+  "reject": [
+    {"name": "await-outside", "code": "E_AWAIT_CONTEXT"},
+    {"name": "await-not-task", "code": "E_AWAIT_NOT_TASK"},
+    {"name": "async-method", "code": "E_CAPABILITY_UNAVAILABLE"},
+    {"name": "async-value", "code": "E_CAPABILITY_UNAVAILABLE"},
+    {"name": "undeclared-error", "code": "E_EFFECT_UNHANDLED"}
+  ]
+}

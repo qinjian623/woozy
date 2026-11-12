@@ -146,6 +146,12 @@ class Verifier {
         shape = !t.inputs.empty() && t.targets.size() == 2 &&
                 t.targets[0] != t.targets[1];
         break;
+      case Exit::await_:
+        shape = true; // arity and distinctness checked with the Task type
+        break;
+      case Exit::cancel_return:
+        shape = t.inputs.empty() && t.targets.empty();
+        break;
       case Exit::missing:
         break;
       }
@@ -1304,12 +1310,23 @@ class Verifier {
         }
       }
       const auto &t = bb.terminator;
+      TypeId async_return = TypeId{0}, async_error = TypeId{0};
+      if (f.async) {
+        const auto &task = type(sig.result, t.source);
+        need(task.kind == hir::TypeKind::Task && task.type_args.size() == 2,
+             "async function signature result", t.source);
+        async_return = task.type_args.at(0);
+        async_error = task.type_args.at(1);
+      }
       if (t.kind == Exit::error_return)
         need(t.origin && t.exit && t.exit->kind == hir::ExitKind::error &&
-                 t.exit->error_type == sig.throws_type,
+                 t.exit->error_type ==
+                     (f.async ? std::optional<TypeId>(async_error)
+                              : sig.throws_type),
              "ErrorReturn without verified error exit", t.source);
       if (t.kind == Exit::return_ && !t.origin)
-        need(type(sig.result, t.source).kind == hir::TypeKind::Unit &&
+        need(type(f.async ? async_return : sig.result, t.source).kind ==
+                 hir::TypeKind::Unit &&
                  t.source.snapshot == f.source.snapshot &&
                  t.source.begin_byte == f.source.begin_byte &&
                  t.source.end_byte == f.source.end_byte,
@@ -1344,13 +1361,41 @@ class Verifier {
                   params[0].call == *t.origin && params[0].error == (side == 1),
               "TryCall side parameter/predecessor", t.source);
         }
+      } else if (t.kind == Exit::await_) {
+        need(t.targets.size() == 3 && t.origin, "await arity/origin", t.source);
+        const auto &task = type(t.signature, t.source);
+        need(task.kind == hir::TypeKind::Task && task.type_args.size() == 2,
+             "await task signature", t.source);
+        need(operands.size() == 1 && !operands[0].address &&
+                 operands[0].type == t.signature,
+             "await future operand", t.source);
+        const auto error_type = task.type_args[1];
+        const bool unit_error =
+            type(error_type, t.source).kind == hir::TypeKind::Unit;
+        for (unsigned side = 0; side < 2; ++side) {
+          auto target = t.targets[side].value;
+          const auto &params = f.blocks[target].parameters;
+          const auto expected = task.type_args[side];
+          const bool unit =
+              type(expected, t.source).kind == hir::TypeKind::Unit;
+          need(predecessors[target] == Set{b} &&
+                   params.size() == (unit ? 0u : 1u) &&
+                   (unit || (params[0].type == expected &&
+                             params[0].call == *t.origin &&
+                             params[0].error == (side == 1))),
+               "await side parameter/predecessor", t.source);
+        }
+        need(f.blocks[t.targets[2].value].parameters.empty(),
+             "await cancel parameter", t.source);
+        (void)unit_error;
       } else {
         need(t.signature.value == 0, "signature on non-TryCall", t.source);
         for (const auto &d : operands)
           need(!d.address &&
-                   (t.kind == Exit::return_ ? d.type == sig.result
+                   (t.kind == Exit::return_
+                        ? d.type == (f.async ? async_return : sig.result)
                     : t.kind == Exit::error_return
-                        ? sig.throws_type == d.type
+                        ? d.type == (f.async ? async_error : *sig.throws_type)
                         : type(d.type, t.source).kind == hir::TypeKind::Bool),
                "terminator type mismatch", t.source);
       }
@@ -1358,8 +1403,8 @@ class Verifier {
         need(b != 0 && predecessors[b].size() == 1, "orphan block parameter",
              t.source);
         const auto &pred = f.blocks[*predecessors[b].begin()].terminator;
-        need(pred.kind == Exit::try_call, "parameter without TryCall edge",
-             t.source);
+        need(pred.kind == Exit::try_call || pred.kind == Exit::await_,
+             "parameter without TryCall/await edge", t.source);
       }
     }
     Set impossible;
@@ -1577,19 +1622,36 @@ class Verifier {
       const auto &t = bb.terminator;
       if (t.kind == Exit::try_call && !impossible.contains(b))
         ++actual.calls[{context(state), *t.origin}];
-      if (t.origin && t.kind != Exit::try_call) {
-        const auto &n = node(*t.origin);
-        for (const auto &p : n.exits) {
-          bool relevant =
-              t.kind == Exit::return_        ? p.kind == hir::ExitKind::return_
-              : t.kind == Exit::error_return ? p.kind == hir::ExitKind::error
-                                             : true;
-          if (relevant)
+      if (t.origin && (t.kind == Exit::return_ || t.kind == Exit::error_return)) {
+        // A function-level edge must apply its matching HIR plan when one is
+        // recorded. Trivial exits have no plan. Await's cancel plan belongs to
+        // its separate cancel_return edge, and a caught error plan is applied
+        // on a branch whose t.exit is validated below.
+        const auto want = t.kind == Exit::return_ ? hir::ExitKind::return_
+                                                  : hir::ExitKind::error;
+        for (const auto &p : node(*t.origin).exits)
+          if (p.kind == want)
             need(t.exit && t.exit->origin == *t.origin &&
-                     p.kind == t.exit->kind &&
-                     p.error_type == t.exit->error_type,
+                     t.exit->kind == p.kind &&
+                     t.exit->error_type == p.error_type,
                  "exit omitted required cleanup plan", t.source);
+      }
+      if (t.kind == Exit::await_) {
+        // The await node owns exactly one error plan (when E is not Unit) and
+        // one cancel plan; both must be present at the matching exit blocks.
+        const auto &n = node(*t.origin);
+        const auto &task = type(t.signature, t.source);
+        const auto error_type = task.type_args[1];
+        size_t errors = 0, cancels = 0;
+        for (const auto &p : n.exits) {
+          errors += p.kind == hir::ExitKind::error;
+          cancels += p.kind == hir::ExitKind::cancel;
         }
+        need(errors == (type(error_type, t.source).kind == hir::TypeKind::Unit
+                            ? 0u
+                            : 1u) &&
+                 cancels == 1,
+             "await cleanup plans", t.source);
       }
       if (t.exit) {
         const auto &p = plan(*t.exit);
@@ -1624,7 +1686,9 @@ class Verifier {
               need(t.inputs == top.saved, "exit value changed after cleanup",
                    t.source);
           }
-        } else
+        } else if (p.kind == hir::ExitKind::cancel)
+          need(t.kind == Exit::cancel_return, "cancel exit kind", t.source);
+        else
           need(t.kind == Exit::branch, "normal/jump exit is not branch",
                t.source);
         state.pop_back();
@@ -1632,6 +1696,7 @@ class Verifier {
       // An exhaustive enum switch's default edge cannot execute, even when
       // generated inside a cleanup. Other unfinished exits remain invalid.
       if (t.kind == Exit::return_ || t.kind == Exit::error_return ||
+          t.kind == Exit::cancel_return ||
           (t.kind == Exit::unreachable && !impossible.contains(b)))
         need(state.empty(), "function exits with unfinished cleanup", t.source);
       for (auto target : t.targets) {
@@ -1799,7 +1864,7 @@ std::string dump(const Module &m) {
       const auto &t = f.blocks[b].terminator;
       static constexpr const char *exits[] = {
           "missing",     "branch",   "conditional", "return",
-          "unreachable", "try_call", "error_return"};
+          "unreachable", "try_call", "error_return", "await", "cancel_return"};
       out << "  " << exits[static_cast<unsigned>(t.kind)];
       if (t.kind == Exit::try_call)
         out << " signature=" << t.signature.value;

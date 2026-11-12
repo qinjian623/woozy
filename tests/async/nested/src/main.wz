@@ -1,0 +1,37 @@
+// CON03: nested await, typed error propagation and defer cleanup across
+// suspension points.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+import "std/vec" as vec;
+
+enum Failure { Bad; }
+
+async func inner(x i32, log Vec[i32]) i32 throws Failure {
+    defer { vec.push(log, x); }
+    await a.sleep(1);
+    if x < 0 { throw Failure.Bad; }
+    return x * 2;
+}
+
+async func middle(x i32, log Vec[i32]) i32 throws Failure {
+    let value = await inner(x, log);
+    return await inner(value, log);
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[i32]();
+    try {
+        io.println(await middle(3, log));
+    } catch error Failure {
+        io.println("unexpected");
+    }
+    try {
+        io.println(await middle(-1, log));
+    } catch error Failure {
+        io.println("caught");
+    }
+    io.println(vec.len(log));
+    return 0;
+}

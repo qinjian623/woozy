@@ -1,0 +1,14 @@
+// CON03: an async call returns a Task; await delivers its value.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+
+async func add(a i32, b i32) i32 {
+    return a + b;
+}
+
+async func main() i32 throws os.Error {
+    let value = await add(20, 22);
+    io.println(value);
+    return 0;
+}

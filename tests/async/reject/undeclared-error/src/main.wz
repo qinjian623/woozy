@@ -1,0 +1,6 @@
+package app;
+enum Failure { Bad; }
+async func risky() i32 throws Failure { throw Failure.Bad; }
+async func main() i32 {
+    return await risky();
+}

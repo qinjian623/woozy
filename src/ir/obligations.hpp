@@ -63,6 +63,16 @@ class RequiredExits {
       if (auto error = h.types.find(c->signature)->throws_type)
         flow.merge(exit(id, hir::ExitKind::error, error));
     }
+    if (n.kind() == hir::NodeKind::await_) {
+      const auto *task = h.types.find(node(n.children[0]).type);
+      if (!task || task->kind != hir::TypeKind::Task ||
+          task->type_args.size() != 2)
+        throw std::logic_error("await child is not a Task");
+      const auto error = task->type_args[1];
+      if (h.types.find(error)->kind != hir::TypeKind::Unit)
+        flow.merge(exit(id, hir::ExitKind::error, error));
+      flow.merge(exit(id, hir::ExitKind::cancel));
+    }
     return flow;
   }
   Flow stmt(HirNodeId id) {

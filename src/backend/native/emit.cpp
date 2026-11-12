@@ -4,6 +4,7 @@
 #include "lang/backend/native.hpp"
 #include "c_ffi.hpp"
 #include <cmath>
+#include <cstdlib>
 #include <functional>
 #include <llvm/ADT/APFloat.h>
 #include <llvm/ADT/SmallVector.h>
@@ -11,6 +12,7 @@
 #include <llvm/IR/Constants.h>
 #include <llvm/IR/IRBuilder.h>
 #include <llvm/IR/Instructions.h>
+#include <llvm/IR/Intrinsics.h>
 #include <llvm/IR/LegacyPassManager.h>
 #include <llvm/IR/MDBuilder.h>
 #include <llvm/IR/Module.h>
@@ -49,6 +51,9 @@ std::string text_ir(const llvm::Module &m) {
   return s;
 }
 void verify_llvm(const llvm::Module &m) {
+  if (std::getenv("WZ_DUMP_IR") != nullptr) {
+    llvm::errs() << text_ir(m) << "\n";
+  }
   std::string error;
   llvm::raw_string_ostream stream(error);
   if (llvm::verifyModule(m, &stream))
@@ -73,6 +78,16 @@ class Emitter {
   // the value instead of silently passing its thunk.
   std::set<ValueId> dynamic_function_values;
   std::map<SymbolId, llvm::Function *> function_thunks;
+  // Async declarations are split into three symbols: the coroutine (which
+  // takes a trailing future pointer and returns void), its start function
+  // (the source-visible Task-producing call), and resume/destroy wrappers
+  // published to the runtime.
+  std::map<SymbolId, llvm::Function *> async_starts, async_resume, async_destroy;
+  std::map<TypeId, llvm::StructType *> promise_types;
+  std::map<TypeId, int> promise_result_slot, promise_error_slot;
+  std::map<SymbolId, llvm::Function *> async_release;
+  llvm::Function *coro_resume_intrinsic = nullptr,
+                 *coro_destroy_intrinsic = nullptr;
   std::map<std::string, llvm::StructType *> env_record_types;
   std::map<std::pair<std::string, bool>, llvm::Function *> env_record_ops;
   std::map<std::tuple<uint64_t, uint64_t, uint64_t>, llvm::Function *>
@@ -122,6 +137,54 @@ class Emitter {
       context,
       {builder.getPtrTy(), builder.getInt64Ty(), builder.getInt64Ty()});
   hir::Type type(TypeId id) const { return *aggregates.types.find(id); }
+  llvm::Function *call_target(SymbolId symbol) const {
+    if (auto it = async_starts.find(symbol); it != async_starts.end())
+      return it->second;
+    return functions.at(symbol);
+  }
+  llvm::StructType *promise_type(TypeId task) {
+    if (auto it = promise_types.find(task); it != promise_types.end())
+      return it->second;
+    const auto &t = type(task);
+    std::vector<llvm::Type *> fields = {builder.getInt32Ty(),
+                                        builder.getInt32Ty()};
+    const auto result = t.type_args.at(0), error = t.type_args.at(1);
+    int result_slot = -1, error_slot = -1;
+    if (type(result).kind != hir::TypeKind::Unit) {
+      result_slot = static_cast<int>(fields.size());
+      fields.push_back(lower_type(result));
+    }
+    if (type(error).kind != hir::TypeKind::Unit) {
+      error_slot = static_cast<int>(fields.size());
+      fields.push_back(lower_type(error));
+    }
+    auto *layout = llvm::StructType::create(
+        context, fields, "lang.promise." + std::to_string(task.value));
+    promise_types.emplace(task, layout);
+    promise_result_slot.emplace(task, result_slot);
+    promise_error_slot.emplace(task, error_slot);
+    return layout;
+  }
+  llvm::FunctionType *coroutine_signature(TypeId id) {
+    const auto &t = type(id);
+    std::vector<llvm::Type *> parameters;
+    for (auto p : t.parameters)
+      parameters.push_back(p.mode == hir::ParamMode::inout
+                               ? builder.getPtrTy()
+                               : lower_type(p.type));
+    parameters.push_back(builder.getPtrTy()); // future
+    return llvm::FunctionType::get(builder.getVoidTy(), parameters, false);
+  }
+  // Promise slots are written by the coroutine; the same offsets are read by
+  // an awaiter, so both sides derive them from the canonical Task type.
+  llvm::Value *promise_slot(llvm::Value *promise, llvm::StructType *layout,
+                            TypeId task, bool error) {
+    const int slot = error ? promise_error_slot.at(task)
+                           : promise_result_slot.at(task);
+    if (slot < 0)
+      fail("promise slot is absent for a Unit payload");
+    return builder.CreateStructGEP(layout, promise, static_cast<unsigned>(slot));
+  }
   llvm::Type *lower_type(TypeId id) {
     if (auto found = layouts.find(id); found != layouts.end())
       return found->second;
@@ -148,6 +211,7 @@ class Emitter {
     case hir::TypeKind::CondvarHandle:
     case hir::TypeKind::AtomicI64Handle:
     case hir::TypeKind::IpcHandle:
+    case hir::TypeKind::Task:
       return builder.getPtrTy();
     case hir::TypeKind::String: {
       auto *layout = llvm::StructType::get(
@@ -670,7 +734,10 @@ class Emitter {
         found != function_thunks.end())
       return found->second;
     auto signature_id = function_signatures.at(symbol);
-    auto target = functions.at(symbol);
+    // Direct-call callees also materialize a function instruction; for an
+    // async declaration the value-shaped entry is its Task-producing start
+    // function, not the coroutine (which takes a trailing future).
+    auto target = call_target(symbol);
     auto *thunk = llvm::Function::Create(
         signature(signature_id, true), llvm::GlobalValue::InternalLinkage,
         "lang.thunk." + std::to_string(symbol.value), module);
@@ -930,6 +997,33 @@ class Emitter {
       return call("lang_vec_length_v1", i64, args);
     case SystemOperation::text_length:
       return text_length(0);
+    case SystemOperation::async_spawn:
+      call("lang_async_spawn_v1", builder.getVoidTy(), args);
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_cancel:
+      call("lang_async_cancel_v1", builder.getVoidTy(), args);
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_finished:
+      return builder.CreateICmpNE(
+          call("lang_async_finished_v1", builder.getInt32Ty(), args),
+          builder.getInt32(0));
+    case SystemOperation::async_sleep:
+      return call("lang_async_sleep_v1", builder.getPtrTy(), args);
+    case SystemOperation::async_wait_readable:
+      return call("lang_async_wait_fd_v1", builder.getPtrTy(),
+                  {args[0], builder.getInt32(1)});
+    case SystemOperation::async_wait_writable:
+      return call("lang_async_wait_fd_v1", builder.getPtrTy(),
+                  {args[0], builder.getInt32(4)});
+    case SystemOperation::async_run:
+      call("lang_async_run_v1", builder.getVoidTy(), {});
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_run_until:
+      call("lang_async_run_until_v1", builder.getVoidTy(), args);
+      return llvm::Constant::getNullValue(lower_type(i.type));
+    case SystemOperation::async_shutdown:
+      call("lang_async_shutdown_v1", builder.getVoidTy(), {});
+      return llvm::Constant::getNullValue(lower_type(i.type));
     case SystemOperation::thread_spawn:
       return thread_spawn(i, args);
     case SystemOperation::thread_error:
@@ -1528,7 +1622,7 @@ class Emitter {
       const auto &call = call_origin(i.origin, i.source);
       std::vector<llvm::Value *> actual(args.begin() + 1, args.end());
       if (call.kind == hir::CalleeKind::direct && call.direct_symbol) {
-        auto target = functions.at(*call.direct_symbol);
+        auto target = call_target(*call.direct_symbol);
         const auto hf = hir_functions.find(*call.direct_symbol);
         if (hf != hir_functions.end() && !hf->second->captures.empty())
           fail("direct call targets a capturing lambda entry");
@@ -1562,13 +1656,77 @@ class Emitter {
     const bool capturing =
         hf != hir_functions.end() && !hf->second->captures.empty();
     const unsigned parameter_offset = capturing ? 1 : 0;
+    const bool is_async = f.async;
+    // The coroutine prologue must be the LLVM entry block. It is created
+    // before the IR blocks so the first body block may have predecessors.
+    llvm::BasicBlock *async_entry = nullptr;
+    if (is_async)
+      async_entry = llvm::BasicBlock::Create(context, "entry", fn);
     std::vector<llvm::BasicBlock *> blocks;
     for (size_t b = 0; b < f.blocks.size(); ++b)
       blocks.push_back(
           llvm::BasicBlock::Create(context, "b" + std::to_string(b), fn));
     const auto [poll_headers, loop_exits] = gc_loop_safepoints(f);
     const bool gc_entry = gc_entry_symbol && *gc_entry_symbol == f.symbol;
-    builder.SetInsertPoint(blocks[0]);
+    llvm::Value *coro_token = nullptr, *coro_handle = nullptr,
+                *promise_ptr = nullptr;
+    llvm::StructType *promise_layout = nullptr;
+    llvm::BasicBlock *async_final = nullptr;
+    llvm::BasicBlock *async_suspend_return = nullptr;
+    llvm::Function *coro_promise_intrinsic = nullptr;
+    if (is_async) {
+      promise_layout = promise_type(sig.result);
+      builder.SetInsertPoint(async_entry);
+      auto *future = fn->getArg(fn->arg_size() - 1);
+      auto *promise_alloca = builder.CreateAlloca(promise_layout);
+      auto *coro_id = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_id);
+      auto *coro_alloc = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_alloc);
+      auto *coro_size = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_size, {builder.getInt64Ty()});
+      auto *coro_begin = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_begin);
+      coro_promise_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_promise);
+      coro_token = builder.CreateCall(
+          coro_id, {builder.getInt32(8), promise_alloca,
+                    llvm::ConstantPointerNull::get(builder.getPtrTy()),
+                    llvm::ConstantPointerNull::get(builder.getPtrTy())});
+      auto *need = builder.CreateCall(coro_alloc, {coro_token});
+      auto *size = builder.CreateCall(coro_size, {});
+      auto *alloc = builder.CreateCall(
+          module.getOrInsertFunction(
+              "lang_async_frame_alloc_v1",
+              llvm::FunctionType::get(builder.getPtrTy(),
+                                      {builder.getInt64Ty()}, false)),
+          {size});
+      auto *memory = builder.CreateSelect(
+          need, alloc, llvm::ConstantPointerNull::get(builder.getPtrTy()));
+      coro_handle = builder.CreateCall(coro_begin, {coro_token, memory});
+      promise_ptr =
+          builder.CreateCall(coro_promise_intrinsic,
+                             {coro_handle, builder.getInt32(8),
+                              builder.getInt1(false)});
+      auto release_entry = async_release.find(f.symbol);
+      llvm::Value *release =
+          release_entry == async_release.end()
+              ? static_cast<llvm::Value *>(
+                    llvm::ConstantPointerNull::get(builder.getPtrTy()))
+              : static_cast<llvm::Value *>(release_entry->second);
+      auto publish = module.getOrInsertFunction(
+          "lang_async_publish_v1",
+          llvm::FunctionType::get(
+              builder.getVoidTy(),
+              {builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy(),
+               builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy()},
+              false));
+      builder.CreateCall(publish,
+                         {future, coro_handle, async_resume.at(f.symbol),
+                          async_destroy.at(f.symbol), promise_ptr, release});
+    } else {
+      builder.SetInsertPoint(blocks[0]);
+    }
     for (const auto &slot : f.slots) {
       llvm::Value *storage;
       if (slot.inout)
@@ -1642,6 +1800,77 @@ class Emitter {
       outputs.emplace(b, storage);
       incoming.emplace(t.targets[0].value, storage.value);
       incoming.emplace(t.targets[1].value, storage.error);
+    }
+    for (size_t b = 0; b < f.blocks.size(); ++b) {
+      const auto &t = f.blocks[b].terminator;
+      if (t.kind != ir::Exit::await_)
+        continue;
+      const auto &task = type(t.signature);
+      for (unsigned side = 0; side < 2; ++side) {
+        const auto payload = task.type_args[side];
+        if (type(payload).kind == hir::TypeKind::Unit)
+          continue;
+        auto *address =
+            builder.CreateAlloca(lower_type(payload), nullptr, "await.side");
+        if (!incoming.emplace(t.targets[side].value, address).second)
+          fail("await side target already has an incoming value");
+      }
+    }
+    if (is_async) {
+      // Promise status/claimed start cleared; the body writes them only on an
+      // exit. The initial suspend returns control to lang.start, which already
+      // owns the published future object.
+      auto *zero = builder.getInt32(0);
+      builder.CreateStore(zero, builder.CreateStructGEP(promise_layout,
+                                                        promise_ptr, 0));
+      builder.CreateStore(zero, builder.CreateStructGEP(promise_layout,
+                                                        promise_ptr, 1));
+      auto *coro_save = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_save);
+      auto *coro_suspend = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_suspend);
+      auto *save = builder.CreateCall(coro_save, {coro_handle});
+      auto *suspended = builder.CreateCall(
+          coro_suspend, {save, builder.getInt1(false)});
+      auto *body = llvm::BasicBlock::Create(context, "async.body", fn);
+      // One shared suspension exit for the whole coroutine. `coro.end(null)`
+      // is the CoroSplit fallthrough marker: the ramp returns the published
+      // handle and a resume function returns to its caller until resumed.
+      async_suspend_return =
+          llvm::BasicBlock::Create(context, "async.suspend.return", fn);
+      auto *dispatch = builder.CreateSwitch(suspended, async_suspend_return);
+      dispatch->addCase(builder.getInt8(0), body);
+      dispatch->addCase(builder.getInt8(1), body);
+      {
+        llvm::IRBuilderBase::InsertPointGuard guard(builder);
+        auto *coro_end_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+            &module, llvm::Intrinsic::coro_end);
+        builder.SetInsertPoint(async_suspend_return);
+        builder.CreateCall(coro_end_intrinsic,
+                           {llvm::ConstantPointerNull::get(builder.getPtrTy()),
+                            builder.getInt1(false),
+                            llvm::ConstantTokenNone::get(context)});
+        builder.CreateRetVoid();
+      }
+      async_final = llvm::BasicBlock::Create(context, "async.final", fn);
+      // First-resume cancellation check: a task queued and cancelled before it
+      // ever ran has no registered cleanup, so it enters the exit directly.
+      builder.SetInsertPoint(body);
+      auto *cancelled_entry =
+          llvm::BasicBlock::Create(context, "async.cancel.entry", fn);
+      auto *current_cancelled = builder.CreateCall(
+          module.getOrInsertFunction(
+              "lang_async_current_cancelled_v1",
+              llvm::FunctionType::get(builder.getInt32Ty(), {}, false)));
+      builder.CreateCondBr(
+          builder.CreateICmpNE(current_cancelled, builder.getInt32(0)),
+          cancelled_entry, blocks[0]);
+      builder.SetInsertPoint(cancelled_entry);
+      builder.CreateStore(builder.getInt32(3),
+                          builder.CreateStructGEP(promise_layout, promise_ptr, 0));
+      builder.CreateStore(builder.getInt32(3),
+                          builder.CreateStructGEP(promise_layout, promise_ptr, 1));
+      builder.CreateBr(async_final);
     }
     // Dominating definitions precede uses, including nested short-circuit CFGs
     // whose numeric block IDs are not topologically ordered.
@@ -1719,8 +1948,103 @@ class Emitter {
         }
         break;
       }
+      case ir::Exit::await_: {
+        const auto &task = type(t.signature);
+        auto *layout = promise_type(t.signature);
+        const auto payload = task.type_args.at(0);
+        const auto error_type = task.type_args.at(1);
+        const bool unit_payload = type(payload).kind == hir::TypeKind::Unit;
+        const bool unit_error = type(error_type).kind == hir::TypeKind::Unit;
+        const int result_slot = promise_result_slot.at(t.signature);
+        const int error_slot = promise_error_slot.at(t.signature);
+        auto *future = values.at(t.inputs[0]);
+        auto await_fn = module.getOrInsertFunction(
+            "lang_async_await_v1",
+            llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy()},
+                                    false));
+        auto promise_of = module.getOrInsertFunction(
+            "lang_async_promise_v1",
+            llvm::FunctionType::get(builder.getPtrTy(), {builder.getPtrTy()},
+                                    false));
+        auto *check = llvm::BasicBlock::Create(context, "await.check", fn);
+        auto *suspend = llvm::BasicBlock::Create(context, "await.suspend", fn);
+        auto *ready = llvm::BasicBlock::Create(context, "await.ready", fn);
+        auto *failed = llvm::BasicBlock::Create(context, "await.error", fn);
+        auto *cancelled = llvm::BasicBlock::Create(context, "await.cancel", fn);
+        builder.CreateBr(check);
+        builder.SetInsertPoint(check);
+        auto *status = builder.CreateCall(await_fn, {future});
+        auto *dispatch = builder.CreateSwitch(status, cancelled);
+        dispatch->addCase(builder.getInt32(0), suspend);
+        dispatch->addCase(builder.getInt32(1), ready);
+        dispatch->addCase(builder.getInt32(2), failed);
+        builder.SetInsertPoint(suspend);
+        auto *coro_save = llvm::Intrinsic::getOrInsertDeclaration(
+            &module, llvm::Intrinsic::coro_save);
+        auto *coro_suspend = llvm::Intrinsic::getOrInsertDeclaration(
+            &module, llvm::Intrinsic::coro_suspend);
+        auto *save = builder.CreateCall(coro_save, {coro_handle});
+        auto *suspended =
+            builder.CreateCall(coro_suspend, {save, builder.getInt1(false)});
+        auto *resumed0 =
+            llvm::BasicBlock::Create(context, "await.resumed.0", fn);
+        auto *resumed1 =
+            llvm::BasicBlock::Create(context, "await.resumed.1", fn);
+        auto *resume_dispatch =
+            builder.CreateSwitch(suspended, async_suspend_return);
+        resume_dispatch->addCase(builder.getInt8(0), resumed0);
+        resume_dispatch->addCase(builder.getInt8(1), resumed1);
+        builder.SetInsertPoint(resumed0);
+        builder.CreateBr(check);
+        builder.SetInsertPoint(resumed1);
+        builder.CreateBr(check);
+        builder.SetInsertPoint(ready);
+        if (!unit_payload) {
+          auto *promise = builder.CreateCall(promise_of, {future});
+          builder.CreateStore(
+              builder.CreateLoad(lower_type(payload),
+                                 builder.CreateStructGEP(
+                                     layout, promise,
+                                     static_cast<unsigned>(result_slot))),
+              incoming.at(t.targets[0].value));
+          auto *claimed = builder.CreateLoad(
+              builder.getInt32Ty(), builder.CreateStructGEP(layout, promise, 1));
+          builder.CreateStore(builder.CreateOr(claimed, builder.getInt32(1)),
+                              builder.CreateStructGEP(layout, promise, 1));
+        }
+        builder.CreateBr(blocks[t.targets[0].value]);
+        builder.SetInsertPoint(failed);
+        if (!unit_error) {
+          auto *promise = builder.CreateCall(promise_of, {future});
+          builder.CreateStore(
+              builder.CreateLoad(lower_type(error_type),
+                                 builder.CreateStructGEP(
+                                     layout, promise,
+                                     static_cast<unsigned>(error_slot))),
+              incoming.at(t.targets[1].value));
+          auto *claimed = builder.CreateLoad(
+              builder.getInt32Ty(), builder.CreateStructGEP(layout, promise, 1));
+          builder.CreateStore(builder.CreateOr(claimed, builder.getInt32(2)),
+                              builder.CreateStructGEP(layout, promise, 1));
+        }
+        builder.CreateBr(blocks[t.targets[1].value]);
+        builder.SetInsertPoint(cancelled);
+        builder.CreateBr(blocks[t.targets[2].value]);
+        break;
+      }
       case ir::Exit::return_:
-        if (sig.throws_type) {
+        if (is_async) {
+          const int result_slot = promise_result_slot.at(sig.result);
+          if (result_slot >= 0)
+            builder.CreateStore(
+                values.at(t.inputs[0]),
+                builder.CreateStructGEP(promise_layout, promise_ptr,
+                                        static_cast<unsigned>(result_slot)));
+          builder.CreateStore(builder.getInt32(1),
+                              builder.CreateStructGEP(promise_layout,
+                                                      promise_ptr, 0));
+          builder.CreateBr(async_final);
+        } else if (sig.throws_type) {
           if (type(sig.result).kind != hir::TypeKind::Unit)
             builder.CreateStore(values.at(t.inputs[0]),
                                 fn->getArg(sig.parameters.size() +
@@ -1729,10 +2053,38 @@ class Emitter {
         } else
           builder.CreateRet(values.at(t.inputs[0]));
         break;
+      case ir::Exit::cancel_return:
+        builder.CreateStore(builder.getInt32(3),
+                            builder.CreateStructGEP(promise_layout,
+                                                    promise_ptr, 0));
+        // Nothing was written to the result/error slots. Mark both claimed so
+        // the future release never drops an uninitialized value.
+        builder.CreateStore(builder.getInt32(3),
+                            builder.CreateStructGEP(promise_layout,
+                                                    promise_ptr, 1));
+        builder.CreateBr(async_final);
+        break;
       case ir::Exit::error_return:
-        builder.CreateStore(values.at(t.inputs[0]),
-                            fn->getArg(fn->arg_size() - 1));
-        builder.CreateRet(builder.getFalse());
+        if (is_async) {
+          const int error_slot = promise_error_slot.at(sig.result);
+          if (error_slot >= 0)
+            builder.CreateStore(
+                values.at(t.inputs[0]),
+                builder.CreateStructGEP(promise_layout, promise_ptr,
+                                        static_cast<unsigned>(error_slot)));
+          builder.CreateStore(builder.getInt32(2),
+                              builder.CreateStructGEP(promise_layout,
+                                                      promise_ptr, 0));
+          // No result was produced; keep release from dropping that slot.
+          builder.CreateStore(builder.getInt32(1),
+                              builder.CreateStructGEP(promise_layout,
+                                                      promise_ptr, 1));
+          builder.CreateBr(async_final);
+        } else {
+          builder.CreateStore(values.at(t.inputs[0]),
+                              fn->getArg(fn->arg_size() - 1));
+          builder.CreateRet(builder.getFalse());
+        }
         break;
       case ir::Exit::unreachable:
         builder.CreateUnreachable();
@@ -1740,6 +2092,42 @@ class Emitter {
       default:
         fail("unverified terminator reached emitter");
       }
+    }
+    if (is_async) {
+      auto *coro_save = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_save);
+      auto *coro_suspend = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_suspend);
+      auto *coro_free = llvm::Intrinsic::getOrInsertDeclaration(
+          &module, llvm::Intrinsic::coro_free);
+      builder.SetInsertPoint(async_final);
+      auto *save = builder.CreateCall(coro_save, {coro_handle});
+      auto *suspended =
+          builder.CreateCall(coro_suspend, {save, builder.getInt1(true)});
+      // The default edge is the final suspension: return to the caller and
+      // keep the frame for a later destroy. The 0/1 continuations are reached
+      // only by coro.destroy, which resumes at the final suspend.
+      auto *cleanup =
+          llvm::BasicBlock::Create(context, "async.cleanup", fn);
+      auto *final_dispatch =
+          builder.CreateSwitch(suspended, async_suspend_return);
+      final_dispatch->addCase(builder.getInt8(0), cleanup);
+      final_dispatch->addCase(builder.getInt8(1), cleanup);
+      builder.SetInsertPoint(cleanup);
+      auto *memory = builder.CreateCall(coro_free, {coro_token, coro_handle});
+      auto *present = builder.CreateICmpNE(
+          memory, llvm::ConstantPointerNull::get(builder.getPtrTy()));
+      auto *free_block =
+          llvm::BasicBlock::Create(context, "async.free", fn);
+      builder.CreateCondBr(present, free_block, async_suspend_return);
+      builder.SetInsertPoint(free_block);
+      builder.CreateCall(
+          module.getOrInsertFunction(
+              "lang_async_frame_free_v1",
+              llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                      false)),
+          {memory});
+      builder.CreateBr(async_suspend_return);
     }
     std::string error;
     llvm::raw_string_ostream stream(error);
@@ -1778,19 +2166,135 @@ public:
   Output run(SymbolId entry, const Options &options) {
     // Only concrete CFG functions and their used types reach LLVM. The shared
     // context also contains legal, non-executable generic declarations.
+    if (std::getenv("WZ_DUMP_NATIVEIR") != nullptr)
+      llvm::errs() << ir::dump(input) << "\n";
     for (const auto &h : input.hir.module().functions)
       hir_functions.emplace(h.symbol, &h);
+    bool has_async = false;
+    coro_resume_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+        &module, llvm::Intrinsic::coro_resume);
+    coro_destroy_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
+        &module, llvm::Intrinsic::coro_destroy);
     for (const auto &f : input.functions) {
       function_signatures.emplace(f.symbol, f.signature);
       const auto hf = hir_functions.find(f.symbol);
       const bool capturing =
           hf != hir_functions.end() && !hf->second->captures.empty();
-      functions.emplace(
-          f.symbol,
-          llvm::Function::Create(
-              signature(f.signature, capturing),
-              llvm::GlobalValue::InternalLinkage,
-              "lang.fn." + std::to_string(f.symbol.value), module));
+      if (!f.async) {
+        functions.emplace(
+            f.symbol,
+            llvm::Function::Create(
+                signature(f.signature, capturing),
+                llvm::GlobalValue::InternalLinkage,
+                "lang.fn." + std::to_string(f.symbol.value), module));
+        continue;
+      }
+      has_async = true;
+      if (capturing)
+        fail("async capture entry is not supported");
+      const auto id = std::to_string(f.symbol.value);
+      auto *coro = llvm::Function::Create(
+          coroutine_signature(f.signature), llvm::GlobalValue::InternalLinkage,
+          "lang.async." + id, module);
+      coro->addFnAttr(llvm::Attribute::PresplitCoroutine);
+      functions.emplace(f.symbol, coro);
+      auto *start = llvm::Function::Create(
+          signature(f.signature), llvm::GlobalValue::InternalLinkage,
+          "lang.start." + id, module);
+      async_starts.emplace(f.symbol, start);
+      auto *resume = llvm::Function::Create(
+          llvm::FunctionType::get(builder.getVoidTy(),
+                                  {builder.getPtrTy()}, false),
+          llvm::GlobalValue::InternalLinkage, "lang.resume." + id, module);
+      auto *destroy = llvm::Function::Create(
+          llvm::FunctionType::get(builder.getVoidTy(),
+                                  {builder.getPtrTy()}, false),
+          llvm::GlobalValue::InternalLinkage, "lang.destroy." + id, module);
+      async_resume.emplace(f.symbol, resume);
+      async_destroy.emplace(f.symbol, destroy);
+      {
+        llvm::IRBuilderBase::InsertPointGuard guard(builder);
+        builder.SetInsertPoint(
+            llvm::BasicBlock::Create(context, "resume", resume));
+        builder.CreateCall(coro_resume_intrinsic, {resume->getArg(0)});
+        builder.CreateRetVoid();
+        builder.SetInsertPoint(
+            llvm::BasicBlock::Create(context, "destroy", destroy));
+        builder.CreateCall(coro_destroy_intrinsic, {destroy->getArg(0)});
+        builder.CreateRetVoid();
+      }
+      const auto &task = type(f.signature).result;
+      const auto &task_type = type(task);
+      const auto result_type = task_type.type_args.at(0);
+      const auto error_type = task_type.type_args.at(1);
+      auto *layout = promise_type(task);
+      const int result_slot = promise_result_slot.at(task);
+      const int error_slot = promise_error_slot.at(task);
+      const bool drop_result =
+          result_slot >= 0 && owning(result_type);
+      const bool drop_error = error_slot >= 0 && owning(error_type);
+      if (drop_result || drop_error) {
+        auto *release = llvm::Function::Create(
+            llvm::FunctionType::get(builder.getVoidTy(),
+                                    {builder.getPtrTy()}, false),
+            llvm::GlobalValue::InternalLinkage, "lang.release." + id, module);
+        async_release.emplace(f.symbol, release);
+        llvm::IRBuilderBase::InsertPointGuard guard(builder);
+        builder.SetInsertPoint(
+            llvm::BasicBlock::Create(context, "entry", release));
+        auto *promise = release->getArg(0);
+        auto *claimed = builder.CreateLoad(
+            builder.getInt32Ty(),
+            builder.CreateStructGEP(layout, promise, 1));
+        if (drop_result) {
+          auto *present = llvm::BasicBlock::Create(context, "claimed", release);
+          auto *next = llvm::BasicBlock::Create(context, "next", release);
+          builder.CreateCondBr(
+              builder.CreateICmpEQ(
+                  builder.CreateAnd(claimed, builder.getInt32(1)), 
+                  builder.getInt32(0)),
+              present, next);
+          builder.SetInsertPoint(present);
+          builder.CreateCall(value_op(result_type, false),
+                             {builder.CreateStructGEP(
+                                 layout, promise,
+                                 static_cast<unsigned>(result_slot))});
+          builder.CreateBr(next);
+          builder.SetInsertPoint(next);
+        }
+        if (drop_error) {
+          auto *present = llvm::BasicBlock::Create(context, "claimed", release);
+          auto *done = llvm::BasicBlock::Create(context, "done", release);
+          builder.CreateCondBr(
+              builder.CreateICmpEQ(
+                  builder.CreateAnd(claimed, builder.getInt32(2)),
+                  builder.getInt32(0)),
+              present, done);
+          builder.SetInsertPoint(present);
+          builder.CreateCall(value_op(error_type, false),
+                             {builder.CreateStructGEP(
+                                 layout, promise,
+                                 static_cast<unsigned>(error_slot))});
+          builder.CreateBr(done);
+          builder.SetInsertPoint(done);
+        }
+        builder.CreateRetVoid();
+      }
+      {
+        llvm::IRBuilderBase::InsertPointGuard guard(builder);
+        builder.SetInsertPoint(
+            llvm::BasicBlock::Create(context, "start", start));
+        auto *future = builder.CreateCall(
+            module.getOrInsertFunction(
+                "lang_async_task_new_v1",
+                llvm::FunctionType::get(builder.getPtrTy(), {}, false)));
+        std::vector<llvm::Value *> args;
+        for (unsigned a = 0; a < start->arg_size(); ++a)
+          args.push_back(start->getArg(a));
+        args.push_back(future);
+        builder.CreateCall(functions.at(f.symbol), args);
+        builder.CreateRet(future);
+      }
     }
     auto chosen = functions.find(entry);
     if (chosen == functions.end())
@@ -1801,16 +2305,32 @@ public:
         fail("capturing lambda cannot be the executable entry");
     }
     TypeId selected;
+    bool entry_async = false;
     for (auto &f : input.functions)
-      if (f.symbol == entry)
+      if (f.symbol == entry) {
         selected = f.signature;
+        entry_async = f.async;
+      }
     const auto &sig = type(selected);
     const auto &result = type(sig.result);
-    if (!sig.parameters.empty() ||
-        !(result.kind == hir::TypeKind::Unit ||
-          (result.kind == hir::TypeKind::SignedInt && result.bits == 32)))
+    if (entry_async) {
+      const auto &task = type(sig.result);
+      if (task.kind != hir::TypeKind::Task || task.type_args.size() != 2)
+        fail("async entry signature is not a Task");
+      const auto payload = type(task.type_args.at(0));
+      if (!sig.parameters.empty() ||
+          !(payload.kind == hir::TypeKind::Unit ||
+            (payload.kind == hir::TypeKind::SignedInt && payload.bits == 32)))
+        unsupported(
+            "async executable entry requires no parameters and i32 or Unit "
+            "result");
+    } else if (!sig.parameters.empty() ||
+               !(result.kind == hir::TypeKind::Unit ||
+                 (result.kind == hir::TypeKind::SignedInt &&
+                  result.bits == 32))) {
       unsupported(
           "executable entry requires no parameters and i32 or Unit result");
+    }
     gc_entry_symbol = entry;
     for (auto &f : input.functions)
       function(f);
@@ -1846,7 +2366,97 @@ public:
       builder.CreateRet(builder.getInt32(1));
     }
     builder.SetInsertPoint(run);
-    if (!sig.throws_type) {
+    if (entry_async) {
+      const auto &task = type(sig.result);
+      const auto payload = task.type_args.at(0);
+      const auto error_type = task.type_args.at(1);
+      auto *layout = promise_type(sig.result);
+      const int result_slot = promise_result_slot.at(sig.result);
+      const int error_slot = promise_error_slot.at(sig.result);
+      auto *future = builder.CreateCall(async_starts.at(entry));
+      auto spawn = module.getOrInsertFunction(
+          "lang_async_spawn_v1",
+          llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                  false));
+      builder.CreateCall(spawn, {future});
+      auto run_until = module.getOrInsertFunction(
+          "lang_async_run_until_v1",
+          llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                  false));
+      builder.CreateCall(run_until, {future});
+      auto *status = builder.CreateCall(
+          module.getOrInsertFunction(
+              "lang_async_status_v1",
+              llvm::FunctionType::get(builder.getInt32Ty(),
+                                      {builder.getPtrTy()}, false)),
+          {future});
+      auto shutdown = module.getOrInsertFunction(
+          "lang_async_shutdown_v1",
+          llvm::FunctionType::get(builder.getVoidTy(), {}, false));
+      auto release = module.getOrInsertFunction(
+          "lang_async_task_release_v1",
+          llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                  false));
+      auto promise_of = module.getOrInsertFunction(
+          "lang_async_promise_v1",
+          llvm::FunctionType::get(builder.getPtrTy(), {builder.getPtrTy()},
+                                  false));
+      auto *done = llvm::BasicBlock::Create(context, "async.done", main);
+      auto *error = llvm::BasicBlock::Create(context, "async.error", main);
+      auto *cancelled =
+          llvm::BasicBlock::Create(context, "async.cancelled", main);
+      builder.CreateCondBr(builder.CreateICmpEQ(status, builder.getInt32(1)),
+                           done,
+                           builder.CreateICmpEQ(status, builder.getInt32(2))
+                               ? error
+                               : cancelled);
+      builder.SetInsertPoint(done);
+      llvm::Value *value = builder.getInt32(0);
+      if (type(payload).kind != hir::TypeKind::Unit) {
+        auto *promise = builder.CreateCall(promise_of, {future});
+        value = builder.CreateLoad(
+            lower_type(payload),
+            builder.CreateStructGEP(layout, promise,
+                                    static_cast<unsigned>(result_slot)));
+        auto *claimed = builder.CreateLoad(
+            builder.getInt32Ty(), builder.CreateStructGEP(layout, promise, 1));
+        builder.CreateStore(builder.CreateOr(claimed, builder.getInt32(1)),
+                            builder.CreateStructGEP(layout, promise, 1));
+      }
+      builder.CreateCall(shutdown);
+      builder.CreateCall(release, {future});
+      builder.CreateCall(finish, {});
+      builder.CreateRet(value);
+      builder.SetInsertPoint(error);
+      auto *promise = builder.CreateCall(promise_of, {future});
+      auto *error_value = builder.CreateLoad(
+          lower_type(error_type),
+          builder.CreateStructGEP(layout, promise,
+                                  static_cast<unsigned>(error_slot)));
+      auto *claimed = builder.CreateLoad(
+          builder.getInt32Ty(), builder.CreateStructGEP(layout, promise, 1));
+      builder.CreateStore(builder.CreateOr(claimed, builder.getInt32(2)),
+                          builder.CreateStructGEP(layout, promise, 1));
+      builder.CreateCall(shutdown);
+      builder.CreateCall(release, {future});
+      auto report = module.getOrInsertFunction(
+          "lang_native_typed_error_v1",
+          llvm::FunctionType::get(builder.getVoidTy(),
+                                  {builder.getPtrTy(), builder.getInt64Ty()},
+                                  false));
+      const auto key = type_key(error_type);
+      builder.CreateCall(report, {builder.CreateGlobalString(key),
+                                  builder.getInt64(key.size())});
+      if (owning(error_type))
+        builder.CreateCall(value_op(error_type, false), {error_value});
+      builder.CreateCall(finish, {});
+      builder.CreateRet(builder.getInt32(1));
+      builder.SetInsertPoint(cancelled);
+      builder.CreateCall(shutdown);
+      builder.CreateCall(release, {future});
+      builder.CreateCall(finish, {});
+      builder.CreateRet(builder.getInt32(1));
+    } else if (!sig.throws_type) {
       llvm::Value *value = builder.CreateCall(chosen->second);
       llvm::Value *result_value =
           result.kind == hir::TypeKind::Unit ? builder.getInt32(0) : value;
@@ -1893,7 +2503,7 @@ public:
     out.native_ir = ir::dump(input);
     out.c_adapter_source = std::move(out_c_adapter_source);
     out.llvm_before_optimization = text_ir(module);
-    if (options.optimization == 2) {
+    if (has_async || options.optimization == 2) {
       llvm::LoopAnalysisManager loops;
       llvm::FunctionAnalysisManager functions;
       llvm::CGSCCAnalysisManager cgscc;
@@ -1904,11 +2514,14 @@ public:
       passes.registerFunctionAnalyses(functions);
       passes.registerLoopAnalyses(loops);
       passes.crossRegisterProxies(loops, functions, cgscc, modules);
-      auto pipeline =
-          passes.buildPerModuleDefaultPipeline(llvm::OptimizationLevel::O2);
+      auto pipeline = passes.buildPerModuleDefaultPipeline(
+          options.optimization == 2 ? llvm::OptimizationLevel::O2
+                                    : llvm::OptimizationLevel::O0);
       pipeline.run(module, modules);
     }
     verify_llvm(module);
+    if (std::getenv("WZ_DUMP_LLVM") != nullptr)
+      llvm::errs() << text_ir(module) << "\n";
     out.llvm_ir = text_ir(module);
     out.triple = module.getTargetTriple().str();
     out.data_layout = module.getDataLayoutStr();

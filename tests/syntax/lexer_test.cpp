@@ -18,12 +18,19 @@ int main() {
           "a>>=2;", "/* a /* b */ x", "`中文\n😀`", "\"\\u{10FFFF}\\0\\n\""})
       check(scan(s).success());
     for (auto s : {"007", "0x_FF", "1__0", "10_", "123i32", "0b2", "1e+",
-                   "async", "++", "?", "/*", "\"\\x20\"", "\"\\u{D800}\"",
+                   "++", "?", "/*", "\"\\x20\"", "\"\\u{D800}\"",
                    "\"\\u{110000}\"", "\"\\u{}\"", "\"a\n", "`a", "中文"}) {
       auto r = scan(s);
       check(!r.success());
       check(r.state == PhaseState::recovered);
       check(r.value->tokens.back().kind == TokenKind::end);
+    }
+    // `async` and `await` became keywords for CON03. They must lex as single
+    // keyword tokens, not identifiers and not the reserved-token error.
+    for (auto s : {"async", "await", "async func", "await task"}) {
+      auto keywords = scan(s);
+      check(keywords.success());
+      check(keywords.value->tokens.front().kind == TokenKind::keyword);
     }
     auto r = scan("\xef\xbb\xbf //中文😀\r\n\"\\u{1F600}\\0\"\r\n");
     check(r.success());

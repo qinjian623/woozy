@@ -1,0 +1,6 @@
+package app;
+struct Counter { value i32; }
+impl Counter {
+    async func bump(value Counter) i32 { return value.value + 1; }
+}
+func main() i32 { return 0; }

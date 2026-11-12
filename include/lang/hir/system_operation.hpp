@@ -37,7 +37,13 @@ enum class SystemOperation : uint16_t {
   slice_view, slice_len, slice_sub, slice_to_vec,
   // Source-level Weak. These are builtins owned by std/weak; there is no new
   // Native IR opcode. upgrade returns the canonical std/option.Option[A].
-  weak_empty, weak_downgrade, weak_upgrade
+  weak_empty, weak_downgrade, weak_upgrade,
+  // std/async executor operations. Task[A,B] is the compiler-private owning
+  // handle; sleep/readable/writable return an already-pending Task that an
+  // async function awaits.
+  async_spawn, async_cancel, async_finished, async_sleep,
+  async_wait_readable, async_wait_writable, async_run, async_run_until,
+  async_shutdown
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -63,6 +69,26 @@ inline constexpr std::array<SystemOperationSpec, 13> system_operations{{
   {SystemOperation::exit, "__woozy_os_exit", "Unit", {"i32", "", "", ""}, 1},
   {SystemOperation::vec_length, "__woozy_os_vec_length", "usize", {"Vec[u8]", "", "", ""}, 1},
   {SystemOperation::text_length, "__woozy_os_text_length", "usize", {"string", "", "", ""}, 1},
+}};
+inline constexpr std::array<SystemOperationSpec, 9> async_system_operations{{
+  {SystemOperation::async_spawn, "__woozy_async_spawn", "Unit",
+   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
+  {SystemOperation::async_cancel, "__woozy_async_cancel", "Unit",
+   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
+  {SystemOperation::async_finished, "__woozy_async_finished", "bool",
+   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
+  {SystemOperation::async_sleep, "__woozy_async_sleep", "Task[Unit,Unit]",
+   {"i64", "", "", ""}, 1, "std/async"},
+  {SystemOperation::async_wait_readable, "__woozy_async_wait_readable",
+   "Task[Unit,Unit]", {"i32", "", "", ""}, 1, "std/async"},
+  {SystemOperation::async_wait_writable, "__woozy_async_wait_writable",
+   "Task[Unit,Unit]", {"i32", "", "", ""}, 1, "std/async"},
+  {SystemOperation::async_run, "__woozy_async_run", "Unit",
+   {"", "", "", ""}, 0, "std/async"},
+  {SystemOperation::async_run_until, "__woozy_async_run_until", "Unit",
+   {"Task[A,B]", "", "", ""}, 1, "std/async", 2},
+  {SystemOperation::async_shutdown, "__woozy_async_shutdown", "Unit",
+   {"", "", "", ""}, 0, "std/async"},
 }};
 // New owning runtime operations are kept in a separate table so the original
 // std/os operation inventory (and its source tests) remains exact. Both tables
@@ -312,7 +338,7 @@ inline constexpr std::array<SystemOperationSpec, 3> weak_system_operations{{
 }};
 inline constexpr auto all_system_operations = [] {
   std::array<SystemOperationSpec, system_operations.size() +
-      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size() + slice_system_operations.size() + weak_system_operations.size()> all{};
+      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size() + slice_system_operations.size() + weak_system_operations.size() + async_system_operations.size()> all{};
   std::size_t index = 0;
   for (const auto &spec : system_operations) all[index++] = spec;
   for (const auto &spec : concurrency_system_operations) all[index++] = spec;
@@ -323,6 +349,7 @@ inline constexpr auto all_system_operations = [] {
   for (const auto &spec : ffi_system_operations) all[index++] = spec;
   for (const auto &spec : slice_system_operations) all[index++] = spec;
   for (const auto &spec : weak_system_operations) all[index++] = spec;
+  for (const auto &spec : async_system_operations) all[index++] = spec;
   return all;
 }();
 inline const SystemOperationSpec *system_operation_spec(SystemOperation operation) {

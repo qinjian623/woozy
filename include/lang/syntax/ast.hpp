@@ -17,6 +17,13 @@ enum class AstKind {
   Variant,
   GenericParameter,
   Parameter,
+  // Marks a Function declaration whose first token was `async`. The marker
+  // has no children and precedes all parameters in the Function's children.
+  Async,
+  // `await <expr>`; one child expression. Parsing is context-free here; the
+  // checker decides whether the enclosing function is async and whether the
+  // child has a Task type.
+  Await,
   NamedType,
   FunctionType,
   ParenthesizedType,

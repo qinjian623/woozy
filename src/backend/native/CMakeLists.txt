@@ -28,6 +28,7 @@ add_library(lang_native_runtime STATIC
   ${LANG_NATIVE_ROOT}/runtime/native/os.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/os_buffers.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/thread.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/async.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/sync.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/text.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/unicode/unicode.cpp

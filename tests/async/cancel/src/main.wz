@@ -1,0 +1,38 @@
+// CON03: cooperative cancellation runs the suspend-point cancel exit plan;
+// shutdown cancels and releases every remaining suspended frame.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+import "std/vec" as vec;
+
+async func child(log Vec[string]) Unit {
+    defer { vec.push(log, "child.cleanup"); }
+    await a.sleep(5000);
+    vec.push(log, "child.after");
+}
+
+async func worker(log Vec[string]) Unit {
+    defer { vec.push(log, "worker.cleanup"); }
+    await a.sleep(5000);
+    vec.push(log, "worker.after");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let task = child(log);
+    a.spawn(task);
+    a.run_until(a.sleep(5));
+    a.cancel(task);
+    a.run_until(task);
+    io.println(a.finished(task));
+    let pending = worker(log);
+    a.spawn(pending);
+    a.run_until(a.sleep(5));
+    a.shutdown();
+    io.println(a.finished(pending));
+    for line in log {
+        io.println(line);
+    }
+    return 0;
+}

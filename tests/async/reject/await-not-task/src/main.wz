@@ -1,0 +1,4 @@
+package app;
+async func main() i32 {
+    return await 1;
+}
