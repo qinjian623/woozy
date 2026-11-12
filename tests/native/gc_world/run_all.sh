@@ -161,6 +161,24 @@ run_seccomp_panic() {
   return 0
 }
 
+run_critical_overflow() {
+  local log=$BUILD_DIR/critical-overflow.log
+  timeout --signal=TERM --kill-after=5s 20s     "$BUILD_DIR/gc_world_critical_overflow" >"$log" 2>&1
+  local status=$?
+  if [ "$status" -ne 101 ]; then
+    fail "critical-depth-overflow (exit $status, expected 101)"
+    show_log "$log"
+    return 1
+  fi
+  if ! grep -q "LANG_NATIVE_PANIC:v1:gc-world:critical-depth-overflow:" "$log"; then
+    fail "critical-depth-overflow (missing panic reason)"
+    show_log "$log"
+    return 1
+  fi
+  pass "critical-depth-overflow"
+  return 0
+}
+
 HOST_SOURCES=(
   "$SCRIPT_DIR/gc_world_test.cpp"
   "$ROOT/runtime/native/gc_world.cpp"
@@ -197,6 +215,12 @@ if build_step "misuse binary" "$COMPILER" "${COMMON[@]}" -O2 -g \
   run_expect_panic enter-safe-unregistered safe-unregistered
   run_expect_panic leave-safe-unregistered safe-unregistered
   run_expect_panic leave-without-enter leave-without-enter
+  run_expect_panic critical-in-safe critical-in-safe
+  run_expect_panic safe-in-critical safe-in-critical
+  run_expect_panic enter-critical-unregistered critical-unregistered
+  run_expect_panic leave-critical-unregistered critical-unregistered
+  run_expect_panic unregister-in-critical unregister-in-critical
+  run_expect_panic leave-critical-without-enter leave-critical-without-enter
   run_expect_panic stop-unregistered stop-unregistered
   run_expect_panic stop-in-safe stop-in-safe
   run_expect_panic resume-unregistered resume-unregistered
@@ -205,6 +229,14 @@ if build_step "misuse binary" "$COMPILER" "${COMMON[@]}" -O2 -g \
   run_expect_panic unregister-collector unregister-collector
   run_expect_panic fork-unregistered fork-unregistered
   run_expect_panic fork-active-stop fork-active-stop
+fi
+
+if build_step "critical overflow binary" "$COMPILER" "${COMMON[@]}" -O2 -g \
+    -DLANG_GC_WORLD_TEST_CRITICAL_MAX=2u \
+    "$SCRIPT_DIR/gc_world_critical_overflow_test.cpp" \
+    "$ROOT/runtime/native/gc_world.cpp" "$ROOT/runtime/native/alloc.cpp" \
+    -o "$BUILD_DIR/gc_world_critical_overflow"; then
+  run_critical_overflow
 fi
 
 if build_step "seccomp fault binary" "$COMPILER" "${COMMON[@]}" -O2 -g \

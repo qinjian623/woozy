@@ -38,12 +38,22 @@ constexpr int kEtimedout = -110;
 constexpr int kEbusy = -16;
 constexpr int kEinval = -22;
 
+// The production limit is the full uint32 range. The overflow test compiles a
+// separate copy of this translation unit with a lowered limit so it can reach
+// the same checked branch without four billion nested calls.
+#if defined(LANG_GC_WORLD_TEST_CRITICAL_MAX)
+constexpr uint32_t kCriticalDepthMax = LANG_GC_WORLD_TEST_CRITICAL_MAX;
+#else
+constexpr uint32_t kCriticalDepthMax = 0xffffffffu;
+#endif
+
 struct Node {
   Node *next;
   int32_t tid;
   uint32_t refs;
   uint32_t state;
   uint32_t safe_depth;
+  uint32_t critical_depth;
 };
 
 struct KernelTimespec {
@@ -213,6 +223,7 @@ Node *allocate_node(int32_t tid) noexcept {
   __atomic_store_n(&node->refs, 2u, __ATOMIC_RELAXED);
   node->state = kStateActive;
   node->safe_depth = 0;
+  node->critical_depth = 0;
   return node;
 }
 
@@ -307,6 +318,8 @@ bool all_stopped_locked(int32_t collector_tid) noexcept {
       return false;
     if (node->state == kStateSafe && node->safe_depth == 0)
       gc_panic("state-corruption");
+    if (node->critical_depth != 0)
+      gc_panic("state-corruption"); // Critical nodes must remain ACTIVE.
     if (node->state != kStateSafe && node->state != kStateParked)
       gc_panic("state-corruption");
   }
@@ -344,7 +357,8 @@ extern "C" bool lang_gc_world_register_v1(void) noexcept {
     if (existing) {
       const bool requested = request_active_locked();
       const bool collector = is_active_collector_locked(tid);
-      if (requested && !collector && existing->state == kStateActive) {
+      if (requested && !collector && existing->state == kStateActive &&
+          existing->critical_depth == 0) {
         existing->state = kStateParked;
         wait = true;
         notify = true;
@@ -418,6 +432,11 @@ extern "C" bool lang_gc_world_unregister_v1(void) noexcept {
       node_release(node);
       gc_panic("unregister-in-safe");
     }
+    if (node->critical_depth != 0) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("unregister-in-critical");
+    }
     if (node->state == kStateParked) {
       registry_unlock();
       node_release(node);
@@ -460,6 +479,18 @@ extern "C" void lang_gc_world_poll_v1(void) noexcept {
     node_release(node);
     return;
   }
+  if (node->critical_depth != 0) {
+    // A critical region is a mid-modification window. Defer the pending stop
+    // until leave_critical reaches depth zero; do not PARK here.
+    if (node->state != kStateActive) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
+    registry_unlock();
+    node_release(node);
+    return;
+  }
   if (node->state == kStateActive) {
     node->state = kStateParked;
     park = true;
@@ -488,6 +519,13 @@ extern "C" void lang_gc_world_enter_safe_v1(void) noexcept {
 
   bool notify = false;
   registry_lock();
+  if (node->critical_depth != 0) {
+    // SAFE asserts the graph is quiescent; a critical region explicitly says a
+    // write is in progress. Combining the two would be a false claim.
+    registry_unlock();
+    node_release(node);
+    gc_panic("safe-in-critical");
+  }
   if (node->safe_depth == 0xffffffffu) {
     registry_unlock();
     node_release(node);
@@ -555,6 +593,99 @@ extern "C" void lang_gc_world_leave_safe_v1(void) noexcept {
   node_release(node);
 }
 
+extern "C" void lang_gc_world_enter_critical_v1(void) noexcept {
+  const int32_t tid = current_tid();
+  Node *node = find_and_acquire(tid);
+  if (!node)
+    gc_panic("critical-unregistered");
+
+  registry_lock();
+  if (node->safe_depth != 0 || node->state == kStateSafe) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("critical-in-safe");
+  }
+  if (node->state == kStateParked) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("critical-while-parked");
+  }
+  if (node->state != kStateActive) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("state-corruption");
+  }
+  if (node->critical_depth == kCriticalDepthMax) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("critical-depth-overflow");
+  }
+  ++node->critical_depth;
+  registry_unlock();
+  node_release(node);
+}
+
+extern "C" void lang_gc_world_leave_critical_v1(void) noexcept {
+  const int32_t tid = current_tid();
+  Node *node = find_and_acquire(tid);
+  if (!node)
+    gc_panic("critical-unregistered");
+
+  bool park = false;
+  bool notify = false;
+  registry_lock();
+  if (node->critical_depth == 0) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("leave-critical-without-enter");
+  }
+  --node->critical_depth;
+  if (node->critical_depth == 0) {
+    if (request_active_locked() && !is_active_collector_locked(tid)) {
+      if (node->state != kStateActive) {
+        registry_unlock();
+        node_release(node);
+        gc_panic("state-corruption");
+      }
+      node->state = kStateParked;
+      park = true;
+      notify = true;
+    } else {
+      node->state = kStateActive;
+    }
+  } else if (node->state != kStateActive) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("state-corruption");
+  }
+  registry_unlock();
+
+  if (notify)
+    notify_waiters();
+  if (park)
+    wait_until_resumed(node);
+  node_release(node);
+}
+
+extern "C" bool lang_gc_world_can_collect_v1(void) noexcept {
+  const int32_t tid = current_tid();
+  Node *node = find_and_acquire(tid);
+  if (!node)
+    return false; // The query never auto-registers an unknown thread.
+
+  registry_lock();
+  // A collection can start only when no stop is already owned, this thread is
+  // an ordinary ACTIVE mutator, and it is outside both exclusion regions. This
+  // makes the active collector (and every thread during another collector's
+  // stop) non-collectible; it never releases or consumes the stop.
+  const bool collectable =
+      !stop_active_locked() && node->state == kStateActive &&
+      node->safe_depth == 0 && node->critical_depth == 0;
+  registry_unlock();
+  node_release(node);
+  return collectable;
+}
+
 extern "C" int64_t lang_gc_world_stop_v1(int64_t timeout_ns) noexcept {
   if (timeout_ns < -1)
     return kEinval;
@@ -579,6 +710,13 @@ extern "C" int64_t lang_gc_world_stop_v1(int64_t timeout_ns) noexcept {
     registry_unlock();
     node_release(self);
     gc_panic("stop-in-safe");
+  }
+  if (self->critical_depth != 0) {
+    // Do not set a request from a mid-modification region. In particular this
+    // must not disturb an already-owned stop or leave a pending old request.
+    registry_unlock();
+    node_release(self);
+    return kEbusy;
   }
   if (self->state == kStateParked) {
     registry_unlock();
@@ -658,7 +796,11 @@ extern "C" void lang_gc_world_fork_prepare_v1(void) noexcept {
     registry_unlock();
     gc_panic("fork-hook-misuse");
   }
-  if (stop_active_locked() && g_collector_tid != tid) {
+  if (stop_active_locked() && g_collector_tid != tid &&
+      node->critical_depth == 0) {
+    // A critical caller is the intended exception: it entered critical before
+    // taking launch/environment/allocator locks and is not a pausable point.
+    // Its child still clears the inherited stop and keeps the critical depth.
     registry_unlock();
     gc_panic("fork-active-stop");
   }
@@ -666,6 +808,10 @@ extern "C" void lang_gc_world_fork_prepare_v1(void) noexcept {
     registry_unlock();
     gc_panic("fork-parked");
   }
+  // critical_depth is deliberately allowed here, including while another
+  // collector's stop is pending. A future fork path enters a critical region
+  // before acquiring launch/environment/allocator locks; the child preserves
+  // the surviving thread's depth and clears the inherited stop.
   g_fork_prepared = 1;
   g_fork_tid = tid;
   // The registry lock stays held across the caller's fork().
@@ -714,6 +860,8 @@ extern "C" void lang_gc_world_fork_child_v1(void) noexcept {
   // in the parent; the child has a new kernel tid.
   keep->tid = child_tid;
   __atomic_store_n(&keep->refs, 1u, __ATOMIC_RELAXED);
+  // critical_depth is copied unchanged. A critical region is still ACTIVE
+  // (not SAFE); only safe_depth changes the state classification.
   if (keep->safe_depth == 0)
     keep->state = kStateActive;
   else

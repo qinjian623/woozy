@@ -182,6 +182,25 @@ extern "C" int gc_static_main() noexcept {
     fail("second-register-not-idempotent");
   if (lang_gc_world_request_pending_v1() != 0)
     fail("pending-helper");
+  if (!lang_gc_world_can_collect_v1())
+    fail("can-collect-normal");
+
+  lang_gc_world_enter_critical_v1();
+  if (lang_gc_world_can_collect_v1())
+    fail("can-collect-in-critical");
+  if (lang_gc_world_stop_v1(0) != -16)
+    fail("stop-in-critical-not-busy");
+  if (lang_gc_world_poll_required_v1())
+    fail("busy-stop-set-request");
+  lang_gc_world_enter_critical_v1();
+  if (lang_gc_world_can_collect_v1())
+    fail("can-collect-in-nested-critical");
+  lang_gc_world_leave_critical_v1();
+  if (lang_gc_world_can_collect_v1())
+    fail("can-collect-after-inner-leave");
+  lang_gc_world_leave_critical_v1();
+  if (!lang_gc_world_can_collect_v1())
+    fail("can-collect-after-outer-leave");
 
   lang_gc_world_enter_safe_v1();
   lang_gc_world_enter_safe_v1();

@@ -65,21 +65,44 @@ bool lang_gc_world_register_v1(void) LANG_GC_WORLD_NOEXCEPT;
 // removed it, false when the thread was not registered. It is thread-scoped:
 // an external callback that did not itself create the registration must not
 // call this, or it removes the language thread's only registration. Panic if
-// called by the active stop owner or from inside a SAFE region.
+// called by the active stop owner or from inside a SAFE or critical region.
 bool lang_gc_world_unregister_v1(void) LANG_GC_WORLD_NOEXCEPT;
 
 // Safepoint poll. With no request the fast path performs one atomic load and
 // returns without gettid or futex. With a request the slow path looks up the
-// registered node, moves ACTIVE to PARKED, and waits for resume. An
+// registered node. It moves ACTIVE to PARKED and waits unless the thread is in
+// SAFE or in a critical region. A critical region defers the stop without
+// parking; the outermost leave_critical performs the pending safepoint. An
 // unregistered thread that reaches the slow path is Panic.
 void lang_gc_world_poll_v1(void) LANG_GC_WORLD_NOEXCEPT;
 
 // Nestable SAFE regions for blocking/foreign calls that do not touch the Wz
 // graph. All graph writes must be complete before enter. enter/leave are not
 // a blanket "make every syscall safe" annotation; a caller that holds an
-// allocator or runtime lock still has to reason about that lock.
+// allocator or runtime lock still has to reason about that lock. enter_safe is
+// Panic while any critical region is active: SAFE asserts graph quiescence,
+// while critical asserts a partial graph modification is in progress.
 void lang_gc_world_enter_safe_v1(void) LANG_GC_WORLD_NOEXCEPT;
 void lang_gc_world_leave_safe_v1(void) LANG_GC_WORLD_NOEXCEPT;
+
+// Nestable critical (graph-modification) regions. enter_critical is allowed
+// only for the current registered thread when it is ACTIVE and outside SAFE;
+// it Panics when parked, inside SAFE, or on depth overflow. A stop request
+// observed by poll is deferred while critical_depth is nonzero, so a mutator
+// can finish a multi-word graph update. The outermost leave_critical is a
+// safepoint: with a request still active it becomes PARKED and waits for
+// resume before returning. Inner leaves never park.
+void lang_gc_world_enter_critical_v1(void) LANG_GC_WORLD_NOEXCEPT;
+void lang_gc_world_leave_critical_v1(void) LANG_GC_WORLD_NOEXCEPT;
+
+// Query only, no registration and no state change. Returns true when no stop
+// is currently owned, the calling thread is registered, its node is ACTIVE,
+// and safe_depth and critical_depth are both zero. It is therefore false for
+// the collector holding a successful stop, for every thread while another
+// collector owns a stop, and for any thread in SAFE or critical. It never
+// resumes, releases, or consumes an already successful stop. Unregistered
+// threads return false (they are not auto-registered).
+bool lang_gc_world_can_collect_v1(void) LANG_GC_WORLD_NOEXCEPT;
 
 // Stop all other registered mutators. timeout_ns:
 //   -1  wait without a deadline
@@ -87,11 +110,13 @@ void lang_gc_world_leave_safe_v1(void) LANG_GC_WORLD_NOEXCEPT;
 //   >0  absolute monotonic deadline of now + timeout_ns
 //   <-1 return -22 without changing state
 // Returns 0 on success, -110 (ETIMEDOUT) after retracting the request, -16
-// (EBUSY) if another collector (or this collector) already owns a stop.
-// The caller must be registered, outside SAFE, and becomes the recorded
-// collector. On success all other registered nodes are SAFE or PARKED, new
-// registrations cannot start graph work, and the caller may continue to use
-// the registry/allocator for collection.
+// (EBUSY) if another collector (or this collector) already owns a stop, or if
+// the caller is inside a critical region. The critical case is a busy result
+// and does not set or change any request. The caller must be registered,
+// outside SAFE and outside critical, and becomes the recorded collector. On
+// success all other registered nodes are SAFE or PARKED, new registrations
+// cannot start graph work, and the caller may continue to use the
+// registry/allocator for collection.
 int64_t lang_gc_world_stop_v1(int64_t timeout_ns) LANG_GC_WORLD_NOEXCEPT;
 
 // Only the thread that obtained a successful stop may resume. This clears the
@@ -111,8 +136,11 @@ void lang_gc_world_resume_v1(void) LANG_GC_WORLD_NOEXCEPT;
 //   child:  lang_alloc_fork_child_v1();     lang_gc_world_fork_child_v1();
 //
 // Prepare Panic if the caller is unregistered, already inside a stop that it
-// does not own, or parked. A collector may fork during its own stop; the child
-// clears the stop. The child does not simulate ARC drops for vanished threads.
+// does not own, or parked. A critical caller is allowed: a future fork path
+// enters critical before taking launch/environment/allocator locks. A collector
+// may fork during its own stop; the child clears the stop and preserves the
+// surviving thread's critical_depth. The child does not simulate ARC drops for
+// vanished threads.
 void lang_gc_world_fork_prepare_v1(void) LANG_GC_WORLD_NOEXCEPT;
 void lang_gc_world_fork_parent_v1(void) LANG_GC_WORLD_NOEXCEPT;
 void lang_gc_world_fork_child_v1(void) LANG_GC_WORLD_NOEXCEPT;

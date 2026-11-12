@@ -148,6 +148,204 @@ void test_basic_stop_and_resume() {
   expect_live(0);
 }
 
+void test_critical_poll_defers_stop_and_nested_leave() {
+  // The driver is intentionally unregistered. Only the collector and the
+  // mutator are registry members.
+  std::atomic<bool> collector_ready{false};
+  std::atomic<bool> in_critical{false};
+  std::atomic<bool> half_write{false};
+  std::atomic<bool> poll_deferred{false};
+  std::atomic<bool> nested_entered{false};
+  std::atomic<bool> inner_left{false};
+  std::atomic<bool> outer_left{false};
+  std::atomic<bool> graph_complete{false};
+  std::atomic<bool> stop_started{false};
+  std::atomic<bool> stop_succeeded{false};
+  std::atomic<bool> release_outer{false};
+  std::atomic<bool> resume_now{false};
+  std::atomic<bool> worker_done{false};
+
+  std::thread collector([&] {
+    CHECK(lang_gc_world_register_v1());
+    collector_ready.store(true, std::memory_order_release);
+    while (!stop_started.load(std::memory_order_acquire))
+      sleep_ms(1);
+    CHECK(lang_gc_world_stop_v1(5000000000LL) == 0);
+    stop_succeeded.store(true, std::memory_order_release);
+    while (!resume_now.load(std::memory_order_acquire))
+      sleep_ms(1);
+    lang_gc_world_resume_v1();
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  std::thread worker([&] {
+    CHECK(lang_gc_world_register_v1());
+    lang_gc_world_enter_critical_v1();
+    half_write.store(true, std::memory_order_release);
+    in_critical.store(true, std::memory_order_release);
+
+    while (!lang_gc_world_poll_required_v1())
+      std::this_thread::yield();
+    // Repeated registration must not park an already-critical thread.
+    CHECK(!lang_gc_world_register_v1());
+    // The request is active but the critical region must defer PARK.
+    lang_gc_world_poll_v1();
+    poll_deferred.store(true, std::memory_order_release);
+
+    lang_gc_world_enter_critical_v1();
+    nested_entered.store(true, std::memory_order_release);
+    // Polling at nested depth is still deferred.
+    lang_gc_world_poll_v1();
+    // An inner leave must not become a safepoint.
+    lang_gc_world_leave_critical_v1();
+    inner_left.store(true, std::memory_order_release);
+
+    while (!release_outer.load(std::memory_order_acquire))
+      sleep_ms(1);
+    // Outer leave is the safepoint; it parks until resume.
+    lang_gc_world_leave_critical_v1();
+    outer_left.store(true, std::memory_order_release);
+    graph_complete.store(true, std::memory_order_release);
+    CHECK(lang_gc_world_unregister_v1());
+    worker_done.store(true, std::memory_order_release);
+  });
+
+  CHECK(wait_for([&] { return collector_ready.load(); }, 5000));
+  CHECK(wait_for([&] { return in_critical.load(); }, 5000));
+  stop_started.store(true, std::memory_order_release);
+
+  CHECK(wait_for([&] {
+          return poll_deferred.load() && nested_entered.load() &&
+                 inner_left.load();
+        },
+        5000));
+  sleep_ms(50);
+  // The graph is mid-write and the mutator is still critical.
+  CHECK(half_write.load());
+  CHECK(!graph_complete.load());
+  CHECK(!stop_succeeded.load());
+
+  release_outer.store(true, std::memory_order_release);
+  CHECK(wait_for([&] { return stop_succeeded.load(); }, 5000));
+  sleep_ms(50);
+  // The outermost leave parked inside leave_critical and cannot return yet.
+  CHECK(!outer_left.load());
+
+  resume_now.store(true, std::memory_order_release);
+  CHECK(wait_for([&] { return outer_left.load() && worker_done.load(); }, 5000));
+  worker.join();
+  collector.join();
+  CHECK(graph_complete.load());
+  expect_live(0);
+}
+
+void test_critical_stop_busy_and_can_collect() {
+  CHECK(lang_gc_world_register_v1());
+  CHECK(lang_gc_world_can_collect_v1());
+
+  lang_gc_world_enter_critical_v1();
+  CHECK(!lang_gc_world_can_collect_v1());
+  CHECK(lang_gc_world_stop_v1(0) == -16);
+  CHECK(!lang_gc_world_poll_required_v1());
+  lang_gc_world_enter_critical_v1();
+  CHECK(!lang_gc_world_can_collect_v1());
+  lang_gc_world_leave_critical_v1();
+  CHECK(!lang_gc_world_can_collect_v1());
+  lang_gc_world_leave_critical_v1();
+  CHECK(lang_gc_world_can_collect_v1());
+
+  // A successful stop makes the collector non-collectible but must not be
+  // released or consumed by can_collect.
+  CHECK(lang_gc_world_stop_v1(0) == 0);
+  CHECK(!lang_gc_world_can_collect_v1());
+  CHECK(lang_gc_world_stop_v1(0) == -16);
+  lang_gc_world_resume_v1();
+  CHECK(lang_gc_world_can_collect_v1());
+
+  lang_gc_world_enter_safe_v1();
+  CHECK(!lang_gc_world_can_collect_v1());
+  lang_gc_world_leave_safe_v1();
+  CHECK(lang_gc_world_can_collect_v1());
+
+  CHECK(lang_gc_world_unregister_v1());
+  // Unregistered is false and does not silently register the thread.
+  CHECK(!lang_gc_world_can_collect_v1());
+  CHECK(lang_gc_world_register_v1());
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+}
+
+void test_can_collect_false_during_other_stop() {
+  CHECK(lang_gc_world_register_v1());
+
+  std::atomic<bool> worker_ready{false};
+  std::atomic<bool> query_done{false};
+  std::atomic<bool> worker_left{false};
+  std::thread worker([&] {
+    CHECK(lang_gc_world_register_v1());
+    worker_ready.store(true, std::memory_order_release);
+    while (!lang_gc_world_poll_required_v1())
+      std::this_thread::yield();
+    // Another collector owns the pending stop. This thread is still ACTIVE
+    // and has not parked, but can_collect must be false while that stop owns
+    // the world.
+    CHECK(!lang_gc_world_can_collect_v1());
+    query_done.store(true, std::memory_order_release);
+    lang_gc_world_poll_v1(); // now park so the stop can complete
+    worker_left.store(true, std::memory_order_release);
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  CHECK(wait_for([&] { return worker_ready.load(); }, 5000));
+  CHECK(lang_gc_world_stop_v1(2000000000LL) == 0);
+  CHECK(wait_for([&] { return query_done.load(); }, 2000));
+  lang_gc_world_resume_v1();
+  CHECK(wait_for([&] { return worker_left.load(); }, 2000));
+  worker.join();
+  CHECK(lang_gc_world_can_collect_v1());
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+}
+
+void test_critical_long_region_stop_timeout() {
+  CHECK(lang_gc_world_register_v1());
+
+  std::atomic<bool> in_critical{false};
+  std::atomic<bool> release_worker{false};
+  std::atomic<bool> left{false};
+  std::thread worker([&] {
+    CHECK(lang_gc_world_register_v1());
+    lang_gc_world_enter_critical_v1();
+    in_critical.store(true, std::memory_order_release);
+    while (!release_worker.load(std::memory_order_acquire)) {
+      // Deferred while the request exists; harmless fast path after retract.
+      lang_gc_world_poll_v1();
+      sleep_ms(1);
+    }
+    lang_gc_world_leave_critical_v1();
+    left.store(true, std::memory_order_release);
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  CHECK(wait_for([&] { return in_critical.load(); }, 5000));
+  const auto start = Clock::now();
+  CHECK(lang_gc_world_stop_v1(50000000LL) == -110); // 50 ms
+  const int64_t elapsed = elapsed_ms(start);
+  CHECK(elapsed >= 20);
+  CHECK(elapsed < 2000);
+  CHECK(!lang_gc_world_poll_required_v1());
+
+  // The old request was retracted; leaving the long critical region must not
+  // park on a stale epoch or request.
+  release_worker.store(true, std::memory_order_release);
+  CHECK(wait_for([&] { return left.load(); }, 5000));
+  worker.join();
+  CHECK(!lang_gc_world_poll_required_v1());
+  CHECK(lang_gc_world_can_collect_v1());
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+}
+
 void test_hundreds_of_stop_resume_rounds() {
   CHECK(lang_gc_world_register_v1());
   MutatorGroup group;
@@ -786,6 +984,166 @@ void test_fork_from_safe_preserves_depth() {
   expect_live(0);
 }
 
+void test_fork_from_critical_preserves_nested_depth() {
+  CHECK(lang_gc_world_register_v1());
+  lang_gc_world_enter_critical_v1();
+  lang_gc_world_enter_critical_v1();
+  CHECK(!lang_gc_world_can_collect_v1());
+
+  int pipe_fds[2] = {-1, -1};
+  CHECK(::pipe(pipe_fds) == 0);
+  // The future fork path enters critical before taking the allocator lock.
+  lang_alloc_fork_prepare_v1();
+  lang_gc_world_fork_prepare_v1();
+  const pid_t pid = ::fork();
+  CHECK(pid >= 0);
+
+  if (pid == 0) {
+    close_fd(pipe_fds[0]);
+    lang_alloc_fork_child_v1();
+    lang_gc_world_fork_child_v1();
+
+    int ok = 1;
+    ok = ok && !lang_gc_world_register_v1();
+    ok = ok && !lang_gc_world_can_collect_v1();
+    lang_gc_world_leave_critical_v1(); // depth becomes 1, not zero
+    ok = ok && !lang_gc_world_poll_required_v1();
+    ok = ok && !lang_gc_world_can_collect_v1();
+    // If the nested depth was lost, this stop would succeed (or the next leave
+    // would Panic). A -16 proves the surviving thread is still critical.
+    ok = ok && (lang_gc_world_stop_v1(0) == -16);
+    ok = ok && !lang_gc_world_poll_required_v1();
+    lang_gc_world_leave_critical_v1();
+    ok = ok && lang_gc_world_can_collect_v1();
+    ok = ok && (lang_gc_world_stop_v1(0) == 0);
+    lang_gc_world_resume_v1();
+    ok = ok && lang_gc_world_unregister_v1();
+    ok = ok && (gc_test_alloc_live() == 0);
+    (void)write_all_fd(pipe_fds[1], &ok, sizeof(ok));
+    ::close(pipe_fds[1]);
+    ::_exit(ok ? 0 : 1);
+  }
+
+  lang_gc_world_fork_parent_v1();
+  lang_alloc_fork_parent_v1();
+  close_fd(pipe_fds[1]);
+
+  // The parent still owns both critical levels.
+  CHECK(!lang_gc_world_can_collect_v1());
+  lang_gc_world_leave_critical_v1();
+  CHECK(!lang_gc_world_can_collect_v1());
+  lang_gc_world_leave_critical_v1();
+  CHECK(lang_gc_world_can_collect_v1());
+
+  int child_ok = 0;
+  CHECK(read_all_fd(pipe_fds[0], &child_ok, sizeof(child_ok)));
+  close_fd(pipe_fds[0]);
+  int status = 0;
+  CHECK(::waitpid(pid, &status, 0) == pid);
+  CHECK(WIFEXITED(status));
+  CHECK(WEXITSTATUS(status) == 0);
+  CHECK(child_ok == 1);
+
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+}
+
+void test_fork_from_critical_during_pending_stop() {
+  std::atomic<bool> collector_ready{false};
+  std::atomic<bool> start_stop{false};
+  std::atomic<bool> stop_ok{false};
+  std::atomic<bool> resume_now{false};
+  std::atomic<bool> forker_in_critical{false};
+  std::atomic<bool> fork_finished{false};
+  std::atomic<bool> child_ok{false};
+  std::atomic<bool> forker_left{false};
+
+  std::thread collector([&] {
+    CHECK(lang_gc_world_register_v1());
+    collector_ready.store(true, std::memory_order_release);
+    while (!start_stop.load(std::memory_order_acquire))
+      sleep_ms(1);
+    CHECK(lang_gc_world_stop_v1(2000000000LL) == 0);
+    stop_ok.store(true, std::memory_order_release);
+    while (!resume_now.load(std::memory_order_acquire))
+      sleep_ms(1);
+    lang_gc_world_resume_v1();
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  std::thread forker([&] {
+    CHECK(lang_gc_world_register_v1());
+    lang_gc_world_enter_critical_v1();
+    forker_in_critical.store(true, std::memory_order_release);
+    while (!lang_gc_world_poll_required_v1())
+      std::this_thread::yield();
+
+    int pipe_fds[2] = {-1, -1};
+    CHECK(::pipe(pipe_fds) == 0);
+    // Critical is held before the allocator fork lock. The stop owned by the
+    // collector above is still pending, which is exactly the allowed case.
+    lang_alloc_fork_prepare_v1();
+    lang_gc_world_fork_prepare_v1();
+    const pid_t pid = ::fork();
+    CHECK(pid >= 0);
+
+    if (pid == 0) {
+      close_fd(pipe_fds[0]);
+      lang_alloc_fork_child_v1();
+      lang_gc_world_fork_child_v1();
+
+      int ok = 1;
+      ok = ok && !lang_gc_world_register_v1();
+      ok = ok && !lang_gc_world_poll_required_v1(); // child cleared the stop
+      ok = ok && !lang_gc_world_can_collect_v1();    // still critical
+      lang_gc_world_leave_critical_v1();             // preserved depth 1 -> 0
+      ok = ok && lang_gc_world_can_collect_v1();
+      ok = ok && (lang_gc_world_stop_v1(0) == 0);
+      lang_gc_world_resume_v1();
+      ok = ok && lang_gc_world_unregister_v1();
+      ok = ok && (gc_test_alloc_live() == 0);
+      (void)write_all_fd(pipe_fds[1], &ok, sizeof(ok));
+      ::close(pipe_fds[1]);
+      ::_exit(ok ? 0 : 1);
+    }
+
+    lang_gc_world_fork_parent_v1();
+    lang_alloc_fork_parent_v1();
+    close_fd(pipe_fds[1]);
+
+    int ok = 0;
+    CHECK(read_all_fd(pipe_fds[0], &ok, sizeof(ok)));
+    close_fd(pipe_fds[0]);
+    int status = 0;
+    CHECK(::waitpid(pid, &status, 0) == pid);
+    CHECK(WIFEXITED(status));
+    CHECK(WEXITSTATUS(status) == 0);
+    child_ok.store(ok == 1, std::memory_order_release);
+    fork_finished.store(true, std::memory_order_release);
+
+    // This is the pending stop's safepoint after the fork snapshot.
+    lang_gc_world_leave_critical_v1();
+    forker_left.store(true, std::memory_order_release);
+    CHECK(lang_gc_world_unregister_v1());
+  });
+
+  CHECK(wait_for([&] { return collector_ready.load(); }, 5000));
+  CHECK(wait_for([&] { return forker_in_critical.load(); }, 5000));
+  start_stop.store(true, std::memory_order_release);
+
+  CHECK(wait_for([&] { return fork_finished.load(); }, 5000));
+  CHECK(child_ok.load());
+  CHECK(wait_for([&] { return stop_ok.load(); }, 5000));
+  sleep_ms(50);
+  CHECK(!forker_left.load()); // forker is parked inside leave_critical
+
+  resume_now.store(true, std::memory_order_release);
+  CHECK(wait_for([&] { return forker_left.load(); }, 5000));
+  collector.join();
+  forker.join();
+  expect_live(0);
+}
+
 void test_collector_fork_during_stop_clears_child_world() {
   CHECK(lang_gc_world_register_v1());
   MutatorGroup group;
@@ -856,6 +1214,27 @@ void test_collector_fork_during_stop_clears_child_world() {
   expect_live(0);
 }
 
+void benchmark_critical_pair() {
+  CHECK(lang_gc_world_register_v1());
+  for (int iteration = 0; iteration < 1000; ++iteration) {
+    lang_gc_world_enter_critical_v1();
+    lang_gc_world_leave_critical_v1();
+  }
+  constexpr int kPairs = 100000;
+  const auto start = Clock::now();
+  for (int iteration = 0; iteration < kPairs; ++iteration) {
+    lang_gc_world_enter_critical_v1();
+    lang_gc_world_leave_critical_v1();
+  }
+  const auto elapsed = std::chrono::duration_cast<std::chrono::nanoseconds>(
+                           Clock::now() - start)
+                           .count();
+  CHECK(lang_gc_world_unregister_v1());
+  expect_live(0);
+  std::printf("GC_WORLD_CRITICAL_PAIR_NS=%lld\n",
+              static_cast<long long>(elapsed / kPairs));
+}
+
 void test_unregistered_idle_poll_is_fast_path() {
   // The no-request path cannot perform a tid lookup by design. An unregistered
   // thread is caught only when a request makes it enter the slow path; that
@@ -872,6 +1251,10 @@ int main() {
 
   test_unregistered_idle_poll_is_fast_path();
   test_basic_stop_and_resume();
+  test_critical_poll_defers_stop_and_nested_leave();
+  test_critical_stop_busy_and_can_collect();
+  test_can_collect_false_during_other_stop();
+  test_critical_long_region_stop_timeout();
   test_safe_thread_does_not_block_stop_and_leave_waits();
   test_nested_safe();
   test_registration_during_stop_waits();
@@ -885,8 +1268,11 @@ int main() {
   test_thread_exit_cycles();
   test_fork_prunes_inherited_registry();
   test_fork_from_safe_preserves_depth();
+  test_fork_from_critical_preserves_nested_depth();
+  test_fork_from_critical_during_pending_stop();
   test_collector_fork_during_stop_clears_child_world();
   test_hundreds_of_stop_resume_rounds();
+  benchmark_critical_pair();
 
   expect_live(0);
   std::printf("GC_WORLD_HOST_OK allocations=%llu\n",

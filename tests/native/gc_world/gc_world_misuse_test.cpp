@@ -128,6 +128,41 @@ int main(int argc, char **argv) {
     (void)lang_gc_world_unregister_v1();
     unexpected_return(argv[1]);
   }
+  if (mode == "critical-in-safe") {
+    if (!lang_gc_world_register_v1())
+      std::_Exit(17);
+    lang_gc_world_enter_safe_v1();
+    lang_gc_world_enter_critical_v1();
+    unexpected_return(argv[1]);
+  }
+  if (mode == "safe-in-critical") {
+    if (!lang_gc_world_register_v1())
+      std::_Exit(18);
+    lang_gc_world_enter_critical_v1();
+    lang_gc_world_enter_safe_v1();
+    unexpected_return(argv[1]);
+  }
+  if (mode == "enter-critical-unregistered") {
+    lang_gc_world_enter_critical_v1();
+    unexpected_return(argv[1]);
+  }
+  if (mode == "leave-critical-unregistered") {
+    lang_gc_world_leave_critical_v1();
+    unexpected_return(argv[1]);
+  }
+  if (mode == "unregister-in-critical") {
+    if (!lang_gc_world_register_v1())
+      std::_Exit(19);
+    lang_gc_world_enter_critical_v1();
+    (void)lang_gc_world_unregister_v1();
+    unexpected_return(argv[1]);
+  }
+  if (mode == "leave-critical-without-enter") {
+    if (!lang_gc_world_register_v1())
+      std::_Exit(20);
+    lang_gc_world_leave_critical_v1();
+    unexpected_return(argv[1]);
+  }
   if (mode == "fork-unregistered") {
     lang_gc_world_fork_prepare_v1();
     unexpected_return(argv[1]);
