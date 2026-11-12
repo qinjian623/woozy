@@ -17,6 +17,7 @@ from run_unbound_methods import (
     parse_observer,
     elf_checks,
     source_hashes,
+    heap_allocation_roles,
 )
 
 EXPECTED = {
@@ -144,7 +145,13 @@ def main():
                 r["observation"] = data
                 assert not data["live"] and not data["vec_live"], data
                 assert len(data["vec_allocations"]) == len(data["vec_frees"]) == wanted["vec"], data
-                assert len(data["allocations"]) == len(data["frees"]) == wanted["vec"], data
+                assert sorted(data["vec_frees"]) == list(range(len(data["vec_allocations"]))), data
+                # SourceGC world/registry metadata also uses lang_alloc_v1;
+                # balance every heap allocation without equating it to Vecs.
+                assert len(data["allocations"]) == len(data["frees"]), data
+                assert sorted(data["frees"]) == list(range(len(data["allocations"]))), data
+                vec_heap, _metadata_heap = heap_allocation_roles(data)
+                assert len(vec_heap) == len(data["vec_allocations"]), data
                 assert data["events"] == wanted["native_events"], data
                 if case == "core":
                     sequence = data["sequence"]
@@ -155,7 +162,9 @@ def main():
                         end = next(i for i, x in enumerate(sequence) if x[0] == "obs" and x[1] == b)
                         middle = sequence[start + 1 : end]
                         assert sum(x[0] == "vec_free" for x in middle) == vecs, middle
-                        assert sum(x[0] == "free" for x in middle) == vecs, middle
+                        assert sum(
+                            x[0] == "free" and x[1] in vec_heap for x in middle
+                        ) == vecs, middle
                 if case == "owning-move-borrow":
                     sequence = data["sequence"]
                     first = next(i for i, x in enumerate(sequence) if x[0] == "obs" and x[1] == 1)
@@ -167,7 +176,10 @@ def main():
                     assert [x for x in sequence[bad + 1 : catch] if x[0] == "vec_free"] == [
                         ("vec_free", 1)
                     ], sequence
-                    assert sum(x[0] == "free" for x in sequence[bad + 1 : catch]) == 1, sequence
+                    assert sum(
+                        x[0] == "free" and x[1] in vec_heap
+                        for x in sequence[bad + 1 : catch]
+                    ) == 1, sequence
                 r["status"] = "passed"
             r = row(case, "python", source_sha256=hashes)
             target = args.out / case / "python"

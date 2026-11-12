@@ -204,12 +204,42 @@ def parse_observer(text):
                 vec_live=vec_live, events=events, sequence=sequence)
 
 
+def heap_allocation_roles(data):
+    """Split heap tokens into Vec-backed payloads and runtime metadata.
+
+    A Vec descriptor and its inline payload are one lang_alloc_v1 call, so its
+    ALLOC is immediately followed by VEC:1 for the same pointer.  SourceGC world
+    nodes and registry entries also use lang_alloc_v1/lang_free_v1 but have no
+    VEC:1 event.  They must be balanced, but they are not element payloads.
+    """
+    sequence = data['sequence']
+    vec_tokens, metadata_tokens = set(), set()
+    for position, item in enumerate(sequence):
+        if item[0] != 'alloc':
+            continue
+        token = item[1]
+        pointer = data['allocations'][token]['pointer']
+        if (position + 1 < len(sequence)
+                and sequence[position + 1][0] == 'vec_alloc'
+                and data['vec_allocations'][sequence[position + 1][1]] == pointer):
+            vec_tokens.add(token)
+        else:
+            metadata_tokens.add(token)
+    assert vec_tokens | metadata_tokens == set(range(len(data['allocations'])))
+    return vec_tokens, metadata_tokens
+
+
 def assert_observer(case, data):
     assert not data['live'] and not data['vec_live'], (case, data)
-    assert len(data['allocations']) == EXPECTED_VEC_ALLOCATIONS[case], data
-    assert sorted(data['frees']) == list(range(len(data['allocations']))), data
-    assert len(data['vec_allocations']) == EXPECTED_VEC_ALLOCATIONS[case], data
+    assert len(data['vec_allocations']) == len(data['vec_frees']) == \
+        EXPECTED_VEC_ALLOCATIONS[case], data
     assert sorted(data['vec_frees']) == list(range(len(data['vec_allocations']))), data
+    # SourceGC metadata and closure environments add heap allocations beyond
+    # the Vec count.  Every one of them must still be released exactly once.
+    assert len(data['allocations']) == len(data['frees']), data
+    assert sorted(data['frees']) == list(range(len(data['allocations']))), data
+    vec_heap, _metadata_heap = heap_allocation_roles(data)
+    assert len(vec_heap) == len(data['vec_allocations']), data
     assert data['events'] == EXPECTED_EVENTS[case], data
     if case == 'const-alias-owned-failure':
         sequence = data['sequence']
@@ -220,8 +250,11 @@ def assert_observer(case, data):
             assert bad < free < catch, (token, sequence)
         for token in range(3, 6):
             assert sequence.index(('vec_free', token)) > catch, (token, sequence)
-        for token, position in ((token, sequence.index(('alloc', token)))
-                                for token in range(len(data['allocations']))):
+        # Check the ordinary heap payload lifetime only for Vec-backed
+        # allocations.  GC registry entries can be released at unregister or
+        # program finish and are not element payloads.
+        for token in vec_heap:
+            position = sequence.index(('alloc', token))
             free = sequence.index(('free', token))
             if position < bad:
                 assert bad < free < catch, (token, sequence)

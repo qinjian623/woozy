@@ -73,7 +73,8 @@ def main():
        a.root/'tests/native/vec_observer.cpp',a.root/'tests/native/alloc_observer.cpp',
        a.runtime,'-o',out/'observe','-Wl,--wrap=lang_alloc_v1','-Wl,--wrap=lang_free_v1']);ok(r)
     row['observe']=r=command([out/'observe']);assert r['exit']==code,r
-    live={};allocations=[];frees=[];events=[];obs=[];drops={};iterations={};last_refs={}
+    live={};allocations=[];frees=[];events=[];obs=[];drops={};iterations={};last_refs={};refs_peak={}
+    cleared_without_event4=[]
     heap_live={};heap_allocated=[];heap_freed=[]
     merged=[]
     for line in r['stderr'].splitlines():
@@ -85,11 +86,22 @@ def main():
        live[identity]=detail;allocations.append([identity,detail]);drops[identity]=[];iterations[identity]=0
       elif event==5:
        assert identity in live,('duplicate free',line)
-       length=live.pop(identity);assert drops[identity]==list(range(length-1,-1,-1)),('element order',drops[identity],length)
+       length=live.pop(identity)
+       # An ordinary final release drops the remaining prefix in reverse order.
+       # SourceGC clear() has already dropped the cycle's elements directly, so
+       # the collected self-cycle's final event5 has no original event4 prefix.
+       # Keep the strict reverse-drop check for every ordinary Vec and only
+       # admit that one empty-prefix cycle below.
+       if drops[identity]==list(range(length-1,-1,-1)):
+        pass
+       elif ident=='recursive-cycle-retained' and length and not drops[identity]:
+        cleared_without_event4.append(identity)
+       else:
+        raise AssertionError(('element order',drops[identity],length))
        assert iterations[identity]==0,('freed during iteration',line)
        frees.append([identity,length])
-      elif event==2:assert identity in live;last_refs[identity]=detail
-      elif event==3:assert identity in live;last_refs[identity]=detail
+      elif event==2:assert identity in live;last_refs[identity]=detail;refs_peak[identity]=max(refs_peak.get(identity,0),detail)
+      elif event==3:assert identity in live;last_refs[identity]=detail;refs_peak[identity]=max(refs_peak.get(identity,0),detail)
       elif event==4:assert identity in live;drops[identity].append(detail)
       elif event in (6,7):assert identity in live;iterations[identity]+=1 if event==6 else -1;assert iterations[identity]>=0
       else:assert identity in live,('operation on freed identity',line)
@@ -105,21 +117,23 @@ def main():
      elif panic:assert line.startswith('LANG_NATIVE_PANIC:v1:'),line
      else:assert line=='LANG_TYPED_ERROR: app.E',line
     cycle=ident=='recursive-cycle-retained'
-    if not panic and not cycle:assert not live,('still live',live)
     if not panic:
+     # SourceGC collects the self-cycle, so no Vec identity or heap allocation
+     # may survive final release.  Missing frees still fail this balance check.
+     assert not live,('still live',live)
+     assert not heap_live,('still live allocations',heap_live)
+     assert len(heap_allocated)==len(heap_freed),(heap_allocated,heap_freed)
      if cycle:
-      # The Vec descriptor and payload are one allocation; the retained
-      # self-cycle keeps exactly that one block live.
-      assert len(heap_live)==1,('cycle live allocations',heap_live)
-      assert len(heap_allocated)==len(heap_freed)+1,(heap_allocated,heap_freed)
-      assert len(live)==1,('cycle Vec identities',live)
-      identity=next(iter(live))
-      assert last_refs[identity]>=1,last_refs
-      assert identity not in [x[0] for x in frees],frees
+      # The retained cycle is the one non-empty Vec; it must now be collected
+      # after clear(), including its final event5 release.
+      cycle_ids=[identity for identity,length in allocations if length]
+      assert len(cycle_ids)==1,allocations
+      identity=cycle_ids[0]
+      assert last_refs.get(identity,0)==0,last_refs
+      assert refs_peak.get(identity,0)>=2,refs_peak
+      assert cleared_without_event4==[identity],cleared_without_event4
+      assert identity in [x[0] for x in frees],frees
       assert drops[identity]==[],drops
-     else:
-      assert not heap_live,('still live allocations',heap_live)
-      assert len(heap_allocated)==len(heap_freed),(heap_allocated,heap_freed)
     if expected.get('events') is not None:
      assert [x[1] for x in obs if x[0]==1]==expected['events'],obs
     if ident=='field-replace-order':assert [x[1] for x in frees]==[1,5,4,2,3],frees
@@ -190,7 +204,7 @@ def main():
      assert at(('obs',1,1,1))<at(('obs',1,2,12))<freed[0]<at(('obs',1,5,125))<freed[1]<at(('obs',1,6,1256))<at(('obs',1,7,12567))<freed[2],merged
     row['observations']=dict(allocations=allocations,last_frees=frees,live=live,
       values=obs,events=events,heap_allocations=heap_allocated,
-      heap_frees=heap_freed,heap_live=heap_live,refs=last_refs)
+      heap_frees=heap_freed,heap_live=heap_live,refs=last_refs,refs_peak=refs_peak)
     if a.sanitize:
      row['sanitized_build']=r=command([a.clang,f'-O{opt}','-fsanitize=address,undefined','-fno-omit-frame-pointer','-fno-exceptions','-fno-rtti',
        out/'probe/sanitize.ll',a.root/'runtime/native/weak.cpp',a.root/'runtime/native/panic.cpp',a.root/'runtime/native/alloc.cpp',a.root/'runtime/native/text.cpp',a.root/'runtime/native/thread.cpp',a.root/'tests/native/vec_observer.cpp','-o',out/'sanitize']);ok(r)
