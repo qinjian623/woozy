@@ -1,5 +1,6 @@
 #include "thread.hpp"
 #include "../native/alloc.hpp"
+#include "../native/gc_program.hpp"
 #include "../native/weak.hpp"
 
 #include <cerrno>
@@ -116,12 +117,18 @@ void destroy_thread(LangHandle *handle) noexcept {
 void *run_thread(void *pointer) noexcept {
   auto *state = static_cast<HostedThreadState *>(pointer);
   current_thread = state;
+  // Register the language thread before its entry can touch the graph. The
+  // ThreadState context remains an external strong root; only the thread's
+  // registry node is created here.
+  lang::native::gc_program::ThreadGuard gc_thread;
   // LangThreadEntry and the drop boundary are no-throws by ABI.  This object
   // is compiled with -fno-exceptions; a foreign C++ throw is outside the ABI
   // and terminates at the boundary rather than being translated into a fake
   // language status.
   const int64_t result = state->entry(context(state));
   drop_context(state);
+  // The context is no longer a root. Unregister before publishing completion.
+  gc_thread.release();
   state->result = result;
   __atomic_store_n(&state->done, 1u, __ATOMIC_RELEASE);
   if (pthread_mutex_lock(&state->mutex) == 0) {
@@ -278,6 +285,11 @@ int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
   }
   int status = pthread_mutex_lock(&state->mutex);
   if (status) return -static_cast<int64_t>(status);
+  // SAFE spans the predicate/condvar loop, but leave only after the handle
+  // mutex is released. pthread_cond_wait releases that mutex while sleeping;
+  // the remaining predicate windows are short and no allocator/environment/
+  // launch lock is involved. This cannot park while holding the handle mutex.
+  lang::native::gc_program::SafeGuard safe;
   int64_t result = 0;
   while (!__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) {
     if (timeout_ns > 0) {
@@ -288,8 +300,8 @@ int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
           result = 0;
         break;
       }
-      // Keep the same absolute monotonic deadline after every wakeup. The
-      // explicit clock check also bounds a stream of spurious successes.
+      // Keep the same absolute monotonic deadline after every wakeup; the
+      // clock check bounds a stream of spurious successes.
       status = pthread_cond_timedwait(&state->cond, &state->mutex, &deadline);
     } else {
       status = pthread_cond_wait(&state->cond, &state->mutex);
@@ -300,6 +312,7 @@ int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
     }
   }
   pthread_mutex_unlock(&state->mutex);
+  safe.release();
   return result ? result : terminal_status(state);
 }
 } // namespace

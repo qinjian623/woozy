@@ -21,6 +21,10 @@ set(LANG_HOSTED_PUBLIC_SOURCES
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/alloc.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/panic.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/weak.cpp
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/gc.cpp
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/gc_world.cpp
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/gc_runtime.cpp
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/gc_program.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/os.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/os_buffers.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/sync.cpp

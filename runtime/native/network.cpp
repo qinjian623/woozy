@@ -1,5 +1,7 @@
 #include "network.hpp"
 
+#include "gc_program.hpp"
+
 #include "linux.hpp"
 
 #include <cstdint>
@@ -562,6 +564,7 @@ int64_t lang_net_connect_v1(int32_t fd,
   uint32_t length = 0;
   const int64_t built = build_kernel_address(address, storage, &length);
   if (built < 0) return built;
+  lang::native::gc_program::SafeGuard safe;
   return sys3(kSysConnect, static_cast<long>(fd), to_long(storage),
               static_cast<long>(length));
 }
@@ -576,12 +579,15 @@ int64_t lang_net_accept_v1(int32_t fd, LangNetAddress *out,
                            uint32_t flags) noexcept {
   alignas(8) uint8_t storage[kSockaddrStorageBytes];
   uint32_t length = kSockaddrStorageBytes;
-  const int64_t accepted =
-      out == nullptr
-          ? sys4(kSysAccept4, static_cast<long>(fd), 0, 0,
-                 static_cast<long>(flags))
-          : sys4(kSysAccept4, static_cast<long>(fd), to_long(storage),
-                 to_long(&length), static_cast<long>(flags));
+  int64_t accepted;
+  {
+    lang::native::gc_program::SafeGuard safe;
+    accepted = out == nullptr
+                   ? sys4(kSysAccept4, static_cast<long>(fd), 0, 0,
+                          static_cast<long>(flags))
+                   : sys4(kSysAccept4, static_cast<long>(fd), to_long(storage),
+                          to_long(&length), static_cast<long>(flags));
+  }
   if (accepted < 0) return accepted;
   if (out != nullptr) {
     const int64_t decoded = decode_kernel_address(storage, length, out);
@@ -599,6 +605,7 @@ int64_t lang_net_send_v1(int32_t fd, const void *data, uint64_t count,
   if (count > kMaxSignedCount) return kErrInval;
   if (count != 0 && data == nullptr) return kErrFault;
   const int32_t effective_flags = flags | kMsgNoSignal;
+  lang::native::gc_program::SafeGuard safe;
   return sys6(kSysSendto, static_cast<long>(fd), to_long(data),
               static_cast<long>(count), static_cast<long>(effective_flags), 0,
               0);
@@ -609,6 +616,7 @@ int64_t lang_net_recv_v1(int32_t fd, void *data, uint64_t count,
                          int32_t flags) noexcept {
   if (count > kMaxSignedCount) return kErrInval;
   if (count != 0 && data == nullptr) return kErrFault;
+  lang::native::gc_program::SafeGuard safe;
   return sys6(kSysRecvfrom, static_cast<long>(fd), to_long(data),
               static_cast<long>(count), static_cast<long>(flags), 0, 0);
 }
@@ -624,6 +632,7 @@ int64_t lang_net_sendto_v1(int32_t fd, const void *data, uint64_t count,
   if (count > kMaxSignedCount) return kErrInval;
   if (count != 0 && data == nullptr) return kErrFault;
   const int32_t effective_flags = flags | kMsgNoSignal;
+  lang::native::gc_program::SafeGuard safe;
   return sys6(kSysSendto, static_cast<long>(fd), to_long(data),
               static_cast<long>(count), static_cast<long>(effective_flags),
               to_long(storage), static_cast<long>(length));
@@ -637,13 +646,17 @@ int64_t lang_net_recvfrom_v1(int32_t fd, void *data, uint64_t count,
 
   alignas(8) uint8_t storage[kSockaddrStorageBytes];
   uint32_t length = kSockaddrStorageBytes;
-  const int64_t received =
-      out == nullptr
-          ? sys6(kSysRecvfrom, static_cast<long>(fd), to_long(data),
-                 static_cast<long>(count), static_cast<long>(flags), 0, 0)
-          : sys6(kSysRecvfrom, static_cast<long>(fd), to_long(data),
-                 static_cast<long>(count), static_cast<long>(flags),
-                 to_long(storage), to_long(&length));
+  int64_t received;
+  {
+    lang::native::gc_program::SafeGuard safe;
+    received = out == nullptr
+                   ? sys6(kSysRecvfrom, static_cast<long>(fd), to_long(data),
+                          static_cast<long>(count), static_cast<long>(flags), 0,
+                          0)
+                   : sys6(kSysRecvfrom, static_cast<long>(fd), to_long(data),
+                          static_cast<long>(count), static_cast<long>(flags),
+                          to_long(storage), to_long(&length));
+  }
   if (received < 0) return received;
   if (out != nullptr) {
     const int64_t decoded = decode_kernel_address(storage, length, out);
@@ -754,6 +767,7 @@ int64_t lang_net_poll_v1(LangPollFd *rows, uint64_t count,
                          int32_t timeout_ms) noexcept {
   if (count > kMaxUnsigned32) return kErrInval;
   if (count != 0 && rows == nullptr) return kErrFault;
+  lang::native::gc_program::SafeGuard safe;
   return sys3(kSysPoll, to_long(rows), static_cast<long>(count),
               static_cast<long>(timeout_ms));
 }

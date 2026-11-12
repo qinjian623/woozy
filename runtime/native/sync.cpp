@@ -1,5 +1,7 @@
 #include "sync.hpp"
 
+#include "gc_program.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -331,7 +333,12 @@ void lang_mutex_lock_v1(LangHandle *handle) noexcept {
     if (__atomic_exchange_n(&state.lock, kMutexContended, __ATOMIC_ACQUIRE) ==
         kMutexFree)
       break;
-    futex_wait(&state.lock, kMutexContended);
+    {
+      // Contended lock wait: the owner word is the only state read and no
+      // runtime lock is held while sleeping.
+      lang::native::gc_program::SafeGuard safe;
+      futex_wait(&state.lock, kMutexContended);
+    }
   }
   __atomic_store_n(&state.owner, self, __ATOMIC_RELAXED);
 }
@@ -413,8 +420,10 @@ bool condvar_wait(LangHandle *condvar_handle, LangHandle *mutex_handle,
         wait_error = true;
         break;
       }
+      lang::native::gc_program::SafeGuard safe;
       result = sys_futex_wait_until(&waiter.signalled, 0u, &remaining);
     } else {
+      lang::native::gc_program::SafeGuard safe;
       result = sys_futex(&waiter.signalled, kFutexWait, 0u);
     }
     if (result >= 0 || result == kErrIntr || result == kErrAgain ||

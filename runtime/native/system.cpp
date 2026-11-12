@@ -1,5 +1,7 @@
 #include "system.hpp"
 
+#include "gc_program.hpp"
+
 #include "linux.hpp"
 
 #include <cstdint>
@@ -484,9 +486,14 @@ int64_t lang_sys_nanosleep_v1(const LangTimespec *request,
   kernel_request.nanoseconds = request->nanoseconds;
 
   KernelTimespec kernel_remaining;
-  const int64_t result =
-      sys2(kSysNanosleep, to_long(&kernel_request),
-           remaining == nullptr ? 0 : to_long(&kernel_remaining));
+  int64_t result;
+  {
+    // Sleeping holds no runtime lock and does not touch the graph. The
+    // caller-visible remaining value is written after leaving SAFE.
+    lang::native::gc_program::SafeGuard safe;
+    result = sys2(kSysNanosleep, to_long(&kernel_request),
+                  remaining == nullptr ? 0 : to_long(&kernel_remaining));
+  }
 
   // The kernel reports the leftover interval only for an interrupted sleep.
   // There is deliberately no retry loop here.

@@ -181,6 +181,13 @@ target_link_options(lang_native_weak_objects_hosted_test PRIVATE
   -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
 add_test(NAME native.weak_objects_hosted COMMAND lang_native_weak_objects_hosted_test)
 set_tests_properties(native.weak_objects_hosted PROPERTIES TIMEOUT 120)
+add_test(NAME native.gc_program
+  COMMAND ${CMAKE_COMMAND} -E env
+    "CXX=${LLVM_TOOLS_BINARY_DIR}/clang++"
+    "LANG_LLVM_ROOT=${LLVM_TOOLS_BINARY_DIR}/.."
+    "GC_PROGRAM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}/gc-program-results"
+    bash ${CMAKE_CURRENT_LIST_DIR}/gc_program/run_all.sh)
+set_tests_properties(native.gc_program PROPERTIES TIMEOUT 600)
 add_executable(lang_native_startup_test startup_test.cpp)
 target_compile_features(lang_native_startup_test PRIVATE cxx_std_20)
 add_test(NAME native.startup COMMAND lang_native_startup_test)

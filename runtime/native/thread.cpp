@@ -2,6 +2,7 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "gc_program.hpp"
 #include "weak.hpp"
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
@@ -246,8 +247,15 @@ void lang_thread_unmap_exit_v1(void *, uint64_t) noexcept {
 }
 extern "C" [[noreturn]] __attribute__((noinline))
 void lang_thread_run_v1(ThreadState *state) noexcept {
+  // The language thread is a world mutator before its entry can touch the
+  // graph. Registration parks while a stop is active. The ThreadState context
+  // is not registered: its owned references remain an external strong root.
+  lang::native::gc_program::ThreadGuard gc_thread;
   const int64_t result = state->entry(context(state));
   if (state->context_drop) state->context_drop(context(state));
+  // The context is no longer a root after its drop. Unregister before
+  // publishing completion so a collector no longer waits on this thread.
+  gc_thread.release();
   block_signals();
   void *stack_mapping = state->stack_mapping;
   state->result = result;
@@ -340,17 +348,22 @@ int64_t wait_thread(LangHandle *handle, int64_t timeout_ns) noexcept {
     }
     if (deadline.finite && timeout_ns == 0) return kTimedOut;
     long result;
-    if (deadline.finite) {
-      KernelTime remaining;
-      const int64_t status = deadline.remaining(remaining);
-      if (status == kTimedOut) {
-        if (__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) return 0;
-        return kTimedOut;
+    {
+      // Waiting for completion never touches the Wz graph and holds no
+      // runtime lock; the join can be paused by the collector.
+      lang::native::gc_program::SafeGuard safe;
+      if (deadline.finite) {
+        KernelTime remaining;
+        const int64_t status = deadline.remaining(remaining);
+        if (status == kTimedOut) {
+          if (__atomic_load_n(&state->done, __ATOMIC_ACQUIRE)) return 0;
+          return kTimedOut;
+        }
+        if (status < 0) return status;
+        result = futex_wait_until(&state->done, 0, &remaining);
+      } else {
+        result = futex(&state->done, 128, 0);
       }
-      if (status < 0) return status;
-      result = futex_wait_until(&state->done, 0, &remaining);
-    } else {
-      result = futex(&state->done, 128, 0);
     }
     if (result < 0 && result != kAgain && result != kEintr &&
         result != kTimedOut)

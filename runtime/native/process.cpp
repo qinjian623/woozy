@@ -1,5 +1,6 @@
 #include "process.hpp"
 #include "alloc.hpp"
+#include "gc_program.hpp"
 #include "thread.hpp"
 #include "weak.hpp"
 #include "linux.hpp"
@@ -27,6 +28,13 @@ uint32_t launch_lock;
 thread_local bool hosted_launch_owned;
 thread_local bool hosted_fork_owns_launch;
 thread_local bool hosted_fork_locks_held;
+// The program fork scope may be entered by the language spawn/fork wrapper
+// before launch, or by our atfork prepare for a direct libc fork. The token is
+// thread-scoped because an atfork handler has no parameter list.
+thread_local LangGcProgramForkToken hosted_fork_token;
+thread_local bool hosted_fork_scope_owned;
+thread_local bool hosted_fork_atfork_scope;
+thread_local bool hosted_gc_fork_hooks;
 #endif
 void launch_acquire() noexcept {
   while(__atomic_exchange_n(&launch_lock,1u,__ATOMIC_ACQUIRE))
@@ -65,7 +73,16 @@ struct Guard {Guard() noexcept {lock();} ~Guard(){unlock();}};
 void hosted_fork_parent_release() noexcept {
   if (hosted_fork_locks_held) {
     hosted_fork_locks_held=false;
-    // Reverse the prepare order: allocator was acquired before Weak.
+    // Reverse the prepare order: runtime -> world -> gc -> Weak -> allocator.
+    if (hosted_gc_fork_hooks) {
+      auto runtime_parent = lang::native::gc_program::hooks_v1.runtime_fork_parent;
+      auto world_parent = lang::native::gc_program::hooks_v1.world_fork_parent;
+      auto gc_parent = lang::native::gc_program::hooks_v1.gc_fork_parent;
+      if (runtime_parent) runtime_parent();
+      if (world_parent) world_parent();
+      if (gc_parent) gc_parent();
+      hosted_gc_fork_hooks = false;
+    }
     lang_weak_fork_parent_v1();
     lang_alloc_fork_parent_v1();
     unlock();
@@ -75,7 +92,63 @@ void hosted_fork_parent_release() noexcept {
     launch_release();
   }
 }
+
+void hosted_enter_fork_scope() noexcept {
+  if (hosted_fork_scope_owned) return;
+  auto enter = lang::native::gc_program::hooks_v1.fork_enter;
+  if (!enter) return;
+  enter(&hosted_fork_token);
+  hosted_fork_scope_owned = true;
+  hosted_fork_atfork_scope = true;
+}
+
+void hosted_leave_fork_scope() noexcept {
+  if (!hosted_fork_atfork_scope) return;
+  auto leave = lang::native::gc_program::hooks_v1.fork_leave;
+  if (leave) leave(&hosted_fork_token);
+  hosted_fork_scope_owned = false;
+  hosted_fork_atfork_scope = false;
+}
 #endif
+
+// One stack-owned scope for a language spawn/fork. In hosted builds an atfork
+// handler may already have entered a scope; it must not duplicate the no-park
+// interval or the SAFE suspension.
+struct ForkScope {
+  LangGcProgramForkToken token{};
+#if defined(LANG_RUNTIME_HOSTED)
+  bool owns = false;
+#endif
+  ForkScope() noexcept {
+    auto enter = lang::native::gc_program::hooks_v1.fork_enter;
+    if (!enter) return;
+#if defined(LANG_RUNTIME_HOSTED)
+    if (hosted_fork_scope_owned) return;
+    enter(&token);
+    hosted_fork_scope_owned = true;
+    owns = true;
+#else
+    enter(&token);
+#endif
+  }
+  ~ForkScope() noexcept {
+    auto leave = lang::native::gc_program::hooks_v1.fork_leave;
+    if (!leave) return;
+#if defined(LANG_RUNTIME_HOSTED)
+    if (!owns) return;
+    leave(&token);
+    hosted_fork_scope_owned = false;
+#else
+    leave(&token);
+#endif
+  }
+  ForkScope(const ForkScope &) = delete;
+  ForkScope &operator=(const ForkScope &) = delete;
+};
+bool gc_fork_ready() noexcept {
+  auto ready = lang::native::gc_program::hooks_v1.fork_ready;
+  return ready && ready() != 0;
+}
 uint64_t size(const char *s) noexcept {uint64_t n=0;while(s[n])++n;return n;}
 void copy(void *out,const void *in,uint64_t n) noexcept {
   auto *a=static_cast<volatile uint8_t *>(out);
@@ -197,14 +270,41 @@ int64_t fork_process() noexcept {
   return pid;
 #else
   lock();lang_alloc_fork_prepare_v1();lang_weak_fork_prepare_v1();
+  const bool gc_fork_hooks = gc_fork_ready();
+  if (gc_fork_hooks) {
+    auto gc_prepare = lang::native::gc_program::hooks_v1.gc_fork_prepare;
+    auto world_prepare = lang::native::gc_program::hooks_v1.world_fork_prepare;
+    auto runtime_prepare = lang::native::gc_program::hooks_v1.runtime_fork_prepare;
+    if (gc_prepare) gc_prepare();
+    if (world_prepare) world_prepare();
+    if (runtime_prepare) runtime_prepare();
+  }
   auto pid=sys(57);
   if(!pid) {
     lang_alloc_fork_child_v1();
     lang_weak_fork_child_v1();
+    if (gc_fork_hooks) {
+      auto gc_child = lang::native::gc_program::hooks_v1.gc_fork_child;
+      auto world_child = lang::native::gc_program::hooks_v1.world_fork_child;
+      auto runtime_child = lang::native::gc_program::hooks_v1.runtime_fork_child;
+      if (gc_child) gc_child();
+      if (world_child) world_child();
+      if (runtime_child) runtime_child();
+    }
     __atomic_store_n(&launch_lock,0u,__ATOMIC_RELAXED);
     __atomic_store_n(&environment_lock,0u,__ATOMIC_RELAXED);
     lang_thread_fork_child_v1();
-  } else {lang_weak_fork_parent_v1();lang_alloc_fork_parent_v1();unlock();}
+  } else {
+    if (gc_fork_hooks) {
+      auto runtime_parent = lang::native::gc_program::hooks_v1.runtime_fork_parent;
+      auto world_parent = lang::native::gc_program::hooks_v1.world_fork_parent;
+      auto gc_parent = lang::native::gc_program::hooks_v1.gc_fork_parent;
+      if (runtime_parent) runtime_parent();
+      if (world_parent) world_parent();
+      if (gc_parent) gc_parent();
+    }
+    lang_weak_fork_parent_v1();lang_alloc_fork_parent_v1();unlock();
+  }
   return pid;
 #endif
 }
@@ -256,6 +356,11 @@ int64_t execute(Bytes path,const LangVec *args,const LangVec *env,bool raw) noex
   return sys(59,addr(e.path),addr(e.arguments),addr(e.environment));
 }
 int64_t spawn(Bytes path,const LangVec *args,const LangVec *env,bool raw,int32_t in,int32_t out,int32_t err) noexcept {
+  // Enter the graph-stable fork scope before taking launch, so a pending stop
+  // parks us without any runtime lock. It remains held through the descriptor
+  // handshake because the parent still holds launch while reading the exec
+  // error pipe; this is deliberately not a SAFE region.
+  ForkScope fork_scope;
   // Serialize every runtime fork until temporary descriptors are closed;
   // another child must not retain our exec-error pipe writer.
   LaunchGuard launch;
@@ -314,6 +419,9 @@ cleanup:
 } // namespace
 #if defined(LANG_RUNTIME_HOSTED)
 extern "C" void lang_hosted_process_atfork_prepare_v1() noexcept {
+  // Direct libc fork enters the graph-stable scope before acquiring launch.
+  // The language spawn/fork wrapper already entered it before its LaunchGuard.
+  hosted_enter_fork_scope();
   // Language fork/spawn already holds launch through pipe cleanup. Direct
   // libc fork must also wait until those temporary descriptors are closed.
   if(!hosted_launch_owned) {
@@ -323,10 +431,20 @@ extern "C" void lang_hosted_process_atfork_prepare_v1() noexcept {
   lock();
   lang_alloc_fork_prepare_v1();
   lang_weak_fork_prepare_v1();
+  hosted_gc_fork_hooks = gc_fork_ready();
+  if (hosted_gc_fork_hooks) {
+    auto gc_prepare = lang::native::gc_program::hooks_v1.gc_fork_prepare;
+    auto world_prepare = lang::native::gc_program::hooks_v1.world_fork_prepare;
+    auto runtime_prepare = lang::native::gc_program::hooks_v1.runtime_fork_prepare;
+    if (gc_prepare) gc_prepare();
+    if (world_prepare) world_prepare();
+    if (runtime_prepare) runtime_prepare();
+  }
   hosted_fork_locks_held=true;
 }
 extern "C" void lang_hosted_process_atfork_parent_v1() noexcept {
   hosted_fork_parent_release();
+  hosted_leave_fork_scope();
 }
 extern "C" void lang_hosted_process_atfork_child_v1() noexcept {
   hosted_fork_locks_held=false;
@@ -334,8 +452,19 @@ extern "C" void lang_hosted_process_atfork_child_v1() noexcept {
   hosted_launch_owned=false;
   lang_alloc_fork_child_v1();
   lang_weak_fork_child_v1();
+  if (hosted_gc_fork_hooks) {
+    auto gc_child = lang::native::gc_program::hooks_v1.gc_fork_child;
+    auto world_child = lang::native::gc_program::hooks_v1.world_fork_child;
+    auto runtime_child = lang::native::gc_program::hooks_v1.runtime_fork_child;
+    if (gc_child) gc_child();
+    if (world_child) world_child();
+    if (runtime_child) runtime_child();
+    hosted_gc_fork_hooks = false;
+  }
   __atomic_store_n(&environment_lock,0u,__ATOMIC_RELAXED);
   __atomic_store_n(&launch_lock,0u,__ATOMIC_RELAXED);
+  // hosted/thread.cpp's own atfork child hook updates the pthread state.
+  hosted_leave_fork_scope();
 }
 #endif
 extern "C" void lang_process_init_v1(uint64_t argc,const char *const *argv,const char *const *env) noexcept {
@@ -383,10 +512,14 @@ extern "C" int64_t lang_process_unsetenv_v1(const LangText *name) noexcept {
 extern "C" int64_t lang_process_unsetenv_bytes_v1(const LangVec *name) noexcept {
   Bytes n;auto status=byte_view(name,n);return status<0?status:setenv(n,{},1,true);
 }
-extern "C" int64_t lang_process_fork_v1() noexcept {LaunchGuard launch;return fork_process();}
+extern "C" int64_t lang_process_fork_v1() noexcept {ForkScope fork_scope;LaunchGuard launch;return fork_process();}
 extern "C" int64_t lang_process_waitpid_v1(int32_t pid,int32_t options,int32_t *status) noexcept {
   if(!status)return -14;
-  int32_t result=0;auto r=sys(61,pid,addr(&result),options);
+  int32_t result=0;int64_t r;
+  {
+    lang::native::gc_program::SafeGuard safe;
+    r=sys(61,pid,addr(&result),options);
+  }
   if(r>0)*status=result;else if(!r)*status=0;
   return r;
 }
@@ -414,7 +547,11 @@ extern "C" int64_t lang_signal_wait_v1(LangSignalInfo *out,uint64_t mask,int64_t
   if(timeout< -1)return -22;
   alignas(8) uint8_t info[128]{};
   const int64_t time[2]={timeout/1000000000,timeout%1000000000};
-  auto result=sys(128,addr(&mask),addr(info),timeout<0?0:addr(time),8);
+  int64_t result;
+  {
+    lang::native::gc_program::SafeGuard safe;
+    result=sys(128,addr(&mask),addr(info),timeout<0?0:addr(time),8);
+  }
   if(result<0)return result;
   auto load32=[&](unsigned off) {int32_t n;copy(&n,info+off,4);return n;};
   // SIGCHLD shares the pid/uid prefix, followed by status. Queued signals

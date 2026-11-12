@@ -1,4 +1,5 @@
 #include "ipc.hpp"
+#include "gc_program.hpp"
 #include "linux.hpp"
 #include <cstddef>
 
@@ -101,6 +102,9 @@ int64_t wait(uint32_t *word, uint32_t value, Deadline &deadline) noexcept {
     auto status=deadline.remaining(remaining);
     if (status<0) return status;
   }
+  // All mutex/condition/semaphore waits funnel through here after releasing
+  // their internal locks. The graph is quiescent while this futex sleeps.
+  lang::native::gc_program::SafeGuard safe;
   return sys(202,address(word),0,value,deadline.finite?address(&remaining):0);
 }
 int64_t wake(uint32_t *word, uint32_t count) noexcept {

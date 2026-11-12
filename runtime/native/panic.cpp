@@ -1,6 +1,7 @@
 #include <cstddef>
 #include <cstdint>
 #include "alloc.hpp"
+#include "gc_program.hpp"
 #include "vec.hpp"
 #include "weak.hpp"
 
@@ -267,6 +268,16 @@ extern "C" void lang_vec_release_v1(LangVec *v) noexcept {
   }
   __atomic_thread_fence(__ATOMIC_ACQUIRE);
   if (__atomic_load_n(&v->iterations, __ATOMIC_RELAXED)) vec_panic(8);
+  // Ordinary final strong release: remove a registered object before any
+  // payload drop can re-enter Woozy or observe a half-cleaned registration.
+  // The disabled path is one atomic load; if gc_program.cpp is not linked the
+  // hook pointer stays null and legacy single-unit builds are unchanged.
+  if (lang::native::gc_program::enabled()) {
+    auto final_release_hook =
+        lang::native::gc_program::hooks_v1.vec_final_release;
+    if (final_release_hook)
+      final_release_hook(v);
+  }
   // The strong count is already zero, so no upgrade can acquire the target.
   // Detach the canonical slot before payload cleanup and descriptor free; the
   // slot is never read again after this point.

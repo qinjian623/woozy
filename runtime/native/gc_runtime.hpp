@@ -35,7 +35,8 @@
 // Forward order for Root's future fork integration (controller hooks do not
 // call the other layers themselves):
 //
-//   enter critical if the fork path requires it
+//   enter a genuine graph critical only if modifying the graph; a graph-stable
+//   fork uses the separate world fork-stable no-park interval
 //   lang_alloc_fork_prepare_v1
 //   lang_weak_fork_prepare_v1
 //   lang_gc_fork_prepare_v1

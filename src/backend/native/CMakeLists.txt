@@ -19,6 +19,10 @@ add_library(lang_native_runtime STATIC
   ${LANG_NATIVE_ROOT}/runtime/native/alloc.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/panic.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/weak.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/gc.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/gc_world.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/gc_runtime.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/gc_program.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/start.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/freestanding.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/os.cpp

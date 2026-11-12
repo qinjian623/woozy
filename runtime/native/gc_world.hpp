@@ -85,6 +85,31 @@ void lang_gc_world_poll_v1(void) LANG_GC_WORLD_NOEXCEPT;
 void lang_gc_world_enter_safe_v1(void) LANG_GC_WORLD_NOEXCEPT;
 void lang_gc_world_leave_safe_v1(void) LANG_GC_WORLD_NOEXCEPT;
 
+// Fork support for an outer SAFE region. suspend leaves every current SAFE
+// level (honoring a pending stop at the outermost level, as ordinary leave
+// does), returns the saved depth, and leaves the thread ACTIVE outside SAFE.
+// The caller must be registered. Inside an existing critical region there is
+// no SAFE depth by construction, so suspend returns 0 and the fork path nests
+// another critical region. restore re-enters exactly that many SAFE levels after
+// the runtime fork locks have been released. These two functions are the only
+// private world extension used by lang-gc-program/1; they do not expose or
+// change any node field.
+uint32_t lang_gc_world_suspend_safe_v1(void) LANG_GC_WORLD_NOEXCEPT;
+void lang_gc_world_restore_safe_v1(uint32_t safe_depth)
+    LANG_GC_WORLD_NOEXCEPT;
+
+// Graph-stable fork no-park interval. The caller must be registered, ACTIVE,
+// and outside SAFE (the fork path suspends outer SAFE first). Unlike a graph
+// critical region, this interval asserts that the graph is stable, so
+// synchronous callbacks and SAFE regions remain legal. While it is active the
+// world keeps the node ACTIVE for stop/collection even if safe_depth is
+// nonzero, and poll/callback-leave defer parking. The outermost leave publishes
+// SAFE or PARKED only after all internal fork locks have been released. A
+// genuine graph critical region nested inside remains subject to the normal
+// callback-in-critical / safe-in-critical rejection.
+void lang_gc_world_enter_fork_stable_v1(void) LANG_GC_WORLD_NOEXCEPT;
+void lang_gc_world_leave_fork_stable_v1(void) LANG_GC_WORLD_NOEXCEPT;
+
 // Nestable critical (graph-modification) regions. enter_critical is allowed
 // only for the current registered thread when it is ACTIVE and outside SAFE;
 // it Panics when parked, inside SAFE, or on depth overflow. A stop request
@@ -97,9 +122,10 @@ void lang_gc_world_leave_critical_v1(void) LANG_GC_WORLD_NOEXCEPT;
 
 // Query only, no registration and no state change. Returns true when no stop
 // is currently owned, the calling thread is registered, its node is ACTIVE,
-// and safe_depth and critical_depth are both zero. It is therefore false for
-// the collector holding a successful stop, for every thread while another
-// collector owns a stop, and for any thread in SAFE or critical. It never
+// safe_depth and critical_depth are both zero, and the fork-stable no-park
+// depth is zero. It is therefore false for the collector holding a successful
+// stop, for every thread while another collector owns a stop, and for any
+// thread in SAFE, critical, or a fork-stable no-park interval. It never
 // resumes, releases, or consumes an already successful stop. Unregistered
 // threads return false (they are not auto-registered).
 bool lang_gc_world_can_collect_v1(void) LANG_GC_WORLD_NOEXCEPT;
@@ -154,7 +180,8 @@ void lang_gc_world_callback_leave_v1(
 //   <-1 return -22 without changing state
 // Returns 0 on success, -110 (ETIMEDOUT) after retracting the request, -16
 // (EBUSY) if another collector (or this collector) already owns a stop, or if
-// the caller is inside a critical region. The critical case is a busy result
+// the caller is inside a critical or fork-stable no-park region. That case is a
+// busy result
 // and does not set or change any request. The caller must be registered,
 // outside SAFE and outside critical, and becomes the recorded collector. On
 // success all other registered nodes are SAFE or PARKED, new registrations
@@ -179,8 +206,9 @@ void lang_gc_world_resume_v1(void) LANG_GC_WORLD_NOEXCEPT;
 //   child:  lang_alloc_fork_child_v1();     lang_gc_world_fork_child_v1();
 //
 // Prepare Panic if the caller is unregistered, already inside a stop that it
-// does not own, or parked. A critical caller is allowed: a future fork path
-// enters critical before taking launch/environment/allocator locks. A collector
+// does not own, or parked. A critical or fork-stable no-park caller is allowed:
+// the fork path enters that interval before taking launch/environment/allocator
+// locks. A collector
 // may fork during its own stop; the child clears the stop and preserves the
 // surviving thread's critical_depth. The child does not simulate ARC drops for
 // vanished threads.

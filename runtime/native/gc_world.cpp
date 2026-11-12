@@ -62,6 +62,10 @@ struct Node {
   uint32_t state;
   uint32_t safe_depth;
   uint32_t critical_depth;
+  // Graph-stable fork no-park depth. This is not a graph-modification
+  // critical region: synchronous callbacks and SAFE are allowed, but the
+  // collector must not park this thread while internal fork locks are held.
+  uint32_t no_park_depth;
   uint32_t callback_depth;
   void *callback_token;
 };
@@ -234,6 +238,7 @@ Node *allocate_node(int32_t tid) noexcept {
   node->state = kStateActive;
   node->safe_depth = 0;
   node->critical_depth = 0;
+  node->no_park_depth = 0;
   node->callback_depth = 0;
   node->callback_token = nullptr;
   return node;
@@ -344,6 +349,8 @@ bool all_stopped_locked(int32_t collector_tid) noexcept {
   for (Node *node = g_nodes; node; node = node->next) {
     if (node->tid == collector_tid)
       continue;
+    if (node->no_park_depth != 0 && node->state != kStateActive)
+      gc_panic("state-corruption"); // no-park must never publish SAFE/PARKED
     if (node->state == kStateActive)
       return false;
     if (node->state == kStateSafe && node->safe_depth == 0)
@@ -388,7 +395,9 @@ extern "C" bool lang_gc_world_register_v1(void) noexcept {
       const bool requested = request_active_locked();
       const bool collector = is_active_collector_locked(tid);
       if (requested && !collector && existing->state == kStateActive &&
-          existing->critical_depth == 0 && existing->callback_depth == 0) {
+          existing->critical_depth == 0 &&
+          existing->no_park_depth == 0 &&
+          existing->callback_depth == 0) {
         // Idempotent register is not a callback safepoint. An ACTIVE callback
         // may be midway through a graph update; returning false without
         // parking preserves that work for the collector to wait on.
@@ -470,6 +479,11 @@ extern "C" bool lang_gc_world_unregister_v1(void) noexcept {
       node_release(node);
       gc_panic("unregister-in-critical");
     }
+    if (node->no_park_depth != 0) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("unregister-in-fork-stable");
+    }
     if (node->callback_depth != 0) {
       registry_unlock();
       node_release(node);
@@ -513,6 +527,19 @@ extern "C" void lang_gc_world_poll_v1(void) noexcept {
     return;
   }
   if (is_active_collector_locked(tid) || node->state == kStateSafe) {
+    registry_unlock();
+    node_release(node);
+    return;
+  }
+  if (node->no_park_depth != 0) {
+    // A graph-stable fork interval may be inside a synchronous callback or a
+    // SAFE region. It keeps state ACTIVE for the collector; defer the stop
+    // until the fork locks are released.
+    if (node->state != kStateActive) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
     registry_unlock();
     node_release(node);
     return;
@@ -570,7 +597,16 @@ extern "C" void lang_gc_world_enter_safe_v1(void) noexcept {
     gc_panic("safe-depth-overflow");
   }
   ++node->safe_depth;
-  if (node->safe_depth == 1) {
+  if (node->no_park_depth != 0) {
+    // The graph-stable fork interval remains ACTIVE for stop/collection even
+    // while user or atfork code is in a SAFE region. Otherwise the collector
+    // would consider the thread stopped while it may hold an internal lock.
+    if (node->state != kStateActive) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
+  } else if (node->safe_depth == 1) {
     if (node->state == kStateParked) {
       registry_unlock();
       node_release(node);
@@ -603,7 +639,15 @@ extern "C" void lang_gc_world_leave_safe_v1(void) noexcept {
     gc_panic("leave-without-enter");
   }
   --node->safe_depth;
-  if (node->safe_depth == 0) {
+  if (node->no_park_depth != 0) {
+    // Do not publish SAFE/PARKED while the fork interval holds internal
+    // locks. The outermost leave_fork_stable will handle a pending request.
+    if (node->state != kStateActive) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
+  } else if (node->safe_depth == 0) {
     const bool requested = request_active_locked();
     if (requested && !is_active_collector_locked(tid)) {
       if (node->state != kStateSafe) {
@@ -621,6 +665,133 @@ extern "C" void lang_gc_world_leave_safe_v1(void) noexcept {
     registry_unlock();
     node_release(node);
     gc_panic("state-corruption");
+  }
+  registry_unlock();
+
+  if (notify)
+    notify_waiters();
+  if (park)
+    wait_until_resumed(node);
+  node_release(node);
+}
+
+extern "C" uint32_t lang_gc_world_suspend_safe_v1(void) noexcept {
+  const int32_t tid = current_tid();
+  Node *node = find_and_acquire(tid);
+  if (!node)
+    gc_panic("suspend-safe-unregistered");
+
+  registry_lock();
+  if (node->critical_depth != 0) {
+    // enter_safe forbids a critical region, so a critical caller has no SAFE
+    // depth to suspend. This is the already-critical fork case: leave the
+    // critical region nested and restore nothing.
+    registry_unlock();
+    node_release(node);
+    return 0;
+  }
+  const uint32_t depth = node->safe_depth;
+  registry_unlock();
+  node_release(node);
+
+  // Only this thread changes its own safe_depth. Ordinary leave_safe calls
+  // preserve the accepted park/resume behavior at depth zero.
+  for (uint32_t level = 0; level < depth; ++level)
+    lang_gc_world_leave_safe_v1();
+  return depth;
+}
+
+extern "C" void lang_gc_world_restore_safe_v1(uint32_t safe_depth) noexcept {
+  for (uint32_t level = 0; level < safe_depth; ++level)
+    lang_gc_world_enter_safe_v1();
+}
+
+extern "C" void lang_gc_world_enter_fork_stable_v1(void) noexcept {
+  const int32_t tid = current_tid();
+  Node *node = find_and_acquire(tid);
+  if (!node)
+    gc_panic("fork-stable-unregistered");
+
+  registry_lock();
+  if (node->state == kStateParked) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("fork-stable-while-parked");
+  }
+  if (node->state != kStateActive) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("state-corruption");
+  }
+  if (node->safe_depth != 0) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("fork-stable-in-safe");
+  }
+  if (node->no_park_depth == 0xffffffffu) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("fork-stable-depth-overflow");
+  }
+  ++node->no_park_depth;
+  registry_unlock();
+  node_release(node);
+}
+
+extern "C" void lang_gc_world_leave_fork_stable_v1(void) noexcept {
+  const int32_t tid = current_tid();
+  Node *node = find_and_acquire(tid);
+  if (!node)
+    gc_panic("fork-stable-unregistered");
+
+  bool park = false;
+  bool notify = false;
+  registry_lock();
+  if (node->no_park_depth == 0) {
+    registry_unlock();
+    node_release(node);
+    gc_panic("leave-fork-stable-without-enter");
+  }
+  --node->no_park_depth;
+  if (node->no_park_depth != 0) {
+    if (node->state != kStateActive) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
+  } else if (node->critical_depth != 0) {
+    // A genuine graph-critical region remains ACTIVE and keeps its own
+    // callback/SAFE rejection; do not park for a pending stop here.
+    if (node->state != kStateActive) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
+  } else {
+    const bool requested =
+        request_active_locked() && !is_active_collector_locked(tid);
+    if (node->safe_depth != 0) {
+      // The caller restored its outer SAFE depth while the fork interval was
+      // still active. Publish SAFE only now that fork locks are released.
+      if (node->state != kStateActive) {
+        registry_unlock();
+        node_release(node);
+        gc_panic("state-corruption");
+      }
+      node->state = kStateSafe;
+      notify = requested;
+    } else if (requested) {
+      if (node->state != kStateActive) {
+        registry_unlock();
+        node_release(node);
+        gc_panic("state-corruption");
+      }
+      node->state = kStateParked;
+      park = true;
+      notify = true;
+    } else {
+      node->state = kStateActive;
+    }
   }
   registry_unlock();
 
@@ -678,7 +849,14 @@ extern "C" void lang_gc_world_leave_critical_v1(void) noexcept {
     gc_panic("leave-critical-without-enter");
   }
   --node->critical_depth;
-  if (node->critical_depth == 0) {
+  if (node->no_park_depth != 0) {
+    // Still inside the graph-stable fork interval; defer a pending stop.
+    if (node->state != kStateActive) {
+      registry_unlock();
+      node_release(node);
+      gc_panic("state-corruption");
+    }
+  } else if (node->critical_depth == 0) {
     if (request_active_locked() && !is_active_collector_locked(tid)) {
       if (node->state != kStateActive) {
         registry_unlock();
@@ -768,7 +946,9 @@ extern "C" void lang_gc_world_callback_enter_v1(
         gc_panic("state-corruption");
       }
     } else if (node->state == kStateActive) {
-      if (node->safe_depth != 0) {
+      // ACTIVE with a nonzero safe_depth is valid only inside the graph-stable
+      // fork no-park interval, where SAFE is not published to the collector.
+      if (node->safe_depth != 0 && node->no_park_depth == 0) {
         registry_unlock();
         node_release(node);
         gc_panic("state-corruption");
@@ -796,26 +976,38 @@ extern "C" void lang_gc_world_callback_enter_v1(
         wait_while_world_request_active();
         continue;
       }
-      // The caller was ACTIVE and has not touched the graph yet. Park it, but
-      // only if no outer callback is already doing active graph work.
-      if (node->callback_depth != 0) {
+      if (node->no_park_depth != 0) {
+        // The graph is stable and the thread holds internal fork locks. A
+        // synchronous callback must run, and parking here would deadlock the
+        // collector on those locks. The collector sees ACTIVE and times out or
+        // waits until leave_fork_stable.
+        if (node->state != kStateActive) {
+          registry_unlock();
+          node_release(node);
+          gc_panic("state-corruption");
+        }
+      } else {
+        // The caller was ACTIVE and has not touched the graph yet. Park it,
+        // but only if no outer callback is already doing active graph work.
+        if (node->callback_depth != 0) {
+          registry_unlock();
+          node_release(node);
+          gc_panic("callback-nested-pending-stop");
+        }
+        node->state = kStateParked;
+        park_notified = true;
         registry_unlock();
-        node_release(node);
-        gc_panic("callback-nested-pending-stop");
+        if (park_notified)
+          notify_waiters();
+        wait_until_resumed(node);
+        continue;
       }
-      node->state = kStateParked;
-      park_notified = true;
-      registry_unlock();
-      if (park_notified)
-        notify_waiters();
-      wait_until_resumed(node);
-      continue;
     }
 
     // No pending request: save all prior SAFE depth and become ACTIVE before
     // returning to the callback body.
     const uint32_t saved_safe_depth = node->safe_depth;
-    if (node->state == kStateSafe) {
+    if (node->state == kStateSafe || node->safe_depth != 0) {
       node->safe_depth = 0;
       node->state = kStateActive;
     }
@@ -892,8 +1084,13 @@ extern "C" void lang_gc_world_callback_leave_v1(
       gc_panic("callback-created-safe");
     }
     node->safe_depth = saved_safe_depth;
-    node->state = kStateSafe;
-    notify = request_active_locked();
+    if (node->no_park_depth != 0) {
+      // Keep the fork no-park interval ACTIVE for the collector.
+      node->state = kStateActive;
+    } else {
+      node->state = kStateSafe;
+      notify = request_active_locked();
+    }
   } else if (created) {
     if (node->callback_depth != 0) {
       registry_unlock();
@@ -908,6 +1105,9 @@ extern "C" void lang_gc_world_callback_leave_v1(
   } else if (node->callback_depth != 0) {
     // An outer callback is still active. Returning to it must not park here;
     // the outer scope owns the next safepoint/leave.
+    node->state = kStateActive;
+  } else if (node->no_park_depth != 0) {
+    // Still inside the graph-stable fork interval; defer the stop.
     node->state = kStateActive;
   } else if (request_active_locked() &&
              !is_active_collector_locked(tid)) {
@@ -941,7 +1141,8 @@ extern "C" bool lang_gc_world_can_collect_v1(void) noexcept {
   // stop) non-collectible; it never releases or consumes the stop.
   const bool collectable =
       !stop_active_locked() && node->state == kStateActive &&
-      node->safe_depth == 0 && node->critical_depth == 0;
+      node->safe_depth == 0 && node->critical_depth == 0 &&
+      node->no_park_depth == 0;
   registry_unlock();
   node_release(node);
   return collectable;
@@ -963,6 +1164,13 @@ extern "C" int64_t lang_gc_world_stop_v1(int64_t timeout_ns) noexcept {
   bool notify = false;
   registry_lock();
   if (stop_active_locked()) {
+    registry_unlock();
+    node_release(self);
+    return kEbusy;
+  }
+  if (self->no_park_depth != 0) {
+    // The thread may hold internal fork locks. It must not become a collector
+    // or be parked until leave_fork_stable handles its pending request.
     registry_unlock();
     node_release(self);
     return kEbusy;
@@ -1065,7 +1273,7 @@ extern "C" void lang_gc_world_fork_prepare_v1(void) noexcept {
     gc_panic("fork-hook-misuse");
   }
   if (stop_active_locked() && g_collector_tid != tid &&
-      node->critical_depth == 0) {
+      node->critical_depth == 0 && node->no_park_depth == 0) {
     // A critical caller is the intended exception: it entered critical before
     // taking launch/environment/allocator locks and is not a pausable point.
     // Its child still clears the inherited stop and keeps the critical depth.
@@ -1134,9 +1342,11 @@ extern "C" void lang_gc_world_fork_child_v1(void) noexcept {
   // callback leave will release them. callback_depth/token themselves stay
   // unchanged.
   __atomic_store_n(&keep->refs, 1u + keep->callback_depth, __ATOMIC_RELAXED);
-  // critical_depth is copied unchanged. A critical region is still ACTIVE
-  // (not SAFE); only safe_depth changes the state classification.
-  if (keep->safe_depth == 0)
+  // critical_depth and no_park_depth are copied unchanged. Both keep the
+  // surviving thread ACTIVE (not SAFE); only a plain outer safe_depth changes
+  // the state classification.
+  if (keep->safe_depth == 0 || keep->critical_depth != 0 ||
+      keep->no_park_depth != 0)
     keep->state = kStateActive;
   else
     keep->state = kStateSafe;

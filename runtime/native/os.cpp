@@ -1,5 +1,7 @@
 #include "os.hpp"
 
+#include "gc_program.hpp"
+
 #include <cstddef>
 #include <cstdint>
 
@@ -112,6 +114,9 @@ int64_t lang_os_read_v1(int32_t fd, void *data, uint64_t count) noexcept {
   // The specified zero-count rule is unconditional: no descriptor check and no
   // buffer access.
   if (count == 0) return 0;
+  // A byte buffer has no owning elements. Every graph write/validation is done
+  // before this call; only the raw kernel transfer is SAFE.
+  lang::native::gc_program::SafeGuard safe;
   return syscall3(kSysRead, static_cast<long>(fd),
                   static_cast<long>(reinterpret_cast<intptr_t>(data)),
                   static_cast<long>(count));
@@ -120,6 +125,7 @@ int64_t lang_os_read_v1(int32_t fd, void *data, uint64_t count) noexcept {
 int64_t lang_os_write_v1(int32_t fd, const void *data,
                          uint64_t count) noexcept {
   if (count == 0) return 0;
+  lang::native::gc_program::SafeGuard safe;
   return syscall3(kSysWrite, static_cast<long>(fd),
                   static_cast<long>(reinterpret_cast<intptr_t>(data)),
                   static_cast<long>(count));
