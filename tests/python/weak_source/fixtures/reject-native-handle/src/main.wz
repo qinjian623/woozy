@@ -1,0 +1,12 @@
+package app;
+
+import "std/thread" as thread;
+import "std/weak" as weak;
+
+func probe(value thread.Thread) Weak[thread.Thread] {
+    return weak.downgrade[thread.Thread](value);
+}
+
+func main() i32 {
+    return 0;
+}

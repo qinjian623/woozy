@@ -126,6 +126,17 @@ if(LANG_TEST_PYTHON)
     --clang ${LLVM_TOOLS_BINARY_DIR}/clang --runtime $<TARGET_FILE:lang_native_runtime>
     --out ${CMAKE_CURRENT_BINARY_DIR}/cleanup-results)
   set_tests_properties(native.cleanup PROPERTIES TIMEOUT 240)
+  add_test(NAME native.reference_values_backend COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/reference_values_backend/run_reference_values_backend.py
+    --helper $<TARGET_FILE:lang_native_helper> --root ${LANG_SOURCE_ROOT}
+    --out ${CMAKE_CURRENT_BINARY_DIR}/reference-values-backend-results)
+  set_tests_properties(native.reference_values_backend PROPERTIES TIMEOUT 300)
+  add_test(NAME native.weak_source COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/weak_source/run_weak_source.py
+    --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_native_helper>
+    --root ${LANG_SOURCE_ROOT}
+    --out ${CMAKE_CURRENT_BINARY_DIR}/weak-source-results)
+  set_tests_properties(native.weak_source PROPERTIES TIMEOUT 900)
 endif()
 add_executable(lang_native_float_probe float_probe.cpp)
 target_include_directories(lang_native_float_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
@@ -188,13 +199,6 @@ add_test(NAME native.gc_program
     "GC_PROGRAM_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}/gc-program-results"
     bash ${CMAKE_CURRENT_LIST_DIR}/gc_program/run_all.sh)
 set_tests_properties(native.gc_program PROPERTIES TIMEOUT 600)
-add_test(NAME native.vec_graph_publish
-  COMMAND ${CMAKE_COMMAND} -E env
-    "CXX=${LLVM_TOOLS_BINARY_DIR}/clang++"
-    "LANG_LLVM_ROOT=${LLVM_TOOLS_BINARY_DIR}/.."
-    "VEC_GRAPH_PUBLISH_BUILD_DIR=${CMAKE_CURRENT_BINARY_DIR}/vec-graph-results"
-    bash ${CMAKE_CURRENT_LIST_DIR}/vec_graph_publish/run_all.sh)
-set_tests_properties(native.vec_graph_publish PROPERTIES TIMEOUT 300)
 add_executable(lang_native_startup_test startup_test.cpp)
 target_compile_features(lang_native_startup_test PRIVATE cxx_std_20)
 add_test(NAME native.startup COMMAND lang_native_startup_test)

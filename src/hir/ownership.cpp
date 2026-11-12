@@ -173,6 +173,12 @@ void complete_function(HirModule &m, const HirFunction &function,
     if (auto branches = std::get_if<Switch>(&n.data))
       for (const auto &arm : branches->arms)
         complete_pattern(m, arm.pattern, done, stop);
+    if (auto value = std::get_if<FunctionValue>(&n.data)) {
+      for (const auto &capture : value->captures)
+        complete_root(m, capture.type, n.source, done, stop);
+      if (value->bound)
+        complete_root(m, value->bound->type, n.source, done, stop);
+    }
     pending.insert(pending.end(), n.children.begin(), n.children.end());
   }
 }
@@ -189,6 +195,8 @@ ValueKind provisional_kind(const Type &t) {
     return ValueKind::vec;
   case TypeKind::Slice:
     return ValueKind::slice;
+  case TypeKind::Function:
+    return ValueKind::function;
   case TypeKind::NominalStruct:
     return ValueKind::structure;
   case TypeKind::NominalEnum:
@@ -270,6 +278,12 @@ class Classifier {
       return {ValueKind::c_pointer, {}};
     if (t.kind == TypeKind::CForeignResource)
       return {ValueKind::c_resource, {}};
+    if (t.kind == TypeKind::Weak)
+      return {ValueKind::weak, {}};
+    // A function value is an owning reference to code plus an optional shared
+    // environment. It is never trivial, including as an aggregate member.
+    if (t.kind == TypeKind::Function)
+      return {ValueKind::function, {}};
     if (t.kind == TypeKind::Error)
       return {ValueKind::unsupported,
               "dynamic string/foreign/error value ownership is not supported"};
@@ -355,6 +369,10 @@ class Classifier {
       return true;
     if (t.kind == TypeKind::CForeignResource)
       return true;
+    if (t.kind == TypeKind::Weak)
+      return true;
+    if (t.kind == TypeKind::Function)
+      return true;
     if (t.kind == TypeKind::CForeignPointer ||
         t.kind == TypeKind::CForeignBuffer ||
         t.kind == TypeKind::CForeignRecord ||
@@ -428,6 +446,18 @@ public:
     if (t.kind == TypeKind::CForeignResource) {
       out.kind = ValueKind::c_resource;
       out.needs_drop = true;
+      return out;
+    }
+    if (t.kind == TypeKind::Weak) {
+      out.kind = ValueKind::weak;
+      out.needs_drop = true;
+      out.pod_inout = false;
+      return out;
+    }
+    if (t.kind == TypeKind::Function) {
+      out.kind = ValueKind::function;
+      out.needs_drop = true;
+      out.pod_inout = false;
       return out;
     }
     if (t.kind == TypeKind::CForeignPointer ||
@@ -507,6 +537,12 @@ class Analysis {
     throw Problem{n(id).source, std::move(code), std::move(msg)};
   }
   bool owned(TypeId t) const { return classify_value(m, t).needs_drop; }
+  static bool inert_function_value(const HirNode &n) {
+    if (n.kind() != NodeKind::function_value)
+      return false;
+    const auto &value = std::get<FunctionValue>(n.data);
+    return value.captures.empty() && !value.bound;
+  }
   static void join(std::optional<State> &dst, const State &s) {
     if (!dst) {
       dst = s;
@@ -518,9 +554,12 @@ class Analysis {
   static void edges(Flow &to, Flow &from) {
     to.edges.insert(to.edges.end(), from.edges.begin(), from.edges.end());
   }
-  void local(SymbolId s, ScopeId scope, TypeId type, ParamMode mode) {
+  void local(SymbolId s, ScopeId scope, TypeId type, ParamMode mode,
+             bool read_only_capture = false) {
     auto order = uint32_t(scope_locals[scope.value].size());
-    locals.emplace(s.value, LocalLifetime{s, scope, type, order, mode});
+    locals.emplace(s.value,
+                   LocalLifetime{s, scope, type, order, mode,
+                                 read_only_capture});
     scope_locals[scope.value].push_back(s); // declaration order
   }
   void pattern(const Pattern &p, ScopeId s) {
@@ -539,9 +578,14 @@ class Analysis {
     auto ops = classify_value(m, x.type);
     if (ops.kind == ValueKind::unsupported)
       issue(id, "E_CAPABILITY_UNAVAILABLE", ops.reason);
+    // A noncapturing function value is classified as owning (C5) but has a
+    // null environment, so its copy/drop is a backend no-op. It therefore
+    // does not by itself create owned temporaries/cleanup records.
+    const bool inert_function = inert_function_value(x);
     if (ops.needs_drop || x.kind() == NodeKind::move ||
         x.kind() == NodeKind::for_in)
-      enabled.insert(fun->symbol.value);
+      if (!inert_function)
+        enabled.insert(fun->symbol.value);
     if (auto fi = std::get_if<ForIn>(&x.data)) {
       auto collection = ty(m, n(x.children[0]).type);
       TypeId element{};
@@ -748,6 +792,9 @@ class Analysis {
     return r;
   }
   void use(HirNodeId id, uint32_t operand, HirNodeId child, UseKind kind) {
+    // A noncapturing function value has no environment storage to borrow.
+    if (kind == UseKind::borrow && inert_function_value(n(child)))
+      return;
     // A computed trivial value has no storage to borrow. In particular a
     // Move result is distinct from its now-consumed source binding.
     if (kind == UseKind::borrow && !owned(n(child).type) && !borrow_root(child))
@@ -794,8 +841,15 @@ class Analysis {
     } else if (auto args = call_args(x)) {
       auto floor = active_borrows.size();
       if (auto callee = call_callee(x)) {
-        expr_records(*callee, fe, live);
-        if (owned(n(*callee).type))
+        auto root = borrow_root(*callee);
+        const bool borrowed = root.has_value();
+        expr_records(*callee, fe, live, borrowed);
+        if (borrowed)
+          active_borrows.push_back({CleanupKind::end_borrow,
+                                    {OwnerKind::binding, root->value},
+                                    locals.at(root->value).type});
+        else if (owned(n(*callee).type) &&
+                 !inert_function_value(n(*callee)))
           active_borrows.push_back({CleanupKind::end_borrow,
                                     {OwnerKind::temporary, callee->value},
                                     n(*callee).type});
@@ -808,7 +862,9 @@ class Analysis {
           active_borrows.push_back({CleanupKind::end_borrow,
                                     {OwnerKind::binding, root->value},
                                     locals.at(root->value).type});
-        else if (a.mode == ParamMode::ordinary && owned(n(a.expression).type))
+        else if (a.mode == ParamMode::ordinary &&
+                 owned(n(a.expression).type) &&
+                 !inert_function_value(n(a.expression)))
           active_borrows.push_back({CleanupKind::end_borrow,
                                     {OwnerKind::temporary, a.expression.value},
                                     n(a.expression).type});
@@ -859,6 +915,7 @@ class Analysis {
       UseKind kind = UseKind::borrow;
       if (x.kind() == NodeKind::struct_init ||
           x.kind() == NodeKind::enum_init || x.kind() == NodeKind::vec_init ||
+          x.kind() == NodeKind::function_value ||
           x.kind() == NodeKind::move)
         kind = UseKind::take;
       if (auto args = call_args(x)) {
@@ -883,7 +940,7 @@ class Analysis {
       out.records.uses.push_back({id, 0, UseKind::take, r->binding, x.type});
     if (!borrowed_value && owned(x.type) && x.kind() != NodeKind::place &&
         x.kind() != NodeKind::field_place &&
-        x.kind() != NodeKind::index_place) {
+        x.kind() != NodeKind::index_place && !inert_function_value(x)) {
       out.records.temporaries.push_back({id, fe, x.type});
       live.push_back(id);
     }
@@ -1565,6 +1622,13 @@ public:
         if (p.mode == ParamMode::move || owned(p.type))
           enabled.insert(f->symbol.value);
       }
+      // Capture locals are entry-initialized read-only aliases of one
+      // environment row field. They are borrowed, never dropped at exit.
+      for (const auto &capture : f->captures) {
+        supported(capture.type);
+        local(capture.local, f->scope, capture.type, ParamMode::ordinary,
+              true);
+      }
       gather(f->body);
       if (!enabled.count(f->symbol.value))
         continue;
@@ -1576,6 +1640,8 @@ public:
       State st;
       for (auto p : f->parameters)
         st[p.symbol.value] = 1;
+      for (const auto &capture : f->captures)
+        st[capture.local.value] = 1;
       statement(f->body, st);
     }
     return out;
@@ -1604,6 +1670,242 @@ PhaseResult<std::monostate> result(const std::function<void()> &fn,
   return r;
 }
 } // namespace
+bool weak_target(const HirModule &m, TypeId id) {
+  const auto *t = m.types.find(id);
+  if (!t || !m.resolved || !m.resolved->project)
+    return false;
+  if (t->kind == TypeKind::Vec || t->kind == TypeKind::Function)
+    return true;
+  if (t->kind != TypeKind::NominalStruct || !t->declaration.value ||
+      t->declaration.value >= m.resolved->symbols.size())
+    return false;
+  const auto &declaration = m.resolved->symbols[t->declaration.value];
+  if (declaration.kind != modules::SymbolKind::type || !declaration.exported ||
+      !declaration.definition || declaration.foreign)
+    return false;
+  const auto &module = m.resolved->project->module(declaration.module);
+  if (module.binding)
+    return false;
+  struct Canonical {
+    std::string_view path, name, field;
+    TypeKind handle;
+    size_t arity;
+  };
+  static constexpr Canonical canonicals[] = {
+      {"std/thread", "Thread", "state", TypeKind::ThreadHandle, 0},
+      {"std/sync", "Mutex", "state", TypeKind::MutexHandle, 0},
+      {"std/sync", "Condvar", "state", TypeKind::CondvarHandle, 0},
+      {"std/sync", "AtomicI64", "state", TypeKind::AtomicI64Handle, 0},
+      {"std/ipc", "Memory", "handle", TypeKind::IpcHandle, 0},
+      // Box is the only wrapper whose canonical private field is a Vec cell.
+      {"std/box", "Box", "cell", TypeKind::Vec, 1},
+  };
+  const Canonical *canonical = nullptr;
+  for (const auto &candidate : canonicals)
+    if (module.logical_path == candidate.path &&
+        declaration.name == candidate.name &&
+        t->type_args.size() == candidate.arity) {
+      canonical = &candidate;
+      break;
+    }
+  if (!canonical)
+    return false;
+  // Require the unique real exported declaration, not a duplicated symbol
+  // that merely carries the same module/name fields.
+  size_t matches = 0;
+  for (const auto &s : m.resolved->symbols)
+    if (s.module == declaration.module &&
+        s.kind == modules::SymbolKind::type && s.exported && s.definition &&
+        s.name == declaration.name)
+      ++matches;
+  if (matches != 1)
+    return false;
+  const NominalDecl *nominal = nullptr;
+  for (const auto &d : m.nominals)
+    if (d.symbol == t->declaration) {
+      nominal = &d;
+      break;
+    }
+  if (!nominal || nominal->kind != TypeKind::NominalStruct ||
+      nominal->params.size() != canonical->arity ||
+      nominal->fields.size() != 1 || !nominal->variants.empty())
+    return false;
+  const auto &field = nominal->fields.front();
+  if (field.exported || m.resolved->symbols.at(field.symbol.value).name !=
+                            canonical->field)
+    return false;
+  const auto *field_type = m.types.find(field.type);
+  if (!field_type)
+    return false;
+  if (canonical->handle != TypeKind::Vec) {
+    // The wrapper's single private field is the exact compiler-private
+    // runtime handle; a same-shaped user field is not accepted.
+    return field_type->kind == canonical->handle;
+  }
+  if (field_type->kind != TypeKind::Vec || field_type->type_args.size() != 1)
+    return false;
+  const auto *element = m.types.find(field_type->type_args[0]);
+  return element && element->kind == TypeKind::TypeParameter &&
+         element->declaration == nominal->params.front().symbol;
+}
+
+bool ordinary_copyable(const HirModule &m, TypeId root,
+                       std::stop_token stop) {
+  // Logical copyability for closure captures and bound receivers. Fn itself
+  // shares its environment and is copyable even when the environment contains
+  // a non-copyable resource; the resource is only reached by moving it out of
+  // a source binding, not by copying the Fn value.
+  TypeContext scratch = m.types;
+  std::set<uint64_t> active;
+  size_t visited = 0;
+  std::function<bool(TypeId, size_t)> copyable = [&](TypeId id,
+                                                     size_t depth) -> bool {
+    check_cancelled(stop);
+    if (depth > 128 || ++visited > 65536)
+      return false;
+    const auto *found = scratch.find(id);
+    if (!found)
+      return false;
+    const Type t = *found;
+    switch (t.kind) {
+    case TypeKind::Unit:
+    case TypeKind::Bool:
+    case TypeKind::SignedInt:
+    case TypeKind::UnsignedInt:
+    case TypeKind::Float:
+    case TypeKind::Isize:
+    case TypeKind::Usize:
+    case TypeKind::String:
+    case TypeKind::Vec:
+    case TypeKind::Slice:
+    case TypeKind::Weak:
+    case TypeKind::ThreadHandle:
+    case TypeKind::MutexHandle:
+    case TypeKind::CondvarHandle:
+    case TypeKind::AtomicI64Handle:
+    case TypeKind::IpcHandle:
+    case TypeKind::Function:
+    case TypeKind::ForeignOpaque:
+    case TypeKind::ForeignCallable:
+    case TypeKind::CForeignPointer:
+    case TypeKind::CForeignBuffer:
+    case TypeKind::CForeignRecord:
+    case TypeKind::CForeignCallback:
+    case TypeKind::CForeignOpaque:
+      return true;
+    case TypeKind::CForeignResource: {
+      if (!t.c_type || !m.resolved || !m.resolved->project ||
+          t.c_type > m.resolved->project->c_types.size())
+        return false;
+      return !m.resolved->project->c_types.at(t.c_type - 1)
+                  .retain_symbol.empty();
+    }
+    case TypeKind::TypeParameter:
+      return false;
+    case TypeKind::Error:
+      return false;
+    case TypeKind::NominalStruct:
+    case TypeKind::NominalEnum:
+      break;
+    }
+    if (!m.resolved || !m.resolved->project)
+      return false;
+    if (!active.insert(id.value).second)
+      return false; // Value-storage cycle has no finite copy rule.
+    const NominalDecl *d = nullptr;
+    for (const auto &candidate : m.nominals)
+      if (candidate.symbol == t.declaration) {
+        d = &candidate;
+        break;
+      }
+    if (!d || d->params.size() != t.type_args.size()) {
+      active.erase(id.value);
+      return false;
+    }
+    Substitutions sub;
+    for (size_t i = 0; i < d->params.size(); ++i)
+      sub.push_back({d->params[i].symbol, t.type_args[i]});
+    auto fields = [&](const auto &fs) {
+      for (const auto &f : fs) {
+        auto concrete = substitute(f.type, sub, scratch);
+        if (!scratch.find(concrete) || !copyable(concrete, depth + 1)) {
+          active.erase(id.value);
+          return false;
+        }
+      }
+      return true;
+    };
+    bool ok = fields(d->fields);
+    for (const auto &v : d->variants)
+      ok = ok && fields(v.payload);
+    active.erase(id.value);
+    return ok;
+  };
+  return m.types.find(root) && copyable(root, 0);
+}
+
+bool owning_value(const HirModule &m, TypeId root, std::stop_token stop) {
+  // Move-intent classification used while checking a closure creation site.
+  // Concrete member types may not be interned publicly until ownership
+  // completion, so this walk uses a private substitution context and never
+  // publishes records.
+  TypeContext scratch = m.types;
+  std::set<uint64_t> active;
+  size_t visited = 0;
+  std::function<bool(TypeId, size_t)> drop = [&](TypeId id,
+                                                 size_t depth) -> bool {
+    check_cancelled(stop);
+    if (depth > 128 || ++visited > 65536)
+      return true;
+    const auto *found = scratch.find(id);
+    if (!found)
+      return true;
+    const Type t = *found;
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
+        t.kind == TypeKind::String || t.kind == TypeKind::Weak ||
+        t.kind == TypeKind::ForeignOpaque ||
+        t.kind == TypeKind::ForeignCallable ||
+        t.kind == TypeKind::CForeignResource ||
+        t.kind == TypeKind::Function ||
+        t.kind == TypeKind::ThreadHandle ||
+        t.kind == TypeKind::MutexHandle ||
+        t.kind == TypeKind::CondvarHandle ||
+        t.kind == TypeKind::AtomicI64Handle ||
+        t.kind == TypeKind::IpcHandle)
+      return true;
+    if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum)
+      return false;
+    if (!active.insert(id.value).second)
+      return false;
+    const NominalDecl *d = nullptr;
+    for (const auto &candidate : m.nominals)
+      if (candidate.symbol == t.declaration) {
+        d = &candidate;
+        break;
+      }
+    if (!d || d->params.size() != t.type_args.size()) {
+      active.erase(id.value);
+      return true;
+    }
+    Substitutions sub;
+    for (size_t i = 0; i < d->params.size(); ++i)
+      sub.push_back({d->params[i].symbol, t.type_args[i]});
+    bool result = false;
+    auto fields = [&](const auto &fs) {
+      for (const auto &f : fs) {
+        auto concrete = substitute(f.type, sub, scratch);
+        result |= drop(concrete, depth + 1);
+      }
+    };
+    fields(d->fields);
+    for (const auto &v : d->variants)
+      fields(v.payload);
+    active.erase(id.value);
+    return result;
+  };
+  return m.types.find(root) && drop(root, 0);
+}
+
 bool inout_data_type(const HirModule &m, TypeId root,
                      const std::set<uint64_t> &parameters) {
   // Substitution may intern storage-only member types. Keep a private copy so
@@ -1645,16 +1947,12 @@ bool inout_data_type(const HirModule &m, TypeId root,
         if (t.kind == TypeKind::Unit)
           return member;
         if (t.kind == TypeKind::Function) {
-          // A non-capturing function value is trivial data only as a member.
-          // Its own inout parameters still follow the same data rule. The
-          // TypeId backedge is checked once, including recursive signatures.
-          if (!member || !functions.insert(id.value).second)
-            return member;
-          for (const auto &p : t.parameters)
-            if (p.mode == ParamMode::inout &&
-                !visit(p.type, false, depth + 1, function_depth + 1))
-              return false;
-          return true;
+          // Function values own their environment and are never POD inout,
+          // whether at a top-level slot or as a struct/enum member.
+          (void)member;
+          (void)functions;
+          (void)function_depth;
+          return false;
         }
         if (t.kind == TypeKind::Bool || t.kind == TypeKind::SignedInt ||
             t.kind == TypeKind::UnsignedInt || t.kind == TypeKind::Isize ||

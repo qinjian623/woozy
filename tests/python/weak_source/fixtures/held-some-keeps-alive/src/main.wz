@@ -1,0 +1,34 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+func main() i32 {
+    let empty Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    var w Weak[Vec[i32]] = empty;
+    var held option.Option[Vec[i32]] = option.Option[Vec[i32]].None;
+    {
+        let values Vec[i32] = [9];
+        w = weak.downgrade[Vec[i32]](values);
+        held = weak.upgrade(w);
+        switch held {
+        case option.Option.Some(strong):
+            if strong[0] != 9 { return 1; }
+        case option.Option.None:
+            return 2;
+        }
+    }
+    switch weak.upgrade(w) {
+    case option.Option.Some(strong):
+        if strong[0] != 9 { return 3; }
+    case option.Option.None:
+        return 4;
+    }
+    held = option.Option[Vec[i32]].None;
+    switch weak.upgrade(w) {
+    case option.Option.Some(strong):
+        return 5;
+    case option.Option.None:
+        return 0;
+    }
+}

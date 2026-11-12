@@ -49,6 +49,30 @@ bool foreign_access_place(const HirNode &n) {
           *r->access == ForeignAccessKind::index_place ||
           *r->access == ForeignAccessKind::slice_place);
 }
+bool type_contains_parameter(const HirModule &m, TypeId id) {
+  std::vector<TypeId> pending{id};
+  std::set<uint64_t> seen;
+  while (!pending.empty()) {
+    auto current = pending.back();
+    pending.pop_back();
+    if (!seen.insert(current.value).second)
+      continue;
+    const auto *t = m.types.find(current);
+    if (!t)
+      return false;
+    if (t->kind == TypeKind::TypeParameter)
+      return true;
+    pending.insert(pending.end(), t->type_args.begin(), t->type_args.end());
+    for (auto p : t->parameters)
+      pending.push_back(p.type);
+    if (t->kind == TypeKind::Function) {
+      pending.push_back(t->result);
+      if (t->throws_type)
+        pending.push_back(*t->throws_type);
+    }
+  }
+  return false;
+}
 } // namespace
 const Type *TypeContext::find(TypeId id) const {
   return id.value && id.value <= entries_.size() ? &entries_[id.value - 1]
@@ -367,6 +391,7 @@ class Verifier {
     SymbolId function;
     bool writable;
     size_t ready;
+    bool read_only = false;
   };
   std::map<uint64_t, Local> locals;
   std::vector<size_t> enter, leave;
@@ -516,11 +541,6 @@ class Verifier {
       return;
     const auto &t = type(id);
     need(t.kind != TypeKind::Error, "invalid/unimplemented type");
-    // The reference-values schema reserves Weak, but source cannot construct
-    // it and no ownership/backend path verifies it yet. Reject it here rather
-    // than letting an unrelated trivial/unsupported default accept it.
-    need(t.kind != TypeKind::Weak,
-         "Weak type has no verified source construction path");
     if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable) {
       need(!t.declaration.value && t.binding.value < m.foreign_bindings.size(),
            "foreign type binding index");
@@ -585,11 +605,17 @@ class Verifier {
       for (auto a : t.type_args)
         valid_type(a, allowed, depth + 1);
     }
-    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
+        t.kind == TypeKind::Weak) {
       need(t.type_args.size() == 1,
            t.kind == TypeKind::Vec ? "Vec element arity"
-                                   : "Slice element arity");
+           : t.kind == TypeKind::Slice ? "Slice element arity"
+                                       : "Weak target arity");
       valid_type(t.type_args[0], allowed, depth + 1);
+      if (t.kind == TypeKind::Weak &&
+          !type_contains_parameter(m, t.type_args[0]))
+        need(weak_target(m, t.type_args[0]),
+             "Weak target is not a canonical source declaration");
     }
     if (t.kind == TypeKind::Function) {
       if (t.throws_type)
@@ -1454,6 +1480,10 @@ class Verifier {
       if (type(expected_type).kind == TypeKind::CForeignCallback) {
         need(argument.kind() == NodeKind::function_value,
              "C callback argument is not an uncaptured function value");
+        const auto &callback = std::get<FunctionValue>(argument.data);
+        need(callback.captures.empty() && !callback.bound &&
+                 !callback.move_capture,
+             "C callback cannot capture or bind a receiver");
         c_callback_type(argument.type, type(expected_type).c_type);
       } else {
         bool compatible = argument.type == expected_type;
@@ -2386,6 +2416,13 @@ class Verifier {
                  resolved_source(callee) == c.direct_symbol,
              "system operation differs from resolved source builtin");
       }
+      if (*c.system == SystemOperation::weak_empty ||
+          *c.system == SystemOperation::weak_downgrade ||
+          *c.system == SystemOperation::weak_upgrade)
+        need(c.type_args.size() == 1 &&
+                 (type_contains_parameter(m, c.type_args[0]) ||
+                  weak_target(m, c.type_args[0])),
+             "Weak operation target is not a canonical source declaration");
       for (size_t i = 0; i < c.args.size(); ++i) {
         const auto &argument = file.node(call.children[i + 1]);
         need(argument.kind == AstKind::Argument && argument.children.size() == 1 &&
@@ -2535,8 +2572,19 @@ class Verifier {
       arity(0);
       break; // binding checks after tree traversal
     case NodeKind::function_value: {
-      arity(0);
       const auto &v = std::get<FunctionValue>(n.data);
+      need(!(v.bound && !v.captures.empty()),
+           "function value has both captures and a bound receiver");
+      if (v.bound) {
+        arity(1);
+        need(expr(ch[0]).type == v.bound->type,
+             "bound receiver child type");
+      } else {
+        arity(v.captures.size());
+        for (size_t i = 0; i < ch.size(); ++i)
+          need(expr(ch[i]).type == v.captures[i].type,
+               "capture child type");
+      }
       for (auto argument : v.type_args)
         valid_type(argument, allowed(scope(n.scope).function));
       if (trait_prototype(v.symbol)) {
@@ -2546,8 +2594,16 @@ class Verifier {
         if (!templates.count(scope(n.scope).function.value))
           need(!templates.count(v.symbol.value) && v.type_args.empty(),
                "template function value survived into concrete execution");
-        need(n.type == instantiated_signature(v.symbol, v.type_args),
-             "function value type mismatch");
+        const auto full = type(instantiated_signature(v.symbol, v.type_args));
+        if (v.bound) {
+          need(!full.parameters.empty(), "bound method has no Self parameter");
+          Type trimmed = full;
+          trimmed.parameters.erase(trimmed.parameters.begin());
+          need(type(n.type) == trimmed, "bound method value type mismatch");
+        } else {
+          need(n.type == instantiated_signature(v.symbol, v.type_args),
+               "function value type mismatch");
+        }
       }
       break;
     }
@@ -2949,8 +3005,11 @@ class Verifier {
           t.kind = TypeKind::IpcHandle;
         else
           t.kind = TypeKind::AtomicI64Handle;
-      } else if (s.name == "Vec" || s.name == "Slice") {
-        t.kind = s.name == "Vec" ? TypeKind::Vec : TypeKind::Slice;
+      } else if (s.name == "Vec" || s.name == "Slice" ||
+                 s.name == "Weak") {
+        t.kind = s.name == "Vec" ? TypeKind::Vec
+                : s.name == "Slice" ? TypeKind::Slice
+                                    : TypeKind::Weak;
         if (n.kind == AstKind::NeutralBracket)
           for (size_t i = 1; i < n.children.size(); ++i)
             t.type_args.push_back(source_type(cr(n.children[i])));
@@ -2958,6 +3017,7 @@ class Verifier {
           for (auto c : n.children)
             if (n.kind == AstKind::NamedType)
               t.type_args.push_back(source_type(cr(c)));
+        need(t.type_args.size() == 1, "container/Weak type arity");
       } else if (s.name == "Ptr" || s.name == "PtrMut") {
         t.kind = TypeKind::CForeignPointer;
         t.bits = s.name == "PtrMut" ? 1 : 0;
@@ -4113,10 +4173,14 @@ class Verifier {
     std::map<uint64_t, HirNodeId> nodes;
     std::map<uint64_t, ScopeId> scopes;
     std::set<uint64_t> destinations;
-    std::vector<std::pair<HirNodeId, HirNodeId>> work{{origin.body, f.body}};
+    struct Work {
+      HirNodeId origin, instance;
+      bool capture_child = false;
+    };
+    std::vector<Work> work{{origin.body, f.body, false}};
     while (!work.empty()) {
       check_cancelled(stop);
-      auto [a, b] = work.back();
+      auto [a, b, capture_child] = work.back();
       work.pop_back();
       const auto &x = node(a), &y = node(b);
       need(nodes.emplace(a.value, b).second &&
@@ -4132,11 +4196,72 @@ class Verifier {
                substitute(x.type, sub, substituted) == y.type &&
                x.children.size() == y.children.size(),
            "instance source/type/children differ from template");
-      need(x.kind() == y.kind() || (x.kind() == NodeKind::constraint_call &&
-                                    y.kind() == NodeKind::call),
-           "instance node kind differs from template");
+      bool kind_ok =
+          x.kind() == y.kind() ||
+          (x.kind() == NodeKind::constraint_call &&
+           y.kind() == NodeKind::call);
+      if (!kind_ok && capture_child) {
+        const auto *xm = std::get_if<Move>(&x.data);
+        const auto *yr = std::get_if<Read>(&y.data);
+        const auto *xr = std::get_if<Read>(&x.data);
+        const auto *ym = std::get_if<Move>(&y.data);
+        kind_ok = (xm && xm->binding && yr) || (xr && ym && ym->binding);
+      }
+      need(kind_ok, "instance node kind differs from template");
+      bool captures = false;
+      if (const auto *vx = std::get_if<FunctionValue>(&x.data)) {
+        const auto *vy = std::get_if<FunctionValue>(&y.data);
+        need(vy, "instance function value lost its payload");
+        need(vx->move_capture == vy->move_capture &&
+                 vx->bound.has_value() == vy->bound.has_value() &&
+                 vx->captures.size() == vy->captures.size(),
+             "instance function value capture metadata differs from template");
+        bool symbol_ok = vx->symbol == vy->symbol;
+        if (!symbol_ok) {
+          for (const auto &candidate : m.instances)
+            if (candidate.symbol == vy->symbol &&
+                candidate.origin == vx->symbol) {
+              symbol_ok = true;
+              break;
+            }
+        }
+        if (!symbol_ok && trait_prototype(vx->symbol) &&
+            impl_method_exists(vy->symbol) &&
+            symbol(vx->symbol).name == symbol(vy->symbol).name)
+          symbol_ok = true;
+        SymbolId vy_origin = vy->symbol;
+        for (const auto &candidate : m.instances)
+          if (candidate.symbol == vy->symbol) {
+            vy_origin = candidate.origin;
+            break;
+          }
+        if (!symbol_ok && trait_prototype(vx->symbol) &&
+            impl_method_exists(vy_origin) &&
+            symbol(vx->symbol).name == symbol(vy_origin).name)
+          symbol_ok = true;
+        need(symbol_ok, "instance function value target differs from template");
+        for (size_t c = 0; c < vx->captures.size(); ++c) {
+          const auto &before = vx->captures[c];
+          const auto &after = vy->captures[c];
+          auto mapped = renamed.find(before.source.value);
+          need(before.origin == after.origin && mapped != renamed.end() &&
+                   mapped->second == after.source &&
+                   after.type == substitute(before.type, sub, substituted),
+               "instance capture source/type differs from template");
+          const bool dependent = type_contains_parameter(m, after.type);
+          const bool owning =
+              dependent || classify_value(m, after.type).needs_drop;
+          need(after.move == (vy->move_capture && owning),
+               "instance capture move intent differs from concrete type");
+        }
+        if (vx->bound)
+          need(vy->bound->type ==
+                       substitute(vx->bound->type, sub, substituted),
+               "instance bound receiver type differs from template");
+        captures = !vx->bound;
+      }
       for (size_t i = 0; i < x.children.size(); ++i)
-        work.emplace_back(x.children[i], y.children[i]);
+        work.push_back({x.children[i], y.children[i], captures});
     }
     auto local = [&](SymbolId id) {
       const auto it = renamed.find(id.value);
@@ -4285,9 +4410,17 @@ class Verifier {
                "instance constraint argument mapping/mode/order");
         }
       }
-      if (auto r = std::get_if<Read>(&x.data))
-        need(std::get<Read>(y.data).symbol == local(r->symbol),
-             "instance read binding mismatch");
+      if (auto r = std::get_if<Read>(&x.data)) {
+        if (auto *read = std::get_if<Read>(&y.data))
+          need(read->symbol == local(r->symbol),
+               "instance read binding mismatch");
+        else {
+          const auto *move = std::get_if<Move>(&y.data);
+          need(move && move->binding &&
+                   *move->binding == local(r->symbol),
+               "instance capture read/move conversion mismatch");
+        }
+      }
       if (auto c = std::get_if<ConstantLiteral>(&x.data)) {
         auto expected = c->value;
         auto actual = std::get<ConstantLiteral>(y.data).value;
@@ -4310,11 +4443,19 @@ class Verifier {
       if (auto r = std::get_if<Binding>(&x.data))
         need(std::get<Binding>(y.data).symbol == local(r->symbol),
              "instance declaration binding mismatch");
-      if (auto r = std::get_if<Move>(&x.data))
-        need(
-            std::get<Move>(y.data).binding ==
-                (r->binding ? std::optional(local(*r->binding)) : std::nullopt),
-            "instance move source mismatch");
+      if (auto r = std::get_if<Move>(&x.data)) {
+        if (auto *move = std::get_if<Move>(&y.data))
+          need(move->binding ==
+                   (r->binding ? std::optional(local(*r->binding))
+                               : std::nullopt),
+               "instance move source mismatch");
+        else {
+          const auto *read = std::get_if<Read>(&y.data);
+          need(r->binding && read &&
+                   read->symbol == local(*r->binding),
+               "instance capture move/read conversion mismatch");
+        }
+      }
       if (auto r = std::get_if<ForIn>(&x.data)) {
         const auto &v = std::get<ForIn>(y.data);
         need(v.element == local(r->element) &&
@@ -4347,6 +4488,7 @@ class Verifier {
             std::make_tuple(r.module.value, r.file, r.node.value), s.id);
       }
     std::map<uint64_t, std::set<uint64_t>> template_symbols;
+    std::set<uint64_t> capture_local_symbols;
     for (const auto &t : m.templates) {
       auto ps = parameter_set(t.params);
       need(!ps.empty(), "template without parameters");
@@ -4387,6 +4529,10 @@ class Verifier {
                   .at(std::make_tuple(ref.module.value, ref.file, id.value))
                   .value);
         pending.insert(pending.end(), n.children.begin(), n.children.end());
+      }
+      for (const auto &capture : t.function.captures) {
+        originals.insert(capture.local.value);
+        capture_local_symbols.insert(capture.local.value);
       }
       need(originals.count(t.function.symbol.value),
            "template function is not its original declaration");
@@ -4437,7 +4583,18 @@ class Verifier {
                  generated.insert(to.value).second,
              "instance renamed map is not one-to-one");
         const auto &a = symbol(from), &b = symbol(to);
-        need(originals.count(from.value) && a.definition &&
+        need(originals.count(from.value),
+             "renamed source is not an original template-owned symbol");
+        if (capture_local_symbols.count(from.value)) {
+          need(a.kind == modules::SymbolKind::value &&
+                   b.kind == modules::SymbolKind::value &&
+                   a.name == b.name && a.module == b.module &&
+                   !a.definition && !b.definition && !a.declaration &&
+                   !b.declaration,
+               "capture local rename is not a definitionless value copy");
+          continue;
+        }
+        need(a.definition &&
                  original_declarations.at(std::make_tuple(
                      a.definition->module.value, a.definition->file,
                      a.definition->node.value)) == from,
@@ -4469,6 +4626,17 @@ class Verifier {
                  renamed.at(t.function.parameters[p].symbol.value) ==
                      f.parameters[p].symbol,
              "instance parameter mapping mismatch");
+      need(f.captures.size() == t.function.captures.size(),
+           "instance capture count differs from template");
+      for (size_t c = 0; c < f.captures.size(); ++c) {
+        const auto &before = t.function.captures[c];
+        const auto &after = f.captures[c];
+        need(before.origin == after.origin &&
+                 renamed.count(before.local.value) &&
+                 renamed.at(before.local.value) == after.local &&
+                 substitute(before.type, sub, substituted) == after.type,
+             "instance capture binding mapping mismatch");
+      }
       // Every local and pattern symbol belongs to this instance's map.
       for (const auto &[sid, l] : locals)
         if (l.function == i.symbol)
@@ -5052,7 +5220,10 @@ class Verifier {
                      std::get<ForeignRead>(n.data).access ==
                          ForeignAccessKind::slice_place)))) ||
                  (kind == AstKind::ForIn && n.kind() == NodeKind::for_in) ||
-                 (kind == AstKind::Unary && n.kind() == NodeKind::move) ||
+                 (kind == AstKind::Unary &&
+                  (n.kind() == NodeKind::move ||
+                   (n.kind() == NodeKind::function_value &&
+                    std::get<FunctionValue>(n.data).move_capture))) ||
                  (index_syntax(file.node(n.source.node.node)) &&
                   (n.kind() == NodeKind::index_read ||
                    n.kind() == NodeKind::index_place ||
@@ -5080,7 +5251,11 @@ class Verifier {
     for (const auto &n : m.nodes)
       if (scope(n.scope).function == f.symbol)
         owning |= n.kind() == NodeKind::move || n.kind() == NodeKind::for_in ||
-                  classify_value(m, n.type).needs_drop;
+                  // A function value is owning for classification/IR, but it
+                  // adds no source owning-expression/cleanup statement. Keep
+                  // the existing scalar-builder source gate unchanged.
+                  (n.kind() != NodeKind::function_value &&
+                   classify_value(m, n.type).needs_drop);
     if (expected.empty() && !owning)
       return; // preserve existing scalar builder lowering
     const auto &syntax_function = file.node(ref.node);
@@ -5308,6 +5483,198 @@ class Verifier {
     fail("function literal has no matching enclosing specialization");
   }
 
+  // Independent free-variable recomputation: collect value occurrences in
+  // source order whose declaration lies outside the literal's AST subtree.
+  std::vector<SymbolId> capture_origins(modules::NodeRef literal) const {
+    const auto &file =
+        *m.resolved->project->module(literal.module).files.at(literal.file);
+    std::set<uint64_t> subtree;
+    std::vector<AstNodeId> pending{literal.node};
+    while (!pending.empty()) {
+      check_cancelled(stop);
+      auto id = pending.back();
+      pending.pop_back();
+      if (!subtree.insert(id.value).second)
+        continue;
+      const auto &node = file.node(id);
+      pending.insert(pending.end(), node.children.begin(), node.children.end());
+    }
+    std::vector<const modules::Occurrence *> found;
+    for (const auto &occurrence : m.resolved->occurrences) {
+      const auto &ref = occurrence.source;
+      if (ref.module != literal.module || ref.file != literal.file ||
+          !subtree.count(ref.node.value))
+        continue;
+      if (symbol(occurrence.symbol).kind != modules::SymbolKind::value)
+        continue;
+      found.push_back(&occurrence);
+    }
+    std::sort(found.begin(), found.end(), [](const auto *a, const auto *b) {
+      if (a->span.begin_byte != b->span.begin_byte)
+        return a->span.begin_byte < b->span.begin_byte;
+      return a->source.node.value < b->source.node.value;
+    });
+    std::vector<SymbolId> result;
+    std::set<uint64_t> seen;
+    for (const auto *occurrence : found) {
+      const auto &declaration = symbol(occurrence->symbol);
+      bool inside = false;
+      if (declaration.definition &&
+          declaration.definition->module == literal.module &&
+          declaration.definition->file == literal.file)
+        inside = subtree.count(declaration.definition->node.value) != 0;
+      if (inside || !seen.insert(occurrence->symbol.value).second)
+        continue;
+      result.push_back(occurrence->symbol);
+    }
+    return result;
+  }
+  SymbolId capture_source_origin(SymbolId id) const {
+    for (const auto &instance : m.instances)
+      for (auto [from, to] : instance.renamed)
+        if (to == id)
+          return from;
+    return id;
+  }
+  const CaptureBinding *function_capture(const HirFunction &f,
+                                         SymbolId origin) const {
+    for (const auto &capture : f.captures)
+      if (capture.origin == origin)
+        return &capture;
+    return nullptr;
+  }
+  // Recompute one literal function value's capture schema from the real
+  // source tree and the independently verified lambda entry. Submitted
+  // captures/move_capture are compared, never trusted.
+  void check_literal_function_value(const HirNode &n, const FunctionValue &v,
+                                    modules::NodeRef literal_ref) const {
+    const auto owner = scope(n.scope).function;
+    const auto expected = source_lambda_value(literal_ref, owner);
+    need(v.symbol == expected.symbol && v.type_args == expected.type_args,
+         "function literal identity differs from its enclosing "
+         "specialization");
+    auto target = functions.find(v.symbol.value);
+    need(target != functions.end() && target->second,
+         "capturing function value has no HIR lambda entry");
+    const auto &lambda = *target->second;
+    need(lambda.captures.size() == v.captures.size(),
+         "function value capture count differs from the lambda entry");
+    need(n.children.size() == v.captures.size(),
+         "function value capture child count");
+    const auto creator = functions.find(owner.value);
+    need(creator != functions.end() && creator->second,
+         "function value creator has no HIR entry");
+    const auto &creator_function = *creator->second;
+    for (size_t i = 0; i < v.captures.size(); ++i) {
+      const auto &source = v.captures[i];
+      const auto &binding = lambda.captures[i];
+      need(source.origin == binding.origin && source.type == binding.type,
+           "function value capture order/origin/type differs from the lambda "
+           "entry");
+      const bool dependent = type_contains_parameter(m, source.type);
+      const bool owning =
+          dependent || classify_value(m, source.type).needs_drop;
+      const bool expected_move = v.move_capture && owning;
+      need(source.move == expected_move,
+           "capture move intent differs from the real function value mode");
+      if (!expected_move && !dependent &&
+          !ordinary_copyable(m, source.type))
+        need(false, "ordinary function capture type is not copyable");
+      if (const auto *outer = function_capture(creator_function,
+                                               source.origin)) {
+        need(source.source == outer->local,
+             "capture source is not the creator's matching capture local");
+      } else {
+        need(capture_source_origin(source.source) ==
+                 capture_source_origin(source.origin),
+             "capture source is not the creator binding for its origin");
+        auto found = locals.find(source.source.value);
+        need(found != locals.end() && found->second.function == owner,
+             "capture source is not a creator-local binding");
+      }
+      const auto &child = node(n.children[i]);
+      need(child.type == source.type, "capture child type");
+      if (expected_move) {
+        const auto *move = std::get_if<Move>(&child.data);
+        need(move && move->binding &&
+                 *move->binding == source.source &&
+                 child.children.empty(),
+             "owning capture child is not a synthetic source move");
+      } else {
+        const auto *read = std::get_if<Read>(&child.data);
+        need(read && read->symbol == source.source &&
+                 child.children.empty(),
+             "copied capture child is not a creator source read");
+      }
+    }
+  }
+  // A bound value method stores one receiver child. Its callable signature is
+  // the real method signature without the first Self parameter.
+  void check_bound_method_value(const HirNode &n,
+                                const FunctionValue &v) const {
+    need(v.captures.empty() && !v.move_capture && v.bound.has_value(),
+         "bound function value has inconsistent capture metadata");
+    need(n.children.size() == 1, "bound function value receiver count");
+    const auto &receiver = node(n.children[0]);
+    need(receiver.type == v.bound->type,
+         "bound receiver type differs from its schema");
+    const auto full_id = instantiated_signature(v.symbol, v.type_args);
+    const auto &full = type(full_id);
+    need(!full.parameters.empty(), "bound method has no Self parameter");
+    const auto self = full.parameters.front();
+    need(self.type == v.bound->type && self.mode == v.bound->mode &&
+             (self.mode == ParamMode::ordinary ||
+              self.mode == ParamMode::move),
+         "bound method Self type/mode differs from its declaration");
+    need(ordinary_copyable(m, v.bound->type),
+         "bound receiver type is not ordinary-copyable");
+    Type trimmed = full;
+    trimmed.parameters.erase(trimmed.parameters.begin());
+    need(type(n.type) == trimmed, "bound method value type mismatch");
+    auto origin = v.symbol;
+    if (auto instance = instances.find(v.symbol.value);
+        instance != instances.end())
+      origin = instance->second->origin;
+    const auto *impl = method_impl(origin);
+    Substitutions match;
+    need(std::find(impl->methods.begin(), impl->methods.end(), origin) !=
+             impl->methods.end() &&
+             matches(impl->self_type, v.bound->type, match),
+         "bound method receiver does not select its impl");
+    const auto &file = *m.resolved->project->module(n.source.node.module)
+                            .files.at(n.source.node.file);
+    auto source = n.source.node;
+    auto ast = file.node(source.node);
+    while (ast.kind == AstKind::Parenthesized) {
+      need(!ast.children.empty(), "bound method source wrapper");
+      source.node = ast.children.at(0);
+      ast = file.node(source.node);
+    }
+    need(ast.kind == AstKind::Member && ast.children.size() == 1,
+         "bound method source is not a value Member");
+    const auto name = std::string(file.tokens[ast.token_end - 1].spelling);
+    need(symbol(origin).name == name,
+         "bound method source name differs from its target");
+    auto base = source;
+    base.node = ast.children.front();
+    auto base_ast = file.node(base.node);
+    while (base_ast.kind == AstKind::Parenthesized) {
+      need(!base_ast.children.empty(), "bound receiver wrapper");
+      base.node = base_ast.children.at(0);
+      base_ast = file.node(base.node);
+    }
+    need(same_ref(receiver.source.node, base),
+         "bound receiver child differs from the Member base");
+    if (base_ast.kind == AstKind::Unary &&
+        file.tokens.at(base_ast.token_begin).spelling == "move") {
+      const auto *move = std::get_if<Move>(&receiver.data);
+      need(move && move->binding,
+           "move-bound receiver is not a source binding move");
+    } else {
+      need(!std::get_if<Move>(&receiver.data),
+           "ordinary bound receiver was replaced by a move");
+    }
+  }
   void function_value_source(const HirNode &n) const {
     auto origin = [&](SymbolId id) {
       for (const auto &i : m.instances)
@@ -5318,12 +5685,6 @@ class Verifier {
     auto value = std::get_if<FunctionValue>(&n.data);
     if (!value)
       return;
-    // The appended reference-values fields are compiled schema, but the
-    // creator/lambda source and ownership paths are not implemented yet. Any
-    // nondefault metadata here is malformed rather than silently emitted as a
-    // noncapturing function value.
-    need(value->captures.empty() && !value->move_capture && !value->bound,
-         "captured or bound function value has no verified source path");
     const auto &file = *m.resolved->project->module(n.source.node.module)
                             .files.at(n.source.node.file);
     auto r = n.source.node;
@@ -5335,14 +5696,38 @@ class Verifier {
       r.node = ast.children.at(0);
       ast = file.node(r.node);
     }
+    bool move_literal = false;
+    if (ast.kind == AstKind::Unary &&
+        file.tokens.at(ast.token_begin).spelling == "move") {
+      need(ast.children.size() == 1, "move func source arity");
+      move_literal = true;
+      r.node = ast.children.front();
+      ast = file.node(r.node);
+      while (ast.kind == AstKind::Parenthesized ||
+             ast.kind == AstKind::BracketItem ||
+             ast.kind == AstKind::NeutralBracket) {
+        need(!ast.children.empty(), "move func literal wrapper");
+        r.node = ast.children.front();
+        ast = file.node(r.node);
+      }
+    }
     if (ast.kind == AstKind::FunctionLiteral) {
-      const auto expected = source_lambda_value(r, scope(n.scope).function);
-      need(value->symbol == expected.symbol &&
-               value->type_args == expected.type_args,
-           "function literal identity differs from its enclosing "
-           "specialization");
+      need(value->move_capture == move_literal,
+           "function value move_capture differs from its real source");
+      need(!value->bound,
+           "literal function value cannot also bind a receiver");
+      check_literal_function_value(n, *value, r);
       return;
     }
+    need(!move_literal, "move func source is not a function literal");
+    need(!value->move_capture,
+         "plain function value cannot claim move capture");
+    if (value->bound) {
+      check_bound_method_value(n, *value);
+      return;
+    }
+    need(value->captures.empty(),
+         "captured function value has no verified literal source");
     if (auto method = source_method_member(n.source.node)) {
       if (auto prototype = trait_prototype(value->symbol))
         check_template_method_value_source(n, *value, *prototype->first,
@@ -5615,7 +6000,8 @@ class Verifier {
     std::set<uint64_t> owning_functions;
     for (const auto &n : m.nodes)
       if (n.kind() == NodeKind::move || n.kind() == NodeKind::for_in ||
-          classify_value(m, n.type).needs_drop)
+          (n.kind() != NodeKind::function_value &&
+           classify_value(m, n.type).needs_drop))
         owning_functions.insert(scope(n.scope).function.value);
     auto origin = [&](SymbolId id) {
       for (const auto &i : m.instances)
@@ -5623,6 +6009,17 @@ class Verifier {
           if (to == id)
             return from;
       return id;
+    };
+    auto capture_local_for = [&](SymbolId owner,
+                                 SymbolId occurrence)
+        -> std::optional<SymbolId> {
+      auto found = functions.find(owner.value);
+      if (found == functions.end() || !found->second)
+        return std::nullopt;
+      if (const auto *capture =
+              function_capture(*found->second, occurrence))
+        return capture->local;
+      return std::nullopt;
     };
     for (size_t i = 0; i < m.nodes.size(); ++i) {
       const auto &n = m.nodes[i];
@@ -5700,6 +6097,26 @@ class Verifier {
         }
       }
       if (auto mv = std::get_if<Move>(&n.data)) {
+        bool synthetic_capture = false;
+        if (mv->binding && parents[i]) {
+          const auto &parent = node(*parents[i]);
+          if (parent.kind() == NodeKind::function_value) {
+            const auto &value = std::get<FunctionValue>(parent.data);
+            if (value.move_capture)
+              for (const auto &capture : value.captures)
+                if (capture.move && capture.source == *mv->binding)
+                  synthetic_capture = true;
+          }
+        }
+        if (synthetic_capture) {
+          const auto local = locals.find(mv->binding->value);
+          need(local != locals.end() && !local->second.read_only,
+               "synthetic capture move source is not a mutable creator "
+               "binding");
+          read = mv->binding;
+          need(ast.kind == AstKind::Name,
+               "synthetic capture move source is not a name");
+        } else {
         need(ast.kind == AstKind::Unary &&
                  file.tokens.at(ast.token_begin).spelling == "move",
              "move lost source marker");
@@ -5738,6 +6155,7 @@ class Verifier {
           source_input(n.children[0], r.node,
                        "computed move operand differs from source");
         }
+        }
       }
       if (read) {
         unwrap();
@@ -5745,8 +6163,17 @@ class Verifier {
         for (const auto &o : m.resolved->occurrences)
           if (same_ref(o.source, r))
             actual = o.symbol;
-        need(actual && *actual == origin(*read),
-             "owning read/move source identity differs from resolver");
+        const auto owner = scope(n.scope).function;
+        if (actual) {
+          if (auto mapped = capture_local_for(owner, *actual))
+            need(*read == *mapped,
+                 "owning read/move capture local identity differs from the "
+                 "lambda mapping");
+          else
+            need(*actual == origin(*read),
+                 "owning read/move source identity differs from resolver");
+        } else
+          need(false, "owning read/move source identity differs from resolver");
       }
       if (function_constant_read) {
         auto actual = resolved_source(n.source.node);
@@ -6125,6 +6552,8 @@ class Verifier {
            "binding out of scope or used before initialization");
       need(n.type == l.type && (n.kind() != NodeKind::place || l.writable),
            "binding type/writability mismatch");
+      need(!(l.read_only && n.kind() == NodeKind::move),
+           "read-only capture cannot be moved");
     }
     // Postorder without recursive C++ calls. The traversal already rejected
     // DAGs/cycles.
@@ -6331,10 +6760,6 @@ public:
       const auto &f = *fp;
       check_cancelled(stop);
       source(f.source);
-      // Lambda capture locals have no source definition and their environment
-      // is not verified by this stage. A nonempty list can only be forged.
-      need(f.captures.empty(),
-           "HirFunction captures have no verified source/ownership path");
       auto ast_kind = project.modules[f.source.node.module.value]
                           .files[f.source.node.file]
                           ->node(f.source.node.node)
@@ -6391,6 +6816,39 @@ public:
                  .second,
              "duplicate parameter symbol");
       }
+      if (ast_kind == AstKind::FunctionLiteral) {
+        const auto expected = capture_origins(f.source.node);
+        need(expected.size() == f.captures.size(),
+             "HirFunction capture count/order differs from source free "
+             "variables");
+        for (size_t i = 0; i < expected.size(); ++i)
+          need(f.captures[i].origin == expected[i],
+               "HirFunction capture origin/order differs from source free "
+               "variables");
+      } else
+        need(f.captures.empty(),
+             "ordinary function cannot declare capture bindings");
+      if (!f.captures.empty()) {
+        std::set<uint64_t> origins, locals_seen;
+        for (const auto &capture : f.captures) {
+          const auto &origin = symbol(capture.origin);
+          need(origin.kind == modules::SymbolKind::value &&
+                   origins.insert(capture.origin.value).second,
+               "capture origin is not a unique value binding");
+          const auto &local = symbol(capture.local);
+          need(local.kind == modules::SymbolKind::value &&
+                   !local.definition && !local.declaration &&
+                   locals_seen.insert(capture.local.value).second,
+               "capture local is not a fresh definitionless value binding");
+          valid_type(capture.type, allowed(f.symbol));
+          need(locals
+                   .emplace(capture.local.value,
+                            Local{capture.type, f.scope, f.symbol, false, 0,
+                                  true})
+                   .second,
+               "duplicate capture local identity");
+        }
+      }
     }
     // Validate all edges before traversing so bad indices cannot escape via
     // at/UB.
@@ -6445,12 +6903,16 @@ public:
       need(used, "orphan scope");
     uses_and_flow();
     ownership_sources();
-    // Producer ownership data is not otherwise rebuilt here. Captured lambda
-    // locals need the capture-aware ownership path that this stage does not
-    // have, so a forged flag must not pass as an ordinary local lifetime.
     for (const auto &local : m.ownership.locals)
-      need(!local.read_only_capture,
-           "read-only capture lifetime has no verified ownership path");
+      if (local.read_only_capture) {
+        bool found = false;
+        for (const auto *f : all_functions)
+          for (const auto &capture : f->captures)
+            if (capture.local == local.symbol &&
+                capture.type == local.type)
+              found = true;
+        need(found, "read-only capture lifetime has no lambda capture entry");
+      }
     effects_and_exits();
     auto ownership = detail::verify_ownership(m, stop);
     if (ownership.state == PhaseState::cancelled)
@@ -6523,6 +6985,12 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         (m.config.backend == Backend::native ||
          m.config.backend == Backend::python) &&
         m.config.word_bits == 64;
+    // Weak handle encodings are defined for the 64-bit profiles only. The
+    // source rules are backend-neutral; the emitters are separate owners.
+    const bool weak_values =
+        (m.config.backend == Backend::native ||
+         m.config.backend == Backend::python) &&
+        m.config.word_bits == 64;
     const bool c_values =
         m.config.backend == Backend::native && m.config.word_bits == 64;
     auto c_value = [](TypeKind kind) {
@@ -6564,8 +7032,11 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       }
       if (!checked_types.insert(id.value).second)
         return true;
-      if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice) {
+      if (t.kind == TypeKind::Vec || t.kind == TypeKind::Slice ||
+          t.kind == TypeKind::Weak) {
         if (t.kind == TypeKind::Slice && !slice_values)
+          return false;
+        if (t.kind == TypeKind::Weak && !weak_values)
           return false;
         if (!ownership_values || t.type_args.size() != 1)
           return false;
@@ -6630,8 +7101,11 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
               return false;
             continue;
           }
-          if (value.kind == TypeKind::Vec || value.kind == TypeKind::Slice) {
+          if (value.kind == TypeKind::Vec || value.kind == TypeKind::Slice ||
+              value.kind == TypeKind::Weak) {
             if (value.kind == TypeKind::Slice && !slice_values)
+              return false;
+            if (value.kind == TypeKind::Weak && !weak_values)
               return false;
             if (!ownership_values || value.type_args.size() != 1)
               return false;
@@ -6713,6 +7187,9 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
                          [&](const auto &spec) { return spec.operation == *call->system; }) &&
             !(slice_values &&
               std::any_of(slice_system_operations.begin(), slice_system_operations.end(),
+                          [&](const auto &spec) { return spec.operation == *call->system; })) &&
+            !(weak_values &&
+              std::any_of(weak_system_operations.begin(), weak_system_operations.end(),
                           [&](const auto &spec) { return spec.operation == *call->system; }))) {
           unavailable(n.source, "system operations require the Native/64 profile");
           return r;

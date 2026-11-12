@@ -1,0 +1,39 @@
+package app;
+
+import "std/box" as box;
+import "std/option" as option;
+import "std/weak" as weak;
+
+func empty_of[T]() Weak[T] {
+    return weak.empty[T]();
+}
+
+func weak_of[T](value T) Weak[T] {
+    return weak.downgrade[T](value);
+}
+
+func main() i32 {
+    let empty_weak Weak[Vec[i32]] = empty_of[Vec[i32]]();
+    switch weak.upgrade(empty_weak) {
+    case option.Option.Some(strong):
+        return 1;
+    case option.Option.None:
+    }
+    let values Vec[i32] = [11];
+    let w Weak[Vec[i32]] = weak_of[Vec[i32]](values);
+    switch weak.upgrade(w) {
+    case option.Option.Some(strong):
+        if strong[0] != 11 { return 2; }
+    case option.Option.None:
+        return 3;
+    }
+    let cell box.Box[i32] = box.new[i32](7);
+    let wb Weak[box.Box[i32]] = weak_of[box.Box[i32]](cell);
+    switch weak.upgrade(wb) {
+    case option.Option.Some(strong):
+        if box.get(strong) != 7 { return 4; }
+    case option.Option.None:
+        return 5;
+    }
+    return 0;
+}

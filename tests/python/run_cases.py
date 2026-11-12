@@ -142,7 +142,6 @@ UNSUPPORTED_SOURCES = {
     'float-comparison': 'func main() i32 {var x f64=1.0;let y=x==x;return 0;}',
     'string': 'func main() {let x="hello";}',
     'vec': 'func main() {let x=[1,2];}',
-    'capturing-lambda': 'func main() {let x i32=1;let f=func() i32 {return x;};}',
 }
 
 SOURCE_REJECTIONS = {
@@ -154,6 +153,16 @@ SOURCE_REJECTIONS = {
 # Keep the old source bytes and execute the now-supported operations.
 for _ident in ('float-arithmetic', 'float-comparison', 'vec'):
     EXTRA_SOURCES[_ident] = UNSUPPORTED_SOURCES.pop(_ident)
+
+# Capturing lambdas are now emitted and executed by the real Python backend.
+EXTRA_SOURCES['capturing-lambda'] = '''
+func main() i32 {
+    var x i32=1;
+    let f=func() i32 {return x;};
+    x=2;
+    if f()!=1 {return 1;}
+    return 0;
+}'''
 
 def command(argv, **kwargs):
     env = dict(os.environ, PYTHONDONTWRITEBYTECODE='1', PYTHONNOUSERSITE='1')

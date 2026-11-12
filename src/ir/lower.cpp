@@ -46,9 +46,25 @@ class Lower {
     f.blocks[current.value].instructions.push_back(std::move(i));
   }
   LocalSlotId owner_slot(hir::OwnerRef ref) const {
-    if (ref.kind == hir::OwnerKind::binding) return slots.at(SymbolId{ref.identity});
-    if (ref.kind == hir::OwnerKind::iteration) return iterations.at(HirNodeId{ref.identity});
-    return temporaries.at(HirNodeId{ref.identity});
+    if (ref.kind == hir::OwnerKind::binding) {
+      auto found = slots.find(SymbolId{ref.identity});
+      if (found == slots.end())
+        throw std::runtime_error("missing binding owner slot " +
+                                 std::to_string(ref.identity));
+      return found->second;
+    }
+    if (ref.kind == hir::OwnerKind::iteration) {
+      auto found = iterations.find(HirNodeId{ref.identity});
+      if (found == iterations.end())
+        throw std::runtime_error("missing iteration owner slot " +
+                                 std::to_string(ref.identity));
+      return found->second;
+    }
+    auto found = temporaries.find(HirNodeId{ref.identity});
+    if (found == temporaries.end())
+      throw std::runtime_error("missing temporary owner slot " +
+                               std::to_string(ref.identity));
+    return found->second;
   }
   void begin_borrow(hir::OwnerRef owner, ValueId value, SourceSpan source) {
     effect(Op::begin_borrow, owner_slot(owner), source, {value}, owner);
@@ -426,10 +442,14 @@ class Lower {
     case hir::NodeKind::place:
       return access(Op::address, slots.at(std::get<hir::Place>(n.data).symbol),
                     i.source);
-    case hir::NodeKind::function_value:
+    case hir::NodeKind::function_value: {
       i.op = Op::function;
+      i.origin = id;
       i.function = std::get<hir::FunctionValue>(n.data).symbol;
+      for (auto child : n.children) i.inputs.push_back(expr(child));
+      for (auto child : n.children) take(child);
       return emit(i);
+    }
     case hir::NodeKind::struct_init:
     case hir::NodeKind::enum_init: {
       const bool structure = n.kind() == hir::NodeKind::struct_init;
@@ -518,6 +538,31 @@ class Lower {
         callee = emit(fn);
       }
       const size_t argument_offset = system || c_foreign ? 0 : 1;
+      // A callee read from a real binding is borrowed rather than copied; a
+      // computed owning callee is saved as a temporary and borrowed too. Both
+      // happen before argument evaluation and use the recorded end_borrow on
+      // success and typed-error exits.
+      if (c.callee && owning(node(*c.callee).type)) {
+        std::optional<hir::OwnerRef> owner;
+        if (auto temporary = temporaries.find(*c.callee);
+            temporary != temporaries.end())
+          owner = hir::OwnerRef{hir::OwnerKind::temporary, c.callee->value};
+        else {
+          auto base = *c.callee;
+          while (node(base).kind() == hir::NodeKind::field_read ||
+                 node(base).kind() == hir::NodeKind::field_place)
+            base = node(base).children[0];
+          std::optional<SymbolId> root;
+          if (auto *read = std::get_if<hir::Read>(&node(base).data))
+            root = read->symbol;
+          else if (auto *place = std::get_if<hir::Place>(&node(base).data))
+            root = place->symbol;
+          if (root && slots.count(*root))
+            owner = hir::OwnerRef{hir::OwnerKind::binding, root->value};
+        }
+        if (owner)
+          begin_borrow(*owner, callee, i.source);
+      }
       i.inputs.resize(c.args.size() + argument_offset);
       if (!system && !c_foreign) i.inputs[0] = callee;
       // Evaluation follows source order. Only the saved values are reordered.
@@ -960,6 +1005,13 @@ public:
       }
       // Discard labels do not affect position or SymbolId identity.
       slots.emplace(fn.parameters[p].symbol, local);
+    }
+    // Capture locals are initialized by the entry prologue from the single
+    // environment row. They are borrowed slots: no owner and no drop.
+    for (const auto &capture : fn.captures) {
+      auto local = slot(capture.type);
+      f.slots.back().binding = capture.local;
+      slots.emplace(capture.local, local);
     }
     current = block();
     stmt(fn.body);

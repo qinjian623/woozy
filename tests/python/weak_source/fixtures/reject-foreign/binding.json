@@ -1,0 +1,20 @@
+{
+  "schema_version": 1,
+  "contract": "compiler-dev/1",
+  "review_status": "draft_requires_conformance",
+  "allowed_backends": ["python"],
+  "conformance_required": [],
+  "package_requirements": [
+    {"package": "weakhost", "version_policy": "test fixture only"}
+  ],
+  "modules": [
+    {"logical_path": "std/py", "host_module": "langrt", "provider": "language_runtime"},
+    {"logical_path": "host", "host_module": "weakhost", "provider": "python_package"}
+  ],
+  "types": [
+    {"id": "lang.py.Error", "module": "std/py", "name": "Error", "kind": "runtime_error", "host_attribute": ["Error"], "copy": "error_payload_copy"},
+    {"id": "weakhost.Foreign", "module": "host", "name": "Foreign", "kind": "host_reference", "host_attribute": ["Foreign"], "copy": "shared_reference"}
+  ],
+  "values": [],
+  "callables": []
+}

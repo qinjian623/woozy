@@ -108,9 +108,16 @@ void invalid_recomputed(hir::HirModule m, const std::string &name,
                         const auto &change) {
   change(m);
   auto derived = hir::detail::produce_ownership(m, {});
-  need(derived.success(),
-       "recomputed ownership failed before verification: " + name + "\n" +
-           messages(derived));
+  if (!derived.success()) {
+    // Function values are owning values after C5, so a corruption in an
+    // otherwise scalar function can now be rejected by the ownership
+    // producer before the independent verifier runs. That is still a
+    // rejection, not an accepted HIR module.
+    need(derived.failure == FailureKind::source && !derived.diagnostics.empty(),
+         "recomputed ownership failed with an internal error: " + name + "\n" +
+             messages(derived));
+    return;
+  }
   auto r = hir::verify_types(m);
   need(!r.success() && !r.value && r.failure == FailureKind::internal &&
            has(r, "E_IR_INVALID"),
@@ -120,9 +127,15 @@ void invalid_recomputed_published(hir::HirModule m, const std::string &name,
                                   const auto &change) {
   change(m);
   auto derived = hir::detail::produce_ownership(m, {});
-  need(derived.success(),
-       "recomputed ownership failed before verification: " + name + "\n" +
-           messages(derived));
+  if (!derived.success()) {
+    // Function values entered ownership after C5, so a corruption in an
+    // otherwise scalar module may be rejected by the producer first. That is
+    // a rejection of corrupt HIR, not a publication of it.
+    need(derived.failure == FailureKind::source && !derived.diagnostics.empty(),
+         "recomputed ownership failed with an internal error: " + name + "\n" +
+             messages(derived));
+    return;
+  }
   auto r = hir::verify_types(m);
   need(!r.success() && !r.value && r.failure == FailureKind::internal &&
            has(r, "E_IR_INVALID"),
@@ -2885,9 +2898,9 @@ void method_move(const fs::path &root) {
       "E_OWNERSHIP_USE_AFTER_MOVE");
   unsupported(prefix + "func main()i32{let h=H(items:[1],marker:0);"
                        "let r=h.take(move h.items);return r[0];}");
-  bad(prefix + "func main()i32{let h=H(items:[1],marker:0);"
-               "let f=h.take;return 0;}",
-      "E_TYPE_MISMATCH");
+  // A value method's Self-mode binding is now a real bound function value.
+  good(prefix + "func main()i32{let h=H(items:[1],marker:0);"
+                "let f=h.take;return 0;}");
 
   unsupported(
       "struct H{marker i32;} impl H{"
@@ -3936,11 +3949,10 @@ return 0;}
            "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
            "return b.accept(pass(move b));}",
       "E_CALL_ARGUMENT");
-  bad(box + "impl[T] Box[T]{"
-           "func take(self Self,value move T)T{return move value;}} "
-           "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
-           "let f=b.take;return 0;}",
-      "E_TYPE_MISMATCH");
+  good(box + "impl[T] Box[T]{"
+            "func take(self Self,value move T)T{return move value;}} "
+            "func main()i32{let b=Box[i32](value:1,items:[1],marker:0);"
+            "let f=b.take;return 0;}");
 }
 
 void generic_impl_own_method_move(const fs::path &root) {
@@ -7150,10 +7162,12 @@ func main() i32 {
        "struct Box[U]{value U;} impl[U] V for Box[U]{"
        "func bad(self Self,f func(inout Self,Self)Self){}} "
        "func main()i32{return 0;}");
-  good("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
-       "struct Box[U]{value U;} impl V for Box[func() i32]{"
-       "func bad(self Self,f func(inout Self,Self)Self){}} "
-       "func main()i32{return 0;}");
+  // Approved C5: Function is owning and never POD inout, so a concrete
+  // Box[func() i32] Self is not an inout data aggregate.
+  unsupported("trait V{func bad(self Self,f func(inout Self,Self)Self);}"
+              "struct Box[U]{value U;} impl V for Box[func() i32]{"
+              "func bad(self Self,f func(inout Self,Self)Self){}} "
+              "func main()i32{return 0;}");
 
   // Actual first-position inout Self is deferred at the trait declaration
   // and checked with concrete POD data at this i32 application. A callback
@@ -7212,10 +7226,12 @@ func main() i32 {
       "f func(inout Self,Self)Self){}} "
       "func main()i32{let o i32=1;let m=o.bad;return 0;}",
       "E_TYPE_MISMATCH");
-  bad("func main()i32{var x i32=1;"
-      "let f func(inout i32,i32)i32="
-      "func(slot inout i32,value i32)i32{slot=x;return slot;};"
-      "return 0;}", "E_CAPABILITY_UNAVAILABLE");
+  // Capturing a scalar into a function value with a separate inout parameter
+  // is now valid; the capture itself is an ordinary copy.
+  good("func main()i32{var x i32=1;"
+       "let f func(inout i32,i32)i32="
+       "func(slot inout i32,value i32)i32{slot=x;return slot;};"
+       "return 0;}");
   bad("trait V{func bad(self Self,f func(inout Self,Self)Self,"
       "slot inout Self)Self;}"
       "impl V for i32{func bad(self Self,f func(inout Self,Self)Self,"
@@ -10825,7 +10841,7 @@ void aggregate_inout_validation() {
 
   const std::string types =
       "struct Empty{} struct Pair{x i32;y i32;}"
-      "struct Leaf{empty Empty;unit Unit;callback func(i32)i32;pad u64;}"
+      "struct Leaf{empty Empty;unit Unit;pad u64;}"
       "enum Choice{None;Value(v i32);Group(pair Pair,tag i32);} ";
   auto aggregate = good(types +
       "func noop(){} func inc(x i32)i32{return x+1;}"
@@ -10833,7 +10849,7 @@ void aggregate_inout_validation() {
       "func replace(slot inout Leaf,value Leaf)i32{let old=slot.pad;"
       "slot=value;return i32(old);}"
       "func main()i32{var a=Leaf(empty:Empty(),unit:noop(),"
-      "callback:inc,pad:1);var b=a;swap(inout a,inout b);"
+      "pad:1);var b=a;swap(inout a,inout b);"
       "var c=Choice.None;var d=Choice.Value(v:2);"
       "swap(inout c,inout d);return 0;}");
   need(hir::verify_types(aggregate).success(),
@@ -10843,7 +10859,7 @@ void aggregate_inout_validation() {
   auto pair = named_type(aggregate, "Pair");
   auto choice = named_type(aggregate, "Choice");
   need(hir::inout_data_type(aggregate, leaf),
-       "Unit/empty/function fields were not accepted inside a POD aggregate");
+       "Unit/empty fields were not accepted inside a POD aggregate");
   need(hir::classify_value(aggregate, leaf).pod_inout,
        "aggregate ValueOps.pod_inout was not updated");
   need(hir::classify_value(aggregate, pair).pod_inout &&
@@ -10880,6 +10896,12 @@ void aggregate_inout_validation() {
   unavailable("func f[T](slot inout T){} func main()i32{"
               "var v Vec[i32]=[1];f(inout v);return 0;}");
   unavailable("struct F{callback func(inout Vec[i32]);} "
+              "func f(slot inout F){} func main()i32{return 0;}");
+  // Approved C5: a Function field is owning and makes the containing value
+  // non-POD, even when every other field is trivial.
+  unavailable("struct F{callback func(i32)i32;pad u64;} "
+              "func f(slot inout F){} func main()i32{return 0;}");
+  unavailable("enum F{Empty;Call(callback func(i32)i32);} "
               "func f(slot inout F){} func main()i32{return 0;}");
 
   bad("struct S{x i32;} func f(slot inout S){} func main()i32{"
@@ -10998,7 +11020,10 @@ void aggregate_inout_validation() {
   const std::string function_cycle =
       "struct Wrap[T]{apply func(Wrap[T])T;value T;}"
       "struct Owner{token i32;} ";
-  auto fixed_cycle = good(function_cycle +
+  // Approved C5: a Function field is owning, so the concrete Wrap[i32] below
+  // is no longer a POD inout aggregate. Keep the negative capability explicit
+  // instead of relying on the old "Function is trivial" classification.
+  unavailable(function_cycle +
       "trait Edit{func apply(self Self,slot inout Wrap[i32],"
       "callback func(inout Wrap[i32])Unit)Unit;}"
       "impl Edit for Owner{func apply(self Self,slot inout Wrap[i32],"
@@ -11008,9 +11033,7 @@ void aggregate_inout_validation() {
       "func main()i32{let owner=Owner(token:100);"
       "var slot=Wrap[i32](apply:read,value:7);owner.apply(inout slot,bump);"
       "if slot.apply(slot)!=12{return 1;}return 0;}");
-  need(hir::verify(fixed_cycle).success(),
-       "fixed callback function cycle was classified as Self-dependent");
-  auto growing_signature = good(
+  unavailable(
       "struct Wrap[T]{factory func()Wrap[Wrap[T]];}"
       "struct Owner{token i32;}"
       "trait Edit{func apply(self Self,slot inout Wrap[i32],"
@@ -11018,16 +11041,12 @@ void aggregate_inout_validation() {
       "impl Edit for Owner{func apply(self Self,slot inout Wrap[i32],"
       "callback func(inout Wrap[i32])Unit)Unit{}}"
       "func main()i32{return 0;}");
-  need(hir::verify(growing_signature).success(),
-       "ordinary growing function signature was rejected as an inout graph");
-  auto recursive_self_callback = good(function_cycle +
+  unavailable(function_cycle +
       "trait Edit{func apply(self Self,"
       "callback func(inout Wrap[i32],inout Self)Unit)Unit;}"
       "impl Edit for Owner{func apply(self Self,"
       "callback func(inout Wrap[i32],inout Self)Unit)Unit{}}"
       "func main()i32{return 0;}");
-  need(hir::verify(recursive_self_callback).success(),
-       "recursive POD Self callback did not publish");
 
   auto wrapped_self = good(
       "struct Wrap[T]{value T;} struct Pair{value i32;} "

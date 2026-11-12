@@ -1,0 +1,60 @@
+package app;
+
+import "std/option" as option;
+import "std/weak" as weak;
+
+struct Holder {
+    cell Weak[Vec[i32]];
+}
+
+enum Wrap {
+    Empty;
+    Some(cell Weak[Vec[i32]]);
+}
+
+func main() i32 {
+    let empty Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    var holder Holder = Holder(cell: empty);
+    var wrap Wrap = Wrap.Empty;
+    var bag Vec[Weak[Vec[i32]]] = [empty];
+    {
+        let values Vec[i32] = [5, 6];
+        let w Weak[Vec[i32]] = weak.downgrade[Vec[i32]](values);
+        holder = Holder(cell: w);
+        let holder_alias = holder;
+        wrap = Wrap.Some(cell: w);
+        let wrap_alias = wrap;
+        bag = [w, empty];
+        let bag_alias = bag;
+        switch weak.upgrade(holder_alias.cell) {
+        case option.Option.Some(strong):
+            if strong[0] != 5 { return 1; }
+        case option.Option.None:
+            return 2;
+        }
+        switch weak.upgrade(bag_alias[0]) {
+        case option.Option.Some(strong):
+            if strong[1] != 6 { return 3; }
+        case option.Option.None:
+            return 4;
+        }
+        switch wrap_alias {
+        case Wrap.Some(cell):
+            switch weak.upgrade(cell) {
+            case option.Option.Some(strong):
+                if strong[0] != 5 { return 5; }
+            case option.Option.None:
+                return 6;
+            }
+        case Wrap.Empty:
+            return 7;
+        }
+    }
+    switch weak.upgrade(holder.cell) {
+    case option.Option.Some(strong):
+        if strong[0] == 5 { return 8; }
+        return 9;
+    case option.Option.None:
+        return 0;
+    }
+}

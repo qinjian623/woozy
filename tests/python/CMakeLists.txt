@@ -103,6 +103,12 @@ add_test(NAME python.slice_source COMMAND "${LANG_PYTHON312}"
   --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/slice-source"
   --python "${LANG_PYTHON312}")
 set_tests_properties(python.slice_source PROPERTIES TIMEOUT 180)
+add_test(NAME python.weak_source COMMAND "${LANG_PYTHON312}"
+  "${CMAKE_CURRENT_LIST_DIR}/weak_source/run_weak_source.py"
+  --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_python_emit>
+  --root "${LANG_PYTHON_TEST_ROOT}" --out "${CMAKE_CURRENT_BINARY_DIR}/weak-source"
+  --python "${LANG_PYTHON312}" --timeout 120)
+set_tests_properties(python.weak_source PROPERTIES TIMEOUT 300)
 add_test(NAME python.language_gc_source COMMAND "${LANG_PYTHON312}"
   "${CMAKE_CURRENT_LIST_DIR}/language_gc/run_language_gc.py"
   --helper $<TARGET_FILE:lang_python_emit> --root "${LANG_PYTHON_TEST_ROOT}"

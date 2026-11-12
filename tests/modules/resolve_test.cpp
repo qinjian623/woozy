@@ -130,7 +130,9 @@ int main() {
   example("package p; trait Hidden {} pub func f[T Hidden](x T) {}", "E_PRIVATE_TYPE_LEAK");
   example("package p; const f = func() { f(); };");
   example("package p; var x = 1;", "E_CAPABILITY_UNAVAILABLE");
-  example("package p; func f() { let x = 1; let g = func() i32 { return x; }; }", "E_CAPABILITY_UNAVAILABLE");
+  // Capturing a lexical local is resolved as a real cross-function value
+  // occurrence; the closure capture itself is checked by Sema/HIR.
+  example("package p; func f() { let x = 1; let g = func() i32 { return x; }; }");
   example("package p; func f() { let g = func(x i32) i32 { return x; }; }");
   SourceManager manager;
   auto p = project(manager, {{"package p; func a() { b(); }", "package p; func b() { a(); }"}});
@@ -178,7 +180,7 @@ int main() {
       check(occurrence.symbol != symbol.id, "literal treated as name reference");
   }
   check(literals == 3, "missing or duplicate literal identities");
-  example("package p; func f() { let a = func(x i32) { let b = func() i32 { return x; }; }; }", "E_CAPABILITY_UNAVAILABLE");
+  example("package p; func f() { let a = func(x i32) { let b = func() i32 { return x; }; }; }");
   std::stop_source stop;
   stop.request_stop();
   r = resolve_project(p, stop.get_token());

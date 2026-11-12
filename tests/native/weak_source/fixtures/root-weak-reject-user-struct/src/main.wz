@@ -1,0 +1,14 @@
+package app;
+
+import "std/weak" as weak;
+
+struct Payload {
+    value i32;
+}
+
+func main() i32 {
+    let payload = Payload(value: 1);
+    // An ordinary by-value struct is not a Weak target.
+    let weak_value Weak[Payload] = weak.downgrade[Payload](payload);
+    return 0;
+}

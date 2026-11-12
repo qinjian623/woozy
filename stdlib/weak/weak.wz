@@ -1,0 +1,28 @@
+package weak;
+
+import "std/option" as option;
+
+// Source-level weak references. A Weak[T] observes a canonical ARC identity
+// without keeping its target alive. Copying a Weak copies its control handle;
+// it is never a strong GC edge. There is no is_alive/is_empty: an empty or
+// invalidated weak target is observed by upgrade returning None.
+
+// empty returns a Weak whose upgrade always returns None.
+pub func empty[T]() Weak[T] {
+    return __woozy_weak_empty[T]();
+}
+
+// downgrade creates a weak handle to an existing canonical target. The target
+// must be a Vec, function value, Box, Thread, Mutex, Condvar, AtomicI64 or
+// ipc.Memory value; ordinary structs, strings and external handles are not
+// weak targets.
+pub func downgrade[T](value T) Weak[T] {
+    return __woozy_weak_downgrade[T](value);
+}
+
+// upgrade returns Some(target) only while the canonical control block is
+// still open. A dead Weak returns None and never resurrects a collected
+// function environment.
+pub func upgrade[T](value Weak[T]) option.Option[T] {
+    return __woozy_weak_upgrade[T](value);
+}

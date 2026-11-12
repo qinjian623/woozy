@@ -2,6 +2,7 @@
 #include "runtime.hpp"
 #include <algorithm>
 #include <iterator>
+#include <map>
 #include <set>
 #include <stdexcept>
 #include <type_traits>
@@ -114,7 +115,14 @@ class Emitter {
   uint64_t capture_work = 0;
   unsigned expression_depth = 0;
   std::set<SymbolId> available;
+  // Lambda capture locals are read-only environment aliases, never a source
+  // binding and never an owning local slot: they must not be dropped at
+  // function exit or read through '.value'.
+  std::set<SymbolId> capture_locals;
   Suite helpers;
+  Suite adapters;
+  std::map<std::string, std::string> bound_adapters;
+  uint64_t bound_adapter_count = 0;
   // Computed owning switch subjects currently held by an enclosing
   // structured try/finally. Their drops are emitted by that finally after
   // the arm block cleanup, so an expression failure handler must never
@@ -124,7 +132,14 @@ class Emitter {
   std::set<uint64_t> temporary_ids;
   std::set<SymbolId> owned_bindings;
   std::set<uint64_t> value_types;
-  bool owned(TypeId id) const { return classify_value(m, id).needs_drop; }
+  bool owned(TypeId id) const {
+    // Function/Weak are owning reference values. The shared classifier still
+    // reports their stage-A result until its reference-values branch lands, so
+    // honour the published ValueKind here without redefining it.
+    auto v = classify_value(m, id);
+    return v.needs_drop || v.kind == ValueKind::function ||
+           v.kind == ValueKind::weak;
+  }
   std::string ops(TypeId id) const { return "_v" + std::to_string(id.value); }
   std::string key(OwnerKind kind, uint64_t id) const {
     return "(" + std::to_string(static_cast<unsigned>(kind)) + ", " +
@@ -159,7 +174,8 @@ class Emitter {
   void local_drops(ScopeId scope, Suite &suite, const HirNode &n) {
     std::vector<LocalLifetime> locals;
     for (auto l : m.ownership.locals)
-      if (l.scope == scope && l.mode == ParamMode::move && owned(l.type))
+      if (l.scope == scope && l.mode == ParamMode::move && owned(l.type) &&
+          !l.read_only_capture && !capture_locals.contains(l.symbol))
         locals.push_back(l);
     std::sort(locals.begin(), locals.end(),
               [](auto a, auto b) { return a.order > b.order; });
@@ -212,7 +228,15 @@ class Emitter {
     else if (t.kind == TypeKind::SignedInt || t.kind == TypeKind::UnsignedInt ||
              t.kind == TypeKind::Float)
       desc = "_rt.ValueType(stride=" + std::to_string(t.bits / 8) + ")";
+    else if (t.kind == TypeKind::Function)
+      desc = "_rt.ValueType('function')";
+    else if (t.kind == TypeKind::Weak)
+      desc = "_rt.ValueType('weak')";
 
+    if (v.kind == ValueKind::function)
+      desc = "_rt.ValueType('function')";
+    if (v.kind == ValueKind::weak)
+      desc = "_rt.ValueType('weak')";
     if (v.kind == ValueKind::foreign_reference ||
         v.kind == ValueKind::foreign_callable)
       desc = "_rt.ValueType('foreign')";
@@ -268,6 +292,73 @@ class Emitter {
     while (node(base).kind() == NodeKind::field_place)
       base = node(base).children[0];
     return node(base).kind() == NodeKind::index_place;
+  }
+  // Weak target projection is selected by the verified canonical declaration,
+  // not by layout or a type-key spelling. Python maps Vec and function values
+  // directly; Box is the one canonical wrapper whose private cell Vec is the
+  // shared identity and must be re-wrapped on upgrade. Native-only handles
+  // remain an explicit capability error rather than a simulated host handle.
+  const modules::Symbol *canonical_nominal(TypeId id, std::string_view path,
+                                         std::string_view name,
+                                         size_t arity) const {
+    const auto &t = type(id);
+    if (t.kind != TypeKind::NominalStruct || t.type_args.size() != arity ||
+        t.declaration.value >= m.resolved->symbols.size())
+      return nullptr;
+    const auto &s = m.resolved->symbols.at(t.declaration.value);
+    if (s.kind != modules::SymbolKind::type || !s.exported || !s.definition ||
+        s.foreign || s.name != name)
+      return nullptr;
+    const auto &module = m.resolved->project->module(s.module);
+    if (module.binding || module.logical_path != path) return nullptr;
+    return &s;
+  }
+  bool canonical_weak_box(TypeId id) const {
+    const auto *s = canonical_nominal(id, "std/box", "Box", 1);
+    if (!s) return false;
+    const NominalDecl *nominal = nullptr;
+    for (const auto &d : m.nominals)
+      if (d.symbol == type(id).declaration) {
+        nominal = &d;
+        break;
+      }
+    if (!nominal || nominal->kind != TypeKind::NominalStruct ||
+        nominal->params.size() != 1 || nominal->fields.size() != 1 ||
+        !nominal->variants.empty())
+      return false;
+    const auto &field = nominal->fields.front();
+    if (field.exported ||
+        m.resolved->symbols.at(field.symbol.value).name != "cell")
+      return false;
+    const auto *field_type = m.types.find(field.type);
+    if (!field_type || field_type->kind != TypeKind::Vec ||
+        field_type->type_args.size() != 1)
+      return false;
+    const auto *element = m.types.find(field_type->type_args[0]);
+    return element && element->kind == TypeKind::TypeParameter &&
+           element->declaration == nominal->params.front().symbol;
+  }
+  bool canonical_weak_target(TypeId id) const {
+    const auto &t = type(id);
+    if (t.kind == TypeKind::Vec || t.kind == TypeKind::Function) return true;
+    if (canonical_weak_box(id)) return true;
+    return canonical_nominal(id, "std/thread", "Thread", 0) ||
+           canonical_nominal(id, "std/sync", "Mutex", 0) ||
+           canonical_nominal(id, "std/sync", "Condvar", 0) ||
+           canonical_nominal(id, "std/sync", "AtomicI64", 0) ||
+           canonical_nominal(id, "std/ipc", "Memory", 0);
+  }
+  TypeId weak_target_type(SystemOperation operation, const HirNode &n) const {
+    if (operation == SystemOperation::weak_upgrade) {
+      const auto &option = type(n.type);
+      if (option.kind != TypeKind::NominalEnum || option.type_args.size() != 1)
+        throw std::logic_error("verified weak.upgrade lost its Option target");
+      return option.type_args.at(0);
+    }
+    const auto &weak = type(n.type);
+    if (weak.kind != TypeKind::Weak || weak.type_args.size() != 1)
+      throw std::logic_error("verified weak operation lost its target");
+    return weak.type_args.at(0);
   }
   const modules::ForeignDeclaration &
   foreign_declaration(ForeignBindingId id) const {
@@ -662,8 +753,10 @@ class Emitter {
                 node(id));
   }
   std::string read(SymbolId s) const {
-    return name(s) +
-           ((cells.contains(s) || owned_bindings.contains(s)) ? ".value" : "");
+    // A capture local is a borrowed row field, not an Owner slot.
+    const bool owner = (cells.contains(s) || owned_bindings.contains(s)) &&
+                       !capture_locals.contains(s);
+    return name(s) + (owner ? ".value" : "");
   }
   std::string binary(BinaryOp op, const std::string &a, const std::string &b,
                      TypeId operand) const {
@@ -693,9 +786,13 @@ class Emitter {
                         n);
           else if constexpr (std::is_same_v<T, StringLiteral>)
             return save(suite, string_literal(v.utf8), n);
-          else if constexpr (std::is_same_v<T, FunctionValue>)
+          else if constexpr (std::is_same_v<T, FunctionValue>) {
+            if (!v.captures.empty() || v.move_capture || v.bound)
+              throw Rejected{"A constant function value cannot capture or "
+                             "bind a receiver",
+                             n.source.span};
             return save(suite, function_name(v.symbol), n);
-          else {
+          } else {
             std::vector<std::string> fields;
             for (const auto &field : v.fields)
               fields.push_back(constant_value(field, suite, n));
@@ -707,6 +804,133 @@ class Emitter {
           }
         },
         value.data);
+  }
+  // The environment is exactly one record row installed into a Vec. Its
+  // element descriptor recurses into the capture field types so copy/drop/
+  // trace of the resulting Vec handle every captured owning value.
+  std::string environment(const std::vector<TypeId> &types,
+                          const std::vector<std::string> &values,
+                          const HirNode &n, Suite &suite) {
+    if (types.empty() || types.size() != values.size())
+      throw std::logic_error("function environment has no matching row");
+    std::vector<std::string> fields;
+    for (auto t : types)
+      fields.push_back(ops(t));
+    auto row = save(suite, tuple(values), n);
+    return save(suite,
+                "_rt.Vec.create(_rt.ValueType('struct', fields=" +
+                    tuple(fields) + "), " + tuple({row}) + ")",
+                n);
+  }
+  // A bound receiver lives in the environment's single row field. An
+  // ordinary Self receives that borrowed field; a move Self gets a fresh
+  // ordinary copy on every invocation, so the adapter never takes or clears
+  // the environment field and a bound Fn stays repeatable/copyable.
+  std::string bound_adapter(const FunctionValue &value, const HirNode &n) {
+    if (!value.bound)
+      throw std::logic_error("unbound function value requested an adapter");
+    const auto &bound = *value.bound;
+    const HirFunction *target = nullptr;
+    for (const auto &f : m.functions)
+      if (f.symbol == value.symbol)
+        target = &f;
+    if (!target)
+      throw std::logic_error("bound method target is not a verified function");
+    const auto &signature = type(target->signature);
+    if (signature.parameters.empty())
+      throw std::logic_error("bound method has no Self parameter");
+    const auto mode = signature.parameters.front().mode;
+    if (bound.mode != mode)
+      throw std::logic_error(
+          "bound receiver mode differs from the method signature");
+    if (mode == ParamMode::inout)
+      throw Rejected{"Python cannot bind an inout-Self method as a function "
+                     "value",
+                     n.source.span};
+    const auto cache = std::to_string(value.symbol.value) + ":" +
+                       std::to_string(static_cast<unsigned>(mode)) + ":" +
+                       std::to_string(bound.type.value);
+    if (auto found = bound_adapters.find(cache);
+        found != bound_adapters.end())
+      return found->second;
+    const auto helper = "_bound" + std::to_string(bound_adapter_count++);
+    std::vector<std::string> parameters{"_env"}, arguments;
+    for (size_t i = 1; i < signature.parameters.size(); ++i) {
+      parameters.push_back("_a" + std::to_string(i - 1));
+      arguments.push_back("_a" + std::to_string(i - 1));
+    }
+    Suite body;
+    std::string receiver = "_env.get(0)[0]";
+    if (mode == ParamMode::move) {
+      // ops.copy retains/replicates the receiver exactly once per call; the
+      // copy, not the environment field, is what the move Self consumes.
+      body.push_back({"_receiver = " + ops(bound.type) + ".copy(" +
+                          receiver + ")",
+                      n.source.span,
+                      false,
+                      {},
+                      {}});
+      receiver = "_receiver";
+    }
+    arguments.insert(arguments.begin(), receiver);
+    body.push_back({"return " + function_name(value.symbol) + "(" +
+                        join(arguments) + ")",
+                    n.source.span,
+                    false,
+                    {},
+                    {}});
+    adapters.push_back({"def " + helper + "(" + join(parameters) + ")",
+                        n.source.span,
+                        true,
+                        std::move(body),
+                        {}});
+    bound_adapters.emplace(cache, helper);
+    return helper;
+  }
+  std::string function_value_expression(const HirNode &n, HirNodeId id,
+                                        Suite &suite) {
+    const auto &value = std::get<FunctionValue>(n.data);
+    if (value.bound) {
+      if (!value.captures.empty() || n.children.size() != 1)
+        throw std::logic_error(
+            "verified bound function value shape changed");
+      auto receiver = expression(n.children[0], suite);
+      auto environment_value = environment(
+          {value.bound->type}, {take(n.children[0], receiver)}, n, suite);
+      return value_save(
+          suite,
+          "_rt.FunctionValue(" + bound_adapter(value, n) + ", " +
+              environment_value + ")",
+          id);
+    }
+    if (value.captures.empty()) {
+      if (!n.children.empty())
+        throw std::logic_error(
+            "verified noncapturing function value gained children");
+      // A noncapturing value keeps the old immutable-function identity. It
+      // still goes through value_save so an owning Function value would get
+      // its temporary owner slot once the shared classifier publishes that.
+      return value_save(suite, function_name(value.symbol), id);
+    }
+    if (n.children.size() != value.captures.size())
+      throw std::logic_error(
+          "verified function value capture arity changed");
+    std::vector<TypeId> types;
+    std::vector<std::string> values;
+    for (size_t i = 0; i < value.captures.size(); ++i) {
+      auto child = n.children[i];
+      auto captured = expression(child, suite);
+      // An owning Read produced its one copy as an owning temporary; a
+      // synthetic move transfer is already an owning temporary. Taking here
+      // installs that exact value once and never copies it again.
+      values.push_back(take(child, captured));
+      types.push_back(value.captures[i].type);
+    }
+    auto environment_value = environment(types, values, n, suite);
+    return value_save(suite,
+                      "_rt.FunctionValue(" + function_name(value.symbol) +
+                          ", " + environment_value + ")",
+                      id);
   }
   std::string expression(HirNodeId id, Suite &suite) {
     if (outlining && expression_depth >= 16)
@@ -753,8 +977,7 @@ class Emitter {
     case NodeKind::place:
       return save(suite, name(std::get<Place>(n.data).symbol), n);
     case NodeKind::function_value:
-      return save(suite, function_name(std::get<FunctionValue>(n.data).symbol),
-                  n);
+      return function_value_expression(n, id, suite);
     case NodeKind::struct_init: {
       const auto &init = std::get<StructInit>(n.data);
       std::vector<std::string> values(init.fields.size());
@@ -916,6 +1139,23 @@ class Emitter {
         }
         const auto *spec = system_operation_spec(*call.system);
         std::string element = "None", tags = "{}";
+        const bool weak_operation =
+            spec->operation == SystemOperation::weak_empty ||
+            spec->operation == SystemOperation::weak_downgrade ||
+            spec->operation == SystemOperation::weak_upgrade;
+        bool weak_box = false;
+        if (weak_operation) {
+          const auto target = weak_target_type(spec->operation, n);
+          weak_box = canonical_weak_box(target);
+          if (!weak_box && !canonical_weak_target(target))
+            throw Rejected{"Python Weak target is not canonical", n.source.span};
+          const auto &target_type = type(target);
+          if (target_type.kind == TypeKind::NominalStruct && !weak_box)
+            throw Rejected{"Python supports Weak only for Vec, function "
+                           "values and std/box.Box; native-only shared handles "
+                           "are unavailable",
+                           n.source.span};
+        }
         if (spec->operation == SystemOperation::vec_empty ||
             spec->operation == SystemOperation::vec_make ||
             spec->operation == SystemOperation::text_bytes ||
@@ -947,7 +1187,9 @@ class Emitter {
           break;
         default:
           call = "_rt.value_call(" + string_literal(spec->name.substr(8)) +
-                 ", " + tuple(args) + ", " + element + ", " + tags + ")";
+                 ", " + tuple(args) + ", " + element + ", " + tags +
+                 (weak_operation ? (weak_box ? ", True" : ", False") : "") +
+                 ")";
           break;
         }
         auto value = value_save(suite, call, id);
@@ -1024,6 +1266,18 @@ class Emitter {
       auto callee = call.kind == CalleeKind::direct
                         ? save(suite, function_name(*call.direct_symbol), n)
                         : expression(*call.callee, suite);
+      // An owned indirect callee is borrowed after its own evaluation and
+      // before any argument evaluation, so a throwing argument cannot enter
+      // the callee body. The matching end_borrow steps come from the
+      // verified success/typed-error plans; the owning value itself is
+      // released only at the end of the full expression.
+      if (call.kind != CalleeKind::direct && call.callee &&
+          owned(node(*call.callee).type) &&
+          temporary_ids.contains(call.callee->value))
+        line(suite,
+             "_frame.borrow(" +
+                 key(OwnerKind::temporary, call.callee->value) + ")",
+             n);
       std::vector<std::string> args(call.args.size());
       // Evaluate the published source-order vector before arranging formals.
       size_t operand = call.callee ? 1 : 0;
@@ -1272,8 +1526,9 @@ class Emitter {
         registrations.push_back(id);
     bool has_locals = false;
     for (auto l : m.ownership.locals)
-      has_locals |=
-          l.scope == n.scope && l.mode == ParamMode::move && owned(l.type);
+      has_locals |= l.scope == n.scope && l.mode == ParamMode::move &&
+                    owned(l.type) && !l.read_only_capture &&
+                    !capture_locals.contains(l.symbol);
     if (registrations.empty() && !has_locals) {
       for (auto id : n.children)
         statement(id, suite);
@@ -1852,7 +2107,16 @@ class Emitter {
     available.clear();
     for (const auto &p : f.parameters)
       available.insert(p.symbol);
+    for (const auto &c : f.captures) {
+      capture_locals.insert(c.local);
+      named.insert(c.local);
+      available.insert(c.local);
+    }
     std::vector<std::string> parameters;
+    // A lambda with captures receives the environment record row as its
+    // first argument. The original immutable function has no environment.
+    if (!f.captures.empty())
+      parameters.push_back("_env");
     for (const auto &p : f.parameters)
       parameters.push_back(name(p.symbol));
     Statement function{"def " + function_name(f.symbol) + "(" +
@@ -1865,6 +2129,17 @@ class Emitter {
     // to expression-outlining helpers or generated copy/drop snippets.
     line(function.body, "_rt._gc_poll()", node(f.body));
     line(function.body, "_frame = _rt.Frame()", node(f.body));
+    if (!f.captures.empty()) {
+      // One row holds every capture in creation order. Loading it is a pure
+      // borrow of environment storage: the entry never copies a field and
+      // never drops one on exit.
+      line(function.body, "_row = _env.get(0)", node(f.body));
+      for (size_t i = 0; i < f.captures.size(); ++i)
+        line(function.body,
+             name(f.captures[i].local) + " = _row[" + std::to_string(i) +
+                 "]",
+             node(f.body));
+    }
     for (size_t i = 0; i < f.parameters.size(); ++i) {
       const auto &p = f.parameters[i];
       const auto &pt = type(f.signature).parameters[i];
@@ -1922,8 +2197,16 @@ public:
           found->source.span};
     for (const auto &t : m.ownership.temporaries)
       temporary_ids.insert(t.producer.value);
+    // Every lambda capture local is a read-only environment alias. It is
+    // registered before owned_bindings so it can never become an Owner slot.
+    for (const auto &f : m.functions)
+      for (const auto &c : f.captures) {
+        capture_locals.insert(c.local);
+        named.insert(c.local);
+      }
     for (const auto &l : m.ownership.locals)
-      if (l.mode == ParamMode::move && owned(l.type))
+      if (l.mode == ParamMode::move && owned(l.type) &&
+          !l.read_only_capture && !capture_locals.contains(l.symbol))
         owned_bindings.insert(l.symbol);
     for (const auto &f : m.functions) {
       check_cancelled(stop);
@@ -2037,6 +2320,9 @@ public:
                {{"self.cleanup()", {}, false, {}, {}}}, {}},
               {"return False", {}, false, {}, {}}}, {}}}, {}});
     }
+    if (!adapters.empty())
+      program.insert(program.end(), std::make_move_iterator(adapters.begin()),
+                     std::make_move_iterator(adapters.end()));
     if (!helpers.empty()) {
       program.push_back(
           {"class _LangReturn(BaseException)",

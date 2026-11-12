@@ -1,0 +1,64 @@
+package app;
+
+import "std/weak" as weak;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct Holder {
+    w Weak[Vec[i32]];
+    tag i32;
+}
+
+enum Slot {
+    Empty;
+    Filled(w Weak[Vec[i32]]);
+}
+
+func generic_len[T](value Vec[T]) usize {
+    let w Weak[Vec[T]] = weak.downgrade(value);
+    let o option.Option[Vec[T]] = weak.upgrade(w);
+    switch o {
+    case option.Option.Some(alias):
+        return vec.len(alias);
+    case option.Option.None:
+        return 999;
+    }
+}
+
+func main() i32 {
+    let values Vec[i32] = [3, 4];
+    let first = Holder(w: weak.downgrade(values), tag: 6);
+    let second = first;
+    {
+        let third = second;
+        if !(third.tag == 6) { return 1; }
+    }
+
+    let observed = weak.upgrade(second.w);
+    switch observed {
+    case option.Option.Some(item):
+        if !(item[0] == 3 && item[1] == 4) { return 2; }
+    case option.Option.None:
+        return 3;
+    }
+
+    if !(generic_len[i32](values) == 2) { return 4; }
+    let strings Vec[string] = ["a", "b", "c"];
+    if !(generic_len[string](strings) == 3) { return 5; }
+
+    let slot = Slot.Filled(w: weak.downgrade(values));
+    let slot_copy = slot;
+    switch slot_copy {
+    case Slot.Filled(w):
+        let up = weak.upgrade(w);
+        switch up {
+        case option.Option.Some(item):
+            if !(item[0] == 3) { return 6; }
+        case option.Option.None:
+            return 7;
+        }
+    case Slot.Empty:
+        return 8;
+    }
+    return 0;
+}

@@ -42,12 +42,17 @@ struct Local {
   TypeId type;
   bool writable;
   bool ordinary_parameter = false;
+  bool read_only_capture = false;
 };
 struct Constant {
   Value value;
   std::optional<SymbolId> function;
   std::vector<TypeId> type_args;
   std::optional<ConstantValue> aggregate;
+};
+struct Selection {
+  SymbolId method;
+  Substitutions substitutions;
 };
 class Checker {
   HirModule m;
@@ -93,6 +98,25 @@ class Checker {
   size_t instantiated_nodes = 0;
   std::vector<GenericParam> active_params;
   std::set<uint64_t> signature_parameters;
+  // Capture metadata is computed once at the literal's creation site from the
+  // creator's lexical locals. The lambda body then consumes only the mapping
+  // origin -> this lambda's own read-only local.
+  struct ClosureInfo {
+    std::vector<CaptureBinding> bindings;
+    std::vector<CaptureSource> sources;
+    bool move = false;
+  };
+  std::map<uint64_t, ClosureInfo> closures;
+  std::map<uint64_t, SymbolId> capture_by_origin;
+  std::map<uint64_t, CaptureBinding> capture_by_local;
+  std::vector<CaptureBinding> current_captures;
+  // Only complete validation of immutable interned types is cached.
+  std::set<uint64_t> weak_validated;
+  // Nominal field/payload types are substituted and validated only after the
+  // declaration pass has populated every nominal. A type validated before
+  // then is not cached, so a later concrete instance cannot reuse an
+  // incomplete (unsubstituted) conclusion.
+  bool nominal_fields_ready = false;
 
   const AstFile &file(Ref r) const {
     return *m.resolved->project->module(r.module).files.at(r.file);
@@ -119,6 +143,19 @@ class Checker {
     d.phase = "type";
     d.severity = "error";
     d.primary = ast(r).span;
+    const auto kind = d.code == "E_CAPABILITY_UNAVAILABLE"
+                          ? FailureKind::unsupported
+                          : FailureKind::source;
+    throw Rejected{std::move(d), kind};
+  }
+  [[noreturn]] void reject_source(const Source &at, std::string message,
+                                  std::string code = "E_TYPE_MISMATCH") const {
+    Diagnostic d;
+    d.code = std::move(code);
+    d.message = std::move(message);
+    d.phase = "type";
+    d.severity = "error";
+    d.primary = at.span;
     const auto kind = d.code == "E_CAPABILITY_UNAVAILABLE"
                           ? FailureKind::unsupported
                           : FailureKind::source;
@@ -1137,6 +1174,16 @@ class Checker {
       t.type_args = args;
       return m.types.intern(t);
     }
+    if (name == "Weak") {
+      if (args.size() != 1)
+        reject(r, "Weak requires one target type");
+      Type t;
+      t.kind = TypeKind::Weak;
+      t.type_args = args;
+      auto id = m.types.intern(t);
+      validate_weak_type(r, id);
+      return id;
+    }
     if (name == "Ptr" || name == "PtrMut") {
       if (args.size() != 1)
         reject(r, name + " requires one pointee type");
@@ -1650,6 +1697,34 @@ class Checker {
                     {t, {}, {}}};
           break;
         }
+        const auto name = std::string(file(r).tokens[n.token_end - 1].spelling);
+        if (type(base.value.type).kind == TypeKind::NominalStruct) {
+          bool has_field = false;
+          for (const auto &f : nominal(base.value.type).fields)
+            if (symbol(f.symbol).name == name)
+              has_field = true;
+          if (!has_field) {
+            bool has_method = false;
+            for (const auto &im : m.impls)
+              for (auto method : im.methods)
+                if (symbol(method).name == name)
+                  has_method = true;
+            if (has_method) {
+              auto selected =
+                  select_method(r, base.value.type, name);
+              auto own = method_own_parameters(selected.method);
+              if (!own.empty() && expected)
+                infer(r, signatures.at(selected.method.value), *expected,
+                      selected.substitutions);
+              auto args = finish_arguments(
+                  r, generic_params[selected.method.value],
+                  selected.substitutions);
+              result =
+                  bound_method_value(r, base, selected, args);
+              break;
+            }
+          }
+        }
         const auto f = find_field(r, base.value.type);
         auto t = field_type(base.value.type, f);
         result = {node(r, t, FieldRead{f.symbol}, {base.id}), {t, {}, {}}};
@@ -1660,6 +1735,13 @@ class Checker {
           unavailable(r, "external function/type values cannot escape a call");
         const auto &b = m.foreign_bindings.at(ex->declaration->value);
         result = {node(r, b.type, ForeignRead{b.binding}), {b.type, {}, {}}};
+        break;
+      }
+      if (auto mapped = capture_by_origin.find(s->value);
+          mapped != capture_by_origin.end()) {
+        const auto &binding = capture_by_local.at(mapped->second.value);
+        result = {node(r, binding.type, Read{mapped->second}),
+                  {binding.type, {}, {}}};
         break;
       }
       auto k = symbol(*s).kind;
@@ -1730,11 +1812,35 @@ class Checker {
         auto er = child(r, 0);
         while (ast(er).kind == AstKind::Parenthesized)
           er = child(er, 0);
+        if (ast(er).kind == AstKind::FunctionLiteral) {
+          auto s = definition(er);
+          auto sig = signatures.at(s.value);
+          std::vector<TypeId> args;
+          for (const auto &p : generic_params[s.value])
+            args.push_back(parameter_type(p.symbol));
+          check_function_value_inout(r, s, sig);
+          auto value = make_function_value(r, er, true, s, sig,
+                                           std::move(args));
+          match(r, value.value.type, expected);
+          return value;
+        }
         if (ast(er).kind == AstKind::Name) {
           auto sid = occurrence(er);
+          if (sid) {
+            if (auto mapped = capture_by_origin.find(sid->value);
+                mapped != capture_by_origin.end()) {
+              if (locals.at(mapped->second.value).read_only_capture)
+                reject(r, "a read-only capture cannot be moved",
+                       "E_CALL_ARGUMENT");
+              sid = mapped->second;
+            }
+          }
           if (!sid || !locals.count(sid->value))
             reject(r, "move requires a local owner", "E_CALL_ARGUMENT");
           auto l = locals.at(sid->value);
+          if (l.read_only_capture)
+            reject(r, "a read-only capture cannot be moved",
+                   "E_CALL_ARGUMENT");
           if (l.ordinary_parameter ||
               (l.writable && symbol(*sid).definition &&
                ast(*symbol(*sid).definition).kind == AstKind::Parameter))
@@ -2065,7 +2171,7 @@ class Checker {
       for (const auto &p : generic_params[s.value])
         args.push_back(parameter_type(p.symbol));
       check_function_value_inout(r, s, sig);
-      result = {node(r, sig, FunctionValue{s, args}), {sig, {}, {}}};
+      result = make_function_value(r, r, false, s, sig, std::move(args));
       break;
     }
     default:
@@ -2194,10 +2300,18 @@ class Checker {
       unavailable(
           r, "only a whole writable scalar binding can be used as a place");
     auto s = occurrence(r);
+    if (s) {
+      if (auto mapped = capture_by_origin.find(s->value);
+          mapped != capture_by_origin.end())
+        s = mapped->second;
+    }
     if (!s || !locals.count(s->value))
       reject(r, "place is not a local binding",
              inout ? "E_CALL_ARGUMENT" : "E_TYPE_MISMATCH");
     auto l = locals.at(s->value);
+    if (l.read_only_capture)
+      reject(r, "a captured binding is read-only",
+             inout ? "E_CALL_ARGUMENT" : "E_TYPE_MISMATCH");
     if (l.ordinary_parameter) {
       if (inout)
         reject(
@@ -2240,6 +2354,272 @@ class Checker {
     }
     return false;
   }
+
+  // Substitution introduces Weak through arguments or declared field types.
+  // Walking declarations without instantiation can prove a recursive generic
+  // function-type family Weak-free without generating its concrete members.
+  bool may_contain_weak(TypeId id) const {
+    std::vector<TypeId> pending{id};
+    std::set<uint64_t> types, declarations;
+    while (!pending.empty()) {
+      const auto current = pending.back();
+      pending.pop_back();
+      if (!types.insert(current.value).second) continue;
+      if (types.size() > 4096) return true;
+      const auto *found = m.types.find(current);
+      if (!found) return true;
+      const auto &t = *found;
+      if (t.kind == TypeKind::Weak) return true;
+      pending.insert(pending.end(), t.type_args.begin(), t.type_args.end());
+      for (auto parameter : t.parameters) pending.push_back(parameter.type);
+      if (t.kind == TypeKind::Function) {
+        pending.push_back(t.result);
+        if (t.throws_type) pending.push_back(*t.throws_type);
+      }
+      if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum)
+        continue;
+      if (!nominal_fields_ready) return true;
+      const auto entry = nominal_ids.find(t.declaration.value);
+      if (entry == nominal_ids.end()) return true;
+      if (!declarations.insert(t.declaration.value).second) continue;
+      const auto &d = m.nominals[entry->second];
+      for (const auto &field : d.fields) pending.push_back(field.type);
+      for (const auto &variant : d.variants)
+        for (const auto &field : variant.payload) pending.push_back(field.type);
+    }
+    return false;
+  }
+  // Check concrete fields at every signature depth. Exhausting the budget
+  // rejects the source; skipped fields are never cached as valid.
+  void validate_weak_type(Ref r, TypeId id) {
+    validate_weak_type(source(r), id);
+  }
+  void validate_weak_type(const Source &at, TypeId id) {
+    if (weak_validated.count(id.value)) return;
+    if (!may_contain_weak(id)) {
+      weak_validated.insert(id.value);
+      return;
+    }
+    struct Item { TypeId id; Source at; size_t depth; };
+    std::vector<Item> pending{{id, at, 0}};
+    std::set<uint64_t> visited;
+    bool complete = true;
+    size_t work = 0;
+    while (!pending.empty()) {
+      auto item = pending.back();
+      pending.pop_back();
+      if (weak_validated.count(item.id.value) ||
+          !visited.insert(item.id.value).second) continue;
+      if (item.depth > 128 || ++work > 4096)
+        reject_source(item.at, "Weak type validation exceeds its checking budget",
+                      "E_CAPABILITY_UNAVAILABLE");
+      const auto *found = m.types.find(item.id);
+      if (!found) { complete = false; continue; }
+      const Type t = *found;
+      if (t.kind == TypeKind::Weak) {
+        if (t.type_args.size() != 1)
+          reject_source(item.at, "Weak requires one target type");
+        if (!contains_parameter(t.type_args[0])) {
+          if (!nominal_fields_ready &&
+              type(t.type_args[0]).kind == TypeKind::NominalStruct) {
+            // Canonical shared wrappers need their declared fields populated.
+            complete = false;
+          } else if (!weak_target(m, t.type_args[0])) {
+            reject_source(item.at,
+                          "Weak target must be Vec, function value, std/box.Box, "
+                          "std/thread.Thread, std/sync.Mutex/Condvar/AtomicI64 or "
+                          "std/ipc.Memory");
+          }
+        }
+      }
+      for (auto a : t.type_args) pending.push_back({a, item.at, item.depth + 1});
+      for (auto p : t.parameters) pending.push_back({p.type, item.at, item.depth + 1});
+      if (t.kind == TypeKind::Function) {
+        pending.push_back({t.result, item.at, item.depth + 1});
+        if (t.throws_type) pending.push_back({*t.throws_type, item.at, item.depth + 1});
+      }
+      if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum)
+        continue;
+      if (!nominal_fields_ready || !nominal_ids.count(t.declaration.value)) {
+        complete = false;
+        continue;
+      }
+      const auto &d = nominal(item.id);
+      if (t.type_args.size() != d.params.size()) { complete = false; continue; }
+      bool dependent = false;
+      for (auto argument : t.type_args)
+        dependent |= contains_parameter(argument);
+      if (dependent) continue;
+      for (const auto &field : d.fields)
+        pending.push_back({field_type(item.id, field), field.source, item.depth + 1});
+      for (const auto &variant : d.variants)
+        for (const auto &field : variant.payload)
+          pending.push_back({field_type(item.id, field), field.source, item.depth + 1});
+    }
+    if (complete) weak_validated.insert(visited.begin(), visited.end());
+  }
+  // Concrete nominal instances can hide an invalid Weak in a substituted
+  // field/payload even when no executable node names it. Validate every
+  // interned nominal and every function signature before HIR publication.
+  void validate_weak_types_before_publish() {
+    // Only source-interned roots are re-rooted here. Nominal members created
+    // by a validation substitution are checked inside that walk; re-rooting
+    // them would chase an ever-growing concrete generic family.
+    const uint64_t type_roots = m.types.size();
+    for (const auto &d : m.nominals) {
+      for (const auto &field : d.fields)
+        validate_weak_type(field.source, field.type);
+      for (const auto &variant : d.variants)
+        for (const auto &field : variant.payload)
+          validate_weak_type(field.source, field.type);
+    }
+    for (const auto &f : m.functions)
+      validate_weak_type(f.source, f.signature);
+    for (const auto &t : m.templates)
+      validate_weak_type(t.function.source, t.function.signature);
+    for (uint64_t i = 1; i <= type_roots; ++i) {
+      const auto t = type(TypeId{i});
+      if (t.kind != TypeKind::NominalStruct &&
+          t.kind != TypeKind::NominalEnum)
+        continue;
+      auto declaration = nominal_ids.find(t.declaration.value);
+      if (declaration == nominal_ids.end())
+        continue;
+      validate_weak_type(m.nominals[declaration->second].source, TypeId{i});
+    }
+  }
+  struct CaptureUse {
+    SymbolId origin;
+    SymbolId environment;
+    TypeId type;
+    Ref first_use;
+  };
+
+  // Free variables of one function literal are the value occurrences inside
+  // its complete AST subtree (including nested literals) whose resolved
+  // declaration is outside that subtree. Walking in source order gives the
+  // deterministic first-use order, including transitive grandparent captures.
+  std::vector<CaptureUse> capture_uses(Ref literal) {
+    std::vector<CaptureUse> uses;
+    std::set<uint64_t> seen;
+    std::function<void(Ref)> walk = [&](Ref r) {
+      auto found = occurrences.find(key(r));
+      if (found != occurrences.end() &&
+          symbol(found->second).kind == modules::SymbolKind::value) {
+        SymbolId origin = found->second;
+        SymbolId environment = origin;
+        if (auto mapped = capture_by_origin.find(origin.value);
+            mapped != capture_by_origin.end())
+          environment = mapped->second;
+        auto local = locals.find(environment.value);
+        if (local != locals.end() && seen.insert(origin.value).second)
+          uses.push_back(
+              {origin, environment, local->second.type, r});
+      }
+      for (auto c : ast(r).children)
+        walk(at(r, c));
+    };
+    walk(literal);
+    return uses;
+  }
+
+  SymbolId fresh_capture_symbol(SymbolId origin) {
+    auto s = symbol(origin);
+    s.id = SymbolId{owned->symbols.size()};
+    s.kind = modules::SymbolKind::value;
+    s.definition.reset();
+    s.declaration.reset();
+    s.exported = false;
+    s.target.reset();
+    s.foreign.reset();
+    owned->symbols.push_back(s);
+    return s.id;
+  }
+
+  // Build one function value from a real literal source. The creator children
+  // are ordinary Reads for copied captures and synthetic Moves for owning
+  // captures of a `move func`; the lambda entry gets fresh read-only local
+  // symbols that are never source declarations.
+  Expr make_function_value(Ref source_ref, Ref literal, bool move,
+                           SymbolId lambda, TypeId sig,
+                           std::vector<TypeId> type_args) {
+    ClosureInfo info;
+    info.move = move;
+    std::vector<HirNodeId> children;
+    auto uses = capture_uses(literal);
+    for (const auto &use : uses) {
+      if (const auto definition = symbol(use.environment).definition;
+          definition && ast(*definition).kind == AstKind::Parameter &&
+          mode(*definition) == ParamMode::inout)
+        reject(use.first_use,
+               "an inout parameter cannot be captured by a closure",
+               "E_CALL_ARGUMENT");
+      if (move && locals.at(use.environment.value).read_only_capture)
+        reject(use.first_use,
+               "a move func cannot consume an outer read-only capture",
+               "E_CALL_ARGUMENT");
+      const bool dependent = contains_parameter(use.type);
+      const bool owning = dependent || owning_value(m, use.type, stop);
+      const bool capture_move = move && owning;
+      if (!capture_move && !dependent &&
+          !ordinary_copyable(m, use.type, stop))
+        reject(use.first_use,
+               "closure capture type is not ordinary-copyable",
+               "E_CALL_ARGUMENT");
+      auto local = fresh_capture_symbol(use.origin);
+      info.bindings.push_back({use.origin, local, use.type});
+      info.sources.push_back(
+          {use.origin, use.environment, use.type, capture_move});
+      if (capture_move)
+        children.push_back(
+            node(use.first_use, use.type, Move{use.environment}));
+      else
+        children.push_back(
+            node(use.first_use, use.type, Read{use.environment}));
+    }
+    FunctionValue value{lambda, std::move(type_args), info.sources, move, {}};
+    closures[lambda.value] = std::move(info);
+    return {node(source_ref, sig, std::move(value), std::move(children)),
+            {sig, {}, {}}};
+  }
+
+  // A bound value receiver copies the receiver into the function value at
+  // creation. The resulting signature omits the real first Self parameter.
+  Expr bound_method_value(Ref member_ref, Expr receiver,
+                          Selection selected,
+                          const std::vector<TypeId> &type_args) {
+    auto full = substitute(signatures.at(selected.method.value),
+                           selected.substitutions, m.types);
+    const auto &ft = type(full);
+    if (ft.parameters.empty())
+      reject(member_ref, "bound method has no Self parameter");
+    const auto self = ft.parameters.front();
+    if (self.mode == ParamMode::inout)
+      reject(member_ref,
+             "an inout-Self method cannot escape as a bound function value",
+             "E_CALL_ARGUMENT");
+    if (self.mode != ParamMode::ordinary && self.mode != ParamMode::move)
+      reject(member_ref, "unsupported bound Self parameter mode",
+             "E_CALL_ARGUMENT");
+    match(member_ref, receiver.value.type, self.type);
+    if (!contains_parameter(receiver.value.type) &&
+        !ordinary_copyable(m, receiver.value.type, stop))
+      reject(member_ref,
+             "bound receiver type is not ordinary-copyable",
+             "E_CALL_ARGUMENT");
+    Type trimmed;
+    trimmed.kind = TypeKind::Function;
+    trimmed.parameters.assign(ft.parameters.begin() + 1, ft.parameters.end());
+    trimmed.result = ft.result;
+    trimmed.throws_type = ft.throws_type;
+    auto sig = m.types.intern(std::move(trimmed));
+    check_function_value_inout(member_ref, selected.method, sig);
+    FunctionValue value{selected.method, type_args, {}, false,
+                        BoundReceiver{receiver.value.type, self.mode}};
+    return {node(member_ref, sig, std::move(value), {receiver.id}),
+            {sig, {}, {}}};
+  }
+
   std::optional<TypeId> type_expression(Ref r) {
     if (ast(r).kind == AstKind::Parenthesized)
       return type_expression(child(r, 0));
@@ -2404,10 +2784,6 @@ class Checker {
                   "implementation");
     }
   }
-  struct Selection {
-    SymbolId method;
-    Substitutions substitutions;
-  };
   Selection select_method(Ref r, TypeId receiver, std::string_view name,
                           std::optional<TraitRef> required = {}) {
     std::optional<Selection> result;
@@ -2783,6 +3159,16 @@ class Checker {
     if (type_args.size() != required_type_args)
       reject(r, "wrong number of system operation type arguments",
              "E_CALL_ARGUMENT");
+    if ((spec.operation == SystemOperation::weak_empty ||
+         spec.operation == SystemOperation::weak_downgrade ||
+         spec.operation == SystemOperation::weak_upgrade) &&
+        !type_args.empty()) {
+      Type weak;
+      weak.kind = TypeKind::Weak;
+      weak.type_args = {type_args[0]};
+      auto weak_type = m.types.intern(weak);
+      validate_weak_type(r, weak_type);
+    }
     Call call;
     call.kind = CalleeKind::system;
     call.system = spec.operation;
@@ -2918,8 +3304,12 @@ class Checker {
       if (type(expected).kind == TypeKind::CForeignCallback) {
         e = expression(er);
         check_c_callback(ar, e.value.type, type(expected).c_type);
-        if (!std::holds_alternative<FunctionValue>(m.nodes[e.id.value].data))
+        const auto *value = std::get_if<FunctionValue>(&m.nodes[e.id.value].data);
+        if (!value)
           unavailable(ar, "C callback requires an uncaptured function name");
+        if (!value->captures.empty() || value->bound)
+          reject(ar, "C callback cannot capture or bind a receiver",
+                 "E_CALL_ARGUMENT");
       } else {
         const auto want = type(expected);
         e = (want.kind == TypeKind::CForeignPointer ||
@@ -3676,6 +4066,9 @@ class Checker {
         c.aggregate = *pure;
     }
     if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data)) {
+      if (!f->captures.empty() || f->bound)
+        reject(r,
+               "a constant function value cannot capture or bind a receiver");
       c.function = f->symbol;
       c.type_args = f->type_args;
     }
@@ -4032,6 +4425,10 @@ class Checker {
             c.aggregate = *pure;
         }
         if (auto f = std::get_if<FunctionValue>(&m.nodes[e.id.value].data)) {
+          if (!f->captures.empty() || f->bound)
+            reject(r,
+                   "a constant function value cannot capture or bind a "
+                   "receiver");
           c.function = f->symbol;
           c.type_args = f->type_args;
         } else if (alias) {
@@ -4535,6 +4932,7 @@ class Checker {
       }
       signature_parameters = std::move(saved_signature_parameters);
     }
+    nominal_fields_ready = true;
     for (auto r : top)
       if (ast(r).kind == AstKind::Impl) {
         std::vector<Ref> ts;
@@ -4662,6 +5060,8 @@ class Checker {
     std::map<uint64_t, ScopeId> visible;
     for (auto p : f.parameters)
       visible.emplace(p.symbol.value, f.scope);
+    for (const auto &capture : f.captures)
+      visible.emplace(capture.local.value, f.scope);
     struct Cleanup {
       size_t handler_floor;
       ScopeId body;
@@ -4875,6 +5275,17 @@ class Checker {
     break_targets.clear();
     cleanup_depth = 0;
     active_params = generic_params[id.value];
+    capture_by_origin.clear();
+    capture_by_local.clear();
+    current_captures.clear();
+    if (auto info = closures.find(id.value); info != closures.end()) {
+      current_captures = info->second.bindings;
+      for (const auto &binding : info->second.bindings) {
+        capture_by_origin[binding.origin.value] = binding.local;
+        capture_by_local[binding.local.value] = binding;
+        locals[binding.local.value] = {binding.type, false, false, true};
+      }
+    }
     scope = new_scope(r, {});
     auto ps = parameters.at(id.value);
     auto ft = type(sig);
@@ -4886,6 +5297,7 @@ class Checker {
     if (ft.result != unit && flow(body.id).falls)
       reject(r, "non-Unit function has a reachable normal exit without return");
     HirFunction f{id, sig, ps, body.id, scope, source(r)};
+    f.captures = current_captures;
     annotate(f);
     if (active_params.empty())
       m.functions.push_back(f);
@@ -5077,6 +5489,9 @@ class Checker {
       v->symbol = instantiate(v->symbol, v->type_args, n.source.node);
       v->type_args.clear();
     }
+    if (auto v = std::get_if<FunctionValue>(&n.data); v && v->bound &&
+        instance_sub)
+      v->bound->type = substitute(v->bound->type, *instance_sub, m.types);
     if (auto c = std::get_if<ConstraintCall>(&n.data)) {
       auto name = symbol(c->method).name;
       auto selected = select_method(n.source.node, c->receiver, name, c->trait);
@@ -5142,6 +5557,7 @@ class Checker {
     };
     f.symbol = result;
     f.signature = substitute(f.signature, sub, m.types);
+    validate_weak_type(use, f.signature);
     // A generic declaration defers direct mode/type restrictions until the
     // concrete type is known; reject them before publishing invalid HIR. Free
     // generic templates and eligible inherent methods may carry scalar inout
@@ -5164,6 +5580,10 @@ class Checker {
       unavailable(use, "generic/method inout is not implemented");
     for (auto &p : f.parameters)
       p.symbol = rename(p.symbol);
+    for (auto &capture : f.captures) {
+      capture.local = rename(capture.local);
+      capture.type = substitute(capture.type, sub, m.types);
+    }
     std::map<uint64_t, ScopeId> scopes;
     std::function<ScopeId(ScopeId)> clone_scope = [&](ScopeId old) {
       if (auto it = scopes.find(old.value); it != scopes.end())
@@ -5191,6 +5611,7 @@ class Checker {
                "E_INSTANTIATION_LIMIT");
       auto n = m.nodes.at(old.value);
       n.type = substitute(n.type, sub, m.types);
+      validate_weak_type(use, n.type);
       n.scope = clone_scope(n.scope);
       if (auto b = std::get_if<Binding>(&n.data))
         b->symbol = rename(b->symbol);
@@ -5225,15 +5646,25 @@ class Checker {
       };
       if (auto c = std::get_if<Call>(&n.data)) {
         c->signature = substitute(c->signature, sub, m.types);
-        for (auto &t : c->type_args)
+        validate_weak_type(use, c->signature);
+        for (auto &t : c->type_args) {
           t = substitute(t, sub, m.types);
+          validate_weak_type(use, t);
+        }
         if (c->callee)
           c->callee = nodes.at(c->callee->value);
         update_args(c->args);
       }
-      if (auto v = std::get_if<FunctionValue>(&n.data))
+      if (auto v = std::get_if<FunctionValue>(&n.data)) {
         for (auto &t : v->type_args)
           t = substitute(t, sub, m.types);
+        for (auto &capture : v->captures) {
+          capture.type = substitute(capture.type, sub, m.types);
+          capture.source = rename(capture.source);
+        }
+        if (v->bound)
+          v->bound->type = substitute(v->bound->type, sub, m.types);
+      }
       if (auto c = std::get_if<ConstantLiteral>(&n.data))
         transform_constant(c->value, sub, m.types, [](FunctionValue &) {});
       if (auto c = std::get_if<ConstraintCall>(&n.data)) {
@@ -5284,6 +5715,39 @@ class Checker {
       if (auto b = std::get_if<Continue>(&n.data))
         b->loop = nodes.at(b->loop.value);
       m.nodes[id.value] = std::move(n);
+      if (auto v =
+              std::get_if<FunctionValue>(&m.nodes[id.value].data)) {
+        if (v->move_capture) {
+          for (size_t c = 0; c < v->captures.size(); ++c) {
+            const bool dependent = contains_parameter(v->captures[c].type);
+            if (dependent)
+              continue;
+            const bool owning = owning_value(m, v->captures[c].type, stop);
+            auto &child = m.nodes[id.value].children[c];
+            auto &child_node = m.nodes[child.value];
+            if (owning) {
+              v->captures[c].move = true;
+              if (!std::holds_alternative<Move>(child_node.data))
+                child_node.data = Move{v->captures[c].source};
+            } else {
+              v->captures[c].move = false;
+              if (std::holds_alternative<Move>(child_node.data))
+                child_node.data = Read{v->captures[c].source};
+            }
+          }
+        } else {
+          for (const auto &capture : v->captures)
+            if (!contains_parameter(capture.type) &&
+                !ordinary_copyable(m, capture.type, stop))
+              reject(use,
+                     "closure capture type is not ordinary-copyable",
+                     "E_CALL_ARGUMENT");
+        }
+        if (v->bound && !contains_parameter(v->bound->type) &&
+            !ordinary_copyable(m, v->bound->type, stop))
+          reject(use, "bound receiver type is not ordinary-copyable",
+                 "E_CALL_ARGUMENT");
+      }
       return id;
     };
     f.scope = clone_scope(f.scope);
@@ -5400,6 +5864,7 @@ public:
         check_constraints(d.source.node, d.params, type(t).type_args, &sub);
       }
     }
+    validate_weak_types_before_publish();
     if (auto infinite = infinite_value_layout(m, stop))
       reject(m.nominals.at(nominal_ids.at(infinite->value)).source.node,
              "value type has an infinite recursive layout");

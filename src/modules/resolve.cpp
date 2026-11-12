@@ -74,9 +74,6 @@ class Resolver {
     out.occurrences.push_back({ref(id), symbol, span});
     if (active_const && out.symbols[symbol.value].kind == SymbolKind::constant)
       const_edges[active_const->value].push_back({symbol, node(id).span});
-    if (owners[symbol.value] && owners[symbol.value] != function)
-      error("E_CAPABILITY_UNAVAILABLE", "capturing a local binding is unavailable: " +
-            out.symbols[symbol.value].name, node(id).span);
   }
   std::optional<SymbolId> name(AstNodeId id, Scope &scope,
                               std::string_view spelling, SourceSpan span,
@@ -473,7 +470,7 @@ public:
         return result;
       }
       for (const auto *s : {"Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16",
-                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Slice", "Result", "Ptr", "PtrMut",
+                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Slice", "Weak", "Result", "Ptr", "PtrMut",
                            "Buffer", "BufferMut",
                            "__woozy_Thread", "__woozy_Mutex", "__woozy_Condvar",
                            "__woozy_AtomicI64", "__woozy_IpcHandle"})

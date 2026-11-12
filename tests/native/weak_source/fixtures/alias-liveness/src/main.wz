@@ -1,0 +1,61 @@
+package app;
+
+import "std/box" as box;
+import "std/option" as option;
+import "std/weak" as weak;
+
+func main() i32 {
+    var weak_vec Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    {
+        let first Vec[i32] = [1];
+        weak_vec = weak.downgrade(first);
+        {
+            let second = first;
+            switch weak.upgrade(weak_vec) {
+            case option.Option.Some(strong):
+                if strong[0] != 1 { return 1; }
+            case option.Option.None:
+                return 2;
+            }
+            second[0] = 3;
+        }
+        // The inner alias is gone, but the outer strong handle still keeps the
+        // canonical Vec slot open.
+        switch weak.upgrade(weak_vec) {
+        case option.Option.Some(strong):
+            if strong[0] != 3 { return 3; }
+        case option.Option.None:
+            return 4;
+        }
+    }
+    switch weak.upgrade(weak_vec) {
+    case option.Option.Some(strong):
+        if strong[0] == 3 { return 5; }
+        return 6;
+    case option.Option.None:
+    }
+
+    var weak_box Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    {
+        let cell = box.new[i32](5);
+        let alias = cell;
+        weak_box = weak.downgrade(alias);
+        {
+            let third = cell;
+            box.set(third, 8);
+        }
+        switch weak.upgrade(weak_box) {
+        case option.Option.Some(strong):
+            if box.get(strong) != 8 { return 7; }
+        case option.Option.None:
+            return 8;
+        }
+    }
+    switch weak.upgrade(weak_box) {
+    case option.Option.Some(strong):
+        if box.get(strong) == 8 { return 9; }
+        return 10;
+    case option.Option.None:
+        return 0;
+    }
+}

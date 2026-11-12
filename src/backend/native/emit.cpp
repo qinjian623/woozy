@@ -1,4 +1,5 @@
 #include "../../hir/foreign.hpp"
+#include "../../hir/ownership.hpp"
 #include "../../ir/layout.hpp"
 #include "lang/backend/native.hpp"
 #include "c_ffi.hpp"
@@ -63,8 +64,19 @@ class Emitter {
   // for literal operands. ConstantFolder would create poison in dead arms.
   llvm::IRBuilder<llvm::NoFolder> builder{context};
   std::map<SymbolId, llvm::Function *> functions;
+  std::map<SymbolId, TypeId> function_signatures;
+  std::map<SymbolId, const hir::HirFunction *> hir_functions;
   std::map<uint32_t, llvm::StructType *> c_record_layouts;
   std::map<ValueId, SymbolId> function_value_symbols;
+  // Function values that carry an environment (or a bound receiver) cannot be
+  // used as C callbacks. Op::function records them so the C lowering rejects
+  // the value instead of silently passing its thunk.
+  std::set<ValueId> dynamic_function_values;
+  std::map<SymbolId, llvm::Function *> function_thunks;
+  std::map<std::string, llvm::StructType *> env_record_types;
+  std::map<std::pair<std::string, bool>, llvm::Function *> env_record_ops;
+  std::map<std::tuple<uint64_t, uint64_t, uint64_t>, llvm::Function *>
+      bound_adapters;
   std::string out_c_adapter_source;
   std::map<std::pair<uint64_t, uint32_t>, llvm::Function *> callback_bridges;
   std::set<uint32_t> used_c_callables, used_c_resources;
@@ -83,7 +95,26 @@ class Emitter {
        builder.getPtrTy(),
        builder.getPtrTy(),
        builder.getPtrTy(),
-       builder.getInt64Ty()});
+       builder.getInt64Ty(),
+       // LangVec.weak_control: the private canonical Weak slot appended after
+       // capacity, at byte offset 72. The runtime owns every construction and
+       // detach; generated code only takes its address for downgrade.
+       builder.getPtrTy()});
+  // LangFn is exactly {code, env}. Every stored/indirect code pointer has the
+  // env-first C ABI; a noncapturing value stores a cached thunk and a null env.
+  llvm::StructType *fn_type = llvm::StructType::get(
+      context, {builder.getPtrTy(), builder.getPtrTy()});
+  // LangWeak is exactly {control, code}. The reviewed Weak source operations
+  // project the canonical target slot below; the 16-byte value layout and its
+  // value ops are unchanged.
+  llvm::StructType *weak_type = llvm::StructType::get(
+      context, {builder.getPtrTy(), builder.getPtrTy()});
+  // LangHandle prefix {refs, kind, destroy, weak_control}. Handles stay opaque
+  // pointers in lowered values; this layout only addresses the canonical Weak
+  // slot at byte offset 24.
+  llvm::StructType *handle_type = llvm::StructType::get(
+      context, {builder.getInt64Ty(), builder.getInt64Ty(),
+                builder.getPtrTy(), builder.getPtrTy()});
   // Source Slice[T] is an inline 24-byte {owner, start, length} descriptor.
   // The low-level runtime owns retain/pin/copy/drop; this is not a heap node.
   llvm::StructType *slice_type = llvm::StructType::get(
@@ -107,6 +138,9 @@ class Emitter {
     case hir::TypeKind::Float:
       return t.bits == 32 ? builder.getFloatTy() : builder.getDoubleTy();
     case hir::TypeKind::Function:
+      return fn_type;
+    case hir::TypeKind::Weak:
+      return weak_type;
     case hir::TypeKind::Vec:
     case hir::TypeKind::ThreadHandle:
     case hir::TypeKind::MutexHandle:
@@ -271,6 +305,8 @@ class Emitter {
       return "Vec[" + type_key(t.type_args[0]) + "]";
     case hir::TypeKind::Slice:
       return "Slice[" + type_key(t.type_args[0]) + "]";
+    case hir::TypeKind::Weak:
+      return "Weak[" + type_key(t.type_args.at(0)) + "]";
     case hir::TypeKind::Function: {
       std::string key = "func(";
       for (size_t a = 0; a < t.parameters.size(); ++a) {
@@ -290,13 +326,17 @@ class Emitter {
     }
     return {};
   }
-  llvm::FunctionType *signature(TypeId id) {
+  llvm::FunctionType *signature(TypeId id, bool env_first = false,
+                               bool skip_first_parameter = false) {
     const auto &t = type(id);
     std::vector<llvm::Type *> parameters;
-    for (auto p : t.parameters)
-      parameters.push_back(p.mode == hir::ParamMode::inout
+    if (env_first)
+      parameters.push_back(builder.getPtrTy());
+    for (size_t p = skip_first_parameter ? 1 : 0; p < t.parameters.size();
+         ++p)
+      parameters.push_back(t.parameters[p].mode == hir::ParamMode::inout
                                ? builder.getPtrTy()
-                               : lower_type(p.type));
+                               : lower_type(t.parameters[p].type));
     if (t.throws_type) {
       if (type(t.result).kind != hir::TypeKind::Unit)
         parameters.push_back(builder.getPtrTy());
@@ -540,6 +580,255 @@ class Emitter {
 #include "system_extra.inc"
 #include "process_ops.inc"
 #include "text_values.inc"
+#include "weak_ops.inc"
+  std::string id_list(const std::vector<TypeId> &fields) const {
+    std::string key;
+    for (auto id : fields) {
+      key += std::to_string(id.value);
+      key.push_back(',');
+    }
+    return key;
+  }
+  // A nonempty Fn environment is exactly one row of an anonymous record held
+  // in a LangVec. The record has no public TypeId, so its recursive copy/drop
+  // helpers are synthesized from the field TypeIds in declaration order.
+  llvm::StructType *env_record_type(const std::vector<TypeId> &fields) {
+    const auto key = id_list(fields);
+    if (auto found = env_record_types.find(key);
+        found != env_record_types.end())
+      return found->second;
+    std::vector<llvm::Type *> elements;
+    for (auto field : fields)
+      elements.push_back(lower_type(field));
+    auto *layout = llvm::StructType::get(context, elements);
+    env_record_types.emplace(key, layout);
+    return layout;
+  }
+  llvm::Function *env_record_op(const std::vector<TypeId> &fields,
+                                bool copy) {
+    const auto key = std::pair{id_list(fields), copy};
+    if (auto found = env_record_ops.find(key); found != env_record_ops.end())
+      return found->second;
+    auto *layout = env_record_type(fields);
+    auto *fn = llvm::Function::Create(
+        llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                false),
+        llvm::GlobalValue::InternalLinkage,
+        std::string(copy ? "lang.env.copy." : "lang.env.drop.") +
+            std::to_string(env_record_ops.size()),
+        module);
+    env_record_ops.emplace(key, fn);
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    auto *address = fn->getArg(0);
+    for (size_t n = 0; n < fields.size(); ++n) {
+      const size_t p = copy ? n : fields.size() - 1 - n;
+      if (owning(fields[p]))
+        builder.CreateCall(value_op(fields[p], copy),
+                           {builder.CreateStructGEP(layout, address, p)});
+    }
+    builder.CreateRetVoid();
+    builder.restoreIP(ip);
+    return fn;
+  }
+  // Install already-owned child values as one Vec row. The children were
+  // copied or moved by NativeIR; storing their bytes transfers ownership once.
+  llvm::Value *make_environment(const std::vector<TypeId> &fields,
+                                llvm::ArrayRef<llvm::Value *> children) {
+    if (fields.size() != children.size())
+      fail("function environment child count differs from schema");
+    auto *layout = env_record_type(fields);
+    auto *row = storage(layout);
+    for (size_t n = 0; n < fields.size(); ++n)
+      builder.CreateStore(children[n],
+                          builder.CreateStructGEP(layout, row, n));
+    const uint64_t stride = std::max<uint64_t>(
+        1, module.getDataLayout().getTypeAllocSize(layout).getFixedValue());
+    auto *env = runtime("lang_vec_new_v1", builder.getPtrTy(),
+                        {builder.getInt64(1), builder.getInt64(stride),
+                         env_record_op(fields, true),
+                         env_record_op(fields, false)});
+    auto *data = vec_field(env, 5, builder.getPtrTy());
+    const uint64_t bytes =
+        module.getDataLayout().getTypeAllocSize(layout).getFixedValue();
+    if (bytes)
+      vec_memory(builder.CreateMemCpy(data, llvm::MaybeAlign(1), row,
+                                      llvm::MaybeAlign(1), bytes),
+                 false);
+    vec_memory(builder.CreateStore(builder.getInt64(1),
+                                   builder.CreateStructGEP(vec_type, env, 2)),
+               true);
+    return env;
+  }
+  // Cache one env-ignoring thunk per noncapturing function. Stored/indirect
+  // code always has the env-first ABI, including throws outputs.
+  llvm::Function *function_thunk(SymbolId symbol) {
+    if (auto found = function_thunks.find(symbol);
+        found != function_thunks.end())
+      return found->second;
+    auto signature_id = function_signatures.at(symbol);
+    auto target = functions.at(symbol);
+    auto *thunk = llvm::Function::Create(
+        signature(signature_id, true), llvm::GlobalValue::InternalLinkage,
+        "lang.thunk." + std::to_string(symbol.value), module);
+    function_thunks.emplace(symbol, thunk);
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", thunk));
+    std::vector<llvm::Value *> actual;
+    for (unsigned a = 1; a < thunk->arg_size(); ++a)
+      actual.push_back(thunk->getArg(a));
+    builder.CreateRet(builder.CreateCall(target, actual));
+    builder.restoreIP(ip);
+    return thunk;
+  }
+  llvm::Function *bound_adapter(const hir::FunctionValue &value) {
+    if (!value.bound) fail("bound adapter without receiver schema");
+    const auto &bound = *value.bound;
+    if (bound.mode == hir::ParamMode::inout)
+      fail("inout Self cannot be stored in a bound function value");
+    auto signature_id = function_signatures.at(value.symbol);
+    const auto &method = type(signature_id);
+    if (method.parameters.empty() || method.parameters[0].type != bound.type ||
+        method.parameters[0].mode != bound.mode)
+      fail("bound receiver differs from the method Self parameter");
+    // Both ordinary and move Self require an ordinary-copyable receiver. The
+    // per-call copy for move Self must not consume the environment field.
+    if (owning(bound.type)) (void)value_op(bound.type, true);
+    const auto key = std::tuple<uint64_t, uint64_t, uint64_t>{
+        value.symbol.value, bound.type.value,
+        static_cast<uint64_t>(bound.mode)};
+    if (auto found = bound_adapters.find(key); found != bound_adapters.end())
+      return found->second;
+    auto *adapter = llvm::Function::Create(
+        signature(signature_id, true, true), llvm::GlobalValue::InternalLinkage,
+        "lang.bound." + std::to_string(value.symbol.value) + "." +
+            std::to_string(bound.type.value),
+        module);
+    bound_adapters.emplace(key, adapter);
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(
+        llvm::BasicBlock::Create(context, "entry", adapter));
+    auto *env = adapter->getArg(0);
+    auto *row = runtime("lang_vec_at_v1", builder.getPtrTy(),
+                        {env, builder.getInt64(0)});
+    auto *layout = env_record_type({bound.type});
+    auto *address = builder.CreateStructGEP(layout, row, 0);
+    llvm::Value *receiver =
+        builder.CreateLoad(lower_type(bound.type), address);
+    if (bound.mode == hir::ParamMode::move && owning(bound.type)) {
+      auto *copy = storage(lower_type(bound.type));
+      builder.CreateStore(receiver, copy);
+      builder.CreateCall(value_op(bound.type, true), {copy});
+      receiver = builder.CreateLoad(lower_type(bound.type), copy);
+    }
+    std::vector<llvm::Value *> actual{receiver};
+    for (unsigned a = 1; a < method.parameters.size(); ++a)
+      actual.push_back(adapter->getArg(a));
+    for (unsigned a = method.parameters.size(); a < adapter->arg_size(); ++a)
+      actual.push_back(adapter->getArg(a));
+    builder.CreateRet(builder.CreateCall(functions.at(value.symbol), actual));
+    builder.restoreIP(ip);
+    return adapter;
+  }
+  const hir::FunctionValue *function_value_schema(const ir::Instruction &i) {
+    if (!i.origin || i.origin->value >= input.hir.module().nodes.size())
+      return nullptr;
+    const auto &node = input.hir.module().nodes[i.origin->value];
+    if (auto *value = std::get_if<hir::FunctionValue>(&node.data))
+      return value;
+    if (auto *literal = std::get_if<hir::ConstantLiteral>(&node.data))
+      return std::get_if<hir::FunctionValue>(&literal->value.data);
+    return nullptr;
+  }
+  llvm::Value *function_value(const ir::Instruction &i,
+                              llvm::ArrayRef<llvm::Value *> args) {
+    const auto *schema = function_value_schema(i);
+    const bool constant_origin =
+        i.origin && i.origin->value < input.hir.module().nodes.size() &&
+        std::holds_alternative<hir::ConstantLiteral>(
+            input.hir.module().nodes[i.origin->value].data);
+    const SymbolId symbol = schema ? schema->symbol : i.function;
+    if (symbol != i.function)
+      fail("function value symbol differs from its HIR schema");
+    if (schema && schema->bound && !schema->captures.empty())
+      fail("function value has both captures and a bound receiver");
+    const bool dynamic =
+        schema && (!schema->captures.empty() || schema->bound.has_value());
+    if (dynamic && constant_origin)
+      fail("constant FunctionValue cannot capture or bind a receiver");
+    if (dynamic && args.empty())
+      fail("capturing or bound function value has no environment inputs");
+    llvm::Value *value = llvm::Constant::getNullValue(fn_type);
+    if (dynamic) {
+      std::vector<TypeId> fields;
+      if (schema->bound) {
+        if (args.size() != 1)
+          fail("bound function value has the wrong receiver child count");
+        if (value_types.at(i.inputs[0]) != schema->bound->type)
+          fail("bound receiver child type differs from its schema");
+        fields.push_back(schema->bound->type);
+      } else {
+        if (args.size() != schema->captures.size())
+          fail("capture child count differs from the function schema");
+        const auto hf = hir_functions.find(symbol);
+        if (hf == hir_functions.end() ||
+            hf->second->captures.size() != schema->captures.size())
+          fail("capture schema differs from the lambda entry");
+        for (size_t c = 0; c < schema->captures.size(); ++c) {
+          if (value_types.at(i.inputs[c]) != schema->captures[c].type)
+            fail("capture child type differs from the function schema");
+          if (hf->second->captures[c].origin != schema->captures[c].origin ||
+              hf->second->captures[c].type != schema->captures[c].type)
+            fail("capture origin/type differs from the lambda entry");
+          fields.push_back(schema->captures[c].type);
+        }
+      }
+      if (schema->bound) {
+        const auto hf = hir_functions.find(symbol);
+        if (hf != hir_functions.end() && !hf->second->captures.empty())
+          fail("bound method entry unexpectedly captures locals");
+      }
+      llvm::Function *code = schema->bound
+                                 ? bound_adapter(*schema)
+                                 : functions.at(symbol);
+      value = builder.CreateInsertValue(value, code, {0});
+      value = builder.CreateInsertValue(
+          value, make_environment(fields, args), {1});
+    } else {
+      if (!args.empty()) fail("noncapturing function value has children");
+      const auto found = hir_functions.find(symbol);
+      if (found != hir_functions.end() && !found->second->captures.empty())
+        fail("capturing function value is missing its HIR capture schema");
+      value = llvm::ConstantStruct::get(
+          fn_type, {function_thunk(symbol),
+                    llvm::ConstantPointerNull::get(builder.getPtrTy())});
+    }
+    if (i.result) {
+      function_value_symbols[*i.result] = symbol;
+      if (dynamic) dynamic_function_values.insert(*i.result);
+    }
+    return value;
+  }
+  const hir::Call &call_origin(const std::optional<HirNodeId> &origin,
+                               SourceSpan source) const {
+    if (!origin || origin->value >= input.hir.module().nodes.size())
+      fail("call instruction has no HIR origin");
+    const auto &node = input.hir.module().nodes[origin->value];
+    const auto *call = std::get_if<hir::Call>(&node.data);
+    if (!call)
+      fail("call instruction origin is not a HIR call");
+    (void)source;
+    return *call;
+  }
+  llvm::Value *indirect_call_operand(llvm::Value *callee,
+                                     llvm::ArrayRef<llvm::Value *> arguments,
+                                     TypeId signature_id, SourceSpan source) {
+    auto *code = builder.CreateExtractValue(callee, {0});
+    auto *env = builder.CreateExtractValue(callee, {1});
+    std::vector<llvm::Value *> actual{env};
+    actual.insert(actual.end(), arguments.begin(), arguments.end());
+    return builder.CreateCall(signature(signature_id, true), code, actual);
+  }
   void emit_vec_check(llvm::Value *vec, llvm::Value *index, SourceSpan source) {
     auto *length = vec_field(vec, 1, builder.getInt64Ty());
     auto *init = vec_field(vec, 2, builder.getInt64Ty());
@@ -553,6 +842,7 @@ class Emitter {
     if (!i.system) fail("system operation missing");
     if (auto *value = process_system_call(i, args)) return value;
     if (auto *value = extra_system_call(i, args)) return value;
+    if (auto *value = weak_system_call(i, args)) return value;
     for (const auto &spec : hir::value_system_operations)
       if (spec.operation == *i.system) return value_system_call(i, args);
     auto call = [&](llvm::StringRef name, llvm::Type *result,
@@ -771,6 +1061,8 @@ class Emitter {
         auto found = function_value_symbols.find(i.inputs[a]);
         if (found == function_value_symbols.end())
           fail("C callback argument has no function identity");
+        if (dynamic_function_values.contains(i.inputs[a]))
+          fail("C callback cannot be a capturing or bound function value");
         auto *trampoline = callback_trampoline(
             found->second, type(parameter_type).c_type);
         (void)callback_bridge(found->second, type(parameter_type).c_type);
@@ -1058,8 +1350,7 @@ class Emitter {
       break;
     }
     case ir::Op::function:
-      v = functions.at(i.function);
-      if (i.result) function_value_symbols[*i.result] = i.function;
+      v = function_value(i, args);
       break;
     case ir::Op::load:
       v = builder.CreateLoad(lower_type(i.type), slots.at(i.slot.value));
@@ -1187,8 +1478,19 @@ class Emitter {
       break;
     }
     case ir::Op::call: {
-      llvm::SmallVector<llvm::Value *, 8> actual(args.begin() + 1, args.end());
-      v = builder.CreateCall(signature(i.signature), args[0], actual);
+      const auto &call = call_origin(i.origin, i.source);
+      std::vector<llvm::Value *> actual(args.begin() + 1, args.end());
+      if (call.kind == hir::CalleeKind::direct && call.direct_symbol) {
+        auto target = functions.at(*call.direct_symbol);
+        const auto hf = hir_functions.find(*call.direct_symbol);
+        if (hf != hir_functions.end() && !hf->second->captures.empty())
+          fail("direct call targets a capturing lambda entry");
+        v = builder.CreateCall(target, actual);
+      } else if (call.kind == hir::CalleeKind::function_value) {
+        v = indirect_call_operand(args[0], actual, i.signature, i.source);
+      } else {
+        fail("ordinary call origin is neither direct nor function_value");
+      }
       break;
     }
     }
@@ -1205,9 +1507,14 @@ class Emitter {
     values.clear();
     value_types.clear();
     function_value_symbols.clear();
+    dynamic_function_values.clear();
     slots.clear();
     auto *fn = functions.at(f.symbol);
     const auto sig = type(f.signature);
+    const auto hf = hir_functions.find(f.symbol);
+    const bool capturing =
+        hf != hir_functions.end() && !hf->second->captures.empty();
+    const unsigned parameter_offset = capturing ? 1 : 0;
     std::vector<llvm::BasicBlock *> blocks;
     for (size_t b = 0; b < f.blocks.size(); ++b)
       blocks.push_back(
@@ -1216,7 +1523,7 @@ class Emitter {
     for (const auto &slot : f.slots) {
       llvm::Value *storage;
       if (slot.inout)
-        storage = fn->getArg(*slot.parameter);
+        storage = fn->getArg(*slot.parameter + parameter_offset);
       else
         storage = builder.CreateAlloca(lower_type(slot.type));
       slots.push_back(storage);
@@ -1227,10 +1534,40 @@ class Emitter {
       }
       active.push_back(flag);
     }
+    // A lambda entry receives borrowed capture slots from the single env row.
+    // Loading a field into its slot does not copy or take ownership, and the
+    // slot is not dropped when the lambda exits.
+    if (capturing) {
+      std::vector<TypeId> fields;
+      for (const auto &capture : hf->second->captures)
+        fields.push_back(capture.type);
+      auto *layout = env_record_type(fields);
+      auto *row = runtime("lang_vec_at_v1", builder.getPtrTy(),
+                          {fn->getArg(0), builder.getInt64(0)});
+      for (size_t c = 0; c < hf->second->captures.size(); ++c) {
+        const auto &capture = hf->second->captures[c];
+        std::optional<size_t> target;
+        for (size_t s = 0; s < f.slots.size(); ++s)
+          if (f.slots[s].binding == capture.local) {
+            target = s;
+            break;
+          }
+        if (!target || f.slots[*target].type != capture.type)
+          fail("capture local has no matching initialized slot");
+        if (f.slots[*target].parameter || f.slots[*target].inout ||
+            f.slots[*target].owner)
+          fail("capture local is marked as an owning parameter or local");
+        auto *value = builder.CreateLoad(
+            lower_type(capture.type),
+            builder.CreateStructGEP(layout, row, c));
+        builder.CreateStore(value, slots[*target]);
+      }
+    }
     for (size_t s = 0; s < f.slots.size(); ++s) {
       const auto &slot = f.slots[s];
       if (slot.parameter && !slot.inout)
-        builder.CreateStore(fn->getArg(*slot.parameter), slots[s]);
+        builder.CreateStore(fn->getArg(*slot.parameter + parameter_offset),
+                            slots[s]);
     }
     for (const auto &b : f.blocks) for (const auto &i : b.instructions)
       if (i.op == ir::Op::iteration_begin) {
@@ -1304,17 +1641,36 @@ class Emitter {
         if (storage.value)
           actual.push_back(storage.value);
         actual.push_back(storage.error);
-        auto *success = builder.CreateCall(signature(t.signature),
-                                           values.at(t.inputs[0]), actual);
-        builder.CreateCondBr(success, blocks[t.targets[0].value],
-                             blocks[t.targets[1].value]);
+        const auto &call = call_origin(t.origin, t.source);
+        if (call.kind == hir::CalleeKind::direct && call.direct_symbol) {
+          auto target = functions.at(*call.direct_symbol);
+          const auto hf = hir_functions.find(*call.direct_symbol);
+          if (hf != hir_functions.end() && !hf->second->captures.empty())
+            fail("direct throwing call targets a capturing lambda entry");
+          auto *success = builder.CreateCall(target, actual);
+          builder.CreateCondBr(success, blocks[t.targets[0].value],
+                               blocks[t.targets[1].value]);
+        } else if (call.kind == hir::CalleeKind::function_value) {
+          std::vector<llvm::Value *> method_args(actual.begin(), actual.end());
+          auto *callee = values.at(t.inputs[0]);
+          auto *code = builder.CreateExtractValue(callee, {0});
+          auto *env = builder.CreateExtractValue(callee, {1});
+          method_args.insert(method_args.begin(), env);
+          auto *success = builder.CreateCall(signature(t.signature, true),
+                                             code, method_args);
+          builder.CreateCondBr(success, blocks[t.targets[0].value],
+                               blocks[t.targets[1].value]);
+        } else {
+          fail("throwing call origin is neither direct nor function_value");
+        }
         break;
       }
       case ir::Exit::return_:
         if (sig.throws_type) {
           if (type(sig.result).kind != hir::TypeKind::Unit)
             builder.CreateStore(values.at(t.inputs[0]),
-                                fn->getArg(sig.parameters.size()));
+                                fn->getArg(sig.parameters.size() +
+                                           parameter_offset));
           builder.CreateRet(builder.getTrue());
         } else
           builder.CreateRet(values.at(t.inputs[0]));
@@ -1368,15 +1724,28 @@ public:
   Output run(SymbolId entry, const Options &options) {
     // Only concrete CFG functions and their used types reach LLVM. The shared
     // context also contains legal, non-executable generic declarations.
-    for (const auto &f : input.functions)
+    for (const auto &h : input.hir.module().functions)
+      hir_functions.emplace(h.symbol, &h);
+    for (const auto &f : input.functions) {
+      function_signatures.emplace(f.symbol, f.signature);
+      const auto hf = hir_functions.find(f.symbol);
+      const bool capturing =
+          hf != hir_functions.end() && !hf->second->captures.empty();
       functions.emplace(
           f.symbol,
           llvm::Function::Create(
-              signature(f.signature), llvm::GlobalValue::InternalLinkage,
+              signature(f.signature, capturing),
+              llvm::GlobalValue::InternalLinkage,
               "lang.fn." + std::to_string(f.symbol.value), module));
+    }
     auto chosen = functions.find(entry);
     if (chosen == functions.end())
       fail("entry SymbolId is not a verified function");
+    {
+      const auto hf = hir_functions.find(entry);
+      if (hf != hir_functions.end() && !hf->second->captures.empty())
+        fail("capturing lambda cannot be the executable entry");
+    }
     TypeId selected;
     for (auto &f : input.functions)
       if (f.symbol == entry)

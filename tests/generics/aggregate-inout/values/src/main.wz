@@ -24,7 +24,6 @@ struct Nested {
     pair Pair;
     choice Choice;
     unit Unit;
-    callback func(i32) i32;
     empty Empty;
     pad u64;
 }
@@ -57,12 +56,11 @@ func relay(slot inout Pair, x i32, y i32) {
     mutate(inout slot, x, y);
 }
 
-func replace_nested(slot inout Nested, callback func(i32) i32) i32 {
+func replace_nested(slot inout Nested) i32 {
     let old = slot.pair.x;
     slot = Nested(pair: Pair(x: old + 10, y: old + 20),
                   choice: Choice.Group(pair: Pair(x: 7, y: 8), tag: 9),
                   unit: noop(),
-                  callback: callback,
                   empty: Empty(),
                   pad: 18446744073709551615);
     return old;
@@ -122,19 +120,16 @@ func main() i32 {
     }
 
     // Whole-struct replacement changes every value field, including an empty
-    // struct, Unit field, fixed function value and a wide padding field.
+    // struct, Unit field and a wide padding field. Function values are owning
+    // after C5 and therefore intentionally not POD inout data.
     var nested = Nested(pair: Pair(x: 3, y: 4),
                         choice: Choice.None,
                         unit: noop(),
-                        callback: inc,
                         empty: Empty(),
                         pad: 42);
-    let old_nested = replace_nested(inout nested, dec);
+    let old_nested = replace_nested(inout nested);
     if old_nested != 3 || nested.pair.x != 13 || nested.pair.y != 23 {
         return 3;
-    }
-    if nested.callback(10) != 9 {  // the fixed function value was replaced
-        return 4;
     }
     if nested.pad != 18446744073709551615 {
         return 5;

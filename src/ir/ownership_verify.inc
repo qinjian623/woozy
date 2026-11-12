@@ -5,9 +5,23 @@
     const auto &h = m.hir.module();
     std::vector<unsigned> entry(f.slots.size(), 1); // bit 1 dead, bit 2 live
     const auto &sig = *types.find(f.signature);
+    auto capture_slot = [&](const Slot &slot) {
+      if (!slot.binding) return false;
+      for (const auto &hf : h.functions)
+        if (hf.symbol == f.symbol)
+          for (const auto &capture : hf.captures)
+            if (capture.local == *slot.binding)
+              return true;
+      return false;
+    };
     for (size_t n = 0; n < f.slots.size(); ++n) {
       const auto &s = f.slots[n];
       bool own = hir::classify_value(h, s.type).needs_drop;
+      if (capture_slot(s)) {
+        need(!s.owner && !s.parameter && !s.inout && !s.owning_parameter,
+             "capture slot cannot own or be an incoming parameter", f.source);
+        continue;
+      }
       need(own == s.owner.has_value(), "owning slot missing identity/live flag", f.source);
       if (s.parameter) {
         need(s.owning_parameter == (own && sig.parameters[*s.parameter].mode == hir::ParamMode::move),
@@ -70,7 +84,8 @@
       for (size_t n = p + 1; n < b.instructions.size(); ++n) {
         const auto &i = b.instructions[n];
         if (i.op == Op::store && i.slot != take.slot && f.slots[i.slot.value].owner && saved.contains(i.inputs[0])) consumed = true;
-        if (i.op == Op::struct_init || i.op == Op::enum_init || i.op == Op::vec_init)
+        if (i.op == Op::struct_init || i.op == Op::enum_init ||
+            i.op == Op::vec_init || i.op == Op::function)
           for (auto v : i.inputs) if (saved.contains(v)) consumed = true;
         if (i.op == Op::vec_set && saved.contains(i.inputs[2])) consumed = true;
         if (i.op == Op::replace_indirect && saved.contains(i.inputs[1])) consumed = true;
@@ -121,8 +136,12 @@
           need(producer && producer->op == Op::copy && producer->inputs.size() == 1,
                "owned Read lacks actual logical copy", i.source);
           const auto *load = definitions.at(producer->inputs[0]);
-          need(load->op == Op::load && f.slots.at(load->slot.value).owner ==
-               hir::OwnerRef{hir::OwnerKind::binding, std::get<hir::Read>(n.data).symbol.value},
+          const auto &load_slot = f.slots.at(load->slot.value);
+          const auto symbol = std::get<hir::Read>(n.data).symbol;
+          need(load->op == Op::load &&
+                   (load_slot.owner ==
+                        hir::OwnerRef{hir::OwnerKind::binding, symbol.value} ||
+                    (capture_slot(load_slot) && load_slot.binding == symbol)),
                "owned Read copies wrong source", i.source);
         } else if (n.kind() == hir::NodeKind::field_read) {
           need(producer && producer->op == Op::copy && producer->inputs.size() == 1 &&
@@ -145,10 +164,23 @@
     using Values = std::map<ValueId, unsigned>; // bit 1 transferred, bit 2 available
     Values empty_values;
     std::map<LocalSlotId, ValueId> temporary_values;
+    auto inert_function = [&](const Instruction &i) {
+      if (i.op != Op::function)
+        return false;
+      // No-origin function instructions are direct-call metadata or constant
+      // noncapturing values, never a captured environment temporary.
+      if (!i.origin || i.origin->value >= h.nodes.size())
+        return true;
+      const auto *v = std::get_if<hir::FunctionValue>(
+          &h.nodes[i.origin->value].data);
+      return v && v->captures.empty() && !v->bound;
+    };
     auto owned_value = [&](ValueId value) {
       auto definition = definitions.find(value);
-      if (definition != definitions.end() && definition->second->op == Op::string_literal)
-        return false; // Verified static bytes have no runtime owner.
+      if (definition != definitions.end() &&
+          (definition->second->op == Op::string_literal ||
+           inert_function(*definition->second)))
+        return false; // Static bytes / null-environment Fn have no owner.
       auto type = definition != definitions.end() ? definition->second->type
                                                  : parameters.at(value)->type;
       return hir::classify_value(h, type).needs_drop;
@@ -158,13 +190,16 @@
              op == Op::enum_init || op == Op::vec_init || op == Op::vec_read ||
              op == Op::vec_slice || op == Op::iteration_read ||
              op == Op::call || op == Op::system_call ||
-             op == Op::foreign_call || op == Op::binary;
+             op == Op::foreign_call || op == Op::binary ||
+             op == Op::function;
     };
     for (const auto &block : f.blocks) {
       for (const auto &p : block.parameters)
         if (owned_value(p.value)) empty_values.emplace(p.value, 1);
       for (const auto &i : block.instructions) {
-        if (i.result && produces_owner(i.op) && owned_value(*i.result))
+        if (i.result &&
+            produces_owner(i.op) &&
+            !inert_function(i) && owned_value(*i.result))
           empty_values.emplace(*i.result, 1);
         if (i.op == Op::store && f.slots[i.slot.value].owner &&
             f.slots[i.slot.value].owner->kind == hir::OwnerKind::temporary)
@@ -279,7 +314,8 @@
             require_element_owner(value, i.source);
         if (i.op == Op::store && f.slots[i.slot.value].owner)
           consume(i.inputs[0], i.source);
-        if (i.op == Op::struct_init || i.op == Op::enum_init || i.op == Op::vec_init)
+        if (i.op == Op::struct_init || i.op == Op::enum_init ||
+            i.op == Op::vec_init || i.op == Op::function)
           for (auto value : i.inputs) consume(value, i.source);
         if (i.op == Op::vec_set) consume(i.inputs[2], i.source);
         if (i.op == Op::replace_indirect) consume(i.inputs[1], i.source);
@@ -292,7 +328,8 @@
             values.at(value) = 2;
           }
         }
-        if (i.result && produces_owner(i.op) && owned_value(*i.result)) {
+        if (i.result && produces_owner(i.op) &&
+            !inert_function(i) && owned_value(*i.result)) {
           need(values.at(*i.result) == 1, "owned result overwritten before transfer", i.source);
           values.at(*i.result) = 2;
         }

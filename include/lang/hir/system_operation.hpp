@@ -34,7 +34,10 @@ enum class SystemOperation : uint16_t {
   unicode_normalize, unicode_casefold, unicode_boundaries,
   thread_wait_for, condvar_wait_for,
   ffi_buffer, ffi_buffer_mut, ffi_buffer_len, ffi_buffer_len_mut,
-  slice_view, slice_len, slice_sub, slice_to_vec
+  slice_view, slice_len, slice_sub, slice_to_vec,
+  // Source-level Weak. These are builtins owned by std/weak; there is no new
+  // Native IR opcode. upgrade returns the canonical std/option.Option[A].
+  weak_empty, weak_downgrade, weak_upgrade
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -300,9 +303,16 @@ inline constexpr std::array<SystemOperationSpec, 4> slice_system_operations{{
   {SystemOperation::slice_to_vec, "__woozy_slice_to_vec", "Vec[A]",
    {"Slice[A]"}, 1, "std/slice", 1},
 }};
+// Weak[A] only accepts the canonical source targets checked by the frontend.
+// downgrade/upgrade/empty never manufacture an address-keyed registry.
+inline constexpr std::array<SystemOperationSpec, 3> weak_system_operations{{
+  {SystemOperation::weak_empty, "__woozy_weak_empty", "Weak[A]", {}, 0, "std/weak", 1},
+  {SystemOperation::weak_downgrade, "__woozy_weak_downgrade", "Weak[A]", {"A"}, 1, "std/weak", 1},
+  {SystemOperation::weak_upgrade, "__woozy_weak_upgrade", "Option[A]", {"Weak[A]"}, 1, "std/weak", 1},
+}};
 inline constexpr auto all_system_operations = [] {
   std::array<SystemOperationSpec, system_operations.size() +
-      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size() + slice_system_operations.size()> all{};
+      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size() + slice_system_operations.size() + weak_system_operations.size()> all{};
   std::size_t index = 0;
   for (const auto &spec : system_operations) all[index++] = spec;
   for (const auto &spec : concurrency_system_operations) all[index++] = spec;
@@ -312,6 +322,7 @@ inline constexpr auto all_system_operations = [] {
   for (const auto &spec : process_system_operations) all[index++] = spec;
   for (const auto &spec : ffi_system_operations) all[index++] = spec;
   for (const auto &spec : slice_system_operations) all[index++] = spec;
+  for (const auto &spec : weak_system_operations) all[index++] = spec;
   return all;
 }();
 inline const SystemOperationSpec *system_operation_spec(SystemOperation operation) {

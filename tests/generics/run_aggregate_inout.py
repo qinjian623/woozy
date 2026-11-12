@@ -17,8 +17,10 @@ import sys
 sys.dont_write_bytecode = True
 
 POSITIVE = ('values', 'routes', 'correction-positive',
-            'fixed-callback-function-cycle',
             'reject-correction/generic-dependent-callback')
+# Approved C5: Function is owning and never POD inout. This former positive
+# fixture contains a concrete Function field inside the inout aggregate.
+C5_UNSUPPORTED = ('fixed-callback-function-cycle',)
 REJECT_CODES = {'E_CALL_ARGUMENT', 'E_CAPABILITY_UNAVAILABLE'}
 FORBIDDEN_REJECT_CODES = {'E_IR_INVALID', 'E_INTERNAL_ERROR'}
 
@@ -170,6 +172,25 @@ def main():
                     'helper differs from CLI output: ' + name
             row['helper_metadata_sha256'] = digest(metadata / 'metadata.json')
             row['status'] = 'passed'
+
+        for case in C5_UNSUPPORTED:
+            project = cases / case
+            manifest = project / 'lang.toml'
+            hashes = source_hashes(project)
+            for backend in ('native', 'python'):
+                row = dict(case=case, kind='c5-unsupported-check',
+                           backend=backend, source_sha256=hashes,
+                           status='failed')
+                report['runs'].append(row)
+                row['check'] = check = run(
+                    [args.cli, 'check', '--project', manifest,
+                     '--backend', backend, '--format', 'json'],
+                    library=library)
+                assert check['exit'] != 0, check
+                found = codes(check)
+                assert 'E_CAPABILITY_UNAVAILABLE' in found, (case, backend, found)
+                row['diagnostic_codes'] = found
+                row['status'] = 'passed'
 
         for group in ('reject-owned', 'reject-alias', 'reject-correction'):
             for manifest in sorted((cases / group).glob('*/lang.toml')):

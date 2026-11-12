@@ -1,0 +1,29 @@
+package app;
+
+import "std/box" as box;
+import "std/option" as option;
+import "std/weak" as weak;
+
+func main() i32 {
+    var weak_value Weak[box.Box[i32]] = weak.empty[box.Box[i32]]();
+    {
+        let cell = box.new[i32](5);
+        let alias = cell;
+        weak_value = weak.downgrade[box.Box[i32]](cell);
+        box.set(alias, 8);
+        switch weak.upgrade(weak_value) {
+        case option.Option.Some(strong):
+            if box.get(strong) != 8 { return 1; }
+        case option.Option.None:
+            return 2;
+        }
+    }
+
+    switch weak.upgrade(weak_value) {
+    case option.Option.Some(strong):
+        if box.get(strong) == 8 { return 3; }
+        return 4;
+    case option.Option.None:
+        return 0;
+    }
+}

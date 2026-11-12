@@ -219,11 +219,14 @@ func main() i32 {
         std::get<FunctionValue>(baseline.nodes[function_node->value].data);
     require(value.captures.empty() && !value.move_capture && !value.bound,
             "old FunctionValue gained capture metadata");
+    // Approved C5: a function value is an owning reference to code plus an
+    // optional environment. It is never trivial/POD inout, even though this
+    // sample is noncapturing.
     const auto &ops =
         classify_value(baseline, baseline.nodes[function_node->value].type);
-    require(ops.kind == ValueKind::trivial && !ops.needs_drop &&
+    require(ops.kind == ValueKind::function && ops.needs_drop &&
                 !ops.pod_inout,
-            "stage A changed the existing Function classification");
+            "Function is not classified as an owning non-POD value");
   }
 
   // Old aggregate initializers remain valid and mean the same value. The
@@ -249,40 +252,39 @@ func main() i32 {
     auto &value = std::get<FunctionValue>(
         m.nodes[function_node->value].data);
     value.captures.push_back({SymbolId{1}, SymbolId{2}, i32, false});
-    rejects(m, "captured or bound function value", "FunctionValue.captures");
+    rejects(m, "node child count", "FunctionValue.captures");
   }
   {
     auto m = baseline;
     auto &value = std::get<FunctionValue>(
         m.nodes[function_node->value].data);
     value.captures.push_back({SymbolId{1}, SymbolId{2}, i32, true});
-    rejects(m, "captured or bound function value",
-            "CaptureSource.move");
+    rejects(m, "node child count", "CaptureSource.move");
   }
   {
     auto m = baseline;
     std::get<FunctionValue>(m.nodes[function_node->value].data).move_capture =
         true;
-    rejects(m, "captured or bound function value",
+    rejects(m, "plain function value cannot claim move capture",
             "FunctionValue.move_capture");
   }
   {
     auto m = baseline;
     std::get<FunctionValue>(m.nodes[function_node->value].data).bound =
         BoundReceiver{i32, ParamMode::ordinary};
-    rejects(m, "captured or bound function value", "FunctionValue.bound");
+    rejects(m, "node child count", "FunctionValue.bound");
   }
   {
     auto m = baseline;
     std::get<FunctionValue>(m.nodes[function_node->value].data).bound =
         BoundReceiver{i32, ParamMode::move};
-    rejects(m, "captured or bound function value",
-            "BoundReceiver.mode=move");
+    rejects(m, "node child count", "BoundReceiver.mode=move");
   }
   {
     auto m = baseline;
     m.functions.at(0).captures.push_back(capture_binding(m));
-    rejects(m, "HirFunction captures", "HirFunction.captures");
+    rejects(m, "ordinary function cannot declare capture bindings",
+            "HirFunction.captures");
   }
   {
     auto m = baseline;
@@ -317,30 +319,42 @@ func main() i32 {
     m.ownership.locals.at(0).read_only_capture = true;
     require(contains(dump(m), "read_only_capture"),
             "true capture lifetime has no dump marker");
-    rejects(m, "read-only capture lifetime", "LocalLifetime.read_only_capture");
+    rejects(m, "read-only capture lifetime has no lambda capture entry",
+            "LocalLifetime.read_only_capture");
   }
   {
-    // Weak must be internable as a shape (arity one) for the next stage, but
-    // HIR verification must not silently classify it as a trivial value.
+    // Weak[T] is now a real frontend type, but only canonical targets are
+    // accepted. Vec and function values are direct targets; a scalar or an
+    // arbitrary user declaration is not a target even if its shape matches.
     auto m = baseline;
+    const auto vec = find_type(baseline, TypeKind::Vec);
     Type weak;
     weak.kind = TypeKind::Weak;
-    weak.type_args = {i32};
+    weak.type_args = {vec};
     auto id = m.types.intern(weak);
     require(id.value != 0, "Weak TypeId is invalid");
-    rejects(m, "Weak type has no verified source construction path",
-            "TypeKind::Weak");
+    require(verify(m).success(), "canonical Weak[Vec[T]] type was rejected");
+
+    auto invalid = baseline;
     Type bad;
     bad.kind = TypeKind::Weak;
+    bad.type_args = {i32};
+    (void)invalid.types.intern(bad);
+    rejects(invalid, "Weak target is not a canonical source declaration",
+            "TypeKind::Weak non-canonical target");
+
+    auto arity_module = baseline;
+    Type bad_arity;
+    bad_arity.kind = TypeKind::Weak;
     bool arity0 = false, arity2 = false;
     try {
-      (void)m.types.intern(bad);
+      (void)arity_module.types.intern(bad_arity);
     } catch (const std::invalid_argument &) {
       arity0 = true;
     }
-    bad.type_args = {i32, i32};
+    bad_arity.type_args = {i32, i32};
     try {
-      (void)m.types.intern(bad);
+      (void)arity_module.types.intern(bad_arity);
     } catch (const std::invalid_argument &) {
       arity2 = true;
     }
@@ -356,8 +370,8 @@ func main() i32 {
             << " FunctionValue=" << sizeof(FunctionValue)
             << " HirFunction=" << sizeof(HirFunction)
             << " LocalLifetime=" << sizeof(LocalLifetime)
-            << "; old HIR accepted; captures/move/bound/HirFunction.captures/"
-               "constant/read_only_capture/Weak rejected\n";
+            << "; old HIR accepted; Function is owning non-POD; forged "
+               "capture/move/bound/capture-lifetime metadata rejected\n";
 }
 } // namespace
 

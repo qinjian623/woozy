@@ -1,0 +1,10 @@
+package app;
+
+import "std/os" as os;
+import "std/weak" as weak;
+
+func main() i32 {
+    let file = os.stdin();
+    let w Weak[os.File] = weak.downgrade[os.File](file);
+    return 0;
+}

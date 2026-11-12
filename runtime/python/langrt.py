@@ -1581,7 +1581,7 @@ def _math_call(name, args):
         return math.inf
 
 
-def value_call(operation, args, element=None, tags=None):
+def value_call(operation, args, element=None, tags=None, weak_box=False):
     try:
         if operation.startswith('math_'):
             return _math_call(operation[5:], args)
@@ -1625,6 +1625,21 @@ def value_call(operation, args, element=None, tags=None):
             return (tags['Some'], (value,)) if present else (tags['None'], ())
         if operation == 'vec_resize': return args[0].resize(args[1], args[2])
         if operation == 'vec_clear': return args[0].clear()
+        if operation == 'weak_empty': return Weak()
+        if operation == 'weak_downgrade':
+            # Box is a canonical wrapper around one private Vec cell.  The
+            # emitter marks that projection; no arbitrary single-field struct
+            # is ever unwrapped here.
+            target = args[0][0] if weak_box else args[0]
+            return Weak(target)
+        if operation == 'weak_upgrade':
+            target = args[0].upgrade()
+            if target is None:
+                return tags['None'], ()
+            # A Box upgrade re-wraps the private cell into the canonical Box
+            # tuple.  The upgraded strong cell owner is transferred once into
+            # the Option payload; there is no extra retain.
+            return tags['Some'], ((target,) if weak_box else target,)
     except (MemoryError, OverflowError):
         raise Panic('value library allocation failed') from None
     raise RuntimeError('invalid checked value operation')

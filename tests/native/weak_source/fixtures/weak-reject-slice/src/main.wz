@@ -1,0 +1,11 @@
+package app;
+
+import "std/slice" as slice;
+import "std/weak" as weak;
+
+func main() i32 {
+    let values Vec[i32] = [1, 2];
+    let borrowed Slice[i32] = slice.view[i32](values, 0, 2);
+    let w Weak[Slice[i32]] = weak.empty[Slice[i32]]();
+    return 0;
+}

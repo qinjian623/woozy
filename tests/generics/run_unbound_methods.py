@@ -16,7 +16,9 @@ SIMPLE_CASES = {'cross-package', 'public-const-phantom', 'local-const-aliases',
                 'local-const-call-controls'}
 EXPECTED_VEC_ALLOCATIONS = {'core': 1, 'move-inout': 3, 'throws': 3,
                             'const-alias-owned-failure': 6}
-EXPECTED_NATIVE_IR_REJECTIONS = {'core': 11, 'move-inout': 13, 'throws': 6,
+# C5 makes Function a nonzero owning value, so the core probe now also rejects
+# the "borrowed-parameter-made-owning" mutation (12 instead of 11).
+EXPECTED_NATIVE_IR_REJECTIONS = {'core': 12, 'move-inout': 13, 'throws': 6,
                                  'const-alias-owned-failure': 13}
 EXPECTED_MUTATIONS = {
     'core': set(),
@@ -66,7 +68,6 @@ REJECTS = {
     'reject-phantom': {'E_TYPE_MISMATCH'},
     'reject-expected-mode': {'E_TYPE_MISMATCH'},
     'reject-private': {'E_PRIVATE_ACCESS'},
-    'reject-capture': {'E_TYPE_MISMATCH'},
     'reject-named': {'E_CALL_ARGUMENT'},
     'reject-constructor': {'E_TYPE_MISMATCH'},
     'reject-vec-inout': {'E_CAPABILITY_UNAVAILABLE'},

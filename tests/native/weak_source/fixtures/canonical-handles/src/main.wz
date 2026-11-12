@@ -1,0 +1,121 @@
+package app;
+
+import "std/ipc" as ipc;
+import "std/option" as option;
+import "std/os" as os;
+import "std/sync" as sync;
+import "std/thread" as thread;
+import "std/weak" as weak;
+
+func wait_flag(flag sync.AtomicI64) i64 {
+    for sync.load(flag) == 0 {}
+    return 9;
+}
+
+func main() i32 throws os.Error {
+    // The runner holds the ThreadState while the thread runs. Dropping the only
+    // source Thread value must not close the Weak slot yet.
+    let flag = sync.atomic_i64(0);
+    var weak_thread Weak[thread.Thread] = weak.empty[thread.Thread]();
+    {
+        let worker = thread.spawn[sync.AtomicI64](wait_flag, flag);
+        weak_thread = weak.downgrade(worker);
+    }
+    {
+        let running = weak.upgrade(weak_thread);
+        switch running {
+        case option.Option.Some(handle):
+            sync.store(flag, 1);
+            if !thread.wait_for(handle, 2000000000) { return 1; }
+            if !(thread.join(handle) == 9) { return 2; }
+        case option.Option.None:
+            return 3;
+        }
+    }
+    // After completion the runner and this last handle are released. Poll a
+    // bounded number of times for the deterministic final detach.
+    var settled = false;
+    for var i i32 = 0; i < 100000 && !settled; i += 1 {
+        let probe = weak.upgrade(weak_thread);
+        switch probe {
+        case option.Option.Some(handle):
+        case option.Option.None:
+            settled = true;
+        }
+    }
+    if !settled { return 4; }
+
+    var weak_mutex Weak[sync.Mutex] = weak.empty[sync.Mutex]();
+    {
+        let m = sync.mutex();
+        weak_mutex = weak.downgrade(m);
+        let alive = weak.upgrade(weak_mutex);
+        switch alive {
+        case option.Option.Some(mm):
+            sync.lock(mm);
+            sync.unlock(mm);
+        case option.Option.None:
+            return 5;
+        }
+    }
+    switch weak.upgrade(weak_mutex) {
+    case option.Option.Some(mm):
+        return 6;
+    case option.Option.None:
+    }
+
+    var weak_cond Weak[sync.Condvar] = weak.empty[sync.Condvar]();
+    {
+        let c = sync.condvar();
+        weak_cond = weak.downgrade(c);
+        let alive = weak.upgrade(weak_cond);
+        switch alive {
+        case option.Option.Some(cc):
+            sync.notify_one(cc);
+        case option.Option.None:
+            return 7;
+        }
+    }
+    switch weak.upgrade(weak_cond) {
+    case option.Option.Some(cc):
+        return 8;
+    case option.Option.None:
+    }
+
+    var weak_atomic Weak[sync.AtomicI64] = weak.empty[sync.AtomicI64]();
+    {
+        let a = sync.atomic_i64(4);
+        weak_atomic = weak.downgrade(a);
+        let alive = weak.upgrade(weak_atomic);
+        switch alive {
+        case option.Option.Some(aa):
+            if !(sync.load(aa) == 4) { return 9; }
+        case option.Option.None:
+            return 10;
+        }
+    }
+    switch weak.upgrade(weak_atomic) {
+    case option.Option.Some(aa):
+        return 11;
+    case option.Option.None:
+    }
+
+    var weak_memory Weak[ipc.Memory] = weak.empty[ipc.Memory]();
+    {
+        let memory = ipc.map_anon(4096, ipc.PROT_READ | ipc.PROT_WRITE);
+        weak_memory = weak.downgrade(memory);
+        let alive = weak.upgrade(weak_memory);
+        switch alive {
+        case option.Option.Some(mm):
+            if !(ipc.len(mm) == 4096) { return 12; }
+        case option.Option.None:
+            return 13;
+        }
+    }
+    switch weak.upgrade(weak_memory) {
+    case option.Option.Some(mm):
+        return 14;
+    case option.Option.None:
+    }
+    return 0;
+}

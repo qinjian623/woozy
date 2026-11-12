@@ -1,0 +1,42 @@
+package app;
+
+enum E { Bad; }
+
+func inc(x i32) i32 { return x + 1; }
+func fail(x i32) i32 throws E {
+    if x == 3 { throw E.Bad; }
+    return x * 2;
+}
+func apply(op func(i32) i32, x i32) i32 { return op(x); }
+func maker() (func(i32) i32) { return inc; }
+
+struct Holder { f func(i32) i32; }
+
+func main() i32 {
+    let a = inc;
+    let b = a;
+    if inc(0) != 1 || a(1) != 2 || b(2) != 3 || apply(a, 3) != 4 { return 1; }
+    let holder = Holder(f: inc);
+    let values Vec[func(i32) i32] = [a, holder.f];
+    if values[0](4) != 5 || values[1](5) != 6 { return 2; }
+    let made = maker();
+    if made(6) != 7 { return 7; }
+    try {
+        let direct = fail(3);
+        return 3;
+    } catch e E {
+    }
+    let g = fail;
+    try {
+        let success = g(4);
+        if success != 8 { return 4; }
+    } catch e E {
+        return 5;
+    }
+    try {
+        let indirect = g(3);
+        return 6;
+    } catch e E {
+    }
+    return 0;
+}

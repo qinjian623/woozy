@@ -101,10 +101,6 @@ REJECTS = {
         "struct S{value i32;}impl S{func echo(owner move S)S{return move owner;}}func main(){let s=S(value:1);let r=(move s).echo();}",
         "E_CALL_ARGUMENT",
     ),
-    "bound-method-value": (
-        BOX + "func main(){let x=Box(items:[1]);let f=(move x).take;}",
-        "E_TYPE_MISMATCH",
-    ),
     "ambiguous-application": (
         "struct S{value i32;}trait Echo[A]{func echo(owner move Self)Self;}impl Echo[i32] for S{func echo(owner move Self)Self{return move owner;}}impl Echo[bool] for S{func echo(owner move Self)Self{return move owner;}}func main(){let s=S(value:1);let r=(move s).echo();}",
         "E_TYPE_MISMATCH",

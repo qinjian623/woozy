@@ -76,8 +76,40 @@
     llvm::AllocaInst *scratch = nullptr;
     return element_storage(id, value, scratch);
   }
-  bool owning(TypeId id) const {
-    return hir::classify_value(input.hir.module(), id).needs_drop;
+  // A Function or Weak always owns a runtime reference (its environment/control
+  // slot) even while the shared HIR classifier still treats Function as
+  // trivial. Aggregates containing either must be copied/dropped field-wise.
+  bool contains_function(TypeId id, std::set<uint64_t> &active,
+                         unsigned depth) {
+    if (depth > 64) return false;
+    const auto &t = type(id);
+    if (t.kind == hir::TypeKind::Function || t.kind == hir::TypeKind::Weak)
+      return true;
+    if (t.kind != hir::TypeKind::NominalStruct &&
+        t.kind != hir::TypeKind::NominalEnum)
+      return false;
+    if (!active.insert(id.value).second) return false;
+    if (t.kind == hir::TypeKind::NominalStruct) {
+      for (auto field : aggregates.fields(id))
+        if (contains_function(field.type, active, depth + 1)) {
+          active.erase(id.value);
+          return true;
+        }
+    } else {
+      for (const auto &variant : aggregates.declaration(id).variants)
+        for (auto field : aggregates.fields(id, variant.symbol))
+          if (contains_function(field.type, active, depth + 1)) {
+            active.erase(id.value);
+            return true;
+          }
+    }
+    active.erase(id.value);
+    return false;
+  }
+  bool owning(TypeId id) {
+    std::set<uint64_t> active;
+    return hir::classify_value(input.hir.module(), id).needs_drop ||
+           contains_function(id, active, 0);
   }
   llvm::Value *runtime(const char *name, llvm::Type *result,
                        std::vector<llvm::Value *> args) {
@@ -175,6 +207,44 @@
     if (t.kind == hir::TypeKind::Vec) {
       auto *value = builder.CreateLoad(builder.getPtrTy(), address);
       builder.CreateCall(vec_rc(copy), {value});
+    } else if (t.kind == hir::TypeKind::Function) {
+      auto *value = builder.CreateLoad(fn_type, address);
+      auto *env = builder.CreateExtractValue(value, {1});
+      auto *present = llvm::BasicBlock::Create(context, "fn.env", fn);
+      auto *done = llvm::BasicBlock::Create(context, "fn.done", fn);
+      builder.CreateCondBr(
+          builder.CreateICmpNE(env,
+                               llvm::ConstantPointerNull::get(
+                                   builder.getPtrTy())),
+          present, done);
+      builder.SetInsertPoint(present);
+      builder.CreateCall(
+          module.getOrInsertFunction(
+              copy ? "lang_vec_retain_v1" : "lang_vec_release_v1",
+              llvm::FunctionType::get(builder.getVoidTy(),
+                                      {builder.getPtrTy()}, false)),
+          {env});
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
+    } else if (t.kind == hir::TypeKind::Weak) {
+      auto *value = builder.CreateLoad(weak_type, address);
+      auto *control = builder.CreateExtractValue(value, {0});
+      auto *present = llvm::BasicBlock::Create(context, "weak.control", fn);
+      auto *done = llvm::BasicBlock::Create(context, "weak.done", fn);
+      builder.CreateCondBr(
+          builder.CreateICmpNE(control,
+                               llvm::ConstantPointerNull::get(
+                                   builder.getPtrTy())),
+          present, done);
+      builder.SetInsertPoint(present);
+      builder.CreateCall(
+          module.getOrInsertFunction(
+              copy ? "lang_weak_retain_v1" : "lang_weak_release_v1",
+              llvm::FunctionType::get(builder.getVoidTy(),
+                                      {builder.getPtrTy()}, false)),
+          {control});
+      builder.CreateBr(done);
+      builder.SetInsertPoint(done);
     } else if (t.kind == hir::TypeKind::Slice) {
       // The storage already holds a live 24-byte descriptor for copy; drop
       // clears it before ending the pin and releasing the strong reference.

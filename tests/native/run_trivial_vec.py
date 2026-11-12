@@ -1,5 +1,10 @@
 #!/usr/bin/env python3
-"""Check null value-ops for trivial Vec elements and owning nested Vecs."""
+"""Check null value-ops for trivial Vec elements and owning nested/function Vecs.
+
+A Function value owns a possible environment, so Vec[func] is no longer a
+trivial element even when every value in the fixture currently has a null
+environment. The two callbacks are still real type-specific value operations.
+"""
 from __future__ import annotations
 
 import argparse
@@ -163,10 +168,13 @@ def main():
                                      else f"O{opt}.after.ll")).read_text(
                 encoding="utf-8")
             calls, null_calls, owning = parse_ir_calls(ir_text)
-            need(len(null_calls) == 8,
-                 f"O{opt}: expected 8 trivial null/null calls, got {len(null_calls)}")
-            need(len(owning) == 1,
-                 f"O{opt}: expected 1 owning nested Vec callback call, got {len(owning)}")
+            # Trivial scalar/struct/Unit slices keep null callbacks. Vec[func]
+            # now owns a possibly non-null environment and the nested Vec owns
+            # its elements, so both use generated copy/drop callbacks.
+            need(len(null_calls) == 7,
+                 f"O{opt}: expected 7 trivial null/null calls, got {len(null_calls)}")
+            need(len(owning) == 2,
+                 f"O{opt}: expected 2 owning callback calls, got {len(owning)}")
             summary["backend"][f"O{opt}"] = {
                 "calls": len(calls), "null_copy_drop": len(null_calls),
                 "owning_copy_drop": len(owning), "call_records": calls,

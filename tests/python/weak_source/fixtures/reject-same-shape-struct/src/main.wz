@@ -1,0 +1,13 @@
+package app;
+
+import "std/weak" as weak;
+
+struct SameShape {
+    cell Vec[i32];
+}
+
+func main() i32 {
+    let value = SameShape(cell: [1]);
+    let w Weak[SameShape] = weak.downgrade[SameShape](value);
+    return 0;
+}

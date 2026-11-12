@@ -1,0 +1,13 @@
+package app;
+
+import "std/weak" as weak;
+
+struct Payload {
+    value i32;
+}
+
+func main() i32 {
+    let payload = Payload(value: 1);
+    let w Weak[Payload] = weak.downgrade[Payload](payload);
+    return 0;
+}

@@ -1,0 +1,8 @@
+# Registration fragment for the Root CMakeLists.txt owner. The test needs the
+# same frontend/IR sources as lang_reference_frontend_test.
+add_executable(lang_reference_closure_frontend_test
+  tests/reference_closure_frontend/reference_closure_frontend_test.cpp
+  src/ir/lower.cpp src/ir/verify.cpp)
+target_link_libraries(lang_reference_closure_frontend_test PRIVATE lang_sema)
+add_test(NAME reference_closure_frontend
+  COMMAND lang_reference_closure_frontend_test ${CMAKE_CURRENT_SOURCE_DIR})

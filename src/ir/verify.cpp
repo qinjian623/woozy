@@ -42,6 +42,12 @@ class Verifier {
     need(t != nullptr, "invalid TypeId", s);
     return *t;
   }
+  const hir::HirFunction *hir_function_for(SymbolId symbol) const {
+    for (const auto &f : m.hir.module().functions)
+      if (f.symbol == symbol)
+        return &f;
+    return nullptr;
+  }
   void function(const Function &f) const {
     detail::AggregateTypes aggregates(m.hir.module());
     const auto s = f.source;
@@ -60,11 +66,37 @@ class Verifier {
                  slot.inout ==
                      (sig.parameters[p].mode == hir::ParamMode::inout),
              "parameter slot type/mode mismatch", s);
-      } else
+      } else {
         need(!slot.inout, "local slot cannot be an incoming pointer", s);
+        if (slot.binding) {
+          const auto *h = hir_function_for(f.symbol);
+          bool capture = false;
+          if (h)
+            for (const auto &binding : h->captures)
+              if (binding.local == *slot.binding) {
+                capture = true;
+                need(binding.type == slot.type && !slot.owner,
+                     "capture local slot type/ownership", s);
+              }
+          (void)capture;
+        }
+      }
     }
     need(parameters.size() == sig.parameters.size(), "missing parameter slot",
          s);
+    if (const auto *h = hir_function_for(f.symbol)) {
+      for (const auto &capture : h->captures) {
+        bool found = false;
+        for (const auto &slot : f.slots)
+          if (slot.binding == capture.local) {
+            need(slot.type == capture.type && !slot.parameter && !slot.inout &&
+                     !slot.owner,
+                 "capture local slot identity", s);
+            found = true;
+          }
+        need(found, "capture local has no entry slot", s);
+      }
+    }
     struct Def {
       size_t block, position;
       TypeId type;
@@ -304,9 +336,18 @@ class Verifier {
       return d;
     };
     Set all_slots, incoming;
+    const auto *h = hir_function_for(f.symbol);
+    auto capture_slot = [&](size_t index) {
+      if (!h || index >= f.slots.size() || !f.slots[index].binding)
+        return false;
+      for (const auto &capture : h->captures)
+        if (capture.local == *f.slots[index].binding)
+          return true;
+      return false;
+    };
     for (size_t i = 0; i < f.slots.size(); ++i) {
       all_slots.insert(i);
-      if (f.slots[i].parameter)
+      if (f.slots[i].parameter || capture_slot(i))
         incoming.insert(i);
     }
     std::vector<Set> in(f.blocks.size(), all_slots),
@@ -765,12 +806,56 @@ class Verifier {
                  i.source);
           }
           break;
-        case Op::function:
-          arity(0);
-          need(functions.contains(i.function) &&
-                   functions.at(i.function) == i.type,
-               "unknown function identity/signature", i.source);
+        case Op::function: {
+          need(functions.contains(i.function),
+               "unknown function identity", i.source);
+          if (!i.origin) {
+            need(functions.at(i.function) == i.type,
+                 "unknown function identity/signature", i.source);
+            arity(0);
+            const auto *h = hir_function_for(i.function);
+            need(!h || h->captures.empty(),
+                 "capturing function used as a direct callee", i.source);
+            break;
+          }
+          need(i.origin->value < m.hir.module().nodes.size(),
+               "function instruction origin", i.source);
+          const auto &origin = m.hir.module().nodes[i.origin->value];
+          if (const auto *v = std::get_if<hir::FunctionValue>(&origin.data)) {
+            need(v->symbol == i.function && origin.type == i.type,
+                 "function instruction differs from its HIR value", i.source);
+            if (v->bound) {
+              const auto &full = type(functions.at(i.function), i.source);
+              need(!full.parameters.empty(), "bound method has no Self",
+                   i.source);
+              auto trimmed = full;
+              trimmed.parameters.erase(trimmed.parameters.begin());
+              need(type(i.type, i.source) == trimmed,
+                   "bound function instruction signature", i.source);
+            } else
+              need(functions.at(i.function) == i.type,
+                   "unknown function identity/signature", i.source);
+            const size_t expected = v->bound ? 1 : v->captures.size();
+            arity(expected);
+            for (size_t a = 0; a < expected; ++a) {
+              value(a);
+              const auto expected_type =
+                  v->bound ? v->bound->type : v->captures[a].type;
+              need(args[a].type == expected_type,
+                   "function environment input type/order", i.source);
+            }
+          } else if (const auto *c =
+                         std::get_if<hir::ConstantLiteral>(&origin.data)) {
+            const auto *v = std::get_if<hir::FunctionValue>(&c->value.data);
+            need(v && v->symbol == i.function && v->captures.empty() &&
+                     !v->bound && !v->move_capture && origin.type == i.type,
+                 "constant function instruction differs from HIR", i.source);
+            arity(0);
+          } else
+            need(false, "function instruction origin is not a function value",
+                 i.source);
           break;
+        }
         case Op::load:
         case Op::address:
         case Op::store: {

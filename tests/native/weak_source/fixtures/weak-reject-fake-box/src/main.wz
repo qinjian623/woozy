@@ -1,0 +1,15 @@
+package app;
+
+import "std/weak" as weak;
+
+// Same single private Vec field shape as std/box.Box, but a user declaration
+// with a different module and name. Layout must not make it eligible.
+struct FakeBox {
+    cell Vec[i32];
+}
+
+func main() i32 {
+    let fake = FakeBox(cell: [1]);
+    let w Weak[FakeBox] = weak.downgrade(fake);
+    return 0;
+}

@@ -1,0 +1,18 @@
+--- tests/native/CMakeLists.txt	2026-11-12 13:45:45.928681947 +0800
++++ /tmp/CMakeLists.txt.weak	2026-11-12 13:54:17.574388469 +0800
+@@ -131,6 +131,15 @@
+     --helper $<TARGET_FILE:lang_native_helper> --root ${LANG_SOURCE_ROOT}
+     --out ${CMAKE_CURRENT_BINARY_DIR}/reference-values-backend-results)
+   set_tests_properties(native.reference_values_backend PROPERTIES TIMEOUT 300)
++  # Source Weak operations on the published canonical targets. The runner
++  # executes the Root reference_values Weak subset at O0/O2 plus the additional
++  # handle/generic/alias/reject source cases. See tests/native/weak_source.
++  add_test(NAME native.weak_source COMMAND ${LANG_TEST_PYTHON}
++    ${CMAKE_CURRENT_LIST_DIR}/weak_source/run_weak_source.py
++    --cli $<TARGET_FILE:woozyc> --helper $<TARGET_FILE:lang_native_helper>
++    --root ${LANG_SOURCE_ROOT}
++    --out ${CMAKE_CURRENT_BINARY_DIR}/weak-source-results)
++  set_tests_properties(native.weak_source PROPERTIES TIMEOUT 900)
+ endif()
+ add_executable(lang_native_float_probe float_probe.cpp)
+ target_include_directories(lang_native_float_probe SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})

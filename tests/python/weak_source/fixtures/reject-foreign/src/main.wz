@@ -1,0 +1,12 @@
+package app;
+
+import "host" as host;
+import "std/weak" as weak;
+
+func probe(value host.Foreign) Weak[host.Foreign] {
+    return weak.downgrade[host.Foreign](value);
+}
+
+func main() i32 {
+    return 0;
+}

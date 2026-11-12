@@ -1,0 +1,10 @@
+package app;
+
+import "std/ipc" as ipc;
+import "std/weak" as weak;
+
+func main() i32 {
+    // ipc.Mutex is a multi-field wrapper around Memory; it is not canonical.
+    let w Weak[ipc.Mutex] = weak.empty[ipc.Mutex]();
+    return 0;
+}

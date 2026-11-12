@@ -45,9 +45,8 @@ enum class TypeKind {
   // Appended to preserve the published numeric TypeKind values.
   Slice,
   // Weak[T]: type_args[0] is the target. Appended for the reference-values
-  // schema. Until the source spelling and ownership path are implemented,
-  // HIR verification rejects every occurrence instead of treating it as a
-  // trivial value.
+  // schema. Source construction and the std/weak operations are verified by
+  // the frontend; runtime emission remains a separate owner.
   Weak
 };
 enum class ParamMode { ordinary, inout, move };
@@ -657,9 +656,8 @@ enum class ValueKind {
   // A borrowed Slice inline value. It owns one strong Vec reference and one
   // iteration pin; copy and drop use the private 24-byte runtime ABI.
   slice,
-  // Appended for the reference-values schema. Their value operations are not
-  // implemented yet, so classify_value keeps returning its existing result
-  // for Function and never produces these kinds in this stage.
+  // Appended for the reference-values schema. Function values own an optional
+  // shared environment; Weak owns a control edge. Both are non-POD.
   function,
   weak
 };

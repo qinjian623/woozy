@@ -1,0 +1,11 @@
+package app;
+
+import "std/slice" as slice;
+import "std/weak" as weak;
+
+func main() i32 {
+    let values Vec[i32] = [1];
+    let view Slice[i32] = slice.view(values, 0, 1);
+    let w Weak[Slice[i32]] = weak.downgrade[Slice[i32]](view);
+    return 0;
+}

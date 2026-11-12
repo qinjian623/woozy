@@ -1,0 +1,9 @@
+package app;
+
+import "std/weak" as weak;
+
+func main() i32 {
+    let text string = "not a weak target";
+    let w Weak[string] = weak.downgrade[string](text);
+    return 0;
+}

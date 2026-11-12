@@ -73,6 +73,21 @@ if(BUILD_TESTING)
   add_executable(lang_hir_test tests/hir/hir_test.cpp)
   target_link_libraries(lang_hir_test PRIVATE lang_hir)
   add_test(NAME hir.scalar COMMAND lang_hir_test)
+  # First source Weak frontend stage. Real .wz fixtures also lower verified HIR
+  # to NativeIR to reject forged operation metadata. Runtime emission is owned
+  # by the native/python backends.
+  add_executable(lang_reference_frontend_test
+    tests/reference_frontend/reference_frontend_test.cpp
+    src/ir/lower.cpp src/ir/verify.cpp)
+  target_link_libraries(lang_reference_frontend_test PRIVATE lang_sema)
+  add_test(NAME reference_frontend.weak
+    COMMAND lang_reference_frontend_test ${CMAKE_CURRENT_SOURCE_DIR})
+  add_executable(lang_reference_closure_frontend_test
+    tests/reference_closure_frontend/reference_closure_frontend_test.cpp
+    src/ir/lower.cpp src/ir/verify.cpp)
+  target_link_libraries(lang_reference_closure_frontend_test PRIVATE lang_sema)
+  add_test(NAME reference_closure_frontend
+    COMMAND lang_reference_closure_frontend_test ${CMAKE_CURRENT_SOURCE_DIR})
   add_executable(lang_hir_reference_values_schema_test
     tests/hir/reference_values_schema/reference_values_schema_test.cpp)
   target_link_libraries(lang_hir_reference_values_schema_test PRIVATE lang_sema)

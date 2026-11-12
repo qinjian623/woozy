@@ -7,7 +7,10 @@
     if (auto found = thread_bridges.find(entry_type); found != thread_bridges.end())
       return found->second;
     auto argument = type(entry_type).parameters.at(0).type;
-    auto *layout = llvm::StructType::get(context, {builder.getPtrTy(), lower_type(argument)});
+    // The context starts with the complete LangFn value, then A. The entry code
+    // receives the saved environment explicitly, so a capturing entry works
+    // even when A is a scalar that has no owning value operation.
+    auto *layout = llvm::StructType::get(context, {fn_type, lower_type(argument)});
     auto make = [&](llvm::Type *result, const char *name) {
       return llvm::Function::Create(
           llvm::FunctionType::get(result, {builder.getPtrTy()}, false),
@@ -17,18 +20,32 @@
     auto ip = builder.saveIP();
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", bridge.entry));
     auto *data = bridge.entry->getArg(0);
-    auto *entry = builder.CreateLoad(builder.getPtrTy(), builder.CreateStructGEP(layout, data, 0));
+    auto *saved = builder.CreateLoad(
+        fn_type, builder.CreateStructGEP(layout, data, 0));
+    auto *code = builder.CreateExtractValue(saved, {0});
+    auto *env = builder.CreateExtractValue(saved, {1});
     auto *value = builder.CreateLoad(lower_type(argument), builder.CreateStructGEP(layout, data, 1));
-    builder.CreateRet(builder.CreateCall(signature(entry_type), entry, {value}));
-    if (owning(argument)) {
-      for (bool copy : {true, false}) {
-        auto *fn = make(builder.getVoidTy(), copy ? "lang.thread.copy" : "lang.thread.drop");
-        (copy ? bridge.copy : bridge.drop) = fn;
-        builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
-        builder.CreateCall(value_op(argument, copy),
-            {builder.CreateStructGEP(layout, fn->getArg(0), 1)});
-        builder.CreateRetVoid();
+    builder.CreateRet(builder.CreateCall(signature(entry_type, true), code,
+                                         {env, value}));
+    for (bool copy : {true, false}) {
+      auto *fn = make(builder.getVoidTy(), copy ? "lang.thread.copy" : "lang.thread.drop");
+      (copy ? bridge.copy : bridge.drop) = fn;
+      builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+      auto *address = fn->getArg(0);
+      // Copy in declaration order, drop in reverse order. The Fn environment is
+      // always handled; A uses its own value operation even when trivial.
+      if (copy) {
+        builder.CreateCall(value_op(entry_type, true),
+                           {builder.CreateStructGEP(layout, address, 0)});
+        builder.CreateCall(value_op(argument, true),
+                           {builder.CreateStructGEP(layout, address, 1)});
+      } else {
+        builder.CreateCall(value_op(argument, false),
+                           {builder.CreateStructGEP(layout, address, 1)});
+        builder.CreateCall(value_op(entry_type, false),
+                           {builder.CreateStructGEP(layout, address, 0)});
       }
+      builder.CreateRetVoid();
     }
     builder.restoreIP(ip);
     thread_bridges.emplace(entry_type, bridge);
