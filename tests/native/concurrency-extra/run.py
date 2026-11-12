@@ -112,7 +112,8 @@ def main():
         runtime_source = (args.root / 'tests/native/concurrency-extra' /
                           'runtime_timeout_test.cpp')
         runtime_sources = [args.root / 'runtime/native' / name for name in
-                           ('thread.cpp', 'sync.cpp', 'panic.cpp', 'alloc.cpp')]
+                           ('thread.cpp', 'sync.cpp', 'panic.cpp', 'alloc.cpp',
+                            'weak.cpp')]
         for opt in (0, 2):
             executable = args.out / 'runtime' / f'timeout-O{opt}'
             executable.parent.mkdir(parents=True, exist_ok=True)
@@ -139,7 +140,7 @@ def main():
                          'static_timeout_fixture.cpp')
         static_sources = [args.root / 'runtime/native' / name for name in
                           ('thread.cpp', 'sync.cpp', 'panic.cpp', 'alloc.cpp',
-                           'start.cpp', 'freestanding.cpp')]
+                           'weak.cpp', 'start.cpp', 'freestanding.cpp')]
         for opt in (0, 2):
             executable = args.out / 'static' / f'timeout-O{opt}'
             executable.parent.mkdir(parents=True, exist_ok=True)

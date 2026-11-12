@@ -157,7 +157,7 @@ void suite() {
   }
   need(load(&shared_counts.drops)==1,"join returned before context cleanup");
 
-  LangHandle sample{1,LangHandleKind::atomic_i64,count_destroy};LangHandle *retainers[8];
+  LangHandle sample{1,LangHandleKind::atomic_i64,count_destroy,nullptr};LangHandle *retainers[8];
   for(auto &retainer:retainers) {
     JoinInput input{&sample,0};retainer=lang_thread_spawn_v1(retain_entry,&input,sizeof(input),copy_join,drop_join);
     need(lang_thread_error_v1(retainer)==0,"retainer creation failed");
@@ -181,8 +181,8 @@ void suite() {
   until([&]{return load(&background_counts.drops)==1&&unmapped(state_address)&&unmapped(background.tcb)&&unmapped(background.stack);},
         "last-handle drop did not release state, stack and TCB");
 
-  panic("wrong kind",[]{LangHandle handle{1,LangHandleKind::mutex,no_destroy};lang_thread_wait_v1(&handle);});
-  panic("zero reference retain",[]{LangHandle handle{0,LangHandleKind::atomic_i64,no_destroy};lang_handle_retain_v1(&handle);});
+  panic("wrong kind",[]{LangHandle handle{1,LangHandleKind::mutex,no_destroy,nullptr};lang_thread_wait_v1(&handle);});
+  panic("zero reference retain",[]{LangHandle handle{0,LangHandleKind::atomic_i64,no_destroy,nullptr};lang_handle_retain_v1(&handle);});
   panic("munmap epilogue failure",[]{lang_thread_unmap_exit_v1(nullptr,0);});
   panic("early result",[]{Counts counts;uint32_t gate=0;Input input{0,&gate,&counts,nullptr};auto *thread=start(input);lang_thread_result_v1(thread);});
   panic("signal blocking failure",[]{

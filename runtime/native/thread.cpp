@@ -2,6 +2,8 @@
 #include <cstddef>
 #include <cstdint>
 
+#include "weak.hpp"
+
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t, uint64_t,
                                                  uint64_t) noexcept;
 
@@ -19,8 +21,10 @@ constexpr int64_t kMaxSeconds = 0x7fffffffffffffffLL;
 // Linux futex timespecs must stay representable as ktime_t. Clamp absurd
 // positive timeouts and keep recomputing from the fixed monotonic deadline.
 constexpr int64_t kMaxWaitSeconds = 9000000000LL;
-static_assert(sizeof(LangHandle) == 24 && offsetof(LangHandle, refs) == 0 &&
-              offsetof(LangHandle, kind) == 8 && offsetof(LangHandle, destroy) == 16);
+static_assert(sizeof(LangHandle) == 32 && offsetof(LangHandle, refs) == 0 &&
+              offsetof(LangHandle, kind) == 8 &&
+              offsetof(LangHandle, destroy) == 16 &&
+              offsetof(LangHandle, weak_control) == 24);
 
 long syscall0(long number) noexcept {
   long result;
@@ -215,6 +219,9 @@ extern "C" void lang_handle_release_v1(LangHandle *handle) noexcept {
   }
   if (refs == 1) {
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    // The strong count is zero. Detach before destroy: either the caller or
+    // the runner can perform this final release, and destroy unmaps the state.
+    lang_weak_detach_v1(handle->weak_control);
     handle->destroy(handle);
   }
 }
@@ -281,7 +288,7 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry entry,
     lang_native_panic_v1(6, 0, 0, 0);
   const uint64_t bytes = (sizeof(ThreadState) + size + kPage - 1) & ~(kPage - 1);
   auto *state = static_cast<ThreadState *>(mapping(bytes, 3));
-  *state = {{2, LangHandleKind::thread, destroy_thread}, bytes, nullptr,
+  *state = {{2, LangHandleKind::thread, destroy_thread, nullptr}, bytes, nullptr,
             entry, drop, 0, 0, 0, 0, syscall0(39)};
   void *stack_mapping = mapping(kStackMappingBytes, 0);
   auto *stack = static_cast<unsigned char *>(stack_mapping) + kPage;

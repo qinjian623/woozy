@@ -740,7 +740,7 @@ static int test_handle_lifecycle() {
 } // namespace
 
 int main() {
-  static_assert(sizeof(LangHandle) == 24, "LangHandle ABI changed");
+  static_assert(sizeof(LangHandle) == 32, "LangHandle ABI changed");
 
   // Allocation-failure Panic is tested first, before this process creates any
   // pooled allocation, so denying mmap forces the constructor's allocation to

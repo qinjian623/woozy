@@ -21,7 +21,7 @@
 #include <unistd.h>
 #include <vector>
 
-static_assert(sizeof(LangVec) == 72, "LangVec ABI must stay 72 bytes");
+static_assert(sizeof(LangVec) == 80, "LangVec ABI must stay 80 bytes");
 static_assert(sizeof(LangSlice) == 24, "LangSlice ABI must stay 24 bytes");
 static_assert(alignof(LangSlice) == 8, "LangSlice alignment changed");
 static_assert(offsetof(LangSlice, owner) == 0, "LangSlice owner offset changed");

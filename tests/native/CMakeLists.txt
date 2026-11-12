@@ -162,6 +162,25 @@ target_link_options(lang_native_vec_runtime_test PRIVATE
   -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
 add_test(NAME native.vec_runtime COMMAND lang_native_vec_runtime_test)
 set_tests_properties(native.vec_runtime PROPERTIES TIMEOUT 30)
+add_executable(lang_native_weak_objects_test
+  weak_objects/weak_objects_test.cpp weak_objects/weak_objects_alloc_observer.cpp)
+target_include_directories(lang_native_weak_objects_test PRIVATE
+  ${LANG_SOURCE_ROOT}/runtime/native)
+target_link_libraries(lang_native_weak_objects_test PRIVATE lang_native_runtime)
+target_link_options(lang_native_weak_objects_test PRIVATE
+  -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
+add_test(NAME native.weak_objects COMMAND lang_native_weak_objects_test)
+set_tests_properties(native.weak_objects PROPERTIES TIMEOUT 120)
+add_executable(lang_native_weak_objects_hosted_test
+  weak_objects/weak_objects_test.cpp weak_objects/weak_objects_alloc_observer.cpp)
+target_include_directories(lang_native_weak_objects_hosted_test PRIVATE
+  ${LANG_SOURCE_ROOT}/runtime/native)
+target_link_libraries(lang_native_weak_objects_hosted_test PRIVATE lang_hosted_runtime)
+target_link_options(lang_native_weak_objects_hosted_test PRIVATE
+  -pthread -Wl,-u,lang_hosted_startup_v1
+  -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
+add_test(NAME native.weak_objects_hosted COMMAND lang_native_weak_objects_hosted_test)
+set_tests_properties(native.weak_objects_hosted PROPERTIES TIMEOUT 120)
 add_executable(lang_native_startup_test startup_test.cpp)
 target_compile_features(lang_native_startup_test PRIVATE cxx_std_20)
 add_test(NAME native.startup COMMAND lang_native_startup_test)

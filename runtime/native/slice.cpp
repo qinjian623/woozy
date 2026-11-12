@@ -4,7 +4,7 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t, uint64_t,
                                                  uint64_t, uint64_t) noexcept;
 
 // The borrowed-Slice ABI depends on the published LangVec layout.
-static_assert(sizeof(LangVec) == 72, "LangVec ABI must stay 72 bytes");
+static_assert(sizeof(LangVec) == 80, "LangVec ABI must stay 80 bytes");
 static_assert(offsetof(LangVec, length) == 8, "LangVec length offset changed");
 static_assert(offsetof(LangVec, initialized) == 16,
               "LangVec initialized offset changed");

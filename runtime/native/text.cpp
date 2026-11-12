@@ -20,7 +20,7 @@ LangText allocate(uint64_t bytes, uint64_t length) noexcept {
   auto *owner = static_cast<LangHandle *>(
       lang_alloc_v1(sizeof(LangHandle) + bytes, alignof(LangHandle)));
   if (!owner) panic(5);
-  *owner = {1, kTextKind, destroy};
+  *owner = {1, kTextKind, destroy, nullptr};
   return {reinterpret_cast<const uint8_t *>(owner + 1), bytes, length, owner};
 }
 void copy(uint8_t *to, const uint8_t *from, uint64_t bytes) noexcept {

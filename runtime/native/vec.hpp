@@ -1,5 +1,6 @@
 #pragma once
 #include <cstdint>
+struct LangWeakControl;
 // Private runtime ABI. Element callbacks operate on storage, so no C++
 // aggregate calling convention is assumed by generated LLVM code.
 extern "C" {
@@ -17,6 +18,12 @@ struct LangVec {
   // Private ABI extension. Appending capacity keeps every original field at
   // its previous offset. New Vecs start with capacity == length.
   uint64_t capacity;
+  // Canonical Weak slot, shared by every alias of this descriptor. It is null
+  // until a downgrade installs the one control block, permanently tagged by
+  // collector invalidation, or left installed while its control target is
+  // cleared by the final strong release. Constructors write null before
+  // publication; element operations never touch it.
+  LangWeakControl *weak_control;
 };
 LangVec *lang_vec_new_v1(uint64_t, uint64_t, LangValueOp, LangValueOp) noexcept;
 void lang_vec_retain_v1(LangVec *) noexcept;

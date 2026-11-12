@@ -648,7 +648,7 @@ int main() {
     lang_handle_release_v1(self_thread);
 
     // Handle ARC updates from many runtime threads.
-    LangHandle sample{1, LangHandleKind::atomic_i64, count_destroy};
+    LangHandle sample{1, LangHandleKind::atomic_i64, count_destroy, nullptr};
     LangHandle *retainers[kRetainers];
     for (auto &retainer : retainers) {
       RetainInput input{&sample};
@@ -688,11 +688,11 @@ int main() {
     check_timed_waits();
 
     expect_panic("wrong handle kind", [] {
-      LangHandle handle{1, LangHandleKind::mutex, no_destroy};
+      LangHandle handle{1, LangHandleKind::mutex, no_destroy, nullptr};
       lang_thread_wait_v1(&handle);
     });
     expect_panic("zero-reference retain", [] {
-      LangHandle handle{0, LangHandleKind::atomic_i64, no_destroy};
+      LangHandle handle{0, LangHandleKind::atomic_i64, no_destroy, nullptr};
       lang_handle_retain_v1(&handle);
     });
     expect_panic("hosted unmap epilogue", [] {

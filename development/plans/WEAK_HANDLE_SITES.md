@@ -1,6 +1,11 @@
 # Weak handle sites and ownership map
 
-Status: evaluation only. This maps the Native ownership sites a future
+Status: pre-implementation map, retained as the change inventory. The real
+Vec/Handle slot, final-release and fork changes are now integrated; Root
+full CTest 136/136 passed. Source Weak and automatic Native GC remain
+unimplemented. The older sizes below describe the measured pre-change layout.
+
+This maps the Native ownership sites a future
 source-level `Weak[T]` must use. It does not implement `Weak[T]`, change the
 runtime, or claim MEM01/MEM02 completion.
 Operation: `woozy-shared-handle-weak-map-20261112`.

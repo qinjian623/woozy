@@ -2,6 +2,7 @@
 #include <cstdint>
 #include "alloc.hpp"
 #include "vec.hpp"
+#include "weak.hpp"
 
 #if defined(__x86_64__) && defined(__linux__)
 
@@ -134,6 +135,9 @@ void *element(LangVec *v, uint64_t i) {
 // independent descriptor and use a null data pointer instead of dummy bytes.
 constexpr uint64_t kVecHeaderBytes =
     (static_cast<uint64_t>(sizeof(LangVec)) + 15) & ~uint64_t{15};
+static_assert(sizeof(LangVec) == 80, "LangVec ABI must stay 80 bytes");
+static_assert(offsetof(LangVec, weak_control) == 72,
+              "LangVec Weak slot must follow capacity");
 static_assert(kVecHeaderBytes >= sizeof(LangVec),
               "Vec payload must not overlap its descriptor");
 static_assert(kVecHeaderBytes % 16 == 0,
@@ -230,7 +234,7 @@ extern "C" LangVec *lang_vec_new_v1(uint64_t length, uint64_t stride,
   if (!v) vec_panic(5);
   auto *data = length ? reinterpret_cast<unsigned char *>(v) + kVecHeaderBytes
                       : nullptr;
-  *v = {1, length, 0, stride, 0, data, copy, drop, length};
+  *v = {1, length, 0, stride, 0, data, copy, drop, length, nullptr};
   observe(1, v, length);
   return v;
 }
@@ -263,6 +267,10 @@ extern "C" void lang_vec_release_v1(LangVec *v) noexcept {
   }
   __atomic_thread_fence(__ATOMIC_ACQUIRE);
   if (__atomic_load_n(&v->iterations, __ATOMIC_RELAXED)) vec_panic(8);
+  // The strong count is already zero, so no upgrade can acquire the target.
+  // Detach the canonical slot before payload cleanup and descriptor free; the
+  // slot is never read again after this point.
+  lang_weak_detach_v1(v->weak_control);
   if (!v->drop && !lang_vec_observe_v1) {
     // Trivial elements have no cleanup and no observer needs per-element
     // events.

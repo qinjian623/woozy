@@ -73,6 +73,13 @@ TypeId TypeContext::intern(Type t) {
     if (t.type_args.size() != 1)
       bad();
     break;
+  // Weak[T] is part of the published reference-values schema, but no source
+  // expression can construct it yet. Keep the shape check here; HIR
+  // verification rejects the kind itself.
+  case TypeKind::Weak:
+    if (t.type_args.size() != 1)
+      bad();
+    break;
   case TypeKind::CForeignPointer:
   case TypeKind::CForeignBuffer:
     if (t.type_args.size() != 1 || t.bits > 1 || t.c_type)
@@ -127,6 +134,7 @@ TypeId TypeContext::intern(Type t) {
     bad();
   if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum &&
       t.kind != TypeKind::Vec && t.kind != TypeKind::Slice &&
+      t.kind != TypeKind::Weak &&
       t.kind != TypeKind::CForeignPointer &&
       t.kind != TypeKind::CForeignBuffer && !t.type_args.empty())
     bad();
@@ -508,6 +516,11 @@ class Verifier {
       return;
     const auto &t = type(id);
     need(t.kind != TypeKind::Error, "invalid/unimplemented type");
+    // The reference-values schema reserves Weak, but source cannot construct
+    // it and no ownership/backend path verifies it yet. Reject it here rather
+    // than letting an unrelated trivial/unsupported default accept it.
+    need(t.kind != TypeKind::Weak,
+         "Weak type has no verified source construction path");
     if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable) {
       need(!t.declaration.value && t.binding.value < m.foreign_bindings.size(),
            "foreign type binding index");
@@ -5305,6 +5318,12 @@ class Verifier {
     auto value = std::get_if<FunctionValue>(&n.data);
     if (!value)
       return;
+    // The appended reference-values fields are compiled schema, but the
+    // creator/lambda source and ownership paths are not implemented yet. Any
+    // nondefault metadata here is malformed rather than silently emitted as a
+    // noncapturing function value.
+    need(value->captures.empty() && !value->move_capture && !value->bound,
+         "captured or bound function value has no verified source path");
     const auto &file = *m.resolved->project->module(n.source.node.module)
                             .files.at(n.source.node.file);
     auto r = n.source.node;
@@ -5434,6 +5453,9 @@ class Verifier {
                  "constant float bits/type");
           else if (auto f = std::get_if<FunctionValue>(&v.data)) {
             need(t.kind == TypeKind::Function, "constant function type");
+            // Constants carry no environment and no receiver adapter.
+            need(f->captures.empty() && !f->move_capture && !f->bound,
+                 "constant function value cannot capture or bind a receiver");
             if (trait_prototype(f->symbol))
               need(templates.count(scope(n.scope).function.value),
                    "constant trait prototype survived concrete execution");
@@ -6309,6 +6331,10 @@ public:
       const auto &f = *fp;
       check_cancelled(stop);
       source(f.source);
+      // Lambda capture locals have no source definition and their environment
+      // is not verified by this stage. A nonempty list can only be forged.
+      need(f.captures.empty(),
+           "HirFunction captures have no verified source/ownership path");
       auto ast_kind = project.modules[f.source.node.module.value]
                           .files[f.source.node.file]
                           ->node(f.source.node.node)
@@ -6419,6 +6445,12 @@ public:
       need(used, "orphan scope");
     uses_and_flow();
     ownership_sources();
+    // Producer ownership data is not otherwise rebuilt here. Captured lambda
+    // locals need the capture-aware ownership path that this stage does not
+    // have, so a forged flag must not pass as an ordinary local lifetime.
+    for (const auto &local : m.ownership.locals)
+      need(!local.read_only_capture,
+           "read-only capture lifetime has no verified ownership path");
     effects_and_exits();
     auto ownership = detail::verify_ownership(m, stop);
     if (ownership.state == PhaseState::cancelled)
@@ -6945,6 +6977,9 @@ std::string dump(const HirModule &m) {
     print_source(s, t.function.source);
     for (auto p : t.function.parameters)
       s << " param=" << p.symbol.value << ':' << std::quoted(p.label);
+    for (const auto &c : t.function.captures)
+      s << " capture=" << c.origin.value << ':' << c.local.value << ':'
+        << c.type.value;
     s << '\n';
   }
   for (const auto &i : m.instances) {
@@ -6963,6 +6998,9 @@ std::string dump(const HirModule &m) {
     print_source(s, f.source);
     for (const auto &p : f.parameters)
       s << " param=" << p.symbol.value << ':' << std::quoted(p.label);
+    for (const auto &c : f.captures)
+      s << " capture=" << c.origin.value << ':' << c.local.value << ':'
+        << c.type.value;
     s << '\n';
   }
   for (size_t i = 0; i < m.scopes.size(); ++i) {
@@ -7021,6 +7059,13 @@ std::string dump(const HirModule &m) {
                           s << ':' << x.symbol.value;
                           for (auto a : x.type_args)
                             s << ':' << a.value;
+                          if (!x.captures.empty())
+                            s << " captures=" << x.captures.size();
+                          if (x.move_capture)
+                            s << " move_capture";
+                          if (x.bound)
+                            s << " bound=" << x.bound->type.value << ':'
+                              << int(x.bound->mode);
                         }
                       },
                       v.data);
@@ -7030,9 +7075,18 @@ std::string dump(const HirModule &m) {
                                std::is_same_v<T, Place> ||
                                std::is_same_v<T, FunctionValue>) {
             s << " symbol=" << data.symbol.value;
-            if constexpr (std::is_same_v<T, FunctionValue>)
+            if constexpr (std::is_same_v<T, FunctionValue>) {
               for (auto t : data.type_args)
                 s << " type_arg=" << t.value;
+              for (const auto &c : data.captures)
+                s << " capture=" << c.origin.value << ':' << c.source.value
+                  << ':' << c.type.value << ':' << c.move;
+              if (data.move_capture)
+                s << " move_capture";
+              if (data.bound)
+                s << " bound=" << data.bound->type.value << ':'
+                  << int(data.bound->mode);
+            }
           } else if constexpr (std::is_same_v<T, Binding>)
             s << " symbol=" << data.symbol.value
               << " writable=" << data.writable;
@@ -7240,10 +7294,14 @@ std::string dump(const HirModule &m) {
   for (auto t : m.ownership.temporaries)
     s << "temporary " << t.producer.value << " full=" << t.full_expression.value
       << " type=" << t.type.value << '\n';
-  for (auto l : m.ownership.locals)
+  for (auto l : m.ownership.locals) {
     s << "lifetime " << l.symbol.value << " scope=" << l.scope.value
       << " type=" << l.type.value << " order=" << l.order
-      << " mode=" << int(l.mode) << '\n';
+      << " mode=" << int(l.mode);
+    if (l.read_only_capture)
+      s << " read_only_capture";
+    s << '\n';
+  }
   auto actions = [&](const auto &as) {
     for (auto a : as)
       s << " action=" << int(a.kind) << ':' << int(a.owner.kind) << ':'

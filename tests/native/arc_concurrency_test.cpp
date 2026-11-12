@@ -25,7 +25,7 @@
 #include <thread>
 #include <unistd.h>
 
-static_assert(sizeof(LangVec) == 72, "LangVec capacity ABI must stay 72 bytes");
+static_assert(sizeof(LangVec) == 80, "LangVec capacity ABI must stay 80 bytes");
 static_assert(offsetof(LangVec, refs) == 0, "refs must stay first");
 static_assert(offsetof(LangVec, iterations) == 32,
               "iterations offset changed");

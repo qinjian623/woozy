@@ -1,6 +1,6 @@
 # Reference values / closure / Weak 共享 ABI 提案（修正版）
 
-状态：**Root 已审查的实现约定，功能尚未实现**。本版只修正 `development/plans/REFERENCE_VALUES.md`；未改 Core、runtime、Root，未构建、未提交。已先读取 `/tmp/closure-abi-independent-20261112/review.json`，并按其中 C1--C7 的实际源码行重新核对；不是照抄审查摘要。源码核对片段保存在 `/tmp/woozy-reference-abi-plan/correction-source-check.txt`。
+状态：**Root 已审查的实现约定；共享 HIR 字段已接入，源码闭包与 Weak 尚未实现**。本版只修正 `development/plans/REFERENCE_VALUES.md`；未改 Core、runtime、Root，未构建、未提交。已先读取 `/tmp/closure-abi-independent-20261112/review.json`，并按其中 C1--C7 的实际源码行重新核对；不是照抄审查摘要。源码核对片段保存在 `/tmp/woozy-reference-abi-plan/correction-source-check.txt`。
 
 范围：LANG01（闭包、bound method、函数值）+ 源码 `Weak` 的编译器侧；Native 只承诺 Linux x86_64，Python 只承诺 Python/64。运行库 handle RC 站点和 `std/box` 仍属并行 worker；本文件只发布它们必须遵守的接口。
 
@@ -177,3 +177,5 @@ enum class ValueKind { /* existing values unchanged */ function, weak };
 - move func 的移动意图保存在父节点 move_capture；T 未具体化时不能永久将 CaptureSource.move 判为 false。实例化后按实际类型重新决定：标量复制不消耗原绑定，拥有值移动并消耗原绑定。若捕获 child 因此由 Read 变为 Move，instance_body 只为经过源码验证的这一捕获构造接受转换；普通节点的 kind/source 验证保持原规则。
 
 本版修正了独立检查 C1–C7，以及复核 R1/I1/I2。它授权实现者按唯一 schema 分别修改前端、Native 和 Python；运行与负测试完成前不得把功能标为完成。
+
+阶段 A 已编译这些共用字段，并保留对非默认捕获/绑定、capture lifetime 及 Weak 类型的明确拒绝。独立检查 46 项前端、11 项静态和旧函数值执行通过，Root 新 schema 及相关 12 项也已通过。后续前端负责逐项加入真实源码与所有权验证后移除对应拒绝；不得只关闭检查。

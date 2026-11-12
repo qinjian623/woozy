@@ -43,7 +43,7 @@ int64_t create(LangHandle **out, int32_t fd, uint64_t bytes, uint64_t offset,
   if (result<0 && result>=-4095) return result;
   auto *m=static_cast<Mapping *>(lang_alloc_v1(sizeof(Mapping),alignof(Mapping)));
   if (!m) {sys(11,result,bytes);lang_native_panic_v1(5,0,0,0);}
-  *m={{1,LangHandleKind::ipc,destroy},reinterpret_cast<uint8_t *>(result),bytes,protection};
+  *m={{1,LangHandleKind::ipc,destroy,nullptr},reinterpret_cast<uint8_t *>(result),bytes,protection};
   *out=&m->handle;
   return 0;
 }

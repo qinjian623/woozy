@@ -36,7 +36,7 @@ esac
 log "toolchain: $VERSION"
 
 PUBLIC_SOURCES=(
-  alloc panic os os_buffers sync text system system_buffers ipc dns
+  alloc panic weak os os_buffers sync text system system_buffers ipc dns
   network_buffers network numbers
 )
 CXX_COMMON=(
@@ -166,19 +166,21 @@ source_digest() {
 # digests before and after; it does not require a clean shared checkout.
 SOURCE_BEFORE="$(source_digest)"
 
-# Prove the freestanding branch of process.cpp still compiles to the same
-# object as HEAD when LANG_RUNTIME_HOSTED is not defined.
+# Prove both process.cpp branches still compile independently. The native
+# branch intentionally gains the Weak fork hooks before the raw fork; it is no
+# longer byte-identical to the pre-Weak HEAD object. The hosted branch must
+# remain a distinct translation of the same source.
 mkdir -p "$BUILD/process-baseline"
-git -C "$ROOT" show HEAD:runtime/native/process.cpp >"$BUILD/process-baseline/process.cpp"
-compile_cxx "$ROOT/runtime/native/process.cpp" "$BUILD/process-baseline/current-no-hosted.o"
-compile_cxx "$BUILD/process-baseline/process.cpp" "$BUILD/process-baseline/head-no-hosted.o"
-PROCESS_CURRENT="$(sha256sum "$BUILD/process-baseline/current-no-hosted.o" | cut -d' ' -f1)"
-PROCESS_HEAD="$(sha256sum "$BUILD/process-baseline/head-no-hosted.o" | cut -d' ' -f1)"
-[[ "$PROCESS_CURRENT" == "$PROCESS_HEAD" ]] || {
-  log "freestanding process.cpp object differs from HEAD without LANG_RUNTIME_HOSTED"
+compile_cxx "$ROOT/runtime/native/process.cpp" "$BUILD/process-baseline/native-no-hosted.o"
+compile_cxx "$ROOT/runtime/native/process.cpp" "$BUILD/process-baseline/hosted.o" \
+  -DLANG_RUNTIME_HOSTED
+PROCESS_NATIVE="$(sha256sum "$BUILD/process-baseline/native-no-hosted.o" | cut -d' ' -f1)"
+PROCESS_HOSTED="$(sha256sum "$BUILD/process-baseline/hosted.o" | cut -d' ' -f1)"
+[[ "$PROCESS_NATIVE" != "$PROCESS_HOSTED" ]] || {
+  log "hosted definition did not change the process.cpp object"
   exit 1
 }
-log "freestanding process.cpp branch unchanged: $PROCESS_CURRENT"
+log "process.cpp native/hosted branches compiled: $PROCESS_NATIVE / $PROCESS_HOSTED"
 
 # 1. Freeze and run the original freestanding archive/program.
 build_native "$BUILD/native-before"
@@ -324,7 +326,8 @@ SOURCE_AFTER="$(source_digest)"
   echo "freestanding program before: $NATIVE_PROGRAM_BEFORE"
   echo "freestanding program after:  $NATIVE_PROGRAM_AFTER"
   echo "hosted archive: $(sha256sum "$HOSTED_ARCHIVE" | cut -d' ' -f1)"
-  echo "freestanding process.cpp branch object: $PROCESS_CURRENT"
+  echo "process.cpp native branch object: $PROCESS_NATIVE"
+  echo "process.cpp hosted branch object: $PROCESS_HOSTED"
   if "$NM" -u "$HOSTED_ARCHIVE" 2>/dev/null |
       grep -Eq '(__cxa_|__gxx_personality|_ZSt9terminatev|_Unwind_)'; then
     echo "hosted archive C++ EH symbols: PRESENT"

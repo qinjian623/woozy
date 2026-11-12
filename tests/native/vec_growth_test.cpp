@@ -17,7 +17,7 @@
 #include <unistd.h>
 #include <vector>
 
-static_assert(sizeof(LangVec) == 72, "LangVec must append capacity");
+static_assert(sizeof(LangVec) == 80, "LangVec must append capacity and Weak slot");
 static_assert(offsetof(LangVec, refs) == 0, "refs offset changed");
 static_assert(offsetof(LangVec, length) == 8, "length offset changed");
 static_assert(offsetof(LangVec, initialized) == 16, "initialized offset changed");

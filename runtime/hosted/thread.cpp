@@ -1,5 +1,6 @@
 #include "thread.hpp"
 #include "../native/alloc.hpp"
+#include "../native/weak.hpp"
 
 #include <cerrno>
 #include <cstddef>
@@ -38,8 +39,10 @@ struct alignas(16) HostedThreadState {
   int32_t process_id;
   int32_t reserved;
 };
-static_assert(sizeof(LangHandle) == 24 && offsetof(LangHandle, refs) == 0 &&
-              offsetof(LangHandle, kind) == 8 && offsetof(LangHandle, destroy) == 16);
+static_assert(sizeof(LangHandle) == 32 && offsetof(LangHandle, refs) == 0 &&
+              offsetof(LangHandle, kind) == 8 &&
+              offsetof(LangHandle, destroy) == 16 &&
+              offsetof(LangHandle, weak_control) == 24);
 
 // Safe host TLS: each runner records its own state.  This is used only by the
 // fork-child compatibility hook; it is not a replacement for the C library's
@@ -157,6 +160,9 @@ extern "C" void lang_handle_release_v1(LangHandle *handle) noexcept {
   }
   if (refs == 1) {
     __atomic_thread_fence(__ATOMIC_ACQUIRE);
+    // The last release can be the caller's or the runner's. Detach before the
+    // hosted destroy joins/detaches the pthread and frees the state.
+    lang_weak_detach_v1(handle->weak_control);
     handle->destroy(handle);
   }
 }
@@ -173,7 +179,7 @@ extern "C" LangHandle *lang_thread_spawn_v1(LangThreadEntry entry,
       lang_alloc_v1(sizeof(HostedThreadState), alignof(HostedThreadState)));
   if (!state) lang_native_panic_v1(5, 0, 0, 0);
   new (state) HostedThreadState{};
-  state->handle = {2, LangHandleKind::thread, destroy_thread};
+  state->handle = {2, LangHandleKind::thread, destroy_thread, nullptr};
   state->entry = entry;
   state->context_drop = drop;
   state->process_id = static_cast<int32_t>(getpid());

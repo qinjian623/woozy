@@ -13,6 +13,7 @@ get_filename_component(LANG_SLICE_RUNTIME_DIR
 set(LANG_SLICE_CORE
   "${LANG_SLICE_RUNTIME_DIR}/slice.cpp"
   "${LANG_SLICE_RUNTIME_DIR}/panic.cpp"
+  "${LANG_SLICE_RUNTIME_DIR}/weak.cpp"
   "${LANG_SLICE_RUNTIME_DIR}/alloc.cpp")
 set(LANG_SLICE_FREESTANDING_FLAGS
   -ffreestanding -fno-exceptions -fno-rtti -fno-builtin

@@ -1,6 +1,7 @@
 #include "process.hpp"
 #include "alloc.hpp"
 #include "thread.hpp"
+#include "weak.hpp"
 #include "linux.hpp"
 #include <cstddef>
 #include <initializer_list>
@@ -64,6 +65,8 @@ struct Guard {Guard() noexcept {lock();} ~Guard(){unlock();}};
 void hosted_fork_parent_release() noexcept {
   if (hosted_fork_locks_held) {
     hosted_fork_locks_held=false;
+    // Reverse the prepare order: allocator was acquired before Weak.
+    lang_weak_fork_parent_v1();
     lang_alloc_fork_parent_v1();
     unlock();
   }
@@ -193,14 +196,15 @@ int64_t fork_process() noexcept {
   }
   return pid;
 #else
-  lock();lang_alloc_fork_prepare_v1();
+  lock();lang_alloc_fork_prepare_v1();lang_weak_fork_prepare_v1();
   auto pid=sys(57);
   if(!pid) {
     lang_alloc_fork_child_v1();
+    lang_weak_fork_child_v1();
     __atomic_store_n(&launch_lock,0u,__ATOMIC_RELAXED);
     __atomic_store_n(&environment_lock,0u,__ATOMIC_RELAXED);
     lang_thread_fork_child_v1();
-  } else {lang_alloc_fork_parent_v1();unlock();}
+  } else {lang_weak_fork_parent_v1();lang_alloc_fork_parent_v1();unlock();}
   return pid;
 #endif
 }
@@ -318,6 +322,7 @@ extern "C" void lang_hosted_process_atfork_prepare_v1() noexcept {
   }
   lock();
   lang_alloc_fork_prepare_v1();
+  lang_weak_fork_prepare_v1();
   hosted_fork_locks_held=true;
 }
 extern "C" void lang_hosted_process_atfork_parent_v1() noexcept {
@@ -328,6 +333,7 @@ extern "C" void lang_hosted_process_atfork_child_v1() noexcept {
   hosted_fork_owns_launch=false;
   hosted_launch_owned=false;
   lang_alloc_fork_child_v1();
+  lang_weak_fork_child_v1();
   __atomic_store_n(&environment_lock,0u,__ATOMIC_RELAXED);
   __atomic_store_n(&launch_lock,0u,__ATOMIC_RELAXED);
 }

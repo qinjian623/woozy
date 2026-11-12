@@ -193,7 +193,7 @@ def main():
       heap_frees=heap_freed,heap_live=heap_live,refs=last_refs)
     if a.sanitize:
      row['sanitized_build']=r=command([a.clang,f'-O{opt}','-fsanitize=address,undefined','-fno-omit-frame-pointer','-fno-exceptions','-fno-rtti',
-       out/'probe/sanitize.ll',a.root/'runtime/native/panic.cpp',a.root/'tests/native/vec_observer.cpp','-o',out/'sanitize']);ok(r)
+       out/'probe/sanitize.ll',a.root/'runtime/native/weak.cpp',a.root/'runtime/native/panic.cpp',a.root/'runtime/native/alloc.cpp',a.root/'runtime/native/text.cpp',a.root/'runtime/native/thread.cpp',a.root/'tests/native/vec_observer.cpp','-o',out/'sanitize']);ok(r)
      row['sanitized_execute']=r=command([out/'sanitize']);assert r['exit']==code and 'ERROR: AddressSanitizer' not in r['stderr'] and 'runtime error:' not in r['stderr'],r
     row['hashes']={str(p.relative_to(out)):digest(p) for p in sorted(out.rglob('*')) if p.is_file()}
     row['kind']='panic' if panic else 'execution-and-final-release';row['status']='passed'

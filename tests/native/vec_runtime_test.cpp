@@ -5,7 +5,7 @@
 #include <cstdint>
 #include <string>
 #include <vector>
-static_assert(sizeof(LangVec) == 72, "LangVec capacity ABI must stay 72 bytes");
+static_assert(sizeof(LangVec) == 80, "LangVec capacity ABI must stay 80 bytes");
 static constexpr uint64_t kVecHeaderBytes =
     (static_cast<uint64_t>(sizeof(LangVec)) + 15) & ~uint64_t{15};
 static_assert(kVecHeaderBytes == 80, "Vec header bytes changed");

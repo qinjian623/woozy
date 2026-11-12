@@ -14,8 +14,8 @@ This is the low-level borrowed view only. It does not implement source-level
 | 8 | `uint64_t start` |
 | 16 | `uint64_t length` |
 
-`LangVec` remains at its published 72-byte layout. The only new exported
-symbols are:
+`LangVec` remains at its published 80-byte layout (the trailing canonical Weak
+slot follows the 72-byte pre-Weak prefix). The only new exported symbols are:
 
 ```
 lang_slice_new_v1

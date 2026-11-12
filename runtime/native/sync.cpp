@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "alloc.hpp"
+#include "weak.hpp"
 
 #if defined(__x86_64__) && defined(__linux__)
 
@@ -237,7 +238,9 @@ struct AtomicI64Object {
   AtomicI64State state;
 };
 
-static_assert(sizeof(LangHandle) == 24, "LangHandle layout must stay 24 bytes");
+static_assert(sizeof(LangHandle) == 32, "LangHandle layout must stay 32 bytes");
+static_assert(offsetof(LangHandle, weak_control) == 24,
+              "Weak slot must follow destroy");
 static_assert(offsetof(MutexObject, handle) == 0,
               "handle must be the first MutexObject member");
 static_assert(offsetof(CondvarObject, handle) == 0,
@@ -259,6 +262,7 @@ Object *allocate_object(LangHandleKind kind,
   object->handle.refs = 1;
   object->handle.kind = kind;
   object->handle.destroy = destroy;
+  object->handle.weak_control = nullptr;
   return object;
 }
 

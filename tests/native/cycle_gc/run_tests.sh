@@ -31,7 +31,7 @@ if [[ "$version" != *"clang version 22.1.8"* ]]; then
 fi
 
 wrap=(-fuse-ld=lld -Wl,--wrap=lang_alloc_v1 -Wl,--wrap=lang_free_v1)
-runtime=("$root/runtime/native/gc.cpp" "$root/runtime/native/panic.cpp")
+runtime=("$root/runtime/native/gc.cpp" "$root/runtime/native/weak.cpp" "$root/runtime/native/panic.cpp")
 host_test="$here/cycle_gc_test.cpp"
 static_test="$here/cycle_gc_test.cpp"
 

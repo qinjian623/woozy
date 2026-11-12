@@ -43,7 +43,12 @@ enum class TypeKind {
   // Borrowed view over a Vec. type_args[0] is the element type. The inline
   // 24-byte {owner,start,length} value retains+pins its owner while live.
   // Appended to preserve the published numeric TypeKind values.
-  Slice
+  Slice,
+  // Weak[T]: type_args[0] is the target. Appended for the reference-values
+  // schema. Until the source spelling and ownership path are implemented,
+  // HIR verification rejects every occurrence instead of treating it as a
+  // trivial value.
+  Weak
 };
 enum class ParamMode { ordinary, inout, move };
 struct ParameterType {
@@ -139,10 +144,36 @@ struct Read {
 struct Place {
   SymbolId symbol;
 }; // whole writable binding, for assignment or an inout argument
+// One lambda-local read-only binding established from the environment.
+// origin is the creator's lexical declaration and stays stable across
+// instances; local is this lambda's own binding and has no source definition.
+struct CaptureBinding {
+  SymbolId origin;
+  SymbolId local;
+  TypeId type;
+};
+// One value installed into a function value's environment. source is the
+// creator's binding (possibly another lambda's CaptureBinding.local).
+struct CaptureSource {
+  SymbolId origin;
+  SymbolId source;
+  TypeId type;
+  bool move = false;
+};
+struct BoundReceiver {
+  TypeId type;
+  ParamMode mode; // ordinary or move; inout bindings are rejected
+};
 struct FunctionValue {
   SymbolId symbol;
   std::vector<TypeId> type_args;
-}; // noncapturing function identity
+  // Appended for the reference-values schema. Empty/default fields keep every
+  // existing two-field aggregate initializer valid and mean a noncapturing,
+  // unbound function value.
+  std::vector<CaptureSource> captures{}; // free variables in creation order
+  bool move_capture = false;             // only a real `move func` literal
+  std::optional<BoundReceiver> bound{};  // at most one receiver child
+}; // noncapturing function identity when all appended fields are default
 struct ConstantValue;
 struct ConstantAggregate {
   std::optional<SymbolId> variant;   // absent for struct; active enum variant
@@ -392,6 +423,9 @@ struct LocalLifetime {
   TypeId type;
   uint32_t order;
   ParamMode mode; // ordinary parameters borrowed; local bindings use move
+  // Appended for the reference-values schema. A lambda capture local is
+  // borrowed from the environment and is not destroyed when the lambda exits.
+  bool read_only_capture = false;
   bool operator==(const LocalLifetime &) const = default;
 };
 struct FullExpression {
@@ -519,6 +553,10 @@ struct HirFunction {
   HirNodeId body;
   ScopeId scope;
   Source source;
+  // Appended for the reference-values schema; empty for every ordinary
+  // function. Lambda bodies map their captured occurrence origins to the
+  // read-only CaptureBinding.local symbols registered in this vector.
+  std::vector<CaptureBinding> captures{};
 };
 struct GenericParam {
   SymbolId symbol;
@@ -618,7 +656,12 @@ enum class ValueKind {
   string,
   // A borrowed Slice inline value. It owns one strong Vec reference and one
   // iteration pin; copy and drop use the private 24-byte runtime ABI.
-  slice
+  slice,
+  // Appended for the reference-values schema. Their value operations are not
+  // implemented yet, so classify_value keeps returning its existing result
+  // for Function and never produces these kinds in this stage.
+  function,
+  weak
 };
 struct ValueField {
   std::optional<SymbolId> variant;

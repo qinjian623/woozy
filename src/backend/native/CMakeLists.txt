@@ -18,6 +18,7 @@ target_link_libraries(lang_native PRIVATE ${LANG_NATIVE_LLVM_LIBS})
 add_library(lang_native_runtime STATIC
   ${LANG_NATIVE_ROOT}/runtime/native/alloc.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/panic.cpp
+  ${LANG_NATIVE_ROOT}/runtime/native/weak.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/start.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/freestanding.cpp
   ${LANG_NATIVE_ROOT}/runtime/native/os.cpp
