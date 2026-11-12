@@ -6,14 +6,11 @@ This directory is the hosted replacement for `runtime/native/start.cpp` and
 link that may use the C library, pthreads and selected external libraries
 (OpenSSL in the validation fixture).
 
-It is **not** a change to the freestanding runtime.  The native `start.cpp`,
-`thread.cpp`, `freestanding.cpp`, `CMakeLists.txt`, compiler, stdlib and shared
-headers are untouched.  The only existing file changed is
-`runtime/native/process.cpp`, and only inside a compile-time
-`LANG_RUNTIME_HOSTED` branch; the freestanding branch stays byte-for-byte
-equivalent to HEAD (the test script compares the non-hosted process object).
-The hosted archive reuses the existing allocator, Vec, text, process, sync,
-system/network and math runtime objects.
+The compiler selects the freestanding archive by default.  A project opts in
+with `[build.native] runtime = "hosted"`; native dependencies use the separate
+C schema-v2 binding format.  The hosted archive uses normal CRT/pthread startup
+and the `LANG_RUNTIME_HOSTED` process branch.  It reuses the existing allocator,
+Vec, text, Unicode, process, sync, system/network and math code.
 
 ## What is replaced and why
 
@@ -153,6 +150,8 @@ runtime/native/os.cpp
 runtime/native/os_buffers.cpp
 runtime/native/sync.cpp
 runtime/native/text.cpp
+runtime/native/unicode/unicode.cpp
+runtime/native/unicode/utf8proc_adapter.c
 runtime/native/system.cpp
 runtime/native/system_buffers.cpp
 runtime/native/ipc.cpp
@@ -199,18 +198,20 @@ A ready-to-consume list of sources and flags is provided in
   hosted archive.
 * archive with `llvm-ar rcD` or equivalent deterministic archiver.
 
-The current compiler does **not** have a hosted link mode.  A future Root
-integration must link generated `program.o` with a normal CRT/dynamic-C link
-(for example through the Clang driver, not the current `-nostdlib -static`
-path), include the hosted archive, and force the constructor member into the
-link, for example:
+The hosted link mode uses the Clang driver and normal CRT, includes the hosted
+archive and forces its constructor member into the link.  The default
+freestanding mode retains `-nostdlib -static`.  An equivalent hosted link is:
 
 ```text
-clang++ program.o \
+clang program.o \
   -Wl,-u,lang_hosted_startup_v1 \
-  -Wl,--start-group libwoozy_hosted_runtime.a -Wl,--end-group \
-  -pthread -lssl -lcrypto -o program
+  -Wl,--start-group liblang_hosted_runtime.a -Wl,--end-group \
+  -pthread -o program
 ```
+
+Programs with C bindings also link their generated adapter object and the
+libraries declared in their manifest.  OpenSSL and libstdc++ are added only
+when the selected external library requires them.
 
 Without `-Wl,-u,lang_hosted_startup_v1` (or an equivalent
 `--whole-archive` section), the constructor member is not extracted from a
@@ -221,12 +222,13 @@ program only uses allocator/Vec APIs. Weak addresses of `__libc_stack_end` and
 `environ` are checked before reading either variable's value. The
 hosted archive itself has no C++ exception symbols; the no-argument CRT fixture
 is linked with `-nostdlib++ -static-libgcc` and depends only on libc/libm/loader,
-demonstrating that the runtime needs no C++ exception library.  This is the missing Root
-compiler link mode, not a runtime workaround.
+demonstrating that the runtime needs no C++ exception library.
 
-The Native FFI language side is also not part of this batch.  No source-language
-declaration currently imports libc/OpenSSL symbols; the tests below are C++
-runtime harnesses linked directly against the hosted archive.
+Source-language C bindings and hosted link selection are implemented.  Real
+Woozy calls to C fixtures, libc and OpenSSL SHA-256 are tested in
+`tests/native/c_ffi/`; that suite is separate from the C++ runtime harnesses
+below.  Captured or retained callbacks and the public TLS/HTTPS modules remain
+unfinished.
 
 ## Validation
 

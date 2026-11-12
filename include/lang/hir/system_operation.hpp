@@ -32,7 +32,8 @@ enum class SystemOperation : uint16_t {
   math_fabs, math_floor, math_ceil, math_trunc, math_round, math_sqrt, math_sin, math_cos, math_tan, math_asin, math_acos, math_atan, math_exp, math_exp2, math_expm1, math_log, math_log2, math_log10, math_log1p, math_copysign, math_hypot, math_atan2, math_pow, math_fmod, math_remainder, math_fma, math_ldexp, math_frexp, math_isnan, math_isinf, math_isfinite, math_signbit,
   process_args, process_args_bytes, process_environment, process_environment_bytes, process_getenv, process_getenv_bytes, process_setenv, process_unsetenv, process_execve, process_spawn, process_setenv_bytes, process_unsetenv_bytes, process_execve_bytes, process_spawn_bytes, process_fork, process_waitpid, signal_mask, signal_pending, signal_wait, signal_disposition, ipc_map_anon, ipc_map_file, ipc_shm_open, ipc_shm_unlink, ipc_read_bytes, ipc_write_bytes, ipc_read_i32, ipc_write_i32, ipc_read_i64, ipc_write_i64, ipc_atomic_load, ipc_atomic_store, ipc_atomic_add, ipc_atomic_compare, ipc_mutex_init, ipc_cond_init, ipc_sem_init, ipc_length, ipc_mutex_lock, ipc_mutex_unlock, ipc_mutex_destroy, ipc_cond_signal, ipc_cond_broadcast, ipc_cond_destroy, ipc_sem_post, ipc_sem_destroy, ipc_cond_wait, ipc_sem_wait, ipc_sem_trywait, ipc_sem_value,
   unicode_normalize, unicode_casefold, unicode_boundaries,
-  thread_wait_for, condvar_wait_for
+  thread_wait_for, condvar_wait_for,
+  ffi_buffer, ffi_buffer_mut, ffi_buffer_len, ffi_buffer_len_mut
 };
 struct SystemOperationSpec {
   SystemOperation operation;
@@ -271,9 +272,23 @@ inline constexpr std::array<SystemOperationSpec, 50> process_system_operations{{
   {SystemOperation::ipc_sem_trywait, "__woozy_ipc_sem_trywait", "bool", {"__woozy_IpcHandle", "usize"}, 2, "std/ipc"},
   {SystemOperation::ipc_sem_value, "__woozy_ipc_sem_value", "u32", {"__woozy_IpcHandle", "usize"}, 2, "std/ipc"},
 }};
+// std/ffi pointer/buffer plumbing. These operations never fabricate a raw
+// address from an integer and never accept an arbitrary pointer spelling;
+// their types are the same frozen C ABI pointer/buffer types used by schema
+// v2 bindings.
+inline constexpr std::array<SystemOperationSpec, 4> ffi_system_operations{{
+  {SystemOperation::ffi_buffer, "__woozy_ffi_buffer", "Buffer[A]",
+   {"Ptr[A]", "usize"}, 2, "std/ffi", 1},
+  {SystemOperation::ffi_buffer_mut, "__woozy_ffi_buffer_mut", "BufferMut[A]",
+   {"PtrMut[A]", "usize"}, 2, "std/ffi", 1},
+  {SystemOperation::ffi_buffer_len, "__woozy_ffi_buffer_len", "usize",
+   {"Buffer[A]"}, 1, "std/ffi", 1},
+  {SystemOperation::ffi_buffer_len_mut, "__woozy_ffi_buffer_len_mut", "usize",
+   {"BufferMut[A]"}, 1, "std/ffi", 1},
+}};
 inline constexpr auto all_system_operations = [] {
   std::array<SystemOperationSpec, system_operations.size() +
-      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size()> all{};
+      concurrency_system_operations.size() + value_system_operations.size() + os_system_operations.size() + network_system_operations.size() + process_system_operations.size() + ffi_system_operations.size()> all{};
   std::size_t index = 0;
   for (const auto &spec : system_operations) all[index++] = spec;
   for (const auto &spec : concurrency_system_operations) all[index++] = spec;
@@ -281,6 +296,7 @@ inline constexpr auto all_system_operations = [] {
   for (const auto &spec : os_system_operations) all[index++] = spec;
   for (const auto &spec : network_system_operations) all[index++] = spec;
   for (const auto &spec : process_system_operations) all[index++] = spec;
+  for (const auto &spec : ffi_system_operations) all[index++] = spec;
   return all;
 }();
 inline const SystemOperationSpec *system_operation_spec(SystemOperation operation) {

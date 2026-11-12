@@ -9,7 +9,7 @@ add_library(lang_native_ir STATIC
   ${LANG_NATIVE_ROOT}/src/ir/lower.cpp ${LANG_NATIVE_ROOT}/src/ir/verify.cpp)
 target_link_libraries(lang_native_ir PUBLIC lang_hir)
 target_compile_features(lang_native_ir PUBLIC cxx_std_20)
-add_library(lang_native STATIC emit.cpp)
+add_library(lang_native STATIC emit.cpp c_ffi.cpp)
 target_link_libraries(lang_native PUBLIC lang_native_ir)
 target_include_directories(lang_native SYSTEM PRIVATE ${LLVM_INCLUDE_DIRS})
 target_compile_options(lang_native PRIVATE -fno-rtti)
@@ -43,10 +43,40 @@ target_compile_features(lang_native_runtime PRIVATE cxx_std_20)
 target_compile_options(lang_native_runtime PRIVATE -ffreestanding -fno-builtin -fno-exceptions -fno-rtti -fno-sanitize=all -fno-builtin-memcpy -fno-builtin-memset -fno-builtin-memmove
   $<$<CXX_COMPILER_ID:GNU>:-fno-tree-loop-distribute-patterns>)
 set_target_properties(lang_native_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
+# Explicit hosted runtime archive. It is never used by the default freestanding
+# link mode and is built from the published hosted source manifest.
+include(${LANG_NATIVE_ROOT}/runtime/hosted/sources.cmake)
+set(LANG_HOSTED_PUBLIC_SOURCES_NO_PROCESS ${LANG_HOSTED_PUBLIC_SOURCES})
+list(REMOVE_ITEM LANG_HOSTED_PUBLIC_SOURCES_NO_PROCESS
+  ${LANG_NATIVE_ROOT}/runtime/native/process.cpp)
+add_library(lang_hosted_public OBJECT
+  ${LANG_HOSTED_PUBLIC_SOURCES_NO_PROCESS}
+  ${LANG_NATIVE_ROOT}/runtime/hosted/ffi_process.cpp
+  ${LANG_MATH_C_SOURCES})
+target_compile_features(lang_hosted_public PRIVATE cxx_std_20)
+target_compile_options(lang_hosted_public PRIVATE
+  -fPIC -ffreestanding -fno-builtin -fno-exceptions -fno-rtti
+  -fno-sanitize=all -fno-builtin-memcpy -fno-builtin-memset
+  -fno-builtin-memmove
+  $<$<CXX_COMPILER_ID:GNU>:-fno-tree-loop-distribute-patterns>)
+set_source_files_properties(${LANG_MATH_C_SOURCES} PROPERTIES
+  LANGUAGE C
+  COMPILE_OPTIONS "${LANG_MATH_C_FLAGS}")
+add_library(lang_hosted_replacement OBJECT
+  ${LANG_HOSTED_REPLACEMENT_SOURCES})
+target_compile_features(lang_hosted_replacement PRIVATE cxx_std_20)
+target_compile_options(lang_hosted_replacement PRIVATE
+  -fPIC -fno-exceptions -fno-rtti -pthread -fstack-protector-strong)
+add_library(lang_hosted_runtime STATIC
+  $<TARGET_OBJECTS:lang_hosted_public>
+  $<TARGET_OBJECTS:lang_hosted_replacement>)
+set_target_properties(lang_hosted_runtime PROPERTIES POSITION_INDEPENDENT_CODE ON)
+
 add_executable(lang_native_helper helper.cpp)
 target_link_libraries(lang_native_helper PRIVATE lang_sema lang_native lang_driver_process json-c::json-c)
 target_compile_definitions(lang_native_helper PRIVATE
   LANG_NATIVE_RUNTIME="$<TARGET_FILE:lang_native_runtime>"
+  LANG_HOSTED_RUNTIME="$<TARGET_FILE:lang_hosted_runtime>"
   LANG_NATIVE_CLANG="${LLVM_TOOLS_BINARY_DIR}/clang"
   LANG_NATIVE_LLD="${LLVM_TOOLS_BINARY_DIR}/ld.lld")
-add_dependencies(lang_native_helper lang_native_runtime)
+add_dependencies(lang_native_helper lang_native_runtime lang_hosted_runtime)

@@ -1,0 +1,125 @@
+{
+  "$schema": "https://json-schema.org/draft/2020-12/schema",
+  "$id": "https://woozy.local/contracts/c-bindings.schema.json",
+  "title": "Woozy C ABI binding bundle v2",
+  "description": "Independent of python-bindings.schema.json. Used with [build.native] runtime = hosted and native dependencies.",
+  "type": "object",
+  "additionalProperties": false,
+  "required": ["schema_version", "contract", "abi", "target", "requires_hosted", "modules", "types", "callables"],
+  "properties": {
+    "schema_version": {"const": 2},
+    "contract": {"const": "compiler-dev/1"},
+    "abi": {"const": "c"},
+    "target": {"const": "x86_64-linux-gnu"},
+    "requires_hosted": {"type": "boolean"},
+    "modules": {
+      "type": "array",
+      "minItems": 1,
+      "items": {
+        "type": "object",
+        "additionalProperties": false,
+        "required": ["logical_path", "provider", "library"],
+        "properties": {
+          "logical_path": {"$ref": "#/$defs/logicalPath"},
+          "provider": {"const": "native_library"},
+          "library": {"type": "string", "pattern": "^$|^[A-Za-z0-9_+.-]+$"}
+        }
+      }
+    },
+    "types": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/type"}
+    },
+    "callables": {
+      "type": "array",
+      "items": {"$ref": "#/$defs/callable"}
+    }
+  },
+  "$defs": {
+    "logicalPath": {
+      "type": "string",
+      "pattern": "^[A-Za-z_][A-Za-z0-9_]*(/[A-Za-z_][A-Za-z0-9_]*)*$"
+    },
+    "cSymbol": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+    "typeRef": {
+      "type": "string",
+      "description": "Scalar, Ptr[T], PtrMut[T], Buffer[T], BufferMut[T], or a declared type id."
+    },
+    "field": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type", "offset"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "type": {"$ref": "#/$defs/typeRef"},
+        "offset": {"type": "integer", "minimum": 0}
+      }
+    },
+    "parameter": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["name", "type"],
+      "properties": {
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "type": {"$ref": "#/$defs/typeRef"}
+      }
+    },
+    "type": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "module", "name", "kind"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+$"},
+        "module": {"$ref": "#/$defs/logicalPath"},
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "kind": {"enum": ["record", "resource", "callback", "opaque"]},
+        "c_name": {"type": "string"},
+        "fields": {"type": "array", "items": {"$ref": "#/$defs/field"}},
+        "size": {"type": "integer", "minimum": 0},
+        "align": {"type": "integer", "minimum": 1},
+        "release_symbol": {"$ref": "#/$defs/cSymbol"},
+        "retain_symbol": {"$ref": "#/$defs/cSymbol"},
+        "result": {"$ref": "#/$defs/typeRef"},
+        "parameters": {"type": "array", "items": {"$ref": "#/$defs/parameter"}}
+      },
+      "allOf": [
+        {
+          "if": {"properties": {"kind": {"const": "record"}}},
+          "then": {"required": ["fields", "size", "align"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "resource"}}},
+          "then": {"required": ["release_symbol"]}
+        },
+        {
+          "if": {"properties": {"kind": {"const": "callback"}}},
+          "then": {"required": ["result", "parameters"]}
+        }
+      ]
+    },
+    "result": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["type", "ownership"],
+      "properties": {
+        "type": {"$ref": "#/$defs/typeRef"},
+        "ownership": {"enum": ["value", "borrowed", "owned", "unit"]},
+        "release_symbol": {"$ref": "#/$defs/cSymbol"},
+        "retain_symbol": {"$ref": "#/$defs/cSymbol"}
+      }
+    },
+    "callable": {
+      "type": "object",
+      "additionalProperties": false,
+      "required": ["id", "module", "name", "symbol", "parameters", "result"],
+      "properties": {
+        "id": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*(\\.[A-Za-z_][A-Za-z0-9_]*)+$"},
+        "module": {"$ref": "#/$defs/logicalPath"},
+        "name": {"type": "string", "pattern": "^[A-Za-z_][A-Za-z0-9_]*$"},
+        "symbol": {"$ref": "#/$defs/cSymbol"},
+        "parameters": {"type": "array", "items": {"$ref": "#/$defs/parameter"}},
+        "result": {"$ref": "#/$defs/result"}
+      }
+    }
+  }
+}

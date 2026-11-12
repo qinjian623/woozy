@@ -1,0 +1,33 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-apple-darwin",
+  "requires_hosted": true,
+  "modules": [
+    {
+      "logical_path": "fixture/lib",
+      "provider": "native_library",
+      "library": "ffi_fixture"
+    }
+  ],
+  "types": [],
+  "callables": [
+    {
+      "id": "fixture.cf_i8",
+      "module": "fixture/lib",
+      "name": "cf_i8",
+      "symbol": "cf_i8",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "i8"
+        }
+      ],
+      "result": {
+        "type": "i8",
+        "ownership": "value"
+      }
+    }
+  ]
+}

@@ -1,0 +1,7 @@
+package app;
+import "fixture/lib" as fixture;
+import "std/ffi" as ffi;
+func main() i32 {
+    let view = ffi.buffer[u8](fixture.cf_bytes_ptr(), fixture.cf_bytes_len());
+    unsafe { return i32(view[4]); }
+}

@@ -1,0 +1,1066 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {
+      "logical_path": "fixture/lib",
+      "provider": "native_library",
+      "library": "ffi_fixture"
+    }
+  ],
+  "types": [
+    {
+      "id": "fixture.Point",
+      "module": "fixture/lib",
+      "name": "Point",
+      "kind": "record",
+      "size": 16,
+      "align": 8,
+      "fields": [
+        {
+          "name": "x",
+          "type": "i32",
+          "offset": 0
+        },
+        {
+          "name": "y",
+          "type": "i32",
+          "offset": 4
+        },
+        {
+          "name": "weight",
+          "type": "f64",
+          "offset": 8
+        }
+      ]
+    },
+    {
+      "id": "fixture.OwnedResource",
+      "module": "fixture/lib",
+      "name": "OwnedResource",
+      "kind": "resource",
+      "release_symbol": "cf_resource_release",
+      "retain_symbol": "cf_resource_retain"
+    },
+    {
+      "id": "fixture.Callback",
+      "module": "fixture/lib",
+      "name": "Callback",
+      "kind": "callback",
+      "result": "i32",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "fixture.Tiny",
+      "module": "fixture/lib",
+      "name": "Tiny",
+      "kind": "record",
+      "size": 4,
+      "align": 4,
+      "fields": [
+        {
+          "name": "value",
+          "type": "i32",
+          "offset": 0
+        }
+      ]
+    },
+    {
+      "id": "fixture.Large",
+      "module": "fixture/lib",
+      "name": "Large",
+      "kind": "record",
+      "size": 24,
+      "align": 8,
+      "fields": [
+        {
+          "name": "a",
+          "type": "i64",
+          "offset": 0
+        },
+        {
+          "name": "b",
+          "type": "i64",
+          "offset": 8
+        },
+        {
+          "name": "c",
+          "type": "f64",
+          "offset": 16
+        }
+      ]
+    },
+    {
+      "id": "fixture.BufferView",
+      "module": "fixture/lib",
+      "name": "BufferView",
+      "kind": "record",
+      "size": 24,
+      "align": 8,
+      "fields": [
+        {
+          "name": "tag",
+          "type": "i32",
+          "offset": 0
+        },
+        {
+          "name": "data",
+          "type": "Buffer[u8]",
+          "offset": 8
+        }
+      ]
+    },
+    {
+      "id": "fixture.PointCallback",
+      "module": "fixture/lib",
+      "name": "PointCallback",
+      "kind": "callback",
+      "result": "i64",
+      "parameters": [
+        {
+          "name": "point",
+          "type": "fixture.Point"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "fixture.PointReturnCallback",
+      "module": "fixture/lib",
+      "name": "PointReturnCallback",
+      "kind": "callback",
+      "result": "fixture.Point",
+      "parameters": [
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "fixture.TinyCallback",
+      "module": "fixture/lib",
+      "name": "TinyCallback",
+      "kind": "callback",
+      "result": "fixture.Tiny",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "fixture.Tiny"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "fixture.LargeCallback",
+      "module": "fixture/lib",
+      "name": "LargeCallback",
+      "kind": "callback",
+      "result": "fixture.Large",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "fixture.Large"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "fixture.NarrowCallback",
+      "module": "fixture/lib",
+      "name": "NarrowCallback",
+      "kind": "callback",
+      "result": "bool",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "i8"
+        },
+        {
+          "name": "b",
+          "type": "u16"
+        },
+        {
+          "name": "c",
+          "type": "f32"
+        },
+        {
+          "name": "d",
+          "type": "bool"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "fixture.FloatCallback",
+      "module": "fixture/lib",
+      "name": "FloatCallback",
+      "kind": "callback",
+      "result": "f64",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "f32"
+        },
+        {
+          "name": "b",
+          "type": "f64"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "fixture.IntReturnCallback",
+      "module": "fixture/lib",
+      "name": "IntReturnCallback",
+      "kind": "callback",
+      "result": "i16",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "i8"
+        },
+        {
+          "name": "b",
+          "type": "u16"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "callables": [
+    {
+      "id": "fixture.cf_i8",
+      "module": "fixture/lib",
+      "name": "cf_i8",
+      "symbol": "cf_i8",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "i8"
+        }
+      ],
+      "result": {
+        "type": "i8",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_i16",
+      "module": "fixture/lib",
+      "name": "cf_i16",
+      "symbol": "cf_i16",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "i16"
+        }
+      ],
+      "result": {
+        "type": "i16",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_i32",
+      "module": "fixture/lib",
+      "name": "cf_i32",
+      "symbol": "cf_i32",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_i64",
+      "module": "fixture/lib",
+      "name": "cf_i64",
+      "symbol": "cf_i64",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "i64"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_isize",
+      "module": "fixture/lib",
+      "name": "cf_isize",
+      "symbol": "cf_isize",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "isize"
+        }
+      ],
+      "result": {
+        "type": "isize",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_usize",
+      "module": "fixture/lib",
+      "name": "cf_usize",
+      "symbol": "cf_usize",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "usize"
+        }
+      ],
+      "result": {
+        "type": "usize",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_u8",
+      "module": "fixture/lib",
+      "name": "cf_u8",
+      "symbol": "cf_u8",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "u8"
+        }
+      ],
+      "result": {
+        "type": "u8",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_u16",
+      "module": "fixture/lib",
+      "name": "cf_u16",
+      "symbol": "cf_u16",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "u16"
+        }
+      ],
+      "result": {
+        "type": "u16",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_u32",
+      "module": "fixture/lib",
+      "name": "cf_u32",
+      "symbol": "cf_u32",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "u32"
+        }
+      ],
+      "result": {
+        "type": "u32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_u64",
+      "module": "fixture/lib",
+      "name": "cf_u64",
+      "symbol": "cf_u64",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_f32",
+      "module": "fixture/lib",
+      "name": "cf_f32",
+      "symbol": "cf_f32",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "f32"
+        }
+      ],
+      "result": {
+        "type": "f32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_f64",
+      "module": "fixture/lib",
+      "name": "cf_f64",
+      "symbol": "cf_f64",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "f64"
+        }
+      ],
+      "result": {
+        "type": "f64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_bool",
+      "module": "fixture/lib",
+      "name": "cf_bool",
+      "symbol": "cf_bool",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "bool"
+        }
+      ],
+      "result": {
+        "type": "bool",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_add_i32",
+      "module": "fixture/lib",
+      "name": "cf_add_i32",
+      "symbol": "cf_add_i32",
+      "parameters": [
+        {
+          "name": "a",
+          "type": "i32"
+        },
+        {
+          "name": "b",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_void",
+      "module": "fixture/lib",
+      "name": "cf_void",
+      "symbol": "cf_void",
+      "parameters": [
+        {
+          "name": "v",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "fixture.cf_last_void",
+      "module": "fixture/lib",
+      "name": "cf_last_void",
+      "symbol": "cf_last_void",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_bytes_ptr",
+      "module": "fixture/lib",
+      "name": "cf_bytes_ptr",
+      "symbol": "cf_bytes_ptr",
+      "parameters": [],
+      "result": {
+        "type": "Ptr[u8]",
+        "ownership": "borrowed"
+      }
+    },
+    {
+      "id": "fixture.cf_bytes_len",
+      "module": "fixture/lib",
+      "name": "cf_bytes_len",
+      "symbol": "cf_bytes_len",
+      "parameters": [],
+      "result": {
+        "type": "usize",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_checksum",
+      "module": "fixture/lib",
+      "name": "cf_checksum",
+      "symbol": "cf_checksum",
+      "parameters": [
+        {
+          "name": "view",
+          "type": "Buffer[u8]"
+        }
+      ],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_global_i32_ptr",
+      "module": "fixture/lib",
+      "name": "cf_global_i32_ptr",
+      "symbol": "cf_global_i32_ptr",
+      "parameters": [],
+      "result": {
+        "type": "PtrMut[i32]",
+        "ownership": "borrowed"
+      }
+    },
+    {
+      "id": "fixture.cf_read_i32",
+      "module": "fixture/lib",
+      "name": "cf_read_i32",
+      "symbol": "cf_read_i32",
+      "parameters": [
+        {
+          "name": "p",
+          "type": "Ptr[i32]"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_write_i32",
+      "module": "fixture/lib",
+      "name": "cf_write_i32",
+      "symbol": "cf_write_i32",
+      "parameters": [
+        {
+          "name": "p",
+          "type": "PtrMut[i32]"
+        },
+        {
+          "name": "v",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "fixture.cf_point_make",
+      "module": "fixture/lib",
+      "name": "cf_point_make",
+      "symbol": "cf_point_make",
+      "parameters": [
+        {
+          "name": "x",
+          "type": "i32"
+        },
+        {
+          "name": "y",
+          "type": "i32"
+        },
+        {
+          "name": "weight",
+          "type": "f64"
+        }
+      ],
+      "result": {
+        "type": "fixture.Point",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_point_sum",
+      "module": "fixture/lib",
+      "name": "cf_point_sum",
+      "symbol": "cf_point_sum",
+      "parameters": [
+        {
+          "name": "p",
+          "type": "fixture.Point"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_point_weight",
+      "module": "fixture/lib",
+      "name": "cf_point_weight",
+      "symbol": "cf_point_weight",
+      "parameters": [
+        {
+          "name": "p",
+          "type": "fixture.Point"
+        }
+      ],
+      "result": {
+        "type": "f64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_point_size",
+      "module": "fixture/lib",
+      "name": "cf_point_size",
+      "symbol": "cf_point_size",
+      "parameters": [],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_point_align",
+      "module": "fixture/lib",
+      "name": "cf_point_align",
+      "symbol": "cf_point_align",
+      "parameters": [],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_point_offset_x",
+      "module": "fixture/lib",
+      "name": "cf_point_offset_x",
+      "symbol": "cf_point_offset_x",
+      "parameters": [],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_point_offset_y",
+      "module": "fixture/lib",
+      "name": "cf_point_offset_y",
+      "symbol": "cf_point_offset_y",
+      "parameters": [],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_point_offset_weight",
+      "module": "fixture/lib",
+      "name": "cf_point_offset_weight",
+      "symbol": "cf_point_offset_weight",
+      "parameters": [],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_resource_new",
+      "module": "fixture/lib",
+      "name": "cf_resource_new",
+      "symbol": "cf_resource_new",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "fixture.OwnedResource",
+        "ownership": "owned",
+        "release_symbol": "cf_resource_release",
+        "retain_symbol": "cf_resource_retain"
+      }
+    },
+    {
+      "id": "fixture.cf_resource_value",
+      "module": "fixture/lib",
+      "name": "cf_resource_value",
+      "symbol": "cf_resource_value",
+      "parameters": [
+        {
+          "name": "r",
+          "type": "fixture.OwnedResource"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_resource_live",
+      "module": "fixture/lib",
+      "name": "cf_resource_live",
+      "symbol": "cf_resource_live",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply",
+      "module": "fixture/lib",
+      "name": "cf_apply",
+      "symbol": "cf_apply",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.Callback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_thread_tls",
+      "module": "fixture/lib",
+      "name": "cf_thread_tls",
+      "symbol": "cf_thread_tls",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_env_name",
+      "module": "fixture/lib",
+      "name": "cf_env_name",
+      "symbol": "cf_env_name",
+      "parameters": [],
+      "result": {
+        "type": "Ptr[u8]",
+        "ownership": "borrowed"
+      }
+    },
+    {
+      "id": "fixture.cf_strlen_nonempty",
+      "module": "fixture/lib",
+      "name": "cf_strlen_nonempty",
+      "symbol": "cf_strlen_nonempty",
+      "parameters": [
+        {
+          "name": "s",
+          "type": "Ptr[u8]"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_resource_refs",
+      "module": "fixture/lib",
+      "name": "cf_resource_refs",
+      "symbol": "cf_resource_refs",
+      "parameters": [
+        {
+          "name": "r",
+          "type": "fixture.OwnedResource"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_sha_input",
+      "module": "fixture/lib",
+      "name": "cf_sha_input",
+      "symbol": "cf_sha_input",
+      "parameters": [],
+      "result": {
+        "type": "Ptr[u8]",
+        "ownership": "borrowed"
+      }
+    },
+    {
+      "id": "fixture.cf_sha_input_len",
+      "module": "fixture/lib",
+      "name": "cf_sha_input_len",
+      "symbol": "cf_sha_input_len",
+      "parameters": [],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_sha_output",
+      "module": "fixture/lib",
+      "name": "cf_sha_output",
+      "symbol": "cf_sha_output",
+      "parameters": [],
+      "result": {
+        "type": "PtrMut[u8]",
+        "ownership": "borrowed"
+      }
+    },
+    {
+      "id": "fixture.cf_thread_tls_stress",
+      "module": "fixture/lib",
+      "name": "cf_thread_tls_stress",
+      "symbol": "cf_thread_tls_stress",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply_point",
+      "module": "fixture/lib",
+      "name": "cf_apply_point",
+      "symbol": "cf_apply_point",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.PointCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply_point_return",
+      "module": "fixture/lib",
+      "name": "cf_apply_point_return",
+      "symbol": "cf_apply_point_return",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.PointReturnCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply_tiny",
+      "module": "fixture/lib",
+      "name": "cf_apply_tiny",
+      "symbol": "cf_apply_tiny",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.TinyCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "fixture.Tiny",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply_large",
+      "module": "fixture/lib",
+      "name": "cf_apply_large",
+      "symbol": "cf_apply_large",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.LargeCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "fixture.Large",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply_narrow",
+      "module": "fixture/lib",
+      "name": "cf_apply_narrow",
+      "symbol": "cf_apply_narrow",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.NarrowCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "bool",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply_float",
+      "module": "fixture/lib",
+      "name": "cf_apply_float",
+      "symbol": "cf_apply_float",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.FloatCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "f64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_buffer_view_make",
+      "module": "fixture/lib",
+      "name": "cf_buffer_view_make",
+      "symbol": "cf_buffer_view_make",
+      "parameters": [
+        {
+          "name": "tag",
+          "type": "i32"
+        },
+        {
+          "name": "data",
+          "type": "Ptr[u8]"
+        },
+        {
+          "name": "len",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "fixture.BufferView",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_buffer_view_sum",
+      "module": "fixture/lib",
+      "name": "cf_buffer_view_sum",
+      "symbol": "cf_buffer_view_sum",
+      "parameters": [
+        {
+          "name": "view",
+          "type": "fixture.BufferView"
+        }
+      ],
+      "result": {
+        "type": "u64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "fixture.cf_apply_int_return",
+      "module": "fixture/lib",
+      "name": "cf_apply_int_return",
+      "symbol": "cf_apply_int_return",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "fixture.IntReturnCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "i16",
+        "ownership": "value"
+      }
+    }
+  ]
+}

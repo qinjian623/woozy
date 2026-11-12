@@ -1,0 +1,20 @@
+package ffi;
+
+// A Buffer borrows the pointer and length; it owns neither. Construction is
+// explicit and never uses String or Vec storage as a C buffer. Reads/writes
+// through Buffer/Ptr remain unsafe operations in source code.
+pub func buffer[A](pointer Ptr[A], length usize) Buffer[A] {
+    return __woozy_ffi_buffer[A](pointer, length);
+}
+
+pub func buffer_mut[A](pointer PtrMut[A], length usize) BufferMut[A] {
+    return __woozy_ffi_buffer_mut[A](pointer, length);
+}
+
+pub func len[A](data Buffer[A]) usize {
+    return __woozy_ffi_buffer_len[A](data);
+}
+
+pub func len_mut[A](data BufferMut[A]) usize {
+    return __woozy_ffi_buffer_len_mut[A](data);
+}

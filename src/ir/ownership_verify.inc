@@ -158,7 +158,7 @@
              op == Op::enum_init || op == Op::vec_init || op == Op::vec_read ||
              op == Op::vec_slice || op == Op::iteration_read ||
              op == Op::call || op == Op::system_call ||
-             op == Op::binary;
+             op == Op::foreign_call || op == Op::binary;
     };
     for (const auto &block : f.blocks) {
       for (const auto &p : block.parameters)

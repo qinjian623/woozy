@@ -197,6 +197,18 @@ ValueKind provisional_kind(const Type &t) {
     return ValueKind::foreign_reference;
   case TypeKind::ForeignCallable:
     return ValueKind::foreign_callable;
+  case TypeKind::CForeignPointer:
+    return ValueKind::c_pointer;
+  case TypeKind::CForeignBuffer:
+    return ValueKind::c_buffer;
+  case TypeKind::CForeignRecord:
+    return ValueKind::c_record;
+  case TypeKind::CForeignResource:
+    return ValueKind::c_resource;
+  case TypeKind::CForeignCallback:
+    return ValueKind::c_callback;
+  case TypeKind::CForeignOpaque:
+    return ValueKind::c_pointer;
   case TypeKind::Error:
     return ValueKind::unsupported;
   default:
@@ -244,6 +256,18 @@ class Classifier {
                   : ValueKind::foreign_reference,
               {}};
     }
+    if (t.kind == TypeKind::CForeignPointer)
+      return {ValueKind::c_pointer, {}};
+    if (t.kind == TypeKind::CForeignBuffer)
+      return {ValueKind::c_buffer, {}};
+    if (t.kind == TypeKind::CForeignRecord)
+      return {ValueKind::c_record, {}};
+    if (t.kind == TypeKind::CForeignCallback)
+      return {ValueKind::c_callback, {}};
+    if (t.kind == TypeKind::CForeignOpaque)
+      return {ValueKind::c_pointer, {}};
+    if (t.kind == TypeKind::CForeignResource)
+      return {ValueKind::c_resource, {}};
     if (t.kind == TypeKind::Error)
       return {ValueKind::unsupported,
               "dynamic string/foreign/error value ownership is not supported"};
@@ -323,6 +347,14 @@ class Classifier {
     if (t.kind == TypeKind::ForeignOpaque ||
         t.kind == TypeKind::ForeignCallable)
       return true;
+    if (t.kind == TypeKind::CForeignResource)
+      return true;
+    if (t.kind == TypeKind::CForeignPointer ||
+        t.kind == TypeKind::CForeignBuffer ||
+        t.kind == TypeKind::CForeignRecord ||
+        t.kind == TypeKind::CForeignCallback ||
+        t.kind == TypeKind::CForeignOpaque)
+      return false;
     if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum)
       return false;
     // Value storage recursion that does not pass through Vec has no finite
@@ -385,6 +417,19 @@ public:
         t.kind == TypeKind::ForeignCallable) {
       out.kind = support_result.kind;
       out.needs_drop = true;
+      return out;
+    }
+    if (t.kind == TypeKind::CForeignResource) {
+      out.kind = ValueKind::c_resource;
+      out.needs_drop = true;
+      return out;
+    }
+    if (t.kind == TypeKind::CForeignPointer ||
+        t.kind == TypeKind::CForeignBuffer ||
+        t.kind == TypeKind::CForeignRecord ||
+        t.kind == TypeKind::CForeignCallback ||
+        t.kind == TypeKind::CForeignOpaque) {
+      out.kind = support_result.kind;
       return out;
     }
     if (t.kind == TypeKind::Error) {

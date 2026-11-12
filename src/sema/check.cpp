@@ -64,6 +64,8 @@ class Checker {
   SymbolId function{0};
   ScopeId scope{0};
   size_t cleanup_depth = 0;
+  unsigned unsafe_depth = 0;
+  std::map<uint32_t, TypeId> c_named_types;
   TypeId unit{0}, boolean{0}, i64{0};
   std::vector<HirNodeId> loops, break_targets;
   std::shared_ptr<modules::ResolvedProject> owned;
@@ -1072,6 +1074,13 @@ class Checker {
     if (kind == modules::SymbolKind::type) {
       if (auto ex = m.resolved->foreign_export(*s)) {
         if (!args.empty()) reject(r, "external type does not accept type arguments");
+        if (ex->c_type) {
+          modules::CTypeRef ref;
+          ref.kind = modules::CTypeRef::Kind::named;
+          ref.named = *ex->c_type;
+          return c_type(ref);
+        }
+        if (ex->c_type_ref) return c_type(*ex->c_type_ref);
         if (!ex->declaration) reject(r, "external type lacks declaration");
         return m.foreign_bindings.at(ex->declaration->value).type;
       }
@@ -1117,6 +1126,30 @@ class Checker {
         reject(r, "Vec requires one element type");
       Type t;
       t.kind = TypeKind::Vec;
+      t.type_args = args;
+      return m.types.intern(t);
+    }
+    if (name == "Ptr" || name == "PtrMut") {
+      if (args.size() != 1)
+        reject(r, name + " requires one pointee type");
+      Type t;
+      t.kind = TypeKind::CForeignPointer;
+      t.bits = name == "PtrMut" ? 1 : 0;
+      t.type_args = args;
+      return m.types.intern(t);
+    }
+    if (name == "Buffer" || name == "BufferMut") {
+      if (args.size() != 1)
+        reject(r, name + " requires one element type");
+      const auto kind = type(args[0]).kind;
+      if (!(kind == TypeKind::SignedInt || kind == TypeKind::UnsignedInt ||
+            kind == TypeKind::Isize || kind == TypeKind::Usize ||
+            kind == TypeKind::Float || kind == TypeKind::Bool ||
+            kind == TypeKind::TypeParameter))
+        reject(r, "Buffer element must be a fixed scalar type");
+      Type t;
+      t.kind = TypeKind::CForeignBuffer;
+      t.bits = name == "BufferMut" ? 1 : 0;
       t.type_args = args;
       return m.types.intern(t);
     }
@@ -1596,6 +1629,19 @@ class Checker {
                     {t, {}, {}}};
           break;
         }
+        if (type(base.value.type).kind == TypeKind::CForeignRecord) {
+          auto name = std::string(file(r).tokens[n.token_end - 1].spelling);
+          const auto &decl = c_decl(type(base.value.type).c_type);
+          std::optional<uint32_t> field;
+          for (uint32_t i = 0; i < decl.fields.size(); ++i)
+            if (decl.fields[i].name == name) field = i;
+          if (!field)
+            reject(r, "C record has no such field", "E_NAME_NOT_FOUND");
+          auto t = c_type(decl.fields[*field].type);
+          result = {node(r, t, CFieldRead{decl.id, *field}, {base.id}),
+                    {t, {}, {}}};
+          break;
+        }
         const auto f = find_field(r, base.value.type);
         auto t = field_type(base.value.type, f);
         result = {node(r, t, FieldRead{f.symbol}, {base.id}), {t, {}, {}}};
@@ -1956,8 +2002,23 @@ class Checker {
                     {t, {}, {}}};
           break;
         }
-        if (type(v.value.type).kind != TypeKind::Vec &&
-            type(v.value.type).kind != TypeKind::String)
+        const auto receiver_kind = type(v.value.type).kind;
+        if (receiver_kind == TypeKind::CForeignPointer ||
+            receiver_kind == TypeKind::CForeignBuffer) {
+          if (!unsafe_depth)
+            reject(r, "C pointer/buffer indexing requires unsafe");
+          if (n.children.size() != 2)
+            reject(r, "C pointer requires one index", "E_CALL_ARGUMENT");
+          auto index = expression(child(r, 1));
+          if (!integer(index.value.type))
+            reject(r, "C pointer index must be integer");
+          auto t = type(v.value.type).type_args.at(0);
+          if (type(t).kind == TypeKind::Unit)
+            reject(r, "void pointer cannot be indexed");
+          result = {node(r, t, IndexRead{}, {v.id, index.id}), {t, {}, {}}};
+          break;
+        }
+        if (receiver_kind != TypeKind::Vec && receiver_kind != TypeKind::String)
           reject(r, "index receiver must be Vec or string");
         if (n.children.size() != 2)
           reject(r, "Vec requires one index");
@@ -2027,6 +2088,23 @@ class Checker {
                      ForeignRead{*index_id, ForeignAccessKind::index_place, {}},
                      {base.id, index.id}),
                 {t, {}, {}}};
+      }
+      const auto receiver_kind = type(base.value.type).kind;
+      if (receiver_kind == TypeKind::CForeignPointer ||
+          receiver_kind == TypeKind::CForeignBuffer) {
+        if (!unsafe_depth)
+          reject(r, "C pointer/buffer indexing requires unsafe");
+        if (!type(base.value.type).bits)
+          reject(r, "C pointer/buffer is read-only");
+        if (ast(r).children.size() != 2)
+          reject(r, "C pointer requires one index", "E_CALL_ARGUMENT");
+        auto index = expression(child(r, 1));
+        if (!integer(index.value.type))
+          reject(r, "C pointer index must be integer");
+        auto t = type(base.value.type).type_args.at(0);
+        if (type(t).kind == TypeKind::Unit)
+          reject(r, "void pointer cannot be indexed");
+        return {node(r, t, IndexPlace{}, {base.id, index.id}), {t, {}, {}}};
       }
       if (type(base.value.type).kind != TypeKind::Vec)
         reject(r, "index receiver must be Vec");
@@ -2535,6 +2613,43 @@ class Checker {
   TypeId declared_foreign_type(const std::string &name) {
     return hir::detail::binding_type(*m.resolved->project, m.types, name);
   }
+  TypeId c_type(const modules::CTypeRef &ref) {
+    if (ref.kind == modules::CTypeRef::Kind::named) {
+      auto it = c_named_types.find(ref.named);
+      if (it != c_named_types.end()) return it->second;
+    }
+    auto id = hir::detail::c_type_id(*m.resolved->project, m.types, ref);
+    if (ref.kind == modules::CTypeRef::Kind::named)
+      c_named_types.emplace(ref.named, id);
+    return id;
+  }
+  const modules::CTypeDecl &c_decl(uint32_t id) const {
+    return m.resolved->project->c_type(id);
+  }
+  const modules::CCallableDecl &c_callable(uint32_t id) const {
+    return m.resolved->project->c_callable(id);
+  }
+  // A source function value may initialize a C callback only when the
+  // complete non-throwing source signature equals the declared C callback
+  // signature element by element. No capture, throws, labels or implicit
+  // conversions are allowed.
+  void check_c_callback(Ref r, TypeId function, uint32_t id) {
+    const auto &decl = c_decl(id);
+    const auto &sig = type(function);
+    if (sig.kind != TypeKind::Function || sig.throws_type)
+      reject(r, "C callback requires a non-throwing function value");
+    if (sig.parameters.size() != decl.parameters.size())
+      reject(r, "C callback parameter count mismatch", "E_CALL_ARGUMENT");
+    for (size_t i = 0; i < decl.parameters.size(); ++i) {
+      auto expected = c_type(decl.parameters[i].type);
+      if (sig.parameters[i].mode != ParamMode::ordinary ||
+          sig.parameters[i].type != expected)
+        reject(r, "C callback parameter type mismatch", "E_CALL_ARGUMENT");
+    }
+    auto expected_result = c_type(decl.result);
+    if (sig.result != expected_result)
+      reject(r, "C callback result type mismatch", "E_CALL_ARGUMENT");
+  }
   static bool foreign_place_kind(const HirNode &n) {
     const auto *read = std::get_if<ForeignRead>(&n.data);
     return read && read->access &&
@@ -2747,6 +2862,65 @@ class Checker {
     const auto &decl = std::get<modules::BindingCallable>(m.resolved->project->foreign_binding(*selected).detail);
     return build(*this, *selected, *hir::detail::bind_arguments(decl, labels));
   }
+  bool c_assignable(TypeId actual, TypeId expected) const {
+    if (actual == expected) return true;
+    const auto &a = type(actual);
+    const auto &e = type(expected);
+    return (e.kind == TypeKind::CForeignPointer ||
+            e.kind == TypeKind::CForeignBuffer) &&
+           a.kind == e.kind && e.bits == 0 && a.bits == 1 &&
+           a.type_args == e.type_args;
+  }
+  Expr c_foreign_call(Ref r, uint32_t id) {
+    const auto &decl = c_callable(id);
+    TypeId signature;
+    try {
+      signature = hir::detail::c_callable_signature(*m.resolved->project,
+                                                     m.types, decl);
+    } catch (const std::invalid_argument &e) {
+      reject(r, e.what(), "E_BINDING_INVALID");
+    }
+    const auto sig = type(signature);
+    if (ast(r).children.size() - 1 != decl.parameters.size())
+      reject(r, "C function requires exactly one argument per parameter",
+             "E_CALL_ARGUMENT");
+    Call call;
+    call.kind = CalleeKind::c_foreign;
+    call.signature = signature;
+    call.c_callable = id;
+    std::vector<HirNodeId> children;
+    for (size_t i = 1; i < ast(r).children.size(); ++i) {
+      auto ar = child(r, i);
+      auto er = child(ar, 0);
+      if (token(ar, 1) == ":")
+        reject(ar, "C functions use fixed positional arguments only",
+               "E_CALL_ARGUMENT");
+      if (ast(er).kind == AstKind::Unary &&
+          (token(er) == "move" || token(er) == "inout"))
+        reject(ar, "C arguments require ordinary mode", "E_CALL_ARGUMENT");
+      const auto expected = sig.parameters[i - 1].type;
+      Expr e;
+      if (type(expected).kind == TypeKind::CForeignCallback) {
+        e = expression(er);
+        check_c_callback(ar, e.value.type, type(expected).c_type);
+        if (!std::holds_alternative<FunctionValue>(m.nodes[e.id.value].data))
+          unavailable(ar, "C callback requires an uncaptured function name");
+      } else {
+        const auto want = type(expected);
+        e = (want.kind == TypeKind::CForeignPointer ||
+             want.kind == TypeKind::CForeignBuffer)
+                ? expression(er)
+                : expression(er, expected);
+        if (!c_assignable(e.value.type, expected))
+          reject(ar, "C argument type differs from binding");
+      }
+      call.args.push_back({uint32_t(i - 1), uint32_t(i - 1), {},
+                           ParamMode::ordinary, e.id});
+      children.push_back(e.id);
+    }
+    return {node(r, sig.result, std::move(call), std::move(children)),
+            {sig.result, {}, {}}};
+  }
   Expr call(Ref r, std::optional<TypeId> expected) {
     auto callee_ref = child(r, 0);
     auto system_callee = callee_ref;
@@ -2760,6 +2934,9 @@ class Checker {
         sid && symbol(*sid).kind == modules::SymbolKind::builtin_function)
       if (const auto *spec = system_operation_spec(symbol(*sid).name))
         return system_call(r, system_callee, *sid, *spec);
+    if (auto sid = occurrence(callee_ref))
+      if (auto ex = m.resolved->foreign_export(*sid); ex && ex->c_callable)
+        return c_foreign_call(r, *ex->c_callable);
     if (auto sid = occurrence(callee_ref))
       if (auto ex = m.resolved->foreign_export(*sid); ex && !ex->candidates.empty())
         return foreign_call(r, callee_ref, ex->candidates);
@@ -3793,11 +3970,15 @@ class Checker {
     switch (n.kind) {
     case AstKind::Block:
       return block(r);
-    case AstKind::Unsafe:
+    case AstKind::Unsafe: {
       if (n.children.size() != 1 ||
           ast(child(r, 0)).kind != AstKind::Block)
         unavailable(r, "unsafe requires exactly one lexical block");
-      return block(child(r, 0));
+      ++unsafe_depth;
+      auto result = block(child(r, 0));
+      --unsafe_depth;
+      return result;
+    }
     case AstKind::Switch:
       return switch_statement(r);
     case AstKind::Binding: {
@@ -4203,6 +4384,15 @@ class Checker {
     m.foreign_bindings = hir::detail::binding_records(project, m.types);
     std::vector<Ref> top;
     for (const auto &mod : m.resolved->project->modules) {
+      if (mod.c_binding) {
+        if (m.config.backend != Backend::native)
+          for (const auto &owner : m.resolved->project->modules)
+            for (const auto &im : owner.imports)
+              if (im.target == mod.id)
+                unavailable({owner.id, im.file, im.node},
+                            "C ABI modules are native-only");
+        continue;
+      }
       if (mod.binding) {
         const auto &backends = m.resolved->project->bindings.at(mod.binding->bundle).allowed_backends;
         const std::string backend = m.config.backend == Backend::python ? "python" : "native";

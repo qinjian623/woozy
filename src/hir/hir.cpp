@@ -72,6 +72,18 @@ TypeId TypeContext::intern(Type t) {
     if (t.type_args.size() != 1)
       bad();
     break;
+  case TypeKind::CForeignPointer:
+  case TypeKind::CForeignBuffer:
+    if (t.type_args.size() != 1 || t.bits > 1 || t.c_type)
+      bad();
+    break;
+  case TypeKind::CForeignRecord:
+  case TypeKind::CForeignResource:
+  case TypeKind::CForeignCallback:
+  case TypeKind::CForeignOpaque:
+    if (!t.c_type || !t.type_args.empty() || t.bits)
+      bad();
+    break;
   case TypeKind::Function:
     if (!find(t.result) || (t.throws_type && !find(*t.throws_type)))
       bad();
@@ -103,15 +115,23 @@ TypeId TypeContext::intern(Type t) {
       (!t.parameters.empty() || t.result.value || t.throws_type))
     bad();
   if (t.kind != TypeKind::SignedInt && t.kind != TypeKind::UnsignedInt &&
-      t.kind != TypeKind::Float && t.bits)
+      t.kind != TypeKind::Float && t.kind != TypeKind::CForeignPointer &&
+      t.kind != TypeKind::CForeignBuffer && t.bits)
     bad();
-  if (!nominal(t.kind) && t.kind != TypeKind::ForeignOpaque && t.kind != TypeKind::ForeignCallable &&
+  if (!nominal(t.kind) && t.kind != TypeKind::ForeignOpaque &&
+      t.kind != TypeKind::ForeignCallable &&
       (t.declaration.value || t.binding.value))
     bad();
   if (nominal(t.kind) && t.binding.value)
     bad();
   if (t.kind != TypeKind::NominalStruct && t.kind != TypeKind::NominalEnum &&
-      t.kind != TypeKind::Vec && !t.type_args.empty())
+      t.kind != TypeKind::Vec && t.kind != TypeKind::CForeignPointer &&
+      t.kind != TypeKind::CForeignBuffer && !t.type_args.empty())
+    bad();
+  if ((t.kind == TypeKind::CForeignRecord ||
+       t.kind == TypeKind::CForeignResource ||
+       t.kind == TypeKind::CForeignCallback ||
+       t.kind == TypeKind::CForeignOpaque) != bool(t.c_type))
     bad();
   for (auto a : t.type_args)
     if (!find(a))
@@ -455,6 +475,7 @@ class Verifier {
     case NodeKind::index_read:
     case NodeKind::vec_slice:
     case NodeKind::foreign_read:
+    case NodeKind::c_field_read:
       return foreign_access_read(n) || !foreign_access_place(n);
     default:
       return false;
@@ -493,6 +514,46 @@ class Verifier {
                ? std::holds_alternative<modules::BindingType>(d.detail)
                : std::holds_alternative<modules::BindingCallable>(d.detail),
            "foreign type declaration category");
+    }
+    if (t.kind == TypeKind::CForeignPointer || t.kind == TypeKind::CForeignBuffer) {
+      need(t.type_args.size() == 1 && t.bits <= 1 && !t.c_type &&
+               !t.declaration.value && !t.binding.value,
+           "C pointer/buffer type shape");
+      const auto &element = type(t.type_args[0]);
+      if (t.kind == TypeKind::CForeignBuffer)
+        need(element.kind == TypeKind::SignedInt ||
+                 element.kind == TypeKind::UnsignedInt ||
+                 element.kind == TypeKind::Isize ||
+                 element.kind == TypeKind::Usize ||
+                 element.kind == TypeKind::Float ||
+                 element.kind == TypeKind::Bool ||
+                 element.kind == TypeKind::TypeParameter,
+             "C buffer element type");
+      if (element.kind == TypeKind::CForeignOpaque) {
+        need(element.c_type && element.c_type <=
+                                    m.resolved->project->c_types.size() &&
+                 m.resolved->project->c_type(element.c_type).kind ==
+                     modules::CDeclKind::opaque,
+             "C opaque pointee");
+      } else {
+        valid_type(t.type_args[0], allowed, depth + 1);
+      }
+    }
+    need(t.kind != TypeKind::CForeignOpaque,
+         "C opaque type must be used behind a pointer");
+    if (t.kind == TypeKind::CForeignRecord ||
+        t.kind == TypeKind::CForeignResource ||
+        t.kind == TypeKind::CForeignCallback ||
+        t.kind == TypeKind::CForeignOpaque) {
+      need(t.c_type && t.c_type <= m.resolved->project->c_types.size() &&
+               t.type_args.empty() && !t.bits && !t.declaration.value &&
+               !t.binding.value,
+           "C named type index");
+      const auto &d = m.resolved->project->c_type(t.c_type);
+      need((t.kind == TypeKind::CForeignRecord && d.kind == modules::CDeclKind::record) ||
+               (t.kind == TypeKind::CForeignResource && d.kind == modules::CDeclKind::resource) ||
+               (t.kind == TypeKind::CForeignCallback && d.kind == modules::CDeclKind::callback),
+           "C named type declaration kind");
     }
     if (t.kind == TypeKind::TypeParameter) {
       need(allowed.count(t.declaration.value),
@@ -1299,6 +1360,128 @@ class Verifier {
       need(source_child(*access.end, ast.children.back()),
            "slice end differs from source");
   }
+  void c_callback_type(TypeId function, uint32_t c_type) const {
+    const auto &decl = m.resolved->project->c_type(c_type);
+    need(decl.kind == modules::CDeclKind::callback,
+         "C callback declaration kind");
+    const auto &sig = type(function);
+    need(sig.kind == TypeKind::Function && !sig.throws_type &&
+             sig.parameters.size() == decl.parameters.size(),
+         "C callback source signature");
+    TypeContext scratch = m.types;
+    for (size_t i = 0; i < decl.parameters.size(); ++i) {
+      auto expected = detail::c_type_id(*m.resolved->project, scratch,
+                                        decl.parameters[i].type);
+      need(sig.parameters[i].mode == ParamMode::ordinary &&
+               sig.parameters[i].type == expected,
+           "C callback parameter type");
+    }
+    need(sig.result == detail::c_type_id(*m.resolved->project, scratch,
+                                         decl.result),
+         "C callback result type");
+  }
+  void c_foreign_call(const HirNode &n, const Call &c) const {
+    need(c.c_callable.has_value() && !c.binding && !c.callee &&
+             c.type_args.empty() && c.omitted.empty(),
+         "C call metadata");
+    const auto &project = *m.resolved->project;
+    need(*c.c_callable >= 1 && *c.c_callable <= project.c_callables.size(),
+         "C callable index");
+    const auto &decl = project.c_callable(*c.c_callable);
+    TypeContext scratch = m.types;
+    TypeId expected;
+    try {
+      expected = detail::c_callable_signature(project, scratch, decl);
+    } catch (const std::invalid_argument &e) {
+      need(false, "C callable signature is invalid");
+    }
+    need(expected == c.signature, "C call signature differs from frozen binding");
+    const auto &sig = type(c.signature);
+    need(sig.kind == TypeKind::Function && !sig.throws_type &&
+             n.type == sig.result && sig.parameters.size() == c.args.size(),
+         "C call signature/result/arity");
+    const auto &file = *project.module(n.source.node.module).files.at(n.source.node.file);
+    const auto &ast = file.node(n.source.node.node);
+    need(ast.kind == AstKind::Call && ast.children.size() == c.args.size() + 1,
+         "C call source arity");
+    auto callee_ref = n.source.node;
+    callee_ref.node = ast.children[0];
+    auto sid = resolved_source(unwrapped(callee_ref));
+    need(sid.has_value(), "C call source has no export identity");
+    auto ex = m.resolved->foreign_export(*sid);
+    need(ex && ex->c_callable == *c.c_callable,
+         "C call source export differs from binding identity");
+    need(n.children.size() == c.args.size(), "C call argument children");
+    for (size_t i = 0; i < c.args.size(); ++i) {
+      const auto &a = c.args[i];
+      need(a.source_index == i && a.parameter_index == i && !a.label &&
+               a.mode == ParamMode::ordinary,
+           "C argument order/label/mode");
+      need(a.expression == n.children[i], "C argument child identity");
+      const auto &syntax = file.node(ast.children[i + 1]);
+      need(syntax.kind == AstKind::Argument && syntax.children.size() == 1 &&
+               file.tokens.at(syntax.token_begin + 1).spelling != ":",
+           "C call positional argument source");
+      auto ref = n.source.node;
+      ref.node = syntax.children[0];
+      auto er = unwrapped(ref);
+      const auto &e = file.node(er.node);
+      need(!(e.kind == AstKind::Unary &&
+             (file.tokens.at(e.token_begin).spelling == "move" ||
+              file.tokens.at(e.token_begin).spelling == "inout")),
+           "C argument mode");
+      const auto &argument = expr(a.expression);
+      need(same_ref(unwrapped(argument.source.node), er),
+           "C argument source identity");
+      const auto expected_type = sig.parameters[i].type;
+      if (type(expected_type).kind == TypeKind::CForeignCallback) {
+        need(argument.kind() == NodeKind::function_value,
+             "C callback argument is not an uncaptured function value");
+        c_callback_type(argument.type, type(expected_type).c_type);
+      } else {
+        bool compatible = argument.type == expected_type;
+        if (!compatible) {
+          const auto &actual = type(argument.type);
+          const auto &wanted = type(expected_type);
+          compatible = (wanted.kind == TypeKind::CForeignPointer ||
+                        wanted.kind == TypeKind::CForeignBuffer) &&
+                       actual.kind == wanted.kind && wanted.bits == 0 &&
+                       actual.bits == 1 &&
+                       actual.type_args == wanted.type_args;
+        }
+        need(compatible, "C argument type differs from binding");
+      }
+    }
+  }
+  void c_field_read(const HirNode &n) const {
+    const auto &d = std::get<CFieldRead>(n.data);
+    need(d.c_type >= 1 && d.c_type <= m.resolved->project->c_types.size(),
+         "C field record index");
+    const auto &decl = m.resolved->project->c_type(d.c_type);
+    need(decl.kind == modules::CDeclKind::record && d.field < decl.fields.size(),
+         "C field declaration/index");
+    need(n.children.size() == 1, "C field child count");
+    const auto &base = expr(n.children[0]);
+    const auto base_type = type(base.type);
+    need(base_type.kind == TypeKind::CForeignRecord &&
+             base_type.c_type == d.c_type,
+         "C field receiver type");
+    TypeContext scratch = m.types;
+    auto expected = detail::c_type_id(*m.resolved->project, scratch,
+                                      decl.fields[d.field].type);
+    need(n.type == expected, "C field result type differs from declaration");
+    const auto &file = *m.resolved->project->module(n.source.node.module).files.at(n.source.node.file);
+    const auto &ast = file.node(n.source.node.node);
+    need(ast.kind == AstKind::Member && ast.children.size() == 1,
+         "C field source is not a member");
+    auto ref = n.source.node;
+    ref.node = ast.children[0];
+    need(same_ref(unwrapped(base.source.node), unwrapped(ref)),
+         "C field base differs from source receiver");
+    const auto name = file.tokens.at(ast.token_end - 1).spelling;
+    need(name == decl.fields[d.field].name,
+         "C field name differs from declaration");
+  }
   void foreign_call(const HirNode &n, const Call &c) const {
     need(c.binding.has_value() && c.callee.has_value() && !c.direct_symbol && c.type_args.empty(),
          "foreign call metadata");
@@ -2096,7 +2279,12 @@ class Verifier {
       foreign_call(n, c);
       return;
     }
-    need(!c.binding && c.omitted.empty(), "foreign metadata on ordinary call");
+    if (c.kind == CalleeKind::c_foreign) {
+      c_foreign_call(n, c);
+      return;
+    }
+    need(!c.binding && !c.c_callable && c.omitted.empty(),
+         "foreign metadata on ordinary call");
     for (auto argument : c.type_args)
       valid_type(argument, allowed(scope(n.scope).function));
     const auto &sig = type(c.signature);
@@ -2545,11 +2733,20 @@ class Verifier {
       arity(2);
       auto receiver = type(expr(ch[0]).type);
       bool text = receiver.kind == TypeKind::String;
+      const bool c_pointer = receiver.kind == TypeKind::CForeignPointer ||
+                             receiver.kind == TypeKind::CForeignBuffer;
       need((receiver.kind == TypeKind::Vec ||
-            (text && n.kind() == NodeKind::index_read)) &&
+            (text && n.kind() == NodeKind::index_read) || c_pointer) &&
                integer(type(expr(ch[1]).type).kind), "index types");
-      need(text ? type(n.type).kind == TypeKind::UnsignedInt && type(n.type).bits == 32
-                : n.type == receiver.type_args[0], "indexed element type");
+      if (c_pointer) {
+        need(receiver.type_args.size() == 1 && n.type == receiver.type_args[0] &&
+                 type(n.type).kind != TypeKind::Unit &&
+                 (n.kind() != NodeKind::index_place || receiver.bits == 1),
+             "C index result/write permission");
+      } else {
+        need(text ? type(n.type).kind == TypeKind::UnsignedInt && type(n.type).bits == 32
+                  : n.type == receiver.type_args[0], "indexed element type");
+      }
       const auto &file = *m.resolved->project->module(n.source.node.module)
                               .files.at(n.source.node.file);
       const auto &syntax = file.node(n.source.node.node);
@@ -2598,6 +2795,9 @@ class Verifier {
         foreign_access(id);
       else
         foreign_read(id);
+      break;
+    case NodeKind::c_field_read:
+      c_field_read(n);
       break;
     case NodeKind::unsupported:
       fail("unsupported HIR node: " + std::get<Unsupported>(n.data).feature,
@@ -2680,9 +2880,18 @@ class Verifier {
         const bool type_arguments =
             (n.kind == AstKind::NeutralBracket && n.children.size() > 1) ||
             (n.kind == AstKind::NamedType && !n.children.empty());
-        need(ex->kind == modules::ForeignExportKind::type && ex->declaration &&
-                 !type_arguments,
+        need(ex->kind == modules::ForeignExportKind::type && !type_arguments,
              "foreign source type identity/arity");
+        if (ex->c_type) {
+          modules::CTypeRef ref;
+          ref.kind = modules::CTypeRef::Kind::named;
+          ref.named = *ex->c_type;
+          return detail::c_type_id(*m.resolved->project, substituted, ref);
+        }
+        if (ex->c_type_ref)
+          return detail::c_type_id(*m.resolved->project, substituted,
+                                   *ex->c_type_ref);
+        need(ex->declaration.has_value(), "foreign source type lacks declaration");
         Type ft; ft.kind = TypeKind::ForeignOpaque; ft.binding = *ex->declaration;
         return substituted.intern(ft);
       }
@@ -2728,6 +2937,28 @@ class Verifier {
           for (auto c : n.children)
             if (n.kind == AstKind::NamedType)
               t.type_args.push_back(source_type(cr(c)));
+      } else if (s.name == "Ptr" || s.name == "PtrMut") {
+        t.kind = TypeKind::CForeignPointer;
+        t.bits = s.name == "PtrMut" ? 1 : 0;
+        if (n.kind == AstKind::NeutralBracket)
+          for (size_t i = 1; i < n.children.size(); ++i)
+            t.type_args.push_back(source_type(cr(n.children[i])));
+        else
+          for (auto c : n.children)
+            if (n.kind == AstKind::NamedType)
+              t.type_args.push_back(source_type(cr(c)));
+        need(t.type_args.size() == 1, "C pointer type arity");
+      } else if (s.name == "Buffer" || s.name == "BufferMut") {
+        t.kind = TypeKind::CForeignBuffer;
+        t.bits = s.name == "BufferMut" ? 1 : 0;
+        if (n.kind == AstKind::NeutralBracket)
+          for (size_t i = 1; i < n.children.size(); ++i)
+            t.type_args.push_back(source_type(cr(n.children[i])));
+        else
+          for (auto c : n.children)
+            if (n.kind == AstKind::NamedType)
+              t.type_args.push_back(source_type(cr(c)));
+        need(t.type_args.size() == 1, "C buffer type arity");
       } else if (s.name == "Unit")
         t.kind = TypeKind::Unit;
       else if (s.name == "bool")
@@ -4741,8 +4972,9 @@ class Verifier {
         auto key = unwrap_source(id);
         if (auto sid = source_symbol(id))
           if (auto ex = m.resolved->foreign_export(*sid);
-              ex && (ex->kind == modules::ForeignExportKind::value ||
-                     ex->kind == modules::ForeignExportKind::function))
+              ex && !ex->c_type && !ex->c_callable &&
+              (ex->kind == modules::ForeignExportKind::value ||
+               ex->kind == modules::ForeignExportKind::function))
             expected_foreign_reads.insert(key.value);
         if (n.kind == AstKind::Member && !source_symbol(id)) {
           auto base = ast_type(n.children.at(0), 0);
@@ -6242,6 +6474,16 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         m.config.backend == Backend::python && m.config.word_bits == 64;
     const bool runtime_handle_values =
         m.config.backend == Backend::native && m.config.word_bits == 64;
+    const bool c_values =
+        m.config.backend == Backend::native && m.config.word_bits == 64;
+    auto c_value = [](TypeKind kind) {
+      return kind == TypeKind::CForeignPointer ||
+             kind == TypeKind::CForeignBuffer ||
+             kind == TypeKind::CForeignRecord ||
+             kind == TypeKind::CForeignResource ||
+             kind == TypeKind::CForeignCallback ||
+             kind == TypeKind::CForeignOpaque;
+    };
     auto runtime_handle = [](TypeKind kind) {
       return kind == TypeKind::ThreadHandle || kind == TypeKind::MutexHandle ||
              kind == TypeKind::CondvarHandle ||
@@ -6265,6 +6507,12 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
         return runtime_handle_values;
       if (t.kind == TypeKind::ForeignOpaque || t.kind == TypeKind::ForeignCallable)
         return foreign_values;
+      if (c_value(t.kind)) {
+        if (!c_values) return false;
+        for (auto arg : t.type_args)
+          if (!storage_types.find(arg) || !supported(arg, depth + 1)) return false;
+        return true;
+      }
       if (!checked_types.insert(id.value).second)
         return true;
       if (t.kind == TypeKind::Vec) {
@@ -6376,7 +6624,7 @@ PhaseResult<std::monostate> check_backend_capabilities(const HirModule &m,
       // here (e.g. S[T].f: func() S[S[T]]); functions/calls are checked below.
       return t.kind != TypeKind::Vec && t.kind != TypeKind::TypeParameter &&
              t.kind != TypeKind::Error && t.kind != TypeKind::ForeignOpaque &&
-             t.kind != TypeKind::ForeignCallable;
+             t.kind != TypeKind::ForeignCallable && !c_value(t.kind);
     };
     auto signature_supported = [&](TypeId id) {
       const auto t = *m.types.find(id);
@@ -6887,10 +7135,13 @@ std::string dump(const HirModule &m) {
                 << a.expression.value;
           } else if constexpr (std::is_same_v<T, ForeignRead>) {
             s << " foreign_read=" << data.binding.value;
+          } else if constexpr (std::is_same_v<T, CFieldRead>) {
+            s << " c_record=" << data.c_type << " c_field=" << data.field;
           } else if constexpr (std::is_same_v<T, Call>) {
             for (auto t : data.type_args)
               s << " type_arg=" << t.value;
             if (data.binding) s << " binding=" << data.binding->value;
+            if (data.c_callable) s << " c_callable=" << *data.c_callable;
             if (data.system) s << " system=" << int(*data.system);
             for (auto p : data.omitted) s << " omitted=" << p;
             s << " callee_kind=" << int(data.kind)

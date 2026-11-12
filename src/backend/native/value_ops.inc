@@ -192,6 +192,21 @@
                t.kind == hir::TypeKind::AtomicI64Handle || t.kind == hir::TypeKind::IpcHandle) {
       runtime(copy ? "lang_handle_retain_v1" : "lang_handle_release_v1",
               builder.getVoidTy(), {builder.CreateLoad(builder.getPtrTy(), address)});
+    } else if (t.kind == hir::TypeKind::CForeignResource) {
+      const auto &decl = input.hir.module().resolved->project->c_type(t.c_type);
+      auto *value = builder.CreateLoad(builder.getPtrTy(), address);
+      if (copy) {
+        if (decl.retain_symbol.empty())
+          unsupported("C resource has no retain_symbol and cannot be copied");
+        builder.CreateCall(module.getOrInsertFunction(
+            cffi::retain_symbol(t.c_type),
+            llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false)), {value});
+      } else {
+        used_c_resources.insert(t.c_type);
+        builder.CreateCall(module.getOrInsertFunction(
+            cffi::release_symbol(t.c_type),
+            llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()}, false)), {value});
+      }
     } else if (t.kind == hir::TypeKind::NominalStruct) {
       auto fields = aggregates.fields(id);
       for (size_t n = 0; n < fields.size(); ++n) {

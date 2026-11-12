@@ -100,4 +100,65 @@ bind_arguments(const modules::BindingCallable &c,
     }
   return out;
 }
+
+// Canonical TypeId for one frozen C binding type expression. The named
+// declaration index is 1-based in Project::c_types. Pointer/buffer write
+// permission is encoded in Type::bits; the pointee/element is type_args[0].
+inline TypeId c_type_id(const modules::Project &p, TypeContext &ctx,
+                        const modules::CTypeRef &ref, size_t depth = 0) {
+  if (depth > 32) throw std::invalid_argument("C type nesting exceeds the limit");
+  Type t;
+  auto scalar = [&](std::string_view name) {
+    if (name == "Unit") t.kind = TypeKind::Unit;
+    else if (name == "bool") t.kind = TypeKind::Bool;
+    else if (name == "isize") t.kind = TypeKind::Isize;
+    else if (name == "usize") t.kind = TypeKind::Usize;
+    else if (name == "f32" || name == "f64") {
+      t.kind = TypeKind::Float; t.bits = name == "f32" ? 32 : 64;
+    } else if (name.size() >= 2 && (name[0] == 'i' || name[0] == 'u')) {
+      t.kind = name[0] == 'i' ? TypeKind::SignedInt : TypeKind::UnsignedInt;
+      t.bits = unsigned(std::stoul(std::string(name.substr(1))));
+    } else throw std::invalid_argument("unknown C scalar type");
+  };
+  switch (ref.kind) {
+  case modules::CTypeRef::Kind::scalar:
+    scalar(ref.scalar);
+    return ctx.intern(std::move(t));
+  case modules::CTypeRef::Kind::pointer:
+  case modules::CTypeRef::Kind::buffer: {
+    if (ref.args.size() != 1)
+      throw std::invalid_argument("C pointer/buffer arity");
+    t.kind = ref.kind == modules::CTypeRef::Kind::pointer
+                 ? TypeKind::CForeignPointer
+                 : TypeKind::CForeignBuffer;
+    t.bits = ref.writable ? 1 : 0;
+    t.type_args.push_back(c_type_id(p, ctx, ref.args[0], depth + 1));
+    return ctx.intern(std::move(t));
+  }
+  case modules::CTypeRef::Kind::named: {
+    if (!ref.named || ref.named > p.c_types.size())
+      throw std::invalid_argument("C type index");
+    const auto &d = p.c_type(ref.named);
+    t.c_type = ref.named;
+    switch (d.kind) {
+    case modules::CDeclKind::record: t.kind = TypeKind::CForeignRecord; break;
+    case modules::CDeclKind::resource: t.kind = TypeKind::CForeignResource; break;
+    case modules::CDeclKind::callback: t.kind = TypeKind::CForeignCallback; break;
+    case modules::CDeclKind::opaque: t.kind = TypeKind::CForeignOpaque; break;
+    }
+    return ctx.intern(std::move(t));
+  }
+  }
+  throw std::invalid_argument("unknown C type expression");
+}
+inline TypeId c_callable_signature(const modules::Project &p, TypeContext &ctx,
+                                   const modules::CCallableDecl &callable) {
+  Type sig;
+  sig.kind = TypeKind::Function;
+  for (const auto &param : callable.parameters)
+    sig.parameters.push_back({ParamMode::ordinary,
+                              c_type_id(p, ctx, param.type)});
+  sig.result = c_type_id(p, ctx, callable.result.type);
+  return ctx.intern(std::move(sig));
+}
 } // namespace lang::hir::detail

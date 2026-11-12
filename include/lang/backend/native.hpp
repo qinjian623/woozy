@@ -14,6 +14,10 @@ struct Output {
   std::vector<uint8_t> object;
   std::string native_ir, llvm_before_optimization, llvm_ir;
   std::string triple, data_layout;
+  // C schema-v2 adapter source for every referenced callable/resource, empty
+  // when the program has no C foreign call. The driver compiles it with the
+  // fixed Clang and links the result before the native runtime archive.
+  std::string c_adapter_source;
 };
 // No parsing or name lookup. The caller selects an existing function SymbolId.
 // Current executable entry supports no arguments and i32 or Unit result.

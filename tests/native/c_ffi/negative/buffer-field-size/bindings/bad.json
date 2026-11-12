@@ -1,0 +1,32 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {
+      "logical_path": "fixture/lib",
+      "provider": "native_library",
+      "library": "ffi_fixture"
+    }
+  ],
+  "types": [
+    {
+      "id": "fixture.BufferView",
+      "module": "fixture/lib",
+      "name": "BufferView",
+      "kind": "record",
+      "size": 8,
+      "align": 8,
+      "fields": [
+        {
+          "name": "data",
+          "type": "Buffer[u8]",
+          "offset": 0
+        }
+      ]
+    }
+  ],
+  "callables": []
+}

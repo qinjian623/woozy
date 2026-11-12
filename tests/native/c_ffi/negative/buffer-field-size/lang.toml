@@ -1,0 +1,15 @@
+schema_version = 1
+[package]
+name = "c_ffi_buffer_field_size"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[build.native]
+runtime = "hosted"
+[dependencies.fixture]
+kind = "native"
+binding = "bindings/bad.json"
+libraries = []
+library_dirs = []

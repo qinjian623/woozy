@@ -32,7 +32,16 @@ enum class Op {
   // Appended: an address of one already bounds-checked Vec element. It is
   // confined to the field replacement of the assignment identified by origin.
   vec_element_address,
-  system_call
+  system_call,
+  // C ABI operations. foreign_call carries the 1-based frozen callable index
+  // and receives already evaluated arguments in declared order (no callee
+  // value). Pointer/buffer reads and writes are explicit unsafe operations.
+  foreign_call,
+  c_field_read,
+  c_ptr_read,
+  c_ptr_write,
+  c_buffer_read,
+  c_buffer_write
 };
 struct ExitSite {
   HirNodeId origin;
@@ -49,6 +58,9 @@ struct Instruction {
   SymbolId function;
   TypeId signature;
   std::optional<hir::SystemOperation> system; // system_call only
+  std::optional<uint32_t> c_callable; // foreign_call: 1-based callable index
+  uint32_t c_type = 0;                // C named type/record index
+  uint32_t c_field = 0;               // C record field index
   SymbolId field;   // resolved declaration identity, never a source name
   SymbolId variant; // enum declaration identity; enum_test produces bool
   uint64_t bits = 0;

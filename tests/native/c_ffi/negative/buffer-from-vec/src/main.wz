@@ -1,0 +1,5 @@
+package app;
+import "fixture/lib" as fixture;
+func main() i32 {
+    return i32(fixture.cf_checksum([1, 2, 3]));
+}

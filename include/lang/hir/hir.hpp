@@ -22,6 +22,16 @@ enum class TypeKind {
   Error,
   Vec,
   ForeignCallable,
+  // C ABI values. Pointer/buffer carry their pointee/element in type_args[0]
+  // and only their write permission in bits. Record/resource/callback carry
+  // the 1-based Project::c_types index in c_type and never a declaration or
+  // binding ID. These are distinct from Python's ForeignOpaque/Callable.
+  CForeignPointer,
+  CForeignBuffer,
+  CForeignRecord,
+  CForeignResource,
+  CForeignCallback,
+  CForeignOpaque,
   // Compiler-private owning runtime handles. These are canonical leaves: no
   // parameters, declaration, binding or type arguments. Public std modules
   // wrap them in ordinary nominal structs.
@@ -47,6 +57,7 @@ struct Type {
   std::optional<TypeId> throws_type;
   std::vector<TypeId>
       type_args; // nominal declaration arguments, in declaration order
+  uint32_t c_type = 0; // C ABI declaration index, 1-based; zero for others
   bool operator==(const Type &) const = default;
 };
 // TypeId 0 is invalid. All other IDs index their owning context, starting at 1.
@@ -166,7 +177,13 @@ struct IntegerConvert {
    // every f32/f64 pair. f32->f64 widening is exact; f64->f32 narrows once
    // with RNE, overflowing finite values to signed infinity and never using
    // the float->integer Panic rule.
-enum class CalleeKind { direct, function_value, foreign, system };
+enum class CalleeKind {
+  direct,
+  function_value,
+  foreign,   // Python schema-v1 host call
+  system,
+  c_foreign  // C schema-v2 native-library call
+};
 struct CallArg {
   uint32_t source_index = 0, parameter_index = 0;
   std::optional<std::string> label;
@@ -181,6 +198,7 @@ struct Call {
   std::vector<CallArg> args; // source order, never sorted by parameter_index
   std::vector<TypeId> type_args;
   std::optional<ForeignBindingId> binding;
+  std::optional<uint32_t> c_callable; // C ABI callable index, 1-based
   std::vector<uint32_t> omitted; // declaration indices, sorted; no value slots
   std::optional<SystemOperation> system;
   // children: [callee when function_value], then args in source order.
@@ -218,6 +236,12 @@ struct FieldRead {
 struct FieldPlace {
   SymbolId field;
 }; // child: writable base place
+// A read of a field in a C ABI record. The C declaration and field are
+// resolved from frozen Project metadata, not from a source symbol.
+struct CFieldRead {
+  uint32_t c_type = 0; // 1-based Project::c_types index
+  uint32_t field = 0;  // declaration-order field index
+};
 using PatternLiteral =
     std::variant<BoolLiteral, IntegerLiteral, FloatLiteral, StringLiteral>;
 struct Pattern {
@@ -421,7 +445,7 @@ using NodeData = std::variant<
     IntegerConvert, Call, Block, ExpressionStatement, If, For, Noop, Return,
     Break, Continue, Unsupported, StructInit, EnumInit, FieldRead, FieldPlace,
     Switch, ConstraintCall, Try, Defer, Throw, Move, VecInit, IndexRead,
-    IndexPlace, VecSlice, ForIn, ForeignRead, ConstantLiteral>;
+    IndexPlace, VecSlice, ForIn, ForeignRead, ConstantLiteral, CFieldRead>;
 enum class NodeKind {
   unit_literal,
   bool_literal,
@@ -463,7 +487,8 @@ enum class NodeKind {
   vec_slice,
   for_in,
   foreign_read,
-  constant_literal
+  constant_literal,
+  c_field_read
 };
 struct HirNode {
   TypeId type;
@@ -576,6 +601,13 @@ enum class ValueKind {
   foreign_reference,
   foreign_callable,
   foreign_error,
+  // C ABI values. Pointers/buffers/records/callbacks are non-owning; a
+  // resource is an owning reference released through its binding.
+  c_pointer,
+  c_buffer,
+  c_record,
+  c_resource,
+  c_callback,
   // An owning compiler-private thread/mutex/condvar/atomic handle. The source
   // std modules expose it only through ordinary nominal wrappers.
   runtime_handle,

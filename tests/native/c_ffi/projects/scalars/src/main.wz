@@ -1,0 +1,148 @@
+package app;
+import "fixture/lib" as fixture;
+import "std/ffi" as ffi;
+
+func callback(value i32, context u64) i32 {
+    return value + i32(context);
+}
+
+func point_cb(point fixture.Point, context u64) i64 {
+    return i64(point.x) + 100 * i64(point.y);
+}
+
+func point_return_cb(context u64) fixture.Point {
+    return fixture.cf_point_make(11, 22, 1.5);
+}
+
+func tiny_cb(value fixture.Tiny, context u64) fixture.Tiny {
+    return value;
+}
+
+func large_cb(value fixture.Large, context u64) fixture.Large {
+    return value;
+}
+
+func narrow_cb(a i8, b u16, c f32, d bool, context u64) bool {
+    return a == -7 && b == 65000 && c == 2.5 && d;
+}
+
+func float_cb(a f32, b f64, context u64) f64 {
+    return f64(a) + b;
+}
+
+func int_return_cb(a i8, b u16, context u64) i16 {
+    return i16(a) + i16(b);
+}
+
+func early_resource(value i32) i32 {
+    let resource = fixture.cf_resource_new(value);
+    if value < 0 { return 1; }
+    return fixture.cf_resource_value(resource) - value;
+}
+
+func main() i32 {
+    if fixture.cf_i8(-5) != -4 { return 1; }
+    if fixture.cf_i16(-1000) != -1002 { return 2; }
+    if fixture.cf_i32(-7) != -21 { return 3; }
+    if fixture.cf_i64(9) != -9 { return 4; }
+    if fixture.cf_isize(-8) != 8 { return 52; }
+    if fixture.cf_usize(41) != 42 { return 53; }
+    if fixture.cf_u8(250) != 251 { return 5; }
+    if fixture.cf_u16(65530) != 65532 { return 6; }
+    if fixture.cf_u32(7) != 35 { return 7; }
+    if fixture.cf_u64(0) != 0x5a5a5a5a5a5a5a5a { return 8; }
+    if fixture.cf_f32(2.0) != 3.0 { return 9; }
+    if fixture.cf_f64(2.5) != 2.25 { return 10; }
+    if fixture.cf_bool(false) != true { return 11; }
+    if fixture.cf_add_i32(-3, 10) != 7 { return 12; }
+    fixture.cf_void(77);
+    if fixture.cf_last_void() != 77 { return 13; }
+
+    let bytes Ptr[u8] = fixture.cf_bytes_ptr();
+    let count = fixture.cf_bytes_len();
+    let view Buffer[u8] = ffi.buffer[u8](bytes, count);
+    if ffi.len[u8](view) != 4 { return 14; }
+    unsafe {
+        if view[0] != 65 { return 15; }
+        if view[1] != 0 { return 16; }
+        if view[2] != 255 { return 17; }
+        if view[3] != 66 { return 18; }
+    }
+    if fixture.cf_checksum(view) != 146159386 { return 19; }
+    let small_index i32 = 2;
+    unsafe {
+        if view[small_index] != 255 { return 45; }
+    }
+
+    let pointer PtrMut[i32] = fixture.cf_global_i32_ptr();
+    if fixture.cf_read_i32(pointer) != 11 { return 20; }
+    unsafe {
+        if pointer[0] != 11 { return 21; }
+        pointer[0] = 42;
+        pointer[0] += 1;
+        if pointer[0] != 43 { return 51; }
+        pointer[0] -= 1;
+    }
+    if fixture.cf_read_i32(pointer) != 42 { return 22; }
+    fixture.cf_write_i32(pointer, 51);
+    unsafe {
+        if pointer[0] != 51 { return 23; }
+    }
+
+    let writable = fixture.cf_sha_output();
+    let mutable = ffi.buffer_mut[u8](writable, 8);
+    if ffi.len_mut[u8](mutable) != 8 { return 42; }
+    unsafe {
+        mutable[0] = 7;
+        mutable[1] = 9;
+        mutable[0] += 1;
+        if mutable[0] != 8 { return 43; }
+        if mutable[1] != 9 { return 44; }
+    }
+
+    let point fixture.Point = fixture.cf_point_make(3, 4, 2.5);
+    if point.x != 3 { return 24; }
+    if point.y != 4 { return 25; }
+    if point.weight != 2.5 { return 26; }
+    if fixture.cf_point_sum(point) != 7 { return 27; }
+    if fixture.cf_point_weight(point) != 2.5 { return 28; }
+    if fixture.cf_point_size() != 16 { return 29; }
+    if fixture.cf_point_align() != 8 { return 30; }
+    if fixture.cf_point_offset_x() != 0 { return 31; }
+    if fixture.cf_point_offset_y() != 4 { return 32; }
+    if fixture.cf_point_offset_weight() != 8 { return 33; }
+
+    {
+        let resource fixture.OwnedResource = fixture.cf_resource_new(123);
+        if fixture.cf_resource_live() != 1 { return 34; }
+        let alias fixture.OwnedResource = resource;
+        if fixture.cf_resource_live() != 1 { return 35; }
+        if fixture.cf_resource_refs(resource) != 2 { return 41; }
+        if fixture.cf_resource_value(resource) != 123 { return 36; }
+        if fixture.cf_resource_value(alias) != 123 { return 37; }
+    }
+    if fixture.cf_resource_live() != 0 { return 38; }
+    fixture.cf_resource_new(9);
+    if fixture.cf_resource_live() != 0 { return 46; }
+    if early_resource(-5) != 1 { return 47; }
+    if fixture.cf_resource_live() != 0 { return 48; }
+    if early_resource(12) != 0 { return 49; }
+    if fixture.cf_resource_live() != 0 { return 50; }
+
+    if fixture.cf_apply(callback, 100, 23) != 123 { return 39; }
+    if fixture.cf_apply_point(point_cb, 7) != 2211 { return 54; }
+    if fixture.cf_apply_point_return(point_return_cb, 7) != 2211 { return 55; }
+    let tiny fixture.Tiny = fixture.cf_apply_tiny(tiny_cb, 7);
+    if tiny.value != 7 { return 56; }
+    let large fixture.Large = fixture.cf_apply_large(large_cb, 7);
+    if large.a != 1 || large.b != 2 || large.c != 3.5 { return 57; }
+    if fixture.cf_apply_narrow(narrow_cb, 99) != true { return 58; }
+    if fixture.cf_apply_float(float_cb, 99) != 3.75 { return 59; }
+    if fixture.cf_apply_int_return(int_return_cb, 99) != 95 { return 62; }
+    let buffer_view fixture.BufferView = fixture.cf_buffer_view_make(5, bytes, u64(count));
+    let buffer_field Buffer[u8] = buffer_view.data;
+    if ffi.len[u8](buffer_field) != 4 { return 60; }
+    if fixture.cf_buffer_view_sum(buffer_view) != 74 { return 61; }
+    if fixture.cf_strlen_nonempty(fixture.cf_env_name()) != 13 { return 40; }
+    return 0;
+}

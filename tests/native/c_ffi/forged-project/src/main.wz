@@ -1,0 +1,9 @@
+package app;
+import "fixture/lib" as fixture;
+func main() i32 {
+    let pointer = fixture.cf_global_i32_ptr();
+    unsafe { pointer[0] = 7; if pointer[0] != 7 { return 1; } }
+    let point = fixture.cf_point_make(1, 2, 3.0);
+    if point.x != 1 { return 2; }
+    return fixture.cf_add_i32(1, 2) - 3;
+}

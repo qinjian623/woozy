@@ -1,0 +1,42 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {"logical_path": "libc/libc", "provider": "native_library", "library": ""},
+    {"logical_path": "libc/crypto", "provider": "native_library", "library": "crypto"}
+  ],
+  "types": [
+    {
+      "id": "libc.OwnedBytes",
+      "module": "libc/libc",
+      "name": "OwnedBytes",
+      "kind": "resource",
+      "release_symbol": "free"
+    }
+  ],
+  "callables": [
+    {"id": "libc.getenv", "module": "libc/libc", "name": "getenv", "symbol": "getenv",
+     "parameters": [{"name": "name", "type": "Ptr[u8]"}],
+     "result": {"type": "Ptr[u8]", "ownership": "borrowed"}},
+    {"id": "libc.__errno_location", "module": "libc/libc", "name": "__errno_location", "symbol": "__errno_location",
+     "parameters": [],
+     "result": {"type": "PtrMut[i32]", "ownership": "borrowed"}},
+    {"id": "libc.close", "module": "libc/libc", "name": "close", "symbol": "close",
+     "parameters": [{"name": "fd", "type": "i32"}],
+     "result": {"type": "i32", "ownership": "value"}},
+    {"id": "libc.malloc", "module": "libc/libc", "name": "malloc", "symbol": "malloc",
+     "parameters": [{"name": "size", "type": "usize"}],
+     "result": {"type": "libc.OwnedBytes", "ownership": "owned",
+                "release_symbol": "free"}},
+    {"id": "libc.malloc_usable_size", "module": "libc/libc", "name": "malloc_usable_size", "symbol": "malloc_usable_size",
+     "parameters": [{"name": "p", "type": "libc.OwnedBytes"}],
+     "result": {"type": "usize", "ownership": "value"}},
+    {"id": "libc.SHA256", "module": "libc/crypto", "name": "SHA256", "symbol": "SHA256",
+     "parameters": [{"name": "data", "type": "Ptr[u8]"}, {"name": "length", "type": "usize"},
+                    {"name": "out", "type": "PtrMut[u8]"}],
+     "result": {"type": "PtrMut[u8]", "ownership": "borrowed"}}
+  ]
+}

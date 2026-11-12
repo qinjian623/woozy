@@ -57,6 +57,30 @@ TypeId build_signature(TypeContext &types, const HirModule *module,
       t.type_args = std::move(parameters);
       return types.intern(t);
     }
+    if (base == "Ptr" || base == "PtrMut") {
+      if (parameters.size() != 1) return invalid();
+      t.kind = TypeKind::CForeignPointer;
+      t.bits = base == "PtrMut" ? 1 : 0;
+      t.type_args = std::move(parameters);
+      return types.intern(t);
+    }
+    if (base == "Buffer" || base == "BufferMut") {
+      if (parameters.size() != 1) return invalid();
+      const auto *element = types.find(parameters[0]);
+      if (!element ||
+          !(element->kind == TypeKind::SignedInt ||
+            element->kind == TypeKind::UnsignedInt ||
+            element->kind == TypeKind::Isize ||
+            element->kind == TypeKind::Usize ||
+            element->kind == TypeKind::Float ||
+            element->kind == TypeKind::Bool ||
+            element->kind == TypeKind::TypeParameter))
+        return invalid();
+      t.kind = TypeKind::CForeignBuffer;
+      t.bits = base == "BufferMut" ? 1 : 0;
+      t.type_args = std::move(parameters);
+      return types.intern(t);
+    }
     if (base == "Result" || base == "Option" || base.starts_with("std/")) {
       if (!module || !module->resolved || !module->resolved->project)
         throw std::invalid_argument("system operation requires its standard type module");

@@ -1,4 +1,5 @@
 #include "lang/ir/native.hpp"
+#include "../hir/foreign.hpp"
 #include "layout.hpp"
 #include "obligations.hpp"
 #include <algorithm>
@@ -131,7 +132,8 @@ class Verifier {
                   i.op != Op::save_output && i.op != Op::vec_set &&
                   i.op != Op::iteration_end && i.op != Op::iteration_begin &&
                   i.op != Op::iteration_next && i.op != Op::ownership_begin &&
-                  i.op != Op::ownership_end && i.op != Op::replace_indirect && i.op != Op::begin_borrow && i.op != Op::vec_check),
+                  i.op != Op::ownership_end && i.op != Op::replace_indirect && i.op != Op::begin_borrow && i.op != Op::vec_check &&
+                  i.op != Op::c_ptr_write && i.op != Op::c_buffer_write),
              "invalid instruction result", i.source);
         if (i.result)
           need(defs.emplace(*i.result, Def{b, p + 1, i.type,
@@ -354,7 +356,8 @@ class Verifier {
             pending.push_back({*it, false});
         }
       } else if (const auto *call = std::get_if<hir::Call>(&node.data);
-                 call && call->kind == hir::CalleeKind::system) {
+                 call && (call->kind == hir::CalleeKind::system ||
+                          call->kind == hir::CalleeKind::c_foreign)) {
         system_order.emplace(id, sequence++);
       }
     }
@@ -930,6 +933,134 @@ class Verifier {
           }
           break;
         }
+        case Op::foreign_call: {
+          need(!i.system && i.c_callable.has_value(),
+               "C call missing frozen metadata", i.source);
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "C call without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes[i.origin->value];
+          const auto *call = std::get_if<hir::Call>(&source.data);
+          need(call && call->kind == hir::CalleeKind::c_foreign &&
+                   call->c_callable == i.c_callable &&
+                   call->signature == i.signature &&
+                   m.hir.module().scopes.at(source.scope.value).function == f.symbol,
+               "C call metadata differs from HIR", i.source);
+          const auto &cs = type(i.signature, i.source);
+          need(cs.kind == hir::TypeKind::Function && !cs.throws_type &&
+                   i.type == cs.result,
+               "C call signature/result", i.source);
+          need(*i.c_callable >= 1 &&
+                   *i.c_callable <= m.hir.module().resolved->project->c_callables.size(),
+               "C callable index", i.source);
+          auto position = system_order.find(*i.origin);
+          need(position != system_order.end() &&
+                   (!previous_system || position->second > *previous_system),
+               "C call order differs from HIR evaluation", i.source);
+          previous_system = position->second;
+          arity(cs.parameters.size());
+          for (size_t a = 0; a < cs.parameters.size(); ++a) {
+            value(a);
+            const auto &argument = call->args.at(a);
+            need(argument.parameter_index == a && argument.source_index == a &&
+                     !argument.label &&
+                     argument.mode == hir::ParamMode::ordinary,
+                 "C argument order/mode differs from HIR", i.source);
+            if (type(cs.parameters[a].type, i.source).kind ==
+                hir::TypeKind::CForeignCallback) {
+              need(m.hir.module().nodes.at(argument.expression.value).kind() ==
+                       hir::NodeKind::function_value &&
+                       args[a].type ==
+                           m.hir.module().nodes.at(argument.expression.value).type &&
+                       !args[a].address,
+                   "C callback argument type/identity", i.source);
+            } else {
+              bool compatible = args[a].type == cs.parameters[a].type;
+              if (!compatible) {
+                const auto &actual = type(args[a].type, i.source);
+                const auto &wanted = type(cs.parameters[a].type, i.source);
+                compatible = (wanted.kind == hir::TypeKind::CForeignPointer ||
+                              wanted.kind == hir::TypeKind::CForeignBuffer) &&
+                             actual.kind == wanted.kind && wanted.bits == 0 &&
+                             actual.bits == 1 &&
+                             actual.type_args == wanted.type_args;
+              }
+              need(compatible && !args[a].address,
+                   "C argument type/mode mismatch", i.source);
+            }
+          }
+          break;
+        }
+        case Op::c_field_read: {
+          arity(1);
+          need(i.c_type, "C field metadata", i.source);
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "C field without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes.at(i.origin->value);
+          const auto *field = std::get_if<hir::CFieldRead>(&source.data);
+          need(field && field->c_type == i.c_type && field->field == i.c_field &&
+                   source.type == i.type && source.children.size() == 1,
+               "C field differs from HIR", i.source);
+          const auto &receiver = type(args[0].type, i.source);
+          need(receiver.kind == hir::TypeKind::CForeignRecord &&
+                   receiver.c_type == i.c_type && !args[0].address,
+               "C field receiver type", i.source);
+          const auto &decl =
+              m.hir.module().resolved->project->c_type(i.c_type);
+          need(decl.kind == modules::CDeclKind::record &&
+                   i.c_field < decl.fields.size(),
+               "C field declaration", i.source);
+          hir::TypeContext scratch = m.hir.module().types;
+          auto expected = hir::detail::c_type_id(
+              *m.hir.module().resolved->project, scratch,
+              decl.fields[i.c_field].type);
+          need(expected == i.type, "C field result type", i.source);
+          break;
+        }
+        case Op::c_ptr_read:
+        case Op::c_buffer_read: {
+          arity(2);
+          const auto &receiver = type(args[0].type, i.source);
+          need(receiver.kind == (i.op == Op::c_ptr_read
+                                     ? hir::TypeKind::CForeignPointer
+                                     : hir::TypeKind::CForeignBuffer) &&
+                   receiver.type_args.size() == 1 &&
+                   i.type == receiver.type_args[0] && !args[0].address,
+               "C indexed read receiver/result", i.source);
+          need(integer(type(args[1].type, i.source).kind) && !args[1].address,
+               "C indexed read index type", i.source);
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "C indexed read without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes.at(i.origin->value);
+          need((source.kind() == hir::NodeKind::index_read ||
+                source.kind() == hir::NodeKind::index_place) &&
+                   source.children.size() == 2 && source.type == i.type,
+               "C indexed read differs from HIR", i.source);
+          if (source.kind() == hir::NodeKind::index_place)
+            need(receiver.bits == 1,
+                 "C compound read of read-only pointer", i.source);
+          break;
+        }
+        case Op::c_ptr_write:
+        case Op::c_buffer_write: {
+          arity(3);
+          const auto &receiver = type(args[0].type, i.source);
+          need(receiver.kind == (i.op == Op::c_ptr_write
+                                     ? hir::TypeKind::CForeignPointer
+                                     : hir::TypeKind::CForeignBuffer) &&
+                   receiver.type_args.size() == 1 && receiver.bits == 1 &&
+                   args[2].type == receiver.type_args[0] && !args[0].address &&
+                   !args[2].address,
+               "C indexed write receiver/result", i.source);
+          need(integer(type(args[1].type, i.source).kind) && !args[1].address,
+               "C indexed write index type", i.source);
+          need(i.origin && i.origin->value < m.hir.module().nodes.size(),
+               "C indexed write without HIR origin", i.source);
+          const auto &source = m.hir.module().nodes.at(i.origin->value);
+          need(source.kind() == hir::NodeKind::index_place &&
+                   source.children.size() == 2,
+               "C indexed write differs from HIR", i.source);
+          break;
+        }
         case Op::call: {
           need(!i.system, "system metadata on ordinary call", i.source);
           need(i.origin && i.origin->value < m.hir.module().nodes.size(),
@@ -1227,7 +1358,8 @@ class Verifier {
                    "instruction moved across cleanup bodies", i.source);
             }
         }
-        if ((i.op == Op::call || i.op == Op::system_call) && !impossible.contains(b))
+        if ((i.op == Op::call || i.op == Op::system_call ||
+             i.op == Op::foreign_call) && !impossible.contains(b))
           ++actual.calls[{context(state), *i.origin}];
         if (i.op == Op::exit_begin) {
           const auto &site = *i.exit;
@@ -1456,7 +1588,8 @@ std::string dump(const Module &m) {
             "enum_test",     "enum_payload",  "string_literal",
             "exit_begin",    "cleanup_begin", "cleanup_end",
             "copy", "move", "take", "destroy", "borrow", "end_borrow", "save_output",
-            "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check", "vec_element_address", "system_call"};
+            "vec_init", "vec_read", "vec_set", "vec_slice", "iteration_begin", "iteration_end", "vec_length", "iteration_test", "iteration_read", "iteration_next", "ownership_begin", "ownership_end", "replace_indirect", "begin_borrow", "vec_check", "vec_element_address", "system_call",
+            "foreign_call", "c_field_read", "c_ptr_read", "c_ptr_write", "c_buffer_read", "c_buffer_write"};
         out << names[static_cast<unsigned>(i.op)] << " type=" << i.type.value;
         if (i.op == Op::constant)
           out << " bits=" << i.bits;
@@ -1474,8 +1607,12 @@ std::string dump(const Module &m) {
           out << " op=" << static_cast<unsigned>(i.unary);
         if (i.op == Op::binary)
           out << " op=" << static_cast<unsigned>(i.binary);
-        if (i.op == Op::call || i.op == Op::system_call)
+        if (i.op == Op::call || i.op == Op::system_call ||
+            i.op == Op::foreign_call)
           out << " signature=" << i.signature.value;
+        if (i.c_callable) out << " c_callable=" << *i.c_callable;
+        if (i.c_type) out << " c_type=" << i.c_type;
+        if (i.op == Op::c_field_read) out << " c_field=" << i.c_field;
         if (i.system)
           out << " system=" << static_cast<unsigned>(*i.system);
         if (i.op == Op::field_read || i.op == Op::field_address ||

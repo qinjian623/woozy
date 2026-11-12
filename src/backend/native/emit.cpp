@@ -1,5 +1,7 @@
+#include "../../hir/foreign.hpp"
 #include "../../ir/layout.hpp"
 #include "lang/backend/native.hpp"
+#include "c_ffi.hpp"
 #include <cmath>
 #include <functional>
 #include <llvm/ADT/APFloat.h>
@@ -61,6 +63,12 @@ class Emitter {
   // for literal operands. ConstantFolder would create poison in dead arms.
   llvm::IRBuilder<llvm::NoFolder> builder{context};
   std::map<SymbolId, llvm::Function *> functions;
+  std::map<uint32_t, llvm::StructType *> c_record_layouts;
+  std::map<ValueId, SymbolId> function_value_symbols;
+  std::string out_c_adapter_source;
+  std::map<std::pair<uint64_t, uint32_t>, llvm::Function *> callback_bridges;
+  std::set<uint32_t> used_c_callables, used_c_resources;
+  std::set<std::pair<uint64_t, uint32_t>> used_c_callbacks;
   std::unique_ptr<llvm::TargetMachine> machine;
   std::map<ValueId, llvm::Value *> values;
   std::map<ValueId, TypeId> value_types;
@@ -108,6 +116,13 @@ class Emitter {
       layouts.emplace(id, layout);
       return layout;
     }
+    case hir::TypeKind::CForeignPointer:
+    case hir::TypeKind::CForeignBuffer:
+    case hir::TypeKind::CForeignRecord:
+    case hir::TypeKind::CForeignResource:
+    case hir::TypeKind::CForeignCallback:
+    case hir::TypeKind::CForeignOpaque:
+      return c_lower_type(id);
     case hir::TypeKind::NominalStruct:
     case hir::TypeKind::NominalEnum: {
       auto *layout = llvm::StructType::create(
@@ -131,6 +146,75 @@ class Emitter {
     }
     default:
       unsupported("native scalar type is not implemented");
+    }
+    return nullptr;
+  }
+  llvm::Type *c_ref_llvm_type(const modules::CTypeRef &ref) {
+    using modules::CTypeRef;
+    if (ref.kind == CTypeRef::Kind::scalar) {
+      if (ref.scalar == "Unit" || ref.scalar == "bool") return builder.getInt8Ty();
+      if (ref.scalar == "i8") return builder.getInt8Ty();
+      if (ref.scalar == "u8") return builder.getInt8Ty();
+      if (ref.scalar == "i16") return builder.getInt16Ty();
+      if (ref.scalar == "u16") return builder.getInt16Ty();
+      if (ref.scalar == "i32") return builder.getInt32Ty();
+      if (ref.scalar == "u32") return builder.getInt32Ty();
+      if (ref.scalar == "i64" || ref.scalar == "u64" ||
+          ref.scalar == "isize" || ref.scalar == "usize")
+        return builder.getInt64Ty();
+      if (ref.scalar == "f32") return builder.getFloatTy();
+      if (ref.scalar == "f64") return builder.getDoubleTy();
+      unsupported("unknown C scalar storage type");
+    }
+    if (ref.kind == CTypeRef::Kind::pointer || ref.kind == CTypeRef::Kind::buffer)
+      return ref.kind == CTypeRef::Kind::pointer
+                 ? static_cast<llvm::Type *>(builder.getPtrTy())
+                 : llvm::StructType::get(context,
+                                         {builder.getPtrTy(), builder.getInt64Ty()});
+    const auto &d = input.hir.module().resolved->project->c_type(ref.named);
+    if (d.kind == modules::CDeclKind::record) {
+      if (auto it = c_record_layouts.find(d.id); it != c_record_layouts.end())
+        return it->second;
+      auto *layout = llvm::StructType::create(context,
+          "c.record." + std::to_string(d.id));
+      c_record_layouts.emplace(d.id, layout);
+      std::vector<llvm::Type *> fields;
+      for (const auto &field : d.fields)
+        fields.push_back(c_ref_llvm_type(field.type));
+      layout->setBody(fields);
+      return layout;
+    }
+    return builder.getPtrTy();
+  }
+  llvm::Type *c_lower_type(TypeId id) {
+    const auto t = type(id);
+    if (t.kind == hir::TypeKind::CForeignRecord) {
+      modules::CTypeRef ref;
+      ref.kind = modules::CTypeRef::Kind::named;
+      ref.named = t.c_type;
+      return c_ref_llvm_type(ref);
+    }
+    switch (t.kind) {
+    case hir::TypeKind::Unit:
+    case hir::TypeKind::Bool:
+      return builder.getInt8Ty();
+    case hir::TypeKind::SignedInt:
+    case hir::TypeKind::UnsignedInt:
+    case hir::TypeKind::Isize:
+    case hir::TypeKind::Usize:
+      return builder.getIntNTy(hir::bit_width(t, input.hir.config()));
+    case hir::TypeKind::Float:
+      return t.bits == 32 ? builder.getFloatTy() : builder.getDoubleTy();
+    case hir::TypeKind::CForeignPointer:
+    case hir::TypeKind::CForeignResource:
+    case hir::TypeKind::CForeignCallback:
+    case hir::TypeKind::CForeignOpaque:
+      return builder.getPtrTy();
+    case hir::TypeKind::CForeignBuffer:
+      return llvm::StructType::get(context,
+                                   {builder.getPtrTy(), builder.getInt64Ty()});
+    default:
+      unsupported("non-C type in C storage position");
     }
     return nullptr;
   }
@@ -478,6 +562,15 @@ class Emitter {
     };
     auto *i64 = builder.getInt64Ty();
     switch (*i.system) {
+    case SystemOperation::ffi_buffer:
+    case SystemOperation::ffi_buffer_mut: {
+      llvm::Value *value = llvm::Constant::getNullValue(lower_type(i.type));
+      value = builder.CreateInsertValue(value, args[0], {0});
+      return builder.CreateInsertValue(value, args[1], {1});
+    }
+    case SystemOperation::ffi_buffer_len:
+    case SystemOperation::ffi_buffer_len_mut:
+      return builder.CreateExtractValue(args[0], {1});
     case SystemOperation::read:
       return call("lang_os_read_vec_v1", i64, {args[0], args[1], args[2]});
     case SystemOperation::write:
@@ -556,6 +649,119 @@ class Emitter {
     }
     fail("unknown system operation");
     return nullptr;
+  }
+  llvm::Value *to_c_storage(TypeId t, llvm::Value *value) {
+    if (type(t).kind == hir::TypeKind::Bool && value->getType()->isIntegerTy(1))
+      return builder.CreateZExt(value, builder.getInt8Ty());
+    return value;
+  }
+  llvm::Value *from_c_storage(TypeId t, llvm::Value *value) {
+    if (type(t).kind == hir::TypeKind::Bool)
+      return builder.CreateTrunc(value, builder.getInt1Ty());
+    return value;
+  }
+  llvm::Function *callback_bridge(SymbolId symbol, uint32_t c_type) {
+    auto key = std::pair{symbol.value, c_type};
+    if (auto it = callback_bridges.find(key); it != callback_bridges.end())
+      return it->second;
+    const auto &d = input.hir.module().resolved->project->c_type(c_type);
+    auto *bridge = llvm::Function::Create(
+        llvm::FunctionType::get(builder.getVoidTy(),
+                                {builder.getPtrTy(), builder.getPtrTy()}, false),
+        llvm::GlobalValue::ExternalLinkage,
+        cffi::callback_bridge_symbol(symbol.value, c_type), module);
+    bridge->addFnAttr(llvm::Attribute::NoUnwind);
+    callback_bridges.emplace(key, bridge);
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", bridge));
+    auto *target = functions.at(symbol);
+    std::vector<llvm::Value *> call_args;
+    for (size_t a = 0; a < d.parameters.size(); ++a) {
+      auto *slot = builder.CreateGEP(builder.getPtrTy(), bridge->getArg(1),
+                                     builder.getInt64(a));
+      auto *address = builder.CreateLoad(builder.getPtrTy(), slot);
+      llvm::Value *value =
+          builder.CreateLoad(c_ref_llvm_type(d.parameters[a].type), address);
+      if (target->getFunctionType()->getParamType(a)->isIntegerTy(1) &&
+          value->getType()->isIntegerTy(8))
+        value = builder.CreateTrunc(value, builder.getInt1Ty());
+      call_args.push_back(value);
+    }
+    auto *call = builder.CreateCall(target, call_args);
+    const bool unit = d.result.kind == modules::CTypeRef::Kind::scalar &&
+                      d.result.scalar == "Unit";
+    if (!unit) {
+      llvm::Value *result = call;
+      auto *storage = c_ref_llvm_type(d.result);
+      if (storage->isIntegerTy(8) && result->getType()->isIntegerTy(1))
+        result = builder.CreateZExt(result, builder.getInt8Ty());
+      builder.CreateStore(result, bridge->getArg(0));
+    }
+    builder.CreateRetVoid();
+    builder.restoreIP(ip);
+    return bridge;
+  }
+  llvm::Function *callback_trampoline(SymbolId symbol, uint32_t c_type) {
+    used_c_callbacks.emplace(symbol.value, c_type);
+    // The Clang-compiled C trampoline is the real C function pointer. The
+    // declaration type here is irrelevant to the call ABI; only its address is
+    // stored into the adapter argument slot.
+    auto callee = module.getOrInsertFunction(
+        cffi::callback_trampoline_symbol(symbol.value, c_type),
+        llvm::FunctionType::get(builder.getVoidTy(), {}, false));
+    return llvm::cast<llvm::Function>(callee.getCallee());
+  }
+  llvm::Value *c_foreign_call(const ir::Instruction &i,
+                              llvm::ArrayRef<llvm::Value *> args) {
+    if (!i.c_callable) fail("C call missing callable metadata");
+    const auto id = *i.c_callable;
+    if (id < 1 || id > input.hir.module().resolved->project->c_callables.size())
+      fail("C callable index out of range");
+    const auto &sig = type(i.signature);
+    used_c_callables.insert(id);
+    auto note_resource = [&](TypeId t) {
+      const auto &value = type(t);
+      if (value.kind == hir::TypeKind::CForeignResource)
+        used_c_resources.insert(value.c_type);
+    };
+    note_resource(sig.result);
+    for (auto p : sig.parameters) note_resource(p.type);
+    llvm::AllocaInst *out = nullptr;
+    if (type(sig.result).kind != hir::TypeKind::Unit)
+      out = builder.CreateAlloca(c_lower_type(sig.result), nullptr, "c.out");
+    std::vector<llvm::Value *> actual;
+    for (size_t a = 0; a < sig.parameters.size(); ++a) {
+      const auto parameter_type = sig.parameters[a].type;
+      auto *slot = builder.CreateAlloca(c_lower_type(parameter_type), nullptr,
+                                        "c.arg");
+      if (type(parameter_type).kind == hir::TypeKind::CForeignCallback) {
+        auto found = function_value_symbols.find(i.inputs[a]);
+        if (found == function_value_symbols.end())
+          fail("C callback argument has no function identity");
+        auto *trampoline = callback_trampoline(
+            found->second, type(parameter_type).c_type);
+        (void)callback_bridge(found->second, type(parameter_type).c_type);
+        builder.CreateStore(trampoline, slot);
+      } else {
+        builder.CreateStore(to_c_storage(parameter_type, args[a]), slot);
+      }
+      actual.push_back(slot);
+    }
+    std::vector<llvm::Type *> parameter_types;
+    parameter_types.push_back(builder.getPtrTy());
+    for (size_t a = 0; a < sig.parameters.size(); ++a)
+      parameter_types.push_back(builder.getPtrTy());
+    auto adapter = module.getOrInsertFunction(
+        cffi::adapter_symbol(id),
+        llvm::FunctionType::get(builder.getVoidTy(), parameter_types, false));
+    std::vector<llvm::Value *> call_args;
+    call_args.push_back(out ? static_cast<llvm::Value *>(out)
+                            : llvm::ConstantPointerNull::get(builder.getPtrTy()));
+    call_args.insert(call_args.end(), actual.begin(), actual.end());
+    builder.CreateCall(adapter, call_args);
+    if (!out) return builder.getInt8(0);
+    return from_c_storage(sig.result,
+                          builder.CreateLoad(c_lower_type(sig.result), out));
   }
   void instruction(const ir::Instruction &i) {
     std::vector<llvm::Value *> args;
@@ -769,6 +975,7 @@ class Emitter {
     }
     case ir::Op::function:
       v = functions.at(i.function);
+      if (i.result) function_value_symbols[*i.result] = i.function;
       break;
     case ir::Op::load:
       v = builder.CreateLoad(lower_type(i.type), slots.at(i.slot.value));
@@ -849,6 +1056,52 @@ class Emitter {
     case ir::Op::system_call:
       v = system_call(i, args);
       break;
+    case ir::Op::foreign_call:
+      v = c_foreign_call(i, args);
+      break;
+    case ir::Op::c_field_read: {
+      v = from_c_storage(i.type, builder.CreateExtractValue(args[0], {i.c_field}));
+      break;
+    }
+    case ir::Op::c_ptr_read:
+    case ir::Op::c_buffer_read: {
+      const auto receiver = type(value_types.at(i.inputs[0]));
+      const auto element = receiver.type_args.at(0);
+      const auto index_type = type(value_types.at(i.inputs[1]));
+      auto *index = builder.CreateIntCast(args[1], builder.getInt64Ty(),
+                                          signed_(index_type));
+      llvm::Value *address = nullptr;
+      if (i.op == ir::Op::c_ptr_read) {
+        address = builder.CreateGEP(c_lower_type(element), args[0], index);
+      } else {
+        auto *data = builder.CreateExtractValue(args[0], {0});
+        auto *length = builder.CreateExtractValue(args[0], {1});
+        guard(builder.CreateICmpUGE(index, length), 4, i.source);
+        address = builder.CreateGEP(c_lower_type(element), data, index);
+      }
+      v = from_c_storage(element,
+                         builder.CreateLoad(c_lower_type(element), address));
+      break;
+    }
+    case ir::Op::c_ptr_write:
+    case ir::Op::c_buffer_write: {
+      const auto receiver = type(value_types.at(i.inputs[0]));
+      const auto element = receiver.type_args.at(0);
+      const auto index_type = type(value_types.at(i.inputs[1]));
+      auto *index = builder.CreateIntCast(args[1], builder.getInt64Ty(),
+                                          signed_(index_type));
+      llvm::Value *address = nullptr;
+      if (i.op == ir::Op::c_ptr_write) {
+        address = builder.CreateGEP(c_lower_type(element), args[0], index);
+      } else {
+        auto *data = builder.CreateExtractValue(args[0], {0});
+        auto *length = builder.CreateExtractValue(args[0], {1});
+        guard(builder.CreateICmpUGE(index, length), 4, i.source);
+        address = builder.CreateGEP(c_lower_type(element), data, index);
+      }
+      builder.CreateStore(to_c_storage(element, args[2]), address);
+      break;
+    }
     case ir::Op::call: {
       llvm::SmallVector<llvm::Value *, 8> actual(args.begin() + 1, args.end());
       v = builder.CreateCall(signature(i.signature), args[0], actual);
@@ -867,6 +1120,7 @@ class Emitter {
     active.clear(); iteration_lengths.clear(); iteration_indices.clear();
     values.clear();
     value_types.clear();
+    function_value_symbols.clear();
     slots.clear();
     auto *fn = functions.at(f.symbol);
     const auto sig = type(f.signature);
@@ -1088,9 +1342,14 @@ public:
       if (owning(*sig.throws_type)) builder.CreateCall(value_op(*sig.throws_type, false), {outputs.back()});
       builder.CreateRet(builder.getInt32(1));
     }
+    if (!used_c_callables.empty())
+      out_c_adapter_source = cffi::adapter_source(
+          *input.hir.module().resolved->project, used_c_callables,
+          used_c_resources, used_c_callbacks);
     verify_llvm(module);
     Output out;
     out.native_ir = ir::dump(input);
+    out.c_adapter_source = std::move(out_c_adapter_source);
     out.llvm_before_optimization = text_ir(module);
     if (options.optimization == 2) {
       llvm::LoopAnalysisManager loops;

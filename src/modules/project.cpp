@@ -35,6 +35,17 @@ bool logical(std::string_view s) {
     p = e + 1;
   }
 }
+bool c_ident(std::string_view s) {
+  static const std::set<std::string_view> keywords{
+      "auto", "break", "case", "char", "const", "continue", "default", "do",
+      "double", "else", "enum", "extern", "float", "for", "goto", "if",
+      "inline", "int", "long", "register", "restrict", "return", "short",
+      "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+      "unsigned", "void", "volatile", "while", "_Alignas", "_Alignof",
+      "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary", "_Noreturn",
+      "_Static_assert", "_Thread_local"};
+  return ident(s) && !keywords.contains(s);
+}
 bool dotted(std::string_view s) {
   std::string path(s);
   std::replace(path.begin(), path.end(), '.', '/');
@@ -86,10 +97,13 @@ std::string sha256(std::string_view bytes) {
 struct Dependency {
   std::string kind, host;
   fs::path source, binding;
+  std::vector<std::string> libraries;
+  std::vector<fs::path> library_dirs;
 };
 struct Config {
   fs::path root;
   std::string name, entry;
+  bool hosted = false;
   std::map<std::string, Dependency> deps;
 };
 struct Loader {
@@ -102,7 +116,9 @@ struct Loader {
   std::map<std::string, ModuleId> identities;
   std::map<std::string, std::string> logical_sources;
   std::map<std::string, size_t> bundle_ids;
+  std::map<std::string, size_t> c_bundle_ids;
   std::map<std::string, SourceSpan> binding_identities;
+  std::map<std::string, SourceSpan> c_type_identities, c_callable_identities;
   std::shared_ptr<const SourceSnapshot> binding_source;
   std::map<std::string, SourceSpan> binding_spans;
   Loader(SourceManager &manager, std::stop_token token,
@@ -193,17 +209,58 @@ struct Loader {
         auto t = value.as_table();
         if (!t)
           fail("E_MANIFEST_INVALID", "dependency must be a table", span);
+        auto keys = [&](std::initializer_list<std::string_view> allowed) {
+          for (auto &&[key, ignored] : *t) {
+            (void)ignored;
+            bool known = std::any_of(allowed.begin(), allowed.end(),
+                                     [&](auto k) { return key.str() == k; });
+            if (!known)
+              fail("E_MANIFEST_INVALID",
+                   "unknown dependency key: " + std::string(key.str()), span);
+          }
+        };
         Dependency d;
         d.kind = required((*t), "kind");
-        if (d.kind == "source")
+        if (d.kind == "source") {
+          keys({"kind", "path"});
           d.source = path.parent_path() / required((*t), "path");
-        else if (d.kind == "python") {
+        } else if (d.kind == "python") {
+          keys({"kind", "binding", "host_package"});
           d.binding = path.parent_path() / required((*t), "binding");
           d.host = required((*t), "host_package");
-        } else if (d.kind == "native")
-          fail("E_CAPABILITY_UNAVAILABLE",
-               "native ABI module loading requires T11", span);
-        else
+        } else if (d.kind == "native") {
+          keys({"kind", "binding", "libraries", "library_dirs"});
+          d.binding = path.parent_path() / required((*t), "binding");
+          auto libraries = (*t)["libraries"].as_array();
+          if (!libraries)
+            fail("E_MANIFEST_INVALID", "native dependency requires a libraries array", span);
+          for (auto &&entry : *libraries) {
+            auto library = entry.value<std::string>();
+            if (!library || library->empty() || library->front() == '-' ||
+                library->find('/') != std::string::npos ||
+                library->find('\\') != std::string::npos ||
+                library->find('\0') != std::string::npos ||
+                !std::all_of(library->begin(), library->end(), [](char c) {
+                  return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                         (c >= '0' && c <= '9') || c == '_' || c == '+' ||
+                         c == '-' || c == '.';
+                }))
+              fail("E_MANIFEST_INVALID", "invalid native library name", span);
+            d.libraries.push_back(*library);
+          }
+          if ((*t)["library_dirs"]) {
+            auto dirs = (*t)["library_dirs"].as_array();
+            if (!dirs)
+              fail("E_MANIFEST_INVALID", "library_dirs must be an array", span);
+            for (auto &&entry : *dirs) {
+              auto dir = entry.value<std::string>();
+              if (!dir || dir->empty() || dir->front() == '-' ||
+                  dir->find('\0') != std::string::npos)
+                fail("E_MANIFEST_INVALID", "invalid native library directory", span);
+              d.library_dirs.push_back(path.parent_path() / *dir);
+            }
+          }
+        } else
           fail("E_MANIFEST_INVALID", "unknown dependency kind", span);
         c.deps.emplace(n, std::move(d));
       }
@@ -211,23 +268,51 @@ struct Loader {
       fail("E_MANIFEST_INVALID", "dependencies must be a table", span);
     if (table["build"] && !table["build"].is_table())
       fail("E_MANIFEST_INVALID", "build must be a table", span);
+    if (auto build = table["build"].as_table()) {
+      for (auto &&[key, ignored] : *build) {
+        (void)ignored;
+        if (key.str() != "backend" && key.str() != "word_bits" &&
+            key.str() != "native")
+          fail("E_MANIFEST_INVALID", "unknown build key: " +
+                                          std::string(key.str()), span);
+      }
+      if ((*build)["native"]) {
+        auto native = (*build)["native"].as_table();
+        if (!native)
+          fail("E_MANIFEST_INVALID", "build.native must be a table", span);
+        for (auto &&[key, ignored] : *native) {
+          (void)ignored;
+          if (key.str() != "runtime")
+            fail("E_MANIFEST_INVALID", "unknown build.native key: " +
+                                            std::string(key.str()), span);
+        }
+        if ((*native)["runtime"] && !(*native)["runtime"].is_string())
+          fail("E_MANIFEST_INVALID", "build.native.runtime must be a string", span);
+        auto runtime = (*native)["runtime"].value_or(std::string("freestanding"));
+        if (runtime != "freestanding" && runtime != "hosted")
+          fail("E_MANIFEST_INVALID",
+               "build.native.runtime must be freestanding or hosted", span);
+        c.hosted = runtime == "hosted";
+      }
+    }
     if (main_manifest) {
       if (!(c.entry == "app" || c.entry.starts_with("app/")))
         fail("E_MANIFEST_INVALID", "project entry must be an app logical module", span);
       project.package_name = c.name;
+      if (table["build"]["backend"] && !table["build"]["backend"].is_string())
+        fail("E_MANIFEST_INVALID", "backend must be a string", span);
+      if (table["build"]["word_bits"] &&
+          !table["build"]["word_bits"].is_integer())
+        fail("E_MANIFEST_INVALID", "word_bits must be an integer", span);
       project.backend =
           table["build"]["backend"].value_or(std::string("native"));
       if (project.backend != "native" && project.backend != "python")
         fail("E_MANIFEST_INVALID", "invalid backend", span);
-      if (table["build"]["word_bits"] &&
-          !table["build"]["word_bits"].is_integer())
-        fail("E_MANIFEST_INVALID", "word_bits must be an integer", span);
-      if (table["build"]["backend"] && !table["build"]["backend"].is_string())
-        fail("E_MANIFEST_INVALID", "backend must be a string", span);
       auto bits = table["build"]["word_bits"].value_or(int64_t(64));
       if (bits != 32 && bits != 64)
         fail("E_MANIFEST_INVALID", "word_bits must be 32 or 64", span);
       project.word_bits = static_cast<unsigned>(bits);
+      project.hosted = c.hosted;
     }
     configs.emplace(key, c);
     return c;
@@ -731,6 +816,496 @@ struct Loader {
     bundle_ids.emplace(key, bundle_id);
     return bundle_id;
   }
+  // -----------------------------------------------------------------------
+  // C ABI binding schema v2. Nothing in this section shares Python v1
+  // declaration records: `abi:"c"` selects independent parsing and strict
+  // rejection of unknown keys, host attributes, optional/varargs parameters
+  // and Python ownership vocabulary.
+  struct CParsedType {
+    CTypeDecl decl;
+  };
+  static bool c_scalar(std::string_view name) {
+    for (auto candidate : {"Unit", "bool", "i8", "i16", "i32", "i64", "u8",
+                           "u16", "u32", "u64", "isize", "usize", "f32",
+                           "f64"})
+      if (name == candidate) return true;
+    return false;
+  }
+  CTypeRef c_type_expr(const std::string &text,
+                       const std::map<std::string, uint32_t> &named,
+                       const std::vector<CParsedType> &types, Json at,
+                       size_t depth = 0, bool pointer_target = false) {
+    if (depth > 32) invalid(at, "C type nesting exceeds the limit");
+    auto trim = [](std::string s) {
+      while (!s.empty() && (s.front() == ' ' || s.front() == '\t')) s.erase(s.begin());
+      while (!s.empty() && (s.back() == ' ' || s.back() == '\t')) s.pop_back();
+      return s;
+    };
+    std::string s = trim(text);
+    if (s.empty() || s.find('\0') != std::string::npos)
+      invalid(at, "empty or NUL C type");
+    auto bracket = s.find('[');
+    if (bracket != std::string::npos) {
+      if (s.back() != ']') invalid(at, "malformed C type");
+      auto base = trim(s.substr(0, bracket));
+      auto inner = trim(s.substr(bracket + 1, s.size() - bracket - 2));
+      if (inner.empty() || inner.find('[') != std::string::npos ||
+          inner.find(',') != std::string::npos)
+        invalid(at, "C pointer/buffer requires exactly one type argument");
+      CTypeRef result;
+      if (base == "Ptr" || base == "PtrMut" || base == "Buffer" ||
+          base == "BufferMut") {
+        result.kind = base.starts_with("Ptr") ? CTypeRef::Kind::pointer
+                                              : CTypeRef::Kind::buffer;
+        result.writable = base == "PtrMut" || base == "BufferMut";
+        result.args.push_back(c_type_expr(inner, named, types, at, depth + 1,
+                                          result.kind == CTypeRef::Kind::pointer));
+        if (result.kind == CTypeRef::Kind::pointer &&
+            result.args[0].kind == CTypeRef::Kind::named) {
+          const auto kind = types.at(result.args[0].named - 1).decl.kind;
+          if (kind == CDeclKind::resource || kind == CDeclKind::callback)
+            invalid(at, "pointer to resource/callback must use the named C type");
+        }
+        if (result.kind == CTypeRef::Kind::buffer) {
+          const auto &element = result.args[0];
+          bool scalar = element.kind == CTypeRef::Kind::scalar &&
+                        element.scalar != "Unit";
+          if (!scalar)
+            invalid(at, "Buffer element must be a fixed-size C scalar");
+        }
+        return result;
+      }
+      invalid(at, "unknown C parameterized type: " + base);
+    }
+    if (c_scalar(s)) {
+      CTypeRef result;
+      result.kind = CTypeRef::Kind::scalar;
+      result.scalar = s;
+      return result;
+    }
+    auto it = named.find(s);
+    if (it == named.end()) invalid(at, "unknown C type: " + s);
+    const auto &decl = types.at(it->second - 1).decl;
+    if (decl.kind == CDeclKind::opaque && !pointer_target)
+      invalid(at, "opaque C type must be used through Ptr[T]");
+    CTypeRef result;
+    result.kind = CTypeRef::Kind::named;
+    result.named = it->second;
+    return result;
+  }
+  void c_layout(const CTypeRef &ref, const std::vector<CParsedType> &types,
+                std::set<uint32_t> &active, uint64_t &size, uint64_t &align) {
+    if (ref.kind == CTypeRef::Kind::pointer) {
+      size = 8; align = 8; return;
+    }
+    if (ref.kind == CTypeRef::Kind::buffer) {
+      // Buffer is a real {pointer, uint64_t} value, not a pointer alias.
+      size = 16; align = 8; return;
+    }
+    if (ref.kind == CTypeRef::Kind::scalar) {
+      align = ref.scalar == "i8" || ref.scalar == "u8" || ref.scalar == "bool"
+                  ? 1
+                  : ref.scalar == "i16" || ref.scalar == "u16"
+                        ? 2
+                        : ref.scalar == "i32" || ref.scalar == "u32" ||
+                                  ref.scalar == "f32"
+                              ? 4
+                              : ref.scalar == "Unit" ? 1 : 8;
+      size = ref.scalar == "Unit" ? 0 : align;
+      return;
+    }
+    const auto &decl = types.at(ref.named - 1).decl;
+    if (decl.kind == CDeclKind::resource || decl.kind == CDeclKind::callback ||
+        decl.kind == CDeclKind::opaque) {
+      size = 8; align = 8; return;
+    }
+    if (decl.kind != CDeclKind::record)
+      throw std::logic_error("unknown C declaration kind");
+    if (!active.insert(ref.named).second)
+      fail("E_BINDING_INVALID", "C record contains itself by value",
+           decl.source);
+    uint64_t offset = 0, alignment = 1;
+    for (const auto &field : decl.fields) {
+      uint64_t field_size = 0, field_align = 1;
+      c_layout(field.type, types, active, field_size, field_align);
+      if (field_size == 0)
+        fail("E_BINDING_INVALID", "record field has zero size", field.source);
+      offset = (offset + field_align - 1) / field_align * field_align;
+      if (offset != field.offset)
+        fail("E_BINDING_INVALID",
+             decl.identity + "." + field.name +
+                 ": declared offset does not match natural C layout",
+             field.source);
+      offset += field_size;
+      alignment = std::max(alignment, field_align);
+    }
+    size = (offset + alignment - 1) / alignment * alignment;
+    align = alignment;
+    if (decl.size != size || decl.align != align)
+      fail("E_BINDING_INVALID",
+           decl.identity +
+               ": declared size/align does not match natural C layout",
+           decl.source);
+    active.erase(ref.named);
+  }
+  void validate_c_layout(const std::vector<CParsedType> &types) {
+    for (const auto &parsed : types) {
+      if (parsed.decl.kind != CDeclKind::record) continue;
+      std::set<uint32_t> active;
+      uint64_t size = 0, align = 1;
+      c_layout(CTypeRef{CTypeRef::Kind::named, {}, false, {}, parsed.decl.id},
+               types, active, size, align);
+    }
+  }
+  size_t c_bundle(const fs::path &p) {
+    auto path = canonical(p);
+    auto key = path.string();
+    if (c_bundle_ids.contains(key)) return c_bundle_ids.at(key);
+    binding_source = read(path);
+    auto span = binding_source->raw_span(0, binding_source->original.size());
+    const auto &text = binding_source->original;
+    auto tok = std::unique_ptr<json_tokener, decltype(&json_tokener_free)>(json_tokener_new(), json_tokener_free);
+    json_tokener_set_flags(tok.get(), JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8);
+    if (text.size() >= size_t(std::numeric_limits<int>::max()))
+      fail("E_BINDING_INVALID", "C binding JSON is too large", span);
+    auto raw = json_tokener_parse_ex(tok.get(), text.data(), static_cast<int>(text.size()));
+    auto obj = std::unique_ptr<json_object, decltype(&json_object_put)>(raw, json_object_put);
+    if (json_tokener_get_error(tok.get()) != json_tokener_success || !raw)
+      fail("E_BINDING_INVALID", "invalid JSON C binding bundle", span);
+    for (size_t i = json_tokener_get_parse_end(tok.get()); i < text.size(); ++i)
+      if (text[i] != ' ' && text[i] != '\n' && text[i] != '\r' && text[i] != '\t')
+        fail("E_BINDING_INVALID", "trailing JSON content", binding_source->raw_span(i, i + 1));
+    index_json();
+    Json root{raw, ""};
+    object(root, {"schema_version", "contract", "abi", "target",
+                  "requires_hosted", "modules", "types", "callables"});
+    CBindingBundle b;
+    b.path = path; b.json = text; b.sha256 = sha256(text); b.source = span;
+    auto version = field(root, "schema_version");
+    if (!json_object_is_type(version.value, json_type_int) ||
+        json_object_get_int64(version.value) != 2)
+      invalid(version, "schema_version must be 2 for a C ABI bundle");
+    b.schema_version = 2;
+    b.contract = choice(field(root, "contract"), {"compiler-dev/1"});
+    b.abi = choice(field(root, "abi"), {"c"});
+    b.target = choice(field(root, "target"), {"x86_64-linux-gnu"});
+    b.requires_hosted = boolean(field(root, "requires_hosted"));
+    std::map<std::string, size_t> mods;
+    for (auto j : array(field(root, "modules"))) {
+      object(j, {"logical_path", "provider", "library"});
+      CModule m{string(field(j, "logical_path")),
+                choice(field(j, "provider"), {"native_library"}),
+                string(field(j, "library")), location(j)};
+      if (!logical(m.logical_path)) invalid(field(j, "logical_path"), "invalid logical module");
+      if (m.logical_path == "app" || m.logical_path.starts_with("app/"))
+        invalid(field(j, "logical_path"), "app is reserved for source modules");
+      if (!m.library.empty() &&
+          (m.library.front() == '-' || m.library.find('\0') != std::string::npos ||
+           !std::all_of(m.library.begin(), m.library.end(), [](char c) {
+             return (c >= 'a' && c <= 'z') || (c >= 'A' && c <= 'Z') ||
+                    (c >= '0' && c <= '9') || c == '_' || c == '+' ||
+                    c == '-' || c == '.';
+           })))
+        invalid(field(j, "library"), "invalid native library name");
+      if (!mods.emplace(m.logical_path, b.modules.size()).second)
+        invalid(j, "duplicate C binding module");
+      b.modules.push_back(std::move(m));
+    }
+    if (b.modules.empty()) invalid(field(root, "modules"), "C binding requires a module");
+    std::vector<CParsedType> types;
+    std::map<std::string, uint32_t> type_ids, type_names;
+    for (auto j : array(field(root, "types"))) {
+      check_cancelled(stop);
+      object(j, {"id", "module", "name", "kind"},
+             {"c_name", "fields", "size", "align", "release_symbol",
+              "retain_symbol", "result", "parameters"});
+      CTypeDecl d;
+      d.source = location(j);
+      d.identity = identity(field(j, "id"));
+      if (!dotted(d.identity) || type_ids.contains(d.identity) ||
+          c_type_identities.contains(d.identity))
+        invalid(field(j, "id"), "duplicate or invalid C type id");
+      c_type_identities.emplace(d.identity, d.source);
+      d.module = string(field(j, "module"));
+      if (!mods.contains(d.module)) invalid(field(j, "module"), "undeclared module");
+      d.name = identifier(field(j, "name"));
+      if (d.name == "_") invalid(field(j, "name"), "export cannot be _");
+      auto kind = choice(field(j, "kind"), {"record", "resource", "callback", "opaque"});
+      d.kind = kind == "record" ? CDeclKind::record
+               : kind == "resource" ? CDeclKind::resource
+               : kind == "callback" ? CDeclKind::callback
+                                     : CDeclKind::opaque;
+      if (field(j, "c_name").value)
+        d.c_name = string(field(j, "c_name"));
+      uint32_t local = uint32_t(types.size() + 1);
+      d.id = local;
+      type_ids.emplace(d.identity, local);
+      if (!type_names.emplace(d.identity, local).second)
+        invalid(j, "duplicate C type id");
+      types.push_back({std::move(d)});
+    }
+    // Resolve record/resource/callback payloads after every named type is
+    // known. String references are checked recursively; no host header is
+    // read and no C compiler is invoked at check time.
+    auto type_objects = array(field(root, "types"));
+    for (size_t ti = 0; ti < types.size(); ++ti) {
+      check_cancelled(stop);
+      auto &d = types[ti].decl;
+      Json j = type_objects.at(ti);
+      if (d.kind == CDeclKind::record) {
+        if (!field(j, "size").value || !field(j, "align").value)
+          invalid(j, "record requires size and align");
+        auto size = field(j, "size"), align = field(j, "align");
+        if (!json_object_is_type(size.value, json_type_int) ||
+            !json_object_is_type(align.value, json_type_int) ||
+            json_object_get_int64(size.value) < 0 ||
+            json_object_get_int64(align.value) <= 0)
+          invalid(j, "record size/align must be positive integers");
+        d.size = uint64_t(json_object_get_int64(size.value));
+        d.align = uint64_t(json_object_get_int64(align.value));
+        auto fields = field(j, "fields");
+        if (!fields.value) invalid(j, "record requires fields");
+        std::set<std::string> names;
+        for (auto f : array(fields)) {
+          object(f, {"name", "type", "offset"});
+          CFieldDecl field_decl;
+          field_decl.name = identifier(field(f, "name"));
+          if (!c_ident(field_decl.name))
+            invalid(field(f, "name"), "record field name is a C keyword");
+          if (!names.insert(field_decl.name).second)
+            invalid(f, "duplicate record field");
+          field_decl.type = c_type_expr(string(field(f, "type")), type_names,
+                                         types, field(f, "type"));
+          auto off = field(f, "offset");
+          if (!json_object_is_type(off.value, json_type_int) ||
+              json_object_get_int64(off.value) < 0)
+            invalid(off, "field offset must be a nonnegative integer");
+          field_decl.offset = uint64_t(json_object_get_int64(off.value));
+          field_decl.source = location(f);
+          d.fields.push_back(std::move(field_decl));
+        }
+        for (const auto &field_decl : d.fields) {
+          if (field_decl.type.kind != CTypeRef::Kind::named) continue;
+          const auto kind = types.at(field_decl.type.named - 1).decl.kind;
+          if (kind == CDeclKind::resource || kind == CDeclKind::callback)
+            fail("E_BINDING_INVALID",
+                 "record field " + field_decl.name +
+                     " cannot be an owning resource or callback value",
+                 field_decl.source);
+        }
+      } else if (d.kind == CDeclKind::resource) {
+        d.release_symbol = string(field(j, "release_symbol"));
+        if (!c_ident(d.release_symbol) || d.release_symbol == "_")
+          invalid(field(j, "release_symbol"), "resource requires a valid release symbol");
+        if (field(j, "retain_symbol").value) {
+          d.retain_symbol = string(field(j, "retain_symbol"));
+          if (!c_ident(d.retain_symbol) || d.retain_symbol == "_")
+            invalid(field(j, "retain_symbol"), "invalid retain symbol");
+        }
+      } else if (d.kind == CDeclKind::callback) {
+        auto result = field(j, "result");
+        if (!result.value) invalid(j, "callback requires result");
+        d.result = c_type_expr(string(result), type_names, types, result);
+        auto params = field(j, "parameters");
+        if (!params.value) invalid(j, "callback requires parameters");
+        std::set<std::string> names;
+        for (auto p : array(params)) {
+          object(p, {"name", "type"});
+          auto name = identifier(field(p, "name"));
+          if (name == "_" || !names.insert(name).second)
+            invalid(p, "duplicate or discard callback parameter");
+          auto param_type = c_type_expr(string(field(p, "type")),
+                                        type_names, types,
+                                        field(p, "type"));
+          if (param_type.kind == CTypeRef::Kind::scalar &&
+              param_type.scalar == "Unit")
+            invalid(field(p, "type"), "Unit is not a C callback value parameter");
+          d.parameters.push_back({name, std::move(param_type), location(p)});
+        }
+      }
+    }
+    validate_c_layout(types);
+    std::vector<CCallableDecl> callables;
+    std::map<std::string, uint32_t> callable_ids;
+    std::set<std::pair<std::string, std::string>> export_names;
+    for (auto &t : types)
+      if (!export_names.emplace(t.decl.module, t.decl.name).second)
+        fail("E_BINDING_INVALID", "duplicate C export name: " + t.decl.name, t.decl.source);
+    for (auto j : array(field(root, "callables"))) {
+      check_cancelled(stop);
+      object(j, {"id", "module", "name", "symbol", "parameters", "result"});
+      CCallableDecl d;
+      d.source = location(j);
+      d.identity = identity(field(j, "id"));
+      if (!dotted(d.identity) || callable_ids.contains(d.identity) ||
+          c_callable_identities.contains(d.identity))
+        invalid(field(j, "id"), "duplicate or invalid C callable id");
+      c_callable_identities.emplace(d.identity, d.source);
+      d.id = uint32_t(callables.size() + 1);
+      d.module = string(field(j, "module"));
+      if (!mods.contains(d.module)) invalid(field(j, "module"), "undeclared module");
+      d.name = identifier(field(j, "name"));
+      d.symbol = string(field(j, "symbol"));
+      if (!c_ident(d.symbol) || d.symbol == "_")
+        invalid(field(j, "symbol"), "invalid C symbol");
+      if (d.name == "_" || !export_names.emplace(d.module, d.name).second)
+        invalid(field(j, "name"), "duplicate or invalid C export name");
+      std::set<std::string> names;
+      for (auto p : array(field(j, "parameters"))) {
+        object(p, {"name", "type"});
+        auto name = identifier(field(p, "name"));
+        if (name == "_" || !names.insert(name).second)
+          invalid(p, "duplicate or discard C parameter name");
+        auto param_type = c_type_expr(string(field(p, "type")),
+                                      type_names, types,
+                                      field(p, "type"));
+        if (param_type.kind == CTypeRef::Kind::scalar &&
+            param_type.scalar == "Unit")
+          invalid(field(p, "type"), "Unit is not a C value parameter");
+        d.parameters.push_back({name, std::move(param_type), location(p)});
+      }
+      auto result = field(j, "result");
+      object(result, {"type", "ownership"}, {"release_symbol", "retain_symbol"});
+      d.result.type = c_type_expr(string(field(result, "type")), type_names,
+                                  types, field(result, "type"));
+      d.result.ownership = choice(field(result, "ownership"),
+                                  {"value", "owned", "borrowed", "unit"});
+      d.result.source = location(result);
+      if (field(result, "release_symbol").value) {
+        d.result.release_symbol = string(field(result, "release_symbol"));
+        if (!c_ident(d.result.release_symbol) || d.result.release_symbol == "_")
+          invalid(field(result, "release_symbol"), "invalid release symbol");
+      }
+      if (field(result, "retain_symbol").value) {
+        d.result.retain_symbol = string(field(result, "retain_symbol"));
+        if (!c_ident(d.result.retain_symbol) || d.result.retain_symbol == "_")
+          invalid(field(result, "retain_symbol"), "invalid retain symbol");
+      }
+      if (d.result.ownership != "owned" &&
+          (!d.result.release_symbol.empty() || !d.result.retain_symbol.empty()))
+        invalid(result, "release/retain symbols require owned ownership");
+      bool unit = d.result.type.kind == CTypeRef::Kind::scalar &&
+                  d.result.type.scalar == "Unit";
+      bool resource = d.result.type.kind == CTypeRef::Kind::named &&
+                      types.at(d.result.type.named - 1).decl.kind == CDeclKind::resource;
+      if ((d.result.ownership == "unit") != unit)
+        invalid(result, "unit ownership requires Unit result");
+      if (d.result.ownership == "owned") {
+        if (!resource)
+          invalid(result, "owned result must name a resource type");
+        const auto &resource_decl = types.at(d.result.type.named - 1).decl;
+        if (d.result.release_symbol.empty())
+          d.result.release_symbol = resource_decl.release_symbol;
+        if (d.result.release_symbol.empty())
+          invalid(result, "owned result requires release_symbol");
+        if (d.result.release_symbol != resource_decl.release_symbol)
+          invalid(result, "owned result release_symbol differs from resource type");
+        if (d.result.retain_symbol.empty())
+          d.result.retain_symbol = resource_decl.retain_symbol;
+        if (d.result.retain_symbol != resource_decl.retain_symbol)
+          invalid(result, "owned result retain_symbol differs from resource type");
+      } else if (resource) {
+        invalid(result, "resource result must use owned ownership");
+      } else if (d.result.ownership == "borrowed" && unit) {
+        invalid(result, "Unit cannot be borrowed");
+      }
+      for (const auto &part : {b.contract, b.sha256, d.module, std::string("callable"), d.identity})
+        d.stable_identity += std::to_string(part.size()) + ":" + part;
+      callable_ids.emplace(d.identity, uint32_t(callables.size() + 1));
+      callables.push_back(std::move(d));
+    }
+    if (callables.empty() && types.empty())
+      invalid(field(root, "callables"), "C binding declares no exports");
+    // Commit only after every declaration and layout check passed. Local
+    // named indexes are rebased to Project::c_types.
+    size_t base = project.c_types.size();
+    for (auto &p : types) {
+      auto rebase = [&](CTypeRef &ref) {
+        std::function<void(CTypeRef &)> visit = [&](CTypeRef &r) {
+          if (r.kind == CTypeRef::Kind::named) r.named += uint32_t(base);
+          for (auto &a : r.args) visit(a);
+        };
+        visit(ref);
+      };
+      p.decl.bundle = project.c_bindings.size();
+      p.decl.id = uint32_t(base + p.decl.id);
+      for (auto &f : p.decl.fields) rebase(f.type);
+      if (p.decl.kind == CDeclKind::callback) {
+        rebase(p.decl.result);
+        for (auto &param : p.decl.parameters) rebase(param.type);
+      }
+    }
+    size_t callable_base = project.c_callables.size();
+    for (auto &c : callables) {
+      c.bundle = project.c_bindings.size();
+      c.id = uint32_t(callable_base + c.id);
+      std::function<void(CTypeRef &)> rebase = [&](CTypeRef &r) {
+        if (r.kind == CTypeRef::Kind::named) r.named += uint32_t(base);
+        for (auto &a : r.args) rebase(a);
+      };
+      for (auto &p : c.parameters) rebase(p.type);
+      rebase(c.result.type);
+    }
+    size_t bundle_id = project.c_bindings.size();
+    for (auto &p : types) { b.types.push_back(p.decl.id); project.c_types.push_back(std::move(p.decl)); }
+    for (auto &c : callables) { b.callables.push_back(c.id); project.c_callables.push_back(std::move(c)); }
+    project.c_bindings.push_back(std::move(b));
+    c_bundle_ids.emplace(key, bundle_id);
+    return bundle_id;
+  }
+  ModuleId c_foreign(std::string name, const Dependency &dep,
+                     const Config &context, std::optional<SourceSpan> where) {
+    (void)context;
+    auto bundle_id = c_bundle(dep.binding);
+    const auto &bundle = project.c_bindings.at(bundle_id);
+    if (bundle.requires_hosted && !project.hosted)
+      fail("E_CAPABILITY_UNAVAILABLE",
+           "C binding requires [build.native] runtime = hosted",
+           where.value_or(bundle.source));
+    auto module = std::find_if(bundle.modules.begin(), bundle.modules.end(),
+                               [&](const auto &m) { return m.logical_path == name; });
+    if (module == bundle.modules.end())
+      fail("E_BINDING_INVALID", "C binding does not declare module " + name,
+           where.value_or(bundle.source));
+    std::string identity = "c-binding:" + bundle.path.string() + ":" + name;
+    claim(name, identity, where);
+    if (identities.contains(identity)) return identities.at(identity);
+    for (const auto &library : dep.libraries)
+      if (std::find(project.c_libraries.begin(), project.c_libraries.end(), library) ==
+          project.c_libraries.end())
+        project.c_libraries.push_back(library);
+    if (!module->library.empty() &&
+        std::find(project.c_libraries.begin(), project.c_libraries.end(),
+                  module->library) == project.c_libraries.end())
+      project.c_libraries.push_back(module->library);
+    for (const auto &dir : dep.library_dirs) {
+      auto canonical_dir = canonical(dir);
+      if (std::find(project.c_library_dirs.begin(), project.c_library_dirs.end(),
+                    canonical_dir) == project.c_library_dirs.end())
+        project.c_library_dirs.push_back(canonical_dir);
+    }
+    ModuleId id(project.modules.size());
+    identities.emplace(identity, id);
+    project.modules.push_back({id, name, identity, name, {}, {}, {}, {}, bundle_id});
+    std::map<std::string, ForeignExport> exports;
+    for (uint32_t type_id : bundle.types) {
+      const auto &d = project.c_type(type_id);
+      if (d.module != name) continue;
+      ForeignExport e{d.name, d.identity, ForeignExportKind::type, bundle_id,
+                      std::nullopt, {}, type_id, std::nullopt, std::nullopt};
+      exports.emplace(d.name, std::move(e));
+    }
+    for (uint32_t callable_id : bundle.callables) {
+      const auto &d = project.c_callable(callable_id);
+      if (d.module != name) continue;
+      ForeignExport e{d.name, d.identity, ForeignExportKind::function, bundle_id,
+                      std::nullopt, {}, std::nullopt, callable_id, std::nullopt};
+      exports.emplace(d.name, std::move(e));
+    }
+    for (auto &[n, e] : exports)
+      project.modules[id.value].foreign_exports.push_back(std::move(e));
+    return id;
+  }
   ModuleId foreign(std::string name, const fs::path &path,
                    const std::string &host, std::optional<SourceSpan> where) {
     auto b = bundle(path);
@@ -812,6 +1387,8 @@ struct Loader {
       auto dep = it->second;
       if (dep.kind == "python")
         return foreign(name, dep.binding, dep.host, where);
+      if (dep.kind == "native")
+        return c_foreign(name, dep, context, where);
       root = canonical(dep.source);
       if (fs::exists(root / "lang.toml")) {
         c = config(root / "lang.toml");

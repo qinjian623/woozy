@@ -1,0 +1,10 @@
+schema_version = 1
+[package]
+name = "c_ffi_unicode"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[build.native]
+runtime = "hosted"

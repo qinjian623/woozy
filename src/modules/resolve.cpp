@@ -326,8 +326,12 @@ class Resolver {
       scope.parent = &prelude;
       for (size_t i = 0; i < m.foreign_exports.size(); ++i) {
         const auto &e = m.foreign_exports[i];
-        auto source = out.project->foreign_binding(
-            e.declaration ? *e.declaration : e.candidates.at(0)).source;
+        auto source = e.c_type
+            ? out.project->c_type(*e.c_type).source
+            : e.c_callable
+                  ? out.project->c_callable(*e.c_callable).source
+                  : out.project->foreign_binding(
+                        e.declaration ? *e.declaration : e.candidates.at(0)).source;
         auto id = add(scope, e.name, e.kind == ForeignExportKind::type ? SymbolKind::type :
              e.kind == ForeignExportKind::function ? SymbolKind::function : SymbolKind::value,
             {}, source, true);
@@ -469,7 +473,8 @@ public:
         return result;
       }
       for (const auto *s : {"Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16",
-                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Result",
+                           "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec", "Result", "Ptr", "PtrMut",
+                           "Buffer", "BufferMut",
                            "__woozy_Thread", "__woozy_Mutex", "__woozy_Condvar",
                            "__woozy_AtomicI64", "__woozy_IpcHandle"})
         add(prelude, s, SymbolKind::builtin_type);

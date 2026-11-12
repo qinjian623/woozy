@@ -1,0 +1,8 @@
+package app;
+import "std/unicode" as unicode;
+func main() i32 {
+    if unicode.nfc("e\u{301}") != "é" { return 1; }
+    if unicode.nfd("é") != "e\u{301}" { return 2; }
+    if unicode.casefold("Straße") != "strasse" { return 3; }
+    return 0;
+}

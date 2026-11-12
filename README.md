@@ -43,12 +43,18 @@ func main() throws os.Error {
 
 已有整数与浮点、字符串值、函数与非捕获函数值、struct/enum、Vec、受约束泛型、模块、typed throws 和块级 defer。程序可以生成 Native 代码或 Python 代码；语言规则不会随所选后端改变。
 
-标准库提供 `std/io`、`std/os`、`std/fs`、`std/path`、`std/text`、`std/vec`、`std/option`、`std/result`、`std/hash`、`std/map`、`std/set`、`std/json`、`std/strconv`、`std/math`、`std/time`、`std/random`、`std/net`、`std/thread`、`std/sync`、`std/process`、`std/signal` 和 `std/ipc`；接口见 [标准库](docs/STDLIB.md)。`std/os`、`std/fs`、`std/io`、`std/net`、`std/thread`、`std/sync`、`std/process`、`std/signal`、`std/ipc`、`std/time` 和 `std/random` 面向 Linux x86_64 Native 程序，系统接口使用 C 风格名称与参数顺序，失败时抛出 `os.Error`，锁误用产生 Panic。不开放原始 syscall 接口。
+标准库提供输入输出、文件系统、字符串与容器、JSON、数学、时间、随机数、网络、进程与并发接口，见 [标准库](docs/STDLIB.md)。系统接口面向 Linux x86_64 Native 程序，使用 C 风格名称与参数顺序，失败时抛出声明的错误，锁误用产生 Panic。不开放原始 syscall 接口。
+
+`std/http` 支持 HTTP/1.1；`std/unicode` 提供 Unicode 18 正规化、casefold 和字素簇；`std/timezone` 支持命名时区、夏令时和本地时间转换。
 
 `std/thread` 支持无捕获函数加明确参数的线程创建与等待，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员同步，原子 ARC 只保护引用计数。
 
+`std/rwlock` 提供读写锁，`std/cancel` 提供协作取消。`std/channel` 提供有界或无界队列，以及超时和取消等待；`std/task` 提供固定工作线程的线程池与 Future，需要显式调用 shutdown。
+
+Native 程序可以声明并调用 C 库的有类型函数，传递自然布局的 C record、Ptr 和 Buffer，或使用同步的无捕获回调。指针和 Buffer 的索引访问放在 unsafe 块内；C 错误码不会自动转换成 Woozy 错误。需要 libc 的库必须明确选择 hosted 运行方式，普通程序继续独立运行。
+
 `std/process` 支持 spawn、exec、wait、参数和环境，`std/signal` 支持同步信号等待，`std/ipc` 支持共享内存及跨进程同步。多线程 fork 后只保留调用线程，业务锁由程序员处理，子进程通常应尽快 exec。
 
-捕获闭包、默认参数、模板特化、通用 Slice 和 Ptr 尚未提供。
+捕获闭包、默认参数、模板特化和通用 Slice 尚未提供。
 
 编译器编译、实现、测试和开发协作资料统一放在 [development/](development/README.md)。

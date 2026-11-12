@@ -1,4 +1,4 @@
-# Source/flag recommendations for a future Root hosted link mode.
+# Source/flag manifest for the explicitly selected hosted link mode.
 #
 # This manifest is data only; it does not modify the existing native target.
 # The existing freestanding archive remains:
@@ -32,6 +32,11 @@ set(LANG_HOSTED_PUBLIC_SOURCES
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/network_buffers.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/network.cpp
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/numbers.cpp
+  # Unicode is public runtime functionality and must be present in hosted
+  # links of std/unicode. The C adapter keeps the vendored utf8proc TU local to
+  # this runtime and introduces no libc memory symbols.
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/unicode/unicode.cpp
+  ${LANG_HOSTED_LANG_ROOT}/runtime/native/unicode/utf8proc_adapter.c
   ${LANG_HOSTED_LANG_ROOT}/runtime/native/math/support.cpp)
 
 # These are intentionally absent from the hosted archive.

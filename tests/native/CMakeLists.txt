@@ -15,6 +15,12 @@ set_tests_properties(native.os_runtime PROPERTIES TIMEOUT 30)
 add_executable(lang_native_system_ir_test system_ir_test.cpp)
 target_link_libraries(lang_native_system_ir_test PRIVATE lang_sema lang_native)
 add_test(NAME native.system_ir COMMAND lang_native_system_ir_test)
+add_executable(lang_c_ffi_forged_test c_ffi/forged_test.cpp)
+target_link_libraries(lang_c_ffi_forged_test PRIVATE lang_sema lang_native_ir)
+add_test(NAME native.c_ffi_forged COMMAND lang_c_ffi_forged_test
+  ${LANG_SOURCE_ROOT}/tests/native/c_ffi/forged-project/lang.toml)
+set_tests_properties(native.c_ffi_forged PROPERTIES TIMEOUT 60)
+
 add_executable(lang_native_ir_test ir_test.cpp)
 target_link_libraries(lang_native_ir_test PRIVATE lang_sema lang_native)
 add_test(NAME native.ir COMMAND lang_native_ir_test ${LANG_SOURCE_ROOT}/tests/fixtures/core/lang.toml
@@ -232,6 +238,16 @@ foreach(part IN ITEMS sync thread)
 endforeach()
 
 if(LANG_TEST_PYTHON)
+  add_test(NAME native.c_ffi COMMAND ${LANG_TEST_PYTHON}
+    ${CMAKE_CURRENT_LIST_DIR}/c_ffi/run_c_ffi.py --cli $<TARGET_FILE:woozyc>
+    --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/c-ffi-results
+    --clang ${LLVM_TOOLS_BINARY_DIR}/clang
+    --ar ${LLVM_TOOLS_BINARY_DIR}/llvm-ar
+    --hosted-runtime $<TARGET_FILE:lang_hosted_runtime>
+    --native-runtime $<TARGET_FILE:lang_native_runtime>
+    --forged $<TARGET_FILE:lang_c_ffi_forged_test>)
+  set_tests_properties(native.c_ffi PROPERTIES TIMEOUT 600)
+
   add_test(NAME native.concurrency COMMAND ${LANG_TEST_PYTHON}
     ${CMAKE_CURRENT_LIST_DIR}/run_concurrency.py --cli $<TARGET_FILE:woozyc>
     --root ${LANG_SOURCE_ROOT} --out ${CMAKE_CURRENT_BINARY_DIR}/concurrency-results)

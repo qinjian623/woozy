@@ -175,12 +175,18 @@ int run(int argc, char **argv) {
     if (!emitted.success())
       return report(emitted);
     const auto &out = *emitted.value;
+    const auto &frozen_project = *checked.value->module().resolved->project;
     if (executable) {
       const fs::path directory(args.at("--out-dir"));
       Stage stage(directory);
       const auto object = stage.path / "program.o";
       const auto program = stage.path / "program";
-      for (const char *dependency : {LANG_NATIVE_CLANG, LANG_NATIVE_LLD, LANG_NATIVE_RUNTIME})
+      const auto adapter_c = stage.path / "c_adapter.c";
+      const auto adapter_o = stage.path / "c_adapter.o";
+      std::vector<const char *> dependencies{LANG_NATIVE_CLANG, LANG_NATIVE_LLD,
+                                             LANG_NATIVE_RUNTIME};
+      if (frozen_project.hosted) dependencies.push_back(LANG_HOSTED_RUNTIME);
+      for (const char *dependency : dependencies)
         if (!fs::is_regular_file(dependency))
           throw std::system_error(ENOENT, std::generic_category(), dependency);
       write(object.string(), out.object.data(), out.object.size());
@@ -192,17 +198,52 @@ int run(int argc, char **argv) {
                                      "native executable target only supports Linux x86_64: " + out.triple});
         return report(failed);
       }
-      auto link = run_process({LANG_NATIVE_CLANG, "--target=" + out.triple,
-                               "-nostdlib", "-static",
-                               "--ld-path=" LANG_NATIVE_LLD, object.string(),
-                               LANG_NATIVE_RUNTIME, "-o", program.string()});
-      if (link.exit_code != 0) {
+      bool has_adapter = !out.c_adapter_source.empty();
+      if (has_adapter) {
+        write(adapter_c.string(), out.c_adapter_source);
+        auto compile = run_process({LANG_NATIVE_CLANG, "--target=" + out.triple,
+                                    "-std=c11", "-O2", "-fPIC", "-c",
+                                    adapter_c.string(), "-o", adapter_o.string()});
+        if (compile.exit_code != 0) {
+          PhaseResult<int> failed;
+          const bool environment = compile.signalled || compile.exit_code == 127 ||
+                                   compile.exit_code == 126;
+          failed.failure = environment ? FailureKind::environment : FailureKind::source;
+          Diagnostic diagnostic{environment ? "E_TOOLCHAIN_MISSING" : "E_LINK_FAILED",
+                                "link", "error",
+                                "C adapter compilation failed with status " +
+                                    std::to_string(compile.exit_code)};
+          diagnostic.notes.push_back(compile.output);
+          failed.diagnostics.push_back(std::move(diagnostic));
+          return report(failed);
+        }
+      }
+      std::vector<std::string> link{LANG_NATIVE_CLANG, "--target=" + out.triple};
+      if (frozen_project.hosted) {
+        link.push_back("-Wl,-u,lang_hosted_startup_v1");
+        link.push_back("-pthread");
+      } else {
+        link.push_back("-nostdlib");
+        link.push_back("-static");
+        link.push_back("--ld-path=" LANG_NATIVE_LLD);
+      }
+      link.push_back(object.string());
+      if (has_adapter) link.push_back(adapter_o.string());
+      link.push_back(frozen_project.hosted ? LANG_HOSTED_RUNTIME : LANG_NATIVE_RUNTIME);
+      for (const auto &dir : frozen_project.c_library_dirs)
+        link.push_back("-L" + dir.string());
+      for (const auto &library : frozen_project.c_libraries)
+        link.push_back("-l" + library);
+      link.push_back("-o");
+      link.push_back(program.string());
+      auto linked = run_process(link);
+      if (linked.exit_code != 0) {
         PhaseResult<int> failed;
-        const bool environment = link.signalled || link.exit_code == 127 || link.exit_code == 126;
+        const bool environment = linked.signalled || linked.exit_code == 127 || linked.exit_code == 126;
         failed.failure = environment ? FailureKind::environment : FailureKind::source;
         Diagnostic diagnostic{environment ? "E_TOOLCHAIN_MISSING" : "E_LINK_FAILED",
-                              "link", "error", "native linker exited with status " + std::to_string(link.exit_code)};
-        diagnostic.notes.push_back(link.output);
+                              "link", "error", "native linker exited with status " + std::to_string(linked.exit_code)};
+        diagnostic.notes.push_back(linked.output);
         failed.diagnostics.push_back(std::move(diagnostic));
         return report(failed);
       }
@@ -260,6 +301,9 @@ int run(int argc, char **argv) {
     string("runtime_abi", std::string(backend::native::runtime_abi));
     string("triple", out.triple);
     string("data_layout", out.data_layout);
+    string("runtime", frozen_project.hosted ? "hosted" : "freestanding");
+    json_object_object_add(metadata, "c_adapter",
+                           json_object_new_boolean(!out.c_adapter_source.empty()));
     json_object_object_add(metadata, "entry_symbol",
                            json_object_new_uint64(entry.value));
     for (auto key :

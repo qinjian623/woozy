@@ -1,0 +1,35 @@
+package app;
+import "fixture/lib" as fixture;
+import "libc/libc" as libc;
+import "libc/crypto" as crypto;
+
+func main() i32 {
+    let name = fixture.cf_env_name();
+    let value = libc.getenv(name);
+    if fixture.cf_strlen_nonempty(value) != 1 { return 1; }
+
+    let errno_pointer = libc.__errno_location();
+    let closed = libc.close(-1);
+    if closed == 0 { return 2; }
+    unsafe {
+        if errno_pointer[0] != 9 { return 3; }
+    }
+
+    {
+        let memory = libc.malloc(64);
+        if libc.malloc_usable_size(memory) < 64 { return 4; }
+    }
+
+    let input = fixture.cf_sha_input();
+    let length = fixture.cf_sha_input_len();
+    let output = fixture.cf_sha_output();
+    let produced = crypto.SHA256(input, usize(length), output);
+    unsafe {
+        if produced[0] != 0xba { return 5; }
+        if produced[1] != 0x78 { return 6; }
+        if produced[2] != 0x16 { return 7; }
+        if produced[3] != 0xbf { return 8; }
+        if produced[31] != 0xad { return 9; }
+    }
+    return 0;
+}

@@ -1,0 +1,20 @@
+package app;
+import "fixture/lib" as fixture;
+import "std/thread" as thread;
+import "std/os" as os;
+
+func worker(value i64) i64 {
+    if fixture.cf_thread_tls(i32(value)) != 0 { return 1; }
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    var failures i64 = 0;
+    for var i i32 = 0; i < 8; i += 1 {
+        let handle = thread.spawn[i64](worker, i64(i) + 1);
+        failures += thread.join(handle);
+    }
+    if failures != 0 { return 1; }
+    if fixture.cf_thread_tls_stress() != 0 { return 2; }
+    return 0;
+}

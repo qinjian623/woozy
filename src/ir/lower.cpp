@@ -149,6 +149,7 @@ class Lower {
     finish(site);
   }
   const hir::HirNode &node(HirNodeId id) const { return h.nodes.at(id.value); }
+  const hir::Type &ty(HirNodeId id) const { return *h.types.find(node(id).type); }
   bool live() const {
     return f.blocks[current.value].terminator.kind == Exit::missing;
   }
@@ -394,11 +395,24 @@ class Lower {
       for (auto child : n.children) i.inputs.push_back(expr(child));
       for (auto child : n.children) take(child);
       return emit(i);
-    case hir::NodeKind::index_read:
+    case hir::NodeKind::index_read: {
       i.origin = id;
-      i.op = Op::vec_read;
+      const auto receiver = ty(n.children[0]).kind;
+      i.op = receiver == hir::TypeKind::CForeignPointer ? Op::c_ptr_read
+              : receiver == hir::TypeKind::CForeignBuffer ? Op::c_buffer_read
+                                                          : Op::vec_read;
       i.inputs = {expr(n.children[0]), expr(n.children[1])};
       return emit(i);
+    }
+    case hir::NodeKind::c_field_read: {
+      i.origin = id;
+      i.op = Op::c_field_read;
+      const auto &f = std::get<hir::CFieldRead>(n.data);
+      i.c_type = f.c_type;
+      i.c_field = f.field;
+      i.inputs = {expr(n.children[0])};
+      return emit(i);
+    }
     case hir::NodeKind::vec_slice:
       i.origin = id;
       i.op = Op::vec_slice;
@@ -478,13 +492,18 @@ class Lower {
     case hir::NodeKind::call: {
       const auto &c = std::get<hir::Call>(n.data);
       const bool system = c.kind == hir::CalleeKind::system;
-      i.op = system ? Op::system_call : Op::call;
+      const bool c_foreign = c.kind == hir::CalleeKind::c_foreign;
+      i.op = system ? Op::system_call : c_foreign ? Op::foreign_call : Op::call;
       i.system = c.system;
+      i.c_callable = c.c_callable;
       i.origin = id;
       i.signature = c.signature;
       ValueId callee;
       if (system) {
         // Fixed typed operation; there is no source-level function pointer.
+      } else if (c_foreign) {
+        // C calls have no source-level callee value. The adapter identity is
+        // an immutable binding index checked by both verifiers.
       } else if (c.callee)
         callee = expr(*c.callee);
       else {
@@ -495,9 +514,9 @@ class Lower {
         fn.source = i.source;
         callee = emit(fn);
       }
-      const size_t argument_offset = system ? 0 : 1;
+      const size_t argument_offset = system || c_foreign ? 0 : 1;
       i.inputs.resize(c.args.size() + argument_offset);
-      if (!system) i.inputs[0] = callee;
+      if (!system && !c_foreign) i.inputs[0] = callee;
       // Evaluation follows source order. Only the saved values are reordered.
       for (const auto &arg : c.args) {
         auto value = expr(arg.expression);
@@ -681,6 +700,35 @@ class Lower {
       }
       if (place.kind() == hir::NodeKind::index_place) {
         auto receiver = expr(place.children[0]); auto index = expr(place.children[1]);
+        const auto receiver_kind = ty(place.children[0]).kind;
+        if (receiver_kind == hir::TypeKind::CForeignPointer ||
+            receiver_kind == hir::TypeKind::CForeignBuffer) {
+          const bool buffer = receiver_kind == hir::TypeKind::CForeignBuffer;
+          auto compound = std::get<hir::Assign>(n.data).compound;
+          std::optional<ValueId> lhs;
+          if (compound) {
+            Instruction read; read.op = buffer ? Op::c_buffer_read
+                                               : Op::c_ptr_read;
+            read.type = place.type; read.inputs = {receiver, index};
+            read.origin = n.children[0];
+            read.source = s; lhs = emit(read);
+          }
+          auto rhs = expr(n.children[1]);
+          if (compound) {
+            Instruction op; op.op = Op::binary; op.type = place.type;
+            op.inputs = {*lhs, rhs}; op.binary = *compound; op.source = s;
+            rhs = emit(op);
+          }
+          take(n.children[1]);
+          Instruction write;
+          write.op = buffer ? Op::c_buffer_write : Op::c_ptr_write;
+          write.type = unit;
+          write.origin = n.children[0];
+          write.inputs = {receiver, index, rhs};
+          write.source = s;
+          f.blocks[current.value].instructions.push_back(std::move(write));
+          full(id); break;
+        }
         effect(Op::vec_check, LocalSlotId{0}, s, {receiver, index});
         auto compound = std::get<hir::Assign>(n.data).compound;
         std::optional<ValueId> lhs;
