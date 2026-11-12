@@ -1,0 +1,454 @@
+#include "gc_runtime.hpp"
+
+#include "alloc.hpp"
+#include "gc_world.hpp"
+#include "linux.hpp"
+
+#if !defined(__x86_64__) || !defined(__linux__)
+#error "lang-gc-runtime/1 is implemented only for Linux x86_64"
+#endif
+
+// Automatic controller for lang-gc/1 + lang-gc-world/1.
+//
+// This translation unit uses only atomics, lang_alloc_v1/lang_free_v1, direct
+// Linux syscalls, and the two accepted runtime layers. There is no libc,
+// libstdc++, pthread, thread_local, or dynamic initialization.
+
+namespace {
+
+using lang::native::linux_x86_64::syscall6;
+
+constexpr long kSysWrite = 1;
+constexpr long kSysGettid = 186;
+constexpr long kSysExitGroup = 231;
+constexpr int kEintr = -4;
+
+constexpr int64_t kAutoStopNs = 10 * 1000 * 1000; // 10 ms
+constexpr uint64_t kInitialPressure = 128;
+constexpr uint64_t kMaxU64 = ~uint64_t{0};
+
+struct DeferredRelease {
+  DeferredRelease *next;
+  void *payload;
+  void (*release)(void *) noexcept;
+};
+
+// Controller phase is advisory/statistical except for the fork callback guard.
+uint32_t g_phase = LANG_GC_RUNTIME_PHASE_IDLE;
+uint32_t g_busy = 0;
+uint32_t g_enqueue_open = 0;
+int32_t g_collector_tid = 0;
+uint64_t g_generation = 0;
+
+uint64_t g_pressure_accum = 0;
+uint64_t g_pressure_limit = kInitialPressure;
+
+uint64_t g_queue_lock_next = 0;
+uint64_t g_queue_lock_serving = 0;
+DeferredRelease *g_queue_head = nullptr;
+DeferredRelease *g_queue_tail = nullptr;
+uint64_t g_queue_depth = 0;
+uint32_t g_fork_prepared = 0;
+
+uint64_t g_last_live_after = 0;
+uint64_t g_queue_enqueued = 0;
+uint64_t g_queue_drained = 0;
+uint64_t g_collect_ok = 0;
+uint64_t g_collect_busy = 0;
+uint64_t g_collect_timeout = 0;
+uint64_t g_collect_invalid = 0;
+uint64_t g_kernel_busy = 0;
+uint64_t g_total_registered_scanned = 0;
+uint64_t g_total_traced_edges = 0;
+
+inline void cpu_pause() noexcept {
+  __asm__ volatile("pause" ::: "memory");
+}
+
+void write_all(int fd, const char *bytes, uint64_t size) noexcept {
+  while (size) {
+    const int64_t result =
+        syscall6(kSysWrite, fd, reinterpret_cast<long>(bytes),
+                 static_cast<long>(size), 0, 0, 0);
+    if (result == kEintr)
+      continue;
+    if (result <= 0)
+      return;
+    bytes += result;
+    size -= static_cast<uint64_t>(result);
+  }
+}
+
+[[noreturn]] __attribute__((no_stack_protector)) void
+controller_panic_with_tid(const char *reason, int64_t tid) noexcept {
+  char record[192];
+  uint64_t length = 0;
+  const auto append = [&](const char *text) {
+    while (*text && length < sizeof(record) - 1)
+      record[length++] = *text++;
+  };
+  const auto append_unsigned = [&](uint64_t value) {
+    char digits[24];
+    uint64_t count = 0;
+    if (value == 0) {
+      digits[count++] = '0';
+    } else {
+      while (value) {
+        digits[count++] = static_cast<char>('0' + value % 10);
+        value /= 10;
+      }
+    }
+    while (count && length < sizeof(record) - 1)
+      record[length++] = digits[--count];
+  };
+
+  append("LANG_NATIVE_PANIC:v1:gc-runtime:");
+  append(reason);
+  append(":");
+  append_unsigned(tid > 0 ? static_cast<uint64_t>(tid) : 0u);
+  append(":0:0\n");
+  write_all(2, record, length);
+  syscall6(kSysExitGroup, 101, 0, 0, 0, 0, 0);
+  __builtin_unreachable();
+}
+
+[[noreturn]] __attribute__((no_stack_protector)) void
+controller_panic(const char *reason) noexcept {
+  const int64_t tid = syscall6(kSysGettid, 0, 0, 0, 0, 0, 0);
+  controller_panic_with_tid(reason, tid > 0 ? tid : 0);
+}
+
+int32_t current_tid() noexcept {
+  const int64_t tid = syscall6(kSysGettid, 0, 0, 0, 0, 0, 0);
+  if (tid <= 0)
+    controller_panic_with_tid("gettid-failed", 0);
+  return static_cast<int32_t>(tid);
+}
+
+void queue_lock() noexcept {
+  const uint64_t ticket =
+      __atomic_fetch_add(&g_queue_lock_next, 1u, __ATOMIC_RELAXED);
+  while (__atomic_load_n(&g_queue_lock_serving, __ATOMIC_ACQUIRE) != ticket)
+    cpu_pause();
+}
+
+void queue_unlock() noexcept {
+  __atomic_fetch_add(&g_queue_lock_serving, 1u, __ATOMIC_RELEASE);
+}
+
+bool pressure_pending() noexcept {
+  const uint64_t limit =
+      __atomic_load_n(&g_pressure_limit, __ATOMIC_ACQUIRE);
+  const uint64_t accum =
+      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+  return accum >= limit;
+}
+
+void saturating_increment(uint64_t *value) noexcept {
+  uint64_t current = __atomic_load_n(value, __ATOMIC_RELAXED);
+  for (;;) {
+    if (current == kMaxU64)
+      return;
+    if (__atomic_compare_exchange_n(value, &current, current + 1, false,
+                                    __ATOMIC_RELAXED, __ATOMIC_RELAXED))
+      return;
+  }
+}
+
+void begin_enqueue(int32_t tid) noexcept {
+  queue_lock();
+  __atomic_store_n(&g_collector_tid, tid, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_enqueue_open, 1u, __ATOMIC_RELEASE);
+  __atomic_store_n(&g_phase, LANG_GC_RUNTIME_PHASE_KERNEL, __ATOMIC_RELEASE);
+  queue_unlock();
+}
+
+DeferredRelease *detach_batch() noexcept {
+  queue_lock();
+  __atomic_store_n(&g_enqueue_open, 0u, __ATOMIC_RELEASE);
+  DeferredRelease *batch = g_queue_head;
+  g_queue_head = nullptr;
+  g_queue_tail = nullptr;
+  __atomic_store_n(&g_queue_depth, 0u, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_collector_tid, 0, __ATOMIC_RELAXED);
+  queue_unlock();
+  return batch;
+}
+
+void drain_batch(DeferredRelease *batch) noexcept {
+  while (batch) {
+    DeferredRelease *item = batch;
+    batch = item->next;
+    const uint64_t before =
+        __atomic_load_n(&g_generation, __ATOMIC_ACQUIRE);
+    item->release(item->payload);
+    const bool forked =
+        __atomic_load_n(&g_generation, __ATOMIC_ACQUIRE) != before;
+    __atomic_add_fetch(&g_queue_drained, 1u, __ATOMIC_RELAXED);
+    lang_free_v1(item);
+    if (forked) {
+      // The child inherited this local drain list. It must not execute any
+      // further external releases or fake drops for abandoned items.
+      return;
+    }
+  }
+}
+
+void update_pressure(uint64_t snapshot, uint64_t live_after) noexcept {
+  uint64_t limit;
+  if (live_after > kMaxU64 / 2) {
+    limit = kMaxU64;
+  } else {
+    limit = live_after * 2;
+    if (limit < kInitialPressure)
+      limit = kInitialPressure;
+  }
+
+  // Subtract only the registrations captured before this collection. Anything
+  // registered after the snapshot remains pending and is not lost.
+  uint64_t current =
+      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+  for (;;) {
+    const uint64_t next = current > snapshot ? current - snapshot : 0;
+    if (__atomic_compare_exchange_n(&g_pressure_accum, &current, next, false,
+                                    __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE))
+      break;
+  }
+  __atomic_store_n(&g_pressure_limit, limit, __ATOMIC_RELEASE);
+  __atomic_store_n(&g_last_live_after, live_after, __ATOMIC_RELAXED);
+}
+
+int64_t map_world_failure(int64_t status) noexcept {
+  if (status == -16)
+    __atomic_add_fetch(&g_collect_busy, 1u, __ATOMIC_RELAXED);
+  else if (status == -110)
+    __atomic_add_fetch(&g_collect_timeout, 1u, __ATOMIC_RELAXED);
+  else if (status == -22)
+    __atomic_add_fetch(&g_collect_invalid, 1u, __ATOMIC_RELAXED);
+  else
+    controller_panic("world-stop-status");
+  return status;
+}
+
+} // namespace
+
+extern "C" LangGcStatus lang_gc_runtime_register_v1(
+    void *object, const LangGcOps *ops) noexcept {
+  const LangGcStatus status = lang_gc_register_v1(object, ops);
+  if (status == LANG_GC_OK)
+    saturating_increment(&g_pressure_accum);
+  return status;
+}
+
+extern "C" LangGcStatus lang_gc_runtime_unregister_v1(void *object) noexcept {
+  return lang_gc_unregister_v1(object);
+}
+
+extern "C" void lang_gc_runtime_poll_v1(void) noexcept {
+  // Fast path, in order: one atomic world-request load, then pressure loads.
+  // No gettid, lock, allocation, futex, or kernel call occurs when neither is
+  // pending.
+  if (lang_gc_world_poll_required_v1())
+    lang_gc_world_poll_v1();
+  if (!pressure_pending())
+    return;
+  if (!lang_gc_world_can_collect_v1())
+    return;
+  (void)lang_gc_runtime_collect_v1(kAutoStopNs, nullptr);
+}
+
+extern "C" int64_t lang_gc_runtime_collect_v1(
+    int64_t timeout_ns, LangGcStats *out) noexcept {
+  if (out)
+    *out = LangGcStats{};
+  if (timeout_ns < -1) {
+    __atomic_add_fetch(&g_collect_invalid, 1u, __ATOMIC_RELAXED);
+    return -22;
+  }
+
+  uint32_t expected = 0;
+  if (!__atomic_compare_exchange_n(&g_busy, &expected, 1u, false,
+                                   __ATOMIC_ACQ_REL, __ATOMIC_ACQUIRE)) {
+    __atomic_add_fetch(&g_collect_busy, 1u, __ATOMIC_RELAXED);
+    return -16;
+  }
+
+  const int32_t tid = current_tid();
+  const uint64_t pressure_snapshot =
+      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+
+  __atomic_store_n(&g_phase, LANG_GC_RUNTIME_PHASE_STOPPING,
+                   __ATOMIC_RELEASE);
+  const int64_t stop_status = lang_gc_world_stop_v1(timeout_ns);
+  if (stop_status != 0) {
+    __atomic_store_n(&g_busy, 0u, __ATOMIC_RELEASE);
+    __atomic_store_n(&g_collector_tid, 0, __ATOMIC_RELAXED);
+    __atomic_store_n(&g_phase, LANG_GC_RUNTIME_PHASE_IDLE,
+                     __ATOMIC_RELEASE);
+    return map_world_failure(stop_status);
+  }
+
+  // The kernel collection runs with the world stopped. The queue is opened
+  // only for this collector and only for the kernel clear/release phase.
+  begin_enqueue(tid);
+  LangGcStats local{};
+  const LangGcStatus kernel_status = lang_gc_collect_stopped_v1(&local);
+  if (kernel_status != LANG_GC_OK && kernel_status != LANG_GC_BUSY)
+    controller_panic("kernel-status");
+
+  // Detach before resume. From this point new defer calls return false and
+  // release their own payload; the old batch remains owned by this stack.
+  DeferredRelease *batch = detach_batch();
+
+  const bool kernel_ok = kernel_status == LANG_GC_OK;
+  if (kernel_ok) {
+    update_pressure(pressure_snapshot, local.registry_live_after);
+    __atomic_add_fetch(&g_collect_ok, 1u, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&g_total_registered_scanned, local.registered,
+                       __ATOMIC_RELAXED);
+    __atomic_add_fetch(&g_total_traced_edges, local.traced_edges,
+                       __ATOMIC_RELAXED);
+    __atomic_store_n(&g_last_live_after, local.registry_live_after,
+                     __ATOMIC_RELAXED);
+  } else {
+    __atomic_add_fetch(&g_kernel_busy, 1u, __ATOMIC_RELAXED);
+  }
+
+  // The world stop must be released before any external release callback. The
+  // controller busy state is cleared before draining as well, so callbacks may
+  // re-enter register/collect and create a fresh queue.
+  lang_gc_world_resume_v1();
+  __atomic_store_n(&g_busy, 0u, __ATOMIC_RELEASE);
+  __atomic_store_n(&g_phase,
+                   kernel_ok ? LANG_GC_RUNTIME_PHASE_DRAINING
+                             : LANG_GC_RUNTIME_PHASE_IDLE,
+                   __ATOMIC_RELEASE);
+
+  if (out && kernel_ok)
+    *out = local;
+
+  // The queue should be empty on a kernel BUSY result (no clear callbacks ran
+  // for this attempt). Draining an unexpected batch after resume at least
+  // releases transferred references without running anything under a stop.
+  drain_batch(batch);
+  __atomic_store_n(&g_phase, LANG_GC_RUNTIME_PHASE_IDLE, __ATOMIC_RELEASE);
+  return kernel_ok ? 0 : -16;
+}
+
+extern "C" bool lang_gc_runtime_defer_release_v1(
+    void *payload, void (*release)(void *) noexcept) noexcept {
+  if (!payload || !release)
+    return false;
+  if (!__atomic_load_n(&g_enqueue_open, __ATOMIC_ACQUIRE))
+    return false;
+
+  const int32_t tid = current_tid();
+  if (tid != __atomic_load_n(&g_collector_tid, __ATOMIC_ACQUIRE))
+    return false;
+
+  auto *item = static_cast<DeferredRelease *>(
+      lang_alloc_v1(sizeof(DeferredRelease), alignof(DeferredRelease)));
+  if (!item) {
+    // This is the eligible collector path: returning false would force an
+    // external release while the world is still stopped. The queue cannot
+    // honor its transfer contract, so terminate instead of faking a drop.
+    controller_panic("defer-allocation-failed");
+  }
+  item->next = nullptr;
+  item->payload = payload;
+  item->release = release;
+
+  queue_lock();
+  const bool accepted =
+      __atomic_load_n(&g_enqueue_open, __ATOMIC_RELAXED) != 0 &&
+      tid == __atomic_load_n(&g_collector_tid, __ATOMIC_RELAXED);
+  if (accepted) {
+    if (g_queue_tail)
+      g_queue_tail->next = item;
+    else
+      g_queue_head = item;
+    g_queue_tail = item;
+    __atomic_add_fetch(&g_queue_depth, 1u, __ATOMIC_RELAXED);
+    __atomic_add_fetch(&g_queue_enqueued, 1u, __ATOMIC_RELAXED);
+  }
+  queue_unlock();
+
+  if (!accepted)
+    lang_free_v1(item);
+  return accepted;
+}
+
+extern "C" void lang_gc_runtime_stats_v1(LangGcRuntimeStats *out) noexcept {
+  if (!out)
+    return;
+  *out = LangGcRuntimeStats{};
+  out->pressure_accum =
+      __atomic_load_n(&g_pressure_accum, __ATOMIC_ACQUIRE);
+  out->pressure_limit =
+      __atomic_load_n(&g_pressure_limit, __ATOMIC_ACQUIRE);
+  out->last_live_after =
+      __atomic_load_n(&g_last_live_after, __ATOMIC_RELAXED);
+  out->queue_depth = __atomic_load_n(&g_queue_depth, __ATOMIC_RELAXED);
+  out->queue_enqueued = __atomic_load_n(&g_queue_enqueued, __ATOMIC_RELAXED);
+  out->queue_drained = __atomic_load_n(&g_queue_drained, __ATOMIC_RELAXED);
+  out->collect_ok = __atomic_load_n(&g_collect_ok, __ATOMIC_RELAXED);
+  out->collect_busy = __atomic_load_n(&g_collect_busy, __ATOMIC_RELAXED);
+  out->collect_timeout = __atomic_load_n(&g_collect_timeout, __ATOMIC_RELAXED);
+  out->collect_invalid = __atomic_load_n(&g_collect_invalid, __ATOMIC_RELAXED);
+  out->kernel_busy = __atomic_load_n(&g_kernel_busy, __ATOMIC_RELAXED);
+  out->total_registered_scanned =
+      __atomic_load_n(&g_total_registered_scanned, __ATOMIC_RELAXED);
+  out->total_traced_edges =
+      __atomic_load_n(&g_total_traced_edges, __ATOMIC_RELAXED);
+  out->generation = __atomic_load_n(&g_generation, __ATOMIC_RELAXED);
+  out->phase = __atomic_load_n(&g_phase, __ATOMIC_ACQUIRE);
+  out->busy = __atomic_load_n(&g_busy, __ATOMIC_ACQUIRE);
+  out->collector_tid =
+      __atomic_load_n(&g_collector_tid, __ATOMIC_ACQUIRE);
+  out->enqueue_open =
+      __atomic_load_n(&g_enqueue_open, __ATOMIC_ACQUIRE);
+}
+
+extern "C" void lang_gc_runtime_fork_prepare_v1(void) noexcept {
+  const int32_t tid = current_tid();
+  queue_lock();
+  if (__atomic_load_n(&g_phase, __ATOMIC_ACQUIRE) ==
+          LANG_GC_RUNTIME_PHASE_KERNEL &&
+      __atomic_load_n(&g_collector_tid, __ATOMIC_ACQUIRE) == tid) {
+    queue_unlock();
+    controller_panic("fork-in-gc-callback");
+  }
+  if (__atomic_load_n(&g_fork_prepared, __ATOMIC_RELAXED) != 0) {
+    queue_unlock();
+    controller_panic("fork-hook-misuse");
+  }
+  __atomic_store_n(&g_fork_prepared, 1u, __ATOMIC_RELAXED);
+  // The queue lock stays held across the caller's fork.
+}
+
+extern "C" void lang_gc_runtime_fork_parent_v1(void) noexcept {
+  if (__atomic_load_n(&g_fork_prepared, __ATOMIC_RELAXED) == 0)
+    controller_panic("fork-hook-misuse");
+  __atomic_store_n(&g_fork_prepared, 0u, __ATOMIC_RELAXED);
+  queue_unlock();
+}
+
+extern "C" void lang_gc_runtime_fork_child_v1(void) noexcept {
+  if (__atomic_load_n(&g_fork_prepared, __ATOMIC_RELAXED) == 0)
+    controller_panic("fork-hook-misuse");
+
+  // The queue lock is inherited held. Do not touch any inherited queue node or
+  // invoke its release callback: abandoned references are not fake drops.
+  __atomic_add_fetch(&g_generation, 1u, __ATOMIC_RELEASE);
+  g_queue_head = nullptr;
+  g_queue_tail = nullptr;
+  __atomic_store_n(&g_queue_depth, 0u, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_enqueue_open, 0u, __ATOMIC_RELEASE);
+  __atomic_store_n(&g_collector_tid, 0, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_busy, 0u, __ATOMIC_RELEASE);
+  __atomic_store_n(&g_phase, LANG_GC_RUNTIME_PHASE_IDLE, __ATOMIC_RELEASE);
+  __atomic_store_n(&g_fork_prepared, 0u, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_queue_lock_next, 0u, __ATOMIC_RELAXED);
+  __atomic_store_n(&g_queue_lock_serving, 0u, __ATOMIC_RELAXED);
+  __atomic_thread_fence(__ATOMIC_SEQ_CST);
+}
