@@ -3,7 +3,7 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "10d3f79beb8453c3c94c40bd455fd6be8c091448",
+  "git_head": "ee033c3e337cf294da4af5cccd9eb035cf0f03dc",
   "previous_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
   "frozen_at": "2026-11-14",
   "repository_roots": [
@@ -31,8 +31,8 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1318,
-    "manifests": 1008,
+    "tracked_wz": 1324,
+    "manifests": 1009,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
     "auxiliary_dsl_inputs": 21
@@ -1230,8 +1230,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/backend.wz",
-      "sha256": "56f60e13b61f0d105f3af9e28a06c6db67294458b6ed09dc48adb92d648b0fdf",
-      "size": 22088,
+      "sha256": "5e05ff73fb65feda8d7947a1314b0e854f3ea077adb3f21017784b423d2687ab",
+      "size": 22727,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -3498,6 +3498,82 @@
         "project:selfhost/tests/project/lang.toml"
       ],
       "manifest": "selfhost/tests/project/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/python_capability/fixtures/native_only/main.wz",
+      "sha256": "d18ac3b9b8133229cb95cdcb4720e6271769d6fdff39a816090afa8b518553f9",
+      "size": 116,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/python_capability/lang.toml"
+      ],
+      "manifest": "selfhost/tests/python_capability/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/python_capability/fixtures/native_only/os.wz",
+      "sha256": "4c4cd525828c621f1c9d446bd7ef3b70ef9e016281eb68ff11fdb0281a9ebaf3",
+      "size": 100,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/python_capability/lang.toml"
+      ],
+      "manifest": "selfhost/tests/python_capability/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/python_capability/fixtures/ordinary/main.wz",
+      "sha256": "db6b1345acfde8be2e2f47199a86fc4d125724adc58fd168412927afe26f620e",
+      "size": 137,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/python_capability/lang.toml"
+      ],
+      "manifest": "selfhost/tests/python_capability/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/python_capability/fixtures/value/main.wz",
+      "sha256": "041fc33cd066a8c780ed342f825ce8a49a0412e3270f42923ec38300fc903591",
+      "size": 119,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/python_capability/lang.toml"
+      ],
+      "manifest": "selfhost/tests/python_capability/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/python_capability/fixtures/value/text.wz",
+      "sha256": "7423e187242abbca59ccf7ad2dfbc9bfb8b62a15a9779c931e5efdf6917b1f10",
+      "size": 93,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/python_capability/lang.toml"
+      ],
+      "manifest": "selfhost/tests/python_capability/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/python_capability/lang.toml",
+      "sha256": "72b93e325bc99769817257321f5f1d1cc7c9cb5f98210f1396204353e53eeab3",
+      "size": 139,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/python_capability/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/python_capability/run.py",
+      "sha256": "763e9d7ff98b04eb16d9c35a848cf4c4ef862b6751f0d1d4096a08117c07e833",
+      "size": 15655,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/python_capability/src/main.wz",
+      "sha256": "739451239af6a1bd489ab2d6fa857142f493dcb7d6020cc7f178bcf5d0d69001",
+      "size": 12768,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/python_capability/lang.toml"
+      ],
+      "manifest": "selfhost/tests/python_capability/lang.toml"
     },
     {
       "path": "selfhost/tests/pythonemit/differential_main.wz",
@@ -79465,6 +79541,25 @@
       "tags": [
         "component"
       ]
+    },
+    {
+      "id": "project:selfhost/tests/python_capability/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/python_capability/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/python_capability/run.py",
+      "runner_status": "component",
+      "reason": "Wz frontend/HIR backend capability component with same-source C++ oracle; O0/O2 exact rejection and acceptance checks passed separately; complete CLI and corpus parity remain pending",
+      "tags": [
+        "selfhost"
+      ]
     }
   ],
   "runners": [
@@ -79652,6 +79747,11 @@
       "path": "selfhost/tests/project/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "selfhost/tests/python_capability/run.py",
+      "status": "component",
+      "reason": "Builds an isolated Wz parse/resolve/sema/HIR verifier driver and same-source C++ oracle; not a complete candidate CLI or corpus result"
     },
     {
       "path": "selfhost/tests/pythonemit/run.py",
@@ -80646,7 +80746,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "10d3f79beb8453c3c94c40bd455fd6be8c091448",
+    "to_git_head": "ee033c3e337cf294da4af5cccd9eb035cf0f03dc",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -80815,7 +80915,15 @@
       "selfhost/tests/stat_bytes_e/src/main.wz",
       "selfhost/tests/float_observer/driver/main.wz",
       "selfhost/tests/float_observer/run.py",
-      "selfhost/tests/float_observer/test_controls.py"
+      "selfhost/tests/float_observer/test_controls.py",
+      "selfhost/tests/python_capability/fixtures/native_only/main.wz",
+      "selfhost/tests/python_capability/fixtures/native_only/os.wz",
+      "selfhost/tests/python_capability/fixtures/ordinary/main.wz",
+      "selfhost/tests/python_capability/fixtures/value/main.wz",
+      "selfhost/tests/python_capability/fixtures/value/text.wz",
+      "selfhost/tests/python_capability/lang.toml",
+      "selfhost/tests/python_capability/run.py",
+      "selfhost/tests/python_capability/src/main.wz"
     ],
     "modified_freeze_paths": [
       {
@@ -80885,10 +80993,19 @@
         "new_size": 31430,
         "commit": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
         "accepted_task": "fa0f40d5-ef37-4604-8a3d-7677efbf475f"
+      },
+      {
+        "path": "selfhost/src/wzcc/hirverify/backend.wz",
+        "old_sha256": "56f60e13b61f0d105f3af9e28a06c6db67294458b6ed09dc48adb92d648b0fdf",
+        "new_sha256": "5e05ff73fb65feda8d7947a1314b0e854f3ea077adb3f21017784b423d2687ab",
+        "old_size": 22088,
+        "new_size": 22727,
+        "commit": "ee033c3e337cf294da4af5cccd9eb035cf0f03dc",
+        "accepted_task": "075656d3-cd5d-456d-a1e4-b15c38e86173"
       }
     ],
-    "new_freeze_path_count": 168,
-    "modified_freeze_path_count": 12,
+    "new_freeze_path_count": 176,
+    "modified_freeze_path_count": 13,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 3
   }
