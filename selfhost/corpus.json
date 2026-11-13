@@ -3,7 +3,7 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "fdff24556a46463c4b8171bd30d26277a607c5cf",
+  "git_head": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
   "previous_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
   "frozen_at": "2026-11-14",
   "repository_roots": [
@@ -31,7 +31,7 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1324,
+    "tracked_wz": 1325,
     "manifests": 1009,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
@@ -1250,8 +1250,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
-      "sha256": "c12289e983fa0d6edd50aa8c70a34652115b1eb5f71dfaf30c11a09b8791f61e",
-      "size": 37552,
+      "sha256": "f7e56b1ed2b3e2d8417b36dbae31f101c64547318d3196f06b36cb4dddf5535c",
+      "size": 39611,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1260,8 +1260,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/flow.wz",
-      "sha256": "8b108538a7dc2b3eb3c077f0d5b4e9f0c9bcda23be630f326a5a1bae55f1b962",
-      "size": 56328,
+      "sha256": "70f873b253599659e4198dae9d8b6a0ba3598d2412e2ea47c77e1270245b612c",
+      "size": 58415,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1290,8 +1290,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/run.wz",
-      "sha256": "2702517aef9c4bc787d039d35d1181da829e41c06ad9b5af191597135805e46e",
-      "size": 16778,
+      "sha256": "9c63637a400fc494c8613c272487bff3b5350b6377858458c53cf0eb00be0461",
+      "size": 17031,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1360,8 +1360,8 @@
     },
     {
       "path": "selfhost/src/wzcc/hirverify/verify.wz",
-      "sha256": "1f429cfc37c3ed816618d577a4f200b5f3c2dd2dffcb630384f5a45034d3d72e",
-      "size": 17955,
+      "sha256": "16b489cfc7d9ed8383ff54e89f6d01ed3c03517d8075addc83fa7d4bbfd793e9",
+      "size": 18189,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -2566,6 +2566,30 @@
       "path": "selfhost/tests/hirdump/run.py",
       "sha256": "b78930fad5da9ce6b6671a89742522e5941f607c01d0377cf04af9571b058e1b",
       "size": 12171,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/driver.wz",
+      "sha256": "95aa97906ef337085904984aa062a7657f148c8be60d2b37974f54e55c36c354",
+      "size": 6191,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/run.py",
+      "sha256": "22c12071ced503d7087c1c97b952c2e0eb46f6b5cda7bcd3cc93a65e46031c72",
+      "size": 20022,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/test_controls.py",
+      "sha256": "a393f3531fde7c4cb25d70dadeb2a6568ecf0977e8d51ee7da11a805cbc395ae",
+      "size": 11315,
       "role": "runner_source",
       "assignment": []
     },
@@ -79643,6 +79667,16 @@
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
     },
     {
+      "path": "selfhost/tests/hirverify/cache/run.py",
+      "status": "component",
+      "reason": "Per-run HIR verifier cache correctness, repeated old/new comparisons or strict report controls; component evidence, not complete compiler or corpus parity"
+    },
+    {
+      "path": "selfhost/tests/hirverify/cache/test_controls.py",
+      "status": "component",
+      "reason": "Per-run HIR verifier cache correctness, repeated old/new comparisons or strict report controls; component evidence, not complete compiler or corpus parity"
+    },
+    {
       "path": "selfhost/tests/hirverify/run.py",
       "status": "component",
       "reason": "HIR verifier/exit-identity component test; not evidence a candidate passed public CLI or the full corpus"
@@ -80770,7 +80804,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "fdff24556a46463c4b8171bd30d26277a607c5cf",
+    "to_git_head": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -80949,7 +80983,10 @@
       "selfhost/tests/python_capability/run.py",
       "selfhost/tests/python_capability/src/main.wz",
       "selfhost/tests/float_observer/supplemental.py",
-      "selfhost/tests/float_observer/supplemental_signature_controls.py"
+      "selfhost/tests/float_observer/supplemental_signature_controls.py",
+      "selfhost/tests/hirverify/cache/driver.wz",
+      "selfhost/tests/hirverify/cache/run.py",
+      "selfhost/tests/hirverify/cache/test_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -81028,11 +81065,54 @@
         "new_size": 22727,
         "commit": "ee033c3e337cf294da4af5cccd9eb035cf0f03dc",
         "accepted_task": "075656d3-cd5d-456d-a1e4-b15c38e86173"
+      },
+      {
+        "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
+        "old_sha256": "c12289e983fa0d6edd50aa8c70a34652115b1eb5f71dfaf30c11a09b8791f61e",
+        "old_size": 37552,
+        "new_sha256": "f7e56b1ed2b3e2d8417b36dbae31f101c64547318d3196f06b36cb4dddf5535c",
+        "new_size": 39611,
+        "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+        "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+      },
+      {
+        "path": "selfhost/src/wzcc/hirverify/flow.wz",
+        "old_sha256": "8b108538a7dc2b3eb3c077f0d5b4e9f0c9bcda23be630f326a5a1bae55f1b962",
+        "old_size": 56328,
+        "new_sha256": "70f873b253599659e4198dae9d8b6a0ba3598d2412e2ea47c77e1270245b612c",
+        "new_size": 58415,
+        "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+        "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+      },
+      {
+        "path": "selfhost/src/wzcc/hirverify/run.wz",
+        "old_sha256": "2702517aef9c4bc787d039d35d1181da829e41c06ad9b5af191597135805e46e",
+        "old_size": 16778,
+        "new_sha256": "9c63637a400fc494c8613c272487bff3b5350b6377858458c53cf0eb00be0461",
+        "new_size": 17031,
+        "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+        "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+      },
+      {
+        "path": "selfhost/src/wzcc/hirverify/verify.wz",
+        "old_sha256": "1f429cfc37c3ed816618d577a4f200b5f3c2dd2dffcb630384f5a45034d3d72e",
+        "old_size": 17955,
+        "new_sha256": "16b489cfc7d9ed8383ff54e89f6d01ed3c03517d8075addc83fa7d4bbfd793e9",
+        "new_size": 18189,
+        "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+        "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
       }
     ],
-    "new_freeze_path_count": 178,
-    "modified_freeze_path_count": 13,
+    "new_freeze_path_count": 181,
+    "modified_freeze_path_count": 17,
     "compiler_source_count": 116,
-    "compiler_source_stage1_whitespace_only_differences": 3
+    "compiler_source_stage1_whitespace_only_differences": 2,
+    "compiler_source_stage1_semantic_differences": [
+      "wzcc/hirverify/backend.wz",
+      "wzcc/hirverify/effectsrc.wz",
+      "wzcc/hirverify/flow.wz",
+      "wzcc/hirverify/run.wz",
+      "wzcc/hirverify/verify.wz"
+    ]
   }
 }
