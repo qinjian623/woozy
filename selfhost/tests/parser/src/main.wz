@@ -1,0 +1,1435 @@
+package app;
+
+// Pretokenized parser tests.  These build model.LexResult values by hand so
+// the parser is exercised without depending on the stage-1 lexer package.
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "std/io" as io;
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const AST_BINDING u32 = 3;
+const AST_FUNCTION u32 = 4;
+const AST_STRUCT u32 = 5;
+const AST_ENUM u32 = 6;
+const AST_TRAIT u32 = 7;
+const AST_IMPL u32 = 8;
+const AST_GENERIC_PARAMETER u32 = 11;
+const AST_PARAMETER u32 = 12;
+const AST_ASYNC u32 = 13;
+const AST_AWAIT u32 = 14;
+const AST_NAMED_TYPE u32 = 15;
+const AST_FUNCTION_TYPE u32 = 16;
+const AST_PARENTHESIZED_TYPE u32 = 17;
+const AST_BLOCK u32 = 18;
+const AST_EXPRESSION_STATEMENT u32 = 19;
+const AST_ASSIGN u32 = 20;
+const AST_IF u32 = 21;
+const AST_FOR u32 = 22;
+const AST_FORIN u32 = 23;
+const AST_SWITCH u32 = 24;
+const AST_CASE u32 = 25;
+const AST_TRY u32 = 26;
+const AST_CATCH u32 = 27;
+const AST_DEFER u32 = 28;
+const AST_UNSAFE u32 = 29;
+const AST_RETURN u32 = 30;
+const AST_THROW u32 = 31;
+const AST_BREAK u32 = 32;
+const AST_CONTINUE u32 = 33;
+const AST_UNARY u32 = 36;
+const AST_BINARY u32 = 37;
+const AST_CALL u32 = 38;
+const AST_ARGUMENT u32 = 39;
+const AST_MEMBER u32 = 40;
+const AST_NEUTRAL_BRACKET u32 = 41;
+const AST_BRACKET_ITEM u32 = 42;
+const AST_SLICE u32 = 43;
+const AST_LIST u32 = 44;
+const AST_FUNCTION_LITERAL u32 = 45;
+const AST_BIND_PATTERN u32 = 47;
+const AST_LITERAL_PATTERN u32 = 48;
+const AST_VARIANT_PATTERN u32 = 49;
+const AST_ERROR u32 = 50;
+const AST_TRAIT_OBJECT_TYPE u32 = 51;
+
+struct Builder {
+    tokens Vec[model.Token];
+    offset u64;
+}
+
+struct Test {
+    checks usize;
+    failures usize;
+    failed Vec[string];
+}
+
+func builder() Builder {
+    return Builder(tokens: vec.empty[model.Token](), offset: 0);
+}
+
+func push(b inout Builder, spelling string, kind model.TokenKind) usize {
+    let begin = b.offset;
+    let length = u64(text.byte_len(spelling));
+    b.offset += length;
+    let index = vec.len(b.tokens);
+    vec.push(b.tokens, model.Token(kind: kind,
+        span: model.Span(snapshot: 1, begin_byte: begin,
+                         end_byte: begin + length),
+        spelling: spelling, leading_trivia: vec.empty[model.Trivia](),
+        has_string_value: false, string_value: ""));
+    return index;
+}
+
+func kw(b inout Builder, spelling string) usize {
+    return push(inout b, spelling, model.TokenKind.Keyword);
+}
+
+func name(b inout Builder, spelling string) usize {
+    return push(inout b, spelling, model.TokenKind.Identifier);
+}
+
+func punctuation(b inout Builder, spelling string) usize {
+    return push(inout b, spelling, model.TokenKind.Punctuation);
+}
+
+func integer(b inout Builder, spelling string) usize {
+    return push(inout b, spelling, model.TokenKind.Integer);
+}
+
+func floating(b inout Builder, spelling string) usize {
+    return push(inout b, spelling, model.TokenKind.Floating);
+}
+
+func string_literal(b inout Builder, spelling string) usize {
+    return push(inout b, spelling, model.TokenKind.StringLiteral);
+}
+
+func finish_tokens(b inout Builder) usize {
+    return push(inout b, "", model.TokenKind.End);
+}
+
+func source() model.Source {
+    return model.Source(file_id: 1, revision_id: 1, id: 1, path: "parser-test",
+        original: [], normalized: [], offsets: [], boundaries: [], valid: true,
+        error_byte: 0, error_length: 0, error_message: "");
+}
+
+func invalid_source() model.Source {
+    return model.Source(file_id: 1, revision_id: 1, id: 1,
+        path: "parser-test-invalid", original: [], normalized: [], offsets: [],
+        boundaries: [], valid: false, error_byte: 0, error_length: 1,
+        error_message: "invalid source");
+}
+
+func lexed(b Builder) model.LexResult {
+    return model.LexResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Source, source: source(),
+        tokens: b.tokens, diagnostics: vec.empty[model.Diagnostic](),
+        has_value: true);
+}
+
+func lexed_full(b Builder, state model.PhaseState,
+                failure model.FailureKind,
+                diagnostics Vec[model.Diagnostic],
+                has_value bool, source_value model.Source) model.LexResult {
+    return model.LexResult(state: state, failure: failure,
+        source: source_value, tokens: b.tokens, diagnostics: diagnostics,
+        has_value: has_value);
+}
+
+func lexed_with(b Builder, state model.PhaseState,
+                failure model.FailureKind,
+                diagnostics Vec[model.Diagnostic],
+                has_value bool) model.LexResult {
+    return lexed_full(b, state, failure, diagnostics, has_value, source());
+}
+
+func check(t inout Test, ok bool, label string) {
+    t.checks += 1;
+    if !ok {
+        t.failures += 1;
+        vec.push(t.failed, label);
+    }
+}
+
+func is_complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func is_recovered(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Recovered: return true;
+        default: return false;
+    }
+}
+
+func is_failed(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Failed: return true;
+        default: return false;
+    }
+}
+
+func is_cancelled(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Cancelled: return true;
+        default: return false;
+    }
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_id(failure model.FailureKind) u32 {
+    switch failure {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+// Mirrors PhaseResult::exit_code classification without relying on
+// has_value or diagnostic counts alone.
+func exit_classification(result model.ParseResult) u8 {
+    if is_cancelled(result.state) { return 4; }
+    var error = false;
+    for diagnostic in result.diagnostics {
+        if diagnostic.severity == "error" { error = true; }
+    }
+    if is_complete(result.state) && result.has_value && !error { return 0; }
+    let id = failure_id(result.failure);
+    if id == 2 { return 2; }
+    if id == 3 { return 3; }
+    return 1;
+}
+
+func count_kind(nodes Vec[model.AstNode], kind u32) usize {
+    var count usize = 0;
+    for node in nodes {
+        if model.ast_kind_id(node.kind) == kind { count += 1; }
+    }
+    return count;
+}
+
+func first_kind(nodes Vec[model.AstNode], kind u32) usize {
+    for var index usize = 0; index < vec.len(nodes); index += 1 {
+        if model.ast_kind_id(nodes[index].kind) == kind { return index; }
+    }
+    return vec.len(nodes);
+}
+
+func count_message(diagnostics Vec[model.Diagnostic], message string) usize {
+    var count usize = 0;
+    for diagnostic in diagnostics {
+        if diagnostic.message == message { count += 1; }
+    }
+    return count;
+}
+
+// Every node uses a half-open token range, its span is the raw byte range of
+// that token range, children are allocated before their parent, and only
+// Error nodes carry recovered=true.
+func check_tree(t inout Test, nodes Vec[model.AstNode],
+               tokens Vec[model.Token], label string) {
+    for var index usize = 0; index < vec.len(nodes); index += 1 {
+        let node = nodes[index];
+        let node_kind = model.ast_kind_id(node.kind);
+        check(inout t, node_kind <= 51, label + ": ast kind in frozen range");
+        check(inout t, node.token_begin <= node.token_end,
+              label + ": token range order");
+        check(inout t, node.token_end <= vec.len(tokens),
+              label + ": token range bound");
+        check(inout t, node.span.snapshot == 1, label + ": span snapshot");
+        check(inout t, node.recovered == (node_kind == AST_ERROR),
+              label + ": recovered only on Error");
+        if node.token_begin < vec.len(tokens) {
+            check(inout t, node.span.begin_byte ==
+                     tokens[node.token_begin].span.begin_byte,
+                  label + ": span begins at first token");
+            if node.token_end > node.token_begin {
+                check(inout t, node.span.end_byte ==
+                         tokens[node.token_end - 1].span.end_byte,
+                      label + ": span ends at last token");
+            } else {
+                check(inout t, node.span.end_byte ==
+                         tokens[node.token_begin].span.end_byte,
+                      label + ": empty range keeps token span");
+            }
+        } else {
+            check(inout t, node.span.begin_byte == 0 && node.span.end_byte == 0,
+                  label + ": past-end node has empty span");
+        }
+        for child in node.children {
+            check(inout t, child < index, label + ": child before parent");
+        }
+    }
+}
+
+func build_full() Builder {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "demo");
+    punctuation(inout b, ";");
+    kw(inout b, "import");
+    string_literal(inout b, "\"app/x\"");
+    kw(inout b, "as");
+    name(inout b, "x");
+    punctuation(inout b, ";");
+    kw(inout b, "import");
+    string_literal(inout b, "\"app/y\"");
+    punctuation(inout b, ";");
+    kw(inout b, "const");
+    name(inout b, "K");
+    name(inout b, "i32");
+    punctuation(inout b, "=");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    kw(inout b, "pub");
+    kw(inout b, "struct");
+    name(inout b, "Pair");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    name(inout b, "first");
+    name(inout b, "T");
+    punctuation(inout b, ";");
+    name(inout b, "second");
+    name(inout b, "T");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "enum");
+    name(inout b, "Maybe");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    name(inout b, "None");
+    punctuation(inout b, ";");
+    name(inout b, "Some");
+    punctuation(inout b, "(");
+    name(inout b, "value");
+    name(inout b, "T");
+    punctuation(inout b, ")");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "trait");
+    name(inout b, "Show");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    kw(inout b, "func");
+    name(inout b, "show");
+    punctuation(inout b, "(");
+    name(inout b, "self");
+    name(inout b, "Self");
+    punctuation(inout b, ",");
+    name(inout b, "value");
+    name(inout b, "T");
+    punctuation(inout b, ")");
+    name(inout b, "string");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "impl");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    name(inout b, "Show");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    kw(inout b, "for");
+    name(inout b, "Pair");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    kw(inout b, "func");
+    name(inout b, "show");
+    punctuation(inout b, "(");
+    name(inout b, "self");
+    name(inout b, "Pair");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, ",");
+    name(inout b, "value");
+    name(inout b, "T");
+    punctuation(inout b, ")");
+    name(inout b, "string");
+    punctuation(inout b, "{");
+    kw(inout b, "return");
+    string_literal(inout b, "\"x\"");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    punctuation(inout b, "}");
+    kw(inout b, "impl");
+    name(inout b, "Pair");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    kw(inout b, "func");
+    name(inout b, "get");
+    punctuation(inout b, "(");
+    name(inout b, "self");
+    name(inout b, "Self");
+    punctuation(inout b, ",");
+    name(inout b, "value");
+    name(inout b, "T");
+    punctuation(inout b, ")");
+    name(inout b, "T");
+    punctuation(inout b, "{");
+    kw(inout b, "return");
+    name(inout b, "value");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    punctuation(inout b, "}");
+    kw(inout b, "func");
+    name(inout b, "bounded");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    name(inout b, "Show");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "]");
+    punctuation(inout b, "(");
+    name(inout b, "value");
+    name(inout b, "T");
+    punctuation(inout b, ")");
+    name(inout b, "T");
+    punctuation(inout b, "{");
+    kw(inout b, "return");
+    name(inout b, "value");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "async");
+    kw(inout b, "func");
+    name(inout b, "run");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "(");
+    name(inout b, "value");
+    name(inout b, "T");
+    punctuation(inout b, ",");
+    name(inout b, "slot");
+    kw(inout b, "inout");
+    name(inout b, "T");
+    punctuation(inout b, ",");
+    name(inout b, "owned");
+    kw(inout b, "move");
+    name(inout b, "Vec");
+    punctuation(inout b, "[");
+    name(inout b, "i32");
+    punctuation(inout b, "]");
+    punctuation(inout b, ")");
+    name(inout b, "i32");
+    kw(inout b, "throws");
+    name(inout b, "Show");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    kw(inout b, "var");
+    name(inout b, "total");
+    name(inout b, "i32");
+    punctuation(inout b, "=");
+    integer(inout b, "0");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "f");
+    punctuation(inout b, "=");
+    kw(inout b, "func");
+    punctuation(inout b, "(");
+    name(inout b, "a");
+    name(inout b, "i32");
+    punctuation(inout b, ",");
+    name(inout b, "b");
+    kw(inout b, "inout");
+    name(inout b, "i32");
+    punctuation(inout b, ")");
+    name(inout b, "i32");
+    punctuation(inout b, "{");
+    kw(inout b, "return");
+    name(inout b, "a");
+    punctuation(inout b, "+");
+    name(inout b, "b");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "closure");
+    punctuation(inout b, "=");
+    kw(inout b, "move");
+    kw(inout b, "func");
+    punctuation(inout b, "(");
+    punctuation(inout b, ")");
+    name(inout b, "i32");
+    punctuation(inout b, "{");
+    kw(inout b, "return");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "paren");
+    punctuation(inout b, "(");
+    name(inout b, "i32");
+    punctuation(inout b, ")");
+    punctuation(inout b, "=");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "callback");
+    kw(inout b, "func");
+    punctuation(inout b, "(");
+    name(inout b, "i32");
+    punctuation(inout b, ",");
+    name(inout b, "i32");
+    punctuation(inout b, ")");
+    name(inout b, "i32");
+    punctuation(inout b, "=");
+    name(inout b, "f");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "dyn_show");
+    name(inout b, "dyn");
+    name(inout b, "Show");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "=");
+    name(inout b, "value");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "sliced");
+    punctuation(inout b, "=");
+    punctuation(inout b, "[");
+    integer(inout b, "4");
+    punctuation(inout b, ",");
+    integer(inout b, "5");
+    punctuation(inout b, ",");
+    integer(inout b, "6");
+    punctuation(inout b, "]");
+    punctuation(inout b, "[");
+    integer(inout b, "0");
+    punctuation(inout b, ":");
+    integer(inout b, "2");
+    punctuation(inout b, "]");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "open_slice");
+    punctuation(inout b, "=");
+    punctuation(inout b, "[");
+    integer(inout b, "1");
+    punctuation(inout b, ",");
+    integer(inout b, "2");
+    punctuation(inout b, ",");
+    integer(inout b, "3");
+    punctuation(inout b, "]");
+    punctuation(inout b, "[");
+    punctuation(inout b, ":");
+    integer(inout b, "2");
+    punctuation(inout b, "]");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "tail");
+    punctuation(inout b, "=");
+    name(inout b, "sliced");
+    punctuation(inout b, "[");
+    integer(inout b, "1");
+    punctuation(inout b, ":");
+    punctuation(inout b, "]");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "multi");
+    punctuation(inout b, "=");
+    name(inout b, "f");
+    punctuation(inout b, "[");
+    name(inout b, "a");
+    punctuation(inout b, ",");
+    kw(inout b, "func");
+    punctuation(inout b, "(");
+    name(inout b, "i32");
+    punctuation(inout b, ")");
+    name(inout b, "i32");
+    punctuation(inout b, "]");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "candidate");
+    punctuation(inout b, "=");
+    name(inout b, "f");
+    punctuation(inout b, "[");
+    punctuation(inout b, "(");
+    name(inout b, "i32");
+    punctuation(inout b, ")");
+    punctuation(inout b, "+");
+    integer(inout b, "1");
+    punctuation(inout b, "]");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "member");
+    punctuation(inout b, "=");
+    name(inout b, "Pair");
+    punctuation(inout b, "[");
+    name(inout b, "i32");
+    punctuation(inout b, "]");
+    punctuation(inout b, "(");
+    name(inout b, "first");
+    punctuation(inout b, ":");
+    integer(inout b, "1");
+    punctuation(inout b, ",");
+    name(inout b, "second");
+    punctuation(inout b, ":");
+    integer(inout b, "2");
+    punctuation(inout b, ")");
+    punctuation(inout b, ".");
+    name(inout b, "first");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "ops");
+    punctuation(inout b, "=");
+    name(inout b, "a");
+    punctuation(inout b, "||");
+    name(inout b, "b");
+    punctuation(inout b, "&&");
+    name(inout b, "c");
+    punctuation(inout b, "|");
+    name(inout b, "d");
+    punctuation(inout b, "^");
+    name(inout b, "e");
+    punctuation(inout b, "&");
+    name(inout b, "f");
+    punctuation(inout b, "==");
+    name(inout b, "g");
+    punctuation(inout b, "<");
+    name(inout b, "h");
+    punctuation(inout b, "<<");
+    name(inout b, "i");
+    punctuation(inout b, "+");
+    name(inout b, "j");
+    punctuation(inout b, "*");
+    name(inout b, "k");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "ops2");
+    punctuation(inout b, "=");
+    name(inout b, "a");
+    punctuation(inout b, "!=");
+    name(inout b, "b");
+    punctuation(inout b, "<=");
+    name(inout b, "c");
+    punctuation(inout b, ">=");
+    name(inout b, "d");
+    punctuation(inout b, ">>");
+    name(inout b, "e");
+    punctuation(inout b, "/");
+    name(inout b, "f");
+    punctuation(inout b, "%");
+    name(inout b, "g");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "unary");
+    punctuation(inout b, "=");
+    punctuation(inout b, "+");
+    punctuation(inout b, "-");
+    punctuation(inout b, "!");
+    punctuation(inout b, "~");
+    name(inout b, "value");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "moved");
+    punctuation(inout b, "=");
+    kw(inout b, "move");
+    name(inout b, "value");
+    punctuation(inout b, ";");
+    kw(inout b, "let");
+    name(inout b, "borrowed");
+    punctuation(inout b, "=");
+    kw(inout b, "inout");
+    name(inout b, "value");
+    punctuation(inout b, ";");
+    kw(inout b, "if");
+    name(inout b, "value");
+    punctuation(inout b, "==");
+    name(inout b, "value");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    name(inout b, "f");
+    punctuation(inout b, "(");
+    integer(inout b, "1");
+    punctuation(inout b, ",");
+    kw(inout b, "inout");
+    name(inout b, "total");
+    punctuation(inout b, ")");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "else");
+    kw(inout b, "if");
+    punctuation(inout b, "!");
+    kw(inout b, "false");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "+=");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "else");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "-=");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "for");
+    name(inout b, "item");
+    kw(inout b, "in");
+    punctuation(inout b, "[");
+    integer(inout b, "1");
+    punctuation(inout b, ",");
+    integer(inout b, "2");
+    punctuation(inout b, ",");
+    integer(inout b, "3");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "+=");
+    name(inout b, "item");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "for");
+    kw(inout b, "var");
+    name(inout b, "i");
+    name(inout b, "i32");
+    punctuation(inout b, "=");
+    integer(inout b, "0");
+    punctuation(inout b, ";");
+    name(inout b, "i");
+    punctuation(inout b, "<");
+    integer(inout b, "3");
+    punctuation(inout b, ";");
+    name(inout b, "i");
+    punctuation(inout b, "+=");
+    integer(inout b, "1");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "+=");
+    name(inout b, "i");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "for");
+    name(inout b, "total");
+    punctuation(inout b, ">");
+    integer(inout b, "0");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "-=");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "for");
+    punctuation(inout b, "{");
+    kw(inout b, "continue");
+    punctuation(inout b, ";");
+    kw(inout b, "break");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "switch");
+    name(inout b, "total");
+    punctuation(inout b, "{");
+    kw(inout b, "case");
+    punctuation(inout b, "-");
+    integer(inout b, "1");
+    punctuation(inout b, ":");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    integer(inout b, "0");
+    punctuation(inout b, ";");
+    kw(inout b, "case");
+    name(inout b, "Maybe");
+    punctuation(inout b, "[");
+    name(inout b, "i32");
+    punctuation(inout b, "]");
+    punctuation(inout b, ".");
+    name(inout b, "Some");
+    punctuation(inout b, "(");
+    name(inout b, "item");
+    punctuation(inout b, ")");
+    punctuation(inout b, ":");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    name(inout b, "item");
+    punctuation(inout b, ";");
+    kw(inout b, "case");
+    name(inout b, "item");
+    punctuation(inout b, ":");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    name(inout b, "item");
+    punctuation(inout b, ";");
+    kw(inout b, "case");
+    floating(inout b, "1.5");
+    punctuation(inout b, ":");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    integer(inout b, "4");
+    punctuation(inout b, ";");
+    kw(inout b, "default");
+    punctuation(inout b, ":");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "try");
+    punctuation(inout b, "{");
+    kw(inout b, "throw");
+    name(inout b, "Show");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, ".");
+    name(inout b, "Missing");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "catch");
+    name(inout b, "error");
+    name(inout b, "Show");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    integer(inout b, "2");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "catch");
+    name(inout b, "error");
+    name(inout b, "Other");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "=");
+    integer(inout b, "3");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "defer");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "+=");
+    integer(inout b, "1");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "unsafe");
+    punctuation(inout b, "{");
+    name(inout b, "total");
+    punctuation(inout b, "+=");
+    name(inout b, "f");
+    punctuation(inout b, "[");
+    punctuation(inout b, "(");
+    name(inout b, "i32");
+    punctuation(inout b, ")");
+    punctuation(inout b, "+");
+    integer(inout b, "1");
+    punctuation(inout b, "]");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    kw(inout b, "let");
+    name(inout b, "x");
+    punctuation(inout b, "=");
+    kw(inout b, "await");
+    name(inout b, "run");
+    punctuation(inout b, "[");
+    name(inout b, "T");
+    punctuation(inout b, "]");
+    punctuation(inout b, "(");
+    name(inout b, "value");
+    punctuation(inout b, ",");
+    name(inout b, "slot");
+    punctuation(inout b, ",");
+    kw(inout b, "move");
+    punctuation(inout b, "[");
+    integer(inout b, "1");
+    punctuation(inout b, "]");
+    punctuation(inout b, ")");
+    punctuation(inout b, ";");
+    kw(inout b, "return");
+    name(inout b, "total");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    return b;
+}
+
+func full_run_start(tokens Vec[model.Token]) usize {
+    for var index usize = 0; index < vec.len(tokens); index += 1 {
+        if tokens[index].spelling == "async" { return index; }
+    }
+    return vec.len(tokens);
+}
+
+func full_const_start(tokens Vec[model.Token]) usize {
+    for var index usize = 0; index < vec.len(tokens); index += 1 {
+        if tokens[index].spelling == "const" { return index; }
+    }
+    return vec.len(tokens);
+}
+
+func full_pub_start(tokens Vec[model.Token]) usize {
+    for var index usize = 0; index < vec.len(tokens); index += 1 {
+        if tokens[index].spelling == "pub" { return index; }
+    }
+    return vec.len(tokens);
+}
+
+func test_full_grammar(t inout Test) {
+    let b = build_full();
+    let input = lexed(b);
+    let result = parser.parse(input);
+    check(inout t, result.has_value, "full: has value");
+    check(inout t, is_complete(result.state), "full: complete state");
+    check(inout t, !result.recovered, "full: no recovery");
+    check(inout t, vec.len(result.diagnostics) == 0, "full: no diagnostics");
+    check(inout t, model.ast_kind_id(result.nodes[result.root].kind) == 0,
+          "full: root is File");
+    let top = result.nodes[result.root].children;
+    check(inout t, vec.len(top) == 11, "full: eleven top-level children");
+    let expected = [1, 2, 2, 3, 5, 6, 7, 8, 8, 4, 4];
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        check(inout t, model.ast_kind_id(result.nodes[top[index]].kind) ==
+                 u32(expected[index]), "full: top-level kind");
+    }
+    check(inout t, result.nodes[top[3]].token_begin == full_const_start(b.tokens),
+          "full: const binding patched to const token");
+    check(inout t, result.nodes[top[4]].token_begin == full_pub_start(b.tokens),
+          "full: pub struct starts at pub");
+    let run = top[vec.len(top) - 1];
+    let run_start = full_run_start(b.tokens);
+    check(inout t, result.nodes[run].token_begin == run_start,
+          "full: async function starts at async");
+    check(inout t, model.ast_kind_id(result.nodes[run].kind) == AST_FUNCTION,
+          "full: run is a function");
+    let run_children = result.nodes[run].children;
+    check(inout t, model.ast_kind_id(result.nodes[run_children[0]].kind) == AST_ASYNC,
+          "full: async marker is first child");
+    check(inout t, model.ast_kind_id(result.nodes[run_children[1]].kind) ==
+             AST_GENERIC_PARAMETER, "full: generic parameter follows marker");
+    var parameter_count usize = 0;
+    for child in run_children {
+        if model.ast_kind_id(result.nodes[child].kind) == AST_PARAMETER {
+            parameter_count += 1;
+        }
+    }
+    check(inout t, parameter_count == 3, "full: three parameters");
+    check(inout t, model.ast_kind_id(result.nodes[
+              run_children[vec.len(run_children) - 1]].kind) == AST_BLOCK,
+          "full: block is last function child");
+    check(inout t, count_kind(result.nodes, AST_AWAIT) == 1,
+          "full: await node");
+    check(inout t, count_kind(result.nodes, AST_FUNCTION_LITERAL) == 2,
+          "full: function literals");
+    check(inout t, count_kind(result.nodes, AST_FUNCTION_TYPE) == 2,
+          "full: function types (including bracket candidate)");
+    check(inout t, count_kind(result.nodes, AST_PARENTHESIZED_TYPE) == 1,
+          "full: speculative parenthesized type rolled back");
+    check(inout t, count_kind(result.nodes, AST_TRAIT_OBJECT_TYPE) == 1,
+          "full: dyn trait object");
+    check(inout t, count_kind(result.nodes, AST_SLICE) == 3,
+          "full: slices including omitted endpoints");
+    check(inout t, count_kind(result.nodes, AST_FORIN) == 1, "full: for-in");
+    check(inout t, count_kind(result.nodes, AST_FOR) == 3, "full: three for forms");
+    check(inout t, count_kind(result.nodes, AST_IF) == 2, "full: if and else-if");
+    check(inout t, count_kind(result.nodes, AST_SWITCH) == 1, "full: switch");
+    check(inout t, count_kind(result.nodes, AST_CASE) == 5, "full: case arms");
+    check(inout t, count_kind(result.nodes, AST_TRY) == 1, "full: try");
+    check(inout t, count_kind(result.nodes, AST_CATCH) == 2, "full: two catches");
+    check(inout t, count_kind(result.nodes, AST_DEFER) == 1, "full: defer");
+    check(inout t, count_kind(result.nodes, AST_UNSAFE) == 1, "full: unsafe");
+    check(inout t, count_kind(result.nodes, AST_THROW) == 1, "full: throw");
+    check(inout t, count_kind(result.nodes, AST_BREAK) == 1, "full: break");
+    check(inout t, count_kind(result.nodes, AST_CONTINUE) == 1, "full: continue");
+    check(inout t, count_kind(result.nodes, AST_MEMBER) == 2, "full: members");
+    check(inout t, count_kind(result.nodes, AST_LITERAL_PATTERN) == 2,
+          "full: negative and floating literal patterns");
+    check(inout t, count_kind(result.nodes, AST_VARIANT_PATTERN) == 1,
+          "full: qualified generic variant pattern");
+    check(inout t, count_kind(result.nodes, AST_BIND_PATTERN) == 2,
+          "full: bind patterns including variant payload");
+    check(inout t, count_kind(result.nodes, AST_ASSIGN) > 0, "full: assignment");
+    check(inout t, count_kind(result.nodes, AST_ARGUMENT) > 0, "full: arguments");
+    check(inout t, count_kind(result.nodes, AST_LIST) >= 4, "full: list literals");
+    check(inout t, count_kind(result.nodes, AST_UNARY) >= 6, "full: unary forms");
+    check(inout t, count_kind(result.nodes, AST_NEUTRAL_BRACKET) > 0,
+          "full: neutral brackets");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "full");
+
+    let signature = parser.split_signature(result.nodes, result.lexed.tokens,
+                                           run);
+    check(inout t, signature.valid, "full: split_signature valid");
+    check(inout t, vec.len(signature.parameters) == 3,
+          "full: split_signature parameters");
+    check(inout t, signature.has_result, "full: split_signature result");
+    check(inout t, signature.has_throws_type, "full: split_signature throws");
+    check(inout t, signature.result != signature.throws_type,
+          "full: result and throws node differ");
+    let throws_node = result.nodes[signature.throws_type];
+    check(inout t, throws_node.token_begin > 0, "full: throws token range");
+    check(inout t, result.lexed.tokens[throws_node.token_begin - 1].spelling ==
+             "throws", "full: throws type classified by preceding token");
+    let not_signature = parser.split_signature(result.nodes,
+                                               result.lexed.tokens, top[0]);
+    check(inout t, !not_signature.valid, "full: non-function split rejected");
+}
+
+func test_lex_diagnostics_once(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    finish_tokens(inout b);
+    var diagnostics = vec.empty[model.Diagnostic]();
+    let span = model.Span(snapshot: 1, begin_byte: 0, end_byte: 0);
+    vec.push(diagnostics, model.diagnostic("E_LEX_INVALID_TOKEN", "lex",
+                                           "first", span));
+    vec.push(diagnostics, model.diagnostic("E_LEX_INVALID_LITERAL", "lex",
+                                           "second", span));
+    let input = lexed_with(b, model.PhaseState.Recovered,
+                             model.FailureKind.Source, diagnostics, true);
+    let result = parser.parse(input);
+    check(inout t, result.has_value, "lex: value retained");
+    check(inout t, vec.len(result.lexed.diagnostics) == 2,
+          "lex: lexed diagnostics retained");
+    check(inout t, vec.len(result.diagnostics) == 2,
+          "lex: diagnostics copied exactly once");
+    check(inout t, result.diagnostics[0].code == "E_LEX_INVALID_TOKEN",
+          "lex: first diagnostic order");
+    check(inout t, result.diagnostics[1].code == "E_LEX_INVALID_LITERAL",
+          "lex: second diagnostic order");
+    check(inout t, result.diagnostics[0].message == "first" &&
+             result.diagnostics[1].message == "second",
+          "lex: diagnostic payload retained");
+    check(inout t, count_message(result.diagnostics, "first") == 1,
+          "lex: no duplicate first diagnostic");
+    check(inout t, count_message(result.diagnostics, "second") == 1,
+          "lex: no duplicate second diagnostic");
+    let top = result.nodes[result.root].children;
+    check(inout t, vec.len(top) == 1, "lex: package parsed despite lex recovery");
+    check(inout t, model.ast_kind_id(result.nodes[top[0]].kind) == 1,
+          "lex: package node");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "lex");
+}
+
+func test_lex_and_parse_order(t inout Test) {
+    var b = builder();
+    kw(inout b, "struct");
+    name(inout b, "S");
+    punctuation(inout b, "{");
+    name(inout b, "x");
+    name(inout b, "i32");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    var diagnostics = vec.empty[model.Diagnostic]();
+    vec.push(diagnostics, model.diagnostic("E_LEX_INVALID_TOKEN", "lex",
+        "lex-first", model.Span(snapshot: 1, begin_byte: 0, end_byte: 0)));
+    let result = parser.parse(lexed_with(b, model.PhaseState.Recovered,
+                                         model.FailureKind.Source,
+                                         diagnostics, true));
+    check(inout t, result.has_value, "order: recovered value");
+    check(inout t, vec.len(result.diagnostics) == 2,
+          "order: lex and parse diagnostics");
+    check(inout t, result.diagnostics[0].code == "E_LEX_INVALID_TOKEN" &&
+             result.diagnostics[0].phase == "lex",
+          "order: lexer diagnostic first");
+    check(inout t, result.diagnostics[1].message == "expected 'package'" &&
+             result.diagnostics[1].phase == "parse",
+          "order: parser diagnostic second");
+    check(inout t, result.diagnostics[1].primary.begin_byte ==
+             result.lexed.tokens[0].span.begin_byte,
+          "order: parser diagnostic position");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "order");
+}
+
+func test_missing_semicolon(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    kw(inout b, "func");
+    name(inout b, "main");
+    punctuation(inout b, "(");
+    punctuation(inout b, ")");
+    name(inout b, "i32");
+    punctuation(inout b, "{");
+    let let_index = kw(inout b, "let");
+    name(inout b, "x");
+    name(inout b, "i32");
+    punctuation(inout b, "=");
+    integer(inout b, "1");
+    let missing_at = kw(inout b, "return");
+    let error_end = name(inout b, "x");
+    let eaten_semicolon = punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    let result = parser.parse(lexed(b));
+    check(inout t, result.has_value, "semicolon: recovered value");
+    check(inout t, is_recovered(result.state), "semicolon: recovered state");
+    check(inout t, result.recovered, "semicolon: recovered flag");
+    check(inout t, vec.len(result.diagnostics) == 1, "semicolon: one diagnostic");
+    let diagnostic = result.diagnostics[0];
+    check(inout t, diagnostic.code == "E_PARSE_EXPECTED_TOKEN",
+          "semicolon: code");
+    check(inout t, diagnostic.phase == "parse", "semicolon: phase");
+    check(inout t, diagnostic.message == "expected ';'", "semicolon: message");
+    check(inout t, diagnostic.has_primary, "semicolon: primary span");
+    check(inout t, diagnostic.primary.begin_byte ==
+             result.lexed.tokens[missing_at].span.begin_byte,
+          "semicolon: diagnostic starts at return token");
+    check(inout t, diagnostic.primary.end_byte ==
+             result.lexed.tokens[missing_at].span.end_byte,
+          "semicolon: diagnostic ends at return token");
+    let top = result.nodes[result.root].children;
+    check(inout t, vec.len(top) == 2, "semicolon: package and function");
+    let function = top[1];
+    let function_children = result.nodes[function].children;
+    let body = function_children[vec.len(function_children) - 1];
+    check(inout t, model.ast_kind_id(result.nodes[body].kind) == AST_BLOCK,
+          "semicolon: function body block");
+    let block_children = result.nodes[body].children;
+    check(inout t, vec.len(block_children) == 1, "semicolon: one recovered statement");
+    let error = block_children[0];
+    check(inout t, model.ast_kind_id(result.nodes[error].kind) == AST_ERROR,
+          "semicolon: Error node");
+    check(inout t, result.nodes[error].recovered, "semicolon: Error recovered flag");
+    check(inout t, result.nodes[error].token_begin == let_index,
+          "semicolon: error begins at let");
+    check(inout t, result.nodes[error].token_end == eaten_semicolon,
+          "semicolon: error range ends before consumed semicolon");
+    check(inout t, result.nodes[error].span.begin_byte ==
+             result.lexed.tokens[let_index].span.begin_byte,
+          "semicolon: error span begin");
+    check(inout t, result.nodes[error].span.end_byte ==
+             result.lexed.tokens[error_end].span.end_byte,
+          "semicolon: error span ends at last synced token");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "semicolon");
+}
+
+func test_package_recovery(t inout Test) {
+    var b = builder();
+    let struct_index = kw(inout b, "struct");
+    name(inout b, "S");
+    punctuation(inout b, "{");
+    name(inout b, "x");
+    name(inout b, "i32");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    let result = parser.parse(lexed(b));
+    check(inout t, result.has_value, "package: recovered value");
+    check(inout t, is_recovered(result.state), "package: recovered state");
+    check(inout t, vec.len(result.diagnostics) == 1,
+          "package: one diagnostic");
+    check(inout t, result.diagnostics[0].message == "expected 'package'",
+          "package: message");
+    check(inout t, result.diagnostics[0].primary.begin_byte ==
+             result.lexed.tokens[0].span.begin_byte,
+          "package: diagnostic at first token");
+    let top = result.nodes[result.root].children;
+    check(inout t, vec.len(top) == 2, "package: error then struct");
+    check(inout t, model.ast_kind_id(result.nodes[top[0]].kind) == AST_ERROR,
+          "package: Error node first");
+    check(inout t, result.nodes[top[0]].token_begin == 0 &&
+             result.nodes[top[0]].token_end == 0,
+          "package: empty error range");
+    check(inout t, result.nodes[top[0]].span.begin_byte ==
+             result.lexed.tokens[0].span.begin_byte &&
+             result.nodes[top[0]].span.end_byte ==
+             result.lexed.tokens[0].span.end_byte,
+          "package: empty error keeps first token span");
+    check(inout t, model.ast_kind_id(result.nodes[top[1]].kind) == AST_STRUCT,
+          "package: struct recovered");
+    check(inout t, result.nodes[top[1]].token_begin == struct_index,
+          "package: struct token start");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "package");
+}
+
+func test_named_argument_order(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    kw(inout b, "func");
+    name(inout b, "f");
+    punctuation(inout b, "(");
+    punctuation(inout b, ")");
+    punctuation(inout b, "{");
+    kw(inout b, "let");
+    name(inout b, "x");
+    punctuation(inout b, "=");
+    name(inout b, "g");
+    punctuation(inout b, "(");
+    name(inout b, "a");
+    punctuation(inout b, ":");
+    integer(inout b, "1");
+    punctuation(inout b, ",");
+    let positional = integer(inout b, "2");
+    punctuation(inout b, ")");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    let result = parser.parse(lexed(b));
+    check(inout t, result.has_value, "arguments: recovered value");
+    check(inout t, is_recovered(result.state), "arguments: recovered state");
+    check(inout t, count_message(result.diagnostics,
+             "positional argument follows named argument") == 1,
+          "arguments: exact diagnostic");
+    check(inout t, result.diagnostics[0].primary.begin_byte ==
+             result.lexed.tokens[positional].span.begin_byte,
+          "arguments: diagnostic at positional argument");
+    check(inout t, count_kind(result.nodes, AST_ERROR) == 1,
+          "arguments: one Error node");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "arguments");
+}
+
+func test_depth_limit(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    kw(inout b, "func");
+    name(inout b, "f");
+    punctuation(inout b, "(");
+    punctuation(inout b, ")");
+    punctuation(inout b, "{");
+    kw(inout b, "return");
+    for var index usize = 0; index < 300; index += 1 {
+        punctuation(inout b, "(");
+    }
+    integer(inout b, "1");
+    for var index usize = 0; index < 300; index += 1 {
+        punctuation(inout b, ")");
+    }
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    let result = parser.parse(lexed(b));
+    check(inout t, result.has_value, "depth: recovered value");
+    check(inout t, is_recovered(result.state), "depth: recovered state");
+    check(inout t, count_message(result.diagnostics, "nesting limit exceeded") == 1,
+          "depth: exact nesting diagnostic");
+    check(inout t, count_kind(result.nodes, AST_ERROR) == 1,
+          "depth: one Error node");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "depth");
+}
+
+func test_bracket_rollback(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    kw(inout b, "func");
+    name(inout b, "f");
+    punctuation(inout b, "(");
+    punctuation(inout b, ")");
+    punctuation(inout b, "{");
+    kw(inout b, "let");
+    name(inout b, "x");
+    punctuation(inout b, "=");
+    name(inout b, "g");
+    punctuation(inout b, "[");
+    punctuation(inout b, "(");
+    name(inout b, "i32");
+    punctuation(inout b, ")");
+    punctuation(inout b, "+");
+    integer(inout b, "1");
+    punctuation(inout b, "]");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    let result = parser.parse(lexed(b));
+    check(inout t, result.has_value, "rollback: value");
+    check(inout t, is_complete(result.state), "rollback: complete");
+    check(inout t, vec.len(result.diagnostics) == 0, "rollback: diagnostics rolled back");
+    check(inout t, count_kind(result.nodes, AST_PARENTHESIZED_TYPE) == 0,
+          "rollback: speculative type nodes removed");
+    check(inout t, count_kind(result.nodes, AST_NAMED_TYPE) == 0,
+          "rollback: speculative named type rolled back");
+    let bracket = first_kind(result.nodes, AST_NEUTRAL_BRACKET);
+    check(inout t, bracket < vec.len(result.nodes), "rollback: neutral bracket");
+    let bracket_children = result.nodes[bracket].children;
+    check(inout t, vec.len(bracket_children) == 2,
+          "rollback: base expression and bracket item");
+    let item = bracket_children[1];
+    check(inout t, model.ast_kind_id(result.nodes[item].kind) == AST_BRACKET_ITEM,
+          "rollback: bracket item node");
+    let item_children = result.nodes[item].children;
+    check(inout t, vec.len(item_children) == 1, "rollback: one candidate");
+    check(inout t, model.ast_kind_id(result.nodes[item_children[0]].kind) == AST_BINARY,
+          "rollback: fallback expression is binary");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "rollback");
+}
+
+func test_nested_declaration(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    kw(inout b, "func");
+    name(inout b, "outer");
+    punctuation(inout b, "(");
+    punctuation(inout b, ")");
+    punctuation(inout b, "{");
+    kw(inout b, "func");
+    name(inout b, "inner");
+    punctuation(inout b, "(");
+    punctuation(inout b, ")");
+    punctuation(inout b, "{");
+    punctuation(inout b, "}");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    let result = parser.parse(lexed(b));
+    check(inout t, result.has_value, "nested: recovered value");
+    check(inout t, is_recovered(result.state), "nested: recovered state");
+    check(inout t, count_message(result.diagnostics,
+             "nested declaration or missing closing brace") == 1,
+          "nested: exact diagnostic");
+    check(inout t, count_kind(result.nodes, AST_ERROR) == 2,
+          "nested: outer failure and stray brace errors");
+    check(inout t, count_kind(result.nodes, AST_FUNCTION) == 1,
+          "nested: inner declaration recovered as function");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "nested");
+}
+
+func test_enum_pub_rejected(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    kw(inout b, "enum");
+    name(inout b, "E");
+    punctuation(inout b, "{");
+    kw(inout b, "pub");
+    name(inout b, "A");
+    punctuation(inout b, ";");
+    punctuation(inout b, "}");
+    finish_tokens(inout b);
+    let result = parser.parse(lexed(b));
+    check(inout t, result.has_value, "enum pub: recovered value");
+    check(inout t, is_recovered(result.state), "enum pub: recovered state");
+    check(inout t, count_message(result.diagnostics,
+             "enum variants do not accept pub") == 1,
+          "enum pub: exact diagnostic");
+    check(inout t, count_kind(result.nodes, AST_ERROR) > 0,
+          "enum pub: Error node");
+    check_tree(inout t, result.nodes, result.lexed.tokens, "enum pub");
+}
+
+func check_missing_value(t inout Test, b Builder,
+                         diagnostics Vec[model.Diagnostic],
+                         state model.PhaseState,
+                         failure model.FailureKind, expected_exit u8,
+                         label string) {
+    let result = parser.parse(lexed_with(b, state, failure, diagnostics,
+                                         false));
+    check(inout t, !result.has_value, label + ": no parse value");
+    check(inout t, phase_id(result.state) == phase_id(state),
+          label + ": input state preserved");
+    check(inout t, failure_id(result.failure) == failure_id(failure),
+          label + ": input failure preserved");
+    check(inout t, vec.len(result.diagnostics) == 1,
+          label + ": lex diagnostics retained once");
+    check(inout t, exit_classification(result) == expected_exit,
+          label + ": exit classification");
+}
+
+func test_no_value_and_cancel(t inout Test) {
+    var b = builder();
+    kw(inout b, "package");
+    name(inout b, "app");
+    punctuation(inout b, ";");
+    finish_tokens(inout b);
+    var diagnostics = vec.empty[model.Diagnostic]();
+    vec.push(diagnostics, model.diagnostic("E_LEX_INVALID_TOKEN", "lex",
+        "no value", model.Span(snapshot: 1, begin_byte: 0, end_byte: 0)));
+
+    check_missing_value(inout t, b, diagnostics, model.PhaseState.Failed,
+        model.FailureKind.Source, 1, "missing source");
+    check_missing_value(inout t, b, diagnostics, model.PhaseState.Failed,
+        model.FailureKind.Unsupported, 1, "missing unsupported");
+    check_missing_value(inout t, b, diagnostics, model.PhaseState.Failed,
+        model.FailureKind.Environment, 2, "missing environment");
+    check_missing_value(inout t, b, diagnostics, model.PhaseState.Failed,
+        model.FailureKind.Internal, 3, "missing internal");
+    check_missing_value(inout t, b, diagnostics, model.PhaseState.Recovered,
+        model.FailureKind.Source, 1, "missing recovered source");
+    check_missing_value(inout t, b, diagnostics, model.PhaseState.Cancelled,
+        model.FailureKind.Source, 4, "cancel source");
+    check_missing_value(inout t, b, diagnostics, model.PhaseState.Cancelled,
+        model.FailureKind.Environment, 4, "cancel environment");
+
+    // Missing values keep their input classification even when the source is
+    // also invalid; only a value-bearing invalid source is inconsistent.
+    let invalid_missing = parser.parse(lexed_full(b, model.PhaseState.Failed,
+        model.FailureKind.Environment, diagnostics, false, invalid_source()));
+    check(inout t, !invalid_missing.has_value,
+          "invalid missing: no parse value");
+    check(inout t, is_failed(invalid_missing.state),
+          "invalid missing: failed state");
+    check(inout t, failure_id(invalid_missing.failure) == 2,
+          "invalid missing: environment failure preserved");
+    check(inout t, exit_classification(invalid_missing) == 2,
+          "invalid missing: environment exit classification");
+
+    // A value-bearing result with an invalid source is the one inconsistent
+    // combination that stays internal, even if its failure kind says
+    // environment.
+    let inconsistent = parser.parse(lexed_full(b, model.PhaseState.Complete,
+        model.FailureKind.Environment, diagnostics, true, invalid_source()));
+    check(inout t, !inconsistent.has_value,
+          "inconsistent: no parse value");
+    check(inout t, is_failed(inconsistent.state),
+          "inconsistent: failed state");
+    check(inout t, failure_id(inconsistent.failure) == 3,
+          "inconsistent: internal failure");
+    check(inout t, vec.len(inconsistent.diagnostics) == 1,
+          "inconsistent: lex diagnostics retained once");
+    check(inout t, exit_classification(inconsistent) == 3,
+          "inconsistent: internal exit classification");
+}
+
+func main() i32 throws os.Error {
+    var test = Test(checks: 0, failures: 0, failed: vec.empty[string]());
+    test_full_grammar(inout test);
+    test_lex_diagnostics_once(inout test);
+    test_lex_and_parse_order(inout test);
+    test_missing_semicolon(inout test);
+    test_package_recovery(inout test);
+    test_named_argument_order(inout test);
+    test_depth_limit(inout test);
+    test_bracket_rollback(inout test);
+    test_nested_declaration(inout test);
+    test_enum_pub_rejected(inout test);
+    test_no_value_and_cancel(inout test);
+    for label in test.failed { io.eprintln("parser-test FAIL: " + label); }
+    io.println("parser-test checks");
+    io.println(test.checks);
+    io.println("parser-test failures");
+    io.println(test.failures);
+    return i32(test.failures);
+}

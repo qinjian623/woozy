@@ -1,0 +1,74 @@
+package cli;
+import "app/wzcc/model" as model;
+import "app/wzcc/render" as render;
+import "app/wzcc/source" as source;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/parser" as parser;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+
+func finish(options Options, sources Vec[model.Source], state model.PhaseState,
+            failure model.FailureKind, has_value bool, diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
+    if options.json {
+        try { io.println(render.document(sources, state, failure, has_value, diagnostics)); }
+        catch error render.Error {
+            io.eprintln("E_INTERNAL_ERROR: invalid diagnostic document");
+            return 3;
+        }
+    } else if render.succeeded(state, has_value, diagnostics) {
+        io.println("syntax ok: " + options.path);
+    } else {
+        for diagnostic in diagnostics {
+            var location = "";
+            if diagnostic.has_primary {
+                for item in sources {
+                    if item.id == diagnostic.primary.snapshot {
+                        location = item.path + ":bytes[" + strconv.format_u64(diagnostic.primary.begin_byte) + "," +
+                            strconv.format_u64(diagnostic.primary.end_byte) + "): ";
+                    }
+                }
+            }
+            io.eprintln(location + diagnostic.code + ": " + diagnostic.message);
+        }
+    }
+    return render.exit_code(state, failure, has_value, diagnostics);
+}
+
+func fail(options Options, code string, phase string, message string, failure model.FailureKind) i32 throws os.Error {
+    var diagnostic = model.diagnostic(code, phase, message, model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    return finish(options, [], model.PhaseState.Failed, failure, false, [diagnostic]);
+}
+
+pub func run(args Vec[string]) i32 throws os.Error {
+    let options = arguments(args);
+    if !options.valid {
+        io.eprintln("E_DRIVER_ARGUMENT: use check --syntax-only FILE, check --project MANIFEST, or build --project MANIFEST --out-dir DIR");
+        return 2;
+    }
+    if options.command == "--version" {
+        io.println("woozyc 0.1.0-selfhost (compiler-dev/1)");
+        return 0;
+    }
+    if options.command == "--help" {
+        io.println("Usage: woozyc --help | --version\n       woozyc check --syntax-only [--format json] FILE\n       woozyc check --project MANIFEST [--backend native|python] [--format json]\n       woozyc build --project MANIFEST --out-dir DIR [--format json]\nSelf-host port in progress: project checking and build are not implemented yet.");
+        return 0;
+    }
+    if !options.syntax {
+        return fail(options, "E_CAPABILITY_UNAVAILABLE", "toolchain",
+            "self-host project/type checking and code generation are not implemented yet", model.FailureKind.Unsupported);
+    }
+    try {
+        let input = source.snapshot(1, 1, 1, options.path, fs.read_file(options.path));
+        let lexed = lexer.lex(input);
+        if !render.succeeded(lexed.state, lexed.has_value, lexed.diagnostics) {
+            return finish(options, [input], lexed.state, lexed.failure, lexed.has_value, lexed.diagnostics);
+        }
+        let parsed = parser.parse(lexed);
+        return finish(options, [input], parsed.state, parsed.failure, parsed.has_value, parsed.diagnostics);
+    } catch error os.Error {
+        return fail(options, "E_INPUT_IO", "toolchain", "cannot read source file: " + options.path, model.FailureKind.Environment);
+    }
+}

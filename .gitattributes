@@ -2,3 +2,5 @@
 runtime/native/unicode/vendor/utf8proc/utf8proc_data.c -whitespace
 tests/native/unicode/data/GraphemeBreakTest.txt -whitespace
 tests/bootstrap/readiness/cases/crlf.wz -text whitespace=cr-at-eol
+# TOML fixtures include deliberate CRLF, bare CR and trailing string spaces.
+selfhost/tests/toml/cases/** -text -whitespace

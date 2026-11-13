@@ -1,0 +1,8 @@
+root = 1
+[server]
+host = "localhost"
+port = 8080
+[server.tls]
+enabled = true
+[a.b.c]
+x = 1

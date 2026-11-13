@@ -1,0 +1,166 @@
+// TOML 1.0 reader.
+//
+// This module is a pure Woozy implementation. It does not call the C++
+// toml++ parser, an external interpreter, the old compiler or any host
+// function; all scanning and structure checks happen in this source tree.
+//
+// Public surface (development/docs/SELFHOST_FOUNDATION.md):
+//   parse(input string) Document throws Error
+//   Document.root is a Value
+//   Value is a typed recursive enum; a table is an ordered Vec[Entry]
+//   Entry has key string / value Value
+//   Error.Syntax carries offset usize (Unicode code point index) and message
+//   string. Callers map the offset to a Source byte range.
+//
+// Supported TOML 1.0 forms: basic/literal/multiline strings with every
+// TOML escape (including \u/\U Unicode scalars), comments, integers
+// (decimal/hex/octal/binary, underscores, signs), floats (fraction,
+// exponent, inf/nan), offset date-time, local date-time, local date and
+// local time (proleptic Gregorian validation including year 0000, which is a
+// leap year and accepted by toml++), arrays (multiline, comments, trailing
+// comma, mixed values),
+// inline tables, dotted keys, [tables], [[arrays of tables]], implicit
+// tables and array-of-table element namespaces.
+//
+// Restrictions:
+// - Values are kept as written: Integer/Float/date variants carry the raw
+//   token text. Integers are not range-limited (toml++ rejects values that
+//   do not fit int64; this reader keeps the text so callers can apply the
+//   range policy they need).
+// - CRLF is normalized to LF before scanning and inside multiline string
+//   values, the same normalization the Source snapshot applies. Error
+//   offsets are translated back to Unicode code point indices of the input
+//   string the caller passed. A byte order mark is not skipped; Source
+//   removes it before parse.
+// - Container nesting is limited to MAX_DEPTH and a dotted key/header path
+//   to MAX_KEY_PARTS; exceeding either reports Error.Syntax instead of
+//   exhausting the stack.
+package toml;
+
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub enum Value {
+    String(value string);
+    Integer(text string);
+    Float(text string);
+    Boolean(value bool);
+    OffsetDateTime(text string);
+    LocalDateTime(text string);
+    LocalDate(text string);
+    LocalTime(text string);
+    Array(items Vec[Value]);
+    Table(entries Vec[Entry]);
+}
+
+pub struct Entry {
+    pub key string;
+    pub value Value;
+}
+
+pub struct Document {
+    pub root Value;
+}
+
+pub enum Error {
+    Syntax(offset usize, message string);
+}
+
+const MAX_DEPTH usize = 256;
+const MAX_KEY_PARTS usize = 256;
+
+// Per-entry bookkeeping used while parsing so duplicate key/table and
+// dotted-key rules follow TOML 1.0. Only tables and arrays carry a
+// meaningful kind; scalars use KIND_SCALAR.
+const KIND_SCALAR u32 = 0;
+const KIND_IMPLICIT u32 = 1;
+const KIND_EXPLICIT u32 = 2;
+const KIND_DOTTED u32 = 3;
+const KIND_INLINE u32 = 4;
+const KIND_STATIC_ARRAY u32 = 5;
+const KIND_ARRAY_OF_TABLES u32 = 6;
+
+// Internal parse tree. Node mirrors Value but every entry also records the
+// table/array kind needed for the structural rules. It is converted to the
+// public Value tree when parsing finishes.
+enum Node {
+    String(value string);
+    Integer(text string);
+    Float(text string);
+    Boolean(value bool);
+    OffsetDateTime(text string);
+    LocalDateTime(text string);
+    LocalDate(text string);
+    LocalTime(text string);
+    Array(items Vec[Node]);
+    Table(entries Vec[NodeEntry]);
+}
+
+struct NodeEntry {
+    key string;
+    value Node;
+    kind u32;
+}
+
+func is_table_kind(kind u32) bool {
+    return kind >= KIND_IMPLICIT && kind <= KIND_INLINE;
+}
+
+func is_array_kind(kind u32) bool {
+    return kind >= KIND_STATIC_ARRAY && kind <= KIND_ARRAY_OF_TABLES;
+}
+
+func node_to_value(node Node) Value {
+    switch node {
+        case Node.String(value): return Value.String(value);
+        case Node.Integer(raw): return Value.Integer(raw);
+        case Node.Float(raw): return Value.Float(raw);
+        case Node.Boolean(value): return Value.Boolean(value);
+        case Node.OffsetDateTime(raw): return Value.OffsetDateTime(raw);
+        case Node.LocalDateTime(raw): return Value.LocalDateTime(raw);
+        case Node.LocalDate(raw): return Value.LocalDate(raw);
+        case Node.LocalTime(raw): return Value.LocalTime(raw);
+        case Node.Array(items): {
+            let converted = vec.empty[Value]();
+            for var index usize = 0; index < vec.len(items); index += 1 {
+                vec.push(converted, node_to_value(items[index]));
+            }
+            return Value.Array(converted);
+        }
+        case Node.Table(entries): {
+            let converted = vec.empty[Entry]();
+            for var index usize = 0; index < vec.len(entries); index += 1 {
+                vec.push(converted, Entry(key: entries[index].key,
+                    value: node_to_value(entries[index].value)));
+            }
+            return Value.Table(converted);
+        }
+    }
+}
+
+// parse reads one TOML document. On success Document.root is a Value.Table.
+// Scanning uses the CRLF-normalized text; Error.Syntax.offset is always a
+// code point index into the caller's original input string.
+pub func parse(input string) Document throws Error {
+    let normalized = normalize_newlines(input);
+    var cursor usize = 0;
+    try {
+        let entries = parse_document(normalized.text, inout cursor);
+        return Document(root: node_to_value(Node.Table(entries)));
+    } catch error Error {
+        var position usize = 0;
+        var message = "";
+        switch error {
+            case Error.Syntax(offset, text_value): {
+                position = offset;
+                message = text_value;
+            }
+        }
+        if position >= vec.len(normalized.offsets) {
+            position = text.len(input);
+        } else {
+            position = normalized.offsets[position];
+        }
+        throw Error.Syntax(position, message);
+    }
+}

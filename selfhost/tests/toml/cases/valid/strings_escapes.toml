@@ -1,0 +1,9 @@
+quoted = "he said \"hi\""
+backslash = "c:\\tmp"
+controls = "\b\t\n\f\r"
+unicode = "\u00e9 \u4e2d \U0001F600"
+nul_escape = "\u0000"
+tab_literal = "a	b"
+literal_tab = 'a	b'
+literal_backslash = '\n is not a newline'
+empty_literal = ''

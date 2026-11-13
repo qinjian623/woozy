@@ -1,0 +1,6 @@
+dec = 1_000_000
+hex = 0xdead_BEEF
+oct = 0o755
+bin = 0b1101
+big = 9223372036854775808
+huge_hex = 0xffffffffffffffffffffffff

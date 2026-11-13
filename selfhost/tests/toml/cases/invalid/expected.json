@@ -1,0 +1,84 @@
+{
+  "duplicate_key.toml": {
+    "message_contains": "duplicate key"
+  },
+  "duplicate_table.toml": {
+    "message_contains": "declare a table twice"
+  },
+  "duplicate_dotted_key.toml": {
+    "message_contains": "duplicate key"
+  },
+  "header_after_dotted.toml": {
+    "message_contains": "declare a table twice"
+  },
+  "dotted_after_header.toml": {
+    "message_contains": "dotted key cannot redefine"
+  },
+  "inline_extend.toml": {
+    "message_contains": "inline table or array"
+  },
+  "inline_extend_header.toml": {
+    "message_contains": "inline table"
+  },
+  "inline_trailing_comma.toml": {
+    "message_contains": "trailing comma"
+  },
+  "static_array_extend.toml": {
+    "message_contains": "inline table or array"
+  },
+  "static_array_aot.toml": {
+    "message_contains": "inline array"
+  },
+  "string_unterminated.toml": {
+    "message_contains": "unterminated",
+    "offset": 4
+  },
+  "string_surrogate.toml": {
+    "message_contains": "Unicode scalar"
+  },
+  "string_bad_escape.toml": {
+    "message_contains": "invalid escape"
+  },
+  "date_invalid_day.toml": {
+    "message_contains": "invalid date"
+  },
+  "time_offset_range.toml": {
+    "message_contains": "invalid time offset"
+  },
+  "key_missing_equals.toml": {
+    "message_contains": "expected '='"
+  },
+  "number_leading_zero.toml": {
+    "message_contains": "leading zeros"
+  },
+  "comment_control.toml": {
+    "message_contains": "control character"
+  },
+  "unicode_offset.toml": {
+    "message_contains": "leading zeros",
+    "offset": 13
+  },
+  "unicode_comment_offset.toml": {
+    "message_contains": "leading zeros",
+    "offset": 10
+  },
+  "year_zero_feb30.toml": {
+    "message_contains": "invalid date"
+  },
+  "crlf_offset.toml": {
+    "message_contains": "invalid value",
+    "offset": 16
+  },
+  "crlf_multiple_offset.toml": {
+    "message_contains": "leading zeros",
+    "offset": 40
+  },
+  "crlf_eof_offset.toml": {
+    "message_contains": "invalid value",
+    "offset": 10
+  },
+  "eof_value_offset.toml": {
+    "message_contains": "invalid value",
+    "offset": 3
+  }
+}

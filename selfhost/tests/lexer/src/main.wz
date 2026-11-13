@@ -1,0 +1,843 @@
+package app;
+
+// Synthetic normalized-Source tests for the Wz lexer port (SH02).
+//
+// These cases construct model.Source values directly with identity offsets or
+// with an explicit BOM/CRLF offset table. They are labelled synthetic because
+// the Root full-source oracle is a later integration step. Every expectation
+// comes from the reference tests/syntax/lexer_test.cpp and the documented
+// token/trivia/span rules, not from an expression-only subset.
+
+import "wz/wzcc/lexer" as lexer;
+import "wz/wzcc/model" as model;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct ExpectedToken {
+    kind u32;
+    begin u64;
+    end u64;
+    spelling string;
+    trivia usize;
+    has_value bool;
+    value string;
+}
+
+struct ExpectedDiagnostic {
+    code string;
+    phase string;
+    message string;
+    begin u64;
+    end u64;
+}
+
+struct NumCase {
+    text string;
+    kind u32;
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_id(kind model.FailureKind) u32 {
+    switch kind {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func trivia_id(kind model.TriviaKind) u32 {
+    return model.trivia_kind_id(kind);
+}
+
+func synthetic(data Vec[u8]) model.Source {
+    let offsets = vec.empty[u64]();
+    var index usize = 0;
+    for index <= vec.len(data) {
+        vec.push(offsets, u64(index));
+        index += 1;
+    }
+    return model.Source(file_id: 1, revision_id: 1, id: 1,
+        path: "synthetic", original: data, normalized: data,
+        offsets: offsets, boundaries: vec.empty[model.Boundary](),
+        valid: true, error_byte: 0, error_length: 0, error_message: "");
+}
+
+func invalid_source(id u64, error_byte u64, error_length u64,
+    message string) model.Source {
+    return model.Source(file_id: 9, revision_id: 2, id: id,
+        path: "synthetic-invalid", original: text.bytes("invalid"),
+        normalized: vec.empty[u8](), offsets: vec.empty[u64](),
+        boundaries: vec.empty[model.Boundary](), valid: false,
+        error_byte: error_byte, error_length: error_length,
+        error_message: message);
+}
+
+func check_token(tokens Vec[model.Token], index usize,
+    expected ExpectedToken) bool {
+    let token = tokens[index];
+    if model.token_kind_id(token.kind) != expected.kind { return false; }
+    if token.span.begin_byte != expected.begin { return false; }
+    if token.span.end_byte != expected.end { return false; }
+    if token.spelling != expected.spelling { return false; }
+    if vec.len(token.leading_trivia) != expected.trivia { return false; }
+    if token.has_string_value != expected.has_value { return false; }
+    if expected.has_value {
+        if token.string_value != expected.value { return false; }
+    } else if token.string_value != "" {
+        return false;
+    }
+    return true;
+}
+
+func check_tokens(result model.LexResult,
+    expected Vec[ExpectedToken]) i32 {
+    if !result.has_value { return 1; }
+    if vec.len(result.tokens) != vec.len(expected) { return 2; }
+    var index usize = 0;
+    for index < vec.len(expected) {
+        if !check_token(result.tokens, index, expected[index]) {
+            return 10 + i32(index);
+        }
+        index += 1;
+    }
+    return 0;
+}
+
+func check_phase(result model.LexResult, phase u32, failure u32,
+    has_value bool, token_count usize, diagnostic_count usize) i32 {
+    if phase_id(result.state) != phase { return 1; }
+    if failure_id(result.failure) != failure { return 2; }
+    if result.has_value != has_value { return 3; }
+    if vec.len(result.tokens) != token_count { return 4; }
+    if vec.len(result.diagnostics) != diagnostic_count { return 5; }
+    return 0;
+}
+
+func check_diagnostic(result model.LexResult, index usize,
+    expected ExpectedDiagnostic) bool {
+    if index >= vec.len(result.diagnostics) { return false; }
+    let d = result.diagnostics[index];
+    if d.code != expected.code { return false; }
+    if d.phase != expected.phase { return false; }
+    if d.severity != "error" { return false; }
+    if d.message != expected.message { return false; }
+    if !d.has_primary { return false; }
+    if d.primary.snapshot != result.source.id { return false; }
+    if d.primary.begin_byte != expected.begin { return false; }
+    if d.primary.end_byte != expected.end { return false; }
+    if vec.len(d.related) != 0 { return false; }
+    if vec.len(d.fixits) != 0 { return false; }
+    if vec.len(d.notes) != 0 { return false; }
+    if d.has_expected_type || d.has_actual_type { return false; }
+    return true;
+}
+
+func check_trivia(token model.Token, index usize, kind u32, begin u64,
+    end u64, spelling string) bool {
+    if index >= vec.len(token.leading_trivia) { return false; }
+    let item = token.leading_trivia[index];
+    if trivia_id(item.kind) != kind { return false; }
+    if item.span.begin_byte != begin { return false; }
+    if item.span.end_byte != end { return false; }
+    if item.spelling != spelling { return false; }
+    return true;
+}
+
+func test_numeric_positive() i32 {
+    let integers Vec[NumCase] = [
+        NumCase(text: "0", kind: 2),
+        NumCase(text: "42", kind: 2),
+        NumCase(text: "1_000", kind: 2),
+        NumCase(text: "0b10_01", kind: 2),
+        NumCase(text: "0o755", kind: 2),
+        NumCase(text: "0xdead_BEEF", kind: 2),
+        NumCase(text: "9223372036854775808", kind: 2),
+    ];
+    var index usize = 0;
+    for item in integers {
+        let result = lexer.lex(synthetic(text.bytes(item.text)));
+        var code = check_phase(result, 0, 0, true, 2, 0);
+        if code != 0 { return 100 + i32(index) * 10 + code; }
+        let size = text.byte_len(item.text);
+        let expected = vec.empty[ExpectedToken]();
+        vec.push(expected, ExpectedToken(kind: item.kind, begin: 0,
+            end: u64(size), spelling: item.text, trivia: 0,
+            has_value: false, value: ""));
+        vec.push(expected, ExpectedToken(kind: 0, begin: u64(size),
+            end: u64(size), spelling: "", trivia: 0, has_value: false,
+            value: ""));
+        code = check_tokens(result, expected);
+        if code != 0 { return 200 + i32(index) * 10 + code; }
+        index += 1;
+    }
+    let floats Vec[NumCase] = [
+        NumCase(text: "1.0", kind: 3),
+        NumCase(text: "1e-3", kind: 3),
+        NumCase(text: "1_000.25", kind: 3),
+        NumCase(text: "0.5", kind: 3),
+        NumCase(text: "0e0", kind: 3),
+    ];
+    index = 0;
+    for item in floats {
+        let result = lexer.lex(synthetic(text.bytes(item.text)));
+        var code = check_phase(result, 0, 0, true, 2, 0);
+        if code != 0 { return 300 + i32(index) * 10 + code; }
+        let size = text.byte_len(item.text);
+        let expected = vec.empty[ExpectedToken]();
+        vec.push(expected, ExpectedToken(kind: item.kind, begin: 0,
+            end: u64(size), spelling: item.text, trivia: 0,
+            has_value: false, value: ""));
+        vec.push(expected, ExpectedToken(kind: 0, begin: u64(size),
+            end: u64(size), spelling: "", trivia: 0, has_value: false,
+            value: ""));
+        code = check_tokens(result, expected);
+        if code != 0 { return 400 + i32(index) * 10 + code; }
+        index += 1;
+    }
+    // A '+' after a hexadecimal literal is punctuation, not an exponent sign.
+    let result = lexer.lex(synthetic(text.bytes("0xE+1")));
+    var code = check_phase(result, 0, 0, true, 4, 0);
+    if code != 0 { return 500 + code; }
+    let expected = vec.empty[ExpectedToken]();
+    vec.push(expected, ExpectedToken(kind: 2, begin: 0, end: 3,
+        spelling: "0xE", trivia: 0, has_value: false, value: ""));
+    vec.push(expected, ExpectedToken(kind: 6, begin: 3, end: 4,
+        spelling: "+", trivia: 0, has_value: false, value: ""));
+    vec.push(expected, ExpectedToken(kind: 2, begin: 4, end: 5,
+        spelling: "1", trivia: 0, has_value: false, value: ""));
+    vec.push(expected, ExpectedToken(kind: 0, begin: 5, end: 5,
+        spelling: "", trivia: 0, has_value: false, value: ""));
+    code = check_tokens(result, expected);
+    if code != 0 { return 600 + code; }
+
+    // Multi-digit candidates after a nonzero source offset must use absolute
+    // byte positions inside the FSM, not token-relative ones.
+    let mixed = lexer.lex(synthetic(
+        text.bytes("x 123 1_000.25 0b10_01;")));
+    code = check_phase(mixed, 0, 0, true, 6, 0);
+    if code != 0 { return 700 + code; }
+    let mixed_expected = vec.empty[ExpectedToken]();
+    vec.push(mixed_expected, ExpectedToken(kind: 1, begin: 0, end: 1,
+        spelling: "x", trivia: 0, has_value: false, value: ""));
+    vec.push(mixed_expected, ExpectedToken(kind: 2, begin: 2, end: 5,
+        spelling: "123", trivia: 1, has_value: false, value: ""));
+    vec.push(mixed_expected, ExpectedToken(kind: 3, begin: 6, end: 14,
+        spelling: "1_000.25", trivia: 1, has_value: false, value: ""));
+    vec.push(mixed_expected, ExpectedToken(kind: 2, begin: 15, end: 22,
+        spelling: "0b10_01", trivia: 1, has_value: false, value: ""));
+    vec.push(mixed_expected, ExpectedToken(kind: 6, begin: 22, end: 23,
+        spelling: ";", trivia: 0, has_value: false, value: ""));
+    vec.push(mixed_expected, ExpectedToken(kind: 0, begin: 23, end: 23,
+        spelling: "", trivia: 0, has_value: false, value: ""));
+    code = check_tokens(mixed, mixed_expected);
+    if code != 0 { return 800 + code; }
+    return 0;
+}
+
+func test_numeric_negative() i32 {
+    let cases Vec[string] = ["007", "0x_FF", "1__0", "10_", "123i32",
+        "0b2", "1e+", "0b", "0x", "00", "1_", "0x1_", "0b1__0", "1e_2",
+        "0o8"];
+    var index usize = 0;
+    for spelling in cases {
+        let result = lexer.lex(synthetic(text.bytes(spelling)));
+        var code = check_phase(result, 1, 0, true, 2, 1);
+        if code != 0 { return 100 + i32(index) * 10 + code; }
+        let size = text.byte_len(spelling);
+        let expected = vec.empty[ExpectedToken]();
+        vec.push(expected, ExpectedToken(kind: 7, begin: 0, end: u64(size),
+            spelling: spelling, trivia: 0, has_value: false, value: ""));
+        vec.push(expected, ExpectedToken(kind: 0, begin: u64(size),
+            end: u64(size), spelling: "", trivia: 0, has_value: false,
+            value: ""));
+        code = check_tokens(result, expected);
+        if code != 0 { return 200 + i32(index) * 10 + code; }
+        let diagnostic = ExpectedDiagnostic(code: "E_LEX_INVALID_LITERAL",
+            phase: "lex", message: "invalid literal", begin: 0,
+            end: u64(size));
+        if !check_diagnostic(result, 0, diagnostic) {
+            return 300 + i32(index);
+        }
+        if model.token_kind_id(result.tokens[1].kind) != 0 {
+            return 400 + i32(index);
+        }
+        index += 1;
+    }
+    let offset_bad = lexer.lex(synthetic(text.bytes("x 007 y")));
+    var code = check_phase(offset_bad, 1, 0, true, 4, 1);
+    if code != 0 { return 900 + code; }
+    let offset_expected = vec.empty[ExpectedToken]();
+    vec.push(offset_expected, ExpectedToken(kind: 1, begin: 0, end: 1,
+        spelling: "x", trivia: 0, has_value: false, value: ""));
+    vec.push(offset_expected, ExpectedToken(kind: 7, begin: 2, end: 5,
+        spelling: "007", trivia: 1, has_value: false, value: ""));
+    vec.push(offset_expected, ExpectedToken(kind: 1, begin: 6, end: 7,
+        spelling: "y", trivia: 1, has_value: false, value: ""));
+    vec.push(offset_expected, ExpectedToken(kind: 0, begin: 7, end: 7,
+        spelling: "", trivia: 0, has_value: false, value: ""));
+    code = check_tokens(offset_bad, offset_expected);
+    if code != 0 { return 950 + code; }
+    if !check_diagnostic(offset_bad, 0,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_LITERAL", phase: "lex",
+            message: "invalid literal", begin: 2, end: 5)) {
+        return 980;
+    }
+    return 0;
+}
+
+func test_strings_positive() i32 {
+    let s1 = "\"\\u{10FFFF}\\0\\n\"";
+    let result = lexer.lex(synthetic(text.bytes(s1)));
+    var code = check_phase(result, 0, 0, true, 2, 0);
+    if code != 0 { return 100 + code; }
+    let size = text.byte_len(s1);
+    let expected = vec.empty[ExpectedToken]();
+    vec.push(expected, ExpectedToken(kind: 4, begin: 0, end: u64(size),
+        spelling: s1, trivia: 0, has_value: true,
+        value: "\u{10FFFF}\0\n"));
+    vec.push(expected, ExpectedToken(kind: 0, begin: u64(size),
+        end: u64(size), spelling: "", trivia: 0, has_value: false,
+        value: ""));
+    code = check_tokens(result, expected);
+    if code != 0 { return 200 + code; }
+    if text.byte_len(result.tokens[0].string_value) != 6 { return 300; }
+
+    let s2 = "`中文\n😀`";
+    let backtick = lexer.lex(synthetic(text.bytes(s2)));
+    code = check_phase(backtick, 0, 0, true, 2, 0);
+    if code != 0 { return 400 + code; }
+    if model.token_kind_id(backtick.tokens[0].kind) != 4 { return 410; }
+    if backtick.tokens[0].spelling != s2 { return 420; }
+    if !backtick.tokens[0].has_string_value { return 430; }
+    if backtick.tokens[0].string_value != "中文\n😀" { return 440; }
+    if text.byte_len(backtick.tokens[0].string_value) != 11 { return 450; }
+    if backtick.tokens[0].span.end_byte != u64(text.byte_len(s2)) {
+        return 460;
+    }
+
+    let s3 = "\"\"";
+    let empty = lexer.lex(synthetic(text.bytes(s3)));
+    code = check_phase(empty, 0, 0, true, 2, 0);
+    if code != 0 { return 500 + code; }
+    if !empty.tokens[0].has_string_value { return 510; }
+    if empty.tokens[0].string_value != "" { return 520; }
+    if empty.tokens[0].spelling != s3 { return 530; }
+
+    let s4 = "\"a\\tb\"";
+    let tab = lexer.lex(synthetic(text.bytes(s4)));
+    code = check_phase(tab, 0, 0, true, 2, 0);
+    if code != 0 { return 600 + code; }
+    if !tab.tokens[0].has_string_value { return 610; }
+    if tab.tokens[0].string_value != "a\tb" { return 620; }
+
+    let s5 = "\"\\u{0}\"";
+    let nul = lexer.lex(synthetic(text.bytes(s5)));
+    code = check_phase(nul, 0, 0, true, 2, 0);
+    if code != 0 { return 700 + code; }
+    if !nul.tokens[0].has_string_value { return 710; }
+    if nul.tokens[0].string_value != "\0" { return 720; }
+    if text.byte_len(nul.tokens[0].string_value) != 1 { return 730; }
+
+    let s6 = "`a\\\"b`";
+    let raw = lexer.lex(synthetic(text.bytes(s6)));
+    code = check_phase(raw, 0, 0, true, 2, 0);
+    if code != 0 { return 800 + code; }
+    if !raw.tokens[0].has_string_value { return 810; }
+    if raw.tokens[0].string_value != "a\\\"b" { return 820; }
+    if text.byte_len(raw.tokens[0].string_value) != 4 { return 830; }
+    return 0;
+}
+
+func test_strings_negative() i32 {
+    let cases Vec[string] = ["\"\\x20\"", "\"\\u{D800}\"",
+        "\"\\u{110000}\"", "\"\\u{}\"", "\"a\n", "`a", "\"",
+        "\"a\tb\"", "\"\\u{12G4}\"", "\"abc\\", "\"\\uX\""];
+    var index usize = 0;
+    for spelling in cases {
+        let result = lexer.lex(synthetic(text.bytes(spelling)));
+        var code = check_phase(result, 1, 0, true, 2, 1);
+        if code != 0 { return 100 + i32(index) * 10 + code; }
+        let size = text.byte_len(spelling);
+        let expected = vec.empty[ExpectedToken]();
+        vec.push(expected, ExpectedToken(kind: 7, begin: 0, end: u64(size),
+            spelling: spelling, trivia: 0, has_value: false, value: ""));
+        vec.push(expected, ExpectedToken(kind: 0, begin: u64(size),
+            end: u64(size), spelling: "", trivia: 0, has_value: false,
+            value: ""));
+        code = check_tokens(result, expected);
+        if code != 0 { return 200 + i32(index) * 10 + code; }
+        let diagnostic = ExpectedDiagnostic(code: "E_LEX_INVALID_LITERAL",
+            phase: "lex", message: "invalid literal", begin: 0,
+            end: u64(size));
+        if !check_diagnostic(result, 0, diagnostic) {
+            return 300 + i32(index);
+        }
+        if result.tokens[0].has_string_value { return 400 + i32(index); }
+        if model.token_kind_id(result.tokens[1].kind) != 0 {
+            return 500 + i32(index);
+        }
+        index += 1;
+    }
+    return 0;
+}
+
+func test_keywords() i32 {
+    let words Vec[string] = ["as", "break", "case", "catch", "const",
+        "continue", "default", "defer", "else", "enum", "false", "for",
+        "func", "if", "impl", "import", "in", "inout", "let", "move",
+        "package", "pub", "return", "struct", "switch", "throw", "throws",
+        "trait", "true", "try", "unsafe", "var", "async", "await"];
+    let source = vec.empty[u8]();
+    var offset usize = 0;
+    var index usize = 0;
+    for word in words {
+        if index > 0 {
+            vec.push(source, 32);
+            offset += 1;
+        }
+        let bytes = text.bytes(word);
+        for byte in bytes {
+            vec.push(source, byte);
+        }
+        offset += text.byte_len(word);
+        index += 1;
+    }
+    let result = lexer.lex(synthetic(source));
+    let code = check_phase(result, 0, 0, true, 35, 0);
+    if code != 0 { return 100 + code; }
+    offset = 0;
+    index = 0;
+    for word in words {
+        let token = result.tokens[index];
+        if model.token_kind_id(token.kind) != 5 {
+            return 200 + i32(index);
+        }
+        if token.spelling != word { return 300 + i32(index); }
+        if token.span.begin_byte != u64(offset) {
+            return 400 + i32(index);
+        }
+        if token.span.end_byte != u64(offset + text.byte_len(word)) {
+            return 500 + i32(index);
+        }
+        if index == 0 {
+            if vec.len(token.leading_trivia) != 0 { return 600; }
+        } else {
+            if vec.len(token.leading_trivia) != 1 { return 610; }
+            if !check_trivia(token, 0, 0, u64(offset - 1), u64(offset), " ") {
+                return 620 + i32(index);
+            }
+        }
+        offset += text.byte_len(word) + 1;
+        index += 1;
+    }
+    if model.token_kind_id(result.tokens[34].kind) != 0 { return 700; }
+    if result.tokens[34].span.begin_byte != u64(offset - 1) { return 710; }
+
+    let non_keywords = "fn while auto null i32 share";
+    let plain = lexer.lex(synthetic(text.bytes(non_keywords)));
+    let plain_code = check_phase(plain, 0, 0, true, 7, 0);
+    if plain_code != 0 { return 800 + plain_code; }
+    // All six words are identifiers, never keywords.
+    if model.token_kind_id(plain.tokens[0].kind) != 1 { return 810; }
+    if model.token_kind_id(plain.tokens[1].kind) != 1 { return 820; }
+    if model.token_kind_id(plain.tokens[2].kind) != 1 { return 830; }
+    if model.token_kind_id(plain.tokens[3].kind) != 1 { return 840; }
+    if model.token_kind_id(plain.tokens[4].kind) != 1 { return 850; }
+    if model.token_kind_id(plain.tokens[5].kind) != 1 { return 860; }
+    let async_source = lexer.lex(synthetic(text.bytes("async func")));
+    let async_code = check_phase(async_source, 0, 0, true, 3, 0);
+    if async_code != 0 { return 900 + async_code; }
+    if model.token_kind_id(async_source.tokens[0].kind) != 5 { return 910; }
+    if model.token_kind_id(async_source.tokens[1].kind) != 5 { return 920; }
+    if async_source.tokens[0].spelling != "async" { return 930; }
+    if async_source.tokens[1].spelling != "func" { return 940; }
+
+    let reserved_text = "class extends extern operator";
+    let reserved = lexer.lex(synthetic(text.bytes(reserved_text)));
+    let reserved_code = check_phase(reserved, 1, 0, true, 5, 4);
+    if reserved_code != 0 { return 1000 + reserved_code; }
+    let reserved_words Vec[string] = ["class", "extends", "extern", "operator"];
+    let reserved_spans Vec[u64] = [0, 5, 6, 13, 14, 20, 21, 29];
+    var word_index usize = 0;
+    for word in reserved_words {
+        let token = reserved.tokens[word_index];
+        if model.token_kind_id(token.kind) != 7 {
+            return 1100 + i32(word_index);
+        }
+        if token.spelling != word { return 1200 + i32(word_index); }
+        if token.span.begin_byte != reserved_spans[word_index * 2] {
+            return 1300 + i32(word_index);
+        }
+        if token.span.end_byte != reserved_spans[word_index * 2 + 1] {
+            return 1400 + i32(word_index);
+        }
+        let diagnostic = ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN",
+            phase: "lex", message: "invalid or reserved token",
+            begin: reserved_spans[word_index * 2],
+            end: reserved_spans[word_index * 2 + 1]);
+        if !check_diagnostic(reserved, word_index, diagnostic) {
+            return 1500 + i32(word_index);
+        }
+        word_index += 1;
+    }
+    if model.token_kind_id(reserved.tokens[4].kind) != 0 { return 1600; }
+    if reserved.tokens[4].span.begin_byte != 29 { return 1610; }
+
+    // Exact word matching: longer identifiers are not reserved.
+    let lookalike_text = "classy extendsX extern_ operator1";
+    let lookalike = lexer.lex(synthetic(text.bytes(lookalike_text)));
+    let lookalike_code = check_phase(lookalike, 0, 0, true, 5, 0);
+    if lookalike_code != 0 { return 1700 + lookalike_code; }
+    word_index = 0;
+    for token in lookalike.tokens {
+        if word_index < 4 {
+            if model.token_kind_id(token.kind) != 1 {
+                return 1800 + i32(word_index);
+            }
+        }
+        word_index += 1;
+    }
+    return 0;
+}
+
+func test_operators() i32 {
+    let arrow_text = "a>>=2;";
+    let arrow = lexer.lex(synthetic(text.bytes(arrow_text)));
+    let code = check_phase(arrow, 0, 0, true, 5, 0);
+    if code != 0 { return 100 + code; }
+    let expected = vec.empty[ExpectedToken]();
+    vec.push(expected, ExpectedToken(kind: 1, begin: 0, end: 1,
+        spelling: "a", trivia: 0, has_value: false, value: ""));
+    vec.push(expected, ExpectedToken(kind: 6, begin: 1, end: 4,
+        spelling: ">>=", trivia: 0, has_value: false, value: ""));
+    vec.push(expected, ExpectedToken(kind: 2, begin: 4, end: 5,
+        spelling: "2", trivia: 0, has_value: false, value: ""));
+    vec.push(expected, ExpectedToken(kind: 6, begin: 5, end: 6,
+        spelling: ";", trivia: 0, has_value: false, value: ""));
+    vec.push(expected, ExpectedToken(kind: 0, begin: 6, end: 6,
+        spelling: "", trivia: 0, has_value: false, value: ""));
+    let arrow_code = check_tokens(arrow, expected);
+    if arrow_code != 0 { return 200 + arrow_code; }
+
+    let multi Vec[string] = ["<<=", ">>=", "==", "!=", "<=", ">=", "&&",
+        "||", "<<", ">>", "+=", "-=", "*=", "/=", "%=", "&=", "|=", "^="];
+    let multi_source = vec.empty[u8]();
+    var multi_size usize = 0;
+    var index usize = 0;
+    for op in multi {
+        if index > 0 {
+            vec.push(multi_source, 32);
+            multi_size += 1;
+        }
+        for byte in text.bytes(op) {
+            vec.push(multi_source, byte);
+        }
+        multi_size += text.byte_len(op);
+        index += 1;
+    }
+    let multi_result = lexer.lex(synthetic(multi_source));
+    let multi_code = check_phase(multi_result, 0, 0, true, 19, 0);
+    if multi_code != 0 { return 300 + multi_code; }
+    var offset usize = 0;
+    index = 0;
+    for op in multi {
+        let token = multi_result.tokens[index];
+        if model.token_kind_id(token.kind) != 6 { return 400 + i32(index); }
+        if token.spelling != op { return 500 + i32(index); }
+        if token.span.begin_byte != u64(offset) { return 600 + i32(index); }
+        if token.span.end_byte != u64(offset + text.byte_len(op)) {
+            return 700 + i32(index);
+        }
+        offset += text.byte_len(op) + 1;
+        index += 1;
+    }
+
+    let reserved_text = "++ -- -> =>";
+    let reserved = lexer.lex(synthetic(text.bytes(reserved_text)));
+    let reserved_code = check_phase(reserved, 1, 0, true, 5, 4);
+    if reserved_code != 0 { return 800 + reserved_code; }
+    let reserved_ops Vec[string] = ["++", "--", "->", "=>"];
+    let reserved_starts Vec[u64] = [0, 3, 6, 9];
+    index = 0;
+    for op in reserved_ops {
+        let token = reserved.tokens[index];
+        if model.token_kind_id(token.kind) != 7 { return 900 + i32(index); }
+        if token.spelling != op { return 1000 + i32(index); }
+        if token.span.begin_byte != reserved_starts[index] {
+            return 1100 + i32(index);
+        }
+        if token.span.end_byte != reserved_starts[index] + 2 {
+            return 1200 + i32(index);
+        }
+        let diagnostic = ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN",
+            phase: "lex", message: "invalid or reserved token",
+            begin: reserved_starts[index], end: reserved_starts[index] + 2);
+        if !check_diagnostic(reserved, index, diagnostic) {
+            return 1300 + i32(index);
+        }
+        index += 1;
+    }
+
+    let single_chars Vec[string] = ["+", "-", "*", "/", "%", "!", "~", "&",
+        "|", "^", "<", ">", "=", "(", ")", "[", "]", "{", "}", ".", ",",
+        ":", ";"];
+    let single_source = vec.empty[u8]();
+    index = 0;
+    for item in single_chars {
+        if index > 0 { vec.push(single_source, 32); }
+        for byte in text.bytes(item) { vec.push(single_source, byte); }
+        index += 1;
+    }
+    let single = lexer.lex(synthetic(single_source));
+    let single_code = check_phase(single, 0, 0, true, 24, 0);
+    if single_code != 0 { return 1400 + single_code; }
+    index = 0;
+    for item in single_chars {
+        let token = single.tokens[index];
+        if model.token_kind_id(token.kind) != 6 { return 1500 + i32(index); }
+        if token.spelling != item { return 1600 + i32(index); }
+        if token.span.begin_byte != u64(index * 2) {
+            return 1700 + i32(index);
+        }
+        if token.span.end_byte != u64(index * 2 + 1) {
+            return 1800 + i32(index);
+        }
+        index += 1;
+    }
+    return 0;
+}
+
+func test_invalid_characters() i32 {
+    let question = lexer.lex(synthetic(text.bytes("?")));
+    var code = check_phase(question, 1, 0, true, 2, 1);
+    if code != 0 { return 100 + code; }
+    if model.token_kind_id(question.tokens[0].kind) != 7 { return 110; }
+    if question.tokens[0].span.begin_byte != 0 { return 120; }
+    if question.tokens[0].span.end_byte != 1 { return 130; }
+    if question.tokens[0].spelling != "?" { return 140; }
+    if !check_diagnostic(question, 0,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN", phase: "lex",
+            message: "invalid or reserved token", begin: 0, end: 1)) {
+        return 150;
+    }
+
+    let han = lexer.lex(synthetic(text.bytes("中文")));
+    code = check_phase(han, 1, 0, true, 3, 2);
+    if code != 0 { return 200 + code; }
+    if model.token_kind_id(han.tokens[0].kind) != 7 { return 210; }
+    if han.tokens[0].span.begin_byte != 0 { return 220; }
+    if han.tokens[0].span.end_byte != 3 { return 230; }
+    if han.tokens[0].spelling != "中" { return 240; }
+    if han.tokens[1].span.begin_byte != 3 { return 250; }
+    if han.tokens[1].span.end_byte != 6 { return 260; }
+    if han.tokens[1].spelling != "文" { return 270; }
+    if !check_diagnostic(han, 0,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN", phase: "lex",
+            message: "invalid or reserved token", begin: 0, end: 3)) {
+        return 280;
+    }
+    if !check_diagnostic(han, 1,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN", phase: "lex",
+            message: "invalid or reserved token", begin: 3, end: 6)) {
+        return 290;
+    }
+
+    // A four-byte scalar is consumed as one invalid token, including all
+    // continuation bytes, exactly like the reference fallback loop.
+    let emoji = lexer.lex(synthetic(text.bytes("😀")));
+    code = check_phase(emoji, 1, 0, true, 2, 1);
+    if code != 0 { return 300 + code; }
+    if emoji.tokens[0].span.begin_byte != 0 { return 310; }
+    if emoji.tokens[0].span.end_byte != 4 { return 320; }
+    if emoji.tokens[0].spelling != "😀" { return 330; }
+    if !check_diagnostic(emoji, 0,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN", phase: "lex",
+            message: "invalid or reserved token", begin: 0, end: 4)) {
+        return 340;
+    }
+    return 0;
+}
+
+func test_trivia() i32 {
+    let empty = lexer.lex(synthetic(vec.empty[u8]()));
+    var code = check_phase(empty, 0, 0, true, 1, 0);
+    if code != 0 { return 100 + code; }
+    if model.token_kind_id(empty.tokens[0].kind) != 0 { return 110; }
+    if empty.tokens[0].span.begin_byte != 0 { return 120; }
+    if empty.tokens[0].span.end_byte != 0 { return 130; }
+    if vec.len(empty.tokens[0].leading_trivia) != 0 { return 140; }
+
+    let spaces = lexer.lex(synthetic(text.bytes("  \n")));
+    code = check_phase(spaces, 0, 0, true, 1, 0);
+    if code != 0 { return 200 + code; }
+    if !check_trivia(spaces.tokens[0], 0, 0, 0, 3, "  \n") {
+        return 210;
+    }
+
+    let line = lexer.lex(synthetic(text.bytes("//x")));
+    code = check_phase(line, 0, 0, true, 1, 0);
+    if code != 0 { return 300 + code; }
+    if line.tokens[0].span.begin_byte != 3 { return 310; }
+    if !check_trivia(line.tokens[0], 0, 1, 0, 3, "//x") { return 320; }
+
+    let mixed = lexer.lex(synthetic(text.bytes("//c\nx")));
+    code = check_phase(mixed, 0, 0, true, 2, 0);
+    if code != 0 { return 400 + code; }
+    if model.token_kind_id(mixed.tokens[0].kind) != 1 { return 410; }
+    if mixed.tokens[0].spelling != "x" { return 420; }
+    if !check_trivia(mixed.tokens[0], 0, 1, 0, 3, "//c") { return 430; }
+    if !check_trivia(mixed.tokens[0], 1, 0, 3, 4, "\n") { return 440; }
+
+    let nested = lexer.lex(synthetic(text.bytes("/* a /* b */ x")));
+    code = check_phase(nested, 0, 0, true, 2, 0);
+    if code != 0 { return 500 + code; }
+    if model.token_kind_id(nested.tokens[0].kind) != 1 { return 510; }
+    if nested.tokens[0].span.begin_byte != 13 { return 520; }
+    if nested.tokens[0].spelling != "x" { return 530; }
+    if !check_trivia(nested.tokens[0], 0, 2, 0, 12, "/* a /* b */") {
+        return 540;
+    }
+    if !check_trivia(nested.tokens[0], 1, 0, 12, 13, " ") { return 550; }
+
+    let unterminated = lexer.lex(synthetic(text.bytes("/*")));
+    code = check_phase(unterminated, 1, 0, true, 1, 1);
+    if code != 0 { return 600 + code; }
+    if model.token_kind_id(unterminated.tokens[0].kind) != 0 { return 610; }
+    if unterminated.tokens[0].span.begin_byte != 2 { return 620; }
+    if !check_trivia(unterminated.tokens[0], 0, 2, 0, 2, "/*") {
+        return 630;
+    }
+    if !check_diagnostic(unterminated, 0,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN", phase: "lex",
+            message: "unterminated block comment", begin: 0, end: 2)) {
+        return 640;
+    }
+
+    let padded = lexer.lex(synthetic(text.bytes(" \t\n x")));
+    code = check_phase(padded, 0, 0, true, 2, 0);
+    if code != 0 { return 700 + code; }
+    if !check_trivia(padded.tokens[0], 0, 0, 0, 4, " \t\n ") { return 710; }
+
+    let flat_block = lexer.lex(synthetic(text.bytes("/*/\n*/")));
+    code = check_phase(flat_block, 0, 0, true, 1, 0);
+    if code != 0 { return 800 + code; }
+    if !check_trivia(flat_block.tokens[0], 0, 2, 0, 6, "/*/\n*/") {
+        return 810;
+    }
+
+    let three = lexer.lex(synthetic(text.bytes("//\n/* */")));
+    code = check_phase(three, 0, 0, true, 1, 0);
+    if code != 0 { return 900 + code; }
+    if vec.len(three.tokens[0].leading_trivia) != 3 { return 910; }
+    if !check_trivia(three.tokens[0], 0, 1, 0, 2, "//") { return 920; }
+    if !check_trivia(three.tokens[0], 1, 0, 2, 3, "\n") { return 930; }
+    if !check_trivia(three.tokens[0], 2, 2, 3, 8, "/* */") { return 940; }
+    return 0;
+}
+
+func test_bom_crlf() i32 {
+    let raw = text.bytes(
+        "\u{FEFF} //中文😀\r\n\"\\u{1F600}\\0\"\r\n");
+    let normalized = text.bytes(" //中文😀\n\"\\u{1F600}\\0\"\n");
+    let offsets = vec.empty[u64]();
+    let values Vec[u64] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 12, 13, 14, 15,
+        16, 18, 19, 20, 21, 22, 23, 24, 25, 26, 27, 28, 29, 30, 31, 33];
+    for value in values {
+        vec.push(offsets, value);
+    }
+    let source = model.Source(file_id: 3, revision_id: 4, id: 5,
+        path: "synthetic-bom-crlf", original: raw, normalized: normalized,
+        offsets: offsets, boundaries: vec.empty[model.Boundary](),
+        valid: true, error_byte: 0, error_length: 0, error_message: "");
+    let result = lexer.lex(source);
+    let code = check_phase(result, 0, 0, true, 2, 0);
+    if code != 0 { return 100 + code; }
+    let token = result.tokens[0];
+    if model.token_kind_id(token.kind) != 4 { return 110; }
+    if token.span.snapshot != 5 { return 120; }
+    if token.span.begin_byte != 18 { return 130; }
+    if token.span.end_byte != 31 { return 140; }
+    if vec.len(token.leading_trivia) != 3 { return 150; }
+    if !check_trivia(token, 0, 0, 3, 4, " ") { return 160; }
+    if !check_trivia(token, 1, 1, 4, 16, "//中文😀") { return 170; }
+    if !check_trivia(token, 2, 0, 16, 18, "\n") { return 180; }
+    if !token.has_string_value { return 190; }
+    if token.string_value != "\u{1F600}\0" { return 200; }
+    if text.byte_len(token.string_value) != 5 { return 210; }
+    let eof = result.tokens[1];
+    if model.token_kind_id(eof.kind) != 0 { return 220; }
+    if eof.span.begin_byte != 33 { return 230; }
+    if eof.span.end_byte != 33 { return 240; }
+    if vec.len(eof.leading_trivia) != 1 { return 250; }
+    if !check_trivia(eof, 0, 0, 31, 33, "\n") { return 260; }
+    return 0;
+}
+
+func test_invalid_source() i32 {
+    let source = invalid_source(7, 3, 1, "standalone CR");
+    let result = lexer.lex(source);
+    var code = check_phase(result, 2, 0, false, 0, 1);
+    if code != 0 { return 100 + code; }
+    if result.source.id != 7 { return 110; }
+    if !check_diagnostic(result, 0,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN", phase: "lex",
+            message: "standalone CR", begin: 3, end: 4)) {
+        return 120;
+    }
+
+    let truncated = invalid_source(8, 5, 0, "truncated UTF-8");
+    let second = lexer.lex(truncated);
+    code = check_phase(second, 2, 0, false, 0, 1);
+    if code != 0 { return 200 + code; }
+    if !check_diagnostic(second, 0,
+        ExpectedDiagnostic(code: "E_LEX_INVALID_TOKEN", phase: "lex",
+            message: "truncated UTF-8", begin: 5, end: 5)) {
+        return 210;
+    }
+    return 0;
+}
+
+func fail(name string, code i32) {
+    try {
+        io.eprintln("FAIL " + name + " #" +
+            strconv.format_i64(i64(code)));
+    } catch error os.Error {}
+}
+
+func main() i32 {
+    var code = test_numeric_positive();
+    if code != 0 { fail("numeric-positive", code); return 10; }
+    code = test_numeric_negative();
+    if code != 0 { fail("numeric-negative", code); return 11; }
+    code = test_strings_positive();
+    if code != 0 { fail("strings-positive", code); return 12; }
+    code = test_strings_negative();
+    if code != 0 { fail("strings-negative", code); return 13; }
+    code = test_keywords();
+    if code != 0 { fail("keywords-reserved", code); return 14; }
+    code = test_operators();
+    if code != 0 { fail("operators", code); return 15; }
+    code = test_invalid_characters();
+    if code != 0 { fail("invalid-characters", code); return 16; }
+    code = test_trivia();
+    if code != 0 { fail("trivia", code); return 17; }
+    code = test_bom_crlf();
+    if code != 0 { fail("bom-crlf", code); return 18; }
+    code = test_invalid_source();
+    if code != 0 { fail("invalid-source", code); return 19; }
+    try { io.println("lexer wz tests passed"); }
+    catch error os.Error { return 20; }
+    return 0;
+}

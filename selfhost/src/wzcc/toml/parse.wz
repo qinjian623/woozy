@@ -1,0 +1,354 @@
+// Document structure and TOML 1.0 table rules for the Woozy TOML reader.
+// The rules follow the specification: keys are unique per table, tables and
+// arrays of tables cannot be redefined, dotted keys create namespaces that
+// cannot later be opened with a [table] header, and inline tables/arrays are
+// recursively immutable.
+package toml;
+
+import "std/text" as text;
+import "std/vec" as vec;
+
+func find_entry(entries Vec[NodeEntry], key string) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].key == key { return i64(index); }
+    }
+    return -1;
+}
+
+func push_table(entries Vec[NodeEntry], key string, kind u32) Vec[NodeEntry] {
+    let created = vec.empty[NodeEntry]();
+    vec.push(entries, NodeEntry(key: key, value: Node.Table(created), kind: kind));
+    return created;
+}
+
+func table_of(node Node) Vec[NodeEntry] throws Error {
+    switch node {
+        case Node.Table(entries): return entries;
+        case _: throw error_at(0, "internal table lookup failed");
+    }
+}
+
+func array_of(node Node) Vec[Node] throws Error {
+    switch node {
+        case Node.Array(items): return items;
+        case _: throw error_at(0, "internal array lookup failed");
+    }
+}
+
+func last_table_of(items Vec[Node], offset usize) Vec[NodeEntry] throws Error {
+    if vec.len(items) == 0 {
+        throw error_at(offset, "array of tables has no element");
+    }
+    return table_of(items[vec.len(items) - 1]);
+}
+
+// header_descend resolves one intermediate segment of a [table] or
+// [[table]] header. Missing segments become implicit tables. Arrays of
+// tables resolve to their last element, inline values are immutable.
+func header_descend(entries Vec[NodeEntry], key string, offset usize) Vec[NodeEntry] throws Error {
+    let found = find_entry(entries, key);
+    if found < 0 {
+        return push_table(entries, key, KIND_IMPLICIT);
+    }
+    let position = usize(found);
+    let kind = entries[position].kind;
+    if kind == KIND_INLINE {
+        throw error_at(offset, "cannot extend an inline table");
+    }
+    if is_table_kind(kind) {
+        return table_of(entries[position].value);
+    }
+    if kind == KIND_ARRAY_OF_TABLES {
+        let items = array_of(entries[position].value);
+        return last_table_of(items, offset);
+    }
+    if kind == KIND_STATIC_ARRAY {
+        throw error_at(offset, "cannot extend an inline array");
+    }
+    throw error_at(offset, "cannot overwrite a value with a table");
+}
+
+// header_final resolves the last segment of a [table] header. An existing
+// implicit table may be defined now; explicit, dotted, inline, array and
+// scalar values may not.
+func header_final(entries Vec[NodeEntry], key string, offset usize) Vec[NodeEntry] throws Error {
+    let found = find_entry(entries, key);
+    if found < 0 {
+        return push_table(entries, key, KIND_EXPLICIT);
+    }
+    let position = usize(found);
+    if entries[position].kind == KIND_IMPLICIT {
+        let inner = table_of(entries[position].value);
+        entries[position].kind = KIND_EXPLICIT;
+        return inner;
+    }
+    throw error_at(offset, "cannot declare a table twice");
+}
+
+// aot_final appends one element for a [[table]] header.
+func aot_final(entries Vec[NodeEntry], key string, offset usize) Vec[NodeEntry] throws Error {
+    let found = find_entry(entries, key);
+    if found < 0 {
+        let items = vec.empty[Node]();
+        let created = vec.empty[NodeEntry]();
+        vec.push(items, Node.Table(created));
+        vec.push(entries, NodeEntry(key: key, value: Node.Array(items),
+            kind: KIND_ARRAY_OF_TABLES));
+        return created;
+    }
+    let position = usize(found);
+    let kind = entries[position].kind;
+    if kind == KIND_ARRAY_OF_TABLES {
+        let items = array_of(entries[position].value);
+        let created = vec.empty[NodeEntry]();
+        vec.push(items, Node.Table(created));
+        return created;
+    }
+    if kind == KIND_STATIC_ARRAY {
+        throw error_at(offset, "cannot extend an inline array");
+    }
+    throw error_at(offset, "cannot overwrite a value with an array of tables");
+}
+
+// dotted_descend resolves one intermediate segment of a dotted key written
+// in the current table. Dotted namespaces stay extendable inside one table
+// section, but cannot extend a namespace that was opened by a header.
+func dotted_descend(entries Vec[NodeEntry], key string, offset usize) Vec[NodeEntry] throws Error {
+    let found = find_entry(entries, key);
+    if found < 0 {
+        return push_table(entries, key, KIND_DOTTED);
+    }
+    let position = usize(found);
+    let kind = entries[position].kind;
+    if kind == KIND_INLINE || kind == KIND_STATIC_ARRAY {
+        throw error_at(offset, "cannot extend an inline table or array");
+    }
+    if kind == KIND_EXPLICIT || kind == KIND_ARRAY_OF_TABLES {
+        throw error_at(offset, "a dotted key cannot redefine a header namespace");
+    }
+    if is_table_kind(kind) {
+        let inner = table_of(entries[position].value);
+        entries[position].kind = KIND_DOTTED;
+        return inner;
+    }
+    throw error_at(offset, "cannot overwrite a value with a table");
+}
+
+// finalize_dotted locks every namespace created or touched by dotted keys.
+// TOML applies this when the next [table] header starts, so a later header
+// cannot declare such a namespace again.
+func finalize_dotted(entries Vec[NodeEntry]) {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].kind == KIND_DOTTED {
+            entries[index].kind = KIND_EXPLICIT;
+        }
+        switch entries[index].value {
+            case Node.Table(inner): finalize_dotted(inner);
+            case Node.Array(items): {
+                for var item usize = 0; item < vec.len(items); item += 1 {
+                    switch items[item] {
+                        case Node.Table(inner): finalize_dotted(inner);
+                        case _: { }
+                    }
+                }
+            }
+            case _: { }
+        }
+    }
+}
+
+func value_kind(value Node) u32 {
+    switch value {
+        case Node.Table(entries): return KIND_INLINE;
+        case Node.Array(items): return KIND_STATIC_ARRAY;
+        case _: return KIND_SCALAR;
+    }
+}
+
+func parse_assignment(source string, cursor inout usize, current Vec[NodeEntry]) throws Error {
+    let key_offset = cursor;
+    let parts = scan_dotted_key(source, inout cursor);
+    skip_inline_ws(source, inout cursor);
+    if cursor >= text.len(source) || source[cursor] != RUNE_EQUALS {
+        throw error_at(cursor, "expected '=' after a key");
+    }
+    cursor += 1;
+    skip_inline_ws(source, inout cursor);
+    let value = scan_value(source, inout cursor, 0);
+    var container = current;
+    for var index usize = 0; index + 1 < vec.len(parts); index += 1 {
+        container = dotted_descend(container, parts[index], key_offset);
+    }
+    let last = parts[vec.len(parts) - 1];
+    if find_entry(container, last) >= 0 {
+        throw error_at(key_offset, "duplicate key");
+    }
+    vec.push(container, NodeEntry(key: last, value: value, kind: value_kind(value)));
+}
+
+func parse_table_header(source string, cursor inout usize, root Vec[NodeEntry]) Vec[NodeEntry] throws Error {
+    cursor += 1;
+    skip_inline_ws(source, inout cursor);
+    let parts = scan_dotted_key(source, inout cursor);
+    skip_inline_ws(source, inout cursor);
+    if cursor >= text.len(source) || source[cursor] != RUNE_CLOSE_BRACKET {
+        throw error_at(cursor, "expected ']' after a table header");
+    }
+    cursor += 1;
+    var container = root;
+    for var index usize = 0; index + 1 < vec.len(parts); index += 1 {
+        container = header_descend(container, parts[index], cursor);
+    }
+    return header_final(container, parts[vec.len(parts) - 1], cursor);
+}
+
+func parse_aot_header(source string, cursor inout usize, root Vec[NodeEntry]) Vec[NodeEntry] throws Error {
+    cursor += 2;
+    skip_inline_ws(source, inout cursor);
+    let parts = scan_dotted_key(source, inout cursor);
+    skip_inline_ws(source, inout cursor);
+    if cursor + 1 >= text.len(source) || source[cursor] != RUNE_CLOSE_BRACKET
+        || source[cursor + 1] != RUNE_CLOSE_BRACKET {
+        throw error_at(cursor, "expected ']]' after an array of tables header");
+    }
+    cursor += 2;
+    var container = root;
+    for var index usize = 0; index + 1 < vec.len(parts); index += 1 {
+        container = header_descend(container, parts[index], cursor);
+    }
+    return aot_final(container, parts[vec.len(parts) - 1], cursor);
+}
+
+func parse_array(source string, cursor inout usize, depth usize) Node throws Error {
+    if depth > MAX_DEPTH {
+        throw error_at(cursor, "container nesting is too deep");
+    }
+    cursor += 1;
+    let items = vec.empty[Node]();
+    skip_array_ws(source, inout cursor);
+    if cursor >= text.len(source) {
+        throw error_at(cursor, "unterminated array");
+    }
+    if source[cursor] == RUNE_CLOSE_BRACKET {
+        cursor += 1;
+        return Node.Array(items);
+    }
+    for true {
+        let item = scan_value(source, inout cursor, depth);
+        vec.push(items, item);
+        skip_array_ws(source, inout cursor);
+        if cursor >= text.len(source) {
+            throw error_at(cursor, "unterminated array");
+        }
+        if source[cursor] == RUNE_COMMA {
+            cursor += 1;
+            skip_array_ws(source, inout cursor);
+            if cursor >= text.len(source) {
+                throw error_at(cursor, "unterminated array");
+            }
+            if source[cursor] == RUNE_CLOSE_BRACKET {
+                cursor += 1;
+                return Node.Array(items);
+            }
+            continue;
+        }
+        if source[cursor] == RUNE_CLOSE_BRACKET {
+            cursor += 1;
+            return Node.Array(items);
+        }
+        throw error_at(cursor, "expected ',' or ']' in an array");
+    }
+    throw error_at(cursor, "unterminated array");
+}
+
+func parse_inline_table(source string, cursor inout usize, depth usize) Node throws Error {
+    if depth > MAX_DEPTH {
+        throw error_at(cursor, "container nesting is too deep");
+    }
+    cursor += 1;
+    let entries = vec.empty[NodeEntry]();
+    skip_inline_ws(source, inout cursor);
+    if cursor < text.len(source) && source[cursor] == RUNE_CLOSE_BRACE {
+        cursor += 1;
+        return Node.Table(entries);
+    }
+    for true {
+        let key_offset = cursor;
+        let parts = scan_dotted_key(source, inout cursor);
+        skip_inline_ws(source, inout cursor);
+        if cursor >= text.len(source) || source[cursor] != RUNE_EQUALS {
+            throw error_at(cursor, "expected '=' in an inline table");
+        }
+        cursor += 1;
+        skip_inline_ws(source, inout cursor);
+        let value = scan_value(source, inout cursor, depth);
+        var container = entries;
+        for var index usize = 0; index + 1 < vec.len(parts); index += 1 {
+            container = dotted_descend(container, parts[index], key_offset);
+        }
+        let last = parts[vec.len(parts) - 1];
+        if find_entry(container, last) >= 0 {
+            throw error_at(key_offset, "duplicate key in an inline table");
+        }
+        vec.push(container, NodeEntry(key: last, value: value, kind: value_kind(value)));
+        skip_inline_ws(source, inout cursor);
+        if cursor >= text.len(source) {
+            throw error_at(cursor, "unterminated inline table");
+        }
+        if source[cursor] == RUNE_COMMA {
+            cursor += 1;
+            skip_inline_ws(source, inout cursor);
+            if cursor < text.len(source) && source[cursor] == RUNE_CLOSE_BRACE {
+                throw error_at(cursor, "trailing comma in an inline table");
+            }
+            continue;
+        }
+        if source[cursor] == RUNE_CLOSE_BRACE {
+            cursor += 1;
+            return Node.Table(entries);
+        }
+        throw error_at(cursor, "expected ',' or '}' in an inline table");
+    }
+    throw error_at(cursor, "unterminated inline table");
+}
+
+func parse_document(source string, cursor inout usize) Vec[NodeEntry] throws Error {
+    let root = vec.empty[NodeEntry]();
+    var current = root;
+    for true {
+        skip_inline_ws(source, inout cursor);
+        if cursor >= text.len(source) { return root; }
+        let rune = source[cursor];
+        if rune == RUNE_LF {
+            cursor += 1;
+            continue;
+        }
+        if rune == RUNE_HASH {
+            scan_comment(source, inout cursor);
+            continue;
+        }
+        if rune == RUNE_OPEN_BRACKET {
+            finalize_dotted(root);
+            if cursor + 1 < text.len(source) && source[cursor + 1] == RUNE_OPEN_BRACKET {
+                current = parse_aot_header(source, inout cursor, root);
+            } else {
+                current = parse_table_header(source, inout cursor, root);
+            }
+        } else {
+            if !is_key_initial(rune) {
+                throw error_at(cursor, "invalid statement");
+            }
+            parse_assignment(source, inout cursor, current);
+        }
+        skip_inline_ws(source, inout cursor);
+        if cursor < text.len(source) && source[cursor] == RUNE_HASH {
+            scan_comment(source, inout cursor);
+        }
+        if cursor >= text.len(source) { return root; }
+        if source[cursor] != RUNE_LF {
+            throw error_at(cursor, "expected a newline or end of document");
+        }
+        cursor += 1;
+    }
+    return root;
+}

@@ -1,0 +1,322 @@
+// Test driver for selfhost/src/wzcc/toml. Reads one TOML document from
+// standard input, prints a canonical dump on success, or prints
+// "error offset=<n> message=<text>" on a TOML syntax error.
+//
+// The dump is a private test format: S/I/F/B tags for scalar kinds, ODT/LDT/
+// LD/LT for date-time kinds, A[...] for arrays and T[key=value,...] for
+// tables. Keys and string values use JSON-style escapes. Integers are
+// rewritten as plain decimal (matching Python's int) and date-times use one
+// canonical spelling, so the Python tomllib oracle can compare text exactly.
+package app;
+
+import "app/wzcc/toml" as toml;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func push_byte(out Vec[u8], value u32) {
+    vec.push(out, u8(value));
+}
+
+func push_rune(out Vec[u8], rune u32) {
+    if rune <= 0x7f {
+        push_byte(out, rune);
+    } else if rune <= 0x7ff {
+        push_byte(out, 0xc0 | (rune >> 6));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    } else if rune <= 0xffff {
+        push_byte(out, 0xe0 | (rune >> 12));
+        push_byte(out, 0x80 | ((rune >> 6) & 0x3f));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    } else {
+        push_byte(out, 0xf0 | (rune >> 18));
+        push_byte(out, 0x80 | ((rune >> 12) & 0x3f));
+        push_byte(out, 0x80 | ((rune >> 6) & 0x3f));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    }
+}
+
+func push_ascii(out Vec[u8], value string) {
+    for rune in value {
+        push_byte(out, rune);
+    }
+}
+
+func push_hex4(out Vec[u8], value u32) {
+    push_byte(out, 92);
+    push_byte(out, 117);
+    for var shift i32 = 12; shift >= 0; shift -= 4 {
+        let digit = (value >> u32(shift)) & 0x0f;
+        if digit < 10 {
+            push_byte(out, 48 + digit);
+        } else {
+            push_byte(out, 87 + digit);
+        }
+    }
+}
+
+func push_escaped(out Vec[u8], value string) {
+    push_byte(out, 34);
+    for rune in value {
+        if rune == 34 {
+            push_ascii(out, "\\\"");
+        } else if rune == 92 {
+            push_ascii(out, "\\\\");
+        } else if rune < 0x20 || rune == 0x7f {
+            push_hex4(out, rune);
+        } else {
+            push_rune(out, rune);
+        }
+    }
+    push_byte(out, 34);
+}
+
+func push_quoted_ascii(out Vec[u8], value Vec[u8]) {
+    push_byte(out, 34);
+    for byte in value {
+        vec.push(out, byte);
+    }
+    push_byte(out, 34);
+}
+
+// canonical_integer rewrites any TOML integer token as plain decimal so the
+// Python oracle (which sees an unbounded int) can compare without relying on
+// the original spelling. Base prefixes, underscores and '+' are removed.
+func decimal_multiply_add(digits Vec[u8], multiplier u32, addend u32) {
+    var carry = addend;
+    for var index usize = 0; index < vec.len(digits); index += 1 {
+        let product = u32(digits[index]) * multiplier + carry;
+        digits[index] = u8(product % 10);
+        carry = product / 10;
+    }
+    for carry > 0 {
+        vec.push(digits, u8(carry % 10));
+        carry = carry / 10;
+    }
+}
+
+func canonical_integer(raw string) Vec[u8] {
+    var cursor usize = 0;
+    var negative = false;
+    if cursor < text.len(raw) && raw[cursor] == 43 {
+        cursor += 1;
+    } else if cursor < text.len(raw) && raw[cursor] == 45 {
+        negative = true;
+        cursor += 1;
+    }
+    var radix u32 = 10;
+    if text.len(raw) - cursor >= 2 && raw[cursor] == 48 {
+        let marker = raw[cursor + 1];
+        if marker == 120 {
+            radix = 16;
+            cursor += 2;
+        } else if marker == 111 {
+            radix = 8;
+            cursor += 2;
+        } else if marker == 98 {
+            radix = 2;
+            cursor += 2;
+        }
+    }
+    let digits = vec.empty[u8]();
+    vec.push(digits, 0);
+    for cursor < text.len(raw) {
+        let rune = raw[cursor];
+        cursor += 1;
+        if rune == 95 {
+            continue;
+        }
+        var value u32 = rune - 48;
+        if rune >= 65 && rune <= 70 {
+            value = rune - 55;
+        } else if rune >= 97 && rune <= 102 {
+            value = rune - 87;
+        }
+        decimal_multiply_add(digits, radix, value);
+    }
+    for vec.len(digits) > 1 && digits[vec.len(digits) - 1] == 0 {
+        let removed = vec.pop(digits);
+    }
+    var zero = true;
+    for var index usize = 0; index < vec.len(digits); index += 1 {
+        if digits[index] != 0 {
+            zero = false;
+        }
+    }
+    let out = vec.empty[u8]();
+    if negative && !zero {
+        vec.push(out, 45);
+    }
+    for var index usize = 0; index < vec.len(digits); index += 1 {
+        vec.push(out, 48 + digits[vec.len(digits) - 1 - index]);
+    }
+    return out;
+}
+
+// time_end returns the index just after HH:MM:SS or its fractional digits.
+func time_end(raw string, start usize) usize {
+    var cursor = start + 8;
+    if cursor < text.len(raw) && raw[cursor] == 46 {
+        cursor += 1;
+        for cursor < text.len(raw) && raw[cursor] >= 48 && raw[cursor] <= 57 {
+            cursor += 1;
+        }
+    }
+    return cursor;
+}
+
+func push_canonical_time(out Vec[u8], raw string, start usize) {
+    for var index usize = 0; index < 8; index += 1 {
+        push_byte(out, raw[start + index]);
+    }
+    let end = time_end(raw, start);
+    var cursor = start + 8;
+    if cursor < end {
+        var fraction_start = cursor + 1;
+        var nonzero = false;
+        for var index usize = 0; index < 6; index += 1 {
+            if fraction_start + index < end && raw[fraction_start + index] != 48 {
+                nonzero = true;
+            }
+        }
+        if nonzero {
+            push_byte(out, 46);
+            for var index usize = 0; index < 6; index += 1 {
+                if fraction_start + index < end {
+                    push_byte(out, raw[fraction_start + index]);
+                } else {
+                    push_byte(out, 48);
+                }
+            }
+        }
+    }
+}
+
+func push_canonical_datetime(out Vec[u8], raw string) {
+    for var index usize = 0; index < 10; index += 1 {
+        push_byte(out, raw[index]);
+    }
+    if text.len(raw) == 10 {
+        return;
+    }
+    push_byte(out, 84);
+    push_canonical_time(out, raw, 11);
+    let after_time = time_end(raw, 11);
+    if after_time >= text.len(raw) {
+        return;
+    }
+    let marker = raw[after_time];
+    if marker == 90 || marker == 122 {
+        push_byte(out, 90);
+        return;
+    }
+    var zero = true;
+    for var index usize = after_time; index < text.len(raw); index += 1 {
+        let rune = raw[index];
+        if rune != 43 && rune != 45 && rune != 58 && rune != 48 {
+            zero = false;
+        }
+    }
+    if zero {
+        push_byte(out, 90);
+    } else {
+        for var index usize = after_time; index < text.len(raw); index += 1 {
+            push_byte(out, raw[index]);
+        }
+    }
+}
+
+func dump_value(out Vec[u8], value toml.Value) {
+    switch value {
+        case toml.Value.String(item): {
+            push_ascii(out, "S");
+            push_escaped(out, item);
+        }
+        case toml.Value.Integer(raw): {
+            push_ascii(out, "I");
+            push_quoted_ascii(out, canonical_integer(raw));
+        }
+        case toml.Value.Float(raw): {
+            push_ascii(out, "F");
+            push_escaped(out, raw);
+        }
+        case toml.Value.Boolean(item): {
+            if item {
+                push_ascii(out, "B1");
+            } else {
+                push_ascii(out, "B0");
+            }
+        }
+        case toml.Value.OffsetDateTime(raw): {
+            push_ascii(out, "ODT\"");
+            push_canonical_datetime(out, raw);
+            push_byte(out, 34);
+        }
+        case toml.Value.LocalDateTime(raw): {
+            push_ascii(out, "LDT\"");
+            push_canonical_datetime(out, raw);
+            push_byte(out, 34);
+        }
+        case toml.Value.LocalDate(raw): {
+            push_ascii(out, "LD\"");
+            for var index usize = 0; index < 10; index += 1 {
+                push_byte(out, raw[index]);
+            }
+            push_byte(out, 34);
+        }
+        case toml.Value.LocalTime(raw): {
+            push_ascii(out, "LT\"");
+            push_canonical_time(out, raw, 0);
+            push_byte(out, 34);
+        }
+        case toml.Value.Array(items): {
+            push_ascii(out, "A[");
+            for var index usize = 0; index < vec.len(items); index += 1 {
+                if index != 0 { push_byte(out, 44); }
+                dump_value(out, items[index]);
+            }
+            push_byte(out, 93);
+        }
+        case toml.Value.Table(entries): {
+            push_ascii(out, "T[");
+            for var index usize = 0; index < vec.len(entries); index += 1 {
+                if index != 0 { push_byte(out, 44); }
+                push_escaped(out, entries[index].key);
+                push_byte(out, 61);
+                dump_value(out, entries[index].value);
+            }
+            push_byte(out, 93);
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let input = io.read_text(os.stdin());
+    try {
+        let document = toml.parse(input);
+        let out = vec.empty[u8]();
+        dump_value(out, document.root);
+        push_byte(out, 10);
+        os.write_all(os.stdout(), out);
+        return 0;
+    } catch error toml.Error {
+        var offset usize = 0;
+        var message = "";
+        switch error {
+            case toml.Error.Syntax(position, text_value): {
+                offset = position;
+                message = text_value;
+            }
+        }
+        let out = vec.empty[u8]();
+        push_ascii(out, "error offset=");
+        push_ascii(out, strconv.format_u64(u64(offset)));
+        push_ascii(out, " message=");
+        push_ascii(out, message);
+        push_byte(out, 10);
+        os.write_all(os.stdout(), out);
+        return 2;
+    }
+}

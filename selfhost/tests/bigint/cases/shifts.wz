@@ -1,0 +1,53 @@
+// Shifts by 0, limb boundaries (31/32/33, 63/64/65), large amounts and a u64
+// maximum right shift. Right shift truncates the magnitude and keeps sign.
+package app;
+import "app/wzcc/bigint" as bigint;
+import "std/io" as io;
+import "std/os" as os;
+
+func report(label string, value bigint.BigInt) throws os.Error {
+    io.println(label + "=" + bigint.format_decimal(value));
+}
+
+func main() i32 throws os.Error {
+    try {
+        let zero = bigint.zero();
+        let one = bigint.from_i64(1);
+        report("z.shl.100", bigint.shift_left(zero, 100));
+        report("z.shr.100", bigint.shift_right(zero, 100));
+        report("one.shl.0", bigint.shift_left(one, 0));
+        report("one.shl.31", bigint.shift_left(one, 31));
+        report("one.shl.32", bigint.shift_left(one, 32));
+        report("one.shl.33", bigint.shift_left(one, 33));
+        report("one.shl.63", bigint.shift_left(one, 63));
+        report("one.shl.64", bigint.shift_left(one, 64));
+        report("one.shl.65", bigint.shift_left(one, 65));
+        report("one.shl.100", bigint.shift_left(one, 100));
+        report("one.shl.1000", bigint.shift_left(one, 1000));
+        report("n1.shl.64", bigint.shift_left(bigint.from_i64(-1), 64));
+        let u64max = bigint.from_u64(18446744073709551615);
+        report("u64max.shl.32", bigint.shift_left(u64max, 32));
+        report("u64max.shr.0", bigint.shift_right(u64max, 0));
+        report("u64max.shr.31", bigint.shift_right(u64max, 31));
+        report("u64max.shr.32", bigint.shift_right(u64max, 32));
+        report("u64max.shr.63", bigint.shift_right(u64max, 63));
+        report("u64max.shr.64", bigint.shift_right(u64max, 64));
+        report("u64max.shr.65", bigint.shift_right(u64max, 65));
+        report("u64max.shr.100", bigint.shift_right(u64max, 100));
+        report("n1.shr.1", bigint.shift_right(bigint.from_i64(-1), 1));
+        report("n1.shr.64", bigint.shift_right(bigint.from_i64(-1), 64));
+        report("n3.shr.1", bigint.shift_right(bigint.from_i64(-3), 1));
+        report("n4.shr.2", bigint.shift_right(bigint.from_i64(-4), 2));
+        report("n5.shr.2", bigint.shift_right(bigint.from_i64(-5), 2));
+        report("one.shr.u64max", bigint.shift_right(one, 18446744073709551615));
+        report("u64max.shr.u64max", bigint.shift_right(u64max, 18446744073709551615));
+        let x = bigint.parse_digits("1234567890123456789012345678901234567890", 10);
+        report("x.shl.77", bigint.shift_left(x, 77));
+        report("x.roundtrip", bigint.shift_right(bigint.shift_left(x, 77), 77));
+        report("negx.shl.65", bigint.shift_left(bigint.negate(x), 65));
+        report("negx.shr.65", bigint.shift_right(bigint.negate(x), 65));
+    } catch error bigint.Error {
+        io.println("unexpected-bigint-error");
+    }
+    return 0;
+}

@@ -1,0 +1,713 @@
+// Token scanning for the TOML 1.0 reader. Everything here works on the
+// normalized text (CRLF already converted to LF) and reports offsets as
+// Unicode code point indices.
+package toml;
+
+import "std/text" as text;
+import "std/vec" as vec;
+
+const RUNE_TAB u32 = 9;
+const RUNE_LF u32 = 10;
+const RUNE_CR u32 = 13;
+const RUNE_SPACE u32 = 32;
+const RUNE_QUOTE u32 = 34;
+const RUNE_HASH u32 = 35;
+const RUNE_APOSTROPHE u32 = 39;
+const RUNE_PLUS u32 = 43;
+const RUNE_COMMA u32 = 44;
+const RUNE_MINUS u32 = 45;
+const RUNE_DOT u32 = 46;
+const RUNE_COLON u32 = 58;
+const RUNE_EQUALS u32 = 61;
+const RUNE_OPEN_BRACKET u32 = 91;
+const RUNE_BACKSLASH u32 = 92;
+const RUNE_CLOSE_BRACKET u32 = 93;
+const RUNE_OPEN_BRACE u32 = 123;
+const RUNE_CLOSE_BRACE u32 = 125;
+const RUNE_DEL u32 = 127;
+
+func error_at(offset usize, message string) Error {
+    return Error.Syntax(offset, message);
+}
+
+func is_digit(rune u32) bool { return rune >= 48 && rune <= 57; }
+
+func is_hex_digit(rune u32) bool {
+    return is_digit(rune) || (rune >= 65 && rune <= 70) || (rune >= 97 && rune <= 102);
+}
+
+func hex_value(rune u32) u32 {
+    if rune <= 57 { return rune - 48; }
+    if rune <= 70 { return rune - 55; }
+    return rune - 87;
+}
+
+func is_bare_key_char(rune u32) bool {
+    if is_digit(rune) { return true; }
+    if rune >= 65 && rune <= 90 { return true; }
+    if rune >= 97 && rune <= 122 { return true; }
+    return rune == 45 || rune == 95;
+}
+
+func is_key_initial(rune u32) bool {
+    return is_bare_key_char(rune) || rune == RUNE_QUOTE || rune == RUNE_APOSTROPHE;
+}
+
+func push_byte(out Vec[u8], value u32) {
+    vec.push(out, u8(value));
+}
+
+func push_rune(out Vec[u8], rune u32) {
+    if rune <= 0x7f {
+        push_byte(out, rune);
+    } else if rune <= 0x7ff {
+        push_byte(out, 0xc0 | (rune >> 6));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    } else if rune <= 0xffff {
+        push_byte(out, 0xe0 | (rune >> 12));
+        push_byte(out, 0x80 | ((rune >> 6) & 0x3f));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    } else {
+        push_byte(out, 0xf0 | (rune >> 18));
+        push_byte(out, 0x80 | ((rune >> 12) & 0x3f));
+        push_byte(out, 0x80 | ((rune >> 6) & 0x3f));
+        push_byte(out, 0x80 | (rune & 0x3f));
+    }
+}
+
+func bytes_to_string(out Vec[u8], offset usize) string throws Error {
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        throw error_at(offset, "string is not valid UTF-8");
+    }
+}
+
+// Normalized holds the text that is actually scanned plus the map back to the
+// caller's string. offsets[index] is the code point index in the original
+// input that produced normalized index; the last entry is the original
+// length, so an end-of-input diagnostic maps to the input's end.
+struct Normalized {
+    text string;
+    offsets Vec[usize];
+}
+
+// normalize_newlines converts every CRLF pair to one LF code point, which is
+// what TOML requires and what SourceSnapshot already did for .wz sources.
+// Scanning and string values use the normalized text; only the diagnostic
+// offset is translated back to the original input before it is thrown.
+func normalize_newlines(input string) Normalized throws Error {
+    let out = vec.empty[u8]();
+    let offsets = vec.empty[usize]();
+    var cursor usize = 0;
+    let length = text.len(input);
+    for cursor < length {
+        let rune = input[cursor];
+        if rune == RUNE_CR && cursor + 1 < length && input[cursor + 1] == RUNE_LF {
+            push_byte(out, RUNE_LF);
+            vec.push(offsets, cursor);
+            cursor += 2;
+        } else {
+            push_rune(out, rune);
+            vec.push(offsets, cursor);
+            cursor += 1;
+        }
+    }
+    vec.push(offsets, length);
+    return Normalized(text: bytes_to_string(out, 0), offsets: offsets);
+}
+
+func skip_inline_ws(source string, cursor inout usize) {
+    for cursor < text.len(source) {
+        let rune = source[cursor];
+        if rune == RUNE_SPACE || rune == RUNE_TAB {
+            cursor += 1;
+        } else {
+            break;
+        }
+    }
+}
+
+// scan_comment consumes a comment starting at '#'. The cursor stops on the
+// terminating LF or at end of input; the caller consumes the line break.
+func scan_comment(source string, cursor inout usize) throws Error {
+    cursor += 1;
+    for cursor < text.len(source) {
+        let rune = source[cursor];
+        if rune == RUNE_LF { return; }
+        if (rune < 0x20 && rune != RUNE_TAB) || rune == RUNE_DEL {
+            throw error_at(cursor, "control character in comment");
+        }
+        cursor += 1;
+    }
+}
+
+// skip_array_ws skips whitespace, line breaks and comments inside arrays.
+func skip_array_ws(source string, cursor inout usize) throws Error {
+    for true {
+        let before = cursor;
+        skip_inline_ws(source, inout cursor);
+        if cursor < text.len(source) {
+            let rune = source[cursor];
+            if rune == RUNE_LF { cursor += 1; continue; }
+            if rune == RUNE_HASH { scan_comment(source, inout cursor); continue; }
+        }
+        if cursor == before { return; }
+    }
+}
+
+func scan_hex_char(source string, cursor inout usize, digits usize, start usize) u32 throws Error {
+    var value u32 = 0;
+    for var index usize = 0; index < digits; index += 1 {
+        if cursor >= text.len(source) || !is_hex_digit(source[cursor]) {
+            throw error_at(cursor, "invalid Unicode escape");
+        }
+        value = value * 16 + hex_value(source[cursor]);
+        cursor += 1;
+    }
+    if value >= 0xd800 && value <= 0xdfff {
+        throw error_at(start, "escaped code point is not a Unicode scalar value");
+    }
+    if value > 0x10ffff {
+        throw error_at(start, "escaped code point is not a Unicode scalar value");
+    }
+    return value;
+}
+
+// scan_escape decodes one escape sequence; cursor points at the character
+// after the backslash.
+func scan_escape(source string, cursor inout usize, out Vec[u8], start usize) throws Error {
+    if cursor >= text.len(source) {
+        throw error_at(start, "unterminated escape sequence");
+    }
+    let rune = source[cursor];
+    if rune == 98 {
+        push_byte(out, 8);
+        cursor += 1;
+        return;
+    }
+    if rune == 116 {
+        push_byte(out, 9);
+        cursor += 1;
+        return;
+    }
+    if rune == 110 {
+        push_byte(out, 10);
+        cursor += 1;
+        return;
+    }
+    if rune == 102 {
+        push_byte(out, 12);
+        cursor += 1;
+        return;
+    }
+    if rune == 114 {
+        push_byte(out, 13);
+        cursor += 1;
+        return;
+    }
+    if rune == RUNE_QUOTE {
+        push_byte(out, RUNE_QUOTE);
+        cursor += 1;
+        return;
+    }
+    if rune == RUNE_BACKSLASH {
+        push_byte(out, RUNE_BACKSLASH);
+        cursor += 1;
+        return;
+    }
+    if rune == 117 {
+        cursor += 1;
+        let value = scan_hex_char(source, inout cursor, 4, start);
+        push_rune(out, value);
+        return;
+    }
+    if rune == 85 {
+        cursor += 1;
+        let value = scan_hex_char(source, inout cursor, 8, start);
+        push_rune(out, value);
+        return;
+    }
+    throw error_at(start, "invalid escape sequence");
+}
+
+func scan_basic_string(source string, cursor inout usize) string throws Error {
+    let start = cursor;
+    cursor += 1;
+    let out = vec.empty[u8]();
+    for true {
+        if cursor >= text.len(source) {
+            throw error_at(start, "unterminated string");
+        }
+        let rune = source[cursor];
+        if rune == RUNE_QUOTE {
+            cursor += 1;
+            return bytes_to_string(out, start);
+        }
+        if rune == RUNE_BACKSLASH {
+            cursor += 1;
+            scan_escape(source, inout cursor, out, start);
+            continue;
+        }
+        if (rune < 0x20 && rune != RUNE_TAB) || rune == RUNE_DEL {
+            throw error_at(cursor, "control character in string");
+        }
+        push_rune(out, rune);
+        cursor += 1;
+    }
+    throw error_at(start, "unterminated string");
+}
+
+func scan_literal_string(source string, cursor inout usize) string throws Error {
+    let start = cursor;
+    cursor += 1;
+    let content_start = cursor;
+    for true {
+        if cursor >= text.len(source) {
+            throw error_at(start, "unterminated string");
+        }
+        let rune = source[cursor];
+        if rune == RUNE_APOSTROPHE {
+            let value = source[content_start:cursor];
+            cursor += 1;
+            return value;
+        }
+        if (rune < 0x20 && rune != RUNE_TAB) || rune == RUNE_DEL {
+            throw error_at(cursor, "control character in string");
+        }
+        cursor += 1;
+    }
+    throw error_at(start, "unterminated string");
+}
+
+func triple_at(source string, cursor usize, rune u32) bool {
+    if text.len(source) - cursor < 3 { return false; }
+    return source[cursor] == rune && source[cursor + 1] == rune && source[cursor + 2] == rune;
+}
+
+// scan_multiline_basic handles """...""" including first-newline trimming,
+// line-ending backslashes, embedded quote runs and escapes.
+func scan_multiline_basic(source string, cursor inout usize) string throws Error {
+    let start = cursor;
+    cursor += 3;
+    if cursor < text.len(source) && source[cursor] == RUNE_LF { cursor += 1; }
+    let out = vec.empty[u8]();
+    for true {
+        if cursor >= text.len(source) {
+            throw error_at(start, "unterminated multiline string");
+        }
+        let rune = source[cursor];
+        if rune == RUNE_QUOTE {
+            if triple_at(source, cursor, RUNE_QUOTE) {
+                cursor += 3;
+                if cursor < text.len(source) && source[cursor] == RUNE_QUOTE {
+                    push_byte(out, RUNE_QUOTE);
+                    cursor += 1;
+                    if cursor < text.len(source) && source[cursor] == RUNE_QUOTE {
+                        push_byte(out, RUNE_QUOTE);
+                        cursor += 1;
+                    }
+                }
+                return bytes_to_string(out, start);
+            }
+            push_byte(out, RUNE_QUOTE);
+            cursor += 1;
+            continue;
+        }
+        if rune == RUNE_BACKSLASH {
+            var probe = cursor + 1;
+            for probe < text.len(source) && (source[probe] == RUNE_SPACE || source[probe] == RUNE_TAB) {
+                probe += 1;
+            }
+            if probe < text.len(source) && source[probe] == RUNE_LF {
+                cursor = probe + 1;
+                for cursor < text.len(source) {
+                    let next = source[cursor];
+                    if next == RUNE_SPACE || next == RUNE_TAB || next == RUNE_LF {
+                        cursor += 1;
+                    } else {
+                        break;
+                    }
+                }
+                continue;
+            }
+            cursor += 1;
+            scan_escape(source, inout cursor, out, start);
+            continue;
+        }
+        if (rune < 0x20 && rune != RUNE_TAB && rune != RUNE_LF) || rune == RUNE_DEL {
+            throw error_at(cursor, "control character in string");
+        }
+        push_rune(out, rune);
+        cursor += 1;
+    }
+    throw error_at(start, "unterminated multiline string");
+}
+
+func scan_multiline_literal(source string, cursor inout usize) string throws Error {
+    let start = cursor;
+    cursor += 3;
+    if cursor < text.len(source) && source[cursor] == RUNE_LF { cursor += 1; }
+    let content_start = cursor;
+    for true {
+        if cursor >= text.len(source) {
+            throw error_at(start, "unterminated multiline string");
+        }
+        let rune = source[cursor];
+        if rune == RUNE_APOSTROPHE && triple_at(source, cursor, RUNE_APOSTROPHE) {
+            let value = source[content_start:cursor];
+            cursor += 3;
+            var extra = "";
+            if cursor < text.len(source) && source[cursor] == RUNE_APOSTROPHE {
+                extra += "'";
+                cursor += 1;
+                if cursor < text.len(source) && source[cursor] == RUNE_APOSTROPHE {
+                    extra += "'";
+                    cursor += 1;
+                }
+            }
+            return value + extra;
+        }
+        if (rune < 0x20 && rune != RUNE_TAB && rune != RUNE_LF) || rune == RUNE_DEL {
+            throw error_at(cursor, "control character in string");
+        }
+        cursor += 1;
+    }
+    throw error_at(start, "unterminated multiline string");
+}
+
+func scan_bare_key(source string, cursor inout usize) string {
+    let start = cursor;
+    for cursor < text.len(source) && is_bare_key_char(source[cursor]) {
+        cursor += 1;
+    }
+    return source[start:cursor];
+}
+
+func scan_key_part(source string, cursor inout usize) string throws Error {
+    if cursor >= text.len(source) {
+        throw error_at(cursor, "expected a key");
+    }
+    let rune = source[cursor];
+    if rune == RUNE_QUOTE { return scan_basic_string(source, inout cursor); }
+    if rune == RUNE_APOSTROPHE { return scan_literal_string(source, inout cursor); }
+    if is_bare_key_char(rune) { return scan_bare_key(source, inout cursor); }
+    throw error_at(cursor, "invalid key");
+}
+
+func scan_dotted_key(source string, cursor inout usize) Vec[string] throws Error {
+    let parts = vec.empty[string]();
+    vec.push(parts, scan_key_part(source, inout cursor));
+    for true {
+        skip_inline_ws(source, inout cursor);
+        if cursor < text.len(source) && source[cursor] == RUNE_DOT {
+            cursor += 1;
+            skip_inline_ws(source, inout cursor);
+            vec.push(parts, scan_key_part(source, inout cursor));
+            if vec.len(parts) > MAX_KEY_PARTS {
+                throw error_at(cursor, "key path is too long");
+            }
+            continue;
+        }
+        break;
+    }
+    return parts;
+}
+
+func has_digit(source string, cursor usize, count usize) bool {
+    if text.len(source) - cursor < count { return false; }
+    for var index usize = 0; index < count; index += 1 {
+        if !is_digit(source[cursor + index]) { return false; }
+    }
+    return true;
+}
+
+func looks_like_date(source string, cursor usize) bool {
+    return text.len(source) - cursor >= 10 && has_digit(source, cursor, 4)
+        && source[cursor + 4] == RUNE_MINUS && has_digit(source, cursor + 5, 2)
+        && source[cursor + 7] == RUNE_MINUS && has_digit(source, cursor + 8, 2);
+}
+
+func looks_like_time(source string, cursor usize) bool {
+    return text.len(source) - cursor >= 8 && has_digit(source, cursor, 2)
+        && source[cursor + 2] == RUNE_COLON && has_digit(source, cursor + 3, 2)
+        && source[cursor + 5] == RUNE_COLON && has_digit(source, cursor + 6, 2);
+}
+
+func read_two_digits(source string, cursor usize) u32 {
+    let high = source[cursor] - 48;
+    let low = source[cursor + 1] - 48;
+    return high * 10 + low;
+}
+
+func days_in_month(year u32, month u32) u32 {
+    if month == 2 {
+        let leap = (year % 4 == 0 && year % 100 != 0) || year % 400 == 0;
+        if leap { return 29; }
+        return 28;
+    }
+    if month == 4 || month == 6 || month == 9 || month == 11 { return 30; }
+    return 31;
+}
+
+// scan_time_component consumes HH:MM:SS[.frac]; the shape was checked by the
+// caller (looks_like_time).
+func scan_time_component(source string, cursor inout usize, value_offset usize) throws Error {
+    let hour = read_two_digits(source, cursor);
+    let minute = read_two_digits(source, cursor + 3);
+    let second = read_two_digits(source, cursor + 6);
+    if hour > 23 || minute > 59 || second > 59 {
+        throw error_at(value_offset, "invalid time");
+    }
+    cursor += 8;
+    if cursor < text.len(source) && source[cursor] == RUNE_DOT {
+        cursor += 1;
+        if cursor >= text.len(source) || !is_digit(source[cursor]) {
+            throw error_at(value_offset, "invalid time");
+        }
+        for cursor < text.len(source) && is_digit(source[cursor]) {
+            cursor += 1;
+        }
+    }
+}
+
+func scan_date_value(source string, cursor inout usize) Node throws Error {
+    let start = cursor;
+    let year = read_two_digits(source, cursor) * 100 + read_two_digits(source, cursor + 2);
+    let month = read_two_digits(source, cursor + 5);
+    let day = read_two_digits(source, cursor + 8);
+    if month < 1 || month > 12 || day < 1 || day > days_in_month(year, month) {
+        throw error_at(start, "invalid date");
+    }
+    cursor += 10;
+    var separator u32 = 0;
+    if cursor < text.len(source) {
+        let rune = source[cursor];
+        if rune == 84 || rune == 116 {
+            separator = rune;
+        } else if rune == RUNE_SPACE && looks_like_time(source, cursor + 1) {
+            separator = RUNE_SPACE;
+        }
+    }
+    if separator == 0 {
+        return Node.LocalDate(source[start:cursor]);
+    }
+    cursor += 1;
+    if !looks_like_time(source, cursor) {
+        throw error_at(start, "invalid date-time");
+    }
+    scan_time_component(source, inout cursor, start);
+    if cursor < text.len(source) {
+        let rune = source[cursor];
+        if rune == 90 || rune == 122 {
+            cursor += 1;
+            return Node.OffsetDateTime(source[start:cursor]);
+        }
+        if rune == RUNE_PLUS || rune == RUNE_MINUS {
+            cursor += 1;
+            if !has_digit(source, cursor, 2) || cursor + 2 >= text.len(source)
+                || source[cursor + 2] != RUNE_COLON || !has_digit(source, cursor + 3, 2) {
+                throw error_at(start, "invalid time offset");
+            }
+            let offset_hour = read_two_digits(source, cursor);
+            let offset_minute = read_two_digits(source, cursor + 3);
+            if offset_hour > 23 || offset_minute > 59 {
+                throw error_at(start, "invalid time offset");
+            }
+            cursor += 5;
+            return Node.OffsetDateTime(source[start:cursor]);
+        }
+    }
+    return Node.LocalDateTime(source[start:cursor]);
+}
+
+func scan_local_time(source string, cursor inout usize) Node throws Error {
+    let start = cursor;
+    scan_time_component(source, inout cursor, start);
+    return Node.LocalTime(source[start:cursor]);
+}
+
+func scan_digit_run(source string, cursor inout usize, radix u32) throws Error {
+    let start = cursor;
+    for true {
+        if cursor >= text.len(source) { break; }
+        let rune = source[cursor];
+        var valid = is_digit(rune);
+        if radix == 16 {
+            valid = is_hex_digit(rune);
+        } else if radix == 8 {
+            valid = rune >= 48 && rune <= 55;
+        } else if radix == 2 {
+            valid = rune == 48 || rune == 49;
+        }
+        if valid {
+            cursor += 1;
+            if cursor < text.len(source) && source[cursor] == 95 {
+                if cursor + 1 >= text.len(source) {
+                    throw error_at(cursor, "underscore must be between digits");
+                }
+                let next = source[cursor + 1];
+                var next_valid = is_digit(next);
+                if radix == 16 {
+                    next_valid = is_hex_digit(next);
+                } else if radix == 8 {
+                    next_valid = next >= 48 && next <= 55;
+                } else if radix == 2 {
+                    next_valid = next == 48 || next == 49;
+                }
+                if !next_valid {
+                    throw error_at(cursor, "underscore must be between digits");
+                }
+                cursor += 1;
+            }
+            continue;
+        }
+        if rune == 95 {
+            throw error_at(cursor, "underscore must be between digits");
+        }
+        break;
+    }
+    if cursor == start {
+        throw error_at(start, "invalid number");
+    }
+}
+
+func scan_number(source string, cursor inout usize) Node throws Error {
+    let start = cursor;
+    var signed = false;
+    if source[cursor] == RUNE_PLUS || source[cursor] == RUNE_MINUS {
+        signed = true;
+        cursor += 1;
+        if cursor >= text.len(source) {
+            throw error_at(start, "invalid number");
+        }
+    }
+    if source[cursor] == 48 {
+        if !signed && cursor + 1 < text.len(source) {
+            let marker = source[cursor + 1];
+            if marker == 120 || marker == 111 || marker == 98 {
+                cursor += 2;
+                var radix u32 = 2;
+                if marker == 120 {
+                    radix = 16;
+                } else if marker == 111 {
+                    radix = 8;
+                }
+                scan_digit_run(source, inout cursor, radix);
+                return Node.Integer(source[start:cursor]);
+            }
+        }
+        cursor += 1;
+        if cursor < text.len(source) && is_digit(source[cursor]) {
+            throw error_at(cursor, "leading zeros are not allowed in a number");
+        }
+    } else if source[cursor] >= 49 && source[cursor] <= 57 {
+        scan_digit_run(source, inout cursor, 10);
+    } else {
+        throw error_at(start, "invalid number");
+    }
+    var floating = false;
+    if cursor < text.len(source) && source[cursor] == RUNE_DOT {
+        floating = true;
+        cursor += 1;
+        if cursor >= text.len(source) || !is_digit(source[cursor]) {
+            throw error_at(start, "invalid float");
+        }
+        scan_digit_run(source, inout cursor, 10);
+    }
+    if cursor < text.len(source) && (source[cursor] == 101 || source[cursor] == 69) {
+        floating = true;
+        cursor += 1;
+        if cursor < text.len(source) && (source[cursor] == RUNE_PLUS || source[cursor] == RUNE_MINUS) {
+            cursor += 1;
+        }
+        if cursor >= text.len(source) || !is_digit(source[cursor]) {
+            throw error_at(start, "invalid float exponent");
+        }
+        scan_digit_run(source, inout cursor, 10);
+    }
+    if floating {
+        return Node.Float(source[start:cursor]);
+    }
+    return Node.Integer(source[start:cursor]);
+}
+
+func matches_at(source string, cursor usize, word string) bool {
+    let length = text.len(word);
+    if text.len(source) - cursor < length { return false; }
+    return source[cursor:cursor + length] == word;
+}
+
+func scan_special_float(source string, cursor inout usize) Node throws Error {
+    let start = cursor;
+    var probe = cursor;
+    if probe < text.len(source) && (source[probe] == RUNE_PLUS || source[probe] == RUNE_MINUS) {
+        probe += 1;
+    }
+    if matches_at(source, probe, "inf") {
+        cursor = probe + 3;
+        return Node.Float(source[start:cursor]);
+    }
+    if matches_at(source, probe, "nan") {
+        cursor = probe + 3;
+        return Node.Float(source[start:cursor]);
+    }
+    throw error_at(start, "invalid value");
+}
+
+func scan_atom(source string, cursor inout usize) Node throws Error {
+    let start = cursor;
+    if looks_like_date(source, cursor) {
+        return scan_date_value(source, inout cursor);
+    }
+    if looks_like_time(source, cursor) {
+        return scan_local_time(source, inout cursor);
+    }
+    let rune = source[cursor];
+    if rune == RUNE_PLUS || rune == RUNE_MINUS {
+        var probe = cursor + 1;
+        if matches_at(source, probe, "inf") || matches_at(source, probe, "nan") {
+            return scan_special_float(source, inout cursor);
+        }
+    } else if matches_at(source, cursor, "inf") || matches_at(source, cursor, "nan") {
+        return scan_special_float(source, inout cursor);
+    }
+    if is_digit(rune) || rune == RUNE_PLUS || rune == RUNE_MINUS {
+        return scan_number(source, inout cursor);
+    }
+    throw error_at(start, "invalid value");
+}
+
+func scan_value(source string, cursor inout usize, depth usize) Node throws Error {
+    if cursor >= text.len(source) {
+        throw error_at(cursor, "invalid value");
+    }
+    let rune = source[cursor];
+    if rune == RUNE_QUOTE {
+        if triple_at(source, cursor, RUNE_QUOTE) {
+            return Node.String(scan_multiline_basic(source, inout cursor));
+        }
+        return Node.String(scan_basic_string(source, inout cursor));
+    }
+    if rune == RUNE_APOSTROPHE {
+        if triple_at(source, cursor, RUNE_APOSTROPHE) {
+            return Node.String(scan_multiline_literal(source, inout cursor));
+        }
+        return Node.String(scan_literal_string(source, inout cursor));
+    }
+    if rune == 116 && matches_at(source, cursor, "true") {
+        cursor += 4;
+        return Node.Boolean(true);
+    }
+    if rune == 102 && matches_at(source, cursor, "false") {
+        cursor += 5;
+        return Node.Boolean(false);
+    }
+    if rune == RUNE_OPEN_BRACKET {
+        return parse_array(source, inout cursor, depth + 1);
+    }
+    if rune == RUNE_OPEN_BRACE {
+        return parse_inline_table(source, inout cursor, depth + 1);
+    }
+    return scan_atom(source, inout cursor);
+}

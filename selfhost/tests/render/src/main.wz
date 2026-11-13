@@ -1,0 +1,33 @@
+package app;
+import "compiler/wzcc/model" as model;
+import "compiler/wzcc/render" as render;
+import "std/io" as io;
+import "std/os" as os;
+
+func main() i32 throws os.Error {
+    if render.exit_code(model.PhaseState.Complete, model.FailureKind.Internal, true, []) != 0 { return 1; }
+    if render.exit_code(model.PhaseState.Cancelled, model.FailureKind.Source, false, []) != 130 { return 2; }
+    if render.exit_code(model.PhaseState.Failed, model.FailureKind.Environment, false, []) != 2 { return 3; }
+    let input = model.Source(file_id: 1, revision_id: 2, id: 3,
+        path: "quote\"/中文.wz", original: [65, 66], normalized: [65, 66],
+        offsets: [0, 1, 2], boundaries: [], valid: true,
+        error_byte: 0, error_length: 0, error_message: "");
+    let span = model.Span(snapshot: 3, begin_byte: 0, end_byte: 2);
+    var diagnostic = model.diagnostic("E_TEST", "parse", "line\n\"quoted\"", span);
+    diagnostic.notes = ["nul:\u{0}"];
+    diagnostic.related = [model.Related(span: span, message: "related")];
+    diagnostic.fixits = [model.Fixit(span: span, replacement: "fix", revision: 2)];
+    diagnostic.has_expected_type = true;
+    diagnostic.expected_type = "i32";
+    try {
+        io.println(render.document([input], model.PhaseState.Recovered, model.FailureKind.Source, true, [diagnostic]));
+    } catch error render.Error { return 4; }
+    if render.succeeded(model.PhaseState.Complete, true, [diagnostic]) { return 5; }
+    diagnostic.fixits = [model.Fixit(span: span, replacement: "stale", revision: 1)];
+    var rejected = false;
+    try {
+        let ignored = render.document([input], model.PhaseState.Failed, model.FailureKind.Source, false, [diagnostic]);
+    } catch error render.Error { rejected = true; }
+    if !rejected { return 6; }
+    return 0;
+}

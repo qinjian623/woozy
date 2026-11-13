@@ -1,0 +1,16 @@
+integer = 42
+negative = -17
+plus = +7
+zero = 0
+min_neg = -0
+float = 3.5
+float_exp = 1e10
+float_neg_exp = 1.5e-3
+float_under = 1_0.0_1e1_0
+inf = inf
+neg_inf = -inf
+nan = nan
+boolean_true = true
+boolean_false = false
+empty_string = ""
+literal = 'C:\Users\nodejs\templates'

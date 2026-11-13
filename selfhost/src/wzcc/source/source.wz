@@ -1,0 +1,265 @@
+// Source snapshots: original bytes, normalized bytes, byte mapping and UTF-16
+// positions. This is the pure-Wz counterpart of src/support/source.cpp.
+//
+// The normalization rules and error positions are frozen by
+// development/docs/SELFHOST_CONTRACT.md:
+//   * only a leading UTF-8 BOM is removed;
+//   * CRLF becomes LF, while a lone CR is an error;
+//   * raw NUL is an error;
+//   * invalid UTF-8 reports the same byte and length as SourceError;
+//   * positions are zero-based UTF-16 line/character coordinates.
+package source;
+
+import "app/wzcc/model" as model;
+import "std/vec" as vec;
+
+// Internal invariant violations are implementation errors. The contract allows
+// these to Panic rather than silently clamp an invalid position.
+func internal_error() u64 {
+    let empty = vec.empty[u8]();
+    return u64(empty[vec.len(empty)]);
+}
+
+struct Decode {
+    ok bool;
+    width usize;
+    code u32;
+    error_byte u64;
+    error_length u64;
+    message string;
+}
+
+func decode_error(byte usize, length usize, message string) Decode {
+    return Decode(ok: false, width: 1, code: 0,
+        error_byte: u64(byte), error_length: u64(length), message: message);
+}
+
+func decode(bytes Vec[u8], at usize) Decode {
+    let count = vec.len(bytes);
+    let lead = bytes[at];
+    var width usize = 1;
+    var code u32 = u32(lead);
+    var minimum u32 = 0;
+    if lead < 0x80 {
+        width = 1;
+    } else if lead >= 0xC2 && lead <= 0xDF {
+        width = 2;
+        code = u32(lead & 0x1F);
+        minimum = 0x80;
+    } else if lead >= 0xE0 && lead <= 0xEF {
+        width = 3;
+        code = u32(lead & 0x0F);
+        minimum = 0x800;
+    } else if lead >= 0xF0 && lead <= 0xF4 {
+        width = 4;
+        code = u32(lead & 0x07);
+        minimum = 0x10000;
+    } else {
+        return decode_error(at, 1, "invalid UTF-8");
+    }
+    if width > count - at {
+        return decode_error(at, count - at, "truncated UTF-8");
+    }
+    for var index usize = 1; index < width; index += 1 {
+        let next = bytes[at + index];
+        if (next & 0xC0) != 0x80 {
+            return decode_error(at, index, "invalid continuation");
+        }
+        code = (code << 6) | u32(next & 0x3F);
+    }
+    if code < minimum || code > 0x10FFFF ||
+       (code >= 0xD800 && code <= 0xDFFF) {
+        return decode_error(at, width, "invalid scalar");
+    }
+    return Decode(ok: true, width: width, code: code,
+        error_byte: 0, error_length: 0, message: "");
+}
+
+func invalid_source(file_id u64, revision_id u64, id u64, path string,
+                    bytes Vec[u8], byte u64, length u64,
+                    message string) model.Source {
+    return model.Source(file_id: file_id, revision_id: revision_id, id: id,
+        path: path, original: bytes,
+        normalized: vec.empty[u8](), offsets: vec.empty[u64](),
+        boundaries: vec.empty[model.Boundary](), valid: false,
+        error_byte: byte, error_length: length, error_message: message);
+}
+
+func has_boundary(source model.Source, byte u64) bool {
+    for boundary in source.boundaries {
+        if boundary.byte == byte {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Vec handles are shared, but a snapshot owns its original bytes. Copy the
+// caller's buffer so later mutation through another handle cannot change it.
+func copy_bytes(bytes Vec[u8]) Vec[u8] {
+    return bytes[0:vec.len(bytes)];
+}
+
+pub func snapshot(file_id u64, revision_id u64, id u64, path string,
+                  bytes Vec[u8]) model.Source {
+    let original = copy_bytes(bytes);
+    let count = vec.len(original);
+    var start usize = 0;
+    if count >= 3 && original[0] == 0xEF && original[1] == 0xBB &&
+       original[2] == 0xBF {
+        start = 3;
+    }
+    var normalized = vec.empty[u8]();
+    var offsets = vec.empty[u64]();
+    var boundaries = vec.empty[model.Boundary]();
+    vec.push(offsets, u64(start));
+    vec.push(boundaries, model.Boundary(byte: u64(start),
+        position: model.Position(line: 0, character: 0)));
+    var index usize = start;
+    var line u64 = 0;
+    var character u64 = 0;
+    for index < count {
+        let decoded = decode(original, index);
+        if !decoded.ok {
+            return invalid_source(file_id, revision_id, id, path, original,
+                decoded.error_byte, decoded.error_length, decoded.message);
+        }
+        var width = decoded.width;
+        var code = decoded.code;
+        if code == 0 {
+            return invalid_source(file_id, revision_id, id, path, original,
+                u64(index), 1, "raw NUL");
+        }
+        if code == 13 {
+            if index + 1 >= count || original[index + 1] != 0x0A {
+                return invalid_source(file_id, revision_id, id, path, original,
+                    u64(index), 1, "standalone CR");
+            }
+            width = 2;
+            code = 10;
+            vec.push(normalized, 0x0A);
+            vec.push(offsets, u64(index + 2));
+        } else {
+            for var part usize = 0; part < width; part += 1 {
+                vec.push(normalized, original[index + part]);
+            }
+            for var part usize = 1; part <= width; part += 1 {
+                vec.push(offsets, u64(index + part));
+            }
+        }
+        index += width;
+        if code == 10 {
+            line += 1;
+            character = 0;
+        } else if code > 0xFFFF {
+            character += 2;
+        } else {
+            character += 1;
+        }
+        vec.push(boundaries, model.Boundary(byte: u64(index),
+            position: model.Position(line: line, character: character)));
+    }
+    return model.Source(file_id: file_id, revision_id: revision_id, id: id,
+        path: path, original: original, normalized: normalized,
+        offsets: offsets, boundaries: boundaries, valid: true,
+        error_byte: 0, error_length: 0, error_message: "");
+}
+
+pub func raw_span(source model.Source, begin u64, end u64) model.Span {
+    if begin > end || end > u64(vec.len(source.original)) {
+        let ignored = internal_error();
+        return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    }
+    return model.Span(snapshot: source.id, begin_byte: begin, end_byte: end);
+}
+
+pub func span(source model.Source, begin usize, end usize) model.Span {
+    if !source.valid {
+        let ignored = internal_error();
+        return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    }
+    if begin > end || begin >= vec.len(source.offsets) ||
+       end >= vec.len(source.offsets) {
+        let ignored = internal_error();
+        return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    }
+    let begin_byte = source.offsets[begin];
+    let end_byte = source.offsets[end];
+    if !has_boundary(source, begin_byte) || !has_boundary(source, end_byte) {
+        let ignored = internal_error();
+        return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    }
+    return model.Span(snapshot: source.id, begin_byte: begin_byte,
+        end_byte: end_byte);
+}
+
+pub func position(source model.Source, byte u64) model.Position {
+    if !source.valid {
+        let ignored = internal_error();
+        return model.Position(line: 0, character: 0);
+    }
+    for boundary in source.boundaries {
+        if boundary.byte == byte {
+            return boundary.position;
+        }
+    }
+    let ignored = internal_error();
+    return model.Position(line: 0, character: 0);
+}
+
+pub func byte_at(source model.Source, where model.Position) u64 {
+    if !source.valid {
+        let ignored = internal_error();
+        return 0;
+    }
+    for boundary in source.boundaries {
+        if boundary.position.line == where.line &&
+           boundary.position.character == where.character {
+            return boundary.byte;
+        }
+    }
+    let ignored = internal_error();
+    return 0;
+}
+
+// SourceManager counterpart. File and snapshot IDs are one-based and global to
+// the manager; revision increments once per accepted update, including updates
+// whose bytes produce an invalid snapshot. Old snapshots are retained.
+pub struct Manager {
+    pub files Vec[string];
+    pub snapshots Vec[model.Source];
+    pub revision u64;
+}
+
+pub func manager() Manager {
+    return Manager(files: vec.empty[string](),
+        snapshots: vec.empty[model.Source](), revision: 0);
+}
+
+pub func add_file(state inout Manager, path string) u64 {
+    if path == "" {
+        let ignored = internal_error();
+    }
+    vec.push(state.files, path);
+    return u64(vec.len(state.files));
+}
+
+pub func update(state inout Manager, file_id u64, bytes Vec[u8]) model.Source {
+    if file_id == 0 || file_id > u64(vec.len(state.files)) {
+        let ignored = internal_error();
+    }
+    let path = state.files[usize(file_id - 1)];
+    let revision = state.revision + 1;
+    let id = u64(vec.len(state.snapshots)) + 1;
+    let value = snapshot(file_id, revision, id, path, bytes);
+    state.revision = revision;
+    vec.push(state.snapshots, value);
+    return value;
+}
+
+pub func get(state Manager, snapshot_id u64) model.Source {
+    if snapshot_id == 0 || snapshot_id > u64(vec.len(state.snapshots)) {
+        let ignored = internal_error();
+    }
+    return state.snapshots[usize(snapshot_id - 1)];
+}

@@ -1,0 +1,17 @@
+basic = """
+line one
+line two"""
+inline_close = """one
+two"""
+quote_run = """x""y"""
+quote_four = """x""""
+continuation = """a\
+   b\
+   c"""
+continuation_spaces = """a\   
+   b"""
+literal = '''
+line one
+line two'''
+literal_quote = '''x''y'''
+literal_four = '''x''''

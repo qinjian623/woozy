@@ -1,0 +1,73 @@
+package app;
+
+import "selfhost/wzcc/digest" as digest;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func same(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func copy_bytes(source Vec[u8]) Vec[u8] {
+    let out = vec.make[u8](vec.len(source), 0);
+    for var index usize = 0; index < vec.len(source); index += 1 {
+        out[index] = source[index];
+    }
+    return out;
+}
+
+func pattern(length usize) Vec[u8] {
+    let out = vec.make[u8](length, 0);
+    for var index usize = 0; index < length; index += 1 {
+        out[index] = u8((index * 37 + 11) % 256);
+    }
+    return out;
+}
+
+func repeated(length usize, byte u8) Vec[u8] {
+    return vec.make[u8](length, byte);
+}
+
+func run_case(name string, data Vec[u8]) throws os.Error {
+    let before = copy_bytes(data);
+    let result = digest.sha256(data);
+    io.print("HASH ");
+    io.print(name);
+    io.print(" ");
+    io.println(result);
+    if same(data, before) {
+        io.print("ALIAS ");
+        io.print(name);
+        io.println(" ok");
+    } else {
+        io.print("ALIAS ");
+        io.print(name);
+        io.println(" fail");
+    }
+}
+
+func main() i32 throws os.Error {
+    run_case("empty", vec.empty[u8]());
+    run_case("abc", [97, 98, 99]);
+    run_case("nul", [0]);
+    run_case("nul-embedded", [97, 0, 98]);
+    run_case("invalid-utf8", [0xff, 0xfe, 0x80, 0xc0, 0xaf]);
+    run_case("len55", pattern(55));
+    run_case("len56", pattern(56));
+    run_case("len63", pattern(63));
+    run_case("len64", pattern(64));
+    run_case("len65", pattern(65));
+    run_case("len119", pattern(119));
+    run_case("len120", pattern(120));
+    run_case("len127", pattern(127));
+    run_case("len128", pattern(128));
+    run_case("len129", pattern(129));
+    run_case("multiblock", pattern(1024));
+    run_case("million-a", repeated(1000000, 97));
+    return 0;
+}

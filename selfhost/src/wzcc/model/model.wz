@@ -1,0 +1,265 @@
+package model;
+
+pub struct Span {
+    pub snapshot u64;
+    pub begin_byte u64;
+    pub end_byte u64;
+}
+
+pub struct Position {
+    pub line u64;
+    pub character u64;
+}
+
+pub struct Boundary {
+    pub byte u64;
+    pub position Position;
+}
+
+pub struct Source {
+    pub file_id u64;
+    pub revision_id u64;
+    pub id u64;
+    pub path string;
+    pub original Vec[u8];
+    pub normalized Vec[u8];
+    pub offsets Vec[u64];
+    pub boundaries Vec[Boundary];
+    pub valid bool;
+    pub error_byte u64;
+    pub error_length u64;
+    pub error_message string;
+}
+
+pub struct Related {
+    pub span Span;
+    pub message string;
+}
+
+pub struct Fixit {
+    pub span Span;
+    pub replacement string;
+    pub revision u64;
+}
+
+pub struct Diagnostic {
+    pub code string;
+    pub phase string;
+    pub severity string;
+    pub message string;
+    pub has_primary bool;
+    pub primary Span;
+    pub related Vec[Related];
+    pub fixits Vec[Fixit];
+    pub notes Vec[string];
+    pub has_expected_type bool;
+    pub expected_type string;
+    pub has_actual_type bool;
+    pub actual_type string;
+}
+
+pub enum TokenKind {
+    End;
+    Identifier;
+    Integer;
+    Floating;
+    StringLiteral;
+    Keyword;
+    Punctuation;
+    Error;
+}
+
+pub enum TriviaKind {
+    Whitespace;
+    LineComment;
+    BlockComment;
+}
+
+pub struct Trivia {
+    pub kind TriviaKind;
+    pub span Span;
+    pub spelling string;
+}
+
+pub struct Token {
+    pub kind TokenKind;
+    pub span Span;
+    pub spelling string;
+    pub leading_trivia Vec[Trivia];
+    pub has_string_value bool;
+    pub string_value string;
+}
+
+pub enum PhaseState { Complete; Recovered; Failed; Cancelled; }
+
+pub enum FailureKind { Source; Unsupported; Environment; Internal; }
+
+pub struct LexResult {
+    pub state PhaseState;
+    pub failure FailureKind;
+    pub source Source;
+    pub tokens Vec[Token];
+    pub diagnostics Vec[Diagnostic];
+    pub has_value bool;
+}
+
+pub enum AstKind {
+    File;
+    Package;
+    Import;
+    Binding;
+    Function;
+    Struct;
+    Enum;
+    Trait;
+    Impl;
+    Field;
+    Variant;
+    GenericParameter;
+    Parameter;
+    Async;
+    Await;
+    NamedType;
+    FunctionType;
+    ParenthesizedType;
+    Block;
+    ExpressionStatement;
+    Assign;
+    If;
+    For;
+    ForIn;
+    Switch;
+    Case;
+    Try;
+    Catch;
+    Defer;
+    Unsafe;
+    Return;
+    Throw;
+    Break;
+    Continue;
+    Name;
+    Literal;
+    Unary;
+    Binary;
+    Call;
+    Argument;
+    Member;
+    NeutralBracket;
+    BracketItem;
+    Slice;
+    List;
+    FunctionLiteral;
+    Parenthesized;
+    BindPattern;
+    LiteralPattern;
+    VariantPattern;
+    Error;
+    TraitObjectType;
+}
+
+pub struct AstNode {
+    pub kind AstKind;
+    pub span Span;
+    pub token_begin usize;
+    pub token_end usize;
+    pub children Vec[usize];
+    pub recovered bool;
+}
+
+pub struct ParseResult {
+    pub state PhaseState;
+    pub failure FailureKind;
+    pub lexed LexResult;
+    pub nodes Vec[AstNode];
+    pub root usize;
+    pub recovered bool;
+    pub diagnostics Vec[Diagnostic];
+    pub has_value bool;
+}
+
+pub func diagnostic(code string, phase string, message string, span Span) Diagnostic {
+    return Diagnostic(code: code, phase: phase, severity: "error",
+        message: message, has_primary: true, primary: span,
+        related: [], fixits: [], notes: [],
+        has_expected_type: false, expected_type: "",
+        has_actual_type: false, actual_type: "");
+}
+
+pub func token_kind_id(kind TokenKind) u32 {
+    switch kind {
+        case TokenKind.End: return 0;
+        case TokenKind.Identifier: return 1;
+        case TokenKind.Integer: return 2;
+        case TokenKind.Floating: return 3;
+        case TokenKind.StringLiteral: return 4;
+        case TokenKind.Keyword: return 5;
+        case TokenKind.Punctuation: return 6;
+        case TokenKind.Error: return 7;
+    }
+}
+
+pub func trivia_kind_id(kind TriviaKind) u32 {
+    switch kind {
+        case TriviaKind.Whitespace: return 0;
+        case TriviaKind.LineComment: return 1;
+        case TriviaKind.BlockComment: return 2;
+    }
+}
+
+pub func ast_kind_id(kind AstKind) u32 {
+    switch kind {
+        case AstKind.File: return 0;
+        case AstKind.Package: return 1;
+        case AstKind.Import: return 2;
+        case AstKind.Binding: return 3;
+        case AstKind.Function: return 4;
+        case AstKind.Struct: return 5;
+        case AstKind.Enum: return 6;
+        case AstKind.Trait: return 7;
+        case AstKind.Impl: return 8;
+        case AstKind.Field: return 9;
+        case AstKind.Variant: return 10;
+        case AstKind.GenericParameter: return 11;
+        case AstKind.Parameter: return 12;
+        case AstKind.Async: return 13;
+        case AstKind.Await: return 14;
+        case AstKind.NamedType: return 15;
+        case AstKind.FunctionType: return 16;
+        case AstKind.ParenthesizedType: return 17;
+        case AstKind.Block: return 18;
+        case AstKind.ExpressionStatement: return 19;
+        case AstKind.Assign: return 20;
+        case AstKind.If: return 21;
+        case AstKind.For: return 22;
+        case AstKind.ForIn: return 23;
+        case AstKind.Switch: return 24;
+        case AstKind.Case: return 25;
+        case AstKind.Try: return 26;
+        case AstKind.Catch: return 27;
+        case AstKind.Defer: return 28;
+        case AstKind.Unsafe: return 29;
+        case AstKind.Return: return 30;
+        case AstKind.Throw: return 31;
+        case AstKind.Break: return 32;
+        case AstKind.Continue: return 33;
+        case AstKind.Name: return 34;
+        case AstKind.Literal: return 35;
+        case AstKind.Unary: return 36;
+        case AstKind.Binary: return 37;
+        case AstKind.Call: return 38;
+        case AstKind.Argument: return 39;
+        case AstKind.Member: return 40;
+        case AstKind.NeutralBracket: return 41;
+        case AstKind.BracketItem: return 42;
+        case AstKind.Slice: return 43;
+        case AstKind.List: return 44;
+        case AstKind.FunctionLiteral: return 45;
+        case AstKind.Parenthesized: return 46;
+        case AstKind.BindPattern: return 47;
+        case AstKind.LiteralPattern: return 48;
+        case AstKind.VariantPattern: return 49;
+        case AstKind.Error: return 50;
+        case AstKind.TraitObjectType: return 51;
+    }
+}

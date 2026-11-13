@@ -1,0 +1,24 @@
+schema_version = 1
+
+[package]
+name = "woozyc_selfhost"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "native"
+word_bits = 64
+
+[build.native]
+runtime = "hosted"
+
+[dependencies.dep]
+kind = "native"
+binding = "binding.json"
+libraries = ["m", "z"]
+library_dirs = ["lib"]
+
+[dependencies.py]
+kind = "python"
+binding = "binding.json"
+host_package = "host"

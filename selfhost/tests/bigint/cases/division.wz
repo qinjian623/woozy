@@ -1,0 +1,67 @@
+// Signed division truncates toward zero and the remainder keeps the dividend
+// sign. Includes an exact-zero remainder canonical check and gcd.
+package app;
+import "app/wzcc/bigint" as bigint;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func report_div(label string, left bigint.BigInt, right bigint.BigInt) throws os.Error {
+    try {
+        let parts = bigint.divrem(left, right);
+        io.println(label + ".q=" + bigint.format_decimal(parts.quotient));
+        io.println(label + ".r=" + bigint.format_decimal(parts.remainder));
+    } catch error bigint.Error {
+        io.println("unexpected-bigint-error");
+    }
+}
+
+func report_gcd(label string, left bigint.BigInt, right bigint.BigInt) throws os.Error {
+    io.println(label + "=" + bigint.format_decimal(bigint.gcd(left, right)));
+}
+
+func main() i32 throws os.Error {
+    try {
+        report_div("d.7.3", bigint.from_i64(7), bigint.from_i64(3));
+        report_div("d.n7.3", bigint.from_i64(-7), bigint.from_i64(3));
+        report_div("d.7.n3", bigint.from_i64(7), bigint.from_i64(-3));
+        report_div("d.n7.n3", bigint.from_i64(-7), bigint.from_i64(-3));
+        report_div("d.6.3", bigint.from_i64(6), bigint.from_i64(3));
+        report_div("d.n6.3", bigint.from_i64(-6), bigint.from_i64(3));
+        report_div("d.6.n3", bigint.from_i64(6), bigint.from_i64(-3));
+        report_div("d.n6.n3", bigint.from_i64(-6), bigint.from_i64(-3));
+        report_div("d.1.2", bigint.from_i64(1), bigint.from_i64(2));
+        report_div("d.100.100", bigint.from_i64(100), bigint.from_i64(100));
+        report_div("d.100.n100", bigint.from_i64(100), bigint.from_i64(-100));
+        report_div("d.min.n1",
+            bigint.from_i64(-9223372036854775807 - 1), bigint.from_i64(-1));
+        report_div("d.min.2",
+            bigint.from_i64(-9223372036854775807 - 1), bigint.from_i64(2));
+        let two_96 = bigint.subtract(bigint.shift_left(bigint.from_i64(1), 96), bigint.from_i64(1));
+        let two_32_plus_1 = bigint.add(bigint.shift_left(bigint.from_i64(1), 32), bigint.from_i64(1));
+        report_div("d.2p96m1.2p32p1", two_96, two_32_plus_1);
+        report_div("d.n2p96m1.2p32p1", bigint.negate(two_96), two_32_plus_1);
+        let exact = bigint.divrem(bigint.from_i64(6), bigint.from_i64(3));
+        io.println("exact.q.sign");
+        io.println(exact.quotient.sign);
+        io.println("exact.r.sign");
+        io.println(exact.remainder.sign);
+        io.println("exact.r.len");
+        io.println(vec.len(exact.remainder.limbs));
+        report_gcd("g.0.0", bigint.zero(), bigint.zero());
+        report_gcd("g.0.42", bigint.zero(), bigint.from_i64(42));
+        report_gcd("g.n42.30", bigint.from_i64(-42), bigint.from_i64(30));
+        report_gcd("g.2p64m1.2p32m1",
+            bigint.from_u64(18446744073709551615),
+            bigint.from_i64(4294967295));
+        let two_64 = bigint.subtract(bigint.shift_left(bigint.from_i64(1), 64), bigint.from_i64(1));
+        report_gcd("g.2p96m1.2p64m1", two_96, two_64);
+        report_gcd("g.neg.neg", bigint.negate(two_96), bigint.negate(two_64));
+        report_gcd("g.coprime",
+            bigint.subtract(bigint.shift_left(bigint.from_i64(1), 100), bigint.from_i64(1)),
+            bigint.subtract(bigint.shift_left(bigint.from_i64(1), 61), bigint.from_i64(1)));
+    } catch error bigint.Error {
+        io.println("unexpected-bigint-error");
+    }
+    return 0;
+}

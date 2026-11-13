@@ -1,0 +1,679 @@
+// Real execution tests for the pure-Wz source snapshot module.
+//
+// The vector set mirrors tests/support/support_test.cpp (BOM, CRLF, NUL, lone
+// CR, UTF-8 error byte/length and UTF-16 boundaries) and adds the scalar edges
+// that the C++ constructor rejects or accepts. The runner builds this program
+// with stage0 at O0 and O2 and runs it with no arguments; panic modes are run
+// separately and must exit 101.
+package app;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "std/os" as os;
+import "std/process" as process;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func bytes_equal(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func offsets_equal(left Vec[u64], right Vec[u64]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func positions_equal(left model.Position, right model.Position) bool {
+    return left.line == right.line && left.character == right.character;
+}
+
+func boundaries_equal(left Vec[model.Boundary],
+                      right Vec[model.Boundary]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index].byte != right[index].byte ||
+           !positions_equal(left[index].position, right[index].position) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// The support_test.cpp payload: BOM, CJK, an astral scalar, tab, CRLF, and a
+// non-leading BOM that must be preserved.
+func test_bom_crlf_emoji() i32 {
+    let raw = text.bytes("\u{feff}中😀\t\r\nx\u{feff}");
+    let value = source.snapshot(1, 7, 13, "test.wz", raw);
+    if !value.valid {
+        return 101;
+    }
+    if value.file_id != 1 || value.revision_id != 7 || value.id != 13 ||
+       value.path != "test.wz" {
+        return 102;
+    }
+    if !bytes_equal(value.original, raw) {
+        return 103;
+    }
+    if !bytes_equal(value.normalized, text.bytes("中😀\t\nx\u{feff}")) {
+        return 104;
+    }
+    if value.error_byte != 0 || value.error_length != 0 ||
+       value.error_message != "" {
+        return 105;
+    }
+    let want_offsets Vec[u64] = [3, 4, 5, 6, 7, 8, 9, 10, 11, 13, 14, 15, 16, 17];
+    if !offsets_equal(value.offsets, want_offsets) {
+        return 106;
+    }
+    let want_boundaries Vec[model.Boundary] = [
+        model.Boundary(byte: 3, position: model.Position(line: 0, character: 0)),
+        model.Boundary(byte: 6, position: model.Position(line: 0, character: 1)),
+        model.Boundary(byte: 10, position: model.Position(line: 0, character: 3)),
+        model.Boundary(byte: 11, position: model.Position(line: 0, character: 4)),
+        model.Boundary(byte: 13, position: model.Position(line: 1, character: 0)),
+        model.Boundary(byte: 14, position: model.Position(line: 1, character: 1)),
+        model.Boundary(byte: 17, position: model.Position(line: 1, character: 2))
+    ];
+    if !boundaries_equal(value.boundaries, want_boundaries) {
+        return 107;
+    }
+    if !positions_equal(source.position(value, 6),
+                        model.Position(line: 0, character: 1)) ||
+       !positions_equal(source.position(value, 10),
+                        model.Position(line: 0, character: 3)) ||
+       !positions_equal(source.position(value, 11),
+                        model.Position(line: 0, character: 4)) ||
+       !positions_equal(source.position(value, 13),
+                        model.Position(line: 1, character: 0)) ||
+       !positions_equal(source.position(value, 17),
+                        model.Position(line: 1, character: 2)) {
+        return 108;
+    }
+    if source.byte_at(value, model.Position(line: 0, character: 3)) != 10 ||
+       source.byte_at(value, model.Position(line: 0, character: 4)) != 11 ||
+       source.byte_at(value, model.Position(line: 1, character: 0)) != 13 ||
+       source.byte_at(value, model.Position(line: 1, character: 1)) != 14 ||
+       source.byte_at(value, model.Position(line: 1, character: 2)) != 17 {
+        return 109;
+    }
+    let inner = source.span(value, 8, 9);
+    if inner.snapshot != 13 || inner.begin_byte != 11 || inner.end_byte != 13 {
+        return 110;
+    }
+    let whole = source.span(value, 0, 13);
+    if whole.begin_byte != 3 || whole.end_byte != 17 {
+        return 111;
+    }
+    let empty = source.span(value, 9, 9);
+    if empty.begin_byte != 13 || empty.end_byte != 13 {
+        return 112;
+    }
+    if source.span(value, 0, 3).begin_byte != 3 ||
+       source.span(value, 0, 3).end_byte != 6 {
+        return 113;
+    }
+    let raw_span = source.raw_span(value, 4, 5);
+    if raw_span.snapshot != 13 || raw_span.begin_byte != 4 ||
+       raw_span.end_byte != 5 {
+        return 114;
+    }
+    if source.raw_span(value, 0, 17).end_byte != 17 {
+        return 115;
+    }
+    return 0;
+}
+
+func test_empty_and_bom_only() i32 {
+    let empty = source.snapshot(2, 1, 1, "empty.wz", text.bytes(""));
+    if !empty.valid {
+        return 201;
+    }
+    if vec.len(empty.normalized) != 0 || vec.len(empty.offsets) != 1 ||
+       vec.len(empty.boundaries) != 1 {
+        return 202;
+    }
+    if empty.offsets[0] != 0 || empty.boundaries[0].byte != 0 ||
+       !positions_equal(empty.boundaries[0].position,
+                        model.Position(line: 0, character: 0)) {
+        return 203;
+    }
+    let empty_span = source.span(empty, 0, 0);
+    if empty_span.begin_byte != 0 || empty_span.end_byte != 0 {
+        return 204;
+    }
+    if source.byte_at(empty, model.Position(line: 0, character: 0)) != 0 {
+        return 205;
+    }
+    let bom = source.snapshot(3, 1, 2, "bom.wz", text.bytes("\u{feff}"));
+    if !bom.valid {
+        return 206;
+    }
+    if !bytes_equal(bom.normalized, text.bytes("")) ||
+       vec.len(bom.offsets) != 1 || bom.offsets[0] != 3 ||
+       vec.len(bom.boundaries) != 1 || bom.boundaries[0].byte != 3 {
+        return 207;
+    }
+    let bom_span = source.span(bom, 0, 0);
+    if bom_span.begin_byte != 3 || bom_span.end_byte != 3 {
+        return 208;
+    }
+    if source.byte_at(bom, model.Position(line: 0, character: 0)) != 3 {
+        return 209;
+    }
+    if !positions_equal(source.position(bom, 3),
+                        model.Position(line: 0, character: 0)) {
+        return 210;
+    }
+    if source.raw_span(bom, 3, 3).begin_byte != 3 {
+        return 211;
+    }
+    return 0;
+}
+
+func test_newline_and_crlf() i32 {
+    let lf = source.snapshot(4, 2, 3, "lf.wz", text.bytes("a\nb"));
+    if !lf.valid || !bytes_equal(lf.normalized, text.bytes("a\nb")) {
+        return 251;
+    }
+    let lf_offsets Vec[u64] = [0, 1, 2, 3];
+    if !offsets_equal(lf.offsets, lf_offsets) {
+        return 252;
+    }
+    if !positions_equal(source.position(lf, 2),
+                        model.Position(line: 1, character: 0)) ||
+       source.byte_at(lf, model.Position(line: 1, character: 0)) != 2 {
+        return 253;
+    }
+    if source.span(lf, 1, 2).end_byte != 2 {
+        return 254;
+    }
+    let crlf = source.snapshot(4, 3, 4, "crlf.wz", text.bytes("a\r\nb"));
+    if !crlf.valid || !bytes_equal(crlf.normalized, text.bytes("a\nb")) {
+        return 255;
+    }
+    let crlf_offsets Vec[u64] = [0, 1, 3, 4];
+    if !offsets_equal(crlf.offsets, crlf_offsets) {
+        return 256;
+    }
+    let crlf_boundaries Vec[model.Boundary] = [
+        model.Boundary(byte: 0, position: model.Position(line: 0, character: 0)),
+        model.Boundary(byte: 1, position: model.Position(line: 0, character: 1)),
+        model.Boundary(byte: 3, position: model.Position(line: 1, character: 0)),
+        model.Boundary(byte: 4, position: model.Position(line: 1, character: 1))
+    ];
+    if !boundaries_equal(crlf.boundaries, crlf_boundaries) {
+        return 257;
+    }
+    if !positions_equal(source.position(crlf, 3),
+                        model.Position(line: 1, character: 0)) ||
+       source.byte_at(crlf, model.Position(line: 1, character: 0)) != 3 {
+        return 258;
+    }
+    let crlf_span = source.span(crlf, 1, 2);
+    if crlf_span.begin_byte != 1 || crlf_span.end_byte != 3 {
+        return 259;
+    }
+    return 0;
+}
+
+func test_utf16_boundaries() i32 {
+    let emoji = source.snapshot(5, 1, 5, "emoji.wz", text.bytes("😀a"));
+    if !emoji.valid {
+        return 401;
+    }
+    let emoji_offsets Vec[u64] = [0, 1, 2, 3, 4, 5];
+    if !offsets_equal(emoji.offsets, emoji_offsets) {
+        return 402;
+    }
+    let emoji_boundaries Vec[model.Boundary] = [
+        model.Boundary(byte: 0, position: model.Position(line: 0, character: 0)),
+        model.Boundary(byte: 4, position: model.Position(line: 0, character: 2)),
+        model.Boundary(byte: 5, position: model.Position(line: 0, character: 3))
+    ];
+    if !boundaries_equal(emoji.boundaries, emoji_boundaries) {
+        return 403;
+    }
+    if !positions_equal(source.position(emoji, 4),
+                        model.Position(line: 0, character: 2)) ||
+       source.byte_at(emoji, model.Position(line: 0, character: 2)) != 4 {
+        return 404;
+    }
+    let cjk = source.snapshot(5, 2, 6, "cjk.wz", text.bytes("中"));
+    if !cjk.valid || cjk.boundaries[1].byte != 3 ||
+       !positions_equal(cjk.boundaries[1].position,
+                        model.Position(line: 0, character: 1)) {
+        return 405;
+    }
+    let u10000 = source.snapshot(5, 3, 7, "u10000.wz", text.bytes("\u{10000}"));
+    if !u10000.valid || vec.len(u10000.offsets) != 5 ||
+       !positions_equal(u10000.boundaries[1].position,
+                        model.Position(line: 0, character: 2)) {
+        return 406;
+    }
+    let uffff = source.snapshot(5, 4, 8, "uffff.wz", text.bytes("\u{ffff}"));
+    if !uffff.valid || !positions_equal(uffff.boundaries[1].position,
+                        model.Position(line: 0, character: 1)) {
+        return 407;
+    }
+    let umax = source.snapshot(5, 5, 9, "umax.wz", text.bytes("\u{10ffff}"));
+    if !umax.valid || vec.len(umax.offsets) != 5 ||
+       !positions_equal(umax.boundaries[1].position,
+                        model.Position(line: 0, character: 2)) {
+        return 408;
+    }
+    let d7ff = source.snapshot(5, 6, 10, "d7ff.wz", text.bytes("\u{d7ff}"));
+    if !d7ff.valid || !positions_equal(d7ff.boundaries[1].position,
+                        model.Position(line: 0, character: 1)) {
+        return 409;
+    }
+    let e000 = source.snapshot(5, 7, 11, "e000.wz", text.bytes("\u{e000}"));
+    if !e000.valid || !positions_equal(e000.boundaries[1].position,
+                        model.Position(line: 0, character: 1)) {
+        return 410;
+    }
+    let mixed = source.snapshot(5, 8, 12, "mixed.wz",
+                                text.bytes("中\r\n😀"));
+    if !mixed.valid || !bytes_equal(mixed.normalized, text.bytes("中\n😀")) {
+        return 411;
+    }
+    let mixed_boundaries Vec[model.Boundary] = [
+        model.Boundary(byte: 0, position: model.Position(line: 0, character: 0)),
+        model.Boundary(byte: 3, position: model.Position(line: 0, character: 1)),
+        model.Boundary(byte: 5, position: model.Position(line: 1, character: 0)),
+        model.Boundary(byte: 9, position: model.Position(line: 1, character: 2))
+    ];
+    if !boundaries_equal(mixed.boundaries, mixed_boundaries) {
+        return 412;
+    }
+    let bom_crlf = source.snapshot(5, 9, 13, "bomcrlf.wz",
+                                   text.bytes("\u{feff}\r\na"));
+    if !bom_crlf.valid || !bytes_equal(bom_crlf.normalized, text.bytes("\na")) {
+        return 413;
+    }
+    let bom_crlf_offsets Vec[u64] = [3, 5, 6];
+    if !offsets_equal(bom_crlf.offsets, bom_crlf_offsets) {
+        return 414;
+    }
+    if source.span(bom_crlf, 0, 0).begin_byte != 3 ||
+       source.span(bom_crlf, 1, 1).begin_byte != 5 ||
+       !positions_equal(source.position(bom_crlf, 5),
+                        model.Position(line: 1, character: 0)) {
+        return 415;
+    }
+    return 0;
+}
+
+func test_immutability() i32 {
+    var raw = text.bytes("a\u{feff}中");
+    let value = source.snapshot(6, 1, 20, "copy.wz", raw);
+    if !value.valid {
+        return 451;
+    }
+    raw[0] = 0x7A;
+    vec.push(raw, 0x21);
+    if !bytes_equal(value.original, text.bytes("a\u{feff}中")) {
+        return 452;
+    }
+    if !bytes_equal(value.normalized, text.bytes("a\u{feff}中")) {
+        return 453;
+    }
+    return 0;
+}
+
+func invalid_case(code i32, raw Vec[u8], want_byte u64, want_length u64,
+                  want_message string) i32 {
+    let bad = source.snapshot(9, 8, 7, "bad.wz", raw);
+    if bad.valid {
+        return code;
+    }
+    if bad.file_id != 9 || bad.revision_id != 8 || bad.id != 7 ||
+       bad.path != "bad.wz" {
+        return code + 1;
+    }
+    if !bytes_equal(bad.original, raw) {
+        return code + 2;
+    }
+    if vec.len(bad.normalized) != 0 || vec.len(bad.offsets) != 0 ||
+       vec.len(bad.boundaries) != 0 {
+        return code + 3;
+    }
+    if bad.error_byte != want_byte || bad.error_length != want_length ||
+       bad.error_message != want_message {
+        return code + 4;
+    }
+    let raw_span = source.raw_span(bad, want_byte, want_byte + want_length);
+    if raw_span.snapshot != 7 || raw_span.begin_byte != want_byte ||
+       raw_span.end_byte != want_byte + want_length {
+        return code + 5;
+    }
+    return 0;
+}
+
+func test_invalid_bytes() i32 {
+    var code = invalid_case(301, [0x61, 0xC0, 0xAF], 1, 1,
+                            "invalid UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(310, [0x61, 0x80], 1, 1, "invalid UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(320, [0x61, 0xED, 0xA0, 0x80], 1, 3,
+                        "invalid scalar");
+    if code != 0 { return code; }
+    code = invalid_case(330, [0x61, 0xF4, 0x90, 0x80, 0x80], 1, 4,
+                        "invalid scalar");
+    if code != 0 { return code; }
+    code = invalid_case(340, [0x61, 0x00], 1, 1, "raw NUL");
+    if code != 0 { return code; }
+    code = invalid_case(350, [0x61, 0x0D], 1, 1, "standalone CR");
+    if code != 0 { return code; }
+    code = invalid_case(360, [0x61, 0xE4, 0xB8, 0x78], 1, 2,
+                        "invalid continuation");
+    if code != 0 { return code; }
+    code = invalid_case(370, [0x61, 0xE4, 0xB8], 1, 2, "truncated UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(380, [0x61, 0xE0, 0x80, 0x80], 1, 3,
+                        "invalid scalar");
+    if code != 0 { return code; }
+    code = invalid_case(390, [0x0D], 0, 1, "standalone CR");
+    if code != 0 { return code; }
+    code = invalid_case(401, [0xF0, 0x9F, 0x98], 0, 3, "truncated UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(411, [0xFF], 0, 1, "invalid UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(421, [0xC0], 0, 1, "invalid UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(431, [0xEF, 0xBB, 0xBF, 0x80], 3, 1,
+                        "invalid UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(441, [0xEF, 0xBB, 0xBF, 0x0D], 3, 1,
+                        "standalone CR");
+    if code != 0 { return code; }
+    code = invalid_case(451, [0xEF, 0xBB], 0, 2, "truncated UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(461, [0x61, 0xE0, 0x9F, 0xBF], 1, 3,
+                        "invalid scalar");
+    if code != 0 { return code; }
+    code = invalid_case(471, [0x61, 0x61, 0x00, 0x62], 2, 1, "raw NUL");
+    if code != 0 { return code; }
+    code = invalid_case(481, [0x61, 0xF0, 0x8F, 0xBF, 0xBF], 1, 4,
+                        "invalid scalar");
+    if code != 0 { return code; }
+    code = invalid_case(491, [0xEF, 0xBB, 0xBF, 0xE4, 0xB8], 3, 2,
+                        "truncated UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(501, [0x61, 0xC2], 1, 1, "truncated UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(511, [0x61, 0xE2, 0x82], 1, 2, "truncated UTF-8");
+    if code != 0 { return code; }
+    code = invalid_case(521, [0x61, 0xED, 0xBF, 0xBF], 1, 3,
+                        "invalid scalar");
+    if code != 0 { return code; }
+    code = invalid_case(531, [0x61, 0x0D, 0x0D], 1, 1, "standalone CR");
+    if code != 0 { return code; }
+    code = invalid_case(541, [0x61, 0xF5], 1, 1, "invalid UTF-8");
+    if code != 0 { return code; }
+    return 0;
+}
+
+func test_manager_ids() i32 {
+    var state = source.manager();
+    if vec.len(state.files) != 0 || vec.len(state.snapshots) != 0 ||
+       state.revision != 0 {
+        return 601;
+    }
+    let first = source.add_file(inout state, "first.wz");
+    let second = source.add_file(inout state, "second.wz");
+    if first != 1 || second != 2 {
+        return 602;
+    }
+    if vec.len(state.files) != 2 || state.files[0] != "first.wz" ||
+       state.files[1] != "second.wz" || state.revision != 0 {
+        return 603;
+    }
+    return 0;
+}
+
+func test_manager_updates() i32 {
+    var state = source.manager();
+    source.add_file(inout state, "a.wz");
+    source.add_file(inout state, "b.wz");
+    let one = source.update(inout state, 1, text.bytes("a\nb"));
+    if !one.valid || one.file_id != 1 || one.revision_id != 1 ||
+       one.id != 1 || one.path != "a.wz" {
+        return 611;
+    }
+    if state.revision != 1 || vec.len(state.snapshots) != 1 {
+        return 612;
+    }
+    let two = source.update(inout state, 2, text.bytes("\u{feff}中\r\nx"));
+    if !two.valid || two.file_id != 2 || two.revision_id != 2 ||
+       two.id != 2 || two.path != "b.wz" {
+        return 613;
+    }
+    if state.revision != 2 || vec.len(state.snapshots) != 2 {
+        return 614;
+    }
+    let three = source.update(inout state, 1, text.bytes("z"));
+    if !three.valid || three.file_id != 1 || three.revision_id != 3 ||
+       three.id != 3 || three.path != "a.wz" {
+        return 615;
+    }
+    if state.revision != 3 || vec.len(state.snapshots) != 3 {
+        return 616;
+    }
+    if one.revision_id != 1 || one.id != 1 ||
+       !bytes_equal(one.normalized, text.bytes("a\nb")) {
+        return 617;
+    }
+    let stored_one = source.get(state, 1);
+    let stored_two = source.get(state, 2);
+    let stored_three = source.get(state, 3);
+    if stored_one.revision_id != 1 || stored_one.file_id != 1 ||
+       !bytes_equal(stored_one.normalized, text.bytes("a\nb")) {
+        return 618;
+    }
+    if stored_two.revision_id != 2 || stored_two.file_id != 2 ||
+       !bytes_equal(stored_two.normalized, text.bytes("中\nx")) ||
+       stored_two.offsets[0] != 3 {
+        return 619;
+    }
+    if stored_three.revision_id != 3 || stored_three.file_id != 1 ||
+       !bytes_equal(stored_three.normalized, text.bytes("z")) {
+        return 620;
+    }
+    if !positions_equal(source.position(two, 8),
+                        model.Position(line: 1, character: 0)) ||
+       source.byte_at(two, model.Position(line: 1, character: 0)) != 8 {
+        return 621;
+    }
+    return 0;
+}
+
+func test_manager_invalid_source() i32 {
+    var state = source.manager();
+    source.add_file(inout state, "bad.wz");
+    let good = source.update(inout state, 1, text.bytes("ok"));
+    let bad = source.update(inout state, 1, [0x61, 0x80]);
+    if bad.valid || bad.file_id != 1 || bad.revision_id != 2 ||
+       bad.id != 2 || bad.path != "bad.wz" {
+        return 631;
+    }
+    if bad.error_byte != 1 || bad.error_length != 1 ||
+       bad.error_message != "invalid UTF-8" {
+        return 632;
+    }
+    if vec.len(bad.normalized) != 0 || vec.len(bad.offsets) != 0 ||
+       vec.len(bad.boundaries) != 0 {
+        return 633;
+    }
+    if state.revision != 2 || vec.len(state.snapshots) != 2 {
+        return 634;
+    }
+    let stored_bad = source.get(state, 2);
+    if stored_bad.valid || stored_bad.id != 2 ||
+       stored_bad.error_message != "invalid UTF-8" ||
+       !bytes_equal(stored_bad.original, [0x61, 0x80]) {
+        return 635;
+    }
+    let stored_good = source.get(state, 1);
+    if !stored_good.valid || stored_good.revision_id != 1 ||
+       !bytes_equal(stored_good.normalized, text.bytes("ok")) {
+        return 636;
+    }
+    if !good.valid || good.revision_id != 1 || good.id != 1 {
+        return 637;
+    }
+    let after = source.update(inout state, 1, text.bytes("later"));
+    if !after.valid || after.id != 3 || after.revision_id != 3 ||
+       state.revision != 3 || vec.len(state.snapshots) != 3 {
+        return 638;
+    }
+    return 0;
+}
+
+func test_manager_input_copy() i32 {
+    var state = source.manager();
+    source.add_file(inout state, "copy.wz");
+    var raw = text.bytes("a\u{feff}中");
+    let captured = source.update(inout state, 1, raw);
+    raw[0] = 0x7A;
+    vec.push(raw, 0x21);
+    if !bytes_equal(captured.original, text.bytes("a\u{feff}中")) {
+        return 641;
+    }
+    let stored = source.get(state, 1);
+    if !bytes_equal(stored.original, text.bytes("a\u{feff}中")) {
+        return 642;
+    }
+    if !bytes_equal(stored.normalized, text.bytes("a\u{feff}中")) {
+        return 643;
+    }
+    return 0;
+}
+
+func panic_source() model.Source {
+    return source.snapshot(1, 7, 13, "test.wz",
+        text.bytes("\u{feff}中😀\t\r\nx\u{feff}"));
+}
+
+func panic_bad_source() model.Source {
+    return source.snapshot(2, 2, 2, "bad.wz", [0x61, 0x80]);
+}
+
+func run_panic_mode(mode string) i32 {
+    if mode == "byte-inside-char" {
+        let value = panic_source();
+        let ignored = source.byte_at(value,
+            model.Position(line: 0, character: 2));
+    } else if mode == "position-inside-crlf" {
+        let value = panic_source();
+        let ignored = source.position(value, 12);
+    } else if mode == "span-interior-byte" {
+        let value = panic_source();
+        let ignored = source.span(value, 1, 2);
+    } else if mode == "span-invalid-source" {
+        let value = panic_bad_source();
+        let ignored = source.span(value, 0, 0);
+    } else if mode == "position-invalid-source" {
+        let value = panic_bad_source();
+        let ignored = source.position(value, 0);
+    } else if mode == "byte-invalid-source" {
+        let value = panic_bad_source();
+        let ignored = source.byte_at(value,
+            model.Position(line: 0, character: 0));
+    } else if mode == "rawspan-order" {
+        let value = panic_source();
+        let ignored = source.raw_span(value, 2, 1);
+    } else if mode == "rawspan-bounds" {
+        let value = panic_source();
+        let ignored = source.raw_span(value, 0, 18);
+    } else if mode == "manager-update-zero" {
+        var state = source.manager();
+        source.add_file(inout state, "a.wz");
+        let ignored = source.update(inout state, 0, [0x61]);
+    } else if mode == "manager-update-unknown" {
+        var state = source.manager();
+        source.add_file(inout state, "a.wz");
+        let ignored = source.update(inout state, 2, [0x61]);
+    } else if mode == "manager-get-zero" {
+        var state = source.manager();
+        source.add_file(inout state, "a.wz");
+        let ignored = source.update(inout state, 1, [0x61]);
+        let ignored_snapshot = source.get(state, 0);
+    } else if mode == "manager-get-unknown" {
+        var state = source.manager();
+        source.add_file(inout state, "a.wz");
+        let ignored = source.update(inout state, 1, [0x61]);
+        let ignored_snapshot = source.get(state, 2);
+    } else if mode == "manager-empty-path" {
+        var state = source.manager();
+        let ignored = source.add_file(inout state, "");
+    } else {
+        return 600;
+    }
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) > 1 {
+        return run_panic_mode(arguments[1]);
+    }
+    let first = test_bom_crlf_emoji();
+    if first != 0 {
+        return first;
+    }
+    let second = test_empty_and_bom_only();
+    if second != 0 {
+        return second;
+    }
+    let third = test_newline_and_crlf();
+    if third != 0 {
+        return third;
+    }
+    let fourth = test_utf16_boundaries();
+    if fourth != 0 {
+        return fourth;
+    }
+    let fifth = test_invalid_bytes();
+    if fifth != 0 {
+        return fifth;
+    }
+    let sixth = test_immutability();
+    if sixth != 0 {
+        return sixth;
+    }
+    let seventh = test_manager_ids();
+    if seventh != 0 {
+        return seventh;
+    }
+    let eighth = test_manager_updates();
+    if eighth != 0 {
+        return eighth;
+    }
+    let ninth = test_manager_invalid_source();
+    if ninth != 0 {
+        return ninth;
+    }
+    let tenth = test_manager_input_copy();
+    if tenth != 0 {
+        return tenth;
+    }
+    return 0;
+}

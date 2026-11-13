@@ -1,0 +1,459 @@
+// Arbitrary-precision signed integers for the self-hosted compiler.
+//
+// Representation is canonical and immutable from the caller's point of view:
+//   sign  == 0  => limbs is empty (the unique zero)
+//   sign  == +1 => limbs are little-endian base 2^32, highest limb nonzero
+//   sign  == -1 => same magnitude encoding, negative value
+//
+// Public operations never mutate a Vec reachable from an argument. Results
+// that need editable storage allocate a fresh Vec and copy the limbs first;
+// alias-sharing inputs such as negate/absolute only share an immutable handle.
+// There is no host floating-point path and no dependency on a C/C++ bigint
+// helper such as GMP.
+package bigint;
+
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const U32_MASK u64 = 4294967295;
+const U32_BASE u64 = 4294967296;
+const DECIMAL_CHUNK u32 = 1000000000;
+const I64_MAX_MAGNITUDE u64 = 9223372036854775807;
+const I64_MIN_MAGNITUDE u64 = 9223372036854775808;
+
+pub enum Error {
+    InvalidBase;
+    InvalidDigit(offset usize);
+    DivisionByZero;
+    Overflow;
+}
+
+pub struct DivRem {
+    pub quotient BigInt;
+    pub remainder BigInt;
+}
+
+pub struct BigInt {
+    pub sign i32;
+    pub limbs Vec[u32];
+}
+
+struct MagnitudeDiv {
+    quotient Vec[u32];
+    remainder Vec[u32];
+}
+
+pub func zero() BigInt {
+    return BigInt(sign: 0, limbs: vec.empty[u32]());
+}
+
+func limb_at(limbs Vec[u32], index usize) u32 {
+    if index < vec.len(limbs) { return limbs[index]; }
+    return 0;
+}
+
+func trim_inplace(values Vec[u32]) {
+    var length = vec.len(values);
+    for length > 0 && values[length - 1] == 0 { length -= 1; }
+    if length != vec.len(values) { vec.resize(values, length, 0); }
+}
+
+func normalize(sign i32, limbs Vec[u32]) BigInt {
+    var length = vec.len(limbs);
+    for length > 0 && limbs[length - 1] == 0 { length -= 1; }
+    if length == 0 { return zero(); }
+    if length != vec.len(limbs) { vec.resize(limbs, length, 0); }
+    var normalized_sign i32 = 1;
+    if sign < 0 { normalized_sign = -1; }
+    return BigInt(sign: normalized_sign, limbs: limbs);
+}
+
+func copy_limbs(source Vec[u32]) Vec[u32] {
+    let out = vec.empty[u32]();
+    vec.reserve(out, vec.len(source));
+    for var index usize = 0; index < vec.len(source); index += 1 {
+        vec.push(out, source[index]);
+    }
+    return out;
+}
+
+func from_magnitude(magnitude u64) Vec[u32] {
+    let limbs = vec.empty[u32]();
+    var value = magnitude;
+    for value > 0 {
+        vec.push(limbs, u32(value & U32_MASK));
+        value = value >> 32;
+    }
+    return limbs;
+}
+
+pub func from_u64(value u64) BigInt {
+    let limbs = from_magnitude(value);
+    if vec.len(limbs) == 0 { return zero(); }
+    return BigInt(sign: 1, limbs: limbs);
+}
+
+pub func from_i64(value i64) BigInt {
+    if value == 0 { return zero(); }
+    if value > 0 { return from_u64(u64(value)); }
+    // -(value + 1) cannot overflow even for i64 min; then add the missing one.
+    let magnitude = u64(-(value + 1)) + 1;
+    return BigInt(sign: -1, limbs: from_magnitude(magnitude));
+}
+
+// Numeric length, tolerating noncanonical high zero limbs.
+func value_length(values Vec[u32]) usize {
+    var length = vec.len(values);
+    for length > 0 && values[length - 1] == 0 { length -= 1; }
+    return length;
+}
+
+func compare_abs(left Vec[u32], right Vec[u32]) i32 {
+    let left_length = value_length(left);
+    let right_length = value_length(right);
+    if left_length < right_length { return -1; }
+    if left_length > right_length { return 1; }
+    var index = left_length;
+    for index > 0 {
+        index -= 1;
+        let left_limb = left[index];
+        let right_limb = right[index];
+        if left_limb < right_limb { return -1; }
+        if left_limb > right_limb { return 1; }
+    }
+    return 0;
+}
+
+func add_abs(left Vec[u32], right Vec[u32]) Vec[u32] {
+    var length = vec.len(left);
+    if vec.len(right) > length { length = vec.len(right); }
+    let out = vec.make[u32](length + 1, 0);
+    var carry u64 = 0;
+    for var index usize = 0; index < length; index += 1 {
+        let sum = u64(limb_at(left, index)) + u64(limb_at(right, index)) + carry;
+        out[index] = u32(sum & U32_MASK);
+        carry = sum >> 32;
+    }
+    out[length] = u32(carry);
+    return out;
+}
+
+// Requires left >= right and mutates the freshly copied left vector.
+func sub_abs_inplace(left Vec[u32], right Vec[u32]) {
+    var borrow u64 = 0;
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        let left_limb = u64(left[index]);
+        let right_limb = u64(limb_at(right, index)) + borrow;
+        if left_limb >= right_limb {
+            left[index] = u32(left_limb - right_limb);
+            borrow = 0;
+        } else {
+            left[index] = u32(left_limb + U32_BASE - right_limb);
+            borrow = 1;
+        }
+    }
+}
+
+func subtract_abs(left Vec[u32], right Vec[u32]) Vec[u32] {
+    let out = copy_limbs(left);
+    sub_abs_inplace(out, right);
+    trim_inplace(out);
+    return out;
+}
+
+func multiply_abs(left Vec[u32], right Vec[u32]) Vec[u32] {
+    let left_length = vec.len(left);
+    let right_length = vec.len(right);
+    if left_length == 0 || right_length == 0 { return vec.empty[u32](); }
+    let out = vec.make[u32](left_length + right_length, 0);
+    for var i usize = 0; i < left_length; i += 1 {
+        var carry u64 = 0;
+        let left_limb = u64(left[i]);
+        for var j usize = 0; j < right_length; j += 1 {
+            let index = i + j;
+            let accumulator =
+                left_limb * u64(right[j]) + u64(out[index]) + carry;
+            out[index] = u32(accumulator & U32_MASK);
+            carry = accumulator >> 32;
+        }
+        out[i + right_length] = u32(carry);
+    }
+    return out;
+}
+
+func bit_length_limbs(values Vec[u32]) u64 {
+    let length = value_length(values);
+    if length == 0 { return 0; }
+    var top = values[length - 1];
+    var bits u64 = 0;
+    for top > 0 {
+        bits += 1;
+        top = top >> 1;
+    }
+    return u64(length - 1) * 32 + bits;
+}
+
+func shift_left_limbs(source Vec[u32], bits u64) Vec[u32] {
+    let length = vec.len(source);
+    if length == 0 { return vec.empty[u32](); }
+    let words = usize(bits / 32);
+    let offset = u32(bits % 32);
+    let out = vec.make[u32](length + words + 1, 0);
+    for var index usize = 0; index < length; index += 1 {
+        let value = u64(source[index]);
+        let low = (value << u64(offset)) & U32_MASK;
+        let high = (value >> u64(32 - offset)) & U32_MASK;
+        out[index + words] = out[index + words] | u32(low);
+        out[index + words + 1] = out[index + words + 1] | u32(high);
+    }
+    trim_inplace(out);
+    return out;
+}
+
+func shift_right_one_inplace(values Vec[u32]) {
+    var carry u32 = 0;
+    var index = vec.len(values);
+    for index > 0 {
+        index -= 1;
+        let current = values[index];
+        values[index] = (current >> 1) | (carry << 31);
+        carry = current & 1;
+    }
+    trim_inplace(values);
+}
+
+// Divides two nonzero magnitude vectors. The divisor must be canonical.
+func div_abs(dividend Vec[u32], divisor Vec[u32]) MagnitudeDiv {
+    if compare_abs(dividend, divisor) < 0 {
+        return MagnitudeDiv(quotient: vec.empty[u32](),
+                            remainder: copy_limbs(dividend));
+    }
+    let shift = bit_length_limbs(dividend) - bit_length_limbs(divisor);
+    let scaled = shift_left_limbs(divisor, shift);
+    let remainder = copy_limbs(dividend);
+    let quotient = vec.make[u32](usize(shift / 32) + 1, 0);
+    // Subtract the largest shifted divisor at each bit, high bit first.
+    var position = shift + 1;
+    for position > 0 {
+        position -= 1;
+        if compare_abs(remainder, scaled) >= 0 {
+            sub_abs_inplace(remainder, scaled);
+            // compare_abs uses vector length, so keep the working value
+            // canonical after every subtraction.
+            trim_inplace(remainder);
+            let word = usize(position / 32);
+            quotient[word] = quotient[word] | (u32(1) << u32(position % 32));
+        }
+        shift_right_one_inplace(scaled);
+    }
+    trim_inplace(quotient);
+    return MagnitudeDiv(quotient: quotient, remainder: remainder);
+}
+
+func div_small_inplace(values Vec[u32], divisor u32) u32 {
+    var remainder u64 = 0;
+    var index = vec.len(values);
+    for index > 0 {
+        index -= 1;
+        let current = (remainder << 32) | u64(values[index]);
+        values[index] = u32(current / u64(divisor));
+        remainder = current % u64(divisor);
+    }
+    trim_inplace(values);
+    return u32(remainder);
+}
+
+pub func parse_digits(value string, base u32) BigInt throws Error {
+    if base < 2 || base > 36 { throw Error.InvalidBase; }
+    let length = text.len(value);
+    if length == 0 { throw Error.InvalidDigit(0); }
+    var cursor usize = 0;
+    var sign i32 = 1;
+    let first = value[0];
+    if first == 43 {
+        cursor = 1;
+    } else if first == 45 {
+        cursor = 1;
+        sign = -1;
+    }
+    if cursor == length { throw Error.InvalidDigit(cursor); }
+    let limbs = vec.empty[u32]();
+    vec.push(limbs, 0);
+    for cursor < length {
+        let rune = value[cursor];
+        var digit i32 = -1;
+        if rune >= 48 && rune <= 57 {
+            digit = i32(rune - 48);
+        } else if rune >= 65 && rune <= 90 {
+            digit = i32(rune - 65) + 10;
+        } else if rune >= 97 && rune <= 122 {
+            digit = i32(rune - 97) + 10;
+        }
+        if digit < 0 || u32(digit) >= base {
+            throw Error.InvalidDigit(cursor);
+        }
+        var carry u64 = u64(digit);
+        let radix = u64(base);
+        for var index usize = 0; index < vec.len(limbs); index += 1 {
+            let accumulator = u64(limbs[index]) * radix + carry;
+            limbs[index] = u32(accumulator & U32_MASK);
+            carry = accumulator >> 32;
+        }
+        if carry > 0 { vec.push(limbs, u32(carry)); }
+        cursor += 1;
+    }
+    return normalize(sign, limbs);
+}
+
+pub func format_decimal(value BigInt) string {
+    if value.sign == 0 { return "0"; }
+    let work = copy_limbs(value.limbs);
+    let chunks = vec.empty[u32]();
+    for vec.len(work) > 0 {
+        vec.push(chunks, div_small_inplace(work, DECIMAL_CHUNK));
+    }
+    var index = vec.len(chunks);
+    index -= 1;
+    var out = strconv.format_u64(u64(chunks[index]));
+    for index > 0 {
+        index -= 1;
+        let part = strconv.format_u64(u64(chunks[index]));
+        var padding = 9 - text.len(part);
+        for padding > 0 {
+            out = out + "0";
+            padding -= 1;
+        }
+        out = out + part;
+    }
+    if value.sign < 0 { return "-" + out; }
+    return out;
+}
+
+pub func compare(left BigInt, right BigInt) i32 {
+    if left.sign != right.sign {
+        if left.sign < right.sign { return -1; }
+        return 1;
+    }
+    if left.sign == 0 { return 0; }
+    let magnitude = compare_abs(left.limbs, right.limbs);
+    if left.sign > 0 { return magnitude; }
+    if magnitude == 0 { return 0; }
+    if magnitude > 0 { return -1; }
+    return 1;
+}
+
+pub func negate(value BigInt) BigInt {
+    if value.sign == 0 { return zero(); }
+    return BigInt(sign: -value.sign, limbs: value.limbs);
+}
+
+pub func absolute(value BigInt) BigInt {
+    if value.sign >= 0 { return value; }
+    return BigInt(sign: 1, limbs: value.limbs);
+}
+
+pub func add(left BigInt, right BigInt) BigInt {
+    if left.sign == 0 { return right; }
+    if right.sign == 0 { return left; }
+    if left.sign == right.sign {
+        return normalize(left.sign, add_abs(left.limbs, right.limbs));
+    }
+    let magnitude = compare_abs(left.limbs, right.limbs);
+    if magnitude == 0 { return zero(); }
+    if magnitude > 0 {
+        return normalize(left.sign, subtract_abs(left.limbs, right.limbs));
+    }
+    return normalize(right.sign, subtract_abs(right.limbs, left.limbs));
+}
+
+pub func subtract(left BigInt, right BigInt) BigInt {
+    return add(left, negate(right));
+}
+
+pub func multiply(left BigInt, right BigInt) BigInt {
+    if left.sign == 0 || right.sign == 0 { return zero(); }
+    let limbs = multiply_abs(left.limbs, right.limbs);
+    var sign i32 = 1;
+    if left.sign != right.sign { sign = -1; }
+    return normalize(sign, limbs);
+}
+
+pub func divrem(left BigInt, right BigInt) DivRem throws Error {
+    if right.sign == 0 { throw Error.DivisionByZero; }
+    if left.sign == 0 {
+        return DivRem(quotient: zero(), remainder: zero());
+    }
+    let parts = div_abs(left.limbs, right.limbs);
+    var quotient_sign i32 = 1;
+    if left.sign != right.sign { quotient_sign = -1; }
+    return DivRem(quotient: normalize(quotient_sign, parts.quotient),
+                  remainder: normalize(left.sign, parts.remainder));
+}
+
+pub func shift_left(value BigInt, bits u64) BigInt {
+    if value.sign == 0 { return zero(); }
+    return normalize(value.sign, shift_left_limbs(value.limbs, bits));
+}
+
+pub func shift_right(value BigInt, bits u64) BigInt {
+    if value.sign == 0 { return zero(); }
+    let length = vec.len(value.limbs);
+    let words = usize(bits / 32);
+    if words >= length { return zero(); }
+    let offset = u32(bits % 32);
+    let out = vec.make[u32](length - words, 0);
+    for var index usize = 0; index < length - words; index += 1 {
+        let low = u64(value.limbs[index + words]);
+        var high u64 = 0;
+        if index + words + 1 < length {
+            high = u64(value.limbs[index + words + 1]);
+        }
+        let combined = (low >> u64(offset)) |
+                       ((high << u64(32 - offset)) & U32_MASK);
+        out[index] = u32(combined & U32_MASK);
+    }
+    return normalize(value.sign, out);
+}
+
+pub func bit_length(value BigInt) u64 {
+    return bit_length_limbs(value.limbs);
+}
+
+pub func gcd(left BigInt, right BigInt) BigInt {
+    var a = absolute(left);
+    var b = absolute(right);
+    for b.sign != 0 {
+        let parts = div_abs(a.limbs, b.limbs);
+        let remainder = normalize(1, parts.remainder);
+        a = b;
+        b = remainder;
+    }
+    return a;
+}
+
+pub func to_u64(value BigInt) u64 throws Error {
+    if value.sign < 0 { throw Error.Overflow; }
+    if value.sign == 0 { return 0; }
+    let length = vec.len(value.limbs);
+    if length > 2 { throw Error.Overflow; }
+    if length == 1 { return u64(value.limbs[0]); }
+    return (u64(value.limbs[1]) << 32) | u64(value.limbs[0]);
+}
+
+pub func to_i64(value BigInt) i64 throws Error {
+    if value.sign == 0 { return 0; }
+    let length = vec.len(value.limbs);
+    if length > 2 { throw Error.Overflow; }
+    var magnitude = u64(value.limbs[0]);
+    if length == 2 {
+        magnitude = (u64(value.limbs[1]) << 32) | magnitude;
+    }
+    if value.sign > 0 {
+        if magnitude > I64_MAX_MAGNITUDE { throw Error.Overflow; }
+        return i64(magnitude);
+    }
+    if magnitude > I64_MIN_MAGNITUDE { throw Error.Overflow; }
+    if magnitude == I64_MIN_MAGNITUDE { return -9223372036854775807 - 1; }
+    return -i64(magnitude);
+}

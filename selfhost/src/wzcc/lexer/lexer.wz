@@ -1,0 +1,552 @@
+package lexer;
+
+// Pure Wz port of src/syntax/lexer.cpp.
+//
+// The lexer consumes the normalized bytes of a model.Source and reproduces the
+// reference token stream: trivia is attached to the following token, the final
+// token is always EOF, string decoding produces raw UTF-8 bytes (including
+// NUL), and numeric candidates are scanned first, then validated by an
+// equivalent hand-written FSM because Wz has no regular expressions.
+
+import "app/wzcc/model" as model;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct OperatorMatch {
+    length usize;
+    reserved bool;
+}
+
+func is_digit(c u8) bool {
+    return c >= 48 && c <= 57;
+}
+
+func is_letter(c u8) bool {
+    return (c >= 65 && c <= 90) || (c >= 97 && c <= 122) || c == 95;
+}
+
+func is_hex(c u8) bool {
+    return is_digit(c) || (c >= 65 && c <= 70) || (c >= 97 && c <= 102);
+}
+
+func hex_value(c u8) u32 {
+    if c <= 57 { return u32(c) - 48; }
+    if c >= 97 { return u32(c) - 87; }
+    return u32(c) - 55;
+}
+
+func radix_digit(c u8, radix u32) bool {
+    if radix == 2 { return c == 48 || c == 49; }
+    if radix == 8 { return c >= 48 && c <= 55; }
+    return is_hex(c);
+}
+
+func byte_at(data Vec[u8], size usize, index usize) u8 {
+    if index < size { return data[index]; }
+    return 0;
+}
+
+func starts_at(data Vec[u8], size usize, position usize, prefix string) bool {
+    let count = text.len(prefix);
+    var index usize = 0;
+    for index < count {
+        if position + index >= size { return false; }
+        if u32(data[position + index]) != prefix[index] { return false; }
+        index += 1;
+    }
+    return true;
+}
+
+func is_keyword(word string) bool {
+    if word == "as" { return true; }
+    if word == "break" { return true; }
+    if word == "case" { return true; }
+    if word == "catch" { return true; }
+    if word == "const" { return true; }
+    if word == "continue" { return true; }
+    if word == "default" { return true; }
+    if word == "defer" { return true; }
+    if word == "else" { return true; }
+    if word == "enum" { return true; }
+    if word == "false" { return true; }
+    if word == "for" { return true; }
+    if word == "func" { return true; }
+    if word == "if" { return true; }
+    if word == "impl" { return true; }
+    if word == "import" { return true; }
+    if word == "in" { return true; }
+    if word == "inout" { return true; }
+    if word == "let" { return true; }
+    if word == "move" { return true; }
+    if word == "package" { return true; }
+    if word == "pub" { return true; }
+    if word == "return" { return true; }
+    if word == "struct" { return true; }
+    if word == "switch" { return true; }
+    if word == "throw" { return true; }
+    if word == "throws" { return true; }
+    if word == "trait" { return true; }
+    if word == "true" { return true; }
+    if word == "try" { return true; }
+    if word == "unsafe" { return true; }
+    if word == "var" { return true; }
+    if word == "async" { return true; }
+    if word == "await" { return true; }
+    return false;
+}
+
+func is_reserved(word string) bool {
+    return word == "class" || word == "extends" || word == "extern" ||
+        word == "operator";
+}
+
+func is_single_punctuation(c u8) bool {
+    return c == 43 || c == 45 || c == 42 || c == 47 || c == 37 || c == 33 ||
+        c == 126 || c == 38 || c == 124 || c == 94 || c == 60 || c == 62 ||
+        c == 61 || c == 40 || c == 41 || c == 91 || c == 93 || c == 123 ||
+        c == 125 || c == 46 || c == 44 || c == 58 || c == 59;
+}
+
+func slice_text(data Vec[u8], first usize, last usize) string {
+    let out = vec.empty[u8]();
+    vec.reserve(out, last - first);
+    var index = first;
+    for index < last {
+        vec.push(out, data[index]);
+        index += 1;
+    }
+    try { return text.from_bytes(out); }
+    catch error text.Error { return ""; }
+}
+
+func bytes_text(data Vec[u8]) string {
+    try { return text.from_bytes(data); }
+    catch error text.Error { return ""; }
+}
+
+func raw_span(source model.Source, first usize, last usize) model.Span {
+    return model.Span(snapshot: source.id,
+        begin_byte: source.offsets[first], end_byte: source.offsets[last]);
+}
+
+func append_scalar(out Vec[u8], scalar u32) {
+    if scalar < 128 {
+        vec.push(out, u8(scalar));
+    } else if scalar < 2048 {
+        vec.push(out, u8(192 | (scalar >> 6)));
+        vec.push(out, u8(128 | (scalar & 63)));
+    } else if scalar < 65536 {
+        vec.push(out, u8(224 | (scalar >> 12)));
+        vec.push(out, u8(128 | ((scalar >> 6) & 63)));
+        vec.push(out, u8(128 | (scalar & 63)));
+    } else {
+        vec.push(out, u8(240 | (scalar >> 18)));
+        vec.push(out, u8(128 | ((scalar >> 12) & 63)));
+        vec.push(out, u8(128 | ((scalar >> 6) & 63)));
+        vec.push(out, u8(128 | (scalar & 63)));
+    }
+}
+
+// Equivalent of std::regex_match over
+//   (0b[01](_?[01])*|0o[0-7](_?[0-7])*|0x[0-9a-fA-F](_?[0-9a-fA-F])*
+//    |(0|[1-9](_?[0-9])*)(\.[0-9](_?[0-9])*)?([eE][+-]?[0-9](_?[0-9])*)?)
+func radix_valid(data Vec[u8], first usize, last usize, radix u32) bool {
+    if first >= last { return false; }
+    if !radix_digit(data[first], radix) { return false; }
+    var index = first + 1;
+    for true {
+        if index >= last { break; }
+        let c = data[index];
+        if c == 95 {
+            if index + 1 < last && radix_digit(data[index + 1], radix) {
+                index += 2;
+                continue;
+            }
+            return false;
+        }
+        if radix_digit(c, radix) {
+            index += 1;
+            continue;
+        }
+        return false;
+    }
+    return true;
+}
+
+func digits_from(data Vec[u8], first usize, last usize,
+    position usize) usize {
+    var index = position;
+    for true {
+        if first + index >= last { break; }
+        let c = data[first + index];
+        if is_digit(c) {
+            index += 1;
+            continue;
+        }
+        if c == 95 && first + index + 1 < last &&
+            is_digit(data[first + index + 1]) {
+            index += 2;
+            continue;
+        }
+        break;
+    }
+    return index;
+}
+
+func number_valid(data Vec[u8], first usize, last usize) bool {
+    if first >= last { return false; }
+    let count = last - first;
+    let first_byte = data[first];
+    if count >= 2 && first_byte == 48 {
+        let second = data[first + 1];
+        if second == 98 { return radix_valid(data, first + 2, last, 2); }
+        if second == 111 { return radix_valid(data, first + 2, last, 8); }
+        if second == 120 { return radix_valid(data, first + 2, last, 16); }
+    }
+    var index usize = 0;
+    if first_byte == 48 {
+        index = 1;
+    } else if first_byte >= 49 && first_byte <= 57 {
+        index = digits_from(data, first, last, 1);
+    } else {
+        return false;
+    }
+    if index < count && data[first + index] == 46 &&
+        index + 1 < count && is_digit(data[first + index + 1]) {
+        index = digits_from(data, first, last, index + 2);
+    }
+    if index < count &&
+        (data[first + index] == 101 || data[first + index] == 69) {
+        index += 1;
+        if index < count &&
+            (data[first + index] == 43 || data[first + index] == 45) {
+            index += 1;
+        }
+        if index >= count || !is_digit(data[first + index]) { return false; }
+        index = digits_from(data, first, last, index + 1);
+    }
+    return index == count;
+}
+
+func number_is_floating(data Vec[u8], first usize, last usize) bool {
+    if last - first > 1 && data[first] == 48 && data[first + 1] == 120 {
+        return false;
+    }
+    var index = first;
+    for index < last {
+        let c = data[index];
+        if c == 46 || c == 101 || c == 69 { return true; }
+        index += 1;
+    }
+    return false;
+}
+
+func match_operator(data Vec[u8], size usize, position usize) OperatorMatch {
+    if starts_at(data, size, position, "<<=") {
+        return OperatorMatch(length: 3, reserved: false);
+    }
+    if starts_at(data, size, position, ">>=") {
+        return OperatorMatch(length: 3, reserved: false);
+    }
+    if starts_at(data, size, position, "++") {
+        return OperatorMatch(length: 2, reserved: true);
+    }
+    if starts_at(data, size, position, "--") {
+        return OperatorMatch(length: 2, reserved: true);
+    }
+    if starts_at(data, size, position, "->") {
+        return OperatorMatch(length: 2, reserved: true);
+    }
+    if starts_at(data, size, position, "=>") {
+        return OperatorMatch(length: 2, reserved: true);
+    }
+    if starts_at(data, size, position, "==") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "!=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "<=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, ">=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "&&") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "||") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "<<") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, ">>") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "+=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "-=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "*=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "/=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "%=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "&=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "|=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    if starts_at(data, size, position, "^=") {
+        return OperatorMatch(length: 2, reserved: false);
+    }
+    return OperatorMatch(length: 0, reserved: false);
+}
+
+pub func lex(source model.Source) model.LexResult {
+    let diagnostics = vec.empty[model.Diagnostic]();
+    let tokens = vec.empty[model.Token]();
+    if !source.valid {
+        let span = model.Span(snapshot: source.id,
+            begin_byte: source.error_byte,
+            end_byte: source.error_byte + source.error_length);
+        vec.push(diagnostics,
+            model.diagnostic("E_LEX_INVALID_TOKEN", "lex",
+                source.error_message, span));
+        return model.LexResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Source, source: source, tokens: tokens,
+            diagnostics: diagnostics, has_value: false);
+    }
+    let data = source.normalized;
+    let size = vec.len(data);
+    var position usize = 0;
+    var trivia = vec.empty[model.Trivia]();
+    for true {
+        let first = position;
+        let c = byte_at(data, size, position);
+        if c == 32 || c == 9 || c == 10 ||
+            starts_at(data, size, position, "//") ||
+            starts_at(data, size, position, "/*") {
+            var kind = model.TriviaKind.Whitespace;
+            if starts_at(data, size, position, "//") {
+                kind = model.TriviaKind.LineComment;
+                for position < size && byte_at(data, size, position) != 10 {
+                    position += 1;
+                }
+            } else if starts_at(data, size, position, "/*") {
+                kind = model.TriviaKind.BlockComment;
+                position += 2;
+                for position < size &&
+                    !starts_at(data, size, position, "*/") {
+                    position += 1;
+                }
+                if position == size {
+                    vec.push(diagnostics,
+                        model.diagnostic("E_LEX_INVALID_TOKEN", "lex",
+                            "unterminated block comment",
+                            raw_span(source, first, position)));
+                } else {
+                    position += 2;
+                }
+            } else {
+                for position < size &&
+                    (byte_at(data, size, position) == 32 ||
+                     byte_at(data, size, position) == 9 ||
+                     byte_at(data, size, position) == 10) {
+                    position += 1;
+                }
+            }
+            vec.push(trivia,
+                model.Trivia(kind: kind,
+                    span: raw_span(source, first, position),
+                    spelling: slice_text(data, first, position)));
+            continue;
+        }
+        if position == size {
+            vec.push(tokens,
+                model.Token(kind: model.TokenKind.End,
+                    span: raw_span(source, position, position), spelling: "",
+                    leading_trivia: trivia, has_string_value: false,
+                    string_value: ""));
+            break;
+        }
+        var kind = model.TokenKind.End;
+        var has_value = false;
+        var value = "";
+        var bad = false;
+        var literal = false;
+        if is_letter(byte_at(data, size, position)) {
+            for is_letter(byte_at(data, size, position)) ||
+                is_digit(byte_at(data, size, position)) {
+                position += 1;
+            }
+            let word = slice_text(data, first, position);
+            if is_keyword(word) {
+                kind = model.TokenKind.Keyword;
+            } else {
+                kind = model.TokenKind.Identifier;
+            }
+            bad = is_reserved(word);
+        } else if is_digit(byte_at(data, size, position)) {
+            literal = true;
+            for true {
+                let current = byte_at(data, size, position);
+                if is_letter(current) || is_digit(current) {
+                    position += 1;
+                    continue;
+                }
+                if current == 46 &&
+                    is_digit(byte_at(data, size, position + 1)) {
+                    position += 1;
+                    continue;
+                }
+                if (current == 43 || current == 45) && position > first &&
+                    (byte_at(data, size, position - 1) == 101 ||
+                     byte_at(data, size, position - 1) == 69) &&
+                    !(position > first + 1 && data[first] == 48 &&
+                      data[first + 1] == 120) {
+                    position += 1;
+                    continue;
+                }
+                break;
+            }
+            bad = !number_valid(data, first, position);
+            if number_is_floating(data, first, position) {
+                kind = model.TokenKind.Floating;
+            } else {
+                kind = model.TokenKind.Integer;
+            }
+        } else if byte_at(data, size, position) == 34 ||
+            byte_at(data, size, position) == 96 {
+            literal = true;
+            kind = model.TokenKind.StringLiteral;
+            let quote = byte_at(data, size, position);
+            position += 1;
+            let decoded = vec.empty[u8]();
+            for position < size && byte_at(data, size, position) != quote {
+                let current = byte_at(data, size, position);
+                position += 1;
+                if quote == 96 {
+                    vec.push(decoded, current);
+                    continue;
+                }
+                if current < 32 || current == 127 {
+                    bad = true;
+                    if current == 10 { break; }
+                    continue;
+                }
+                if current != 92 {
+                    vec.push(decoded, current);
+                    continue;
+                }
+                if position == size {
+                    bad = true;
+                    break;
+                }
+                let escape = byte_at(data, size, position);
+                position += 1;
+                if escape == 110 {
+                    vec.push(decoded, 10);
+                } else if escape == 114 {
+                    vec.push(decoded, 13);
+                } else if escape == 116 {
+                    vec.push(decoded, 9);
+                } else if escape == 48 {
+                    vec.push(decoded, 0);
+                } else if escape == 92 || escape == 34 {
+                    vec.push(decoded, escape);
+                } else if escape == 117 {
+                    if byte_at(data, size, position) != 123 {
+                        bad = true;
+                    } else {
+                        position += 1;
+                        var scalar u32 = 0;
+                        var count usize = 0;
+                        for true {
+                            let h = byte_at(data, size, position);
+                            if !is_hex(h) { break; }
+                            position += 1;
+                            if count < 6 {
+                                scalar = scalar * 16 + hex_value(h);
+                            }
+                            count += 1;
+                        }
+                        if byte_at(data, size, position) == 125 {
+                            position += 1;
+                        } else {
+                            bad = true;
+                        }
+                        if count == 0 || count > 6 || scalar > 0x10FFFF ||
+                            (scalar >= 0xD800 && scalar <= 0xDFFF) {
+                            bad = true;
+                        } else {
+                            append_scalar(decoded, scalar);
+                        }
+                    }
+                } else {
+                    bad = true;
+                }
+            }
+            if position < size && byte_at(data, size, position) == quote {
+                position += 1;
+            } else {
+                bad = true;
+            }
+            if !bad {
+                value = bytes_text(decoded);
+                has_value = true;
+            }
+        } else {
+            kind = model.TokenKind.Punctuation;
+            let matched = match_operator(data, size, position);
+            if matched.length > 0 {
+                position += matched.length;
+                bad = matched.reserved;
+            } else if is_single_punctuation(byte_at(data, size, position)) {
+                position += 1;
+            } else {
+                bad = true;
+                position += 1;
+                for position < size && (data[position] & 192) == 128 {
+                    position += 1;
+                }
+            }
+        }
+        if bad {
+            kind = model.TokenKind.Error;
+            if literal {
+                vec.push(diagnostics,
+                    model.diagnostic("E_LEX_INVALID_LITERAL", "lex",
+                        "invalid literal",
+                        raw_span(source, first, position)));
+            } else {
+                vec.push(diagnostics,
+                    model.diagnostic("E_LEX_INVALID_TOKEN", "lex",
+                        "invalid or reserved token",
+                        raw_span(source, first, position)));
+            }
+        }
+        vec.push(tokens,
+            model.Token(kind: kind,
+                span: raw_span(source, first, position),
+                spelling: slice_text(data, first, position),
+                leading_trivia: trivia, has_string_value: has_value,
+                string_value: value));
+        trivia = vec.empty[model.Trivia]();
+    }
+    var state = model.PhaseState.Complete;
+    if vec.len(diagnostics) > 0 {
+        state = model.PhaseState.Recovered;
+    }
+    return model.LexResult(state: state, failure: model.FailureKind.Source,
+        source: source, tokens: tokens, diagnostics: diagnostics,
+        has_value: true);
+}

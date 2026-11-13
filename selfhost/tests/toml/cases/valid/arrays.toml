@@ -1,0 +1,10 @@
+empty = []
+nested = [[1], [2, 3], []]
+mixed = [1, "x", true, 2.5, 1979-05-27, 07:32:00]
+multiline = [
+  1, # one
+  2,  # two
+  3,
+]
+trailing = [1, 2,]
+with_inline = [{a = 1}, {b = 2}]

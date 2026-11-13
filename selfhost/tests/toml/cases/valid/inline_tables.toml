@@ -1,0 +1,6 @@
+empty = {}
+scalar = {a = 1, b = "x"}
+dotted = {a.b = 1, a.c = 2}
+nested = {a = {b = {c = 1}}}
+with_array = {a = [1, 2, {b = 3}]}
+quoted = {"a b" = 1, 'c.d' = 2}

@@ -1,0 +1,73 @@
+// Core construction, parsing, formatting, comparison, conversion and
+// bit_length checks. Expected output is produced independently by run.py
+// with Python's arbitrary-precision integers.
+package app;
+import "app/wzcc/bigint" as bigint;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func line(label string, value bigint.BigInt) throws os.Error {
+    io.println(label + "=" + bigint.format_decimal(value));
+}
+
+func main() i32 throws os.Error {
+    try {
+        let z = bigint.zero();
+        io.println("zero.sign");
+        io.println(z.sign);
+        io.println("zero.len");
+        io.println(vec.len(z.limbs));
+        line("i64min", bigint.from_i64(-9223372036854775807 - 1));
+        line("i64max", bigint.from_i64(9223372036854775807));
+        line("u64max", bigint.from_u64(18446744073709551615));
+        line("minus-one", bigint.from_i64(-1));
+        line("one", bigint.from_i64(1));
+        io.println("bl.zero");
+        io.println(bigint.bit_length(z));
+        io.println("bl.one");
+        io.println(bigint.bit_length(bigint.from_i64(1)));
+        io.println("bl.minus-two");
+        io.println(bigint.bit_length(bigint.from_i64(-2)));
+        io.println("bl.u64max");
+        io.println(bigint.bit_length(bigint.from_u64(18446744073709551615)));
+        io.println("bl.2p64");
+        io.println(bigint.bit_length(bigint.parse_digits("18446744073709551616", 10)));
+        line("base2", bigint.parse_digits("-101010", 2));
+        line("base8", bigint.parse_digits("+777", 8));
+        line("base16", bigint.parse_digits("deadBEEF", 16));
+        line("base36", bigint.parse_digits("zz", 36));
+        line("base36neg", bigint.parse_digits("-ZZ", 36));
+        line("pluszero", bigint.parse_digits("+0", 10));
+        line("minuszero", bigint.parse_digits("-0", 10));
+        let a = bigint.parse_digits("-12345678901234567890", 10);
+        let b = bigint.parse_digits("12345678901234567890", 10);
+        io.println("cmp.ab");
+        io.println(bigint.compare(a, b));
+        io.println("cmp.ba");
+        io.println(bigint.compare(b, a));
+        io.println("cmp.aa");
+        io.println(bigint.compare(a, a));
+        io.println("cmp.za");
+        io.println(bigint.compare(z, a));
+        io.println("cmp.zb");
+        io.println(bigint.compare(z, b));
+        line("negate.a", bigint.negate(a));
+        line("absolute.a", bigint.absolute(a));
+        line("negate.zero", bigint.negate(z));
+        line("absolute.min", bigint.absolute(bigint.from_i64(-9223372036854775807 - 1)));
+        io.println("to.i64min");
+        io.println(bigint.to_i64(bigint.from_i64(-9223372036854775807 - 1)));
+        io.println("to.i64max");
+        io.println(bigint.to_i64(bigint.from_i64(9223372036854775807)));
+        io.println("to.u64max");
+        io.println(bigint.to_u64(bigint.from_u64(18446744073709551615)));
+        io.println("to.zero");
+        io.println(bigint.to_i64(z));
+        line("fmt.leading", bigint.parse_digits("00000000000000000000000000000123", 10));
+        line("fmt.big", bigint.parse_digits("100000000000000000000000000000000000000000000000000", 10));
+    } catch error bigint.Error {
+        io.println("unexpected-bigint-error");
+    }
+    return 0;
+}

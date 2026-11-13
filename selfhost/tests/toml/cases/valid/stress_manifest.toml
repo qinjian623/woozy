@@ -1,0 +1,480 @@
+[[dependency_groups]]
+name = "group0"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 0
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group1"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 1
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group2"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 2
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group3"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 3
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group4"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 4
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group5"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 5
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group6"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 6
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group7"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 7
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group8"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 8
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group9"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 9
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group10"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 10
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group11"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 11
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group12"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 12
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group13"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 13
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group14"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 14
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group15"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 15
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group16"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 16
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group17"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 17
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group18"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 18
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group19"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 19
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group20"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 20
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group21"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 21
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group22"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 22
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group23"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 23
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group24"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 24
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group25"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 25
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group26"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 26
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group27"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 27
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group28"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 28
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group29"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 29
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group30"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 30
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group31"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 31
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group32"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 32
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group33"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 33
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group34"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 34
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group35"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 35
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group36"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 36
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group37"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 37
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group38"
+enabled = true
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 38
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+
+[[dependency_groups]]
+name = "group39"
+enabled = false
+members = ["a", "b", "c"]
+
+[dependency_groups.options]
+level = 39
+paths = [
+  "/usr/lib", # first
+  "/lib",
+]
+

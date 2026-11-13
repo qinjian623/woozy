@@ -1,0 +1,113 @@
+package render;
+import "app/wzcc/model" as model;
+import "std/json" as json;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+pub enum Error { Encoding; UnknownSnapshot; InvalidSpan; }
+
+func quote(value string) string throws Error {
+    try { return json.serialize(json.Value.String(value)); }
+    catch error json.Error { throw Error.Encoding; }
+}
+
+func span_json(sources Vec[model.Source], span model.Span) string throws Error {
+    for source in sources {
+        if source.id == span.snapshot {
+            if span.begin_byte > span.end_byte || span.end_byte > u64(vec.len(source.original)) {
+                throw Error.InvalidSpan;
+            }
+            return "{\"path\":" + quote(source.path) +
+                ",\"start_byte\":" + strconv.format_u64(span.begin_byte) +
+                ",\"end_byte\":" + strconv.format_u64(span.end_byte) + "}";
+        }
+    }
+    throw Error.UnknownSnapshot;
+}
+
+pub func succeeded(state model.PhaseState, has_value bool, diagnostics Vec[model.Diagnostic]) bool {
+    switch state {
+        case model.PhaseState.Complete: {}
+        default: return false;
+    }
+    if !has_value { return false; }
+    for diagnostic in diagnostics {
+        if diagnostic.severity == "error" { return false; }
+    }
+    return true;
+}
+
+pub func exit_code(state model.PhaseState, failure model.FailureKind,
+                   has_value bool, diagnostics Vec[model.Diagnostic]) i32 {
+    switch state {
+        case model.PhaseState.Cancelled: return 130;
+        default: {}
+    }
+    if succeeded(state, has_value, diagnostics) { return 0; }
+    switch failure {
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+        default: return 1;
+    }
+}
+
+pub func document(sources Vec[model.Source], state model.PhaseState,
+                  failure model.FailureKind, has_value bool,
+                  diagnostics Vec[model.Diagnostic]) string throws Error {
+    var status = "error";
+    switch state {
+        case model.PhaseState.Cancelled: status = "cancelled";
+        default: {
+            if succeeded(state, has_value, diagnostics) { status = "ok"; }
+            else {
+                switch failure {
+                    case model.FailureKind.Internal: status = "internal_error";
+                    default: {}
+                }
+            }
+        }
+    }
+    var output = "{\"schema_version\":1,\"compiler_version\":\"0.1.0-selfhost (compiler-dev/1)\"," +
+        "\"source_revision\":\"cli-request\",\"status\":" + quote(status) + ",\"diagnostics\":[";
+    var first = true;
+    for diagnostic in diagnostics {
+        if !first { output += ","; }
+        first = false;
+        output += "{\"code\":" + quote(diagnostic.code) + ",\"phase\":" + quote(diagnostic.phase) +
+            ",\"severity\":" + quote(diagnostic.severity) + ",\"message\":" + quote(diagnostic.message) + ",\"primary\":";
+        if diagnostic.has_primary { output += span_json(sources, diagnostic.primary); }
+        else { output += "null"; }
+        output += ",\"related\":[";
+        var first_related = true;
+        for related in diagnostic.related {
+            if !first_related { output += ","; }
+            first_related = false;
+            output += "{\"span\":" + span_json(sources, related.span) + ",\"message\":" + quote(related.message) + "}";
+        }
+        output += "],\"fixits\":[";
+        var first_fixit = true;
+        for fixit in diagnostic.fixits {
+            if !first_fixit { output += ","; }
+            first_fixit = false;
+            var current = false;
+            for source in sources {
+                if source.id == fixit.span.snapshot && source.revision_id == fixit.revision { current = true; }
+            }
+            if !current { throw Error.InvalidSpan; }
+            output += "{\"span\":" + span_json(sources, fixit.span) + ",\"replacement\":" + quote(fixit.replacement) +
+                ",\"source_revision\":" + quote(strconv.format_u64(fixit.revision)) + "}";
+        }
+        output += "],\"notes\":[";
+        var first_note = true;
+        for note in diagnostic.notes {
+            if !first_note { output += ","; }
+            first_note = false;
+            output += quote(note);
+        }
+        output += "]";
+        if diagnostic.has_expected_type { output += ",\"expected_type\":" + quote(diagnostic.expected_type); }
+        if diagnostic.has_actual_type { output += ",\"actual_type\":" + quote(diagnostic.actual_type); }
+        output += "}";
+    }
+    return output + "]}";
+}

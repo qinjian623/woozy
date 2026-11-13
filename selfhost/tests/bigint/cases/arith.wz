@@ -1,0 +1,55 @@
+// Carry/borrow across limbs, mixed-sign addition and subtraction, and
+// schoolbook multiplication with canonical zero results.
+package app;
+import "app/wzcc/bigint" as bigint;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func report(label string, value bigint.BigInt) throws os.Error {
+    io.println(label + "=" + bigint.format_decimal(value));
+}
+
+func main() i32 throws os.Error {
+    try {
+        let zero = bigint.zero();
+        let one = bigint.from_i64(1);
+        let u32max = bigint.from_i64(4294967295);
+        let u64max = bigint.from_u64(18446744073709551615);
+        let two_64 = bigint.shift_left(one, 64);
+        report("u64max.p1", bigint.add(u64max, one));
+        report("u32max.p.u32max", bigint.add(u32max, u32max));
+        report("u64max.p.u64max", bigint.add(u64max, u64max));
+        report("2p64.m1", bigint.subtract(two_64, one));
+        let two_96 = bigint.shift_left(one, 96);
+        report("2p96.m1", bigint.subtract(two_96, one));
+        report("2p96.m.2p64", bigint.subtract(two_96, two_64));
+        report("2p64.m.2p64", bigint.subtract(two_64, two_64));
+        report("u64max.m.2p64", bigint.subtract(u64max, two_64));
+        report("neg2p64.p1", bigint.add(bigint.negate(two_64), one));
+        report("5.p.n3", bigint.add(bigint.from_i64(5), bigint.from_i64(-3)));
+        report("n5.p.3", bigint.add(bigint.from_i64(-5), bigint.from_i64(3)));
+        report("5.m.3", bigint.subtract(bigint.from_i64(5), bigint.from_i64(3)));
+        report("3.m.5", bigint.subtract(bigint.from_i64(3), bigint.from_i64(5)));
+        report("n5.m.n3", bigint.subtract(bigint.from_i64(-5), bigint.from_i64(-3)));
+        report("n5.p.5", bigint.add(bigint.from_i64(-5), bigint.from_i64(5)));
+        let ten_40 = bigint.parse_digits("10000000000000000000000000000000000000000", 10);
+        let cancelled = bigint.subtract(ten_40, ten_40);
+        io.println("cancel.sign");
+        io.println(cancelled.sign);
+        io.println("cancel.len");
+        io.println(vec.len(cancelled.limbs));
+        report("m.u64max.u64max", bigint.multiply(u64max, u64max));
+        report("m.n7.6", bigint.multiply(bigint.from_i64(-7), bigint.from_i64(6)));
+        report("m.7.n6", bigint.multiply(bigint.from_i64(7), bigint.from_i64(-6)));
+        report("m.n7.n6", bigint.multiply(bigint.from_i64(-7), bigint.from_i64(-6)));
+        report("m.zero.big", bigint.multiply(zero, ten_40));
+        let ten_50 = bigint.parse_digits("100000000000000000000000000000000000000000000000000", 10);
+        report("m.10p50.10p50", bigint.multiply(ten_50, ten_50));
+        report("m.2p64m1.2p64p1",
+            bigint.multiply(u64max, bigint.add(two_64, one)));
+    } catch error bigint.Error {
+        io.println("unexpected-bigint-error");
+    }
+    return 0;
+}

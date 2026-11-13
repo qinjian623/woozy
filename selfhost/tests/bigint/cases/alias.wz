@@ -1,0 +1,68 @@
+// Alias immutability: every public operation runs on shared Vec handles, and
+// the original values plus their aliases must keep their decimal value, sign
+// and limb length. The operation results are also checked against run.py's
+// Python oracle.
+package app;
+import "app/wzcc/bigint" as bigint;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func main() i32 throws os.Error {
+    try {
+        let a = bigint.parse_digits("999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999999", 10);
+        let b = bigint.negate(bigint.parse_digits("123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789123456789", 10));
+        let snapshot_a = bigint.format_decimal(a);
+        let snapshot_b = bigint.format_decimal(b);
+        let length_a = vec.len(a.limbs);
+        let length_b = vec.len(b.limbs);
+        let alias_a = a;
+        let alias_b = b;
+        let summed = bigint.add(alias_a, alias_b);
+        let difference = bigint.subtract(alias_a, alias_b);
+        let product = bigint.multiply(alias_a, alias_b);
+        let parts = bigint.divrem(alias_a, alias_b);
+        let scaled = bigint.shift_left(alias_a, 77);
+        let shifted = bigint.shift_right(alias_b, 65);
+        let common = bigint.gcd(alias_a, alias_b);
+        let negated = bigint.negate(alias_a);
+        let magnitude = bigint.absolute(alias_b);
+        let ordering = bigint.compare(alias_a, alias_b);
+        let reparsed = bigint.parse_digits(snapshot_a, 10);
+        io.println("sum=" + bigint.format_decimal(summed));
+        io.println("diff=" + bigint.format_decimal(difference));
+        io.println("product=" + bigint.format_decimal(product));
+        io.println("q=" + bigint.format_decimal(parts.quotient));
+        io.println("r=" + bigint.format_decimal(parts.remainder));
+        io.println("scaled=" + bigint.format_decimal(scaled));
+        io.println("shifted=" + bigint.format_decimal(shifted));
+        io.println("gcd=" + bigint.format_decimal(common));
+        io.println("negated=" + bigint.format_decimal(negated));
+        io.println("magnitude=" + bigint.format_decimal(magnitude));
+        io.println("ordering=" + bigint.format_decimal(bigint.from_i64(i64(ordering))));
+        io.println("reparsed=" + bigint.format_decimal(reparsed));
+        io.println("alias.a.same");
+        io.println(bigint.format_decimal(a) == snapshot_a);
+        io.println("alias.b.same");
+        io.println(bigint.format_decimal(b) == snapshot_b);
+        io.println("alias.aa.same");
+        io.println(bigint.format_decimal(alias_a) == snapshot_a);
+        io.println("alias.bb.same");
+        io.println(bigint.format_decimal(alias_b) == snapshot_b);
+        io.println("alias.a.len.same");
+        io.println(vec.len(a.limbs) == length_a);
+        io.println("alias.b.len.same");
+        io.println(vec.len(b.limbs) == length_b);
+        io.println("alias.a.sign");
+        io.println(a.sign);
+        io.println("alias.b.sign");
+        io.println(b.sign);
+        io.println("snapshot.a");
+        io.println(snapshot_a);
+        io.println("snapshot.b");
+        io.println(snapshot_b);
+    } catch error bigint.Error {
+        io.println("unexpected-bigint-error");
+    }
+    return 0;
+}

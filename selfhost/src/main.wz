@@ -1,0 +1,6 @@
+package app;
+import "app/wzcc/cli" as cli;
+import "std/os" as os;
+import "std/process" as process;
+
+func main() i32 throws os.Error { return cli.run(process.args()); }

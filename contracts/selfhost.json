@@ -1,0 +1,100 @@
+{
+  "schema_version": 1,
+  "contract": "selfhost/1",
+  "base_commit": "330efa1927478955d4d49e3e689dcb9858b74ea6",
+  "status": "in_progress",
+  "platform": "Linux x86_64",
+  "implementation": "Woozy frontend and Native/Python emission; existing LLVM/Clang/LLD/runtime permitted",
+  "forbidden": "New compiler invoking old C++ frontend/helper for language analysis/emission; expression-only or wrapper selfhosting claims",
+  "stages": [
+    {
+      "id": "SH00",
+      "title": "shared records and CLI",
+      "status": "in_progress",
+      "owner": "Root",
+      "verified": "Wz CLI syntax-only: 80 existing syntax cases passed O0/O2; rendering JSON tested; project/check/build still incomplete"
+    },
+    {
+      "id": "SH01",
+      "title": "Source bytes, UTF8/UTF16 and spans",
+      "status": "done",
+      "task": "fc964ee6-0caf-4d63-9c30-d71c726cba70",
+      "verified": "SourceManager32checks+panic modes passed O0/O2; immutable UTF8/rawbyte snapshots"
+    },
+    {
+      "id": "SH02",
+      "title": "complete lexer",
+      "status": "done",
+      "task": "9c894134-0c0c-4e19-a87a-5cd434bb45ce",
+      "verified": "121 real frontend inputs match stage0 token/trivia/diagnostic fields O0/O2"
+    },
+    {
+      "id": "SH03",
+      "title": "complete parser and recovery",
+      "status": "done",
+      "task": "ff05026d-6a75-4483-818f-229fd4945fe1",
+      "verified": "3484 pretokenized checks O0/O2; AST/recovery fields match121realinputs"
+    },
+    {
+      "id": "SH04",
+      "title": "frontend field-by-field differential tests",
+      "status": "done",
+      "task": "bbc85883-bdca-4452-8273-598c468f10a5",
+      "verified": "C++oracle121/121; realWzO0/O2 each121/121; live modules required; no copied compiler fixture fallback"
+    },
+    {
+      "id": "SH05",
+      "title": "project/TOML/bindings/modules/resolve",
+      "status": "in_progress",
+      "verified": "Source/lexer/parser/CLI integrated. BigInt,TOML,SHA256 actualO0/O2 tests passed. Project loading/name resolution not yet implemented."
+    },
+    {
+      "id": "SH06",
+      "title": "exact constants, type checking, generics and typed HIR",
+      "status": "in_progress"
+    },
+    {
+      "id": "SH07",
+      "title": "ownership and Native control flow IR",
+      "status": "planned"
+    },
+    {
+      "id": "SH08",
+      "title": "complete Native LLVM text generation and tool driver",
+      "status": "planned"
+    },
+    {
+      "id": "SH09",
+      "title": "complete Python emitter",
+      "status": "planned"
+    },
+    {
+      "id": "SH10",
+      "title": "stage0/1/2/3 and semantic/diagnostic/execution parity",
+      "status": "planned"
+    }
+  ],
+  "completion": [
+    "same complete Wz compiler sources build stage1 using stage0, stage2 using stage1 and stage3 using stage2",
+    "new frontend never calls old frontend in check/build",
+    "existing supported language and both backend source corpora retain behavior",
+    "stage2 and stage3 equivalent behavior; normalized deterministic output comparison where available"
+  ],
+  "active_tasks": [
+    {
+      "id": "SH05d",
+      "scope": "ordered builtin/system-operation metadata",
+      "task": "c2dfaad4-4213-4111-84ea-2c9227f8b465"
+    },
+    {
+      "id": "SH05e",
+      "scope": "file input and canonical Linux paths",
+      "task": "2bbc25c1-af5f-4b42-bf13-bfecf55b2bfa"
+    },
+    {
+      "id": "SH06a",
+      "scope": "exact rational/IEEE numerical foundation",
+      "task": "e2332eb9-17d8-4008-800f-495754ca0ac7"
+    }
+  ]
+}

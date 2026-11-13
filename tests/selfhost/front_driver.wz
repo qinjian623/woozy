@@ -1,0 +1,499 @@
+// SH04 differential frontend driver.
+//
+// This program is built by the stage-0 compiler only when the real
+// app/wzcc/source, app/wzcc/lexer and app/wzcc/parser modules exist.  It must
+// never call the C++ compiler, lang_native_helper or the stage0 oracle.
+package app;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/parser" as parser;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const FILE_ID u64 = 7;
+const REVISION_ID u64 = 11;
+const SOURCE_ID u64 = 13;
+
+func push_byte(out Vec[u8], value u8) {
+    vec.push(out, value);
+}
+
+func push_ascii(out Vec[u8], value string) {
+    for var index usize = 0; index < text.len(value); index += 1 {
+        push_byte(out, u8(value[index]));
+    }
+}
+
+func push_u64(out Vec[u8], value u64) {
+    push_ascii(out, strconv.format_u64(value));
+}
+
+func push_usize(out Vec[u8], value usize) {
+    push_u64(out, u64(value));
+}
+
+func push_bool(out Vec[u8], value bool) {
+    if value { push_ascii(out, "true"); } else { push_ascii(out, "false"); }
+}
+
+func push_rune(out Vec[u8], rune u32) {
+    if rune <= 0x7f {
+        push_byte(out, u8(rune));
+    } else if rune <= 0x7ff {
+        push_byte(out, u8(0xc0 | (rune >> 6)));
+        push_byte(out, u8(0x80 | (rune & 0x3f)));
+    } else if rune <= 0xffff {
+        push_byte(out, u8(0xe0 | (rune >> 12)));
+        push_byte(out, u8(0x80 | ((rune >> 6) & 0x3f)));
+        push_byte(out, u8(0x80 | (rune & 0x3f)));
+    } else {
+        push_byte(out, u8(0xf0 | (rune >> 18)));
+        push_byte(out, u8(0x80 | ((rune >> 12) & 0x3f)));
+        push_byte(out, u8(0x80 | ((rune >> 6) & 0x3f)));
+        push_byte(out, u8(0x80 | (rune & 0x3f)));
+    }
+}
+
+func push_hex4(out Vec[u8], value u32) {
+    let high = (value >> 4) & 0x0f;
+    let low = value & 0x0f;
+    push_ascii(out, "\\u00");
+    if high < 10 { push_byte(out, u8(48 + high)); } else { push_byte(out, u8(87 + high)); }
+    if low < 10 { push_byte(out, u8(48 + low)); } else { push_byte(out, u8(87 + low)); }
+}
+
+func push_string(out Vec[u8], value string) {
+    push_byte(out, 34);
+    for var index usize = 0; index < text.len(value); index += 1 {
+        let rune = value[index];
+        if rune == 34 {
+            push_ascii(out, "\\\"");
+        } else if rune == 92 {
+            push_ascii(out, "\\\\");
+        } else if rune == 8 {
+            push_ascii(out, "\\b");
+        } else if rune == 12 {
+            push_ascii(out, "\\f");
+        } else if rune == 10 {
+            push_ascii(out, "\\n");
+        } else if rune == 13 {
+            push_ascii(out, "\\r");
+        } else if rune == 9 {
+            push_ascii(out, "\\t");
+        } else if rune < 0x20 {
+            push_hex4(out, rune);
+        } else {
+            push_rune(out, rune);
+        }
+    }
+    push_byte(out, 34);
+}
+
+func push_hex(out Vec[u8], value Vec[u8]) {
+    push_byte(out, 34);
+    for byte in value {
+        let high = (u32(byte) >> 4) & 0x0f;
+        let low = u32(byte) & 0x0f;
+        if high < 10 { push_byte(out, u8(48 + high)); } else { push_byte(out, u8(87 + high)); }
+        if low < 10 { push_byte(out, u8(48 + low)); } else { push_byte(out, u8(87 + low)); }
+    }
+    push_byte(out, 34);
+}
+
+func phase_name(state model.PhaseState) string {
+    switch state {
+        case model.PhaseState.Complete: return "complete";
+        case model.PhaseState.Recovered: return "recovered";
+        case model.PhaseState.Failed: return "failed";
+        case model.PhaseState.Cancelled: return "cancelled";
+    }
+    return "unknown";
+}
+
+func phase_id(state model.PhaseState) u64 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+    return 0;
+}
+
+func failure_name(failure model.FailureKind) string {
+    switch failure {
+        case model.FailureKind.Source: return "source";
+        case model.FailureKind.Unsupported: return "unsupported";
+        case model.FailureKind.Environment: return "environment";
+        case model.FailureKind.Internal: return "internal";
+    }
+    return "unknown";
+}
+
+func failure_id(failure model.FailureKind) u64 {
+    switch failure {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+    return 0;
+}
+
+func push_span(out Vec[u8], span model.Span) {
+    push_ascii(out, "{\"snapshot\":");
+    push_u64(out, span.snapshot);
+    push_ascii(out, ",\"begin\":");
+    push_u64(out, span.begin_byte);
+    push_ascii(out, ",\"end\":");
+    push_u64(out, span.end_byte);
+    push_byte(out, 125);
+}
+
+func push_diagnostics(out Vec[u8], values Vec[model.Diagnostic]) {
+    push_byte(out, 91);
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index != 0 { push_byte(out, 44); }
+        let diagnostic = values[index];
+        push_ascii(out, "{\"code\":");
+        push_string(out, diagnostic.code);
+        push_ascii(out, ",\"phase\":");
+        push_string(out, diagnostic.phase);
+        push_ascii(out, ",\"severity\":");
+        push_string(out, diagnostic.severity);
+        push_ascii(out, ",\"message\":");
+        push_string(out, diagnostic.message);
+        push_ascii(out, ",\"primary\":");
+        if diagnostic.has_primary {
+            push_span(out, diagnostic.primary);
+        } else {
+            push_ascii(out, "null");
+        }
+        push_ascii(out, ",\"related\":[");
+        for var related_index usize = 0; related_index < vec.len(diagnostic.related); related_index += 1 {
+            if related_index != 0 { push_byte(out, 44); }
+            let related = diagnostic.related[related_index];
+            push_ascii(out, "{\"span\":");
+            push_span(out, related.span);
+            push_ascii(out, ",\"message\":");
+            push_string(out, related.message);
+            push_byte(out, 125);
+        }
+        push_ascii(out, "],\"fixits\":[");
+        for var fixit_index usize = 0; fixit_index < vec.len(diagnostic.fixits); fixit_index += 1 {
+            if fixit_index != 0 { push_byte(out, 44); }
+            let fixit = diagnostic.fixits[fixit_index];
+            push_ascii(out, "{\"span\":");
+            push_span(out, fixit.span);
+            push_ascii(out, ",\"replacement\":");
+            push_string(out, fixit.replacement);
+            push_ascii(out, ",\"revision\":");
+            push_u64(out, fixit.revision);
+            push_byte(out, 125);
+        }
+        push_ascii(out, "],\"notes\":[");
+        for var note_index usize = 0; note_index < vec.len(diagnostic.notes); note_index += 1 {
+            if note_index != 0 { push_byte(out, 44); }
+            push_string(out, diagnostic.notes[note_index]);
+        }
+        push_ascii(out, "],\"expected_type\":");
+        if diagnostic.has_expected_type {
+            push_string(out, diagnostic.expected_type);
+        } else {
+            push_ascii(out, "null");
+        }
+        push_ascii(out, ",\"actual_type\":");
+        if diagnostic.has_actual_type {
+            push_string(out, diagnostic.actual_type);
+        } else {
+            push_ascii(out, "null");
+        }
+        push_byte(out, 125);
+    }
+    push_byte(out, 93);
+}
+
+func push_source(out Vec[u8], snapshot model.Source) {
+    push_ascii(out, "{\"file_id\":");
+    push_u64(out, snapshot.file_id);
+    push_ascii(out, ",\"revision_id\":");
+    push_u64(out, snapshot.revision_id);
+    push_ascii(out, ",\"id\":");
+    push_u64(out, snapshot.id);
+    push_ascii(out, ",\"path\":");
+    push_string(out, snapshot.path);
+    push_ascii(out, ",\"valid\":");
+    push_bool(out, snapshot.valid);
+    push_ascii(out, ",\"error_byte\":");
+    push_u64(out, snapshot.error_byte);
+    push_ascii(out, ",\"error_length\":");
+    push_u64(out, snapshot.error_length);
+    push_ascii(out, ",\"error_message\":");
+    if snapshot.valid {
+        push_ascii(out, "null");
+    } else {
+        push_string(out, snapshot.error_message);
+    }
+    push_ascii(out, ",\"original_hex\":");
+    push_hex(out, snapshot.original);
+    if !snapshot.valid {
+        push_ascii(out, ",\"normalized_hex\":\"\",\"offsets\":[],\"boundaries\":[]}");
+        return;
+    }
+    push_ascii(out, ",\"normalized_hex\":");
+    push_hex(out, snapshot.normalized);
+    push_ascii(out, ",\"offsets\":[");
+    for var index usize = 0; index < vec.len(snapshot.offsets); index += 1 {
+        if index != 0 { push_byte(out, 44); }
+        push_u64(out, snapshot.offsets[index]);
+    }
+    push_ascii(out, "],\"boundaries\":[");
+    for var index usize = 0; index < vec.len(snapshot.boundaries); index += 1 {
+        if index != 0 { push_byte(out, 44); }
+        let boundary = snapshot.boundaries[index];
+        // Boundary.byte is the raw/original byte offset; the separate
+        // offsets vector maps normalized byte positions to raw positions.
+        push_ascii(out, "{\"byte\":");
+        push_u64(out, boundary.byte);
+        push_ascii(out, ",\"original_byte\":");
+        push_u64(out, boundary.byte);
+        push_ascii(out, ",\"line\":");
+        push_u64(out, boundary.position.line);
+        push_ascii(out, ",\"character\":");
+        push_u64(out, boundary.position.character);
+        push_ascii(out, ",\"byte_at\":");
+        push_u64(out, source.byte_at(snapshot, boundary.position));
+        push_byte(out, 125);
+    }
+    push_ascii(out, "]}");
+}
+
+func push_lex(out Vec[u8], lexed model.LexResult) {
+    push_ascii(out, "{\"state\":");
+    push_string(out, phase_name(lexed.state));
+    push_ascii(out, ",\"state_id\":");
+    push_u64(out, phase_id(lexed.state));
+    push_ascii(out, ",\"failure\":");
+    push_string(out, failure_name(lexed.failure));
+    push_ascii(out, ",\"failure_id\":");
+    push_u64(out, failure_id(lexed.failure));
+    push_ascii(out, ",\"has_value\":");
+    push_bool(out, lexed.has_value);
+    push_ascii(out, ",\"diagnostics\":");
+    push_diagnostics(out, lexed.diagnostics);
+    push_ascii(out, ",\"tokens\":[");
+    if lexed.has_value {
+        for var index usize = 0; index < vec.len(lexed.tokens); index += 1 {
+            if index != 0 { push_byte(out, 44); }
+            let token = lexed.tokens[index];
+            push_ascii(out, "{\"kind\":");
+            push_u64(out, u64(model.token_kind_id(token.kind)));
+            push_ascii(out, ",\"kind_name\":");
+            push_string(out, token_kind_name(token.kind));
+            push_ascii(out, ",\"span\":");
+            push_span(out, token.span);
+            push_ascii(out, ",\"spelling\":");
+            push_string(out, token.spelling);
+            push_ascii(out, ",\"leading_trivia\":[");
+            for var trivia_index usize = 0; trivia_index < vec.len(token.leading_trivia); trivia_index += 1 {
+                if trivia_index != 0 { push_byte(out, 44); }
+                let trivia = token.leading_trivia[trivia_index];
+                push_ascii(out, "{\"kind\":");
+                push_u64(out, u64(model.trivia_kind_id(trivia.kind)));
+                push_ascii(out, ",\"kind_name\":");
+                push_string(out, trivia_kind_name(trivia.kind));
+                push_ascii(out, ",\"span\":");
+                push_span(out, trivia.span);
+                push_ascii(out, ",\"spelling\":");
+                push_string(out, trivia.spelling);
+                push_byte(out, 125);
+            }
+            push_ascii(out, "],\"has_string_value\":");
+            push_bool(out, token.has_string_value);
+            push_ascii(out, ",\"string_value\":");
+            if token.has_string_value {
+                push_string(out, token.string_value);
+            } else {
+                push_ascii(out, "null");
+            }
+            push_byte(out, 125);
+        }
+    }
+    push_ascii(out, "]}");
+}
+
+func token_kind_name(kind model.TokenKind) string {
+    switch kind {
+        case model.TokenKind.End: return "end";
+        case model.TokenKind.Identifier: return "identifier";
+        case model.TokenKind.Integer: return "integer";
+        case model.TokenKind.Floating: return "floating";
+        case model.TokenKind.StringLiteral: return "string_literal";
+        case model.TokenKind.Keyword: return "keyword";
+        case model.TokenKind.Punctuation: return "punctuation";
+        case model.TokenKind.Error: return "error";
+    }
+    return "unknown";
+}
+
+func trivia_kind_name(kind model.TriviaKind) string {
+    switch kind {
+        case model.TriviaKind.Whitespace: return "whitespace";
+        case model.TriviaKind.LineComment: return "line_comment";
+        case model.TriviaKind.BlockComment: return "block_comment";
+    }
+    return "unknown";
+}
+
+func ast_kind_name(kind model.AstKind) string {
+    switch kind {
+        case model.AstKind.File: return "File";
+        case model.AstKind.Package: return "Package";
+        case model.AstKind.Import: return "Import";
+        case model.AstKind.Binding: return "Binding";
+        case model.AstKind.Function: return "Function";
+        case model.AstKind.Struct: return "Struct";
+        case model.AstKind.Enum: return "Enum";
+        case model.AstKind.Trait: return "Trait";
+        case model.AstKind.Impl: return "Impl";
+        case model.AstKind.Field: return "Field";
+        case model.AstKind.Variant: return "Variant";
+        case model.AstKind.GenericParameter: return "GenericParameter";
+        case model.AstKind.Parameter: return "Parameter";
+        case model.AstKind.Async: return "Async";
+        case model.AstKind.Await: return "Await";
+        case model.AstKind.NamedType: return "NamedType";
+        case model.AstKind.FunctionType: return "FunctionType";
+        case model.AstKind.ParenthesizedType: return "ParenthesizedType";
+        case model.AstKind.Block: return "Block";
+        case model.AstKind.ExpressionStatement: return "ExpressionStatement";
+        case model.AstKind.Assign: return "Assign";
+        case model.AstKind.If: return "If";
+        case model.AstKind.For: return "For";
+        case model.AstKind.ForIn: return "ForIn";
+        case model.AstKind.Switch: return "Switch";
+        case model.AstKind.Case: return "Case";
+        case model.AstKind.Try: return "Try";
+        case model.AstKind.Catch: return "Catch";
+        case model.AstKind.Defer: return "Defer";
+        case model.AstKind.Unsafe: return "Unsafe";
+        case model.AstKind.Return: return "Return";
+        case model.AstKind.Throw: return "Throw";
+        case model.AstKind.Break: return "Break";
+        case model.AstKind.Continue: return "Continue";
+        case model.AstKind.Name: return "Name";
+        case model.AstKind.Literal: return "Literal";
+        case model.AstKind.Unary: return "Unary";
+        case model.AstKind.Binary: return "Binary";
+        case model.AstKind.Call: return "Call";
+        case model.AstKind.Argument: return "Argument";
+        case model.AstKind.Member: return "Member";
+        case model.AstKind.NeutralBracket: return "NeutralBracket";
+        case model.AstKind.BracketItem: return "BracketItem";
+        case model.AstKind.Slice: return "Slice";
+        case model.AstKind.List: return "List";
+        case model.AstKind.FunctionLiteral: return "FunctionLiteral";
+        case model.AstKind.Parenthesized: return "Parenthesized";
+        case model.AstKind.BindPattern: return "BindPattern";
+        case model.AstKind.LiteralPattern: return "LiteralPattern";
+        case model.AstKind.VariantPattern: return "VariantPattern";
+        case model.AstKind.Error: return "Error";
+        case model.AstKind.TraitObjectType: return "TraitObjectType";
+    }
+    return "unknown";
+}
+
+func push_parse_not_run(out Vec[u8]) {
+    push_ascii(out, "{\"state\":\"not_run\",\"state_id\":null,\"failure\":null,");
+    push_ascii(out, "\"failure_id\":null,\"has_value\":false,\"root\":null,");
+    push_ascii(out, "\"recovered\":false,\"diagnostics\":[],\"nodes\":[]}");
+}
+
+func push_parse(out Vec[u8], parsed model.ParseResult) {
+    push_ascii(out, "{\"state\":");
+    push_string(out, phase_name(parsed.state));
+    push_ascii(out, ",\"state_id\":");
+    push_u64(out, phase_id(parsed.state));
+    push_ascii(out, ",\"failure\":");
+    push_string(out, failure_name(parsed.failure));
+    push_ascii(out, ",\"failure_id\":");
+    push_u64(out, failure_id(parsed.failure));
+    push_ascii(out, ",\"has_value\":");
+    push_bool(out, parsed.has_value);
+    push_ascii(out, ",\"root\":");
+    if parsed.has_value {
+        push_usize(out, parsed.root);
+    } else {
+        push_ascii(out, "null");
+    }
+    push_ascii(out, ",\"recovered\":");
+    if parsed.has_value {
+        push_bool(out, parsed.recovered);
+    } else {
+        push_bool(out, false);
+    }
+    push_ascii(out, ",\"diagnostics\":");
+    push_diagnostics(out, parsed.diagnostics);
+    push_ascii(out, ",\"nodes\":[");
+    if parsed.has_value {
+        for var index usize = 0; index < vec.len(parsed.nodes); index += 1 {
+            if index != 0 { push_byte(out, 44); }
+            let node = parsed.nodes[index];
+            push_ascii(out, "{\"kind\":");
+            push_u64(out, u64(model.ast_kind_id(node.kind)));
+            push_ascii(out, ",\"kind_name\":");
+            push_string(out, ast_kind_name(node.kind));
+            push_ascii(out, ",\"span\":");
+            push_span(out, node.span);
+            push_ascii(out, ",\"token_begin\":");
+            push_usize(out, node.token_begin);
+            push_ascii(out, ",\"token_end\":");
+            push_usize(out, node.token_end);
+            push_ascii(out, ",\"children\":[");
+            for var child_index usize = 0; child_index < vec.len(node.children); child_index += 1 {
+                if child_index != 0 { push_byte(out, 44); }
+                push_usize(out, node.children[child_index]);
+            }
+            push_ascii(out, "],\"recovered\":");
+            push_bool(out, node.recovered);
+            push_byte(out, 125);
+        }
+    }
+    push_ascii(out, "]}");
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) != 2 {
+        io.eprintln("usage: front_driver SOURCE");
+        return 2;
+    }
+    let bytes = fs.read_file(arguments[1]);
+    let snapshot = source.snapshot(FILE_ID, REVISION_ID, SOURCE_ID, arguments[1], bytes);
+    let lexed = lexer.lex(snapshot);
+
+    let out = vec.empty[u8]();
+    push_ascii(out, "{\"protocol\":\"woozy-selfhost-front/1\",");
+    push_ascii(out, "\"operation_id\":\"woozy-SH04-front-diff-one-correction-20261113\",");
+    push_ascii(out, "\"source\":");
+    push_source(out, snapshot);
+    push_ascii(out, ",\"lex\":");
+    push_lex(out, lexed);
+    push_ascii(out, ",\"parse\":");
+    if lexed.has_value {
+        let parsed = parser.parse(lexed);
+        push_parse(out, parsed);
+    } else {
+        push_parse_not_run(out);
+    }
+    push_ascii(out, "}\n");
+    os.write_all(os.stdout(), out);
+    return 0;
+}

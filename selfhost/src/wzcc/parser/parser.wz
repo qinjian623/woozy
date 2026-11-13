@@ -1,0 +1,983 @@
+package parser;
+
+// Stage-1 port of src/syntax/parser.cpp.  The parser consumes an already
+// lexed, immutable token sequence; it never re-runs the lexer and never calls
+// the old frontend.
+import "app/wzcc/model" as model;
+import "std/vec" as vec;
+
+const PARSE_DEPTH_LIMIT usize = 256;
+
+// Same payload-free typed abort as the C++ SyntaxError exception.
+enum ParseAbort { Hit; }
+
+// Comma-separated production selected by comma_list.
+const ITEM_TYPE u8 = 0;
+const ITEM_FUNCTION_PARAM u8 = 1;
+const ITEM_GENERIC_PARAM u8 = 2;
+const ITEM_PARAM u8 = 3;
+const ITEM_EXPR u8 = 4;
+const ITEM_ARGUMENT u8 = 5;
+const ITEM_PATTERN_TYPE u8 = 6;
+const ITEM_PATTERN u8 = 7;
+const ITEM_VARIANT_FIELD u8 = 8;
+
+// Frozen AstKind ordinals from the C++ enum, used because enum values are
+// compared by the published model id rather than by ad-hoc numeric layout.
+const AST_FUNCTION u32 = 4;
+const AST_STRUCT u32 = 5;
+const AST_ENUM u32 = 6;
+const AST_TRAIT u32 = 7;
+const AST_IMPL u32 = 8;
+const AST_PARAMETER u32 = 12;
+const AST_NAMED_TYPE u32 = 15;
+const AST_FUNCTION_TYPE u32 = 16;
+const AST_PARENTHESIZED_TYPE u32 = 17;
+const AST_EXPRESSION_STATEMENT u32 = 19;
+const AST_RETURN u32 = 30;
+const AST_THROW u32 = 31;
+const AST_FUNCTION_LITERAL u32 = 45;
+const AST_ERROR u32 = 50;
+const AST_TRAIT_OBJECT_TYPE u32 = 51;
+
+// Direct children of one signature only, mirroring lang::SignatureSyntax.
+// valid is false where the C++ helper throws std::invalid_argument.
+pub struct SignatureSyntax {
+    pub parameters Vec[usize];
+    pub has_result bool;
+    pub result usize;
+    pub has_throws_type bool;
+    pub throws_type usize;
+    pub valid bool;
+}
+
+struct Parser {
+    snapshot u64;
+    tokens Vec[model.Token];
+    p usize;
+    nodes Vec[model.AstNode];
+    diagnostics Vec[model.Diagnostic];
+}
+
+func text_at(tokens Vec[model.Token], p usize, n usize) string {
+    if p + n < vec.len(tokens) { return tokens[p + n].spelling; }
+    return "";
+}
+
+func is_end(tokens Vec[model.Token], p usize) bool {
+    if p >= vec.len(tokens) { return true; }
+    return model.token_kind_id(tokens[p].kind) == 0;
+}
+
+func at(tokens Vec[model.Token], p usize, spelling string) bool {
+    return text_at(tokens, p, 0) == spelling;
+}
+
+func type_start(tokens Vec[model.Token], p usize) bool {
+    if is_end(tokens, p) { return false; }
+    if model.token_kind_id(tokens[p].kind) == 1 { return true; }
+    return at(tokens, p, "(");
+}
+
+func binding_start(tokens Vec[model.Token], p usize) bool {
+    return at(tokens, p, "let") || at(tokens, p, "var") ||
+           at(tokens, p, "const");
+}
+
+func top_start(tokens Vec[model.Token], p usize) bool {
+    return at(tokens, p, "pub") || at(tokens, p, "async") ||
+           at(tokens, p, "func") || at(tokens, p, "struct") ||
+           at(tokens, p, "enum") || at(tokens, p, "trait") ||
+           at(tokens, p, "impl") || binding_start(tokens, p);
+}
+
+func literal_at(tokens Vec[model.Token], p usize) bool {
+    if is_end(tokens, p) { return false; }
+    let kind = model.token_kind_id(tokens[p].kind);
+    return kind == 2 || kind == 3 || kind == 4 ||
+           at(tokens, p, "true") || at(tokens, p, "false");
+}
+
+func precedence(tokens Vec[model.Token], p usize) i32 {
+    let t = text_at(tokens, p, 0);
+    if t == "||" { return 1; }
+    if t == "&&" { return 2; }
+    if t == "|" { return 3; }
+    if t == "^" { return 4; }
+    if t == "&" { return 5; }
+    if t == "==" || t == "!=" { return 6; }
+    if t == "<" || t == ">" || t == "<=" || t == ">=" { return 7; }
+    if t == "<<" || t == ">>" { return 8; }
+    if t == "+" || t == "-" { return 9; }
+    if t == "*" || t == "/" || t == "%" { return 10; }
+    return 0;
+}
+
+func add_node(state inout Parser, kind model.AstKind, start usize,
+              children Vec[usize]) usize {
+    var span = model.Span(snapshot: state.snapshot, begin_byte: 0,
+                          end_byte: 0);
+    if start < vec.len(state.tokens) { span = state.tokens[start].span; }
+    if state.p > start {
+        span.end_byte = state.tokens[state.p - 1].span.end_byte;
+    }
+    let id = vec.len(state.nodes);
+    vec.push(state.nodes, model.AstNode(kind: kind, span: span,
+        token_begin: start, token_end: state.p, children: children,
+        recovered: model.ast_kind_id(kind) == AST_ERROR));
+    return id;
+}
+
+func fail(state inout Parser, message string) throws ParseAbort {
+    var span = model.Span(snapshot: state.snapshot, begin_byte: 0,
+                          end_byte: 0);
+    if state.p < vec.len(state.tokens) { span = state.tokens[state.p].span; }
+    vec.push(state.diagnostics,
+        model.diagnostic("E_PARSE_EXPECTED_TOKEN", "parse", message, span));
+    throw ParseAbort.Hit;
+}
+
+func advance(state inout Parser) {
+    if !is_end(state.tokens, state.p) { state.p += 1; }
+}
+
+func eat(state inout Parser, spelling string) bool {
+    if at(state.tokens, state.p, spelling) {
+        advance(inout state);
+        return true;
+    }
+    return false;
+}
+
+func expect(state inout Parser, spelling string) throws ParseAbort {
+    if !eat(inout state, spelling) {
+        fail(inout state, "expected '" + spelling + "'");
+    }
+}
+
+func ident(state inout Parser) throws ParseAbort {
+    if is_end(state.tokens, state.p) ||
+       model.token_kind_id(state.tokens[state.p].kind) != 1 {
+        fail(inout state, "expected identifier");
+    }
+    advance(inout state);
+}
+
+func truncate_nodes(state inout Parser, count usize) {
+    for vec.len(state.nodes) > count { vec.pop(state.nodes); }
+}
+
+func truncate_diagnostics(state inout Parser, count usize) {
+    for vec.len(state.diagnostics) > count { vec.pop(state.diagnostics); }
+}
+
+func append_nodes(destination Vec[usize], source Vec[usize]) {
+    for node in source { vec.push(destination, node); }
+}
+
+// The C++ comma helper's exact do/while shape: a closing token immediately
+// consumes the empty list when allowed, otherwise it is an item error.
+func comma_list(state inout Parser, close string, item u8, allow_empty bool,
+                depth usize) Vec[usize] throws ParseAbort {
+    var out = vec.empty[usize]();
+    if at(state.tokens, state.p, close) {
+        if !allow_empty { fail(inout state, "expected list item"); }
+        advance(inout state);
+        return out;
+    }
+    var named = false;
+    for {
+        if item == ITEM_TYPE {
+            let value = type(inout state, depth + 1, false);
+            vec.push(out, value);
+        } else if item == ITEM_FUNCTION_PARAM {
+            let start = state.p;
+            if at(state.tokens, state.p, "move") {
+                advance(inout state);
+            } else if at(state.tokens, state.p, "inout") {
+                advance(inout state);
+            }
+            let value = type(inout state, depth + 1, false);
+            let parameter = add_node(inout state, model.AstKind.Parameter,
+                                     start, [value]);
+            vec.push(out, parameter);
+        } else if item == ITEM_GENERIC_PARAM {
+            let start = state.p;
+            ident(inout state);
+            var children = vec.empty[usize]();
+            if !at(state.tokens, state.p, ",") &&
+               !at(state.tokens, state.p, "]") {
+                let value = type(inout state, depth + 1, true);
+                vec.push(children, value);
+            }
+            let parameter = add_node(inout state,
+                model.AstKind.GenericParameter, start, children);
+            vec.push(out, parameter);
+        } else if item == ITEM_PARAM {
+            let start = state.p;
+            ident(inout state);
+            if at(state.tokens, state.p, "inout") {
+                advance(inout state);
+            } else if at(state.tokens, state.p, "move") {
+                advance(inout state);
+            }
+            let value = type(inout state, depth + 1, false);
+            let parameter = add_node(inout state, model.AstKind.Parameter,
+                                     start, [value]);
+            vec.push(out, parameter);
+        } else if item == ITEM_EXPR {
+            let value = expr(inout state, depth + 1, 1);
+            vec.push(out, value);
+        } else if item == ITEM_ARGUMENT {
+            let start = state.p;
+            let label = at(state.tokens, state.p + 1, ":");
+            if label {
+                ident(inout state);
+                expect(inout state, ":");
+                named = true;
+            } else if named {
+                fail(inout state,
+                     "positional argument follows named argument");
+            }
+            let value = expr(inout state, depth + 1, 1);
+            let argument = add_node(inout state, model.AstKind.Argument,
+                                    start, [value]);
+            vec.push(out, argument);
+        } else if item == ITEM_PATTERN_TYPE {
+            let value = type(inout state, depth + 1, false);
+            vec.push(out, value);
+        } else if item == ITEM_PATTERN {
+            let value = pattern(inout state, depth + 1);
+            vec.push(out, value);
+        } else {
+            let start = state.p;
+            ident(inout state);
+            let value = type(inout state, depth + 1, false);
+            let field = add_node(inout state, model.AstKind.Field, start,
+                                 [value]);
+            vec.push(out, field);
+        }
+        if !eat(inout state, ",") { break; }
+        if at(state.tokens, state.p, close) { break; }
+    }
+    expect(inout state, close);
+    return out;
+}
+
+func signature_list(state inout Parser, depth usize) Vec[usize] throws ParseAbort {
+    var out = vec.empty[usize]();
+    if type_start(state.tokens, state.p) {
+        let value = type(inout state, depth + 1, false);
+        vec.push(out, value);
+    }
+    if eat(inout state, "throws") {
+        let value = type(inout state, depth + 1, false);
+        vec.push(out, value);
+    }
+    return out;
+}
+
+func generics(state inout Parser, depth usize) Vec[usize] throws ParseAbort {
+    var out = vec.empty[usize]();
+    if eat(inout state, "[") {
+        out = comma_list(inout state, "]", ITEM_GENERIC_PARAM, false, depth);
+    }
+    return out;
+}
+
+func params(state inout Parser, depth usize) Vec[usize] throws ParseAbort {
+    expect(inout state, "(");
+    var out = comma_list(inout state, ")", ITEM_PARAM, true, depth);
+    let signature = signature_list(inout state, depth);
+    append_nodes(out, signature);
+    return out;
+}
+
+func type(state inout Parser, depth usize, named bool) usize throws ParseAbort {
+    if depth > PARSE_DEPTH_LIMIT {
+        fail(inout state, "nesting limit exceeded");
+    }
+    let start = state.p;
+    var children = vec.empty[usize]();
+    if !named && eat(inout state, "(") {
+        let inner = type(inout state, depth + 1, false);
+        vec.push(children, inner);
+        expect(inout state, ")");
+        return add_node(inout state, model.AstKind.ParenthesizedType,
+                        start, children);
+    }
+    if !named && eat(inout state, "func") {
+        expect(inout state, "(");
+        let arguments = comma_list(inout state, ")", ITEM_FUNCTION_PARAM,
+                                   true, depth);
+        append_nodes(children, arguments);
+        let signature = signature_list(inout state, depth);
+        append_nodes(children, signature);
+        return add_node(inout state, model.AstKind.FunctionType, start,
+                        children);
+    }
+    if !named && at(state.tokens, state.p, "dyn") {
+        advance(inout state);
+        let name_start = state.p;
+        ident(inout state);
+        for eat(inout state, ".") { ident(inout state); }
+        var arguments = vec.empty[usize]();
+        if eat(inout state, "[") {
+            arguments = comma_list(inout state, "]", ITEM_TYPE, false, depth);
+        }
+        let named_type = add_node(inout state, model.AstKind.NamedType,
+                                  name_start, arguments);
+        vec.push(children, named_type);
+        return add_node(inout state, model.AstKind.TraitObjectType, start,
+                        children);
+    }
+    for {
+        ident(inout state);
+        if eat(inout state, "[") {
+            let arguments = comma_list(inout state, "]", ITEM_TYPE, false,
+                                       depth);
+            append_nodes(children, arguments);
+        }
+        if !eat(inout state, ".") { break; }
+    }
+    return add_node(inout state, model.AstKind.NamedType, start, children);
+}
+
+func expr(state inout Parser, depth usize, minimum i32) usize throws ParseAbort {
+    if depth > PARSE_DEPTH_LIMIT {
+        fail(inout state, "nesting limit exceeded");
+    }
+    let start = state.p;
+    var left usize = 0;
+    if eat(inout state, "await") {
+        let child = expr(inout state, depth + 1, 11);
+        left = add_node(inout state, model.AstKind.Await, start, [child]);
+    } else if at(state.tokens, state.p, "+") ||
+              at(state.tokens, state.p, "-") ||
+              at(state.tokens, state.p, "!") ||
+              at(state.tokens, state.p, "~") ||
+              at(state.tokens, state.p, "move") ||
+              at(state.tokens, state.p, "inout") {
+        advance(inout state);
+        let child = expr(inout state, depth + 1, 11);
+        left = add_node(inout state, model.AstKind.Unary, start, [child]);
+    } else {
+        if eat(inout state, "func") {
+            var children = params(inout state, depth);
+            let body = block(inout state, depth + 1);
+            vec.push(children, body);
+            left = add_node(inout state, model.AstKind.FunctionLiteral,
+                            start, children);
+        } else if eat(inout state, "(") {
+            let inner = expr(inout state, depth + 1, 1);
+            expect(inout state, ")");
+            left = add_node(inout state, model.AstKind.Parenthesized, start,
+                            [inner]);
+        } else if eat(inout state, "[") {
+            let items = comma_list(inout state, "]", ITEM_EXPR, true, depth);
+            left = add_node(inout state, model.AstKind.List, start, items);
+        } else if literal_at(state.tokens, state.p) {
+            advance(inout state);
+            left = add_node(inout state, model.AstKind.Literal, start,
+                            vec.empty[usize]());
+        } else {
+            ident(inout state);
+            left = add_node(inout state, model.AstKind.Name, start,
+                            vec.empty[usize]());
+        }
+        for {
+            if eat(inout state, ".") {
+                ident(inout state);
+                left = add_node(inout state, model.AstKind.Member, start,
+                                [left]);
+            } else if eat(inout state, "(") {
+                var children = vec.empty[usize]();
+                vec.push(children, left);
+                let arguments = comma_list(inout state, ")", ITEM_ARGUMENT,
+                                           true, depth);
+                append_nodes(children, arguments);
+                left = add_node(inout state, model.AstKind.Call, start,
+                                children);
+            } else if eat(inout state, "[") {
+                var children = vec.empty[usize]();
+                vec.push(children, left);
+                var slice = false;
+                if !at(state.tokens, state.p, ":") {
+                    for {
+                        let item_start = state.p;
+                        var value usize = 0;
+                        if at(state.tokens, state.p, "func") ||
+                           at(state.tokens, state.p, "(") {
+                            let save = state.p;
+                            let node_count = vec.len(state.nodes);
+                            let diagnostic_count = vec.len(state.diagnostics);
+                            try {
+                                let candidate = type(inout state, depth + 1,
+                                                     false);
+                                // A candidate must consume the whole item.
+                                if !at(state.tokens, state.p, ",") &&
+                                   !at(state.tokens, state.p, "]") {
+                                    fail(inout state,
+                                         "expected end of bracket type candidate");
+                                }
+                                value = candidate;
+                            } catch error ParseAbort {
+                                state.p = save;
+                                truncate_nodes(inout state, node_count);
+                                truncate_diagnostics(inout state,
+                                                     diagnostic_count);
+                                value = expr(inout state, depth + 1, 1);
+                            }
+                        } else {
+                            value = expr(inout state, depth + 1, 1);
+                        }
+                        let bracket_item = add_node(inout state,
+                            model.AstKind.BracketItem, item_start, [value]);
+                        vec.push(children, bracket_item);
+                        if !eat(inout state, ",") { break; }
+                        if at(state.tokens, state.p, "]") { break; }
+                    }
+                }
+                if eat(inout state, ":") {
+                    slice = true;
+                    if !at(state.tokens, state.p, "]") {
+                        let end = expr(inout state, depth + 1, 1);
+                        vec.push(children, end);
+                    }
+                }
+                expect(inout state, "]");
+                var kind = model.AstKind.NeutralBracket;
+                if slice { kind = model.AstKind.Slice; }
+                left = add_node(inout state, kind, start, children);
+            } else {
+                break;
+            }
+        }
+    }
+    for precedence(state.tokens, state.p) >= minimum &&
+            precedence(state.tokens, state.p) != 0 {
+        let prec = precedence(state.tokens, state.p);
+        advance(inout state);
+        let right = expr(inout state, depth + 1, prec + 1);
+        left = add_node(inout state, model.AstKind.Binary, start,
+                        [left, right]);
+    }
+    return left;
+}
+
+func binding(state inout Parser, depth usize) usize throws ParseAbort {
+    let start = state.p;
+    advance(inout state);
+    ident(inout state);
+    var children = vec.empty[usize]();
+    if !at(state.tokens, state.p, "=") {
+        let type_node = type(inout state, depth + 1, false);
+        vec.push(children, type_node);
+    }
+    expect(inout state, "=");
+    let value = expr(inout state, depth + 1, 1);
+    vec.push(children, value);
+    return add_node(inout state, model.AstKind.Binding, start, children);
+}
+
+func simple(state inout Parser, depth usize) usize throws ParseAbort {
+    let start = state.p;
+    let value = expr(inout state, depth + 1, 1);
+    let t = text_at(state.tokens, state.p, 0);
+    if t == "=" || t == "+=" || t == "-=" || t == "*=" || t == "/=" ||
+       t == "%=" || t == "<<=" || t == ">>=" || t == "&=" ||
+       t == "^=" || t == "|=" {
+        advance(inout state);
+        let right = expr(inout state, depth + 1, 1);
+        return add_node(inout state, model.AstKind.Assign, start,
+                        [value, right]);
+    }
+    return add_node(inout state, model.AstKind.ExpressionStatement, start,
+                    [value]);
+}
+
+func pattern(state inout Parser, depth usize) usize throws ParseAbort {
+    if depth > PARSE_DEPTH_LIMIT {
+        fail(inout state, "nesting limit exceeded");
+    }
+    let start = state.p;
+    var children = vec.empty[usize]();
+    if eat(inout state, "-") {
+        if is_end(state.tokens, state.p) ||
+           (model.token_kind_id(state.tokens[state.p].kind) != 2 &&
+            model.token_kind_id(state.tokens[state.p].kind) != 3) {
+            fail(inout state, "expected number");
+        }
+        advance(inout state);
+        return add_node(inout state, model.AstKind.LiteralPattern, start,
+                        vec.empty[usize]());
+    }
+    if literal_at(state.tokens, state.p) {
+        advance(inout state);
+        return add_node(inout state, model.AstKind.LiteralPattern, start,
+                        vec.empty[usize]());
+    }
+    ident(inout state);
+    var qualified = false;
+    for at(state.tokens, state.p, "[") || at(state.tokens, state.p, ".") {
+        if eat(inout state, "[") {
+            let arguments = comma_list(inout state, "]", ITEM_PATTERN_TYPE,
+                                       false, depth);
+            append_nodes(children, arguments);
+            if !at(state.tokens, state.p, ".") {
+                fail(inout state, "expected qualified variant");
+            }
+        }
+        expect(inout state, ".");
+        ident(inout state);
+        qualified = true;
+    }
+    if qualified && eat(inout state, "(") {
+        let arguments = comma_list(inout state, ")", ITEM_PATTERN, true,
+                                   depth);
+        append_nodes(children, arguments);
+    }
+    var kind = model.AstKind.BindPattern;
+    if qualified { kind = model.AstKind.VariantPattern; }
+    return add_node(inout state, kind, start, children);
+}
+
+func statement(state inout Parser, depth usize) usize throws ParseAbort {
+    if depth > PARSE_DEPTH_LIMIT {
+        fail(inout state, "nesting limit exceeded");
+    }
+    let start = state.p;
+    var children = vec.empty[usize]();
+    if at(state.tokens, state.p, "{") {
+        return block(inout state, depth + 1);
+    }
+    if binding_start(state.tokens, state.p) {
+        let value = binding(inout state, depth);
+        expect(inout state, ";");
+        return value;
+    }
+    if eat(inout state, "if") {
+        let condition = expr(inout state, depth + 1, 1);
+        vec.push(children, condition);
+        let body = block(inout state, depth + 1);
+        vec.push(children, body);
+        if eat(inout state, "else") {
+            var alternative usize = 0;
+            if at(state.tokens, state.p, "if") {
+                alternative = statement(inout state, depth + 1);
+            } else {
+                alternative = block(inout state, depth + 1);
+            }
+            vec.push(children, alternative);
+        }
+        return add_node(inout state, model.AstKind.If, start, children);
+    }
+    if eat(inout state, "for") {
+        var kind = model.AstKind.For;
+        if !at(state.tokens, state.p, "{") {
+            if text_at(state.tokens, state.p, 1) == "in" {
+                ident(inout state);
+                expect(inout state, "in");
+                let source = expr(inout state, depth + 1, 1);
+                vec.push(children, source);
+                kind = model.AstKind.ForIn;
+            } else {
+                if !at(state.tokens, state.p, ";") {
+                    var first usize = 0;
+                    if binding_start(state.tokens, state.p) {
+                        first = binding(inout state, depth);
+                    } else {
+                        first = simple(inout state, depth);
+                    }
+                    vec.push(children, first);
+                }
+                if eat(inout state, ";") {
+                    if !at(state.tokens, state.p, ";") {
+                        let condition = expr(inout state, depth + 1, 1);
+                        vec.push(children, condition);
+                    }
+                    expect(inout state, ";");
+                    if !at(state.tokens, state.p, "{") {
+                        let step = simple(inout state, depth);
+                        vec.push(children, step);
+                    }
+                } else if vec.len(children) > 0 &&
+                          model.ast_kind_id(state.nodes[
+                              children[vec.len(children) - 1]].kind) !=
+                              AST_EXPRESSION_STATEMENT {
+                    fail(inout state, "expected loop separator");
+                }
+            }
+        }
+        let body = block(inout state, depth + 1);
+        vec.push(children, body);
+        return add_node(inout state, kind, start, children);
+    }
+    if eat(inout state, "switch") {
+        let value = expr(inout state, depth + 1, 1);
+        vec.push(children, value);
+        expect(inout state, "{");
+        for !at(state.tokens, state.p, "}") &&
+                !is_end(state.tokens, state.p) {
+            let case_start = state.p;
+            var case_children = vec.empty[usize]();
+            if eat(inout state, "case") {
+                let arm = pattern(inout state, depth + 1);
+                vec.push(case_children, arm);
+            } else {
+                expect(inout state, "default");
+            }
+            expect(inout state, ":");
+            for !at(state.tokens, state.p, "case") &&
+                    !at(state.tokens, state.p, "default") &&
+                    !at(state.tokens, state.p, "}") &&
+                    !is_end(state.tokens, state.p) {
+                let arm = statement(inout state, depth + 1);
+                vec.push(case_children, arm);
+            }
+            let case_node = add_node(inout state, model.AstKind.Case,
+                                     case_start, case_children);
+            vec.push(children, case_node);
+        }
+        expect(inout state, "}");
+        return add_node(inout state, model.AstKind.Switch, start, children);
+    }
+    if eat(inout state, "try") {
+        let body = block(inout state, depth + 1);
+        vec.push(children, body);
+        if !at(state.tokens, state.p, "catch") {
+            fail(inout state, "expected catch");
+        }
+        for eat(inout state, "catch") {
+            let catch_start = state.p - 1;
+            ident(inout state);
+            let error_type = type(inout state, depth + 1, false);
+            let handler = block(inout state, depth + 1);
+            let catch_node = add_node(inout state, model.AstKind.Catch,
+                                      catch_start, [error_type, handler]);
+            vec.push(children, catch_node);
+        }
+        return add_node(inout state, model.AstKind.Try, start, children);
+    }
+    if at(state.tokens, state.p, "defer") ||
+       at(state.tokens, state.p, "unsafe") {
+        var kind = model.AstKind.Defer;
+        if at(state.tokens, state.p, "unsafe") {
+            kind = model.AstKind.Unsafe;
+        }
+        advance(inout state);
+        let body = block(inout state, depth + 1);
+        vec.push(children, body);
+        return add_node(inout state, kind, start, children);
+    }
+    if at(state.tokens, state.p, "return") ||
+       at(state.tokens, state.p, "throw") ||
+       at(state.tokens, state.p, "break") ||
+       at(state.tokens, state.p, "continue") {
+        var kind = model.AstKind.Return;
+        if at(state.tokens, state.p, "throw") {
+            kind = model.AstKind.Throw;
+        } else if at(state.tokens, state.p, "break") {
+            kind = model.AstKind.Break;
+        } else if at(state.tokens, state.p, "continue") {
+            kind = model.AstKind.Continue;
+        }
+        advance(inout state);
+        if model.ast_kind_id(kind) == AST_THROW ||
+           (model.ast_kind_id(kind) == AST_RETURN &&
+            !at(state.tokens, state.p, ";")) {
+            let value = expr(inout state, depth + 1, 1);
+            vec.push(children, value);
+        }
+        expect(inout state, ";");
+        return add_node(inout state, kind, start, children);
+    }
+    let value = simple(inout state, depth);
+    expect(inout state, ";");
+    return value;
+}
+
+func async_marker(state inout Parser, children Vec[usize]) bool throws ParseAbort {
+    if !at(state.tokens, state.p, "async") { return false; }
+    let start = state.p;
+    advance(inout state);
+    let marker = add_node(inout state, model.AstKind.Async, start,
+                          vec.empty[usize]());
+    vec.push(children, marker);
+    return true;
+}
+
+func block(state inout Parser, depth usize) usize throws ParseAbort {
+    if depth > PARSE_DEPTH_LIMIT {
+        fail(inout state, "nesting limit exceeded");
+    }
+    let start = state.p;
+    expect(inout state, "{");
+    var children = vec.empty[usize]();
+    for !is_end(state.tokens, state.p) &&
+            !at(state.tokens, state.p, "}") {
+        if (at(state.tokens, state.p, "func") ||
+            at(state.tokens, state.p, "async")) &&
+           text_at(state.tokens, state.p, 1) != "(" {
+            fail(inout state,
+                 "nested declaration or missing closing brace");
+        }
+        let item_start = state.p;
+        try {
+            let item = statement(inout state, depth + 1);
+            vec.push(children, item);
+        } catch error ParseAbort {
+            for !is_end(state.tokens, state.p) &&
+                    !at(state.tokens, state.p, ";") &&
+                    !at(state.tokens, state.p, "}") &&
+                    !top_start(state.tokens, state.p) {
+                advance(inout state);
+            }
+            let error_node = add_node(inout state, model.AstKind.Error,
+                                      item_start, vec.empty[usize]());
+            vec.push(children, error_node);
+            if top_start(state.tokens, state.p) { throw ParseAbort.Hit; }
+            if at(state.tokens, state.p, ";") { advance(inout state); }
+        }
+        if state.p == item_start && !is_end(state.tokens, state.p) {
+            advance(inout state);
+        }
+    }
+    expect(inout state, "}");
+    return add_node(inout state, model.AstKind.Block, start, children);
+}
+
+func declaration(state inout Parser) usize throws ParseAbort {
+    let start = state.p;
+    if at(state.tokens, state.p, "pub") { advance(inout state); }
+    var children = vec.empty[usize]();
+    let is_async = async_marker(inout state, children);
+    if binding_start(state.tokens, state.p) {
+        let value = binding(inout state, 0);
+        expect(inout state, ";");
+        state.nodes[value].token_begin = start;
+        state.nodes[value].token_end = state.p;
+        state.nodes[value].span.begin_byte = state.tokens[start].span.begin_byte;
+        state.nodes[value].span.end_byte =
+            state.tokens[state.p - 1].span.end_byte;
+        return value;
+    }
+    var kind = model.AstKind.Function;
+    if eat(inout state, "func") {
+        ident(inout state);
+        let parameters = generics(inout state, 0);
+        append_nodes(children, parameters);
+        let signature = params(inout state, 0);
+        append_nodes(children, signature);
+        let body = block(inout state, 1);
+        vec.push(children, body);
+        return add_node(inout state, model.AstKind.Function, start,
+                        children);
+    }
+    if is_async { fail(inout state, "expected 'func' after 'async'"); }
+    if at(state.tokens, state.p, "struct") {
+        kind = model.AstKind.Struct;
+        advance(inout state);
+    } else if at(state.tokens, state.p, "enum") {
+        kind = model.AstKind.Enum;
+        advance(inout state);
+    } else if at(state.tokens, state.p, "trait") {
+        kind = model.AstKind.Trait;
+        advance(inout state);
+    } else if at(state.tokens, state.p, "impl") {
+        kind = model.AstKind.Impl;
+        advance(inout state);
+    } else {
+        fail(inout state, "expected declaration");
+    }
+    if model.ast_kind_id(kind) == AST_IMPL {
+        let parameters = generics(inout state, 0);
+        append_nodes(children, parameters);
+        let target = type(inout state, 1, true);
+        vec.push(children, target);
+        if eat(inout state, "for") {
+            let provided = type(inout state, 1, true);
+            vec.push(children, provided);
+        }
+    } else {
+        ident(inout state);
+        let parameters = generics(inout state, 0);
+        append_nodes(children, parameters);
+    }
+    expect(inout state, "{");
+    for !at(state.tokens, state.p, "}") &&
+            !is_end(state.tokens, state.p) {
+        let member_start = state.p;
+        if model.ast_kind_id(kind) == AST_ENUM &&
+           at(state.tokens, state.p, "pub") {
+            fail(inout state, "enum variants do not accept pub");
+        }
+        if at(state.tokens, state.p, "pub") { advance(inout state); }
+        if model.ast_kind_id(kind) == AST_STRUCT {
+            ident(inout state);
+            let field_type = type(inout state, 1, false);
+            expect(inout state, ";");
+            let field = add_node(inout state, model.AstKind.Field,
+                                 member_start, [field_type]);
+            vec.push(children, field);
+        } else if model.ast_kind_id(kind) == AST_ENUM {
+            ident(inout state);
+            var variant_children = vec.empty[usize]();
+            if eat(inout state, "(") {
+                let fields = comma_list(inout state, ")", ITEM_VARIANT_FIELD,
+                                        true, 0);
+                append_nodes(variant_children, fields);
+            }
+            expect(inout state, ";");
+            let variant = add_node(inout state, model.AstKind.Variant,
+                                   member_start, variant_children);
+            vec.push(children, variant);
+        } else {
+            var member_children = vec.empty[usize]();
+            async_marker(inout state, member_children);
+            expect(inout state, "func");
+            ident(inout state);
+            let parameters = generics(inout state, 0);
+            append_nodes(member_children, parameters);
+            let signature = params(inout state, 0);
+            append_nodes(member_children, signature);
+            if model.ast_kind_id(kind) == AST_TRAIT {
+                expect(inout state, ";");
+            } else {
+                let body = block(inout state, 1);
+                vec.push(member_children, body);
+            }
+            let member = add_node(inout state, model.AstKind.Function,
+                                  member_start, member_children);
+            vec.push(children, member);
+        }
+    }
+    expect(inout state, "}");
+    return add_node(inout state, kind, start, children);
+}
+
+pub func parse(input model.LexResult) model.ParseResult {
+    var nodes = vec.empty[model.AstNode]();
+    var diagnostics = vec.empty[model.Diagnostic]();
+    for diagnostic in input.diagnostics { vec.push(diagnostics, diagnostic); }
+    var cancelled = false;
+    switch input.state {
+        case model.PhaseState.Cancelled: cancelled = true;
+        default: cancelled = false;
+    }
+    if cancelled {
+        return model.ParseResult(state: input.state, failure: input.failure,
+            lexed: input, nodes: nodes, root: 0, recovered: false,
+            diagnostics: diagnostics, has_value: false);
+    }
+    if !input.has_value {
+        return model.ParseResult(state: input.state, failure: input.failure,
+            lexed: input, nodes: nodes, root: 0, recovered: false,
+            diagnostics: diagnostics, has_value: false);
+    }
+    if !input.source.valid {
+        // A value-bearing result with an invalid source is internally
+        // inconsistent; missing-value failures above retain their kind.
+        return model.ParseResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Internal, lexed: input, nodes: nodes,
+            root: 0, recovered: false, diagnostics: diagnostics,
+            has_value: false);
+    }
+    var state = Parser(snapshot: input.source.id, tokens: input.tokens, p: 0,
+                       nodes: vec.empty[model.AstNode](),
+                       diagnostics: diagnostics);
+    let parser_diagnostic_base = vec.len(state.diagnostics);
+    var top = vec.empty[usize]();
+    // Package and imports have one shared recovery point in the C++ parser.
+    try {
+        let package_start = state.p;
+        expect(inout state, "package");
+        ident(inout state);
+        expect(inout state, ";");
+        let package_node = add_node(inout state, model.AstKind.Package,
+                                    package_start, vec.empty[usize]());
+        vec.push(top, package_node);
+        for eat(inout state, "import") {
+            let import_start = state.p - 1;
+            let spelling = text_at(state.tokens, state.p, 0);
+            if is_end(state.tokens, state.p) ||
+               model.token_kind_id(state.tokens[state.p].kind) != 4 ||
+               (spelling != "" && spelling[0] == 96) {
+                fail(inout state, "expected text import string");
+            }
+            advance(inout state);
+            if eat(inout state, "as") { ident(inout state); }
+            expect(inout state, ";");
+            let import_node = add_node(inout state, model.AstKind.Import,
+                                       import_start, vec.empty[usize]());
+            vec.push(top, import_node);
+        }
+    } catch error ParseAbort {
+        let error_node = add_node(inout state, model.AstKind.Error, 0,
+                                  vec.empty[usize]());
+        vec.push(top, error_node);
+    }
+    for !is_end(state.tokens, state.p) {
+        let item_start = state.p;
+        try {
+            let item = declaration(inout state);
+            vec.push(top, item);
+        } catch error ParseAbort {
+            if state.p == item_start { advance(inout state); }
+            for !is_end(state.tokens, state.p) &&
+                    !top_start(state.tokens, state.p) {
+                advance(inout state);
+            }
+            let error_node = add_node(inout state, model.AstKind.Error,
+                                      item_start, vec.empty[usize]());
+            vec.push(top, error_node);
+        }
+    }
+    let root = add_node(inout state, model.AstKind.File, 0, top);
+    let recovered = vec.len(state.diagnostics) > parser_diagnostic_base;
+    var phase = model.PhaseState.Complete;
+    if recovered { phase = model.PhaseState.Recovered; }
+    return model.ParseResult(state: phase, failure: model.FailureKind.Source,
+        lexed: input, nodes: state.nodes, root: root, recovered: recovered,
+        diagnostics: state.diagnostics, has_value: true);
+}
+
+pub func split_signature(file_nodes Vec[model.AstNode],
+                         tokens Vec[model.Token],
+                         id usize) SignatureSyntax {
+    var result = SignatureSyntax(parameters: vec.empty[usize](),
+        has_result: false, result: 0, has_throws_type: false, throws_type: 0,
+        valid: false);
+    if id >= vec.len(file_nodes) { return result; }
+    let owner = file_nodes[id];
+    let owner_id = model.ast_kind_id(owner.kind);
+    if owner_id != AST_FUNCTION && owner_id != AST_FUNCTION_LITERAL &&
+       owner_id != AST_FUNCTION_TYPE {
+        return result;
+    }
+    for child in owner.children {
+        let node = file_nodes[child];
+        let node_id = model.ast_kind_id(node.kind);
+        if node_id == AST_PARAMETER {
+            vec.push(result.parameters, child);
+        } else if node_id == AST_NAMED_TYPE ||
+                  node_id == AST_FUNCTION_TYPE ||
+                  node_id == AST_PARENTHESIZED_TYPE ||
+                  node_id == AST_TRAIT_OBJECT_TYPE {
+            if node.token_begin == 0 || node.token_end > vec.len(tokens) {
+                return result;
+            }
+            if tokens[node.token_begin - 1].spelling == "throws" {
+                if result.has_throws_type { return result; }
+                result.has_throws_type = true;
+                result.throws_type = child;
+            } else {
+                if result.has_result { return result; }
+                result.has_result = true;
+                result.result = child;
+            }
+        }
+    }
+    result.valid = true;
+    return result;
+}

@@ -1,6 +1,14 @@
-# Woozy 自举就绪评估
+# Woozy 自举实现与检查
 
-状态：**小范围探针已通过；完整自举尚未开始，也不能声称已经通过。**
+2026-11-13 已开始移植完整编译器，源码在 `selfhost/src/`。已移植 Source/SourceManager、完整词法与语法分析、诊断 JSON、语法检查 CLI、大整数、TOML 和 SHA-256。121 个真实输入的源码位置、token、AST、恢复状态及诊断与 C++ 前端逐字段一致，Native O0/O2 均通过。新 CLI 已独立通过现有 80 个语法用例；这部分运行时不调用旧前端。
+
+项目加载、名称与类型检查、HIR/所有权及 Native/Python 代码生成仍在移植。新 CLI 的项目检查和 build 暂时明确报不支持。尚未完成 stage1/2/3，不能称为完整自举。任务和共享接口见 `contracts/selfhost.json`、`SELFHOST_CONTRACT.md`、`SELFHOST_FOUNDATION.md`；检查命令见 `development/tests/selfhost/README.md`。
+
+以下保留开始移植前的就绪评估与探针记录，其“本轮”指当时的评估。
+
+## 早期就绪评估
+
+评估时状态：**小范围探针已通过；完整自举当时尚未开始。**
 
 本文回答的是“现在能不能开始用 Woozy 写自己的编译器开发”，不是本轮重写整个编译器，也不把探针结果当成自举证明。支持范围仅限 Linux x86_64；工具链基线为 LLVM/Clang/LLD 22.1.8。
 

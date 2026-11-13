@@ -1,0 +1,10 @@
+[[products]]
+name = "hammer"
+[[products]]
+name = "nail"
+[products.details]
+stock = 10
+[[products]]
+name = "saw"
+[[products.parts]]
+id = 1

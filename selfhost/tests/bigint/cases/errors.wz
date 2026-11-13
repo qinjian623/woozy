@@ -1,0 +1,101 @@
+// Error paths: base range, invalid digits with code-point offsets, division
+// by zero, and checked conversions at the i64/u64 boundaries.
+package app;
+import "app/wzcc/bigint" as bigint;
+import "std/io" as io;
+import "std/os" as os;
+
+func show_error(error bigint.Error) throws os.Error {
+    switch error {
+        case bigint.Error.InvalidBase:
+            io.println("InvalidBase");
+        case bigint.Error.InvalidDigit(offset):
+            io.println("InvalidDigit");
+            io.println(offset);
+        case bigint.Error.DivisionByZero:
+            io.println("DivisionByZero");
+        case bigint.Error.Overflow:
+            io.println("Overflow");
+    }
+}
+
+func report_parse(label string, value string, base u32) throws os.Error {
+    io.println(label);
+    try {
+        let parsed = bigint.parse_digits(value, base);
+        io.println("ok");
+        io.println(bigint.format_decimal(parsed));
+    } catch error bigint.Error {
+        show_error(error);
+    }
+}
+
+func report_div(label string, left bigint.BigInt, right bigint.BigInt) throws os.Error {
+    io.println(label);
+    try {
+        let parts = bigint.divrem(left, right);
+        io.println("ok");
+        io.println(bigint.format_decimal(parts.quotient));
+        io.println(bigint.format_decimal(parts.remainder));
+    } catch error bigint.Error {
+        show_error(error);
+    }
+}
+
+func report_i64(label string, value bigint.BigInt) throws os.Error {
+    io.println(label);
+    try {
+        let converted = bigint.to_i64(value);
+        io.println("ok");
+        io.println(converted);
+    } catch error bigint.Error {
+        show_error(error);
+    }
+}
+
+func report_u64(label string, value bigint.BigInt) throws os.Error {
+    io.println(label);
+    try {
+        let converted = bigint.to_u64(value);
+        io.println("ok");
+        io.println(converted);
+    } catch error bigint.Error {
+        show_error(error);
+    }
+}
+
+func main() i32 throws os.Error {
+    try {
+        report_parse("p.base0", "1", 0);
+        report_parse("p.base1", "1", 1);
+        report_parse("p.base37", "1", 37);
+        report_parse("p.empty", "", 10);
+        report_parse("p.minus", "-", 10);
+        report_parse("p.plus", "+", 10);
+        report_parse("p.embedded", "12x4", 10);
+        report_parse("p.space", "12 4", 10);
+        report_parse("p.prefix", "0x10", 10);
+        report_parse("p.binary2", "2", 2);
+        report_parse("p.base35z", "z", 35);
+        report_parse("p.underscore", "1_0", 10);
+        report_parse("p.unicode", "12é4", 10);
+        report_parse("p.valid36", "10", 36);
+        report_parse("p.maxdigit36", "z", 36);
+        report_parse("p.leadingplus", "+FF", 16);
+        let zero = bigint.zero();
+        let one = bigint.from_i64(1);
+        report_div("d.one.zero", one, zero);
+        report_div("d.zero.zero", zero, zero);
+        report_i64("i64.2p63", bigint.parse_digits("9223372036854775808", 10));
+        report_i64("i64.below-min", bigint.parse_digits("-9223372036854775809", 10));
+        report_i64("i64.min-ok", bigint.parse_digits("-9223372036854775808", 10));
+        report_i64("i64.max-ok", bigint.parse_digits("9223372036854775807", 10));
+        report_u64("u64.negative", bigint.parse_digits("-1", 10));
+        report_u64("u64.2p64", bigint.parse_digits("18446744073709551616", 10));
+        report_u64("u64.max-ok", bigint.parse_digits("18446744073709551615", 10));
+        report_u64("u64.zero", zero);
+    } catch error bigint.Error {
+        io.println("unexpected-bigint-error");
+    }
+    return 0;
+}
