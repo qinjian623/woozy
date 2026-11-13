@@ -598,6 +598,33 @@ static bool cleanup_graph() noexcept {
 }
 
 // ---------------------------------------------------------------------------
+// Registry-only object used by the table, concurrency and fork tests.
+// ---------------------------------------------------------------------------
+
+struct RegistryOnly {
+  uint64_t refs;
+};
+
+static void registry_only_trace(void *, LangGcVisitor, void *) noexcept {}
+
+static void registry_only_clear(void *) noexcept {}
+
+static void registry_only_retain(void *opaque) noexcept {
+  auto *object = static_cast<RegistryOnly *>(opaque);
+  __atomic_add_fetch(&object->refs, 1u, __ATOMIC_RELAXED);
+}
+
+static void registry_only_release(void *opaque) noexcept {
+  auto *object = static_cast<RegistryOnly *>(opaque);
+  if (__atomic_sub_fetch(&object->refs, 1u, __ATOMIC_ACQ_REL) == 0)
+    lang_free_v1(object);
+}
+
+static const LangGcOps g_registry_only_ops = {
+    registry_only_trace, registry_only_clear, registry_only_retain,
+    registry_only_release};
+
+// ---------------------------------------------------------------------------
 // Focused graph tests
 // ---------------------------------------------------------------------------
 
@@ -923,34 +950,84 @@ static bool test_random_graph_oracle() noexcept {
   return true;
 }
 
+static bool test_registry_index() noexcept {
+  REQUIRE(lang_gc_registry_live_v1() == 0);
+
+  // Keep this mirror in sync with the private index in runtime/native/gc.cpp.
+  // It is used only to construct deterministic collisions in the real table;
+  // the assertions below still rely on exact pointer identity and statuses.
+  constexpr uint64_t kTestRegistryBuckets = 2048;
+  auto test_hash = [](uintptr_t pointer) noexcept {
+    uint64_t value = pointer;
+    value ^= value >> 33;
+    value *= 0xff51afd7ed558ccdULL;
+    value ^= value >> 33;
+    value *= 0xc4ceb9fe1a85ec53ULL;
+    value ^= value >> 33;
+    return value & (kTestRegistryBuckets - 1);
+  };
+
+  // Five aligned synthetic addresses in one real bucket.  register and
+  // unregister never dereference the target, so this table-only test needs no
+  // object storage.
+  void *colliders[5];
+  uint64_t found = 0;
+  const uintptr_t base = 0x100000000ULL;
+  const uint64_t bucket = test_hash(base);
+  for (uintptr_t candidate = base; found < 5; candidate += 8) {
+    if (test_hash(candidate) != bucket) continue;
+    colliders[found++] = reinterpret_cast<void *>(candidate);
+  }
+
+  REQUIRE(lang_gc_register_v1(colliders[0], &g_registry_only_ops) ==
+          LANG_GC_OK);
+  REQUIRE(lang_gc_register_v1(colliders[1], &g_registry_only_ops) ==
+          LANG_GC_OK);
+  REQUIRE(lang_gc_register_v1(colliders[2], &g_registry_only_ops) ==
+          LANG_GC_OK);
+  REQUIRE(lang_gc_register_v1(colliders[3], &g_registry_only_ops) ==
+          LANG_GC_OK);
+  REQUIRE(lang_gc_registry_live_v1() == 4);
+
+  // Every colliding address is still distinguished exactly.
+  for (uint64_t index = 0; index < 4; ++index)
+    REQUIRE(lang_gc_register_v1(colliders[index], &g_registry_only_ops) ==
+            LANG_GC_DUPLICATE);
+  REQUIRE(lang_gc_unregister_v1(colliders[4]) == LANG_GC_NOT_REGISTERED);
+  REQUIRE(lang_gc_registry_live_v1() == 4);
+
+  // The list is 3, 2, 1, 0.  Remove a middle entry, the head, then the tail;
+  // re-register the removed middle address and remove it again.
+  REQUIRE(lang_gc_unregister_v1(colliders[1]) == LANG_GC_OK);
+  REQUIRE(lang_gc_unregister_v1(colliders[1]) == LANG_GC_NOT_REGISTERED);
+  REQUIRE(lang_gc_unregister_v1(colliders[3]) == LANG_GC_OK);
+  REQUIRE(lang_gc_unregister_v1(colliders[0]) == LANG_GC_OK);
+  REQUIRE(lang_gc_registry_live_v1() == 1);
+  REQUIRE(lang_gc_register_v1(colliders[1], &g_registry_only_ops) ==
+          LANG_GC_OK);
+  REQUIRE(lang_gc_register_v1(colliders[1], &g_registry_only_ops) ==
+          LANG_GC_DUPLICATE);
+  REQUIRE(lang_gc_unregister_v1(colliders[1]) == LANG_GC_OK);
+  REQUIRE(lang_gc_unregister_v1(colliders[2]) == LANG_GC_OK);
+  REQUIRE(lang_gc_registry_live_v1() == 0);
+
+  // A normal registered graph still snapshots, computes stats and reclaims
+  // cycles through the unchanged collector list.
+  REQUIRE(graph_begin(3));
+  REQUIRE(add_edge(0, 1));
+  REQUIRE(add_edge(1, 0));
+  REQUIRE(add_edge(2, 2));
+  REQUIRE(graph_finish());
+  REQUIRE(collect_and_verify());
+  REQUIRE(cleanup_graph());
+  return true;
+}
+
 #ifndef LANG_GC_FREESTANDING
 
 // ---------------------------------------------------------------------------
 // Hosted concurrency and panic-path tests
 // ---------------------------------------------------------------------------
-
-struct RegistryOnly {
-  uint64_t refs;
-};
-
-static void registry_only_trace(void *, LangGcVisitor, void *) noexcept {}
-
-static void registry_only_clear(void *) noexcept {}
-
-static void registry_only_retain(void *opaque) noexcept {
-  auto *object = static_cast<RegistryOnly *>(opaque);
-  __atomic_add_fetch(&object->refs, 1u, __ATOMIC_RELAXED);
-}
-
-static void registry_only_release(void *opaque) noexcept {
-  auto *object = static_cast<RegistryOnly *>(opaque);
-  if (__atomic_sub_fetch(&object->refs, 1u, __ATOMIC_ACQ_REL) == 0)
-    lang_free_v1(object);
-}
-
-static const LangGcOps g_registry_only_ops = {
-    registry_only_trace, registry_only_clear, registry_only_retain,
-    registry_only_release};
 
 static void registry_worker(unsigned thread_id, std::atomic<unsigned> *failures) noexcept {
   uint64_t seed = 0x123456789abcdef0ULL ^ (static_cast<uint64_t>(thread_id) << 32);
@@ -1173,6 +1250,66 @@ static bool test_statuses_and_fork_hooks() noexcept {
   return true;
 }
 
+static bool test_fork_with_registry_entries() noexcept {
+  auto *first = static_cast<RegistryOnly *>(
+      lang_alloc_v1(sizeof(RegistryOnly), alignof(RegistryOnly)));
+  auto *second = static_cast<RegistryOnly *>(
+      lang_alloc_v1(sizeof(RegistryOnly), alignof(RegistryOnly)));
+  REQUIRE(first != nullptr);
+  REQUIRE(second != nullptr);
+  first->refs = 1;
+  second->refs = 1;
+  REQUIRE(lang_gc_register_v1(first, &g_registry_only_ops) == LANG_GC_OK);
+  REQUIRE(lang_gc_register_v1(second, &g_registry_only_ops) == LANG_GC_OK);
+  REQUIRE(lang_gc_registry_live_v1() == 2);
+
+  lang_gc_fork_prepare_v1();
+  const pid_t pid = fork();
+  if (pid < 0) {
+    lang_gc_fork_parent_v1();
+    report_failure(__FILE__, __LINE__);
+    return false;
+  }
+  if (pid == 0) {
+    lang_gc_fork_child_v1();
+    // The child inherits the list and hash chains.  A snapshot must still see
+    // both entries, and inherited entries must unlink exactly like new ones.
+    LangGcStats stats{};
+    if (lang_gc_collect_stopped_v1(&stats) != LANG_GC_OK) _exit(2);
+    if (stats.registered != 2 || stats.reachable != 2 ||
+        stats.candidates != 0 || stats.registry_live_after != 2)
+      _exit(3);
+    if (lang_gc_unregister_v1(second) != LANG_GC_OK) _exit(4);
+    if (lang_gc_unregister_v1(first) != LANG_GC_OK) _exit(5);
+    if (lang_gc_unregister_v1(first) != LANG_GC_NOT_REGISTERED) _exit(6);
+    if (lang_gc_register_v1(first, &g_registry_only_ops) != LANG_GC_OK)
+      _exit(7);
+    if (lang_gc_unregister_v1(first) != LANG_GC_OK) _exit(8);
+    registry_only_release(first);
+    registry_only_release(second);
+    _exit(0);
+  }
+  lang_gc_fork_parent_v1();
+
+  int status = 0;
+  while (waitpid(pid, &status, 0) < 0)
+    if (errno != EINTR) {
+      report_failure(__FILE__, __LINE__);
+      return false;
+    }
+  REQUIRE(WIFEXITED(status));
+  REQUIRE(WEXITSTATUS(status) == 0);
+  // The parent's entries are untouched by the child's unregister calls.
+  REQUIRE(lang_gc_registry_live_v1() == 2);
+  REQUIRE(lang_gc_unregister_v1(second) == LANG_GC_OK);
+  REQUIRE(lang_gc_unregister_v1(first) == LANG_GC_OK);
+  registry_only_release(first);
+  registry_only_release(second);
+  REQUIRE(lang_gc_registry_live_v1() == 0);
+  REQUIRE(track_live_count() == 0);
+  return true;
+}
+
 static bool test_refcount_panics() noexcept {
   REQUIRE(expect_panic("zero-refs", panic_zero_refs,
                        "reference-count-overflow"));
@@ -1221,9 +1358,11 @@ int main() {
       {"clear-allocate-nested",
        test_clear_callback_allocate_nested_collect},
       {"random-oracle", test_random_graph_oracle},
+      {"registry-index", test_registry_index},
 #ifndef LANG_GC_FREESTANDING
       {"concurrent-registry", test_concurrent_registration_then_collect},
       {"statuses-fork", test_statuses_and_fork_hooks},
+      {"fork-registry", test_fork_with_registry_entries},
       {"refcount-panics", test_refcount_panics},
 #endif
   };

@@ -20,14 +20,76 @@ uint32_t g_lock_next;
 uint32_t g_lock_serving;
 uint32_t g_collecting;
 
+// The registry list is still what the collector snapshots, but duplicate
+// detection and unregister must not walk it.  A small private address index
+// maps objects to an intrusive hash chain.  The bucket count is fixed: it is
+// only a performance bound, never a correctness bound.  Any number of
+// colliding addresses share a bucket and are still found by exact pointer
+// comparison.  The fixed table is BSS; it adds no allocation or public ABI.
+constexpr uint64_t kRegistryBuckets = 2048;
+static_assert((kRegistryBuckets & (kRegistryBuckets - 1)) == 0,
+              "registry bucket count must be a power of two");
+
 struct Entry {
   void *object;
   LangGcOps ops;
-  Entry *next;
+  Entry *next;       // collector list
+  Entry *prev;       // collector-list back-link for O(1) removal
+  Entry *hash_next;  // private address-index chain
+  Entry **hash_prev; // link (bucket head or previous Entry::hash_next)
 };
 
 Entry *g_entries;
+Entry *g_buckets[kRegistryBuckets];
 uint64_t g_live;
+
+// Mix the whole pointer value.  mmap-backed objects are page aligned, so
+// taking raw low or high bits alone would put every allocation in one bucket.
+static inline uint64_t registry_hash(const void *object) noexcept {
+  uint64_t value = reinterpret_cast<uintptr_t>(object);
+  value ^= value >> 33;
+  value *= 0xff51afd7ed558ccdULL;
+  value ^= value >> 33;
+  value *= 0xc4ceb9fe1a85ec53ULL;
+  value ^= value >> 33;
+  return value & (kRegistryBuckets - 1);
+}
+
+// Caller holds the registry lock.
+static Entry *find_entry_locked(const void *object) noexcept {
+  for (Entry *entry = g_buckets[registry_hash(object)]; entry;
+       entry = entry->hash_next)
+    if (entry->object == object) return entry;
+  return nullptr;
+}
+
+// Caller holds the registry lock.  The new entry is already allocated and all
+// of its fields are initialized here before either list can reference it.
+static void insert_entry_locked(Entry *entry) noexcept {
+  entry->prev = nullptr;
+  entry->next = g_entries;
+  if (g_entries) g_entries->prev = entry;
+  g_entries = entry;
+
+  Entry **bucket = &g_buckets[registry_hash(entry->object)];
+  entry->hash_prev = bucket;
+  entry->hash_next = *bucket;
+  if (*bucket) (*bucket)->hash_prev = &entry->hash_next;
+  *bucket = entry;
+}
+
+// Caller holds the registry lock.  The entry stays allocated until the caller
+// has released the lock, so no hash or list link can outlive it.
+static void remove_entry_locked(Entry *entry) noexcept {
+  if (entry->prev)
+    entry->prev->next = entry->next;
+  else
+    g_entries = entry->next;
+  if (entry->next) entry->next->prev = entry->prev;
+
+  *entry->hash_prev = entry->hash_next;
+  if (entry->hash_next) entry->hash_next->hash_prev = entry->hash_prev;
+}
 
 static inline void cpu_pause() noexcept {
 #if defined(__x86_64__) || defined(__i386__)
@@ -253,18 +315,12 @@ extern "C" LangGcStatus lang_gc_register_v1(void *object,
   bool duplicate = false;
   {
     RegistryLockGuard guard;
-    for (Entry *current = g_entries; current; current = current->next) {
-      if (current->object == object) {
-        duplicate = true;
-        break;
-      }
-    }
+    duplicate = find_entry_locked(object) != nullptr;
     if (!duplicate) {
       if (g_live == kMaxU64) gc_panic(7, g_live);
       entry->object = object;
       entry->ops = *ops;
-      entry->next = g_entries;
-      g_entries = entry;
+      insert_entry_locked(entry);
       ++g_live;
     }
   }
@@ -280,15 +336,10 @@ extern "C" LangGcStatus lang_gc_unregister_v1(void *object) noexcept {
   Entry *removed = nullptr;
   {
     RegistryLockGuard guard;
-    Entry **link = &g_entries;
-    while (*link) {
-      if ((*link)->object == object) {
-        removed = *link;
-        *link = removed->next;
-        --g_live;
-        break;
-      }
-      link = &(*link)->next;
+    removed = find_entry_locked(object);
+    if (removed) {
+      remove_entry_locked(removed);
+      --g_live;
     }
   }
   if (!removed) return LANG_GC_NOT_REGISTERED;
