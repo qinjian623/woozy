@@ -1130,6 +1130,18 @@ func test_production(state inout Checks, ids Vec[usize]) throws os.Error {
         same_types(type_snapshot, produced.types),
         "verify leaves module types intact");
 
+    // Repeated verification builds a fresh Analysis every time.  Its private
+    // ValueOps cache must never grow or rewrite the caller's public type table.
+    let repeat_snapshot = types.clone_context(produced.types);
+    for var iteration usize = 0; iteration < 3; iteration += 1 {
+        let repeated = ownership.verify_ownership(produced);
+        need(inout state, repeated.has_value && phase_complete(repeated.state),
+            "repeated independent verify");
+    }
+    need(inout state, types.size(produced.types) == after_produce &&
+        same_types(repeat_snapshot, produced.types),
+        "repeated verification leaves cached module types intact");
+
     let f_return = produced.nodes[3].exits;
     need(inout state, vec.len(f_return) == 1 &&
         same_exit_kind(f_return[0].kind, hir.ExitKind.Return) &&

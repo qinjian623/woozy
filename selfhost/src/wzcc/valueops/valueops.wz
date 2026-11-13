@@ -51,8 +51,16 @@ struct Support {
     reason string;
 }
 
+// A private type table is needed only when a member type actually has to be
+// substituted.  Until then all lookups use the caller's public context; the
+// clone never becomes the caller's table and its storage-only ids stay local.
+struct PrivateContext {
+    value types.Context;
+    ready bool;
+}
+
 struct Classifier {
-    scratch types.Context;
+    scratch PrivateContext;
     support_seen Vec[usize];
     support_count usize;
 }
@@ -323,16 +331,25 @@ pub func infinite_value_layout(module hir.HirModule) option.Option[usize]
     return option.Option[usize].None;
 }
 
-func type_weight(scratch types.Context, id usize, depth usize) usize {
+func private_find(module hir.HirModule, state PrivateContext, id usize)
+    option.Option[model.Type] {
+    if state.ready {
+        return types.find(state.value, id);
+    }
+    return types.find(module.types, id);
+}
+
+func type_weight(module hir.HirModule, scratch PrivateContext, id usize,
+                 depth usize) usize {
     if depth > COMPLETION_DEPTH {
         return MAX_WEIGHT;
     }
-    switch types.find(scratch, id) {
+    switch private_find(module, scratch, id) {
         case option.Option.None: return MAX_WEIGHT;
         case option.Option.Some(value): {
             var result usize = 1;
             for argument in value.type_args {
-                let weight = type_weight(scratch, argument, depth + 1);
+                let weight = type_weight(module, scratch, argument, depth + 1);
                 if weight == MAX_WEIGHT || result > MAX_WEIGHT - weight {
                     return MAX_WEIGHT;
                 }
@@ -356,6 +373,16 @@ func substitute_support(scratch inout types.Context, id usize,
     }
 }
 
+func private_substitute(module hir.HirModule, state inout PrivateContext,
+                        id usize, substitutions Vec[model.Substitution]) usize
+    throws model.SupportError {
+    if !state.ready {
+        state.value = types.clone_context(module.types);
+        state.ready = true;
+    }
+    return substitute_support(inout state.value, id, substitutions);
+}
+
 func active_contains(active Vec[ActiveNominal], declaration usize,
                      function_depth usize, weight usize) bool {
     for item in active {
@@ -368,7 +395,7 @@ func active_contains(active Vec[ActiveNominal], declaration usize,
     return false;
 }
 
-func inout_data_visit(module hir.HirModule, scratch inout types.Context,
+func inout_data_visit(module hir.HirModule, scratch inout PrivateContext,
                       parameters Vec[usize], active inout Vec[ActiveNominal],
                       id usize, member bool, depth usize,
                       function_depth usize) bool throws model.SupportError {
@@ -376,7 +403,7 @@ func inout_data_visit(module hir.HirModule, scratch inout types.Context,
         return false;
     }
     var value = model.empty_type(model.TypeKind.Error);
-    switch types.find(scratch, id) {
+    switch private_find(module, scratch, id) {
         case option.Option.Some(found): value = found;
         case option.Option.None: return false;
     }
@@ -417,7 +444,7 @@ func inout_data_visit(module hir.HirModule, scratch inout types.Context,
        vec.len(value.type_args) != vec.len(nominal.params) {
         return false;
     }
-    let weight = type_weight(scratch, id, depth);
+    let weight = type_weight(module, scratch, id, depth);
     if active_contains(active, value.declaration, function_depth, weight) {
         return false;
     }
@@ -431,7 +458,7 @@ func inout_data_visit(module hir.HirModule, scratch inout types.Context,
     }
     var ok = true;
     for field in nominal.fields {
-        let concrete = substitute_support(inout scratch, field.type_id,
+        let concrete = private_substitute(module, inout scratch, field.type_id,
             substitutions);
         if !inout_data_visit(module, inout scratch, parameters, inout active,
                 concrete, true, depth + 1, function_depth) {
@@ -442,8 +469,8 @@ func inout_data_visit(module hir.HirModule, scratch inout types.Context,
     if ok {
         for variant in nominal.variants {
             for field in variant.payload {
-                let concrete = substitute_support(inout scratch, field.type_id,
-                    substitutions);
+                let concrete = private_substitute(module, inout scratch,
+                    field.type_id, substitutions);
                 if !inout_data_visit(module, inout scratch, parameters,
                         inout active, concrete, true, depth + 1,
                         function_depth) {
@@ -462,7 +489,7 @@ func inout_data_visit(module hir.HirModule, scratch inout types.Context,
 
 pub func inout_data_type(module hir.HirModule, type_id usize,
                          parameters Vec[usize]) bool throws model.SupportError {
-    var scratch = types.clone_context(module.types);
+    var scratch = PrivateContext(value: types.context(), ready: false);
     var active = vec.empty[ActiveNominal]();
     return inout_data_visit(module, inout scratch, parameters, inout active,
         type_id, false, 0, 0);
@@ -1316,8 +1343,8 @@ func support(module hir.HirModule, state inout Classifier, id usize,
         result.kind = hir.ValueKind.Structure;
     }
     for field in nominal.fields {
-        let concrete = substitute_support(inout state.scratch, field.type_id,
-            substitutions);
+        let concrete = private_substitute(module, inout state.scratch,
+            field.type_id, substitutions);
         if type_missing(module.types, concrete) {
             throw model.SupportError.Invalid(
                 "concrete ownership member type was not interned publicly");
@@ -1340,7 +1367,7 @@ func support(module hir.HirModule, state inout Classifier, id usize,
     }
     for variant in nominal.variants {
         for field in variant.payload {
-            let concrete = substitute_support(inout state.scratch,
+            let concrete = private_substitute(module, inout state.scratch,
                 field.type_id, substitutions);
             if type_missing(module.types, concrete) {
                 throw model.SupportError.Invalid(
@@ -1543,8 +1570,8 @@ func needs_drop_visit(module hir.HirModule, state inout Classifier, id usize,
     }
     var result = false;
     for field in nominal.fields {
-        let concrete = substitute_support(inout state.scratch, field.type_id,
-            substitutions);
+        let concrete = private_substitute(module, inout state.scratch,
+            field.type_id, substitutions);
         if type_missing(module.types, concrete) {
             throw model.SupportError.Invalid(
                 "concrete ownership member type was not interned publicly");
@@ -1555,7 +1582,7 @@ func needs_drop_visit(module hir.HirModule, state inout Classifier, id usize,
     }
     for variant in nominal.variants {
         for field in variant.payload {
-            let concrete = substitute_support(inout state.scratch,
+            let concrete = private_substitute(module, inout state.scratch,
                 field.type_id, substitutions);
             if type_missing(module.types, concrete) {
                 throw model.SupportError.Invalid(
@@ -1572,8 +1599,8 @@ func needs_drop_visit(module hir.HirModule, state inout Classifier, id usize,
 
 pub func classify_value(module hir.HirModule, type_id usize) hir.ValueOps
     throws model.SupportError {
-    var state = Classifier(scratch: types.clone_context(module.types),
-        support_seen: vec.empty[usize](), support_count: 0);
+    var state = Classifier(scratch: PrivateContext(value: types.context(),
+        ready: false), support_seen: vec.empty[usize](), support_count: 0);
     let fields = vec.empty[hir.ValueField]();
     let support_result = support(module, inout state, type_id, 0, true, fields);
     var out = hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,

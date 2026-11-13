@@ -73,6 +73,11 @@ struct EffectEntry {
     effects Vec[usize];
 }
 
+struct ValueEntry {
+    type_id usize;
+    operations hir.ValueOps;
+}
+
 struct Derived {
     records hir.Ownership;
     exits Vec[Vec[hir.ExitPlan]];
@@ -97,6 +102,7 @@ struct Analysis {
     safe_borrow_receivers Vec[usize];
     full_expression_root option.Option[usize];
     full_expression_effects Vec[EffectEntry];
+    values Vec[ValueEntry];
 }
 
 func empty_ownership() hir.Ownership {
@@ -295,12 +301,49 @@ func support_error_message(error model.SupportError) string {
     }
 }
 
-func classify(module hir.HirModule, id usize) hir.ValueOps throws Problem {
+func value_entry_lookup(entries Vec[ValueEntry], type_id usize) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].type_id == type_id {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func copy_value_fields(fields Vec[hir.ValueField]) Vec[hir.ValueField] {
+    let out = vec.empty[hir.ValueField]();
+    vec.reserve(out, vec.len(fields));
+    for field in fields {
+        vec.push(out, field);
+    }
+    return out;
+}
+
+// ValueOps owns its field array.  Return an independent array on every path so
+// a caller can never mutate the Analysis-local cached record.
+func copy_value_ops(operations hir.ValueOps) hir.ValueOps {
+    return hir.ValueOps(kind: operations.kind,
+        needs_drop: operations.needs_drop, pod_inout: operations.pod_inout,
+        fields: copy_value_fields(operations.fields), reason: operations.reason);
+}
+
+func classify(analysis inout Analysis, id usize) hir.ValueOps throws Problem {
+    let known = value_entry_lookup(analysis.values, id);
+    if known >= 0 {
+        return copy_value_ops(analysis.values[usize(known)].operations);
+    }
+    var operations = hir.ValueOps(kind: hir.ValueKind.Trivial,
+        needs_drop: false, pod_inout: false, fields: [], reason: "");
     try {
-        return valueops.classify_value(module, id);
+        operations = valueops.classify_value(analysis.module, id);
     } catch error model.SupportError {
+        // Failures are not recorded: every query starts from fresh classifier
+        // traversal budgets and preserves its original code/message.
         throw internal_problem(support_error_message(error));
     }
+    vec.push(analysis.values,
+        ValueEntry(type_id: id, operations: operations));
+    return copy_value_ops(operations);
 }
 
 func contains_type_parameter(module hir.HirModule, id usize) bool
@@ -679,7 +722,7 @@ func gather(analysis inout Analysis, id usize, parent option.Option[usize])
                 ScopeNodeEntry(scope: node.scope, node: id));
         }
     }
-    let operations = classify(analysis.module, node.type_id);
+    let operations = classify(inout analysis, node.type_id);
     if same_value_kind(operations.kind, hir.ValueKind.Unsupported) {
         issue(analysis, id, "E_CAPABILITY_UNAVAILABLE", operations.reason);
     }
@@ -999,7 +1042,7 @@ func binary_pure(op hir.BinaryOp) bool {
     }
 }
 
-func local_index_borrow(analysis Analysis, receiver usize, index usize)
+func local_index_borrow(analysis inout Analysis, receiver usize, index usize)
     bool throws Problem {
     let receiver_node = node_at(analysis, receiver);
     var symbol usize = 0;
@@ -1026,7 +1069,7 @@ func local_index_borrow(analysis Analysis, receiver usize, index usize)
     }
     let element = receiver_type.type_args[0];
     if contains_type_parameter(analysis.module, element) ||
-       owned(analysis, element) {
+       owned(inout analysis, element) {
         return false;
     }
     return pure_integer_index(analysis, index);
@@ -1039,7 +1082,7 @@ func local_index_can_borrow(analysis inout Analysis, receiver usize,
         case option.Option.Some(_): has_root = true;
         case option.Option.None: {}
     }
-    if !has_root || !local_index_borrow(analysis, receiver, index) {
+    if !has_root || !local_index_borrow(inout analysis, receiver, index) {
         return false;
     }
     return !ids_contains(full_effects(inout analysis), root);
@@ -1133,13 +1176,13 @@ func push_use(analysis inout Analysis, id usize, operand u32, child usize,
         return;
     }
     var root = borrow_root(analysis, child);
-    if use_is(kind, hir.UseKind.Borrow) && !owned(analysis, node.type_id) {
+    if use_is(kind, hir.UseKind.Borrow) && !owned(inout analysis, node.type_id) {
         switch root {
             case option.Option.Some(_): {}
             case option.Option.None: return;
         }
     }
-    if !owned(analysis, node.type_id) &&
+    if !owned(inout analysis, node.type_id) &&
        !kind_is(kind_of(node), hir.NodeKind.Move) &&
        !use_is(kind, hir.UseKind.Inout) &&
        !(use_is(kind, hir.UseKind.Borrow) && option_is_some(root)) {
@@ -1211,8 +1254,8 @@ func call_callee(node hir.HirNode) option.Option[usize] {
     }
 }
 
-func owned(analysis Analysis, type_id usize) bool throws Problem {
-    return classify(analysis.module, type_id).needs_drop;
+func owned(analysis inout Analysis, type_id usize) bool throws Problem {
+    return classify(inout analysis, type_id).needs_drop;
 }
 
 func borrow_step(owner_kind hir.OwnerKind, identity usize, type_id usize)
@@ -1301,7 +1344,7 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
                     vec.push(analysis.active_borrows, borrow_step(
                         hir.OwnerKind.Binding, symbol,
                         local_of(analysis, symbol).type_id));
-                } else if owned(analysis, callee_node.type_id) &&
+                } else if owned(inout analysis, callee_node.type_id) &&
                           !inert_function_value(callee_node) {
                     vec.push(analysis.active_borrows, borrow_step(
                         hir.OwnerKind.Temporary, callee,
@@ -1328,7 +1371,7 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
             } else {
                 let argument_node = node_at(analysis, argument.expression);
                 if mode_is(argument.mode, model.ParamMode.Ordinary) &&
-                   owned(analysis, argument_node.type_id) &&
+                   owned(inout analysis, argument_node.type_id) &&
                    !inert_function_value(argument_node) {
                     vec.push(analysis.active_borrows, borrow_step(
                         hir.OwnerKind.Temporary, argument.expression,
@@ -1431,7 +1474,7 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
     }
     switch node_read(node) {
         case option.Option.Some(value):
-            if owned(analysis, node.type_id) || borrowed_value {
+            if owned(inout analysis, node.type_id) || borrowed_value {
                 var read_kind = hir.UseKind.Copy;
                 if borrowed_value {
                     read_kind = hir.UseKind.Borrow;
@@ -1457,7 +1500,7 @@ func expr_records(analysis inout Analysis, id usize, fe usize,
             }
         case option.Option.None: {}
     }
-    if !borrowed_value && owned(analysis, node.type_id) &&
+    if !borrowed_value && owned(inout analysis, node.type_id) &&
        !kind_is(kind, hir.NodeKind.Place) &&
        !kind_is(kind, hir.NodeKind.FieldPlace) &&
        !kind_is(kind, hir.NodeKind.IndexPlace) &&
@@ -1490,7 +1533,7 @@ func pattern_copies(analysis inout Analysis, pattern hir.Pattern, body usize,
                     root option.Option[usize]) throws Problem {
     switch pattern.binding {
         case option.Option.Some(binding):
-            if owned(analysis, pattern.type_id) {
+            if owned(inout analysis, pattern.type_id) {
                 vec.push(analysis.out.records.uses, hir.ValueUse(consumer: body,
                     operand: 0, kind: hir.UseKind.Copy, root: root,
                     type_id: pattern.type_id,
@@ -1612,7 +1655,7 @@ func records(analysis inout Analysis, id usize) throws Problem {
             case option.Option.Some(iterator):
                 full_expression(inout analysis, iterator.next, iterator.next,
                     true);
-                if owned(analysis, element_type) {
+                if owned(inout analysis, element_type) {
                     vec.push(analysis.out.records.uses, hir.ValueUse(
                         consumer: id, operand: 0, kind: hir.UseKind.Copy,
                         root: option.Option[usize].None,
@@ -1620,7 +1663,7 @@ func records(analysis inout Analysis, id usize) throws Problem {
                         destination: option.Option[usize].Some(data.element)));
                 }
             case option.Option.None:
-                if owned(analysis, element_type) {
+                if owned(inout analysis, element_type) {
                     vec.push(analysis.out.records.uses, hir.ValueUse(
                         consumer: id, operand: 0, kind: hir.UseKind.Copy,
                         root: option.Option[usize].None,
@@ -1634,7 +1677,7 @@ func records(analysis inout Analysis, id usize) throws Problem {
     if kind_is(kind, hir.NodeKind.Switch) {
         let subject = child_at(node, 0);
         let subject_node = node_at(analysis, subject);
-        if owned(analysis, subject_node.type_id) {
+        if owned(inout analysis, subject_node.type_id) {
             switch node_read(subject_node) {
                 case option.Option.Some(read_data): {
                     let root = read_data.symbol;
@@ -1709,7 +1752,7 @@ func records(analysis inout Analysis, id usize) throws Problem {
                 throw internal_problem("ownership try payload missing");
         }
         for catcher in try_data.catches {
-            if owned(analysis, catcher.error_type) {
+            if owned(inout analysis, catcher.error_type) {
                 vec.push(analysis.out.records.uses, hir.ValueUse(
                     consumer: catcher.body, operand: 0,
                     kind: hir.UseKind.Take, root: option.Option[usize].None,
@@ -1792,8 +1835,8 @@ func error_type_of(analysis Analysis, node hir.HirNode) option.Option[usize]
     return option.Option[usize].None;
 }
 
-func action_owned(analysis Analysis, type_id usize) bool throws Problem {
-    return owned(analysis, type_id);
+func action_owned(analysis inout Analysis, type_id usize) bool throws Problem {
+    return owned(inout analysis, type_id);
 }
 
 func emit_exit(analysis inout Analysis, id usize, kind hir.ExitKind,
@@ -1809,7 +1852,7 @@ func emit_exit(analysis inout Analysis, id usize, kind hir.ExitKind,
             case option.Option.None:
                 type_id = node_at(analysis, child_at(node, 0)).type_id;
         }
-        if action_owned(analysis, type_id) {
+        if action_owned(inout analysis, type_id) {
             var owner_kind = hir.OwnerKind.ReturnOutput;
             if option_is_some_usize(error) {
                 owner_kind = hir.OwnerKind.ErrorOutput;
@@ -1894,7 +1937,7 @@ func emit_exit(analysis inout Analysis, id usize, kind hir.ExitKind,
                 local_index -= 1;
                 let local = local_of(analysis, symbols[local_index]);
                 if !mode_is(local.mode, model.ParamMode.Move) ||
-                   !owned(analysis, local.type_id) {
+                   !owned(inout analysis, local.type_id) {
                     continue;
                 }
                 var visible = true;
@@ -2803,7 +2846,7 @@ func bool_value(value option.Option[hir.BoolLiteral]) bool {
 }
 
 func supported(analysis inout Analysis, type_id usize) throws Problem {
-    let operations = classify(analysis.module, type_id);
+    let operations = classify(inout analysis, type_id);
     if same_value_kind(operations.kind, hir.ValueKind.Unsupported) {
         issue(analysis, analysis.function.body, "E_CAPABILITY_UNAVAILABLE",
             operations.reason);
@@ -2854,7 +2897,7 @@ func analyze_function(analysis inout Analysis, function hir.HirFunction)
         ids_insert(analysis.parameter_symbols,
             function.parameters[index].symbol);
         if mode_is(parameter.mode, model.ParamMode.Move) ||
-           owned(analysis, parameter.type_id) {
+           owned(inout analysis, parameter.type_id) {
             ids_insert(analysis.enabled, function.symbol);
         }
     }
@@ -2914,7 +2957,7 @@ func new_analysis(module hir.HirModule) Analysis {
         active_borrows: [], switch_subjects: [], function: empty_hir_function(),
         has_function: false, parameter_symbols: [], safe_borrow_receivers: [],
         full_expression_root: option.Option[usize].None,
-        full_expression_effects: []);
+        full_expression_effects: [], values: []);
 }
 
 func derive(module hir.HirModule) Derived throws Problem {
