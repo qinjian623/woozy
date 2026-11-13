@@ -551,8 +551,15 @@ def accept_errors(args, environment, server_object, client_program, opt, cases):
             chat.expect(alice, '* accept-alice joined')
             # The first accept succeeded and its draining accept saw EAGAIN.
             # Only now connect Bob, so the fixture fails accept call three.
-            bob = chat.raw(port, 'bob')
-            chat.send(bob, b'accept-bob\n', allow_closed=fatal)
+            try:
+                bob = chat.raw(port, 'bob')
+            except ConnectionResetError:
+                if not fatal:
+                    raise
+                # A fatal accept closes the listener before connect can finish.
+                bob = None
+            if bob is not None:
+                chat.send(bob, b'accept-bob\n', allow_closed=fatal)
             if fatal:
                 chat.exit(server, expected=1)
                 chat.exit(alice)
