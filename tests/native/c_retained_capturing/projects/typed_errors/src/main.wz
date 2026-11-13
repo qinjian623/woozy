@@ -1,0 +1,45 @@
+package app;
+import "capturing/lib" as capturing;
+
+enum Failure {
+    Boom(value i32);
+}
+
+func cb(value i32) i32 {
+    return value + 1;
+}
+
+// Normal return and typed-error exit both leave the registration scope.  The
+// automatic release must run on each path without double-unregistering.
+func run(fail bool) i32 throws Failure {
+    let sub = capturing.subscribe(cb);
+    let value = capturing.invoke_last(sub, 4);
+    if fail {
+        throw Failure.Boom(value: value);
+    }
+    return value;
+}
+
+func main() i32 {
+    var normal i32 = 0;
+    try {
+        normal = run(false);
+    } catch error Failure {
+        return 1;
+    }
+    if normal != 5 { return 2; }
+    if capturing.live_subscriptions() != 0 { return 3; }
+    var caught i32 = 0;
+    try {
+        let ignored = run(true);
+        return 4;
+    } catch error Failure {
+        switch error {
+            case Failure.Boom(value): caught = value;
+        }
+    }
+    if caught != 5 { return 5; }
+    if capturing.live_subscriptions() != 0 { return 6; }
+    if capturing.unregister_calls() != 2 { return 7; }
+    return 0;
+}

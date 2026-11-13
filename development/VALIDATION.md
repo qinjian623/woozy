@@ -30,3 +30,19 @@
 C++ 编译器构建、语义检查器、LLVM 代码生成、Python 转译、ARC 运行库、真实绑定 conformance、PyTorch 训练和多平台执行均未在本轮实现或运行。对应测试是开发任务的验收要求，不能把本包检查通过记为这些功能完成。
 
 基线验证文件中的 NumPy 数据准备记录属于上轮历史结果，保留其原始时间和范围；本轮没有重新执行训练或声称已经生成 Python 程序。
+
+## 2026-11-13 捕获式 C 回调
+
+主目录 Release 构建后，使用 LLVM/Clang 22.1.8 和现有 legacy libxml2，完整 **176/176 CTest 通过，191.60 秒**。命令：
+
+```sh
+ctest --test-dir build/woozy-stdlib-native --output-on-failure -j6
+```
+
+新增13个真实Source项目在O0/O2执行，覆盖逃逸闭包、函数变量、绑定方法、userdata各位置、bool/i64/Unit、注册期间同步调用、C pthread、失败与typed-error清理、显式/自动注销、双句柄借用、Weak清理和move-only句柄捕获。CTest固定要求源码实际执行；本次无failed或not_run。核心ELF仍无INTERP/NEEDED，旧C接口、静态回调和双后端检查继续通过。
+
+独立检查发现并修正了外层SAFE下清理捕获环境、并发注销等待阻碍GC，多句柄借用退出顺序，以及注册未完成时 fork 后缺少 PID 检查的问题；运行库测试包含对应断言。纯Woozy对象仍按普通ARC/GC清理；C注册是外部根，形成循环时需要显式close。
+
+测试说明：[Source/C fixture](tests/native/c_retained_capturing/README.md)、[运行库](tests/native/c_callback_runtime/README.md)；用法：[调用C库](../docs/FFI.md)。完整自举仍未实现，本次完成的是既定扩展与自举条件评估。
+
+最后的 PID 修正在新增进程测试上先确认旧实现失败；成功/null finish 两种继承使用均在锁与清理前 Panic，父进程正常清理一次。完整176项在该修正与测试目录隔离之后重新执行通过。

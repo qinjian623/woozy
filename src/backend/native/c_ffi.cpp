@@ -36,6 +36,14 @@ std::string buffer_name(const CTypeRef &ref) {
   return std::string("wf_buf_") + (ref.writable ? "mut_" : "ro_") +
          ref.args[0].scalar;
 }
+// The managed callback userdata slot is exactly PtrMut[Unit]; the binding
+// contract rejects any other spelling before generation.
+bool unit_pointer(const CTypeRef &ref) {
+  return ref.kind == CTypeRef::Kind::pointer && ref.writable &&
+         ref.args.size() == 1 &&
+         ref.args[0].kind == CTypeRef::Kind::scalar &&
+         ref.args[0].scalar == "Unit";
+}
 struct Generator {
   const Project &p;
   std::ostringstream out;
@@ -150,8 +158,53 @@ struct Generator {
     out << "}\n";
   }
 
+  // One C trampoline per callback type/userdata mapping. The runtime context
+  // is the userdata parameter; all other callback parameters are packed in
+  // declaration order and the typed LLVM dispatcher reconstructs the source
+  // call. No per-instance code or global current-closure slot is involved.
+  void emit_registration_trampoline(uint32_t c_type, size_t userdata) {
+    const auto &d = p.c_type(c_type);
+    const bool unit = d.result.kind == CTypeRef::Kind::scalar &&
+                      d.result.scalar == "Unit";
+    const auto result = unit ? std::string("void") : ctype(d.result);
+    const auto dispatch =
+        registration_callback_dispatch_symbol(c_type, userdata);
+    out << "extern void " << dispatch
+        << "(void *context, void *out, void *const *args);\n";
+    out << result << " "
+        << registration_callback_trampoline_symbol(c_type, userdata) << "(";
+    for (size_t i = 0; i < d.parameters.size(); ++i) {
+      if (i) out << ", ";
+      out << ctype(d.parameters[i].type) << " p" << i;
+    }
+    if (d.parameters.empty()) out << "void";
+    out << ") {\n";
+    const size_t packed = d.parameters.size() - (userdata < d.parameters.size());
+    if (packed == 0) {
+      out << "  void *args[1] = {0};\n";
+    } else {
+      out << "  void *args[" << packed << "] = {";
+      size_t emitted = 0;
+      for (size_t i = 0; i < d.parameters.size(); ++i) {
+        if (i == userdata) continue;
+        if (emitted++) out << ", ";
+        out << "&p" << i;
+      }
+      out << "};\n";
+    }
+    if (unit) {
+      out << "  " << dispatch << "(p" << userdata << ", 0, args);\n";
+    } else {
+      out << "  " << result << " result;\n";
+      out << "  " << dispatch << "(p" << userdata << ", &result, args);\n";
+      out << "  return result;\n";
+    }
+    out << "}\n";
+  }
+
   void emit_callable(uint32_t id) {
     const auto &d = p.c_callable(id);
+    const bool close = registration_close(p, d);
     std::vector<std::string> parameter_types;
     for (const auto &param : d.parameters) {
       auto type = ctype(param.type);
@@ -160,13 +213,19 @@ struct Generator {
       parameter_types.push_back(type);
     }
     auto result = ctype(d.result.type);
-    out << "extern " << result << " " << d.symbol << "(";
-    for (size_t i = 0; i < parameter_types.size(); ++i) {
-      if (i) out << ", ";
-      out << parameter_types[i];
+    if (close) {
+      // The explicit close operation never reaches the C symbol from Source:
+      // runtime close drains leases and callbacks, then calls unregister.
+      out << "extern void lang_c_registration_close_v1(void *);\n";
+    } else {
+      out << "extern " << result << " " << d.symbol << "(";
+      for (size_t i = 0; i < parameter_types.size(); ++i) {
+        if (i) out << ", ";
+        out << parameter_types[i];
+      }
+      if (parameter_types.empty()) out << "void";
+      out << ");\n";
     }
-    if (parameter_types.empty()) out << "void";
-    out << ");\n";
     out << "void " << adapter_symbol(id) << "(void *out";
     for (size_t i = 0; i < parameter_types.size(); ++i)
       out << ", const void *a" << i;
@@ -177,7 +236,7 @@ struct Generator {
     }
     out << "  ";
     if (result != "void") out << result << " result = ";
-    out << d.symbol << "(";
+    out << (close ? "lang_c_registration_close_v1" : d.symbol) << "(";
     for (size_t i = 0; i < parameter_types.size(); ++i) {
       if (i) out << ", ";
       out << "v" << i;
@@ -211,6 +270,70 @@ std::string callback_trampoline_symbol(uint64_t function, uint32_t c_type) {
   return "lang_c_callback_trampoline_v1_" + std::to_string(function) + "_" +
          std::to_string(c_type);
 }
+std::string registration_callback_trampoline_symbol(uint32_t c_type,
+                                                    size_t userdata) {
+  return "lang_c_registration_trampoline_v1_" + std::to_string(c_type) +
+         "_" + std::to_string(userdata);
+}
+std::string registration_callback_dispatch_symbol(uint32_t c_type,
+                                                  size_t userdata) {
+  return "lang_c_registration_dispatch_v1_" + std::to_string(c_type) + "_" +
+         std::to_string(userdata);
+}
+std::string registration_unregister_symbol(uint32_t c_type) {
+  return "lang_c_registration_unregister_v1_" + std::to_string(c_type);
+}
+
+std::optional<RegistrationCallback>
+registration_callback(const Project &project,
+                      const modules::CCallableDecl &callable) {
+  if (!callable.registers) return std::nullopt;
+  const auto &registers = *callable.registers;
+  if (registers.callback_parameter >= callable.parameters.size() ||
+      registers.userdata_parameter >= callable.parameters.size() ||
+      registers.callback_parameter == registers.userdata_parameter)
+    throw std::invalid_argument("registration parameter index out of range");
+  const auto &callback_ref = callable.parameters[registers.callback_parameter].type;
+  if (callback_ref.kind != CTypeRef::Kind::named || !callback_ref.named ||
+      callback_ref.named > project.c_types.size())
+    throw std::invalid_argument("registration callback is not a named C type");
+  const auto &callback = project.c_type(callback_ref.named);
+  if (callback.kind != CDeclKind::callback)
+    throw std::invalid_argument("registration callback is not a C callback");
+  if (registers.callback_userdata_parameter >= callback.parameters.size() ||
+      !unit_pointer(callback.parameters[registers.callback_userdata_parameter].type))
+    throw std::invalid_argument("callback userdata is not PtrMut[Unit]");
+  if (!unit_pointer(callable.parameters[registers.userdata_parameter].type))
+    throw std::invalid_argument("registration userdata is not PtrMut[Unit]");
+  if (callable.result.type.kind != CTypeRef::Kind::named ||
+      !callable.result.type.named ||
+      callable.result.type.named > project.c_types.size())
+    throw std::invalid_argument("registration result is not a C resource");
+  const auto &resource = project.c_type(callable.result.type.named);
+  if (resource.kind != CDeclKind::resource || !resource.registration)
+    throw std::invalid_argument("registration result is not a managed resource");
+  if (resource.registration->callback_type != callback_ref.named)
+    throw std::invalid_argument("registration callback type differs from resource");
+  if (resource.registration->unregister_symbol.empty())
+    throw std::invalid_argument("managed resource has no unregister symbol");
+  return RegistrationCallback{resource.id, callback.id,
+                              registers.callback_parameter,
+                              registers.userdata_parameter,
+                              registers.callback_userdata_parameter};
+}
+
+bool registration_close(const Project &project,
+                        const modules::CCallableDecl &callable) {
+  if (callable.registers || callable.parameters.size() != 1) return false;
+  if (callable.result.type.kind != CTypeRef::Kind::scalar ||
+      callable.result.type.scalar != "Unit")
+    return false;
+  const auto &ref = callable.parameters.front().type;
+  if (ref.kind != CTypeRef::Kind::named) return false;
+  const auto &resource = project.c_type(ref.named);
+  return resource.kind == CDeclKind::resource && resource.registration &&
+         callable.symbol == resource.registration->unregister_symbol;
+}
 
 std::string adapter_source(
     const Project &project, const std::set<uint32_t> &callables,
@@ -226,6 +349,18 @@ std::string adapter_source(
     if (id < 1 || id > project.c_types.size() ||
         project.c_type(id).kind != CDeclKind::resource)
       throw std::invalid_argument("unknown C resource type");
+  }
+  // Managed registrations derive their one generic trampoline per callback
+  // type/userdata mapping from the constructor set, plus one raw unregister
+  // helper per constructed resource. Nothing here is per registration value.
+  std::set<std::pair<uint32_t, size_t>> registration_mappings;
+  std::set<uint32_t> registration_resources;
+  for (uint32_t id : callables) {
+    auto mapping = registration_callback(project, project.c_callable(id));
+    if (!mapping) continue;
+    registration_mappings.insert(
+        {mapping->callback_type, mapping->callback_userdata_parameter});
+    registration_resources.insert(mapping->resource_type);
   }
   // Every scalar buffer spelling is tiny. Emitting the complete scalar set
   // keeps pointer-to-buffer spelling and record fields deterministic.
@@ -257,8 +392,18 @@ std::string adapter_source(
   }
   for (const auto &[function, c_type] : callbacks)
     g.emit_callback_trampoline(function, c_type);
+  for (const auto &[c_type, userdata] : registration_mappings)
+    g.emit_registration_trampoline(c_type, userdata);
   for (uint32_t id : resource_types) {
     const auto &d = project.c_type(id);
+    if (d.registration) {
+      // The Source value is the runtime context wrapper, not the raw foreign
+      // token: last release closes the registration instead of calling C.
+      g.out << "extern void lang_c_registration_release_v1(void *);\n";
+      g.out << "void " << release_symbol(id) << "(void *p) { if (p) "
+            << "lang_c_registration_release_v1(p); }\n";
+      continue;
+    }
     g.out << "extern void " << d.release_symbol << "(void *);\n";
     g.out << "void " << release_symbol(id) << "(void *p) { if (p) "
           << d.release_symbol << "(p); }\n";
@@ -267,6 +412,14 @@ std::string adapter_source(
       g.out << "void " << retain_symbol(id) << "(void *p) { if (p) "
             << d.retain_symbol << "(p); }\n";
     }
+  }
+  for (uint32_t id : registration_resources) {
+    const auto &d = project.c_type(id);
+    g.out << "extern void " << d.registration->unregister_symbol
+          << "(void *);\n";
+    g.out << "void " << registration_unregister_symbol(id)
+          << "(void *p) { if (p) " << d.registration->unregister_symbol
+          << "(p); }\n";
   }
   for (uint32_t id : callables) g.emit_callable(id);
   return g.out.str();

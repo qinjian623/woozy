@@ -118,6 +118,15 @@ struct CParameterDecl {
   CTypeRef type;
   SourceSpan source;
 };
+struct CRegistrationDecl {
+  uint32_t callback_type = 0; // Project::c_types, rebased with the bundle
+  std::string unregister_symbol;
+};
+struct CRegistrationCall {
+  size_t callback_parameter = 0; // indexes into the original C parameter list
+  size_t userdata_parameter = 0;
+  size_t callback_userdata_parameter = 0;
+};
 struct CTypeDecl {
   uint32_t id = 0; // 1-based index in Project::c_types, source declaration ID
   size_t bundle = 0;
@@ -131,6 +140,7 @@ struct CTypeDecl {
   // Callback signature; result is a C type expression.
   CTypeRef result;
   std::vector<CParameterDecl> parameters;
+  std::optional<CRegistrationDecl> registration; // managed resource only
 };
 struct CReturnDecl {
   CTypeRef type;
@@ -146,7 +156,16 @@ struct CCallableDecl {
   std::vector<CParameterDecl> parameters; // fixed positional order
   CReturnDecl result;
   std::string stable_identity;
+  std::optional<CRegistrationCall> registers;
 };
+inline std::vector<size_t>
+c_source_parameter_indices(const CCallableDecl &callable) {
+  std::vector<size_t> result;
+  for (size_t i = 0; i < callable.parameters.size(); ++i)
+    if (!callable.registers || i != callable.registers->userdata_parameter)
+      result.push_back(i);
+  return result;
+}
 struct CModule {
   std::string logical_path, provider, library;
   SourceSpan source;

@@ -1,0 +1,35 @@
+package app;
+import "capturing/lib" as capturing;
+
+// C callback declarations may return bool, a fixed scalar or Unit.  The
+// source signature omits only the callback context slot.
+func main() i32 {
+    {
+        let bool_cb = func(flag bool) bool {
+            return !flag;
+        };
+        let sub = capturing.subscribe_bool(bool_cb);
+        if capturing.invoke_bool(sub, true) != false { return 1; }
+        if capturing.invoke_bool(sub, false) != true { return 2; }
+        if capturing.calls_bool(sub) != 2 { return 3; }
+    }
+    {
+        let scalar_cb = func(value i32) i64 {
+            return i64(value) * 10000000000;
+        };
+        let sub = capturing.subscribe_scalar(scalar_cb);
+        if capturing.invoke_scalar(sub, 5) != 50000000000 { return 4; }
+        if capturing.calls_scalar(sub) != 1 { return 5; }
+    }
+    {
+        let unit_cb = func(value i32) Unit {
+            let observed = value;
+        };
+        let sub = capturing.subscribe_unit(unit_cb);
+        capturing.invoke_unit(sub, 9);
+        if capturing.calls_unit(sub) != 1 { return 6; }
+    }
+    if capturing.live_subscriptions() != 0 { return 7; }
+    if capturing.unregister_calls() != 3 { return 8; }
+    return 0;
+}

@@ -506,3 +506,6 @@ add_subdirectory(async_memory)
 add_subdirectory(hosted_thread_gc)
 
 add_subdirectory(async_fork)
+
+add_subdirectory(c_callback_runtime)
+add_subdirectory(c_retained_capturing)

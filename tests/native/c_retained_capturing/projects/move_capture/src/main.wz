@@ -1,0 +1,30 @@
+package app;
+import "capturing/lib" as capturing;
+import "std/weak" as weak;
+import "std/option" as option;
+
+// Fn copies share an environment even when it owns a move-only registration.
+func main() i32 {
+    var observed Weak[func(i32) i32] = weak.empty[func(i32) i32]();
+    {
+        let values Vec[i32] = [7];
+        let sub = capturing.subscribe(func(value i32) i32 {
+            return values[0] + value;
+        });
+        let reader = move func(value i32) i32 {
+            return capturing.invoke_last(sub, value);
+        };
+        let shared = reader;
+        observed = weak.downgrade[func(i32) i32](shared);
+        if reader(1) != 8 { return 1; }
+        if shared(2) != 9 { return 2; }
+        if capturing.live_subscriptions() != 1 { return 3; }
+    }
+    if capturing.live_subscriptions() != 0 { return 4; }
+    if capturing.unregister_calls() != 1 { return 5; }
+    switch weak.upgrade(observed) {
+        case option.Option.Some(value): return 6;
+        case option.Option.None: {}
+    }
+    return 0;
+}

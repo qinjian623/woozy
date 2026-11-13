@@ -129,7 +129,41 @@ C record 的 `size`、`align` 和字段 `offset` 必须符合自然 C 布局。�
 
 C 调用没有 `throws` 效果，也不会自动把错误变成 `py.Error`。C 返回的错误码仍是声明类型上的普通值；`errno` 通过声明的获取接口读取，例如 glibc 的 `__errno_location()` 返回 `PtrMut[i32]`，或 getter 直接返回 `i32`。`ownership` 字段只描述值、借用、拥有或 `Unit`，不是错误处理机制。
 
-callback 只接受直接写出的无捕获、不抛错函数名，完整签名必须与 callback 声明一致。C 可以在调用期间使用函数指针，也可以保存它，稍后或从自己的线程调用。函数地址在程序运行期间有效。C 库负责自己的上下文数据，以及停止回调、等待正在执行的回调结束后再释放上下文；这不会保留 Woozy 局部变量。局部函数值变量、捕获闭包和抛错 callback 仍不能作为 C callback 实参。
+普通 callback 参数接受直接写出的无捕获、不抛错函数名，完整签名必须与 callback 声明一致。C 可以保存函数地址并从自己的线程调用；这不会保留 Woozy 局部变量。捕获闭包、函数值变量和绑定方法使用下面的注册接口。
+
+### 让 C 库保存捕获闭包
+
+C API 必须同时接收函数指针和 `void *userdata`，返回不透明指针句柄，并提供注销函数。绑定中的 callback 仍声明完整 C 签名；资源和注册函数增加如下字段：
+
+```json
+{"id":"events.Subscription","module":"events/lib","name":"Subscription",
+ "kind":"resource","registration":{
+   "callback":"events.Callback","unregister_symbol":"events_unsubscribe"}}
+```
+
+```json
+{"id":"events.subscribe","module":"events/lib","name":"subscribe",
+ "symbol":"events_subscribe","parameters":[
+   {"name":"callback","type":"events.Callback"},
+   {"name":"userdata","type":"PtrMut[Unit]"}],
+ "result":{"type":"events.Subscription","ownership":"owned"},
+ "registers":{"callback_parameter":"callback",
+   "userdata_parameter":"userdata","callback_userdata_parameter":"context"}}
+```
+
+假设 `events.Callback` 的 C 参数是 `value i32, context PtrMut[Unit]`，Woozy 中传入的函数只接收 `value`。编译器管理 userdata，程序不需要创建裸指针：
+
+```wz
+let values Vec[i32] = [7];
+let sub = events.subscribe(func(value i32) i32 {
+    return values[0] + value;
+});
+// sub 离开作用域时自动注销；此前 C 可以继续调用这个闭包。
+```
+
+注册句柄只能移动，不能复制。注册期间保留闭包及其捕获值；注销等待正在执行的回调和借用句柄的 C 调用结束，再释放捕获值。若绑定另外导出了注销符号对应的“单个资源参数、Unit 返回”函数，也可提前调用它；重复注销无效，注销后不能再调用使用该句柄的 C 操作。在自己的回调内注销同一注册会 Panic。
+
+资源声明不填写 `release_symbol` 或 `retain_symbol`。两处 userdata 都必须是 `PtrMut[Unit]`，可以位于各自参数列表的任意位置。回调不能 `throws`。注册失败以空指针表示；此时 C 必须已停止并等待所有回调结束。正常注销也必须保证返回后再无回调，包括尚未进入 Woozy 的派发。绑定声明不能替代 C 库的这些保证。C 注册仍保留捕获图时，GC 不会替程序注销；这类外部注册形成的强引用循环需要保留句柄并显式 close，之后才能由 Woozy 回收。
 
 在 hosted 程序中，若 async 执行器属于另一线程，外部 C 库直接调用 libc `fork` 会产生 Panic；C 的 atfork 回调不能返回 Woozy 的 typed error。需要通过 `throws os.Error` 处理这项限制时，调用 `std/process.fork`。启动其他程序可用 `std/process.spawn`。
 
@@ -137,7 +171,7 @@ callback 只接受直接写出的无捕获、不抛错函数名，完整签名�
 
 - 不支持 C 可变参数、数组/union/packed/bitfield record，也不支持在 Woozy 中构造 record 或修改 record 字段。
 - 只接受 C 符号；C++ 库可先提供 `extern "C"` 接口，再按 C 声明使用；当前不直接支持 C++ ABI、名称修饰符号或 C++ 类型。Windows、macOS 和 ARM 目标也未提供。
-- 捕获闭包的保留型 callback 和抛错 callback 尚不支持；TLS 专用 ABI 不作为公共库接口提供。
+- 保存捕获闭包仅支持上述带 userdata、返回指针句柄的注册接口；不支持抛错 callback、状态码加输出参数的注册接口，或没有 userdata 的 C API。TLS 专用 ABI 不作为公共库接口提供。
 - 清单不提供任意链接器参数，也没有跳过库名或目录校验的入口；能链接什么由经过校验的 native 依赖决定。
 
 更多语言规则见 [语言规则](SEMANTICS.md)，标准库接口见 [标准库](STDLIB.md)，系统接口见 [系统接口](OS.md)，可运行项目见 [示例目录](../examples/)。

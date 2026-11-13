@@ -1,0 +1,13 @@
+package app;
+import "capturing/lib" as capturing;
+
+// Callbacks do not throw.  The registration callable accepts only a
+// nonthrowing function value.
+func danger(value i32) i32 throws i32 {
+    throw value;
+}
+
+func main() i32 {
+    let sub = capturing.subscribe(danger);
+    return 0;
+}

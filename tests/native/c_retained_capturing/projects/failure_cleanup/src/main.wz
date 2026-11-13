@@ -1,0 +1,26 @@
+package app;
+import "capturing/lib" as capturing;
+
+// A null registration result must consume the already-created context exactly
+// once.  The second variant enters the callback synchronously and only then
+// reports failure, so cleanup must also handle the post-callback case.
+func main() i32 {
+    let values Vec[i32] = [3, 4];
+    let cb = func(value i32) i32 {
+        return values[0] + values[1] + value;
+    };
+
+    let failed = capturing.subscribe_fail(cb);
+    if !capturing.subscription_null(failed) { return 1; }
+    if capturing.callback_calls() != 0 { return 2; }
+    if capturing.live_subscriptions() != 0 { return 3; }
+    if capturing.registration_failures() != 1 { return 4; }
+
+    let after = capturing.subscribe_fail_after(cb, 5);
+    if !capturing.subscription_null(after) { return 5; }
+    if capturing.callback_calls() != 1 { return 6; }
+    if capturing.live_subscriptions() != 0 { return 7; }
+    if capturing.registration_failures() != 2 { return 8; }
+    if capturing.unregister_calls() != 0 { return 9; }
+    return 0;
+}

@@ -3904,8 +3904,12 @@ class Checker {
       reject(r, e.what(), "E_BINDING_INVALID");
     }
     const auto sig = type(signature);
-    if (ast(r).children.size() - 1 != decl.parameters.size())
-      reject(r, "C function requires exactly one argument per parameter",
+    const auto source_parameters = modules::c_source_parameter_indices(decl);
+    if (source_parameters.size() != sig.parameters.size())
+      reject(r, "C callable source signature is inconsistent",
+             "E_BINDING_INVALID");
+    if (ast(r).children.size() - 1 != source_parameters.size())
+      reject(r, "C function requires exactly one argument per source parameter",
              "E_CALL_ARGUMENT");
     Call call;
     call.kind = CalleeKind::c_foreign;
@@ -3922,8 +3926,20 @@ class Checker {
           (token(er) == "move" || token(er) == "inout"))
         reject(ar, "C arguments require ordinary mode", "E_CALL_ARGUMENT");
       const auto expected = sig.parameters[i - 1].type;
+      const auto raw = source_parameters.at(i - 1);
       Expr e;
-      if (type(expected).kind == TypeKind::CForeignCallback) {
+      if (decl.registers && raw == decl.registers->callback_parameter) {
+        // A retained managed callback takes an ordinary Fn value: closures,
+        // function variables and bound method values all use the existing Fn
+        // ABI. Exact type equality keeps throws, non-ordinary modes and wrong
+        // arity/signatures out without a new source form.
+        e = expression(er);
+        if (e.value.type != expected)
+          reject(ar,
+                 "C registering callback requires a non-throwing ordinary "
+                 "function value with the source signature",
+                 "E_CALL_ARGUMENT");
+      } else if (type(expected).kind == TypeKind::CForeignCallback) {
         e = expression(er);
         check_c_callback(ar, e.value.type, type(expected).c_type);
         const auto *value = std::get_if<FunctionValue>(&m.nodes[e.id.value].data);

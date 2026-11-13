@@ -1,0 +1,13 @@
+package app;
+import "capturing_static/lib" as capturing_static;
+
+func cb(value i32, context u64) i32 {
+    return value + i32(context);
+}
+
+// This project uses only the static C callback surface, so it can prove the
+// existing Python rejection even before the capturing registration interface
+// is integrated.  No Python program may be produced.
+func main() i32 {
+    return capturing_static.apply(cb, 5, 3) - 8;
+}

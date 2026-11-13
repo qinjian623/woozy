@@ -1,0 +1,26 @@
+package app;
+import "capturing/lib" as capturing;
+
+// The callback is called from a C-owned pthread after the registration call
+// returns.  It captures a local value and reaches back into C through the
+// borrowed token from the ordinary main-thread call after the join.
+func main() i32 {
+    let base i32 = 7;
+    let cb = func(value i32) i32 {
+        return value + base;
+    };
+    {
+        let sub = capturing.subscribe(cb);
+        if capturing.start_thread(sub, 16) != 0 { return 1; }
+        if capturing.join_thread(sub) != 0 { return 2; }
+        if capturing.thread_calls(sub) != 16 { return 3; }
+        // sum(i + 7, i=0..15) = 120 + 112 = 232
+        if capturing.thread_sum(sub) != 232 { return 4; }
+        if capturing.calls(sub) != 16 { return 5; }
+        if capturing.invoke_last(sub, 3) != 10 { return 6; }
+        if capturing.calls(sub) != 17 { return 7; }
+    }
+    if capturing.live_subscriptions() != 0 { return 8; }
+    if capturing.live_threads() != 0 { return 9; }
+    return 0;
+}

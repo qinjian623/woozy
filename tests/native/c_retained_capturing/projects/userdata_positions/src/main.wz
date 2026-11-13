@@ -1,0 +1,44 @@
+package app;
+import "capturing/lib" as capturing;
+
+// Three callback declarations put the runtime-owned context first, in the
+// middle and last.  Distinct registrations carry distinct capturing
+// environments, so no global current-closure slot can satisfy the test.
+func main() i32 {
+    {
+        let first_tag i32 = 100;
+        let first_cb = func(value i32) i32 {
+            return value + first_tag;
+        };
+        let first = capturing.subscribe_first(first_cb);
+        if capturing.invoke_first(first, 5) != 105 { return 1; }
+        if capturing.calls_first(first) != 1 { return 2; }
+
+        let middle_tag i32 = 200;
+        let middle_cb = func(left i32, right i32) i32 {
+            return left * 10 + right + middle_tag;
+        };
+        let middle = capturing.subscribe_middle(middle_cb);
+        if capturing.invoke_middle(middle, 3, 4) != 234 { return 3; }
+        if capturing.calls_middle(middle) != 1 { return 4; }
+
+        let tag_a i32 = 500;
+        let callback_a = func(value i32) i32 {
+            return value + tag_a;
+        };
+        let a = capturing.subscribe(callback_a);
+        let tag_b i32 = 700;
+        let callback_b = func(value i32) i32 {
+            return value + tag_b;
+        };
+        let b = capturing.subscribe(callback_b);
+        if capturing.invoke_last(a, 5) != 505 { return 5; }
+        if capturing.invoke_last(b, 5) != 705 { return 6; }
+        if capturing.invoke_last(a, 6) != 506 { return 7; }
+        if capturing.calls(a) != 2 { return 8; }
+        if capturing.calls(b) != 1 { return 9; }
+    }
+    if capturing.live_subscriptions() != 0 { return 10; }
+    if capturing.unregister_calls() != 4 { return 11; }
+    return 0;
+}

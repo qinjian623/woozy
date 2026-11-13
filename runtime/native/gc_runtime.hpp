@@ -31,6 +31,9 @@
 // invokes external release callbacks. A non-collector call returns false on a
 // fast path and must release its own reference. Pure Wz strong edges are never
 // deferred through this mechanism; only external C/reference payloads are.
+// A managed C registration may transfer its already-retained external env root
+// intact: it is not a traced Wz edge, adds no retain during collection, and
+// cannot drop that root until unregister/drain runs after resume.
 //
 // Forward order for Root's future fork integration (controller hooks do not
 // call the other layers themselves):
@@ -138,6 +141,8 @@ int64_t lang_gc_runtime_collect_v1(
 // allocate a queue node, this is a terminal Panic rather than a false result
 // that would force an external release while the world is stopped. Pure Wz
 // strong edges must not be deferred through this function.
+// The managed C registration exception above preserves an existing external
+// root; it does not permit deferring ordinary Fn, Vec or coroutine owners.
 bool lang_gc_runtime_defer_release_v1(
     void *payload, void (*release)(void *) noexcept) LANG_GC_RUNTIME_NOEXCEPT;
 

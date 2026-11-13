@@ -1,0 +1,59 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {
+      "logical_path": "capturing_static/lib",
+      "provider": "native_library",
+      "library": "c_capturing"
+    }
+  ],
+  "types": [
+    {
+      "id": "capturing_static.StaticCallback",
+      "module": "capturing_static/lib",
+      "name": "StaticCallback",
+      "kind": "callback",
+      "result": "i32",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "callables": [
+    {
+      "id": "capturing_static.apply",
+      "module": "capturing_static/lib",
+      "name": "apply",
+      "symbol": "wcc_apply_static",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing_static.StaticCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    }
+  ]
+}

@@ -1,32 +1,32 @@
 # 本轮扩展
 
-范围为网络应用库、高层并发、语言与容器、内存管理、外部调用和基础库，只做 Linux x86_64。完整要求见 [extensions.json](../../contracts/extensions.json)，源码的用户规则见 [SEMANTICS.md](../../docs/SEMANTICS.md)。
+本轮只做 Linux x86_64，范围为网络应用库、并发、语言与容器、内存管理、外部调用和基础库。逐项要求见 [extensions.json](../../contracts/extensions.json)，用户规则见 [SEMANTICS.md](../../docs/SEMANTICS.md)。
 
-## 已实现
+## 已实现并检查的部分
 
-HTTP/1.1、超时同步、读写锁、取消、Channel、线程池、Unicode 18、命名时区、声明式 Python 属性/索引/切片已经检查通过。线程池须明确调用 shutdown。
+- HTTP/1.1、TLS/HTTPS；TLS 明确选择 OpenSSL 及其依赖，默认核心程序保持独立。
+- 超时同步、读写锁、取消、Channel、线程池、Native async/await 和执行器；线程池仍需明确 shutdown。
+- 按值与 move 捕获闭包、绑定方法、动态 trait、用户 Iterator、Slice，以及文档列出的字段和索引 inout。
+- Weak、Box 和纯 Woozy 强引用循环回收，包括 Vec、闭包和 Task/frame；外部 Python/C 对象自身的循环仍由宿主管理。
+- 有类型的 C 调用、静态函数保留回调，以及声明式 Python 属性、索引和切片。
+- Unicode 18、命名时区，以及此前完成的字符串、容器、文件、进程、IPC 和网络接口。
 
-有类型的同步 C 调用支持标量、指针/缓冲、自然 C record、资源以及无捕获同步回调。只有明确声明的 C 接口按 C ABI 调用；普通 Woozy 值和内部函数 ABI 不属于稳定 C/C++ ABI。保留型回调尚未实现，FFI01 保持未完成。
+用户 Iterator 对表达式只求值一次，复制迭代器并推进副本；共享对象字段仍共享。next 不 throws，逐项失败用 Result 元素。
 
-Python 已自动回收纯 Woozy 强引用循环，包括经 Slice 与 Box 字段持有的边。运行时测试与真实源码测试禁用宿主 GC；不声称回收外部 Python/C 对象自身的循环。
+主目录 `228cee9` 完整 171/171 CTest 通过（152.93 秒）。后续 `21b8d5b` 的真实 async TCP/UDP 源码和观察器 66/66 通过，另有 4 次计数正反检查；该测试提交没有重跑完整 171 项。
 
-## 2026-11-12 整合
+## 捕获式 C 回调
 
-- Native Source Slice 已提交。Python Source Slice 修正已通过独立 84 条源码命令、13 条运行库测试和拥有值/迭代检查，现已合入主目录并重建。视图持有 owner 并保护存储；Vec 切片仍复制，Slice 切片产生子视图。更广的 inout 尚未完成。
-- Box 已合入 `stdlib/box`，只有 new/get/set 和私有 Vec cell。修正测试目录后，主目录 Native O0/O2、Python 和四线程检查共 59 条通过。Native 强循环暂不会自动回收。
-- TLS/HTTPS 公共库已合入主目录，55 项实际测试通过，含证书、主机名、过期、IP/SNI、非阻塞进度、部分写入和独立对端。Root 修正的三处错误为重复关闭 fd、失败清理等待对端、无效 transport token 被当作地址。默认核心仍独立，选择 TLS 时明确链接 OpenSSL 及必要依赖。
-- 整合后的完整 CTest 已通过 134/134（296.35 秒），包括新增 Python Slice、Box 和 TLS/HTTPS 检查；日志为 `checks/extensions-20261111/full-ctest-134-slice-box-tls.log`。
+用户已确定带 userdata、注册期间保留捕获值、注销等待在途调用、不允许 throws。实现说明见 [C_RETAINED_CAPTURING_CALLBACKS.md](../docs/C_RETAINED_CAPTURING_CALLBACKS.md)，用法见 [调用 C 库](../../docs/FFI.md)。
 
-## 正在做和未实现的部分
+四个 Pi-Ollama DeepSeek Flash worker 分别编写前端、运行库、Native 代码生成和真实 C/Source 测试。首版发现的外层 SAFE 清理、并发 close 等待和借用退出顺序已修正。私有整合版相关 11/11 CTest 通过；13 个 Source 项目在 O0/O2 下运行通过，包括 Weak 清理观察和 move-only 注册句柄的函数捕获。正式 CTest 固定要求所有 Source 用例实际执行。
 
-Weak 的真实 Vec/共享句柄 slot、最后释放和 fork 已合入，完整 CTest 136/136（259.77 秒）通过；加入共用 HIR 字段后，完整 CTest 137/137（257.95 秒）也通过。Root 修正了测试观察器的原子计数和释放完成记账；独立 4×20000 精确计数及七种配置均通过。Source Weak、捕获闭包与绑定方法、动态 trait、自定义 Iterator、更广的 inout、async/await 和保留型 C 回调尚未完成。
+代码已整合到主目录，重新构建成功；完整 **176/176 CTest 通过（191.60 秒）**，FFI01 已完成。新增 Source CTest 固定 require，未把跳过项计为通过。
 
-Native GC、线程暂停、修改区间、压力控制器及外部回调恢复已在独立测试中通过。生命周期、线程、阻塞调用与 fork 的运行库接入现已合入，完整 CTest 为 138/138（210.64 秒）。随后补充 ACTIVE 线程在 fork 前处理已有暂停请求的修正；新增正负对照先确认旧代码失败，修正后运行库脚本 113 项检查通过，2 项 raw-clone ASAN 因缺少 ASAN TLS 明确跳过。独立补测确认 fork 中合法回调/SAFE、压力精确累计和 finish 后存活线程释放均已修复。尚未接入真实源码自动回收。Vec 的写入与清理次序也已修正，重入复制、旧元素释放、别名与 Weak 检查共 59 项通过，1 项 sanitizer/系统调用过滤组合明确跳过。主目录完整 CTest 已通过 139/139（234.15 秒）。源码压力目标继续如实报告未实现。接入顺序见 [MEMORY_INTEGRATION.md](MEMORY_INTEGRATION.md)，真实对象的 Weak 修改点见 [WEAK_HANDLE_SITES.md](WEAK_HANDLE_SITES.md)。
+## 保留的限制和后续工作
 
-闭包实现遵守用户确定的按值捕获、只读捕获绑定、move func 和每次复制 move-Self 接收者规则。函数表示和捕获身份方案已经修正并审查，共用 HIR 字段已接入；新字段尚未有真实源码/所有权验证时仍明确拒绝。Weak 前端第一阶段已返回，独立检查发现具体泛型字段中的非法 Weak 被误报为编译器内部错误，修正后才可合入。闭包前端继续另做；两个 Flash worker 分别按已审查共用 HIR 修改 Native 和 Python emitter。另一 worker 接入 Vec 图写入与清理次序。24 个独立源码用例已复核并提交，仅语法通过，未宣称运行通过。
+Python 暂不支持 async；文档明确拒绝的 async 外部资源组合和 inout 类型仍不支持。保存捕获闭包的 C 接口目前要求 hosted、userdata、指针注册句柄和完整注销保证；没有这些条件的接口不会自动接入。
 
-## 分工与自举
+普通开发优先 Pi/Pi-Ollama DeepSeek Flash，Claude-Ollama 暂停。独立文件可并行修改，共享编译器文件每次由一个负责人写入，不设固定三个 bridge worker 上限。
 
-独立目录同时安排多个 worker，不设固定三人上限；共享 AST/HIR、所有权和后端文件每次只有一个写入负责人。普通开发使用 Pi/Pi-Ollama DeepSeek Flash，独立审查与整合另分工。Claude-Ollama 暂停使用。
-
-现在可以开始用 Woozy 写编译器。完整自举需要实际 stage0、stage1、stage2 编译与测试，不以 tokenizer 或调用旧 C++ 编译器的包装程序代替。跨平台不在本轮。
+自举条件评估已完成；完整自举尚未实现。后续必须实际完成 stage0、stage1、stage2 和相应测试，不以 tokenizer 或旧编译器包装程序代替。跨平台仍在本轮之外。

@@ -1011,4 +1011,4 @@ func main() throws os.Error {
 
 ## 尚未提供
 
-默认参数、模板特化和捕获闭包的保留型 C 回调尚未提供。C 互操作的有类型 Ptr 访问放在 unsafe 块内。
+默认参数和模板特化尚未提供。带 userdata 的 C 注册接口可以保存捕获闭包，用法和注销要求见 [调用 C 库](FFI.md)。C 互操作的有类型 Ptr 访问放在 unsafe 块内。

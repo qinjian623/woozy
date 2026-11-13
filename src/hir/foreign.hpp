@@ -151,13 +151,56 @@ inline TypeId c_type_id(const modules::Project &p, TypeContext &ctx,
   }
   throw std::invalid_argument("unknown C type expression");
 }
+// Source-facing function type for one C callback declaration. The callback's
+// C userdata slot is not a Source argument: registration stores the retained
+// closure separately, so the ordinary Fn type omits that one parameter.
+inline TypeId c_callback_closure_signature(const modules::Project &p,
+                                           TypeContext &ctx,
+                                           uint32_t callback_type,
+                                           size_t userdata_index) {
+  if (!callback_type || callback_type > p.c_types.size())
+    throw std::invalid_argument("C callback type index");
+  const auto &decl = p.c_type(callback_type);
+  if (decl.kind != modules::CDeclKind::callback)
+    throw std::invalid_argument("C callback declaration kind");
+  if (userdata_index >= decl.parameters.size())
+    throw std::invalid_argument("C callback userdata index");
+  Type sig;
+  sig.kind = TypeKind::Function;
+  for (size_t i = 0; i < decl.parameters.size(); ++i)
+    if (i != userdata_index)
+      sig.parameters.push_back(
+          {ParamMode::ordinary, c_type_id(p, ctx, decl.parameters[i].type)});
+  sig.result = c_type_id(p, ctx, decl.result);
+  return ctx.intern(std::move(sig));
+}
+// Canonical Source signature of a frozen C callable. A registering callable
+// omits only its own userdata parameter from the source parameter list and
+// exposes its retained callback parameter as an ordinary non-throwing Fn type
+// without the callback userdata slot. Raw C indexes stay in the frozen
+// binding; Call metadata remains in this source order everywhere else.
 inline TypeId c_callable_signature(const modules::Project &p, TypeContext &ctx,
                                    const modules::CCallableDecl &callable) {
   Type sig;
   sig.kind = TypeKind::Function;
-  for (const auto &param : callable.parameters)
-    sig.parameters.push_back({ParamMode::ordinary,
-                              c_type_id(p, ctx, param.type)});
+  const auto source = modules::c_source_parameter_indices(callable);
+  for (size_t index : source) {
+    if (index >= callable.parameters.size())
+      throw std::invalid_argument("C callable parameter index");
+    const auto &param = callable.parameters[index];
+    if (callable.registers &&
+        index == callable.registers->callback_parameter) {
+      if (param.type.kind != modules::CTypeRef::Kind::named)
+        throw std::invalid_argument("C registering callback is not named");
+      sig.parameters.push_back(
+          {ParamMode::ordinary,
+           c_callback_closure_signature(p, ctx, param.type.named,
+                                        callable.registers->callback_userdata_parameter)});
+    } else {
+      sig.parameters.push_back(
+          {ParamMode::ordinary, c_type_id(p, ctx, param.type)});
+    }
+  }
   sig.result = c_type_id(p, ctx, callable.result.type);
   return ctx.intern(std::move(sig));
 }

@@ -1,0 +1,13 @@
+package app;
+import "capturing_static/lib" as capturing_static;
+
+// Existing static C callbacks still accept only direct function names.  A
+// capturing closure passed to an ordinary callback parameter stays rejected.
+func main() i32 {
+    let base = 7;
+    let captured = func(value i32, context u64) i32 {
+        return value + base + i32(context);
+    };
+    capturing_static.apply(captured, 5, 3);
+    return 0;
+}

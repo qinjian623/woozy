@@ -1,0 +1,13 @@
+package app;
+import "capturing/lib" as capturing;
+
+func cb(value i32) i32 {
+    return value;
+}
+
+// The binding requires hosted mode; this manifest keeps the default
+// freestanding runtime.
+func main() i32 {
+    let sub = capturing.subscribe(cb);
+    return capturing.invoke_last(sub, 1) - 1;
+}

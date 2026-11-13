@@ -1,0 +1,13 @@
+package app;
+import "capturing/lib" as capturing;
+
+// The source callback signature must be the C callback signature with only
+// the context slot removed.  The extra parameter is a signature mismatch.
+func wrong(value i32, extra i32) i32 {
+    return value + extra;
+}
+
+func main() i32 {
+    let sub = capturing.subscribe(wrong);
+    return 0;
+}

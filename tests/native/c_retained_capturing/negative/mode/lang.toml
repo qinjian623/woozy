@@ -1,0 +1,13 @@
+schema_version = 1
+[package]
+name = "c_capturing_negative_mode"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[dependencies.capturing]
+kind = "native"
+binding = "../../bindings/capturing.json"
+libraries = ["c_capturing"]
+library_dirs = ["../../.build"]

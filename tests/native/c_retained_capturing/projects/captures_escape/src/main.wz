@@ -1,0 +1,54 @@
+package app;
+import "capturing/lib" as capturing;
+
+// The closure environment is a heap Vec and escapes the function that created
+// it.  The C token keeps the copied LangFn code/env pair alive after the
+// originating local bindings are gone.
+func make_capture(base i32) (func(i32) i32) {
+    let values Vec[i32] = [base, base + 1];
+    return func(value i32) i32 {
+        return values[0] + values[1] + value;
+    };
+}
+
+struct Counter {
+    base i32;
+}
+
+impl Counter {
+    func add(self Self, value i32) i32 {
+        return self.base + value;
+    }
+}
+
+func main() i32 {
+    {
+        let captured = make_capture(10);
+        let sub = capturing.subscribe(captured);
+        if capturing.invoke_last(sub, 5) != 26 { return 1; }
+        if capturing.calls(sub) != 1 { return 2; }
+        if capturing.info_last(sub) != 1 { return 3; }
+    }
+    if capturing.live_subscriptions() != 0 { return 4; }
+    if capturing.unregister_calls() != 1 { return 5; }
+
+    {
+        // A local function value variable with the same capturing environment.
+        let local func(i32) i32 = make_capture(20);
+        let sub = capturing.subscribe(local);
+        if capturing.invoke_last(sub, 1) != 42 { return 6; }
+        if capturing.sum_last(sub) != 42 { return 7; }
+    }
+    if capturing.live_subscriptions() != 0 { return 8; }
+
+    {
+        // A bound method value carries its receiver in the Fn environment.
+        let counter = Counter(base: 100);
+        let bound func(i32) i32 = counter.add;
+        let sub = capturing.subscribe(bound);
+        if capturing.invoke_last(sub, 2) != 102 { return 9; }
+    }
+    if capturing.live_subscriptions() != 0 { return 10; }
+    if capturing.unregister_calls() != 3 { return 11; }
+    return 0;
+}

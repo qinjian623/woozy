@@ -1,0 +1,37 @@
+package app;
+import "capturing/lib" as capturing;
+import "std/option" as option;
+import "std/weak" as weak;
+
+// C live counters prove the foreign token was freed.  These Weak handles are a
+// separate observation: after explicit close, the retained closure environment
+// must release the captured Vec and Fn targets, so upgrade returns None without
+// relying on the C allocation count.
+func main() i32 {
+    var vec_weak Weak[Vec[i32]] = weak.empty[Vec[i32]]();
+    var fn_weak Weak[func(i32) i32] = weak.empty[func(i32) i32]();
+    {
+        let values Vec[i32] = [7];
+        vec_weak = weak.downgrade[Vec[i32]](values);
+        let cb = func(value i32) i32 {
+            return values[0] + value;
+        };
+        fn_weak = weak.downgrade[func(i32) i32](cb);
+        let sub = capturing.subscribe(cb);
+        if capturing.invoke_last(sub, 1) != 8 { return 1; }
+        capturing.close(sub);
+        if capturing.live_subscriptions() != 0 { return 2; }
+    }
+
+    switch weak.upgrade(vec_weak) {
+        case option.Option.Some(value): return 3;
+        case option.Option.None: {}
+    }
+    switch weak.upgrade(fn_weak) {
+        case option.Option.Some(value): return 4;
+        case option.Option.None: {}
+    }
+    if capturing.live_subscriptions() != 0 { return 5; }
+    if capturing.unregister_calls() != 1 { return 6; }
+    return 0;
+}

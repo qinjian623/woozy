@@ -278,6 +278,8 @@
               {builder.CreateLoad(builder.getPtrTy(), address)});
     } else if (t.kind == hir::TypeKind::CForeignResource) {
       const auto &decl = input.hir.module().resolved->project->c_type(t.c_type);
+      if (decl.registration && copy)
+        unsupported("managed registration resource is move-only");
       auto *value = builder.CreateLoad(builder.getPtrTy(), address);
       if (copy) {
         if (decl.retain_symbol.empty())

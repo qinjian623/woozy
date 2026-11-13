@@ -13,7 +13,8 @@ get_filename_component(LANG_HOSTED_LANG_ROOT
 set(LANG_HOSTED_REPLACEMENT_SOURCES
   ${CMAKE_CURRENT_LIST_DIR}/start.cpp
   ${CMAKE_CURRENT_LIST_DIR}/thread.cpp
-  ${CMAKE_CURRENT_LIST_DIR}/process.cpp)
+  ${CMAKE_CURRENT_LIST_DIR}/process.cpp
+  ${CMAKE_CURRENT_LIST_DIR}/c_callback.cpp)
 
 # Compile these into the hosted archive, but not native start/thread/
 # freestanding.  Keep the existing freestanding flags for these public units.

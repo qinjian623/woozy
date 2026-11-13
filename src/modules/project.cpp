@@ -821,6 +821,20 @@ struct Loader {
   // declaration records: `abi:"c"` selects independent parsing and strict
   // rejection of unknown keys, host attributes, optional/varargs parameters
   // and Python ownership vocabulary.
+  // Registration metadata is parsed in two phases: frozen JSON names are
+  // resolved only after every named type exists, then callable slots after
+  // every callable exists. Only final indexes reach the frozen structs.
+  struct CPendingRegistration {
+    size_t type_index = 0; // index into the local parsed type list
+    std::string callback, unregister_symbol;
+    SourceSpan source;
+  };
+  struct CPendingRegisters {
+    size_t callable_index = 0;
+    std::string callback_parameter, userdata_parameter,
+        callback_userdata_parameter;
+    SourceSpan source;
+  };
   struct CParsedType {
     CTypeDecl decl;
   };
@@ -1013,12 +1027,13 @@ struct Loader {
     }
     if (b.modules.empty()) invalid(field(root, "modules"), "C binding requires a module");
     std::vector<CParsedType> types;
+    std::vector<CPendingRegistration> registrations;
     std::map<std::string, uint32_t> type_ids, type_names;
     for (auto j : array(field(root, "types"))) {
       check_cancelled(stop);
       object(j, {"id", "module", "name", "kind"},
              {"c_name", "fields", "size", "align", "release_symbol",
-              "retain_symbol", "result", "parameters"});
+              "retain_symbol", "result", "parameters", "registration"});
       CTypeDecl d;
       d.source = location(j);
       d.identity = identity(field(j, "id"));
@@ -1037,12 +1052,60 @@ struct Loader {
                                      : CDeclKind::opaque;
       if (field(j, "c_name").value)
         d.c_name = string(field(j, "c_name"));
+      std::optional<CPendingRegistration> registration;
+      if (field(j, "registration").value) {
+        if (d.kind != CDeclKind::resource)
+          invalid(field(j, "registration"),
+                  "registration is only valid on a resource type");
+        Json r = field(j, "registration");
+        object(r, {"callback", "unregister_symbol"});
+        CPendingRegistration pending;
+        pending.callback = identity(field(r, "callback"));
+        pending.unregister_symbol = identity(field(r, "unregister_symbol"));
+        if (!c_ident(pending.unregister_symbol) ||
+            pending.unregister_symbol == "_")
+          invalid(field(r, "unregister_symbol"), "invalid unregister symbol");
+        pending.source = location(r);
+        registration = std::move(pending);
+      }
       uint32_t local = uint32_t(types.size() + 1);
       d.id = local;
       type_ids.emplace(d.identity, local);
       if (!type_names.emplace(d.identity, local).second)
         invalid(j, "duplicate C type id");
       types.push_back({std::move(d)});
+      if (registration) {
+        registration->type_index = types.size() - 1;
+        registrations.push_back(std::move(*registration));
+      }
+    }
+    // Resolve registration targets only after every named type is known. The
+    // declaration is a hosted lifetime contract: a registered resource has no
+    // user-declared retain/release pair, and its unregister symbol becomes the
+    // internal release symbol for existing ownership checks.
+    if (!registrations.empty() && !project.hosted)
+      fail("E_CAPABILITY_UNAVAILABLE",
+           "C callback registration requires [build.native] runtime = hosted",
+           registrations.front().source);
+    std::set<std::string> unregister_symbols;
+    for (auto &pending : registrations) {
+      auto &d = types.at(pending.type_index).decl;
+      auto callback = type_ids.find(pending.callback);
+      if (callback == type_ids.end())
+        fail("E_BINDING_INVALID",
+             "registration callback is not a declared C type: " +
+                 pending.callback,
+             pending.source);
+      if (types.at(callback->second - 1).decl.kind != CDeclKind::callback)
+        fail("E_BINDING_INVALID",
+             "registration callback must name a callback type", pending.source);
+      if (!unregister_symbols.insert(pending.unregister_symbol).second)
+        fail("E_BINDING_INVALID",
+             "duplicate C unregister symbol: " + pending.unregister_symbol,
+             pending.source);
+      d.registration =
+          CRegistrationDecl{callback->second, pending.unregister_symbol};
+      d.release_symbol = pending.unregister_symbol;
     }
     // Resolve record/resource/callback payloads after every named type is
     // known. String references are checked recursively; no host header is
@@ -1094,13 +1157,20 @@ struct Loader {
                  field_decl.source);
         }
       } else if (d.kind == CDeclKind::resource) {
-        d.release_symbol = string(field(j, "release_symbol"));
-        if (!c_ident(d.release_symbol) || d.release_symbol == "_")
-          invalid(field(j, "release_symbol"), "resource requires a valid release symbol");
-        if (field(j, "retain_symbol").value) {
-          d.retain_symbol = string(field(j, "retain_symbol"));
-          if (!c_ident(d.retain_symbol) || d.retain_symbol == "_")
-            invalid(field(j, "retain_symbol"), "invalid retain symbol");
+        if (d.registration) {
+          if (field(j, "release_symbol").value ||
+              field(j, "retain_symbol").value)
+            invalid(j, "managed registration resource has no declared "
+                       "release/retain symbol");
+        } else {
+          d.release_symbol = string(field(j, "release_symbol"));
+          if (!c_ident(d.release_symbol) || d.release_symbol == "_")
+            invalid(field(j, "release_symbol"), "resource requires a valid release symbol");
+          if (field(j, "retain_symbol").value) {
+            d.retain_symbol = string(field(j, "retain_symbol"));
+            if (!c_ident(d.retain_symbol) || d.retain_symbol == "_")
+              invalid(field(j, "retain_symbol"), "invalid retain symbol");
+          }
         }
       } else if (d.kind == CDeclKind::callback) {
         auto result = field(j, "result");
@@ -1124,8 +1194,30 @@ struct Loader {
         }
       }
     }
+    // A managed registration resource owns a host-side callback context; that
+    // ownership is undefined across the C callback boundary.
+    for (const auto &parsed : types) {
+      const auto &callback = parsed.decl;
+      if (callback.kind != CDeclKind::callback) continue;
+      auto managed = [&](const CTypeRef &ref) {
+        return ref.kind == CTypeRef::Kind::named &&
+               types.at(ref.named - 1).decl.registration.has_value();
+      };
+      if (managed(callback.result))
+        fail("E_BINDING_INVALID",
+             callback.identity +
+                 ": callback result cannot be a managed registration resource",
+             callback.source);
+      for (const auto &param : callback.parameters)
+        if (managed(param.type))
+          fail("E_BINDING_INVALID",
+               callback.identity + "." + param.name +
+                   ": callback parameter cannot be a managed registration resource",
+               param.source);
+    }
     validate_c_layout(types);
     std::vector<CCallableDecl> callables;
+    std::vector<CPendingRegisters> registration_calls;
     std::map<std::string, uint32_t> callable_ids;
     std::set<std::pair<std::string, std::string>> export_names;
     for (auto &t : types)
@@ -1133,7 +1225,8 @@ struct Loader {
         fail("E_BINDING_INVALID", "duplicate C export name: " + t.decl.name, t.decl.source);
     for (auto j : array(field(root, "callables"))) {
       check_cancelled(stop);
-      object(j, {"id", "module", "name", "symbol", "parameters", "result"});
+      object(j, {"id", "module", "name", "symbol", "parameters", "result"},
+             {"registers"});
       CCallableDecl d;
       d.source = location(j);
       d.identity = identity(field(j, "id"));
@@ -1150,6 +1243,27 @@ struct Loader {
         invalid(field(j, "symbol"), "invalid C symbol");
       if (d.name == "_" || !export_names.emplace(d.module, d.name).second)
         invalid(field(j, "name"), "duplicate or invalid C export name");
+      std::optional<CPendingRegisters> registers;
+      if (field(j, "registers").value) {
+        Json r = field(j, "registers");
+        object(r, {"callback_parameter", "userdata_parameter",
+                   "callback_userdata_parameter"});
+        auto slot_name = [&](const char *key) {
+          auto value = string(field(r, key));
+          if (value.empty() || value.find('\0') != std::string::npos)
+            invalid(field(r, key), "invalid registration parameter name");
+          return value;
+        };
+        CPendingRegisters pending;
+        pending.callback_parameter = slot_name("callback_parameter");
+        pending.userdata_parameter = slot_name("userdata_parameter");
+        pending.callback_userdata_parameter =
+            slot_name("callback_userdata_parameter");
+        if (pending.callback_parameter == pending.userdata_parameter)
+          invalid(r, "callback and userdata parameters must differ");
+        pending.source = location(r);
+        registers = std::move(pending);
+      }
       std::set<std::string> names;
       for (auto p : array(field(j, "parameters"))) {
         object(p, {"name", "type"});
@@ -1212,7 +1326,137 @@ struct Loader {
       for (const auto &part : {b.contract, b.sha256, d.module, std::string("callable"), d.identity})
         d.stable_identity += std::to_string(part.size()) + ":" + part;
       callable_ids.emplace(d.identity, uint32_t(callables.size() + 1));
+      if (registers) {
+        registers->callable_index = callables.size();
+        registration_calls.push_back(std::move(*registers));
+      }
       callables.push_back(std::move(d));
+    }
+    // Resolve callable registration slots after every type and callable is
+    // known. Frozen indexes refer to the raw C parameter lists, and one
+    // callback type keeps one consistent userdata slot across constructors.
+    std::map<uint32_t, size_t> callback_userdata;
+    auto parameter_slot = [](const CCallableDecl &callable,
+                             const std::string &name) {
+      for (size_t i = 0; i < callable.parameters.size(); ++i)
+        if (callable.parameters[i].name == name)
+          return std::optional<size_t>(i);
+      return std::optional<size_t>{};
+    };
+    auto userdata_type = [](const CTypeRef &ref) {
+      return ref.kind == CTypeRef::Kind::pointer && ref.writable &&
+             ref.args.size() == 1 &&
+             ref.args[0].kind == CTypeRef::Kind::scalar &&
+             ref.args[0].scalar == "Unit";
+    };
+    for (auto &pending : registration_calls) {
+      auto &d = callables.at(pending.callable_index);
+      if (d.result.type.kind != CTypeRef::Kind::named)
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": registers requires an owned managed resource result",
+             pending.source);
+      const auto &resource = types.at(d.result.type.named - 1).decl;
+      if (!resource.registration)
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": registers requires an owned managed resource result",
+             pending.source);
+      auto callback = parameter_slot(d, pending.callback_parameter);
+      auto userdata = parameter_slot(d, pending.userdata_parameter);
+      if (!callback)
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": registers callback_parameter is not a declared C parameter",
+             pending.source);
+      if (!userdata)
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": registers userdata_parameter is not a declared C parameter",
+             pending.source);
+      if (*callback == *userdata)
+        fail("E_BINDING_INVALID",
+             d.identity + ": callback and userdata parameters must differ",
+             pending.source);
+      const auto &callback_parameter = d.parameters[*callback];
+      if (callback_parameter.type.kind != CTypeRef::Kind::named ||
+          callback_parameter.type.named != resource.registration->callback_type)
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": callback parameter type differs from the resource registration callback",
+             callback_parameter.source);
+      if (!userdata_type(d.parameters[*userdata].type))
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": registration userdata parameter must be PtrMut[Unit]",
+             d.parameters[*userdata].source);
+      const auto &callback_decl =
+          types.at(resource.registration->callback_type - 1).decl;
+      std::optional<size_t> userdata_slot;
+      for (size_t i = 0; i < callback_decl.parameters.size(); ++i)
+        if (callback_decl.parameters[i].name ==
+            pending.callback_userdata_parameter)
+          userdata_slot = i;
+      if (!userdata_slot)
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": callback_userdata_parameter is not a declared callback parameter",
+             pending.source);
+      if (!userdata_type(callback_decl.parameters[*userdata_slot].type))
+        fail("E_BINDING_INVALID",
+             d.identity + ": callback userdata parameter must be PtrMut[Unit]",
+             callback_decl.parameters[*userdata_slot].source);
+      auto [slot, inserted] = callback_userdata.emplace(
+          resource.registration->callback_type, *userdata_slot);
+      if (!inserted && slot->second != *userdata_slot)
+        fail("E_BINDING_INVALID",
+             "callback userdata position differs between registration constructors",
+             pending.source);
+      d.registers = CRegistrationCall{*callback, *userdata, *userdata_slot};
+    }
+    // A managed resource can only be produced by its annotated constructors.
+    for (const auto &d : callables) {
+      const bool managed =
+          d.result.type.kind == CTypeRef::Kind::named &&
+          types.at(d.result.type.named - 1).decl.registration.has_value();
+      if (managed && !d.registers)
+        fail("E_BINDING_INVALID",
+             d.identity +
+                 ": managed resource result requires registers metadata",
+             d.source);
+    }
+    // The unregister symbol is the explicit close operation when a callable
+    // declares it: exactly one callable may do so, with one matching resource
+    // parameter and a Unit result, and any other declaration is a conflict.
+    // A registration may leave the symbol unexported; automatic teardown is
+    // then the only close path and no callable is required.
+    std::map<std::string, std::vector<size_t>> symbol_declarations;
+    for (size_t i = 0; i < callables.size(); ++i)
+      symbol_declarations[callables[i].symbol].push_back(i);
+    for (const auto &parsed : types) {
+      const auto &resource = parsed.decl;
+      if (!resource.registration) continue;
+      auto found =
+          symbol_declarations.find(resource.registration->unregister_symbol);
+      if (found == symbol_declarations.end()) continue;
+      if (found->second.size() != 1)
+        fail("E_BINDING_INVALID",
+             resource.identity +
+                 ": unregister symbol may be declared by at most one explicit close callable",
+             resource.source);
+      const auto &close = callables.at(found->second.front());
+      const bool unit_result =
+          close.result.type.kind == CTypeRef::Kind::scalar &&
+          close.result.type.scalar == "Unit" &&
+          close.result.ownership == "unit";
+      if (close.parameters.size() != 1 ||
+          close.parameters[0].type.kind != CTypeRef::Kind::named ||
+          close.parameters[0].type.named != resource.id || !unit_result)
+        fail("E_BINDING_INVALID",
+             close.identity +
+                 ": unregister symbol must be the explicit close operation for " +
+                 resource.identity,
+             close.source);
     }
     if (callables.empty() && types.empty())
       invalid(field(root, "callables"), "C binding declares no exports");
@@ -1229,6 +1473,8 @@ struct Loader {
       };
       p.decl.bundle = project.c_bindings.size();
       p.decl.id = uint32_t(base + p.decl.id);
+      if (p.decl.registration)
+        p.decl.registration->callback_type += uint32_t(base);
       for (auto &f : p.decl.fields) rebase(f.type);
       if (p.decl.kind == CDeclKind::callback) {
         rebase(p.decl.result);

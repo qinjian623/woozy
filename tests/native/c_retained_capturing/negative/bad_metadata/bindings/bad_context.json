@@ -1,0 +1,996 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {
+      "logical_path": "capturing/lib",
+      "provider": "native_library",
+      "library": "c_capturing"
+    }
+  ],
+  "types": [
+    {
+      "id": "capturing.Subscription",
+      "module": "capturing/lib",
+      "name": "Subscription",
+      "kind": "resource",
+      "registration": {
+        "callback": "capturing.CallbackLast",
+        "unregister_symbol": "wcc_unsubscribe"
+      }
+    },
+    {
+      "id": "capturing.SubscriptionFirst",
+      "module": "capturing/lib",
+      "name": "SubscriptionFirst",
+      "kind": "resource",
+      "registration": {
+        "callback": "capturing.CallbackFirst",
+        "unregister_symbol": "wcc_unsubscribe_first"
+      }
+    },
+    {
+      "id": "capturing.SubscriptionMiddle",
+      "module": "capturing/lib",
+      "name": "SubscriptionMiddle",
+      "kind": "resource",
+      "registration": {
+        "callback": "capturing.CallbackMiddle",
+        "unregister_symbol": "wcc_unsubscribe_middle"
+      }
+    },
+    {
+      "id": "capturing.SubscriptionBool",
+      "module": "capturing/lib",
+      "name": "SubscriptionBool",
+      "kind": "resource",
+      "registration": {
+        "callback": "capturing.CallbackBool",
+        "unregister_symbol": "wcc_unsubscribe_bool"
+      }
+    },
+    {
+      "id": "capturing.SubscriptionUnit",
+      "module": "capturing/lib",
+      "name": "SubscriptionUnit",
+      "kind": "resource",
+      "registration": {
+        "callback": "capturing.CallbackUnit",
+        "unregister_symbol": "wcc_unsubscribe_unit"
+      }
+    },
+    {
+      "id": "capturing.SubscriptionScalar",
+      "module": "capturing/lib",
+      "name": "SubscriptionScalar",
+      "kind": "resource",
+      "registration": {
+        "callback": "capturing.CallbackScalar",
+        "unregister_symbol": "wcc_unsubscribe_scalar"
+      }
+    },
+    {
+      "id": "capturing.CallbackLast",
+      "module": "capturing/lib",
+      "name": "CallbackLast",
+      "kind": "callback",
+      "result": "i32",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    },
+    {
+      "id": "capturing.CallbackFirst",
+      "module": "capturing/lib",
+      "name": "CallbackFirst",
+      "kind": "callback",
+      "result": "i32",
+      "parameters": [
+        {
+          "name": "context",
+          "type": "PtrMut[Unit]"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "id": "capturing.CallbackMiddle",
+      "module": "capturing/lib",
+      "name": "CallbackMiddle",
+      "kind": "callback",
+      "result": "i32",
+      "parameters": [
+        {
+          "name": "left",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "PtrMut[Unit]"
+        },
+        {
+          "name": "right",
+          "type": "i32"
+        }
+      ]
+    },
+    {
+      "id": "capturing.CallbackBool",
+      "module": "capturing/lib",
+      "name": "CallbackBool",
+      "kind": "callback",
+      "result": "bool",
+      "parameters": [
+        {
+          "name": "flag",
+          "type": "bool"
+        },
+        {
+          "name": "context",
+          "type": "PtrMut[Unit]"
+        }
+      ]
+    },
+    {
+      "id": "capturing.CallbackUnit",
+      "module": "capturing/lib",
+      "name": "CallbackUnit",
+      "kind": "callback",
+      "result": "Unit",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "PtrMut[Unit]"
+        }
+      ]
+    },
+    {
+      "id": "capturing.CallbackScalar",
+      "module": "capturing/lib",
+      "name": "CallbackScalar",
+      "kind": "callback",
+      "result": "i64",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "PtrMut[Unit]"
+        }
+      ]
+    },
+    {
+      "id": "capturing.StaticCallback",
+      "module": "capturing/lib",
+      "name": "StaticCallback",
+      "kind": "callback",
+      "result": "i32",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "callables": [
+    {
+      "id": "capturing.subscribe",
+      "module": "capturing/lib",
+      "name": "subscribe",
+      "symbol": "wcc_subscribe_last",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackLast"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        }
+      ],
+      "result": {
+        "type": "capturing.Subscription",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_initial",
+      "module": "capturing/lib",
+      "name": "subscribe_initial",
+      "symbol": "wcc_subscribe_initial",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackLast"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "capturing.Subscription",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_fail",
+      "module": "capturing/lib",
+      "name": "subscribe_fail",
+      "symbol": "wcc_subscribe_fail",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackLast"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        }
+      ],
+      "result": {
+        "type": "capturing.Subscription",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_fail_after",
+      "module": "capturing/lib",
+      "name": "subscribe_fail_after",
+      "symbol": "wcc_subscribe_fail_after",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackLast"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "capturing.Subscription",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_first",
+      "module": "capturing/lib",
+      "name": "subscribe_first",
+      "symbol": "wcc_subscribe_first",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackFirst"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        }
+      ],
+      "result": {
+        "type": "capturing.SubscriptionFirst",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_middle",
+      "module": "capturing/lib",
+      "name": "subscribe_middle",
+      "symbol": "wcc_subscribe_middle",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackMiddle"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        }
+      ],
+      "result": {
+        "type": "capturing.SubscriptionMiddle",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_bool",
+      "module": "capturing/lib",
+      "name": "subscribe_bool",
+      "symbol": "wcc_subscribe_bool",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackBool"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        }
+      ],
+      "result": {
+        "type": "capturing.SubscriptionBool",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_unit",
+      "module": "capturing/lib",
+      "name": "subscribe_unit",
+      "symbol": "wcc_subscribe_unit",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackUnit"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        }
+      ],
+      "result": {
+        "type": "capturing.SubscriptionUnit",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.subscribe_scalar",
+      "module": "capturing/lib",
+      "name": "subscribe_scalar",
+      "symbol": "wcc_subscribe_scalar",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.CallbackScalar"
+        },
+        {
+          "name": "userdata",
+          "type": "PtrMut[Unit]"
+        }
+      ],
+      "result": {
+        "type": "capturing.SubscriptionScalar",
+        "ownership": "owned"
+      },
+      "registers": {
+        "callback_parameter": "callback",
+        "userdata_parameter": "userdata",
+        "callback_userdata_parameter": "context"
+      }
+    },
+    {
+      "id": "capturing.close",
+      "module": "capturing/lib",
+      "name": "close",
+      "symbol": "wcc_unsubscribe",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "capturing.invoke_last",
+      "module": "capturing/lib",
+      "name": "invoke_last",
+      "symbol": "wcc_invoke_last",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.pair_last",
+      "module": "capturing/lib",
+      "name": "pair_last",
+      "symbol": "wcc_pair_last",
+      "parameters": [
+        {
+          "name": "first",
+          "type": "capturing.Subscription"
+        },
+        {
+          "name": "second",
+          "type": "capturing.Subscription"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.invoke_first",
+      "module": "capturing/lib",
+      "name": "invoke_first",
+      "symbol": "wcc_invoke_first",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionFirst"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.invoke_middle",
+      "module": "capturing/lib",
+      "name": "invoke_middle",
+      "symbol": "wcc_invoke_middle",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionMiddle"
+        },
+        {
+          "name": "left",
+          "type": "i32"
+        },
+        {
+          "name": "right",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.invoke_bool",
+      "module": "capturing/lib",
+      "name": "invoke_bool",
+      "symbol": "wcc_invoke_bool",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionBool"
+        },
+        {
+          "name": "flag",
+          "type": "bool"
+        }
+      ],
+      "result": {
+        "type": "bool",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.invoke_unit",
+      "module": "capturing/lib",
+      "name": "invoke_unit",
+      "symbol": "wcc_invoke_unit",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionUnit"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "capturing.invoke_scalar",
+      "module": "capturing/lib",
+      "name": "invoke_scalar",
+      "symbol": "wcc_invoke_scalar",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionScalar"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.info_last",
+      "module": "capturing/lib",
+      "name": "info_last",
+      "symbol": "wcc_info_last",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.calls",
+      "module": "capturing/lib",
+      "name": "calls",
+      "symbol": "wcc_calls",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.calls_first",
+      "module": "capturing/lib",
+      "name": "calls_first",
+      "symbol": "wcc_calls_first",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionFirst"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.calls_middle",
+      "module": "capturing/lib",
+      "name": "calls_middle",
+      "symbol": "wcc_calls_middle",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionMiddle"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.calls_bool",
+      "module": "capturing/lib",
+      "name": "calls_bool",
+      "symbol": "wcc_calls_bool",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionBool"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.calls_unit",
+      "module": "capturing/lib",
+      "name": "calls_unit",
+      "symbol": "wcc_calls_unit",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionUnit"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.calls_scalar",
+      "module": "capturing/lib",
+      "name": "calls_scalar",
+      "symbol": "wcc_calls_scalar",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionScalar"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.sum_last",
+      "module": "capturing/lib",
+      "name": "sum_last",
+      "symbol": "wcc_sum_last",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.last_value",
+      "module": "capturing/lib",
+      "name": "last_value",
+      "symbol": "wcc_last_value",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.subscription_null",
+      "module": "capturing/lib",
+      "name": "subscription_null",
+      "symbol": "wcc_subscription_null",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "bool",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.start_thread",
+      "module": "capturing/lib",
+      "name": "start_thread",
+      "symbol": "wcc_start_thread",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        },
+        {
+          "name": "count",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.join_thread",
+      "module": "capturing/lib",
+      "name": "join_thread",
+      "symbol": "wcc_join_thread",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.thread_calls",
+      "module": "capturing/lib",
+      "name": "thread_calls",
+      "symbol": "wcc_thread_calls",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.thread_sum",
+      "module": "capturing/lib",
+      "name": "thread_sum",
+      "symbol": "wcc_thread_sum",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.Subscription"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.apply_static",
+      "module": "capturing/lib",
+      "name": "apply_static",
+      "symbol": "wcc_apply_static",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "capturing.StaticCallback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.live_subscriptions",
+      "module": "capturing/lib",
+      "name": "live_subscriptions",
+      "symbol": "wcc_live_subscriptions",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.live_threads",
+      "module": "capturing/lib",
+      "name": "live_threads",
+      "symbol": "wcc_live_threads",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.unregister_calls",
+      "module": "capturing/lib",
+      "name": "unregister_calls",
+      "symbol": "wcc_unregister_calls",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.callback_calls",
+      "module": "capturing/lib",
+      "name": "callback_calls",
+      "symbol": "wcc_callback_calls",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.registration_failures",
+      "module": "capturing/lib",
+      "name": "registration_failures",
+      "symbol": "wcc_registration_failures",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.callback_sum",
+      "module": "capturing/lib",
+      "name": "callback_sum",
+      "symbol": "wcc_callback_sum",
+      "parameters": [],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "capturing.close_first",
+      "module": "capturing/lib",
+      "name": "close_first",
+      "symbol": "wcc_unsubscribe_first",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionFirst"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "capturing.close_middle",
+      "module": "capturing/lib",
+      "name": "close_middle",
+      "symbol": "wcc_unsubscribe_middle",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionMiddle"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "capturing.close_bool",
+      "module": "capturing/lib",
+      "name": "close_bool",
+      "symbol": "wcc_unsubscribe_bool",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionBool"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "capturing.close_unit",
+      "module": "capturing/lib",
+      "name": "close_unit",
+      "symbol": "wcc_unsubscribe_unit",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionUnit"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    },
+    {
+      "id": "capturing.close_scalar",
+      "module": "capturing/lib",
+      "name": "close_scalar",
+      "symbol": "wcc_unsubscribe_scalar",
+      "parameters": [
+        {
+          "name": "subscription",
+          "type": "capturing.SubscriptionScalar"
+        }
+      ],
+      "result": {
+        "type": "Unit",
+        "ownership": "unit"
+      }
+    }
+  ]
+}

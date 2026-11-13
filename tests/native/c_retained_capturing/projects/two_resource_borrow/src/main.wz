@@ -1,0 +1,42 @@
+package app;
+import "capturing/lib" as capturing;
+
+// One ordinary C call borrows two managed registration tokens.  The backend
+// must end the second borrow before the first, including when both arguments
+// are the same token.  The C fixture enters both callbacks with no global lock
+// held, then quiescent close frees each token separately.
+func main() i32 {
+    {
+        let base i32 = 3;
+        let cb = func(value i32) i32 {
+            return value * 2 + base;
+        };
+        let same = capturing.subscribe(cb);
+        // first 4*2+3=11, second 5*2+3=13
+        if capturing.pair_last(same, same, 4) != 11013 { return 1; }
+        if capturing.calls(same) != 2 { return 2; }
+    }
+    if capturing.live_subscriptions() != 0 { return 3; }
+    if capturing.unregister_calls() != 1 { return 4; }
+
+    {
+        let tag_a i32 = 3;
+        let callback_a = func(value i32) i32 {
+            return value * 2 + tag_a;
+        };
+        let tag_b i32 = 5;
+        let callback_b = func(value i32) i32 {
+            return value * 2 + tag_b;
+        };
+        let a = capturing.subscribe(callback_a);
+        let b = capturing.subscribe(callback_b);
+        // first 4*2+3=11, second 5*2+5=15
+        if capturing.pair_last(a, b, 4) != 11015 { return 5; }
+        if capturing.calls(a) != 1 { return 6; }
+        if capturing.calls(b) != 1 { return 7; }
+    }
+    if capturing.live_subscriptions() != 0 { return 8; }
+    if capturing.unregister_calls() != 3 { return 9; }
+    if capturing.live_threads() != 0 { return 10; }
+    return 0;
+}

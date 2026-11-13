@@ -98,6 +98,11 @@ class Emitter {
       bound_adapters;
   std::string out_c_adapter_source;
   std::map<std::pair<uint64_t, uint32_t>, llvm::Function *> callback_bridges;
+  // One typed dispatcher per managed callback type/userdata mapping. The
+  // dispatcher is generic over the registration value: it loads the copied
+  // LangFn from the runtime context and invokes that code pointer.
+  std::map<std::pair<uint32_t, size_t>, llvm::Function *>
+      registration_dispatchers;
   std::set<uint32_t> used_c_callables, used_c_resources;
   std::set<std::pair<uint64_t, uint32_t>> used_c_callbacks;
   std::unique_ptr<llvm::TargetMachine> machine;
@@ -974,6 +979,17 @@ class Emitter {
     auto ip = builder.saveIP();
     builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
     auto *address = fn->getArg(0);
+    if (copy && std::any_of(fields.begin(), fields.end(), [&](TypeId field) {
+          return !hir::ordinary_copyable(input.hir.module(), field);
+        })) {
+      // Fn copies share the env; deep-copying its move-only row is invalid.
+      runtime("lang_native_panic_v1", builder.getVoidTy(),
+              {builder.getInt32(10), builder.getInt64(0),
+               builder.getInt64(0), builder.getInt64(0)});
+      builder.CreateUnreachable();
+      builder.restoreIP(ip);
+      return fn;
+    }
     for (size_t n = 0; n < fields.size(); ++n) {
       const size_t p = copy ? n : fields.size() - 1 - n;
       if (owning(fields[p]))
@@ -1442,12 +1458,171 @@ class Emitter {
         llvm::FunctionType::get(builder.getVoidTy(), {}, false));
     return llvm::cast<llvm::Function>(callee.getCallee());
   }
+  // Lang-visible storage for one C callback parameter/result. Only bool differs
+  // from C storage (i1 versus the byte-sized C _Bool slot).
+  llvm::Type *c_callback_source_type(const modules::CTypeRef &ref) {
+    if (ref.kind == modules::CTypeRef::Kind::scalar && ref.scalar == "bool")
+      return builder.getInt1Ty();
+    return c_ref_llvm_type(ref);
+  }
+  llvm::Function *registration_dispatcher(uint32_t c_type, size_t userdata) {
+    auto key = std::pair{c_type, userdata};
+    if (auto it = registration_dispatchers.find(key);
+        it != registration_dispatchers.end())
+      return it->second;
+    const auto &d = input.hir.module().resolved->project->c_type(c_type);
+    if (d.kind != modules::CDeclKind::callback)
+      fail("managed callback type is not a C callback");
+    if (userdata >= d.parameters.size())
+      fail("managed callback userdata index out of range");
+    auto *fn = llvm::Function::Create(
+        llvm::FunctionType::get(
+            builder.getVoidTy(),
+            {builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy()},
+            false),
+        llvm::GlobalValue::ExternalLinkage,
+        cffi::registration_callback_dispatch_symbol(c_type, userdata), module);
+    fn->addFnAttr(llvm::Attribute::NoUnwind);
+    registration_dispatchers.emplace(key, fn);
+    auto ip = builder.saveIP();
+    builder.SetInsertPoint(llvm::BasicBlock::Create(context, "entry", fn));
+    auto *context_arg = fn->getArg(0);
+    auto *out = fn->getArg(1);
+    auto *packed_args = fn->getArg(2);
+    // Existing 32-byte GC callback scope. The 16-byte registration token is
+    // separate and lives until after the GC scope leaves.
+    auto *gc_token_type = llvm::StructType::get(
+        context, {builder.getPtrTy(), builder.getPtrTy(),
+                  builder.getInt32Ty(), builder.getInt32Ty(),
+                  builder.getInt32Ty(), builder.getInt32Ty()});
+    auto *gc_token = builder.CreateAlloca(gc_token_type, nullptr, "c.cb.token");
+    builder.CreateStore(llvm::Constant::getNullValue(gc_token_type), gc_token);
+    auto enter_gc = module.getOrInsertFunction(
+        "lang_gc_program_callback_enter_v1",
+        llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy()},
+                                false));
+    auto *gc_entered = builder.CreateCall(enter_gc, {gc_token});
+    auto *token_type = llvm::StructType::get(
+        context, {builder.getPtrTy(), builder.getPtrTy()});
+    auto *token = builder.CreateAlloca(token_type, nullptr, "c.reg.token");
+    builder.CreateStore(llvm::Constant::getNullValue(token_type), token);
+    auto enter = module.getOrInsertFunction(
+        "lang_c_registration_enter_v1",
+        llvm::FunctionType::get(builder.getPtrTy(),
+                                {builder.getPtrTy(), builder.getPtrTy()},
+                                false));
+    auto *state = builder.CreateCall(enter, {context_arg, token});
+    auto *code = builder.CreateLoad(
+        builder.getPtrTy(),
+        builder.CreateGEP(builder.getPtrTy(), state, builder.getInt64(0)));
+    auto *env = builder.CreateLoad(
+        builder.getPtrTy(),
+        builder.CreateGEP(builder.getPtrTy(), state, builder.getInt64(1)));
+    std::vector<llvm::Type *> parameter_types{builder.getPtrTy()};
+    std::vector<llvm::Value *> call_args{env};
+    size_t packed = 0;
+    for (size_t a = 0; a < d.parameters.size(); ++a) {
+      if (a == userdata) continue;
+      auto *slot = builder.CreateGEP(builder.getPtrTy(), packed_args,
+                                    builder.getInt64(packed++));
+      auto *address = builder.CreateLoad(builder.getPtrTy(), slot);
+      llvm::Value *value =
+          builder.CreateLoad(c_ref_llvm_type(d.parameters[a].type), address);
+      auto *source = c_callback_source_type(d.parameters[a].type);
+      if (source->isIntegerTy(1) && value->getType()->isIntegerTy(8))
+        value = builder.CreateTrunc(value, builder.getInt1Ty());
+      parameter_types.push_back(source);
+      call_args.push_back(value);
+    }
+    const bool unit = d.result.kind == modules::CTypeRef::Kind::scalar &&
+                      d.result.scalar == "Unit";
+    // Source Unit results lower to the existing i8 return; the C-side void
+    // result simply ignores it, exactly as the static bridge does.
+    auto *source_result = unit ? static_cast<llvm::Type *>(builder.getInt8Ty())
+                               : c_callback_source_type(d.result);
+    auto *call = builder.CreateCall(
+        llvm::FunctionType::get(source_result, parameter_types, false), code,
+        call_args);
+    if (!unit) {
+      auto *storage = c_ref_llvm_type(d.result);
+      llvm::Value *result = call;
+      if (storage->isIntegerTy(8) && result->getType()->isIntegerTy(1))
+        result = builder.CreateZExt(result, builder.getInt8Ty());
+      builder.CreateStore(result, out);
+    }
+    auto leave_gc = module.getOrInsertFunction(
+        "lang_gc_program_callback_leave_v1",
+        llvm::FunctionType::get(
+            builder.getVoidTy(), {builder.getInt32Ty(), builder.getPtrTy()},
+            false));
+    builder.CreateCall(leave_gc, {gc_entered, gc_token});
+    auto leave = module.getOrInsertFunction(
+        "lang_c_registration_leave_v1",
+        llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                false));
+    builder.CreateCall(leave, {token});
+    builder.CreateRetVoid();
+    builder.restoreIP(ip);
+    return fn;
+  }
+  // A managed resource argument is leased for the whole foreign call. Null
+  // owners pass a null token, matching existing nullable C results, and skip
+  // both runtime calls (no assumption about null-context handling).
+  struct RegistrationBorrow {
+    llvm::AllocaInst *token = nullptr;
+    llvm::Value *present = nullptr;
+    llvm::Value *raw = nullptr;
+  };
+  RegistrationBorrow borrow_registration(llvm::Value *owner) {
+    auto *token_type = llvm::StructType::get(
+        context, {builder.getPtrTy(), builder.getPtrTy()});
+    auto *token = builder.CreateAlloca(token_type, nullptr, "c.reg.token");
+    builder.CreateStore(llvm::Constant::getNullValue(token_type), token);
+    auto *null = llvm::ConstantPointerNull::get(builder.getPtrTy());
+    auto *present = builder.CreateICmpNE(owner, null);
+    auto *fn = builder.GetInsertBlock()->getParent();
+    auto *lease = llvm::BasicBlock::Create(context, "c.reg.lease", fn);
+    auto *absent = llvm::BasicBlock::Create(context, "c.reg.no.lease", fn);
+    auto *done = llvm::BasicBlock::Create(context, "c.reg.leased", fn);
+    builder.CreateCondBr(present, lease, absent);
+    builder.SetInsertPoint(lease);
+    auto borrow = module.getOrInsertFunction(
+        "lang_c_registration_borrow_v1",
+        llvm::FunctionType::get(builder.getPtrTy(),
+                                {builder.getPtrTy(), builder.getPtrTy()},
+                                false));
+    auto *raw = builder.CreateCall(borrow, {owner, token});
+    builder.CreateBr(done);
+    builder.SetInsertPoint(absent);
+    builder.CreateBr(done);
+    builder.SetInsertPoint(done);
+    auto *value = builder.CreatePHI(builder.getPtrTy(), 2);
+    value->addIncoming(raw, lease);
+    value->addIncoming(null, absent);
+    return {token, present, value};
+  }
+  void end_registration_borrow(const RegistrationBorrow &borrow) {
+    auto *fn = builder.GetInsertBlock()->getParent();
+    auto *end = llvm::BasicBlock::Create(context, "c.reg.end.lease", fn);
+    auto *done = llvm::BasicBlock::Create(context, "c.reg.lease.done", fn);
+    builder.CreateCondBr(borrow.present, end, done);
+    builder.SetInsertPoint(end);
+    auto release = module.getOrInsertFunction(
+        "lang_c_registration_end_borrow_v1",
+        llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                false));
+    builder.CreateCall(release, {borrow.token});
+    builder.CreateBr(done);
+    builder.SetInsertPoint(done);
+  }
   llvm::Value *c_foreign_call(const ir::Instruction &i,
                               llvm::ArrayRef<llvm::Value *> args) {
     if (!i.c_callable) fail("C call missing callable metadata");
     const auto id = *i.c_callable;
-    if (id < 1 || id > input.hir.module().resolved->project->c_callables.size())
+    const auto &project = *input.hir.module().resolved->project;
+    if (id < 1 || id > project.c_callables.size())
       fail("C callable index out of range");
+    const auto &decl = project.c_callable(id);
     const auto &sig = type(i.signature);
     used_c_callables.insert(id);
     auto note_resource = [&](TypeId t) {
@@ -1457,32 +1632,107 @@ class Emitter {
     };
     note_resource(sig.result);
     for (auto p : sig.parameters) note_resource(p.type);
+    std::optional<cffi::RegistrationCallback> registration;
+    bool close = false;
+    try {
+      registration = cffi::registration_callback(project, decl);
+      close = cffi::registration_close(project, decl);
+    } catch (const std::invalid_argument &e) {
+      fail(e.what());
+    }
+    // Source omits only the callable userdata parameter; every other raw C
+    // parameter keeps its declared position in the adapter.
+    const auto source_indices = modules::c_source_parameter_indices(decl);
+    if (source_indices.size() != sig.parameters.size())
+      fail("C call signature does not match source parameters");
+    std::vector<size_t> source_of(decl.parameters.size(), decl.parameters.size());
+    for (size_t s = 0; s < source_indices.size(); ++s)
+      source_of[source_indices[s]] = s;
     llvm::AllocaInst *out = nullptr;
     if (type(sig.result).kind != hir::TypeKind::Unit)
       out = builder.CreateAlloca(c_lower_type(sig.result), nullptr, "c.out");
     std::vector<llvm::Value *> actual;
-    for (size_t a = 0; a < sig.parameters.size(); ++a) {
-      const auto parameter_type = sig.parameters[a].type;
-      auto *slot = builder.CreateAlloca(c_lower_type(parameter_type), nullptr,
-                                        "c.arg");
+    std::vector<RegistrationBorrow> borrows;
+    llvm::Value *registration_code = nullptr, *registration_env = nullptr;
+    llvm::AllocaInst *registration_userdata = nullptr;
+    llvm::Function *registration_trampoline = nullptr;
+    if (registration) {
+      auto callee = module.getOrInsertFunction(
+          cffi::registration_callback_trampoline_symbol(
+              registration->callback_type,
+              registration->callback_userdata_parameter),
+          llvm::FunctionType::get(builder.getVoidTy(), {}, false));
+      registration_trampoline = llvm::cast<llvm::Function>(callee.getCallee());
+    }
+    for (size_t r = 0; r < decl.parameters.size(); ++r) {
+      auto *slot = builder.CreateAlloca(c_ref_llvm_type(decl.parameters[r].type),
+                                        nullptr, "c.arg");
+      if (registration && r == registration->callback_parameter) {
+        const auto parameter_type = sig.parameters[source_of[r]].type;
+        if (type(parameter_type).kind != hir::TypeKind::Function)
+          fail("managed registration callback is not a source function value");
+        auto *value = args[source_of[r]];
+        registration_code = builder.CreateExtractValue(value, {0});
+        registration_env = builder.CreateExtractValue(value, {1});
+        builder.CreateStore(registration_trampoline, slot);
+        actual.push_back(slot);
+        continue;
+      }
+      if (registration && r == registration->userdata_parameter) {
+        registration_userdata = slot;
+        actual.push_back(slot);
+        continue;
+      }
+      if (source_of[r] >= sig.parameters.size())
+        fail("C raw parameter has no source argument");
+      const auto parameter_type = sig.parameters[source_of[r]].type;
       if (type(parameter_type).kind == hir::TypeKind::CForeignCallback) {
-        auto found = function_value_symbols.find(i.inputs[a]);
+        auto found = function_value_symbols.find(i.inputs[source_of[r]]);
         if (found == function_value_symbols.end())
           fail("C callback argument has no function identity");
-        if (dynamic_function_values.contains(i.inputs[a]))
+        if (dynamic_function_values.contains(i.inputs[source_of[r]]))
           fail("C callback cannot be a capturing or bound function value");
         auto *trampoline = callback_trampoline(
             found->second, type(parameter_type).c_type);
         (void)callback_bridge(found->second, type(parameter_type).c_type);
         builder.CreateStore(trampoline, slot);
       } else {
-        builder.CreateStore(to_c_storage(parameter_type, args[a]), slot);
+        auto *value = args[source_of[r]];
+        bool leased = false;
+        if (!close && type(parameter_type).kind ==
+                          hir::TypeKind::CForeignResource &&
+            project.c_type(type(parameter_type).c_type).registration) {
+          auto borrow = borrow_registration(value);
+          builder.CreateStore(borrow.raw, slot);
+          borrows.push_back(borrow);
+          leased = true;
+        }
+        if (!leased)
+          builder.CreateStore(to_c_storage(parameter_type, value), slot);
       }
       actual.push_back(slot);
     }
+    // The context is fully initialized before the C adapter can run and the
+    // trampoline can synchronously re-enter Woozy. env is retained here.
+    llvm::Value *registration_context = nullptr;
+    if (registration) {
+      auto unregister = module.getOrInsertFunction(
+          cffi::registration_unregister_symbol(registration->resource_type),
+          llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                  false));
+      auto create = module.getOrInsertFunction(
+          "lang_c_registration_new_v1",
+          llvm::FunctionType::get(
+              builder.getPtrTy(),
+              {builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy()},
+              false));
+      registration_context = builder.CreateCall(
+          create, {registration_code, registration_env, unregister.getCallee()});
+      builder.CreateStore(registration_context, registration_userdata);
+    }
     std::vector<llvm::Type *> parameter_types;
     parameter_types.push_back(builder.getPtrTy());
-    for (size_t a = 0; a < sig.parameters.size(); ++a)
+    for (size_t r = 0; r < decl.parameters.size(); ++r)
       parameter_types.push_back(builder.getPtrTy());
     auto adapter = module.getOrInsertFunction(
         cffi::adapter_symbol(id),
@@ -1496,6 +1746,21 @@ class Emitter {
     auto *safe = gc_enter_safe();
     builder.CreateCall(adapter, call_args);
     gc_leave_safe(safe);
+    // Runtime leases are a TLS stack: release them in reverse order so a
+    // later lease always ends before the earlier lease it may have nested on.
+    for (auto borrow = borrows.rbegin(); borrow != borrows.rend(); ++borrow)
+      end_registration_borrow(*borrow);
+    if (registration) {
+      // The adapter returned the raw foreign token. finish runs ACTIVE and
+      // returns the Source wrapper; a null token consumes the context.
+      auto *raw = builder.CreateLoad(builder.getPtrTy(), out);
+      auto finish = module.getOrInsertFunction(
+          "lang_c_registration_finish_v1",
+          llvm::FunctionType::get(builder.getPtrTy(),
+                                  {builder.getPtrTy(), builder.getPtrTy()},
+                                  false));
+      return builder.CreateCall(finish, {registration_context, raw});
+    }
     if (!out) return builder.getInt8(0);
     return from_c_storage(sig.result,
                           builder.CreateLoad(c_lower_type(sig.result), out));
@@ -2941,10 +3206,24 @@ public:
       builder.CreateCall(finish, {});
       builder.CreateRet(builder.getInt32(1));
     }
-    if (!used_c_callables.empty())
+    if (!used_c_callables.empty()) {
+      // Every used managed constructor needs its typed dispatcher because the
+      // one generic C trampoline only carries the runtime context.
+      const auto &project = *input.hir.module().resolved->project;
+      for (uint32_t id : used_c_callables) {
+        std::optional<cffi::RegistrationCallback> mapping;
+        try {
+          mapping = cffi::registration_callback(project, project.c_callable(id));
+        } catch (const std::invalid_argument &e) {
+          fail(e.what());
+        }
+        if (mapping)
+          (void)registration_dispatcher(
+              mapping->callback_type, mapping->callback_userdata_parameter);
+      }
       out_c_adapter_source = cffi::adapter_source(
-          *input.hir.module().resolved->project, used_c_callables,
-          used_c_resources, used_c_callbacks);
+          project, used_c_callables, used_c_resources, used_c_callbacks);
+    }
     verify_llvm(module);
     Output out;
     out.native_ir = ir::dump(input);

@@ -1,0 +1,20 @@
+package app;
+import "capturing/lib" as capturing;
+
+// C invokes the callback synchronously before the registration call returns.
+// The context must be fully initialized and ACTIVE before the C call starts.
+func cb(value i32) i32 {
+    return value * 2;
+}
+
+func main() i32 {
+    let sub = capturing.subscribe_initial(cb, 21);
+    if capturing.calls(sub) != 1 { return 1; }
+    if capturing.last_value(sub) != 42 { return 2; }
+    if capturing.invoke_last(sub, 8) != 16 { return 3; }
+    if capturing.calls(sub) != 2 { return 4; }
+    capturing.close(sub);
+    if capturing.live_subscriptions() != 0 { return 5; }
+    if capturing.unregister_calls() != 1 { return 6; }
+    return 0;
+}

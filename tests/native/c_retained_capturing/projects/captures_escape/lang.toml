@@ -1,0 +1,15 @@
+schema_version = 1
+[package]
+name = "c_capturing_captures_escape"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[build.native]
+runtime = "hosted"
+[dependencies.capturing]
+kind = "native"
+binding = "../../bindings/capturing.json"
+libraries = ["c_capturing"]
+library_dirs = ["../../.build"]

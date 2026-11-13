@@ -2,7 +2,7 @@
   "schema_version": 1,
   "base_commit": "148db60b4be4f4b599bf1056d89a4d7d360f2dd8",
   "objective": "Complete the six requested Woozy extension areas on Linux x86_64 and establish evidence-based compiler self-hosting readiness.",
-  "status": "in_progress",
+  "status": "complete",
   "parallel_work": "No fixed three-worker bridge limit. Parallelize independent file owners within live provider/service limits; shared compiler files retain one writer.",
   "decisions": {
     "platform": "Linux x86_64; no other native target in this goal",
@@ -15,7 +15,8 @@
     "weak_targets": "Vec, function values, ARC shared handles and std/box.Box[T]; exclude value structs/enums, string, fd wrappers and foreign Python/C objects",
     "bound_move_receiver": "Bound move-Self methods are repeatable: copy receiver by ordinary value rules before every call, then transfer that copy; reject noncopyable receivers; no once-only function type",
     "async_fork": "std/process.fork fails with os.Error before creating a child when the executor belongs to another thread; same-thread fork and exec-only spawn remain supported; inherited tasks do not migrate from a vanished thread",
-    "user_iteration": "std/iter.Iterator[T] next(inout Self)->std/option.Option[T]; for evaluates once, advances a private logical copy, shared fields stay shared; next nonthrowing, Result item allowed; ambiguous applications rejected"
+    "user_iteration": "std/iter.Iterator[T] next(inout Self)->std/option.Option[T]; for evaluates once, advances a private logical copy, shared fields stay shared; next nonthrowing, Result item allowed; ambiguous applications rejected",
+    "retained_capturing_callbacks": "Userdata C APIs only; registration retains closure/captures, unregister drains in-flight callbacks before release, callbacks nonthrowing. First implementation hosted opaque owned token registration with explicit quiescence contract."
   },
   "tasks": [
     {
@@ -175,8 +176,8 @@
     {
       "id": "FFI01",
       "title": "Native C ABI and explicit hosted-library mode",
-      "status": "in_progress",
-      "owner": "Root: typed C ABI and static retained callback GC scopes implemented; capturing callbacks remain pending",
+      "status": "complete",
+      "owner": "Four Pi-Ollama DeepSeek Flash implementations; Root integration, move-only env and finish PID fixes; independent runtime/Source reviews; main176/176 passed191.60sec",
       "depends_on": [],
       "acceptance": [
         "Declared C ABI functions, supported aggregate layout and typed pointer/buffer arguments",
@@ -233,5 +234,15 @@
         "Full self-hosting criterion is stage0 to stage1 to stage2 of the same Woozy compiler sources with semantic/regression comparison; a wrapper around the C++ compiler does not count"
       ]
     }
-  ]
+  ],
+  "verification_20261113": {
+    "configuration": "Linux x86_64 Release, Clang/LLVM22.1.8, Native and Python test targets",
+    "ctest_passed": 176,
+    "ctest_total": 176,
+    "elapsed_seconds": 191.6,
+    "capturing_callback_source": "13 projects at O0/O2; require mode, zero failed or not_run; Weak cleanup and move-only capture included",
+    "core_elf": "no INTERP or NEEDED retained",
+    "self_hosting": "readiness assessment complete; full stage0/stage1/stage2 compiler rewrite remains future work",
+    "post_review_fixes": "finish PID rejected before locks/env changes; success/null fork tests fail before fix and pass after; Source runner isolates projects and shared library in per-run output"
+  }
 }

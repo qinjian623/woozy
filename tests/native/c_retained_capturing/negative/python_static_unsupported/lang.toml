@@ -1,0 +1,15 @@
+schema_version = 1
+[package]
+name = "c_capturing_negative_python_static_unsupported"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[build.native]
+runtime = "hosted"
+[dependencies.capturing_static]
+kind = "native"
+binding = "../../bindings/static_only.json"
+libraries = ["c_capturing"]
+library_dirs = ["../../.build"]
