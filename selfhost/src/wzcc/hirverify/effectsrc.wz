@@ -1,0 +1,851 @@
+// Source effect/cleanup construct preservation.  This is the
+// Verifier::source_effect_nodes section of hir.cpp.
+package hirverify;
+
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct CountEntry {
+    node usize;
+    count usize;
+}
+
+struct NodeTypeEntry {
+    node usize;
+    types Vec[usize];
+}
+
+func count_add(entries Vec[CountEntry], node usize) {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].node == node {
+            entries[index].count += 1;
+            return;
+        }
+    }
+    vec.push(entries, CountEntry(node: node, count: 1));
+}
+
+func count_get(entries Vec[CountEntry], node usize) usize {
+    for entry in entries {
+        if entry.node == node {
+            return entry.count;
+        }
+    }
+    return 0;
+}
+
+func count_equal(left Vec[CountEntry], right Vec[CountEntry]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for entry in left {
+        if count_get(right, entry.node) != entry.count {
+            return false;
+        }
+    }
+    return true;
+}
+
+func node_type_add(entries Vec[NodeTypeEntry], node usize, type_id usize) {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].node == node {
+            ids_insert(entries[index].types, type_id);
+            return;
+        }
+    }
+    let types = vec.empty[usize]();
+    ids_insert(types, type_id);
+    vec.push(entries, NodeTypeEntry(node: node, types: types));
+}
+
+func node_type_unique(entries Vec[NodeTypeEntry], node usize)
+    option.Option[usize] {
+    for entry in entries {
+        if entry.node == node {
+            if vec.len(entry.types) == 1 {
+                return option.Option[usize].Some(entry.types[0]);
+            }
+            return option.Option[usize].None;
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func source_effect_nodes(state inout Verifier, function_value hir.HirFunction)
+    throws Invalid {
+    let reference = function_value.source.node;
+    let file = verifier_file(state, reference.module, reference.file);
+    let expected = vec.empty[CountEntry]();
+    let actual = vec.empty[CountEntry]();
+    let expected_foreign_reads = vec.empty[usize]();
+    let expected_foreign_calls = vec.empty[usize]();
+    let actual_foreign_reads = vec.empty[usize]();
+    let actual_foreign_calls = vec.empty[usize]();
+    let node_types = vec.empty[NodeTypeEntry]();
+    for node in state.m.nodes {
+        if verifier_scope(state, node.scope).function == function_value.symbol {
+            node_type_add(node_types, node.source.node.node, node.type_id);
+        }
+    }
+    let todo = vec.empty[usize]();
+    vec.push(todo, reference.node);
+    for vec.len(todo) > 0 {
+        let id = option_usize(vec.pop(todo));
+        let syntax = file.nodes[id];
+        if id != reference.node &&
+           (ast_is(syntax.kind, model.AstKind.Function) ||
+            ast_is(syntax.kind, model.AstKind.FunctionLiteral) ||
+            ast_is(syntax.kind, model.AstKind.FunctionType)) {
+            continue;
+        }
+        if ast_is(syntax.kind, model.AstKind.Call) && vec.len(syntax.children) > 0 {
+            let callee_raw = syntax.children[0];
+            let target = source_unwrap_ast(state, file, callee_raw);
+            let target_node = file.nodes[target];
+            var is_foreign = false;
+            let symbol = source_ast_symbol(state, reference.module, reference.file, file, target);
+            if option.is_some(symbol) {
+                let exported = foreign_export(state, option_usize(symbol));
+                if option.is_some(exported) &&
+                   vec.len(option_foreign_export(exported).candidates) > 0 {
+                    ids_insert(expected_foreign_reads, target);
+                    is_foreign = true;
+                }
+            }
+            var method = target;
+            if ast_is(target_node.kind, model.AstKind.NeutralBracket) &&
+               vec.len(target_node.children) > 0 {
+                method = source_unwrap_ast(state, file, target_node.children[0]);
+            }
+            let method_node = file.nodes[method];
+            if !is_foreign && ast_is(method_node.kind, model.AstKind.Member) &&
+               !option.is_some(source_ast_symbol(state, reference.module, reference.file, file, method)) {
+                let base = source_ast_type(inout state, reference.module, reference.file, file, method_node.children[0],
+                    0, node_types);
+                if option.is_some(base) &&
+                   kind_is(verifier_type(state, option_usize(base)).kind,
+                       model.TypeKind.ForeignOpaque) {
+                    ids_insert(expected_foreign_reads,
+                        source_unwrap_ast(state, file, method));
+                    is_foreign = true;
+                }
+            }
+            if !is_foreign {
+                let callee_type = source_ast_type(inout state, reference.module, reference.file, file,
+                    syntax.children[0], 0, node_types);
+                if option.is_some(callee_type) &&
+                   kind_is(verifier_type(state, option_usize(callee_type)).kind,
+                       model.TypeKind.ForeignOpaque) {
+                    ids_insert(expected_foreign_reads, target);
+                    is_foreign = true;
+                }
+            }
+            if is_foreign {
+                ids_insert(expected_foreign_calls, id);
+            }
+        }
+        if ast_is(syntax.kind, model.AstKind.Name) ||
+           ast_is(syntax.kind, model.AstKind.Member) {
+            let key = source_unwrap_ast(state, file, id);
+            let symbol = source_ast_symbol(state, reference.module, reference.file, file, id);
+            if option.is_some(symbol) {
+                let exported = foreign_export(state, option_usize(symbol));
+                if option.is_some(exported) {
+                    let export_value = option_foreign_export(exported);
+                    if !option.is_some(export_value.c_type) &&
+                       !option.is_some(export_value.c_callable) &&
+                       (export_kind_is(export_value.kind,
+                            model.ForeignExportKind.Value) ||
+                        export_kind_is(export_value.kind,
+                            model.ForeignExportKind.Function)) {
+                        ids_insert(expected_foreign_reads, key);
+                    }
+                }
+            }
+            if ast_is(syntax.kind, model.AstKind.Member) &&
+               !option.is_some(source_ast_symbol(state, reference.module, reference.file, file, id)) {
+                let base = source_ast_type(inout state, reference.module, reference.file, file, syntax.children[0], 0,
+                    node_types);
+                if option.is_some(base) &&
+                   kind_is(verifier_type(state, option_usize(base)).kind,
+                       model.TypeKind.ForeignOpaque) {
+                    ids_insert(expected_foreign_reads, key);
+                }
+            }
+        }
+        if ast_is(syntax.kind, model.AstKind.Try) ||
+           ast_is(syntax.kind, model.AstKind.Defer) ||
+           ast_is(syntax.kind, model.AstKind.Throw) ||
+           ast_is(syntax.kind, model.AstKind.Catch) ||
+           ast_is(syntax.kind, model.AstKind.List) ||
+           ast_is(syntax.kind, model.AstKind.Slice) ||
+           ast_is(syntax.kind, model.AstKind.ForIn) ||
+           source_index_syntax(state, reference.module, reference.file, file, syntax) ||
+           (ast_is(syntax.kind, model.AstKind.Unary) &&
+            file.lexed.tokens[syntax.token_begin].spelling == "move") {
+            count_add(expected, id);
+        }
+        for child in syntax.children {
+            vec.push(todo, child);
+        }
+    }
+    let synthetic_iterator_nodes = vec.empty[usize]();
+    let scan = vec.empty[usize]();
+    vec.push(scan, function_value.body);
+    for vec.len(scan) > 0 {
+        let scan_id = option_usize(vec.pop(scan));
+        let scan_node = verifier_node(state, scan_id);
+        switch scan_node.data {
+            case hir.NodeData.ForIn(value): {
+                if option.is_some(value.iterator) {
+                    let iterator = option_iterator(value.iterator);
+                    ids_insert(synthetic_iterator_nodes, iterator.next);
+                    for child in verifier_node(state, iterator.next).children {
+                        ids_insert(synthetic_iterator_nodes, child);
+                    }
+                }
+            }
+            default: {}
+        }
+        for child in scan_node.children {
+            vec.push(scan, child);
+        }
+    }
+    let pending = vec.empty[usize]();
+    vec.push(pending, function_value.body);
+    for vec.len(pending) > 0 {
+        let current_id = option_usize(vec.pop(pending));
+        let node = verifier_node(state, current_id);
+        let syntax = file.nodes[node.source.node.node];
+        if node_is(hir.node_kind(node.data), hir.NodeKind.ForeignRead) {
+            var access = option.Option[hir.ForeignAccessKind].None;
+            switch node.data {
+                case hir.NodeData.ForeignRead(value): access = value.access;
+                default: {}
+            }
+            if !option.is_some(access) || foreign_access_id(
+                    option_foreign_access(access)) == 0 ||
+               foreign_access_id(option_foreign_access(access)) == 1 {
+                ids_insert(actual_foreign_reads,
+                    source_unwrap_ast(state, file, node.source.node.node));
+            }
+        }
+        if node_is(hir.node_kind(node.data), hir.NodeKind.Call) {
+            var is_foreign = false;
+            switch node.data {
+                case hir.NodeData.Call(value): is_foreign = callee_id(value.kind) == 2;
+                default: {}
+            }
+            if is_foreign {
+                ids_insert(actual_foreign_calls, node.source.node.node);
+            }
+        }
+        if !ids_contains(synthetic_iterator_nodes, current_id) &&
+           (ast_is(syntax.kind, model.AstKind.Try) ||
+            ast_is(syntax.kind, model.AstKind.Defer) ||
+            ast_is(syntax.kind, model.AstKind.Throw) ||
+            ast_is(syntax.kind, model.AstKind.List) ||
+            ast_is(syntax.kind, model.AstKind.Slice) ||
+            ast_is(syntax.kind, model.AstKind.ForIn) ||
+            source_index_syntax(state, reference.module, reference.file, file, syntax) ||
+            (ast_is(syntax.kind, model.AstKind.Unary) &&
+             file.lexed.tokens[syntax.token_begin].spelling == "move")) {
+            var matches = false;
+            let node_kind = hir.node_kind(node.data);
+            if ast_is(syntax.kind, model.AstKind.Try) &&
+               node_is(node_kind, hir.NodeKind.Try) {
+                matches = true;
+            }
+            if ast_is(syntax.kind, model.AstKind.Defer) &&
+               node_is(node_kind, hir.NodeKind.Defer) {
+                matches = true;
+            }
+            if ast_is(syntax.kind, model.AstKind.Throw) &&
+               node_is(node_kind, hir.NodeKind.Throw) {
+                matches = true;
+            }
+            if ast_is(syntax.kind, model.AstKind.List) &&
+               node_is(node_kind, hir.NodeKind.VecInit) {
+                matches = true;
+            }
+            if ast_is(syntax.kind, model.AstKind.Slice) {
+                if node_is(node_kind, hir.NodeKind.VecSlice) {
+                    matches = true;
+                }
+                if node_is(node_kind, hir.NodeKind.ForeignRead) {
+                    var access = option.Option[hir.ForeignAccessKind].None;
+                    switch node.data {
+                        case hir.NodeData.ForeignRead(value): access = value.access;
+                        default: {}
+                    }
+                    if option.is_some(access) &&
+                       (foreign_access_id(option_foreign_access(access)) == 4 ||
+                        foreign_access_id(option_foreign_access(access)) == 5) {
+                        matches = true;
+                    }
+                }
+            }
+            if ast_is(syntax.kind, model.AstKind.ForIn) &&
+               node_is(node_kind, hir.NodeKind.ForIn) {
+                matches = true;
+            }
+            if ast_is(syntax.kind, model.AstKind.Unary) &&
+               file.lexed.tokens[syntax.token_begin].spelling == "move" {
+                if node_is(node_kind, hir.NodeKind.Move) {
+                    matches = true;
+                }
+                if node_is(node_kind, hir.NodeKind.FunctionValue) {
+                    var move_capture = false;
+                    switch node.data {
+                        case hir.NodeData.FunctionValue(value):
+                            move_capture = value.move_capture;
+                        default: {}
+                    }
+                    if move_capture {
+                        matches = true;
+                    }
+                }
+            }
+            if source_index_syntax(state, reference.module, reference.file, file, syntax) {
+                if node_is(node_kind, hir.NodeKind.IndexRead) ||
+                   node_is(node_kind, hir.NodeKind.IndexPlace) {
+                    matches = true;
+                }
+                if node_is(node_kind, hir.NodeKind.ForeignRead) {
+                    var access = option.Option[hir.ForeignAccessKind].None;
+                    switch node.data {
+                        case hir.NodeData.ForeignRead(value): access = value.access;
+                        default: {}
+                    }
+                    if option.is_some(access) &&
+                       (foreign_access_id(option_foreign_access(access)) == 2 ||
+                        foreign_access_id(option_foreign_access(access)) == 3) {
+                        matches = true;
+                    }
+                }
+            }
+            need(matches,
+                "source effect construct was erased or replaced");
+            count_add(actual, node.source.node.node);
+        }
+        if node_is(hir.node_kind(node.data), hir.NodeKind.Try) {
+            var try_value = hir.Try(catches: []);
+            switch node.data {
+                case hir.NodeData.Try(value): try_value = value;
+                default: {}
+            }
+            for handler in try_value.catches {
+                count_add(actual, handler.source.node.node);
+            }
+        }
+        for child in node.children {
+            vec.push(pending, child);
+        }
+    }
+    need(ids_equal(actual_foreign_reads, expected_foreign_reads),
+        "HIR foreign reads differ from source operations");
+    need(ids_equal(actual_foreign_calls, expected_foreign_calls),
+        "HIR foreign calls differ from source operations");
+    need(count_equal(actual, expected),
+        "HIR omits or duplicates source error/cleanup constructs");
+    var owning = false;
+    for node in state.m.nodes {
+        if verifier_scope(state, node.scope).function == function_value.symbol {
+            let kind = hir.node_kind(node.data);
+            if node_is(kind, hir.NodeKind.Move) ||
+               node_is(kind, hir.NodeKind.ForIn) ||
+               (!node_is(kind, hir.NodeKind.FunctionValue) &&
+                classify_needs_drop(state.m, node.type_id)) {
+                owning = true;
+            }
+        }
+    }
+    if vec.len(expected) == 0 && !owning {
+        return;
+    }
+    let syntax_function = file.nodes[reference.node];
+    need(vec.len(syntax_function.children) > 0, "function has no source body");
+    need(exact_source_child(state, function_value, function_value.body,
+             syntax_function.children[vec.len(syntax_function.children) - 1]),
+        "HIR statement source order/control owner differs from AST");
+    let statements = vec.empty[usize]();
+    vec.push(statements, function_value.body);
+    for vec.len(statements) > 0 {
+        let id = option_usize(vec.pop(statements));
+        let node = verifier_node(state, id);
+        let syntax = file.nodes[node.source.node.node];
+        let node_kind = hir.node_kind(node.data);
+        if node_is(node_kind, hir.NodeKind.Block) {
+            let sequence = vec.empty[usize]();
+            if ast_is(syntax.kind, model.AstKind.Block) {
+                for child in syntax.children {
+                    vec.push(sequence, child);
+                }
+            } else if ast_is(syntax.kind, model.AstKind.Case) {
+                var start usize = 0;
+                if file.lexed.tokens[syntax.token_begin].spelling != "default" {
+                    start = 1;
+                }
+                for var index usize = start; index < vec.len(syntax.children);
+                    index += 1 {
+                    vec.push(sequence, syntax.children[index]);
+                }
+            } else if ast_is(syntax.kind, model.AstKind.If) {
+                vec.push(sequence, node.source.node.node);
+            } else {
+                fail("lexical block has no supported AST statement sequence");
+            }
+            need(vec.len(node.children) == vec.len(sequence),
+                "HIR omits or adds a source statement");
+            for var index usize = 0; index < vec.len(sequence); index += 1 {
+                need(exact_source_child(state, function_value, node.children[index],
+                         sequence[index]),
+                    "HIR statement source order/control owner differs from AST");
+            }
+        } else if node_is(node_kind, hir.NodeKind.If) {
+            need(ast_is(syntax.kind, model.AstKind.If), "statement kind differs from its AST source");
+            need(vec.len(node.children) == vec.len(syntax.children),
+                "if source branch count");
+            for var branch usize = 1; branch < vec.len(node.children); branch += 1 {
+                need(exact_source_child(state, function_value,
+                         node.children[branch], syntax.children[branch]),
+                    "HIR statement source order/control owner differs from AST");
+            }
+        } else if node_is(node_kind, hir.NodeKind.ForIn) {
+            need(ast_is(syntax.kind, model.AstKind.ForIn),
+                "statement kind differs from its AST source");
+            need(exact_source_child(state, function_value, node.children[1],
+                     syntax.children[vec.len(syntax.children) - 1]),
+                "HIR statement source order/control owner differs from AST");
+        } else if node_is(node_kind, hir.NodeKind.For) {
+            need(ast_is(syntax.kind, model.AstKind.For),
+                "statement kind differs from its AST source");
+            need(exact_source_child(state, function_value, node.children[3],
+                     syntax.children[vec.len(syntax.children) - 1]),
+                "HIR statement source order/control owner differs from AST");
+        } else if node_is(node_kind, hir.NodeKind.Switch) {
+            need(ast_is(syntax.kind, model.AstKind.Switch),
+                "statement kind differs from its AST source");
+            var switch_value = hir.Switch(arms: [], exhaustive: false);
+            switch node.data {
+                case hir.NodeData.Switch(value): switch_value = value;
+                default: {}
+            }
+            need(vec.len(syntax.children) == vec.len(switch_value.arms) + 1,
+                "switch source arm count");
+            for var arm usize = 0; arm < vec.len(switch_value.arms); arm += 1 {
+                need(exact_source_child(state, function_value,
+                         switch_value.arms[arm].body,
+                         syntax.children[arm + 1]),
+                    "HIR statement source order/control owner differs from AST");
+            }
+        } else if node_is(node_kind, hir.NodeKind.Binding) {
+            need(ast_is(syntax.kind, model.AstKind.Binding),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Assign) {
+            need(ast_is(syntax.kind, model.AstKind.Assign),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.ExpressionStatement) {
+            need(ast_is(syntax.kind, model.AstKind.ExpressionStatement),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Return) {
+            need(ast_is(syntax.kind, model.AstKind.Return),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Break) {
+            need(ast_is(syntax.kind, model.AstKind.Break),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Continue) {
+            need(ast_is(syntax.kind, model.AstKind.Continue),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Noop) {
+            need(ast_is(syntax.kind, model.AstKind.For),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Try) {
+            need(ast_is(syntax.kind, model.AstKind.Try),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Defer) {
+            need(ast_is(syntax.kind, model.AstKind.Defer),
+                "statement kind differs from its AST source");
+        } else if node_is(node_kind, hir.NodeKind.Throw) {
+            need(ast_is(syntax.kind, model.AstKind.Throw),
+                "statement kind differs from its AST source");
+        }
+        for child in node.children {
+            vec.push(statements, child);
+        }
+    }
+}
+
+func exact_source_child(state Verifier, function_value hir.HirFunction,
+                        child usize, syntax usize) bool throws Invalid {
+    let file = verifier_file(state, function_value.source.node.module,
+        function_value.source.node.file);
+    var expected = function_value.source.node;
+    let syntax_node = file.nodes[syntax];
+    if ast_is(syntax_node.kind, model.AstKind.Unsafe) {
+        if vec.len(syntax_node.children) != 1 ||
+           !ast_is(file.nodes[syntax_node.children[0]].kind,
+               model.AstKind.Block) {
+            return false;
+        }
+        expected.node = syntax_node.children[0];
+    } else {
+        expected.node = syntax;
+    }
+    return same_ref(verifier_node(state, child).source.node, expected);
+}
+
+func source_unwrap_ast(state Verifier, file model.ParseResult, id usize)
+    usize {
+    var value = id;
+    for true {
+        let node = file.nodes[value];
+        var transparent = ast_is(node.kind, model.AstKind.Parenthesized) ||
+                          ast_is(node.kind, model.AstKind.BracketItem);
+        if ast_is(node.kind, model.AstKind.Unary) {
+            transparent = node.token_begin < vec.len(file.lexed.tokens) &&
+                file.lexed.tokens[node.token_begin].spelling == "+";
+        }
+        if !transparent {
+            return value;
+        }
+        if vec.len(node.children) == 0 {
+            return value;
+        }
+        value = node.children[0];
+    }
+    return value;
+}
+
+func source_ast_symbol(state Verifier, module usize, file_index usize,
+                       file model.ParseResult, id usize)
+    option.Option[usize] {
+    let target = source_unwrap_ast(state, file, id);
+    for occurrence in state.m.resolved.occurrences {
+        if occurrence.source.module == module &&
+           occurrence.source.file == file_index &&
+           occurrence.source.node == target {
+            return option.Option[usize].Some(occurrence.symbol);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func source_index_syntax(state Verifier, module usize, file_index usize,
+                         file model.ParseResult, syntax model.AstNode) bool
+    throws Invalid {
+    if !ast_is(syntax.kind, model.AstKind.NeutralBracket) {
+        return false;
+    }
+    var types_only = vec.len(syntax.children) > 1;
+    for var index usize = 1; index < vec.len(syntax.children); index += 1 {
+        if !source_type_syntax(state, module, file_index, file, syntax.children[index]) {
+            types_only = false;
+        }
+    }
+    if types_only {
+        return false;
+    }
+    if vec.len(syntax.children) == 0 {
+        return true;
+    }
+    let symbol = source_ast_symbol(state, module, file_index, file, syntax.children[0]);
+    if option.is_some(symbol) {
+        let kind = verifier_symbol(state, option_usize(symbol)).kind;
+        return !symbol_is(kind, model.SymbolKind.Function) &&
+               !symbol_is(kind, model.SymbolKind.Type) &&
+               !symbol_is(kind, model.SymbolKind.BuiltinType) &&
+               !symbol_is(kind, model.SymbolKind.TypeParameter);
+    }
+    return true;
+}
+
+func source_type_syntax(state Verifier, module usize, file_index usize,
+                        file model.ParseResult, id usize) bool throws Invalid {
+    let node = file.nodes[id];
+    if ast_is(node.kind, model.AstKind.FunctionType) ||
+       ast_is(node.kind, model.AstKind.NamedType) {
+        return true;
+    }
+    if ast_is(node.kind, model.AstKind.BracketItem) ||
+       ast_is(node.kind, model.AstKind.Parenthesized) ||
+       ast_is(node.kind, model.AstKind.ParenthesizedType) {
+        return vec.len(node.children) > 0 &&
+            source_type_syntax(state, module, file_index, file, node.children[0]);
+    }
+    if ast_is(node.kind, model.AstKind.NeutralBracket) {
+        return vec.len(node.children) > 0 &&
+            source_type_syntax(state, module, file_index, file, node.children[0]);
+    }
+    let symbol = source_ast_symbol(state, module, file_index, file, id);
+    if option.is_some(symbol) {
+        let kind = verifier_symbol(state, option_usize(symbol)).kind;
+        return symbol_is(kind, model.SymbolKind.Type) ||
+               symbol_is(kind, model.SymbolKind.BuiltinType) ||
+               symbol_is(kind, model.SymbolKind.TypeParameter);
+    }
+    return false;
+}
+
+func source_ast_type(state inout Verifier, module usize, file_index usize,
+                     file model.ParseResult, id usize, depth usize,
+                     node_types Vec[NodeTypeEntry])
+    option.Option[usize] throws Invalid {
+    if depth > 64 {
+        return option.Option[usize].None;
+    }
+    let unwrapped = source_unwrap_ast(state, file, id);
+    let node = file.nodes[unwrapped];
+    if ast_is(node.kind, model.AstKind.Name) ||
+       ast_is(node.kind, model.AstKind.Member) {
+        let symbol = source_ast_symbol(state, module, file_index, file, unwrapped);
+        if option.is_some(symbol) {
+            let exported = foreign_export(state, option_usize(symbol));
+            if option.is_some(exported) {
+                let declaration = option_foreign_export(exported).declaration;
+                if option.is_some(declaration) &&
+                   option_usize(declaration) < vec.len(state.m.foreign_bindings) {
+                    return option.Option[usize].Some(
+                        state.m.foreign_bindings[option_usize(declaration)].type_id);
+                }
+            }
+        }
+        if ast_is(node.kind, model.AstKind.Member) &&
+           vec.len(node.children) > 0 {
+            let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
+                node_types);
+            if option.is_some(base) {
+                let base_type = verifier_type(state, option_usize(base));
+                if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+                    let owner = foreign_declaration(state, base_type.binding);
+                    let owner_type = option_binding_type(owner.detail);
+                    let name = source_member_name(file, unwrapped);
+                    for member in owner_type.members {
+                        let member_decl = foreign_declaration(state, member);
+                        var callable = false;
+                        switch member_decl.detail {
+                            case model.ForeignDetail.Callable(value):
+                                callable = value.call_kind == "method" &&
+                                    member_decl.name == name;
+                            default: {}
+                        }
+                        if callable {
+                            return option.Option[usize].Some(
+                                state.m.foreign_bindings[member].type_id);
+                        }
+                    }
+                    for member in owner_type.properties {
+                        if foreign_declaration(state, member).name == name {
+                            return option.Option[usize].Some(
+                                state.m.foreign_bindings[member].type_id);
+                        }
+                    }
+                }
+                if kind_is(base_type.kind, model.TypeKind.NominalStruct) {
+                    let declaration = nominal_type(state, option_usize(base));
+                    for field in declaration.fields {
+                        if verifier_symbol(state, field.symbol).name ==
+                           source_member_name(file, unwrapped) {
+                            return option.Option[usize].Some(
+                                field_type(inout state, option_usize(base), field));
+                        }
+                    }
+                }
+            }
+        }
+        let unique = node_type_unique(node_types, unwrapped);
+        if option.is_some(unique) {
+            return unique;
+        }
+        return option.Option[usize].None;
+    }
+    if ast_is(node.kind, model.AstKind.Call) && vec.len(node.children) > 0 {
+        let callee = node.children[0];
+        let target = source_unwrap_ast(state, file, callee);
+        let target_node = file.nodes[target];
+        let symbol = source_ast_symbol(state, module, file_index, file, target);
+        if option.is_some(symbol) {
+            let exported = foreign_export(state, option_usize(symbol));
+            if option.is_some(exported) &&
+               vec.len(option_foreign_export(exported).candidates) > 0 {
+                return common_foreign_result(state,
+                    option_foreign_export(exported).candidates);
+            }
+            if symbol_is(verifier_symbol(state, option_usize(symbol)).kind,
+                         model.SymbolKind.Function) {
+                let found = function_entry_index(state, option_usize(symbol));
+                if found >= 0 {
+                    return option.Option[usize].Some(verifier_type(state,
+                        verifier_function(state,
+                            option_usize(symbol)).signature).result);
+                }
+            }
+        }
+        var method = target;
+        if ast_is(target_node.kind, model.AstKind.NeutralBracket) &&
+           vec.len(target_node.children) > 0 {
+            method = source_unwrap_ast(state, file, target_node.children[0]);
+        }
+        let method_node = file.nodes[method];
+        if ast_is(method_node.kind, model.AstKind.Member) &&
+           !option.is_some(source_ast_symbol(state, module, file_index, file, method)) {
+            let base = source_ast_type(inout state, module, file_index, file, method_node.children[0],
+                depth + 1, node_types);
+            if option.is_some(base) &&
+               kind_is(verifier_type(state, option_usize(base)).kind,
+                   model.TypeKind.ForeignOpaque) {
+                let candidates = source_method_candidates(state,
+                    option_usize(base), source_member_name(file, method));
+                if vec.len(candidates) > 0 {
+                    return common_foreign_result(state, candidates);
+                }
+            }
+        }
+        let callee_type = source_ast_type(inout state, module, file_index, file, callee, depth + 1,
+            node_types);
+        if option.is_some(callee_type) {
+            let kind = verifier_type(state, option_usize(callee_type)).kind;
+            if kind_is(kind, model.TypeKind.Function) {
+                return option.Option[usize].Some(
+                    verifier_type(state, option_usize(callee_type)).result);
+            }
+            if kind_is(kind, model.TypeKind.ForeignOpaque) {
+                let candidates = source_callable_candidates(state,
+                    option_usize(callee_type));
+                if vec.len(candidates) > 0 {
+                    return common_foreign_result(state, candidates);
+                }
+            }
+        }
+        return node_type_unique(node_types, unwrapped);
+    }
+    if ast_is(node.kind, model.AstKind.NeutralBracket) &&
+       vec.len(node.children) == 2 {
+        let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
+            node_types);
+        if option.is_some(base) {
+            let base_type = verifier_type(state, option_usize(base));
+            if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+                let owner = foreign_declaration(state, base_type.binding);
+                let owner_type = option_binding_type(owner.detail);
+                if vec.len(owner_type.indexers) > 0 {
+                    return option.Option[usize].Some(
+                        state.m.foreign_bindings[owner_type.indexers[0]].type_id);
+                }
+            }
+            if kind_is(base_type.kind, model.TypeKind.Vec) ||
+               kind_is(base_type.kind, model.TypeKind.Slice) {
+                return option.Option[usize].Some(base_type.type_args[0]);
+            }
+        }
+    }
+    if ast_is(node.kind, model.AstKind.Slice) {
+        let base = source_ast_type(inout state, module, file_index, file, node.children[0], depth + 1,
+            node_types);
+        if option.is_some(base) {
+            let base_type = verifier_type(state, option_usize(base));
+            if kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+                let owner = foreign_declaration(state, base_type.binding);
+                let owner_type = option_binding_type(owner.detail);
+                if vec.len(owner_type.slices) > 0 {
+                    return option.Option[usize].Some(
+                        state.m.foreign_bindings[owner_type.slices[0]].type_id);
+                }
+            }
+            if kind_is(base_type.kind, model.TypeKind.Vec) ||
+               kind_is(base_type.kind, model.TypeKind.Slice) {
+                return base;
+            }
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func source_member_name(file model.ParseResult, id usize) string {
+    let node = file.nodes[id];
+    if node.token_end <= node.token_begin ||
+       node.token_end > vec.len(file.lexed.tokens) {
+        return "";
+    }
+    return file.lexed.tokens[node.token_end - 1].spelling;
+}
+
+func common_foreign_result(state Verifier, candidates Vec[usize])
+    option.Option[usize] throws Invalid {
+    var result = option.Option[usize].None;
+    for candidate in candidates {
+        if candidate >= vec.len(state.m.foreign_bindings) {
+            return option.Option[usize].None;
+        }
+        let binding = state.m.foreign_bindings[candidate];
+        if !option.is_some(binding.signature) {
+            return option.Option[usize].None;
+        }
+        let value = verifier_type(state, option_usize(binding.signature)).result;
+        if option.is_some(result) && option_usize(result) != value {
+            return option.Option[usize].None;
+        }
+        result = option.Option[usize].Some(value);
+    }
+    return result;
+}
+
+func source_method_candidates(state Verifier, receiver usize, name string)
+    Vec[usize] throws Invalid {
+    let result = vec.empty[usize]();
+    let receiver_type = verifier_type(state, receiver);
+    if !kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
+        return result;
+    }
+    let owner = foreign_declaration(state, receiver_type.binding);
+    var owner_type = option_binding_type(owner.detail);
+    for member in owner_type.members {
+        let declaration = foreign_declaration(state, member);
+        var callable = false;
+        switch declaration.detail {
+            case model.ForeignDetail.Callable(value):
+                callable = value.call_kind == "method" &&
+                    declaration.name == name;
+            default: {}
+        }
+        if callable {
+            vec.push(result, member);
+        }
+    }
+    return result;
+}
+
+func source_callable_candidates(state Verifier, receiver usize) Vec[usize]
+    throws Invalid {
+    let result = vec.empty[usize]();
+    let receiver_type = verifier_type(state, receiver);
+    if !kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
+        return result;
+    }
+    let owner = foreign_declaration(state, receiver_type.binding);
+    let owner_type = option_binding_type(owner.detail);
+    for member in owner_type.members {
+        let declaration = foreign_declaration(state, member);
+        var callable = false;
+        switch declaration.detail {
+            case model.ForeignDetail.Callable(value):
+                callable = value.call_kind == "callable";
+            default: {}
+        }
+        if callable {
+            vec.push(result, member);
+        }
+    }
+    return result;
+}
+
+func option_foreign_access(value option.Option[hir.ForeignAccessKind])
+    hir.ForeignAccessKind {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return hir.ForeignAccessKind.PropertyRead;
+    }
+}

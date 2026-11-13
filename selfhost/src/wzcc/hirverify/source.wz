@@ -1,0 +1,649 @@
+// Source reconstruction and trait/impl relationships.  Nothing here trusts a
+// producer-provided signature, instance, bound or resolved identity: every
+// value is rebuilt from the owning Source arena and the real declaration
+// records.
+package hirverify;
+
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct NodeKey3 {
+    module usize;
+    file usize;
+    node usize;
+}
+
+struct IteratorMatch {
+    found i64;
+    substitutions Vec[model.Substitution];
+}
+
+struct SourceMethodCall {
+    base model.NodeRef;
+    has_base_symbol bool;
+    base_symbol usize;
+    name string;
+    explicit_type_arguments bool;
+    explicit_arguments Vec[model.NodeRef];
+}
+
+struct SplitSignature {
+    parameters Vec[usize];
+    has_result bool;
+    result usize;
+    has_throws bool;
+    throws_type usize;
+}
+
+struct FunctionSource {
+    function usize;
+    type_args Vec[usize];
+    explicit_type_args bool;
+}
+
+func node_key3(reference model.NodeRef) NodeKey3 {
+    return NodeKey3(module: reference.module, file: reference.file,
+        node: reference.node);
+}
+
+func key3_contains(values Vec[NodeKey3], key NodeKey3) bool {
+    for value in values {
+        if value.module == key.module && value.file == key.file &&
+           value.node == key.node {
+            return true;
+        }
+    }
+    return false;
+}
+
+func unwrapped(state Verifier, reference model.NodeRef) model.NodeRef
+    throws Invalid {
+    let file = verifier_file(state, reference.module, reference.file);
+    var result = reference;
+    for true {
+        need(result.node < vec.len(file.nodes), "source AST node index");
+        let node = file.nodes[result.node];
+        var transparent = ast_is(node.kind, model.AstKind.Parenthesized) ||
+                          ast_is(node.kind, model.AstKind.BracketItem);
+        if ast_is(node.kind, model.AstKind.Unary) {
+            need(node.token_begin < vec.len(file.lexed.tokens),
+                "source token range");
+            transparent = file.lexed.tokens[node.token_begin].spelling == "+";
+        }
+        if !transparent {
+            return result;
+        }
+        need(vec.len(node.children) > 0, "transparent source wrapper");
+        result.node = node.children[0];
+    }
+    return result;
+}
+
+func last_source_symbol(state Verifier, reference model.NodeRef)
+    option.Option[usize] throws Invalid {
+    let target = unwrapped(state, reference);
+    var found = option.Option[usize].None;
+    for occurrence in state.m.resolved.occurrences {
+        if same_ref(occurrence.source, target) {
+            found = option.Option[usize].Some(occurrence.symbol);
+        }
+    }
+    return found;
+}
+
+func resolved_source(state Verifier, reference model.NodeRef)
+    option.Option[usize] throws Invalid {
+    let target = unwrapped(state, reference);
+    for occurrence in state.m.resolved.occurrences {
+        if same_ref(occurrence.source, target) {
+            return option.Option[usize].Some(occurrence.symbol);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func source_string(state Verifier, reference model.NodeRef) string
+    throws Invalid {
+    var ref = reference;
+    let visited = vec.empty[NodeKey3]();
+    for true {
+        let key = node_key3(ref);
+        need(!key3_contains(visited, key), "string constant source cycle");
+        vec.push(visited, key);
+        let file = verifier_file(state, ref.module, ref.file);
+        need(ref.node < vec.len(file.nodes), "string source AST node");
+        let ast = file.nodes[ref.node];
+        if ast_is(ast.kind, model.AstKind.Parenthesized) ||
+           ast_is(ast.kind, model.AstKind.BracketItem) {
+            need(vec.len(ast.children) == 1, "string source wrapper");
+            ref.node = ast.children[0];
+            continue;
+        }
+        if ast_is(ast.kind, model.AstKind.Literal) {
+            need(ast.token_begin < vec.len(file.lexed.tokens),
+                "string source token");
+            let token = file.lexed.tokens[ast.token_begin];
+            need(token_is(token.kind, model.TokenKind.StringLiteral) &&
+                 token.has_string_value,
+                "string literal source is not a decoded string");
+            return token.string_value;
+        }
+        need(ast_is(ast.kind, model.AstKind.Name) ||
+             ast_is(ast.kind, model.AstKind.Member),
+            "string literal source is not a literal or constant");
+        var target = option.Option[usize].None;
+        for occurrence in state.m.resolved.occurrences {
+            if same_ref(occurrence.source, ref) {
+                target = option.Option[usize].Some(occurrence.symbol);
+            }
+        }
+        need(option.is_some(target), "string literal replaced a runtime value");
+        let symbol = verifier_symbol(state, option_usize(target));
+        need(symbol_is(symbol.kind, model.SymbolKind.Constant) &&
+             option.is_some(symbol.definition),
+            "string literal replaced a runtime value");
+        ref = option_ref(symbol.definition);
+        let declaration_file = verifier_file(state, ref.module, ref.file);
+        need(ref.node < vec.len(declaration_file.nodes),
+            "string constant declaration node");
+        let declaration = declaration_file.nodes[ref.node];
+        var token_index = declaration.token_begin;
+        need(token_index < vec.len(declaration_file.lexed.tokens),
+            "string constant token range");
+        if declaration_file.lexed.tokens[token_index].spelling == "pub" {
+            token_index += 1;
+        }
+        need(ast_is(declaration.kind, model.AstKind.Binding) &&
+             token_index < vec.len(declaration_file.lexed.tokens) &&
+             declaration_file.lexed.tokens[token_index].spelling == "const" &&
+             vec.len(declaration.children) > 0,
+            "string constant source is not a const declaration");
+        ref.node = declaration.children[vec.len(declaration.children) - 1];
+    }
+    return "";
+}
+
+func trait_declaration(state Verifier, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(state.m.traits); index += 1 {
+        if state.m.traits[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func symbol_from_module(state Verifier, id usize, path string,
+                        name string) bool throws Invalid {
+    let symbol = verifier_symbol(state, id);
+    if symbol.name != name {
+        return false;
+    }
+    let module = verifier_module(state, symbol.module);
+    return module.logical_path == path;
+}
+
+func std_iterator_trait(state Verifier) i64 throws Invalid {
+    for var index usize = 0; index < vec.len(state.m.traits); index += 1 {
+        let trait_value = state.m.traits[index];
+        if symbol_from_module(state, trait_value.symbol, "std/iter", "Iterator") {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func iterator_next_prototype(state Verifier, trait_index usize) i64
+    throws Invalid {
+    let trait_value = state.m.traits[trait_index];
+    var result i64 = -1;
+    for var index usize = 0; index < vec.len(trait_value.methods); index += 1 {
+        let method = trait_value.methods[index];
+        if verifier_symbol(state, method.symbol).name == "next" {
+            need(result < 0,
+                "std/iter.Iterator declares next more than once");
+            result = i64(index);
+        }
+    }
+    need(result >= 0, "std/iter.Iterator has no next method");
+    return result;
+}
+
+func std_option_type(state Verifier, id usize) bool throws Invalid {
+    let value = verifier_type(state, id);
+    return kind_is(value.kind, model.TypeKind.NominalEnum) &&
+           symbol_from_module(state, value.declaration, "std/option", "Option");
+}
+
+func iterator_impl(state inout Verifier, self_type usize, element usize)
+    IteratorMatch throws Invalid {
+    let trait_index = std_iterator_trait(state);
+    need(trait_index >= 0, "std/iter.Iterator declaration missing");
+    let trait_value = state.m.traits[usize(trait_index)];
+    var found i64 = -1;
+    var substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
+        let implementation = state.m.impls[index];
+        switch implementation.trait_ref {
+            case option.Option.Some(application): {
+                if application.declaration != trait_value.symbol ||
+                   vec.len(application.args) != 1 {
+                    continue;
+                }
+                let sub = vec.empty[model.Substitution]();
+                if !matches(inout state, implementation.self_type, self_type, sub) {
+                    continue;
+                }
+                if !matches(inout state, application.args[0], element, sub) {
+                    continue;
+                }
+                need(found < 0,
+                    "ambiguous Iterator implementation in for-in HIR");
+                found = i64(index);
+                substitutions = sub;
+            }
+            case option.Option.None: {}
+        }
+    }
+    return IteratorMatch(found: found, substitutions: substitutions);
+}
+
+func mentions_self(state Verifier, id usize, self_symbol usize) bool
+    throws Invalid {
+    let pending = vec.empty[usize]();
+    vec.push(pending, id);
+    let seen = vec.empty[usize]();
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let current = option_usize(popped);
+        if !ids_insert(seen, current) {
+            continue;
+        }
+        let value = verifier_type(state, current);
+        if kind_is(value.kind, model.TypeKind.TypeParameter) &&
+           value.declaration == self_symbol {
+            return true;
+        }
+        for argument in value.type_args {
+            vec.push(pending, argument);
+        }
+        for parameter in value.parameters {
+            vec.push(pending, parameter.type_id);
+        }
+        if kind_is(value.kind, model.TypeKind.Function) {
+            vec.push(pending, value.result);
+            if option.is_some(value.throws_type) {
+                vec.push(pending, option_usize(value.throws_type));
+            }
+        }
+    }
+    return false;
+}
+
+func check_object_safe(state inout Verifier, trait_symbol usize,
+                       span model.Span) throws Invalid {
+    let found = trait_declaration(state, trait_symbol);
+    need(found >= 0, "dyn trait declaration is missing");
+    let trait_value = state.m.traits[usize(found)];
+    for method in trait_value.methods {
+        let own = source_parameters(inout state, method.source);
+        need(vec.len(own) == 0, "dyn trait method has generic type parameters");
+        let signature = verifier_type(state, method.signature);
+        need(vec.len(signature.parameters) > 0 &&
+             mode_is_id(signature.parameters[0].mode, 0) &&
+             kind_is(verifier_type(state,
+                 signature.parameters[0].type_id).kind,
+                 model.TypeKind.TypeParameter) &&
+             verifier_type(state, signature.parameters[0].type_id).declaration ==
+                 trait_value.self,
+            "dyn trait method has no ordinary Self receiver");
+        need(!option.is_some(signature.throws_type),
+            "dyn trait method throws");
+        need(!mentions_self(state, signature.result, trait_value.self),
+            "dyn trait method returns Self");
+        for var index usize = 1; index < vec.len(signature.parameters); index += 1 {
+            need(mode_is_id(signature.parameters[index].mode, 0),
+                "dyn trait method has a move/inout parameter");
+            need(!mentions_self(state, signature.parameters[index].type_id,
+                                trait_value.self),
+                "dyn trait method uses Self in a data parameter");
+        }
+    }
+}
+
+func trait_prototype(state Verifier, method usize) option.Option[ProtoRef] {
+    for var trait_index usize = 0; trait_index < vec.len(state.m.traits);
+        trait_index += 1 {
+        let trait_value = state.m.traits[trait_index];
+        for var method_index usize = 0;
+            method_index < vec.len(trait_value.methods); method_index += 1 {
+            if trait_value.methods[method_index].symbol == method {
+                return option.Option[ProtoRef].Some(
+                    ProtoRef(trait_index: trait_index, method: method_index));
+            }
+        }
+    }
+    return option.Option[ProtoRef].None;
+}
+
+func source_trait_application(state inout Verifier, reference model.NodeRef)
+    hir.TraitRef throws Invalid {
+    let target = unwrapped(state, reference);
+    let declaration = last_source_symbol(state, target);
+    need(option.is_some(declaration) &&
+         symbol_is(verifier_symbol(state, option_usize(declaration)).kind,
+             model.SymbolKind.Trait),
+        "trait application has no resolved trait declaration");
+    let file = verifier_file(state, reference.module, reference.file);
+    need(reference.node < vec.len(file.nodes), "trait source node");
+    let syntax = file.nodes[reference.node];
+    need(ast_is(syntax.kind, model.AstKind.NamedType) ||
+         ast_is(syntax.kind, model.AstKind.NeutralBracket) ||
+         vec.len(syntax.children) == 0,
+        "trait application source kind");
+    let args = vec.empty[usize]();
+    if ast_is(syntax.kind, model.AstKind.NeutralBracket) {
+        for var index usize = 1; index < vec.len(syntax.children); index += 1 {
+            var child = reference;
+            child.node = syntax.children[index];
+            vec.push(args, source_type(inout state, child));
+        }
+    } else {
+        for id in syntax.children {
+            var child = reference;
+            child.node = id;
+            vec.push(args, source_type(inout state, child));
+        }
+    }
+    return hir.TraitRef(declaration: option_usize(declaration), args: args);
+}
+
+func parameter_type(state inout Verifier, symbol usize) usize
+    throws Invalid {
+    var value = model.empty_type(model.TypeKind.TypeParameter);
+    value.declaration = symbol;
+    return intern_type(inout state, value);
+}
+
+func trait_self_application(state inout Verifier, trait_value hir.TraitDecl)
+    hir.TraitRef throws Invalid {
+    let args = vec.empty[usize]();
+    for parameter in trait_value.params {
+        vec.push(args, parameter_type(inout state, parameter.symbol));
+    }
+    return hir.TraitRef(declaration: trait_value.symbol, args: args);
+}
+
+func check_trait_application(state inout Verifier, reference hir.TraitRef,
+                             allowed Vec[usize]) throws Invalid {
+    let symbol = verifier_symbol(state, reference.declaration);
+    need(symbol_is(symbol.kind, model.SymbolKind.Trait),
+        "trait application declaration is not a trait");
+    let found = trait_declaration(state, reference.declaration);
+    need(found >= 0 &&
+         vec.len(state.m.traits[usize(found)].params) ==
+             vec.len(reference.args),
+        "trait application has the wrong argument count");
+    for argument in reference.args {
+        valid_type(inout state, argument, allowed);
+    }
+}
+
+func same_trait_application(left hir.TraitRef, right hir.TraitRef) bool {
+    return same_trait_ref(left, right);
+}
+
+func check_trait_parameter_bounds(state inout Verifier, reference hir.TraitRef,
+                                  application usize, depth usize)
+    throws Invalid {
+    let found = trait_declaration(state, reference.declaration);
+    need(found >= 0, "trait application has no real declaration");
+    let trait_value = state.m.traits[usize(found)];
+    need(vec.len(trait_value.params) == vec.len(reference.args),
+        "trait application has the wrong argument count");
+    need(depth < 64, "trait constraint graph exceeds verification budget");
+    if !trait_key_insert(state.active_trait_bounds, application,
+                         reference.declaration, reference.args) {
+        return;
+    }
+    let substitutions = vec.empty[model.Substitution]();
+    vec.push(substitutions, model.Substitution(symbol: trait_value.self,
+        type_id: application));
+    for var index usize = 0; index < vec.len(trait_value.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: trait_value.params[index].symbol,
+            type_id: reference.args[index]));
+    }
+    for var index usize = 0; index < vec.len(trait_value.params); index += 1 {
+        switch trait_value.params[index].trait_ref {
+            case option.Option.Some(bound): {
+                let concrete = hir.TraitRef(declaration: bound.declaration,
+                    args: vec.empty[usize]());
+                for argument in bound.args {
+                    vec.push(concrete.args,
+                        substitute_type(inout state, argument, substitutions));
+                }
+                check_trait_parameter_bounds(inout state, concrete,
+                    reference.args[index], depth + 1);
+                need(satisfies(inout state, reference.args[index], concrete, 0),
+                    "trait argument does not satisfy the trait declaration's "
+                    + "parameter constraint");
+            }
+            case option.Option.None: {}
+        }
+    }
+    check_trait_application_data(inout state, reference, application);
+    trait_key_erase(state.active_trait_bounds, application,
+        reference.declaration, reference.args);
+}
+
+func same_application(state Verifier, left usize, right hir.TraitRef,
+                      right_application usize) bool {
+    return same_trait_ref(right, right);
+}
+
+func check_trait_application_data(state inout Verifier,
+                                  reference hir.TraitRef,
+                                  application usize) throws Invalid {
+    let found = trait_declaration(state, reference.declaration);
+    if found < 0 || vec.len(state.m.traits[usize(found)].params) !=
+                     vec.len(reference.args) {
+        return;
+    }
+    let trait_value = state.m.traits[usize(found)];
+    let substitutions = vec.empty[model.Substitution]();
+    vec.push(substitutions, model.Substitution(symbol: trait_value.self,
+        type_id: application));
+    for var index usize = 0; index < vec.len(trait_value.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: trait_value.params[index].symbol,
+            type_id: reference.args[index]));
+    }
+    let base = vec.empty[usize]();
+    let seen = vec.empty[usize]();
+    allow_data_types(inout state, application, base, seen);
+    for argument in reference.args {
+        allow_data_types(inout state, argument, base, seen);
+    }
+    for method in trait_value.methods {
+        let allowed = ids_copy(base);
+        for parameter in source_parameters(inout state, method.source) {
+            ids_insert(allowed, parameter.symbol);
+        }
+        let signature = substitute_type(inout state, method.signature,
+            substitutions);
+        let visited = vec.empty[usize]();
+        let expanded = vec.empty[usize]();
+        let work = vec.empty[InoutWork]();
+        vec.push(work, InoutWork(type_id: signature, depth: 0));
+        var next usize = 0;
+        for next < vec.len(work) {
+            let current = work[next];
+            next += 1;
+            need(current.depth < 128,
+                "trait application inout graph exceeds budget");
+            let value = verifier_type(state, current.type_id);
+            if kind_is(value.kind, model.TypeKind.TypeParameter) {
+                continue;
+            }
+            if kind_is(value.kind, model.TypeKind.Vec) ||
+               kind_is(value.kind, model.TypeKind.Slice) {
+                if ids_insert(visited, current.type_id) {
+                    for argument in value.type_args {
+                        vec.push(work, InoutWork(type_id: argument,
+                            depth: current.depth + 1));
+                    }
+                }
+                continue;
+            }
+            if kind_is(value.kind, model.TypeKind.NominalStruct) ||
+               kind_is(value.kind, model.TypeKind.NominalEnum) {
+                if ids_insert(visited, current.type_id) {
+                    for argument in value.type_args {
+                        vec.push(work, InoutWork(type_id: argument,
+                            depth: current.depth + 1));
+                    }
+                }
+                let declared = nominal_index(state, value.declaration);
+                need(declared >= 0, "trait application nominal is missing");
+                let declaration = state.m.nominals[usize(declared)];
+                need(vec.len(declaration.params) == vec.len(value.type_args),
+                    "trait application nominal argument count");
+                if ids_insert(expanded, current.type_id) &&
+                   nominal_has_inout(inout state, current.type_id) {
+                    let fields = vec.empty[model.Substitution]();
+                    for var index usize = 0;
+                        index < vec.len(declaration.params); index += 1 {
+                        vec.push(fields, model.Substitution(
+                            symbol: declaration.params[index].symbol,
+                            type_id: value.type_args[index]));
+                    }
+                    for field in declaration.fields {
+                        vec.push(work, InoutWork(type_id: substitute_type(
+                            inout state, field.type_id, fields),
+                            depth: current.depth + 1));
+                    }
+                    for variant in declaration.variants {
+                        for field in variant.payload {
+                            vec.push(work, InoutWork(type_id: substitute_type(
+                                inout state, field.type_id, fields),
+                                depth: current.depth + 1));
+                        }
+                    }
+                }
+                continue;
+            }
+            if !kind_is(value.kind, model.TypeKind.Function) ||
+               !ids_insert(visited, current.type_id) {
+                continue;
+            }
+            for parameter in value.parameters {
+                if mode_is_id(parameter.mode, 1) {
+                    var scratch = state.m;
+                    scratch.types = state.substituted;
+                    need(inout_slot_type(scratch, parameter.type_id, allowed),
+                        "trait application inout data is not a whole Woozy value");
+                }
+                vec.push(work, InoutWork(type_id: parameter.type_id,
+                    depth: current.depth + 1));
+            }
+            vec.push(work, InoutWork(type_id: value.result,
+                depth: current.depth + 1));
+            if option.is_some(value.throws_type) {
+                vec.push(work, InoutWork(type_id: option_usize(value.throws_type),
+                    depth: current.depth + 1));
+            }
+        }
+    }
+}
+
+func allow_data_types(state inout Verifier, id usize, base Vec[usize],
+                      seen Vec[usize]) throws Invalid {
+    if !ids_insert(seen, id) {
+        return;
+    }
+    var found = option.Option[model.Type].None;
+    switch types.find(state.substituted, id) {
+        case option.Option.Some(value): found = option.Option[model.Type].Some(value);
+        case option.Option.None: found = types.find(state.m.types, id);
+    }
+    need(option.is_some(found), "trait application data type is missing");
+    let value = option_usize_type(found);
+    if kind_is(value.kind, model.TypeKind.TypeParameter) {
+        ids_insert(base, value.declaration);
+        return;
+    }
+    for argument in value.type_args {
+        allow_data_types(inout state, argument, base, seen);
+    }
+    for parameter in value.parameters {
+        allow_data_types(inout state, parameter.type_id, base, seen);
+    }
+    if kind_is(value.kind, model.TypeKind.Function) {
+        allow_data_types(inout state, value.result, base, seen);
+        if option.is_some(value.throws_type) {
+            allow_data_types(inout state, option_usize(value.throws_type), base,
+                seen);
+        }
+    }
+}
+
+func option_usize_type(value option.Option[model.Type]) model.Type {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.empty_type(model.TypeKind.Error);
+    }
+}
+
+func nominal_has_inout(state inout Verifier, root usize) bool
+    throws Invalid {
+    let pending = vec.empty[usize]();
+    vec.push(pending, root);
+    let seen_types = vec.empty[usize]();
+    let seen_declarations = vec.empty[usize]();
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let id = option_usize(popped);
+        if !ids_insert(seen_types, id) {
+            continue;
+        }
+        let value = verifier_type(state, id);
+        for argument in value.type_args {
+            vec.push(pending, argument);
+        }
+        if kind_is(value.kind, model.TypeKind.Function) {
+            for parameter in value.parameters {
+                if mode_is_id(parameter.mode, 1) {
+                    return true;
+                }
+                vec.push(pending, parameter.type_id);
+            }
+            vec.push(pending, value.result);
+            if option.is_some(value.throws_type) {
+                vec.push(pending, option_usize(value.throws_type));
+            }
+        }
+        if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+           !kind_is(value.kind, model.TypeKind.NominalEnum) {
+            continue;
+        }
+        let found = nominal_index(state, value.declaration);
+        need(found >= 0, "trait application nominal is missing");
+        let declaration = state.m.nominals[usize(found)];
+        if !ids_insert(seen_declarations, declaration.symbol) {
+            continue;
+        }
+        for field in declaration.fields {
+            vec.push(pending, field.type_id);
+        }
+        for variant in declaration.variants {
+            for field in variant.payload {
+                vec.push(pending, field.type_id);
+            }
+        }
+    }
+    return false;
+}

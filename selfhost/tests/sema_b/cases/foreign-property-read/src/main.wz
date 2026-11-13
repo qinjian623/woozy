@@ -1,0 +1,2 @@
+package app;
+func main() i32 { let p = point; let b = p.size; if b { return 0; } return 1; }

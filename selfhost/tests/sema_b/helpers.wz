@@ -1,0 +1,143 @@
+// Test-only driver in package sema.  It runs the real constructor,
+// declarations and B-side body checking without ownership/verifier so the
+// semantic cases can execute while the full native build is still expensive.
+// This is not a production facade and never claims verified HIR.
+package sema;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct BTestResult {
+    pub ok bool;
+    pub code string;
+    pub message string;
+    pub property_read bool;
+    pub begin_byte u64;
+    pub end_byte u64;
+    pub phase string;
+    pub plain_foreign_read bool;
+}
+
+func b_test_failure(error Error) BTestResult {
+    switch error {
+        case Error.Rejected(diagnostic, failure):
+            return BTestResult(ok: false, code: diagnostic.code,
+                message: diagnostic.message, property_read: false,
+                begin_byte: diagnostic.primary.begin_byte,
+                end_byte: diagnostic.primary.end_byte, phase: diagnostic.phase, plain_foreign_read: false);
+        case Error.Support(support):
+            return BTestResult(ok: false, code: "E_INTERNAL_ERROR",
+                message: b_support_message(support), property_read: false,
+                begin_byte: 0, end_byte: 0, phase: "type", plain_foreign_read: false);
+    }
+}
+
+func b_runtime_config(resolved model.ResolvedProject) model.CheckConfig {
+    var backend = model.Backend.Native;
+    if resolved.project.backend == "python" { backend = model.Backend.Python; }
+    return model.CheckConfig(backend: backend,
+        word_bits: resolved.project.word_bits);
+}
+
+pub func b_test_run(input model.ResolveResult) BTestResult {
+    if !input.has_value {
+        return BTestResult(ok: false, code: "E_RESOLVE",
+            message: "no resolve value", property_read: false,
+            begin_byte: 0, end_byte: 0, phase: "resolve", plain_foreign_read: false);
+    }
+    switch input.state {
+        case model.PhaseState.Complete: {}
+        default:
+            return BTestResult(ok: false, code: "E_RESOLVE",
+                message: "resolve did not complete", property_read: false,
+                begin_byte: 0, end_byte: 0, phase: "resolve", plain_foreign_read: false);
+    }
+    var checker = b_empty_checker_value();
+    try { checker = make_checker(input.value, b_runtime_config(input.value)); }
+    catch error Error { return b_test_failure(error); }
+    try {
+        declarations(inout checker);
+        for module in checker.m.resolved.project.modules {
+            for var file_index usize = 0; file_index < vec.len(module.files);
+                file_index += 1 {
+                let file_ref = model.NodeRef(module: module.id,
+                    file: file_index, node: 0);
+                let file = parsed_file(inout checker, file_ref);
+                let root_ref = at(file_ref, file.root);
+                let root = ast(inout checker, root_ref);
+                for id in root.children {
+                    let location = at(file_ref, id);
+                    switch ast(inout checker, location).kind {
+                        case model.AstKind.Binding: {
+                            let binding = definition(inout checker, location);
+                            let ignored = constant(inout checker, binding);
+                        }
+                        default: {}
+                    }
+                }
+            }
+        }
+        for symbol_value in checker.m.resolved.symbols {
+            switch symbol_value.kind {
+                case model.SymbolKind.Constant:
+                    if symbol_value.exported &&
+                       option.is_some(symbol_value.definition) {
+                        check_public_constant(inout checker, symbol_value.id);
+                    }
+                default: {}
+            }
+        }
+        for id in run_body_symbols(checker.bodies) {
+            check_body(inout checker, id);
+        }
+    } catch error Error { return b_test_failure(error); }
+    var property_read = false;
+    var plain_foreign_read = false;
+    for node in checker.m.nodes {
+        switch node.data {
+            case hir.NodeData.ForeignRead(value): {
+                switch value.access {
+                    case option.Option.Some(access): {
+                        switch access {
+                            case hir.ForeignAccessKind.PropertyRead:
+                                property_read = true;
+                            default: {}
+                        }
+                    }
+                    case option.Option.None: plain_foreign_read = true;
+                }
+            }
+            default: {}
+        }
+    }
+    return BTestResult(ok: true, code: "", message: "",
+        property_read: property_read, begin_byte: 0, end_byte: 0,
+        phase: "", plain_foreign_read: plain_foreign_read);
+}
+
+func b_empty_checker_value() Checker {
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    return Checker(m: hir_empty_module_for_test(resolved),
+        occurrences: [], definitions: [], signatures: [],
+        trait_signature_context: [], parameters: [], locals: [], constants: [],
+        evaluating: [], function: 0, scope: 0, cleanup_depth: 0,
+        async_function: false, current_result: 0,
+        current_async_error: option.Option[usize].None, unsafe_depth: 0,
+        c_named_types: [], unit: 0, boolean: 0, i64_type: 0, loops: [],
+        break_targets: [], nominal_ids: [], self_types: [], generic_params: [],
+        bounds: [], trait_parameters: [], bodies: [], template_ids: [],
+        instance_cache: [], instantiation_depth: 0, constraint_depth: 0,
+        trait_results: [], active_constraints: [], active_trait_bounds: [],
+        instantiated_nodes: 0, active_params: [], signature_parameters: [],
+        async_functions: [], closures: [], capture_by_origin: [],
+        capture_by_local: [], current_captures: [], weak_validated: [],
+        nominal_fields_ready: false);
+}
+
+func hir_empty_module_for_test(resolved model.ResolvedProject) hir.HirModule {
+    return hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+}

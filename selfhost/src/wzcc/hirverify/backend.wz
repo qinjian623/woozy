@@ -1,0 +1,533 @@
+// Backend capability checks.  Only executable functions and the concrete
+// storage types they reach are examined; unused templates are not rejected.
+package hirverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/system" as system;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct CapabilityFlags {
+    ownership_values bool;
+    foreign_values bool;
+    runtime_handle_values bool;
+    slice_values bool;
+    weak_values bool;
+    c_values bool;
+}
+
+struct CapabilityState {
+    storage types.Context;
+    checked Vec[usize];
+    budget bool;
+}
+
+func capability_flags(config model.CheckConfig) CapabilityFlags {
+    let native = backend_is(config.backend, model.Backend.Native);
+    let python = backend_is(config.backend, model.Backend.Python);
+    let word64 = config.word_bits == 64;
+    return CapabilityFlags(
+        ownership_values: (native || python) && word64,
+        foreign_values: python && word64,
+        runtime_handle_values: native && word64,
+        slice_values: (native || python) && word64,
+        weak_values: (native || python) && word64,
+        c_values: native && word64);
+}
+
+func capability_supported(state inout CapabilityState, module hir.HirModule,
+                          flags CapabilityFlags, id usize, depth usize) bool
+    throws Invalid {
+    if depth > 512 || vec.len(state.checked) > 65536 {
+        state.budget = true;
+        return false;
+    }
+    var value = option.Option[model.Type].None;
+    switch types.find(state.storage, id) {
+        case option.Option.Some(item): value = option.Option[model.Type].Some(item);
+        case option.Option.None: return false;
+    }
+    let t = option_usize_type(value);
+    if runtime_handle_kind(t.kind) {
+        return flags.runtime_handle_values;
+    }
+    if kind_is(t.kind, model.TypeKind.ForeignOpaque) ||
+       kind_is(t.kind, model.TypeKind.ForeignCallable) {
+        return flags.foreign_values;
+    }
+    if c_pointer_kind(t.kind) || c_named_kind(t.kind) {
+        if !flags.c_values {
+            return false;
+        }
+        for argument in t.type_args {
+            let exists = types.find(state.storage, argument);
+            if !option.is_some(exists) ||
+               !capability_supported(inout state, module, flags, argument,
+                   depth + 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if ids_contains(state.checked, id) {
+        return true;
+    }
+    ids_insert(state.checked, id);
+    if kind_is(t.kind, model.TypeKind.Vec) ||
+       kind_is(t.kind, model.TypeKind.Slice) ||
+       kind_is(t.kind, model.TypeKind.Weak) {
+        if kind_is(t.kind, model.TypeKind.Slice) && !flags.slice_values {
+            return false;
+        }
+        if kind_is(t.kind, model.TypeKind.Weak) && !flags.weak_values {
+            return false;
+        }
+        if !flags.ownership_values || vec.len(t.type_args) != 1 ||
+           !option.is_some(types.find(state.storage, t.type_args[0])) {
+            return false;
+        }
+        return capability_supported(inout state, module, flags, t.type_args[0],
+            depth + 1);
+    }
+    if kind_is(t.kind, model.TypeKind.TraitObject) {
+        if !flags.ownership_values {
+            return false;
+        }
+        for argument in t.type_args {
+            if !option.is_some(types.find(state.storage, argument)) ||
+               !capability_supported(inout state, module, flags, argument,
+                   depth + 1) {
+                return false;
+            }
+        }
+        return true;
+    }
+    if kind_is(t.kind, model.TypeKind.NominalStruct) ||
+       kind_is(t.kind, model.TypeKind.NominalEnum) {
+        let declared = nominal_index(module_verifier(module), t.declaration);
+        if declared < 0 ||
+           vec.len(t.type_args) != vec.len(module.nominals[usize(declared)].params) {
+            return false;
+        }
+        let declaration = module.nominals[usize(declared)];
+        let substitutions = vec.empty[model.Substitution]();
+        for var p usize = 0; p < vec.len(declaration.params); p += 1 {
+            vec.push(substitutions, model.Substitution(
+                symbol: declaration.params[p].symbol,
+                type_id: t.type_args[p]));
+        }
+        for field in declaration.fields {
+            let concrete = substitute_backend(inout state, field.type_id,
+                substitutions);
+            if !option.is_some(types.find(module.types, concrete)) ||
+               !option.is_some(types.find(state.storage, concrete)) ||
+               !capability_supported(inout state, module, flags, concrete,
+                   depth + 1) {
+                return false;
+            }
+        }
+        for variant in declaration.variants {
+            for field in variant.payload {
+                let concrete = substitute_backend(inout state, field.type_id,
+                    substitutions);
+                if !option.is_some(types.find(module.types, concrete)) ||
+                   !option.is_some(types.find(state.storage, concrete)) ||
+                   !capability_supported(inout state, module, flags, concrete,
+                       depth + 1) {
+                    return false;
+                }
+            }
+        }
+        return true;
+    }
+    if kind_is(t.kind, model.TypeKind.Function) {
+        let pending = vec.empty[usize]();
+        vec.push(pending, id);
+        let seen = vec.empty[usize]();
+        for vec.len(pending) > 0 {
+            if vec.len(pending) > 65536 {
+                state.budget = true;
+                return false;
+            }
+            let current = option_usize(vec.pop(pending));
+            if !ids_insert(seen, current) {
+                continue;
+            }
+            var found = option.Option[model.Type].None;
+            switch types.find(state.storage, current) {
+                case option.Option.Some(item): found = option.Option[model.Type].Some(item);
+                case option.Option.None: return false;
+            }
+            let value = option_usize_type(found);
+            if runtime_handle_kind(value.kind) {
+                if !flags.runtime_handle_values {
+                    return false;
+                }
+                continue;
+            }
+            if kind_is(value.kind, model.TypeKind.ForeignOpaque) ||
+               kind_is(value.kind, model.TypeKind.ForeignCallable) {
+                if !flags.foreign_values {
+                    return false;
+                }
+                continue;
+            }
+            if kind_is(value.kind, model.TypeKind.Vec) ||
+               kind_is(value.kind, model.TypeKind.Slice) ||
+               kind_is(value.kind, model.TypeKind.Weak) {
+                if kind_is(value.kind, model.TypeKind.Slice) &&
+                   !flags.slice_values {
+                    return false;
+                }
+                if kind_is(value.kind, model.TypeKind.Weak) &&
+                   !flags.weak_values {
+                    return false;
+                }
+                if !flags.ownership_values || vec.len(value.type_args) != 1 ||
+                   !option.is_some(types.find(state.storage,
+                       value.type_args[0])) {
+                    return false;
+                }
+            }
+            if kind_is(value.kind, model.TypeKind.NominalStruct) ||
+               kind_is(value.kind, model.TypeKind.NominalEnum) {
+                let declared = nominal_index(module_verifier(module),
+                    value.declaration);
+                if declared >= 0 {
+                    let declaration = module.nominals[usize(declared)];
+                    for field in declaration.fields {
+                        if !option.is_some(types.find(module.types,
+                                field.type_id)) ||
+                           !option.is_some(types.find(state.storage,
+                                field.type_id)) {
+                            return false;
+                        }
+                        vec.push(pending, field.type_id);
+                    }
+                    for variant in declaration.variants {
+                        for field in variant.payload {
+                            if !option.is_some(types.find(module.types,
+                                    field.type_id)) ||
+                               !option.is_some(types.find(state.storage,
+                                    field.type_id)) {
+                                return false;
+                            }
+                            vec.push(pending, field.type_id);
+                        }
+                    }
+                }
+            }
+            for argument in value.type_args {
+                vec.push(pending, argument);
+            }
+            if kind_is(value.kind, model.TypeKind.Function) {
+                vec.push(pending, value.result);
+                if option.is_some(value.throws_type) {
+                    vec.push(pending, option_usize(value.throws_type));
+                }
+                for parameter in value.parameters {
+                    if mode_is_id(parameter.mode, 2) &&
+                       !flags.ownership_values {
+                        return false;
+                    }
+                    vec.push(pending, parameter.type_id);
+                }
+            }
+        }
+    }
+    return !kind_is(t.kind, model.TypeKind.Vec) &&
+           !kind_is(t.kind, model.TypeKind.Slice) &&
+           !kind_is(t.kind, model.TypeKind.TypeParameter) &&
+           !kind_is(t.kind, model.TypeKind.Error) &&
+           !kind_is(t.kind, model.TypeKind.ForeignOpaque) &&
+           !kind_is(t.kind, model.TypeKind.ForeignCallable) &&
+           !c_pointer_kind(t.kind) && !c_named_kind(t.kind);
+}
+
+func module_verifier(module hir.HirModule) Verifier {
+    // A read-only helper for nominal lookup.  No verification state is
+    // mutated; only the nominals map is needed by this helper.
+    var state = make_verifier(module);
+    for var index usize = 0; index < vec.len(module.nominals); index += 1 {
+        vec.push(state.nominals, NominalEntry(symbol:
+            module.nominals[index].symbol, index: index));
+    }
+    return state;
+}
+
+func substitute_backend(state inout CapabilityState, id usize,
+                        substitutions Vec[model.Substitution]) usize
+    throws Invalid {
+    try {
+        return types.substitute(id, substitutions, inout state.storage);
+    } catch error types.Error {
+        type_error_to_invalid(error);
+        return 0;
+    }
+}
+
+func capability_signature_supported(state inout CapabilityState,
+                                    module hir.HirModule,
+                                    flags CapabilityFlags, id usize) bool
+    throws Invalid {
+    let found = types.find(module.types, id);
+    if !option.is_some(found) {
+        return false;
+    }
+    let signature = option_usize_type(found);
+    if option.is_some(signature.throws_type) &&
+       !capability_supported(inout state, module, flags,
+           option_usize(signature.throws_type), 0) {
+        return false;
+    }
+    for parameter in signature.parameters {
+        if mode_is_id(parameter.mode, 2) && !flags.ownership_values {
+            return false;
+        }
+        if !capability_supported(inout state, module, flags, parameter.type_id,
+                                 0) {
+            return false;
+        }
+    }
+    return capability_supported(inout state, module, flags, signature.result, 0);
+}
+
+func capability_unavailable(feature string, span model.Span)
+    model.UnitResult {
+    let diagnostics = vec.empty[model.Diagnostic]();
+    vec.push(diagnostics, model.diagnostic("E_CAPABILITY_UNAVAILABLE", "type",
+        feature, span));
+    return model.UnitResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Unsupported, diagnostics: diagnostics,
+        has_value: false);
+}
+
+func system_op_category(operation u32) u32 {
+    let spec = system_spec(operation);
+    if !spec.has {
+        return 1;
+    }
+    if spec.owner == "std/slice" {
+        return 1;
+    }
+    if spec.owner == "std/weak" {
+        return 2;
+    }
+    return 0;
+}
+
+pub func check_backend_capabilities(input hir.HirModule) model.UnitResult {
+    let verified = verify_types(input);
+    if !phase_is(verified.state, model.PhaseState.Complete) ||
+       !verified.has_value {
+        return verified;
+    }
+    let flags = capability_flags(input.config);
+    var capability = CapabilityState(storage: types.clone_context(input.types),
+        checked: vec.empty[usize](), budget: false);
+    let native64 = backend_is(input.config.backend, model.Backend.Native) &&
+        input.config.word_bits == 64;
+    for function_value in input.functions {
+        var signature_ok = false;
+        try {
+            signature_ok = capability_signature_supported(inout capability,
+                input, flags, function_value.signature);
+        } catch error Invalid {
+            signature_ok = false;
+        }
+        if !signature_ok {
+            if capability.budget {
+                return capability_unavailable(
+                    "backend concrete type expansion budget exceeded",
+                    function_value.source.span);
+            }
+            return capability_unavailable(
+                "backend does not support this concrete function signature",
+                function_value.source.span);
+        }
+        let todo = vec.empty[usize]();
+        vec.push(todo, function_value.body);
+        for vec.len(todo) > 0 {
+            let id = option_usize(vec.pop(todo));
+            let node = input.nodes[id];
+            let node_kind = hir.node_kind(node.data);
+            if node_is(node_kind, hir.NodeKind.Call) {
+                var call = hir.Call(kind: hir.CalleeKind.Direct, signature: 0,
+                    direct_symbol: option.Option[usize].None,
+                    callee: option.Option[usize].None, args: [], type_args: [],
+                    binding: option.Option[usize].None,
+                    c_callable: option.Option[u32].None, omitted: [],
+                    system: option.Option[u32].None);
+                switch node.data {
+                    case hir.NodeData.Call(value): call = value;
+                    default: {}
+                }
+                if callee_id(call.kind) == 3 {
+                    let operation = option_u32_value(call.system);
+                    if !native64 {
+                        let category = system_op_category(operation);
+                        if (category == 1 && !flags.slice_values) ||
+                           (category == 2 && !flags.weak_values) {
+                            return capability_unavailable(
+                                "system operations require the Native/64 profile",
+                                node.source.span);
+                        }
+                    }
+                }
+            }
+            if node_is(node_kind, hir.NodeKind.ForeignRead) ||
+               (node_is(node_kind, hir.NodeKind.Call) && call_kind_of(node) == 2) {
+                if !flags.foreign_values {
+                    return capability_unavailable(
+                        "foreign reads/calls/access require the Python/64 profile",
+                        node.source.span);
+                }
+                var binding_id usize = 0;
+                if node_is(node_kind, hir.NodeKind.ForeignRead) {
+                    switch node.data {
+                        case hir.NodeData.ForeignRead(value):
+                            binding_id = value.binding;
+                        default: {}
+                    }
+                } else {
+                    switch node.data {
+                        case hir.NodeData.Call(value):
+                            binding_id = option_usize(value.binding);
+                        default: {}
+                    }
+                }
+                if binding_id >= vec.len(input.foreign_bindings) {
+                    return capability_unavailable(
+                        "foreign binding index is invalid", node.source.span);
+                }
+                let declaration = input.resolved.project.foreign_bindings[
+                    binding_id];
+                switch declaration.detail {
+                    case model.ForeignDetail.Callable(callable): {
+                        var error_ok = false;
+                        switch callable.error_type {
+                            case option.Option.Some(name):
+                                error_ok = name == "lang.py.Error";
+                            case option.Option.None: {}
+                        }
+                        if !error_ok {
+                            return capability_unavailable(
+                                "Python foreign callable requires declared lang.py.Error",
+                                node.source.span);
+                        }
+                        for parameter in callable.parameters {
+                            if parameter.mode != "ordinary" {
+                                return capability_unavailable(
+                                    "Python foreign callable supports ordinary parameters only",
+                                    node.source.span);
+                            }
+                        }
+                    }
+                    case model.ForeignDetail.Property(property): {
+                        if property.error_type != "lang.py.Error" {
+                            return capability_unavailable(
+                                "Python foreign property requires lang.py.Error",
+                                node.source.span);
+                        }
+                    }
+                    case model.ForeignDetail.Indexer(indexer): {
+                        if indexer.error_type != "lang.py.Error" {
+                            return capability_unavailable(
+                                "Python foreign indexer requires lang.py.Error",
+                                node.source.span);
+                        }
+                    }
+                    case model.ForeignDetail.Slice(slice): {
+                        if slice.error_type != "lang.py.Error" {
+                            return capability_unavailable(
+                                "Python foreign slice requires lang.py.Error",
+                                node.source.span);
+                        }
+                    }
+                    default: {}
+                }
+            }
+            if node_is(node_kind, hir.NodeKind.StructInit) ||
+               node_is(node_kind, hir.NodeKind.EnumInit) ||
+               node_is(node_kind, hir.NodeKind.FieldRead) ||
+               node_is(node_kind, hir.NodeKind.FieldPlace) ||
+               node_is(node_kind, hir.NodeKind.Switch) ||
+               node_is(node_kind, hir.NodeKind.TraitObjectInit) ||
+               node_is(node_kind, hir.NodeKind.TraitDispatch) {
+                if (node_is(node_kind, hir.NodeKind.TraitObjectInit) ||
+                    node_is(node_kind, hir.NodeKind.TraitDispatch)) &&
+                   !flags.ownership_values {
+                    return capability_unavailable(
+                        "backend has not implemented dyn trait objects",
+                        node.source.span);
+                }
+            }
+            if node_is(node_kind, hir.NodeKind.Move) ||
+               node_is(node_kind, hir.NodeKind.VecInit) ||
+               node_is(node_kind, hir.NodeKind.IndexRead) ||
+               node_is(node_kind, hir.NodeKind.IndexPlace) ||
+               node_is(node_kind, hir.NodeKind.VecSlice) ||
+               node_is(node_kind, hir.NodeKind.ForIn) {
+                if !flags.ownership_values {
+                    return capability_unavailable(
+                        "backend has not implemented this aggregate operation",
+                        node.source.span);
+                }
+            } else if node_is(node_kind, hir.NodeKind.ConstraintCall) {
+                return capability_unavailable(
+                    "backend has not implemented this aggregate operation",
+                    node.source.span);
+            }
+            if node_is(node_kind, hir.NodeKind.Call) {
+                var signature usize = 0;
+                switch node.data {
+                    case hir.NodeData.Call(value): signature = value.signature;
+                    default: {}
+                }
+                var call_signature_ok = false;
+                try {
+                    call_signature_ok = capability_signature_supported(
+                        inout capability, input, flags, signature);
+                } catch error Invalid {
+                    call_signature_ok = false;
+                }
+                if !call_signature_ok {
+                    return capability_unavailable(
+                        "backend does not support this call signature",
+                        node.source.span);
+                }
+            }
+            var node_type_ok = false;
+            try {
+                node_type_ok = capability_supported(inout capability, input,
+                    flags, node.type_id, 0);
+            } catch error Invalid {
+                node_type_ok = false;
+            }
+            if !node_type_ok {
+                if capability.budget {
+                    return capability_unavailable(
+                        "backend concrete type expansion budget exceeded",
+                        node.source.span);
+                }
+                return capability_unavailable(
+                    "backend does not support this concrete aggregate type",
+                    node.source.span);
+            }
+            for child in node.children {
+                vec.push(todo, child);
+            }
+        }
+    }
+    return model.UnitResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Internal, diagnostics: [], has_value: true);
+}
+
+func call_kind_of(node hir.HirNode) u32 {
+    switch node.data {
+        case hir.NodeData.Call(value): return callee_id(value.kind);
+        default: return 0;
+    }
+}

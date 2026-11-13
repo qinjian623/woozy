@@ -1,0 +1,1861 @@
+// CPP check.cpp:208-413, 507-1464, 2865-3020, 3269-3457 and the
+// declaration-side foreign wrappers at 3623-3662.
+package sema;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "app/wzcc/foreign" as foreignlib;
+import "app/wzcc/valueops" as valueopslib;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func trait_key(state Checker,actual usize,trait_value hir.TraitRef) TraitKey {
+    return TraitKey(actual:actual,declaration:trait_value.declaration,args:a_copy_ids(trait_value.args));
+}
+func trait_prototype(state inout Checker,method usize) option.Option[MethodPrototypeRef] throws Error {
+    for var trait_index usize=0;trait_index<vec.len(state.m.traits);trait_index+=1 {
+        var declaration=state.m.traits[trait_index];
+        for var method_index usize=0;method_index<vec.len(declaration.methods);method_index+=1 {
+            if declaration.methods[method_index].symbol==method {
+                return option.Option[MethodPrototypeRef].Some(MethodPrototypeRef(
+                    trait_index:trait_index,method_index:method_index));
+            }
+        }
+    }
+    return option.Option[MethodPrototypeRef].None;
+}
+func trait_decl(state inout Checker,symbol_id usize) option.Option[usize] throws Error {
+    for var index usize=0;index<vec.len(state.m.traits);index+=1 {
+        if state.m.traits[index].symbol==symbol_id {return option.Option[usize].Some(index);}
+    }
+    return option.Option[usize].None;
+}
+func symbol_from_module(state inout Checker,symbol_id usize,path string,name string) bool throws Error {
+    var declaration=symbol(inout state,symbol_id);
+    return declaration.name==name && a_module_path(inout state,declaration.module)==path;
+}
+func std_iterator_trait(state inout Checker) option.Option[usize] throws Error {
+    for var index usize=0;index<vec.len(state.m.traits);index+=1 {
+        let trait_symbol=state.m.traits[index].symbol;
+        if symbol_from_module(inout state,trait_symbol,"std/iter","Iterator") {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+func std_option(state inout Checker,type_id usize) bool throws Error {
+    var value=lookup_type(inout state,type_id);
+    return a_kind(value.kind,model.TypeKind.NominalEnum) &&
+        symbol_from_module(inout state,value.declaration,"std/option","Option");
+}
+func iterator_candidate(state inout Checker,r model.NodeRef,actual usize,trait_index usize)
+    option.Option[IteratorCandidate] throws Error {
+    if trait_index>=vec.len(state.m.traits) {throw internal_error("invalid sema trait reference");}
+    var tr=state.m.traits[trait_index];
+    var found=option.Option[IteratorCandidate].None;
+    for var index usize=0;index<vec.len(state.m.impls);index+=1 {
+        var implementation=state.m.impls[index];
+        switch implementation.trait_ref {
+            case option.Option.Some(application): {
+                if application.declaration!=tr.symbol || vec.len(application.args)!=1 {continue;}
+            }
+            case option.Option.None: {continue;}
+        }
+        var application=option.unwrap_or(implementation.trait_ref,
+            hir.TraitRef(declaration:0,args:[]));
+        var sub=vec.empty[model.Substitution]();
+        if !try_infer(inout state,r,implementation.self_type,actual,sub) {continue;}
+        var saved_depth=state.constraint_depth;
+        var accepted=true;
+        try {let ignored=finish_arguments(inout state,r,implementation.params,sub);}
+        catch error Error {
+            switch error {
+                case Error.Rejected(diagnostic,failure): {state.constraint_depth=saved_depth;accepted=false;}
+                case Error.Support(support): throw error;
+            }
+        }
+        if !accepted {continue;}
+        let element=substitute_type(inout state,application.args[0],sub);
+        if contains_parameter(inout state,element) {continue;}
+        switch found {
+            case option.Option.Some(previous): {
+                throw reject(inout state,r,"ambiguous Iterator implementation for for-in","E_TYPE_MISMATCH");
+            }
+            case option.Option.None: {}
+        }
+        found=option.Option[IteratorCandidate].Some(IteratorCandidate(
+            impl_index:option.Option[usize].Some(index),substitutions:sub,element:element));
+    }
+    return found;
+}
+func mentions_self(state inout Checker,type_id usize,self_symbol usize) bool throws Error {
+    var pending=vec.empty[usize]();vec.push(pending,type_id);
+    var seen=vec.empty[usize]();
+    for vec.len(pending)>0 {
+        var popped=vec.pop(pending);let current=option.unwrap_or(popped,0);
+        if !a_insert(seen,current) {continue;}
+        var value=lookup_type(inout state,current);
+        if a_kind(value.kind,model.TypeKind.TypeParameter) && value.declaration==self_symbol {return true;}
+        for arg in value.type_args {vec.push(pending,arg);}
+        for parameter in value.parameters {vec.push(pending,parameter.type_id);}
+        if a_kind(value.kind,model.TypeKind.Function) {
+            vec.push(pending,value.result);
+            switch value.throws_type {
+                case option.Option.Some(error_type):vec.push(pending,error_type);
+                case option.Option.None: {}
+            }
+        }
+    }
+    return false;
+}
+func require_object_safe(state inout Checker,r model.NodeRef,trait_symbol usize) throws Error {
+    var found=trait_decl(inout state,trait_symbol);
+    switch found {
+        case option.Option.None:throw reject(inout state,r,"dyn requires a real trait declaration","E_OBJECT_UNSAFE");
+        case option.Option.Some(trait_index): {
+            var tr=state.m.traits[trait_index];
+            for prototype in tr.methods {
+                let method_name=symbol(inout state,prototype.symbol).name;
+                var own=method_own_parameters(inout state,prototype.symbol);
+                if vec.len(own)>0 {
+                    throw reject(inout state,r,"trait method '"+method_name+
+                        "' has generic type parameters and is not object-safe","E_OBJECT_UNSAFE");
+                }
+                var signature=lookup_type(inout state,prototype.signature);
+                if vec.len(signature.parameters)==0 {
+                    throw reject(inout state,r,"trait method '"+method_name+
+                        "' has no Self receiver and is not object-safe","E_OBJECT_UNSAFE");
+                }
+                if !a_mode(signature.parameters[0].mode,model.ParamMode.Ordinary) {
+                    throw reject(inout state,r,"trait method '"+method_name+
+                        "' does not use an ordinary Self receiver","E_OBJECT_UNSAFE");
+                }
+                let self_type=lookup_type(inout state,signature.parameters[0].type_id);
+                if !a_kind(self_type.kind,model.TypeKind.TypeParameter) || self_type.declaration!=tr.self {
+                    throw reject(inout state,r,"trait method '"+method_name+
+                        "' does not receive Self as its first parameter","E_OBJECT_UNSAFE");
+                }
+                switch signature.throws_type {
+                    case option.Option.Some(error_type):
+                        throw reject(inout state,r,"throwing trait method '"+method_name+
+                            "' is not object-safe","E_OBJECT_UNSAFE");
+                    case option.Option.None: {}
+                }
+                if mentions_self(inout state,signature.result,tr.self) {
+                    throw reject(inout state,r,"trait method '"+method_name+
+                        "' returns Self and is not object-safe","E_OBJECT_UNSAFE");
+                }
+                for var index usize=1;index<vec.len(signature.parameters);index+=1 {
+                    var parameter=signature.parameters[index];
+                    if !a_mode(parameter.mode,model.ParamMode.Ordinary) {
+                        throw reject(inout state,r,"trait method '"+method_name+
+                            "' uses an owning/inout dispatch parameter","E_OBJECT_UNSAFE");
+                    }
+                    if mentions_self(inout state,parameter.type_id,tr.self) {
+                        throw reject(inout state,r,"trait method '"+method_name+
+                            "' uses Self in a non-receiver parameter","E_OBJECT_UNSAFE");
+                    }
+                }
+            }
+        }
+    }
+}
+func check_trait_application(state inout Checker,r model.NodeRef,declaration usize,args Vec[usize])
+    hir.TraitRef throws Error {
+    var found=a_generic_params_get(state.trait_parameters,declaration);
+    switch found {
+        case option.Option.None:throw reject(inout state,r,"trait application has no real declaration","E_NAME_KIND");
+        case option.Option.Some(parameters): {
+            if vec.len(args)!=vec.len(parameters) {
+                throw reject(inout state,r,"wrong number of trait type arguments","E_TYPE_MISMATCH");
+            }
+        }
+    }
+    return hir.TraitRef(declaration:declaration,args:a_copy_ids(args));
+}
+func check_trait_parameter_bounds(state inout Checker,r model.NodeRef,trait_value hir.TraitRef,
+    application usize,depth usize) throws Error {
+    var found=a_generic_params_get(state.trait_parameters,trait_value.declaration);
+    let declaration_found=trait_decl(inout state,trait_value.declaration);
+    var declaration_index usize=0;
+    switch declaration_found {
+        case option.Option.None:throw reject(inout state,r,"trait application has no real declaration","E_NAME_KIND");
+        case option.Option.Some(index):declaration_index=index;
+    }
+    var declaration=state.m.traits[declaration_index];
+    switch found {
+        case option.Option.None:throw reject(inout state,r,"trait application has no real declaration","E_NAME_KIND");
+        case option.Option.Some(parameters): {
+            if vec.len(trait_value.args)!=vec.len(parameters) {
+                throw reject(inout state,r,"wrong number of trait type arguments","E_TYPE_MISMATCH");
+            }
+        }
+    }
+    if depth>=48 {throw reject(inout state,r,"trait constraint graph exceeds checking budget","E_TYPE_MISMATCH");}
+    var key=TraitKey(actual:application,declaration:trait_value.declaration,args:a_copy_ids(trait_value.args));
+    if !a_trait_keys_insert(state.active_trait_bounds,key) {return;}
+    for arg in trait_value.args {let direct=check_inout_graph(inout state,r,arg,true,option.Option[usize].None,false);}
+    var sub=vec.empty[model.Substitution]();
+    vec.push(sub,model.Substitution(symbol:declaration.self,type_id:application));
+    for var index usize=0;index<vec.len(declaration.params);index+=1 {
+        vec.push(sub,model.Substitution(symbol:declaration.params[index].symbol,type_id:trait_value.args[index]));
+    }
+    let declared_parameters=option.unwrap_or(found,vec.empty[hir.GenericParam]());
+    for var index usize=0;index<vec.len(declared_parameters);index+=1 {
+        var parameter=declared_parameters[index];
+        switch parameter.trait_ref {
+            case option.Option.Some(bound_value): {
+                var bound=a_copy_trait_ref(bound_value);
+                for var arg_index usize=0;arg_index<vec.len(bound.args);arg_index+=1 {
+                    bound.args[arg_index]=substitute_type(inout state,bound.args[arg_index],sub);
+                }
+                check_trait_parameter_bounds(inout state,r,bound,trait_value.args[index],depth+1);
+                if !satisfies(inout state,r,trait_value.args[index],bound) {
+                    throw reject(inout state,r,
+                        "trait argument does not satisfy the trait declaration's parameter constraint",
+                        "E_TYPE_MISMATCH");
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    check_trait_application_data(inout state,r,trait_value,application);
+    a_trait_keys_remove(state.active_trait_bounds,key);
+}
+func parameter_type(state inout Checker,symbol_id usize) usize throws Error {
+    var value=model.empty_type(model.TypeKind.TypeParameter);
+    value.declaration=symbol_id;
+    return intern_type(inout state,value);
+}
+func template_inout_type(state inout Checker,type_id usize) bool throws Error {
+    var value=lookup_type(inout state,type_id);
+    if !a_kind(value.kind,model.TypeKind.TypeParameter) {return false;}
+    var declaration=value.declaration;
+    if !a_symbol_kind(symbol(inout state,declaration).kind,model.SymbolKind.TypeParameter) {return false;}
+    if a_contains(state.signature_parameters,declaration) {return true;}
+    for parameter in state.active_params {if parameter.symbol==declaration {return true;}}
+    return false;
+}
+func owning_inout_type(state inout Checker,type_id usize,trait_self option.Option[usize]) bool throws Error {
+    var parameters=a_copy_ids(state.signature_parameters);
+    for parameter in state.active_params {a_insert(parameters,parameter.symbol);}
+    switch trait_self {
+        case option.Option.Some(id):a_insert(parameters,id);
+        case option.Option.None: {}
+    }
+    try {
+        switch valueopslib.inout_slot(state.m,type_id,parameters) {
+            case hir.InoutSlot.Allowed:return true;
+            default:return false;
+        }
+    } catch error model.SupportError {throw Error.Support(error);}
+}
+func owning_inout_reason(state inout Checker,type_id usize,trait_self option.Option[usize]) string throws Error {
+    var parameters=a_copy_ids(state.signature_parameters);
+    for parameter in state.active_params {a_insert(parameters,parameter.symbol);}
+    switch trait_self {
+        case option.Option.Some(id):a_insert(parameters,id);
+        case option.Option.None: {}
+    }
+    try {
+        return valueopslib.inout_slot_reason(valueopslib.inout_slot(state.m,type_id,parameters));
+    } catch error model.SupportError {throw Error.Support(error);}
+}
+func trait_self_type(state inout Checker,type_id usize,self_symbol usize) bool throws Error {
+    var value=lookup_type(inout state,type_id);
+    return a_kind(value.kind,model.TypeKind.TypeParameter) && value.declaration==self_symbol &&
+        a_symbol_kind(symbol(inout state,self_symbol).kind,model.SymbolKind.TypeParameter);
+}
+func impl_of(state inout Checker,target usize) option.Option[usize] throws Error {
+    return a_impl_index_of(inout state,target);
+}
+func declared_self(state inout Checker,target usize) bool throws Error {
+    var found_impl=a_impl_index_of(inout state,target);
+    var implementation_index usize=0;
+    switch found_impl {
+        case option.Option.None:return false;
+        case option.Option.Some(index):implementation_index=index;
+    }
+    var implementation=state.m.impls[implementation_index];
+    var found=a_parameters_get(state.parameters,target);
+    var declared=vec.empty[hir.Parameter]();
+    switch found {
+        case option.Option.Some(values):declared=values;
+        case option.Option.None:return false;
+    }
+    if vec.len(declared)==0 || declared[0].label!="self" {return false;}
+    var signature_found=a_symbol_type_get(state.signatures,target);
+    switch signature_found {
+        case option.Option.None:return false;
+        case option.Option.Some(signature): {
+            var parameters=lookup_type(inout state,signature).parameters;
+            return vec.len(parameters)>0 && parameters[0].type_id==implementation.self_type;
+        }
+    }
+}
+func inherent_self_source(state inout Checker,target usize) bool throws Error {
+    var found_impl=a_impl_index_of(inout state,target);
+    var implementation_index usize=0;
+    switch found_impl {
+        case option.Option.None:return false;
+        case option.Option.Some(index):implementation_index=index;
+    }
+    var implementation=state.m.impls[implementation_index];
+    var found=a_parameters_get(state.parameters,target);
+    var declared=vec.empty[hir.Parameter]();
+    switch found {
+        case option.Option.Some(values):declared=values;
+        case option.Option.None:return false;
+    }
+    switch implementation.trait_ref {
+        case option.Option.Some(application):return false;
+        case option.Option.None: {}
+    }
+    if vec.len(declared)==0 {return false;}
+    let definition_found=symbol(inout state,declared[0].symbol).definition;
+    var definition=model.NodeRef(module:0,file:0,node:0);
+    switch definition_found {
+        case option.Option.None:return false;
+        case option.Option.Some(value):definition=value;
+    }
+    if vec.len(ast(inout state,definition).children)==0 {return false;}
+    let raw=child(inout state,definition,0);
+    return a_option_some_usize(occurrence(inout state,raw),implementation.self_parameter);
+}
+func inherent_method_source(state inout Checker,target usize) bool throws Error {
+    var found_impl=a_impl_index_of(inout state,target);
+    var implementation_index usize=0;
+    switch found_impl {
+        case option.Option.None:return false;
+        case option.Option.Some(index):implementation_index=index;
+    }
+    var implementation=state.m.impls[implementation_index];
+    switch implementation.trait_ref {
+        case option.Option.Some(application):return false;
+        case option.Option.None: {}
+    }
+    var generics=a_generic_params_get(state.generic_params,target);
+    var parameters=vec.empty[hir.GenericParam]();
+    switch generics {
+        case option.Option.None:return false;
+        case option.Option.Some(values):parameters=values;
+    }
+    if vec.len(parameters)<vec.len(implementation.params) {return false;}
+    for var index usize=0;index<vec.len(implementation.params);index+=1 {
+        if parameters[index].symbol!=implementation.params[index].symbol {return false;}
+    }
+    return true;
+}
+func inherent_method_route(state inout Checker,target usize,receiver bool,signature usize) bool throws Error {
+    if !inherent_method_source(inout state,target) {return false;}
+    var parameters=lookup_type(inout state,signature).parameters;
+    let self=declared_self(inout state,target);
+    if receiver {return (self || inherent_self_source(inout state,target)) && vec.len(parameters)>0;}
+    return !self;
+}
+func method_own_parameters(state inout Checker,method usize) Vec[hir.GenericParam] throws Error {
+    var found=a_generic_params_get(state.generic_params,method);
+    var parameters=vec.empty[hir.GenericParam]();
+    switch found {
+        case option.Option.None:return parameters;
+        case option.Option.Some(values):parameters=values;
+    }
+    var prefix usize=0;
+    var impl_found=a_impl_index_of(inout state,method);
+    switch impl_found {
+        case option.Option.Some(index):prefix=vec.len(state.m.impls[index].params);
+        case option.Option.None: {}
+    }
+    if vec.len(parameters)<prefix {return vec.empty[hir.GenericParam]();}
+    let out=vec.empty[hir.GenericParam]();
+    for var index usize=prefix;index<vec.len(parameters);index+=1 {vec.push(out,parameters[index]);}
+    return out;
+}
+func trait_impl_signature_matches(state inout Checker,tr hir.TraitDecl,implementation hir.ImplDecl,
+    prototype hir.MethodPrototype,method usize) bool throws Error {
+    let generics_found=a_generic_params_get(state.generic_params,method);
+    var generics=vec.empty[hir.GenericParam]();
+    switch generics_found {
+        case option.Option.None:return false;
+        case option.Option.Some(values):generics=values;
+    }
+    if vec.len(generics)<vec.len(implementation.params) {return false;}
+    for var index usize=0;index<vec.len(implementation.params);index+=1 {
+        if generics[index].symbol!=implementation.params[index].symbol {return false;}
+    }
+    let own=method_own_parameters(inout state,method);
+    let prototype_own=method_own_parameters(inout state,prototype.symbol);
+    if vec.len(own)!=vec.len(prototype_own) {return false;}
+    switch implementation.trait_ref {
+        case option.Option.None:return false;
+        case option.Option.Some(application): {
+            if application.declaration!=tr.symbol || vec.len(application.args)!=vec.len(tr.params) {
+                return false;
+            }
+        }
+    }
+    var application=option.unwrap_or(implementation.trait_ref,hir.TraitRef(declaration:0,args:[]));
+    var sub=vec.empty[model.Substitution]();
+    vec.push(sub,model.Substitution(symbol:tr.self,type_id:implementation.self_type));
+    for var index usize=0;index<vec.len(tr.params);index+=1 {
+        vec.push(sub,model.Substitution(symbol:tr.params[index].symbol,type_id:application.args[index]));
+    }
+    for var index usize=0;index<vec.len(own);index+=1 {
+        vec.push(sub,model.Substitution(symbol:prototype_own[index].symbol,
+            type_id:parameter_type(inout state,own[index].symbol)));
+    }
+    for var index usize=0;index<vec.len(own);index+=1 {
+        let left_some=option.is_some(prototype_own[index].trait_ref);
+        let right_some=option.is_some(own[index].trait_ref);
+        if left_some!=right_some {return false;}
+        switch prototype_own[index].trait_ref {
+            case option.Option.Some(expected_value): {
+                var expected=a_copy_trait_ref(expected_value);
+                for var arg_index usize=0;arg_index<vec.len(expected.args);arg_index+=1 {
+                    expected.args[arg_index]=substitute_type(inout state,expected.args[arg_index],sub);
+                }
+                switch own[index].trait_ref {
+                    case option.Option.Some(actual): {if !a_trait_equal(expected,actual) {return false;}}
+                    case option.Option.None:return false;
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+    var signature_found=a_symbol_type_get(state.signatures,method);
+    var signature usize=0;
+    switch signature_found {
+        case option.Option.None:return false;
+        case option.Option.Some(value):signature=value;
+    }
+    let expected_signature=substitute_type(inout state,prototype.signature,sub);
+    var actual_type=lookup_type(inout state,signature);
+    let expected_type=lookup_type(inout state,expected_signature);
+    if !types.equal(actual_type,expected_type) {
+        return false;
+    }
+    let declared_found=a_parameters_get(state.parameters,method);
+    var declared=vec.empty[hir.Parameter]();
+    switch declared_found {
+        case option.Option.None:return false;
+        case option.Option.Some(values):declared=values;
+    }
+    if vec.len(declared)!=vec.len(prototype.parameters) {return false;}
+    for var index usize=0;index<vec.len(declared);index+=1 {
+        if declared[index].label!=prototype.parameters[index].label {return false;}
+    }
+    return true;
+}
+func a_trait_prototype_by_name(state inout Checker,tr hir.TraitDecl,name string)
+    option.Option[usize] throws Error {
+    var found=option.Option[usize].None;
+    for var index usize=0;index<vec.len(tr.methods);index+=1 {
+        if symbol(inout state,tr.methods[index].symbol).name==name {
+            switch found {
+                case option.Option.Some(previous):return option.Option[usize].None;
+                case option.Option.None:found=option.Option[usize].Some(index);
+            }
+        }
+    }
+    return found;
+}
+func trait_impl_inout_source(state inout Checker,target usize,receiver bool)
+    option.Option[TraitMethodSource] throws Error {
+    var found_impl=a_impl_index_of(inout state,target);
+    var implementation_index usize=0;
+    switch found_impl {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(index):implementation_index=index;
+    }
+    var implementation=state.m.impls[implementation_index];
+    var application=hir.TraitRef(declaration:0,args:[]);
+    switch implementation.trait_ref {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(value):application=value;
+    }
+    var trait_found=trait_decl(inout state,application.declaration);
+    var trait_index usize=0;
+    switch trait_found {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(index):trait_index=index;
+    }
+    var tr=state.m.traits[trait_index];
+    var target_name=symbol(inout state,target).name;
+    var prototype_found=a_trait_prototype_by_name(inout state,tr,target_name);
+    var prototype_index usize=0;
+    switch prototype_found {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(index):prototype_index=index;
+    }
+    var prototype=tr.methods[prototype_index];
+    if !trait_impl_signature_matches(inout state,tr,implementation,prototype,target) {
+        return option.Option[TraitMethodSource].None;
+    }
+    var signature_found=a_symbol_type_get(state.signatures,target);
+    var signature usize=0;
+    switch signature_found {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(value):signature=value;
+    }
+    var prototype_signature=lookup_type(inout state,prototype.signature);
+    var method_signature=lookup_type(inout state,signature);
+    if vec.len(prototype.parameters)==0 || vec.len(prototype_signature.parameters)==0 {
+        if receiver {return option.Option[TraitMethodSource].None;}
+        return option.Option[TraitMethodSource].Some(TraitMethodSource(
+            impl_index:implementation_index,trait_index:trait_index,
+            prototype_index:prototype_index));
+    }
+    if vec.len(method_signature.parameters)==0 {return option.Option[TraitMethodSource].None;}
+    if receiver {
+        var raw_self=lookup_type(inout state,prototype_signature.parameters[0].type_id);
+        if !a_kind(raw_self.kind,model.TypeKind.TypeParameter) ||
+           raw_self.declaration!=tr.self ||
+           !a_mode(prototype_signature.parameters[0].mode,method_signature.parameters[0].mode) ||
+           method_signature.parameters[0].type_id!=implementation.self_type {
+            return option.Option[TraitMethodSource].None;
+        }
+    }
+    return option.Option[TraitMethodSource].Some(TraitMethodSource(
+        impl_index:implementation_index,trait_index:trait_index,
+        prototype_index:prototype_index));
+}
+func trait_impl_move_source(state inout Checker,target usize,receiver bool)
+    option.Option[TraitMethodSource] throws Error {
+    let found_impl=a_impl_index_of(inout state,target);
+    var implementation_index usize=0;
+    switch found_impl {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(index):implementation_index=index;
+    }
+    let implementation=state.m.impls[implementation_index];
+    var application=hir.TraitRef(declaration:0,args:[]);
+    switch implementation.trait_ref {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(value):application=value;
+    }
+    var trait_found=trait_decl(inout state,application.declaration);
+    var trait_index usize=0;
+    switch trait_found {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(index):trait_index=index;
+    }
+    var tr=state.m.traits[trait_index];
+    let target_name=symbol(inout state,target).name;
+    var prototype_found=a_trait_prototype_by_name(inout state,tr,target_name);
+    var prototype_index usize=0;
+    switch prototype_found {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(index):prototype_index=index;
+    }
+    var prototype=tr.methods[prototype_index];
+    if !trait_impl_signature_matches(inout state,tr,implementation,prototype,target) {
+        return option.Option[TraitMethodSource].None;
+    }
+    let signature_found=a_symbol_type_get(state.signatures,target);
+    var signature usize=0;
+    switch signature_found {
+        case option.Option.None:return option.Option[TraitMethodSource].None;
+        case option.Option.Some(value):signature=value;
+    }
+    let prototype_signature=lookup_type(inout state,prototype.signature);
+    let method_signature=lookup_type(inout state,signature);
+    if vec.len(prototype.parameters)==0 || vec.len(prototype_signature.parameters)==0 ||
+       vec.len(method_signature.parameters)==0 {
+        return option.Option[TraitMethodSource].None;
+    }
+    if receiver {
+        var raw_self=lookup_type(inout state,prototype_signature.parameters[0].type_id);
+        if !a_kind(raw_self.kind,model.TypeKind.TypeParameter) ||
+           raw_self.declaration!=tr.self ||
+           !a_mode(prototype_signature.parameters[0].mode,method_signature.parameters[0].mode) ||
+           method_signature.parameters[0].type_id!=implementation.self_type {
+            return option.Option[TraitMethodSource].None;
+        }
+    }
+    return option.Option[TraitMethodSource].Some(TraitMethodSource(
+        impl_index:implementation_index,trait_index:trait_index,
+        prototype_index:prototype_index));
+}
+func a_constraint_shared(state inout Checker,target usize,trait_value hir.TraitRef,receiver usize)
+    option.Option[MethodPrototypeRef] throws Error {
+    let trait_found=trait_decl(inout state,trait_value.declaration);
+    var trait_index usize=0;
+    switch trait_found {
+        case option.Option.None:return option.Option[MethodPrototypeRef].None;
+        case option.Option.Some(index):trait_index=index;
+    }
+    let receiver_type=lookup_type(inout state,receiver);
+    if !a_kind(receiver_type.kind,model.TypeKind.TypeParameter) {
+        return option.Option[MethodPrototypeRef].None;
+    }
+    let bounded=a_bound_get(state.bounds,receiver_type.declaration);
+    var has_bound=false;
+    switch bounded {
+        case option.Option.Some(value): {
+            switch value {
+                case option.Option.Some(bound):has_bound=a_trait_equal(bound,trait_value);
+                case option.Option.None: {}
+            }
+        }
+        case option.Option.None: {}
+    }
+    if !has_bound {return option.Option[MethodPrototypeRef].None;}
+    var active=false;
+    for parameter in state.active_params {if parameter.symbol==receiver_type.declaration {active=true;}}
+    if !active {return option.Option[MethodPrototypeRef].None;}
+    let generics=a_generic_params_get(state.generic_params,target);
+    switch generics {
+        case option.Option.None:return option.Option[MethodPrototypeRef].None;
+        case option.Option.Some(value): {}
+    }
+    let tr=state.m.traits[trait_index];
+    var prototype_found=option.Option[usize].None;
+    for var index usize=0;index<vec.len(tr.methods);index+=1 {
+        if tr.methods[index].symbol==target {
+            switch prototype_found {
+                case option.Option.Some(previous):return option.Option[MethodPrototypeRef].None;
+                case option.Option.None:prototype_found=option.Option[usize].Some(index);
+            }
+        }
+    }
+    switch prototype_found {
+        case option.Option.None:return option.Option[MethodPrototypeRef].None;
+        case option.Option.Some(index):return option.Option[MethodPrototypeRef].Some(
+            MethodPrototypeRef(trait_index:trait_index,method_index:index));
+    }
+}
+// Value-form T.method keeps the real first-position Self receiver requirement.
+func a_constraint_value_self(state inout Checker,reference MethodPrototypeRef) bool throws Error {
+    let prototype=state.m.traits[reference.trait_index].methods[reference.method_index];
+    if vec.len(prototype.parameters)==0 {return false;}
+    let signature=lookup_type(inout state,prototype.signature);
+    if vec.len(signature.parameters)==0 {return false;}
+    let raw_self=lookup_type(inout state,signature.parameters[0].type_id);
+    let tr=state.m.traits[reference.trait_index];
+    return a_kind(raw_self.kind,model.TypeKind.TypeParameter) &&
+        raw_self.declaration==tr.self;
+}
+func constraint_method_source(state inout Checker,target usize,trait_value hir.TraitRef,receiver usize)
+    option.Option[MethodPrototypeRef] throws Error {
+    let found=a_constraint_shared(inout state,target,trait_value,receiver);
+    switch found {
+        case option.Option.None:return option.Option[MethodPrototypeRef].None;
+        case option.Option.Some(reference): {
+            if !a_constraint_value_self(inout state,reference) {
+                return option.Option[MethodPrototypeRef].None;
+            }
+            return found;
+        }
+    }
+}
+func constraint_method_move_source(state inout Checker,target usize,trait_value hir.TraitRef,receiver usize)
+    option.Option[MethodPrototypeRef] throws Error {
+    let found=a_constraint_shared(inout state,target,trait_value,receiver);
+    switch found {
+        case option.Option.None:return option.Option[MethodPrototypeRef].None;
+        case option.Option.Some(reference): {
+            if !a_constraint_value_self(inout state,reference) {
+                return option.Option[MethodPrototypeRef].None;
+            }
+            return found;
+        }
+    }
+}
+// CPP 868-909: static move source checks only the declared top-level modes.
+func constraint_static_method_move_source(state inout Checker,target usize,trait_value hir.TraitRef,receiver usize)
+    option.Option[MethodPrototypeRef] throws Error {
+    let found=a_constraint_shared(inout state,target,trait_value,receiver);
+    var reference=MethodPrototypeRef(trait_index:0,method_index:0);
+    switch found {
+        case option.Option.None:return option.Option[MethodPrototypeRef].None;
+        case option.Option.Some(value):reference=value;
+    }
+    let prototype=state.m.traits[reference.trait_index].methods[reference.method_index];
+    let signature=lookup_type(inout state,prototype.signature);
+    var top_level_inout=false;
+    for parameter in signature.parameters {
+        if a_mode(parameter.mode,model.ParamMode.Inout) {top_level_inout=true;}
+    }
+    for parameter in signature.parameters {
+        if top_level_inout {
+            if !a_mode(parameter.mode,model.ParamMode.Ordinary) &&
+               !a_mode(parameter.mode,model.ParamMode.Move) &&
+               !a_mode(parameter.mode,model.ParamMode.Inout) {
+                return option.Option[MethodPrototypeRef].None;
+            }
+        } else {
+            if !a_mode(parameter.mode,model.ParamMode.Ordinary) &&
+               !a_mode(parameter.mode,model.ParamMode.Move) {
+                return option.Option[MethodPrototypeRef].None;
+            }
+        }
+    }
+    return found;
+}
+// CPP 914-959: static value-qualified source keeps its own mode filter.
+func constraint_static_method_source(state inout Checker,target usize,trait_value hir.TraitRef,receiver usize)
+    option.Option[MethodPrototypeRef] throws Error {
+    let found=a_constraint_shared(inout state,target,trait_value,receiver);
+    var reference=MethodPrototypeRef(trait_index:0,method_index:0);
+    switch found {
+        case option.Option.None:return option.Option[MethodPrototypeRef].None;
+        case option.Option.Some(value):reference=value;
+    }
+    let prototype=state.m.traits[reference.trait_index].methods[reference.method_index];
+    let signature=lookup_type(inout state,prototype.signature);
+    var top_level_inout=false;
+    for parameter in signature.parameters {
+        if a_mode(parameter.mode,model.ParamMode.Inout) {top_level_inout=true;}
+    }
+    for parameter in signature.parameters {
+        if top_level_inout {
+            if !a_mode(parameter.mode,model.ParamMode.Ordinary) &&
+               !a_mode(parameter.mode,model.ParamMode.Move) &&
+               !a_mode(parameter.mode,model.ParamMode.Inout) {
+                return option.Option[MethodPrototypeRef].None;
+            }
+        } else {
+            if !a_mode(parameter.mode,model.ParamMode.Ordinary) &&
+               !a_mode(parameter.mode,model.ParamMode.Move) {
+                return option.Option[MethodPrototypeRef].None;
+            }
+        }
+    }
+    return found;
+}
+struct AInoutMemo { type_id usize; value bool; }
+struct AInoutWork { type_id usize; depth usize; }
+func a_inout_memo_get(memo Vec[AInoutMemo],type_id usize) option.Option[bool] {
+    for entry in memo {if entry.type_id==type_id {return option.Option[bool].Some(entry.value);}}
+    return option.Option[bool].None;
+}
+func a_inout_memo_set(memo Vec[AInoutMemo],type_id usize,value bool) {
+    for var index usize=0;index<vec.len(memo);index+=1 {
+        if memo[index].type_id==type_id {memo[index].value=value;return;}
+    }
+    vec.push(memo,AInoutMemo(type_id:type_id,value:value));
+}
+func a_has_inout(state inout Checker,root usize,memo Vec[AInoutMemo]) bool throws Error {
+    var cached=a_inout_memo_get(memo,root);
+    switch cached {
+        case option.Option.Some(value):return value;
+        case option.Option.None: {}
+    }
+    var seen_types=vec.empty[usize]();
+    var seen_declarations=vec.empty[usize]();
+    var pending=vec.empty[usize]();vec.push(pending,root);
+    for vec.len(pending)>0 {
+        var popped=vec.pop(pending);let id=option.unwrap_or(popped,0);
+        if !a_insert(seen_types,id) {continue;}
+        var value=lookup_type(inout state,id);
+        for arg in value.type_args {vec.push(pending,arg);}
+        if a_kind(value.kind,model.TypeKind.Function) {
+            for parameter in value.parameters {
+                if a_mode(parameter.mode,model.ParamMode.Inout) {
+                    a_inout_memo_set(memo,root,true);return true;
+                }
+                vec.push(pending,parameter.type_id);
+            }
+            vec.push(pending,value.result);
+            switch value.throws_type {
+                case option.Option.Some(error_type):vec.push(pending,error_type);
+                case option.Option.None: {}
+            }
+        }
+        if !a_kind(value.kind,model.TypeKind.NominalStruct) &&
+           !a_kind(value.kind,model.TypeKind.NominalEnum) {continue;}
+        var declaration=nominal(inout state,id);
+        if !a_insert(seen_declarations,declaration.symbol) {continue;}
+        for field in declaration.fields {vec.push(pending,field.type_id);}
+        for variant in declaration.variants {
+            for field in variant.payload {vec.push(pending,field.type_id);}
+        }
+    }
+    a_inout_memo_set(memo,root,false);
+    return false;
+}
+func check_inout_graph(state inout Checker,r model.NodeRef,root usize,allow_template bool,
+    trait_self option.Option[usize],trait_self_callback bool) bool throws Error {
+    let visited_args=vec.empty[usize]();
+    let expanded_nominals=vec.empty[usize]();
+    var direct_inout=false;
+    let inout_memo=vec.empty[AInoutMemo]();
+    let work=vec.empty[AInoutWork]();vec.push(work,AInoutWork(type_id:root,depth:0));
+    for var next usize=0;next<vec.len(work);next+=1 {
+        var item=work[next];let id=item.type_id;let depth=item.depth;
+        if depth>512 {
+            throw unavailable(inout state,r,"inout type graph exceeds checking budget");
+        }
+        var value=lookup_type(inout state,id);
+        if a_kind(value.kind,model.TypeKind.TypeParameter) {continue;}
+        if a_kind(value.kind,model.TypeKind.Vec) {
+            if !a_insert(visited_args,id) {continue;}
+            for arg in value.type_args {vec.push(work,AInoutWork(type_id:arg,depth:depth+1));}
+            continue;
+        }
+        if a_kind(value.kind,model.TypeKind.NominalStruct) ||
+           a_kind(value.kind,model.TypeKind.NominalEnum) {
+            if a_insert(visited_args,id) {
+                for arg in value.type_args {vec.push(work,AInoutWork(type_id:arg,depth:depth+1));}
+            }
+            var declaration=nominal(inout state,id);
+            if a_insert(expanded_nominals,id) && a_has_inout(inout state,id,inout_memo) {
+                var subs=nominal_subs(inout state,id);
+                for field in declaration.fields {
+                    var concrete=substitute_type(inout state,field.type_id,subs);
+                    vec.push(work,AInoutWork(type_id:concrete,depth:depth+1));
+                }
+                for variant in declaration.variants {
+                    for field in variant.payload {
+                        let concrete=substitute_type(inout state,field.type_id,subs);
+                        vec.push(work,AInoutWork(type_id:concrete,depth:depth+1));
+                    }
+                }
+            }
+            continue;
+        }
+        if !a_kind(value.kind,model.TypeKind.Function) || !a_insert(visited_args,id) {continue;}
+        for var index usize=0;index<vec.len(value.parameters);index+=1 {
+            var parameter=value.parameters[index];
+            if a_mode(parameter.mode,model.ParamMode.Inout) {
+                if depth==0 {direct_inout=true;}
+                var trait_self_slot=false;
+                switch trait_self {
+                    case option.Option.Some(self_symbol): {
+                        trait_self_slot=trait_self_type(inout state,parameter.type_id,self_symbol);
+                    }
+                    case option.Option.None: {}
+                }
+                var data_self=option.Option[usize].None;
+                switch trait_self {
+                    case option.Option.Some(self_symbol): {
+                        if depth>0 || index>0 {data_self=option.Option[usize].Some(self_symbol);}
+                    }
+                    case option.Option.None: {}
+                }
+                if !owning_inout_type(inout state,parameter.type_id,data_self) &&
+                   !(allow_template && template_inout_type(inout state,parameter.type_id)) &&
+                   !trait_self_slot {
+                    var reason=owning_inout_reason(inout state,parameter.type_id,data_self);
+                    if reason=="" {
+                        throw unavailable(inout state,r,"inout accepts only whole Woozy value bindings");
+                    }
+                    throw unavailable(inout state,r,reason);
+                }
+            }
+            vec.push(work,AInoutWork(type_id:parameter.type_id,depth:depth+1));
+        }
+        vec.push(work,AInoutWork(type_id:value.result,depth:depth+1));
+        switch value.throws_type {
+            case option.Option.Some(error_type):vec.push(work,AInoutWork(type_id:error_type,depth:depth+1));
+            case option.Option.None: {}
+        }
+    }
+    return direct_inout;
+}
+func a_allow_type(state inout Checker,type_id usize,base Vec[usize],seen Vec[usize]) throws Error {
+    if !a_insert(seen,type_id) {return;}
+    var value=lookup_type(inout state,type_id);
+    if a_kind(value.kind,model.TypeKind.TypeParameter) {a_insert(base,value.declaration);return;}
+    for arg in value.type_args {a_allow_type(inout state,arg,base,seen);}
+    for parameter in value.parameters {a_allow_type(inout state,parameter.type_id,base,seen);}
+    if a_kind(value.kind,model.TypeKind.Function) {
+        a_allow_type(inout state,value.result,base,seen);
+        switch value.throws_type {
+            case option.Option.Some(error_type):a_allow_type(inout state,error_type,base,seen);
+            case option.Option.None: {}
+        }
+    }
+}
+func check_trait_application_data(state inout Checker,r model.NodeRef,trait_value hir.TraitRef,application usize) throws Error {
+    let trait_found=trait_decl(inout state,trait_value.declaration);
+    var trait_index usize=0;
+    switch trait_found {
+        case option.Option.None:return;
+        case option.Option.Some(index):trait_index=index;
+    }
+    let tr=state.m.traits[trait_index];
+    if vec.len(trait_value.args)!=vec.len(tr.params) {return;}
+    var sub=vec.empty[model.Substitution]();
+    vec.push(sub,model.Substitution(symbol:tr.self,type_id:application));
+    for var index usize=0;index<vec.len(tr.params);index+=1 {
+        vec.push(sub,model.Substitution(symbol:tr.params[index].symbol,type_id:trait_value.args[index]));
+    }
+    let base=vec.empty[usize]();let seen=vec.empty[usize]();
+    a_allow_type(inout state,application,base,seen);
+    for arg in trait_value.args {a_allow_type(inout state,arg,base,seen);}
+    let saved=state.signature_parameters;
+    for method in tr.methods {
+        state.signature_parameters=a_copy_ids(base);
+        for parameter in method_own_parameters(inout state,method.symbol) {
+            a_insert(state.signature_parameters,parameter.symbol);
+        }
+        var signature=substitute_type(inout state,method.signature,sub);
+        var direct=check_inout_graph(inout state,r,signature,true,option.Option[usize].None,false);
+    }
+    state.signature_parameters=saved;
+}
+func check_generic_trait_method_modes(state inout Checker,r model.NodeRef,
+    own Vec[hir.GenericParam],signature usize,trait_self option.Option[usize],generic_trait bool) throws Error {
+    if !generic_trait && vec.len(own)==0 {return;}
+    var parameters=lookup_type(inout state,signature).parameters;
+    for parameter in parameters {
+        if a_mode(parameter.mode,model.ParamMode.Ordinary) {continue;}
+        if !a_mode(parameter.mode,model.ParamMode.Move) &&
+           !a_mode(parameter.mode,model.ParamMode.Inout) {
+            throw unavailable(inout state,r,"trait method parameter mode is not implemented");
+        }
+    }
+}
+func check_function_value_inout(state inout Checker,r model.NodeRef,target usize,signature usize) throws Error {
+    var direct=check_inout_graph(inout state,r,signature,true,option.Option[usize].None,false);
+    if !direct {return;}
+    let generics=a_generic_params_get(state.generic_params,target);
+    var has=false;
+    switch generics {
+        case option.Option.Some(values):has=vec.len(values)>0;
+        case option.Option.None: {}
+    }
+    if has && !free_generic_template(inout state,target) {
+        throw unavailable(inout state,r,"generic/method inout is not implemented");
+    }
+}
+func check_method_value_modes(state inout Checker,r model.NodeRef,target usize,signature usize,
+    required option.Option[hir.TraitRef],qualifier option.Option[usize]) throws Error {
+    let direct=check_inout_graph(inout state,r,signature,true,option.Option[usize].None,false);
+    if !direct {return;}
+    var source=false;
+    var have_required=false;var have_qualifier=false;
+    var required_value=hir.TraitRef(declaration:0,args:[]);var qualifier_value usize=0;
+    switch required {
+        case option.Option.Some(value):have_required=true;required_value=value;
+        case option.Option.None: {}
+    }
+    switch qualifier {
+        case option.Option.Some(value):have_qualifier=true;qualifier_value=value;
+        case option.Option.None: {}
+    }
+    if have_required && have_qualifier {
+        switch constraint_static_method_source(inout state,target,required_value,qualifier_value) {
+            case option.Option.Some(value):source=true;
+            case option.Option.None: {}
+        }
+        if !source {
+            switch constraint_static_method_move_source(inout state,target,required_value,qualifier_value) {
+                case option.Option.Some(value):source=true;
+                case option.Option.None: {}
+            }
+        }
+    } else {
+        let impl_found=a_impl_index_of(inout state,target);
+        switch impl_found {
+            case option.Option.Some(index): {
+                switch state.m.impls[index].trait_ref {
+                    case option.Option.None: {
+                        if inherent_method_source(inout state,target) {source=true;}
+                    }
+                    case option.Option.Some(application): {}
+                }
+            }
+            case option.Option.None: {}
+        }
+        if !source {
+            switch trait_impl_inout_source(inout state,target,false) {
+                case option.Option.Some(value):source=true;
+                case option.Option.None: {}
+            }
+        }
+        if !source {
+            switch trait_impl_move_source(inout state,target,false) {
+                case option.Option.Some(value):source=true;
+                case option.Option.None: {}
+            }
+        }
+    }
+    if !source {
+        throw unavailable(inout state,r,"method function value move/inout source is not implemented");
+    }
+}
+func generics(state inout Checker,r model.NodeRef) Vec[hir.GenericParam] throws Error {
+    var result=vec.empty[hir.GenericParam]();
+    for id in ast(inout state,r).children {
+        let generic_ref=at(r,id);
+        if !a_kind_ast(ast(inout state,generic_ref).kind,model.AstKind.GenericParameter) {continue;}
+        var symbol_id=definition(inout state,generic_ref);
+        var trait_ref=option.Option[hir.TraitRef].None;
+        if vec.len(ast(inout state,generic_ref).children)>0 {
+            let bound_ref=child(inout state,generic_ref,0);
+            var declaration=occurrence(inout state,bound_ref);
+            var declaration_id usize=0;var valid=false;
+            switch declaration {
+                case option.Option.Some(value): {
+                    declaration_id=value;
+                    valid=a_symbol_kind(symbol(inout state,value).kind,model.SymbolKind.Trait);
+                }
+                case option.Option.None: {}
+            }
+            if !valid {throw reject(inout state,generic_ref,"generic constraint must name a trait","E_TYPE_MISMATCH");}
+            var args=vec.empty[usize]();
+            if a_kind_ast(ast(inout state,bound_ref).kind,model.AstKind.NeutralBracket) {
+                for var index usize=1;index<vec.len(ast(inout state,bound_ref).children);index+=1 {
+                    var argument_ref=child(inout state,bound_ref,index);
+                    vec.push(args,parse_type(inout state,argument_ref,
+                        option.Option[usize].None,false));
+                }
+            } else {
+                for child_id in ast(inout state,bound_ref).children {
+                    vec.push(args,parse_type(inout state,at(bound_ref,child_id),
+                        option.Option[usize].None,false));
+                }
+            }
+            trait_ref=option.Option[hir.TraitRef].Some(check_trait_application(
+                inout state,bound_ref,declaration_id,args));
+        }
+        a_bound_set(state.bounds,symbol_id,trait_ref);
+        vec.push(result,hir.GenericParam(symbol:symbol_id,trait_ref:trait_ref,
+            source:source(inout state,generic_ref)));
+        let created=parameter_type(inout state,symbol_id);
+    }
+    return result;
+}
+func a_kind_ast(kind model.AstKind,expected model.AstKind) bool {
+    return model.ast_kind_id(kind)==model.ast_kind_id(expected);
+}
+func nominal(state inout Checker,type_id usize) hir.NominalDecl throws Error {
+    var value=lookup_type(inout state,type_id);
+    var found=a_nominal_id_get(state.nominal_ids,value.declaration);
+    var index usize=0;
+    switch found {
+        case option.Option.None:throw internal_error("nominal declaration is missing");
+        case option.Option.Some(value_index):index=value_index;
+    }
+    if index>=vec.len(state.m.nominals) {throw internal_error("invalid sema nominal reference");}
+    return state.m.nominals[index];
+}
+func nominal_subs(state inout Checker,type_id usize) Vec[model.Substitution] throws Error {
+    var declaration=nominal(inout state,type_id);
+    var value=lookup_type(inout state,type_id);
+    var result=vec.empty[model.Substitution]();
+    for var index usize=0;index<vec.len(declaration.params);index+=1 {
+        if index>=vec.len(value.type_args) {throw internal_error("nominal type argument count");}
+        vec.push(result,model.Substitution(symbol:declaration.params[index].symbol,
+            type_id:value.type_args[index]));
+    }
+    return result;
+}
+func field_type(state inout Checker,type_id usize,field hir.FieldDecl) usize throws Error {
+    let subs=nominal_subs(inout state,type_id);
+    return substitute_type(inout state,field.type_id,subs);
+}
+struct ASignatureParts {
+    parameters Vec[usize];
+    result option.Option[usize];
+    throws_type option.Option[usize];
+}
+func a_split_signature(state inout Checker,r model.NodeRef) ASignatureParts throws Error {
+    var n=ast(inout state,r);
+    if !a_kind_ast(n.kind,model.AstKind.Function) &&
+       !a_kind_ast(n.kind,model.AstKind.FunctionLiteral) &&
+       !a_kind_ast(n.kind,model.AstKind.FunctionType) {
+        throw internal_error("signature owner is not a function");
+    }
+    let parameters=vec.empty[usize]();
+    var result=option.Option[usize].None;
+    var throws_type=option.Option[usize].None;
+    for id in n.children {
+        var current=ast(inout state,at(r,id));
+        if a_kind_ast(current.kind,model.AstKind.Parameter) {
+            vec.push(parameters,id);continue;
+        }
+        if a_kind_ast(current.kind,model.AstKind.NamedType) ||
+           a_kind_ast(current.kind,model.AstKind.FunctionType) ||
+           a_kind_ast(current.kind,model.AstKind.ParenthesizedType) ||
+           a_kind_ast(current.kind,model.AstKind.TraitObjectType) {
+            if current.token_begin==0 {
+                throw internal_error("invalid signature type token range");
+            }
+            let file=parsed_file(inout state,r);
+            if current.token_end>vec.len(file.lexed.tokens) {
+                throw internal_error("invalid signature type token range");
+            }
+            let spelling=file.lexed.tokens[current.token_begin-1].spelling;
+            if spelling=="throws" {
+                switch throws_type {
+                    case option.Option.Some(previous):throw internal_error("duplicate signature type component");
+                    case option.Option.None:throws_type=option.Option[usize].Some(id);
+                }
+            } else {
+                switch result {
+                    case option.Option.Some(previous):throw internal_error("duplicate signature type component");
+                    case option.Option.None:result=option.Option[usize].Some(id);
+                }
+            }
+        }
+    }
+    return ASignatureParts(parameters:parameters,result:result,throws_type:throws_type);
+}
+func parse_type(state inout Checker,r model.NodeRef,trait_self option.Option[usize],
+    trait_self_callback bool) usize throws Error {
+    let n=ast(inout state,r);
+    if a_kind_ast(n.kind,model.AstKind.ParenthesizedType) ||
+       a_kind_ast(n.kind,model.AstKind.Parenthesized) ||
+       a_kind_ast(n.kind,model.AstKind.BracketItem) {
+        let inner=child(inout state,r,0);
+        return parse_type(inout state,inner,trait_self,trait_self_callback);
+    }
+    if a_kind_ast(n.kind,model.AstKind.TraitObjectType) {
+        if vec.len(n.children)!=1 {
+            throw reject(inout state,r,"dyn requires one trait application","E_OBJECT_UNSAFE");
+        }
+        let named=child(inout state,r,0);
+        if !a_kind_ast(ast(inout state,named).kind,model.AstKind.NamedType) {
+            throw reject(inout state,r,"dyn requires a trait name","E_OBJECT_UNSAFE");
+        }
+        var declaration=occurrence(inout state,named);
+        var declaration_id usize=0;var valid=false;
+        switch declaration {
+            case option.Option.Some(value): {
+                declaration_id=value;
+                valid=a_symbol_kind(symbol(inout state,value).kind,model.SymbolKind.Trait);
+            }
+            case option.Option.None: {}
+        }
+        if !valid {throw reject(inout state,named,"dyn requires a trait name","E_NAME_KIND");}
+        var args=vec.empty[usize]();
+        for id in ast(inout state,named).children {
+            vec.push(args,parse_type(inout state,at(named,id),
+                option.Option[usize].None,false));
+        }
+        var application=check_trait_application(inout state,named,declaration_id,args);
+        require_object_safe(inout state,r,declaration_id);
+        var value=model.empty_type(model.TypeKind.TraitObject);
+        value.declaration=declaration_id;value.type_args=application.args;
+        return intern_type(inout state,value);
+    }
+    if a_kind_ast(n.kind,model.AstKind.FunctionType) {
+        return signature(inout state,r,trait_self,true,trait_self_callback);
+    }
+    var symbol_found=option.Option[usize].None;
+    var args=vec.empty[usize]();
+    if a_kind_ast(n.kind,model.AstKind.NeutralBracket) {
+        let head=child(inout state,r,0);
+        symbol_found=occurrence(inout state,head);
+        for var index usize=1;index<vec.len(n.children);index+=1 {
+            let argument_ref=child(inout state,r,index);
+            vec.push(args,parse_type(inout state,argument_ref,
+                option.Option[usize].None,false));
+        }
+    } else if a_kind_ast(n.kind,model.AstKind.NamedType) ||
+              a_kind_ast(n.kind,model.AstKind.Name) ||
+              a_kind_ast(n.kind,model.AstKind.Member) {
+        symbol_found=occurrence(inout state,r);
+        if a_kind_ast(n.kind,model.AstKind.NamedType) {
+            for id in n.children {
+                vec.push(args,parse_type(inout state,at(r,id),
+                    option.Option[usize].None,false));
+            }
+        }
+    } else {
+        throw reject(inout state,r,"generic arguments must be types","E_NAME_KIND");
+    }
+    var symbol_id usize=0;
+    switch symbol_found {
+        case option.Option.Some(value):symbol_id=value;
+        case option.Option.None:throw reject(inout state,r,"type has no resolved symbol","E_NAME_KIND");
+    }
+    let kind=symbol(inout state,symbol_id).kind;
+    if a_symbol_kind(kind,model.SymbolKind.TypeParameter) {
+        if vec.len(args)>0 {throw reject(inout state,r,"type parameter does not accept arguments","E_TYPE_MISMATCH");}
+        let self_found=a_symbol_type_get(state.self_types,symbol_id);
+        switch self_found {
+            case option.Option.Some(value):return value;
+            case option.Option.None:return parameter_type(inout state,symbol_id);
+        }
+    }
+    if a_symbol_kind(kind,model.SymbolKind.Type) {
+        let export_found=a_foreign_export(inout state,symbol_id);
+        switch export_found {
+            case option.Option.Some(external): {
+                if vec.len(args)>0 {
+                    throw reject(inout state,r,"external type does not accept type arguments","E_TYPE_MISMATCH");
+                }
+                switch external.c_type {
+                    case option.Option.Some(named_id): {
+                        let reference=model.CTypeRef(kind:model.CTypeKind.Named,scalar:"",
+                            writable:false,args:[],named:named_id);
+                        return c_type(inout state,reference);
+                    }
+                    case option.Option.None: {}
+                }
+                switch external.c_type_ref {
+                    case option.Option.Some(reference):return c_type(inout state,reference);
+                    case option.Option.None: {}
+                }
+                switch external.declaration {
+                    case option.Option.None:throw reject(inout state,r,"external type lacks declaration","E_TYPE_MISMATCH");
+                    case option.Option.Some(declaration_id): {
+                        if declaration_id>=vec.len(state.m.foreign_bindings) {
+                            throw internal_error("invalid foreign binding reference");
+                        }
+                        return state.m.foreign_bindings[declaration_id].type_id;
+                    }
+                }
+            }
+            case option.Option.None: {}
+        }
+        let nominal_found=a_nominal_id_get(state.nominal_ids,symbol_id);
+        var nominal_index usize=0;
+        switch nominal_found {
+            case option.Option.None:throw unavailable(inout state,r,"foreign types require T10/T11");
+            case option.Option.Some(value):nominal_index=value;
+        }
+        var declaration=state.m.nominals[nominal_index];
+        if vec.len(args)!=vec.len(declaration.params) {
+            throw reject(inout state,r,"wrong number of type arguments","E_TYPE_MISMATCH");
+        }
+        var value=model.empty_type(declaration.kind);
+        value.declaration=symbol_id;value.type_args=args;
+        return intern_type(inout state,value);
+    }
+    if !a_symbol_kind(kind,model.SymbolKind.BuiltinType) {
+        throw reject(inout state,r,"name does not denote a value type","E_NAME_KIND");
+    }
+    let name=symbol(inout state,symbol_id).name;
+    if a_private_runtime_type_name(name) {
+        let owner=a_module_path(inout state,r.module);
+        var allowed=false;
+        if name=="__woozy_IpcHandle" {allowed=owner=="std/ipc";}
+        else {allowed=a_private_runtime_type_module(owner);}
+        if !allowed {
+            throw reject(inout state,r,"private runtime type is only available to its std module","E_PRIVATE_ACCESS");
+        }
+        if vec.len(args)>0 {
+            throw reject(inout state,r,"private runtime type does not accept type arguments","E_CALL_ARGUMENT");
+        }
+        var value=model.empty_type(model.TypeKind.AtomicI64Handle);
+        if name=="__woozy_Thread" {value.kind=model.TypeKind.ThreadHandle;}
+        else if name=="__woozy_Mutex" {value.kind=model.TypeKind.MutexHandle;}
+        else if name=="__woozy_Condvar" {value.kind=model.TypeKind.CondvarHandle;}
+        else if name=="__woozy_IpcHandle" {value.kind=model.TypeKind.IpcHandle;}
+        return intern_type(inout state,value);
+    }
+    if name=="Vec" {
+        if vec.len(args)!=1 {throw reject(inout state,r,"Vec requires one element type","E_TYPE_MISMATCH");}
+        var value=model.empty_type(model.TypeKind.Vec);value.type_args=args;
+        return intern_type(inout state,value);
+    }
+    if name=="Slice" {
+        if vec.len(args)!=1 {throw reject(inout state,r,"Slice requires one element type","E_TYPE_MISMATCH");}
+        var value=model.empty_type(model.TypeKind.Slice);value.type_args=args;
+        return intern_type(inout state,value);
+    }
+    if name=="Weak" {
+        if vec.len(args)!=1 {throw reject(inout state,r,"Weak requires one target type","E_TYPE_MISMATCH");}
+        var value=model.empty_type(model.TypeKind.Weak);value.type_args=args;
+        var id=intern_type(inout state,value);
+        validate_weak_type(inout state,r,id);
+        return id;
+    }
+    if name=="Task" {
+        if vec.len(args)!=2 {throw reject(inout state,r,"Task requires a result type and an error type","E_TYPE_MISMATCH");}
+        let error_type=lookup_type(inout state,args[1]);
+        if !a_kind(error_type.kind,model.TypeKind.Unit) &&
+           (a_kind(error_type.kind,model.TypeKind.Vec) ||
+            a_kind(error_type.kind,model.TypeKind.Function) ||
+            a_kind(error_type.kind,model.TypeKind.Weak)) {
+            throw reject(inout state,r,"Task error type must be a plain error value type","E_TYPE_MISMATCH");
+        }
+        var value=model.empty_type(model.TypeKind.Task);value.type_args=args;
+        return intern_type(inout state,value);
+    }
+    if name=="Ptr" || name=="PtrMut" {
+        if vec.len(args)!=1 {throw reject(inout state,r,name+" requires one pointee type","E_TYPE_MISMATCH");}
+        var value=model.empty_type(model.TypeKind.CForeignPointer);
+        if name=="PtrMut" {value.bits=1;}
+        value.type_args=args;return intern_type(inout state,value);
+    }
+    if name=="Buffer" || name=="BufferMut" {
+        if vec.len(args)!=1 {throw reject(inout state,r,name+" requires one element type","E_TYPE_MISMATCH");}
+        let kind_value=lookup_type(inout state,args[0]).kind;
+        if !(a_kind(kind_value,model.TypeKind.SignedInt) ||
+             a_kind(kind_value,model.TypeKind.UnsignedInt) ||
+             a_kind(kind_value,model.TypeKind.Isize) ||
+             a_kind(kind_value,model.TypeKind.Usize) ||
+             a_kind(kind_value,model.TypeKind.Float) ||
+             a_kind(kind_value,model.TypeKind.Bool) ||
+             a_kind(kind_value,model.TypeKind.TypeParameter)) {
+            throw reject(inout state,r,"Buffer element must be a fixed scalar type","E_TYPE_MISMATCH");
+        }
+        var value=model.empty_type(model.TypeKind.CForeignBuffer);
+        if name=="BufferMut" {value.bits=1;}
+        value.type_args=args;return intern_type(inout state,value);
+    }
+    if name=="Result" {throw unavailable(inout state,r,"container, owned string and Result support requires T08/T09");}
+    if vec.len(args)>0 {throw reject(inout state,r,"scalar type does not accept type arguments","E_TYPE_MISMATCH");}
+    if name=="Unit" {return state.unit;}
+    if name=="bool" {return state.boolean;}
+    if name=="string" {return scalar(inout state,model.TypeKind.String,0);}
+    if name=="isize" {return scalar(inout state,model.TypeKind.Isize,0);}
+    if name=="usize" {return scalar(inout state,model.TypeKind.Usize,0);}
+    if name=="f32" {return scalar(inout state,model.TypeKind.Float,32);}
+    if name=="f64" {return scalar(inout state,model.TypeKind.Float,64);}
+    if text.byte_len(name)>=2 && (name[0]==105 || name[0]==117) {
+        var bits u32=64;
+        if name=="i8" || name=="u8" {bits=8;}
+        else if name=="i16" || name=="u16" {bits=16;}
+        else if name=="i32" || name=="u32" {bits=32;}
+        if name[0]==105 {return scalar(inout state,model.TypeKind.SignedInt,bits);}
+        return scalar(inout state,model.TypeKind.UnsignedInt,bits);
+    }
+    throw unavailable(inout state,r,"type is not implemented");
+}
+func signature(state inout Checker,r model.NodeRef,trait_self option.Option[usize],
+    callback bool,trait_self_callback bool) usize throws Error {
+    var value=model.empty_type(model.TypeKind.Function);
+    value.result=state.unit;
+    let parts=a_split_signature(inout state,r);
+    for var index usize=0;index<vec.len(parts.parameters);index+=1 {
+        let parameter_ref=at(r,parts.parameters[index]);
+        let parameter_mode=mode(inout state,parameter_ref);
+        let parameter_type_ref=child(inout state,parameter_ref,0);
+        let parameter_type_id=parse_type(inout state,parameter_type_ref,
+            trait_self,trait_self_callback);
+        if a_mode(parameter_mode,model.ParamMode.Inout) &&
+           a_kind(lookup_type(inout state,parameter_type_id).kind,model.TypeKind.ForeignOpaque) {
+            throw unavailable(inout state,parameter_ref,"external inout parameters are not supported");
+        }
+        var trait_self_slot=false;
+        switch trait_self {
+            case option.Option.Some(self_symbol): {
+                trait_self_slot=trait_self_type(inout state,parameter_type_id,self_symbol);
+            }
+            case option.Option.None: {}
+        }
+        var data_self=option.Option[usize].None;
+        switch trait_self {
+            case option.Option.Some(self_symbol): {
+                if callback || index>0 {data_self=option.Option[usize].Some(self_symbol);}
+            }
+            case option.Option.None: {}
+        }
+        if a_mode(parameter_mode,model.ParamMode.Inout) &&
+           !owning_inout_type(inout state,parameter_type_id,data_self) &&
+           !template_inout_type(inout state,parameter_type_id) &&
+           !trait_self_slot {
+            let reason=owning_inout_reason(inout state,parameter_type_id,data_self);
+            if reason=="" {
+                throw unavailable(inout state,parameter_ref,"inout accepts only whole Woozy value bindings");
+            }
+            throw unavailable(inout state,parameter_ref,reason);
+        }
+        vec.push(value.parameters,model.ParameterType(mode:parameter_mode,type_id:parameter_type_id));
+    }
+    switch parts.result {
+        case option.Option.Some(result_ref):value.result=parse_type(inout state,at(r,result_ref),
+            trait_self,trait_self_callback);
+        case option.Option.None: {}
+    }
+    switch parts.throws_type {
+        case option.Option.Some(throws_ref):value.throws_type=option.Option[usize].Some(
+            parse_type(inout state,at(r,throws_ref),trait_self,trait_self_callback));
+        case option.Option.None: {}
+    }
+    return intern_type(inout state,value);
+}
+func contains_parameter(state inout Checker,type_id usize) bool throws Error {
+    var pending=vec.empty[usize]();vec.push(pending,type_id);
+    var visited=vec.empty[usize]();
+    for vec.len(pending)>0 {
+        var popped=vec.pop(pending);let current=option.unwrap_or(popped,0);
+        if !a_insert(visited,current) {continue;}
+        var value=lookup_type(inout state,current);
+        if a_kind(value.kind,model.TypeKind.TypeParameter) {return true;}
+        for arg in value.type_args {vec.push(pending,arg);}
+        for parameter in value.parameters {vec.push(pending,parameter.type_id);}
+        if a_kind(value.kind,model.TypeKind.Function) {
+            vec.push(pending,value.result);
+            switch value.throws_type {
+                case option.Option.Some(error_type):vec.push(pending,error_type);
+                case option.Option.None: {}
+            }
+        }
+    }
+    return false;
+}
+func may_contain_weak(state inout Checker,type_id usize) bool throws Error {
+    var pending=vec.empty[usize]();vec.push(pending,type_id);
+    let seen_types=vec.empty[usize]();
+    let seen_declarations=vec.empty[usize]();
+    for vec.len(pending)>0 {
+        var popped=vec.pop(pending);let current=option.unwrap_or(popped,0);
+        if !a_insert(seen_types,current) {continue;}
+        if vec.len(seen_types)>4096 {return true;}
+        var found=types.find(state.m.types,current);
+        var value=model.empty_type(model.TypeKind.Error);
+        switch found {
+            case option.Option.Some(actual):value=actual;
+            case option.Option.None:return true;
+        }
+        if a_kind(value.kind,model.TypeKind.Weak) {return true;}
+        for arg in value.type_args {vec.push(pending,arg);}
+        for parameter in value.parameters {vec.push(pending,parameter.type_id);}
+        if a_kind(value.kind,model.TypeKind.Function) {
+            vec.push(pending,value.result);
+            switch value.throws_type {
+                case option.Option.Some(error_type):vec.push(pending,error_type);
+                case option.Option.None: {}
+            }
+        }
+        if !a_kind(value.kind,model.TypeKind.NominalStruct) &&
+           !a_kind(value.kind,model.TypeKind.NominalEnum) {continue;}
+        if !state.nominal_fields_ready {return true;}
+        var entry=a_nominal_id_get(state.nominal_ids,value.declaration);
+        var index usize=0;
+        switch entry {
+            case option.Option.None:return true;
+            case option.Option.Some(value_index):index=value_index;
+        }
+        if !a_insert(seen_declarations,value.declaration) {continue;}
+        var declaration=state.m.nominals[index];
+        for field in declaration.fields {vec.push(pending,field.type_id);}
+        for variant in declaration.variants {
+            for field in variant.payload {vec.push(pending,field.type_id);}
+        }
+    }
+    return false;
+}
+struct AWeakItem { type_id usize; at hir.HirSource; depth usize; }
+func validate_weak_type(state inout Checker,r model.NodeRef,type_id usize) throws Error {
+    let location=source(inout state,r);
+    validate_weak_at(inout state,location,type_id);
+}
+func validate_weak_at(state inout Checker,location hir.HirSource,type_id usize) throws Error {
+    if a_contains(state.weak_validated,type_id) {return;}
+    if !may_contain_weak(inout state,type_id) {
+        a_insert(state.weak_validated,type_id);return;
+    }
+    let pending=vec.empty[AWeakItem]();
+    vec.push(pending,AWeakItem(type_id:type_id,at:location,depth:0));
+    let visited=vec.empty[usize]();
+    var complete=true;var work usize=0;
+    for vec.len(pending)>0 {
+        let popped=vec.pop(pending);let item=option.unwrap_or(popped,
+            AWeakItem(type_id:0,at:location,depth:0));
+        if a_contains(state.weak_validated,item.type_id) || !a_insert(visited,item.type_id) {continue;}
+        work+=1;
+        if item.depth>128 || work>4096 {
+            throw reject_source(item.at,"Weak type validation exceeds its checking budget",
+                "E_CAPABILITY_UNAVAILABLE");
+        }
+        var found=types.find(state.m.types,item.type_id);
+        var value=model.empty_type(model.TypeKind.Error);
+        switch found {
+            case option.Option.Some(actual):value=actual;
+            case option.Option.None: {complete=false;continue;}
+        }
+        if a_kind(value.kind,model.TypeKind.Weak) {
+            if vec.len(value.type_args)!=1 {
+                throw reject_source(item.at,"Weak requires one target type","E_TYPE_MISMATCH");
+            }
+            let target=value.type_args[0];
+            if !contains_parameter(inout state,target) {
+                let target_type=lookup_type(inout state,target);
+                if !state.nominal_fields_ready &&
+                   a_kind(target_type.kind,model.TypeKind.NominalStruct) {
+                    complete=false;
+                } else {
+                    var valid=false;
+                    try {valid=valueopslib.weak_target(state.m,target);}
+                    catch error model.SupportError {throw Error.Support(error);}
+                    if !valid {
+                        throw reject_source(item.at,
+                            "Weak target must be Vec, function value, std/box.Box, "+
+                            "std/thread.Thread, std/sync.Mutex/Condvar/AtomicI64 or "+
+                            "std/ipc.Memory","E_TYPE_MISMATCH");
+                    }
+                }
+            }
+        }
+        for arg in value.type_args {vec.push(pending,AWeakItem(type_id:arg,at:item.at,depth:item.depth+1));}
+        for parameter in value.parameters {vec.push(pending,AWeakItem(type_id:parameter.type_id,at:item.at,depth:item.depth+1));}
+        if a_kind(value.kind,model.TypeKind.Function) {
+            vec.push(pending,AWeakItem(type_id:value.result,at:item.at,depth:item.depth+1));
+            switch value.throws_type {
+                case option.Option.Some(error_type):vec.push(pending,AWeakItem(
+                    type_id:error_type,at:item.at,depth:item.depth+1));
+                case option.Option.None: {}
+            }
+        }
+        if !a_kind(value.kind,model.TypeKind.NominalStruct) &&
+           !a_kind(value.kind,model.TypeKind.NominalEnum) {continue;}
+        var entry=a_nominal_id_get(state.nominal_ids,value.declaration);
+        var declaration_index usize=0;var valid_entry=false;
+        switch entry {
+            case option.Option.Some(index):declaration_index=index;valid_entry=true;
+            case option.Option.None: {}
+        }
+        if !state.nominal_fields_ready || !valid_entry {complete=false;continue;}
+        var declaration=state.m.nominals[declaration_index];
+        if vec.len(value.type_args)!=vec.len(declaration.params) {complete=false;continue;}
+        var dependent=false;
+        for arg in value.type_args {if contains_parameter(inout state,arg) {dependent=true;}}
+        if dependent {continue;}
+        for field in declaration.fields {
+            vec.push(pending,AWeakItem(type_id:field_type(inout state,item.type_id,field),
+                at:field.source,depth:item.depth+1));
+        }
+        for variant in declaration.variants {
+            for field in variant.payload {
+                vec.push(pending,AWeakItem(type_id:field_type(inout state,item.type_id,field),
+                    at:field.source,depth:item.depth+1));
+            }
+        }
+    }
+    if complete {
+        for id in visited {a_insert(state.weak_validated,id);}
+    }
+}
+func validate_weak_types_before_publish(state inout Checker) throws Error {
+    let type_roots=types.size(state.m.types);
+    for declaration in state.m.nominals {
+        for field in declaration.fields {validate_weak_at(inout state,field.source,field.type_id);}
+        for variant in declaration.variants {
+            for field in variant.payload {validate_weak_at(inout state,field.source,field.type_id);}
+        }
+    }
+    for function in state.m.functions {validate_weak_at(inout state,function.source,function.signature);}
+    for template in state.m.templates {
+        validate_weak_at(inout state,template.function.source,template.function.signature);
+    }
+    for var id usize=1;id<=type_roots;id+=1 {
+        var value=lookup_type(inout state,id);
+        if !a_kind(value.kind,model.TypeKind.NominalStruct) &&
+           !a_kind(value.kind,model.TypeKind.NominalEnum) {continue;}
+        let entry=a_nominal_id_get(state.nominal_ids,value.declaration);
+        switch entry {
+            case option.Option.None: {}
+            case option.Option.Some(index): {
+                let nominal_source=state.m.nominals[index].source;
+                validate_weak_at(inout state,nominal_source,id);
+            }
+        }
+    }
+}
+func infer(state inout Checker,r model.NodeRef,pattern usize,actual usize,
+    substitutions Vec[model.Substitution]) throws Error {
+    let p=lookup_type(inout state,pattern);let a=lookup_type(inout state,actual);
+    if a_kind(p.kind,model.TypeKind.TypeParameter) {
+        for substitution in substitutions {
+            if substitution.symbol==p.declaration {
+                if !types.equal(lookup_type(inout state,substitution.type_id),
+                    lookup_type(inout state,actual)) {
+                    throw reject(inout state,r,"conflicting generic type inference","E_TYPE_MISMATCH");
+                }
+                return;
+            }
+        }
+        vec.push(substitutions,model.Substitution(symbol:p.declaration,type_id:actual));
+        return;
+    }
+    if !a_kind(p.kind,a.kind) || p.bits!=a.bits || p.declaration!=a.declaration ||
+       vec.len(p.parameters)!=vec.len(a.parameters) ||
+       vec.len(p.type_args)!=vec.len(a.type_args) ||
+       option.is_some(p.throws_type)!=option.is_some(a.throws_type) {
+        throw reject(inout state,r,"type inference mismatch","E_TYPE_MISMATCH");
+    }
+    for var index usize=0;index<vec.len(p.type_args);index+=1 {
+        infer(inout state,r,p.type_args[index],a.type_args[index],substitutions);
+    }
+    if a_kind(p.kind,model.TypeKind.Function) {
+        for var index usize=0;index<vec.len(p.parameters);index+=1 {
+            if !a_mode(p.parameters[index].mode,a.parameters[index].mode) {
+                throw reject(inout state,r,"function argument mode mismatch","E_TYPE_MISMATCH");
+            }
+            infer(inout state,r,p.parameters[index].type_id,a.parameters[index].type_id,substitutions);
+        }
+        infer(inout state,r,p.result,a.result,substitutions);
+        switch p.throws_type {
+            case option.Option.Some(error_type): {
+                infer(inout state,r,error_type,option.unwrap_or(a.throws_type,0),substitutions);
+            }
+            case option.Option.None: {}
+        }
+    }
+}
+func try_infer(state inout Checker,r model.NodeRef,pattern usize,actual usize,
+    substitutions Vec[model.Substitution]) bool throws Error {
+    try {
+        infer(inout state,r,pattern,actual,substitutions);
+        return true;
+    } catch error Error {
+        switch error {
+            case Error.Rejected(diagnostic,failure):return false;
+            case Error.Support(support):throw error;
+        }
+    }
+}
+func finish_arguments(state inout Checker,r model.NodeRef,parameters Vec[hir.GenericParam],
+    substitutions Vec[model.Substitution]) Vec[usize] throws Error {
+    let args=vec.empty[usize]();
+    for parameter in parameters {
+        var found=false;var value usize=0;
+        for substitution in substitutions {
+            if substitution.symbol==parameter.symbol {found=true;value=substitution.type_id;}
+        }
+        if !found {
+            throw reject(inout state,r,"cannot infer type argument; provide explicit type arguments",
+                "E_TYPE_MISMATCH");
+        }
+        vec.push(args,value);
+    }
+    check_constraints(inout state,r,parameters,args,
+        option.Option[Vec[model.Substitution]].Some(substitutions));
+    return args;
+}
+func satisfies(state inout Checker,r model.NodeRef,actual usize,trait_value hir.TraitRef) bool throws Error {
+    let key=trait_key(state,actual,trait_value);
+    var cached=a_trait_key_get(state.trait_results,key);
+    switch cached {
+        case option.Option.Some(value):return value;
+        case option.Option.None: {}
+    }
+    if state.constraint_depth>=48 || a_trait_keys_insert(state.active_constraints,key)==false {
+        return false;
+    }
+    state.constraint_depth+=1;
+    let actual_type=lookup_type(inout state,actual);
+    var found usize=0;
+    if a_kind(actual_type.kind,model.TypeKind.TypeParameter) {
+        var bound=a_bound_get(state.bounds,actual_type.declaration);
+        switch bound {
+            case option.Option.Some(value): {
+                switch value {
+                    case option.Option.Some(bound_value): {
+                        if a_trait_equal(bound_value,trait_value) {found=1;}
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            case option.Option.None: {}
+        }
+    } else {
+        for implementation in state.m.impls {
+            var application=hir.TraitRef(declaration:0,args:[]);
+            switch implementation.trait_ref {
+                case option.Option.None:continue;
+                case option.Option.Some(value):application=value;
+            }
+            if application.declaration!=trait_value.declaration ||
+               vec.len(application.args)!=vec.len(trait_value.args) {continue;}
+            var sub=vec.empty[model.Substitution]();
+            if !try_infer(inout state,r,implementation.self_type,actual,sub) {continue;}
+            var matched=true;
+            for var index usize=0;index<vec.len(trait_value.args);index+=1 {
+                if !try_infer(inout state,r,application.args[index],trait_value.args[index],sub) {
+                    matched=false;break;
+                }
+            }
+            if !matched {continue;}
+            var valid=true;
+            for parameter in implementation.params {
+                var parameter_found=false;var parameter_type_value usize=0;
+                for substitution in sub {
+                    if substitution.symbol==parameter.symbol {
+                        parameter_found=true;parameter_type_value=substitution.type_id;
+                    }
+                }
+                if !parameter_found {valid=false;break;}
+                switch parameter.trait_ref {
+                    case option.Option.Some(bound_value): {
+                        var bound=a_copy_trait_ref(bound_value);
+                        for var arg_index usize=0;arg_index<vec.len(bound.args);arg_index+=1 {
+                            bound.args[arg_index]=substitute_type(inout state,bound.args[arg_index],sub);
+                        }
+                        if !satisfies(inout state,r,parameter_type_value,bound) {valid=false;break;}
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            if valid {found+=1;}
+        }
+    }
+    state.constraint_depth-=1;
+    a_trait_keys_remove(state.active_constraints,key);
+    var result=found==1;
+    a_trait_results_set(state.trait_results,key,result);
+    return result;
+}
+func check_constraints(state inout Checker,r model.NodeRef,parameters Vec[hir.GenericParam],
+    args Vec[usize],substitutions option.Option[Vec[model.Substitution]]) throws Error {
+    let requested=a_copy_ids(args);
+    for var index usize=0;index<vec.len(parameters);index+=1 {
+        let parameter=parameters[index];
+        switch parameter.trait_ref {
+            case option.Option.None: {}
+            case option.Option.Some(bound_value): {
+                var bound=a_copy_trait_ref(bound_value);
+                switch substitutions {
+                    case option.Option.Some(sub): {
+                        for var arg_index usize=0;arg_index<vec.len(bound.args);arg_index+=1 {
+                            bound.args[arg_index]=substitute_type(inout state,bound.args[arg_index],sub);
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+                if index>=vec.len(requested) {throw internal_error("generic argument count");}
+                check_trait_parameter_bounds(inout state,r,bound,requested[index],0);
+                if !satisfies(inout state,r,requested[index],bound) {
+                    throw reject(inout state,r,
+                        "generic constraint requires one applicable explicit trait implementation",
+                        "E_TYPE_MISMATCH");
+                }
+            }
+        }
+    }
+}
+func select_method(state inout Checker,r model.NodeRef,receiver usize,name string,
+    required option.Option[hir.TraitRef]) Selection throws Error {
+    var result=option.Option[Selection].None;
+    for implementation in state.m.impls {
+        var required_value=hir.TraitRef(declaration:0,args:[]);var has_required=false;
+        switch required {
+            case option.Option.Some(value):required_value=value;has_required=true;
+            case option.Option.None: {}
+        }
+        var application=hir.TraitRef(declaration:0,args:[]);
+        switch implementation.trait_ref {
+            case option.Option.Some(value):application=value;
+            case option.Option.None: {}
+        }
+        if has_required {
+            if !option.is_some(implementation.trait_ref) ||
+               application.declaration!=required_value.declaration {continue;}
+        }
+        let sub=vec.empty[model.Substitution]();
+        if !try_infer(inout state,r,implementation.self_type,receiver,sub) {continue;}
+        if has_required {
+            if vec.len(application.args)!=vec.len(required_value.args) {continue;}
+            var matched=true;
+            for var index usize=0;index<vec.len(required_value.args);index+=1 {
+                if !try_infer(inout state,r,application.args[index],required_value.args[index],sub) {
+                    matched=false;break;
+                }
+            }
+            if !matched {continue;}
+        }
+        let saved_depth=state.constraint_depth;
+        var accepted=true;
+        try {let ignored=finish_arguments(inout state,r,implementation.params,sub);}
+        catch error Error {
+            switch error {
+                case Error.Rejected(diagnostic,failure): {state.constraint_depth=saved_depth;accepted=false;}
+                case Error.Support(support):throw error;
+            }
+        }
+        if !accepted {continue;}
+        for method in implementation.methods {
+            if symbol(inout state,method).name!=name {continue;}
+            var exported=false;
+            switch implementation.trait_ref {
+                case option.Option.Some(application_value): {
+                    exported=symbol(inout state,application_value.declaration).exported;
+                }
+                case option.Option.None:exported=symbol(inout state,method).exported;
+            }
+            if symbol(inout state,method).module!=r.module && !exported {
+                throw reject(inout state,r,"method is private","E_PRIVATE_ACCESS");
+            }
+            switch result {
+                case option.Option.Some(previous): {
+                    throw reject(inout state,r,"ambiguous method implementation","E_TYPE_MISMATCH");
+                }
+                case option.Option.None:result=option.Option[Selection].Some(Selection(
+                    method:method,substitutions:sub));
+            }
+        }
+    }
+    switch result {
+        case option.Option.Some(value):return value;
+        case option.Option.None:throw reject(inout state,r,
+            "no matching explicit method implementation","E_TYPE_MISMATCH");
+    }
+}
+func declared_foreign_type(state inout Checker,name string) usize throws Error {
+    try {return foreignlib.binding_type(state.m.resolved.project,inout state.m.types,name);}
+    catch error model.SupportError {throw Error.Support(error);}
+}
+func c_type(state inout Checker,reference model.CTypeRef) usize throws Error {
+    if a_kind_ctype(reference.kind,model.CTypeKind.Named) {
+        let cached=a_c_named_get(state.c_named_types,reference.named);
+        switch cached {
+            case option.Option.Some(value):return value;
+            case option.Option.None: {}
+        }
+    }
+    var id usize=0;
+    try {id=foreignlib.c_type_id(state.m.resolved.project,inout state.m.types,reference);}
+    catch error model.SupportError {throw Error.Support(error);}
+    if a_kind_ctype(reference.kind,model.CTypeKind.Named) {
+        a_c_named_set(state.c_named_types,reference.named,id);
+    }
+    return id;
+}
+func a_kind_ctype(kind model.CTypeKind,expected model.CTypeKind) bool {
+    switch kind {
+        case model.CTypeKind.Scalar: {
+            switch expected {case model.CTypeKind.Scalar:return true;default:return false;}
+        }
+        case model.CTypeKind.Pointer: {
+            switch expected {case model.CTypeKind.Pointer:return true;default:return false;}
+        }
+        case model.CTypeKind.Buffer: {
+            switch expected {case model.CTypeKind.Buffer:return true;default:return false;}
+        }
+        case model.CTypeKind.Named: {
+            switch expected {case model.CTypeKind.Named:return true;default:return false;}
+        }
+    }
+}
+func c_decl(state inout Checker,id u32) model.CTypeDecl throws Error {
+    if id==0 || usize(id)>vec.len(state.m.resolved.project.c_types) {
+        throw internal_error("invalid C type reference");
+    }
+    return state.m.resolved.project.c_types[usize(id)-1];
+}
+func c_callable(state inout Checker,id u32) model.CCallableDecl throws Error {
+    if id==0 || usize(id)>vec.len(state.m.resolved.project.c_callables) {
+        throw internal_error("invalid C callable reference");
+    }
+    return state.m.resolved.project.c_callables[usize(id)-1];
+}
+func check_c_callback(state inout Checker,r model.NodeRef,function_type usize,callback_type u32) throws Error {
+    let declaration=c_decl(inout state,callback_type);
+    let signature=lookup_type(inout state,function_type);
+    if !a_kind(signature.kind,model.TypeKind.Function) || option.is_some(signature.throws_type) {
+        throw reject(inout state,r,"C callback requires a non-throwing function value","E_TYPE_MISMATCH");
+    }
+    if vec.len(signature.parameters)!=vec.len(declaration.parameters) {
+        throw reject(inout state,r,"C callback parameter count mismatch","E_CALL_ARGUMENT");
+    }
+    for var index usize=0;index<vec.len(declaration.parameters);index+=1 {
+        let expected=c_type(inout state,declaration.parameters[index].type_ref);
+        if !a_mode(signature.parameters[index].mode,model.ParamMode.Ordinary) ||
+           signature.parameters[index].type_id!=expected {
+            throw reject(inout state,r,"C callback parameter type mismatch","E_CALL_ARGUMENT");
+        }
+    }
+    let expected_result=c_type(inout state,declaration.result);
+    if signature.result!=expected_result {
+        throw reject(inout state,r,"C callback result type mismatch","E_CALL_ARGUMENT");
+    }
+}
+func free_generic_template(state inout Checker,target usize) bool throws Error {
+    let found=a_generic_params_get(state.generic_params,target);
+    var has=false;
+    switch found {
+        case option.Option.None:return false;
+        case option.Option.Some(values):has=vec.len(values)>0;
+    }
+    return has && !a_impl_method(inout state,target);
+}

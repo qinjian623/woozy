@@ -1,0 +1,522 @@
+// Independent tests for the A-side declaration/type/generic checker.
+// The staged package deliberately excludes a_instantiate because instantiate
+// and transform call B's annotate/flow; this runner makes no full-Checker claim.
+package sema;
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/source" as sources;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func a_test_empty_checker(module hir.HirModule) Checker {
+    return Checker(m:module,occurrences:[],definitions:[],signatures:[],trait_signature_context:[],
+        parameters:[],locals:[],constants:[],evaluating:[],function:0,scope:0,cleanup_depth:0,
+        async_function:false,current_result:0,current_async_error:option.Option[usize].None,
+        unsafe_depth:0,c_named_types:[],unit:0,boolean:0,i64_type:0,loops:[],break_targets:[],
+        nominal_ids:[],self_types:[],generic_params:[],bounds:[],trait_parameters:[],bodies:[],
+        template_ids:[],instance_cache:[],instantiation_depth:0,constraint_depth:0,trait_results:[],
+        active_constraints:[],active_trait_bounds:[],instantiated_nodes:0,active_params:[],
+        signature_parameters:[],async_functions:[],closures:[],capture_by_origin:[],
+        capture_by_local:[],current_captures:[],weak_validated:[],nominal_fields_ready:false);
+}
+func a_test_require(ok bool,label string,count inout usize) throws Error {
+    count+=1;
+    if !ok {throw internal_error("sema_a test failed: "+label);}
+}
+func a_test_find_impl_method(state inout Checker,name string) usize throws Error {
+    for value in state.m.resolved.symbols {
+        if value.name==name {
+            switch impl_of(inout state,value.id) {
+                case option.Option.Some(index):return value.id;
+                case option.Option.None: {}
+            }
+        }
+    }
+    throw internal_error("test impl method missing: "+name);
+}
+func a_test_find_trait_method(state inout Checker,name string) usize throws Error {
+    for value in state.m.resolved.symbols {
+        if value.name==name {
+            switch trait_prototype(inout state,value.id) {
+                case option.Option.Some(reference):return value.id;
+                case option.Option.None: {}
+            }
+        }
+    }
+    throw internal_error("test trait method missing: "+name);
+}
+func a_test_find_symbol(state inout Checker,name string) usize throws Error {
+    for value in state.m.resolved.symbols {
+        if value.name==name {return value.id;}
+    }
+    throw internal_error("test symbol missing: "+name);
+}
+func a_test_definition(state inout Checker,name string) model.NodeRef throws Error {
+    let id=a_test_find_symbol(inout state,name);
+    switch symbol(inout state,id).definition {
+        case option.Option.Some(value):return value;
+        case option.Option.None:throw internal_error("test definition missing: "+name);
+    }
+}
+func a_test_first_parameter(state inout Checker,r model.NodeRef) model.NodeRef throws Error {
+    for id in ast(inout state,r).children {
+        let current=at(r,id);
+        if a_kind_ast(ast(inout state,current).kind,model.AstKind.Parameter) {return current;}
+    }
+    throw internal_error("test parameter missing");
+}
+func a_test_build_text(body string) model.ResolveResult {
+    let snapshot=sources.snapshot(2,2,2,"/tmp/sema-a/input.wz",text.bytes(body));
+    let parsed=parser.parse(lexer.lex(snapshot));
+    let other=sources.snapshot(1,1,1,"/tmp/sema-a/other.wz",text.bytes("package q;"));
+    var project=model.empty_project();project.entry=1;
+    project.files=[parser.parse(lexer.lex(other)),parsed];
+    project.modules=[
+        model.Module(id:0,logical_path:"q",identity:"q",package_name:"q",files:[0],imports:[],
+            foreign_exports:[],binding:option.Option[model.BindingModuleRef].None,
+            c_binding:option.Option[usize].None),
+        model.Module(id:1,logical_path:"p",identity:"p",package_name:"p",files:[1],imports:[],
+            foreign_exports:[],binding:option.Option[model.BindingModuleRef].None,
+            c_binding:option.Option[usize].None)];
+    return resolve.resolve_project(project);
+}
+func a_test_build() model.ResolveResult {
+    let body="package p; trait Marker { func ping(self Self) i32; } struct Secret {} "+
+        "struct Pair[A,B] { a A; b B; } "+
+        "struct Thing {} "+
+        "impl Pair[i32,i32] { func sum(self Self) i32 { return 1; } } "+
+        "impl Marker for Thing { func ping(self Self) i32 { return 1; } } "+
+        "func bounded[T Marker](value T) {} "+
+        "pub async func f() i32 { return 1; } "+
+        "func ident[T](value T) T { return value; } "+
+        "func take(a move i32,b inout i32,c i32) {} "+
+        "func g(arg inout i32,own move i32) i32 { let x i32=1; "+
+        "take(((move own)),(((inout arg))),((x))); return (((x))); } "+
+        "func use_fn(cb func(inout i32,move i32) Unit) {}";
+    return a_test_build_text(body);
+}
+func a_test_prepare_resolved(resolved model.ResolveResult,environment Vec[usize],
+    run_declarations bool) Checker throws Error {
+    var resolved_ok=false;
+    switch resolved.state {case model.PhaseState.Complete:resolved_ok=true;default:{}}
+    if !resolved_ok || !resolved.has_value {
+        throw internal_error("sema_a test source failed to parse/resolve");
+    }
+    var state=a_test_empty_checker(hir.empty_module(resolved.value,1,
+        model.CheckConfig(backend:model.Backend.Native,word_bits:64)));
+    for value in resolved.value.symbols {
+        switch value.definition {
+            case option.Option.Some(r):vec.push(state.definitions,
+                NodeSymbolEntry(key:node_key(r),symbol:value.id));
+            case option.Option.None: {}
+        }
+    }
+    for value in resolved.value.occurrences {
+        vec.push(state.occurrences,NodeSymbolEntry(key:node_key(value.source),symbol:value.symbol));
+    }
+    state.unit=scalar(inout state,model.TypeKind.Unit,0);
+    state.boolean=scalar(inout state,model.TypeKind.Bool,0);
+    state.i64_type=scalar(inout state,model.TypeKind.SignedInt,64);
+    state.signature_parameters=a_copy_ids(environment);
+    if run_declarations {declarations(inout state);}
+    return state;
+}
+func a_test_prepare_text(body string) Checker throws Error {
+    return a_test_prepare_resolved(a_test_build_text(body),[],true);
+}
+func a_test_prepare() Checker throws Error {
+    return a_test_prepare_resolved(a_test_build(),[],true);
+}
+func a_test_weak(state inout Checker,use model.NodeRef,count inout usize) throws Error {
+    let i32_id=scalar(inout state,model.TypeKind.SignedInt,32);
+    var weak=model.empty_type(model.TypeKind.Weak);weak.type_args=[i32_id];
+    let weak_id=intern_type(inout state,weak);
+    var rejected=false;
+    try {validate_weak_type(inout state,use,weak_id);}
+    catch error Error {
+        switch error {
+            case Error.Rejected(diagnostic,failure):
+                rejected=diagnostic.code=="E_TYPE_MISMATCH" && diagnostic.has_primary;
+            case Error.Support(support): {}
+        }
+    }
+    a_test_require(rejected,"Weak rejects non-weak target",inout count);
+    var vector=model.empty_type(model.TypeKind.Vec);vector.type_args=[i32_id];
+    let vector_id=intern_type(inout state,vector);
+    var good=model.empty_type(model.TypeKind.Weak);good.type_args=[vector_id];
+    let good_id=intern_type(inout state,good);
+    validate_weak_type(inout state,use,good_id);
+    a_test_require(a_contains(state.weak_validated,good_id),"Weak accepts Vec target",inout count);
+}
+func a_test_symbol_in_resolved(resolved model.ResolveResult,name string) usize throws Error {
+    for value in resolved.value.symbols {
+        if value.name==name {return value.id;}
+    }
+    throw internal_error("test resolved symbol missing: "+name);
+}
+func a_test_static_sources(count inout usize) throws Error {
+    let body="package p; "+
+        "trait Static { func bump(value inout i32); func take(value move Vec[i32]) i32; } "+
+        "impl Static for i32 { func bump(value inout i32) { value += 1; } "+
+        "func take(value move Vec[i32]) i32 { return 1; } } "+
+        "func run[T Static](value inout i32) { "+
+        "let f func(inout i32) Unit = T.bump; f(inout value); } "+
+        "func run_take[T Static](value move Vec[i32]) i32 { return T.take(move value); }";
+    var state=a_test_prepare_text(body);
+    let static_trait=a_test_find_symbol(inout state,"Static");
+    let required=hir.TraitRef(declaration:static_trait,args:[]);
+    let bump=a_test_find_trait_method(inout state,"bump");
+    let take=a_test_find_trait_method(inout state,"take");
+    let run=a_test_find_symbol(inout state,"run");
+    let run_take=a_test_find_symbol(inout state,"run_take");
+    let run_parameters_found=a_generic_params_get(state.generic_params,run);
+    var run_parameters=vec.empty[hir.GenericParam]();
+    switch run_parameters_found {
+        case option.Option.Some(value):run_parameters=value;
+        case option.Option.None: {}
+    }
+    let run_take_parameters_found=a_generic_params_get(state.generic_params,run_take);
+    var run_take_parameters=vec.empty[hir.GenericParam]();
+    switch run_take_parameters_found {
+        case option.Option.Some(value):run_take_parameters=value;
+        case option.Option.None: {}
+    }
+    a_test_require(vec.len(run_parameters)==1 && vec.len(run_take_parameters)==1,
+        "static trait generic registration",inout count);
+    state.active_params=run_parameters;
+    let inout_receiver=parameter_type(inout state,run_parameters[0].symbol);
+    var bump_normal=false;
+    switch constraint_static_method_source(inout state,bump,required,inout_receiver) {
+        case option.Option.Some(value):bump_normal=true;
+        case option.Option.None: {}
+    }
+    var bump_move=false;
+    switch constraint_static_method_move_source(inout state,bump,required,inout_receiver) {
+        case option.Option.Some(value):bump_move=true;
+        case option.Option.None: {}
+    }
+    var bump_value=false;
+    switch constraint_method_source(inout state,bump,required,inout_receiver) {
+        case option.Option.Some(value):bump_value=true;
+        case option.Option.None: {}
+    }
+    a_test_require(bump_normal && bump_move,"static inout source helpers",inout count);
+    a_test_require(!bump_value,"static method has no value receiver Self",inout count);
+    let bump_prototype_found=trait_prototype(inout state,bump);
+    var bump_signature usize=0;
+    switch bump_prototype_found {
+        case option.Option.Some(reference):
+            bump_signature=state.m.traits[reference.trait_index].methods[reference.method_index].signature;
+        case option.Option.None: {}
+    }
+    let run_definition=a_test_definition(inout state,"run");
+    check_method_value_modes(inout state,run_definition,bump,bump_signature,
+        option.Option[hir.TraitRef].Some(required),option.Option[usize].Some(inout_receiver));
+    a_test_require(true,"static inout method value accepted",inout count);
+    state.active_params=run_take_parameters;
+    let move_receiver=parameter_type(inout state,run_take_parameters[0].symbol);
+    var take_normal=false;
+    switch constraint_static_method_source(inout state,take,required,move_receiver) {
+        case option.Option.Some(value):take_normal=true;
+        case option.Option.None: {}
+    }
+    var take_move=false;
+    switch constraint_static_method_move_source(inout state,take,required,move_receiver) {
+        case option.Option.Some(value):take_move=true;
+        case option.Option.None: {}
+    }
+    var take_value=false;
+    switch constraint_method_source(inout state,take,required,move_receiver) {
+        case option.Option.Some(value):take_value=true;
+        case option.Option.None: {}
+    }
+    a_test_require(take_normal && take_move,"static move source helpers",inout count);
+    a_test_require(!take_value,"static move method has no value receiver Self",inout count);
+}
+func a_test_environment_restore(count inout usize) throws Error {
+    let resolved=a_test_build_text(
+        "package app; struct Holder[T] { value T; } "+
+        "trait Probe[P] { func ping(self Self); } func f[Saved]() {}");
+    let saved_symbol=a_test_symbol_in_resolved(resolved,"Saved");
+    var state=a_test_prepare_resolved(resolved,[saved_symbol],true);
+    a_test_require(vec.len(state.signature_parameters)==1 &&
+        state.signature_parameters[0]==saved_symbol,
+        "declarations restores a pre-existing signature environment",inout count);
+    let empty_resolved=a_test_build_text(
+        "package app; struct Holder[T] { value T; }");
+    var empty_state=a_test_prepare_resolved(empty_resolved,[],true);
+    a_test_require(vec.len(empty_state.signature_parameters)==0,
+        "generic Holder restores an empty signature environment",inout count);
+}
+func a_test_invalid_bound_span(count inout usize) throws Error {
+    let resolved=a_test_build_text("package app; func f[T i32]() {}");
+    var state=a_test_prepare_resolved(resolved,[],false);
+    var caught=false;
+    try {declarations(inout state);}
+    catch error Error {
+        switch error {
+            case Error.Rejected(diagnostic,failure):
+                caught=diagnostic.code=="E_TYPE_MISMATCH" &&
+                    diagnostic.message=="generic constraint must name a trait" &&
+                    diagnostic.has_primary && diagnostic.primary.begin_byte==20 &&
+                    diagnostic.primary.end_byte==25;
+            case Error.Support(support): {}
+        }
+    }
+    a_test_require(caught,"invalid generic bound points at the whole GenericParameter",
+        inout count);
+}
+func tests() usize throws Error {
+    var state=a_test_prepare();
+    var count usize=0;
+    a_test_require(state.nominal_fields_ready,"declarations completed",inout count);
+    a_test_require(vec.len(state.signature_parameters)==0,
+        "declarations restores an empty Root signature environment",inout count);
+    let pair_symbol=a_test_find_symbol(inout state,"Pair");
+    let pair_nominal=a_nominal_id_get(state.nominal_ids,pair_symbol);
+    var pair_index usize=0;
+    switch pair_nominal {case option.Option.Some(value):pair_index=value;
+        case option.Option.None:throw internal_error("Pair nominal missing");}
+    let pair=state.m.nominals[pair_index];
+    a_test_require(vec.len(pair.params)==2 && vec.len(pair.fields)==2,"nominal shape/fields",inout count);
+    a_test_require(pair.fields[0].symbol!=pair.fields[1].symbol,"field identities",inout count);
+    let marker=a_test_find_symbol(inout state,"Marker");
+    let marker_decl=trait_decl(inout state,marker);
+    var has_marker=false;
+    switch marker_decl {
+        case option.Option.Some(index):
+            has_marker=vec.len(state.m.traits[index].methods)==1;
+        case option.Option.None: {}
+    }
+    a_test_require(has_marker,"trait declaration/prototype",inout count);
+    let ping=a_test_find_trait_method(inout state,"ping");
+    let ping_proto=trait_prototype(inout state,ping);
+    var has_ping=false;
+    switch ping_proto {
+        case option.Option.Some(reference):
+            has_ping=state.m.traits[reference.trait_index].methods[reference.method_index].symbol==ping;
+        case option.Option.None: {}
+    }
+    a_test_require(has_ping,"trait prototype lookup",inout count);
+    let g_definition=a_test_definition(inout state,"g");
+    let application=check_trait_application(inout state,g_definition,
+        marker,vec.empty[usize]());
+    a_test_require(application.declaration==marker && vec.len(application.args)==0,
+        "trait application identity",inout count);
+    let sum=a_test_find_symbol(inout state,"sum");
+    let sum_impl=impl_of(inout state,sum);
+    var has_impl=false;
+    switch sum_impl {case option.Option.Some(value):has_impl=true;case option.Option.None: {}}
+    a_test_require(has_impl,"impl method registration",inout count);
+    a_test_require(inherent_method_source(inout state,sum),"inherent method source",inout count);
+    a_test_require(declared_self(inout state,sum),"declared Self receiver",inout count);
+    a_test_require(vec.len(method_own_parameters(inout state,sum))==0,
+        "method own generic suffix",inout count);
+    let ident=a_test_find_symbol(inout state,"ident");
+    let ident_definition=a_test_definition(inout state,"ident");
+    let ident_signature=a_signature_id(inout state,ident);
+    let ident_type=lookup_type(inout state,ident_signature);
+    a_test_require(vec.len(ident_type.parameters)==1,"generic signature parameter",inout count);
+    let ident_parameters_found=a_generic_params_get(state.generic_params,ident);
+    var ident_parameters=vec.empty[hir.GenericParam]();
+    switch ident_parameters_found {
+        case option.Option.Some(value):ident_parameters=value;
+        case option.Option.None: {}
+    }
+    a_test_require(vec.len(ident_parameters)==1,"generic parameter registration",inout count);
+    let t_symbol=ident_parameters[0].symbol;
+    let t_type=parameter_type(inout state,t_symbol);
+    let i32_id=scalar(inout state,model.TypeKind.SignedInt,32);
+    a_test_require(contains_parameter(inout state,t_type),"type parameter containment",inout count);
+    a_test_require(!contains_parameter(inout state,i32_id),"concrete containment",inout count);
+    let sub=vec.empty[model.Substitution]();
+    infer(inout state,ident_definition,t_type,i32_id,sub);
+    a_test_require(vec.len(sub)==1 && sub[0].symbol==t_symbol && sub[0].type_id==i32_id,
+        "inference records actual",inout count);
+    let boolean_id=state.boolean;
+    a_test_require(!try_infer(inout state,ident_definition,t_type,boolean_id,sub),
+        "conflicting inference rejected",inout count);
+    let finished=finish_arguments(inout state,ident_definition,ident_parameters,sub);
+    a_test_require(vec.len(finished)==1 && finished[0]==i32_id,
+        "finish arguments uses inferred type",inout count);
+    check_constraints(inout state,ident_definition,ident_parameters,finished,
+        option.Option[Vec[model.Substitution]].Some(sub));
+    let ident_parameter=a_test_first_parameter(inout state,ident_definition);
+    let parsed_parameter=child(inout state,ident_parameter,0);
+    let parsed_t=parse_type(inout state,parsed_parameter,option.Option[usize].None,false);
+    let parsed_t_type=lookup_type(inout state,parsed_t);
+    a_test_require(model.type_kind_id(parsed_t_type.kind)==model.type_kind_id(model.TypeKind.TypeParameter) &&
+        parsed_t_type.declaration==t_symbol,"parse_type real AST symbol",inout count);
+    let pair_type_id=intern_type(inout state,
+        model.Type(kind:model.TypeKind.NominalStruct,bits:0,declaration:pair_symbol,binding:0,
+            parameters:[],result:0,throws_type:option.Option[usize].None,
+            type_args:[i32_id,i32_id],c_type:0));
+    let sum_definition=a_test_definition(inout state,"sum");
+    let selection=select_method(inout state,sum_definition,pair_type_id,"sum",
+        option.Option[hir.TraitRef].None);
+    a_test_require(selection.method==sum,"select_method finds unique impl",inout count);
+    var vector=model.empty_type(model.TypeKind.Vec);vector.type_args=[i32_id];
+    let vector_id=intern_type(inout state,vector);
+    var inout_fn=model.empty_type(model.TypeKind.Function);inout_fn.result=state.unit;
+    vec.push(inout_fn.parameters,model.ParameterType(mode:model.ParamMode.Inout,type_id:vector_id));
+    let inout_fn_id=intern_type(inout state,inout_fn);
+    let direct=check_inout_graph(inout state,ident_definition,inout_fn_id,false,
+        option.Option[usize].None,false);
+    a_test_require(direct,"inout graph accepts whole Vec binding",inout count);
+    var unit_fn=model.empty_type(model.TypeKind.Function);unit_fn.result=state.unit;
+    vec.push(unit_fn.parameters,model.ParameterType(mode:model.ParamMode.Inout,type_id:state.unit));
+    let unit_fn_id=intern_type(inout state,unit_fn);
+    var unit_rejected=false;
+    try {let ignored=check_inout_graph(inout state,ident_definition,unit_fn_id,false,
+        option.Option[usize].None,false);}
+    catch error Error {
+        switch error {
+            case Error.Rejected(diagnostic,failure):
+                unit_rejected=diagnostic.code=="E_CAPABILITY_UNAVAILABLE";
+            case Error.Support(support): {}
+        }
+    }
+    a_test_require(unit_rejected,"inout graph rejects Unit binding",inout count);
+    let thing_symbol=a_test_find_symbol(inout state,"Thing");
+    let thing_type_id=intern_type(inout state,
+        model.Type(kind:model.TypeKind.NominalStruct,bits:0,declaration:thing_symbol,binding:0,
+            parameters:[],result:0,throws_type:option.Option[usize].None,
+            type_args:[],c_type:0));
+    let marker_ref=hir.TraitRef(declaration:marker,args:[]);
+    let ping_definition=a_test_definition(inout state,"ping");
+    require_object_safe(inout state,ping_definition,marker);
+    a_test_require(satisfies(inout state,ping_definition,thing_type_id,
+        marker_ref),"satisfies real trait impl",inout count);
+    check_trait_parameter_bounds(inout state,ping_definition,marker_ref,
+        thing_type_id,0);
+    let ping_impl=a_test_find_impl_method(inout state,"ping");
+    var check_impl_index usize=0;
+    switch impl_of(inout state,ping_impl) {case option.Option.Some(value):check_impl_index=value;
+        case option.Option.None: {}}
+    var check_trait_index usize=0;
+    switch trait_decl(inout state,marker) {case option.Option.Some(value):check_trait_index=value;
+        case option.Option.None: {}}
+    var check_proto_index usize=0;
+    switch trait_prototype(inout state,ping) {case option.Option.Some(value):
+        check_proto_index=value.method_index;case option.Option.None: {}}
+    let check_impl=state.m.impls[check_impl_index];
+    let check_trait=state.m.traits[check_trait_index];
+    let check_proto=check_trait.methods[check_proto_index];
+    let check_sigmatch=trait_impl_signature_matches(inout state,check_trait,check_impl,
+        check_proto,ping_impl);
+    let check_method_signature=a_signature_id(inout state,ping_impl);
+    let check_sub=[model.Substitution(symbol:check_trait.self,
+        type_id:check_impl.self_type)];
+    let check_expected=substitute_type(inout state,check_proto.signature,check_sub);
+    let check_actual_type=lookup_type(inout state,check_method_signature);
+    let check_expected_type=lookup_type(inout state,check_expected);
+    a_test_require(vec.len(check_actual_type.parameters)==1 &&
+        vec.len(check_expected_type.parameters)==1,
+        "trait impl signature arity",inout count);
+    let check_proto_raw=lookup_type(inout state,check_proto.signature);
+    let check_proto_param=lookup_type(inout state,check_proto_raw.parameters[0].type_id);
+    a_test_require(model.type_kind_id(check_proto_param.kind)==
+        model.type_kind_id(model.TypeKind.TypeParameter) &&
+        check_proto_param.declaration==check_trait.self,
+        "trait prototype keeps its raw Self identity",inout count);
+    let check_actual_param=lookup_type(inout state,check_actual_type.parameters[0].type_id);
+    let check_expected_param=lookup_type(inout state,check_expected_type.parameters[0].type_id);
+    a_test_require(model.type_kind_id(check_actual_param.kind)==
+        model.type_kind_id(model.TypeKind.NominalStruct) &&
+        check_actual_param.declaration==thing_symbol,
+        "impl Self is concrete Thing",inout count);
+    let check_declared_self_type=lookup_type(inout state,check_impl.self_type);
+    a_test_require(model.type_kind_id(check_declared_self_type.kind)==
+        model.type_kind_id(model.TypeKind.NominalStruct) &&
+        check_declared_self_type.declaration==thing_symbol,
+        "impl self_type is Thing",inout count);
+    a_test_require(model.type_kind_id(check_expected_param.kind)==
+        model.type_kind_id(model.TypeKind.NominalStruct) &&
+        check_expected_param.declaration==thing_symbol,
+        "prototype Self substituted to Thing",inout count);
+    a_test_require(types.equal(check_actual_type,check_expected_type),
+        "trait impl signature substitution",inout count);
+    let check_declared_found=a_parameters_get(state.parameters,ping_impl);
+    var check_declared=vec.empty[hir.Parameter]();
+    switch check_declared_found {case option.Option.Some(value):check_declared=value;
+        case option.Option.None: {}}
+    a_test_require(vec.len(check_declared)==vec.len(check_proto.parameters) &&
+        check_declared[0].label==check_proto.parameters[0].label,
+        "trait impl parameter labels",inout count);
+    a_test_require(check_sigmatch,"trait impl signature relation",inout count);
+    let impl_source=trait_impl_inout_source(inout state,ping_impl,true);
+    var has_trait_source=false;
+    switch impl_source {case option.Option.Some(value):has_trait_source=true;
+        case option.Option.None: {}}
+    a_test_require(has_trait_source,"trait impl source relation",inout count);
+    let ping_selection=select_method(inout state,ping_definition,
+        thing_type_id,"ping",option.Option[hir.TraitRef].Some(marker_ref));
+    a_test_require(ping_selection.method==ping_impl,"select trait method by required application",
+        inout count);
+    let bounded=a_test_find_symbol(inout state,"bounded");
+    let bounded_parameters_found=a_generic_params_get(state.generic_params,bounded);
+    var bounded_parameters=vec.empty[hir.GenericParam]();
+    switch bounded_parameters_found {case option.Option.Some(value):bounded_parameters=value;
+        case option.Option.None: {}}
+    a_test_require(vec.len(bounded_parameters)==1,"bounded generic registration",inout count);
+    let bounded_definition=a_test_definition(inout state,"bounded");
+    check_constraints(inout state,bounded_definition,bounded_parameters,
+        [thing_type_id],option.Option[Vec[model.Substitution]].None);
+    var bound_rejected=false;
+    try {check_constraints(inout state,bounded_definition,
+        bounded_parameters,[i32_id],option.Option[Vec[model.Substitution]].None);}
+    catch error Error {
+        switch error {
+            case Error.Rejected(diagnostic,failure):
+                bound_rejected=diagnostic.code=="E_TYPE_MISMATCH";
+            case Error.Support(support): {}
+        }
+    }
+    a_test_require(bound_rejected,"generic bound rejects unsatisfied actual",inout count);
+    state.active_params=bounded_parameters;
+    let bounded_receiver=parameter_type(inout state,bounded_parameters[0].symbol);
+    var value_source=false;
+    switch constraint_method_source(inout state,ping,marker_ref,bounded_receiver) {
+        case option.Option.Some(value):value_source=true;
+        case option.Option.None: {}
+    }
+    var value_move_source=false;
+    switch constraint_method_move_source(inout state,ping,marker_ref,bounded_receiver) {
+        case option.Option.Some(value):value_move_source=true;
+        case option.Option.None: {}
+    }
+    a_test_require(value_source && value_move_source,
+        "value-form bounded trait keeps its real Self receiver",inout count);
+    a_test_weak(inout state,ident_definition,inout count);
+    a_test_static_sources(inout count);
+    a_test_environment_restore(inout count);
+    a_test_invalid_bound_span(inout count);
+    return count;
+}
+pub func run_a_tests() i32 throws os.Error {
+    try {
+        let count=tests();
+        io.println("SEMA_A passed="+strconv.format_u64(u64(count))+" failed=0");
+        return 0;
+    } catch error Error {
+        switch error {
+            case Error.Support(support): {
+                switch support {
+                    case model.SupportError.Invalid(message):io.eprintln(message);
+                    case model.SupportError.Limit(message):io.eprintln(message);
+                }
+            }
+            case Error.Rejected(diagnostic,failure):io.eprintln(diagnostic.code+": "+diagnostic.message);
+        }
+        return 1;
+    }
+}

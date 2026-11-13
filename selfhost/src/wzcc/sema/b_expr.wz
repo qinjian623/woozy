@@ -1,0 +1,1874 @@
+// Checker expression checking and exact constant folding (CPP 1465-2864).
+package sema;
+
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/number" as number;
+import "app/wzcc/system" as system;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func literal_integer(state inout Checker, r model.NodeRef)
+    option.Option[bigint.BigInt] throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var value = r;
+    for {
+        let n = b_ast_m(b_module, value);
+        if !b_kind_is(n.kind, model.AstKind.Parenthesized) { break; }
+        value = b_child_m(b_module, value, 0);
+    }
+    var negative = false;
+    let unary = b_ast_m(b_module, value);
+    if b_kind_is(unary.kind, model.AstKind.Unary) {
+        let spelling = b_token_m(b_module, value, 0);
+        if spelling == "+" || spelling == "-" {
+            negative = spelling == "-";
+            value = b_child_m(b_module, value, 0);
+            for {
+                let n = b_ast_m(b_module, value);
+                if !b_kind_is(n.kind, model.AstKind.Parenthesized) { break; }
+                value = b_child_m(b_module, value, 0);
+            }
+        }
+    }
+    let n = b_ast_m(b_module, value);
+    if !b_kind_is(n.kind, model.AstKind.Literal) {
+        return option.Option[bigint.BigInt].None;
+    }
+    let file = b_file_m(b_module, value);
+    if n.token_begin >= vec.len(file.lexed.tokens) ||
+       !b_token_kind_is_integer(file.lexed.tokens[n.token_begin].kind) {
+        return option.Option[bigint.BigInt].None;
+    }
+    var parsed = bigint.zero();
+    try { parsed = number.parse_integer_spelling(b_token_m(b_module, value, 0)); }
+    catch error number.Error { throw Error.Support(support_from_number_error(error)); }
+    if negative { parsed = bigint.negate(parsed); }
+    return option.Option[bigint.BigInt].Some(parsed);
+}
+
+func b_token_kind_is_integer(kind model.TokenKind) bool {
+    switch kind {
+        case model.TokenKind.Integer: return true;
+        default: return false;
+    }
+}
+
+func b_token_kind_is_floating(kind model.TokenKind) bool {
+    switch kind {
+        case model.TokenKind.Floating: return true;
+        default: return false;
+    }
+}
+
+func b_token_kind_is_string(kind model.TokenKind) bool {
+    switch kind {
+        case model.TokenKind.StringLiteral: return true;
+        default: return false;
+    }
+}
+
+func round_ratio(state inout Checker, negative bool, numerator bigint.BigInt,
+                 denominator bigint.BigInt, type_id usize) u64 throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let value = lookup_type(inout state, type_id);
+    try {
+        return number.exact_ratio_to_ieee(negative, numerator, denominator,
+            value.bits);
+    } catch error number.Error {
+        throw Error.Support(support_from_number_error(error));
+    }
+}
+
+func round_fraction(state inout Checker, negative bool, numerator bigint.BigInt,
+                    denominator bigint.BigInt, shift i64,
+                    type_id usize) u64 throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    if shift >= 0 {
+        return round_ratio(inout state, negative,
+            bigint.shift_left(numerator, u64(shift)), denominator, type_id);
+    }
+    return round_ratio(inout state, negative, numerator,
+        bigint.shift_left(denominator, u64(-shift)), type_id);
+}
+
+func decode_ieee(bits u64, width u32) number.Ieee throws Error {
+    try { return number.decode_ieee(bits, width); }
+    catch error number.Error { throw Error.Support(support_from_number_error(error)); }
+}
+
+func float_bits(state inout Checker, r model.NodeRef, type_id usize) u64 throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let value = lookup_type(inout state, type_id);
+    try { return number.ieee_float_bits(b_token_m(b_module, r, 0), false, value.bits); }
+    catch error number.Error { throw Error.Support(support_from_number_error(error)); }
+}
+
+func binary_token(state inout Checker, r model.NodeRef) string throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    return b_binary_token_m(b_module, r);
+}
+
+func binary_op(spelling string) hir.BinaryOp throws Error {
+    if spelling == "+" { return hir.BinaryOp.Add; }
+    if spelling == "-" { return hir.BinaryOp.Subtract; }
+    if spelling == "*" { return hir.BinaryOp.Multiply; }
+    if spelling == "/" { return hir.BinaryOp.Divide; }
+    if spelling == "%" { return hir.BinaryOp.Remainder; }
+    if spelling == "<<" { return hir.BinaryOp.ShiftLeft; }
+    if spelling == ">>" { return hir.BinaryOp.ShiftRight; }
+    if spelling == "&" { return hir.BinaryOp.BitAnd; }
+    if spelling == "|" { return hir.BinaryOp.BitOr; }
+    if spelling == "^" { return hir.BinaryOp.BitXor; }
+    if spelling == "==" { return hir.BinaryOp.Equal; }
+    if spelling == "!=" { return hir.BinaryOp.NotEqual; }
+    if spelling == "<" { return hir.BinaryOp.Less; }
+    if spelling == "<=" { return hir.BinaryOp.LessEqual; }
+    if spelling == ">" { return hir.BinaryOp.Greater; }
+    if spelling == ">=" { return hir.BinaryOp.GreaterEqual; }
+    throw internal_error("unknown binary operator");
+}
+
+func b_binary_comparison(op hir.BinaryOp) bool {
+    switch op {
+        case hir.BinaryOp.Equal: return true;
+        case hir.BinaryOp.NotEqual: return true;
+        case hir.BinaryOp.Less: return true;
+        case hir.BinaryOp.LessEqual: return true;
+        case hir.BinaryOp.Greater: return true;
+        case hir.BinaryOp.GreaterEqual: return true;
+        default: return false;
+    }
+}
+
+func b_binary_shift(op hir.BinaryOp) bool {
+    switch op {
+        case hir.BinaryOp.ShiftLeft: return true;
+        case hir.BinaryOp.ShiftRight: return true;
+        default: return false;
+    }
+}
+
+func b_match(state inout Checker, r model.NodeRef, actual usize,
+             expected option.Option[usize]) throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch expected {
+        case option.Option.Some(value): {
+            if actual != value {
+                throw reject(inout state, r,
+                    "value type does not match the expected type",
+                    "E_TYPE_MISMATCH");
+            }
+        }
+        case option.Option.None: {}
+    }
+}
+
+func b_require_object_dyn(state inout Checker, r model.NodeRef,
+                          declaration usize) throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    require_object_safe(inout state, r, declaration);
+}
+
+func convert_to(state inout Checker, r model.NodeRef, value Expr,
+                expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch expected {
+        case option.Option.None: return value;
+        case option.Option.Some(wanted_id): {
+            if wanted_id == value.value.type_id { return value; }
+            let want = lookup_type(inout state, wanted_id);
+            if !b_type_kind_is(want.kind, model.TypeKind.TraitObject) {
+                return value;
+            }
+            let actual = lookup_type(inout state, value.value.type_id);
+            if b_type_kind_is(actual.kind, model.TypeKind.TraitObject) ||
+               b_type_kind_is(actual.kind, model.TypeKind.Error) {
+                return value;
+            }
+            if contains_parameter(inout state, value.value.type_id) {
+                throw unavailable(inout state, r,
+                    "dyn construction from a generic type parameter is not implemented");
+            }
+            require_object_safe(inout state, r, want.declaration);
+            var trait_index usize = 0;
+            var have_trait = false;
+            switch trait_decl(inout state, want.declaration) {
+                case option.Option.Some(index): { trait_index = index; have_trait = true; }
+                case option.Option.None: {}
+            }
+            if !have_trait {
+                throw internal_error("dyn trait declaration is missing");
+            }
+            let tr = state.m.traits[trait_index];
+            let trait_ref = hir.TraitRef(declaration: want.declaration,
+                args: b_copy_ids(want.type_args));
+            if !satisfies(inout state, r, value.value.type_id, trait_ref) {
+                throw reject(inout state, r,
+                    "dyn conversion requires exactly one implementation of the complete trait application",
+                    "E_TYPE_MISMATCH");
+            }
+            let methods = vec.empty[usize]();
+            let method_args = vec.empty[Vec[usize]]();
+            for proto in tr.methods {
+                let proto_name = symbol(inout state, proto.symbol).name;
+                let selected = select_method(inout state, r, value.value.type_id,
+                    proto_name, option.Option[hir.TraitRef].Some(trait_ref));
+                if symbol(inout state, selected.method).name !=
+                   symbol(inout state, proto.symbol).name {
+                    throw reject(inout state, r,
+                        "trait method maps to a different implementation method",
+                        "E_TYPE_MISMATCH");
+                }
+                let own = b_generic_params(inout state, selected.method);
+                var substitutions = selected.substitutions;
+                let args = finish_arguments(inout state, r, own,
+                    substitutions);
+                var target = selected.method;
+                if b_template_contains(inout state, target) {
+                    target = instantiate(inout state, target, args, r);
+                }
+                vec.push(methods, target);
+                vec.push(method_args, args);
+            }
+            let init = hir.TraitObjectInit(trait_ref: trait_ref, concrete: value.value.type_id,
+                methods: methods, method_args: method_args);
+            let id = node(inout state, r, wanted_id,
+                hir.NodeData.TraitObjectInit(value: init), [value.id]);
+            return Expr(id: id, value: b_empty_value(wanted_id));
+        }
+    }
+}
+
+func b_template_contains(state inout Checker, symbol usize) bool { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    for entry in state.template_ids {
+        if entry.symbol == symbol { return true; }
+    }
+    return false;
+}
+
+func contextual(state inout Checker, r model.NodeRef) bool throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let n = b_ast_m(b_module, r);
+    if b_kind_is(n.kind, model.AstKind.Parenthesized) {
+        return contextual(inout state, b_child_m(b_module, r, 0));
+    }
+    if b_kind_is(n.kind, model.AstKind.Unary) {
+        let spelling = b_token_m(b_module, r, 0);
+        if spelling == "+" || spelling == "-" || spelling == "move" {
+            return contextual(inout state, b_child_m(b_module, r, 0));
+        }
+    }
+    if b_kind_is(n.kind, model.AstKind.Literal) {
+        let file = b_file_m(b_module, r);
+        if n.token_begin >= vec.len(file.lexed.tokens) { return false; }
+        let kind = file.lexed.tokens[n.token_begin].kind;
+        return b_token_kind_is_integer(kind) || b_token_kind_is_floating(kind);
+    }
+    if b_kind_is(n.kind, model.AstKind.Binary) {
+        return contextual(inout state, b_child_m(b_module, r, 0)) &&
+            contextual(inout state, b_child_m(b_module, r, 1));
+    }
+    return false;
+}
+
+func list_hint(state inout Checker, r model.NodeRef) ListHint throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let n = b_ast_m(b_module, r);
+    if b_kind_is(n.kind, model.AstKind.Parenthesized) {
+        return list_hint(inout state, b_child_m(b_module, r, 0));
+    }
+    if b_kind_is(n.kind, model.AstKind.List) {
+        var hint = ListHint(contextual: true, floating: false,
+            depth: option.Option[usize].None);
+        for id in n.children {
+            let inner = list_hint(inout state, at(r, id));
+            hint.contextual = hint.contextual && inner.contextual;
+            hint.floating = hint.floating || inner.floating;
+            switch hint.depth {
+                case option.Option.None:
+                    switch inner.depth {
+                        case option.Option.Some(depth):
+                            hint.depth = option.Option[usize].Some(depth + 1);
+                        case option.Option.None: {}
+                    }
+                case option.Option.Some(depth): {}
+            }
+        }
+        return hint;
+    }
+    if !contextual(inout state, r) {
+        return ListHint(contextual: false, floating: false,
+            depth: option.Option[usize].None);
+    }
+    if b_kind_is(n.kind, model.AstKind.Binary) {
+        let op = b_binary_token_m(b_module, r);
+        if op == "&&" || op == "||" {
+            return ListHint(contextual: false, floating: false,
+                depth: option.Option[usize].None);
+        }
+        let parsed = binary_op(op);
+        if b_binary_comparison(parsed) {
+            return ListHint(contextual: false, floating: false,
+                depth: option.Option[usize].None);
+        }
+    }
+    var floating = false;
+    if b_kind_is(n.kind, model.AstKind.Literal) {
+        let file = b_file_m(b_module, r);
+        if n.token_begin < vec.len(file.lexed.tokens) {
+            floating = b_token_kind_is_floating(file.lexed.tokens[n.token_begin].kind);
+        }
+    }
+    var hint = ListHint(contextual: true, floating: floating,
+        depth: option.Option[usize].Some(0));
+    for id in n.children {
+        hint.floating = hint.floating ||
+            list_hint(inout state, at(r, id)).floating;
+    }
+    return hint;
+}
+
+func b_one() bigint.BigInt {
+    return bigint.from_u64(1);
+}
+
+func b_pow2(bits u32) bigint.BigInt {
+    return bigint.shift_left(b_one(), u64(bits));
+}
+
+func b_positive_remainder(value bigint.BigInt,
+                          modulus bigint.BigInt) bigint.BigInt throws Error {
+    try {
+        let parts = bigint.divrem(value, modulus);
+        if parts.remainder.sign < 0 {
+            return bigint.add(parts.remainder, modulus);
+        }
+        return parts.remainder;
+    } catch error bigint.Error {
+        throw internal_error("integer arithmetic fault");
+    }
+}
+
+func b_width_mask(width u32) u64 {
+    if width >= 64 { return 0xFFFFFFFFFFFFFFFF; }
+    return (u64(1) << u64(width)) - 1;
+}
+
+func b_low_bits(value bigint.BigInt, width u32) u64 throws Error {
+    let modulus = b_pow2(width);
+    let residue = b_positive_remainder(value, modulus);
+    try {
+        return bigint.to_u64(residue) & b_width_mask(width);
+    } catch error bigint.Error {
+        throw internal_error("integer magnitude does not fit");
+    }
+}
+
+func b_bitwise_fold(op hir.BinaryOp, left bigint.BigInt,
+                    right bigint.BigInt, width u32) bigint.BigInt throws Error {
+    let a = b_low_bits(left, width);
+    let b = b_low_bits(right, width);
+    var result u64 = 0;
+    switch op {
+        case hir.BinaryOp.BitAnd: result = a & b;
+        case hir.BinaryOp.BitOr: result = a | b;
+        case hir.BinaryOp.BitXor: result = a ^ b;
+        default: throw internal_error("invalid bitwise fold operator");
+    }
+    return bigint.from_u64(result);
+}
+
+func b_bitwise_not(value bigint.BigInt, width u32) bigint.BigInt throws Error {
+    let low = b_low_bits(value, width);
+    return bigint.from_u64(b_width_mask(width) ^ low);
+}
+
+func b_arithmetic_shift_right(value bigint.BigInt, amount u32) bigint.BigInt throws Error {
+    if value.sign >= 0 {
+        return bigint.shift_right(value, u64(amount));
+    }
+    let magnitude = bigint.absolute(value);
+    let divisor = b_pow2(amount);
+    try {
+        let parts = bigint.divrem(magnitude, divisor);
+        var quotient = parts.quotient;
+        if parts.remainder.sign != 0 {
+            quotient = bigint.add(quotient, b_one());
+        }
+        return bigint.negate(quotient);
+    } catch error bigint.Error {
+        throw internal_error("integer arithmetic fault");
+    }
+}
+
+func fold(state inout Checker, op hir.BinaryOp, a Value, b Value) Value throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var result = b_empty_value(a.type_id);
+    switch a.integer {
+        case option.Option.None: return result;
+        case option.Option.Some(x): {
+            switch b.integer {
+                case option.Option.None: return result;
+                case option.Option.Some(y): {
+                    var z = bigint.zero();
+                    var have_z = false;
+                    switch op {
+                        case hir.BinaryOp.Add: { z = bigint.add(x, y); have_z = true; }
+                        case hir.BinaryOp.Subtract: { z = bigint.subtract(x, y); have_z = true; }
+                        case hir.BinaryOp.Multiply: { z = bigint.multiply(x, y); have_z = true; }
+                        case hir.BinaryOp.Divide: {
+                            if y.sign == 0 { return result; }
+                            try { z = bigint.divrem(x, y).quotient; }
+                            catch error bigint.Error { return result; }
+                            have_z = true;
+                        }
+                        case hir.BinaryOp.Remainder: {
+                            if y.sign == 0 { return result; }
+                            try { z = bigint.divrem(x, y).remainder; }
+                            catch error bigint.Error { return result; }
+                            have_z = true;
+                        }
+                        case hir.BinaryOp.ShiftLeft: {
+                            if y.sign < 0 || bigint.compare(y, bigint.from_u64(u64(width(inout state, a.type_id)))) >= 0 {
+                                return result;
+                            }
+                            try { z = bigint.shift_left(x, bigint.to_u64(y)); }
+                            catch error bigint.Error { return result; }
+                            have_z = true;
+                        }
+                        case hir.BinaryOp.ShiftRight: {
+                            if y.sign < 0 || bigint.compare(y, bigint.from_u64(u64(width(inout state, a.type_id)))) >= 0 {
+                                return result;
+                            }
+                            try { z = b_arithmetic_shift_right(x, u32(bigint.to_u64(y))); }
+                            catch error bigint.Error { return result; }
+                            have_z = true;
+                        }
+                        case hir.BinaryOp.BitAnd:
+                        case hir.BinaryOp.BitOr:
+                        case hir.BinaryOp.BitXor: {
+                            z = b_bitwise_fold(op, x, y, width(inout state, a.type_id));
+                            have_z = true;
+                        }
+                        default: {
+                            result.type_id = b_boolean;
+                            var comparison = false;
+                            switch op {
+                                case hir.BinaryOp.Equal: comparison = bigint.compare(x, y) == 0;
+                                case hir.BinaryOp.NotEqual: comparison = bigint.compare(x, y) != 0;
+                                case hir.BinaryOp.Less: comparison = bigint.compare(x, y) < 0;
+                                case hir.BinaryOp.LessEqual: comparison = bigint.compare(x, y) <= 0;
+                                case hir.BinaryOp.Greater: comparison = bigint.compare(x, y) > 0;
+                                case hir.BinaryOp.GreaterEqual: comparison = bigint.compare(x, y) >= 0;
+                                default: {}
+                            }
+                            result.boolean = option.Option[bool].Some(comparison);
+                            return result;
+                        }
+                    }
+                    if have_z {
+                        result.integer = option.Option[bigint.BigInt].Some(
+                            wrap(inout state, z, a.type_id));
+                    }
+                    return result;
+                }
+            }
+        }
+    }
+}
+
+func float_fold(state inout Checker, op hir.BinaryOp, a Value, b Value) Value throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var result = b_empty_value(a.type_id);
+    switch a.floating {
+        case option.Option.None: return result;
+        case option.Option.Some(a_bits): {
+            switch b.floating {
+                case option.Option.None: return result;
+                case option.Option.Some(b_bits): {
+                    let width_value = lookup_type(inout state, a.type_id).bits;
+                    var infinity u64 = 0x7ff0000000000000;
+                    var nan_bits u64 = 0x7ff8000000000000;
+                    if width_value == 32 {
+                        infinity = 0x7f800000;
+                        nan_bits = 0x7fc00000;
+                    }
+                    var x = decode_ieee(a_bits, width_value);
+                    var y = decode_ieee(b_bits, width_value);
+                    switch op {
+                        case hir.BinaryOp.Add:
+                        case hir.BinaryOp.Subtract: {
+                            if b_binary_is_subtract(op) { y.negative = !y.negative; }
+                            if b_ieee_nan(x) || b_ieee_nan(y) {
+                                result.floating = option.Option[u64].Some(nan_bits);
+                            } else if b_ieee_inf(x) && b_ieee_inf(y) {
+                                var chosen = nan_bits;
+                                if x.negative == y.negative {
+                                    chosen = b_signed_infinity(x.negative, width_value, infinity);
+                                }
+                                result.floating = option.Option[u64].Some(chosen);
+                            } else if b_ieee_inf(x) {
+                                result.floating = option.Option[u64].Some(
+                                    b_signed_infinity(x.negative, width_value, infinity));
+                            } else if b_ieee_inf(y) {
+                                result.floating = option.Option[u64].Some(
+                                    b_signed_infinity(y.negative, width_value, infinity));
+                            } else {
+                                var shift = x.shift;
+                                if y.shift < shift { shift = y.shift; }
+                                var sum = bigint.shift_left(x.significand, u64(x.shift - shift));
+                                if x.negative { sum = bigint.negate(sum); }
+                                var addend = bigint.shift_left(y.significand, u64(y.shift - shift));
+                                if y.negative { addend = bigint.negate(addend); }
+                                sum = bigint.add(sum, addend);
+                                var magnitude = sum;
+                                if sum.sign < 0 { magnitude = bigint.negate(sum); }
+                                let negative_zero = sum.sign == 0 &&
+                                    x.significand.sign == 0 && y.significand.sign == 0 &&
+                                    x.negative && y.negative;
+                                result.floating = option.Option[u64].Some(
+                                    round_fraction(inout state,
+                                        sum.sign < 0 || negative_zero, magnitude,
+                                        b_one(), shift, a.type_id));
+                            }
+                        }
+                        case hir.BinaryOp.Multiply: {
+                            let negative = x.negative != y.negative;
+                            if b_ieee_nan(x) || b_ieee_nan(y) {
+                                result.floating = option.Option[u64].Some(nan_bits);
+                            } else if b_ieee_inf(x) || b_ieee_inf(y) {
+                                var finite = x;
+                                if b_ieee_inf(x) { finite = y; }
+                                if b_ieee_finite(finite) && finite.significand.sign == 0 {
+                                    result.floating = option.Option[u64].Some(nan_bits);
+                                } else {
+                                    result.floating = option.Option[u64].Some(
+                                        b_signed_infinity(negative, width_value, infinity));
+                                }
+                            } else {
+                                result.floating = option.Option[u64].Some(
+                                    round_fraction(inout state, negative,
+                                        bigint.multiply(x.significand, y.significand),
+                                        b_one(), x.shift + y.shift, a.type_id));
+                            }
+                        }
+                        case hir.BinaryOp.Divide: {
+                            let negative = x.negative != y.negative;
+                            if b_ieee_nan(x) || b_ieee_nan(y) {
+                                result.floating = option.Option[u64].Some(nan_bits);
+                            } else if b_ieee_inf(x) {
+                                var chosen = nan_bits;
+                                if !b_ieee_inf(y) {
+                                    chosen = b_signed_infinity(negative, width_value, infinity);
+                                }
+                                result.floating = option.Option[u64].Some(chosen);
+                            } else if b_ieee_inf(y) {
+                                result.floating = option.Option[u64].Some(
+                                    b_signed_zero(negative, width_value));
+                            } else if y.significand.sign == 0 {
+                                var chosen = nan_bits;
+                                if x.significand.sign != 0 {
+                                    chosen = b_signed_infinity(negative, width_value, infinity);
+                                }
+                                result.floating = option.Option[u64].Some(chosen);
+                            } else if x.significand.sign == 0 {
+                                result.floating = option.Option[u64].Some(
+                                    b_signed_zero(negative, width_value));
+                            } else {
+                                result.floating = option.Option[u64].Some(
+                                    round_fraction(inout state, negative,
+                                        x.significand, y.significand,
+                                        x.shift - y.shift, a.type_id));
+                            }
+                        }
+                        case hir.BinaryOp.Equal:
+                        case hir.BinaryOp.NotEqual:
+                        case hir.BinaryOp.Less:
+                        case hir.BinaryOp.LessEqual:
+                        case hir.BinaryOp.Greater:
+                        case hir.BinaryOp.GreaterEqual: {
+                            var comparison i32 = 0;
+                            if b_ieee_nan(x) || b_ieee_nan(y) {
+                                comparison = 2;
+                            } else if b_ieee_inf(x) || b_ieee_inf(y) {
+                                if b_ieee_inf(x) && b_ieee_inf(y) {
+                                    comparison = 0;
+                                    if x.negative != y.negative {
+                                        comparison = 1;
+                                        if x.negative { comparison = -1; }
+                                    }
+                                } else if b_ieee_inf(x) {
+                                    comparison = 1;
+                                    if x.negative { comparison = -1; }
+                                } else {
+                                    comparison = -1;
+                                    if y.negative { comparison = 1; }
+                                }
+                            } else if x.significand.sign == 0 && y.significand.sign == 0 {
+                                comparison = 0;
+                            } else if x.negative != y.negative {
+                                comparison = 1;
+                                if x.negative { comparison = -1; }
+                            } else {
+                                var shift = x.shift;
+                                if y.shift < shift { shift = y.shift; }
+                                let xs = bigint.shift_left(x.significand, u64(x.shift - shift));
+                                let ys = bigint.shift_left(y.significand, u64(y.shift - shift));
+                                let order = bigint.compare(xs, ys);
+                                comparison = order;
+                                if x.negative { comparison = -comparison; }
+                            }
+                            var value = false;
+                            switch op {
+                                case hir.BinaryOp.Equal: value = comparison == 0;
+                                case hir.BinaryOp.NotEqual: value = comparison == 2 || comparison != 0;
+                                case hir.BinaryOp.Less: value = comparison != 2 && comparison < 0;
+                                case hir.BinaryOp.LessEqual: value = comparison != 2 && comparison <= 0;
+                                case hir.BinaryOp.Greater: value = comparison != 2 && comparison > 0;
+                                case hir.BinaryOp.GreaterEqual: value = comparison != 2 && comparison >= 0;
+                                default: {}
+                            }
+                            result.type_id = b_boolean;
+                            result.boolean = option.Option[bool].Some(value);
+                        }
+                        default: {}
+                    }
+                    return result;
+                }
+            }
+        }
+    }
+}
+
+func b_binary_is_subtract(op hir.BinaryOp) bool {
+    switch op { case hir.BinaryOp.Subtract: return true; default: return false; }
+}
+
+func b_ieee_nan(value number.Ieee) bool {
+    switch value.kind { case number.IeeeKind.NaN: return true; default: return false; }
+}
+
+func b_ieee_inf(value number.Ieee) bool {
+    switch value.kind { case number.IeeeKind.Infinity: return true; default: return false; }
+}
+
+func b_ieee_finite(value number.Ieee) bool {
+    switch value.kind { case number.IeeeKind.Finite: return true; default: return false; }
+}
+
+func b_signed_infinity(negative bool, width u32, infinity u64) u64 {
+    if negative { return (u64(1) << u64(width - 1)) | infinity; }
+    return infinity;
+}
+
+func b_signed_zero(negative bool, width u32) u64 {
+    if negative { return u64(1) << u64(width - 1); }
+    return 0;
+}
+
+func expression(state inout Checker, r model.NodeRef,
+                expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch literal_integer(inout state, r) {
+        case option.Option.Some(value): {
+            let literal_type = b_option_value(expected, b_i64_type);
+            return int_literal(inout state, r, value, literal_type);
+        }
+        case option.Option.None: {}
+    }
+    let n = b_ast_m(b_module, r);
+    var result = Expr(id: 0, value: b_empty_value(b_unit));
+    if b_kind_is(n.kind, model.AstKind.BracketItem) ||
+       b_kind_is(n.kind, model.AstKind.Parenthesized) {
+        return expression(inout state, b_child_m(b_module, r, 0), expected);
+    }
+    if b_kind_is(n.kind, model.AstKind.Literal) {
+        result = b_expression_literal(inout state, r, n, expected);
+    } else if b_kind_is(n.kind, model.AstKind.Name) ||
+              b_kind_is(n.kind, model.AstKind.Member) {
+        result = b_expression_name_or_member(inout state, r, n, expected);
+    } else if b_kind_is(n.kind, model.AstKind.Await) {
+        result = b_expression_await(inout state, r);
+    } else if b_kind_is(n.kind, model.AstKind.Unary) {
+        result = b_expression_unary(inout state, r, expected);
+    } else if b_kind_is(n.kind, model.AstKind.Binary) {
+        result = b_expression_binary(inout state, r, expected);
+    } else if b_kind_is(n.kind, model.AstKind.Call) {
+        result = call(inout state, r, expected);
+    } else if b_kind_is(n.kind, model.AstKind.List) {
+        result = b_expression_list(inout state, r, n, expected);
+    } else if b_kind_is(n.kind, model.AstKind.Slice) {
+        result = b_expression_slice(inout state, r, n);
+    } else if b_kind_is(n.kind, model.AstKind.NeutralBracket) {
+        result = b_expression_neutral(inout state, r, n, expected);
+    } else if b_kind_is(n.kind, model.AstKind.FunctionLiteral) {
+        result = b_expression_function_literal(inout state, r);
+    } else {
+        throw unavailable(inout state, r,
+            "this expression requires aggregate, ownership, or external-call support");
+    }
+    result = convert_to(inout state, r, result, expected);
+    b_match(inout state, r, result.value.type_id, expected);
+    return result;
+}
+
+func b_expression_literal(state inout Checker, r model.NodeRef,
+                          n model.AstNode,
+                          expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let spelling = b_token_m(b_module, r, 0);
+    if spelling == "true" || spelling == "false" {
+        let value = spelling == "true";
+        let bool_type = b_boolean;
+        return Expr(id: node(inout state, r, bool_type,
+                       hir.NodeData.BoolLiteral(value: hir.BoolLiteral(value: value)), []),
+            value: b_bool_value(bool_type, value));
+    }
+    let file = b_file_m(b_module, r);
+    if n.token_begin >= vec.len(file.lexed.tokens) {
+        throw internal_error("invalid literal token");
+    }
+    let kind = file.lexed.tokens[n.token_begin].kind;
+    if b_token_kind_is_floating(kind) {
+        var type_id = b_i64_type;
+        switch expected {
+            case option.Option.Some(value): type_id = value;
+            case option.Option.None: type_id = scalar(inout state, model.TypeKind.Float, 64);
+        }
+        if !b_type_kind_is(lookup_type(inout state, type_id).kind,
+                           model.TypeKind.Float) {
+            throw reject(inout state, r,
+                "float literal requires float context", "E_TYPE_MISMATCH");
+        }
+        let bits = float_bits(inout state, r, type_id);
+        return Expr(id: node(inout state, r, type_id,
+                       hir.NodeData.FloatLiteral(value: hir.FloatLiteral(bits: bits)), []),
+            value: b_float_value(type_id, bits));
+    }
+    if b_token_kind_is_string(kind) {
+        let type_id = scalar(inout state, model.TypeKind.String, 0);
+        let token_value = file.lexed.tokens[n.token_begin];
+        if !token_value.has_string_value {
+            throw internal_error("string literal has no value");
+        }
+        let text = token_value.string_value;
+        if !b_valid_utf8(text) {
+            throw reject(inout state, r,
+                "string literal is not valid UTF-8", "E_TYPE_MISMATCH");
+        }
+        return Expr(id: node(inout state, r, type_id,
+                       hir.NodeData.StringLiteral(value: hir.StringLiteral(utf8: text)), []),
+            value: b_string_value(type_id, text));
+    }
+    throw unavailable(inout state, r, "string/owned literals require T09");
+}
+
+func b_expression_name_or_member(state inout Checker, r model.NodeRef,
+                                 n model.AstNode,
+                                 expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch occurrence(inout state, r) {
+        case option.Option.Some(id):
+            return b_expression_resolved_name(inout state, r, id, expected);
+        case option.Option.None: {}
+    }
+    if !b_kind_is(n.kind, model.AstKind.Member) {
+        throw reject(inout state, r, "unresolved value", "E_NAME_NOT_FOUND");
+    }
+    let base_ref = b_child_m(b_module, r, 0);
+    switch type_expression(inout state, base_ref) {
+        case option.Option.Some(type_id): {
+            if b_type_kind_is(lookup_type(inout state, type_id).kind,
+                              model.TypeKind.NominalEnum) {
+                let declaration = nominal(inout state, type_id);
+                let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
+                var found = false;
+                for variant in declaration.variants {
+                    if symbol(inout state, variant.symbol).name == name {
+                        if vec.len(variant.payload) != 0 {
+                            throw reject(inout state, r,
+                                "variant payload requires a constructor call",
+                                "E_TYPE_MISMATCH");
+                        }
+                        let init = hir.EnumInit(variant: variant.symbol, payload: []);
+                        return Expr(id: node(inout state, r, type_id,
+                                       hir.NodeData.EnumInit(value: init), []),
+                            value: b_empty_value(type_id));
+                    }
+                }
+            }
+            let refs = vec.empty[model.NodeRef]();
+            return method_value(inout state, r, r, refs, expected);
+        }
+        case option.Option.None: {}
+    }
+    let base = expression(inout state, base_ref, option.Option[usize].None);
+    let base_type = lookup_type(inout state, base.value.type_id);
+    if b_type_kind_is(base_type.kind, model.TypeKind.TraitObject) {
+        throw unavailable(inout state, r,
+            "dyn trait methods can only be called directly");
+    }
+    if b_type_kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+        let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
+        let property = foreign_property(inout state, base.value.type_id, name);
+        switch property {
+            case option.Option.Some(binding): {
+                let record = b_foreign_binding(inout state, binding);
+                let data = hir.ForeignRead(binding: record.binding,
+                    access: option.Option[hir.ForeignAccessKind].Some(
+                        hir.ForeignAccessKind.PropertyRead),
+                    start: option.Option[usize].None,
+                    end: option.Option[usize].None);
+                return Expr(id: node(inout state, r, record.type_id,
+                               hir.NodeData.ForeignRead(value: data), [base.id]),
+                    value: b_empty_value(record.type_id));
+            }
+            case option.Option.None: {
+                let methods = foreign_members(inout state, base.value.type_id,
+                    name, "method");
+                if vec.len(methods) != 0 {
+                    throw unavailable(inout state, r,
+                        "external method values cannot escape a call");
+                }
+                throw unavailable(inout state, r,
+                    "external property is not declared");
+            }
+        }
+    }
+    if b_type_kind_is(base_type.kind, model.TypeKind.CForeignRecord) {
+        let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
+        let declaration = c_decl(inout state, base_type.c_type);
+        var field_index usize = 0;
+        var found = false;
+        for var index usize = 0; index < vec.len(declaration.fields); index += 1 {
+            if declaration.fields[index].name == name {
+                field_index = index;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            throw reject(inout state, r,
+                "C record has no such field", "E_NAME_NOT_FOUND");
+        }
+        let type_id = c_type(inout state, declaration.fields[field_index].type_ref);
+        let data = hir.CFieldRead(c_type: declaration.id, field: u32(field_index));
+        return Expr(id: node(inout state, r, type_id,
+                       hir.NodeData.CFieldRead(value: data), [base.id]),
+            value: b_empty_value(type_id));
+    }
+    let name = b_token_m(b_module, r, n.token_end - n.token_begin - 1);
+    if b_type_kind_is(base_type.kind, model.TypeKind.NominalStruct) {
+        let declaration = nominal(inout state, base.value.type_id);
+        var has_field = false;
+        for field in declaration.fields {
+            if symbol(inout state, field.symbol).name == name { has_field = true; }
+        }
+        if !has_field {
+            var has_method = false;
+            for implementation in state.m.impls {
+                for method in implementation.methods {
+                    if symbol(inout state, method).name == name { has_method = true; }
+                }
+            }
+            if has_method {
+                let selected = select_method(inout state, r, base.value.type_id,
+                    name, option.Option[hir.TraitRef].None);
+                let own = method_own_parameters(inout state, selected.method);
+                switch expected {
+                    case option.Option.Some(wanted):
+                        if vec.len(own) != 0 {
+                            var substitutions = selected.substitutions;
+                            let signature = b_signature_or_internal(inout state,
+                                selected.method);
+                            infer(inout state, r, signature, wanted,
+                                substitutions);
+                        }
+                    case option.Option.None: {}
+                }
+                var substitutions = selected.substitutions;
+                let generic = b_generic_params(inout state, selected.method);
+                let args = finish_arguments(inout state, r, generic,
+                    substitutions);
+                return bound_method_value(inout state, r, base,
+                    Selection(method: selected.method, substitutions: substitutions),
+                    args);
+            }
+        }
+    }
+    let field = find_field(inout state, r, base.value.type_id);
+    let type_id = field_type(inout state, base.value.type_id, field);
+    return Expr(id: node(inout state, r, type_id,
+                   hir.NodeData.FieldRead(value: hir.FieldRead(field: field.symbol)),
+                   [base.id]),
+        value: b_empty_value(type_id));
+}
+
+func b_signature_or_internal(state inout Checker, symbol_id usize)
+    usize throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch b_signature_find(inout state, symbol_id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw internal_error("missing sema signature");
+    }
+}
+
+func b_expression_resolved_name(state inout Checker, r model.NodeRef, id usize,
+                                expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch b_foreign_export(inout state, id) {
+        case option.Option.Some(exported): {
+            if !b_foreign_export_kind_is(exported.kind,
+                                         model.ForeignExportKind.Value) {
+                throw unavailable(inout state, r,
+                    "external function/type values cannot escape a call");
+            }
+            switch exported.declaration {
+                case option.Option.Some(binding): {
+                    let record = b_foreign_binding(inout state, binding);
+                    let data = hir.ForeignRead(binding: record.binding,
+                        access: option.Option[hir.ForeignAccessKind].None,
+                        start: option.Option[usize].None,
+                        end: option.Option[usize].None);
+                    return Expr(id: node(inout state, r, record.type_id,
+                                   hir.NodeData.ForeignRead(value: data), []),
+                        value: b_empty_value(record.type_id));
+                }
+                case option.Option.None: {
+                    throw unavailable(inout state, r,
+                        "external function/type values cannot escape a call");
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch b_capture_origin_find(inout state, id) {
+        case option.Option.Some(mapped): {
+            switch b_capture_local_find(inout state, mapped) {
+                case option.Option.Some(binding):
+                    return Expr(id: node(inout state, r, binding.type_id,
+                                   hir.NodeData.Read(value: hir.Read(symbol: mapped)), []),
+                        value: b_empty_value(binding.type_id));
+                case option.Option.None:
+                    throw internal_error("capture binding is missing");
+            }
+        }
+        case option.Option.None: {}
+    }
+    let value_symbol = symbol(inout state, id);
+    if b_symbol_kind_is(value_symbol.kind, model.SymbolKind.BuiltinFunction) {
+        switch b_system_spec(value_symbol.name) {
+            case option.Option.Some(spec):
+                throw unavailable(inout state, r,
+                    "system operations can only be called directly from their owner std module");
+            case option.Option.None: {}
+        }
+    }
+    if b_symbol_kind_is(value_symbol.kind, model.SymbolKind.Function) {
+        if b_async_contains(inout state, id) {
+            throw reject(inout state, r,
+                "an async function can only be called directly; taking its function value is not supported",
+                "E_CAPABILITY_UNAVAILABLE");
+        }
+        var signature usize = 0;
+        switch b_signature_find(inout state, id) {
+            case option.Option.Some(value): signature = value;
+            case option.Option.None:
+                throw unavailable(inout state, r,
+                    "foreign function calls require T10/T11");
+        }
+        let args = vec.empty[usize]();
+        let generic = b_generic_params(inout state, id);
+        if vec.len(generic) != 0 {
+            var substitutions = vec.empty[model.Substitution]();
+            switch expected {
+                case option.Option.Some(wanted):
+                    infer(inout state, r, signature, wanted, substitutions);
+                case option.Option.None: {}
+            }
+            let finished = finish_arguments(inout state, r, generic,
+                substitutions);
+            for argument in finished { vec.push(args, argument); }
+            signature = substitute_type(inout state, signature, substitutions);
+        }
+        check_function_value_inout(inout state, r, id, signature);
+        let data = hir.FunctionValue(symbol: id, type_args: args, captures: [],
+            move_capture: false, bound: option.Option[hir.BoundReceiver].None);
+        return Expr(id: node(inout state, r, signature,
+                       hir.NodeData.FunctionValue(value: data), []),
+            value: b_empty_value(signature));
+    }
+    if b_symbol_kind_is(value_symbol.kind, model.SymbolKind.Constant) {
+        switch b_locals_find(inout state, id) {
+            case option.Option.None: {
+                let constant_value = constant(inout state, id);
+                switch constant_value.aggregate {
+                    case option.Option.Some(aggregate):
+                        return Expr(id: node(inout state, r, constant_value.value.type_id,
+                                       hir.NodeData.ConstantLiteral(
+                                           value: hir.ConstantLiteral(value: aggregate)), []),
+                            value: b_copy_value(constant_value.value));
+                    case option.Option.None: {}
+                }
+                switch constant_value.value.integer {
+                    case option.Option.Some(integer):
+                        b_match(inout state, r, constant_value.value.type_id, expected);
+                        return int_literal(inout state, r, integer,
+                            constant_value.value.type_id);
+                    case option.Option.None: {}
+                }
+                switch constant_value.value.floating {
+                    case option.Option.Some(bits):
+                        b_match(inout state, r, constant_value.value.type_id, expected);
+                        return Expr(id: node(inout state, r, constant_value.value.type_id,
+                                       hir.NodeData.FloatLiteral(
+                                           value: hir.FloatLiteral(bits: bits)), []),
+                            value: b_copy_value(constant_value.value));
+                    case option.Option.None: {}
+                }
+                switch constant_value.value.boolean {
+                    case option.Option.Some(boolean_value):
+                        return Expr(id: node(inout state, r, b_boolean,
+                                       hir.NodeData.BoolLiteral(
+                                           value: hir.BoolLiteral(value: boolean_value)), []),
+                            value: b_copy_value(constant_value.value));
+                    case option.Option.None: {}
+                }
+                switch constant_value.value.string_value {
+                    case option.Option.Some(text):
+                        return Expr(id: node(inout state, r, constant_value.value.type_id,
+                                       hir.NodeData.StringLiteral(
+                                           value: hir.StringLiteral(utf8: text)), []),
+                            value: b_copy_value(constant_value.value));
+                    case option.Option.None: {}
+                }
+                switch constant_value.function {
+                    case option.Option.Some(function_symbol): {
+                        check_function_value_inout(inout state, r, function_symbol,
+                            constant_value.value.type_id);
+                        let data = hir.FunctionValue(symbol: function_symbol,
+                            type_args: b_copy_ids(constant_value.type_args), captures: [],
+                            move_capture: false,
+                            bound: option.Option[hir.BoundReceiver].None);
+                        return Expr(id: node(inout state, r, constant_value.value.type_id,
+                                       hir.NodeData.FunctionValue(value: data), []),
+                            value: b_copy_value(constant_value.value));
+                    }
+                    case option.Option.None: {}
+                }
+                throw unavailable(inout state, r,
+                    "constant value cannot be materialized by scalar HIR");
+            }
+            case option.Option.Some(local): {}
+        }
+    }
+    switch b_locals_find(inout state, id) {
+        case option.Option.Some(local): {
+            let id_node = node(inout state, r, local.type_id,
+                hir.NodeData.Read(value: hir.Read(symbol: id)), []);
+            var result = Expr(id: id_node, value: b_empty_value(local.type_id));
+            switch b_constants_find(inout state, id) {
+                case option.Option.Some(stored): {
+                    result.value = b_copy_value(stored.value);
+                    var aggregate = false;
+                    switch stored.aggregate {
+                        case option.Option.Some(value): aggregate = true;
+                        case option.Option.None: {}
+                    }
+                    if !aggregate {
+                        switch result.value.boolean {
+                            case option.Option.Some(value):
+                                state.m.nodes[id_node].data = hir.NodeData.BoolLiteral(
+                                    value: hir.BoolLiteral(value: value));
+                            case option.Option.None: {}
+                        }
+                        switch result.value.string_value {
+                            case option.Option.Some(value):
+                                state.m.nodes[id_node].data = hir.NodeData.StringLiteral(
+                                    value: hir.StringLiteral(utf8: value));
+                            case option.Option.None: {}
+                        }
+                    }
+                }
+                case option.Option.None: {}
+            }
+            return result;
+        }
+        case option.Option.None:
+            throw unavailable(inout state, r,
+                "binding is not a checked scalar local");
+    }
+}
+
+func b_expression_await(state inout Checker, r model.NodeRef) Expr throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    if !state.async_function {
+        throw reject(inout state, r,
+            "await is only allowed inside an async function", "E_AWAIT_CONTEXT");
+    }
+    if state.cleanup_depth != 0 {
+        throw reject(inout state, r,
+            "await is not allowed in a defer body", "E_AWAIT_CONTEXT");
+    }
+    let task = expression(inout state, b_child_m(b_module, r, 0),
+        option.Option[usize].None);
+    let task_node = state.m.nodes[task.id];
+    let task_type = lookup_type(inout state, task_node.type_id);
+    if !b_type_kind_is(task_type.kind, model.TypeKind.Task) {
+        throw reject(inout state, r,
+            "await requires a Task value", "E_AWAIT_NOT_TASK");
+    }
+    if vec.len(task_type.type_args) == 0 {
+        throw internal_error("Task type has no payload");
+    }
+    let type_id = task_type.type_args[0];
+    return Expr(id: node(inout state, r, type_id,
+                   hir.NodeData.Await(value: hir.Await()), [task.id]),
+        value: b_empty_value(type_id));
+}
+
+func b_expression_unary(state inout Checker, r model.NodeRef,
+                        expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let op = b_token_m(b_module, r, 0);
+    if op == "move" { return b_expression_move(inout state, r, expected); }
+    if op == "inout" {
+        throw reject(inout state, r,
+            "argument mode marker outside its matching call", "E_CALL_ARGUMENT");
+    }
+    var child_expected = expected;
+    if op == "!" { child_expected = option.Option[usize].Some(b_boolean); }
+    let a = expression(inout state, b_child_m(b_module, r, 0), child_expected);
+    if op == "+" {
+        if !integer(inout state, a.value.type_id) &&
+           !b_type_kind_is(lookup_type(inout state, a.value.type_id).kind,
+                           model.TypeKind.Float) {
+            throw reject(inout state, r,
+                "unary plus requires a numeric operand", "E_TYPE_MISMATCH");
+        }
+        return a;
+    }
+    var unary_op = hir.UnaryOp.Negate;
+    if op == "!" { unary_op = hir.UnaryOp.LogicalNot; }
+    else if op == "~" { unary_op = hir.UnaryOp.BitNot; }
+    if op == "!" {
+        b_match(inout state, r, a.value.type_id,
+            option.Option[usize].Some(b_boolean));
+    } else if op == "~" && !integer(inout state, a.value.type_id) {
+        throw reject(inout state, r,
+            "bitwise not requires an integer operand", "E_TYPE_MISMATCH");
+    } else if op != "~" &&
+              !integer(inout state, a.value.type_id) &&
+              !b_type_kind_is(lookup_type(inout state, a.value.type_id).kind,
+                              model.TypeKind.Float) {
+        throw reject(inout state, r,
+            "integer unary operator requires an integer operand",
+            "E_TYPE_MISMATCH");
+    }
+    let id = node(inout state, r, a.value.type_id,
+        hir.NodeData.Unary(value: hir.Unary(op: unary_op)), [a.id]);
+    var result_value = b_copy_value(a.value);
+    switch result_value.integer {
+        case option.Option.Some(value): {
+            var folded = bigint.negate(value);
+            if op == "~" {
+                folded = b_bitwise_not(value, width(inout state, a.value.type_id));
+            }
+            result_value.integer = option.Option[bigint.BigInt].Some(
+                wrap(inout state, folded, a.value.type_id));
+        }
+        case option.Option.None: {}
+    }
+    switch result_value.floating {
+        case option.Option.Some(bits): {
+            if op == "-" || op == "+" {
+                var folded = bits;
+                if op == "-" {
+                    folded = bits ^ (u64(1) << u64(width(inout state, a.value.type_id) - 1));
+                }
+                result_value.floating = option.Option[u64].Some(folded);
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch result_value.boolean {
+        case option.Option.Some(value):
+            result_value.boolean = option.Option[bool].Some(!value);
+        case option.Option.None: {}
+    }
+    return Expr(id: id, value: result_value);
+}
+
+func b_expression_move(state inout Checker, r model.NodeRef,
+                       expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var er = b_child_m(b_module, r, 0);
+    er = b_strip_parens(inout state, er);
+    let n = b_ast_m(b_module, er);
+    if b_kind_is(n.kind, model.AstKind.FunctionLiteral) {
+        let id = definition(inout state, er);
+        let signature = b_signature_or_internal(inout state, id);
+        let args = b_parameter_types(inout state, id);
+        check_function_value_inout(inout state, r, id, signature);
+        var value = make_function_value(inout state, r, er, true, id,
+            signature, args);
+        b_match(inout state, r, value.value.type_id, expected);
+        return value;
+    }
+    if b_kind_is(n.kind, model.AstKind.Name) {
+        var sid_option = occurrence(inout state, er);
+        switch sid_option {
+            case option.Option.Some(sid): {
+                switch b_capture_origin_find(inout state, sid) {
+                    case option.Option.Some(mapped): {
+                        switch b_locals_find(inout state, mapped) {
+                            case option.Option.Some(local):
+                                if local.read_only_capture {
+                                    throw reject(inout state, r,
+                                        "a read-only capture cannot be moved",
+                                        "E_CALL_ARGUMENT");
+                                }
+                            case option.Option.None: {}
+                        }
+                        sid_option = option.Option[usize].Some(mapped);
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            case option.Option.None: {}
+        }
+        var sid usize = 0;
+        var have_sid = false;
+        switch sid_option {
+            case option.Option.Some(value): { sid = value; have_sid = true; }
+            case option.Option.None: {}
+        }
+        if !have_sid {
+            throw reject(inout state, r,
+                "move requires a local owner", "E_CALL_ARGUMENT");
+        }
+        var local = Local(type_id: 0, writable: false,
+            ordinary_parameter: false, read_only_capture: false);
+        var have_local = false;
+        switch b_locals_find(inout state, sid) {
+            case option.Option.Some(value): { local = value; have_local = true; }
+            case option.Option.None: {}
+        }
+        if !have_local {
+            throw reject(inout state, r,
+                "move requires a local owner", "E_CALL_ARGUMENT");
+        }
+        if local.read_only_capture {
+            throw reject(inout state, r,
+                "a read-only capture cannot be moved", "E_CALL_ARGUMENT");
+        }
+        if local.ordinary_parameter || (local.writable &&
+           b_symbol_definition_is_parameter(inout state, sid)) {
+            throw reject(inout state, r,
+                "borrowed parameter cannot be moved", "E_CALL_ARGUMENT");
+        }
+        let moved = Expr(id: node(inout state, r, local.type_id,
+                               hir.NodeData.Move(value: hir.Move(
+                                   binding: option.Option[usize].Some(sid))), []),
+            value: b_empty_value(local.type_id));
+        var converted = convert_to(inout state, er, moved, expected);
+        b_match(inout state, er, converted.value.type_id, expected);
+        return converted;
+    }
+    if b_kind_is(n.kind, model.AstKind.Member) ||
+       b_kind_is(n.kind, model.AstKind.NeutralBracket) {
+        throw unavailable(inout state, r,
+            "partial field/element move is not supported");
+    }
+    let e = expression(inout state, er, expected);
+    return Expr(id: node(inout state, r, e.value.type_id,
+                   hir.NodeData.Move(value: hir.Move(
+                       binding: option.Option[usize].None)), [e.id]),
+        value: b_copy_value(e.value));
+}
+
+func b_parameter_types(state inout Checker, owner usize) Vec[usize] throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let generic = b_generic_params(inout state, owner);
+    let args = vec.empty[usize]();
+    for parameter in generic {
+        vec.push(args, parameter_type(inout state, parameter.symbol));
+    }
+    return args;
+}
+
+func b_symbol_definition_is_parameter(state inout Checker, symbol_id usize) bool throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let value = symbol(inout state, symbol_id);
+    switch value.definition {
+        case option.Option.Some(reference):
+            return b_kind_is(b_ast_m(b_module, reference).kind,
+                model.AstKind.Parameter);
+        case option.Option.None: return false;
+    }
+}
+
+func b_expression_binary(state inout Checker, r model.NodeRef,
+                         expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let op_text = b_binary_token_m(b_module, r);
+    if op_text == "&&" || op_text == "||" {
+        let a = expression(inout state, b_child_m(b_module, r, 0),
+            option.Option[usize].Some(b_boolean));
+        let b = expression(inout state, b_child_m(b_module, r, 1),
+            option.Option[usize].Some(b_boolean));
+        var value = b_empty_value(b_boolean);
+        var known = false;
+        switch b_node_bool_literal(state.m.nodes[a.id]) {
+            case option.Option.Some(boolean_value): {
+                if (op_text == "&&" && !boolean_value.value) ||
+                   (op_text == "||" && boolean_value.value) {
+                    value.boolean = option.Option[bool].Some(boolean_value.value);
+                    known = true;
+                }
+            }
+            case option.Option.None: {}
+        }
+        if !known {
+            switch b_node_bool_literal(state.m.nodes[a.id]) {
+                case option.Option.Some(a_boolean):
+                    switch b_node_bool_literal(state.m.nodes[b.id]) {
+                        case option.Option.Some(b_boolean): {
+                            var combined = a_boolean.value || b_boolean.value;
+                            if op_text == "&&" {
+                                combined = a_boolean.value && b_boolean.value;
+                            }
+                            value.boolean = option.Option[bool].Some(combined);
+                        }
+                        case option.Option.None: {}
+                    }
+                case option.Option.None: {}
+            }
+        }
+        var logical = hir.LogicalOp.And;
+        if op_text == "||" { logical = hir.LogicalOp.Or; }
+        return Expr(id: node(inout state, r, b_boolean,
+                       hir.NodeData.ShortCircuit(value: hir.ShortCircuit(op: logical)),
+                       [a.id, b.id]),
+            value: value);
+    }
+    let op = binary_op(op_text);
+    let comparison = b_binary_comparison(op);
+    let shift = b_binary_shift(op);
+    var context = expected;
+    if comparison { context = option.Option[usize].None; }
+    var a = b_empty_expr();
+    var b = b_empty_expr();
+    if !shift && contextual(inout state, b_child_m(b_module, r, 0)) &&
+       !contextual(inout state, b_child_m(b_module, r, 1)) {
+        b = expression(inout state, b_child_m(b_module, r, 1), context);
+        a = expression(inout state, b_child_m(b_module, r, 0),
+            option.Option[usize].Some(b.value.type_id));
+    } else {
+        a = expression(inout state, b_child_m(b_module, r, 0), context);
+        var right_expected = option.Option[usize].Some(a.value.type_id);
+        if shift { right_expected = option.Option[usize].None; }
+        b = expression(inout state, b_child_m(b_module, r, 1), right_expected);
+    }
+    if shift {
+        if !integer(inout state, a.value.type_id) ||
+           !integer(inout state, b.value.type_id) {
+            throw reject(inout state, r,
+                "shift operands must be integers", "E_TYPE_MISMATCH");
+        }
+    } else {
+        b_match(inout state, r, b.value.type_id,
+            option.Option[usize].Some(a.value.type_id));
+    }
+    let kind = lookup_type(inout state, a.value.type_id).kind;
+    if b_type_kind_is(kind, model.TypeKind.String) {
+        if b_binary_id(op) != BINARY_ADD && !comparison {
+            throw reject(inout state, r,
+                "string operators support concatenation and comparisons",
+                "E_TYPE_MISMATCH");
+        }
+        var result_type = a.value.type_id;
+        if comparison { result_type = b_boolean; }
+        return Expr(id: node(inout state, r, result_type,
+                       hir.NodeData.Binary(value: hir.Binary(op: op)),
+                       [a.id, b.id]),
+            value: b_empty_value(result_type));
+    }
+    if (b_binary_id(op) == BINARY_REMAINDER || b_binary_id(op) == BINARY_BIT_AND ||
+        b_binary_id(op) == BINARY_BIT_OR || b_binary_id(op) == BINARY_BIT_XOR) &&
+       !integer(inout state, a.value.type_id) {
+        throw reject(inout state, r,
+            "bitwise and remainder operators require integer operands",
+            "E_TYPE_MISMATCH");
+    }
+    if !integer(inout state, a.value.type_id) &&
+       !b_type_kind_is(kind, model.TypeKind.Float) &&
+       !(b_type_kind_is(kind, model.TypeKind.Bool) &&
+         (b_binary_id(op) == BINARY_EQUAL || b_binary_id(op) == BINARY_NOT_EQUAL)) {
+        throw reject(inout state, r,
+            "invalid scalar operator operands", "E_TYPE_MISMATCH");
+    }
+    var value = b_empty_value(b_boolean);
+    if integer(inout state, a.value.type_id) {
+        value = fold(inout state, op, a.value, b.value);
+    } else if b_type_kind_is(kind, model.TypeKind.Float) {
+        value = float_fold(inout state, op, a.value, b.value);
+    }
+    if b_type_kind_is(kind, model.TypeKind.Bool) {
+        switch a.value.boolean {
+            case option.Option.Some(a_bool):
+                switch b.value.boolean {
+                    case option.Option.Some(b_bool): {
+                        var equal = a_bool != b_bool;
+                        if b_binary_id(op) == BINARY_EQUAL { equal = a_bool == b_bool; }
+                        value.boolean = option.Option[bool].Some(equal);
+                    }
+                    case option.Option.None: {}
+                }
+            case option.Option.None: {}
+        }
+    }
+    if comparison { value.type_id = b_boolean; }
+    else { value.type_id = a.value.type_id; }
+    return Expr(id: node(inout state, r, value.type_id,
+                   hir.NodeData.Binary(value: hir.Binary(op: op)), [a.id, b.id]),
+        value: value);
+}
+
+func b_expression_list(state inout Checker, r model.NodeRef, n model.AstNode,
+                       expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var element = option.Option[usize].None;
+    var checked_index = option.Option[usize].None;
+    var checked_expr = b_empty_expr();
+    switch expected {
+        case option.Option.Some(type_id): {
+            let value = lookup_type(inout state, type_id);
+            if !b_type_kind_is(value.kind, model.TypeKind.Vec) {
+                throw reject(inout state, r,
+                    "list requires Vec context", "E_TYPE_MISMATCH");
+            }
+            if vec.len(value.type_args) == 0 {
+                throw internal_error("Vec type has no element");
+            }
+            element = option.Option[usize].Some(value.type_args[0]);
+        }
+        case option.Option.None: {
+            var floating = false;
+            var depth = option.Option[usize].None;
+            for var index usize = 0; index < vec.len(n.children); index += 1 {
+                let reference = at(r, n.children[index]);
+                let hint = list_hint(inout state, reference);
+                if !hint.contextual {
+                    checked_expr = expression(inout state, reference,
+                        option.Option[usize].None);
+                    checked_index = option.Option[usize].Some(index);
+                    element = option.Option[usize].Some(checked_expr.value.type_id);
+                    break;
+                }
+                floating = floating || hint.floating;
+                switch depth {
+                    case option.Option.None:
+                        switch hint.depth {
+                            case option.Option.Some(value):
+                                depth = option.Option[usize].Some(value);
+                            case option.Option.None: {}
+                        }
+                    case option.Option.Some(value): {}
+                }
+            }
+            switch element {
+                case option.Option.None:
+                    switch depth {
+                        case option.Option.Some(value): {
+                            var inner = b_i64_type;
+                            if floating {
+                                inner = scalar(inout state, model.TypeKind.Float, 64);
+                            }
+                            for var step usize = 0; step < value; step += 1 {
+                                var nested = model.empty_type(model.TypeKind.Vec);
+                                nested.type_args = [inner];
+                                inner = intern_type(inout state, nested);
+                            }
+                            element = option.Option[usize].Some(inner);
+                        }
+                        case option.Option.None: {}
+                    }
+                case option.Option.Some(value): {}
+            }
+        }
+    }
+    var element_type usize = 0;
+    switch element {
+        case option.Option.Some(value): element_type = value;
+        case option.Option.None:
+            throw reject(inout state, r,
+                "empty list requires a Vec context", "E_TYPE_MISMATCH");
+    }
+    let values = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(n.children); index += 1 {
+        var e = b_empty_expr();
+        var use_checked = false;
+        switch checked_index {
+            case option.Option.Some(value):
+                if value == index { use_checked = true; }
+            case option.Option.None: {}
+        }
+        if use_checked {
+            e = checked_expr;
+        } else {
+            e = expression(inout state, at(r, n.children[index]), element);
+        }
+        vec.push(values, e.id);
+    }
+    var vector_type = model.empty_type(model.TypeKind.Vec);
+    vector_type.type_args = [element_type];
+    let type_id = intern_type(inout state, vector_type);
+    return Expr(id: node(inout state, r, type_id,
+                   hir.NodeData.VecInit(value: hir.VecInit()), values),
+        value: b_empty_value(type_id));
+}
+
+func b_expression_slice(state inout Checker, r model.NodeRef,
+                        n model.AstNode) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let base = expression(inout state, b_child_m(b_module, r, 0),
+        option.Option[usize].None);
+    let values = vec.empty[usize]();
+    vec.push(values, base.id);
+    var slice = hir.VecSlice(start: option.Option[usize].None,
+        end: option.Option[usize].None);
+    var colon = b_ast_m(b_module, b_child_m(b_module, r, 0)).token_end + 1;
+    if vec.len(n.children) > 1 &&
+       b_kind_is(b_ast_m(b_module, b_child_m(b_module, r, 1)).kind,
+                 model.AstKind.BracketItem) {
+        colon = b_ast_m(b_module, b_child_m(b_module, r, 1)).token_end;
+    }
+    if b_token_index(inout state, r, colon) != ":" {
+        throw reject(inout state, r, "invalid slice delimiter", "E_TYPE_MISMATCH");
+    }
+    let base_type = lookup_type(inout state, base.value.type_id);
+    if b_type_kind_is(base_type.kind, model.TypeKind.ForeignOpaque) {
+        let slice_id = foreign_slice(inout state, base.value.type_id);
+        var binding usize = 0;
+        switch slice_id {
+            case option.Option.Some(value): binding = value;
+            case option.Option.None:
+                throw unavailable(inout state, r,
+                    "external slicing is not declared");
+        }
+        let declaration = b_foreign_slice_declaration(inout state, binding);
+        if !declaration.readable {
+            throw unavailable(inout state, r, "external slicing is write-only");
+        }
+        var access = hir.ForeignRead(binding: binding,
+            access: option.Option[hir.ForeignAccessKind].Some(
+                hir.ForeignAccessKind.SliceRead),
+            start: option.Option[usize].None, end: option.Option[usize].None);
+        for var index usize = 1; index < vec.len(n.children); index += 1 {
+            let endpoint = b_child_m(b_module, r, index);
+            let start = b_ast_m(b_module, endpoint).token_begin < colon;
+            var declared = option.Option[string].None;
+            if start { declared = declaration.start_type; }
+            else { declared = declaration.end_type; }
+            var type_name = "";
+            switch declared {
+                case option.Option.Some(value): type_name = value;
+                case option.Option.None:
+                    throw reject(inout state, r,
+                        "external slice endpoint is not declared",
+                        "E_TYPE_MISMATCH");
+            }
+            let type_id = declared_foreign_type(inout state, type_name);
+            let e = expression(inout state, endpoint,
+                option.Option[usize].Some(type_id));
+            b_match(inout state, endpoint, e.value.type_id,
+                option.Option[usize].Some(type_id));
+            vec.push(values, e.id);
+            if start { access.start = option.Option[usize].Some(e.id); }
+            else { access.end = option.Option[usize].Some(e.id); }
+        }
+        let record = b_foreign_binding(inout state, binding);
+        return Expr(id: node(inout state, r, record.type_id,
+                       hir.NodeData.ForeignRead(value: access), values),
+            value: b_empty_value(record.type_id));
+    }
+    if !b_type_kind_is(base_type.kind, model.TypeKind.Vec) &&
+       !b_type_kind_is(base_type.kind, model.TypeKind.Slice) &&
+       !b_type_kind_is(base_type.kind, model.TypeKind.String) {
+        throw reject(inout state, r,
+            "slice receiver must be Vec, Slice or string", "E_TYPE_MISMATCH");
+    }
+    for var index usize = 1; index < vec.len(n.children); index += 1 {
+        let endpoint = b_child_m(b_module, r, index);
+        let e = expression(inout state, endpoint, option.Option[usize].None);
+        if !integer(inout state, e.value.type_id) {
+            throw reject(inout state, r,
+                "slice endpoint must be integer", "E_TYPE_MISMATCH");
+        }
+        vec.push(values, e.id);
+        if b_ast_m(b_module, endpoint).token_begin < colon {
+            slice.start = option.Option[usize].Some(e.id);
+        } else {
+            slice.end = option.Option[usize].Some(e.id);
+        }
+    }
+    return Expr(id: node(inout state, r, base.value.type_id,
+                   hir.NodeData.VecSlice(value: slice), values),
+        value: b_empty_value(base.value.type_id));
+}
+
+func b_foreign_slice_declaration(state inout Checker, binding usize)
+    model.BindingSlice throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let project = state.m.resolved.project;
+    if binding >= vec.len(project.foreign_bindings) {
+        throw internal_error("invalid foreign slice declaration");
+    }
+    switch project.foreign_bindings[binding].detail {
+        case model.ForeignDetail.Slice(value): return value;
+        default: throw internal_error("foreign slice binding has wrong kind");
+    }
+}
+
+func b_expression_neutral(state inout Checker, r model.NodeRef,
+                          n model.AstNode,
+                          expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let base = b_child_m(b_module, r, 0);
+    let target = occurrence(inout state, base);
+    var target_is_function = false;
+    switch target {
+        case option.Option.Some(id):
+            target_is_function = b_symbol_kind_is(
+                symbol(inout state, id).kind, model.SymbolKind.Function);
+        case option.Option.None: {}
+    }
+    if !target_is_function {
+        var candidate = base;
+        for {
+            let candidate_node = b_ast_m(b_module, candidate);
+            if !b_kind_is(candidate_node.kind, model.AstKind.Parenthesized) { break; }
+            candidate = b_child_m(b_module, candidate, 0);
+        }
+        if b_kind_is(b_ast_m(b_module, candidate).kind, model.AstKind.Member) {
+            var candidate_resolved = true;
+            switch occurrence(inout state, candidate) {
+                case option.Option.Some(id): {}
+                case option.Option.None: candidate_resolved = false;
+            }
+            if !candidate_resolved {
+                switch type_expression(inout state, b_child_m(b_module, candidate, 0)) {
+                    case option.Option.Some(type_id): {
+                        if b_type_kind_is(lookup_type(inout state, type_id).kind,
+                                          model.TypeKind.NominalEnum) {
+                            let name = b_last_token_m(b_module, candidate);
+                            let declaration = nominal(inout state, type_id);
+                            for variant in declaration.variants {
+                                if symbol(inout state, variant.symbol).name == name {
+                                    throw reject(inout state, candidate,
+                                        "enum variants do not take type arguments",
+                                        "E_TYPE_MISMATCH");
+                                }
+                            }
+                        }
+                        let refs = vec.empty[model.NodeRef]();
+                        for var index usize = 1; index < vec.len(n.children); index += 1 {
+                            vec.push(refs, b_child_m(b_module, r, index));
+                        }
+                        return method_value(inout state, r, candidate, refs, expected);
+                    }
+                    case option.Option.None: {}
+                }
+            }
+        }
+        let value = expression(inout state, base, option.Option[usize].None);
+        let receiver = lookup_type(inout state, value.value.type_id);
+        if b_type_kind_is(receiver.kind, model.TypeKind.ForeignOpaque) {
+            if vec.len(n.children) != 2 {
+                throw reject(inout state, r,
+                    "external indexing requires exactly one index",
+                    "E_TYPE_MISMATCH");
+            }
+            let index_id = foreign_indexer(inout state, value.value.type_id);
+            var binding usize = 0;
+            switch index_id {
+                case option.Option.Some(id): binding = id;
+                case option.Option.None:
+                    throw unavailable(inout state, r,
+                        "external indexing is not declared");
+            }
+            let declaration = b_foreign_indexer_declaration(inout state, binding);
+            if !declaration.readable {
+                throw unavailable(inout state, r, "external indexing is write-only");
+            }
+            let index_type = declared_foreign_type(inout state,
+                declaration.index_type);
+            let index = expression(inout state, b_child_m(b_module, r, 1),
+                option.Option[usize].Some(index_type));
+            b_match(inout state, r, index.value.type_id,
+                option.Option[usize].Some(index_type));
+            let record = b_foreign_binding(inout state, binding);
+            let access = hir.ForeignRead(binding: binding,
+                access: option.Option[hir.ForeignAccessKind].Some(
+                    hir.ForeignAccessKind.IndexRead),
+                start: option.Option[usize].None, end: option.Option[usize].None);
+            return Expr(id: node(inout state, r, record.type_id,
+                           hir.NodeData.ForeignRead(value: access),
+                           [value.id, index.id]),
+                value: b_empty_value(record.type_id));
+        }
+        if b_type_kind_is(receiver.kind, model.TypeKind.CForeignPointer) ||
+           b_type_kind_is(receiver.kind, model.TypeKind.CForeignBuffer) {
+            if state.unsafe_depth == 0 {
+                throw reject(inout state, r,
+                    "C pointer/buffer indexing requires unsafe",
+                    "E_TYPE_MISMATCH");
+            }
+            if vec.len(n.children) != 2 {
+                throw reject(inout state, r,
+                    "C pointer requires one index", "E_CALL_ARGUMENT");
+            }
+            let index = expression(inout state, b_child_m(b_module, r, 1),
+                option.Option[usize].None);
+            if !integer(inout state, index.value.type_id) {
+                throw reject(inout state, r,
+                    "C pointer index must be integer", "E_TYPE_MISMATCH");
+            }
+            if vec.len(receiver.type_args) == 0 {
+                throw internal_error("C pointer has no pointee");
+            }
+            let type_id = receiver.type_args[0];
+            if b_type_kind_is(lookup_type(inout state, type_id).kind,
+                              model.TypeKind.Unit) {
+                throw reject(inout state, r,
+                    "void pointer cannot be indexed", "E_TYPE_MISMATCH");
+            }
+            return Expr(id: node(inout state, r, type_id,
+                           hir.NodeData.IndexRead(value: hir.IndexRead()),
+                           [value.id, index.id]),
+                value: b_empty_value(type_id));
+        }
+        if !b_type_kind_is(receiver.kind, model.TypeKind.Vec) &&
+           !b_type_kind_is(receiver.kind, model.TypeKind.Slice) &&
+           !b_type_kind_is(receiver.kind, model.TypeKind.String) {
+            throw reject(inout state, r,
+                "index receiver must be Vec, Slice or string", "E_TYPE_MISMATCH");
+        }
+        if vec.len(n.children) != 2 {
+            throw reject(inout state, r, "indexing requires one index",
+                "E_TYPE_MISMATCH");
+        }
+        let index = expression(inout state, b_child_m(b_module, r, 1),
+            option.Option[usize].None);
+        if !integer(inout state, index.value.type_id) {
+            throw reject(inout state, r, "index must be integer", "E_TYPE_MISMATCH");
+        }
+        var type_id = b_i64_type;
+        if b_type_kind_is(receiver.kind, model.TypeKind.String) {
+            type_id = scalar(inout state, model.TypeKind.UnsignedInt, 32);
+        } else {
+            if vec.len(receiver.type_args) == 0 {
+                throw internal_error("container has no element type");
+            }
+            type_id = receiver.type_args[0];
+        }
+        return Expr(id: node(inout state, r, type_id,
+                       hir.NodeData.IndexRead(value: hir.IndexRead()),
+                       [value.id, index.id]),
+            value: b_empty_value(type_id));
+    }
+    var id usize = 0;
+    switch target {
+        case option.Option.Some(value): id = value;
+        case option.Option.None: throw internal_error("missing generic target");
+    }
+    let generic = b_generic_params(inout state, id);
+    if vec.len(n.children) - 1 != vec.len(generic) {
+        throw reject(inout state, r, "wrong number of generic arguments",
+            "E_CALL_ARGUMENT");
+    }
+    let args = vec.empty[usize]();
+    var substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(generic); index += 1 {
+        let type_id = parse_type(inout state, b_child_m(b_module, r, index + 1),
+            option.Option[usize].None, false);
+        vec.push(args, type_id);
+        vec.push(substitutions, model.Substitution(symbol: generic[index].symbol,
+            type_id: type_id));
+    }
+    check_constraints(inout state, r, generic, args,
+        option.Option[Vec[model.Substitution]].Some(substitutions));
+    let signature = b_signature_or_internal(inout state, id);
+    let concrete = substitute_type(inout state, signature, substitutions);
+    check_function_value_inout(inout state, r, id, concrete);
+    let data = hir.FunctionValue(symbol: id, type_args: args, captures: [],
+        move_capture: false, bound: option.Option[hir.BoundReceiver].None);
+    return Expr(id: node(inout state, r, concrete,
+                   hir.NodeData.FunctionValue(value: data), []),
+        value: b_empty_value(concrete));
+}
+
+func b_foreign_indexer_declaration(state inout Checker, binding usize)
+    model.BindingIndexer throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let project = state.m.resolved.project;
+    if binding >= vec.len(project.foreign_bindings) {
+        throw internal_error("invalid foreign indexer declaration");
+    }
+    switch project.foreign_bindings[binding].detail {
+        case model.ForeignDetail.Indexer(value): return value;
+        default: throw internal_error("foreign indexer binding has wrong kind");
+    }
+}
+
+func b_expression_function_literal(state inout Checker, r model.NodeRef) Expr throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let id = definition(inout state, r);
+    let signature = b_signature_or_internal(inout state, id);
+    let args = b_parameter_types(inout state, id);
+    check_function_value_inout(inout state, r, id, signature);
+    return make_function_value(inout state, r, r, false, id, signature, args);
+}
+
+func b_system_spec(name string) option.Option[system.OperationSpec] {
+    for spec in system.operations() {
+        if spec.name == name { return option.Option[system.OperationSpec].Some(spec); }
+    }
+    return option.Option[system.OperationSpec].None;
+}
+
+func b_valid_utf8(value string) bool {
+    // Reuse the literal package's byte-level round trip.  String indexing in
+    // Woozy is by Unicode scalar, not UTF-8 byte, so a hand-written FSM over
+    // value[index] cannot validate the decoded token bytes.
+    try {
+        let checked = text.from_bytes(text.bytes(value));
+        return text.byte_len(checked) == text.byte_len(value);
+    } catch error text.Error {
+        return false;
+    }
+}

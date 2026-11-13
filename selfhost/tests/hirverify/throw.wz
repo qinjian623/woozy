@@ -1,0 +1,6 @@
+package app;
+enum Boom { Bad; }
+func boom() Unit throws Boom {
+    throw Boom.Bad;
+}
+func main() Unit {}

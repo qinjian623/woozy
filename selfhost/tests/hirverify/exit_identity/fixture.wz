@@ -1,0 +1,8 @@
+package app;
+
+func identity[T](value T) T { return value; }
+func main() i32 {
+    let n = identity[i32](7);
+    let b = identity[bool](true);
+    return n;
+}

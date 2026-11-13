@@ -1,0 +1,4 @@
+package app;
+enum E { Stop; }
+func f() i32 throws E { throw E.Stop; }
+func main() i32 { try { return f(); } catch error E { return 0; } }

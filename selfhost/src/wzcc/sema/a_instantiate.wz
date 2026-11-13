@@ -1,0 +1,979 @@
+// CPP check.cpp:6189-6684: constraint-method source helpers, HIR transform and
+// concrete generic instantiation. All copies use the accepted hirclone.
+package sema;
+import "app/wzcc/constant" as constantlib;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclonelib;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueopslib;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct AScopeMap { old usize; new usize; }
+struct ANodeMap { old usize; new usize; }
+struct AInstantiateWork {
+    result usize;
+    sub Vec[model.Substitution];
+    renamed Vec[hir.SymbolRename];
+    scopes Vec[AScopeMap];
+    nodes Vec[ANodeMap];
+}
+func a_map_scope_get(entries Vec[AScopeMap],old usize) option.Option[usize] {
+    for entry in entries {if entry.old==old {return option.Option[usize].Some(entry.new);}}
+    return option.Option[usize].None;
+}
+func a_map_node_get(entries Vec[ANodeMap],old usize) usize throws Error {
+    for entry in entries {if entry.old==old {return entry.new;}}
+    throw internal_error("missing cloned HIR node");
+}
+func a_map_scope_required(work AInstantiateWork,old usize) usize throws Error {
+    let found=a_map_scope_get(work.scopes,old);
+    switch found {
+        case option.Option.Some(value):return value;
+        case option.Option.None:throw internal_error("missing cloned HIR scope");
+    }
+}
+func a_rename_symbol(state inout Checker,work inout AInstantiateWork,target usize) usize throws Error {
+    for entry in work.renamed {
+        if entry.origin==target {return entry.replacement;}
+    }
+    let replacement=duplicate_symbol(inout state,target);
+    vec.push(work.renamed,hir.SymbolRename(origin:target,replacement:replacement));
+    return replacement;
+}
+func a_clone_scope(state inout Checker,work inout AInstantiateWork,old usize,depth usize) usize throws Error {
+    if depth>512 {throw internal_error("HIR scope clone nesting limit");}
+    var found=a_map_scope_get(work.scopes,old);
+    switch found {
+        case option.Option.Some(value):return value;
+        case option.Option.None: {}
+    }
+    if old>=vec.len(state.m.scopes) {throw internal_error("invalid HIR scope reference");}
+    var scope=state.m.scopes[old];
+    scope.function=work.result;
+    switch scope.parent {
+        case option.Option.Some(parent): {
+            let cloned=a_clone_scope(inout state,inout work,parent,depth+1);
+            scope.parent=option.Option[usize].Some(cloned);
+        }
+        case option.Option.None: {}
+    }
+    let id=vec.len(state.m.scopes);
+    vec.push(state.m.scopes,scope);
+    vec.push(work.scopes,AScopeMap(old:old,new:id));
+    return id;
+}
+func a_clone_pattern(state inout Checker,work inout AInstantiateWork,pattern hir.Pattern,
+    depth usize) hir.Pattern throws Error {
+    if depth>512 {throw internal_error("HIR pattern clone nesting limit");}
+    var value=pattern;
+    value.type_id=substitute_type(inout state,value.type_id,work.sub);
+    switch value.binding {
+        case option.Option.Some(binding): {
+            let renamed=a_rename_symbol(inout state,inout work,binding);
+            value.binding=option.Option[usize].Some(renamed);
+        }
+        case option.Option.None: {}
+    }
+    let payload=vec.empty[hir.Pattern]();
+    for child in pattern.payload {
+        let cloned hir.Pattern=a_clone_pattern(inout state,inout work,child,depth+1);
+        vec.push(payload,cloned);
+    }
+    value.payload=payload;
+    return value;
+}
+func a_sort_ids(values Vec[usize]) {
+    for var index usize=1;index<vec.len(values);index+=1 {
+        var current=values[index];
+        var position=index;
+        for position>0 && values[position-1]>current {
+            values[position]=values[position-1];
+            position-=1;
+        }
+        values[position]=current;
+    }
+}
+func a_update_call_args(work AInstantiateWork,args Vec[hir.CallArg]) throws Error {
+    for var index usize=0;index<vec.len(args);index+=1 {
+        var value=args[index];
+        value.expression=a_map_node_get(work.nodes,value.expression);
+        args[index]=value;
+    }
+}
+func a_clone_node(state inout Checker,work inout AInstantiateWork,old usize,
+    use model.NodeRef) usize throws Error {
+    if old>=vec.len(state.m.nodes) {throw internal_error("invalid HIR node reference");}
+    state.instantiated_nodes+=1;
+    if state.instantiated_nodes>200000 {
+        throw reject(inout state,use,"generic instantiated node budget exceeded","E_INSTANTIATION_LIMIT");
+    }
+    var node=hir.HirNode(type_id:0,source:state.m.nodes[old].source,scope:0,
+        children:[],data:hir.NodeData.Noop(value:hir.Noop()),errors:[],exits:[]);
+    try {node=hirclonelib.clone_node(state.m.nodes[old]);}
+    catch error model.SupportError {throw Error.Support(error);}
+    node.type_id=substitute_type(inout state,node.type_id,work.sub);
+    validate_weak_type(inout state,use,node.type_id);
+    node.scope=a_clone_scope(inout state,inout work,node.scope,0);
+    switch node.data {
+        case hir.NodeData.Binding(payload): {
+            var value=payload;
+            value.symbol=a_rename_symbol(inout state,inout work,value.symbol);
+            node.data=hir.NodeData.Binding(value:value);
+        }
+        case hir.NodeData.Read(payload): {
+            var value=payload;
+            value.symbol=a_rename_symbol(inout state,inout work,value.symbol);
+            node.data=hir.NodeData.Read(value:value);
+        }
+        case hir.NodeData.Place(payload): {
+            var value=payload;
+            value.symbol=a_rename_symbol(inout state,inout work,value.symbol);
+            node.data=hir.NodeData.Place(value:value);
+        }
+        case hir.NodeData.Move(payload): {
+            var value=payload;
+            switch value.binding {
+                case option.Option.Some(binding):
+                    value.binding=option.Option[usize].Some(a_rename_symbol(inout state,inout work,binding));
+                case option.Option.None: {}
+            }
+            node.data=hir.NodeData.Move(value:value);
+        }
+        case hir.NodeData.ForIn(payload): {
+            var value=payload;
+            value.element=a_rename_symbol(inout state,inout work,value.element);
+            switch value.iterator {
+                case option.Option.Some(iterator): {
+                    var copied=iterator;
+                    copied.cursor=a_rename_symbol(inout state,inout work,copied.cursor);
+                    copied.option=a_rename_symbol(inout state,inout work,copied.option);
+                    copied.iterator=substitute_type(inout state,copied.iterator,work.sub);
+                    copied.element=substitute_type(inout state,copied.element,work.sub);
+                    value.iterator=option.Option[hir.IteratorFor].Some(copied);
+                }
+                case option.Option.None: {}
+            }
+            node.data=hir.NodeData.ForIn(value:value);
+        }
+        case hir.NodeData.Return(payload): {
+            var value=payload;
+            value.function=work.result;
+            node.data=hir.NodeData.Return(value:value);
+        }
+        case hir.NodeData.Try(payload): {
+            var value=payload;
+            var catches=vec.empty[hir.Catch]();
+            for current in payload.catches {
+                var copied=current;
+                copied.error_type=substitute_type(inout state,copied.error_type,work.sub);
+                copied.binding=a_rename_symbol(inout state,inout work,copied.binding);
+                vec.push(catches,copied);
+            }
+            value.catches=catches;
+            node.data=hir.NodeData.Try(value:value);
+        }
+        default: {}
+    }
+    node.errors=vec.empty[usize]();
+    node.exits=vec.empty[hir.ExitPlan]();
+    let new_id=vec.len(state.m.nodes);
+    vec.push(state.m.nodes,node);
+    vec.push(work.nodes,ANodeMap(old:old,new:new_id));
+    for var index usize=0;index<vec.len(node.children);index+=1 {
+        node.children[index]=a_clone_node(inout state,inout work,node.children[index],use);
+    }
+    switch node.data {
+        case hir.NodeData.Call(payload): {
+            var value=payload;
+            value.signature=substitute_type(inout state,value.signature,work.sub);
+            validate_weak_type(inout state,use,value.signature);
+            var type_args=vec.empty[usize]();
+            for type_arg in payload.type_args {
+                var concrete=substitute_type(inout state,type_arg,work.sub);
+                validate_weak_type(inout state,use,concrete);
+                vec.push(type_args,concrete);
+            }
+            value.type_args=type_args;
+            switch value.callee {
+                case option.Option.Some(callee):
+                    value.callee=option.Option[usize].Some(a_map_node_get(work.nodes,callee));
+                case option.Option.None: {}
+            }
+            a_update_call_args(work,value.args);
+            node.data=hir.NodeData.Call(value:value);
+        }
+        case hir.NodeData.FunctionValue(payload): {
+            var value=payload;
+            let type_args=vec.empty[usize]();
+            for type_arg in payload.type_args {
+                vec.push(type_args,substitute_type(inout state,type_arg,work.sub));
+            }
+            value.type_args=type_args;
+            let captures=vec.empty[hir.CaptureSource]();
+            for capture in payload.captures {
+                var copied=capture;
+                copied.type_id=substitute_type(inout state,copied.type_id,work.sub);
+                copied.source=a_rename_symbol(inout state,inout work,copied.source);
+                vec.push(captures,copied);
+            }
+            value.captures=captures;
+            switch value.bound {
+                case option.Option.Some(bound): {
+                    var copied=bound;
+                    copied.type_id=substitute_type(inout state,copied.type_id,work.sub);
+                    value.bound=option.Option[hir.BoundReceiver].Some(copied);
+                }
+                case option.Option.None: {}
+            }
+            node.data=hir.NodeData.FunctionValue(value:value);
+        }
+        case hir.NodeData.ConstantLiteral(payload): {
+            var value=payload.value;
+            var context=state.m.types;
+            try {
+                constantlib.transform_constant(inout value,work.sub,inout context,
+                    a_noop_function_throws);
+            } catch error model.SupportError {
+                state.m.types=context;
+                throw Error.Support(error);
+            }
+            state.m.types=context;
+            node.data=hir.NodeData.ConstantLiteral(value:hir.ConstantLiteral(value:value));
+        }
+        case hir.NodeData.ConstraintCall(payload): {
+            var value=payload;
+            value.signature=substitute_type(inout state,value.signature,work.sub);
+            value.receiver=substitute_type(inout state,value.receiver,work.sub);
+            for var index usize=0;index<vec.len(value.trait_ref.args);index+=1 {
+                value.trait_ref.args[index]=substitute_type(inout state,
+                    value.trait_ref.args[index],work.sub);
+            }
+            a_update_call_args(work,value.args);
+            node.data=hir.NodeData.ConstraintCall(value:value);
+        }
+        case hir.NodeData.TraitObjectInit(payload): {
+            var value=payload;
+            value.concrete=substitute_type(inout state,value.concrete,work.sub);
+            for var index usize=0;index<vec.len(value.trait_ref.args);index+=1 {
+                value.trait_ref.args[index]=substitute_type(inout state,
+                    value.trait_ref.args[index],work.sub);
+            }
+            for var method_index usize=0;method_index<vec.len(value.method_args);method_index+=1 {
+                for var arg_index usize=0;arg_index<vec.len(value.method_args[method_index]);
+                    arg_index+=1 {
+                    value.method_args[method_index][arg_index]=substitute_type(inout state,
+                        value.method_args[method_index][arg_index],work.sub);
+                }
+            }
+            node.data=hir.NodeData.TraitObjectInit(value:value);
+        }
+        case hir.NodeData.TraitDispatch(payload): {
+            var value=payload;
+            value.signature=substitute_type(inout state,value.signature,work.sub);
+            for var index usize=0;index<vec.len(value.trait_ref.args);index+=1 {
+                value.trait_ref.args[index]=substitute_type(inout state,
+                    value.trait_ref.args[index],work.sub);
+            }
+            a_update_call_args(work,value.args);
+            node.data=hir.NodeData.TraitDispatch(value:value);
+        }
+        case hir.NodeData.VecSlice(payload): {
+            var value=payload;
+            switch value.start {
+                case option.Option.Some(start):
+                    value.start=option.Option[usize].Some(a_map_node_get(work.nodes,start));
+                case option.Option.None: {}
+            }
+            switch value.end {
+                case option.Option.Some(finish):
+                    value.end=option.Option[usize].Some(a_map_node_get(work.nodes,finish));
+                case option.Option.None: {}
+            }
+            node.data=hir.NodeData.VecSlice(value:value);
+        }
+        case hir.NodeData.ForIn(payload): {
+            var value=payload;
+            value.body=a_map_node_get(work.nodes,value.body);
+            value.body_scope=a_map_scope_required(work,value.body_scope);
+            switch value.iterator {
+                case option.Option.Some(iterator): {
+                    var copied=iterator;
+                    copied.next=a_map_node_get(work.nodes,copied.next);
+                    value.iterator=option.Option[hir.IteratorFor].Some(copied);
+                }
+                case option.Option.None: {}
+            }
+            node.data=hir.NodeData.ForIn(value:value);
+        }
+        case hir.NodeData.StructInit(payload): {
+            var value=payload;
+            a_update_call_args(work,value.fields);
+            node.data=hir.NodeData.StructInit(value:value);
+        }
+        case hir.NodeData.EnumInit(payload): {
+            var value=payload;
+            a_update_call_args(work,value.payload);
+            node.data=hir.NodeData.EnumInit(value:value);
+        }
+        case hir.NodeData.Switch(payload): {
+            var value=payload;
+            let arms=vec.empty[hir.Arm]();
+            for current in payload.arms {
+                var copied=current;
+                let cloned_pattern hir.Pattern=a_clone_pattern(inout state,inout work,copied.pattern,0);
+                copied.pattern=cloned_pattern;
+                copied.scope=a_map_scope_required(work,copied.scope);
+                copied.body=a_map_node_get(work.nodes,copied.body);
+                vec.push(arms,copied);
+            }
+            value.arms=arms;
+            node.data=hir.NodeData.Switch(value:value);
+        }
+        case hir.NodeData.Try(payload): {
+            var value=payload;
+            let caught=vec.empty[usize]();
+            let catches=vec.empty[hir.Catch]();
+            for current in payload.catches {
+                var copied=current;
+                if !a_insert(caught,copied.error_type) {
+                    throw unavailable(inout state,use,"instance has duplicate catch types");
+                }
+                copied.scope=a_map_scope_required(work,copied.scope);
+                copied.body=a_map_node_get(work.nodes,copied.body);
+                vec.push(catches,copied);
+            }
+            value.catches=catches;
+            node.data=hir.NodeData.Try(value:value);
+        }
+        case hir.NodeData.Defer(payload): {
+            var value=payload;
+            value.owner_scope=a_clone_scope(inout state,inout work,value.owner_scope,0);
+            let references=vec.empty[usize]();
+            for reference in payload.references {
+                vec.push(references,a_rename_symbol(inout state,inout work,reference));
+            }
+            a_sort_ids(references);
+            value.references=references;
+            node.data=hir.NodeData.Defer(value:value);
+        }
+        case hir.NodeData.Break(payload): {
+            var value=payload;
+            value.loop=a_map_node_get(work.nodes,value.loop);
+            node.data=hir.NodeData.Break(value:value);
+        }
+        case hir.NodeData.Continue(payload): {
+            var value=payload;
+            value.loop=a_map_node_get(work.nodes,value.loop);
+            node.data=hir.NodeData.Continue(value:value);
+        }
+        default: {}
+    }
+    state.m.nodes[new_id]=node;
+    switch node.data {
+        case hir.NodeData.FunctionValue(payload): {
+            var value=payload;
+            if value.move_capture {
+                for var index usize=0;index<vec.len(value.captures);index+=1 {
+                    let dependent=contains_parameter(inout state,value.captures[index].type_id);
+                    if dependent {continue;}
+                    var owning=false;
+                    try {owning=valueopslib.owning_value(state.m,value.captures[index].type_id);}
+                    catch error model.SupportError {throw Error.Support(error);}
+                    let child_id=node.children[index];
+                    var child=state.m.nodes[child_id];
+                    if owning {
+                        value.captures[index].is_move=true;
+                        var kind=hir.node_kind(child.data);
+                        if hir.node_kind_id(kind)!=hir.node_kind_id(hir.NodeKind.Move) {
+                            child.data=hir.NodeData.Move(value:hir.Move(
+                                binding:option.Option[usize].Some(value.captures[index].source)));
+                        }
+                    } else {
+                        value.captures[index].is_move=false;
+                        let kind=hir.node_kind(child.data);
+                        if hir.node_kind_id(kind)==hir.node_kind_id(hir.NodeKind.Move) {
+                            child.data=hir.NodeData.Read(value:hir.Read(
+                                symbol:value.captures[index].source));
+                        }
+                    }
+                    state.m.nodes[child_id]=child;
+                }
+            } else {
+                for capture in value.captures {
+                    if !contains_parameter(inout state,capture.type_id) {
+                        var copyable=false;
+                        try {copyable=valueopslib.ordinary_copyable(state.m,capture.type_id);}
+                        catch error model.SupportError {throw Error.Support(error);}
+                        if !copyable {
+                            throw reject(inout state,use,
+                                "closure capture type is not ordinary-copyable","E_CALL_ARGUMENT");
+                        }
+                    }
+                }
+            }
+            switch value.bound {
+                case option.Option.Some(bound): {
+                    if !contains_parameter(inout state,bound.type_id) {
+                        var copyable=false;
+                        try {copyable=valueopslib.ordinary_copyable(state.m,bound.type_id);}
+                        catch error model.SupportError {throw Error.Support(error);}
+                        if !copyable {
+                            throw reject(inout state,use,
+                                "bound receiver type is not ordinary-copyable","E_CALL_ARGUMENT");
+                        }
+                    }
+                }
+                case option.Option.None: {}
+            }
+            node.data=hir.NodeData.FunctionValue(value:value);
+            state.m.nodes[new_id]=node;
+        }
+        default: {}
+    }
+    return new_id;
+}
+func a_transparent(state inout Checker,value model.NodeRef) model.NodeRef throws Error {
+    var current=value;
+    for a_kind_ast(ast(inout state,current).kind,model.AstKind.Parenthesized) {
+        current=child(inout state,current,0);
+    }
+    return current;
+}
+func explicit_method_type_refs(state inout Checker,node hir.HirNode)
+    option.Option[Vec[model.NodeRef]] throws Error {
+    let r=node.source.node;
+    let call=ast(inout state,r);
+    if !a_kind_ast(call.kind,model.AstKind.Call) || vec.len(call.children)==0 {
+        return option.Option[Vec[model.NodeRef]].None;
+    }
+    let target_ref=child(inout state,r,0);
+    var target=a_transparent(inout state,target_ref);
+    if !a_kind_ast(ast(inout state,target).kind,model.AstKind.NeutralBracket) {
+        return option.Option[Vec[model.NodeRef]].None;
+    }
+    let inner_ref=child(inout state,target,0);
+    let inner=a_transparent(inout state,inner_ref);
+    if !a_kind_ast(ast(inout state,inner).kind,model.AstKind.Member) ||
+       option.is_some(occurrence(inout state,inner)) {
+        return option.Option[Vec[model.NodeRef]].None;
+    }
+    var refs=vec.empty[model.NodeRef]();
+    for var index usize=1;index<vec.len(ast(inout state,target).children);index+=1 {
+        vec.push(refs,child(inout state,target,index));
+    }
+    return option.Option[Vec[model.NodeRef]].Some(refs);
+}
+func constraint_method_arguments(state inout Checker,node hir.HirNode,call hir.ConstraintCall,
+    instance_sub option.Option[Vec[model.Substitution]]) Vec[usize] throws Error {
+    let trait_found=trait_decl(inout state,call.trait_ref.declaration);
+    var trait_index usize=0;
+    switch trait_found {
+        case option.Option.None:throw internal_error("constraint method has no real prototype");
+        case option.Option.Some(value):trait_index=value;
+    }
+    let tr=state.m.traits[trait_index];
+    var prototype=option.Option[hir.MethodPrototype].None;
+    for current in tr.methods {
+        if current.symbol==call.method {prototype=option.Option[hir.MethodPrototype].Some(current);}
+    }
+    var prototype_value=hir.MethodPrototype(symbol:0,signature:0,parameters:[],source:hir.HirSource(
+        node:model.NodeRef(module:0,file:0,node:0),span:model.Span(snapshot:0,begin_byte:0,end_byte:0)));
+    switch prototype {
+        case option.Option.None:throw internal_error("constraint method has no real prototype");
+        case option.Option.Some(value):prototype_value=value;
+    }
+    if vec.len(call.trait_ref.args)!=vec.len(tr.params) {
+        throw internal_error("constraint method has no real prototype");
+    }
+    let generic_found=a_generic_params_get(state.generic_params,call.method);
+    var parameters=vec.empty[hir.GenericParam]();
+    switch generic_found {
+        case option.Option.None: {}
+        case option.Option.Some(value):parameters=value;
+    }
+    var sub=vec.empty[model.Substitution]();
+    vec.push(sub,model.Substitution(symbol:tr.self,type_id:call.receiver));
+    for var index usize=0;index<vec.len(tr.params);index+=1 {
+        vec.push(sub,model.Substitution(symbol:tr.params[index].symbol,
+            type_id:call.trait_ref.args[index]));
+    }
+    var result=vec.empty[usize]();
+    let refs=explicit_method_type_refs(inout state,node);
+    var have_refs=false;var ref_values=vec.empty[model.NodeRef]();
+    switch refs {
+        case option.Option.Some(value):have_refs=true;ref_values=value;
+        case option.Option.None: {}
+    }
+    if have_refs {
+        if vec.len(ref_values)!=vec.len(parameters) {
+            throw reject(inout state,node.source.node,"wrong number of method type arguments",
+                "E_TYPE_MISMATCH");
+        }
+        for var index usize=0;index<vec.len(parameters);index+=1 {
+            var type_id=parse_type(inout state,ref_values[index],option.Option[usize].None,false);
+            switch instance_sub {
+                case option.Option.Some(substitutions):
+                    type_id=substitute_type(inout state,type_id,substitutions);
+                case option.Option.None: {}
+            }
+            vec.push(result,type_id);
+            vec.push(sub,model.Substitution(symbol:parameters[index].symbol,type_id:type_id));
+        }
+        let prototype_signature=substitute_type(inout state,prototype_value.signature,sub);
+        let actual=lookup_type(inout state,call.signature);
+        let expected=lookup_type(inout state,prototype_signature);
+        if !types.equal(actual,expected) {
+            throw reject(inout state,node.source.node,
+                "method type arguments differ from the checked signature","E_TYPE_MISMATCH");
+        }
+    } else {
+        let matched=a_copy_substitutions(sub);
+        infer(inout state,node.source.node,prototype_value.signature,call.signature,matched);
+        for parameter in parameters {
+            var found=false;var value usize=0;
+            for substitution in matched {
+                if substitution.symbol==parameter.symbol {found=true;value=substitution.type_id;}
+            }
+            if !found {
+                throw reject(inout state,node.source.node,
+                    "cannot infer method type argument; provide explicit type arguments",
+                    "E_TYPE_MISMATCH");
+            }
+            vec.push(result,value);
+        }
+    }
+    for var index usize=0;index<vec.len(parameters);index+=1 {
+        var found=false;
+        for var sub_index usize=0;sub_index<vec.len(sub);sub_index+=1 {
+            if sub[sub_index].symbol==parameters[index].symbol {
+                found=true;sub[sub_index].type_id=result[index];
+            }
+        }
+        if !found {
+            vec.push(sub,model.Substitution(symbol:parameters[index].symbol,type_id:result[index]));
+        }
+    }
+    for var index usize=0;index<vec.len(parameters);index+=1 {
+        switch parameters[index].trait_ref {
+            case option.Option.None: {}
+            case option.Option.Some(bound_value): {
+                var bound=a_copy_trait_ref(bound_value);
+                for var arg_index usize=0;arg_index<vec.len(bound.args);arg_index+=1 {
+                    bound.args[arg_index]=substitute_type(inout state,bound.args[arg_index],sub);
+                }
+                check_trait_parameter_bounds(inout state,node.source.node,bound,result[index],0);
+                if !satisfies(inout state,node.source.node,result[index],bound) {
+                    throw reject(inout state,node.source.node,
+                        "method type argument does not satisfy its trait constraint",
+                        "E_TYPE_MISMATCH");
+                }
+            }
+        }
+    }
+    return result;
+}
+func a_instantiate_constant_functions(state inout Checker,
+    value inout hir.ConstantValue,use model.NodeRef,depth usize) throws Error {
+    if depth>512 {throw internal_error("HIR constant transform nesting limit");}
+    switch value.data {
+        case hir.ConstantData.FunctionValue(function): {
+            let found=a_template_get(state.template_ids,function.symbol);
+            switch found {
+                case option.Option.Some(template_index): {
+                    let function_symbol=function.symbol;
+                    let type_args=a_copy_ids(function.type_args);
+                    let target=instantiate(inout state,function_symbol,type_args,use);
+                    var changed=function;
+                    changed.symbol=target;
+                    changed.type_args=vec.empty[usize]();
+                    value.data=hir.ConstantData.FunctionValue(value:changed);
+                }
+                case option.Option.None: {}
+            }
+        }
+        case hir.ConstantData.ConstantAggregate(aggregate): {
+            var changed=aggregate;
+            for var index usize=0;index<vec.len(changed.fields);index+=1 {
+                var field=changed.fields[index];
+                a_instantiate_constant_functions(inout state,inout field,use,depth+1);
+                changed.fields[index]=field;
+            }
+            value.data=hir.ConstantData.ConstantAggregate(value:changed);
+        }
+        default: {}
+    }
+}
+func transform_node(state inout Checker,id usize,depth usize,
+    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
+    if depth>512 {throw internal_error("HIR transform nesting limit");}
+    if id>=vec.len(state.m.nodes) {throw internal_error("invalid HIR node reference");}
+    var node=hir.HirNode(type_id:0,source:state.m.nodes[id].source,scope:0,
+        children:[],data:hir.NodeData.Noop(value:hir.Noop()),errors:[],exits:[]);
+    try {node=hirclonelib.clone_node(state.m.nodes[id]);}
+    catch error model.SupportError {throw Error.Support(error);}
+    switch node.data {
+        case hir.NodeData.ConstantLiteral(payload): {
+            var value=payload.value;
+            var context=state.m.types;
+            try {
+                constantlib.transform_constant(inout value,vec.empty[model.Substitution](),
+                    inout context,a_noop_function_throws);
+            } catch error model.SupportError {
+                state.m.types=context;
+                throw Error.Support(error);
+            }
+            state.m.types=context;
+            a_instantiate_constant_functions(inout state,inout value,node.source.node,0);
+            node.data=hir.NodeData.ConstantLiteral(value:hir.ConstantLiteral(value:value));
+        }
+        default: {}
+    }
+    switch node.data {
+        case hir.NodeData.Call(payload): {
+            var value=payload;
+            switch value.direct_symbol {
+                case option.Option.Some(direct): {
+                    var found=a_template_get(state.template_ids,direct);
+                    switch found {
+                        case option.Option.Some(template_index): {
+                            var target=instantiate(inout state,direct,value.type_args,node.source.node);
+                            value.direct_symbol=option.Option[usize].Some(target);
+                            value.type_args=vec.empty[usize]();
+                            node.data=hir.NodeData.Call(value:value);
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+        default: {}
+    }
+    switch node.data {
+        case hir.NodeData.FunctionValue(payload): {
+            let prototype_found=trait_prototype(inout state,payload.symbol);
+            var have_prototype=false;
+            switch prototype_found {
+                case option.Option.Some(reference):have_prototype=true;
+                case option.Option.None: {}
+            }
+            if have_prototype {
+                var substitutions=vec.empty[model.Substitution]();
+                switch instance_sub {
+                    case option.Option.Some(value):substitutions=value;
+                    case option.Option.None:throw internal_error("trait prototype value has no instance");
+                }
+                let source=node.source.node;var source_member=source;
+                let source_file=parsed_file(inout state,source);
+                var keep=true;
+                for keep && a_kind_ast(ast(inout state,source_member).kind,
+                    model.AstKind.Parenthesized) {
+                    source_member=at(source_member,ast(inout state,source_member).children[0]);
+                }
+                if a_kind_ast(ast(inout state,source_member).kind,model.AstKind.NeutralBracket) {
+                    let suffix=ast(inout state,source_member);
+                    if vec.len(suffix.children)==0 {throw internal_error("trait prototype value lost its method");}
+                    source_member=at(source_member,suffix.children[0]);
+                    for a_kind_ast(ast(inout state,source_member).kind,
+                        model.AstKind.Parenthesized) {
+                        source_member=at(source_member,ast(inout state,source_member).children[0]);
+                    }
+                }
+                let member=ast(inout state,source_member);
+                if !a_kind_ast(member.kind,model.AstKind.Member) || vec.len(member.children)==0 {
+                    throw internal_error("trait prototype value lost its method");
+                }
+                let base=at(source_member,member.children[0]);
+                let raw_qualifier=parse_type(inout state,base,option.Option[usize].None,false);
+                let qualifier=substitute_type(inout state,raw_qualifier,substitutions);
+                if member.token_end==0 || member.token_end>vec.len(source_file.lexed.tokens) {
+                    throw internal_error("trait prototype value lost its method");
+                }
+                var name=source_file.lexed.tokens[member.token_end-1].spelling;
+                let raw=lookup_type(inout state,raw_qualifier);
+                let bounded=a_bound_get(state.bounds,raw.declaration);
+                var required=hir.TraitRef(declaration:0,args:[]);
+                switch bounded {
+                    case option.Option.Some(value): {
+                        switch value {
+                            case option.Option.Some(bound):required=a_copy_trait_ref(bound);
+                            case option.Option.None:throw internal_error("trait prototype value lost its bound");
+                        }
+                    }
+                    case option.Option.None:throw internal_error("trait prototype value lost its bound");
+                }
+                for var index usize=0;index<vec.len(required.args);index+=1 {
+                    required.args[index]=substitute_type(inout state,required.args[index],
+                        substitutions);
+                }
+                var selected=select_method(inout state,node.source.node,qualifier,name,
+                    option.Option[hir.TraitRef].Some(required));
+                var own=method_own_parameters(inout state,selected.method);
+                if vec.len(own)!=vec.len(payload.type_args) {
+                    throw internal_error("trait prototype method argument count");
+                }
+                for var index usize=0;index<vec.len(own);index+=1 {
+                    vec.push(selected.substitutions,model.Substitution(symbol:own[index].symbol,
+                        type_id:payload.type_args[index]));
+                }
+                var all_generic_found=a_generic_params_get(state.generic_params,selected.method);
+                var all_generic=vec.empty[hir.GenericParam]();
+                switch all_generic_found {
+                    case option.Option.Some(value):all_generic=value;
+                    case option.Option.None: {}
+                }
+                var args=finish_arguments(inout state,node.source.node,all_generic,
+                    selected.substitutions);
+                var target=selected.method;
+                var target_template=a_template_get(state.template_ids,target);
+                switch target_template {
+                    case option.Option.Some(index):
+                        target=instantiate(inout state,target,args,node.source.node);
+                    case option.Option.None: {}
+                }
+                var value=payload;
+                value.symbol=target;value.type_args=vec.empty[usize]();
+                node.data=hir.NodeData.FunctionValue(value:value);
+            }
+        }
+        default: {}
+    }
+    switch node.data {
+        case hir.NodeData.FunctionValue(payload): {
+            var found=a_template_get(state.template_ids,payload.symbol);
+            switch found {
+                case option.Option.Some(template_index): {
+                    var target=instantiate(inout state,payload.symbol,payload.type_args,
+                        node.source.node);
+                    var value=payload;
+                    value.symbol=target;value.type_args=vec.empty[usize]();
+                    node.data=hir.NodeData.FunctionValue(value:value);
+                }
+                case option.Option.None: {}
+            }
+        }
+        default: {}
+    }
+    switch node.data {
+        case hir.NodeData.FunctionValue(payload): {
+            var value=payload;
+            switch value.bound {
+                case option.Option.Some(bound): {
+                    switch instance_sub {
+                        case option.Option.Some(substitutions): {
+                            var copied=bound;
+                            copied.type_id=substitute_type(inout state,copied.type_id,substitutions);
+                            value.bound=option.Option[hir.BoundReceiver].Some(copied);
+                        }
+                        case option.Option.None: {}
+                    }
+                }
+                case option.Option.None: {}
+            }
+            node.data=hir.NodeData.FunctionValue(value:value);
+        }
+        default: {}
+    }
+    switch node.data {
+        case hir.NodeData.TraitObjectInit(payload): {
+            var value=payload;
+            for var index usize=0;index<vec.len(value.methods);index+=1 {
+                let found=a_template_get(state.template_ids,value.methods[index]);
+                switch found {
+                    case option.Option.Some(template_index): {
+                        if index>=vec.len(value.method_args) {
+                            throw internal_error("trait object template method lacks concrete arguments");
+                        }
+                        value.methods[index]=instantiate(inout state,value.methods[index],
+                            value.method_args[index],node.source.node);
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            node.data=hir.NodeData.TraitObjectInit(value:value);
+        }
+        default: {}
+    }
+    switch node.data {
+        case hir.NodeData.ConstraintCall(payload): {
+            let name=symbol(inout state,payload.method).name;
+            var selected=select_method(inout state,node.source.node,payload.receiver,name,
+                option.Option[hir.TraitRef].Some(payload.trait_ref));
+            let synthetic_iterator=a_kind_ast(ast(inout state,node.source.node).kind,
+                model.AstKind.ForIn);
+            if !synthetic_iterator {
+                let method_args=constraint_method_arguments(inout state,node,payload,instance_sub);
+                let own=method_own_parameters(inout state,selected.method);
+                if vec.len(own)!=vec.len(method_args) {
+                    throw internal_error("constraint method own parameter count");
+                }
+                for var index usize=0;index<vec.len(own);index+=1 {
+                    vec.push(selected.substitutions,model.Substitution(symbol:own[index].symbol,
+                        type_id:method_args[index]));
+                }
+            } else {
+                if vec.len(method_own_parameters(inout state,selected.method))!=0 {
+                    throw internal_error("synthetic Iterator.next has own type args");
+                }
+            }
+            let all_generic_found=a_generic_params_get(state.generic_params,selected.method);
+            var all_generic=vec.empty[hir.GenericParam]();
+            switch all_generic_found {
+                case option.Option.Some(value):all_generic=value;
+                case option.Option.None: {}
+            }
+            let args=finish_arguments(inout state,node.source.node,all_generic,
+                selected.substitutions);
+            var target=selected.method;
+            let target_template=a_template_get(state.template_ids,target);
+            switch target_template {
+                case option.Option.Some(index):
+                    target=instantiate(inout state,target,args,node.source.node);
+                case option.Option.None: {}
+            }
+            var concrete=hir.Call(kind:hir.CalleeKind.Direct,signature:payload.signature,
+                direct_symbol:option.Option[usize].Some(target),
+                callee:option.Option[usize].None,args:payload.args,type_args:[],
+                binding:option.Option[usize].None,c_callable:option.Option[u32].None,
+                omitted:[],system:option.Option[u32].None);
+            node.data=hir.NodeData.Call(value:concrete);
+        }
+        default: {}
+    }
+    state.m.nodes[id]=node;
+    for child_id in node.children {
+        transform_node(inout state,child_id,depth+1,instance_sub);
+    }
+}
+func a_sort_renames(values Vec[hir.SymbolRename]) {
+    for var index usize=1;index<vec.len(values);index+=1 {
+        let current=values[index];
+        var position=index;
+        for position>0 && values[position-1].origin>current.origin {
+            values[position]=values[position-1];position-=1;
+        }
+        values[position]=current;
+    }
+}
+func instantiate(state inout Checker,origin usize,arguments Vec[usize],use model.NodeRef) usize throws Error {
+    let template_found=a_template_get(state.template_ids,origin);
+    var template_index usize=0;
+    switch template_found {
+        case option.Option.None:throw internal_error("missing generic template");
+        case option.Option.Some(value):template_index=value;
+    }
+    if template_index>=vec.len(state.m.templates) {throw internal_error("invalid generic template");}
+    let stored=state.m.templates[template_index];
+    var function=hir.HirFunction(symbol:0,signature:0,parameters:[],body:0,scope:0,
+        source:stored.function.source,captures:[],is_async:false);
+    try {function=hirclonelib.clone_function(stored.function);}
+    catch error model.SupportError {throw Error.Support(error);}
+    let parameters=a_copy_generic_params(stored.params);
+    if vec.len(arguments)!=vec.len(parameters) {
+        throw internal_error("instance type argument count");
+    }
+    let sub=vec.empty[model.Substitution]();
+    for var index usize=0;index<vec.len(parameters);index+=1 {
+        vec.push(sub,model.Substitution(symbol:parameters[index].symbol,type_id:arguments[index]));
+    }
+    check_constraints(inout state,use,parameters,arguments,
+        option.Option[Vec[model.Substitution]].Some(sub));
+    let ids=vec.empty[usize]();
+    for argument in arguments {
+        if contains_parameter(inout state,argument) {
+            throw internal_error("nonconcrete instance request");
+        }
+        vec.push(ids,argument);
+    }
+    let key=InstanceKey(origin:origin,args:a_copy_ids(ids));
+    let cached=a_instance_get(state.instance_cache,key);
+    switch cached {
+        case option.Option.Some(value):return value;
+        case option.Option.None: {}
+    }
+    if vec.len(state.instance_cache)>=4096 {
+        throw reject(inout state,use,"generic instance count budget exceeded (4096)",
+            "E_INSTANTIATION_LIMIT");
+    }
+    if state.instantiation_depth>=48 {
+        throw reject(inout state,use,"generic instantiation depth budget exceeded (48)",
+            "E_INSTANTIATION_LIMIT");
+    }
+    state.instantiation_depth+=1;
+    let result=duplicate_symbol(inout state,origin);
+    a_instance_set(state.instance_cache,key,result);
+    var work=AInstantiateWork(result:result,sub:sub,renamed:[],
+        scopes:[],nodes:[]);
+    vec.push(work.renamed,hir.SymbolRename(origin:origin,replacement:result));
+    function.symbol=result;
+    function.signature=substitute_type(inout state,function.signature,sub);
+    validate_weak_type(inout state,use,function.signature);
+    var inout_source=false;
+    if vec.len(parameters)>0 {
+        inout_source=free_generic_template(inout state,origin) ||
+            inherent_method_source(inout state,origin);
+        if !inout_source {
+            switch trait_impl_inout_source(inout state,origin,true) {
+                case option.Option.Some(value):inout_source=true;
+                case option.Option.None: {}
+            }
+        }
+        if !inout_source {
+            switch trait_impl_inout_source(inout state,origin,false) {
+                case option.Option.Some(value):inout_source=true;
+                case option.Option.None: {}
+            }
+        }
+    }
+    let signature_type=lookup_type(inout state,function.signature);
+    for parameter in signature_type.parameters {
+        if a_mode(parameter.mode,model.ParamMode.Inout) &&
+           a_kind(lookup_type(inout state,parameter.type_id).kind,
+               model.TypeKind.ForeignOpaque) {
+            throw unavailable(inout state,use,"external inout parameters are not supported");
+        }
+    }
+    let direct=check_inout_graph(inout state,use,function.signature,false,
+        option.Option[usize].None,false);
+    if direct && !inout_source {
+        throw unavailable(inout state,use,"generic/method inout is not implemented");
+    }
+    for var index usize=0;index<vec.len(function.parameters);index+=1 {
+        function.parameters[index].symbol=a_rename_symbol(inout state,inout work,
+            function.parameters[index].symbol);
+    }
+    for var index usize=0;index<vec.len(function.captures);index+=1 {
+        var capture=function.captures[index];
+        capture.local=a_rename_symbol(inout state,inout work,capture.local);
+        capture.type_id=substitute_type(inout state,capture.type_id,sub);
+        function.captures[index]=capture;
+    }
+    function.scope=a_clone_scope(inout state,inout work,function.scope,0);
+    function.body=a_clone_node(inout state,inout work,function.body,use);
+    a_sort_renames(work.renamed);
+    let renamed=a_copy_renames(work.renamed);
+    let instance=hir.FunctionInstance(symbol:result,origin:origin,
+        type_args:a_copy_ids(ids),renamed:renamed,target:state.m.config);
+    vec.push(state.m.instances,instance);
+    vec.push(state.m.functions,function);
+    transform_node(inout state,function.body,0,
+        option.Option[Vec[model.Substitution]].Some(sub));
+    annotate(inout state,function);
+    let final_signature=lookup_type(inout state,function.signature);
+    let flow_value=flow(inout state,function.body,0);
+    if final_signature.result!=state.unit && flow_value.falls {
+        throw reject(inout state,use,
+            "instantiated non-Unit function has a normal exit without return",
+            "E_TYPE_MISMATCH");
+    }
+    state.instantiation_depth-=1;
+    return result;
+}
+func a_copy_renames(values Vec[hir.SymbolRename]) Vec[hir.SymbolRename] {
+    let out=vec.empty[hir.SymbolRename]();
+    for value in values {vec.push(out,hir.SymbolRename(origin:value.origin,
+        replacement:value.replacement));}
+    return out;
+}

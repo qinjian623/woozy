@@ -1,0 +1,942 @@
+// Calls, foreign/C call construction and call borrow checking.
+package sema;
+
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/signature" as signature;
+import "app/wzcc/system" as system;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func system_call(state inout Checker, r model.NodeRef, callee model.NodeRef,
+                 target usize, spec system.OperationSpec) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    if b_module_path(inout state, r.module) != spec.owner {
+        throw unavailable(inout state, r,
+            "system operations can only be called from their owner std module");
+    }
+    let type_args = vec.empty[usize]();
+    if b_kind_is(b_ast_m(b_module, callee).kind, model.AstKind.NeutralBracket) {
+        let callee_node = b_ast_m(b_module, callee);
+        for var index usize = 1; index < vec.len(callee_node.children); index += 1 {
+            vec.push(type_args, parse_type(inout state,
+                b_child_m(b_module, callee, index),
+                option.Option[usize].None, false));
+        }
+    }
+    if u32(vec.len(type_args)) != spec.type_arity {
+        throw reject(inout state, r,
+            "wrong number of system operation type arguments",
+            "E_CALL_ARGUMENT");
+    }
+    if (spec.name == "__woozy_weak_empty" ||
+        spec.name == "__woozy_weak_downgrade" ||
+        spec.name == "__woozy_weak_upgrade") && vec.len(type_args) != 0 {
+        var weak_type = model.empty_type(model.TypeKind.Weak);
+        weak_type.type_args = [type_args[0]];
+        let weak_id = intern_type(inout state, weak_type);
+        validate_weak_type(inout state, r, weak_id);
+    }
+    var call = hir.Call(kind: hir.CalleeKind.System, signature: 0,
+        direct_symbol: option.Option[usize].Some(target),
+        callee: option.Option[usize].None, args: [], type_args: type_args,
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].Some(spec.operation));
+    let module_value = state.m;
+    var type_context = state.m.types;
+    try {
+        call.signature = signature.system_operation_signature(
+            inout type_context, option.Option[hir.HirModule].Some(module_value),
+            spec.operation, type_args);
+    } catch error model.SupportError {
+        throw unavailable(inout state, r, b_support_message(error));
+    }
+    state.m.types = type_context;
+    let call_type = lookup_type(inout state, call.signature);
+    if vec.len(b_ast_m(b_module, r).children) != vec.len(spec.parameters) + 1 {
+        throw reject(inout state, r,
+            "wrong number of system operation arguments", "E_CALL_ARGUMENT");
+    }
+    let children = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(spec.parameters); index += 1 {
+        let argument_ref = b_child_m(b_module, r, index + 1);
+        if b_token_m(b_module, argument_ref, 1) == ":" {
+            throw reject(inout state, argument_ref,
+                "system operations do not accept argument labels",
+                "E_CALL_ARGUMENT");
+        }
+        let argument = argument_mode(inout state, argument_ref);
+        if argument.has_marker ||
+           !b_mode_is(argument.requested, model.ParamMode.Ordinary) {
+            throw reject(inout state, argument_ref,
+                "system operations require ordinary arguments",
+                "E_CALL_ARGUMENT");
+        }
+        if index >= vec.len(call_type.parameters) {
+            throw internal_error("system signature parameter count");
+        }
+        let expected = call_type.parameters[index].type_id;
+        let value = expression(inout state, argument.value,
+            option.Option[usize].Some(expected));
+        if b_node_kind_is(hir.node_kind(state.m.nodes[value.id].data),
+                          hir.NodeKind.Move) {
+            throw reject(inout state, argument_ref,
+                "system operations require ordinary arguments",
+                "E_CALL_ARGUMENT");
+        }
+        b_match(inout state, argument_ref, value.value.type_id,
+            option.Option[usize].Some(expected));
+        vec.push(call.args, hir.CallArg(source_index: u32(index),
+            parameter_index: u32(index), label: option.Option[string].None,
+            mode: model.ParamMode.Ordinary, expression: value.id));
+        vec.push(children, value.id);
+    }
+    check_call_borrows(inout state, r, call.args, children, false);
+    let id = node(inout state, r, call_type.result,
+        hir.NodeData.Call(value: call), children);
+    return Expr(id: id, value: b_empty_value(call_type.result));
+}
+
+func b_foreign_build(state inout Checker, r model.NodeRef, target model.NodeRef,
+                     binding usize, bound foreign.BoundArguments,
+                     receiver option.Option[Expr],
+                     labels Vec[option.Option[string]]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let record = b_foreign_binding(inout state, binding);
+    var signature_id usize = 0;
+    switch record.signature {
+        case option.Option.Some(value): signature_id = value;
+        case option.Option.None: throw internal_error("foreign callable has no signature");
+    }
+    let signature_type = lookup_type(inout state, signature_id);
+    let omitted = vec.empty[u32]();
+    for index in bound.omitted { vec.push(omitted, index); }
+    var call = hir.Call(kind: hir.CalleeKind.Foreign, signature: signature_id,
+        direct_symbol: option.Option[usize].None,
+        callee: option.Option[usize].None, args: [], type_args: [],
+        binding: option.Option[usize].Some(binding),
+        c_callable: option.Option[u32].None, omitted: omitted,
+        system: option.Option[u32].None);
+    let children = vec.empty[usize]();
+    let receiver_nodes = vec.empty[usize]();
+    switch receiver {
+        case option.Option.Some(value): vec.push(receiver_nodes, value.id);
+        case option.Option.None: {}
+    }
+    let callee_id = node(inout state, target, record.type_id,
+        hir.NodeData.ForeignRead(value: hir.ForeignRead(binding: binding,
+            access: option.Option[hir.ForeignAccessKind].None,
+            start: option.Option[usize].None, end: option.Option[usize].None)),
+        receiver_nodes);
+    call.callee = option.Option[usize].Some(callee_id);
+    vec.push(children, callee_id);
+    for var index usize = 0; index < vec.len(labels); index += 1 {
+        let argument_ref = b_child_m(b_module, r, index + 1);
+        var er = b_child_m(b_module, argument_ref, 0);
+        er = b_strip_parens(inout state, er);
+        let er_node = b_ast_m(b_module, er);
+        if b_kind_is(er_node.kind, model.AstKind.Unary) {
+            let spelling = b_token_m(b_module, er, 0);
+            if spelling == "move" || spelling == "inout" {
+                throw reject(inout state, argument_ref,
+                    "external arguments require ordinary mode",
+                    "E_CALL_ARGUMENT");
+            }
+        }
+        if index >= vec.len(bound.parameters) {
+            throw internal_error("foreign binding argument count");
+        }
+        let parameter_index = usize(bound.parameters[index]);
+        if parameter_index >= vec.len(signature_type.parameters) {
+            throw internal_error("foreign signature parameter index");
+        }
+        if !b_mode_is(signature_type.parameters[parameter_index].mode,
+                      model.ParamMode.Ordinary) {
+            throw unavailable(inout state, argument_ref,
+                "external move/inout is not supported");
+        }
+        let expected = signature_type.parameters[parameter_index].type_id;
+        let value = expression(inout state, er, option.Option[usize].Some(expected));
+        vec.push(call.args, hir.CallArg(source_index: u32(index),
+            parameter_index: bound.parameters[index], label: labels[index],
+            mode: model.ParamMode.Ordinary, expression: value.id));
+        vec.push(children, value.id);
+    }
+    let id = node(inout state, r, signature_type.result,
+        hir.NodeData.Call(value: call), children);
+    return Expr(id: id, value: b_empty_value(signature_type.result));
+}
+
+func foreign_call(state inout Checker, r model.NodeRef, target model.NodeRef,
+                  candidates Vec[usize],
+                  receiver option.Option[Expr]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let labels = vec.empty[option.Option[string]]();
+    let argument_count = vec.len(b_ast_m(b_module, r).children);
+    for var index usize = 1; index < argument_count; index += 1 {
+        let argument_ref = b_child_m(b_module, r, index);
+        if b_token_m(b_module, argument_ref, 1) == ":" {
+            vec.push(labels, option.Option[string].Some(
+                b_token_m(b_module, argument_ref, 0)));
+        } else {
+            vec.push(labels, option.Option[string].None);
+        }
+    }
+    if vec.len(candidates) == 1 {
+        let binding = candidates[0];
+        let declaration = b_foreign_callable_declaration(inout state, binding);
+        let bound = foreign.bind_arguments(declaration, labels);
+        switch bound {
+            case option.Option.Some(value):
+                return b_foreign_build(inout state, r, target, binding, value,
+                    receiver, labels);
+            case option.Option.None:
+                throw reject(inout state, r,
+                    "no external candidate accepts these arguments",
+                    "E_CALL_ARGUMENT");
+        }
+    }
+    var selected = option.Option[usize].None;
+    var failure = option.Option[Error].None;
+    for binding in candidates {
+        let declaration = b_foreign_callable_declaration(inout state, binding);
+        let bound = foreign.bind_arguments(declaration, labels);
+        switch bound {
+            case option.Option.None: continue;
+            case option.Option.Some(value): {
+                var trial = state;
+                try { trial = clone_checker(state); }
+                catch error Error { throw error; }
+                try { let ignored = b_foreign_build(inout trial, r, target,
+                        binding, value, receiver, labels); }
+                catch error Error {
+                    switch error {
+                        case Error.Rejected(diagnostic, kind): {
+                            failure = option.Option[Error].Some(error);
+                            continue;
+                        }
+                        case Error.Support(support): throw error;
+                    }
+                }
+                switch selected {
+                    case option.Option.Some(previous):
+                        throw reject(inout state, r, "ambiguous external call",
+                            "E_CALL_ARGUMENT");
+                    case option.Option.None:
+                        selected = option.Option[usize].Some(binding);
+                }
+            }
+        }
+    }
+    switch selected {
+        case option.Option.Some(binding): {
+            let declaration = b_foreign_callable_declaration(inout state, binding);
+            let bound = foreign.bind_arguments(declaration, labels);
+            switch bound {
+                case option.Option.Some(value):
+                    return b_foreign_build(inout state, r, target, binding, value,
+                        receiver, labels);
+                case option.Option.None:
+                    throw internal_error("selected foreign candidate no longer binds");
+            }
+        }
+        case option.Option.None: {
+            switch failure {
+                case option.Option.Some(value): throw value;
+                case option.Option.None:
+                    throw reject(inout state, r,
+                        "no external candidate accepts these arguments",
+                        "E_CALL_ARGUMENT");
+            }
+        }
+    }
+}
+
+
+func b_foreign_callable_declaration(state inout Checker, binding usize)
+    model.BindingCallable throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let project = state.m.resolved.project;
+    if binding >= vec.len(project.foreign_bindings) {
+        throw internal_error("invalid foreign callable binding");
+    }
+    switch project.foreign_bindings[binding].detail {
+        case model.ForeignDetail.Callable(value): return value;
+        default: throw internal_error("foreign callable has wrong binding kind");
+    }
+}
+
+func c_foreign_call(state inout Checker, r model.NodeRef, id u32) Expr throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let declaration = c_callable(inout state, id);
+    var signature_id usize = 0;
+    var type_context = state.m.types;
+    try {
+        signature_id = foreign.c_callable_signature(state.m.resolved.project,
+            inout type_context, declaration);
+    } catch error model.SupportError {
+        throw reject(inout state, r, b_support_message(error), "E_BINDING_INVALID");
+    }
+    state.m.types = type_context;
+    let signature_type = lookup_type(inout state, signature_id);
+    let source_parameters = foreign.c_source_parameter_indices(declaration);
+    if vec.len(source_parameters) != vec.len(signature_type.parameters) {
+        throw reject(inout state, r,
+            "C callable source signature is inconsistent", "E_BINDING_INVALID");
+    }
+    if vec.len(b_ast_m(b_module, r).children) - 1 != vec.len(source_parameters) {
+        throw reject(inout state, r,
+            "C function requires exactly one argument per source parameter",
+            "E_CALL_ARGUMENT");
+    }
+    var call = hir.Call(kind: hir.CalleeKind.CForeign, signature: signature_id,
+        direct_symbol: option.Option[usize].None,
+        callee: option.Option[usize].None, args: [], type_args: [],
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].Some(id), omitted: [],
+        system: option.Option[u32].None);
+    let children = vec.empty[usize]();
+    for var index usize = 1; index < vec.len(b_ast_m(b_module, r).children); index += 1 {
+        let argument_ref = b_child_m(b_module, r, index);
+        var er = b_child_m(b_module, argument_ref, 0);
+        if b_token_m(b_module, argument_ref, 1) == ":" {
+            throw reject(inout state, argument_ref,
+                "C functions use fixed positional arguments only",
+                "E_CALL_ARGUMENT");
+        }
+        let er_node = b_ast_m(b_module, er);
+        if b_kind_is(er_node.kind, model.AstKind.Unary) {
+            let spelling = b_token_m(b_module, er, 0);
+            if spelling == "move" || spelling == "inout" {
+                throw reject(inout state, argument_ref,
+                    "C arguments require ordinary mode", "E_CALL_ARGUMENT");
+            }
+        }
+        let expected = signature_type.parameters[index - 1].type_id;
+        let raw = source_parameters[index - 1];
+        var e = b_empty_expr();
+        var registered_callback = false;
+        switch declaration.registers {
+            case option.Option.Some(registers):
+                if raw == registers.callback_parameter { registered_callback = true; }
+            case option.Option.None: {}
+        }
+        if registered_callback {
+            e = expression(inout state, er, option.Option[usize].None);
+            if e.value.type_id != expected {
+                throw reject(inout state, argument_ref,
+                    "C registering callback requires a non-throwing ordinary function value with the source signature",
+                    "E_CALL_ARGUMENT");
+            }
+        } else if b_type_kind_is(lookup_type(inout state, expected).kind,
+                                 model.TypeKind.CForeignCallback) {
+            e = expression(inout state, er, option.Option[usize].None);
+            let callback_type = lookup_type(inout state, expected).c_type;
+            check_c_callback(inout state, argument_ref, e.value.type_id,
+                callback_type);
+            switch b_node_function_value(state.m.nodes[e.id]) {
+                case option.Option.Some(value):
+                    if vec.len(value.captures) != 0 {
+                        throw reject(inout state, argument_ref,
+                            "C callback cannot capture or bind a receiver",
+                            "E_CALL_ARGUMENT");
+                    }
+                    switch value.bound {
+                        case option.Option.Some(bound): {
+                            throw reject(inout state, argument_ref,
+                                "C callback cannot capture or bind a receiver",
+                                "E_CALL_ARGUMENT");
+                        }
+                        case option.Option.None: {}
+                    }
+                case option.Option.None:
+                    throw unavailable(inout state, argument_ref,
+                        "C callback requires an uncaptured function name");
+            }
+        } else {
+            let wanted = lookup_type(inout state, expected);
+            if b_type_kind_is(wanted.kind, model.TypeKind.CForeignPointer) ||
+               b_type_kind_is(wanted.kind, model.TypeKind.CForeignBuffer) {
+                e = expression(inout state, er, option.Option[usize].None);
+            } else {
+                e = expression(inout state, er, option.Option[usize].Some(expected));
+            }
+            if !c_assignable(inout state, e.value.type_id, expected) {
+                throw reject(inout state, argument_ref,
+                    "C argument type differs from binding", "E_TYPE_MISMATCH");
+            }
+        }
+        vec.push(call.args, hir.CallArg(source_index: u32(index - 1),
+            parameter_index: u32(index - 1), label: option.Option[string].None,
+            mode: model.ParamMode.Ordinary, expression: e.id));
+        vec.push(children, e.id);
+    }
+    let id_node = node(inout state, r, signature_type.result,
+        hir.NodeData.Call(value: call), children);
+    return Expr(id: id_node, value: b_empty_value(signature_type.result));
+}
+
+func call(state inout Checker, r model.NodeRef,
+          expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let callee_ref = b_child_m(b_module, r, 0);
+    var system_callee = callee_ref;
+    for {
+        if !b_kind_is(b_ast_m(b_module, system_callee).kind,
+                      model.AstKind.Parenthesized) { break; }
+        system_callee = b_child_m(b_module, system_callee, 0);
+    }
+    var system_target = system_callee;
+    if b_kind_is(b_ast_m(b_module, system_callee).kind,
+                 model.AstKind.NeutralBracket) {
+        system_target = b_child_m(b_module, system_callee, 0);
+    }
+    switch occurrence(inout state, system_target) {
+        case option.Option.Some(id): {
+            if b_symbol_kind_is(symbol(inout state, id).kind,
+                                model.SymbolKind.BuiltinFunction) {
+                switch b_system_spec(symbol(inout state, id).name) {
+                    case option.Option.Some(spec):
+                        return system_call(inout state, r, system_callee, id, spec);
+                    case option.Option.None: {}
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch occurrence(inout state, callee_ref) {
+        case option.Option.Some(id): {
+            switch b_foreign_export(inout state, id) {
+                case option.Option.Some(exported): {
+                    switch exported.c_callable {
+                        case option.Option.Some(callable_id):
+                            return c_foreign_call(inout state, r, callable_id);
+                        case option.Option.None: {}
+                    }
+                    if vec.len(exported.candidates) != 0 {
+                        return foreign_call(inout state, r, callee_ref,
+                            exported.candidates, option.Option[Expr].None);
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch type_expression(inout state, callee_ref) {
+        case option.Option.Some(type_id): {
+            if b_type_kind_is(lookup_type(inout state, type_id).kind,
+                              model.TypeKind.NominalStruct) {
+                return constructor(inout state, r, type_id,
+                    option.Option[usize].None);
+            }
+            return scalar_call(inout state, r, option.Option[Expr].None);
+        }
+        case option.Option.None: {}
+    }
+    let suffix_ref = b_strip_parens(inout state, callee_ref);
+    var method_ref = suffix_ref;
+    let method_arg_refs = vec.empty[model.NodeRef]();
+    var method_explicit = false;
+    if b_kind_is(b_ast_m(b_module, suffix_ref).kind,
+                 model.AstKind.NeutralBracket) {
+        let suffix_node = b_ast_m(b_module, suffix_ref);
+        if vec.len(suffix_node.children) != 0 {
+            let inner = b_strip_parens(inout state,
+                b_child_m(b_module, suffix_ref, 0));
+            var inner_resolved = true;
+            switch occurrence(inout state, inner) {
+                case option.Option.Some(id): {}
+                case option.Option.None: inner_resolved = false;
+            }
+            if b_kind_is(b_ast_m(b_module, inner).kind, model.AstKind.Member) &&
+               !inner_resolved {
+                method_explicit = true;
+                for var index usize = 1; index < vec.len(suffix_node.children); index += 1 {
+                    vec.push(method_arg_refs, b_child_m(b_module, suffix_ref, index));
+                }
+                method_ref = inner;
+            }
+        }
+    }
+    var method_resolved = true;
+    switch occurrence(inout state, method_ref) {
+        case option.Option.Some(id): {}
+        case option.Option.None: method_resolved = false;
+    }
+    if b_kind_is(b_ast_m(b_module, method_ref).kind, model.AstKind.Member) &&
+       !method_resolved {
+        return b_call_method(inout state, r, callee_ref, method_ref, suffix_ref,
+            method_explicit, method_arg_refs, expected);
+    }
+    var base = callee_ref;
+    var explicit_args = vec.empty[usize]();
+    if b_kind_is(b_ast_m(b_module, base).kind, model.AstKind.NeutralBracket) {
+        let target_base = b_child_m(b_module, base, 0);
+        var target_is_function = false;
+        switch occurrence(inout state, target_base) {
+            case option.Option.Some(id):
+                target_is_function = b_symbol_kind_is(
+                    symbol(inout state, id).kind, model.SymbolKind.Function);
+            case option.Option.None: {}
+        }
+        if !target_is_function {
+            return scalar_call(inout state, r, option.Option[Expr].None);
+        }
+        let base_node = b_ast_m(b_module, base);
+        for var index usize = 1; index < vec.len(base_node.children); index += 1 {
+            vec.push(explicit_args, parse_type(inout state,
+                b_child_m(b_module, base, index), option.Option[usize].None, false));
+        }
+        base = target_base;
+    }
+    var target = option.Option[usize].None;
+    switch occurrence(inout state, base) {
+        case option.Option.Some(id):
+            if b_symbol_kind_is(symbol(inout state, id).kind,
+                                model.SymbolKind.Function) {
+                target = option.Option[usize].Some(id);
+            }
+        case option.Option.None: {}
+    }
+    switch target {
+        case option.Option.Some(id): {
+            var has_signature = false;
+            switch b_signature_find(inout state, id) {
+                case option.Option.Some(value): has_signature = true;
+                case option.Option.None: {}
+            }
+            if has_signature {
+                let generic = b_generic_params(inout state, id);
+                let callee_is_bracket = b_kind_is(b_ast_m(b_module, callee_ref).kind,
+                    model.AstKind.NeutralBracket);
+                if vec.len(generic) == 0 && !callee_is_bracket {
+                    return scalar_call(inout state, r, option.Option[Expr].None);
+                }
+                var substitutions = vec.empty[model.Substitution]();
+                if callee_is_bracket {
+                    if vec.len(explicit_args) != vec.len(generic) {
+                        throw reject(inout state, r,
+                            "wrong number of generic arguments", "E_CALL_ARGUMENT");
+                    }
+                    for var index usize = 0; index < vec.len(generic); index += 1 {
+                        vec.push(substitutions, model.Substitution(
+                            symbol: generic[index].symbol,
+                            type_id: explicit_args[index]));
+                    }
+                }
+                return typed_call(inout state, r, id,
+                    option.Option[usize].None, substitutions,
+                    option.Option[Expr].None, expected,
+                    option.Option[hir.TraitRef].None,
+                    option.Option[usize].None, model.ParamMode.Ordinary);
+            }
+        }
+        case option.Option.None: {}
+    }
+    return scalar_call(inout state, r, option.Option[Expr].None);
+}
+
+func b_call_method(state inout Checker, r model.NodeRef, call_ref model.NodeRef,
+                   method_ref model.NodeRef, suffix_ref model.NodeRef,
+                   method_explicit bool, method_arg_refs Vec[model.NodeRef],
+                   expected option.Option[usize]) Expr throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let base = b_child_m(b_module, method_ref, 0);
+    let name = b_last_token_m(b_module, method_ref);
+    switch type_expression(inout state, base) {
+        case option.Option.Some(type_id): {
+            let qualifier = lookup_type(inout state, type_id);
+            if b_type_kind_is(qualifier.kind, model.TypeKind.TypeParameter) {
+                let application = b_bound_value(inout state, qualifier.declaration);
+                var application_value = hir.TraitRef(declaration: 0, args: []);
+                switch application {
+                    case option.Option.Some(value): application_value = value;
+                    case option.Option.None:
+                        throw reject(inout state, r,
+                            "method requires a declared trait constraint",
+                            "E_TYPE_MISMATCH");
+                }
+                var trait_index usize = 0;
+                switch trait_decl(inout state, application_value.declaration) {
+                    case option.Option.Some(value): trait_index = value;
+                    case option.Option.None: throw internal_error("missing trait declaration");
+                }
+                let tr = state.m.traits[trait_index];
+                for method in tr.methods {
+                    if symbol(inout state, method.symbol).name == name {
+                        if !b_has_static_method_source(inout state, method.symbol,
+                                application_value, type_id) &&
+                           !b_has_static_method_move_source(inout state, method.symbol,
+                                application_value, type_id) {
+                            throw unavailable(inout state, r,
+                                "trait-static move/inout or Self callback parameters are not implemented");
+                        }
+                        var substitutions = vec.empty[model.Substitution]();
+                        vec.push(substitutions, model.Substitution(symbol: tr.self,
+                            type_id: type_id));
+                        for var index usize = 0; index < vec.len(tr.params); index += 1 {
+                            vec.push(substitutions, model.Substitution(
+                                symbol: tr.params[index].symbol,
+                                type_id: application_value.args[index]));
+                        }
+                        let signature_id = substitute_type(inout state,
+                            method.signature, substitutions);
+                        let explicit = b_explicit_method_sub(inout state, r,
+                            method.symbol, method_explicit, method_arg_refs);
+                        return typed_call(inout state, r, method.symbol,
+                            option.Option[usize].Some(signature_id), explicit,
+                            option.Option[Expr].None, expected,
+                            option.Option[hir.TraitRef].Some(application_value),
+                            option.Option[usize].Some(type_id),
+                            model.ParamMode.Ordinary);
+                    }
+                }
+                throw reject(inout state, r,
+                    "method is not declared by the constraint", "E_NAME_NOT_FOUND");
+            }
+            if b_type_kind_is(qualifier.kind, model.TypeKind.NominalEnum) {
+                let declaration = nominal(inout state, type_id);
+                for variant in declaration.variants {
+                    if symbol(inout state, variant.symbol).name == name {
+                        if method_explicit {
+                            throw reject(inout state, call_ref,
+                                "enum variants do not take type arguments",
+                                "E_CALL_ARGUMENT");
+                        }
+                        return constructor(inout state, r, type_id,
+                            option.Option[usize].Some(variant.symbol));
+                    }
+                }
+            }
+            let initial_selection = select_method(inout state, r, type_id, name,
+                option.Option[hir.TraitRef].None);
+            let selected = b_method_subs(inout state, r, initial_selection,
+                method_explicit, method_arg_refs);
+            switch impl_of(inout state, selected.method) {
+                case option.Option.Some(implementation): {
+                    let implementation_decl = state.m.impls[implementation];
+                    switch implementation_decl.trait_ref {
+                        case option.Option.Some(trait_ref):
+                            switch trait_impl_inout_source(inout state,
+                                    selected.method, false) {
+                                case option.Option.None:
+                                    throw unavailable(inout state, r,
+                                        "trait-static actual self or method source signature is not implemented");
+                                case option.Option.Some(value): {}
+                            }
+                        case option.Option.None: {}
+                    }
+                }
+                case option.Option.None: {}
+            }
+            return typed_call(inout state, r, selected.method,
+                option.Option[usize].None, selected.substitutions,
+                option.Option[Expr].None, expected,
+                option.Option[hir.TraitRef].None, option.Option[usize].None,
+                model.ParamMode.Ordinary);
+        }
+        case option.Option.None: {}
+    }
+    let receiver_argument = expression_mode(inout state, base);
+    let receiver_mode = receiver_argument.requested;
+    var receiver = b_empty_expr();
+    if b_mode_is(receiver_mode, model.ParamMode.Inout) {
+        receiver = place(inout state, receiver_argument.value, true);
+    } else {
+        receiver = expression(inout state, base, option.Option[usize].None);
+    }
+    let receiver_type = lookup_type(inout state, receiver.value.type_id);
+    if b_type_kind_is(receiver_type.kind, model.TypeKind.ForeignOpaque) {
+        if !b_mode_is(receiver_mode, model.ParamMode.Ordinary) {
+            throw unavailable(inout state, base,
+                "external receiver modes are not supported");
+        }
+        if method_explicit {
+            throw unavailable(inout state, r,
+                "external generic methods are not supported");
+        }
+        let candidates = foreign_members(inout state, receiver.value.type_id,
+            name, "method");
+        if vec.len(candidates) == 0 {
+            throw unavailable(inout state, r,
+                "external member is not declared");
+        }
+        return foreign_call(inout state, r, method_ref, candidates,
+            option.Option[Expr].Some(receiver));
+    }
+    if b_type_kind_is(receiver_type.kind, model.TypeKind.TraitObject) {
+        return trait_object_call(inout state, r, method_ref, receiver,
+            method_explicit, expected);
+    }
+    if b_type_kind_is(receiver_type.kind, model.TypeKind.NominalStruct) {
+        let declaration = nominal(inout state, receiver.value.type_id);
+        for field in declaration.fields {
+            if symbol(inout state, field.symbol).name == name {
+                if b_mode_is(receiver_mode, model.ParamMode.Inout) {
+                    throw reject(inout state, base,
+                        "inout receiver requires a method Self parameter",
+                        "E_CALL_ARGUMENT");
+                }
+                if method_explicit {
+                    let found = find_field(inout state, method_ref,
+                        receiver.value.type_id);
+                    let field_type_id = field_type(inout state,
+                        receiver.value.type_id, found);
+                    if !b_type_kind_is(lookup_type(inout state, field_type_id).kind,
+                                       model.TypeKind.Vec) {
+                        throw reject(inout state, method_ref,
+                            "function fields do not take type arguments",
+                            "E_CALL_ARGUMENT");
+                    }
+                    let suffix_node = b_ast_m(b_module, suffix_ref);
+                    if vec.len(suffix_node.children) != 2 {
+                        throw reject(inout state, suffix_ref,
+                            "Vec requires one index", "E_CALL_ARGUMENT");
+                    }
+                    let index = expression(inout state,
+                        b_child_m(b_module, suffix_ref, 1),
+                        option.Option[usize].None);
+                    if !integer(inout state, index.value.type_id) {
+                        throw reject(inout state, suffix_ref,
+                            "Vec index must be integer", "E_TYPE_MISMATCH");
+                    }
+                    let element = b_type_args0(inout state, field_type_id);
+                    let field_value = Expr(id: node(inout state, method_ref,
+                            field_type_id,
+                            hir.NodeData.FieldRead(value: hir.FieldRead(
+                                field: found.symbol)), [receiver.id]),
+                        value: b_empty_value(field_type_id));
+                    let callee_value = Expr(id: node(inout state, suffix_ref,
+                            element,
+                            hir.NodeData.IndexRead(value: hir.IndexRead()),
+                            [field_value.id, index.id]),
+                        value: b_empty_value(element));
+                    return scalar_call(inout state, r,
+                        option.Option[Expr].Some(callee_value));
+                }
+                let found = find_field(inout state, method_ref,
+                    receiver.value.type_id);
+                let field_type_id = field_type(inout state,
+                    receiver.value.type_id, found);
+                let callee_value = Expr(id: node(inout state, method_ref,
+                        field_type_id,
+                        hir.NodeData.FieldRead(value: hir.FieldRead(
+                            field: found.symbol)), [receiver.id]),
+                    value: b_empty_value(field_type_id));
+                return scalar_call(inout state, r,
+                    option.Option[Expr].Some(callee_value));
+            }
+        }
+    }
+    if b_type_kind_is(receiver_type.kind, model.TypeKind.TypeParameter) {
+        let bound = b_bound_value(inout state, receiver_type.declaration);
+        var application_value = hir.TraitRef(declaration: 0, args: []);
+        switch bound {
+            case option.Option.Some(value): application_value = value;
+            case option.Option.None:
+                throw reject(inout state, r,
+                    "method requires a declared trait constraint",
+                    "E_TYPE_MISMATCH");
+        }
+        var trait_index usize = 0;
+        switch trait_decl(inout state, application_value.declaration) {
+            case option.Option.Some(value): trait_index = value;
+            case option.Option.None: throw internal_error("missing trait declaration");
+        }
+        let tr = state.m.traits[trait_index];
+        for method in tr.methods {
+            if symbol(inout state, method.symbol).name == name {
+                var substitutions = vec.empty[model.Substitution]();
+                vec.push(substitutions, model.Substitution(symbol: tr.self,
+                    type_id: receiver.value.type_id));
+                for var index usize = 0; index < vec.len(tr.params); index += 1 {
+                    vec.push(substitutions, model.Substitution(
+                        symbol: tr.params[index].symbol,
+                        type_id: application_value.args[index]));
+                }
+                let signature_id = substitute_type(inout state, method.signature,
+                    substitutions);
+                let explicit = b_explicit_method_sub(inout state, r,
+                    method.symbol, method_explicit, method_arg_refs);
+                return typed_call(inout state, r, method.symbol,
+                    option.Option[usize].Some(signature_id), explicit,
+                    option.Option[Expr].Some(receiver), expected,
+                    option.Option[hir.TraitRef].Some(application_value),
+                    option.Option[usize].None, receiver_mode);
+            }
+        }
+        throw reject(inout state, r,
+            "method is not declared by the constraint", "E_NAME_NOT_FOUND");
+    }
+    let initial_selection = select_method(inout state, r,
+        receiver.value.type_id, name, option.Option[hir.TraitRef].None);
+    let selected = b_method_subs(inout state, r, initial_selection,
+        method_explicit, method_arg_refs);
+    return typed_call(inout state, r, selected.method, option.Option[usize].None,
+        selected.substitutions, option.Option[Expr].Some(receiver), expected,
+        option.Option[hir.TraitRef].None, option.Option[usize].None, receiver_mode);
+}
+
+func b_has_static_method_source(state inout Checker, method usize,
+                                application hir.TraitRef,
+                                qualifier usize) bool throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch constraint_static_method_source(inout state, method, application,
+                                           qualifier) {
+        case option.Option.Some(value): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func b_has_static_method_move_source(state inout Checker, method usize,
+                                     application hir.TraitRef,
+                                     qualifier usize) bool throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch constraint_static_method_move_source(inout state, method, application,
+                                                qualifier) {
+        case option.Option.Some(value): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func b_explicit_method_sub(state inout Checker, location model.NodeRef,
+                           method usize, explicit bool,
+                           refs Vec[model.NodeRef])
+    Vec[model.Substitution] throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let substitutions = vec.empty[model.Substitution]();
+    if !explicit { return substitutions; }
+    let ps = b_generic_params(inout state, method);
+    if vec.len(refs) != vec.len(ps) {
+        throw reject(inout state, location,
+            "wrong number of method type arguments", "E_CALL_ARGUMENT");
+    }
+    for var index usize = 0; index < vec.len(ps); index += 1 {
+        let type_id = parse_type(inout state, refs[index],
+            option.Option[usize].None, false);
+        vec.push(substitutions, model.Substitution(symbol: ps[index].symbol,
+            type_id: type_id));
+    }
+    return substitutions;
+}
+
+func b_method_subs(state inout Checker, location model.NodeRef,
+                   selected Selection, explicit bool,
+                   refs Vec[model.NodeRef]) Selection throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    if !explicit { return selected; }
+    let ps = b_generic_params(inout state, selected.method);
+    let unbound = vec.empty[hir.GenericParam]();
+    for parameter in ps {
+        var bound = false;
+        for substitution in selected.substitutions {
+            if substitution.symbol == parameter.symbol { bound = true; }
+        }
+        if !bound { vec.push(unbound, parameter); }
+    }
+    if vec.len(unbound) != vec.len(refs) {
+        throw reject(inout state, location,
+            "wrong number of method type arguments", "E_CALL_ARGUMENT");
+    }
+    for var index usize = 0; index < vec.len(unbound); index += 1 {
+        let type_id = parse_type(inout state, refs[index],
+            option.Option[usize].None, false);
+        vec.push(selected.substitutions, model.Substitution(
+            symbol: unbound[index].symbol, type_id: type_id));
+    }
+    return selected;
+}
+
+func check_call_borrows(state inout Checker, r model.NodeRef,
+                        args Vec[hir.CallArg], children Vec[usize],
+                        indirect_callee bool) throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let borrowed = vec.empty[PlaceAccess]();
+    var container_borrow = false;
+    for argument in args {
+        if b_mode_is(argument.mode, model.ParamMode.Inout) {
+            var root usize = 0;
+            switch place_root(inout state, argument.expression) {
+                case option.Option.Some(value): root = value;
+                case option.Option.None:
+                    throw reject(inout state, r,
+                        "inout place has no binding-backed storage root",
+                        "E_CALL_ARGUMENT");
+            }
+            let path = place_path(inout state, argument.expression);
+            if b_path_contains_index(path) { container_borrow = true; }
+            for prior in borrowed {
+                if places_overlap(prior.root, prior.path, root, path) {
+                    throw reject(inout state, r,
+                        "overlapping or possibly aliased inout storage in call",
+                        "E_CALL_ARGUMENT");
+                }
+            }
+            vec.push(borrowed, PlaceAccess(root: root, path: path));
+        }
+    }
+    if container_borrow && indirect_callee {
+        throw reject(inout state, r,
+            "indirect callee may retain or resize the borrowed Vec storage",
+            "E_CALL_ARGUMENT");
+    }
+    let risks = vec.empty[usize]();
+    for root in children {
+        var inout_place = false;
+        for argument in args {
+            if b_mode_is(argument.mode, model.ParamMode.Inout) &&
+               argument.expression == root { inout_place = true; }
+        }
+        let accesses = vec.empty[PlaceAccess]();
+        if inout_place {
+            collect_place_index_paths(inout state, root, accesses);
+            for access in accesses {
+                for borrow in borrowed {
+                    if places_overlap(borrow.root, borrow.path, access.root,
+                                      access.path) {
+                        throw reject(inout state, r,
+                            "inout binding is also accessed by this call",
+                            "E_CALL_ARGUMENT");
+                    }
+                }
+            }
+            if container_borrow {
+                collect_place_index_risks(inout state, root, risks);
+            }
+        } else {
+            collect_access_paths(inout state, root, accesses);
+            for access in accesses {
+                for borrow in borrowed {
+                    if places_overlap(borrow.root, borrow.path, access.root,
+                                      access.path) {
+                        throw reject(inout state, r,
+                            "inout binding is also accessed by this call",
+                            "E_CALL_ARGUMENT");
+                    }
+                }
+            }
+            if container_borrow {
+                collect_alias_risks(inout state, root, risks);
+            }
+        }
+    }
+    if vec.len(risks) != 0 {
+        throw reject(inout state, r,
+            "argument may alias a shared container while its element is borrowed by inout",
+            "E_CALL_ARGUMENT");
+    }
+}

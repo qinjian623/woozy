@@ -1,0 +1,895 @@
+// Function-value source identity and constant-value re-evaluation.
+package hirverify;
+
+import "app/wzcc/constant" as constant;
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct CaptureOccurrence {
+    symbol usize;
+    begin_byte u64;
+    node usize;
+}
+
+func constant_function_source(state inout Verifier, id usize)
+    FunctionSource throws Invalid {
+    var constant_id = id;
+    let visited = vec.empty[usize]();
+    for true {
+        let symbol = verifier_symbol(state, constant_id);
+        need(symbol_is(symbol.kind, model.SymbolKind.Constant) &&
+             option.is_some(symbol.definition),
+            "constant function source is not a real constant");
+        need(ids_insert(visited, constant_id),
+            "constant function source cycle");
+        let declaration = option_ref(symbol.definition);
+        let file = verifier_file(state, declaration.module, declaration.file);
+        let binding = file.nodes[declaration.node];
+        need(ast_is(binding.kind, model.AstKind.Binding) &&
+             vec.len(binding.children) > 0,
+            "constant function source is not a binding");
+        var initializer = declaration;
+        initializer.node = binding.children[vec.len(binding.children) - 1];
+        initializer = unwrapped(state, initializer);
+        let ast = file.nodes[initializer.node];
+        if ast_is(ast.kind, model.AstKind.FunctionLiteral) {
+            var function i64 = -1;
+            for candidate in state.m.resolved.symbols {
+                if symbol_is(candidate.kind, model.SymbolKind.Function) &&
+                   option.is_some(candidate.definition) &&
+                   same_ref(option_ref(candidate.definition), initializer) {
+                    function = i64(candidate.id);
+                }
+            }
+            need(function >= 0,
+                "constant function literal has no resolved symbol");
+            return FunctionSource(function: usize(function),
+                type_args: [], explicit_type_args: false);
+        }
+        if ast_is(ast.kind, model.AstKind.NeutralBracket) {
+            need(vec.len(ast.children) > 0,
+                "constant generic function value has no target");
+            var base = initializer;
+            base.node = ast.children[0];
+            let function = resolved_source(state, base);
+            need(option.is_some(function) &&
+                 symbol_is(verifier_symbol(state, option_usize(function)).kind,
+                     model.SymbolKind.Function),
+                "constant generic initializer is not a function");
+            let type_args = vec.empty[usize]();
+            for var index usize = 1; index < vec.len(ast.children); index += 1 {
+                var argument = initializer;
+                argument.node = ast.children[index];
+                vec.push(type_args, source_type(inout state, argument));
+            }
+            return FunctionSource(function: option_usize(function),
+                type_args: type_args, explicit_type_args: true);
+        }
+        need(ast_is(ast.kind, model.AstKind.Name) ||
+             ast_is(ast.kind, model.AstKind.Member),
+            "constant function initializer has an unsupported source kind");
+        let target = resolved_source(state, initializer);
+        need(option.is_some(target),
+            "constant function initializer has no resolved symbol");
+        let selected = verifier_symbol(state, option_usize(target));
+        if symbol_is(selected.kind, model.SymbolKind.Function) {
+            return FunctionSource(function: option_usize(target),
+                type_args: [], explicit_type_args: false);
+        }
+        need(symbol_is(selected.kind, model.SymbolKind.Constant),
+            "constant initializer is neither a function nor a constant");
+        constant_id = option_usize(target);
+    }
+    return FunctionSource(function: 0, type_args: [], explicit_type_args: false);
+}
+
+func source_lambda_value(state inout Verifier, reference model.NodeRef,
+                         owner usize) hir.FunctionValue throws Invalid {
+    var original i64 = -1;
+    for symbol in state.m.resolved.symbols {
+        if symbol_is(symbol.kind, model.SymbolKind.Function) &&
+           option.is_some(symbol.definition) &&
+           same_ref(option_ref(symbol.definition), reference) {
+            original = i64(symbol.id);
+            break;
+        }
+    }
+    need(original >= 0, "function literal has no original declaration");
+    let template_found = template_index(state, usize(original));
+    if template_found < 0 {
+        return hir.FunctionValue(symbol: usize(original), type_args: [],
+            captures: [], move_capture: false,
+            bound: option.Option[hir.BoundReceiver].None);
+    }
+    let template = state.m.templates[usize(template_found)];
+    let arguments = vec.empty[usize]();
+    for parameter in template.params {
+        vec.push(arguments, parameter_type(inout state, parameter.symbol));
+    }
+    if template_index(state, owner) >= 0 {
+        return hir.FunctionValue(symbol: usize(original), type_args: arguments,
+            captures: [], move_capture: false,
+            bound: option.Option[hir.BoundReceiver].None);
+    }
+    let environment = instance_index(state, owner);
+    need(environment >= 0,
+        "generic function literal has no enclosing instance");
+    let instance = state.m.instances[usize(environment)];
+    let parameters = state.m.templates[usize(template_index(state,
+        instance.origin))].params;
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(parameters); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: parameters[index].symbol,
+            type_id: instance.type_args[index]));
+    }
+    for var index usize = 0; index < vec.len(arguments); index += 1 {
+        arguments[index] = substitute_type(inout state, arguments[index],
+            substitutions);
+    }
+    for candidate in state.m.instances {
+        if candidate.origin == usize(original) &&
+           ids_equal(candidate.type_args, arguments) {
+            return hir.FunctionValue(symbol: candidate.symbol, type_args: [],
+                captures: [], move_capture: false,
+                bound: option.Option[hir.BoundReceiver].None);
+        }
+    }
+    fail("function literal has no matching enclosing specialization");
+    return hir.FunctionValue(symbol: 0, type_args: [], captures: [],
+        move_capture: false, bound: option.Option[hir.BoundReceiver].None);
+}
+
+func capture_origins(state Verifier, literal model.NodeRef) Vec[usize]
+    throws Invalid {
+    let file = verifier_file(state, literal.module, literal.file);
+    let subtree = vec.empty[usize]();
+    let pending = vec.empty[usize]();
+    vec.push(pending, literal.node);
+    for vec.len(pending) > 0 {
+        let id = option_usize(vec.pop(pending));
+        if !ids_insert(subtree, id) {
+            continue;
+        }
+        for child in file.nodes[id].children {
+            vec.push(pending, child);
+        }
+    }
+    let found = vec.empty[CaptureOccurrence]();
+    for occurrence in state.m.resolved.occurrences {
+        let reference = occurrence.source;
+        if reference.module != literal.module ||
+           reference.file != literal.file ||
+           !ids_contains(subtree, reference.node) {
+            continue;
+        }
+        if !symbol_is(verifier_symbol(state, occurrence.symbol).kind,
+                      model.SymbolKind.Value) {
+            continue;
+        }
+        vec.push(found, CaptureOccurrence(symbol: occurrence.symbol,
+            begin_byte: occurrence.span.begin_byte, node: reference.node));
+    }
+    var index usize = 1;
+    for index < vec.len(found) {
+        let value = found[index];
+        var position = index;
+        for position > 0 && (found[position - 1].begin_byte > value.begin_byte ||
+             (found[position - 1].begin_byte == value.begin_byte &&
+              found[position - 1].node > value.node)) {
+            found[position] = found[position - 1];
+            position -= 1;
+        }
+        found[position] = value;
+        index += 1;
+    }
+    let result = vec.empty[usize]();
+    let seen = vec.empty[usize]();
+    for occurrence in found {
+        let declaration = verifier_symbol(state, occurrence.symbol);
+        var inside = false;
+        if option.is_some(declaration.definition) {
+            let definition = option_ref(declaration.definition);
+            if definition.module == literal.module &&
+               definition.file == literal.file {
+                inside = ids_contains(subtree, definition.node);
+            }
+        }
+        if inside || !ids_insert(seen, occurrence.symbol) {
+            continue;
+        }
+        vec.push(result, occurrence.symbol);
+    }
+    return result;
+}
+
+func capture_source_origin(state Verifier, id usize) usize {
+    for instance in state.m.instances {
+        for rename in instance.renamed {
+            if rename.replacement == id {
+                return rename.origin;
+            }
+        }
+    }
+    return id;
+}
+
+func function_capture(function_value hir.HirFunction, origin usize)
+    option.Option[hir.CaptureBinding] {
+    for capture in function_value.captures {
+        if capture.origin == origin {
+            return option.Option[hir.CaptureBinding].Some(capture);
+        }
+    }
+    return option.Option[hir.CaptureBinding].None;
+}
+
+func check_literal_function_value(state inout Verifier, node hir.HirNode,
+                                  value hir.FunctionValue,
+                                  literal_ref model.NodeRef) throws Invalid {
+    let owner = verifier_scope(state, node.scope).function;
+    let expected = source_lambda_value(inout state, literal_ref, owner);
+    need(value.symbol == expected.symbol &&
+         ids_equal(value.type_args, expected.type_args),
+        "function literal identity differs from its enclosing specialization");
+    let target_found = function_entry_index(state, value.symbol);
+    need(target_found >= 0,
+        "capturing function value has no HIR lambda entry");
+    let lambda = verifier_function(state, value.symbol);
+    need(vec.len(lambda.captures) == vec.len(value.captures),
+        "function value capture count differs from the lambda entry");
+    need(vec.len(node.children) == vec.len(value.captures),
+        "function value capture child count");
+    let creator_found = function_entry_index(state, owner);
+    need(creator_found >= 0, "function value creator has no HIR entry");
+    let creator = verifier_function(state, owner);
+    for var index usize = 0; index < vec.len(value.captures); index += 1 {
+        let source = value.captures[index];
+        let binding = lambda.captures[index];
+        need(source.origin == binding.origin && source.type_id == binding.type_id,
+            "function value capture order/origin/type differs from the lambda entry");
+        let dependent = type_contains_parameter(state.m, source.type_id);
+        let owning = dependent || classify_needs_drop(state.m, source.type_id);
+        let expected_move = value.move_capture && owning;
+        need(source.is_move == expected_move,
+            "capture move intent differs from the real function value mode");
+        if !expected_move && !dependent &&
+           !ordinary_copyable(state.m, source.type_id) {
+            fail("ordinary function capture type is not copyable");
+        }
+        let outer = function_capture(creator, source.origin);
+        if option.is_some(outer) {
+            need(source.source == option_capture(outer).local,
+                "capture source is not the creator's matching capture local");
+        } else {
+            need(capture_source_origin(state, source.source) ==
+                     capture_source_origin(state, source.origin),
+                "capture source is not the creator binding for its origin");
+            let found = local_index(state, source.source);
+            need(found >= 0 &&
+                 state.locals[usize(found)].value.function == owner,
+                "capture source is not a creator-local binding");
+        }
+        let child = verifier_node(state, node.children[index]);
+        need(child.type_id == source.type_id, "capture child type");
+        if expected_move {
+            var move_binding = false;
+            var move_source usize = 0;
+            switch child.data {
+                case hir.NodeData.Move(move_value): {
+                    move_binding = option.is_some(move_value.binding);
+                    move_source = option_usize(move_value.binding);
+                }
+                default: {}
+            }
+            need(move_binding && move_source == source.source &&
+                 vec.len(child.children) == 0,
+                "owning capture child is not a synthetic source move");
+        } else {
+            var read = false;
+            var read_symbol usize = 0;
+            switch child.data {
+                case hir.NodeData.Read(read_value): {
+                    read = true;
+                    read_symbol = read_value.symbol;
+                }
+                default: {}
+            }
+            need(read && read_symbol == source.source &&
+                 vec.len(child.children) == 0,
+                "copied capture child is not a creator source read");
+        }
+    }
+}
+
+func option_capture(value option.Option[hir.CaptureBinding])
+    hir.CaptureBinding {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return hir.CaptureBinding(origin: 0, local: 0,
+            type_id: 0);
+    }
+}
+
+func check_bound_method_value(state inout Verifier, node hir.HirNode,
+                              value hir.FunctionValue) throws Invalid {
+    need(vec.len(value.captures) == 0 && !value.move_capture &&
+         option.is_some(value.bound),
+        "bound function value has inconsistent capture metadata");
+    need(vec.len(node.children) == 1,
+        "bound function value receiver count");
+    let receiver = verifier_node(state, node.children[0]);
+    let bound = option_bound_receiver(value.bound);
+    need(receiver.type_id == bound.type_id,
+        "bound receiver type differs from its schema");
+    let full_id = instantiated_signature(inout state, value.symbol,
+        value.type_args);
+    let full = verifier_type(state, full_id);
+    need(vec.len(full.parameters) > 0,
+        "bound method has no Self parameter");
+    let self_parameter = full.parameters[0];
+    need(self_parameter.type_id == bound.type_id &&
+         mode_id_value(self_parameter.mode) == mode_id_value(bound.mode) &&
+         (mode_is_id(self_parameter.mode, 0) ||
+          mode_is_id(self_parameter.mode, 2)),
+        "bound method Self type/mode differs from its declaration");
+    need(ordinary_copyable(state.m, bound.type_id),
+        "bound receiver type is not ordinary-copyable");
+    var trimmed = full;
+    let remaining = vec.empty[model.ParameterType]();
+    for var index usize = 1; index < vec.len(full.parameters); index += 1 {
+        vec.push(remaining, full.parameters[index]);
+    }
+    trimmed.parameters = remaining;
+    need(types.equal(verifier_type(state, node.type_id), trimmed),
+        "bound method value type mismatch");
+    var origin = value.symbol;
+    let instance = instance_index(state, value.symbol);
+    if instance >= 0 {
+        origin = state.m.instances[usize(instance)].origin;
+    }
+    let impl_index = method_impl_index(state, origin);
+    let implementation = state.m.impls[usize(impl_index)];
+    let match = vec.empty[model.Substitution]();
+    need(ids_contains(implementation.methods, origin) &&
+         matches(inout state, implementation.self_type, bound.type_id, match),
+        "bound method receiver does not select its impl");
+    let file = verifier_file(state, node.source.node.module,
+        node.source.node.file);
+    var source = node.source.node;
+    var ast = file.nodes[source.node];
+    for ast_is(ast.kind, model.AstKind.Parenthesized) {
+        need(vec.len(ast.children) > 0, "bound method source wrapper");
+        source.node = ast.children[0];
+        ast = file.nodes[source.node];
+    }
+    need(ast_is(ast.kind, model.AstKind.Member) &&
+         vec.len(ast.children) == 1,
+        "bound method source is not a value Member");
+    need(ast.token_end > ast.token_begin &&
+         ast.token_end <= vec.len(file.lexed.tokens),
+        "bound method source token range");
+    need(verifier_symbol(state, origin).name ==
+         file.lexed.tokens[ast.token_end - 1].spelling,
+        "bound method source name differs from its target");
+    var base = source;
+    base.node = ast.children[0];
+    var base_ast = file.nodes[base.node];
+    for ast_is(base_ast.kind, model.AstKind.Parenthesized) {
+        need(vec.len(base_ast.children) > 0, "bound receiver wrapper");
+        base.node = base_ast.children[0];
+        base_ast = file.nodes[base.node];
+    }
+    need(same_ref(receiver.source.node, base),
+        "bound receiver child differs from the Member base");
+    var base_move = false;
+    if ast_is(base_ast.kind, model.AstKind.Unary) {
+        need(base_ast.token_begin < vec.len(file.lexed.tokens),
+            "bound receiver token range");
+        base_move = file.lexed.tokens[base_ast.token_begin].spelling == "move";
+    }
+    if base_move {
+        var move_binding = false;
+        switch receiver.data {
+            case hir.NodeData.Move(move_value):
+                move_binding = option.is_some(move_value.binding);
+            default: {}
+        }
+        need(move_binding, "move-bound receiver is not a source binding move");
+    } else {
+        need(!node_is(hir.node_kind(receiver.data), hir.NodeKind.Move),
+            "ordinary bound receiver was replaced by a move");
+    }
+}
+
+func function_value_source(state inout Verifier, node hir.HirNode)
+    throws Invalid {
+    var value = hir.FunctionValue(symbol: 0, type_args: [], captures: [],
+        move_capture: false, bound: option.Option[hir.BoundReceiver].None);
+    var has_value = false;
+    switch node.data {
+        case hir.NodeData.FunctionValue(item): {
+            value = item;
+            has_value = true;
+        }
+        default: {}
+    }
+    if !has_value {
+        return;
+    }
+    let file = verifier_file(state, node.source.node.module,
+        node.source.node.file);
+    var reference = node.source.node;
+    var ast = file.nodes[reference.node];
+    for ast_is(ast.kind, model.AstKind.Parenthesized) ||
+        ast_is(ast.kind, model.AstKind.BracketItem) ||
+        ast_is(ast.kind, model.AstKind.NeutralBracket) {
+        need(vec.len(ast.children) > 0, "function value source wrapper");
+        reference.node = ast.children[0];
+        ast = file.nodes[reference.node];
+    }
+    var move_literal = false;
+    if ast_is(ast.kind, model.AstKind.Unary) &&
+       file.lexed.tokens[ast.token_begin].spelling == "move" {
+        need(vec.len(ast.children) == 1, "move func source arity");
+        move_literal = true;
+        reference.node = ast.children[0];
+        ast = file.nodes[reference.node];
+        for ast_is(ast.kind, model.AstKind.Parenthesized) ||
+            ast_is(ast.kind, model.AstKind.BracketItem) ||
+            ast_is(ast.kind, model.AstKind.NeutralBracket) {
+            need(vec.len(ast.children) > 0, "move func literal wrapper");
+            reference.node = ast.children[0];
+            ast = file.nodes[reference.node];
+        }
+    }
+    if ast_is(ast.kind, model.AstKind.FunctionLiteral) {
+        need(value.move_capture == move_literal,
+            "function value move_capture differs from its real source");
+        need(!option.is_some(value.bound),
+            "literal function value cannot also bind a receiver");
+        check_literal_function_value(inout state, node, value, reference);
+        return;
+    }
+    need(!move_literal, "move func source is not a function literal");
+    need(!value.move_capture, "plain function value cannot claim move capture");
+    if option.is_some(value.bound) {
+        check_bound_method_value(inout state, node, value);
+        return;
+    }
+    need(vec.len(value.captures) == 0,
+        "captured function value has no verified literal source");
+    let method = source_method_member(state, node.source.node);
+    if option.is_some(method) {
+        let source = source_method_call_value(method);
+        let prototype = trait_prototype(state, value.symbol);
+        if option.is_some(prototype) {
+            let refs = option_proto(prototype);
+            let trait_value = state.m.traits[refs.trait_index];
+            let method_value = trait_value.methods[refs.method];
+            check_template_method_value_source(inout state, node, value,
+                trait_value, method_value, source);
+        } else {
+            check_concrete_method_value_source(inout state, node, value,
+                source, false, 0, false, 0);
+        }
+        return;
+    }
+    let prototype = trait_prototype(state, value.symbol);
+    if option.is_some(prototype) || method_value_is_impl(state, value) {
+        let source = constant_method_source(state, node);
+        need(option.is_some(source),
+            "method value source has no method or constant declaration");
+        need(!option.is_some(prototype),
+            "trait prototype method value source is not a bounded T method");
+        check_concrete_method_value_source(inout state, node, value,
+            source_method_call_value(source), true,
+            source_method_call_value(source).base.module, false, 0);
+        return;
+    }
+    var source_symbol = option.Option[usize].None;
+    for occurrence in state.m.resolved.occurrences {
+        if same_ref(occurrence.source, reference) {
+            source_symbol = option.Option[usize].Some(occurrence.symbol);
+        }
+    }
+    if option.is_some(source_symbol) &&
+       symbol_is(verifier_symbol(state, option_usize(source_symbol)).kind,
+                 model.SymbolKind.Constant) {
+        let expected = constant_function_source(inout state,
+            option_usize(source_symbol));
+        var actual_function = value.symbol;
+        var actual_args = value.type_args;
+        let instance = instance_index(state, value.symbol);
+        if instance >= 0 {
+            actual_function = state.m.instances[usize(instance)].origin;
+            actual_args = state.m.instances[usize(instance)].type_args;
+        }
+        need(actual_function == expected.function,
+            "constant function value differs from its real initializer function or ordered type arguments");
+        need(!expected.explicit_type_args ||
+             ids_equal(actual_args, expected.type_args),
+            "constant function value differs from its real initializer function or ordered type arguments");
+        return;
+    }
+    if !option.is_some(source_symbol) ||
+       !symbol_is(verifier_symbol(state, option_usize(source_symbol)).kind,
+                  model.SymbolKind.Function) {
+        return;
+    }
+    var origin = value.symbol;
+    let instance = instance_index(state, value.symbol);
+    if instance >= 0 {
+        origin = state.m.instances[usize(instance)].origin;
+    }
+    need(origin == option_usize(source_symbol),
+        "function value source identity differs from resolver");
+}
+
+func option_proto(value option.Option[ProtoRef]) ProtoRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return ProtoRef(trait_index: 0, method: 0);
+    }
+}
+
+func function_value_sources(state inout Verifier) throws Invalid {
+    for node in state.m.nodes {
+        function_value_source(inout state, node);
+    }
+}
+
+func check_constant(state inout Verifier, node hir.HirNode,
+                    value hir.ConstantValue) throws Invalid {
+    need(value.type_id == node.type_id,
+        "constant root type differs from expression");
+    let work = vec.empty[usize]();
+    check_constant_shape(inout state, node, value, 0, work);
+    let context = state.substituted;
+    let module_value = state.m;
+    let owner = verifier_scope(state, node.scope).function;
+    let expected = constant_source_value_safe(inout state, module_value,
+        context, node, owner);
+    if !constant.same_constant_value(value, expected) {
+        fail_at("constant value differs from real source" +
+            constant_difference(value, expected), node.source.span);
+    }
+}
+
+func constant_source_value_safe(state inout Verifier, module_value hir.HirModule,
+                                context types.Context, node hir.HirNode,
+                                owner usize) hir.ConstantValue throws Invalid {
+    var callback_state = make_verifier(module_value);
+    callback_state.functions = state.functions;
+    callback_state.templates = state.templates;
+    callback_state.nominals = state.nominals;
+    callback_state.instances = state.instances;
+    callback_state.substituted = context;
+    try {
+        return constant.source_constant_value(module_value,
+            inout state.substituted, node.source.node, node.type_id,
+            func(reference model.NodeRef) usize throws model.SupportError {
+                var probe = callback_state;
+                try {
+                    return source_type_in_function(inout probe, reference,
+                        owner);
+                } catch error Invalid {
+                    throw model.SupportError.Invalid(error.message);
+                }
+            },
+            func(reference model.NodeRef, signature usize) hir.FunctionValue
+                throws model.SupportError {
+                var probe = callback_state;
+                try {
+                    let found = constant_function_value_source(inout probe,
+                        reference, signature, node);
+                    return found;
+                } catch error Invalid {
+                    throw model.SupportError.Invalid(error.message);
+                }
+            });
+    } catch error model.SupportError {
+        support_error(error);
+        return hir.ConstantValue(type_id: 0,
+            data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
+    }
+}
+
+func constant_function_value_source(state inout Verifier,
+                                    reference model.NodeRef, signature usize,
+                                    outer hir.HirNode) hir.FunctionValue
+    throws Invalid {
+    let literal = unwrapped(state, reference);
+    let file = verifier_file(state, literal.module, literal.file);
+    let outer_owner = verifier_scope(state, outer.scope).function;
+    if ast_is(file.nodes[literal.node].kind, model.AstKind.FunctionLiteral) {
+        let value = source_lambda_value(inout state, literal, outer_owner);
+        need(try_constant_function(inout state, outer, reference, signature,
+                 value, literal),
+            "constant function literal signature/source mismatch");
+        return value;
+    }
+    for function_value in state.m.functions {
+        let value = hir.FunctionValue(symbol: function_value.symbol,
+            type_args: [], captures: [], move_capture: false,
+            bound: option.Option[hir.BoundReceiver].None);
+        if try_constant_function(inout state, outer, reference, signature,
+                                 value, literal) {
+            return value;
+        }
+    }
+    for template in state.m.templates {
+        let arguments = vec.empty[usize]();
+        var ref = reference;
+        for ast_is(file.nodes[ref.node].kind, model.AstKind.Parenthesized) {
+            need(vec.len(file.nodes[ref.node].children) > 0,
+                "constant function wrapper");
+            ref.node = file.nodes[ref.node].children[0];
+        }
+        if ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) {
+            for var index usize = 1;
+                index < vec.len(file.nodes[ref.node].children); index += 1 {
+                var argument = ref;
+                argument.node = file.nodes[ref.node].children[index];
+                vec.push(arguments, source_type_in_function(inout state,
+                    argument, outer_owner));
+            }
+        }
+        let value = hir.FunctionValue(symbol: template.function.symbol,
+            type_args: arguments, captures: [], move_capture: false,
+            bound: option.Option[hir.BoundReceiver].None);
+        if vec.len(arguments) == vec.len(template.params) &&
+           try_constant_function(inout state, outer, reference, signature,
+               value, literal) {
+            return value;
+        }
+    }
+    for trait_value in state.m.traits {
+        for method in trait_value.methods {
+            let value = hir.FunctionValue(symbol: method.symbol, type_args: [],
+                captures: [], move_capture: false,
+                bound: option.Option[hir.BoundReceiver].None);
+            if try_constant_function(inout state, outer, reference, signature,
+                                     value, literal) {
+                return value;
+            }
+        }
+    }
+    fail("constant function has no matching real source identity");
+    return hir.FunctionValue(symbol: 0, type_args: [], captures: [],
+        move_capture: false, bound: option.Option[hir.BoundReceiver].None);
+}
+
+func try_constant_function(state inout Verifier, outer hir.HirNode,
+                           reference model.NodeRef, signature usize,
+                           value hir.FunctionValue, literal model.NodeRef)
+    bool throws Invalid {
+    let outer_owner = verifier_scope(state, outer.scope).function;
+    if !option.is_some(trait_prototype(state, value.symbol)) &&
+       instantiated_signature(inout state, value.symbol, value.type_args) !=
+           signature {
+        return false;
+    }
+    let candidate = hir.HirNode(type_id: signature,
+        source: hir.HirSource(node: reference,
+            span: verifier_ast(state, reference).span),
+        scope: outer.scope, children: [], data: hir.NodeData.FunctionValue(
+            value), errors: [], exits: []);
+    try {
+        function_value_source(inout state, candidate);
+    } catch error Invalid {
+        return false;
+    }
+    let file = verifier_file(state, reference.module, reference.file);
+    var ref = reference;
+    for ast_is(file.nodes[ref.node].kind, model.AstKind.Parenthesized) {
+        need(vec.len(file.nodes[ref.node].children) > 0,
+            "constant function wrapper");
+        ref.node = file.nodes[ref.node].children[0];
+    }
+    if ast_is(file.nodes[ref.node].kind, model.AstKind.NeutralBracket) &&
+       !option.is_some(source_method_member(state, reference)) {
+        let written = vec.empty[usize]();
+        for var index usize = 1;
+            index < vec.len(file.nodes[ref.node].children); index += 1 {
+            var argument = ref;
+            argument.node = file.nodes[ref.node].children[index];
+            vec.push(written, source_type_in_function(inout state, argument,
+                outer_owner));
+        }
+        var actual = value.type_args;
+        let instance = instance_index(state, value.symbol);
+        if instance >= 0 {
+            actual = state.m.instances[usize(instance)].type_args;
+        }
+        need(ids_equal(actual, written),
+            "constant function explicit arguments differ from source");
+    }
+    return true;
+}
+
+func check_constant_shape(state inout Verifier, node hir.HirNode,
+                          value hir.ConstantValue, depth usize,
+                          work Vec[usize]) throws Invalid {
+    need(depth <= 128 && vec.len(work) < 100000,
+        "constant value exceeds budget");
+    vec.push(work, 0);
+    let constant_owner = verifier_scope(state, node.scope).function;
+    let constant_allowed = allowed_for(state, constant_owner);
+    valid_type(inout state, value.type_id, constant_allowed);
+    let value_type = verifier_type(state, value.type_id);
+    switch value.data {
+        case hir.ConstantData.ConstantAggregate(aggregate): {
+            need(kind_is(value_type.kind, model.TypeKind.NominalStruct) ||
+                 kind_is(value_type.kind, model.TypeKind.NominalEnum),
+                "constant aggregate type");
+            let declaration = nominal_type(state, value.type_id);
+            var fields = declaration.fields;
+            if kind_is(value_type.kind, model.TypeKind.NominalEnum) {
+                var variant_index i64 = -1;
+                for var index usize = 0;
+                    index < vec.len(declaration.variants); index += 1 {
+                    if option.is_some(aggregate.variant) &&
+                       declaration.variants[index].symbol ==
+                           option_usize(aggregate.variant) {
+                        variant_index = i64(index);
+                    }
+                }
+                need(variant_index >= 0, "constant payload arity/variant");
+                fields = declaration.variants[usize(variant_index)].payload;
+            } else {
+                need(!option.is_some(aggregate.variant),
+                    "variant on constant struct");
+            }
+            need(vec.len(aggregate.fields) == vec.len(fields),
+                "constant payload arity/variant");
+            for var index usize = 0; index < vec.len(aggregate.fields); index += 1 {
+                need(aggregate.fields[index].type_id ==
+                     field_type(inout state, value.type_id, fields[index]),
+                    "constant field type/order");
+                check_constant_shape(inout state, node,
+                    aggregate.fields[index], depth + 1, work);
+            }
+        }
+        case hir.ConstantData.IntegerLiteral(integer_value): {
+            need(integer_kind(value_type.kind), "constant integer type");
+            let fake_node = hir.HirNode(type_id: value.type_id,
+                source: node.source, scope: node.scope, children: [],
+                data: hir.NodeData.IntegerLiteral(integer_value), errors: [],
+                exits: []);
+            integer_literal(state, fake_node, integer_value);
+        }
+        case hir.ConstantData.StringLiteral(string_value): {
+            need(kind_is(value_type.kind, model.TypeKind.String),
+                "constant string type");
+            need(valid_utf8(string_value.utf8), "invalid UTF-8 string");
+        }
+        case hir.ConstantData.FloatLiteral(float_value): {
+            need(kind_is(value_type.kind, model.TypeKind.Float) &&
+                 (value_type.bits == 64 || float_value.bits >> 32 == 0),
+                "constant float bits/type");
+        }
+        case hir.ConstantData.FunctionValue(function_value): {
+            need(kind_is(value_type.kind, model.TypeKind.Function),
+                "constant function type");
+            need(vec.len(function_value.captures) == 0 &&
+                 !function_value.move_capture &&
+                 !option.is_some(function_value.bound),
+                "constant function value cannot capture or bind a receiver");
+            if option.is_some(trait_prototype(state, function_value.symbol)) {
+                need(template_index(state,
+                         verifier_scope(state, node.scope).function) >= 0,
+                    "constant trait prototype survived concrete execution");
+            } else {
+                need(instantiated_signature(inout state,
+                         function_value.symbol, function_value.type_args) ==
+                         value.type_id,
+                    "constant function signature");
+            }
+        }
+        case hir.ConstantData.BoolLiteral(_): {
+            need(kind_is(value_type.kind, model.TypeKind.Bool),
+                "constant bool type");
+        }
+        case hir.ConstantData.UnitLiteral(_): {
+            need(kind_is(value_type.kind, model.TypeKind.Unit),
+                "constant Unit type");
+        }
+    }
+}
+
+func option_is_some_aggregate_variant(value option.Option[usize]) bool {
+    return option.is_some(value);
+}
+
+func constant_difference(left hir.ConstantValue, right hir.ConstantValue)
+    string {
+    if left.type_id != right.type_id {
+        return " type " + decimal(left.type_id) + "/" + decimal(right.type_id);
+    }
+    switch left.data {
+        case hir.ConstantData.FunctionValue(value): {
+            var right_symbol usize = 0;
+            var same = false;
+            switch right.data {
+                case hir.ConstantData.FunctionValue(other): {
+                    right_symbol = other.symbol;
+                    same = true;
+                }
+                default: {}
+            }
+            if same {
+                return " function " + decimal(value.symbol) + "/" +
+                    decimal(right_symbol);
+            }
+            return " function " + decimal(value.symbol) + "/other";
+        }
+        case hir.ConstantData.ConstantAggregate(value): {
+            switch right.data {
+                case hir.ConstantData.ConstantAggregate(other): {
+                    var count = vec.len(value.fields);
+                    if vec.len(other.fields) < count {
+                        count = vec.len(other.fields);
+                    }
+                    for var index usize = 0; index < count; index += 1 {
+                        if !constant.same_constant_value(value.fields[index],
+                                other.fields[index]) {
+                            return " field " + decimal(index) +
+                                constant_difference(value.fields[index],
+                                    other.fields[index]);
+                        }
+                    }
+                }
+                default: {}
+            }
+        }
+        default: {}
+    }
+    return "";
+}
+
+func decimal(value usize) string {
+    if value == 0 {
+        return "0";
+    }
+    let digits = "0123456789";
+    var result = "";
+    var remaining = value;
+    for remaining > 0 {
+        let digit = remaining % 10;
+        result = digits[digit:digit + 1] + result;
+        remaining = remaining / 10;
+    }
+    return result;
+}
+
+func public_constant_values(state inout Verifier) throws Invalid {
+    for node in state.m.nodes {
+        let kind = hir.node_kind(node.data);
+        if !node_is(kind, hir.NodeKind.FunctionValue) &&
+           !node_is(kind, hir.NodeKind.ConstantLiteral) {
+            continue;
+        }
+        let symbol_id = resolved_source(state, node.source.node);
+        if !option.is_some(symbol_id) {
+            continue;
+        }
+        let symbol = verifier_symbol(state, option_usize(symbol_id));
+        if !symbol_is(symbol.kind, model.SymbolKind.Constant) ||
+           !symbol.exported {
+            continue;
+        }
+        let private_type = foreign.private_interface_type(state.m.types,
+            state.m.resolved, [node.type_id]);
+        if option.is_some(private_type) {
+            let private_symbol = verifier_symbol(state,
+                option_usize(private_type));
+            fail_at("public constant value uses private type: " +
+                private_symbol.name, option_span_value(private_symbol.declaration));
+        }
+    }
+}

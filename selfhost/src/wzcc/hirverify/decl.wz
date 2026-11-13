@@ -1,0 +1,1292 @@
+// Rebuild source types/signatures/generics and verify every declaration
+// arena.  This is the Verifier::source_type/source_signature/declarations
+// section of src/hir/hir.cpp without trusting checker caches.
+package hirverify;
+
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func foreign_export(state Verifier, symbol_id usize)
+    option.Option[model.ForeignExport] throws Invalid {
+    let symbol = verifier_symbol(state, symbol_id);
+    switch symbol.foreign {
+        case option.Option.Some(reference): {
+            need(reference.module < vec.len(state.m.resolved.project.modules),
+                "foreign export module");
+            let module = verifier_module(state, reference.module);
+            need(reference.index < vec.len(module.foreign_exports),
+                "foreign export index");
+            return option.Option[model.ForeignExport].Some(
+                module.foreign_exports[reference.index]);
+        }
+        case option.Option.None: return option.Option[model.ForeignExport].None;
+    }
+}
+
+func split_signature(file model.ParseResult, id usize) SplitSignature
+    throws Invalid {
+    need(id < vec.len(file.nodes), "signature owner node");
+    let owner = file.nodes[id];
+    need(ast_is(owner.kind, model.AstKind.Function) ||
+         ast_is(owner.kind, model.AstKind.FunctionLiteral) ||
+         ast_is(owner.kind, model.AstKind.FunctionType),
+        "signature owner is not a function");
+    var result = SplitSignature(parameters: [], has_result: false, result: 0,
+        has_throws: false, throws_type: 0);
+    for child in owner.children {
+        need(child < vec.len(file.nodes), "signature child node");
+        let value = file.nodes[child];
+        if ast_is(value.kind, model.AstKind.Parameter) {
+            vec.push(result.parameters, child);
+            continue;
+        }
+        if !ast_is(value.kind, model.AstKind.NamedType) &&
+           !ast_is(value.kind, model.AstKind.FunctionType) &&
+           !ast_is(value.kind, model.AstKind.ParenthesizedType) &&
+           !ast_is(value.kind, model.AstKind.TraitObjectType) {
+            continue;
+        }
+        need(value.token_begin > 0 &&
+             value.token_end <= vec.len(file.lexed.tokens),
+            "invalid signature type token range");
+        if file.lexed.tokens[value.token_begin - 1].spelling == "throws" {
+            need(!result.has_throws, "duplicate signature type component");
+            result.has_throws = true;
+            result.throws_type = child;
+        } else {
+            need(!result.has_result, "duplicate signature type component");
+            result.has_result = true;
+            result.result = child;
+        }
+    }
+    return result;
+}
+
+func source_signature(state inout Verifier, reference model.NodeRef) usize
+    throws Invalid {
+    let file = verifier_file(state, reference.module, reference.file);
+    var signature = model.empty_type(model.TypeKind.Function);
+    var unit_type = model.empty_type(model.TypeKind.Unit);
+    let unit_id = intern_type(inout state, unit_type);
+    signature.result = unit_id;
+    let parts = split_signature(file, reference.node);
+    for parameter in parts.parameters {
+        var child_ref = reference;
+        let parameter_node = file.nodes[parameter];
+        need(vec.len(parameter_node.children) > 0,
+            "parameter has no source type");
+        var mode = model.ParamMode.Ordinary;
+        let type_begin = file.nodes[parameter_node.children[0]].token_begin;
+        var token_index = parameter_node.token_begin;
+        for token_index < type_begin {
+            need(token_index < vec.len(file.lexed.tokens),
+                "parameter token range");
+            let spelling = file.lexed.tokens[token_index].spelling;
+            if spelling == "inout" {
+                mode = model.ParamMode.Inout;
+            }
+            if spelling == "move" {
+                mode = model.ParamMode.Move;
+            }
+            token_index += 1;
+        }
+        child_ref.node = parameter_node.children[0];
+        vec.push(signature.parameters, model.ParameterType(mode: mode,
+            type_id: source_type(inout state, child_ref)));
+    }
+    if parts.has_result {
+        var child_ref = reference;
+        child_ref.node = parts.result;
+        signature.result = source_type(inout state, child_ref);
+    }
+    if parts.has_throws {
+        var child_ref = reference;
+        child_ref.node = parts.throws_type;
+        signature.throws_type = option.Option[usize].Some(
+            source_type(inout state, child_ref));
+    }
+    var is_async = false;
+    let owner = file.nodes[reference.node];
+    for child in owner.children {
+        if ast_is(file.nodes[child].kind, model.AstKind.Async) {
+            is_async = true;
+        }
+    }
+    if is_async {
+        var task = model.empty_type(model.TypeKind.Task);
+        vec.push(task.type_args, signature.result);
+        if option.is_some(signature.throws_type) {
+            vec.push(task.type_args, option_usize(signature.throws_type));
+        } else {
+            vec.push(task.type_args, unit_id);
+        }
+        signature.result = intern_type(inout state, task);
+        signature.throws_type = option.Option[usize].None;
+    }
+    return intern_type(inout state, signature);
+}
+
+func source_generics(state Verifier, source hir.HirSource) Vec[usize]
+    throws Invalid {
+    let file = verifier_file(state, source.node.module, source.node.file);
+    let entries = vec.empty[GenericOffset]();
+    for var owner_index usize = 0; owner_index < vec.len(file.nodes);
+        owner_index += 1 {
+        let owner = file.nodes[owner_index];
+        if !ast_is(owner.kind, model.AstKind.Function) &&
+           !ast_is(owner.kind, model.AstKind.FunctionLiteral) &&
+           !ast_is(owner.kind, model.AstKind.Impl) &&
+           !ast_is(owner.kind, model.AstKind.Struct) &&
+           !ast_is(owner.kind, model.AstKind.Enum) {
+            continue;
+        }
+        if owner.span.begin_byte > source.span.begin_byte ||
+           owner.span.end_byte < source.span.end_byte {
+            continue;
+        }
+        for child in owner.children {
+            need(child < vec.len(file.nodes), "generic child node");
+            let syntax = file.nodes[child];
+            if !ast_is(syntax.kind, model.AstKind.GenericParameter) {
+                continue;
+            }
+            var reference = source.node;
+            reference.node = child;
+            var found = option.Option[usize].None;
+            for symbol in state.m.resolved.symbols {
+                if symbol_is(symbol.kind, model.SymbolKind.TypeParameter) &&
+                   option.is_some(symbol.definition) &&
+                   same_ref(option_ref(symbol.definition), reference) {
+                    found = option.Option[usize].Some(symbol.id);
+                }
+            }
+            need(option.is_some(found),
+                "generic parameter source has no symbol");
+            vec.push(entries, GenericOffset(offset: syntax.span.begin_byte,
+                symbol: option_usize(found)));
+        }
+    }
+    // Insertion sort by source offset, matching std::sort on begin_byte.
+    var index usize = 1;
+    for index < vec.len(entries) {
+        let value = entries[index];
+        var position = index;
+        for position > 0 &&
+              entries[position - 1].offset > value.offset {
+            entries[position] = entries[position - 1];
+            position -= 1;
+        }
+        entries[position] = value;
+        index += 1;
+    }
+    let result = vec.empty[usize]();
+    for entry in entries {
+        vec.push(result, entry.symbol);
+    }
+    return result;
+}
+
+func source_parameters(state inout Verifier, source hir.HirSource)
+    Vec[hir.GenericParam] throws Invalid {
+    let result = vec.empty[hir.GenericParam]();
+    let file = verifier_file(state, source.node.module, source.node.file);
+    for symbol_id in source_generics(state, source) {
+        let symbol = verifier_symbol(state, symbol_id);
+        need(option.is_some(symbol.definition) &&
+             option.is_some(symbol.declaration),
+            "source generic parameter lacks a real declaration");
+        var location = hir.HirSource(node: option_ref(symbol.definition),
+            span: option_usize_span(symbol.declaration));
+        let syntax = file.nodes[option_ref(symbol.definition).node];
+        var bound = option.Option[hir.TraitRef].None;
+        if vec.len(syntax.children) > 0 {
+            var reference = option_ref(symbol.definition);
+            reference.node = syntax.children[0];
+            bound = option.Option[hir.TraitRef].Some(
+                source_trait_application(inout state, reference));
+        }
+        vec.push(result, hir.GenericParam(symbol: symbol_id, trait_ref: bound,
+            source: location));
+    }
+    return result;
+}
+
+func option_usize_span(value option.Option[model.Span]) model.Span {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return empty_span();
+    }
+}
+
+func source_type(state inout Verifier, reference model.NodeRef) usize
+    throws Invalid {
+    let file = verifier_file(state, reference.module, reference.file);
+    need(reference.node < vec.len(file.nodes), "type source node");
+    let syntax = file.nodes[reference.node];
+    if ast_is(syntax.kind, model.AstKind.ParenthesizedType) ||
+       ast_is(syntax.kind, model.AstKind.Parenthesized) ||
+       ast_is(syntax.kind, model.AstKind.BracketItem) {
+        need(vec.len(syntax.children) > 0, "parenthesized type source");
+        var child = reference;
+        child.node = syntax.children[0];
+        return source_type(inout state, child);
+    }
+    if ast_is(syntax.kind, model.AstKind.FunctionType) {
+        return source_signature(inout state, reference);
+    }
+    if ast_is(syntax.kind, model.AstKind.TraitObjectType) {
+        need(vec.len(syntax.children) == 1, "dyn type source arity");
+        var inner_ref = reference;
+        inner_ref.node = syntax.children[0];
+        let inner = file.nodes[inner_ref.node];
+        need(ast_is(inner.kind, model.AstKind.NamedType),
+            "dyn type source is not a trait");
+        var found = option.Option[usize].None;
+        for occurrence in state.m.resolved.occurrences {
+            if same_ref(occurrence.source, inner_ref) {
+                found = option.Option[usize].Some(occurrence.symbol);
+            }
+        }
+        need(option.is_some(found) &&
+             symbol_is(verifier_symbol(state, option_usize(found)).kind,
+                 model.SymbolKind.Trait),
+            "dyn source name is not a trait");
+        let trait_index = trait_declaration(state, option_usize(found));
+        need(trait_index >= 0, "dyn source trait has no declaration");
+        let trait_value = state.m.traits[usize(trait_index)];
+        var value = model.empty_type(model.TypeKind.TraitObject);
+        value.declaration = option_usize(found);
+        for child in inner.children {
+            var argument = inner_ref;
+            argument.node = child;
+            vec.push(value.type_args, source_type(inout state, argument));
+        }
+        need(vec.len(value.type_args) == vec.len(trait_value.params),
+            "dyn source trait argument count");
+        return intern_type(inout state, value);
+    }
+    var found = option.Option[usize].None;
+    if ast_is(syntax.kind, model.AstKind.NeutralBracket) {
+        need(vec.len(syntax.children) > 0, "type qualifier has no base");
+        var base = reference;
+        base.node = syntax.children[0];
+        found = last_source_symbol(state, base);
+    } else {
+        need(ast_is(syntax.kind, model.AstKind.NamedType) ||
+             ast_is(syntax.kind, model.AstKind.Name) ||
+             ast_is(syntax.kind, model.AstKind.Member),
+            "invalid type syntax source");
+        found = last_source_symbol(state, reference);
+    }
+    need(option.is_some(found), "type syntax has no resolved symbol");
+    let symbol = verifier_symbol(state, option_usize(found));
+    var value = model.empty_type(model.TypeKind.Error);
+    if symbol_is(symbol.kind, model.SymbolKind.TypeParameter) {
+        need(!ast_is(syntax.kind, model.AstKind.NeutralBracket),
+            "type parameter arguments differ from source");
+        for implementation in state.m.impls {
+            if implementation.self_parameter == option_usize(found) {
+                return implementation.self_type;
+            }
+        }
+        value.kind = model.TypeKind.TypeParameter;
+        value.declaration = option_usize(found);
+    } else if symbol_is(symbol.kind, model.SymbolKind.Type) {
+        let exported = foreign_export(state, option_usize(found));
+        if option.is_some(exported) {
+            let declaration = option_foreign_export(exported);
+            var type_arguments = false;
+            if ast_is(syntax.kind, model.AstKind.NeutralBracket) {
+                type_arguments = vec.len(syntax.children) > 1;
+            } else if ast_is(syntax.kind, model.AstKind.NamedType) {
+                type_arguments = vec.len(syntax.children) > 0;
+            }
+            need(export_kind_is(declaration.kind,
+                     model.ForeignExportKind.Type) && !type_arguments,
+                "foreign source type identity/arity");
+            if option.is_some(declaration.c_type) {
+                var c_ref = model.CTypeRef(kind: model.CTypeKind.Named,
+                    scalar: "", writable: false, args: [],
+                    named: option_u32_value(declaration.c_type));
+                return foreign_c_type_id(inout state, c_ref);
+            }
+            if option.is_some(declaration.c_type_ref) {
+                return foreign_c_type_id(inout state,
+                    option_c_type_ref(declaration.c_type_ref));
+            }
+            need(option.is_some(declaration.declaration),
+                "foreign source type lacks declaration");
+            value.kind = model.TypeKind.ForeignOpaque;
+            value.binding = option_usize(declaration.declaration);
+            return intern_type(inout state, value);
+        }
+        let nominal = nominal_index(state, option_usize(found));
+        need(nominal >= 0, "type syntax nominal declaration");
+        value.kind = state.m.nominals[usize(nominal)].kind;
+        value.declaration = option_usize(found);
+        if ast_is(syntax.kind, model.AstKind.NeutralBracket) {
+            for var index usize = 1; index < vec.len(syntax.children); index += 1 {
+                var child = reference;
+                child.node = syntax.children[index];
+                vec.push(value.type_args, source_type(inout state, child));
+            }
+        } else if ast_is(syntax.kind, model.AstKind.NamedType) {
+            for child in syntax.children {
+                var argument = reference;
+                argument.node = child;
+                vec.push(value.type_args, source_type(inout state, argument));
+            }
+        }
+    } else {
+        need(symbol_is(symbol.kind, model.SymbolKind.BuiltinType),
+            "type syntax symbol kind");
+        value = builtin_source_type(inout state, reference, syntax, symbol);
+    }
+    return intern_type(inout state, value);
+}
+
+func option_foreign_export(value option.Option[model.ForeignExport])
+    model.ForeignExport {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.ForeignExport(name: "",
+            identity: "", kind: model.ForeignExportKind.Type, bundle: 0,
+            declaration: option.Option[usize].None,
+            candidates: vec.empty[usize](),
+            c_type: option.Option[u32].None,
+            c_callable: option.Option[u32].None,
+            c_type_ref: option.Option[model.CTypeRef].None);
+    }
+}
+
+func option_c_type_ref(value option.Option[model.CTypeRef]) model.CTypeRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.CTypeRef(kind: model.CTypeKind.Scalar,
+            scalar: "", writable: false, args: [], named: 0);
+    }
+}
+
+func export_kind_is(value model.ForeignExportKind,
+                    expected model.ForeignExportKind) bool {
+    return foreign_export_kind_id(value) == foreign_export_kind_id(expected);
+}
+
+func foreign_export_kind_id(value model.ForeignExportKind) u32 {
+    switch value {
+        case model.ForeignExportKind.Type: return 0;
+        case model.ForeignExportKind.Value: return 1;
+        case model.ForeignExportKind.Function: return 2;
+    }
+}
+
+func foreign_c_type_id(state inout Verifier, reference model.CTypeRef) usize
+    throws Invalid {
+    try {
+        let project_value = state.m.resolved.project;
+        return foreign.c_type_id(project_value, inout state.substituted,
+            reference);
+    } catch error model.SupportError {
+        support_error(error);
+        return 0;
+    }
+}
+
+func private_runtime_type_name(name string) bool {
+    return name == "__woozy_Thread" || name == "__woozy_Mutex" ||
+           name == "__woozy_Condvar" || name == "__woozy_AtomicI64" ||
+           name == "__woozy_IpcHandle";
+}
+
+func private_runtime_type_module(path string) bool {
+    return path == "std/thread" || path == "std/sync" || path == "std/ipc";
+}
+
+func source_type_arguments(state inout Verifier, reference model.NodeRef,
+                           syntax model.AstNode) Vec[usize] throws Invalid {
+    let result = vec.empty[usize]();
+    let file = verifier_file(state, reference.module, reference.file);
+    if ast_is(syntax.kind, model.AstKind.NeutralBracket) {
+        for var index usize = 1; index < vec.len(syntax.children); index += 1 {
+            var child = reference;
+            child.node = syntax.children[index];
+            vec.push(result, source_type(inout state, child));
+        }
+    } else if ast_is(syntax.kind, model.AstKind.NamedType) {
+        for child in syntax.children {
+            var argument = reference;
+            argument.node = child;
+            vec.push(result, source_type(inout state, argument));
+        }
+    }
+    return result;
+}
+
+func builtin_source_type(state inout Verifier, reference model.NodeRef,
+                         syntax model.AstNode, symbol model.Symbol) model.Type
+    throws Invalid {
+    var value = model.empty_type(model.TypeKind.Error);
+    let name = symbol.name;
+    if private_runtime_type_name(name) {
+        let owner = verifier_module(state, reference.module).logical_path;
+        if name == "__woozy_IpcHandle" {
+            need(owner == "std/ipc",
+                "private runtime type spelled outside its std module");
+        } else {
+            need(private_runtime_type_module(owner),
+                "private runtime type spelled outside its std module");
+        }
+        let arguments = source_type_arguments(inout state, reference, syntax);
+        need(vec.len(arguments) == 0,
+            "private runtime type does not accept arguments");
+        if name == "__woozy_Thread" {
+            value.kind = model.TypeKind.ThreadHandle;
+        } else if name == "__woozy_Mutex" {
+            value.kind = model.TypeKind.MutexHandle;
+        } else if name == "__woozy_Condvar" {
+            value.kind = model.TypeKind.CondvarHandle;
+        } else if name == "__woozy_IpcHandle" {
+            value.kind = model.TypeKind.IpcHandle;
+        } else {
+            value.kind = model.TypeKind.AtomicI64Handle;
+        }
+        return value;
+    }
+    if name == "Vec" || name == "Slice" || name == "Weak" {
+        if name == "Vec" {
+            value.kind = model.TypeKind.Vec;
+        } else if name == "Slice" {
+            value.kind = model.TypeKind.Slice;
+        } else {
+            value.kind = model.TypeKind.Weak;
+        }
+        value.type_args = source_type_arguments(inout state, reference, syntax);
+        need(vec.len(value.type_args) == 1, "container/Weak type arity");
+        return value;
+    }
+    if name == "Task" {
+        value.kind = model.TypeKind.Task;
+        value.type_args = source_type_arguments(inout state, reference, syntax);
+        need(vec.len(value.type_args) == 2, "Task result/error arity");
+        return value;
+    }
+    if name == "Ptr" || name == "PtrMut" {
+        value.kind = model.TypeKind.CForeignPointer;
+        value.bits = if_name(name, "PtrMut");
+        value.type_args = source_type_arguments(inout state, reference, syntax);
+        need(vec.len(value.type_args) == 1, "C pointer type arity");
+        return value;
+    }
+    if name == "Buffer" || name == "BufferMut" {
+        value.kind = model.TypeKind.CForeignBuffer;
+        value.bits = if_name(name, "BufferMut");
+        value.type_args = source_type_arguments(inout state, reference, syntax);
+        need(vec.len(value.type_args) == 1, "C buffer type arity");
+        return value;
+    }
+    if name == "Unit" {
+        value.kind = model.TypeKind.Unit;
+    } else if name == "bool" {
+        value.kind = model.TypeKind.Bool;
+    } else if name == "string" {
+        value.kind = model.TypeKind.String;
+    } else if name == "isize" {
+        value.kind = model.TypeKind.Isize;
+    } else if name == "usize" {
+        value.kind = model.TypeKind.Usize;
+    } else if name == "f32" || name == "f64" {
+        value.kind = model.TypeKind.Float;
+        value.bits = 32;
+        if name == "f64" {
+            value.bits = 64;
+        }
+    } else {
+        need(bool_text(name, "i") || bool_text(name, "u"),
+            "unimplemented type syntax");
+        if bool_text(name, "i") {
+            value.kind = model.TypeKind.SignedInt;
+        } else {
+            value.kind = model.TypeKind.UnsignedInt;
+        }
+        if name == "i8" || name == "u8" {
+            value.bits = 8;
+        } else if name == "i16" || name == "u16" {
+            value.bits = 16;
+        } else if name == "i32" || name == "u32" {
+            value.bits = 32;
+        } else {
+            value.bits = 64;
+        }
+    }
+    return value;
+}
+
+func if_name(value string, expected string) u32 {
+    if value == expected {
+        return 1;
+    }
+    return 0;
+}
+
+func bool_text(value string, prefix string) bool {
+    if value == "" {
+        return false;
+    }
+    return value[0:1] == prefix;
+}
+
+func source_type_in_function(state inout Verifier, reference model.NodeRef,
+                             owner usize) usize throws Invalid {
+    var result = source_type(inout state, reference);
+    for instance in state.m.instances {
+        if instance.symbol == owner {
+            let found = template_index(state, instance.origin);
+            need(found >= 0, "instance error template");
+            let parameters = state.m.templates[usize(found)].params;
+            need(vec.len(parameters) == vec.len(instance.type_args),
+                "instance error type arity");
+            let substitutions = vec.empty[model.Substitution]();
+            for var index usize = 0; index < vec.len(parameters); index += 1 {
+                vec.push(substitutions, model.Substitution(
+                    symbol: parameters[index].symbol,
+                    type_id: instance.type_args[index]));
+            }
+            return substitute_type(inout state, result, substitutions);
+        }
+    }
+    return result;
+}
+
+func matches(state inout Verifier, pattern_id usize, actual usize,
+             sub Vec[model.Substitution]) bool throws Invalid {
+    let pattern = resolve_substituted_type(state, pattern_id);
+    let value = resolve_substituted_type(state, actual);
+    if kind_is(pattern.kind, model.TypeKind.TypeParameter) {
+        for entry in sub {
+            if entry.symbol == pattern.declaration {
+                return entry.type_id == actual;
+            }
+        }
+        vec.push(sub, model.Substitution(symbol: pattern.declaration,
+            type_id: actual));
+        return true;
+    }
+    if !kind_is(pattern.kind, value.kind) || pattern.bits != value.bits ||
+       pattern.declaration != value.declaration ||
+       vec.len(pattern.type_args) != vec.len(value.type_args) ||
+       vec.len(pattern.parameters) != vec.len(value.parameters) ||
+       option.is_some(pattern.throws_type) != option.is_some(value.throws_type) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(pattern.type_args); index += 1 {
+        if !matches_impl(inout state, pattern.type_args[index],
+                         value.type_args[index], sub) {
+            return false;
+        }
+    }
+    if kind_is(pattern.kind, model.TypeKind.Function) {
+        for var index usize = 0; index < vec.len(pattern.parameters); index += 1 {
+            if !mode_is_id(pattern.parameters[index].mode,
+                           mode_id_value(value.parameters[index].mode)) ||
+               !matches_impl(inout state, pattern.parameters[index].type_id,
+                             value.parameters[index].type_id, sub) {
+                return false;
+            }
+        }
+        if !matches_impl(inout state, pattern.result, value.result, sub) {
+            return false;
+        }
+        if option.is_some(pattern.throws_type) &&
+           !matches_impl(inout state, option_usize(pattern.throws_type),
+                         option_usize(value.throws_type), sub) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func matches_impl(state inout Verifier, pattern_id usize, actual usize,
+                  sub Vec[model.Substitution]) bool throws Invalid {
+    // matches() pushes into the shared Vec handle; Wz passes the array handle
+    // by value, so recurse directly on the same table.
+    let pattern = resolve_substituted_type(state, pattern_id);
+    let value = resolve_substituted_type(state, actual);
+    if kind_is(pattern.kind, model.TypeKind.TypeParameter) {
+        for entry in sub {
+            if entry.symbol == pattern.declaration {
+                return entry.type_id == actual;
+            }
+        }
+        vec.push(sub, model.Substitution(symbol: pattern.declaration,
+            type_id: actual));
+        return true;
+    }
+    if !kind_is(pattern.kind, value.kind) || pattern.bits != value.bits ||
+       pattern.declaration != value.declaration ||
+       vec.len(pattern.type_args) != vec.len(value.type_args) ||
+       vec.len(pattern.parameters) != vec.len(value.parameters) ||
+       option.is_some(pattern.throws_type) != option.is_some(value.throws_type) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(pattern.type_args); index += 1 {
+        if !matches_impl(inout state, pattern.type_args[index],
+                         value.type_args[index], sub) {
+            return false;
+        }
+    }
+    if kind_is(pattern.kind, model.TypeKind.Function) {
+        for var index usize = 0; index < vec.len(pattern.parameters); index += 1 {
+            let pattern_mode = mode_id_value(pattern.parameters[index].mode);
+            let value_mode = mode_id_value(value.parameters[index].mode);
+            if pattern_mode != value_mode ||
+               !matches_impl(inout state, pattern.parameters[index].type_id,
+                             value.parameters[index].type_id, sub) {
+                return false;
+            }
+        }
+        if !matches_impl(inout state, pattern.result, value.result, sub) {
+            return false;
+        }
+        if option.is_some(pattern.throws_type) &&
+           !matches_impl(inout state, option_usize(pattern.throws_type),
+                         option_usize(value.throws_type), sub) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func mode_id_value(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func resolve_substituted_type(state Verifier, id usize) model.Type
+    throws Invalid {
+    switch types.find(state.substituted, id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: return verifier_type(state, id);
+    }
+}
+
+func satisfies(state inout Verifier, actual usize, trait_ref hir.TraitRef,
+               depth usize) bool throws Invalid {
+    let cached = trait_result_find(state, actual, trait_ref.declaration,
+        trait_ref.args);
+    switch cached {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {}
+    }
+    if depth >= 64 || !trait_key_insert(state.active_constraints, actual,
+                                        trait_ref.declaration, trait_ref.args) {
+        return false;
+    }
+    let value = resolve_substituted_type(state, actual);
+    var count usize = 0;
+    if kind_is(value.kind, model.TypeKind.TypeParameter) {
+        for template in state.m.templates {
+            if params_contain_bound(template.params, value.declaration,
+                                    trait_ref) {
+                count = 1;
+            }
+        }
+        for nominal in state.m.nominals {
+            if params_contain_bound(nominal.params, value.declaration,
+                                    trait_ref) {
+                count = 1;
+            }
+        }
+        for implementation in state.m.impls {
+            if params_contain_bound(implementation.params, value.declaration,
+                                    trait_ref) {
+                count = 1;
+            }
+        }
+        for trait_value in state.m.traits {
+            if params_contain_bound(trait_value.params, value.declaration,
+                                    trait_ref) {
+                count = 1;
+            }
+            if trait_value.self == value.declaration &&
+               same_trait_ref(trait_self_application(inout state, trait_value),
+                              trait_ref) {
+                count = 1;
+            }
+        }
+    } else {
+        for implementation in state.m.impls {
+            switch implementation.trait_ref {
+                case option.Option.Some(application): {
+                    if application.declaration != trait_ref.declaration ||
+                       vec.len(application.args) != vec.len(trait_ref.args) {
+                        continue;
+                    }
+                    let sub = vec.empty[model.Substitution]();
+                    if !matches(inout state, implementation.self_type, actual,
+                                sub) {
+                        continue;
+                    }
+                    var matched_args = true;
+                    for var index usize = 0;
+                        index < vec.len(trait_ref.args); index += 1 {
+                        if !matches(inout state, application.args[index],
+                                    trait_ref.args[index], sub) {
+                            matched_args = false;
+                            break;
+                        }
+                    }
+                    if !matched_args {
+                        continue;
+                    }
+                    var valid = true;
+                    for parameter in implementation.params {
+                        let found = substitution_index(sub, parameter.symbol);
+                        if found < 0 {
+                            valid = false;
+                            break;
+                        }
+                        switch parameter.trait_ref {
+                            case option.Option.Some(bound): {
+                                let concrete = hir.TraitRef(
+                                    declaration: bound.declaration,
+                                    args: vec.empty[usize]());
+                                for argument in bound.args {
+                                    vec.push(concrete.args, substitute_type(
+                                        inout state, argument, sub));
+                                }
+                                if !satisfies(inout state,
+                                    sub[usize(found)].type_id, concrete,
+                                    depth + 1) {
+                                    valid = false;
+                                    break;
+                                }
+                            }
+                            case option.Option.None: {}
+                        }
+                    }
+                    if valid {
+                        count += 1;
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+    }
+    trait_key_erase(state.active_constraints, actual, trait_ref.declaration,
+        trait_ref.args);
+    let result = count == 1;
+    trait_result_set(inout state, actual, trait_ref.declaration, trait_ref.args,
+        result);
+    return result;
+}
+
+func params_contain_bound(parameters Vec[hir.GenericParam], symbol usize,
+                          trait_ref hir.TraitRef) bool {
+    for parameter in parameters {
+        if parameter.symbol == symbol {
+            switch parameter.trait_ref {
+                case option.Option.Some(bound):
+                    return same_trait_ref(bound, trait_ref);
+                case option.Option.None: return false;
+            }
+        }
+    }
+    return false;
+}
+
+func substitution_index(values Vec[model.Substitution], symbol usize) i64 {
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func constraints(state inout Verifier, parameters Vec[hir.GenericParam],
+                 args Vec[usize], outer Vec[model.Substitution])
+    throws Invalid {
+    need(vec.len(parameters) == vec.len(args),
+        "constraint type argument count");
+    let sub = vec.empty[model.Substitution]();
+    for entry in outer {
+        vec.push(sub, entry);
+    }
+    for var index usize = 0; index < vec.len(parameters); index += 1 {
+        let found = substitution_index(sub, parameters[index].symbol);
+        if found < 0 {
+            vec.push(sub, model.Substitution(symbol: parameters[index].symbol,
+                type_id: args[index]));
+        } else {
+            sub[usize(found)].type_id = args[index];
+        }
+    }
+    for var index usize = 0; index < vec.len(parameters); index += 1 {
+        switch parameters[index].trait_ref {
+            case option.Option.Some(bound): {
+                let trait_index = trait_declaration(state, bound.declaration);
+                need(symbol_is(verifier_symbol(state, bound.declaration).kind,
+                         model.SymbolKind.Trait) && trait_index >= 0 &&
+                     vec.len(state.m.traits[usize(trait_index)].params) ==
+                         vec.len(bound.args),
+                    "declared constraint application identity/arity");
+                let concrete = hir.TraitRef(declaration: bound.declaration,
+                    args: vec.empty[usize]());
+                for argument in bound.args {
+                    vec.push(concrete.args,
+                        substitute_type(inout state, argument, sub));
+                }
+                check_trait_parameter_bounds(inout state, concrete,
+                    args[index], 0);
+                need(satisfies(inout state, args[index], concrete, 0),
+                    "type arguments do not satisfy declared constraints");
+            }
+            case option.Option.None: {}
+        }
+    }
+}
+
+func source_declaration_signature(state Verifier, origin usize) usize
+    throws Invalid {
+    let found = template_index(state, origin);
+    if found >= 0 {
+        return state.m.templates[usize(found)].function.signature;
+    }
+    return verifier_function(state, origin).signature;
+}
+
+func source_declaration(state Verifier, origin usize) hir.HirSource
+    throws Invalid {
+    let found = template_index(state, origin);
+    if found >= 0 {
+        return state.m.templates[usize(found)].function.source;
+    }
+    return verifier_function(state, origin).source;
+}
+
+func declaration(state inout Verifier, id usize, source hir.HirSource,
+                 kind model.SymbolKind, ast_kind model.AstKind)
+    throws Invalid {
+    let symbol = verifier_symbol(state, id);
+    verifier_source(state, source);
+    need(symbol_is(symbol.kind, kind) && option.is_some(symbol.definition) &&
+         same_ref(option_ref(symbol.definition), source.node),
+        "declaration source/symbol kind mismatch");
+    let file = verifier_file(state, source.node.module, source.node.file);
+    need(source.node.node < vec.len(file.nodes), "declaration node");
+    need(ast_is(file.nodes[source.node.node].kind, ast_kind),
+        "declaration AST kind mismatch");
+}
+
+func source_entries_fields(state Verifier, owner hir.HirSource,
+                           kind model.AstKind, entries Vec[hir.FieldDecl])
+    throws Invalid {
+    let file = verifier_file(state, owner.node.module, owner.node.file);
+    let expected = vec.empty[usize]();
+    let owner_node = file.nodes[owner.node.node];
+    for id in owner_node.children {
+        if ast_is(file.nodes[id].kind, kind) {
+            vec.push(expected, id);
+        }
+    }
+    need(vec.len(expected) == vec.len(entries),
+        "declaration member count differs from source");
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        var reference = owner.node;
+        reference.node = expected[index];
+        need(same_ref(entries[index].source.node, reference),
+            "declaration member owner/order differs from source");
+    }
+}
+
+func source_entries_variants(state Verifier, owner hir.HirSource,
+                             kind model.AstKind, entries Vec[hir.VariantDecl])
+    throws Invalid {
+    let file = verifier_file(state, owner.node.module, owner.node.file);
+    let expected = vec.empty[usize]();
+    let owner_node = file.nodes[owner.node.node];
+    for id in owner_node.children {
+        if ast_is(file.nodes[id].kind, kind) {
+            vec.push(expected, id);
+        }
+    }
+    need(vec.len(expected) == vec.len(entries),
+        "declaration member count differs from source");
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        var reference = owner.node;
+        reference.node = expected[index];
+        need(same_ref(entries[index].source.node, reference),
+            "declaration member owner/order differs from source");
+    }
+}
+
+func source_entries_params(state Verifier, owner hir.HirSource,
+                           kind model.AstKind, entries Vec[hir.GenericParam])
+    throws Invalid {
+    let file = verifier_file(state, owner.node.module, owner.node.file);
+    let expected = vec.empty[usize]();
+    let owner_node = file.nodes[owner.node.node];
+    for id in owner_node.children {
+        if ast_is(file.nodes[id].kind, kind) {
+            vec.push(expected, id);
+        }
+    }
+    need(vec.len(expected) == vec.len(entries),
+        "declaration member count differs from source");
+    for var index usize = 0; index < vec.len(expected); index += 1 {
+        var reference = owner.node;
+        reference.node = expected[index];
+        need(same_ref(entries[index].source.node, reference),
+            "declaration member owner/order differs from source");
+    }
+}
+
+func parameter_set(state inout Verifier, parameters Vec[hir.GenericParam],
+                   outer_allowed Vec[usize]) Vec[usize] throws Invalid {
+    let result = vec.empty[usize]();
+    for parameter in parameters {
+        declaration(inout state, parameter.symbol, parameter.source,
+            model.SymbolKind.TypeParameter, model.AstKind.GenericParameter);
+        need(ids_insert(result, parameter.symbol),
+            "duplicate generic parameter");
+        let file = verifier_file(state, parameter.source.node.module,
+            parameter.source.node.file);
+        let syntax = file.nodes[parameter.source.node.node];
+        var declared = option.Option[hir.TraitRef].None;
+        if vec.len(syntax.children) > 0 {
+            var reference = parameter.source.node;
+            reference.node = syntax.children[0];
+            declared = option.Option[hir.TraitRef].Some(
+                source_trait_application(inout state, reference));
+        }
+        need(same_trait_ref_opt(declared, parameter.trait_ref),
+            "template constraint differs from source declaration");
+    }
+    let allowed = ids_copy(result);
+    for value in outer_allowed {
+        ids_insert(allowed, value);
+    }
+    for parameter in parameters {
+        switch parameter.trait_ref {
+            case option.Option.Some(bound): {
+                check_trait_application(inout state, bound, allowed);
+                let parameter_type_id = parameter_type(inout state,
+                    parameter.symbol);
+                check_trait_parameter_bounds(inout state, bound,
+                    parameter_type_id, 0);
+            }
+            case option.Option.None: {}
+        }
+    }
+    return result;
+}
+
+func self_owner(state inout Verifier, owner hir.HirSource, self_symbol usize)
+    throws Invalid {
+    need(symbol_is(verifier_symbol(state, self_symbol).kind,
+                   model.SymbolKind.TypeParameter),
+        "Self is not a type parameter");
+    var found usize = 0;
+    for entry in state.m.resolved.self_parameters {
+        if entry.symbol == self_symbol && same_ref(entry.source, owner.node) {
+            found += 1;
+        }
+    }
+    need(found == 1, "Self has no unique real trait/impl owner");
+}
+
+func impl_patterns_overlap(state inout Verifier, left hir.ImplDecl,
+                           right hir.ImplDecl) bool throws Invalid {
+    switch left.trait_ref {
+        case option.Option.Some(left_trait): {
+            switch right.trait_ref {
+                case option.Option.Some(right_trait): {
+                    if vec.len(left_trait.args) != vec.len(right_trait.args) {
+                        return false;
+                    }
+                    var unit_type = model.empty_type(model.TypeKind.Unit);
+                    var first = model.empty_type(model.TypeKind.Function);
+                    first.result = intern_type(inout state, unit_type);
+                    vec.push(first.parameters, model.ParameterType(
+                        mode: model.ParamMode.Ordinary,
+                        type_id: left.self_type));
+                    for argument in left_trait.args {
+                        vec.push(first.parameters, model.ParameterType(
+                            mode: model.ParamMode.Ordinary, type_id: argument));
+                    }
+                    var second = model.empty_type(model.TypeKind.Function);
+                    second.result = first.result;
+                    second.throws_type = first.throws_type;
+                    for parameter in first.parameters {
+                        vec.push(second.parameters, model.ParameterType(
+                            mode: parameter.mode, type_id: parameter.type_id));
+                    }
+                    second.parameters[0].type_id = right.self_type;
+                    for var index usize = 0;
+                        index < vec.len(right_trait.args); index += 1 {
+                        second.parameters[index + 1].type_id =
+                            right_trait.args[index];
+                    }
+                    let first_id = intern_type(inout state, first);
+                    let second_id = intern_type(inout state, second);
+                    try {
+                        return types.patterns_overlap(first_id, second_id,
+                            state.substituted);
+                    } catch error types.Error {
+                        type_error_to_invalid(error);
+                        return false;
+                    }
+                }
+                case option.Option.None:
+                    return type_patterns_overlap_state(inout state,
+                        left.self_type, right.self_type);
+            }
+        }
+        case option.Option.None:
+            return type_patterns_overlap_state(inout state, left.self_type,
+                right.self_type);
+    }
+}
+
+func type_patterns_overlap_state(state inout Verifier, left usize,
+                                 right usize) bool throws Invalid {
+    try {
+        return types.patterns_overlap(left, right, state.substituted);
+    } catch error types.Error {
+        type_error_to_invalid(error);
+        return false;
+    }
+}
+
+func declarations(state inout Verifier) throws Invalid {
+    for nominal in state.m.nominals {
+        need(nominal_index(state, nominal.symbol) < 0 ||
+             state.nominals[usize(nominal_index(state, nominal.symbol))].index !=
+                 vec.len(state.nominals),
+            "duplicate nominal declaration");
+        // The map is populated once below; use an explicit duplicate check.
+    }
+    for var index usize = 0; index < vec.len(state.m.nominals); index += 1 {
+        let nominal = state.m.nominals[index];
+        var duplicate = false;
+        for entry in state.nominals {
+            if entry.symbol == nominal.symbol {
+                duplicate = true;
+            }
+        }
+        need(!duplicate, "duplicate nominal declaration");
+        vec.push(state.nominals, NominalEntry(symbol: nominal.symbol,
+            index: index));
+        need(kind_is(nominal.kind, model.TypeKind.NominalStruct) ||
+             kind_is(nominal.kind, model.TypeKind.NominalEnum),
+            "nominal declaration kind");
+        var ast_kind = model.AstKind.Struct;
+        if kind_is(nominal.kind, model.TypeKind.NominalEnum) {
+            ast_kind = model.AstKind.Enum;
+        }
+        declaration(inout state, nominal.symbol, nominal.source,
+            model.SymbolKind.Type, ast_kind);
+    }
+    for nominal in state.m.nominals {
+        source_entries_params(state, nominal.source,
+            model.AstKind.GenericParameter, nominal.params);
+        source_entries_fields(state, nominal.source, model.AstKind.Field,
+            nominal.fields);
+        source_entries_variants(state, nominal.source, model.AstKind.Variant,
+            nominal.variants);
+        let params = parameter_set(inout state, nominal.params,
+            vec.empty[usize]());
+        let fields = vec.empty[usize]();
+        let variants = vec.empty[usize]();
+        var payload_ok = vec.len(nominal.fields) == 0;
+        if kind_is(nominal.kind, model.TypeKind.NominalStruct) {
+            payload_ok = vec.len(nominal.variants) == 0;
+        }
+        need(payload_ok, "struct/enum declaration payload");
+        for field in nominal.fields {
+            check_nominal_field(inout state, nominal, field, params, fields);
+        }
+        for variant in nominal.variants {
+            declaration(inout state, variant.symbol, variant.source,
+                model.SymbolKind.Variant, model.AstKind.Variant);
+            need(ids_insert(variants, variant.symbol),
+                "duplicate variant identity");
+            source_entries_fields(state, variant.source, model.AstKind.Field,
+                variant.payload);
+            for field in variant.payload {
+                check_nominal_field(inout state, nominal, field, params,
+                    fields);
+            }
+        }
+    }
+    let traits = vec.empty[usize]();
+    for trait_value in state.m.traits {
+        declaration(inout state, trait_value.symbol, trait_value.source,
+            model.SymbolKind.Trait, model.AstKind.Trait);
+        need(ids_insert(traits, trait_value.symbol), "duplicate trait identity");
+        self_owner(inout state, trait_value.source, trait_value.self);
+        source_entries_params(state, trait_value.source,
+            model.AstKind.GenericParameter, trait_value.params);
+        let trait_environment = vec.empty[usize]();
+        ids_insert(trait_environment, trait_value.self);
+        parameter_set(inout state, trait_value.params, trait_environment);
+        let self_application = trait_self_application(inout state, trait_value);
+        let self_parameter = parameter_type(inout state, trait_value.self);
+        check_trait_parameter_bounds(inout state, self_application,
+            self_parameter, 0);
+        let methods = vec.empty[usize]();
+        for method in trait_value.methods {
+            declaration(inout state, method.symbol, method.source,
+                model.SymbolKind.Function, model.AstKind.Function);
+            need(ids_insert(methods, method.symbol),
+                "duplicate trait method");
+            let own = source_parameters(inout state, method.source);
+            let environment = vec.empty[usize]();
+            ids_insert(environment, trait_value.self);
+            for parameter in trait_value.params {
+                ids_insert(environment, parameter.symbol);
+            }
+            let parameter_ids = parameter_set(inout state, own, environment);
+            for value in environment {
+                ids_insert(parameter_ids, value);
+            }
+            valid_type(inout state, method.signature, parameter_ids);
+            need(method.signature == source_signature(inout state,
+                     method.source.node),
+                "trait signature differs from source prototype");
+            let signature = verifier_type(state, method.signature);
+            need(kind_is(signature.kind, model.TypeKind.Function) &&
+                 vec.len(signature.parameters) ==
+                     vec.len(method.parameters),
+                "trait prototype signature");
+            if vec.len(own) > 0 || vec.len(trait_value.params) > 0 {
+                for parameter in signature.parameters {
+                    need(mode_is_id(parameter.mode, 0) ||
+                         mode_is_id(parameter.mode, 1) ||
+                         mode_is_id(parameter.mode, 2),
+                        "generic trait method move/inout is unsupported");
+                }
+            }
+            for function in state.m.functions {
+                need(function.symbol != method.symbol,
+                    "trait prototype has fake executable body");
+            }
+            for template in state.m.templates {
+                need(template.function.symbol != method.symbol,
+                    "trait prototype has fake template body");
+            }
+        }
+    }
+    for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
+        for var prior usize = 0; prior < index; prior += 1 {
+            let first = state.m.impls[index];
+            let second = state.m.impls[prior];
+            var same_target = false;
+            switch first.trait_ref {
+                case option.Option.Some(first_trait): {
+                    switch second.trait_ref {
+                        case option.Option.Some(second_trait):
+                            same_target = first_trait.declaration ==
+                                second_trait.declaration;
+                        case option.Option.None: same_target = false;
+                    }
+                }
+                case option.Option.None: {
+                    switch second.trait_ref {
+                        case option.Option.Some(_): same_target = false;
+                        case option.Option.None: same_target = true;
+                    }
+                }
+            }
+            if !same_target {
+                continue;
+            }
+            need(!impl_patterns_overlap(inout state, first, second),
+                "duplicate or overlapping impl patterns");
+        }
+    }
+    for implementation in state.m.impls {
+        verifier_source(state, implementation.source);
+        self_owner(inout state, implementation.source,
+            implementation.self_parameter);
+        let self_allowed = vec.empty[usize]();
+        ids_insert(self_allowed, implementation.self_parameter);
+        let params = parameter_set(inout state, implementation.params,
+            self_allowed);
+        valid_type(inout state, implementation.self_type, params);
+        let self_type = verifier_type(state, implementation.self_type);
+        need(kind_is(self_type.kind, model.TypeKind.NominalStruct) ||
+             kind_is(self_type.kind, model.TypeKind.NominalEnum) ||
+             number_kind(self_type.kind) ||
+             kind_is(self_type.kind, model.TypeKind.Bool) ||
+             kind_is(self_type.kind, model.TypeKind.Vec) ||
+             kind_is(self_type.kind, model.TypeKind.Slice) ||
+             kind_is(self_type.kind, model.TypeKind.String) ||
+             kind_is(self_type.kind, model.TypeKind.Unit),
+            "impl self type is not an implemented value type");
+        let file = verifier_file(state, implementation.source.node.module,
+            implementation.source.node.file);
+        let syntax = file.nodes[implementation.source.node.node];
+        let types_list = vec.empty[model.NodeRef]();
+        for id in syntax.children {
+            if ast_is(file.nodes[id].kind, model.AstKind.NamedType) {
+                var reference = implementation.source.node;
+                reference.node = id;
+                vec.push(types_list, reference);
+            }
+        }
+        var expected_count usize = 1;
+        switch implementation.trait_ref {
+            case option.Option.Some(_): expected_count = 2;
+            case option.Option.None: {}
+        }
+        need(vec.len(types_list) == expected_count,
+            "impl source declaration arity");
+        need(source_type(inout state,
+                 types_list[vec.len(types_list) - 1]) == implementation.self_type,
+            "impl self type differs from source");
+        switch implementation.trait_ref {
+            case option.Option.Some(application): {
+                need(ids_contains(traits, application.declaration),
+                    "impl trait missing");
+                need(same_trait_ref(source_trait_application(inout state,
+                         types_list[0]), application),
+                    "impl trait application differs from source declaration");
+                check_trait_application(inout state, application, params);
+                check_trait_parameter_bounds(inout state, application,
+                    implementation.self_type, 0);
+            }
+            case option.Option.None: {}
+        }
+    }
+}
+
+func check_nominal_field(state inout Verifier, nominal hir.NominalDecl,
+                         field hir.FieldDecl, params Vec[usize],
+                         fields Vec[usize]) throws Invalid {
+    declaration(inout state, field.symbol, field.source,
+        model.SymbolKind.Field, model.AstKind.Field);
+    need(ids_insert(fields, field.symbol), "duplicate field identity");
+    need(field.source.node.module == nominal.source.node.module &&
+         field.source.node.file == nominal.source.node.file &&
+         field.source.span.begin_byte >= nominal.source.span.begin_byte &&
+         field.source.span.end_byte <= nominal.source.span.end_byte,
+        "field belongs to another declaration");
+    valid_type(inout state, field.type_id, params);
+    let file = verifier_file(state, field.source.node.module,
+        field.source.node.file);
+    need(field.source.node.node < vec.len(file.nodes), "field source node");
+    let syntax = file.nodes[field.source.node.node];
+    need(vec.len(syntax.children) > 0, "field has no source type");
+    var reference = field.source.node;
+    reference.node = syntax.children[0];
+    need(field.type_id == source_type(inout state, reference),
+        "field type differs from source declaration");
+}

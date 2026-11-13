@@ -1,0 +1,607 @@
+// Regression builders for the four confirmed verifier differences.  Every
+// module is assembled from the real AST returned by the Wz lexer/parser.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/vec" as vec;
+
+func check(condition bool, label string) i32 throws os.Error {
+    if condition {
+        io.println("CHECK " + label + " ok");
+        return 0;
+    }
+    io.println("CHECK " + label + " FAIL");
+    return 1;
+}
+
+func complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func failed_internal(result model.UnitResult) bool {
+    var failed = false;
+    switch result.state {
+        case model.PhaseState.Failed: failed = true;
+        default: {}
+    }
+    var internal = false;
+    switch result.failure {
+        case model.FailureKind.Internal: internal = true;
+        default: {}
+    }
+    return failed && internal;
+}
+
+func has_ir(result model.UnitResult, message string) bool {
+    if !failed_internal(result) || vec.len(result.diagnostics) != 1 {
+        return false;
+    }
+    let diagnostic = result.diagnostics[0];
+    return diagnostic.code == "E_IR_INVALID" &&
+           diagnostic.phase == "lowering" &&
+           diagnostic.severity == "error" &&
+           diagnostic.message == message &&
+           diagnostic.has_primary == false;
+}
+
+func hsource(parsed model.ParseResult, id usize) hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: id),
+        span: parsed.nodes[id].span);
+}
+
+func node_ref(parsed model.ParseResult, id usize) model.NodeRef {
+    return model.NodeRef(module: 0, file: 0, node: id);
+}
+
+func make_project(parsed model.ParseResult) model.Project {
+    let module_source = model.Module(id: 0, logical_path: "app",
+        identity: "app", package_name: "app", files: [0], imports: [],
+        foreign_exports: [], binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None);
+    var project = model.empty_project();
+    project.modules = [module_source];
+    project.files = [parsed];
+    return project;
+}
+
+func build_nonunit(parsed model.ParseResult) Built {
+    var context = types.context();
+    var unit usize = 0;
+    var bool_type usize = 0;
+    var int_type usize = 0;
+    var signature_id usize = 0;
+    try {
+        unit = types.intern(inout context,
+            model.empty_type(model.TypeKind.Unit));
+        bool_type = types.intern(inout context,
+            model.empty_type(model.TypeKind.Bool));
+        var integer = model.empty_type(model.TypeKind.SignedInt);
+        integer.bits = 32;
+        int_type = types.intern(inout context, integer);
+        var signature = model.empty_type(model.TypeKind.Function);
+        signature.result = int_type;
+        signature_id = types.intern(inout context, signature);
+    } catch error types.Error {
+        return Built(module: hir.empty_module(prepare_empty_project(), 0,
+            model.CheckConfig(backend: model.Backend.Native, word_bits: 64)),
+            valid: false);
+    }
+    let function_symbol = model.Symbol(id: 0, name: "main",
+        kind: model.SymbolKind.Function, module: 0,
+        definition: option.Option[model.NodeRef].Some(node_ref(parsed, 10)),
+        declaration: option.Option[model.Span].Some(parsed.nodes[10].span),
+        exported: true, target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    let int_symbol = model.Symbol(id: 1, name: "i32",
+        kind: model.SymbolKind.BuiltinType, module: 0,
+        definition: option.Option[model.NodeRef].None,
+        declaration: option.Option[model.Span].None, exported: true,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    let bool_symbol = model.Symbol(id: 2, name: "bool",
+        kind: model.SymbolKind.BuiltinType, module: 0,
+        definition: option.Option[model.NodeRef].None,
+        declaration: option.Option[model.Span].None, exported: true,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    let occurrences = [
+        model.Occurrence(source: node_ref(parsed, 1), symbol: 1,
+            span: parsed.nodes[1].span),
+        model.Occurrence(source: node_ref(parsed, 2), symbol: 2,
+            span: parsed.nodes[2].span)
+    ];
+    let resolved = model.ResolvedProject(project: make_project(parsed),
+        symbols: [function_symbol, int_symbol, bool_symbol],
+        occurrences: occurrences, deferred_members: [], self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = context;
+    module.functions = [hir.HirFunction(symbol: 0, signature: signature_id,
+        parameters: [], body: 0, scope: 0, source: hsource(parsed, 10),
+        captures: [], is_async: false)];
+    module.nodes = [
+        hir.HirNode(type_id: unit, source: hsource(parsed, 9), scope: 0,
+            children: [1, 6], data: hir.NodeData.Block(hir.Block()),
+            errors: [], exits: []),
+        hir.HirNode(type_id: unit, source: hsource(parsed, 6), scope: 0,
+            children: [2, 3], data: hir.NodeData.If(hir.If()), errors: [],
+            exits: []),
+        hir.HirNode(type_id: bool_type, source: hsource(parsed, 2), scope: 0,
+            children: [], data: hir.NodeData.BoolLiteral(
+                hir.BoolLiteral(value: true)), errors: [], exits: []),
+        hir.HirNode(type_id: unit, source: hsource(parsed, 5), scope: 1,
+            children: [4], data: hir.NodeData.Block(hir.Block()), errors: [],
+            exits: []),
+        hir.HirNode(type_id: unit, source: hsource(parsed, 4), scope: 1,
+            children: [5], data: hir.NodeData.Return(hir.Return(function: 0)),
+            errors: [], exits: []),
+        hir.HirNode(type_id: int_type, source: hsource(parsed, 3), scope: 1,
+            children: [], data: hir.NodeData.IntegerLiteral(
+                hir.IntegerLiteral(decimal: "7", bits: 7)), errors: [],
+            exits: []),
+        hir.HirNode(type_id: unit, source: hsource(parsed, 8), scope: 0,
+            children: [7], data: hir.NodeData.Return(hir.Return(function: 0)),
+            errors: [], exits: []),
+        hir.HirNode(type_id: int_type, source: hsource(parsed, 7), scope: 0,
+            children: [], data: hir.NodeData.IntegerLiteral(
+                hir.IntegerLiteral(decimal: "8", bits: 8)), errors: [],
+            exits: [])
+    ];
+    module.scopes = [
+        hir.HirScope(function: 0, parent: option.Option[usize].None,
+            source: hsource(parsed, 9)),
+        hir.HirScope(function: 0, parent: option.Option[usize].Some(0),
+            source: hsource(parsed, 5))
+    ];
+    return Built(module: module, valid: true);
+}
+
+func build_template(parsed model.ParseResult, function_id usize,
+                    type_id usize, value_id usize) Built {
+    var context = types.context();
+    var unit usize = 0;
+    var type_parameter usize = 0;
+    var signature_id usize = 0;
+    try {
+        unit = types.intern(inout context,
+            model.empty_type(model.TypeKind.Unit));
+        var parameter = model.empty_type(model.TypeKind.TypeParameter);
+        parameter.declaration = type_id;
+        type_parameter = types.intern(inout context, parameter);
+        var signature = model.empty_type(model.TypeKind.Function);
+        signature.result = type_parameter;
+        vec.push(signature.parameters, model.ParameterType(
+            mode: model.ParamMode.Ordinary, type_id: type_parameter));
+        signature_id = types.intern(inout context, signature);
+    } catch error types.Error {
+        return Built(module: hir.empty_module(prepare_empty_project(), 0,
+            model.CheckConfig(backend: model.Backend.Native, word_bits: 64)),
+            valid: false);
+    }
+    var symbols = vec.empty[model.Symbol]();
+    let max_id = function_id;
+    var index usize = 0;
+    for index <= max_id {
+        var symbol = model.Symbol(id: index, name: "dummy",
+            kind: model.SymbolKind.Module, module: 0,
+            definition: option.Option[model.NodeRef].None,
+            declaration: option.Option[model.Span].None, exported: false,
+            target: option.Option[usize].None,
+            foreign: option.Option[model.ForeignExportRef].None);
+        vec.push(symbols, symbol);
+        index += 1;
+    }
+    symbols[function_id] = model.Symbol(id: function_id, name: "identity",
+        kind: model.SymbolKind.Function, module: 0,
+        definition: option.Option[model.NodeRef].Some(node_ref(parsed, 8)),
+        declaration: option.Option[model.Span].Some(parsed.nodes[8].span),
+        exported: true, target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    for vec.len(symbols) <= value_id {
+        vec.push(symbols, model.Symbol(id: vec.len(symbols), name: "dummy",
+            kind: model.SymbolKind.Module, module: 0,
+            definition: option.Option[model.NodeRef].None,
+            declaration: option.Option[model.Span].None, exported: false,
+            target: option.Option[usize].None,
+            foreign: option.Option[model.ForeignExportRef].None));
+    }
+    symbols[type_id] = model.Symbol(id: type_id, name: "T",
+        kind: model.SymbolKind.TypeParameter, module: 0,
+        definition: option.Option[model.NodeRef].Some(node_ref(parsed, 1)),
+        declaration: option.Option[model.Span].Some(parsed.nodes[1].span),
+        exported: false, target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    symbols[value_id] = model.Symbol(id: value_id, name: "value",
+        kind: model.SymbolKind.Value, module: 0,
+        definition: option.Option[model.NodeRef].Some(node_ref(parsed, 3)),
+        declaration: option.Option[model.Span].Some(parsed.nodes[3].span),
+        exported: false, target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    let occurrences = [
+        model.Occurrence(source: node_ref(parsed, 2), symbol: type_id,
+            span: parsed.nodes[2].span),
+        model.Occurrence(source: node_ref(parsed, 4), symbol: type_id,
+            span: parsed.nodes[4].span),
+        model.Occurrence(source: node_ref(parsed, 5), symbol: value_id,
+            span: parsed.nodes[5].span)
+    ];
+    let resolved = model.ResolvedProject(project: make_project(parsed),
+        symbols: symbols, occurrences: occurrences, deferred_members: [],
+        self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = context;
+    let function_value = hir.HirFunction(symbol: function_id,
+        signature: signature_id, parameters: [hir.Parameter(symbol: value_id,
+            label: "value")], body: 0, scope: 0, source: hsource(parsed, 8),
+        captures: [], is_async: false);
+    module.templates = [hir.FunctionTemplate(function: function_value,
+        params: [hir.GenericParam(symbol: type_id,
+            trait_ref: option.Option[hir.TraitRef].None,
+            source: hsource(parsed, 1))])];
+    module.nodes = [
+        hir.HirNode(type_id: unit, source: hsource(parsed, 7), scope: 0,
+            children: [1], data: hir.NodeData.Block(hir.Block()), errors: [],
+            exits: []),
+        hir.HirNode(type_id: unit, source: hsource(parsed, 6), scope: 0,
+            children: [2], data: hir.NodeData.Return(hir.Return(
+                function: function_id)), errors: [], exits: []),
+        hir.HirNode(type_id: type_parameter, source: hsource(parsed, 5),
+            scope: 0, children: [], data: hir.NodeData.Read(hir.Read(
+                symbol: value_id)), errors: [], exits: [])
+    ];
+    module.scopes = [hir.HirScope(function: function_id,
+        parent: option.Option[usize].None, source: hsource(parsed, 7))];
+    return Built(module: module, valid: true);
+}
+
+func prepare_empty_project() model.ResolvedProject {
+    return model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+}
+
+func run_fixes(mode string, parsed model.ParseResult, fixture string) i32
+    throws os.Error {
+    var failures i32 = 0;
+    var built = Built(module: hir.empty_module(prepare_empty_project(), 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64)),
+        valid: false);
+    if mode == "nonunit" {
+        built = build_nonunit(parsed);
+    } else if mode == "template0" {
+        built = build_template(parsed, 0, 1, 2);
+    } else if mode == "template1" {
+        built = build_template(parsed, 1, 2, 3);
+    } else if mode == "trait" {
+        built = build_trait_impl(parsed);
+    } else if mode == "throw" {
+        built = build_throw(parsed);
+    } else {
+        io.println("CHECK mode FAIL " + mode);
+        return 1;
+    }
+    failures += check(built.valid, "fixture-build-" + mode);
+    if !built.valid { return 1; }
+    let typed = hirverify.verify_types(built.module);
+    failures += check(complete(typed.state) && typed.has_value &&
+        vec.len(typed.diagnostics) == 0, "type-" + mode);
+    let capability = hirverify.check_backend_capabilities(built.module);
+    failures += check(complete(capability.state) && capability.has_value &&
+        vec.len(capability.diagnostics) == 0, "capability-" + mode);
+    let verified = hirverify.verify(built.module, hirverify.VerifyMode.Backend);
+    failures += check(complete(verified.state) &&
+        option.is_some(verified.value) &&
+        vec.len(verified.diagnostics) == 0, "verified-" + mode);
+    switch verified.value {
+        case option.Option.Some(value): {
+            var snapshot = fallback_module();
+            try { snapshot = hirverify.snapshot(value); }
+            catch error model.SupportError {
+                failures += check(false, "snapshot-" + mode);
+                return failures;
+            }
+            failures += check(vec.len(snapshot.nodes) ==
+                vec.len(built.module.nodes), "snapshot-" + mode);
+        }
+        case option.Option.None: failures += check(false, "verified-value-" + mode);
+    }
+    // The mutation must be rejected while the published snapshot remains
+    // isolated.  Scope identity mutation is the common non-panic corruption.
+    var bad = fallback_module();
+    let copied = copy_fixture(built.module);
+    switch copied {
+        case option.Option.Some(value): bad = value;
+        case option.Option.None: {
+            failures += check(false, "bad-copy-" + mode);
+            return failures;
+        }
+    }
+    if mode == "trait" {
+        vec.push(bad.impls, bad.impls[0]);
+        let overlap = hirverify.verify_types(bad);
+        failures += check(has_ir(overlap,
+            "duplicate or overlapping impl patterns"),
+            "trait-overlap-negative");
+    } else {
+        bad.scopes[0].parent = option.Option[usize].Some(0);
+        let malformed = hirverify.verify_types(bad);
+        failures += check(failed_internal(malformed) &&
+            vec.len(malformed.diagnostics) == 1 &&
+            malformed.diagnostics[0].code == "E_IR_INVALID" &&
+            malformed.diagnostics[0].phase == "lowering",
+            "malformed-" + mode);
+    }
+    io.println("SUMMARY mode=" + mode + " fixture=" + fixture +
+        " failures=" + decimal_i32(failures));
+    return failures;
+}
+
+func fallback_module() hir.HirModule {
+    return hir.empty_module(prepare_empty_project(), 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+}
+
+func copy_fixture(value hir.HirModule) option.Option[hir.HirModule] {
+    try {
+        return option.Option[hir.HirModule].Some(
+            hirclone.clone_module(value));
+    } catch error model.SupportError {
+        return option.Option[hir.HirModule].None;
+    }
+}
+
+func decimal_i32(value i32) string {
+    if value == 0 { return "0"; }
+    let digits = "0123456789";
+    var result = "";
+    var remaining = value;
+    if remaining < 0 { result = "-"; remaining = -remaining; }
+    for remaining > 0 {
+        let digit = remaining % 10;
+        result = result + digits[digits_index(digit):digits_index(digit) + 1];
+        remaining = remaining / 10;
+    }
+    return result;
+}
+
+func digits_index(value i32) usize {
+    return usize(value);
+}
+
+func symbol_value(id usize, name string, kind model.SymbolKind,
+                  definition usize, declaration usize, exported bool)
+    model.Symbol {
+    var def = option.Option[model.NodeRef].None;
+    var decl = option.Option[model.Span].None;
+    if definition != 0 {
+        def = option.Option[model.NodeRef].Some(model.NodeRef(module: 0,
+            file: 0, node: definition));
+        decl = option.Option[model.Span].Some(empty_span_test());
+    }
+    return model.Symbol(id: id, name: name, kind: kind, module: 0,
+        definition: def, declaration: decl, exported: exported,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+}
+
+func empty_span_test() model.Span {
+    return model.Span(snapshot: 1, begin_byte: 0, end_byte: 0);
+}
+
+func build_trait_impl(parsed model.ParseResult) Built {
+    var context = types.context();
+    var unit usize = 0;
+    var int_type usize = 0;
+    var bool_type usize = 0;
+    var tag_type usize = 0;
+    var other_type usize = 0;
+    var signature_id usize = 0;
+    try {
+        unit = types.intern(inout context,
+            model.empty_type(model.TypeKind.Unit));
+        var integer = model.empty_type(model.TypeKind.SignedInt);
+        integer.bits = 32;
+        int_type = types.intern(inout context, integer);
+        bool_type = types.intern(inout context,
+            model.empty_type(model.TypeKind.Bool));
+        var tag = model.empty_type(model.TypeKind.NominalStruct);
+        tag.declaration = 0;
+        tag_type = types.intern(inout context, tag);
+        var other = model.empty_type(model.TypeKind.NominalStruct);
+        other.declaration = 2;
+        other_type = types.intern(inout context, other);
+        var signature = model.empty_type(model.TypeKind.Function);
+        signature.result = unit;
+        signature_id = types.intern(inout context, signature);
+    } catch error types.Error {
+        return Built(module: hir.empty_module(prepare_empty_project(), 0,
+            model.CheckConfig(backend: model.Backend.Native, word_bits: 64)),
+            valid: false);
+    }
+    let symbols = [
+        symbol_value(0, "Tag", model.SymbolKind.Type, 3, 3, true),
+        symbol_value(1, "number", model.SymbolKind.Field, 2, 2, false),
+        symbol_value(2, "Other", model.SymbolKind.Type, 6, 6, true),
+        symbol_value(3, "number", model.SymbolKind.Field, 5, 5, false),
+        symbol_value(4, "Convert", model.SymbolKind.Trait, 8, 8, true),
+        symbol_value(5, "Self", model.SymbolKind.TypeParameter, 0, 8, false),
+        symbol_value(6, "T", model.SymbolKind.TypeParameter, 7, 7, false),
+        symbol_value(7, "Self", model.SymbolKind.TypeParameter, 0, 12, false),
+        symbol_value(8, "Self", model.SymbolKind.TypeParameter, 0, 16, false),
+        symbol_value(9, "Self", model.SymbolKind.TypeParameter, 0, 20, false),
+        symbol_value(10, "main", model.SymbolKind.Function, 23, 23, true),
+        model.Symbol(id: 11, name: "Unit", kind: model.SymbolKind.BuiltinType,
+            module: 0, definition: option.Option[model.NodeRef].None,
+            declaration: option.Option[model.Span].None, exported: true,
+            target: option.Option[usize].None,
+            foreign: option.Option[model.ForeignExportRef].None),
+        model.Symbol(id: 12, name: "i32", kind: model.SymbolKind.BuiltinType,
+            module: 0, definition: option.Option[model.NodeRef].None,
+            declaration: option.Option[model.Span].None, exported: true,
+            target: option.Option[usize].None,
+            foreign: option.Option[model.ForeignExportRef].None),
+        model.Symbol(id: 13, name: "bool", kind: model.SymbolKind.BuiltinType,
+            module: 0, definition: option.Option[model.NodeRef].None,
+            declaration: option.Option[model.Span].None, exported: true,
+            target: option.Option[usize].None,
+            foreign: option.Option[model.ForeignExportRef].None)
+    ];
+    let occurrence_ids Vec[usize] = [1, 4, 9, 10, 11, 13, 14, 15, 17, 18, 19, 21];
+    let occurrence_symbols Vec[usize] = [12, 12, 12, 4, 0, 13, 4, 0, 12, 4, 2, 11];
+    let occurrences = vec.empty[model.Occurrence]();
+    for var index usize = 0; index < vec.len(occurrence_ids); index += 1 {
+        vec.push(occurrences, model.Occurrence(
+            source: node_ref(parsed, occurrence_ids[index]),
+            symbol: occurrence_symbols[index],
+            span: parsed.nodes[occurrence_ids[index]].span));
+    }
+    let self_parameters = [
+        model.SelfParameter(source: node_ref(parsed, 8), symbol: 5),
+        model.SelfParameter(source: node_ref(parsed, 12), symbol: 7),
+        model.SelfParameter(source: node_ref(parsed, 16), symbol: 8),
+        model.SelfParameter(source: node_ref(parsed, 20), symbol: 9)
+    ];
+    let resolved = model.ResolvedProject(project: make_project(parsed),
+        symbols: symbols, occurrences: occurrences, deferred_members: [],
+        self_parameters: self_parameters);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = context;
+    module.nominals = [
+        hir.NominalDecl(symbol: 0, kind: model.TypeKind.NominalStruct,
+            params: [], fields: [hir.FieldDecl(symbol: 1, type_id: int_type,
+                exported: false, source: hsource(parsed, 2))], variants: [],
+            source: hsource(parsed, 3)),
+        hir.NominalDecl(symbol: 2, kind: model.TypeKind.NominalStruct,
+            params: [], fields: [hir.FieldDecl(symbol: 3, type_id: int_type,
+                exported: false, source: hsource(parsed, 5))], variants: [],
+            source: hsource(parsed, 6))
+    ];
+    module.traits = [hir.TraitDecl(symbol: 4, self: 5,
+        params: [hir.GenericParam(symbol: 6,
+            trait_ref: option.Option[hir.TraitRef].None,
+            source: hsource(parsed, 7))], methods: [],
+        source: hsource(parsed, 8))];
+    module.impls = [
+        hir.ImplDecl(params: [], trait_ref: option.Option[hir.TraitRef].Some(
+            hir.TraitRef(declaration: 4, args: [int_type])),
+            self_parameter: 7, self_type: tag_type, methods: [],
+            source: hsource(parsed, 12)),
+        hir.ImplDecl(params: [], trait_ref: option.Option[hir.TraitRef].Some(
+            hir.TraitRef(declaration: 4, args: [bool_type])),
+            self_parameter: 8, self_type: tag_type, methods: [],
+            source: hsource(parsed, 16)),
+        hir.ImplDecl(params: [], trait_ref: option.Option[hir.TraitRef].Some(
+            hir.TraitRef(declaration: 4, args: [int_type])),
+            self_parameter: 9, self_type: other_type, methods: [],
+            source: hsource(parsed, 20))
+    ];
+    module.functions = [hir.HirFunction(symbol: 10, signature: signature_id,
+        parameters: [], body: 0, scope: 0, source: hsource(parsed, 23),
+        captures: [], is_async: false)];
+    module.nodes = [hir.HirNode(type_id: unit, source: hsource(parsed, 22),
+        scope: 0, children: [], data: hir.NodeData.Block(hir.Block()),
+        errors: [], exits: [])];
+    module.scopes = [hir.HirScope(function: 10,
+        parent: option.Option[usize].None, source: hsource(parsed, 22))];
+    return Built(module: module, valid: true);
+}
+
+func build_throw(parsed model.ParseResult) Built {
+    var context = types.context();
+    var unit usize = 0;
+    var boom_type usize = 0;
+    var boom_signature usize = 0;
+    var main_signature usize = 0;
+    try {
+        unit = types.intern(inout context,
+            model.empty_type(model.TypeKind.Unit));
+        var boom = model.empty_type(model.TypeKind.NominalEnum);
+        boom.declaration = 0;
+        boom_type = types.intern(inout context, boom);
+        var throws_signature = model.empty_type(model.TypeKind.Function);
+        throws_signature.result = unit;
+        throws_signature.throws_type = option.Option[usize].Some(boom_type);
+        boom_signature = types.intern(inout context, throws_signature);
+        var plain_signature = model.empty_type(model.TypeKind.Function);
+        plain_signature.result = unit;
+        main_signature = types.intern(inout context, plain_signature);
+    } catch error types.Error {
+        return Built(module: hir.empty_module(prepare_empty_project(), 0,
+            model.CheckConfig(backend: model.Backend.Native, word_bits: 64)),
+            valid: false);
+    }
+    let symbols = [
+        symbol_value(0, "Boom", model.SymbolKind.Type, 2, 2, true),
+        symbol_value(1, "Bad", model.SymbolKind.Variant, 1, 1, true),
+        symbol_value(2, "boom", model.SymbolKind.Function, 9, 9, true),
+        symbol_value(3, "main", model.SymbolKind.Function, 12, 12, true),
+        model.Symbol(id: 4, name: "Unit", kind: model.SymbolKind.BuiltinType,
+            module: 0, definition: option.Option[model.NodeRef].None,
+            declaration: option.Option[model.Span].None, exported: true,
+            target: option.Option[usize].None,
+            foreign: option.Option[model.ForeignExportRef].None)
+    ];
+    let occurrence_ids Vec[usize] = [3, 4, 5, 6, 10];
+    let occurrence_symbols Vec[usize] = [4, 0, 0, 1, 4];
+    let occurrences = vec.empty[model.Occurrence]();
+    for var index usize = 0; index < vec.len(occurrence_ids); index += 1 {
+        vec.push(occurrences, model.Occurrence(
+            source: node_ref(parsed, occurrence_ids[index]),
+            symbol: occurrence_symbols[index],
+            span: parsed.nodes[occurrence_ids[index]].span));
+    }
+    let resolved = model.ResolvedProject(project: make_project(parsed),
+        symbols: symbols, occurrences: occurrences, deferred_members: [],
+        self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.types = context;
+    module.nominals = [hir.NominalDecl(symbol: 0,
+        kind: model.TypeKind.NominalEnum, params: [], fields: [],
+        variants: [hir.VariantDecl(symbol: 1, payload: [],
+            source: hsource(parsed, 1))], source: hsource(parsed, 2))];
+    module.functions = [
+        hir.HirFunction(symbol: 2, signature: boom_signature, parameters: [],
+            body: 0, scope: 0, source: hsource(parsed, 9), captures: [],
+            is_async: false),
+        hir.HirFunction(symbol: 3, signature: main_signature, parameters: [],
+            body: 3, scope: 1, source: hsource(parsed, 12), captures: [],
+            is_async: false)
+    ];
+    let error_exit = hir.ExitPlan(kind: hir.ExitKind.Error,
+        error_type: option.Option[usize].Some(boom_type),
+        target: hir.ExitTarget.FunctionExit(hir.FunctionExit(function: 2)),
+        exited_scopes: [0], defers: [], saves_value: true, actions: []);
+    module.nodes = [
+        hir.HirNode(type_id: unit, source: hsource(parsed, 8), scope: 0,
+            children: [1], data: hir.NodeData.Block(hir.Block()),
+            errors: [boom_type], exits: []),
+        hir.HirNode(type_id: unit, source: hsource(parsed, 7), scope: 0,
+            children: [2], data: hir.NodeData.Throw(hir.Throw()),
+            errors: [boom_type], exits: [error_exit]),
+        hir.HirNode(type_id: boom_type, source: hsource(parsed, 6), scope: 0,
+            children: [], data: hir.NodeData.EnumInit(hir.EnumInit(
+                variant: 1, payload: [])), errors: [], exits: []),
+        hir.HirNode(type_id: unit, source: hsource(parsed, 11), scope: 1,
+            children: [], data: hir.NodeData.Block(hir.Block()), errors: [],
+            exits: [])
+    ];
+    module.scopes = [
+        hir.HirScope(function: 2, parent: option.Option[usize].None,
+            source: hsource(parsed, 8)),
+        hir.HirScope(function: 3, parent: option.Option[usize].None,
+            source: hsource(parsed, 11))
+    ];
+    return Built(module: module, valid: true);
+}

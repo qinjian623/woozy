@@ -1,0 +1,610 @@
+// Post-body effect/exit annotation and function-body checking (CPP 5896-6188).
+package sema;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct VisibleEntry {
+    symbol usize;
+    scope usize;
+}
+
+func b_visible_copy(values Vec[VisibleEntry]) Vec[VisibleEntry] {
+    let out = vec.empty[VisibleEntry]();
+    for value in values { vec.push(out, value); }
+    return out;
+}
+
+func b_visible_assign(target Vec[VisibleEntry], source Vec[VisibleEntry]) {
+    vec.clear(target);
+    for value in source { vec.push(target, value); }
+}
+
+func b_visible_find(values Vec[VisibleEntry], symbol usize)
+    option.Option[usize] {
+    for value in values {
+        if value.symbol == symbol { return option.Option[usize].Some(value.scope); }
+    }
+    return option.Option[usize].None;
+}
+
+func b_visible_set(values Vec[VisibleEntry], symbol usize, scope usize) {
+    var position usize = 0;
+    for position < vec.len(values) && values[position].symbol < symbol {
+        position += 1;
+    }
+    if position < vec.len(values) && values[position].symbol == symbol {
+        values[position].scope = scope;
+        return;
+    }
+    vec.push(values, VisibleEntry(symbol: symbol, scope: scope));
+    var index = vec.len(values) - 1;
+    for index > position {
+        values[index] = values[index - 1];
+        index -= 1;
+    }
+    values[position] = VisibleEntry(symbol: symbol, scope: scope);
+}
+
+func b_visible_external(values Vec[VisibleEntry], external Vec[usize]) {
+    for value in values { b_insert_sorted(external, value.symbol); }
+}
+
+func b_scope_inside(state inout Checker, outer usize, inner usize) bool { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var current = option.Option[usize].Some(inner);
+    for {
+        switch current {
+            case option.Option.None: return false;
+            case option.Option.Some(value): {
+                if value == outer { return true; }
+                if value >= vec.len(state.m.scopes) { return false; }
+                current = state.m.scopes[value].parent;
+            }
+        }
+    }
+}
+
+func b_plan_exit(state inout Checker, id usize, kind hir.ExitKind,
+                 target hir.ExitTarget, keep option.Option[usize],
+                 error option.Option[usize], saves bool,
+                 active Vec[usize]) throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let n = state.m.nodes[id];
+    let exited_scopes = vec.empty[usize]();
+    var current = option.Option[usize].Some(n.scope);
+    for {
+        if b_option_equal(current, keep) { break; }
+        switch current {
+            case option.Option.None:
+                throw internal_error("exit target is not an ancestor");
+            case option.Option.Some(value): {
+                vec.push(exited_scopes, value);
+                if value >= vec.len(state.m.scopes) {
+                    throw internal_error("invalid exit scope");
+                }
+                current = state.m.scopes[value].parent;
+            }
+        }
+    }
+    let defers = vec.empty[usize]();
+    for var index usize = vec.len(active); index > 0; index -= 1 {
+        let candidate = active[index - 1];
+        if b_vec_contains(exited_scopes, state.m.nodes[candidate].scope) {
+            vec.push(defers, candidate);
+        }
+    }
+    if b_option_is_some(error) || vec.len(defers) != 0 {
+        vec.push(state.m.nodes[id].exits, hir.ExitPlan(kind: kind,
+            error_type: error, target: target, exited_scopes: exited_scopes,
+            defers: defers, saves_value: saves, actions: []));
+    }
+}
+
+func b_error_exit(state inout Checker, id usize, error_type usize,
+                  f hir.HirFunction, handlers Vec[usize], active Vec[usize],
+                  cleanups Vec[AnnotationCleanup]) throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var floor usize = 0;
+    if vec.len(cleanups) != 0 {
+        floor = cleanups[vec.len(cleanups) - 1].handler_floor;
+    }
+    for var index usize = vec.len(handlers); index > floor; index -= 1 {
+        let target = handlers[index - 1];
+        var catches = vec.empty[hir.Catch]();
+        switch state.m.nodes[target].data {
+            case hir.NodeData.Try(value): catches = value.catches;
+            default: {}
+        }
+        for var catch_index usize = 0; catch_index < vec.len(catches);
+            catch_index += 1 {
+            if catches[catch_index].error_type == error_type {
+                let target_scope = state.m.nodes[target].scope;
+                b_plan_exit(inout state, id, hir.ExitKind.Error,
+                    hir.ExitTarget.CatchTarget(value: hir.CatchTarget(
+                        try_node: target, index: u32(catch_index))),
+                    option.Option[usize].Some(target_scope),
+                    option.Option[usize].Some(error_type), true, active);
+                return;
+            }
+        }
+    }
+    let ref = state.m.nodes[id].source.node;
+    if vec.len(cleanups) != 0 {
+        throw reject(inout state, ref, "typed error escapes defer body",
+            "E_CLEANUP_ESCAPE");
+    }
+    let signature_type = lookup_type(inout state, f.signature);
+    var declared = false;
+    switch signature_type.throws_type {
+        case option.Option.Some(value):
+            if value == error_type { declared = true; }
+        case option.Option.None: {}
+    }
+    switch state.current_async_error {
+        case option.Option.Some(value):
+            if value == error_type { declared = true; }
+        case option.Option.None: {}
+    }
+    if !declared {
+        throw reject(inout state, ref,
+            "typed error is neither caught nor declared by this function",
+            "E_EFFECT_UNHANDLED");
+    }
+    b_plan_exit(inout state, id, hir.ExitKind.Error,
+        hir.ExitTarget.FunctionExit(value: hir.FunctionExit(function: f.symbol)),
+        option.Option[usize].None, option.Option[usize].Some(error_type),
+        true, active);
+}
+
+func b_bind_pattern(visible Vec[VisibleEntry], pattern hir.Pattern,
+                    scope usize) {
+    switch pattern.binding {
+        case option.Option.Some(value): b_visible_set(visible, value, scope);
+        case option.Option.None: {}
+    }
+    for child in pattern.payload { b_bind_pattern(visible, child, scope); }
+}
+
+func b_annotate_visit(state inout Checker, id usize, depth usize,
+                      f hir.HirFunction, handlers Vec[usize], active Vec[usize],
+                      visible Vec[VisibleEntry],
+                      cleanups Vec[AnnotationCleanup]) throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    if depth > 512 {
+        throw internal_error("effect nesting limit");
+    }
+    let n = state.m.nodes[id];
+    state.m.nodes[id].exits = [];
+    let kind = hir.node_kind(n.data);
+    let scoped = b_node_kind_is(kind, hir.NodeKind.Block) ||
+        b_node_kind_is(kind, hir.NodeKind.For) ||
+        b_node_kind_is(kind, hir.NodeKind.ForIn) ||
+        b_node_kind_is(kind, hir.NodeKind.Switch) ||
+        b_node_kind_is(kind, hir.NodeKind.Try) ||
+        b_node_kind_is(kind, hir.NodeKind.Defer);
+    let saved_visible = vec.empty[VisibleEntry]();
+    if scoped { b_visible_assign(saved_visible, visible); }
+    let active_size = vec.len(active);
+    var switch_data = option.Option[hir.Switch].None;
+    var for_in_data = option.Option[hir.ForIn].None;
+    var try_data = option.Option[hir.Try].None;
+    var defer_data = option.Option[hir.Defer].None;
+    var binding_data = option.Option[hir.Binding].None;
+    var has_switch = false;
+    var has_for_in = false;
+    var has_try = false;
+    var has_defer = false;
+    var read_symbol = option.Option[usize].None;
+    switch n.data {
+        case hir.NodeData.Switch(value): {
+            switch_data = option.Option[hir.Switch].Some(value);
+            has_switch = true;
+        }
+        case hir.NodeData.ForIn(value): {
+            for_in_data = option.Option[hir.ForIn].Some(value);
+            has_for_in = true;
+        }
+        case hir.NodeData.Try(value): {
+            try_data = option.Option[hir.Try].Some(value);
+            has_try = true;
+        }
+        case hir.NodeData.Defer(value): {
+            defer_data = option.Option[hir.Defer].Some(value);
+            has_defer = true;
+        }
+        case hir.NodeData.Binding(value): binding_data = option.Option[hir.Binding].Some(value);
+        default: {}
+    }
+    switch b_node_read(n) {
+        case option.Option.Some(value): read_symbol = option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch b_node_place(n) {
+        case option.Option.Some(value): read_symbol = option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch b_node_move(n) {
+        case option.Option.Some(value):
+            switch value.binding {
+                case option.Option.Some(binding): read_symbol = option.Option[usize].Some(binding);
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+    if has_switch {
+        switch switch_data {
+            case option.Option.Some(value): {
+                b_annotate_visit(inout state, n.children[0], depth + 1, f,
+                    handlers, active, visible, cleanups);
+                for arm in value.arms {
+                    b_visible_assign(visible, saved_visible);
+                    b_bind_pattern(visible, arm.pattern, arm.scope);
+                    b_annotate_visit(inout state, arm.body, depth + 1, f,
+                        handlers, active, visible, cleanups);
+                }
+                b_visible_assign(visible, saved_visible);
+            }
+            case option.Option.None: {}
+        }
+    } else if has_for_in {
+        switch for_in_data {
+            case option.Option.Some(value): {
+                b_annotate_visit(inout state, n.children[0], depth + 1, f,
+                    handlers, active, visible, cleanups);
+                b_visible_set(visible, value.element, value.body_scope);
+                b_annotate_visit(inout state, value.body, depth + 1, f,
+                    handlers, active, visible, cleanups);
+            }
+            case option.Option.None: {}
+        }
+    } else if has_try {
+        switch try_data {
+            case option.Option.Some(value): {
+                vec.push(handlers, id);
+                b_annotate_visit(inout state, n.children[0], depth + 1, f,
+                    handlers, active, visible, cleanups);
+                vec.pop(handlers);
+                for catch_value in value.catches {
+                    b_visible_assign(visible, saved_visible);
+                    b_visible_set(visible, catch_value.binding, catch_value.scope);
+                    b_annotate_visit(inout state, catch_value.body, depth + 1, f,
+                        handlers, active, visible, cleanups);
+                }
+                b_visible_assign(visible, saved_visible);
+            }
+            case option.Option.None: {}
+        }
+    } else if has_defer {
+        switch defer_data {
+            case option.Option.Some(value): {
+                let external = vec.empty[usize]();
+                b_visible_external(visible, external);
+                vec.push(cleanups, AnnotationCleanup(
+                    handler_floor: vec.len(handlers),
+                    body: state.m.nodes[n.children[0]].scope,
+                    external: external, references: []));
+                b_annotate_visit(inout state, n.children[0], depth + 1, f,
+                    handlers, active, visible, cleanups);
+                let references = vec.empty[usize]();
+                if vec.len(cleanups) != 0 {
+                    for symbol in cleanups[vec.len(cleanups) - 1].references {
+                        vec.push(references, symbol);
+                    }
+                }
+                vec.pop(cleanups);
+                b_visible_assign(visible, saved_visible);
+                vec.push(active, id);
+                state.m.nodes[id].data = hir.NodeData.Defer(value: hir.Defer(
+                    owner_scope: value.owner_scope, references: references));
+            }
+            case option.Option.None: {}
+        }
+    } else {
+        for child_id in n.children {
+            b_annotate_visit(inout state, child_id, depth + 1, f,
+                handlers, active, visible, cleanups);
+        }
+    }
+    switch binding_data {
+        case option.Option.Some(value):
+            b_visible_set(visible, value.symbol, n.scope);
+        case option.Option.None: {}
+    }
+    switch read_symbol {
+        case option.Option.Some(symbol_id): {
+            switch b_visible_find(visible, symbol_id) {
+                case option.Option.None:
+                    throw internal_error("binding not visible at use/registration");
+                case option.Option.Some(scope):
+                    for var index usize = 0; index < vec.len(cleanups); index += 1 {
+                        if b_vec_contains(cleanups[index].external, symbol_id) {
+                            b_insert_sorted(cleanups[index].references, symbol_id);
+                        }
+                    }
+            }
+        }
+        case option.Option.None: {}
+    }
+    let errors = vec.empty[usize]();
+    for child_id in n.children {
+        for error_id in state.m.nodes[child_id].errors {
+            b_insert_sorted(errors, error_id);
+        }
+    }
+    switch try_data {
+        case option.Option.Some(value): {
+            vec.clear(errors);
+            let body_errors = state.m.nodes[n.children[0]].errors;
+            for error_id in body_errors {
+                var caught = false;
+                for catch_value in value.catches {
+                    if catch_value.error_type == error_id { caught = true; }
+                }
+                if !caught { b_insert_sorted(errors, error_id); }
+            }
+            for catch_value in value.catches {
+                for error_id in state.m.nodes[catch_value.body].errors {
+                    b_insert_sorted(errors, error_id);
+                }
+            }
+        }
+        case option.Option.None: {}
+    }
+    var own_error = option.Option[usize].None;
+    switch b_node_call(n) {
+        case option.Option.Some(value):
+            own_error = lookup_type(inout state, value.signature).throws_type;
+        case option.Option.None: {}
+    }
+    switch b_node_constraint_call(n) {
+        case option.Option.Some(value):
+            own_error = lookup_type(inout state, value.signature).throws_type;
+        case option.Option.None: {}
+    }
+    switch b_node_foreign_read(n) {
+        case option.Option.Some(value):
+            own_error = option.Option[usize].Some(
+                b_foreign_binding(inout state, value.binding).read_error);
+        case option.Option.None: {}
+    }
+    if b_node_await(n) {
+        let task_node_type = state.m.nodes[n.children[0]].type_id;
+        let task_type = lookup_type(inout state, task_node_type);
+        if !b_type_kind_is(task_type.kind, model.TypeKind.Task) ||
+           vec.len(task_type.type_args) < 2 {
+            throw internal_error("await child is not a Task");
+        }
+        let error_id = task_type.type_args[1];
+        if !b_type_kind_is(lookup_type(inout state, error_id).kind,
+                           model.TypeKind.Unit) {
+            own_error = option.Option[usize].Some(error_id);
+        }
+    }
+    if b_node_throw(n) {
+        own_error = option.Option[usize].Some(state.m.nodes[n.children[0]].type_id);
+    }
+    switch own_error {
+        case option.Option.Some(value): {
+            b_insert_sorted(errors, value);
+            b_error_exit(inout state, id, value, f, handlers, active, cleanups);
+        }
+        case option.Option.None: {}
+    }
+    switch defer_data {
+        case option.Option.Some(value): vec.clear(errors);
+        case option.Option.None: {}
+    }
+    state.m.nodes[id].errors = errors;
+    switch b_node_return(n) {
+        case option.Option.Some(value): {
+            if vec.len(cleanups) != 0 {
+                throw reject(inout state, n.source.node,
+                    "return escapes defer body", "E_CLEANUP_ESCAPE");
+            }
+            b_plan_exit(inout state, id, hir.ExitKind.Return,
+                hir.ExitTarget.FunctionExit(value: hir.FunctionExit(
+                    function: f.symbol)), option.Option[usize].None,
+                option.Option[usize].None, vec.len(n.children) != 0, active);
+        }
+        case option.Option.None: {}
+    }
+    var jump_target = option.Option[usize].None;
+    var jump_is_break = false;
+    switch b_node_break(n) {
+        case option.Option.Some(value): {
+            jump_target = option.Option[usize].Some(value.loop);
+            jump_is_break = true;
+        }
+        case option.Option.None: {}
+    }
+    switch b_node_continue(n) {
+        case option.Option.Some(value):
+            jump_target = option.Option[usize].Some(value.loop);
+        case option.Option.None: {}
+    }
+    switch jump_target {
+        case option.Option.Some(target): {
+            let destination = state.m.nodes[target];
+            if vec.len(cleanups) != 0 &&
+               !b_scope_inside(inout state, cleanups[vec.len(cleanups) - 1].body,
+                               destination.scope) {
+                throw reject(inout state, n.source.node,
+                    "jump escapes defer body", "E_CLEANUP_ESCAPE");
+            }
+            var keep = option.Option[usize].Some(destination.scope);
+            let destination_kind = hir.node_kind(destination.data);
+            if jump_is_break &&
+               (b_node_kind_is(destination_kind, hir.NodeKind.For) ||
+                b_node_kind_is(destination_kind, hir.NodeKind.ForIn)) {
+                keep = state.m.scopes[destination.scope].parent;
+            }
+            var exit_kind = hir.ExitKind.Continue;
+            if jump_is_break { exit_kind = hir.ExitKind.Break; }
+            b_plan_exit(inout state, id, exit_kind,
+                hir.ExitTarget.JumpExit(value: hir.JumpExit(node: target)),
+                keep, option.Option[usize].None, false, active);
+        }
+        case option.Option.None: {}
+    }
+    if b_node_kind_is(kind, hir.NodeKind.Block) ||
+       b_node_kind_is(kind, hir.NodeKind.For) ||
+       b_node_kind_is(kind, hir.NodeKind.ForIn) {
+        let parent = state.m.scopes[n.scope].parent;
+        b_plan_exit(inout state, id, hir.ExitKind.Normal,
+            hir.ExitTarget.ScopeExit(value: hir.ScopeExit(scope: parent)),
+            parent, option.Option[usize].None, false, active);
+        b_visible_assign(visible, saved_visible);
+        for vec.len(active) > active_size { vec.pop(active); }
+    }
+}
+
+func annotate(state inout Checker, f hir.HirFunction) throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let handlers = vec.empty[usize]();
+    let active = vec.empty[usize]();
+    let visible = vec.empty[VisibleEntry]();
+    for parameter in f.parameters {
+        b_visible_set(visible, parameter.symbol, f.scope);
+    }
+    for capture in f.captures {
+        b_visible_set(visible, capture.local, f.scope);
+    }
+    let cleanups = vec.empty[AnnotationCleanup]();
+    b_annotate_visit(inout state, f.body, 0, f, handlers, active, visible,
+        cleanups);
+}
+
+func b_body_find(state inout Checker, symbol_id usize)
+    option.Option[model.NodeRef] throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    for entry in state.bodies {
+        if entry.symbol == symbol_id {
+            return option.Option[model.NodeRef].Some(entry.source);
+        }
+    }
+    return option.Option[model.NodeRef].None;
+}
+
+func b_template_id_set(state inout Checker, symbol_id usize, index usize) { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var position usize = 0;
+    for position < vec.len(state.template_ids) &&
+          state.template_ids[position].symbol < symbol_id {
+        position += 1;
+    }
+    if position < vec.len(state.template_ids) &&
+       state.template_ids[position].symbol == symbol_id {
+        state.template_ids[position].index = index;
+        return;
+    }
+    vec.push(state.template_ids, TemplateIdEntry(symbol: symbol_id,
+        index: index));
+    var cursor = vec.len(state.template_ids) - 1;
+    for cursor > position {
+        state.template_ids[cursor] = state.template_ids[cursor - 1];
+        cursor -= 1;
+    }
+    state.template_ids[position] = TemplateIdEntry(symbol: symbol_id,
+        index: index);
+}
+
+func check_body(state inout Checker, id usize) throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    state.function = id;
+    var r = model.NodeRef(module: 0, file: 0, node: 0);
+    switch b_body_find(inout state, id) {
+        case option.Option.Some(value): r = value;
+        case option.Option.None: throw internal_error("missing sema body");
+    }
+    let signature = b_signature_or_internal(inout state, id);
+    b_locals_clear(inout state);
+    state.loops = vec.empty[usize]();
+    state.break_targets = vec.empty[usize]();
+    state.cleanup_depth = 0;
+    state.active_params = b_generic_params(inout state, id);
+    b_captures_clear(inout state);
+    switch b_closures_find(inout state, id) {
+        case option.Option.Some(info): {
+            state.current_captures = b_copy_captures(info.bindings);
+            for binding in info.bindings {
+                b_capture_origin_set(inout state, binding.origin, binding.local);
+                b_capture_local_set(inout state, binding.local, binding);
+                b_locals_set(inout state, binding.local, Local(
+                    type_id: binding.type_id, writable: false,
+                    ordinary_parameter: false, read_only_capture: true));
+            }
+        }
+        case option.Option.None: {}
+    }
+    state.scope = new_scope(inout state, r, option.Option[usize].None);
+    var parameters = vec.empty[hir.Parameter]();
+    switch b_parameters_find(inout state, id) {
+        case option.Option.Some(value): parameters = value;
+        case option.Option.None: throw internal_error("missing sema parameters");
+    }
+    let signature_type = lookup_type(inout state, signature);
+    state.async_function = has_async_marker(inout state, r);
+    state.current_async_error = option.Option[usize].None;
+    if state.async_function {
+        let task_type = lookup_type(inout state, signature_type.result);
+        if !b_type_kind_is(task_type.kind, model.TypeKind.Task) ||
+           vec.len(task_type.type_args) < 2 {
+            throw internal_error("async signature is not a Task");
+        }
+        state.current_result = task_type.type_args[0];
+        let error_id = task_type.type_args[1];
+        if !b_type_kind_is(lookup_type(inout state, error_id).kind,
+                           model.TypeKind.Unit) {
+            state.current_async_error = option.Option[usize].Some(error_id);
+        }
+    } else {
+        state.current_result = signature_type.result;
+        state.current_async_error = signature_type.throws_type;
+    }
+    for var index usize = 0; index < vec.len(parameters); index += 1 {
+        if index >= vec.len(signature_type.parameters) {
+            throw internal_error("function parameter/signature mismatch");
+        }
+        let parameter_type = signature_type.parameters[index];
+        b_locals_set(inout state, parameters[index].symbol, Local(
+            type_id: parameter_type.type_id,
+            writable: b_mode_is(parameter_type.mode, model.ParamMode.Inout),
+            ordinary_parameter: b_mode_is(parameter_type.mode,
+                model.ParamMode.Ordinary),
+            read_only_capture: false));
+    }
+    let body_ref = b_child_m(b_module, r,
+        vec.len(b_ast_m(b_module, r).children) - 1);
+    let body = block(inout state, body_ref, true);
+    if state.current_result != b_unit && flow(inout state, body.id, 0).falls {
+        throw reject(inout state, r,
+            "non-Unit function has a reachable normal exit without return",
+            "E_TYPE_MISMATCH");
+    }
+    let function = hir.HirFunction(symbol: id, signature: signature,
+        parameters: parameters, body: body.id, scope: state.scope,
+        source: source(inout state, r), captures: state.current_captures,
+        is_async: state.async_function);
+    annotate(inout state, function);
+    if vec.len(state.active_params) == 0 {
+        vec.push(state.m.functions, function);
+    } else {
+        let template_index = vec.len(state.m.templates);
+        b_template_id_set(inout state, id, template_index);
+        vec.push(state.m.templates, hir.FunctionTemplate(function: function,
+            params: state.active_params));
+    }
+}
+
+func b_copy_captures(values Vec[hir.CaptureBinding]) Vec[hir.CaptureBinding] {
+    let out = vec.empty[hir.CaptureBinding]();
+    for value in values { vec.push(out, value); }
+    return out;
+}

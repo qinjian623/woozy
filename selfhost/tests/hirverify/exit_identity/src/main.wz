@@ -1,0 +1,94 @@
+package app;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/vec" as vec;
+
+func decimal(value usize) string {
+    if value == 0 { return "0"; }
+    let digits = "0123456789";
+    var result = "";
+    var remaining = value;
+    for remaining > 0 {
+        let digit = remaining % 10;
+        result = digits[digit:digit + 1] + result;
+        remaining = remaining / 10;
+    }
+    return result;
+}
+func complete(value model.PhaseState) bool {
+    switch value { case model.PhaseState.Complete: return true; default: return false; }
+}
+func failed(value model.PhaseState) bool {
+    switch value { case model.PhaseState.Failed: return true; default: return false; }
+}
+func internal(value model.FailureKind) bool {
+    switch value { case model.FailureKind.Internal: return true; default: return false; }
+}
+func bit(value bool) string { if value { return "1"; } return "0"; }
+func text(diags Vec[model.Diagnostic]) string {
+    if vec.len(diags) == 0 { return "none"; }
+    let d = diags[0];
+    return d.code + ":" + d.phase + ":" + d.severity + ":primary=" +
+        bit(d.has_primary) + ":" + d.message;
+}
+func reject(value hirverify.VerifyResult) bool {
+    return failed(value.state) && internal(value.failure) &&
+        !option.is_some(value.value) && vec.len(value.diagnostics) == 1 &&
+        value.diagnostics[0].code == "E_IR_INVALID" &&
+        value.diagnostics[0].phase == "lowering" &&
+        value.diagnostics[0].severity == "error";
+}
+func main() i32 throws os.Error {
+    let argv = process.args();
+    if vec.len(argv) != 2 { return 2; }
+    let bytes = fs.read_file(argv[1]);
+    let parsed = parser.parse(lexer.lex(source.snapshot(1,1,1,argv[1],
+        bytes[0:vec.len(bytes)])));
+    if !parsed.has_value || parsed.recovered { return 3; }
+    var module = hir.empty_module(model.ResolvedProject(
+        project:model.empty_project(),symbols:[],occurrences:[],
+        deferred_members:[],self_parameters:[]),0,
+        model.CheckConfig(backend:model.Backend.Native,word_bits:64));
+    try { module = build_generated(parsed); }
+    catch error types.Error { return 4; }
+    let typed = hirverify.verify_types(module);
+    io.println("TYPE complete=" + bit(complete(typed.state)) + " diag=" + text(typed.diagnostics));
+    let capability = hirverify.check_backend_capabilities(module);
+    io.println("CAP complete=" + bit(complete(capability.state)) + " diag=" + text(capability.diagnostics));
+    let verified = hirverify.verify(module,hirverify.VerifyMode.Backend);
+    io.println("VERIFY complete=" + bit(complete(verified.state)) + " has=" +
+        bit(option.is_some(verified.value)) + " diag=" + text(verified.diagnostics));
+    var bad = module;
+    try { bad = hirclone.clone_module(module); }
+    catch error model.SupportError { return 4; }
+    bad.nodes[16].data = hir.NodeData.Return(hir.Return(function:99999));
+    let wrong = hirverify.verify(bad,hirverify.VerifyMode.Backend);
+    io.println("BAD_RETURN rejected=" + bit(reject(wrong)) + " diag=" + text(wrong.diagnostics));
+    try { bad = hirclone.clone_module(module); }
+    catch error model.SupportError { return 4; }
+    bad.nodes[16].exits = [hir.ExitPlan(kind:hir.ExitKind.Return,
+        error_type:option.Option[usize].None,
+        target:hir.ExitTarget.FunctionExit(hir.FunctionExit(
+            function:module.functions[vec.len(module.functions)-1].symbol)),
+        exited_scopes:[99999],defers:[99999],saves_value:true,actions:[])];
+    let exit = hirverify.verify(bad,hirverify.VerifyMode.Backend);
+    io.println("BAD_EXIT rejected=" + bit(reject(exit)) + " diag=" + text(exit.diagnostics));
+    if !complete(typed.state) || vec.len(typed.diagnostics) != 0 ||
+       !complete(capability.state) || vec.len(capability.diagnostics) != 0 ||
+       !complete(verified.state) || !option.is_some(verified.value) ||
+       vec.len(verified.diagnostics) != 0 || !reject(wrong) || !reject(exit) {
+        return 5;
+    }
+    return 0;
+}

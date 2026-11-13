@@ -1,0 +1,8 @@
+package app;
+struct Tag { number i32; }
+struct Other { number i32; }
+trait Convert[T] {}
+impl Convert[i32] for Tag {}
+impl Convert[bool] for Tag {}
+impl Convert[i32] for Other {}
+func main() Unit {}

@@ -1,0 +1,1457 @@
+// Constants, flow analysis, patterns, switches and statements (CPP 4695-5895).
+package sema;
+
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/constant" as constant_pkg;
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/literal" as literal_pkg;
+import "app/wzcc/model" as model;
+import "app/wzcc/pattern" as pattern_analysis;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func evaluated_constant(value inout Constant, constant_value hir.ConstantValue)
+    throws Error {
+    value.value.type_id = constant_value.type_id;
+    switch constant_value.data {
+        case hir.ConstantData.IntegerLiteral(payload): {
+            var integer = bigint.zero();
+            try { integer = bigint.parse_digits(payload.decimal, 10); }
+            catch error bigint.Error {
+                throw internal_error("invalid integer constant decimal");
+            }
+            value.value.integer = option.Option[bigint.BigInt].Some(integer);
+        }
+        case hir.ConstantData.FloatLiteral(payload):
+            value.value.floating = option.Option[u64].Some(payload.bits);
+        case hir.ConstantData.BoolLiteral(payload):
+            value.value.boolean = option.Option[bool].Some(payload.value);
+        case hir.ConstantData.StringLiteral(payload):
+            value.value.string_value = option.Option[string].Some(payload.utf8);
+        case hir.ConstantData.FunctionValue(payload): {
+            value.function = option.Option[usize].Some(payload.symbol);
+            value.type_args = b_copy_ids(payload.type_args);
+        }
+        default: {}
+    }
+}
+
+func constant(state inout Checker, symbol_id usize) Constant throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    switch b_constants_find(inout state, symbol_id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {}
+    }
+    if !b_evaluating_add(inout state, symbol_id) {
+        var definition_ref = model.NodeRef(module: 0, file: 0, node: 0);
+        var have_definition = false;
+        switch symbol(inout state, symbol_id).definition {
+            case option.Option.Some(value): { definition_ref = value; have_definition = true; }
+            case option.Option.None: {}
+        }
+        if !have_definition { throw internal_error("constant has no definition"); }
+        throw reject(inout state, definition_ref, "constant cycle",
+            "E_CONSTANT_CYCLE");
+    }
+    var r = model.NodeRef(module: 0, file: 0, node: 0);
+    switch symbol(inout state, symbol_id).definition {
+        case option.Option.Some(value): r = value;
+        case option.Option.None: throw internal_error("constant has no definition");
+    }
+    let begin = vec.len(state.m.nodes);
+    var expected = option.Option[usize].None;
+    let node_value = b_ast_m(b_module, r);
+    if vec.len(node_value.children) > 1 {
+        expected = option.Option[usize].Some(parse_type(inout state,
+            b_child_m(b_module, r, 0), option.Option[usize].None, false));
+    }
+    let e = expression(inout state,
+        b_child_m(b_module, r, vec.len(node_value.children) - 1), expected);
+    var result = Constant(value: b_copy_value(e.value),
+        function: option.Option[usize].None, type_args: [],
+        aggregate: option.Option[hir.ConstantValue].None);
+    let pure = constant_pkg.evaluate_hir_constant(state.m, e.id);
+    switch pure {
+        case option.Option.Some(value): {
+            evaluated_constant(inout result, value);
+            if constant_pkg.aggregate_constant_expression(state.m, e.id) {
+                result.aggregate = option.Option[hir.ConstantValue].Some(
+                    b_clone_constant_value(value));
+            }
+        }
+        case option.Option.None: {}
+    }
+    switch b_node_function_value(state.m.nodes[e.id]) {
+        case option.Option.Some(function): {
+            if vec.len(function.captures) != 0 {
+                throw reject(inout state, r,
+                    "a constant function value cannot capture or bind a receiver",
+                    "E_TYPE_MISMATCH");
+            }
+            switch function.bound {
+                case option.Option.Some(bound):
+                    throw reject(inout state, r,
+                        "a constant function value cannot capture or bind a receiver",
+                        "E_TYPE_MISMATCH");
+                case option.Option.None: {}
+            }
+            result.function = option.Option[usize].Some(function.symbol);
+            result.type_args = b_copy_ids(function.type_args);
+        }
+        case option.Option.None: {}
+    }
+    var has_value = option_is_some_bigint(result.value.integer) ||
+        option_is_some_u64(result.value.floating) ||
+        option_is_some_bool(result.value.boolean) ||
+        option_is_some_string(result.value.string_value) ||
+        option_is_some_usize(result.function) ||
+        option_is_some_constant(result.aggregate);
+    if !has_value {
+        throw unavailable(inout state, r,
+            "const initializer must be a pure non-Panic compile-time value");
+    }
+    if begin <= vec.len(state.m.nodes) {
+        state.m.nodes = state.m.nodes[0:begin];
+    }
+    b_evaluating_remove(inout state, symbol_id);
+    b_constants_set(inout state, symbol_id, result);
+    return result;
+}
+
+func option_is_some_u64(value option.Option[u64]) bool {
+    switch value { case option.Option.Some(inner): return true; case option.Option.None: return false; }
+}
+func option_is_some_bool(value option.Option[bool]) bool {
+    switch value { case option.Option.Some(inner): return true; case option.Option.None: return false; }
+}
+func option_is_some_string(value option.Option[string]) bool {
+    switch value { case option.Option.Some(inner): return true; case option.Option.None: return false; }
+}
+func option_is_some_usize(value option.Option[usize]) bool {
+    switch value { case option.Option.Some(inner): return true; case option.Option.None: return false; }
+}
+func option_is_some_constant(value option.Option[hir.ConstantValue]) bool {
+    switch value { case option.Option.Some(inner): return true; case option.Option.None: return false; }
+}
+
+func option_is_some_constant_entry(value option.Option[Constant]) bool {
+    switch value { case option.Option.Some(inner): return true; case option.Option.None: return false; }
+}
+
+func check_public_constant(state inout Checker, id usize) throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let value = symbol(inout state, id);
+    if !b_symbol_kind_is(value.kind, model.SymbolKind.Constant) ||
+       !value.exported { return; }
+    switch value.definition {
+        case option.Option.Some(value_ref): {}
+        case option.Option.None: return;
+    }
+    let c = constant(inout state, id);
+    let roots = [c.value.type_id];
+    switch foreign.private_interface_type(state.m.types, state.m.resolved, roots) {
+        case option.Option.Some(private_type):
+            switch value.definition {
+                case option.Option.Some(value_ref):
+                    throw private_type_leak(inout state, value_ref, private_type);
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+}
+
+func new_scope(state inout Checker, r model.NodeRef,
+               parent option.Option[usize]) usize throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let id = vec.len(state.m.scopes);
+    vec.push(state.m.scopes, hir.HirScope(function: state.function,
+        parent: parent, source: source(inout state, r)));
+    return id;
+}
+
+func flow(state inout Checker, id usize, depth usize) Flow throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    if depth > 512 {
+        throw internal_error("flow nesting limit");
+    }
+    if id >= vec.len(state.m.nodes) {
+        throw internal_error("invalid flow node");
+    }
+    let n = state.m.nodes[id];
+    var out = b_flow_empty();
+    let kind = hir.node_kind(n.data);
+    if b_node_kind_is(kind, hir.NodeKind.Defer) {
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.ShortCircuit) {
+        let first = flow(inout state, n.children[0], depth + 1);
+        b_flow_merge(out, first);
+        let known = b_node_bool_literal(state.m.nodes[n.children[0]]);
+        var take_second = true;
+        switch known {
+            case option.Option.Some(value):
+                switch n.data {
+                    case hir.NodeData.ShortCircuit(payload):
+                        switch payload.op {
+                            case hir.LogicalOp.And: if !value.value { take_second = false; }
+                            case hir.LogicalOp.Or: if value.value { take_second = false; }
+                        }
+                    default: {}
+                }
+            case option.Option.None: {}
+        }
+        if take_second {
+            b_flow_merge(out, flow(inout state, n.children[1], depth + 1));
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.Block) {
+        for child_id in n.children {
+            if !out.falls { break; }
+            let child_flow = flow(inout state, child_id, depth + 1);
+            b_flow_merge(out, child_flow);
+            out.falls = child_flow.falls;
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.If) {
+        b_flow_merge(out, flow(inout state, n.children[0], depth + 1));
+        let known = b_node_bool_literal(state.m.nodes[n.children[0]]);
+        var has_known = false;
+        var known_value = false;
+        switch known {
+            case option.Option.Some(value): { has_known = true; known_value = value.value; }
+            case option.Option.None: {}
+        }
+        out.falls = !has_known && vec.len(n.children) == 2;
+        for var index usize = 1; index < vec.len(n.children); index += 1 {
+            if has_known {
+                if known_value && index != 1 { continue; }
+                if !known_value && index != 2 { continue; }
+            }
+            let branch = flow(inout state, n.children[index], depth + 1);
+            b_flow_merge(out, branch);
+            out.falls = out.falls || branch.falls;
+        }
+        if has_known && !known_value && vec.len(n.children) == 2 {
+            out.falls = true;
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.Try) {
+        let body = flow(inout state, n.children[0], depth + 1);
+        out = b_flow_copy(body);
+        var catches = vec.empty[hir.Catch]();
+        switch n.data {
+            case hir.NodeData.Try(value): catches = value.catches;
+            default: {}
+        }
+        for catch_value in catches {
+            b_remove_id(out.errors, catch_value.error_type);
+        }
+        for catch_value in catches {
+            var reachable = false;
+            for error_id in body.errors {
+                if b_patterns_overlap(inout state, error_id, catch_value.error_type) {
+                    reachable = true;
+                }
+            }
+            if !reachable { continue; }
+            let handler = flow(inout state, catch_value.body, depth + 1);
+            b_flow_merge(out, handler);
+            out.falls = out.falls || handler.falls;
+        }
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.Switch) {
+        b_flow_merge(out, flow(inout state, n.children[0], depth + 1));
+        out.falls = false;
+        for var index usize = 1; index < vec.len(n.children); index += 1 {
+            let arm = flow(inout state, n.children[index], depth + 1);
+            b_flow_merge(out, arm);
+            out.falls = out.falls || arm.falls || b_vec_contains(arm.breaks, id);
+        }
+        b_remove_id(out.breaks, id);
+        return out;
+    }
+    if b_node_kind_is(kind, hir.NodeKind.For) {
+        b_flow_merge(out, flow(inout state, n.children[0], depth + 1));
+        b_flow_merge(out, flow(inout state, n.children[1], depth + 1));
+        let known = b_node_bool_literal(state.m.nodes[n.children[1]]);
+        var cond_known = false;
+        var cond_value = true;
+        switch known {
+            case option.Option.Some(value): { cond_known = true; cond_value = value.value; }
+            case option.Option.None: {}
+        }
+        if cond_known && !cond_value { return out; }
+        let body = flow(inout state, n.children[3], depth + 1);
+        b_flow_merge(out, body);
+        if body.falls || b_vec_contains(body.continues, id) {
+            b_flow_merge(out, flow(inout state, n.children[2], depth + 1));
+        }
+        out.falls = !cond_known || b_vec_contains(body.breaks, id);
+        b_remove_id(out.breaks, id);
+        b_remove_id(out.continues, id);
+        return out;
+    }
+    for child_id in n.children {
+        b_flow_merge(out, flow(inout state, child_id, depth + 1));
+    }
+    switch b_node_call(n) {
+        case option.Option.Some(payload):
+            b_flow_add_signature_error(inout state, out, payload.signature);
+        case option.Option.None: {}
+    }
+    switch b_node_constraint_call(n) {
+        case option.Option.Some(payload):
+            b_flow_add_signature_error(inout state, out, payload.signature);
+        case option.Option.None: {}
+    }
+    switch b_node_foreign_read(n) {
+        case option.Option.Some(payload):
+            b_insert_sorted(out.errors,
+                b_foreign_binding(inout state, payload.binding).read_error);
+        case option.Option.None: {}
+    }
+    if b_node_await(n) {
+        let task_node_type = state.m.nodes[n.children[0]].type_id;
+        let task_type = lookup_type(inout state, task_node_type);
+        if !b_type_kind_is(task_type.kind, model.TypeKind.Task) ||
+           vec.len(task_type.type_args) < 2 {
+            throw internal_error("await child is not a Task");
+        }
+        let error_id = task_type.type_args[1];
+        if !b_type_kind_is(lookup_type(inout state, error_id).kind,
+                           model.TypeKind.Unit) {
+            b_insert_sorted(out.errors, error_id);
+        }
+    }
+    if b_node_throw(n) {
+        b_insert_sorted(out.errors, state.m.nodes[n.children[0]].type_id);
+        out.falls = false;
+    }
+    switch b_node_return(n) {
+        case option.Option.Some(value): out.falls = false;
+        case option.Option.None: {}
+    }
+    switch b_node_break(n) {
+        case option.Option.Some(value): {
+            b_insert_sorted(out.breaks, value.loop);
+            out.falls = false;
+        }
+        case option.Option.None: {}
+    }
+    switch b_node_continue(n) {
+        case option.Option.Some(value): {
+            b_insert_sorted(out.continues, value.loop);
+            out.falls = false;
+        }
+        case option.Option.None: {}
+    }
+    return out;
+}
+
+func b_flow_add_signature_error(state inout Checker, out Flow,
+                                signature_id usize) throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let signature_type = lookup_type(inout state, signature_id);
+    switch signature_type.throws_type {
+        case option.Option.Some(value): b_insert_sorted(out.errors, value);
+        case option.Option.None: {}
+    }
+}
+
+func b_patterns_overlap(state inout Checker, left usize, right usize) bool throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    try { return types.patterns_overlap(left, right, state.m.types); }
+    catch error types.Error { throw Error.Support(support_from_type_error(error)); }
+}
+
+func block(state inout Checker, r model.NodeRef, outer bool) Statement throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let saved = state.scope;
+    if !outer {
+        state.scope = new_scope(inout state, r,
+            option.Option[usize].Some(saved));
+    }
+    let n = b_ast_m(b_module, r);
+    let children = vec.empty[usize]();
+    var falls = true;
+    var breaks = false;
+    for child_id in n.children {
+        let child_statement = statement(inout state, at(r, child_id));
+        vec.push(children, child_statement.id);
+        if falls {
+            breaks = breaks || child_statement.breaks;
+            falls = child_statement.falls;
+        }
+    }
+    let id = node(inout state, r, b_unit,
+        hir.NodeData.Block(value: hir.Block()), children);
+    state.scope = saved;
+    return b_statement_result(id, falls, breaks);
+}
+
+func pattern(state inout Checker, r model.NodeRef, type_id usize)
+    hir.Pattern throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    var result = hir.Pattern(type_id: type_id, source: source(inout state, r),
+        variant: option.Option[usize].None, binding: option.Option[usize].None,
+        payload: [], literal: option.Option[hir.PatternLiteral].None);
+    let n = b_ast_m(b_module, r);
+    if b_kind_is(n.kind, model.AstKind.BindPattern) {
+        if b_token_m(b_module, r, 0) != "_" {
+            let id = definition(inout state, r);
+            result.binding = option.Option[usize].Some(id);
+            b_locals_set(inout state, id, Local(type_id: type_id, writable: false,
+                ordinary_parameter: false, read_only_capture: false));
+        }
+        return result;
+    }
+    if b_kind_is(n.kind, model.AstKind.LiteralPattern) {
+        try {
+            result.literal = option.Option[hir.PatternLiteral].Some(
+                literal_pkg.decode_pattern_literal(state.m.resolved.project,
+                    state.m.types, r, type_id, state.m.config));
+        } catch error model.SupportError {
+            throw reject(inout state, r, b_support_message(error),
+                "E_TYPE_MISMATCH");
+        }
+        return result;
+    }
+    if !b_kind_is(n.kind, model.AstKind.VariantPattern) {
+        throw unavailable(inout state, r,
+            "only literal, enum variant, binding and wildcard patterns are implemented");
+    }
+    if !b_type_kind_is(lookup_type(inout state, type_id).kind,
+                       model.TypeKind.NominalEnum) {
+        throw reject(inout state, r, "variant pattern requires an enum",
+            "E_TYPE_MISMATCH");
+    }
+    let type_value = lookup_type(inout state, type_id);
+    var base_id usize = 0;
+    var have_base = false;
+    switch occurrence(inout state, r) {
+        case option.Option.Some(value): { base_id = value; have_base = true; }
+        case option.Option.None: {}
+    }
+    if !have_base || base_id != type_value.declaration {
+        throw reject(inout state, r, "pattern belongs to a different enum",
+            "E_TYPE_MISMATCH");
+    }
+    let file = b_file_m(b_module, r);
+    var name = "";
+    var depth usize = 0;
+    for var index usize = n.token_begin; index < n.token_end; index += 1 {
+        if index >= vec.len(file.lexed.tokens) { break; }
+        let spelling = file.lexed.tokens[index].spelling;
+        if spelling == "(" && depth == 0 { break; }
+        if spelling == "[" { depth += 1; }
+        if spelling == "]" { depth -= 1; }
+        if spelling == "." && depth == 0 && index + 1 < vec.len(file.lexed.tokens) {
+            name = file.lexed.tokens[index + 1].spelling;
+        }
+    }
+    var variant = hir.VariantDecl(symbol: 0, payload: [],
+        source: source(inout state, r));
+    var have_variant = false;
+    let declaration = nominal(inout state, type_id);
+    for candidate in declaration.variants {
+        if symbol(inout state, candidate.symbol).name == name {
+            variant = candidate;
+            have_variant = true;
+        }
+    }
+    if !have_variant {
+        throw reject(inout state, r, "unknown enum pattern variant",
+            "E_NAME_NOT_FOUND");
+    }
+    result.variant = option.Option[usize].Some(variant.symbol);
+    var payload_index usize = 0;
+    var type_index usize = 0;
+    for child_id in n.children {
+        let child_ref = at(r, child_id);
+        let child_node = b_ast_m(b_module, child_ref);
+        if b_kind_is(child_node.kind, model.AstKind.NamedType) ||
+           b_kind_is(child_node.kind, model.AstKind.FunctionType) ||
+           b_kind_is(child_node.kind, model.AstKind.ParenthesizedType) {
+            if type_index >= vec.len(type_value.type_args) {
+                throw reject(inout state, child_ref,
+                    "enum pattern type arguments mismatch", "E_TYPE_MISMATCH");
+            }
+            let parsed = parse_type(inout state, child_ref,
+                option.Option[usize].None, false);
+            if parsed != type_value.type_args[type_index] {
+                throw reject(inout state, child_ref,
+                    "enum pattern type arguments mismatch", "E_TYPE_MISMATCH");
+            }
+            type_index += 1;
+            continue;
+        }
+        if payload_index >= vec.len(variant.payload) {
+            throw reject(inout state, r,
+                "wrong variant pattern payload count", "E_CALL_ARGUMENT");
+        }
+        let field = variant.payload[payload_index];
+        let field_type_id = field_type(inout state, type_id, field);
+        vec.push(result.payload, pattern(inout state, child_ref, field_type_id));
+        payload_index += 1;
+    }
+    if payload_index != vec.len(variant.payload) {
+        throw reject(inout state, r,
+            "wrong variant pattern payload count", "E_CALL_ARGUMENT");
+    }
+    return result;
+}
+
+struct DomainCacheEntry {
+    type_id usize;
+    domain pattern_analysis.Domain;
+}
+
+func b_domain_cache_find(values Vec[DomainCacheEntry], type_id usize)
+    option.Option[pattern_analysis.Domain] {
+    for value in values {
+        if value.type_id == type_id {
+            return option.Option[pattern_analysis.Domain].Some(value.domain);
+        }
+    }
+    return option.Option[pattern_analysis.Domain].None;
+}
+
+func b_domain_for(state inout Checker, type_id usize)
+    pattern_analysis.Domain throws model.SupportError {
+    var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(state.m.types, type_id) {
+        case option.Option.Some(item): value = item;
+        case option.Option.None:
+            throw model.SupportError.Limit(
+                "pattern coverage type is missing");
+    }
+    if b_type_kind_is(value.kind, model.TypeKind.NominalEnum) {
+        var declaration_index usize = 0;
+        var found = false;
+        for var index usize = 0; index < vec.len(state.m.nominals); index += 1 {
+            if state.m.nominals[index].symbol == value.declaration {
+                declaration_index = index;
+                found = true;
+            }
+        }
+        if !found || vec.len(state.m.nominals[declaration_index].params) !=
+                     vec.len(value.type_args) {
+            throw model.SupportError.Limit(
+                "enum pattern constructor declaration/type arguments mismatch");
+        }
+        let declaration = state.m.nominals[declaration_index];
+        let substitutions = vec.empty[model.Substitution]();
+        for var index usize = 0; index < vec.len(declaration.params); index += 1 {
+            vec.push(substitutions, model.Substitution(
+                symbol: declaration.params[index].symbol,
+                type_id: value.type_args[index]));
+        }
+        let constructors = vec.empty[pattern_analysis.Constructor]();
+        for variant in declaration.variants {
+            let fields = vec.empty[usize]();
+            for field in variant.payload {
+                var concrete = field.type_id;
+                var type_context = state.m.types;
+                try {
+                    concrete = types.substitute(field.type_id, substitutions,
+                        inout type_context);
+                } catch error types.Error {
+                    throw support_from_type_error(error);
+                }
+                state.m.types = type_context;
+                vec.push(fields, concrete);
+            }
+            vec.push(constructors, pattern_analysis.Constructor(
+                kind: pattern_analysis.ConstructorKind.Variant,
+                variant: variant.symbol, literal_key: "", fields: fields));
+        }
+        return pattern_analysis.Domain(
+            kind: pattern_analysis.DomainKind.NominalEnum,
+            constructors: constructors, bits: 0);
+    }
+    if b_type_kind_is(value.kind, model.TypeKind.Bool) {
+        return pattern_analysis.Domain(
+            kind: pattern_analysis.DomainKind.BoolDomain,
+            constructors: [], bits: 1);
+    }
+    if b_type_kind_is(value.kind, model.TypeKind.SignedInt) ||
+       b_type_kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+       b_type_kind_is(value.kind, model.TypeKind.Isize) ||
+       b_type_kind_is(value.kind, model.TypeKind.Usize) {
+        var bits u32 = 0;
+        try { bits = types.bit_width(value, state.m.config); }
+        catch error types.Error { throw support_from_type_error(error); }
+        return pattern_analysis.Domain(
+            kind: pattern_analysis.DomainKind.IntegerDomain,
+            constructors: [], bits: bits);
+    }
+    if b_type_kind_is(value.kind, model.TypeKind.Float) {
+        return pattern_analysis.Domain(
+            kind: pattern_analysis.DomainKind.FloatDomain,
+            constructors: [], bits: value.bits);
+    }
+    if b_type_kind_is(value.kind, model.TypeKind.String) {
+        return pattern_analysis.Domain(
+            kind: pattern_analysis.DomainKind.StringDomain,
+            constructors: [], bits: 0);
+    }
+    return pattern_analysis.Domain(
+        kind: pattern_analysis.DomainKind.Opaque, constructors: [], bits: 0);
+}
+
+func b_domain_precompute(state inout Checker, type_id usize,
+                         values Vec[DomainCacheEntry])
+    throws model.SupportError {
+    switch b_domain_cache_find(values, type_id) {
+        case option.Option.Some(domain_value): return;
+        case option.Option.None: {}
+    }
+    let domain_value = b_domain_for(inout state, type_id);
+    vec.push(values, DomainCacheEntry(type_id: type_id,
+        domain: domain_value));
+    for constructor in domain_value.constructors {
+        for field in constructor.fields {
+            b_domain_precompute(inout state, field, values);
+        }
+    }
+}
+
+func switch_statement(state inout Checker, r model.NodeRef) Statement throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let n = b_ast_m(b_module, r);
+    let value = expression(inout state, b_child_m(b_module, r, 0),
+        option.Option[usize].None);
+    let id = node(inout state, r, b_unit,
+        hir.NodeData.Switch(value: hir.Switch(arms: [], exhaustive: false)), []);
+    let domain_cache = vec.empty[DomainCacheEntry]();
+    try {
+        b_domain_precompute(inout state, value.value.type_id, domain_cache);
+    } catch error model.SupportError {
+        throw unavailable(inout state, r,
+            "cannot complete switch pattern coverage: " + b_support_message(error));
+    }
+    let lookup = func(type_id usize) pattern_analysis.Domain
+            throws model.SupportError {
+        switch b_domain_cache_find(domain_cache, type_id) {
+            case option.Option.Some(domain_value): return domain_value;
+            case option.Option.None:
+                throw model.SupportError.Limit(
+                    "switch pattern domain cache is incomplete");
+        }
+    };
+    var coverage = pattern_analysis.coverage(value.value.type_id, lookup, 100000);
+    vec.push(state.break_targets, id);
+    let children = vec.empty[usize]();
+    vec.push(children, value.id);
+    let arms = vec.empty[hir.Arm]();
+    var falls = false;
+    for var index usize = 1; index < vec.len(n.children); index += 1 {
+        let case_ref = b_child_m(b_module, r, index);
+        let saved = state.scope;
+        state.scope = new_scope(inout state, case_ref,
+            option.Option[usize].Some(saved));
+        let default_arm = b_token_m(b_module, case_ref, 0) == "default";
+        var arm_pattern = hir.Pattern(type_id: value.value.type_id,
+            source: source(inout state, case_ref),
+            variant: option.Option[usize].None,
+            binding: option.Option[usize].None, payload: [],
+            literal: option.Option[hir.PatternLiteral].None);
+        if !default_arm {
+            arm_pattern = pattern(inout state,
+                b_child_m(b_module, case_ref, 0), value.value.type_id);
+        }
+        var useful = false;
+        try { useful = pattern_analysis.add(inout coverage, arm_pattern); }
+        catch error model.SupportError {
+            throw unavailable(inout state, case_ref,
+                "cannot complete switch pattern coverage: " + b_support_message(error));
+        }
+        if !useful {
+            throw reject(inout state, case_ref, "unreachable switch arm",
+                "E_TYPE_MISMATCH");
+        }
+        let statements = vec.empty[usize]();
+        var arm_falls = true;
+        var arm_breaks = false;
+        let case_node = b_ast_m(b_module, case_ref);
+        var start usize = 1;
+        if default_arm { start = 0; }
+        for var child_index usize = start; child_index < vec.len(case_node.children);
+            child_index += 1 {
+            let child_statement = statement(inout state,
+                b_child_m(b_module, case_ref, child_index));
+            vec.push(statements, child_statement.id);
+            if arm_falls {
+                arm_breaks = arm_breaks || child_statement.breaks;
+                arm_falls = child_statement.falls;
+            }
+        }
+        let body = node(inout state, case_ref, b_unit,
+            hir.NodeData.Block(value: hir.Block()), statements);
+        vec.push(arms, hir.Arm(pattern: arm_pattern, scope: state.scope,
+            body: body, source: source(inout state, case_ref)));
+        vec.push(children, body);
+        state.scope = saved;
+        falls = falls || arm_falls || arm_breaks;
+    }
+    var exhaustive = false;
+    try { exhaustive = pattern_analysis.exhaustive(inout coverage); }
+    catch error model.SupportError {
+        throw unavailable(inout state, r,
+            "cannot complete switch pattern coverage: " + b_support_message(error));
+    }
+    if !exhaustive {
+        throw reject(inout state, r, "switch is not exhaustive", "E_TYPE_MISMATCH");
+    }
+    state.m.nodes[id].children = children;
+    state.m.nodes[id].data = hir.NodeData.Switch(value: hir.Switch(
+        arms: arms, exhaustive: exhaustive));
+    vec.pop(state.break_targets);
+    return b_statement_result(id, falls, false);
+}
+
+func statement(state inout Checker, r model.NodeRef) Statement throws Error { let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let n = b_ast_m(b_module, r);
+    switch n.kind {
+        case model.AstKind.Block:
+            return block(inout state, r, false);
+        case model.AstKind.Unsafe: {
+            if vec.len(n.children) != 1 ||
+               !b_kind_is(b_ast_m(b_module,
+                       b_child_m(b_module, r, 0)).kind, model.AstKind.Block) {
+                throw unavailable(inout state, r,
+                    "unsafe requires exactly one lexical block");
+            }
+            state.unsafe_depth += 1;
+            let result = block(inout state, b_child_m(b_module, r, 0), false);
+            state.unsafe_depth -= 1;
+            return result;
+        }
+        case model.AstKind.Switch:
+            return switch_statement(inout state, r);
+        case model.AstKind.Binding:
+            return b_statement_binding(inout state, r, n);
+        case model.AstKind.Assign:
+            return b_statement_assign(inout state, r, n);
+        case model.AstKind.ExpressionStatement: {
+            let e = expression(inout state, b_child_m(b_module, r, 0),
+                option.Option[usize].None);
+            return b_statement_result(node(inout state, r, b_unit,
+                hir.NodeData.ExpressionStatement(
+                    value: hir.ExpressionStatement()), [e.id]), true, false);
+        }
+        case model.AstKind.Try:
+            return b_statement_try(inout state, r, n);
+        case model.AstKind.Defer: {
+            let owner = state.scope;
+            state.cleanup_depth += 1;
+            let body = block(inout state, b_child_m(b_module, r, 0), false);
+            state.cleanup_depth -= 1;
+            let data = hir.Defer(owner_scope: owner, references: []);
+            return b_statement_result(node(inout state, r, b_unit,
+                hir.NodeData.Defer(value: data), [body.id]), body.falls,
+                body.breaks);
+        }
+        case model.AstKind.Throw: {
+            let e = expression(inout state, b_child_m(b_module, r, 0),
+                option.Option[usize].None);
+            return b_statement_result(node(inout state, r, b_unit,
+                hir.NodeData.Throw(value: hir.Throw()), [e.id]), false, false);
+        }
+        case model.AstKind.Return:
+            return b_statement_return(inout state, r, n);
+        case model.AstKind.If:
+            return b_statement_if(inout state, r, n);
+        case model.AstKind.ForIn:
+            return b_statement_for_in(inout state, r, n);
+        case model.AstKind.For:
+            return b_statement_for(inout state, r, n);
+        case model.AstKind.Break: {
+            if vec.len(state.break_targets) == 0 {
+                var code = "E_TYPE_MISMATCH";
+                if state.cleanup_depth != 0 { code = "E_CLEANUP_ESCAPE"; }
+                throw reject(inout state, r,
+                    "break has no enclosing loop or switch", code);
+            }
+            let target = state.break_targets[vec.len(state.break_targets) - 1];
+            return b_statement_result(node(inout state, r, b_unit,
+                hir.NodeData.Break(value: hir.Break(loop: target)), []),
+                false, true);
+        }
+        case model.AstKind.Continue: {
+            if vec.len(state.loops) == 0 {
+                var code = "E_TYPE_MISMATCH";
+                if state.cleanup_depth != 0 { code = "E_CLEANUP_ESCAPE"; }
+                throw reject(inout state, r,
+                    "continue has no enclosing loop", code);
+            }
+            let target = state.loops[vec.len(state.loops) - 1];
+            return b_statement_result(node(inout state, r, b_unit,
+                hir.NodeData.Continue(value: hir.Continue(loop: target)), []),
+                false, false);
+        }
+        default:
+            throw unavailable(inout state, r,
+                "switch/aggregate, typed errors, cleanup, or ownership statement requires a later task");
+    }
+}
+
+func b_statement_binding(state inout Checker, r model.NodeRef,
+                         n model.AstNode) Statement throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let id = definition(inout state, r);
+    var expected = option.Option[usize].None;
+    if vec.len(n.children) > 1 {
+        expected = option.Option[usize].Some(parse_type(inout state,
+            b_child_m(b_module, r, 0), option.Option[usize].None, false));
+    }
+    let e = expression(inout state,
+        b_child_m(b_module, r, vec.len(n.children) - 1), expected);
+    let writable = first(inout state, r) == "var";
+    var pure = option.Option[hir.ConstantValue].None;
+    if first(inout state, r) == "const" {
+        pure = constant_pkg.evaluate_hir_constant(state.m, e.id);
+    }
+    var alias = option.Option[Constant].None;
+    switch b_node_read(state.m.nodes[e.id]) {
+        case option.Option.Some(read):
+            if b_symbol_kind_is(symbol(inout state, read.symbol).kind,
+                                model.SymbolKind.Constant) {
+                switch b_constants_find(inout state, read.symbol) {
+                    case option.Option.Some(stored):
+                        if option_is_some_usize(stored.function) {
+                            alias = option.Option[Constant].Some(stored);
+                        }
+                    case option.Option.None: {}
+                }
+            }
+        case option.Option.None: {}
+    }
+    var has_scalar = option_is_some_bigint(e.value.integer) ||
+        option_is_some_u64(e.value.floating) ||
+        option_is_some_bool(e.value.boolean) ||
+        option_is_some_string(e.value.string_value);
+    var node_function = false;
+    switch b_node_function_value(state.m.nodes[e.id]) {
+        case option.Option.Some(value): node_function = true;
+        case option.Option.None: {}
+    }
+    if first(inout state, r) == "const" && !has_scalar &&
+       !option_is_some_constant_entry(alias) && !node_function &&
+       !option_is_some_constant(pure) {
+        throw unavailable(inout state, r,
+            "const initializer must be a pure non-Panic compile-time value");
+    }
+    b_locals_set(inout state, id, Local(type_id: e.value.type_id,
+        writable: writable, ordinary_parameter: false,
+        read_only_capture: false));
+    if first(inout state, r) == "const" {
+        var c = Constant(value: b_copy_value(e.value),
+            function: option.Option[usize].None, type_args: [],
+            aggregate: option.Option[hir.ConstantValue].None);
+        switch pure {
+            case option.Option.Some(value): {
+                evaluated_constant(inout c, value);
+                if constant_pkg.aggregate_constant_expression(state.m, e.id) {
+                    c.aggregate = option.Option[hir.ConstantValue].Some(
+                        b_clone_constant_value(value));
+                }
+            }
+            case option.Option.None: {}
+        }
+        switch b_node_function_value(state.m.nodes[e.id]) {
+            case option.Option.Some(function): {
+                if vec.len(function.captures) != 0 {
+                    throw reject(inout state, r,
+                        "a constant function value cannot capture or bind a receiver",
+                        "E_TYPE_MISMATCH");
+                }
+                switch function.bound {
+                    case option.Option.Some(bound):
+                        throw reject(inout state, r,
+                            "a constant function value cannot capture or bind a receiver",
+                            "E_TYPE_MISMATCH");
+                    case option.Option.None: {}
+                }
+                c.function = option.Option[usize].Some(function.symbol);
+                c.type_args = b_copy_ids(function.type_args);
+            }
+            case option.Option.None: {
+                switch alias {
+                    case option.Option.Some(stored): {
+                        c.function = stored.function;
+                        c.type_args = b_copy_ids(stored.type_args);
+                    }
+                    case option.Option.None: {}
+                }
+            }
+        }
+        b_constants_set(inout state, id, c);
+    }
+    return b_statement_result(node(inout state, r, b_unit,
+        hir.NodeData.Binding(value: hir.Binding(symbol: id,
+            writable: writable)), [e.id]), true, false);
+}
+
+func b_statement_assign(state inout Checker, r model.NodeRef,
+                        n model.AstNode) Statement throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let p = place(inout state, b_child_m(b_module, r, 0), false);
+    let op_text = b_binary_token_m(b_module, r);
+    if op_text != "=" && foreign_place_kind(state.m.nodes[p.id]) {
+        throw unavailable(inout state, r,
+            "compound assignment to an external property/index/slice is not supported");
+    }
+    let shift = op_text == "<<=" || op_text == ">>=";
+    var right_expected = option.Option[usize].Some(p.value.type_id);
+    if shift { right_expected = option.Option[usize].None; }
+    let rhs = expression(inout state, b_child_m(b_module, r, 1), right_expected);
+    var compound = option.Option[hir.BinaryOp].None;
+    if op_text != "=" {
+        compound = option.Option[hir.BinaryOp].Some(b_compound_op(op_text));
+        var op = hir.BinaryOp.Add;
+        switch compound { case option.Option.Some(value): op = value; case option.Option.None: {} }
+        let p_type = lookup_type(inout state, p.value.type_id);
+        let floating = b_type_kind_is(p_type.kind, model.TypeKind.Float) &&
+            (b_binary_id(op) == BINARY_ADD || b_binary_id(op) == BINARY_SUBTRACT ||
+             b_binary_id(op) == BINARY_MULTIPLY || b_binary_id(op) == BINARY_DIVIDE);
+        let text = b_type_kind_is(p_type.kind, model.TypeKind.String) &&
+            b_binary_id(op) == BINARY_ADD;
+        if text && !b_node_kind_is(hir.node_kind(state.m.nodes[p.id].data),
+                                   hir.NodeKind.Place) {
+            throw unavailable(inout state, r,
+                "string += requires a whole writable binding");
+        }
+        if !floating && !text &&
+           (!integer(inout state, p.value.type_id) ||
+            !integer(inout state, rhs.value.type_id)) {
+            throw reject(inout state, r,
+                "compound assignment requires integer operands",
+                "E_TYPE_MISMATCH");
+        }
+        if !shift {
+            b_match(inout state, r, rhs.value.type_id,
+                option.Option[usize].Some(p.value.type_id));
+        }
+    }
+    return b_statement_result(node(inout state, r, b_unit,
+        hir.NodeData.Assign(value: hir.Assign(compound: compound)),
+        [p.id, rhs.id]), true, false);
+}
+
+func b_compound_op(op string) hir.BinaryOp throws Error {
+    if op == "+=" { return hir.BinaryOp.Add; }
+    if op == "-=" { return hir.BinaryOp.Subtract; }
+    if op == "*=" { return hir.BinaryOp.Multiply; }
+    if op == "/=" { return hir.BinaryOp.Divide; }
+    if op == "%=" { return hir.BinaryOp.Remainder; }
+    if op == "<<=" { return hir.BinaryOp.ShiftLeft; }
+    if op == ">>=" { return hir.BinaryOp.ShiftRight; }
+    if op == "&=" { return hir.BinaryOp.BitAnd; }
+    if op == "|=" { return hir.BinaryOp.BitOr; }
+    if op == "^=" { return hir.BinaryOp.BitXor; }
+    throw internal_error("unknown compound assignment operator");
+}
+
+func b_statement_try(state inout Checker, r model.NodeRef,
+                     n model.AstNode) Statement throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let id = node(inout state, r, b_unit,
+        hir.NodeData.Try(value: hir.Try(catches: [])), []);
+    let catches = vec.empty[hir.Catch]();
+    let types_seen = vec.empty[usize]();
+    for var index usize = 1; index < vec.len(n.children); index += 1 {
+        let case_ref = b_child_m(b_module, r, index);
+        let type_id = parse_type(inout state, b_child_m(b_module, case_ref, 0),
+            option.Option[usize].None, false);
+        if b_vec_contains(types_seen, type_id) {
+            throw unavailable(inout state, case_ref,
+                "duplicate catch types are not implemented");
+        }
+        b_insert_sorted(types_seen, type_id);
+        vec.push(catches, hir.Catch(error_type: type_id,
+            binding: definition(inout state, case_ref), scope: 0, body: 0,
+            source: source(inout state, case_ref)));
+    }
+    let body = block(inout state, b_child_m(b_module, r, 0), false);
+    let children = vec.empty[usize]();
+    vec.push(children, body.id);
+    for var index usize = 0; index < vec.len(catches); index += 1 {
+        let case_ref = b_child_m(b_module, r, index + 1);
+        let saved = state.scope;
+        state.scope = new_scope(inout state, case_ref,
+            option.Option[usize].Some(saved));
+        b_locals_set(inout state, catches[index].binding,
+            Local(type_id: catches[index].error_type, writable: false,
+                ordinary_parameter: false, read_only_capture: false));
+        let handler = block(inout state, b_child_m(b_module, case_ref, 1), true);
+        catches[index].scope = state.scope;
+        catches[index].body = handler.id;
+        vec.push(children, handler.id);
+        state.scope = saved;
+    }
+    state.m.nodes[id].children = children;
+    state.m.nodes[id].data = hir.NodeData.Try(value: hir.Try(catches: catches));
+    let summary = flow(inout state, id, 0);
+    return b_statement_result(id, summary.falls, vec.len(summary.breaks) != 0);
+}
+
+func b_statement_return(state inout Checker, r model.NodeRef,
+                        n model.AstNode) Statement throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    if state.cleanup_depth != 0 {
+        throw reject(inout state, r, "return escapes defer body",
+            "E_CLEANUP_ESCAPE");
+    }
+    let result_type = state.current_result;
+    let children = vec.empty[usize]();
+    if vec.len(n.children) == 0 {
+        b_match(inout state, r, b_unit,
+            option.Option[usize].Some(result_type));
+    } else {
+        vec.push(children, expression(inout state,
+            b_child_m(b_module, r, 0),
+            option.Option[usize].Some(result_type)).id);
+    }
+    let function_id = state.function;
+    return b_statement_result(node(inout state, r, b_unit,
+        hir.NodeData.Return(value: hir.Return(function: function_id)),
+        children), false, false);
+}
+
+func b_statement_if(state inout Checker, r model.NodeRef,
+                    n model.AstNode) Statement throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let cond = expression(inout state, b_child_m(b_module, r, 0),
+        option.Option[usize].Some(b_boolean));
+    let yes = block(inout state, b_child_m(b_module, r, 1), false);
+    let children = vec.empty[usize]();
+    vec.push(children, cond.id);
+    vec.push(children, yes.id);
+    var falls = true;
+    var breaks = yes.breaks;
+    var else_falls = true;
+    var else_breaks = false;
+    if vec.len(n.children) > 2 {
+        let else_ref = b_child_m(b_module, r, 2);
+        var no = b_statement_result(0, true, false);
+        if b_kind_is(b_ast_m(b_module, else_ref).kind, model.AstKind.Block) {
+            no = block(inout state, else_ref, false);
+        } else {
+            let saved = state.scope;
+            state.scope = new_scope(inout state, else_ref,
+                option.Option[usize].Some(saved));
+            let branch = statement(inout state, else_ref);
+            let branch_id = node(inout state, else_ref, b_unit,
+                hir.NodeData.Block(value: hir.Block()), [branch.id]);
+            no = b_statement_result(branch_id, branch.falls, branch.breaks);
+            state.scope = saved;
+        }
+        vec.push(children, no.id);
+        falls = yes.falls || no.falls;
+        breaks = breaks || no.breaks;
+        else_falls = no.falls;
+        else_breaks = no.breaks;
+    }
+    switch b_node_bool_literal(state.m.nodes[cond.id]) {
+        case option.Option.Some(value): {
+            if value.value {
+                falls = yes.falls;
+                breaks = yes.breaks;
+            } else if vec.len(n.children) == 2 {
+                falls = true;
+                breaks = false;
+            } else {
+                falls = else_falls;
+                breaks = else_breaks;
+            }
+        }
+        case option.Option.None: {}
+    }
+    return b_statement_result(node(inout state, r, b_unit,
+        hir.NodeData.If(value: hir.If()), children), falls, breaks);
+}
+
+func b_statement_for_in(state inout Checker, r model.NodeRef,
+                        n model.AstNode) Statement throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let collection = expression(inout state, b_child_m(b_module, r, 0),
+        option.Option[usize].None);
+    let collection_type = collection.value.type_id;
+    let collection_kind = lookup_type(inout state, collection_type).kind;
+    let builtin = b_type_kind_is(collection_kind, model.TypeKind.Vec) ||
+        b_type_kind_is(collection_kind, model.TypeKind.Slice) ||
+        b_type_kind_is(collection_kind, model.TypeKind.String);
+    var trait_index = option.Option[usize].None;
+    if !builtin { trait_index = std_iterator_trait(inout state); }
+    var iterator_next = option.Option[hir.MethodPrototype].None;
+    var candidate = option.Option[IteratorCandidate].None;
+    var bound = option.Option[hir.TraitRef].None;
+    var element_type usize = 0;
+    let constrained_iterator = !builtin &&
+        b_type_kind_is(collection_kind, model.TypeKind.TypeParameter);
+    if !builtin {
+        var trait_id usize = 0;
+        switch trait_index {
+            case option.Option.Some(value): trait_id = value;
+            case option.Option.None:
+                throw reject(inout state, r,
+                    "for-in requires Vec, Slice, string or an Iterator implementation",
+                    "E_TYPE_MISMATCH");
+        }
+        let tr = state.m.traits[trait_id];
+        for prototype in tr.methods {
+            if symbol(inout state, prototype.symbol).name == "next" {
+                switch iterator_next {
+                    case option.Option.Some(value):
+                        throw reject(inout state, r,
+                            "std/iter.Iterator declares next more than once",
+                            "E_TYPE_MISMATCH");
+                    case option.Option.None:
+                        iterator_next = option.Option[hir.MethodPrototype].Some(prototype);
+                }
+            }
+        }
+        var next = hir.MethodPrototype(symbol: 0, signature: 0,
+            parameters: [], source: source(inout state, r));
+        switch iterator_next {
+            case option.Option.Some(value): next = value;
+            case option.Option.None:
+                throw reject(inout state, r,
+                    "std/iter.Iterator has no next method", "E_TYPE_MISMATCH");
+        }
+        if vec.len(b_generic_params(inout state, next.symbol)) != 0 {
+            throw reject(inout state, r,
+                "generic Iterator.next is not supported by for-in",
+                "E_CAPABILITY_UNAVAILABLE");
+        }
+        let prototype_type = lookup_type(inout state, next.signature);
+        if vec.len(prototype_type.parameters) != 1 ||
+           !b_mode_is(prototype_type.parameters[0].mode, model.ParamMode.Inout) {
+            throw reject(inout state, r,
+                "std/iter.Iterator.next must take one inout Self",
+                "E_TYPE_MISMATCH");
+        }
+        switch prototype_type.throws_type {
+            case option.Option.Some(value):
+                throw reject(inout state, r,
+                    "std/iter.Iterator.next must not throw", "E_TYPE_MISMATCH");
+            case option.Option.None: {}
+        }
+        let result_type = lookup_type(inout state, prototype_type.result);
+        if !std_option(inout state, prototype_type.result) ||
+           vec.len(result_type.type_args) != 1 {
+            throw reject(inout state, r,
+                "std/iter.Iterator.next must return std/option.Option[T]",
+                "E_TYPE_MISMATCH");
+        }
+        if constrained_iterator {
+            let declared = lookup_type(inout state, collection_type).declaration;
+            bound = b_bound_value(inout state, declared);
+            var valid_bound = false;
+            switch bound {
+                case option.Option.Some(value):
+                    if value.declaration == tr.symbol && vec.len(value.args) == 1 {
+                        valid_bound = true;
+                        element_type = value.args[0];
+                    }
+                case option.Option.None: {}
+            }
+            if !valid_bound {
+                throw reject(inout state, r,
+                    "for-in requires the receiver type to implement std/iter.Iterator",
+                    "E_TYPE_MISMATCH");
+            }
+        } else {
+            candidate = iterator_candidate(inout state, r, collection_type, trait_id);
+            switch candidate {
+                case option.Option.Some(value): element_type = value.element;
+                case option.Option.None:
+                    throw reject(inout state, r,
+                        "for-in requires Vec, Slice, string or an Iterator implementation",
+                        "E_TYPE_MISMATCH");
+            }
+        }
+    }
+    let saved = state.scope;
+    state.scope = new_scope(inout state, r, option.Option[usize].Some(saved));
+    let element_symbol = definition(inout state, r);
+    let id = node(inout state, r, b_unit,
+        hir.NodeData.ForIn(value: hir.ForIn(element: element_symbol,
+            body_scope: 0, body: 0,
+            iterator: option.Option[hir.IteratorFor].None)), []);
+    vec.push(state.loops, id);
+    vec.push(state.break_targets, id);
+    let body_ref = b_child_m(b_module, r, vec.len(n.children) - 1);
+    let loop_scope = state.scope;
+    state.scope = new_scope(inout state, body_ref,
+        option.Option[usize].Some(loop_scope));
+    let body_scope_id = state.scope;
+    if builtin {
+        if b_type_kind_is(collection_kind, model.TypeKind.String) {
+            element_type = scalar(inout state, model.TypeKind.UnsignedInt, 32);
+        } else {
+            element_type = b_type_args0(inout state, collection_type);
+        }
+    }
+    b_locals_set(inout state, element_symbol, Local(type_id: element_type,
+        writable: false, ordinary_parameter: false, read_only_capture: false));
+    var cursor_symbol usize = 0;
+    var option_symbol usize = 0;
+    var cursor_place usize = 0;
+    if !builtin {
+        cursor_symbol = hidden_local(inout state, element_symbol, "$for_cursor");
+        option_symbol = hidden_local(inout state, element_symbol, "$for_option");
+        let body_scope = state.scope;
+        state.scope = loop_scope;
+        cursor_place = node(inout state, r, collection_type,
+            hir.NodeData.Place(value: hir.Place(symbol: cursor_symbol)), []);
+        state.scope = body_scope;
+    }
+    let body = block(inout state, body_ref, true);
+    var iterator_meta = option.Option[hir.IteratorFor].None;
+    if !builtin {
+        var next_result usize = 0;
+        let next_args = vec.empty[hir.CallArg]();
+        vec.push(next_args, hir.CallArg(source_index: 0, parameter_index: 0,
+            label: option.Option[string].None, mode: model.ParamMode.Inout,
+            expression: cursor_place));
+        let next_children = vec.empty[usize]();
+        vec.push(next_children, cursor_place);
+        var next_data = hir.NodeData.Noop(value: hir.Noop());
+        var next = hir.MethodPrototype(symbol: 0, signature: 0,
+            parameters: [], source: source(inout state, r));
+        switch iterator_next { case option.Option.Some(value): next = value; case option.Option.None: {} }
+        if constrained_iterator {
+            var bound_value = hir.TraitRef(declaration: 0, args: []);
+            switch bound {
+                case option.Option.Some(value): bound_value = value;
+                case option.Option.None: throw internal_error("missing for-in bound");
+            }
+            var trait_index_value usize = 0;
+            switch trait_index {
+                case option.Option.Some(value): trait_index_value = value;
+                case option.Option.None: throw internal_error("missing for-in trait");
+            }
+            let tr = state.m.traits[trait_index_value];
+            let substitutions = vec.empty[model.Substitution]();
+            vec.push(substitutions, model.Substitution(symbol: tr.self,
+                type_id: collection_type));
+            for var index usize = 0; index < vec.len(tr.params); index += 1 {
+                vec.push(substitutions, model.Substitution(symbol: tr.params[index].symbol,
+                    type_id: bound_value.args[index]));
+            }
+            let concrete = substitute_type(inout state, next.signature,
+                substitutions);
+            next_result = lookup_type(inout state, concrete).result;
+            next_data = hir.NodeData.ConstraintCall(value: hir.ConstraintCall(
+                trait_ref: bound_value, method: next.symbol,
+                receiver: collection_type, signature: concrete, args: next_args));
+        } else {
+            var trait_symbol usize = 0;
+            switch trait_index {
+                case option.Option.Some(value):
+                    trait_symbol = state.m.traits[value].symbol;
+                case option.Option.None: throw internal_error("missing iterator trait");
+            }
+            let required_trait = hir.TraitRef(declaration: trait_symbol,
+                args: [element_type]);
+            let selected = select_method(inout state, r, collection_type, "next",
+                option.Option[hir.TraitRef].Some(required_trait));
+            let original = b_signature_or_internal(inout state, selected.method);
+            let original_type = lookup_type(inout state, original);
+            if vec.len(original_type.parameters) != 1 ||
+               !b_mode_is(original_type.parameters[0].mode,
+                          model.ParamMode.Inout) {
+                throw reject(inout state, r,
+                    "Iterator.next implementation must take one inout Self",
+                    "E_TYPE_MISMATCH");
+            }
+            var substitutions = b_copy_substitutions(selected.substitutions);
+            infer(inout state, r, original_type.parameters[0].type_id,
+                collection_type, substitutions);
+            let generic = b_generic_params(inout state, selected.method);
+            let type_args = finish_arguments(inout state, r, generic,
+                substitutions);
+            let concrete = substitute_type(inout state, original, substitutions);
+            next_result = lookup_type(inout state, concrete).result;
+            var call_data = hir.Call(kind: hir.CalleeKind.Direct,
+                signature: concrete,
+                direct_symbol: option.Option[usize].Some(selected.method),
+                callee: option.Option[usize].None, args: next_args,
+                type_args: type_args, binding: option.Option[usize].None,
+                c_callable: option.Option[u32].None, omitted: [],
+                system: option.Option[u32].None);
+            next_data = hir.NodeData.Call(value: call_data);
+        }
+        let result_type = lookup_type(inout state, next_result);
+        if !std_option(inout state, next_result) ||
+           vec.len(result_type.type_args) != 1 ||
+           result_type.type_args[0] != element_type {
+            throw reject(inout state, r,
+                "Iterator.next must return std/option.Option of the for-in element type",
+                "E_TYPE_MISMATCH");
+        }
+        let option_declaration = nominal(inout state, next_result);
+        var some_symbol usize = 0;
+        var none_symbol usize = 0;
+        var some_field usize = 0;
+        for variant in option_declaration.variants {
+            let name = symbol(inout state, variant.symbol).name;
+            if name == "Some" {
+                some_symbol = variant.symbol;
+                if vec.len(variant.payload) != 0 {
+                    some_field = variant.payload[0].symbol;
+                }
+            } else if name == "None" {
+                none_symbol = variant.symbol;
+            }
+        }
+        if some_symbol == 0 || none_symbol == 0 || some_field == 0 {
+            throw reject(inout state, r,
+                "std/option.Option must declare Some(value T) and None",
+                "E_TYPE_MISMATCH");
+        }
+        let body_saved_scope = state.scope;
+        state.scope = loop_scope;
+        let next_id = node(inout state, r, next_result, next_data, next_children);
+        state.scope = body_saved_scope;
+        iterator_meta = option.Option[hir.IteratorFor].Some(hir.IteratorFor(
+            cursor: cursor_symbol, option: option_symbol, next: next_id,
+            iterator: collection_type, element: element_type,
+            some: some_symbol, none: none_symbol, some_field: some_field));
+    }
+    state.scope = loop_scope;
+    let node_children = vec.empty[usize]();
+    vec.push(node_children, collection.id);
+    vec.push(node_children, body.id);
+    switch iterator_meta {
+        case option.Option.Some(value): vec.push(node_children, value.next);
+        case option.Option.None: {}
+    }
+    state.m.nodes[id].children = node_children;
+    state.m.nodes[id].data = hir.NodeData.ForIn(value: hir.ForIn(
+        element: element_symbol, body_scope: body_scope_id, body: body.id,
+        iterator: iterator_meta));
+    vec.pop(state.loops);
+    vec.pop(state.break_targets);
+    state.scope = saved;
+    state.m.nodes[collection.id].scope = loop_scope;
+    let pending = vec.empty[usize]();
+    for child_id in state.m.nodes[collection.id].children {
+        vec.push(pending, child_id);
+    }
+    for vec.len(pending) > 0 {
+        let child_id = option.unwrap_or(vec.pop(pending), 0);
+        state.m.nodes[child_id].scope = loop_scope;
+        for nested in state.m.nodes[child_id].children {
+            vec.push(pending, nested);
+        }
+    }
+    return b_statement_result(id, true, false);
+}
+
+func b_statement_for(state inout Checker, r model.NodeRef,
+                     n model.AstNode) Statement throws Error {
+    let b_module=state.m;
+    let b_unit=state.unit; let b_boolean=state.boolean; let b_i64_type=state.i64_type;
+    let saved = state.scope;
+    state.scope = new_scope(inout state, r, option.Option[usize].Some(saved));
+    let id = node(inout state, r, b_unit,
+        hir.NodeData.For(value: hir.For()), []);
+    vec.push(state.loops, id);
+    vec.push(state.break_targets, id);
+    let body_ref = b_child_m(b_module, r, vec.len(n.children) - 1);
+    let body_node = b_ast_m(b_module, body_ref);
+    var first_semicolon = body_node.token_begin;
+    var second_semicolon = first_semicolon;
+    var nesting u32 = 0;
+    let file = b_file_m(b_module, r);
+    for var index usize = n.token_begin + 1; index < body_node.token_begin; index += 1 {
+        if index >= vec.len(file.lexed.tokens) { break; }
+        let spelling = file.lexed.tokens[index].spelling;
+        if spelling == "(" || spelling == "[" { nesting += 1; }
+        if spelling == ")" || spelling == "]" { nesting -= 1; }
+        if spelling == ";" && nesting == 0 {
+            if first_semicolon == body_node.token_begin {
+                first_semicolon = index;
+            } else {
+                second_semicolon = index;
+            }
+        }
+    }
+    var init = option.Option[model.NodeRef].None;
+    var condition = option.Option[model.NodeRef].None;
+    var step = option.Option[model.NodeRef].None;
+    for var index usize = 0; index + 1 < vec.len(n.children); index += 1 {
+        let child_ref = b_child_m(b_module, r, index);
+        let start = b_ast_m(b_module, child_ref).token_begin;
+        if first_semicolon == body_node.token_begin {
+            if !b_kind_is(b_ast_m(b_module, child_ref).kind,
+                          model.AstKind.ExpressionStatement) {
+                throw reject(inout state, child_ref, "invalid loop condition",
+                    "E_TYPE_MISMATCH");
+            }
+            condition = option.Option[model.NodeRef].Some(
+                b_child_m(b_module, child_ref, 0));
+        } else if start < first_semicolon {
+            init = option.Option[model.NodeRef].Some(child_ref);
+        } else if start < second_semicolon {
+            condition = option.Option[model.NodeRef].Some(child_ref);
+        } else {
+            step = option.Option[model.NodeRef].Some(child_ref);
+        }
+    }
+    var init_id usize = 0;
+    switch init {
+        case option.Option.Some(value): init_id = statement(inout state, value).id;
+        case option.Option.None:
+            init_id = node(inout state, r, b_unit,
+                hir.NodeData.Noop(value: hir.Noop()), []);
+    }
+    var cond_id usize = 0;
+    switch condition {
+        case option.Option.Some(value):
+            cond_id = expression(inout state, value,
+                option.Option[usize].Some(b_boolean)).id;
+        case option.Option.None:
+            cond_id = node(inout state, r, b_boolean,
+                hir.NodeData.BoolLiteral(
+                    value: hir.BoolLiteral(value: true)), []);
+    }
+    var step_id usize = 0;
+    switch step {
+        case option.Option.Some(value): step_id = statement(inout state, value).id;
+        case option.Option.None:
+            step_id = node(inout state, r, b_unit,
+                hir.NodeData.Noop(value: hir.Noop()), []);
+    }
+    let body = block(inout state, body_ref, false);
+    let node_children = [init_id, cond_id, step_id, body.id];
+    state.m.nodes[id].children = node_children;
+    vec.pop(state.loops);
+    vec.pop(state.break_targets);
+    state.scope = saved;
+    var forever = false;
+    switch b_node_bool_literal(state.m.nodes[cond_id]) {
+        case option.Option.Some(value): forever = value.value;
+        case option.Option.None: {}
+    }
+    return b_statement_result(id, !forever || body.breaks, false);
+}

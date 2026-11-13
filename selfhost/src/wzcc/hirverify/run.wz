@@ -1,0 +1,354 @@
+// Verifier construction and the ordered whole-module run.
+package hirverify;
+
+import "app/wzcc/constant" as constant;
+import "app/wzcc/foreign" as foreign;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/ownership" as ownership;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func run_verification(state inout Verifier) throws Invalid {
+    need(backend_is(state.m.config.backend, model.Backend.Native) ||
+         backend_is(state.m.config.backend, model.Backend.Python),
+        "invalid backend");
+    need(state.m.config.word_bits == 32 || state.m.config.word_bits == 64,
+        "invalid target word width");
+    let project = state.m.resolved.project;
+    need(project.word_bits == state.m.config.word_bits,
+        "HIR target differs from project target");
+    var project_backend = "python";
+    if backend_is(state.m.config.backend, model.Backend.Native) {
+        project_backend = "native";
+    }
+    need(project.backend == project_backend,
+        "HIR target differs from project target");
+    need(state.m.identity < vec.len(project.modules) &&
+         project.modules[state.m.identity].id == state.m.identity,
+        "module identity index");
+    var projected = types.clone_context(state.m.types);
+    var expected_bindings = vec.empty[hir.ForeignBinding]();
+    try {
+        expected_bindings = foreign.binding_records(project, inout projected);
+    } catch error model.SupportError {
+        support_error(error);
+    }
+    need(types.size(projected) == types.size(state.m.types),
+        "foreign typed records differ from declarations");
+    need(vec.len(expected_bindings) == vec.len(state.m.foreign_bindings),
+        "foreign typed records differ from declarations");
+    for var index usize = 0; index < vec.len(expected_bindings); index += 1 {
+        need(same_foreign_binding(expected_bindings[index],
+                 state.m.foreign_bindings[index]),
+            "foreign typed records differ from declarations");
+    }
+    declarations(inout state);
+
+    let hidden_iterator_symbols = vec.empty[usize]();
+    for node in state.m.nodes {
+        switch node.data {
+            case hir.NodeData.ForIn(value): {
+                if option.is_some(value.iterator) {
+                    let iterator = option_iterator(value.iterator);
+                    need(ids_insert(hidden_iterator_symbols, iterator.cursor),
+                        "for-in hidden cursor is shared by another loop");
+                    need(ids_insert(hidden_iterator_symbols, iterator.option),
+                        "for-in hidden Option is shared by another loop");
+                    if iterator.next < vec.len(state.m.nodes) {
+                        vec.push(state.synthetic_iterator_calls, iterator.next);
+                    }
+                }
+            }
+            default: {}
+        }
+    }
+    let declared = declared_parameters(state);
+    let type_count = types.size(state.m.types);
+    for var index usize = 1; index <= type_count; index += 1 {
+        valid_type(inout state, index, declared);
+        let value = verifier_type(state, index);
+        if kind_is(value.kind, model.TypeKind.NominalStruct) ||
+           kind_is(value.kind, model.TypeKind.NominalEnum) {
+            let nominal = nominal_type(state, index);
+            constraints(inout state, nominal.params, value.type_args,
+                vec.empty[model.Substitution]());
+        }
+    }
+    for function_value in state.m.functions {
+        vec.push(state.all_functions, AllFunction(in_template: false,
+            index: vec.len(state.all_functions)));
+    }
+    // Replace the provisional indices with the actual array positions.
+    state.all_functions = [];
+    for var index usize = 0; index < vec.len(state.m.functions); index += 1 {
+        vec.push(state.all_functions, AllFunction(in_template: false,
+            index: index));
+    }
+    for var index usize = 0; index < vec.len(state.m.templates); index += 1 {
+        let template = state.m.templates[index];
+        need(template_index(state, template.function.symbol) < 0 &&
+             function_entry_index(state, template.function.symbol) < 0,
+            "duplicate template identity");
+        vec.push(state.templates, TemplateEntry(symbol:
+            template.function.symbol, index: index));
+        vec.push(state.all_functions, AllFunction(in_template: true,
+            index: index));
+    }
+    for function_entry in state.all_functions {
+        let function_value = all_function_value(state, function_entry);
+        verifier_source(state, function_value.source);
+        let ast = verifier_ast(state, function_value.source.node);
+        need(ast_is(ast.kind, model.AstKind.Function) ||
+             ast_is(ast.kind, model.AstKind.FunctionLiteral),
+            "function source is not a declaration or literal");
+        declaration(inout state, function_value.symbol,
+            function_value.source, model.SymbolKind.Function, ast.kind);
+        need(function_entry_index(state, function_value.symbol) < 0,
+            "duplicate function identity");
+        vec.push(state.functions, FunctionEntry(symbol: function_value.symbol,
+            in_template: function_entry.in_template,
+            index: function_entry.index));
+        let signature = verifier_type(state, function_value.signature);
+        need(kind_is(signature.kind, model.TypeKind.Function),
+            "function signature kind");
+        let function_allowed = allowed_for(state, function_value.symbol);
+        valid_type(inout state, function_value.signature, function_allowed);
+        if template_index(state, function_value.symbol) >= 0 ||
+           vec.len(source_generics(state, function_value.source)) == 0 {
+            need(function_value.signature == source_signature(inout state,
+                     function_value.source.node),
+                "function signature differs from real source declaration");
+        }
+        need(vec.len(signature.parameters) ==
+             vec.len(function_value.parameters),
+            "function parameter count");
+        if function_value.is_async {
+            for parameter in signature.parameters {
+                need(!mode_is_id(parameter.mode, 1),
+                    "async function retains inout parameter storage");
+            }
+        }
+        let function_scope = verifier_scope(state, function_value.scope);
+        need(function_scope.function == function_value.symbol &&
+             !option.is_some(function_scope.parent),
+            "function scope ownership");
+        let labels = vec.empty[string]();
+        for var index usize = 0;
+            index < vec.len(function_value.parameters); index += 1 {
+            let parameter = function_value.parameters[index];
+            let symbol = verifier_symbol(state, parameter.symbol);
+            need(symbol_is(symbol.kind, model.SymbolKind.Value) &&
+                 option.is_some(symbol.definition) &&
+                 option.is_some(symbol.declaration),
+                "parameter symbol kind/source");
+            let source = hir.HirSource(node: option_ref(symbol.definition),
+                span: option_span_value(symbol.declaration));
+            declaration(inout state, parameter.symbol, source,
+                model.SymbolKind.Value, model.AstKind.Parameter);
+            let file = verifier_file(state, source.node.module,
+                source.node.file);
+            let parameter_ast = file.nodes[source.node.node];
+            need(parameter_ast.token_begin + 1 < vec.len(file.lexed.tokens),
+                "parameter token range");
+            let mode_token = file.lexed.tokens[
+                parameter_ast.token_begin + 1].spelling;
+            var declared_mode = model.ParamMode.Ordinary;
+            if mode_token == "inout" {
+                declared_mode = model.ParamMode.Inout;
+            } else if mode_token == "move" {
+                declared_mode = model.ParamMode.Move;
+            }
+            need(mode_id_value(signature.parameters[index].mode) ==
+                 mode_id_value(declared_mode),
+                "parameter mode differs from source declaration");
+            need(source.node.module == function_value.source.node.module &&
+                 source.node.file == function_value.source.node.file &&
+                 source.span.begin_byte >=
+                     function_value.source.span.begin_byte &&
+                 source.span.end_byte <= function_value.source.span.end_byte,
+                "parameter belongs to another function");
+            var label_ok = false;
+            if symbol.name == "_" {
+                label_ok = parameter.label == "";
+            } else {
+                label_ok = parameter.label != "" &&
+                    parameter.label == symbol.name &&
+                    !string_contains(labels, parameter.label);
+            }
+            need(label_ok, "duplicate/invalid parameter label");
+            if symbol.name != "_" {
+                vec.push(labels, parameter.label);
+            }
+            need(local_insert(inout state, parameter.symbol,
+                     Local(type_id: signature.parameters[index].type_id,
+                         scope: function_value.scope,
+                         function: function_value.symbol,
+                         writable: mode_is_id(declared_mode, 1), ready: 0,
+                         read_only: false)),
+                "duplicate parameter symbol");
+        }
+        if ast_is(ast.kind, model.AstKind.FunctionLiteral) {
+            let expected = capture_origins(state, function_value.source.node);
+            need(vec.len(expected) == vec.len(function_value.captures),
+                "HirFunction capture count/order differs from source free variables");
+            for var index usize = 0; index < vec.len(expected); index += 1 {
+                need(function_value.captures[index].origin == expected[index],
+                    "HirFunction capture origin/order differs from source free variables");
+            }
+        } else {
+            need(vec.len(function_value.captures) == 0,
+                "ordinary function cannot declare capture bindings");
+        }
+        if vec.len(function_value.captures) > 0 {
+            let origins = vec.empty[usize]();
+            let locals_seen = vec.empty[usize]();
+            for capture in function_value.captures {
+                let origin = verifier_symbol(state, capture.origin);
+                need(symbol_is(origin.kind, model.SymbolKind.Value) &&
+                     ids_insert(origins, capture.origin),
+                    "capture origin is not a unique value binding");
+                let local = verifier_symbol(state, capture.local);
+                need(symbol_is(local.kind, model.SymbolKind.Value) &&
+                     !option.is_some(local.definition) &&
+                     !option.is_some(local.declaration) &&
+                     ids_insert(locals_seen, capture.local),
+                    "capture local is not a fresh definitionless value binding");
+                valid_type(inout state, capture.type_id, function_allowed);
+                need(local_insert(inout state, capture.local,
+                         Local(type_id: capture.type_id,
+                             scope: function_value.scope,
+                             function: function_value.symbol,
+                             writable: false, ready: 0, read_only: true)),
+                    "duplicate capture local identity");
+            }
+        }
+    }
+    for var index usize = 0; index < vec.len(state.m.scopes); index += 1 {
+        let scope = state.m.scopes[index];
+        let owner = verifier_function(state, scope.function);
+        verifier_source(state, scope.source);
+        need(scope.source.node.module == owner.source.node.module &&
+             scope.source.node.file == owner.source.node.file &&
+             scope.source.span.begin_byte >= owner.source.span.begin_byte &&
+             scope.source.span.end_byte <= owner.source.span.end_byte,
+            "scope source belongs to another function");
+        if option.is_some(scope.parent) {
+            let parent = verifier_scope(state, option_usize(scope.parent));
+            need(parent.function == scope.function &&
+                 option_usize(scope.parent) != index,
+                "scope parent ownership");
+        }
+        var current = scope.parent;
+        for var count usize = 0; option.is_some(current); count += 1 {
+            need(count < vec.len(state.m.scopes), "scope parent cycle");
+            current = verifier_scope(state, option_usize(current)).parent;
+        }
+    }
+    for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
+        let node = state.m.nodes[index];
+        let ignored = verifier_scope(state, node.scope);
+        for child in node.children {
+            let ignored_child = verifier_node(state, child);
+        }
+        shape(inout state, index);
+    }
+    for function_entry in state.all_functions {
+        let function_value = all_function_value(state, function_entry);
+        tree(inout state, function_value);
+        source_effect_nodes(inout state, function_value);
+    }
+    instance_records(inout state);
+    for node in state.m.nodes {
+        let kind = hir.node_kind(node.data);
+        if node_is(kind, hir.NodeKind.ConstantLiteral) {
+            var value = hir.ConstantValue(type_id: 0,
+                data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
+            switch node.data {
+                case hir.NodeData.ConstantLiteral(item): value = item.value;
+                default: {}
+            }
+            check_constant(inout state, node, value);
+        }
+        if node_is(kind, hir.NodeKind.Binding) {
+            var binding_symbol usize = 0;
+            switch node.data {
+                case hir.NodeData.Binding(item): binding_symbol = item.symbol;
+                default: {}
+            }
+            let symbol = verifier_symbol(state, binding_symbol);
+            if symbol_is(symbol.kind, model.SymbolKind.Constant) &&
+               vec.len(node.children) > 0 &&
+               constant.aggregate_constant_expression(state.m, node.children[0]) {
+                let evaluated = constant.evaluate_hir_constant(state.m,
+                    node.children[0]);
+                need(option.is_some(evaluated),
+                    "aggregate const initializer is not pure");
+                let first_child = verifier_node(state, node.children[0]);
+                check_constant(inout state, first_child,
+                    option_constant(evaluated));
+            }
+        }
+    }
+    function_value_sources(inout state);
+    public_constant_values(inout state);
+    finite_layouts(state);
+    for owner in state.owners {
+        need(owner.has, "orphan executable node");
+    }
+    for used in state.scope_used {
+        need(used, "orphan scope");
+    }
+    uses_and_flow(inout state);
+    ownership_sources(inout state);
+    for local in state.m.ownership.locals {
+        if local.read_only_capture {
+            var found = false;
+            for function_entry in state.all_functions {
+                let function_value = all_function_value(state, function_entry);
+                for capture in function_value.captures {
+                    if capture.local == local.symbol &&
+                       capture.type_id == local.type_id {
+                        found = true;
+                    }
+                }
+            }
+            need(found, "read-only capture lifetime has no lambda capture entry");
+        }
+    }
+    effects_and_exits(inout state);
+    let ownership_result = ownership.verify_ownership(state.m);
+    if !phase_is(ownership_result.state, model.PhaseState.Complete) {
+        if phase_is(ownership_result.state, model.PhaseState.Cancelled) {
+            fail("ownership verification was cancelled");
+        }
+        if vec.len(ownership_result.diagnostics) > 0 {
+            fail_at(ownership_result.diagnostics[0].message,
+                ownership_result.diagnostics[0].primary);
+        }
+        fail("ownership verification failed");
+    }
+    for diagnostic in ownership_result.diagnostics {
+        if diagnostic.severity == "error" {
+            fail_at(diagnostic.message, diagnostic.primary);
+        }
+    }
+}
+
+func option_constant(value option.Option[hir.ConstantValue]) hir.ConstantValue {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return hir.ConstantValue(type_id: 0,
+            data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
+    }
+}
+
+func string_contains(values Vec[string], value string) bool {
+    for item in values {
+        if item == value {
+            return true;
+        }
+    }
+    return false;
+}

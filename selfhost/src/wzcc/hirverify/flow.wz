@@ -1,0 +1,1275 @@
+// Ownership source reconstruction, effects/exits and control-flow checks.
+package hirverify;
+
+import "app/wzcc/constant" as constant;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/ownership" as ownership;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueops;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func finite_layouts(state Verifier) throws Invalid {
+    try {
+        let infinite = valueops.infinite_value_layout(state.m);
+        need(!option.is_some(infinite), "infinite recursive value layout");
+    } catch error model.SupportError {
+        support_error(error);
+    }
+}
+
+func postorder(state Verifier) Vec[usize] {
+    let order = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
+        vec.push(order, index);
+    }
+    var index usize = 1;
+    for index < vec.len(order) {
+        let value = order[index];
+        var position = index;
+        for position > 0 &&
+              state.leave[order[position - 1]] > state.leave[value] {
+            order[position] = order[position - 1];
+            position -= 1;
+        }
+        order[position] = value;
+        index += 1;
+    }
+    return order;
+}
+
+func node_contains(state Verifier, outer usize, inner usize) bool {
+    return state.enter[outer] <= state.enter[inner] &&
+           state.leave[inner] <= state.leave[outer];
+}
+
+func origin_symbol(state Verifier, id usize) usize {
+    for instance in state.m.instances {
+        for rename in instance.renamed {
+            if rename.replacement == id {
+                return rename.origin;
+            }
+        }
+    }
+    return id;
+}
+
+func capture_local_for(state Verifier, owner usize, occurrence usize)
+    option.Option[usize] throws Invalid {
+    let found = function_entry_index(state, owner);
+    if found < 0 {
+        return option.Option[usize].None;
+    }
+    let capture = function_capture(verifier_function(state, owner),
+        occurrence);
+    if option.is_some(capture) {
+        return option.Option[usize].Some(option_capture(capture).local);
+    }
+    return option.Option[usize].None;
+}
+
+func synthetic_iterator_source(state Verifier, source hir.HirSource) bool {
+    for node in state.m.nodes {
+        switch node.data {
+            case hir.NodeData.ForIn(value): {
+                if option.is_some(value.iterator) {
+                    let iterator = option_iterator(value.iterator);
+                    if same_ref(source.node,
+                            state.m.nodes[iterator.next].source.node) {
+                        return true;
+                    }
+                    for child in state.m.nodes[iterator.next].children {
+                        if same_ref(source.node,
+                                state.m.nodes[child].source.node) {
+                            return true;
+                        }
+                    }
+                }
+            }
+            default: {}
+        }
+    }
+    return false;
+}
+
+func source_within(state Verifier, value hir.HirSource, syntax usize,
+                   node hir.HirNode) bool throws Invalid {
+    let file = verifier_file(state, node.source.node.module,
+        node.source.node.file);
+    return value.span.begin_byte >= file.nodes[syntax].span.begin_byte &&
+           value.span.end_byte <= file.nodes[syntax].span.end_byte;
+}
+
+func ownership_sources(state inout Verifier) throws Invalid {
+    let owning_functions = vec.empty[usize]();
+    for node in state.m.nodes {
+        let kind = hir.node_kind(node.data);
+        if node_is(kind, hir.NodeKind.Move) ||
+           node_is(kind, hir.NodeKind.ForIn) ||
+           (!node_is(kind, hir.NodeKind.FunctionValue) &&
+            classify_needs_drop(state.m, node.type_id)) {
+            ids_insert(owning_functions,
+                verifier_scope(state, node.scope).function);
+        }
+    }
+    for var i usize = 0; i < vec.len(state.m.nodes); i += 1 {
+        let node = state.m.nodes[i];
+        if synthetic_iterator_source(state, node.source) {
+            continue;
+        }
+        let file = verifier_file(state, node.source.node.module,
+            node.source.node.file);
+        var reference = node.source.node;
+        var ast = file.nodes[reference.node];
+        for ast_is(ast.kind, model.AstKind.Parenthesized) ||
+            ast_is(ast.kind, model.AstKind.BracketItem) {
+            need(vec.len(ast.children) > 0, "owning source wrapper");
+            reference.node = ast.children[0];
+            ast = file.nodes[reference.node];
+        }
+        let node_kind = hir.node_kind(node.data);
+        if node_is(node_kind, hir.NodeKind.Assign) {
+            need(ast_is(ast.kind, model.AstKind.Assign) &&
+                 vec.len(ast.children) == 2,
+                "assignment source is not a real Assign with two children");
+            need(source_input_matches(state, node, node.children[0],
+                     ast.children[0]),
+                "assignment LHS differs from the real Assign left child");
+            need(source_input_matches(state, node, node.children[1],
+                     ast.children[1]),
+                "assignment RHS differs from the real Assign right child");
+        }
+        var read = option.Option[usize].None;
+        if node_is(node_kind, hir.NodeKind.Read) &&
+           classify_needs_drop(state.m, node.type_id) {
+            switch node.data {
+                case hir.NodeData.Read(value):
+                    read = option.Option[usize].Some(value.symbol);
+                default: {}
+            }
+        }
+        var function_constant_read = option.Option[usize].None;
+        if node_is(node_kind, hir.NodeKind.Read) &&
+           kind_is(verifier_type(state, node.type_id).kind,
+                   model.TypeKind.Function) {
+            var payload usize = 0;
+            switch node.data {
+                case hir.NodeData.Read(value): payload = value.symbol;
+                default: {}
+            }
+            let origin = origin_symbol(state, payload);
+            let source_symbol = resolved_source(state, node.source.node);
+            let payload_constant = symbol_is(verifier_symbol(state, origin).kind,
+                model.SymbolKind.Constant);
+            var source_constant = false;
+            if option.is_some(source_symbol) {
+                source_constant = symbol_is(verifier_symbol(state,
+                    option_usize(source_symbol)).kind, model.SymbolKind.Constant);
+            }
+            if payload_constant || source_constant {
+                need(option.is_some(source_symbol) &&
+                     option_usize(source_symbol) == payload,
+                    "function constant read source identity differs from resolver");
+                if !option.is_some(constant_method_source(state, node)) {
+                    let ignored = constant_function_source(inout state, payload);
+                }
+                function_constant_read = option.Option[usize].Some(payload);
+            }
+        }
+        if node_is(node_kind, hir.NodeKind.Move) {
+            var move_binding = option.Option[usize].None;
+            switch node.data {
+                case hir.NodeData.Move(value): move_binding = value.binding;
+                default: {}
+            }
+            var synthetic_capture = false;
+            if option.is_some(move_binding) && option.is_some(parent_node(state,
+                    i)) {
+                let parent = verifier_node(state, option_usize(parent_node(state, i)));
+                switch parent.data {
+                    case hir.NodeData.FunctionValue(value): {
+                        if value.move_capture {
+                            for capture in value.captures {
+                                if capture.is_move &&
+                                   capture.source == option_usize(move_binding) {
+                                    synthetic_capture = true;
+                                }
+                            }
+                        }
+                    }
+                    default: {}
+                }
+            }
+            if synthetic_capture {
+                let local = verifier_local(state, option_usize(move_binding));
+                need(!local.read_only,
+                    "synthetic capture move source is not a mutable creator binding");
+                read = move_binding;
+                need(ast_is(ast.kind, model.AstKind.Name),
+                    "synthetic capture move source is not a name");
+            } else {
+                need(ast_is(ast.kind, model.AstKind.Unary) &&
+                     ast.token_begin < vec.len(file.lexed.tokens) &&
+                     file.lexed.tokens[ast.token_begin].spelling == "move",
+                    "move lost source marker");
+                reference.node = ast.children[0];
+                ast = file.nodes[reference.node];
+                for ast_is(ast.kind, model.AstKind.Parenthesized) ||
+                    ast_is(ast.kind, model.AstKind.BracketItem) {
+                    reference.node = ast.children[0];
+                    ast = file.nodes[reference.node];
+                }
+                if ast_is(ast.kind, model.AstKind.Name) {
+                    let expected_source = resolved_source(state, reference);
+                    need(option.is_some(expected_source),
+                        "move binding has no resolved source");
+                    let expected_symbol = verifier_symbol(state,
+                        option_usize(expected_source));
+                    need(symbol_is(expected_symbol.kind, model.SymbolKind.Value) ||
+                         symbol_is(expected_symbol.kind,
+                             model.SymbolKind.Constant),
+                        "move source is not a local binding");
+                    var expected = option_usize(expected_source);
+                    let owner = verifier_scope(state, node.scope).function;
+                    for instance in state.m.instances {
+                        if instance.symbol == owner {
+                            for rename in instance.renamed {
+                                if rename.origin == expected {
+                                    expected = rename.replacement;
+                                    break;
+                                }
+                            }
+                        }
+                    }
+                    let local = verifier_local(state, expected);
+                    need(local.function == owner &&
+                         option.is_some(move_binding) &&
+                         option_usize(move_binding) == expected,
+                        "source binding move was replaced or has wrong instance identity");
+                    read = option.Option[usize].Some(expected);
+                } else {
+                    need(!option.is_some(move_binding),
+                        "computed move source cannot name a binding");
+                    need(vec.len(node.children) == 1, "move temporary source");
+                    need(source_input_matches(state, node, node.children[0],
+                             reference.node),
+                        "computed move operand differs from source");
+                }
+            }
+        }
+        if option.is_some(read) {
+            for ast_is(ast.kind, model.AstKind.Parenthesized) ||
+                ast_is(ast.kind, model.AstKind.BracketItem) {
+                reference.node = ast.children[0];
+                ast = file.nodes[reference.node];
+            }
+            let actual = resolved_source(state, reference);
+            need(option.is_some(actual),
+                "owning read/move source identity differs from resolver");
+            let owner = verifier_scope(state, node.scope).function;
+            let mapped = capture_local_for(state, owner, option_usize(actual));
+            if option.is_some(mapped) {
+                need(option_usize(read) == option_usize(mapped),
+                    "owning read/move capture local identity differs from the lambda mapping");
+            } else {
+                need(option_usize(actual) == origin_symbol(state,
+                         option_usize(read)),
+                    "owning read/move source identity differs from resolver");
+            }
+        }
+        if option.is_some(function_constant_read) {
+            let actual = resolved_source(state, node.source.node);
+            need(option.is_some(actual) &&
+                 option_usize(actual) == option_usize(function_constant_read),
+                "function constant read source identity differs from resolver");
+            let symbol = verifier_symbol(state, option_usize(actual));
+            need(symbol_is(symbol.kind, model.SymbolKind.Constant) &&
+                 option.is_some(symbol.definition),
+                "function constant read source is not a real const declaration");
+        }
+        if ids_contains(owning_functions, verifier_scope(state,
+                node.scope).function) {
+            if node_is(node_kind, hir.NodeKind.Binary) ||
+               node_is(node_kind, hir.NodeKind.ShortCircuit) {
+                need(ast_is(ast.kind, model.AstKind.Binary) &&
+                     vec.len(ast.children) == 2,
+                    "owning expression binary source");
+                need(source_within(state, verifier_node(state,
+                         node.children[0]).source, ast.children[0], node),
+                    "owning expression source evaluation order");
+                need(source_within(state, verifier_node(state,
+                         node.children[1]).source, ast.children[1], node),
+                    "owning expression source evaluation order");
+            }
+            if node_is(node_kind, hir.NodeKind.FieldRead) ||
+               node_is(node_kind, hir.NodeKind.FieldPlace) {
+                need(ast_is(ast.kind, model.AstKind.Member), "owning field source");
+                need(source_within(state, verifier_node(state,
+                         node.children[0]).source, ast.children[0], node),
+                    "owning expression source evaluation order");
+            }
+            if node_is(node_kind, hir.NodeKind.BoolLiteral) {
+                var boolean_value = false;
+                switch node.data {
+                    case hir.NodeData.BoolLiteral(value): boolean_value = value.value;
+                    default: {}
+                }
+                if ast_is(ast.kind, model.AstKind.Literal) {
+                    var expected_literal = "false";
+                    if boolean_value { expected_literal = "true"; }
+                    need(ast.token_begin < vec.len(file.lexed.tokens) &&
+                         file.lexed.tokens[ast.token_begin].spelling ==
+                             expected_literal,
+                        "branch boolean differs from source literal");
+                } else if ast_is(ast.kind, model.AstKind.Name) ||
+                          ast_is(ast.kind, model.AstKind.Member) {
+                    var is_constant = false;
+                    for occurrence in state.m.resolved.occurrences {
+                        if same_ref(occurrence.source, node.source.node) {
+                            is_constant = symbol_is(verifier_symbol(state,
+                                occurrence.symbol).kind, model.SymbolKind.Constant);
+                        }
+                    }
+                    need(is_constant,
+                        "branch condition replaced a live source variable with a constant");
+                } else {
+                    need(ast_is(ast.kind, model.AstKind.For) && boolean_value,
+                        "unexpected synthetic branch boolean");
+                }
+            }
+            if node_is(node_kind, hir.NodeKind.Call) {
+                need(ast_is(ast.kind, model.AstKind.Call) &&
+                     vec.len(ast.children) > 0, "owning call lost source call");
+                var call_value = hir.Call(kind: hir.CalleeKind.Direct, signature: 0,
+                    direct_symbol: option.Option[usize].None,
+                    callee: option.Option[usize].None, args: [], type_args: [],
+                    binding: option.Option[usize].None,
+                    c_callable: option.Option[u32].None, omitted: [],
+                    system: option.Option[u32].None);
+                switch node.data {
+                    case hir.NodeData.Call(value): call_value = value;
+                    default: {}
+                }
+                var offset usize = 0;
+                if vec.len(call_value.args) + 1 != vec.len(ast.children) {
+                    offset = 1;
+                }
+                need(vec.len(call_value.args) + 1 ==
+                     vec.len(ast.children) + offset,
+                    "owning call source arity");
+                for var j usize = offset; j < vec.len(call_value.args); j += 1 {
+                    let argument = file.nodes[ast.children[j - offset + 1]];
+                    need(ast_is(argument.kind, model.AstKind.Argument) &&
+                         vec.len(argument.children) == 1,
+                        "owning call source argument");
+                    need(source_within(state, verifier_node(state,
+                             call_value.args[j].expression).source,
+                             argument.children[0], node),
+                        "owning expression source evaluation order");
+                }
+                var callee = ast.children[0];
+                for ast_is(file.nodes[callee].kind, model.AstKind.NeutralBracket) ||
+                    ast_is(file.nodes[callee].kind, model.AstKind.Parenthesized) {
+                    callee = file.nodes[callee].children[0];
+                }
+                if option.is_some(call_value.direct_symbol) {
+                    var reference2 = node.source.node;
+                    reference2.node = callee;
+                    for occurrence in state.m.resolved.occurrences {
+                        if same_ref(occurrence.source, reference2) &&
+                           symbol_is(verifier_symbol(state, occurrence.symbol).kind,
+                               model.SymbolKind.Function) {
+                            var target = option_usize(call_value.direct_symbol);
+                            for instance in state.m.instances {
+                                if instance.symbol == target {
+                                    target = instance.origin;
+                                    break;
+                                }
+                            }
+                            need(target == occurrence.symbol,
+                                "owning call target differs from resolved source");
+                        }
+                    }
+                }
+            }
+        }
+        if node_is(node_kind, hir.NodeKind.Binding) {
+            let syntax = file.nodes[node.source.node.node];
+            if vec.len(syntax.children) == 2 {
+                var reference2 = node.source.node;
+                reference2.node = syntax.children[0];
+                var expected = source_type(inout state, reference2);
+                for instance in state.m.instances {
+                    if instance.symbol == verifier_scope(state,
+                            node.scope).function {
+                        let template = state.m.templates[usize(template_index(
+                            state, instance.origin))];
+                        let substitutions = vec.empty[model.Substitution]();
+                        for var j usize = 0; j < vec.len(template.params); j += 1 {
+                            vec.push(substitutions, model.Substitution(
+                                symbol: template.params[j].symbol,
+                                type_id: instance.type_args[j]));
+                        }
+                        expected = substitute_type(inout state, expected,
+                            substitutions);
+                    }
+                }
+                need(expected == verifier_node(state,
+                         node.children[0]).type_id,
+                    "binding annotation type differs from source");
+            }
+            if vec.len(syntax.children) > 0 &&
+               syntax.token_begin < vec.len(file.lexed.tokens) &&
+               file.lexed.tokens[syntax.token_begin].spelling == "const" &&
+               kind_is(verifier_type(state,
+                   verifier_node(state, node.children[0]).type_id).kind,
+                   model.TypeKind.Function) {
+                need(source_input_matches(state, node, node.children[0],
+                         syntax.children[vec.len(syntax.children) - 1]),
+                    "const function initializer differs from real source initializer");
+                var rhs = node.source.node;
+                rhs.node = syntax.children[vec.len(syntax.children) - 1];
+                let target = resolved_source(state, rhs);
+                if option.is_some(target) &&
+                   symbol_is(verifier_symbol(state,
+                       option_usize(target)).kind, model.SymbolKind.Constant) &&
+                   local_index(state, option_usize(target)) >= 0 {
+                    var initializer_read = false;
+                    var initializer_symbol usize = 0;
+                    switch verifier_node(state, node.children[0]).data {
+                        case hir.NodeData.Read(value): {
+                            initializer_read = true;
+                            initializer_symbol = value.symbol;
+                        }
+                        default: {}
+                    }
+                    need(initializer_read,
+                        "local function constant alias did not preserve a real Read");
+                    need(origin_symbol(state, initializer_symbol) ==
+                         option_usize(target),
+                        "local function constant alias read differs from its source binding");
+                }
+            }
+        }
+        if node_is(node_kind, hir.NodeKind.IndexRead) ||
+           node_is(node_kind, hir.NodeKind.IndexPlace) {
+            need(ast_is(ast.kind, model.AstKind.NeutralBracket) &&
+                 vec.len(ast.children) == 2, "index source kind/arity");
+            var index = file.nodes[ast.children[1]];
+            if ast_is(index.kind, model.AstKind.BracketItem) {
+                index = file.nodes[index.children[0]];
+            }
+            need(verifier_node(state, node.children[0]).source.span.begin_byte >=
+                 file.nodes[ast.children[0]].span.begin_byte &&
+                 verifier_node(state, node.children[0]).source.span.end_byte <=
+                 file.nodes[ast.children[0]].span.end_byte &&
+                 verifier_node(state, node.children[1]).source.span.begin_byte >=
+                 index.span.begin_byte &&
+                 verifier_node(state, node.children[1]).source.span.end_byte <=
+                 index.span.end_byte,
+                "index source evaluation order");
+        }
+        if node_is(node_kind, hir.NodeKind.VecSlice) {
+            var slice = hir.VecSlice(start: option.Option[usize].None,
+                end: option.Option[usize].None);
+            switch node.data {
+                case hir.NodeData.VecSlice(value): slice = value;
+                default: {}
+            }
+            need(ast_is(ast.kind, model.AstKind.Slice), "slice source kind");
+            var start_syntax = false;
+            if vec.len(ast.children) > 1 {
+                start_syntax = ast_is(file.nodes[ast.children[1]].kind,
+                    model.AstKind.BracketItem);
+            }
+            need(option.is_some(slice.start) == start_syntax &&
+                 option.is_some(slice.end) ==
+                     (vec.len(ast.children) == 3 ||
+                      (vec.len(ast.children) == 2 && !start_syntax)),
+                "slice omitted endpoint differs from tokens");
+            need(source_input_matches(state, node, node.children[0],
+                     ast.children[0]),
+                "slice receiver/endpoint differs from source evaluation order");
+            if option.is_some(slice.start) {
+                need(source_input_matches(state, node,
+                         option_usize(slice.start), ast.children[1]),
+                    "slice receiver/endpoint differs from source evaluation order");
+            }
+            if option.is_some(slice.end) {
+                need(source_input_matches(state, node,
+                         option_usize(slice.end),
+                         ast.children[vec.len(ast.children) - 1]),
+                    "slice receiver/endpoint differs from source evaluation order");
+            }
+        }
+        if node_is(node_kind, hir.NodeKind.VecInit) {
+            need(ast_is(ast.kind, model.AstKind.List) &&
+                 vec.len(ast.children) == vec.len(node.children),
+                "list source kind/arity");
+            for var j usize = 0; j < vec.len(node.children); j += 1 {
+                let original = file.nodes[ast.children[j]];
+                let value = verifier_node(state, node.children[j]);
+                need(value.source.span.begin_byte >= original.span.begin_byte &&
+                     value.source.span.end_byte <= original.span.end_byte,
+                    "list source order");
+            }
+        }
+    }
+}
+
+func source_input_matches(state Verifier, node hir.HirNode, input usize,
+                          syntax usize) bool throws Invalid {
+    let file = verifier_file(state, node.source.node.module,
+        node.source.node.file);
+    let value = verifier_node(state, input);
+    var expected = node.source.node;
+    expected.node = syntax;
+    for true {
+        if same_ref(value.source.node, expected) {
+            return true;
+        }
+        let source = file.nodes[expected.node];
+        var wrapper = ast_is(source.kind, model.AstKind.Parenthesized) ||
+                      ast_is(source.kind, model.AstKind.BracketItem);
+        if ast_is(source.kind, model.AstKind.Unary) {
+            wrapper = source.token_begin < vec.len(file.lexed.tokens) &&
+                file.lexed.tokens[source.token_begin].spelling == "+";
+        }
+        if !wrapper || vec.len(source.children) != 1 {
+            return false;
+        }
+        expected.node = source.children[0];
+    }
+    return false;
+}
+
+struct FlowState {
+    falls bool;
+    errors Vec[usize];
+    breaks Vec[usize];
+    continues Vec[usize];
+}
+
+struct ReferenceEntry {
+    node usize;
+    symbols Vec[usize];
+}
+
+func own_error(state Verifier, node hir.HirNode) option.Option[usize]
+    throws Invalid {
+    let kind = hir.node_kind(node.data);
+    if node_is(kind, hir.NodeKind.Call) {
+        var signature usize = 0;
+        switch node.data {
+            case hir.NodeData.Call(value): signature = value.signature;
+            default: {}
+        }
+        return verifier_type(state, signature).throws_type;
+    }
+    if node_is(kind, hir.NodeKind.ConstraintCall) {
+        var signature usize = 0;
+        switch node.data {
+            case hir.NodeData.ConstraintCall(value): signature = value.signature;
+            default: {}
+        }
+        return verifier_type(state, signature).throws_type;
+    }
+    if node_is(kind, hir.NodeKind.ForeignRead) {
+        var binding usize = 0;
+        switch node.data {
+            case hir.NodeData.ForeignRead(value): binding = value.binding;
+            default: {}
+        }
+        need(binding < vec.len(state.m.foreign_bindings),
+            "foreign binding index");
+        return option.Option[usize].Some(
+            state.m.foreign_bindings[binding].read_error);
+    }
+    if node_is(kind, hir.NodeKind.Throw) {
+        need(vec.len(node.children) > 0, "throw source/arity");
+        return option.Option[usize].Some(
+            verifier_node(state, node.children[0]).type_id);
+    }
+    if node_is(kind, hir.NodeKind.Await) {
+        need(vec.len(node.children) > 0, "await child");
+        let task = verifier_type(state,
+            verifier_node(state, node.children[0]).type_id);
+        need(kind_is(task.kind, model.TypeKind.Task) &&
+             vec.len(task.type_args) == 2, "await child is not a Task");
+        let error = task.type_args[1];
+        if !kind_is(verifier_type(state, error).kind, model.TypeKind.Unit) {
+            return option.Option[usize].Some(error);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func error_set(values Vec[usize], value usize) Vec[usize] {
+    let result = ids_copy(values);
+    ids_insert(result, value);
+    return result;
+}
+
+func effects_and_exits(state inout Verifier) throws Invalid {
+    let errors = vec.empty[Vec[usize]]();
+    for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
+        vec.push(errors, vec.empty[usize]());
+    }
+    let order = postorder(state);
+    for id in order {
+        let node = state.m.nodes[id];
+        let node_kind = hir.node_kind(node.data);
+        var out = vec.empty[usize]();
+        if node_is(node_kind, hir.NodeKind.Try) {
+            var try_value = hir.Try(catches: []);
+            switch node.data {
+                case hir.NodeData.Try(value): try_value = value;
+                default: {}
+            }
+            out = errors[node.children[0]];
+            for handler in try_value.catches {
+                ids_remove(out, handler.error_type);
+            }
+            for handler in try_value.catches {
+                ids_union(out, errors[handler.body]);
+            }
+        } else if node_is(node_kind, hir.NodeKind.Defer) {
+            need(vec.len(errors[node.children[0]]) == 0,
+                "typed error escapes cleanup body");
+        } else {
+            for child in node.children {
+                ids_union(out, errors[child]);
+            }
+            let error = own_error(state, node);
+            if option.is_some(error) {
+                ids_insert(out, option_usize(error));
+            }
+        }
+        need(ids_equal(node.errors, out),
+            "effect set differs from independently computed errors");
+        errors[id] = out;
+    }
+    let references = vec.empty[ReferenceEntry]();
+    for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
+        let node = state.m.nodes[index];
+        let owner = verifier_scope(state, node.scope).function;
+        var read = option.Option[usize].None;
+        switch node.data {
+            case hir.NodeData.Read(value):
+                read = option.Option[usize].Some(value.symbol);
+            case hir.NodeData.Place(value):
+                read = option.Option[usize].Some(value.symbol);
+            case hir.NodeData.Move(value):
+                read = value.binding;
+            default: {}
+        }
+        var enclosing_defer = option.Option[usize].None;
+        var branch = index;
+        var handler = option.Option[hir.CatchTarget].None;
+        let error = own_error(state, node);
+        var parent = parent_node(state, index);
+        for option.is_some(parent) {
+            let parent_id = option_usize(parent);
+            let p = verifier_node(state, parent_id);
+            let p_kind = hir.node_kind(p.data);
+            if node_is(p_kind, hir.NodeKind.Defer) {
+                if !option.is_some(enclosing_defer) {
+                    enclosing_defer = option.Option[usize].Some(parent_id);
+                }
+                if option.is_some(read) {
+                    let local = verifier_local(state, option_usize(read));
+                    if !verifier_ancestor(state,
+                            verifier_node(state, p.children[0]).scope,
+                            local.scope) {
+                        need(local.function == owner &&
+                             verifier_ancestor(state, local.scope, p.scope) &&
+                             local.ready < state.enter[parent_id],
+                            "defer reference was not visible at registration");
+                        reference_add(references, parent_id,
+                            option_usize(read));
+                    }
+                }
+            }
+            if option.is_some(error) && !option.is_some(handler) &&
+               !option.is_some(enclosing_defer) &&
+               node_is(p_kind, hir.NodeKind.Try) &&
+               vec.len(p.children) > 0 && branch == p.children[0] {
+                var try_value = hir.Try(catches: []);
+                switch p.data {
+                    case hir.NodeData.Try(value): try_value = value;
+                    default: {}
+                }
+                for var c usize = 0; c < vec.len(try_value.catches); c += 1 {
+                    if try_value.catches[c].error_type ==
+                       option_usize(error) {
+                        handler = option.Option[hir.CatchTarget].Some(
+                            hir.CatchTarget(try_node: parent_id,
+                                index: u32(c)));
+                        break;
+                    }
+                }
+            }
+            branch = parent_id;
+            parent = parent_node(state, parent_id);
+        }
+        let expected = vec.empty[hir.ExitPlan]();
+        if option.is_some(error) {
+            if option.is_some(handler) {
+                let target = option_catch(handler);
+                let try_node = verifier_node(state, target.try_node);
+                append_exit(inout state, index, node, expected, hir.ExitKind.Error,
+                    hir.ExitTarget.CatchTarget(target), true, try_node.scope,
+                    true, option_usize(error), true);
+            } else {
+                need(!option.is_some(enclosing_defer),
+                    "error crosses defer boundary");
+                let signature = verifier_type(state,
+                    verifier_function(state, owner).signature);
+                var declared = signature.throws_type;
+                if !option.is_some(declared) &&
+                   verifier_function(state, owner).is_async {
+                    let task = verifier_type(state, signature.result);
+                    if kind_is(task.kind, model.TypeKind.Task) &&
+                       vec.len(task.type_args) == 2 {
+                        let task_error = task.type_args[1];
+                        if !kind_is(verifier_type(state, task_error).kind,
+                                    model.TypeKind.Unit) {
+                            declared = option.Option[usize].Some(task_error);
+                        }
+                    }
+                }
+                need(option.is_some(declared) &&
+                     option_usize(declared) == option_usize(error),
+                    "unhandled typed error not declared by function");
+                append_exit(inout state, index, node, expected, hir.ExitKind.Error,
+                    hir.ExitTarget.FunctionExit(hir.FunctionExit(
+                        function: owner)), false, 0, true,
+                    option_usize(error), true);
+            }
+        }
+        if node_is(hir.node_kind(node.data), hir.NodeKind.Return) {
+            need(!option.is_some(enclosing_defer),
+                "return crosses defer boundary");
+            append_exit(inout state, index, node, expected, hir.ExitKind.Return,
+                hir.ExitTarget.FunctionExit(hir.FunctionExit(function: owner)),
+                false, 0, false, 0, vec.len(node.children) > 0);
+        }
+        if node_is(hir.node_kind(node.data), hir.NodeKind.Await) {
+            need(!option.is_some(enclosing_defer),
+                "await crosses defer boundary");
+            append_exit(inout state, index, node, expected, hir.ExitKind.Cancel,
+                hir.ExitTarget.FunctionExit(hir.FunctionExit(function: owner)),
+                false, 0, false, 0, false);
+        }
+        if node_is(hir.node_kind(node.data), hir.NodeKind.Break) ||
+           node_is(hir.node_kind(node.data), hir.NodeKind.Continue) {
+            var target usize = 0;
+            if node_is(hir.node_kind(node.data), hir.NodeKind.Break) {
+                switch node.data {
+                    case hir.NodeData.Break(value): target = value.loop;
+                    default: {}
+                }
+            } else {
+                switch node.data {
+                    case hir.NodeData.Continue(value): target = value.loop;
+                    default: {}
+                }
+            }
+            if option.is_some(enclosing_defer) {
+                let defer_node = verifier_node(state,
+                    option_usize(enclosing_defer));
+                need(node_contains(state, defer_node.children[0], target),
+                    "jump crosses defer boundary");
+            }
+            let target_node = verifier_node(state, target);
+            var keep = target_node.scope;
+            if node_is(hir.node_kind(node.data), hir.NodeKind.Break) &&
+               (node_is(hir.node_kind(target_node.data), hir.NodeKind.For) ||
+                node_is(hir.node_kind(target_node.data), hir.NodeKind.ForIn)) {
+                keep = option_usize(verifier_scope(state, keep).parent);
+            }
+            var kind = hir.ExitKind.Break;
+            if node_is(hir.node_kind(node.data), hir.NodeKind.Continue) {
+                kind = hir.ExitKind.Continue;
+            }
+            append_exit(inout state, index, node, expected, kind,
+                hir.ExitTarget.JumpExit(hir.JumpExit(node: target)), true, keep,
+                false, 0, false);
+        }
+        if node_is(hir.node_kind(node.data), hir.NodeKind.Block) ||
+           node_is(hir.node_kind(node.data), hir.NodeKind.For) ||
+           node_is(hir.node_kind(node.data), hir.NodeKind.ForIn) {
+            let parent_scope = verifier_scope(state, node.scope).parent;
+            append_exit(inout state, index, node, expected, hir.ExitKind.Normal,
+                hir.ExitTarget.ScopeExit(hir.ScopeExit(scope: parent_scope)),
+                option.is_some(parent_scope), option_usize(parent_scope),
+                false, 0, false);
+        }
+        require_no_actions(state, node, expected);
+        if node_is(hir.node_kind(node.data), hir.NodeKind.Defer) {
+            var defer_value = hir.Defer(owner_scope: 0, references: []);
+            switch node.data {
+                case hir.NodeData.Defer(value): defer_value = value;
+                default: {}
+            }
+            let construct = scope_node(state, defer_value.owner_scope);
+            need(option.is_some(construct) &&
+                 node_is(hir.node_kind(verifier_node(state,
+                     option_usize(construct)).data), hir.NodeKind.Block),
+                "defer registration must belong to nearest lexical block");
+        }
+    }
+    for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
+        var defer_value = hir.Defer(owner_scope: 0, references: []);
+        var is_defer = false;
+        switch state.m.nodes[index].data {
+            case hir.NodeData.Defer(value): {
+                defer_value = value;
+                is_defer = true;
+            }
+            default: {}
+        }
+        if is_defer {
+            let expected = reference_symbols(references, index);
+            need(ids_equal(defer_value.references, expected),
+                "defer references differ from actual external uses");
+        }
+    }
+}
+
+func option_catch(value option.Option[hir.CatchTarget]) hir.CatchTarget {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return hir.CatchTarget(try_node: 0, index: 0);
+    }
+}
+
+func reference_add(entries Vec[ReferenceEntry], node usize, symbol usize) {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].node == node {
+            ids_insert(entries[index].symbols, symbol);
+            return;
+        }
+    }
+    let symbols = vec.empty[usize]();
+    ids_insert(symbols, symbol);
+    vec.push(entries, ReferenceEntry(node: node, symbols: symbols));
+}
+
+func reference_symbols(entries Vec[ReferenceEntry], node usize) Vec[usize] {
+    for entry in entries {
+        if entry.node == node {
+            return ids_copy(entry.symbols);
+        }
+    }
+    return vec.empty[usize]();
+}
+
+func append_exit(state inout Verifier, id usize, node hir.HirNode,
+                 expected Vec[hir.ExitPlan], kind hir.ExitKind,
+                 target hir.ExitTarget, has_keep bool, keep usize,
+                 has_error bool, error usize, saves bool) throws Invalid {
+    var plan = hir.ExitPlan(kind: kind,
+        error_type: option.Option[usize].None, target: target,
+        exited_scopes: [], defers: [], saves_value: saves, actions: []);
+    if has_error {
+        plan.error_type = option.Option[usize].Some(error);
+    }
+    var scope = option.Option[usize].Some(node.scope);
+    for true {
+        if has_keep && option.is_some(scope) &&
+           option_usize(scope) == keep {
+            break;
+        }
+        if !has_keep && !option.is_some(scope) {
+            break;
+        }
+        need(option.is_some(scope), "exit target is not an ancestor scope");
+        vec.push(plan.exited_scopes, option_usize(scope));
+        let construct = scope_node(state, option_usize(scope));
+        need(option.is_some(construct), "exit scope has no owning construct");
+        let block = verifier_node(state, option_usize(construct));
+        if node_is(hir.node_kind(block.data), hir.NodeKind.Block) {
+            var before = vec.len(block.children);
+            if option_usize(construct) != id {
+                before = 0;
+                for before < vec.len(block.children) &&
+                    !node_contains(state, block.children[before], id) {
+                    before += 1;
+                }
+                need(before < vec.len(block.children),
+                    "exit is outside its scope's block");
+            }
+            for before > 0 {
+                before -= 1;
+                let candidate = block.children[before];
+                if node_is(hir.node_kind(verifier_node(state, candidate).data),
+                           hir.NodeKind.Defer) {
+                    vec.push(plan.defers, candidate);
+                }
+            }
+        }
+        scope = verifier_scope(state, option_usize(scope)).parent;
+    }
+    if has_error || vec.len(plan.defers) > 0 {
+        vec.push(expected, plan);
+    }
+}
+
+func same_exit_plan(left hir.ExitPlan, right hir.ExitPlan) bool {
+    if exit_kind_id(left.kind) != exit_kind_id(right.kind) ||
+       option.is_some(left.error_type) != option.is_some(right.error_type) ||
+       left.saves_value != right.saves_value ||
+       !ids_equal(left.exited_scopes, right.exited_scopes) ||
+       !ids_equal(left.defers, right.defers) {
+        return false;
+    }
+    if option.is_some(left.error_type) &&
+       option_usize(left.error_type) != option_usize(right.error_type) {
+        return false;
+    }
+    return same_exit_target(left.target, right.target);
+}
+
+func same_exit_target(left hir.ExitTarget, right hir.ExitTarget) bool {
+    switch left {
+        case hir.ExitTarget.ScopeExit(value): {
+            switch right {
+                case hir.ExitTarget.ScopeExit(other): {
+                    return option.is_some(value.scope) ==
+                           option.is_some(other.scope) &&
+                           (!option.is_some(value.scope) ||
+                            option_usize(value.scope) ==
+                                option_usize(other.scope));
+                }
+                default: return false;
+            }
+        }
+        case hir.ExitTarget.FunctionExit(value): {
+            switch right {
+                case hir.ExitTarget.FunctionExit(other):
+                    return value.function == other.function;
+                default: return false;
+            }
+        }
+        case hir.ExitTarget.JumpExit(value): {
+            switch right {
+                case hir.ExitTarget.JumpExit(other):
+                    return value.node == other.node;
+                default: return false;
+            }
+        }
+        case hir.ExitTarget.CatchTarget(value): {
+            switch right {
+                case hir.ExitTarget.CatchTarget(other):
+                    return value.try_node == other.try_node &&
+                           value.index == other.index;
+                default: return false;
+            }
+        }
+    }
+}
+
+func require_no_actions(state Verifier, node hir.HirNode,
+                        expected Vec[hir.ExitPlan]) throws Invalid {
+    let actual = vec.empty[hir.ExitPlan]();
+    for plan in node.exits {
+        if !option.is_some(plan.error_type) && vec.len(plan.defers) == 0 {
+            continue;
+        }
+        vec.push(actual, hir.ExitPlan(kind: plan.kind,
+            error_type: plan.error_type, target: plan.target,
+            exited_scopes: plan.exited_scopes, defers: plan.defers,
+            saves_value: plan.saves_value, actions: []));
+    }
+    need(vec.len(actual) == vec.len(expected),
+        "exit target/scopes/cleanup order/value preservation mismatch");
+    for var index usize = 0; index < vec.len(actual); index += 1 {
+        need(same_exit_plan(actual[index], expected[index]),
+            "exit target/scopes/cleanup order/value preservation mismatch");
+    }
+}
+
+func flow_merge(out FlowState, child FlowState) {
+    ids_union(out.errors, child.errors);
+    ids_union(out.breaks, child.breaks);
+    ids_union(out.continues, child.continues);
+}
+
+func uses_and_flow(state inout Verifier) throws Invalid {
+    for var i usize = 0; i < vec.len(state.m.nodes); i += 1 {
+        let node = state.m.nodes[i];
+        let kind = hir.node_kind(node.data);
+        var symbol_id = option.Option[usize].None;
+        if node_is(kind, hir.NodeKind.Read) {
+            switch node.data {
+                case hir.NodeData.Read(value):
+                    symbol_id = option.Option[usize].Some(value.symbol);
+                default: {}
+            }
+        } else if node_is(kind, hir.NodeKind.Place) {
+            switch node.data {
+                case hir.NodeData.Place(value):
+                    symbol_id = option.Option[usize].Some(value.symbol);
+                default: {}
+            }
+        } else if node_is(kind, hir.NodeKind.Move) {
+            switch node.data {
+                case hir.NodeData.Move(value): symbol_id = value.binding;
+                default: {}
+            }
+        }
+        if !option.is_some(symbol_id) {
+            continue;
+        }
+        let symbol = verifier_symbol(state, option_usize(symbol_id));
+        let local = verifier_local(state, option_usize(symbol_id));
+        need(option.is_some(owner_of(state, i)) &&
+             option_usize(owner_of(state, i)) == local.function &&
+             verifier_ancestor(state, local.scope, node.scope) &&
+             local.ready < state.enter[i],
+            "binding out of scope or used before initialization");
+        need(node.type_id == local.type_id &&
+             (!node_is(kind, hir.NodeKind.Place) || local.writable),
+            "binding type/writability mismatch");
+        need(!(local.read_only && node_is(kind, hir.NodeKind.Move)),
+            "read-only capture cannot be moved");
+    }
+    let order = postorder(state);
+    let flows = vec.empty[FlowState]();
+    for var index usize = 0; index < vec.len(state.m.nodes); index += 1 {
+        vec.push(flows, FlowState(falls: true, errors: [], breaks: [],
+            continues: []));
+    }
+    for i in order {
+        let node = state.m.nodes[i];
+        let node_kind = hir.node_kind(node.data);
+        var out = flows[i];
+        if node_is(node_kind, hir.NodeKind.Defer) {
+            flows[i] = out;
+            continue;
+        }
+        if node_is(node_kind, hir.NodeKind.ShortCircuit) {
+            flow_merge(out, flows[node.children[0]]);
+            var known = option.Option[bool].None;
+            var operand = node.children[0];
+            switch state.m.nodes[operand].data {
+                case hir.NodeData.BoolLiteral(value):
+                    known = option.Option[bool].Some(value.value);
+                default: {}
+            }
+            var op = hir.LogicalOp.And;
+            switch node.data {
+                case hir.NodeData.ShortCircuit(value): op = value.op;
+                default: {}
+            }
+            var merge_second = !option.is_some(known);
+            if option.is_some(known) {
+                var known_value = option_bool(known);
+                if logical_id(op) == 1 {
+                    known_value = !known_value;
+                }
+                merge_second = known_value;
+            }
+            if merge_second {
+                flow_merge(out, flows[node.children[1]]);
+            }
+            flows[i] = out;
+            continue;
+        }
+        if node_is(node_kind, hir.NodeKind.Block) {
+            for child in node.children {
+                if !out.falls {
+                    break;
+                }
+                flow_merge(out, flows[child]);
+                out.falls = flows[child].falls;
+            }
+            flows[i] = out;
+            continue;
+        }
+        if node_is(node_kind, hir.NodeKind.If) {
+            flow_merge(out, flows[node.children[0]]);
+            var condition = option.Option[bool].None;
+            switch state.m.nodes[node.children[0]].data {
+                case hir.NodeData.BoolLiteral(value):
+                    condition = option.Option[bool].Some(value.value);
+                default: {}
+            }
+            out.falls = vec.len(node.children) == 2 &&
+                (!option.is_some(condition) || !option_bool(condition));
+            for var branch usize = 1; branch < vec.len(node.children); branch += 1 {
+                var expected_branch usize = 2;
+                if option_bool(condition) { expected_branch = 1; }
+                if option.is_some(condition) && branch != expected_branch {
+                    continue;
+                }
+                flow_merge(out, flows[node.children[branch]]);
+                out.falls = out.falls || flows[node.children[branch]].falls;
+            }
+            flows[i] = out;
+            continue;
+        }
+        if node_is(node_kind, hir.NodeKind.Try) {
+            let body = flows[node.children[0]];
+            out.falls = body.falls;
+            out.errors = ids_copy(body.errors);
+            out.breaks = ids_copy(body.breaks);
+            out.continues = ids_copy(body.continues);
+            var try_value = hir.Try(catches: []);
+            switch node.data {
+                case hir.NodeData.Try(value): try_value = value;
+                default: {}
+            }
+            for handler in try_value.catches {
+                ids_remove(out.errors, handler.error_type);
+            }
+            for handler in try_value.catches {
+                var reachable = false;
+                for error in body.errors {
+                    if type_patterns_overlap_state(inout state, error,
+                            handler.error_type) {
+                        reachable = true;
+                    }
+                }
+                if !reachable {
+                    continue;
+                }
+                let handler_flow = flows[handler.body];
+                flow_merge(out, handler_flow);
+                out.falls = out.falls || handler_flow.falls;
+            }
+            flows[i] = out;
+            continue;
+        }
+        if node_is(node_kind, hir.NodeKind.Switch) {
+            flow_merge(out, flows[node.children[0]]);
+            out.falls = false;
+            for var arm usize = 1; arm < vec.len(node.children); arm += 1 {
+                let arm_flow = flows[node.children[arm]];
+                flow_merge(out, arm_flow);
+                out.falls = out.falls || arm_flow.falls ||
+                    ids_contains(arm_flow.breaks, i);
+            }
+            ids_remove(out.breaks, i);
+            flows[i] = out;
+            continue;
+        }
+        if node_is(node_kind, hir.NodeKind.ForIn) {
+            flow_merge(out, flows[node.children[0]]);
+            flow_merge(out, flows[node.children[1]]);
+            ids_remove(out.breaks, i);
+            ids_remove(out.continues, i);
+            out.falls = true;
+            flows[i] = out;
+            continue;
+        }
+        if node_is(node_kind, hir.NodeKind.For) {
+            flow_merge(out, flows[node.children[0]]);
+            flow_merge(out, flows[node.children[1]]);
+            var condition = option.Option[bool].None;
+            switch state.m.nodes[node.children[1]].data {
+                case hir.NodeData.BoolLiteral(value):
+                    condition = option.Option[bool].Some(value.value);
+                default: {}
+            }
+            if option.is_some(condition) && !option_bool(condition) {
+                flows[i] = out;
+                continue;
+            }
+            let body = flows[node.children[3]];
+            flow_merge(out, body);
+            if body.falls || ids_contains(body.continues, i) {
+                flow_merge(out, flows[node.children[2]]);
+            }
+            out.falls = !option.is_some(condition) ||
+                ids_contains(body.breaks, i);
+            ids_remove(out.breaks, i);
+            ids_remove(out.continues, i);
+            flows[i] = out;
+            continue;
+        }
+        for child in node.children {
+            flow_merge(out, flows[child]);
+        }
+        if node_is(node_kind, hir.NodeKind.Call) {
+            var signature usize = 0;
+            switch node.data {
+                case hir.NodeData.Call(value): signature = value.signature;
+                default: {}
+            }
+            let throws_type = verifier_type(state, signature).throws_type;
+            if option.is_some(throws_type) {
+                ids_insert(out.errors, option_usize(throws_type));
+            }
+        }
+        if node_is(node_kind, hir.NodeKind.ConstraintCall) {
+            var signature usize = 0;
+            switch node.data {
+                case hir.NodeData.ConstraintCall(value): signature = value.signature;
+                default: {}
+            }
+            let throws_type = verifier_type(state, signature).throws_type;
+            if option.is_some(throws_type) {
+                ids_insert(out.errors, option_usize(throws_type));
+            }
+        }
+        if node_is(node_kind, hir.NodeKind.ForeignRead) {
+            var binding usize = 0;
+            switch node.data {
+                case hir.NodeData.ForeignRead(value): binding = value.binding;
+                default: {}
+            }
+            ids_insert(out.errors, state.m.foreign_bindings[binding].read_error);
+        }
+        if node_is(node_kind, hir.NodeKind.Throw) {
+            ids_insert(out.errors,
+                verifier_node(state, node.children[0]).type_id);
+            out.falls = false;
+        }
+        if node_is(node_kind, hir.NodeKind.Return) {
+            out.falls = false;
+        }
+        if node_is(node_kind, hir.NodeKind.Break) {
+            var target usize = 0;
+            switch node.data {
+                case hir.NodeData.Break(value): target = value.loop;
+                default: {}
+            }
+            ids_insert(out.breaks, target);
+            out.falls = false;
+        }
+        if node_is(node_kind, hir.NodeKind.Continue) {
+            var target usize = 0;
+            switch node.data {
+                case hir.NodeData.Continue(value): target = value.loop;
+                default: {}
+            }
+            ids_insert(out.continues, target);
+            out.falls = false;
+        }
+        flows[i] = out;
+    }
+    for entry in state.all_functions {
+        let function_value = all_function_value(state, entry);
+        var result = verifier_type(state, function_value.signature).result;
+        if function_value.is_async {
+            let task = verifier_type(state, result);
+            need(kind_is(task.kind, model.TypeKind.Task) &&
+                 vec.len(task.type_args) == 2,
+                "async function result is not a Task");
+            result = task.type_args[0];
+        }
+        need(kind_is(verifier_type(state, result).kind, model.TypeKind.Unit) ||
+             !flows[function_value.body].falls,
+            "non-Unit function has a normal exit without return");
+    }
+}
+
+func option_bool(value option.Option[bool]) bool {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return false;
+    }
+}

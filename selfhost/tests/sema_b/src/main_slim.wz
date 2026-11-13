@@ -1,0 +1,294 @@
+package app;
+
+// Independent B-side semantic cases.  Sources are parsed and resolved by the
+// real accepted source/lexer/parser/resolve packages, then checked by the Wz
+// sema body/effect algorithms. The slim driver omits public verification
+// and ownership derivation; it does not replace those phases.
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct Test {
+    checks usize;
+    failures usize;
+    failed Vec[string];
+}
+
+struct Builder {
+    files Vec[model.ParseResult];
+    sources Vec[model.Source];
+    next_snapshot u64;
+}
+
+struct Case {
+    label string;
+    source string;
+    ok bool;
+    code string;
+    property bool;
+}
+
+func check(t inout Test, ok bool, label string) {
+    t.checks += 1;
+    if !ok {
+        t.failures += 1;
+        vec.push(t.failed, label);
+    }
+}
+
+func add_source(state inout Builder, path string, contents string) usize {
+    let snapshot_id = state.next_snapshot;
+    state.next_snapshot += 1;
+    let input = source.snapshot(snapshot_id, snapshot_id, snapshot_id, path,
+        text.bytes(contents));
+    let lexed = lexer.lex(input);
+    let parsed = parser.parse(lexed);
+    let index = vec.len(state.files);
+    vec.push(state.files, parsed);
+    vec.push(state.sources, input);
+    return index;
+}
+
+func build(source_text string) model.Project {
+    var state = Builder(files: vec.empty[model.ParseResult](),
+        sources: vec.empty[model.Source](), next_snapshot: 1);
+    var project = model.empty_project();
+    project.entry = 0;
+    let logical = "module0";
+    var module = model.Module(id: 0, logical_path: logical,
+        identity: logical, package_name: "p", files: vec.empty[usize](),
+        imports: vec.empty[model.Import](),
+        foreign_exports: vec.empty[model.ForeignExport](),
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None);
+    let index = add_source(inout state, logical + "/0.wz", source_text);
+    vec.push(module.files, index);
+    vec.push(project.modules, module);
+    project.files = state.files;
+    return project;
+}
+
+func empty_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+func foreign_type_decl(id usize, identity string, kind string,
+                       properties Vec[usize]) model.ForeignDeclaration {
+    return model.ForeignDeclaration(id: id, bundle: 0, source: empty_span(),
+        json_pointer: "", identity: identity, module: "demo", name: identity,
+        host_attribute: [],
+        detail: model.ForeignDetail.Type(model.BindingType(kind: kind,
+            copy: "copy", members: [], properties: properties, indexers: [],
+            slices: [])),
+        stable_identity: identity);
+}
+
+func foreign_value_decl(id usize, identity string,
+                        type_name string) model.ForeignDeclaration {
+    return model.ForeignDeclaration(id: id, bundle: 0, source: empty_span(),
+        json_pointer: "", identity: identity, module: "demo", name: identity,
+        host_attribute: [],
+        detail: model.ForeignDetail.Value(model.BindingValue(type_name: type_name)),
+        stable_identity: identity);
+}
+
+func foreign_property_decl(id usize, identity string,
+                           type_name string) model.ForeignDeclaration {
+    return model.ForeignDeclaration(id: id, bundle: 0, source: empty_span(),
+        json_pointer: "", identity: identity, module: "demo", name: "size",
+        host_attribute: [],
+        detail: model.ForeignDetail.Property(model.BindingProperty(
+            owner_type: "demo.Point", name: identity, type_name: type_name,
+            getter: ["size"], setter: [], error_type: "lang.py.Error")),
+        stable_identity: identity);
+}
+
+func build_property(source_text string) model.Project {
+    let declarations = vec.empty[model.ForeignDeclaration]();
+    vec.push(declarations, foreign_type_decl(0, "lang.py.Error",
+        "runtime_error", vec.empty[usize]()));
+    let point_properties = vec.empty[usize]();
+    vec.push(point_properties, 3);
+    vec.push(declarations, foreign_type_decl(1, "demo.Point", "type",
+        point_properties));
+    vec.push(declarations, foreign_value_decl(2, "demo.point", "demo.Point"));
+    vec.push(declarations, foreign_property_decl(3, "demo.Point.size", "bool"));
+    var project = model.empty_project();
+    project.entry = 0;
+    var state = Builder(files: vec.empty[model.ParseResult](),
+        sources: vec.empty[model.Source](), next_snapshot: 1);
+    let logical = "module0";
+    var module = model.Module(id: 0, logical_path: logical,
+        identity: logical, package_name: "p", files: vec.empty[usize](),
+        imports: vec.empty[model.Import](),
+        foreign_exports: vec.empty[model.ForeignExport](),
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None);
+    let index = add_source(inout state, logical + "/0.wz", source_text);
+    vec.push(module.files, index);
+    vec.push(module.foreign_exports, model.ForeignExport(name: "Error",
+        identity: "lang.py.Error", kind: model.ForeignExportKind.Type, bundle: 0,
+        declaration: option.Option[usize].Some(0), candidates: [],
+        c_type: option.Option[u32].None,
+        c_callable: option.Option[u32].None,
+        c_type_ref: option.Option[model.CTypeRef].None));
+    vec.push(module.foreign_exports, model.ForeignExport(name: "Point",
+        identity: "demo.Point", kind: model.ForeignExportKind.Type, bundle: 0,
+        declaration: option.Option[usize].Some(1), candidates: [],
+        c_type: option.Option[u32].None,
+        c_callable: option.Option[u32].None,
+        c_type_ref: option.Option[model.CTypeRef].None));
+    vec.push(module.foreign_exports, model.ForeignExport(name: "point",
+        identity: "demo.point", kind: model.ForeignExportKind.Value, bundle: 0,
+        declaration: option.Option[usize].Some(2), candidates: [],
+        c_type: option.Option[u32].None,
+        c_callable: option.Option[u32].None,
+        c_type_ref: option.Option[model.CTypeRef].None));
+    vec.push(project.modules, module);
+    project.files = state.files;
+    project.foreign_bindings = declarations;
+    return project;
+}
+
+func complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func run_case(t inout Test, value Case) throws os.Error {
+    var project = build(value.source);
+    if value.property { project = build_property(value.source); }
+    let resolved = resolve.resolve_project(project);
+    if !resolved.has_value || !complete(resolved.state) {
+        check(inout t, false, value.label + ": resolve");
+        return;
+    }
+    let typed = sema.b_test_run(resolved);
+    if value.ok {
+        check(inout t, typed.ok, value.label + ": accept");
+        if value.property {
+            check(inout t, typed.property_read,
+                value.label + ": PropertyRead marker");
+            check(inout t, typed.plain_foreign_read,
+                value.label + ": plain ForeignRead None preserved");
+        }
+        if !typed.ok { io.println("CASE " + value.label + " code=" + typed.code + " span=" +
+                strconv.format_u64(typed.begin_byte) + ":" +
+                strconv.format_u64(typed.end_byte) + " " + typed.message); }
+    } else {
+        check(inout t, !typed.ok, value.label + ": reject");
+        check(inout t, typed.code == value.code,
+            value.label + ": " + value.code);
+        if typed.ok || typed.code != value.code {
+            io.println("CASE " + value.label + " code=" + typed.code + " span=" +
+                strconv.format_u64(typed.begin_byte) + ":" +
+                strconv.format_u64(typed.end_byte) + " " + typed.message);
+        }
+    }
+    var ok_text = "0";
+    if typed.ok { ok_text = "1"; }
+    io.println("RESULT " + value.label + " ok=" + ok_text + " code=" +
+        typed.code + " phase=" + typed.phase + " begin=" +
+        strconv.format_u64(typed.begin_byte) + " end=" +
+        strconv.format_u64(typed.end_byte));
+}
+
+func check_invalid_escape(t inout Test) {
+    // Raw invalid UTF-8 source bytes: the Source/Lexer boundary must reject
+    // them before a decoded Token.string_value can reach B.
+    var bytes = text.bytes("package app;\nfunc main() i32 { let s = \"");
+    vec.push(bytes, 0xFF);
+    for b in text.bytes("\"; return 0; }\n") { vec.push(bytes, b); }
+    let input = source.snapshot(999, 999, 999, "invalid-utf8.wz", bytes);
+    let lexed = lexer.lex(input);
+    var rejected = false;
+    switch lexed.state {
+        case model.PhaseState.Complete: {}
+        default: rejected = true;
+    }
+    for diagnostic in lexed.diagnostics {
+        if diagnostic.severity == "error" { rejected = true; }
+    }
+    check(inout t, rejected, "invalid-utf8-source: rejected before Checker");
+}
+func cases() Vec[Case] {
+    return [
+        Case(label: "scalar-fold-and-context",
+            source: "package app;\nfunc main() i32 {\n    let a i32 = 1 + 2 * 3;\n    var b i8 = 127;\n    b += 1;\n    return a + i32(b) - 128;\n}\n",
+            ok: true, code: "", property: false),
+        Case(label: "named-arguments-and-function-value",
+            source: "package app;\nfunc add(a i32, b i32) i32 { return a + b; }\nfunc apply(op func(i32, i32) i32, a i32, b i32) i32 { return op(a, b); }\nfunc main() i32 { let d = add(b: 2, a: 1); let v = apply(add, d, 3); return v - 6; }\n",
+            ok: true, code: "", property: false),
+        Case(label: "constant-fold",
+            source: "package app;\nconst N i32 = 2 * 3 + 1;\nfunc main() i32 { return N - 7; }\n",
+            ok: true, code: "", property: false),
+        Case(label: "struct-constructor-and-field",
+            source: "package app;\nstruct Pair { a i32; b i32; }\nfunc main() i32 { var p = Pair(b: 2, a: 1); p.a += 3; return p.a + p.b - 6; }\n",
+            ok: true, code: "", property: false),
+        Case(label: "enum-switch-exhaustive",
+            source: "package app;\nenum E { A; B(value i32); }\nfunc main() i32 { let e = E.B(value: 2); switch e { case E.A: return 0; case E.B(value): { return value - 2; } } }\n",
+            ok: true, code: "", property: false),
+        Case(label: "vec-index-forin",
+            source: "package app;\nfunc main() i32 { var items = [1, 2, 3]; var sum = 0; for value in items { sum += value; } items[1] = 5; return i32(sum - 6); }\n",
+            ok: true, code: "", property: false),
+        Case(label: "closure-capture",
+            source: "package app;\nfunc main() i32 { let x i32 = 2; let f = func(y i32) i32 { return x + y; }; return f(3) - 5; }\n",
+            ok: true, code: "", property: false),
+        Case(label: "try-throw-catch",
+            source: "package app;\nenum E { Stop(value i32); }\nfunc f(flag bool) i32 throws E { if flag { throw E.Stop(value: 1); } return 0; }\nfunc main() i32 { try { return f(true); } catch error E { switch error { case E.Stop(value): return value; } } }\n",
+            ok: true, code: "", property: false),
+        Case(label: "let-assignment-reject",
+            source: "package app;\nfunc main() i32 { let x = 1; x = 2; return x; }\n",
+            ok: false, code: "E_TYPE_MISMATCH", property: false),
+        Case(label: "switch-not-exhaustive-reject",
+            source: "package app;\nfunc f(x i32) i32 { switch x { case 1: return 1; } return 0; }\nfunc main() i32 { return f(1); }\n",
+            ok: false, code: "E_TYPE_MISMATCH", property: false),
+        Case(label: "implicit-move-reject",
+            source: "package app;\nfunc take(x move i32) i32 { return x; }\nfunc main() i32 { let x = 1; return take(x); }\n",
+            ok: false, code: "E_CALL_ARGUMENT", property: false),
+        Case(label: "overlapping-inout-reject",
+            source: "package app;\nfunc swap(a inout i32, b inout i32) { a = b; }\nfunc main() i32 { var x i32 = 1; swap(inout x, inout x); return x; }\n",
+            ok: false, code: "E_CALL_ARGUMENT", property: false),
+        Case(label: "bool-condition-reject",
+            source: "package app;\nfunc main() i32 { if 1 { return 0; } return 1; }\n",
+            ok: false, code: "E_TYPE_MISMATCH", property: false),
+        Case(label: "literal-range-reject",
+            source: "package app;\nfunc main() i32 { let x i8 = 128; return i32(x); }\n",
+            ok: false, code: "E_TYPE_MISMATCH", property: false),
+        Case(label: "unicode-string-literals",
+            source: "package app;\nfunc main() i32 {\n    let ascii = \"abc\";\n    let eacute = \"é\";\n    let agrave = \"À\";\n    let pi = \"π\";\n    let han = \"中\";\n    let emoji = \"🙂\";\n    let escaped = \"line\\n\\t\";\n    let scalar = \"\\u{1F642}\";\n    let nul = \"\\0\";\n    return 0;\n}\n",
+            ok: true, code: "", property: false),
+        Case(label: "review-try-caught",
+            source: "package app;\nenum E { Stop; }\nfunc f() i32 throws E { throw E.Stop; }\nfunc main() i32 { try { return f(); } catch error E { return 0; } }\n",
+            ok: true, code: "", property: false),
+        Case(label: "review-switch-binding",
+            source: "package app;\nenum E { Item(value i32); }\nfunc main() i32 { let e = E.Item(value: 2); switch e { case E.Item(value): return value - 2; } }\n",
+            ok: true, code: "", property: false),
+        Case(label: "foreign-property-read",
+            source: "package app;\nfunc main() i32 { try { let p = point; let b = p.size; if b { return 0; } return 1; } catch error Error { return 2; } }\n",
+            ok: true, code: "", property: true),
+    ];
+}
+
+func main() i32 throws os.Error {
+    var test = Test(checks: 0, failures: 0, failed: vec.empty[string]());
+    check_invalid_escape(inout test);
+    for value in cases() { run_case(inout test, value); }
+    for label in test.failed { io.println("FAIL " + label); }
+    io.println("SEMA_B passed=" +
+        strconv.format_u64(u64(test.checks - test.failures)) + " failed=" +
+        strconv.format_u64(u64(test.failures)));
+    if test.failures != 0 { return 1; }
+    return 0;
+}

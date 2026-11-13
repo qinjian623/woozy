@@ -1,0 +1,147 @@
+// Public facade: verified HIR is only constructible here, and snapshots are
+// independent deep clones.
+package hirverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub enum VerifyMode { Backend; StaticOnly; }
+
+pub struct VerifiedHirModule {
+    module hir.HirModule;
+}
+
+pub struct VerifyResult {
+    pub state model.PhaseState;
+    pub failure model.FailureKind;
+    pub diagnostics Vec[model.Diagnostic];
+    pub value option.Option[VerifiedHirModule];
+}
+
+func invalid_diagnostic(error Invalid) model.Diagnostic {
+    var diagnostic = model.diagnostic("E_IR_INVALID", "lowering",
+        error.message, error.span);
+    diagnostic.has_primary = error.has_span;
+    if !error.has_span {
+        diagnostic.primary = empty_span();
+    }
+    return diagnostic;
+}
+
+func internal_failure(message string) Invalid {
+    return Invalid(message: message, has_span: false, span: empty_span());
+}
+
+pub func verify_types(input hir.HirModule) model.UnitResult {
+    var state = make_verifier(input);
+    try {
+        run_verification(inout state);
+    } catch error Invalid {
+        let diagnostics = vec.empty[model.Diagnostic]();
+        vec.push(diagnostics, invalid_diagnostic(error));
+        return model.UnitResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Internal, diagnostics: diagnostics,
+            has_value: false);
+    }
+    return model.UnitResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Internal, diagnostics: [], has_value: true);
+}
+
+pub func verify(input hir.HirModule, mode VerifyMode) VerifyResult {
+    var module = input;
+    try {
+        module = hirclone.clone_module(input);
+    } catch error model.SupportError {
+        var message = "";
+        switch error {
+            case model.SupportError.Invalid(value): message = value;
+            case model.SupportError.Limit(value): message = value;
+        }
+        let diagnostics = vec.empty[model.Diagnostic]();
+        vec.push(diagnostics, invalid_diagnostic(internal_failure(message)));
+        return VerifyResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Internal, diagnostics: diagnostics,
+            value: option.Option[VerifiedHirModule].None);
+    }
+    var checked = model.UnitResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Internal, diagnostics: [], has_value: false);
+    var use_backend = false;
+    switch mode {
+        case VerifyMode.Backend: use_backend = true;
+        case VerifyMode.StaticOnly: use_backend = false;
+    }
+    if use_backend {
+        checked = check_backend_capabilities(module);
+    } else {
+        checked = verify_types(module);
+    }
+    if phase_is(checked.state, model.PhaseState.Complete) && checked.has_value {
+        let project = module.resolved.project;
+        var backend_name = "native";
+        if backend_is(module.config.backend, model.Backend.Python) {
+            backend_name = "python";
+        }
+        for module_value in project.modules {
+            switch module_value.binding {
+                case option.Option.Some(reference): {
+                    if reference.bundle >= vec.len(project.bindings) {
+                        let diagnostics = vec.empty[model.Diagnostic]();
+                        vec.push(diagnostics, invalid_diagnostic(
+                            internal_failure("binding bundle index")));
+                        return VerifyResult(state: model.PhaseState.Failed,
+                            failure: model.FailureKind.Internal,
+                            diagnostics: diagnostics,
+                            value: option.Option[VerifiedHirModule].None);
+                    }
+                    let bundle = project.bindings[reference.bundle];
+                    if !string_list_contains(bundle.allowed_backends,
+                                             backend_name) {
+                        var diagnostics = vec.empty[model.Diagnostic]();
+                        var diagnostic = model.diagnostic(
+                            "E_CAPABILITY_UNAVAILABLE", "type",
+                            "foreign source module is unavailable for this backend",
+                            empty_span());
+                        diagnostic.has_primary = false;
+                        vec.push(diagnostics, diagnostic);
+                        return VerifyResult(state: model.PhaseState.Failed,
+                            failure: model.FailureKind.Unsupported,
+                            diagnostics: diagnostics,
+                            value: option.Option[VerifiedHirModule].None);
+                    }
+                }
+                case option.Option.None: {}
+            }
+        }
+    }
+    if !phase_is(checked.state, model.PhaseState.Complete) ||
+       !checked.has_value {
+        return VerifyResult(state: checked.state, failure: checked.failure,
+            diagnostics: checked.diagnostics,
+            value: option.Option[VerifiedHirModule].None);
+    }
+    return VerifyResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Internal, diagnostics: [],
+        value: option.Option[VerifiedHirModule].Some(
+            VerifiedHirModule(module: module)));
+}
+
+func string_list_contains(values Vec[string], value string) bool {
+    for item in values {
+        if item == value {
+            return true;
+        }
+    }
+    return false;
+}
+
+pub func snapshot(value VerifiedHirModule) hir.HirModule
+    throws model.SupportError {
+    return hirclone.clone_module(value.module);
+}
+
+pub func config(value VerifiedHirModule) model.CheckConfig {
+    return value.module.config;
+}

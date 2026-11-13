@@ -1,0 +1,548 @@
+// Shared state and small deterministic containers for the independent HIR
+// verifier.  C++ uses std::map/std::set; this package uses insertion-ordered
+// arrays with explicit lookup helpers so every diagnostic follows source/HIR
+// order and no hash iteration order can leak into behaviour.
+package hirverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Internal invalid-HIR failure.  The span is optional exactly like
+// std::optional<SourceSpan> in the C++ verifier.
+struct Invalid {
+    message string;
+    has_span bool;
+    span model.Span;
+}
+
+func empty_span() model.Span {
+    return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+}
+
+func fail(message string) throws Invalid {
+    throw Invalid(message: message, has_span: false, span: empty_span());
+}
+
+func fail_at(message string, span model.Span) throws Invalid {
+    throw Invalid(message: message, has_span: true, span: span);
+}
+
+func need(condition bool, message string) throws Invalid {
+    if !condition {
+        fail(message);
+    }
+}
+
+func support_invalid(message string) throws Invalid {
+    fail(message);
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func ast_is(kind model.AstKind, expected model.AstKind) bool {
+    return model.ast_kind_id(kind) == model.ast_kind_id(expected);
+}
+
+func token_is(kind model.TokenKind, expected model.TokenKind) bool {
+    return model.token_kind_id(kind) == model.token_kind_id(expected);
+}
+
+func symbol_is(kind model.SymbolKind, expected model.SymbolKind) bool {
+    return model.symbol_kind_id(kind) == model.symbol_kind_id(expected);
+}
+
+func mode_is(mode model.ParamMode, expected model.ParamMode) bool {
+    switch mode {
+        case model.ParamMode.Ordinary: return mode_is_id(expected, 0);
+        case model.ParamMode.Inout: return mode_is_id(expected, 1);
+        case model.ParamMode.Move: return mode_is_id(expected, 2);
+    }
+}
+
+func mode_is_id(mode model.ParamMode, id u32) bool {
+    switch mode {
+        case model.ParamMode.Ordinary: return id == 0;
+        case model.ParamMode.Inout: return id == 1;
+        case model.ParamMode.Move: return id == 2;
+    }
+}
+
+func backend_is(value model.Backend, expected model.Backend) bool {
+    switch value {
+        case model.Backend.Native: {
+            switch expected {
+                case model.Backend.Native: return true;
+                case model.Backend.Python: return false;
+            }
+        }
+        case model.Backend.Python: {
+            switch expected {
+                case model.Backend.Native: return false;
+                case model.Backend.Python: return true;
+            }
+        }
+    }
+}
+
+func phase_is(value model.PhaseState, expected model.PhaseState) bool {
+    switch value {
+        case model.PhaseState.Complete: return phase_id(expected) == 0;
+        case model.PhaseState.Recovered: return phase_id(expected) == 1;
+        case model.PhaseState.Failed: return phase_id(expected) == 2;
+        case model.PhaseState.Cancelled: return phase_id(expected) == 3;
+    }
+}
+
+func phase_id(value model.PhaseState) u32 {
+    switch value {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func node_is(value hir.NodeKind, expected hir.NodeKind) bool {
+    return hir.node_kind_id(value) == hir.node_kind_id(expected);
+}
+
+func unary_is(value hir.UnaryOp, id u32) bool {
+    switch value {
+        case hir.UnaryOp.Negate: return id == 0;
+        case hir.UnaryOp.LogicalNot: return id == 1;
+        case hir.UnaryOp.BitNot: return id == 2;
+    }
+}
+
+func binary_id(value hir.BinaryOp) u32 {
+    switch value {
+        case hir.BinaryOp.Add: return 0;
+        case hir.BinaryOp.Subtract: return 1;
+        case hir.BinaryOp.Multiply: return 2;
+        case hir.BinaryOp.Divide: return 3;
+        case hir.BinaryOp.Remainder: return 4;
+        case hir.BinaryOp.ShiftLeft: return 5;
+        case hir.BinaryOp.ShiftRight: return 6;
+        case hir.BinaryOp.BitAnd: return 7;
+        case hir.BinaryOp.BitOr: return 8;
+        case hir.BinaryOp.BitXor: return 9;
+        case hir.BinaryOp.Equal: return 10;
+        case hir.BinaryOp.NotEqual: return 11;
+        case hir.BinaryOp.Less: return 12;
+        case hir.BinaryOp.LessEqual: return 13;
+        case hir.BinaryOp.Greater: return 14;
+        case hir.BinaryOp.GreaterEqual: return 15;
+    }
+}
+
+func logical_id(value hir.LogicalOp) u32 {
+    switch value {
+        case hir.LogicalOp.And: return 0;
+        case hir.LogicalOp.Or: return 1;
+    }
+}
+
+func callee_id(value hir.CalleeKind) u32 {
+    switch value {
+        case hir.CalleeKind.Direct: return 0;
+        case hir.CalleeKind.FunctionValue: return 1;
+        case hir.CalleeKind.Foreign: return 2;
+        case hir.CalleeKind.System: return 3;
+        case hir.CalleeKind.CForeign: return 4;
+    }
+}
+
+func foreign_access_id(value hir.ForeignAccessKind) u32 {
+    switch value {
+        case hir.ForeignAccessKind.PropertyRead: return 0;
+        case hir.ForeignAccessKind.PropertyPlace: return 1;
+        case hir.ForeignAccessKind.IndexRead: return 2;
+        case hir.ForeignAccessKind.IndexPlace: return 3;
+        case hir.ForeignAccessKind.SliceRead: return 4;
+        case hir.ForeignAccessKind.SlicePlace: return 5;
+    }
+}
+
+func exit_kind_id(value hir.ExitKind) u32 {
+    switch value {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func option_usize(value option.Option[usize]) usize {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+func option_has(value option.Option[usize]) bool {
+    return option.is_some(value);
+}
+
+func option_some(value usize) option.Option[usize] {
+    return option.Option[usize].Some(value);
+}
+
+func option_none() option.Option[usize] {
+    return option.Option[usize].None;
+}
+
+func option_string_has(value option.Option[string]) bool {
+    return option.is_some(value);
+}
+
+func option_string_value(value option.Option[string]) string {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return "";
+    }
+}
+
+func option_u32_has(value option.Option[u32]) bool {
+    return option.is_some(value);
+}
+
+func option_u32_value(value option.Option[u32]) u32 {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+func option_type_has(value option.Option[usize]) bool {
+    return option.is_some(value);
+}
+
+func ids_contains(values Vec[usize], value usize) bool {
+    for item in values {
+        if item == value {
+            return true;
+        }
+    }
+    return false;
+}
+
+func ids_insert(values Vec[usize], value usize) bool {
+    if ids_contains(values, value) {
+        return false;
+    }
+    // Sorted insertion keeps set equality deterministic.
+    var position usize = 0;
+    for position < vec.len(values) && values[position] < value {
+        position += 1;
+    }
+    vec.push(values, value);
+    var index = vec.len(values) - 1;
+    for index > position {
+        values[index] = values[index - 1];
+        index -= 1;
+    }
+    values[position] = value;
+    return true;
+}
+
+func ids_remove(values Vec[usize], value usize) {
+    var index usize = 0;
+    for index < vec.len(values) && values[index] != value {
+        index += 1;
+    }
+    if index == vec.len(values) {
+        return;
+    }
+    for index + 1 < vec.len(values) {
+        values[index] = values[index + 1];
+        index += 1;
+    }
+    let popped = vec.pop(values);
+}
+
+func ids_equal(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func ids_copy(values Vec[usize]) Vec[usize] {
+    let out = vec.empty[usize]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, value);
+    }
+    return out;
+}
+
+func ids_union(target Vec[usize], source Vec[usize]) {
+    for value in source {
+        ids_insert(target, value);
+    }
+}
+
+func ids_without(target Vec[usize], value usize) {
+    ids_remove(target, value);
+}
+
+func ids_any_overlap(left Vec[usize], right Vec[usize]) bool {
+    for value in left {
+        if ids_contains(right, value) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func symbols_contains(values Vec[usize], value usize) bool {
+    return ids_contains(values, value);
+}
+
+func same_ref(left model.NodeRef, right model.NodeRef) bool {
+    return left.module == right.module && left.file == right.file &&
+           left.node == right.node;
+}
+
+func same_span(left model.Span, right model.Span) bool {
+    return left.snapshot == right.snapshot &&
+           left.begin_byte == right.begin_byte &&
+           left.end_byte == right.end_byte;
+}
+
+func same_source(left hir.HirSource, right hir.HirSource) bool {
+    return same_ref(left.node, right.node) && same_span(left.span, right.span);
+}
+
+func same_source_opt(left option.Option[hir.HirSource],
+                     right option.Option[hir.HirSource]) bool {
+    if option.is_some(left) != option.is_some(right) {
+        return false;
+    }
+    switch left {
+        case option.Option.Some(value): {
+            switch right {
+                case option.Option.Some(other): return same_source(value, other);
+                case option.Option.None: return false;
+            }
+        }
+        case option.Option.None: return true;
+    }
+}
+
+func same_trait_ref(left hir.TraitRef, right hir.TraitRef) bool {
+    return left.declaration == right.declaration &&
+           ids_equal(left.args, right.args);
+}
+
+func same_trait_ref_opt(left option.Option[hir.TraitRef],
+                        right option.Option[hir.TraitRef]) bool {
+    if option.is_some(left) != option.is_some(right) {
+        return false;
+    }
+    switch left {
+        case option.Option.Some(value): {
+            switch right {
+                case option.Option.Some(other): return same_trait_ref(value, other);
+                case option.Option.None: return false;
+            }
+        }
+        case option.Option.None: return true;
+    }
+}
+
+func same_foreign_binding(left hir.ForeignBinding,
+                          right hir.ForeignBinding) bool {
+    if left.binding != right.binding || left.type_id != right.type_id ||
+       option.is_some(left.signature) != option.is_some(right.signature) ||
+       option.is_some(left.owner) != option.is_some(right.owner) ||
+       left.read_error != right.read_error {
+        return false;
+    }
+    if option.is_some(left.signature) &&
+       option_usize(left.signature) != option_usize(right.signature) {
+        return false;
+    }
+    if option.is_some(left.owner) &&
+       option_usize(left.owner) != option_usize(right.owner) {
+        return false;
+    }
+    return true;
+}
+
+func same_type(left model.Type, right model.Type) bool {
+    return types.equal(left, right);
+}
+
+func type_of(module hir.HirModule, id usize) model.Type throws Invalid {
+    switch types.find(module.types, id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: fail("missing or out-of-range TypeId");
+    }
+    return model.empty_type(model.TypeKind.Error);
+}
+
+func type_kind_id(value model.Type) u32 {
+    return model.type_kind_id(value.kind);
+}
+
+func integer_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.SignedInt) ||
+           kind_is(kind, model.TypeKind.UnsignedInt) ||
+           kind_is(kind, model.TypeKind.Isize) ||
+           kind_is(kind, model.TypeKind.Usize);
+}
+
+func signed_integer_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.SignedInt) ||
+           kind_is(kind, model.TypeKind.Isize);
+}
+
+func number_kind(kind model.TypeKind) bool {
+    return integer_kind(kind) || kind_is(kind, model.TypeKind.Float);
+}
+
+func nominal_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.NominalStruct) ||
+           kind_is(kind, model.TypeKind.NominalEnum) ||
+           kind_is(kind, model.TypeKind.TypeParameter);
+}
+
+func c_named_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.CForeignRecord) ||
+           kind_is(kind, model.TypeKind.CForeignResource) ||
+           kind_is(kind, model.TypeKind.CForeignCallback) ||
+           kind_is(kind, model.TypeKind.CForeignOpaque);
+}
+
+func c_pointer_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.CForeignPointer) ||
+           kind_is(kind, model.TypeKind.CForeignBuffer);
+}
+
+func runtime_handle_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.ThreadHandle) ||
+           kind_is(kind, model.TypeKind.MutexHandle) ||
+           kind_is(kind, model.TypeKind.CondvarHandle) ||
+           kind_is(kind, model.TypeKind.AtomicI64Handle) ||
+           kind_is(kind, model.TypeKind.IpcHandle);
+}
+
+func type_contains_parameter(module hir.HirModule, id usize) bool
+    throws Invalid {
+    let pending = vec.empty[usize]();
+    vec.push(pending, id);
+    let seen = vec.empty[usize]();
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let current = option_usize(popped);
+        if !ids_insert(seen, current) {
+            continue;
+        }
+        switch types.find(module.types, current) {
+            case option.Option.Some(value): {
+                if kind_is(value.kind, model.TypeKind.TypeParameter) {
+                    return true;
+                }
+                for argument in value.type_args {
+                    vec.push(pending, argument);
+                }
+                for parameter in value.parameters {
+                    vec.push(pending, parameter.type_id);
+                }
+                if kind_is(value.kind, model.TypeKind.Function) {
+                    vec.push(pending, value.result);
+                    if option.is_some(value.throws_type) {
+                        vec.push(pending, option_usize(value.throws_type));
+                    }
+                }
+            }
+            case option.Option.None: return false;
+        }
+    }
+    return false;
+}
+
+func path_text(value string) string {
+    return value;
+}
+
+func substring(value string, start usize, finish usize) string {
+    if start > finish {
+        return "";
+    }
+    let bytes = text.bytes(value);
+    if finish > vec.len(bytes) {
+        return "";
+    }
+    let out = vec.empty[u8]();
+    vec.reserve(out, finish - start);
+    var index = start;
+    for index < finish {
+        vec.push(out, bytes[index]);
+        index += 1;
+    }
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func spelling_at(file model.ParseResult, index usize) string throws Invalid {
+    need(index < vec.len(file.lexed.tokens), "invalid token reference");
+    return file.lexed.tokens[index].spelling;
+}
+
+func option_ref(value option.Option[model.NodeRef]) model.NodeRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.NodeRef(module: 0, file: 0, node: 0);
+    }
+}
+
+func option_span_value(value option.Option[model.Span]) model.Span {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return empty_span();
+    }
+}
+
+func option_foreign_ref(value option.Option[model.ForeignExportRef])
+    model.ForeignExportRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.ForeignExportRef(module: 0, index: 0);
+    }
+}
+
+func option_string_is(value option.Option[string], expected string) bool {
+    switch value {
+        case option.Option.Some(item): return item == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func option_usize_equal(left option.Option[usize],
+                        right option.Option[usize]) bool {
+    if option.is_some(left) != option.is_some(right) {
+        return false;
+    }
+    if !option.is_some(left) {
+        return true;
+    }
+    return option_usize(left) == option_usize(right);
+}

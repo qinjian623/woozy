@@ -1,0 +1,1104 @@
+// Template instance records and clone substitution checks.  Every concrete
+// copy must be a unique, complete rename/substitution of its declared
+// template; producer-provided maps are never trusted.
+package hirverify;
+
+import "app/wzcc/constant" as constant;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct NodeMapEntry {
+    origin usize;
+    instance usize;
+}
+
+struct ScopeMapEntry {
+    origin usize;
+    instance usize;
+}
+
+struct OriginalDecl {
+    key NodeRefKey;
+    symbol usize;
+}
+
+struct NodeRefKey {
+    module usize;
+    file usize;
+    node usize;
+}
+
+struct SymbolListEntry {
+    symbol usize;
+    values Vec[usize];
+}
+
+struct InstanceKeyEntry {
+    origin usize;
+    args Vec[usize];
+}
+
+struct WorkNode {
+    origin usize;
+    instance usize;
+    capture_child bool;
+}
+
+func ref_key(reference model.NodeRef) NodeRefKey {
+    return NodeRefKey(module: reference.module, file: reference.file,
+        node: reference.node);
+}
+
+func ref_key_equal(left NodeRefKey, right NodeRefKey) bool {
+    return left.module == right.module && left.file == right.file &&
+           left.node == right.node;
+}
+
+func original_symbol(entries Vec[OriginalDecl], key NodeRefKey)
+    option.Option[usize] {
+    for entry in entries {
+        if ref_key_equal(entry.key, key) {
+            return option.Option[usize].Some(entry.symbol);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func node_map_index(entries Vec[NodeMapEntry], origin usize) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].origin == origin {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func scope_map_index(entries Vec[ScopeMapEntry], origin usize) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].origin == origin {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func renamed_lookup(values Vec[hir.SymbolRename], origin usize,
+                    has_value bool) usize throws Invalid {
+    for value in values {
+        if value.origin == origin {
+            return value.replacement;
+        }
+    }
+    need(false, "instance metadata references a nonlocal template symbol");
+    return 0;
+}
+
+func renamed_contains(values Vec[hir.SymbolRename], origin usize) bool {
+    for value in values {
+        if value.origin == origin {
+            return true;
+        }
+    }
+    return false;
+}
+
+func symbol_list_add(entries Vec[SymbolListEntry], symbol usize, value usize) {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].symbol == symbol {
+            ids_insert(entries[index].values, value);
+            return;
+        }
+    }
+    let values = vec.empty[usize]();
+    ids_insert(values, value);
+    vec.push(entries, SymbolListEntry(symbol: symbol, values: values));
+}
+
+func symbol_list_get(entries Vec[SymbolListEntry], symbol usize) Vec[usize] {
+    for entry in entries {
+        if entry.symbol == symbol {
+            return entry.values;
+        }
+    }
+    return vec.empty[usize]();
+}
+
+func instance_body(state inout Verifier, origin hir.HirFunction,
+                   instance hir.HirFunction,
+                   substitutions Vec[model.Substitution],
+                   renamed Vec[hir.SymbolRename]) throws Invalid {
+    let nodes = vec.empty[NodeMapEntry]();
+    let scopes = vec.empty[ScopeMapEntry]();
+    let destinations = vec.empty[usize]();
+    let work = vec.empty[WorkNode]();
+    vec.push(work, WorkNode(origin: origin.body, instance: instance.body,
+        capture_child: false));
+    for vec.len(work) > 0 {
+        let popped = vec.pop(work);
+        let item = option_work(popped);
+        let a = item.origin;
+        let b = item.instance;
+        let x = verifier_node(state, a);
+        let y = verifier_node(state, b);
+        need(node_map_index(nodes, a) < 0 && !ids_contains(destinations, b),
+            "instance body is not a unique clone");
+        vec.push(nodes, NodeMapEntry(origin: a, instance: b));
+        ids_insert(destinations, b);
+        let scope_index = scope_map_index(scopes, x.scope);
+        if scope_index < 0 {
+            vec.push(scopes, ScopeMapEntry(origin: x.scope, instance: y.scope));
+        } else {
+            need(scopes[usize(scope_index)].instance == y.scope,
+                "instance scope substitution mismatch");
+        }
+        need(same_ref(x.source.node, y.source.node) &&
+             same_span(x.source.span, y.source.span) &&
+             substitute_type(inout state, x.type_id, substitutions) ==
+                 y.type_id &&
+             vec.len(x.children) == vec.len(y.children),
+            "instance source/type/children differ from template");
+        let x_kind = hir.node_kind(x.data);
+        let y_kind = hir.node_kind(y.data);
+        var kind_ok = node_is(x_kind, y_kind);
+        if !kind_ok {
+            if node_is(x_kind, hir.NodeKind.ConstraintCall) &&
+               node_is(y_kind, hir.NodeKind.Call) {
+                kind_ok = true;
+            }
+        }
+        if !kind_ok && item.capture_child {
+            var x_move = false;
+            var x_read = false;
+            var y_read = false;
+            var y_move = false;
+            switch x.data {
+                case hir.NodeData.Move(value): x_move = option.is_some(value.binding);
+                case hir.NodeData.Read(_): x_read = true;
+                default: {}
+            }
+            switch y.data {
+                case hir.NodeData.Read(_): y_read = true;
+                case hir.NodeData.Move(value): y_move = option.is_some(value.binding);
+                default: {}
+            }
+            kind_ok = (x_move && y_read) || (x_read && y_move);
+        }
+        need(kind_ok, "instance node kind differs from template");
+        var captures = false;
+        switch x.data {
+            case hir.NodeData.FunctionValue(before): {
+                var after = hir.FunctionValue(symbol: 0, type_args: [],
+                    captures: [], move_capture: false,
+                    bound: option.Option[hir.BoundReceiver].None);
+                switch y.data {
+                    case hir.NodeData.FunctionValue(value): after = value;
+                    default: fail("instance function value lost its payload");
+                }
+                need(before.move_capture == after.move_capture &&
+                     option.is_some(before.bound) == option.is_some(after.bound) &&
+                     vec.len(before.captures) == vec.len(after.captures),
+                    "instance function value capture metadata differs from template");
+                var symbol_ok = before.symbol == after.symbol;
+                if !symbol_ok {
+                    for candidate in state.m.instances {
+                        if candidate.symbol == after.symbol &&
+                           candidate.origin == before.symbol {
+                            symbol_ok = true;
+                            break;
+                        }
+                    }
+                }
+                if !symbol_ok && option.is_some(trait_prototype(state,
+                         before.symbol)) && impl_method_exists(state, after.symbol) &&
+                   verifier_symbol(state, before.symbol).name ==
+                       verifier_symbol(state, after.symbol).name {
+                    symbol_ok = true;
+                }
+                var after_origin = after.symbol;
+                for candidate in state.m.instances {
+                    if candidate.symbol == after.symbol {
+                        after_origin = candidate.origin;
+                        break;
+                    }
+                }
+                if !symbol_ok && option.is_some(trait_prototype(state,
+                         before.symbol)) && impl_method_exists(state, after_origin) &&
+                   verifier_symbol(state, before.symbol).name ==
+                       verifier_symbol(state, after_origin).name {
+                    symbol_ok = true;
+                }
+                need(symbol_ok,
+                    "instance function value target differs from template");
+                for var c usize = 0; c < vec.len(before.captures); c += 1 {
+                    let before_capture = before.captures[c];
+                    let after_capture = after.captures[c];
+                    need(before_capture.origin == after_capture.origin &&
+                         renamed_contains(renamed, before_capture.source) &&
+                         renamed_lookup(renamed, before_capture.source, true) ==
+                             after_capture.source &&
+                         after_capture.type_id == substitute_type(inout state,
+                             before_capture.type_id, substitutions),
+                        "instance capture source/type differs from template");
+                    let dependent = type_contains_parameter(state.m,
+                        after_capture.type_id);
+                    let owning = dependent || classify_needs_drop(state.m,
+                        after_capture.type_id);
+                    need(after_capture.is_move ==
+                         (after.move_capture && owning),
+                        "instance capture move intent differs from concrete type");
+                }
+                if option.is_some(before.bound) {
+                    let before_bound = option_bound_receiver(before.bound);
+                    need(option_bound_receiver(after.bound).type_id ==
+                             substitute_type(inout state, before_bound.type_id,
+                                 substitutions),
+                        "instance bound receiver type differs from template");
+                }
+                captures = !option.is_some(before.bound);
+            }
+            default: {}
+        }
+        for var index usize = 0; index < vec.len(x.children); index += 1 {
+            vec.push(work, WorkNode(origin: x.children[index],
+                instance: y.children[index], capture_child: captures));
+        }
+    }
+    for entry in nodes {
+        let x = verifier_node(state, entry.origin);
+        let y = verifier_node(state, entry.instance);
+        let parent_scope = verifier_scope(state, x.scope).parent;
+        let original_scope_source = verifier_scope(state, x.scope).source;
+        let instance_scope_source = verifier_scope(state, y.scope).source;
+        need(same_ref(original_scope_source.node, instance_scope_source.node) &&
+             same_span(original_scope_source.span, instance_scope_source.span),
+            "instance scope source differs from template");
+        if option.is_some(parent_scope) {
+            let mapped = scope_map_index(scopes, option_usize(parent_scope));
+            need(mapped >= 0 && option_usize_equal(
+                     verifier_scope(state, y.scope).parent,
+                     option_some(scopes[usize(mapped)].instance)),
+                "instance parent scope differs from template");
+        } else {
+            need(!option.is_some(verifier_scope(state, y.scope).parent),
+                "instance parent scope differs from template");
+        }
+        switch x.data {
+            case hir.NodeData.Defer(before): {
+                var after = hir.Defer(owner_scope: 0, references: []);
+                switch y.data {
+                    case hir.NodeData.Defer(value): after = value;
+                    default: fail("instance defer payload");
+                }
+                let references = vec.empty[usize]();
+                for value in before.references {
+                    vec.push(references,
+                        renamed_lookup(renamed, value, true));
+                }
+                sort_ids(references);
+                need(after.owner_scope ==
+                         scopes[usize(scope_map_index(scopes,
+                             before.owner_scope))].instance &&
+                     ids_equal(after.references, references),
+                    "instance defer references were not renamed");
+            }
+            case hir.NodeData.Try(before): {
+                var after = hir.Try(catches: []);
+                switch y.data {
+                    case hir.NodeData.Try(value): after = value;
+                    default: fail("instance try payload");
+                }
+                need(vec.len(before.catches) == vec.len(after.catches),
+                    "instance handler count");
+                for var index usize = 0; index < vec.len(before.catches); index += 1 {
+                    let c = before.catches[index];
+                    let v = after.catches[index];
+                    need(v.error_type == substitute_type(inout state,
+                             c.error_type, substitutions) &&
+                         v.binding == renamed_lookup(renamed, c.binding, true) &&
+                         v.scope == scopes[usize(scope_map_index(scopes,
+                             c.scope))].instance &&
+                         v.body == nodes[usize(node_map_index(nodes,
+                             c.body))].instance &&
+                         same_ref(v.source.node, c.source.node),
+                        "instance handler metadata was not substituted/renamed");
+                }
+            }
+            case hir.NodeData.ConstraintCall(before): {
+                var after = hir.Call(kind: hir.CalleeKind.Direct, signature: 0,
+                    direct_symbol: option.Option[usize].None,
+                    callee: option.Option[usize].None, args: [], type_args: [],
+                    binding: option.Option[usize].None,
+                    c_callable: option.Option[u32].None, omitted: [],
+                    system: option.Option[u32].None);
+                switch y.data {
+                    case hir.NodeData.Call(value): after = value;
+                    default: fail("instance constraint call metadata");
+                }
+                need(callee_id(after.kind) == 0 &&
+                     option.is_some(after.direct_symbol) &&
+                     vec.len(after.type_args) == 0 &&
+                     after.signature == substitute_type(inout state,
+                         before.signature, substitutions) &&
+                     vec.len(after.args) == vec.len(before.args) &&
+                     vec.len(y.children) == vec.len(before.args),
+                    "instance constraint call metadata");
+                let receiver = substitute_type(inout state, before.receiver,
+                    substitutions);
+                let required_args = vec.empty[usize]();
+                for argument in before.trait_ref.args {
+                    vec.push(required_args, substitute_type(inout state,
+                        argument, substitutions));
+                }
+                var impl_index i64 = -1;
+                var impl_sub = vec.empty[model.Substitution]();
+                for var index usize = 0; index < vec.len(state.m.impls); index += 1 {
+                    let implementation = state.m.impls[index];
+                    var has_trait = false;
+                    switch implementation.trait_ref {
+                        case option.Option.Some(application):
+                            has_trait = application.declaration ==
+                                    before.trait_ref.declaration &&
+                                vec.len(application.args) == vec.len(required_args);
+                        case option.Option.None: {}
+                    }
+                    if !has_trait {
+                        continue;
+                    }
+                    let application = option_trait_ref(implementation.trait_ref);
+                    let match = vec.empty[model.Substitution]();
+                    if !matches(inout state, implementation.self_type, receiver,
+                                match) {
+                        continue;
+                    }
+                    var matched = true;
+                    for var a usize = 0; a < vec.len(required_args); a += 1 {
+                        if !matches(inout state, application.args[a],
+                                    required_args[a], match) {
+                            matched = false;
+                            break;
+                        }
+                    }
+                    if !matched {
+                        continue;
+                    }
+                    need(impl_index < 0,
+                        "ambiguous instance constraint impl");
+                    impl_index = i64(index);
+                    impl_sub = match;
+                }
+                need(impl_index >= 0,
+                    "instance constraint call has no impl");
+                let implementation = state.m.impls[usize(impl_index)];
+                let trait_index = trait_declaration(state,
+                    before.trait_ref.declaration);
+                var prototype_index i64 = -1;
+                if trait_index >= 0 {
+                    let trait_value = state.m.traits[usize(trait_index)];
+                    for var index usize = 0;
+                        index < vec.len(trait_value.methods); index += 1 {
+                        if trait_value.methods[index].symbol == before.method {
+                            need(prototype_index < 0,
+                                "duplicate instance constraint method");
+                            prototype_index = i64(index);
+                        }
+                    }
+                }
+                need(trait_index >= 0 && prototype_index >= 0,
+                    "instance constraint prototype missing");
+                let trait_value = state.m.traits[usize(trait_index)];
+                let prototype = trait_value.methods[usize(prototype_index)];
+                var expected i64 = -1;
+                for method in implementation.methods {
+                    if verifier_symbol(state, method).name ==
+                       verifier_symbol(state, prototype.symbol).name {
+                        need(expected < 0, "duplicate instance impl method");
+                        expected = i64(method);
+                    }
+                }
+                need(expected >= 0, "instance constraint impl method missing");
+                let method_values = vec.empty[usize]();
+                let constraint_file = verifier_file(state,
+                    x.source.node.module, x.source.node.file);
+                if !ast_is(constraint_file.nodes[x.source.node.node].kind,
+                           model.AstKind.ForIn) {
+                    let arguments = constraint_method_arguments(inout state, x,
+                        before, trait_value, prototype);
+                    for value in arguments.values {
+                        vec.push(method_values, value);
+                    }
+                } else {
+                    need(vec.len(source_parameters(inout state,
+                             prototype.source)) == 0,
+                        "synthetic for-in next retained method type parameters");
+                }
+                let complete = vec.empty[usize]();
+                for parameter in implementation.params {
+                    let found = substitution_index(impl_sub, parameter.symbol);
+                    need(found >= 0,
+                        "instance constraint impl argument is not determined");
+                    vec.push(complete, impl_sub[usize(found)].type_id);
+                }
+                for value in method_values {
+                    vec.push(complete, substitute_type(inout state, value,
+                        substitutions));
+                }
+                var target_instance i64 = -1;
+                for var index usize = 0; index < vec.len(state.m.instances);
+                    index += 1 {
+                    if state.m.instances[index].symbol ==
+                       option_usize(after.direct_symbol) {
+                        target_instance = i64(index);
+                    }
+                }
+                if target_instance >= 0 {
+                    let target = state.m.instances[usize(target_instance)];
+                    need(target.origin == usize(expected),
+                        "instance constraint target differs from selected trait impl");
+                    need(ids_equal(target.type_args, complete),
+                        "instance constraint complete type arguments mismatch");
+                } else {
+                    need(template_index(state,
+                             option_usize(after.direct_symbol)) < 0,
+                        "instance constraint target retained a template");
+                    need(vec.len(complete) == 0,
+                        "instance constraint generic method has no instance key");
+                    need(option_usize(after.direct_symbol) == usize(expected),
+                        "instance constraint target differs from selected trait impl");
+                }
+                for var a usize = 0; a < vec.len(before.args); a += 1 {
+                    let before_arg = before.args[a];
+                    let after_arg = after.args[a];
+                    need(before_arg.source_index == after_arg.source_index &&
+                         before_arg.parameter_index == after_arg.parameter_index &&
+                         option_string_value(before_arg.label) ==
+                             option_string_value(after_arg.label) &&
+                         mode_id_value(before_arg.mode) ==
+                             mode_id_value(after_arg.mode) &&
+                         after_arg.expression == y.children[a],
+                        "instance constraint argument mapping/mode/order");
+                }
+            }
+            default: {}
+        }
+        switch x.data {
+            case hir.NodeData.Read(before): {
+                match_y_read(inout state, y, renamed, before.symbol,
+                    "instance read binding mismatch");
+            }
+            case hir.NodeData.Place(before): {
+                var symbol usize = 0;
+                switch y.data {
+                    case hir.NodeData.Place(value): symbol = value.symbol;
+                    default: fail("instance place binding mismatch");
+                }
+                need(symbol == renamed_lookup(renamed, before.symbol, true),
+                    "instance place binding mismatch");
+            }
+            case hir.NodeData.Binding(before): {
+                var symbol usize = 0;
+                switch y.data {
+                    case hir.NodeData.Binding(value): symbol = value.symbol;
+                    default: fail("instance declaration binding mismatch");
+                }
+                need(symbol == renamed_lookup(renamed, before.symbol, true),
+                    "instance declaration binding mismatch");
+            }
+            case hir.NodeData.Move(before): {
+                var after_binding = option.Option[usize].None;
+                var after_read = false;
+                switch y.data {
+                    case hir.NodeData.Move(value): after_binding = value.binding;
+                    case hir.NodeData.Read(_): after_read = true;
+                    default: {}
+                }
+                if option.is_some(after_binding) {
+                    let expected = option.Option[usize].None;
+                    if option.is_some(before.binding) {
+                        let mapped = option_some(renamed_lookup(renamed,
+                            option_usize(before.binding), true));
+                        need(option_usize_equal(after_binding, mapped),
+                            "instance move source mismatch");
+                    } else {
+                        need(!option.is_some(after_binding),
+                            "instance move source mismatch");
+                    }
+                } else {
+                    need(option.is_some(before.binding) && after_read &&
+                         renamed_contains(renamed,
+                             option_usize(before.binding)),
+                        "instance capture move/read conversion mismatch");
+                }
+            }
+            case hir.NodeData.ForIn(before): {
+                var after = hir.ForIn(element: 0, body_scope: 0, body: 0,
+                    iterator: option.Option[hir.IteratorFor].None);
+                switch y.data {
+                    case hir.NodeData.ForIn(value): after = value;
+                    default: fail("instance for-in identity mismatch");
+                }
+                need(after.element == renamed_lookup(renamed, before.element,
+                         true) &&
+                     after.body == nodes[usize(node_map_index(nodes,
+                         before.body))].instance &&
+                     after.body_scope == scopes[usize(scope_map_index(scopes,
+                         before.body_scope))].instance,
+                    "instance for-in identity mismatch");
+                need(option.is_some(before.iterator) ==
+                     option.is_some(after.iterator),
+                    "instance for-in form mismatch");
+                if option.is_some(before.iterator) {
+                    let before_it = option_iterator(before.iterator);
+                    let after_it = option_iterator(after.iterator);
+                    need(after_it.cursor == renamed_lookup(renamed,
+                             before_it.cursor, true) &&
+                         after_it.option == renamed_lookup(renamed,
+                             before_it.option, true) &&
+                         after_it.next == nodes[usize(node_map_index(nodes,
+                             before_it.next))].instance &&
+                         after_it.iterator == substitute_type(inout state,
+                             before_it.iterator, substitutions) &&
+                         after_it.element == substitute_type(inout state,
+                             before_it.element, substitutions) &&
+                         after_it.some == before_it.some &&
+                         after_it.none == before_it.none &&
+                         after_it.some_field == before_it.some_field,
+                        "instance for-in Iterator identity mismatch");
+                }
+            }
+            case hir.NodeData.Return(before): {
+                var function usize = 0;
+                switch y.data {
+                    case hir.NodeData.Return(value): function = value.function;
+                    default: fail("instance return target mismatch");
+                }
+                need(function == renamed_lookup(renamed, before.function, true),
+                    "instance return target mismatch");
+            }
+            case hir.NodeData.Break(before): {
+                var loop_id usize = 0;
+                switch y.data {
+                    case hir.NodeData.Break(value): loop_id = value.loop;
+                    default: fail("instance break target mismatch");
+                }
+                need(loop_id == nodes[usize(node_map_index(nodes,
+                         before.loop))].instance,
+                    "instance break target mismatch");
+            }
+            case hir.NodeData.Continue(before): {
+                var loop_id usize = 0;
+                switch y.data {
+                    case hir.NodeData.Continue(value): loop_id = value.loop;
+                    default: fail("instance continue target mismatch");
+                }
+                need(loop_id == nodes[usize(node_map_index(nodes,
+                         before.loop))].instance,
+                    "instance continue target mismatch");
+            }
+            case hir.NodeData.ConstantLiteral(before): {
+                var expected = before.value;
+                var actual = hir.ConstantValue(type_id: 0,
+                    data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
+                switch y.data {
+                    case hir.NodeData.ConstantLiteral(value): actual = value.value;
+                    default: fail("instance constant payload");
+                }
+                let instance_values = state.m.instances;
+                try {
+                    constant.transform_constant(inout expected, substitutions,
+                        inout state.substituted,
+                        func(value hir.FunctionValue) hir.FunctionValue
+                            throws model.SupportError {
+                            var result = value;
+                            for instance in instance_values {
+                                if instance.symbol == result.symbol {
+                                    result.symbol = instance.origin;
+                                    result.type_args = ids_copy(instance.type_args);
+                                    break;
+                                }
+                            }
+                            return result;
+                        });
+                    constant.transform_constant(inout actual,
+                        vec.empty[model.Substitution](),
+                        inout state.substituted,
+                        func(value hir.FunctionValue) hir.FunctionValue
+                            throws model.SupportError {
+                            var result = value;
+                            for instance in instance_values {
+                                if instance.symbol == result.symbol {
+                                    result.symbol = instance.origin;
+                                    result.type_args = ids_copy(instance.type_args);
+                                    break;
+                                }
+                            }
+                            return result;
+                        });
+                } catch error model.SupportError {
+                    support_error(error);
+                }
+                need(constant.same_constant_value(expected, actual),
+                    "instance constant differs from template");
+            }
+            default: {}
+        }
+    }
+}
+
+func option_work(value option.Option[WorkNode]) WorkNode {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return WorkNode(origin: 0, instance: 0,
+            capture_child: false);
+    }
+}
+
+func match_y_read(state inout Verifier, y hir.HirNode,
+                  renamed Vec[hir.SymbolRename], expected usize,
+                  message string) throws Invalid {
+    var read = false;
+    var symbol usize = 0;
+    var move_binding = false;
+    switch y.data {
+        case hir.NodeData.Read(value): {
+            read = true;
+            symbol = value.symbol;
+        }
+        case hir.NodeData.Move(value): {
+            move_binding = option.is_some(value.binding);
+            symbol = option_usize(value.binding);
+        }
+        default: {}
+    }
+    if read {
+        need(symbol == renamed_lookup(renamed, expected, true), message);
+    } else {
+        need(move_binding &&
+             symbol == renamed_lookup(renamed, expected, true),
+            "instance capture read/move conversion mismatch");
+    }
+}
+
+func sort_ids(values Vec[usize]) {
+    var index usize = 1;
+    for index < vec.len(values) {
+        let value = values[index];
+        var position = index;
+        for position > 0 && values[position - 1] > value {
+            values[position] = values[position - 1];
+            position -= 1;
+        }
+        values[position] = value;
+        index += 1;
+    }
+}
+
+func same_config(left model.CheckConfig, right model.CheckConfig) bool {
+    var same_backend = false;
+    switch left.backend {
+        case model.Backend.Native: {
+            switch right.backend {
+                case model.Backend.Native: same_backend = true;
+                case model.Backend.Python: {}
+            }
+        }
+        case model.Backend.Python: {
+            switch right.backend {
+                case model.Backend.Native: {}
+                case model.Backend.Python: same_backend = true;
+            }
+        }
+    }
+    return same_backend && left.word_bits == right.word_bits;
+}
+
+func instance_key_exists(keys Vec[InstanceKeyEntry], origin usize,
+                         args Vec[usize]) bool {
+    for key in keys {
+        if key.origin == origin && ids_equal(key.args, args) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func instance_records(state inout Verifier) throws Invalid {
+    let generated = vec.empty[usize]();
+    let original_declarations = vec.empty[OriginalDecl]();
+    for symbol in state.m.resolved.symbols {
+        switch symbol.definition {
+            case option.Option.Some(value):
+                vec.push(original_declarations,
+                    OriginalDecl(key: ref_key(value), symbol: symbol.id));
+            case option.Option.None: {}
+        }
+    }
+    let template_symbols = vec.empty[SymbolListEntry]();
+    let capture_local_symbols = vec.empty[usize]();
+    let synthetic_local_symbols = vec.empty[usize]();
+    for template in state.m.templates {
+        let parameters = parameter_set(inout state, template.params,
+            vec.empty[usize]());
+        need(vec.len(parameters) > 0, "template without parameters");
+        let declared = source_generics(state, template.function.source);
+        need(vec.len(declared) == vec.len(template.params),
+            "template source parameter count");
+        for var index usize = 0; index < vec.len(declared); index += 1 {
+            need(declared[index] == template.params[index].symbol,
+                "template parameter has wrong declaration owner");
+        }
+        for parameter in template.params {
+            need(parameter.source.node.module ==
+                     template.function.source.node.module &&
+                 parameter.source.node.file ==
+                     template.function.source.node.file,
+                "template parameter belongs to another source file");
+        }
+        let reference = template.function.source.node;
+        let file = verifier_file(state, reference.module, reference.file);
+        let originals = vec.empty[usize]();
+        let pending = vec.empty[usize]();
+        vec.push(pending, reference.node);
+        for vec.len(pending) > 0 {
+            let id = option_usize(vec.pop(pending));
+            let node = file.nodes[id];
+            if ast_is(node.kind, model.AstKind.FunctionType) {
+                continue;
+            }
+            if id != reference.node &&
+               (ast_is(node.kind, model.AstKind.Function) ||
+                ast_is(node.kind, model.AstKind.FunctionLiteral)) {
+                continue;
+            }
+            var is_original = id == reference.node;
+            if ast_is(node.kind, model.AstKind.Parameter) ||
+               ast_is(node.kind, model.AstKind.Binding) ||
+               ast_is(node.kind, model.AstKind.Catch) ||
+               ast_is(node.kind, model.AstKind.ForIn) {
+                is_original = true;
+            }
+            if ast_is(node.kind, model.AstKind.BindPattern) {
+                need(node.token_begin < vec.len(file.lexed.tokens),
+                    "bind pattern token range");
+                is_original = file.lexed.tokens[node.token_begin].spelling != "_";
+            }
+            if is_original {
+                let symbol_id = original_symbol(original_declarations,
+                    ref_key(model.NodeRef(module: reference.module,
+                        file: reference.file, node: id)));
+                need(option.is_some(symbol_id),
+                    "template source symbol has no real declaration");
+                ids_insert(originals, option_usize(symbol_id));
+            }
+            for child in node.children {
+                vec.push(pending, child);
+            }
+        }
+        for capture in template.function.captures {
+            ids_insert(originals, capture.local);
+            ids_insert(capture_local_symbols, capture.local);
+        }
+        let hidden_pending = vec.empty[usize]();
+        vec.push(hidden_pending, template.function.body);
+        for vec.len(hidden_pending) > 0 {
+            let hidden = verifier_node(state,
+                option_usize(vec.pop(hidden_pending)));
+            switch hidden.data {
+                case hir.NodeData.ForIn(value): {
+                    if option.is_some(value.iterator) {
+                        let iterator = option_iterator(value.iterator);
+                        ids_insert(originals, iterator.cursor);
+                        ids_insert(originals, iterator.option);
+                        ids_insert(synthetic_local_symbols, iterator.cursor);
+                        ids_insert(synthetic_local_symbols, iterator.option);
+                    }
+                }
+                default: {}
+            }
+            for child in hidden.children {
+                vec.push(hidden_pending, child);
+            }
+        }
+        need(ids_contains(originals, template.function.symbol),
+            "template function is not its original declaration");
+        for symbol_id in originals {
+            if symbol_id != template.function.symbol {
+                let local = verifier_local(state, symbol_id);
+                need(local.function == template.function.symbol,
+                    "template HIR omits or replaces a real source binding");
+            }
+        }
+        vec.push(template_symbols, SymbolListEntry(
+            symbol: template.function.symbol, values: originals));
+    }
+    let keys = vec.empty[InstanceKeyEntry]();
+    for var index usize = 0; index < vec.len(state.m.instances); index += 1 {
+        let instance = state.m.instances[index];
+        need(instance_index(state, instance.symbol) < 0,
+            "duplicate instance identity");
+        vec.push(state.instances, InstanceEntry(symbol: instance.symbol,
+            index: index));
+        let template_found = template_index(state, instance.origin);
+        need(template_found >= 0, "instance origin is not a template");
+        let template = state.m.templates[usize(template_found)];
+        need(same_config(instance.target, state.m.config) &&
+             vec.len(instance.type_args) == vec.len(template.params),
+            "instance target/arity");
+        let substitutions = vec.empty[model.Substitution]();
+        let args = vec.empty[usize]();
+        for var a usize = 0; a < vec.len(instance.type_args); a += 1 {
+            valid_type(inout state, instance.type_args[a], vec.empty[usize]());
+            vec.push(substitutions, model.Substitution(
+                symbol: template.params[a].symbol,
+                type_id: instance.type_args[a]));
+            vec.push(args, instance.type_args[a]);
+        }
+        need(!instance_key_exists(keys, instance.origin, args),
+            "duplicate logical instance");
+        vec.push(keys, InstanceKeyEntry(origin: instance.origin, args: args));
+        constraints(inout state, template.params, instance.type_args,
+            vec.empty[model.Substitution]());
+        let function_value = verifier_function(state, instance.symbol);
+        need(template_index(state, instance.symbol) < 0 &&
+             function_value.signature == substitute_type(inout state,
+                 template.function.signature, substitutions),
+            "instance signature substitution mismatch");
+        need(same_ref(function_value.source.node,
+                 template.function.source.node),
+            "instance function has forged AST source");
+        let originals = symbol_list_get(template_symbols, instance.origin);
+        for local in state.locals {
+            if local.value.function == instance.origin {
+                need(ids_contains(originals, local.symbol),
+                    "template local is not an original symbol");
+            }
+        }
+        need(vec.len(instance.renamed) == vec.len(originals),
+            "instance map omits original template symbols");
+        let renamed = instance.renamed;
+        let dest = vec.empty[usize]();
+        for rename in renamed {
+            need(rename.origin != rename.replacement &&
+                 !renamed_contains_prefix(renamed, rename.origin, rename.replacement) &&
+                 ids_insert(dest, rename.replacement) &&
+                 ids_insert(generated, rename.replacement),
+                "instance renamed map is not one-to-one");
+            let before = verifier_symbol(state, rename.origin);
+            let after = verifier_symbol(state, rename.replacement);
+            need(ids_contains(originals, rename.origin),
+                "renamed source is not an original template-owned symbol");
+            if ids_contains(capture_local_symbols, rename.origin) ||
+               ids_contains(synthetic_local_symbols, rename.origin) {
+                need(symbol_is(before.kind, model.SymbolKind.Value) &&
+                     symbol_is(after.kind, model.SymbolKind.Value) &&
+                     before.name == after.name &&
+                     before.module == after.module &&
+                     !option.is_some(before.definition) &&
+                     !option.is_some(after.definition) &&
+                     !option.is_some(before.declaration) &&
+                     !option.is_some(after.declaration),
+                    "hidden local rename is not a definitionless value copy");
+                continue;
+            }
+            let original = original_symbol(original_declarations,
+                ref_key(option_ref(before.definition)));
+            need(option.is_some(before.definition) && option.is_some(original) &&
+                 option_usize(original) == rename.origin,
+                "renamed source is not an original template-owned symbol");
+            need(symbol_is(before.kind, after.kind) &&
+                 before.name == after.name && before.module == after.module &&
+                 option.is_some(before.definition) &&
+                 option.is_some(after.definition) &&
+                 same_ref(option_ref(before.definition),
+                     option_ref(after.definition)) &&
+                 option.is_some(before.declaration) &&
+                 option.is_some(after.declaration) &&
+                 same_span(option_span_value(before.declaration),
+                     option_span_value(after.declaration)) &&
+                 before.exported == after.exported &&
+                 same_option_symbol(before.target, after.target),
+                "generated symbol has forged origin/source");
+            need(option_ref(before.definition).module ==
+                     template.function.source.node.module &&
+                 option_ref(before.definition).file ==
+                     template.function.source.node.file &&
+                 option.is_some(before.declaration) &&
+                 option_span_value(before.declaration).begin_byte >=
+                     template.function.source.span.begin_byte &&
+                 option_span_value(before.declaration).end_byte <=
+                     template.function.source.span.end_byte,
+                "renamed symbol belongs to another template");
+        }
+        need(renamed_contains(renamed, instance.origin) &&
+             renamed_lookup(renamed, instance.origin, true) ==
+                 instance.symbol,
+            "instance function missing from renamed map");
+        need(vec.len(function_value.parameters) ==
+             vec.len(template.function.parameters),
+            "instance parameter arity");
+        for var p usize = 0; p < vec.len(function_value.parameters); p += 1 {
+            need(renamed_contains(renamed,
+                     template.function.parameters[p].symbol) &&
+                 renamed_lookup(renamed,
+                     template.function.parameters[p].symbol, true) ==
+                     function_value.parameters[p].symbol,
+                "instance parameter mapping mismatch");
+        }
+        need(vec.len(function_value.captures) ==
+             vec.len(template.function.captures),
+            "instance capture count differs from template");
+        for var c usize = 0; c < vec.len(function_value.captures); c += 1 {
+            let before_capture = template.function.captures[c];
+            let after_capture = function_value.captures[c];
+            need(before_capture.origin == after_capture.origin &&
+                 renamed_contains(renamed, before_capture.local) &&
+                 renamed_lookup(renamed, before_capture.local, true) ==
+                     after_capture.local &&
+                 substitute_type(inout state, before_capture.type_id,
+                     substitutions) == after_capture.type_id,
+                "instance capture binding mapping mismatch");
+        }
+        for local in state.locals {
+            if local.value.function == instance.symbol {
+                need(ids_contains(dest, local.symbol),
+                    "instance local absent from renamed map");
+            }
+        }
+        for symbol_id in dest {
+            if symbol_id == instance.symbol {
+                continue;
+            }
+            let local = verifier_local(state, symbol_id);
+            need(local.function == instance.symbol,
+                "renamed symbol is not owned by its instance");
+        }
+        instance_body(inout state, template.function, function_value,
+            substitutions, renamed);
+    }
+    for function_value in state.m.functions {
+        if vec.len(source_generics(state, function_value.source)) > 0 {
+            need(instance_index(state, function_value.symbol) >= 0,
+                "generic-source concrete function has no instance record");
+        }
+    }
+    for function_value in state.m.functions {
+        for template in state.m.templates {
+            if same_ref(function_value.source.node,
+                        template.function.source.node) {
+                let found = instance_index(state, function_value.symbol);
+                need(found >= 0 &&
+                     state.m.instances[usize(found)].origin ==
+                         template.function.symbol,
+                    "concrete template body has no instance origin record");
+            }
+        }
+    }
+    for implementation in state.m.impls {
+        switch implementation.trait_ref {
+            case option.Option.Some(application): {
+                let trait_index = trait_declaration(state,
+                    application.declaration);
+                need(trait_index >= 0 &&
+                     vec.len(implementation.methods) ==
+                         vec.len(state.m.traits[usize(trait_index)].methods),
+                    "impl method count");
+                let trait_value = state.m.traits[usize(trait_index)];
+                need(vec.len(application.args) ==
+                     vec.len(trait_value.params),
+                    "impl trait application arity");
+                for prototype in trait_value.methods {
+                    var function_found i64 = -1;
+                    for method in implementation.methods {
+                        if verifier_symbol(state, method).name ==
+                           verifier_symbol(state, prototype.symbol).name {
+                            need(function_found < 0, "duplicate impl method");
+                            function_found = i64(method);
+                        }
+                    }
+                    need(function_found >= 0, "impl method missing");
+                    let function_value = verifier_function(state,
+                        usize(function_found));
+                    let all = source_parameters(inout state,
+                        function_value.source);
+                    need(vec.len(all) >= vec.len(implementation.params),
+                        "impl method source lost its impl generic prefix");
+                    for var i usize = 0;
+                        i < vec.len(implementation.params); i += 1 {
+                        need(all[i].symbol == implementation.params[i].symbol,
+                            "impl method prefix differs from impl parameters");
+                    }
+                    let own = vec.empty[hir.GenericParam]();
+                    for var i usize = vec.len(implementation.params);
+                        i < vec.len(all); i += 1 {
+                        vec.push(own, all[i]);
+                    }
+                    let prototype_own = source_parameters(inout state,
+                        prototype.source);
+                    need(vec.len(own) == vec.len(prototype_own),
+                        "impl method own generic count mismatch");
+                    let alpha = vec.empty[model.Substitution]();
+                    vec.push(alpha, model.Substitution(symbol: trait_value.self,
+                        type_id: implementation.self_type));
+                    for var i usize = 0; i < vec.len(trait_value.params); i += 1 {
+                        vec.push(alpha, model.Substitution(
+                            symbol: trait_value.params[i].symbol,
+                            type_id: application.args[i]));
+                    }
+                    for var i usize = 0; i < vec.len(own); i += 1 {
+                        var parameter = model.empty_type(model.TypeKind.TypeParameter);
+                        parameter.declaration = own[i].symbol;
+                        vec.push(alpha, model.Substitution(
+                            symbol: prototype_own[i].symbol,
+                            type_id: intern_type(inout state, parameter)));
+                    }
+                    for var i usize = 0; i < vec.len(own); i += 1 {
+                        need(option.is_some(own[i].trait_ref) ==
+                             option.is_some(prototype_own[i].trait_ref),
+                            "impl method generic bound presence mismatch");
+                        if option.is_some(prototype_own[i].trait_ref) {
+                            var expected = option_trait_ref(
+                                prototype_own[i].trait_ref);
+                            for var a usize = 0;
+                                a < vec.len(expected.args); a += 1 {
+                                expected.args[a] = substitute_type(inout state,
+                                    expected.args[a], alpha);
+                            }
+                            need(same_trait_ref(expected,
+                                     option_trait_ref(own[i].trait_ref)),
+                                "impl method generic bound mismatch");
+                        }
+                    }
+                    need(function_value.signature == substitute_type(inout state,
+                             prototype.signature, alpha),
+                        "impl method signature mismatch");
+                    need(vec.len(function_value.parameters) ==
+                         vec.len(prototype.parameters),
+                        "impl method parameter count mismatch");
+                    for var i usize = 0;
+                        i < vec.len(function_value.parameters); i += 1 {
+                        need(function_value.parameters[i].label ==
+                             prototype.parameters[i].label,
+                            "impl method parameter labels mismatch");
+                    }
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+}
+
+func renamed_contains_prefix(values Vec[hir.SymbolRename], origin usize,
+                             replacement usize) bool {
+    var seen = false;
+    for value in values {
+        if value.origin == origin {
+            if seen {
+                return true;
+            }
+            seen = true;
+        }
+    }
+    return false;
+}

@@ -1,0 +1,574 @@
+// CPP check.cpp:541-6684 declaration registration and public wrappers.
+package sema;
+import "app/wzcc/foreign" as foreignlib;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func a_sorted_insert(entries Vec[usize],value usize) {
+    var position usize=0;
+    for position<vec.len(entries) && entries[position]<value {position+=1;}
+    if position<vec.len(entries) && entries[position]==value {return;}
+    vec.push(entries,value);
+    var index=vec.len(entries)-1;
+    for index>position {entries[index]=entries[index-1];index-=1;}
+    entries[position]=value;
+}
+func a_backend_native(backend model.Backend) bool {
+    switch backend {case model.Backend.Native:return true;case model.Backend.Python:return false;}
+}
+func self_parameter(state inout Checker,r model.NodeRef) usize throws Error {
+    for parameter in state.m.resolved.self_parameters {
+        if same_node_key(node_key(parameter.source),node_key(r)) {return parameter.symbol;}
+    }
+    throw internal_error("missing resolver Self owner");
+}
+func a_signature_id(state inout Checker,symbol_id usize) usize throws Error {
+    var found=a_symbol_type_get(state.signatures,symbol_id);
+    switch found {
+        case option.Option.Some(value):return value;
+        case option.Option.None:throw internal_error("missing sema signature");
+    }
+}
+func a_register_nested(state inout Checker,r model.NodeRef,inherited Vec[hir.GenericParam]) throws Error {
+    for id in ast(inout state,r).children {
+        let current=at(r,id);
+        if a_kind_ast(ast(inout state,current).kind,model.AstKind.FunctionLiteral) {
+            register_function(inout state,current,inherited,false,
+                option.Option[usize].None,vec.empty[hir.GenericParam](),false);
+        } else {
+            a_register_nested(inout state,current,inherited);
+        }
+    }
+}
+func register_function(state inout Checker,r model.NodeRef,inherited Vec[hir.GenericParam],
+    prototype bool,trait_self option.Option[usize],environment Vec[hir.GenericParam],
+    member bool) throws Error {
+    let id=definition(inout state,r);
+    let saved_environment=a_copy_ids(state.signature_parameters);
+    for parameter in environment {a_insert(state.signature_parameters,parameter.symbol);}
+    var own=generics(inout state,r);
+    let merged=a_copy_generic_params(inherited);
+    for parameter in own {vec.push(merged,parameter);}
+    a_generic_params_set(state.generic_params,id,merged);
+    var have_trait_self=false;var trait_self_value usize=0;
+    switch trait_self {
+        case option.Option.Some(value):have_trait_self=true;trait_self_value=value;
+        case option.Option.None: {}
+    }
+    if have_trait_self {
+        let self_found=a_symbol_type_get(state.self_types,trait_self_value);
+        var valid=false;
+        switch self_found {
+            case option.Option.Some(value):valid=trait_self_type(inout state,value,trait_self_value);
+            case option.Option.None: {}
+        }
+        if !valid {throw internal_error("invalid trait Self registration");}
+    }
+    var trait_self_callback=false;
+    if have_trait_self {
+        for child_id in ast(inout state,r).children {
+            var parameter_ref=at(r,child_id);
+            if !a_kind_ast(ast(inout state,parameter_ref).kind,model.AstKind.Parameter) {continue;}
+            if a_mode(mode(inout state,parameter_ref),model.ParamMode.Ordinary) {
+                let first_type_ref=child(inout state,parameter_ref,0);
+                let first_type=parse_type(inout state,first_type_ref,trait_self,false);
+                trait_self_callback=trait_self_type(inout state,first_type,trait_self_value);
+            }
+            break;
+        }
+    }
+    vec.clear(state.signature_parameters);
+    for parameter in merged {a_insert(state.signature_parameters,parameter.symbol);}
+    for parameter in environment {a_insert(state.signature_parameters,parameter.symbol);}
+    let declared_signature=signature(inout state,r,trait_self,false,trait_self_callback);
+    a_symbol_type_set(state.signatures,id,declared_signature);
+    if has_async_marker(inout state,r) {
+        if have_trait_self || prototype || member {
+            throw unavailable(inout state,r,
+                "async methods are not supported; use a free async function instead");
+        }
+        a_insert(state.async_functions,id);
+        var declared=lookup_type(inout state,declared_signature);
+        for parameter in declared.parameters {
+            if a_mode(parameter.mode,model.ParamMode.Inout) {
+                throw unavailable(inout state,r,"async functions cannot retain an inout parameter");
+            }
+        }
+        var task=model.empty_type(model.TypeKind.Task);
+        vec.push(task.type_args,declared.result);
+        var task_error=state.unit;
+        switch declared.throws_type {
+            case option.Option.Some(error_type):task_error=error_type;
+            case option.Option.None: {}
+        }
+        vec.push(task.type_args,task_error);
+        let task_id=intern_type(inout state,task);
+        var callable=declared;
+        callable.parameters=vec.empty[model.ParameterType]();
+        for parameter in declared.parameters {
+            vec.push(callable.parameters,model.ParameterType(mode:parameter.mode,
+                type_id:parameter.type_id));
+        }
+        callable.result=task_id;
+        callable.throws_type=option.Option[usize].None;
+        a_symbol_type_set(state.signatures,id,intern_type(inout state,callable));
+    }
+    let current_signature=a_signature_id(inout state,id);
+    var direct=check_inout_graph(inout state,r,current_signature,true,trait_self,trait_self_callback);
+    if have_trait_self {
+        a_trait_signature_set(state.trait_signature_context,id,trait_self_value,trait_self_callback);
+    }
+    state.signature_parameters=saved_environment;
+    for child_id in ast(inout state,r).children {
+        let parameter_ref=at(r,child_id);
+        if !a_kind_ast(ast(inout state,parameter_ref).kind,model.AstKind.Parameter) {continue;}
+        let parameter=definition(inout state,parameter_ref);
+        var label=symbol(inout state,parameter).name;
+        if label=="_" {label="";}
+        a_parameters_push(state.parameters,id,hir.Parameter(symbol:parameter,label:label));
+    }
+    a_parameters_ensure(state.parameters,id);
+    if prototype {return;}
+    a_body_set(state.bodies,id,r);
+    for child_id in ast(inout state,r).children {
+        let block_ref=at(r,child_id);
+        if a_kind_ast(ast(inout state,block_ref).kind,model.AstKind.Block) {
+            a_register_nested(inout state,block_ref,merged);
+        }
+    }
+}
+func overlap(state inout Checker,left usize,right usize) bool throws Error {
+    try {return types.patterns_overlap(left,right,state.m.types);}
+    catch error types.Error {throw Error.Support(support_from_type_error(error));}
+}
+func impls_overlap(state inout Checker,left hir.ImplDecl,right hir.ImplDecl) bool throws Error {
+    var left_application=hir.TraitRef(declaration:0,args:[]);
+    var right_application=hir.TraitRef(declaration:0,args:[]);
+    switch left.trait_ref {
+        case option.Option.None:return overlap(inout state,left.self_type,right.self_type);
+        case option.Option.Some(value):left_application=value;
+    }
+    switch right.trait_ref {
+        case option.Option.None:return overlap(inout state,left.self_type,right.self_type);
+        case option.Option.Some(value):right_application=value;
+    }
+    if vec.len(left_application.args)!=vec.len(right_application.args) {return false;}
+    var first=model.empty_type(model.TypeKind.Function);first.result=state.unit;
+    vec.push(first.parameters,model.ParameterType(mode:model.ParamMode.Ordinary,
+        type_id:left.self_type));
+    for arg in left_application.args {
+        vec.push(first.parameters,model.ParameterType(mode:model.ParamMode.Ordinary,type_id:arg));
+    }
+    var second=model.empty_type(model.TypeKind.Function);second.result=state.unit;
+    second.parameters=a_copy_parameter_types(first.parameters);
+    second.parameters[0].type_id=right.self_type;
+    for var index usize=0;index<vec.len(right_application.args);index+=1 {
+        second.parameters[index+1].type_id=right_application.args[index];
+    }
+    let first_id=intern_type(inout state,first);
+    let second_id=intern_type(inout state,second);
+    return overlap(inout state,first_id,second_id);
+}
+func duplicate_symbol(state inout Checker,origin usize) usize throws Error {
+    var value=symbol(inout state,origin);
+    value.id=vec.len(state.m.resolved.symbols);
+    vec.push(state.m.resolved.symbols,value);
+    return value.id;
+}
+func a_has_read_error(project model.Project) bool {
+    for declaration in project.foreign_bindings {
+        switch declaration.detail {
+            case model.ForeignDetail.Type(value): {
+                if value.kind=="runtime_error" && declaration.identity=="lang.py.Error" {
+                    return true;
+                }
+            }
+            default: {}
+        }
+    }
+    return false;
+}
+func a_module_has_binding(project model.Project,module_id usize) bool throws Error {
+    if module_id>=vec.len(project.modules) {
+        throw internal_error("invalid sema module reference");
+    }
+    return option.is_some(project.modules[module_id].binding);
+}
+func a_c_module_native_error(state inout Checker,module_index usize) throws Error {
+    var module=state.m.resolved.project.modules[module_index];
+    for owner in state.m.resolved.project.modules {
+        for imported in owner.imports {
+            if imported.target==module.id {
+                throw unavailable(inout state,model.NodeRef(module:owner.id,file:imported.file,
+                    node:imported.node),"C ABI modules are native-only");
+            }
+        }
+    }
+}
+func a_binding_backend_error(state inout Checker,module_index usize) throws Error {
+    var module=state.m.resolved.project.modules[module_index];
+    var allowed=vec.empty[string]();
+    switch module.binding {
+        case option.Option.Some(reference): {
+            if reference.bundle>=vec.len(state.m.resolved.project.bindings) {
+                throw internal_error("invalid binding bundle reference");
+            }
+            allowed=state.m.resolved.project.bindings[reference.bundle].allowed_backends;
+        }
+        case option.Option.None: {}
+    }
+    var backend="native";
+    if !a_backend_native(state.m.config.backend) {backend="python";}
+    if a_contains_string(allowed,backend) {return;}
+    for owner in state.m.resolved.project.modules {
+        for imported in owner.imports {
+            if imported.target==module.id {
+                throw unavailable(inout state,model.NodeRef(module:owner.id,file:imported.file,
+                    node:imported.node),"external module is unavailable for this backend");
+            }
+        }
+    }
+}
+func declarations(state inout Checker) throws Error {
+    let project=state.m.resolved.project;
+    let has_read_error=a_has_read_error(project);
+    if vec.len(project.foreign_bindings)>0 && !has_read_error {
+        for owner in project.modules {
+            for imported in owner.imports {
+                if a_module_has_binding(project,imported.target) {
+                    throw unavailable(inout state,model.NodeRef(module:owner.id,file:imported.file,
+                        node:imported.node),
+                        "foreign reads require the declared lang.py.Error type (toolchain std binding)");
+                }
+            }
+        }
+    }
+    try {state.m.foreign_bindings=foreignlib.binding_records(project,inout state.m.types);}
+    catch error model.SupportError {throw Error.Support(error);}
+    let top=vec.empty[model.NodeRef]();
+    for var module_index usize=0;module_index<vec.len(project.modules);module_index+=1 {
+        let module=project.modules[module_index];
+        if option.is_some(module.c_binding) {
+            if !a_backend_native(state.m.config.backend) {
+                a_c_module_native_error(inout state,module_index);
+            }
+            continue;
+        }
+        if option.is_some(module.binding) {
+            a_binding_backend_error(inout state,module_index);
+            continue;
+        }
+        for var file_index usize=0;file_index<vec.len(module.files);file_index+=1 {
+            let file_ref=model.NodeRef(module:module.id,file:file_index,node:0);
+            let file=parsed_file(inout state,file_ref);
+            let root=ast(inout state,at(file_ref,file.root));
+            for child_id in root.children {
+                vec.push(top,model.NodeRef(module:module.id,file:file_index,node:child_id));
+            }
+        }
+    }
+    for r in top {
+        let node=ast(inout state,r);
+        if a_kind_ast(node.kind,model.AstKind.Struct) ||
+           a_kind_ast(node.kind,model.AstKind.Enum) {
+            let symbol_id=definition(inout state,r);
+            let shape=vec.empty[hir.GenericParam]();
+            for child_id in node.children {
+                var child_ref=at(r,child_id);
+                if !a_kind_ast(ast(inout state,child_ref).kind,model.AstKind.GenericParameter) {continue;}
+                vec.push(shape,hir.GenericParam(symbol:definition(inout state,child_ref),
+                    trait_ref:option.Option[hir.TraitRef].None,
+                    source:source(inout state,child_ref)));
+            }
+            let index=vec.len(state.m.nominals);
+            a_nominal_id_set(state.nominal_ids,symbol_id,index);
+            var kind=model.TypeKind.NominalStruct;
+            if a_kind_ast(node.kind,model.AstKind.Enum) {kind=model.TypeKind.NominalEnum;}
+            vec.push(state.m.nominals,hir.NominalDecl(symbol:symbol_id,kind:kind,
+                params:shape,fields:[],variants:[],source:source(inout state,r)));
+        }
+    }
+    for r in top {
+        if !a_kind_ast(ast(inout state,r).kind,model.AstKind.Trait) {continue;}
+        var parameters=vec.empty[hir.GenericParam]();
+        for child_id in ast(inout state,r).children {
+            var child_ref=at(r,child_id);
+            if !a_kind_ast(ast(inout state,child_ref).kind,model.AstKind.GenericParameter) {continue;}
+            vec.push(parameters,hir.GenericParam(symbol:definition(inout state,child_ref),
+                trait_ref:option.Option[hir.TraitRef].None,source:source(inout state,child_ref)));
+        }
+        a_generic_params_set(state.trait_parameters,definition(inout state,r),parameters);
+    }
+    for var index usize=0;index<vec.len(state.m.nominals);index+=1 {
+        var declaration=state.m.nominals[index];
+        var parameters=generics(inout state,declaration.source.node);
+        if vec.len(parameters)!=vec.len(declaration.params) {
+            throw internal_error("nominal parameter registration mismatch");
+        }
+        for var parameter_index usize=0;parameter_index<vec.len(parameters);parameter_index+=1 {
+            if parameters[parameter_index].symbol!=declaration.params[parameter_index].symbol {
+                throw internal_error("nominal parameter registration order mismatch");
+            }
+        }
+        var updated=declaration;
+        updated.params=parameters;
+        state.m.nominals[index]=updated;
+    }
+    for r in top {
+        if !a_kind_ast(ast(inout state,r).kind,model.AstKind.Trait) {continue;}
+        var self= self_parameter(inout state,r);
+        a_symbol_type_set(state.self_types,self,parameter_type(inout state,self));
+        var parameters=generics(inout state,r);
+        var found=a_generic_params_get(state.trait_parameters,definition(inout state,r));
+        var registered=vec.empty[hir.GenericParam]();
+        switch found {
+            case option.Option.None:throw internal_error("trait parameter registration mismatch");
+            case option.Option.Some(value):registered=value;
+        }
+        if vec.len(registered)!=vec.len(parameters) {
+            throw internal_error("trait parameter registration mismatch");
+        }
+        a_generic_params_set(state.trait_parameters,definition(inout state,r),parameters);
+        let self_args=vec.empty[usize]();
+        for parameter in parameters {vec.push(self_args,parameter_type(inout state,parameter.symbol));}
+        a_bound_set(state.bounds,self,option.Option[hir.TraitRef].Some(
+            hir.TraitRef(declaration:definition(inout state,r),args:self_args)));
+        var tr=hir.TraitDecl(symbol:definition(inout state,r),self:self,params:parameters,
+            methods:[],source:source(inout state,r));
+        for child_id in ast(inout state,r).children {
+            var method_ref=at(r,child_id);
+            if !a_kind_ast(ast(inout state,method_ref).kind,model.AstKind.Function) {continue;}
+            register_function(inout state,method_ref,vec.empty[hir.GenericParam](),true,
+                option.Option[usize].Some(self),parameters,true);
+            var method=definition(inout state,method_ref);
+            let declared=a_parameters_get(state.parameters,method);
+            var declared_parameters=vec.empty[hir.Parameter]();
+            switch declared {
+                case option.Option.Some(value):declared_parameters=value;
+                case option.Option.None: {}
+            }
+            vec.push(tr.methods,hir.MethodPrototype(symbol:method,
+                signature:a_signature_id(inout state,method),
+                parameters:declared_parameters,source:source(inout state,method_ref)));
+        }
+        if vec.len(tr.params)>0 {
+            for prototype in tr.methods {
+                var own=method_own_parameters(inout state,prototype.symbol);
+                check_generic_trait_method_modes(inout state,prototype.source.node,
+                    own,prototype.signature,option.Option[usize].Some(tr.self),true);
+            }
+        }
+        vec.push(state.m.traits,tr);
+    }
+    for var index usize=0;index<vec.len(state.m.nominals);index+=1 {
+        var declaration=state.m.nominals[index];
+        let r=declaration.source.node;
+        var saved=a_copy_ids(state.signature_parameters);
+        vec.clear(state.signature_parameters);
+        for parameter in declaration.params {a_insert(state.signature_parameters,parameter.symbol);}
+        declaration.fields=vec.empty[hir.FieldDecl]();
+        declaration.variants=vec.empty[hir.VariantDecl]();
+        for child_id in ast(inout state,r).children {
+            var child_ref=at(r,child_id);
+            if a_kind_ast(ast(inout state,child_ref).kind,model.AstKind.Field) {
+                var field_type_ref=child(inout state,child_ref,0);
+                var type_id=parse_type(inout state,field_type_ref,
+                    option.Option[usize].None,false);
+                var exported=false;
+                if token(inout state,child_ref,0)=="pub" {exported=true;}
+                vec.push(declaration.fields,hir.FieldDecl(symbol:definition(inout state,child_ref),
+                    type_id:type_id,exported:exported,source:source(inout state,child_ref)));
+            }
+            if a_kind_ast(ast(inout state,child_ref).kind,model.AstKind.Variant) {
+                var variant=hir.VariantDecl(symbol:definition(inout state,child_ref),
+                    payload:[],source:source(inout state,child_ref));
+                for field_id in ast(inout state,child_ref).children {
+                    let field_ref=at(child_ref,field_id);
+                    let field_type_ref=child(inout state,field_ref,0);
+                    let type_id=parse_type(inout state,field_type_ref,
+                        option.Option[usize].None,false);
+                    vec.push(variant.payload,hir.FieldDecl(symbol:definition(inout state,field_ref),
+                        type_id:type_id,exported:true,source:source(inout state,field_ref)));
+                }
+                vec.push(declaration.variants,variant);
+            }
+        }
+        state.signature_parameters=saved;
+        state.m.nominals[index]=declaration;
+    }
+    state.nominal_fields_ready=true;
+    for r in top {
+        if !a_kind_ast(ast(inout state,r).kind,model.AstKind.Impl) {continue;}
+        let type_refs=vec.empty[model.NodeRef]();
+        for child_id in ast(inout state,r).children {
+            let child_ref=at(r,child_id);
+            if a_kind_ast(ast(inout state,child_ref).kind,model.AstKind.NamedType) {
+                vec.push(type_refs,child_ref);
+            }
+        }
+        if vec.len(type_refs)==0 {throw internal_error("impl has no target type");}
+        let self_type=parse_type(inout state,type_refs[vec.len(type_refs)-1],
+            option.Option[usize].None,false);
+        let self=self_parameter(inout state,r);
+        a_symbol_type_set(state.self_types,self,self_type);
+        let parameters=generics(inout state,r);
+        var trait_ref=option.Option[hir.TraitRef].None;
+        if vec.len(type_refs)==2 {
+            let declaration=occurrence(inout state,type_refs[0]);
+            var declaration_id usize=0;var valid=false;
+            switch declaration {
+                case option.Option.Some(value): {
+                    declaration_id=value;
+                    valid=a_symbol_kind(symbol(inout state,value).kind,model.SymbolKind.Trait);
+                }
+                case option.Option.None: {}
+            }
+            if !valid {throw reject(inout state,type_refs[0],"impl requires a nominal trait","E_TYPE_MISMATCH");}
+            let args=vec.empty[usize]();
+            for child_id in ast(inout state,type_refs[0]).children {
+                vec.push(args,parse_type(inout state,at(type_refs[0],child_id),
+                    option.Option[usize].None,false));
+            }
+            trait_ref=option.Option[hir.TraitRef].Some(check_trait_application(inout state,
+                type_refs[0],declaration_id,args));
+        }
+        let self_value=lookup_type(inout state,self_type);
+        if !a_kind(self_value.kind,model.TypeKind.NominalStruct) &&
+           !a_kind(self_value.kind,model.TypeKind.NominalEnum) &&
+           !integer(inout state,self_type) &&
+           !a_kind(self_value.kind,model.TypeKind.Float) &&
+           !a_kind(self_value.kind,model.TypeKind.Bool) &&
+           !a_kind(self_value.kind,model.TypeKind.Vec) &&
+           !a_kind(self_value.kind,model.TypeKind.String) &&
+           !a_kind(self_value.kind,model.TypeKind.Unit) {
+            throw unavailable(inout state,r,"impl target is not an implemented value type");
+        }
+        var implementation=hir.ImplDecl(params:parameters,trait_ref:trait_ref,
+            self_parameter:self,self_type:self_type,methods:[],source:source(inout state,r));
+        for child_id in ast(inout state,r).children {
+            let method_ref=at(r,child_id);
+            if !a_kind_ast(ast(inout state,method_ref).kind,model.AstKind.Function) {continue;}
+            register_function(inout state,method_ref,parameters,false,
+                option.Option[usize].None,vec.empty[hir.GenericParam](),true);
+            vec.push(implementation.methods,definition(inout state,method_ref));
+        }
+        for previous in state.m.impls {
+            var same_target=false;
+            switch previous.trait_ref {
+                case option.Option.None:same_target=!option.is_some(implementation.trait_ref);
+                case option.Option.Some(previous_application): {
+                    switch implementation.trait_ref {
+                        case option.Option.Some(current_application):
+                            same_target=previous_application.declaration==current_application.declaration;
+                        case option.Option.None: {}
+                    }
+                }
+            }
+            if same_target && impls_overlap(inout state,previous,implementation) {
+                throw reject(inout state,r,"duplicate or overlapping impl","E_TYPE_MISMATCH");
+            }
+        }
+        vec.push(state.m.impls,implementation);
+    }
+    for implementation in state.m.impls {
+        var application=hir.TraitRef(declaration:0,args:[]);
+        switch implementation.trait_ref {
+            case option.Option.None:continue;
+            case option.Option.Some(value):application=value;
+        }
+        let found_trait=trait_decl(inout state,application.declaration);
+        var trait_index usize=0;
+        switch found_trait {
+            case option.Option.None:throw reject(inout state,implementation.source.node,
+                "unknown trait implementation","E_TYPE_MISMATCH");
+            case option.Option.Some(value):trait_index=value;
+        }
+        let tr=state.m.traits[trait_index];
+        if vec.len(implementation.methods)!=vec.len(tr.methods) {
+            throw reject(inout state,implementation.source.node,
+                "impl must define every trait method exactly once","E_TYPE_MISMATCH");
+        }
+        for prototype in tr.methods {
+            var method_found=option.Option[usize].None;
+            let prototype_name=symbol(inout state,prototype.symbol).name;
+            for method in implementation.methods {
+                if symbol(inout state,method).name==prototype_name {
+                    method_found=option.Option[usize].Some(method);
+                }
+            }
+            var method usize=0;var valid=false;
+            switch method_found {
+                case option.Option.Some(value):method=value;valid=true;
+                case option.Option.None: {}
+            }
+            if !valid {throw reject(inout state,implementation.source.node,
+                "impl is missing a trait method","E_TYPE_MISMATCH");}
+            if !trait_impl_signature_matches(inout state,tr,implementation,prototype,method) {
+                throw reject(inout state,implementation.source.node,
+                    "impl method signature does not match trait","E_TYPE_MISMATCH");
+            }
+        }
+    }
+    for tr in state.m.traits {
+        let generic_trait=vec.len(tr.params)>0;
+        for prototype in tr.methods {
+            let own=method_own_parameters(inout state,prototype.symbol);
+            check_generic_trait_method_modes(inout state,prototype.source.node,
+                own,prototype.signature,option.Option[usize].Some(tr.self),generic_trait);
+        }
+    }
+    let context_methods=vec.empty[usize]();
+    for context in state.trait_signature_context {a_sorted_insert(context_methods,context.method);}
+    for method in context_methods {
+        let found=a_trait_signature_get(state.trait_signature_context,method);
+        var context=TraitSignatureEntry(method:method,trait_self:0,trait_self_callback:false);
+        switch found {
+            case option.Option.Some(value):context=value;
+            case option.Option.None: {}
+        }
+        let definition_found=symbol(inout state,method).definition;
+        var definition=model.NodeRef(module:0,file:0,node:0);
+        switch definition_found {
+            case option.Option.None:throw internal_error("trait method has no source definition");
+            case option.Option.Some(value):definition=value;
+        }
+        let saved=a_copy_ids(state.signature_parameters);
+        vec.clear(state.signature_parameters);
+        for parameter in method_own_parameters(inout state,method) {
+            a_insert(state.signature_parameters,parameter.symbol);
+        }
+        for tr in state.m.traits {
+            if tr.self==context.trait_self {
+                for parameter in tr.params {a_insert(state.signature_parameters,parameter.symbol);}
+            }
+        }
+        let method_signature=a_signature_id(inout state,method);
+        let direct=check_inout_graph(inout state,definition,method_signature,
+            true,option.Option[usize].Some(context.trait_self),context.trait_self_callback);
+        state.signature_parameters=saved;
+    }
+    for r in top {
+        if a_kind_ast(ast(inout state,r).kind,model.AstKind.Function) {
+            register_function(inout state,r,vec.empty[hir.GenericParam](),false,
+                option.Option[usize].None,vec.empty[hir.GenericParam](),false);
+        }
+    }
+    for r in top {
+        if a_kind_ast(ast(inout state,r).kind,model.AstKind.Binding) {
+            a_register_const_functions(inout state,r);
+        }
+    }
+}
+func a_register_const_functions(state inout Checker,r model.NodeRef) throws Error {
+    if a_kind_ast(ast(inout state,r).kind,model.AstKind.FunctionLiteral) {
+        register_function(inout state,r,vec.empty[hir.GenericParam](),false,
+            option.Option[usize].None,vec.empty[hir.GenericParam](),false);
+        return;
+    }
+    for child_id in ast(inout state,r).children {
+        a_register_const_functions(inout state,at(r,child_id));
+    }
+}

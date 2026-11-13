@@ -1,0 +1,543 @@
+// Verifier state plus source/name/type lookup primitives.  Algorithms are
+// split across the other files in this package; this file mirrors the private
+// Verifier storage and the small const helpers at the top of src/hir/hir.cpp.
+package hirverify;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct Local {
+    type_id usize;
+    scope usize;
+    function usize;
+    writable bool;
+    ready usize;
+    read_only bool;
+}
+
+struct LocalEntry {
+    symbol usize;
+    value Local;
+}
+
+struct FunctionEntry {
+    symbol usize;
+    in_template bool;
+    index usize;
+}
+
+struct TemplateEntry {
+    symbol usize;
+    index usize;
+}
+
+struct NominalEntry {
+    symbol usize;
+    index usize;
+}
+
+struct InstanceEntry {
+    symbol usize;
+    index usize;
+}
+
+struct AllFunction {
+    in_template bool;
+    index usize;
+}
+
+struct OwnerEntry {
+    has bool;
+    symbol usize;
+}
+
+struct NodeOptionEntry {
+    has bool;
+    value usize;
+}
+
+struct TraitKey {
+    actual usize;
+    declaration usize;
+    args Vec[usize];
+}
+
+struct TraitResultEntry {
+    key TraitKey;
+    value bool;
+}
+
+struct ValidatedEntry {
+    type_id usize;
+    allowed Vec[usize];
+}
+
+struct Verifier {
+    m hir.HirModule;
+    functions Vec[FunctionEntry];
+    locals Vec[LocalEntry];
+    enter Vec[usize];
+    leave Vec[usize];
+    owners Vec[OwnerEntry];
+    scope_used Vec[bool];
+    parents Vec[NodeOptionEntry];
+    scope_nodes Vec[NodeOptionEntry];
+    clock usize;
+    templates Vec[TemplateEntry];
+    nominals Vec[NominalEntry];
+    instances Vec[InstanceEntry];
+    all_functions Vec[AllFunction];
+    synthetic_iterator_calls Vec[usize];
+    substituted types.Context;
+    trait_results Vec[TraitResultEntry];
+    active_constraints Vec[TraitKey];
+    active_trait_bounds Vec[TraitKey];
+    validated_types Vec[ValidatedEntry];
+}
+
+func make_verifier(module hir.HirModule) Verifier {
+    let owners = vec.empty[OwnerEntry]();
+    let parents = vec.empty[NodeOptionEntry]();
+    let scope_used = vec.empty[bool]();
+    let scope_nodes = vec.empty[NodeOptionEntry]();
+    vec.reserve(owners, vec.len(module.nodes));
+    vec.reserve(parents, vec.len(module.nodes));
+    vec.reserve(scope_used, vec.len(module.scopes));
+    vec.reserve(scope_nodes, vec.len(module.scopes));
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+        vec.push(owners, OwnerEntry(has: false, symbol: 0));
+        vec.push(parents, NodeOptionEntry(has: false, value: 0));
+    }
+    for var index usize = 0; index < vec.len(module.scopes); index += 1 {
+        vec.push(scope_used, false);
+        vec.push(scope_nodes, NodeOptionEntry(has: false, value: 0));
+    }
+    let enter = vec.make[usize](vec.len(module.nodes), 0);
+    let leave = vec.make[usize](vec.len(module.nodes), 0);
+    return Verifier(m: module, functions: [], locals: [], enter: enter,
+        leave: leave, owners: owners, scope_used: scope_used,
+        parents: parents, scope_nodes: scope_nodes, clock: 0,
+        templates: [], nominals: [], instances: [], all_functions: [],
+        synthetic_iterator_calls: [],
+        substituted: types.clone_context(module.types), trait_results: [],
+        active_constraints: [], active_trait_bounds: [],
+        validated_types: []);
+}
+
+func verifier_type(state Verifier, id usize) model.Type throws Invalid {
+    return type_of(state.m, id);
+}
+
+func verifier_node(state Verifier, id usize) hir.HirNode throws Invalid {
+    need(id < vec.len(state.m.nodes), "out-of-range HirNodeId");
+    return state.m.nodes[id];
+}
+
+func verifier_scope(state Verifier, id usize) hir.HirScope throws Invalid {
+    need(id < vec.len(state.m.scopes), "out-of-range ScopeId");
+    return state.m.scopes[id];
+}
+
+func verifier_symbol(state Verifier, id usize) model.Symbol throws Invalid {
+    need(id < vec.len(state.m.resolved.symbols), "out-of-range SymbolId");
+    let value = state.m.resolved.symbols[id];
+    need(value.id == id, "symbol index/identity mismatch");
+    need(value.module < vec.len(state.m.resolved.project.modules),
+        "symbol module index");
+    return value;
+}
+
+func verifier_module(state Verifier, id usize) model.Module throws Invalid {
+    need(id < vec.len(state.m.resolved.project.modules), "module index");
+    let value = state.m.resolved.project.modules[id];
+    need(value.id == id, "module index/identity mismatch");
+    return value;
+}
+
+func verifier_file(state Verifier, module usize, file usize)
+    model.ParseResult throws Invalid {
+    let value = verifier_module(state, module);
+    need(file < vec.len(value.files), "source file index");
+    let index = value.files[file];
+    need(index < vec.len(state.m.resolved.project.files),
+        "source parse index");
+    return state.m.resolved.project.files[index];
+}
+
+func verifier_ast(state Verifier, reference model.NodeRef)
+    model.AstNode throws Invalid {
+    let file = verifier_file(state, reference.module, reference.file);
+    need(reference.node < vec.len(file.nodes), "source AST node index");
+    return file.nodes[reference.node];
+}
+
+func verifier_source(state Verifier, source hir.HirSource)
+    throws Invalid {
+    let project = state.m.resolved.project;
+    need(source.node.module < vec.len(project.modules), "source module index");
+    let module = project.modules[source.node.module];
+    need(module.id == source.node.module, "module index/identity mismatch");
+    need(source.node.file < vec.len(module.files), "source file index");
+    let file_index = module.files[source.node.file];
+    need(file_index < vec.len(project.files), "source parse index");
+    let file = project.files[file_index];
+    need(!file.recovered, "owning AST contains syntax recovery");
+    need(file.lexed.source.valid, "source snapshot missing/invalid");
+    need(source.node.node < vec.len(file.nodes), "source AST node index");
+    let ast = file.nodes[source.node.node];
+    need(ast.span.begin_byte <= ast.span.end_byte &&
+         ast.span.end_byte <= u64(vec.len(file.lexed.source.original)),
+        "invalid AST source span");
+    need(!ast.recovered && !ast_is(ast.kind, model.AstKind.Error),
+        "unresolved/recovered AST source");
+    need(source.span.snapshot == file.lexed.source.id &&
+         source.span.snapshot == ast.span.snapshot &&
+         source.span.begin_byte <= source.span.end_byte &&
+         source.span.end_byte <= u64(vec.len(file.lexed.source.original)) &&
+         source.span.begin_byte >= ast.span.begin_byte &&
+         source.span.end_byte <= ast.span.end_byte,
+        "invalid source span");
+}
+
+func verifier_ancestor(state Verifier, first usize, second usize) bool
+    throws Invalid {
+    var a = first;
+    var b = second;
+    for var count usize = 0; count <= vec.len(state.m.scopes); count += 1 {
+        if a == b {
+            return true;
+        }
+        let value = verifier_scope(state, b);
+        switch value.parent {
+            case option.Option.Some(parent):
+                b = parent;
+            case option.Option.None:
+                return false;
+        }
+    }
+    fail("scope cycle");
+    return false;
+}
+
+func verifier_unit(state Verifier, node hir.HirNode) throws Invalid {
+    need(kind_is(verifier_type(state, node.type_id).kind,
+                 model.TypeKind.Unit), "statement must have Unit type");
+}
+
+func foreign_access_read(node hir.HirNode) bool {
+    switch node.data {
+        case hir.NodeData.ForeignRead(value): {
+            switch value.access {
+                case option.Option.Some(access): {
+                    let id = foreign_access_id(access);
+                    return id == 0 || id == 2 || id == 4;
+                }
+                case option.Option.None: return false;
+            }
+        }
+        default: return false;
+    }
+}
+
+func foreign_access_place(node hir.HirNode) bool {
+    switch node.data {
+        case hir.NodeData.ForeignRead(value): {
+            switch value.access {
+                case option.Option.Some(access): {
+                    let id = foreign_access_id(access);
+                    return id == 1 || id == 3 || id == 5;
+                }
+                case option.Option.None: return false;
+            }
+        }
+        default: return false;
+    }
+}
+
+func verifier_expression(state Verifier, node hir.HirNode) bool {
+    let kind = hir.node_kind(node.data);
+    let id = hir.node_kind_id(kind);
+    // unit_literal..call plus the aggregate/value forms listed by the C++
+    // expression() helper.  Keep the numeric range explicit so new NodeKind
+    // entries cannot silently become expressions.
+    if id <= 41 {
+        var candidate = false;
+        switch kind {
+            case hir.NodeKind.UnitLiteral: candidate = true;
+            case hir.NodeKind.ConstantLiteral: candidate = true;
+            case hir.NodeKind.BoolLiteral: candidate = true;
+            case hir.NodeKind.IntegerLiteral: candidate = true;
+            case hir.NodeKind.FloatLiteral: candidate = true;
+            case hir.NodeKind.StringLiteral: candidate = true;
+            case hir.NodeKind.Read: candidate = true;
+            case hir.NodeKind.FunctionValue: candidate = true;
+            case hir.NodeKind.Unary: candidate = true;
+            case hir.NodeKind.Binary: candidate = true;
+            case hir.NodeKind.ShortCircuit: candidate = true;
+            case hir.NodeKind.IntegerConvert: candidate = true;
+            case hir.NodeKind.Call: candidate = true;
+            case hir.NodeKind.StructInit: candidate = true;
+            case hir.NodeKind.EnumInit: candidate = true;
+            case hir.NodeKind.FieldRead: candidate = true;
+            case hir.NodeKind.ConstraintCall: candidate = true;
+            case hir.NodeKind.Move: candidate = true;
+            case hir.NodeKind.VecInit: candidate = true;
+            case hir.NodeKind.IndexRead: candidate = true;
+            case hir.NodeKind.VecSlice: candidate = true;
+            case hir.NodeKind.ForeignRead: candidate = true;
+            case hir.NodeKind.CFieldRead: candidate = true;
+            case hir.NodeKind.Await: candidate = true;
+            case hir.NodeKind.TraitObjectInit: candidate = true;
+            case hir.NodeKind.TraitDispatch: candidate = true;
+            default: candidate = false;
+        }
+        if !candidate {
+            return false;
+        }
+        return foreign_access_read(node) || !foreign_access_place(node);
+    }
+    return false;
+}
+
+func verifier_expr(state Verifier, id usize) hir.HirNode throws Invalid {
+    let value = verifier_node(state, id);
+    need(verifier_expression(state, value), "expected value expression");
+    return value;
+}
+
+func verifier_statement(state Verifier, node hir.HirNode) bool {
+    if verifier_expression(state, node) {
+        return false;
+    }
+    let kind = hir.node_kind(node.data);
+    if node_is(kind, hir.NodeKind.Place) ||
+       node_is(kind, hir.NodeKind.FieldPlace) ||
+       node_is(kind, hir.NodeKind.IndexPlace) {
+        return false;
+    }
+    return !foreign_access_place(node);
+}
+
+func function_entry_index(state Verifier, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(state.functions); index += 1 {
+        if state.functions[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func verifier_function(state Verifier, symbol usize) hir.HirFunction
+    throws Invalid {
+    let ignored = verifier_symbol(state, symbol);
+    let found = function_entry_index(state, symbol);
+    if found < 0 {
+        fail("function identity has no HIR definition");
+    }
+    let entry = state.functions[usize(found)];
+    if entry.in_template {
+        return state.m.templates[entry.index].function;
+    }
+    return state.m.functions[entry.index];
+}
+
+func template_index(state Verifier, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(state.templates); index += 1 {
+        if state.templates[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func nominal_index(state Verifier, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(state.nominals); index += 1 {
+        if state.nominals[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func instance_index(state Verifier, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(state.instances); index += 1 {
+        if state.instances[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func all_function_value(state Verifier, entry AllFunction) hir.HirFunction {
+    if entry.in_template {
+        return state.m.templates[entry.index].function;
+    }
+    return state.m.functions[entry.index];
+}
+
+func local_index(state Verifier, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(state.locals); index += 1 {
+        if state.locals[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func verifier_local(state Verifier, symbol usize) Local throws Invalid {
+    let found = local_index(state, symbol);
+    if found < 0 {
+        fail("missing local binding");
+    }
+    return state.locals[usize(found)].value;
+}
+
+func local_insert(state inout Verifier, symbol usize, value Local) bool {
+    if local_index(state, symbol) >= 0 {
+        return false;
+    }
+    vec.push(state.locals, LocalEntry(symbol: symbol, value: value));
+    return true;
+}
+
+func scope_node(state Verifier, scope usize) option.Option[usize] {
+    if scope >= vec.len(state.scope_nodes) {
+        return option.Option[usize].None;
+    }
+    let value = state.scope_nodes[scope];
+    if !value.has {
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].Some(value.value);
+}
+
+func parent_node(state Verifier, node usize) option.Option[usize] {
+    if node >= vec.len(state.parents) {
+        return option.Option[usize].None;
+    }
+    let value = state.parents[node];
+    if !value.has {
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].Some(value.value);
+}
+
+func owner_of(state Verifier, node usize) option.Option[usize] {
+    if node >= vec.len(state.owners) {
+        return option.Option[usize].None;
+    }
+    let value = state.owners[node];
+    if !value.has {
+        return option.Option[usize].None;
+    }
+    return option.Option[usize].Some(value.symbol);
+}
+
+func same_trait_key(key TraitKey, actual usize, declaration usize,
+                    args Vec[usize]) bool {
+    return key.actual == actual && key.declaration == declaration &&
+           ids_equal(key.args, args);
+}
+
+func trait_key_insert(values Vec[TraitKey], actual usize, declaration usize,
+                      args Vec[usize]) bool {
+    for value in values {
+        if same_trait_key(value, actual, declaration, args) {
+            return false;
+        }
+    }
+    vec.push(values, TraitKey(actual: actual, declaration: declaration,
+        args: ids_copy(args)));
+    return true;
+}
+
+func trait_key_erase(values Vec[TraitKey], actual usize, declaration usize,
+                     args Vec[usize]) {
+    var index usize = 0;
+    for index < vec.len(values) &&
+          !same_trait_key(values[index], actual, declaration, args) {
+        index += 1;
+    }
+    if index == vec.len(values) {
+        return;
+    }
+    for index + 1 < vec.len(values) {
+        values[index] = values[index + 1];
+        index += 1;
+    }
+    let popped = vec.pop(values);
+}
+
+func trait_result_find(state Verifier, actual usize, declaration usize,
+                       args Vec[usize]) option.Option[bool] {
+    for entry in state.trait_results {
+        if same_trait_key(entry.key, actual, declaration, args) {
+            return option.Option[bool].Some(entry.value);
+        }
+    }
+    return option.Option[bool].None;
+}
+
+func trait_result_set(state inout Verifier, actual usize, declaration usize,
+                      args Vec[usize], value bool) {
+    for var index usize = 0; index < vec.len(state.trait_results); index += 1 {
+        if same_trait_key(state.trait_results[index].key, actual, declaration,
+                          args) {
+            state.trait_results[index].value = value;
+            return;
+        }
+    }
+    vec.push(state.trait_results, TraitResultEntry(
+        key: TraitKey(actual: actual, declaration: declaration,
+            args: ids_copy(args)), value: value));
+}
+
+func validated_find(state Verifier, id usize, allowed Vec[usize]) bool {
+    for entry in state.validated_types {
+        if entry.type_id == id && ids_equal(entry.allowed, allowed) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func validated_insert(state inout Verifier, id usize, allowed Vec[usize]) {
+    if validated_find(state, id, allowed) {
+        return;
+    }
+    vec.push(state.validated_types, ValidatedEntry(type_id: id,
+        allowed: ids_copy(allowed)));
+}
+
+func allowed_for(state Verifier, function usize) Vec[usize] {
+    let result = vec.empty[usize]();
+    let found = template_index(state, function);
+    if found >= 0 {
+        for parameter in state.m.templates[usize(found)].params {
+            ids_insert(result, parameter.symbol);
+        }
+    }
+    return result;
+}
+
+func declared_parameters(state Verifier) Vec[usize] throws Invalid {
+    let result = vec.empty[usize]();
+    for symbol in state.m.resolved.symbols {
+        if symbol_is(symbol.kind, model.SymbolKind.TypeParameter) {
+            var real = option.is_some(symbol.definition);
+            for entry in state.m.resolved.self_parameters {
+                if entry.symbol == symbol.id {
+                    verifier_source(state, hir.HirSource(node: entry.source,
+                        span: verifier_ast(state, entry.source).span));
+                    real = true;
+                }
+            }
+            need(real, "type parameter lacks a real declaration or Self owner");
+            ids_insert(result, symbol.id);
+        }
+    }
+    return result;
+}
