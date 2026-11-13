@@ -123,6 +123,13 @@ def check_observed(title, status, stdout, stderr, case, log_dir):
     if counts is None:
         report_failure(f"{title}: observer COUNTS line missing", log_dir, stdout, stderr)
         raise SystemExit(1)
+    for allocated, freed in (("future_new", "future_free"),
+                             ("frame_new", "frame_free"),
+                             ("vec_new", "vec_free")):
+        if allocated not in counts or counts[allocated] != counts.get(freed):
+            report_failure(f"{title}: unbalanced {allocated}/{freed}: {counts}",
+                           log_dir, stdout, stderr)
+            raise SystemExit(1)
     expected = case["counts"]
     if any(counts.get(key) != value for key, value in expected.items()):
         report_failure(

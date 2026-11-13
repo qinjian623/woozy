@@ -76,4 +76,7 @@ Root 复核：独立提取8例、24配置实际运行通过；修正后的 Weak 
 - 组合副本的5项定向CTest全部通过（34.86秒），含Iterator22、T09、Frame32、永久内存24和原async58。fork已独立复核：三项原死锁、异线程创建前拒绝及FD child-first ack均通过。
 - 永久fork GC测试已改为真实注销前暂停，child必须实际trace仍注册且refs=1的对象；不能靠随机排队绕过该分支。Root相关21/21 CTest通过（33.00秒）。
 - 从教程与并发文档提取Counter迭代器、async sleep示例，各在Native O0/O2运行通过，共4次。用户文档不含构建器开发步骤。
-- 主目录已完成构建；完整171/171 CTest通过（152.93秒）。async TCP/UDP loopback测试由另一Flash worker补充；现有async网络实跑为Unix socket。
+- 主目录已完成构建；完整171/171 CTest通过（152.93秒）。随后补充async TCP/UDP loopback测试，Root实际66/66通过（40.74秒），包含两种协议的O0/O2普通及观察器运行。第二次修改只涉及测试和状态文档，没有重新跑完整171项。
+
+
+TCP/UDP测试用接收方的实际WouldBlock标志、心跳与pipe事件控制先后；没有以固定发送延迟当作已等待的证明。TCP接受立即connect成功、EINTR和EINPROGRESS。Future数量可随合法分支变化，因此观察器对全部用例要求Future/frame/Vec分配与释放平衡；旧用例的精确计数完整保留，新两例保留固定frame/Vec和bad_frame_free检查。Root用一次平衡计数和三种不平衡计数独立检查该判断，4/4通过。立即connect成功分支未在内核实跑中出现，IPv6、公网和syscall级追踪未在新增测试中执行。

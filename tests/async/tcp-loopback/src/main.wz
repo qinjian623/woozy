@@ -1,0 +1,280 @@
+// CON03: a real IPv4 TCP loopback exchange driven only by async tasks.
+//
+// The listener and every accepted/connected socket are nonblocking and
+// close-on-exec. accept() is forced to report WouldBlock by running the server
+// before the client is spawned. The reader's first recv() must also report
+// WouldBlock, after which it publishes that fact plus a heartbeat snapshot in
+// a shared Vec. The client does not send until a heartbeat event fires, and
+// then only accepts the handshake if the reader flag is set and the heartbeat
+// advanced past the snapshot. No wall-clock delay decides the ordering.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+import "std/net" as net;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct ServerFacts {
+    pub accept_would_block bool;
+    pub reader_would_block bool;
+    pub heartbeat_before i32;
+    pub heartbeat_after i32;
+    pub received usize;
+    pub echoed usize;
+    pub echo_matches bool;
+}
+
+struct ClientFacts {
+    pub connect_code i32;
+    pub socket_error i32;
+    pub handshake_ok bool;
+    pub sent usize;
+    pub received usize;
+    pub bytes_match bool;
+}
+
+// Six timer yields, then a one-byte pipe event. The event is the only wakeup
+// the client uses; the server's shared state records whether a real
+// WouldBlock happened before that event and which heartbeat tick it saw.
+async func heartbeat(ticks Vec[i32], state Vec[i32], event_fd i32, signal Vec[u8]) Unit throws os.Error {
+    // Count heartbeat progress only after the peer really waited for data.
+    for state[1] == 0 { await a.sleep(1); }
+    for var index i32 = 0; index < 6; index += 1 {
+        await a.sleep(1);
+        ticks[0] = ticks[0] + 1;
+    }
+    os.write(os.from_fd(event_fd),signal,1);
+}
+
+async func server(listener net.Socket, state Vec[i32], ticks Vec[i32]) ServerFacts throws os.Error {
+    var facts = ServerFacts(accept_would_block:false,reader_would_block:false,
+        heartbeat_before:0,heartbeat_after:0,received:0,echoed:0,echo_matches:false);
+    var accepted = net.from_fd(-1);
+    var have_peer = false;
+    for !have_peer {
+        var wait = false;
+        try {
+            let peer = net.accept(listener,u32(net.SOCK_NONBLOCK|net.SOCK_CLOEXEC));
+            accepted = peer.socket;
+            have_peer = true;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): {
+                    facts.accept_would_block = true;
+                    wait = true;
+                }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if !have_peer && wait {
+            await a.readable(net.fd(listener));
+        }
+    }
+    defer { try { net.close(accepted); } catch error os.Error {} }
+
+    let message = text.bytes("woozy-tcp");
+    let expected = vec.len(message);
+    let buffer = vec.make[u8](expected,0);
+    let chunk = vec.make[u8](expected,0);
+    var received usize = 0;
+    var first_wait = true;
+    for received < expected {
+        var wait = false;
+        try {
+            let count = net.recv(accepted,chunk,expected-received,0);
+            if count == 0 { throw os.Error.NoProgress(received); }
+            for var index usize = 0; index < count; index += 1 {
+                buffer[received+index] = chunk[index];
+            }
+            received += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): {
+                    facts.reader_would_block = true;
+                    if first_wait {
+                        facts.heartbeat_before = ticks[0];
+                        state[2] = ticks[0];
+                        state[1] = 1;
+                        first_wait = false;
+                    }
+                    wait = true;
+                }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if received < expected && wait {
+            await a.readable(net.fd(accepted));
+        }
+    }
+    facts.heartbeat_after = ticks[0];
+    facts.received = received;
+    var same = received == expected;
+    for var index usize = 0; index < expected; index += 1 {
+        if buffer[index] != message[index] { same = false; }
+    }
+    facts.echo_matches = same;
+
+    var echoed usize = 0;
+    for echoed < expected {
+        var wait = false;
+        try {
+            let count = net.send(accepted,buffer[echoed:],expected-echoed,0);
+            if count == 0 { throw os.Error.NoProgress(echoed); }
+            echoed += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): { wait = true; }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if echoed < expected && wait {
+            await a.writable(net.fd(accepted));
+        }
+    }
+    facts.echoed = echoed;
+    return facts;
+}
+
+async func client(address net.Address, state Vec[i32], ticks Vec[i32],
+                  event_fd i32) ClientFacts throws os.Error {
+    let socket = net.socket(net.AF_INET,
+        net.SOCK_STREAM|net.SOCK_NONBLOCK|net.SOCK_CLOEXEC,0);
+    defer { try { net.close(socket); } catch error os.Error {} }
+    var facts = ClientFacts(connect_code:0,socket_error:-1,handshake_ok:false,
+        sent:0,received:0,bytes_match:false);
+    try {
+        net.connect(socket,address);
+    } catch error os.Error {
+        switch error {
+            case os.Error.System(code,completed): {
+                // EINPROGRESS: the handshake continues asynchronously.
+                facts.connect_code = code;
+                if code != 115 { throw error; }
+            }
+            case os.Error.Interrupted(code,completed): {
+                // For TCP the handshake continues after EINTR; wait it out.
+                facts.connect_code = code;
+            }
+            default: throw error;
+        }
+    }
+    if facts.connect_code != 0 {
+        await a.writable(net.fd(socket));
+    }
+    facts.socket_error = net.getsockopt_int(socket,net.SOL_SOCKET,net.SO_ERROR);
+    if facts.socket_error != 0 {
+        return facts;
+    }
+
+    // The server marks a real recv WouldBlock before this event can arm.
+    await a.readable(event_fd);
+    facts.handshake_ok = state[1] != 0 && ticks[0] > state[2];
+    // Even on a failed handshake, still send so the server can finish and the
+    // main task reports TCP_FAIL instead of hanging until the run timeout.
+
+    let message = text.bytes("woozy-tcp");
+    let expected = vec.len(message);
+    var sent usize = 0;
+    for sent < expected {
+        var wait = false;
+        try {
+            let count = net.send(socket,message[sent:],expected-sent,0);
+            if count == 0 { throw os.Error.NoProgress(sent); }
+            sent += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): { wait = true; }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if sent < expected && wait {
+            await a.writable(net.fd(socket));
+        }
+    }
+    facts.sent = sent;
+
+    let buffer = vec.make[u8](expected,0);
+    let chunk = vec.make[u8](expected,0);
+    var received usize = 0;
+    for received < expected {
+        var wait = false;
+        try {
+            let count = net.recv(socket,chunk,expected-received,0);
+            if count == 0 { throw os.Error.NoProgress(received); }
+            for var index usize = 0; index < count; index += 1 {
+                buffer[received+index] = chunk[index];
+            }
+            received += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): { wait = true; }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if received < expected && wait {
+            await a.readable(net.fd(socket));
+        }
+    }
+    facts.received = received;
+    var same = received == expected;
+    for var index usize = 0; index < expected; index += 1 {
+        if buffer[index] != message[index] { same = false; }
+    }
+    facts.bytes_match = same;
+    return facts;
+}
+
+async func main() i32 throws os.Error {
+    let listener = net.socket(net.AF_INET,
+        net.SOCK_STREAM|net.SOCK_NONBLOCK|net.SOCK_CLOEXEC,0);
+    defer { try { net.close(listener); } catch error os.Error {} }
+    net.setsockopt_int(listener,net.SOL_SOCKET,net.SO_REUSEADDR,1);
+    net.bind(listener,net.ip("127.0.0.1",0));
+    net.listen(listener,4);
+    let address = net.getsockname(listener);
+
+    let ticks = vec.make[i32](1,0);
+    let state = vec.make[i32](4,0);
+    let signal = vec.make[u8](1,1);
+    let event = os.pipe(u32(os.O_CLOEXEC));
+    defer { try { os.close(event.read_end); } catch error os.Error {} }
+    defer { try { os.close(event.write_end); } catch error os.Error {} }
+
+    let server_task = server(listener,state,ticks);
+    let client_task = client(address,state,ticks,os.fd(event.read_end));
+    let beat = heartbeat(ticks,state,os.fd(event.write_end),signal);
+    a.spawn(server_task);
+    a.spawn(client_task);
+    a.spawn(beat);
+    let served = await server_task;
+    let connected = await client_task;
+    await beat;
+
+    let message = text.bytes("woozy-tcp");
+    let length = vec.len(message);
+    var ok = address.family == net.AF_INET && address.port != 0;
+    ok = ok && served.accept_would_block;
+    ok = ok && served.reader_would_block;
+    ok = ok && served.heartbeat_after > served.heartbeat_before;
+    ok = ok && served.received == length && served.echoed == length;
+    ok = ok && served.echo_matches;
+    ok = ok && (connected.connect_code == 0 || connected.connect_code == 4 ||
+                connected.connect_code == 115);
+    ok = ok && connected.socket_error == 0;
+    ok = ok && connected.handshake_ok;
+    ok = ok && connected.sent == length && connected.received == length;
+    ok = ok && connected.bytes_match;
+    ok = ok && ticks[0] >= 1;
+    if !ok {
+        io.println("TCP_FAIL");
+        return 1;
+    }
+    io.println("TCP_OK");
+    return 0;
+}

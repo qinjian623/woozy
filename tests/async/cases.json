@@ -81,6 +81,16 @@
       "name": "cancel-queued-move-vec",
       "exit": 0,
       "stdout": ""
+    },
+    {
+      "name": "tcp-loopback",
+      "exit": 0,
+      "stdout": "TCP_OK\n"
+    },
+    {
+      "name": "udp-loopback",
+      "exit": 0,
+      "stdout": "UDP_OK\n"
     }
   ],
   "reject": [
@@ -272,6 +282,30 @@
         "bad_frame_free": 0,
         "vec_new": 1,
         "vec_free": 1
+      }
+    },
+    {
+      "name": "tcp-loopback",
+      "exit": 0,
+      "stdout": "TCP_OK\n",
+      "counts": {
+        "frame_new": 4,
+        "frame_free": 4,
+        "bad_frame_free": 0,
+        "vec_new": 15,
+        "vec_free": 15
+      }
+    },
+    {
+      "name": "udp-loopback",
+      "exit": 0,
+      "stdout": "UDP_OK\n",
+      "counts": {
+        "frame_new": 4,
+        "frame_free": 4,
+        "bad_frame_free": 0,
+        "vec_new": 21,
+        "vec_free": 21
       }
     }
   ]

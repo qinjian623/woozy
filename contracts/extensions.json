@@ -74,8 +74,8 @@
     {
       "id": "CON03",
       "title": "Async functions, await and task execution",
-      "status": "in_progress",
-      "owner": "Core implemented and main full171/171 passed; extra async TCP/UDP tests under one correction",
+      "status": "complete",
+      "owner": "Root: Source async/frame/fork complete for documented Native range; main171 and async TCP/UDP66 passed",
       "depends_on": [
         "LANG01",
         "MEM02",

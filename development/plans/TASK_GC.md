@@ -1,7 +1,7 @@
 # Task / coroutine frame 的 GC 接入
 
 设计对象是 Native 的 Future、LLVM coroutine 和 Slot.owner/active。
-普通async参数私有复制已合入2c9cd64，Hosted Thread清理修正已合入973328d。Source frame metadata、Task图跟踪与fork恢复已在Root验证副本组合，通过Frame32、内存24及相关21项CTest；主目录完整171/171 CTest通过（152.93秒），待提交推送。下文记录实现要求和保留限制。
+普通async参数私有复制已合入2c9cd64，Hosted Thread清理修正已合入973328d。Source frame metadata、Task图跟踪与fork恢复已在Root验证副本组合，通过Frame32、内存24及相关21项CTest；已合入主分支228cee9；主目录完整171/171 CTest通过（152.93秒）。下文记录实现要求和保留限制。
 
 ## 1. 保留 executor 强引用，不给 collector 增加协程 finalizer
 

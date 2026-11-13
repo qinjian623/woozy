@@ -1,0 +1,246 @@
+// CON03: a real IPv4 UDP loopback exchange driven only by async tasks.
+//
+// Both sockets are nonblocking and close-on-exec and bind 127.0.0.1 port 0.
+// The receiver runs first and its first recvfrom() must report WouldBlock; it
+// then publishes that fact plus a heartbeat snapshot in shared state. The
+// sender waits for a heartbeat event, verifies the flag and the later tick,
+// and only then sends the nonempty datagram. The receiver checks byte count,
+// bytes, family, source IP and source port, replies to that source address,
+// and the sender validates the reply source. No wall-clock delay decides the
+// send ordering.
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/async" as a;
+import "std/net" as net;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct ReceiverFacts {
+    pub would_block bool;
+    pub heartbeat_before i32;
+    pub heartbeat_after i32;
+    pub count usize;
+    pub bytes_match bool;
+    pub family_ok bool;
+    pub source_ip_ok bool;
+    pub source_port_ok bool;
+    pub reply_sent usize;
+}
+
+struct SenderFacts {
+    pub handshake_ok bool;
+    pub sent usize;
+    pub received usize;
+    pub reply_bytes_match bool;
+    pub reply_ip_ok bool;
+    pub reply_port_ok bool;
+}
+
+// Six timer yields, then a one-byte pipe event that releases the sender.
+async func heartbeat(ticks Vec[i32], state Vec[i32], event_fd i32, signal Vec[u8]) Unit throws os.Error {
+    // Count heartbeat progress only after the peer really waited for data.
+    for state[1] == 0 { await a.sleep(1); }
+    for var index i32 = 0; index < 6; index += 1 {
+        await a.sleep(1);
+        ticks[0] = ticks[0] + 1;
+    }
+    os.write(os.from_fd(event_fd),signal,1);
+}
+
+async func receiver(socket net.Socket, ticks Vec[i32], state Vec[i32],
+                    sender_port u16, receiver_port u16) ReceiverFacts throws os.Error {
+    defer { try { net.close(socket); } catch error os.Error {} }
+    let payload = text.bytes("woozy-udp");
+    let expected = vec.len(payload);
+    let buffer = vec.make[u8](64,0);
+    let reply = text.bytes("udp-reply");
+    var facts = ReceiverFacts(would_block:false,heartbeat_before:0,heartbeat_after:0,
+        count:0,bytes_match:false,family_ok:false,source_ip_ok:false,
+        source_port_ok:false,reply_sent:0);
+    var received = false;
+    var first_wait = true;
+    var datagram = net.Received(count:0,address:net.any4(0));
+    for !received {
+        var wait = false;
+        try {
+            datagram = net.recvfrom(socket,buffer,vec.len(buffer),0);
+            received = true;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): {
+                    facts.would_block = true;
+                    if first_wait {
+                        facts.heartbeat_before = ticks[0];
+                        state[2] = ticks[0];
+                        state[1] = 1;
+                        first_wait = false;
+                    }
+                    wait = true;
+                }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if !received && wait {
+            await a.readable(net.fd(socket));
+        }
+    }
+    facts.heartbeat_after = ticks[0];
+    facts.count = datagram.count;
+    var same = datagram.count == expected;
+    for var index usize = 0; index < expected && index < datagram.count; index += 1 {
+        if buffer[index] != payload[index] { same = false; }
+    }
+    facts.bytes_match = same;
+    facts.family_ok = datagram.address.family == net.AF_INET;
+    facts.source_ip_ok = net.inet_ntop(datagram.address) == "127.0.0.1";
+    facts.source_port_ok = datagram.address.port == sender_port &&
+                           datagram.address.port != 0 && receiver_port != 0;
+
+    var sent usize = 0;
+    for sent < vec.len(reply) {
+        var wait = false;
+        try {
+            let count = net.sendto(socket,reply[sent:],vec.len(reply)-sent,0,
+                datagram.address);
+            if count == 0 { throw os.Error.NoProgress(sent); }
+            sent += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): { wait = true; }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if sent < vec.len(reply) && wait {
+            await a.writable(net.fd(socket));
+        }
+    }
+    facts.reply_sent = sent;
+    return facts;
+}
+
+async func sender(socket net.Socket, target net.Address, receiver_port u16,
+                  state Vec[i32], ticks Vec[i32], event_fd i32) SenderFacts throws os.Error {
+    defer { try { net.close(socket); } catch error os.Error {} }
+    var facts = SenderFacts(handshake_ok:false,sent:0,received:0,
+        reply_bytes_match:false,reply_ip_ok:false,reply_port_ok:false);
+    let payload = text.bytes("woozy-udp");
+    let expected = vec.len(payload);
+    let reply = text.bytes("udp-reply");
+    let reply_length = vec.len(reply);
+    let buffer = vec.make[u8](64,0);
+
+    // The receiver can only set these fields after a real recvfrom WouldBlock.
+    await a.readable(event_fd);
+    facts.handshake_ok = state[1] != 0 && ticks[0] > state[2];
+    // Even on a failed handshake, still send so the receiver can finish and
+    // the main task reports UDP_FAIL instead of hanging until the timeout.
+
+    var sent usize = 0;
+    for sent < expected {
+        var wait = false;
+        try {
+            let count = net.sendto(socket,payload[sent:],expected-sent,0,target);
+            if count == 0 { throw os.Error.NoProgress(sent); }
+            sent += count;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): { wait = true; }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if sent < expected && wait {
+            await a.writable(net.fd(socket));
+        }
+    }
+    facts.sent = sent;
+
+    var received = false;
+    var datagram = net.Received(count:0,address:net.any4(0));
+    for !received {
+        var wait = false;
+        try {
+            datagram = net.recvfrom(socket,buffer,vec.len(buffer),0);
+            received = true;
+        } catch error os.Error {
+            switch error {
+                case os.Error.WouldBlock(code,completed): { wait = true; }
+                case os.Error.Interrupted(code,completed): {}
+                default: throw error;
+            }
+        }
+        if !received && wait {
+            await a.readable(net.fd(socket));
+        }
+    }
+    facts.received = datagram.count;
+    var same = datagram.count == reply_length;
+    for var index usize = 0; index < reply_length && index < datagram.count; index += 1 {
+        if buffer[index] != reply[index] { same = false; }
+    }
+    facts.reply_bytes_match = same;
+    facts.reply_ip_ok = net.inet_ntop(datagram.address) == "127.0.0.1";
+    facts.reply_port_ok = datagram.address.port == receiver_port &&
+                          datagram.address.port != 0;
+    return facts;
+}
+
+async func main() i32 throws os.Error {
+    let receiver_socket = net.socket(net.AF_INET,
+        net.SOCK_DGRAM|net.SOCK_NONBLOCK|net.SOCK_CLOEXEC,0);
+    net.bind(receiver_socket,net.ip("127.0.0.1",0));
+    let receiver_address = net.getsockname(receiver_socket);
+
+    let sender_socket = net.socket(net.AF_INET,
+        net.SOCK_DGRAM|net.SOCK_NONBLOCK|net.SOCK_CLOEXEC,0);
+    net.bind(sender_socket,net.ip("127.0.0.1",0));
+    let sender_address = net.getsockname(sender_socket);
+
+    let ticks = vec.make[i32](1,0);
+    let state = vec.make[i32](4,0);
+    let signal = vec.make[u8](1,1);
+    let event = os.pipe(u32(os.O_CLOEXEC));
+    defer { try { os.close(event.read_end); } catch error os.Error {} }
+    defer { try { os.close(event.write_end); } catch error os.Error {} }
+
+    let receiver_task = receiver(receiver_socket,ticks,state,sender_address.port,
+        receiver_address.port);
+    let sender_task = sender(sender_socket,receiver_address,receiver_address.port,
+        state,ticks,os.fd(event.read_end));
+    let beat = heartbeat(ticks,state,os.fd(event.write_end),signal);
+    a.spawn(receiver_task);
+    a.spawn(sender_task);
+    a.spawn(beat);
+    let received = await receiver_task;
+    let sent = await sender_task;
+    await beat;
+
+    let payload = text.bytes("woozy-udp");
+    let reply = text.bytes("udp-reply");
+    var ok = receiver_address.family == net.AF_INET && receiver_address.port != 0;
+    ok = ok && sender_address.family == net.AF_INET && sender_address.port != 0;
+    ok = ok && received.would_block;
+    ok = ok && received.heartbeat_after > received.heartbeat_before;
+    ok = ok && received.count == vec.len(payload);
+    ok = ok && received.bytes_match;
+    ok = ok && received.family_ok;
+    ok = ok && received.source_ip_ok;
+    ok = ok && received.source_port_ok;
+    ok = ok && received.reply_sent == vec.len(reply);
+    ok = ok && sent.handshake_ok;
+    ok = ok && sent.sent == vec.len(payload);
+    ok = ok && sent.received == vec.len(reply);
+    ok = ok && sent.reply_bytes_match;
+    ok = ok && sent.reply_ip_ok;
+    ok = ok && sent.reply_port_ok;
+    ok = ok && ticks[0] >= 1;
+    if !ok {
+        io.println("UDP_FAIL");
+        return 1;
+    }
+    io.println("UDP_OK");
+    return 0;
+}
