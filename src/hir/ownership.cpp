@@ -10,6 +10,11 @@ namespace lang::hir {
 bool inout_data_type(const HirModule &, TypeId,
                      const std::set<uint64_t> &);
 namespace {
+// Shared by the standalone query and Classifier: a null scratch is created
+// only when a nominal member actually needs substitution.
+bool inout_data_type_impl(const HirModule &, TypeId,
+                          const std::set<uint64_t> &,
+                          std::optional<TypeContext> &);
 struct Problem {
   Source source;
   std::string code, message;
@@ -236,9 +241,17 @@ ValueKind provisional_kind(const Type &t) {
 // temporary back-edge result is never cached as a completed classification.
 class Classifier {
   const HirModule &m;
-  TypeContext scratch;
+  // Concrete member substitution may intern storage-only TypeIds. Keep the
+  // private copy lazy so scalar/string/Vector queries never clone the table.
+  std::optional<TypeContext> scratch;
   std::set<uint64_t> support_seen;
   size_t support_count = 0;
+
+  TypeContext &private_types() {
+    if (!scratch)
+      scratch.emplace(m.types);
+    return *scratch;
+  }
 
   struct Support {
     ValueKind kind = ValueKind::unsupported;
@@ -332,7 +345,7 @@ class Classifier {
                    {}};
     auto fields = [&](const auto &fs, std::optional<SymbolId> variant) {
       for (const auto &f : fs) {
-        auto concrete = substitute(f.type, sub, scratch);
+        auto concrete = substitute(f.type, sub, private_types());
         if (!m.types.find(concrete))
           throw std::invalid_argument(
               "concrete ownership member type was not interned publicly");
@@ -406,7 +419,7 @@ class Classifier {
     bool result = false;
     auto fields = [&](const auto &fs) {
       for (const auto &f : fs) {
-        auto concrete = substitute(f.type, sub, scratch);
+        auto concrete = substitute(f.type, sub, private_types());
         if (!m.types.find(concrete))
           throw std::invalid_argument(
               "concrete ownership member type was not interned publicly");
@@ -421,8 +434,7 @@ class Classifier {
   }
 
 public:
-  explicit Classifier(const HirModule &module)
-      : m(module), scratch(module.types) {}
+  explicit Classifier(const HirModule &module) : m(module) {}
   ValueOps run(TypeId id) {
     std::vector<ValueField> fields;
     auto support_result = support(id, 0, &fields);
@@ -508,7 +520,7 @@ public:
     }
     std::set<uint64_t> active;
     out.needs_drop = needs_drop(id, active, 0);
-    out.pod_inout = inout_data_type(m, id);
+    out.pod_inout = inout_data_type_impl(m, id, {}, scratch);
     return out;
   }
 };
@@ -535,6 +547,18 @@ class Analysis {
   // never a fabricated binding; only its genuine Temporary record is used.
   std::map<uint64_t, HirNodeId> switch_subjects;
   const HirFunction *fun = nullptr;
+  // Analysis runs only after type completion and never mutates the type table.
+  // Cache only complete, successful classify_value returns; recursive
+  // placeholders are internal to Classifier and are never inserted here.
+  // Producer and verifier each construct their own empty Analysis.
+  mutable std::map<uint64_t, ValueOps> classifications;
+  const ValueOps &classify(TypeId t) const {
+    auto known = classifications.find(t.value);
+    if (known != classifications.end())
+      return known->second;
+    ValueOps ops = classify_value(m, t); // throws before any insertion
+    return classifications.emplace(t.value, std::move(ops)).first->second;
+  }
   using State =
       std::map<uint64_t, unsigned>; // bit 1: live, bit 2: moved/uninitialized
   struct Edge {
@@ -552,7 +576,7 @@ class Analysis {
                           std::string msg) const {
     throw Problem{n(id).source, std::move(code), std::move(msg)};
   }
-  bool owned(TypeId t) const { return classify_value(m, t).needs_drop; }
+  bool owned(TypeId t) const { return classify(t).needs_drop; }
   static bool inert_function_value(const HirNode &n) {
     if (n.kind() != NodeKind::function_value)
       return false;
@@ -591,7 +615,7 @@ class Analysis {
     if (x.kind() == NodeKind::block || x.kind() == NodeKind::for_ ||
         x.kind() == NodeKind::for_in)
       scope_nodes[x.scope.value] = id;
-    auto ops = classify_value(m, x.type);
+    const auto &ops = classify(x.type);
     if (ops.kind == ValueKind::unsupported)
       issue(id, "E_CAPABILITY_UNAVAILABLE", ops.reason);
     // A noncapturing function value is classified as owning (C5) but has a
@@ -1704,7 +1728,7 @@ public:
       fun = f;
       auto sig = ty(m, f->signature);
       auto supported = [&](TypeId type) {
-        auto ops = classify_value(m, type);
+        const auto &ops = classify(type);
         if (ops.kind == ValueKind::unsupported)
           issue(f->body, "E_CAPABILITY_UNAVAILABLE", ops.reason);
       };
@@ -2006,12 +2030,22 @@ bool owning_value(const HirModule &m, TypeId root, std::stop_token stop) {
   return m.types.find(root) && drop(root, 0);
 }
 
-bool inout_data_type(const HirModule &m, TypeId root,
-                     const std::set<uint64_t> &parameters) {
-  // Substitution may intern storage-only member types. Keep a private copy so
-  // no local TypeId escapes and no reference into m.types is held across a
-  // possible growth of the context.
-  TypeContext types = m.types;
+namespace {
+bool inout_data_type_impl(const HirModule &m, TypeId root,
+                          const std::set<uint64_t> &parameters,
+                          std::optional<TypeContext> &scratch) {
+  // Substitution may intern storage-only member types. Keep a private context
+  // so no local TypeId escapes and no reference into m.types is held across a
+  // possible growth. Existing/public entries are looked up without cloning;
+  // the copy is created on the first substitution only.
+  auto find_type = [&](TypeId id) -> const Type * {
+    return scratch ? scratch->find(id) : m.types.find(id);
+  };
+  auto substitute_member = [&](TypeId id, const Substitutions &sub) {
+    if (!scratch)
+      scratch.emplace(m.types);
+    return substitute(id, sub, *scratch);
+  };
   struct ActiveNominal {
     uint64_t declaration;
     size_t function_depth;
@@ -2023,7 +2057,7 @@ bool inout_data_type(const HirModule &m, TypeId root,
       [&](TypeId id, size_t depth) -> size_t {
         if (depth > 128)
           return SIZE_MAX;
-        const auto *found = types.find(id);
+        const auto *found = find_type(id);
         if (!found)
           return SIZE_MAX;
         const Type t = *found;
@@ -2040,7 +2074,7 @@ bool inout_data_type(const HirModule &m, TypeId root,
       [&](TypeId id, bool member, size_t depth, size_t function_depth) {
         if (depth > 128)
           return false;
-        const auto *found = types.find(id);
+        const auto *found = find_type(id);
         if (!found)
           return false;
         const Type t = *found;
@@ -2087,7 +2121,7 @@ bool inout_data_type(const HirModule &m, TypeId root,
           sub.push_back({decl->params[i].symbol, t.type_args[i]});
         auto check = [&](const auto &fields) {
           for (const auto &f : fields) {
-            auto field = substitute(f.type, sub, types);
+            auto field = substitute_member(f.type, sub);
             if (!visit(field, true, depth + 1, function_depth))
               return false;
           }
@@ -2100,6 +2134,13 @@ bool inout_data_type(const HirModule &m, TypeId root,
         return ok;
       };
   return visit(root, false, 0, 0);
+}
+} // namespace
+
+bool inout_data_type(const HirModule &m, TypeId root,
+                     const std::set<uint64_t> &parameters) {
+  std::optional<TypeContext> scratch;
+  return inout_data_type_impl(m, root, parameters, scratch);
 }
 
 // Inout reuses each type's copy/drop; POD classification remains separate.
@@ -2127,9 +2168,18 @@ const char *inout_slot_reason(InoutSlot kind) {
 }
 InoutSlot inout_slot(const HirModule &m, TypeId root,
                      const std::set<uint64_t> &parameters) {
-  // Substitution may intern storage-only member types; the walk keeps its own
-  // TypeContext copy so no reference is held across a possible reallocation.
-  TypeContext types = m.types;
+  // Substitution may intern storage-only member types; keep a private context
+  // for those entries, created only when a nominal field needs replacement.
+  // Existing entries are read from m.types without cloning the whole table.
+  std::optional<TypeContext> scratch;
+  auto find_type = [&](TypeId id) -> const Type * {
+    return scratch ? scratch->find(id) : m.types.find(id);
+  };
+  auto substitute_member = [&](TypeId id, const Substitutions &sub) {
+    if (!scratch)
+      scratch.emplace(m.types);
+    return substitute(id, sub, *scratch);
+  };
   std::map<uint64_t, InoutSlot> memo;
   size_t visited = 0;
   std::function<InoutSlot(TypeId, bool, size_t)> visit =
@@ -2138,7 +2188,7 @@ InoutSlot inout_slot(const HirModule &m, TypeId root,
       return InoutSlot::unsupported;
     if (auto known = memo.find(id.value); known != memo.end())
       return known->second;
-    const auto *found = types.find(id);
+    const auto *found = find_type(id);
     if (!found)
       return InoutSlot::unsupported;
     const Type t = *found;
@@ -2218,7 +2268,7 @@ InoutSlot inout_slot(const HirModule &m, TypeId root,
       auto fields = [&](const auto &fs) {
         InoutSlot outcome = InoutSlot::allowed;
         for (const auto &f : fs) {
-          auto concrete = substitute(f.type, sub, types);
+          auto concrete = substitute_member(f.type, sub);
           auto nested = visit(concrete, true, depth + 1);
           if (nested != InoutSlot::allowed) {
             outcome = nested;

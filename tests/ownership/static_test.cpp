@@ -134,6 +134,137 @@ void facts(const HirModule &m) {
              has(pub, "E_CAPABILITY_UNAVAILABLE"),
          "unsupported ownership width published: " + diagnostics(cap) + diagnostics(pub));
 }
+std::string describe_types(const HirModule &m) {
+  std::string out;
+  for (uint64_t i = 1; i <= m.types.size(); ++i) {
+    const auto *t = m.types.find(TypeId{i});
+    need(t != nullptr, "public TypeContext entry disappeared");
+    out += std::to_string(i) + ':' + std::to_string(int(t->kind)) + ':' +
+           std::to_string(t->bits) + ':' +
+           std::to_string(t->declaration.value) + ':' +
+           std::to_string(t->binding.value) + ':' +
+           std::to_string(t->result.value) + ':' +
+           std::to_string(t->throws_type ? t->throws_type->value : 0) + ':' +
+           std::to_string(t->c_type) + '|';
+    for (auto p : t->parameters)
+      out += std::to_string(int(p.mode)) + ',' +
+             std::to_string(p.type.value) + ';';
+    out += '|';
+    for (auto a : t->type_args)
+      out += std::to_string(a.value) + ',';
+    out += '\n';
+  }
+  return out;
+}
+
+std::string describe_ops(const ValueOps &ops) {
+  std::string out = std::to_string(int(ops.kind)) + ':' +
+                    (ops.needs_drop ? '1' : '0') + ':' +
+                    (ops.pod_inout ? '1' : '0') + ':' + ops.reason + '|';
+  for (const auto &f : ops.fields)
+    out += std::to_string(f.variant ? f.variant->value : 0) + ',' +
+           std::to_string(f.field.value) + ',' + std::to_string(f.type.value) +
+           ';';
+  return out;
+}
+
+// Query results must not depend on the private scratch copy, and the public
+// TypeContext must stay byte-for-byte equivalent after every query. The
+// producer/verifier cache is exercised through an independent recomputation.
+void query_invariance_tests() {
+  auto m = accepted(
+      "struct Node[T] {value T;children Vec[Node[T]];} "
+      "struct Pair[T] {left T;right Vec[T];} "
+      "enum Choice {None;Some(value i32);} "
+      "func make[T](v T) Node[T] {return Node[T](value:v,children:[]);} "
+      "func echo[T](n Node[T]) Node[T] {let alias=n;return alias;} "
+      "func main() i32 {let n=make[i32](1);let p=Pair[i32](left:2,right:[3]);"
+      "let c=Choice.Some(value:4);let text=\"x\";let alias=n;"
+      "return alias.value+p.left-3;}");
+  std::set<uint64_t> parameters;
+  for (uint64_t i = 1; i <= m.types.size(); ++i)
+    if (m.types.find(TypeId{i})->kind == TypeKind::TypeParameter)
+      parameters.insert(m.types.find(TypeId{i})->declaration.value);
+  const auto before = describe_types(m);
+  for (uint64_t i = 1; i <= m.types.size(); ++i) {
+    const auto id = TypeId{i};
+    const auto first = classify_value(m, id);
+    const auto second = classify_value(m, id);
+    need(describe_ops(first) == describe_ops(second),
+         "classify_value is not deterministic for TypeId " +
+             std::to_string(i));
+    need(inout_slot(m, id, parameters) == inout_slot(m, id, parameters),
+         "inout_slot is not deterministic for TypeId " + std::to_string(i));
+    need(inout_data_type(m, id, parameters) ==
+             inout_data_type(m, id, parameters),
+         "inout_data_type is not deterministic for TypeId " +
+             std::to_string(i));
+  }
+  need(describe_types(m) == before,
+       "public TypeContext changed after successful queries");
+
+  // Unknown IDs and an incomplete nominal keep failing the same way and leave
+  // the public context untouched.
+  const TypeId unknown{m.types.size() + 1};
+  bool unknown_threw = false;
+  try {
+    (void)classify_value(m, unknown);
+  } catch (const std::invalid_argument &) {
+    unknown_threw = true;
+  }
+  need(unknown_threw, "classify_value accepted an unknown TypeId");
+  need(inout_slot(m, unknown) == InoutSlot::unsupported,
+       "inout_slot accepted an unknown TypeId");
+  need(!inout_data_type(m, unknown),
+       "inout_data_type accepted an unknown TypeId");
+  need(describe_types(m) == before,
+       "public TypeContext changed after failed queries");
+
+  auto incomplete = m;
+  const NominalDecl *generic_decl = nullptr;
+  for (const auto &d : incomplete.nominals)
+    if (d.params.size() == 1) {
+      generic_decl = &d;
+      break;
+    }
+  need(generic_decl != nullptr, "no generic nominal declaration to probe");
+  Type partial;
+  partial.kind = TypeKind::NominalStruct;
+  partial.declaration = generic_decl->symbol;
+  const auto partial_id = incomplete.types.intern(std::move(partial));
+  const auto partial_before = describe_types(incomplete);
+  bool incomplete_threw = false;
+  try {
+    (void)classify_value(incomplete, partial_id);
+  } catch (const std::invalid_argument &) {
+    incomplete_threw = true;
+  }
+  need(incomplete_threw, "classify_value accepted incomplete nominal arguments");
+  need(inout_slot(incomplete, partial_id) == InoutSlot::unsupported,
+       "inout_slot accepted incomplete nominal arguments");
+  need(!inout_data_type(incomplete, partial_id),
+       "inout_data_type accepted incomplete nominal arguments");
+  need(describe_types(incomplete) == partial_before,
+       "public TypeContext changed after incomplete nominal queries");
+
+  // Re-run both halves explicitly on a copy. The verifier must rebuild its own
+  // cache and reject a deliberately damaged published record.
+  auto produced = m;
+  auto made = detail::produce_ownership(produced, {});
+  need(made.success(), "independent ownership producer failed after queries");
+  auto verified = detail::verify_ownership(produced, {});
+  need(verified.success(),
+       "independent ownership verifier failed after queries: " +
+           diagnostics(verified));
+  auto damaged = produced;
+  need(!damaged.ownership.uses.empty(), "no ownership use to damage");
+  damaged.ownership.uses.pop_back();
+  auto rejected_damage = detail::verify_ownership(damaged, {});
+  need(!rejected_damage.success() && has(rejected_damage, "E_IR_INVALID") &&
+           rejected_damage.exit_code() == ExitCode::internal_error,
+       "damaged ownership record was accepted by the independent verifier");
+}
+
 const ExitPlan &exit(const HirModule &m, HirNodeId id, ExitKind k) {
   for (const auto &p : m.nodes[id.value].exits)
     if (p.kind == k)
@@ -2166,6 +2297,7 @@ int main(int argc, char **argv) {
     folded_constant_move_tests();
     flow_tests();
     recursive_value_tests();
+    query_invariance_tests();
     record_tests();
     local_index_borrow_tests();
     extra_tests();
