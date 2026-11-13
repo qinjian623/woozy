@@ -61,9 +61,14 @@ func main() i32 throws os.Error {
     same(inout state, "join empty/dot", paths.join("","."), ".");
 
     // The libstdc++ filesystem_error wording needs glibc errno text without
-    // linking libc; these lines are compared with generic_category in run.py.
-    let errno_cases Vec[i32] = [2,5,12,13,17,20,21,22,23,24,36,40,9999];
-    for code in errno_cases {
+    // linking libc; every value in 0..255 and the signed/unknown edges is
+    // compared with the real generic_category oracle in run.py.
+    for var code i32 = 0; code <= 255; code += 1 {
+        io.println("ERRNO\t"+strconv.format_i64(i64(code))+"\t"+
+            paths.errno_text(code));
+    }
+    let errno_edges Vec[i32] = [-1,9999,-2147483648,2147483647];
+    for code in errno_edges {
         io.println("ERRNO\t"+strconv.format_i64(i64(code))+"\t"+
             paths.errno_text(code));
     }

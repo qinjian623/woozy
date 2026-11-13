@@ -3,9 +3,11 @@
 
 Every canonical result is compared with a compiled std::filesystem::canonical
 oracle: successful spellings, the errno code and the exact filesystem_error
-text. The empty spelling follows canonical and reports EINVAL. A temporary
-project links the current selfhost modules; the prebuilt stage0 compiler builds
-the driver.
+text. The errno table is compared in order for the full 0..255 range and
+signed/unknown edges against the real generic_category text under LC_ALL=C.
+The empty spelling follows canonical and reports EINVAL. A temporary project
+links the current selfhost modules; the prebuilt stage0 compiler builds the
+driver.
 """
 from __future__ import annotations
 
@@ -171,15 +173,18 @@ def run(opt: str) -> tuple[int, int]:
                 actual_lines.append(line)
             elif line.startswith("ERRNO\t"):
                 actual_errno.append(line)
-        # The errno text table is compared with the local generic_category.
-        for line in sorted(set(expected_errno) - set(actual_errno)):
-            failed += 1
-            print(f"FAIL\terrno text missing: {line}")
-        for line in sorted(set(actual_errno) - set(expected_errno)):
-            failed += 1
-            print(f"FAIL\terrno text differs: {line}")
-        matched_errno = len(set(expected_errno) & set(actual_errno))
-        passed += matched_errno
+        # Every errno text, including the unused gaps and negative/unknown
+        # edges, is compared with the local generic_category in order.
+        matched_errno = 0
+        for index in range(max(len(expected_errno), len(actual_errno))):
+            want = expected_errno[index] if index < len(expected_errno) else "<missing>"
+            got = actual_errno[index] if index < len(actual_errno) else "<missing>"
+            if got == want:
+                passed += 1
+                matched_errno += 1
+            else:
+                failed += 1
+                print(f"FAIL\terrno text [{index}]\n  oracle={want}\n  wzcc  ={got}")
         # Every canonical result, including the full filesystem_error text, is
         # compared with the real C++ oracle in order.
         for index in range(max(len(expected_lines), len(actual_lines))):
@@ -197,8 +202,8 @@ def run(opt: str) -> tuple[int, int]:
             print(f"FAIL\tprogram exit {result.returncode}")
         print(
             f"paths --opt {opt}: passed={passed} failed={failed} "
-            f"checks={passed + failed} (join=16 errno={matched_errno} "
-            f"canonical={len(cases)})"
+            f"checks={passed + failed} (join=16 errno={matched_errno}/"
+            f"{len(expected_errno)} canonical={len(cases)})"
         )
         return passed, failed
     finally:
