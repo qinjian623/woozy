@@ -1,0 +1,232 @@
+// Tests only: staged beside state/errors/common, never installed as sema algorithms.
+package sema;
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/source" as sources;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/text" as text;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func empty_checker(module hir.HirModule) Checker { return Checker(m:module,occurrences:[],definitions:[],signatures:[],trait_signature_context:[],parameters:[],locals:[],constants:[],evaluating:[],function:0,scope:0,cleanup_depth:0,async_function:false,current_result:0,current_async_error:option.Option[usize].None,unsafe_depth:0,c_named_types:[],unit:0,boolean:0,i64_type:0,loops:[],break_targets:[],nominal_ids:[],self_types:[],generic_params:[],bounds:[],trait_parameters:[],bodies:[],template_ids:[],instance_cache:[],instantiation_depth:0,constraint_depth:0,trait_results:[],active_constraints:[],active_trait_bounds:[],instantiated_nodes:0,active_params:[],signature_parameters:[],async_functions:[],closures:[],capture_by_origin:[],capture_by_local:[],current_captures:[],weak_validated:[],nominal_fields_ready:false); }
+func require(ok bool,label string,count inout usize) throws Error {
+    count+=1;if !ok {throw internal_error("helper test failed: "+label);}
+}
+func mode_number(value model.ParamMode)u32 {
+    switch value {case model.ParamMode.Ordinary:return 0;case model.ParamMode.Inout:return 1;case model.ParamMode.Move:return 2;}
+}
+func find_symbol(state inout Checker,name string)usize throws Error {
+    for value in state.m.resolved.symbols {if value.name==name {return value.id;}}
+    throw internal_error("test symbol missing: "+name);
+}
+func symbol_ref(state inout Checker,name string)model.NodeRef throws Error {
+    let id=find_symbol(inout state,name);let value=symbol(inout state,id);
+    switch value.definition {case option.Option.Some(r):return r;case option.Option.None:throw internal_error("test definition missing");}
+}
+func option_index(value option.Option[usize])usize throws Error {
+    switch value {case option.Option.Some(id):return id;case option.Option.None:throw internal_error("expected Some index");}
+}
+func same_span(a model.Span,b model.Span)bool {return a.snapshot==b.snapshot&&a.begin_byte==b.begin_byte&&a.end_byte==b.end_byte;}
+func rejected_matches(error Error,code string,message string,span model.Span,unsupported bool)bool {
+    switch error {
+        case Error.Rejected(d,failure): {
+            var kind_ok=false;switch failure {case model.FailureKind.Unsupported:kind_ok=unsupported;case model.FailureKind.Source:kind_ok=!unsupported;default:{}}
+            return kind_ok&&d.code==code&&d.message==message&&d.phase=="type"&&d.severity=="error"&&d.has_primary&&same_span(d.primary,span);
+        }
+        default:return false;
+    }
+}
+func support_matches(error Error,message string)bool {
+    switch error {case Error.Support(support):{switch support {case model.SupportError.Invalid(text):return text==message;default:return false;}}default:return false;}
+}
+func call_support(callback func()usize throws model.SupportError)usize throws model.SupportError{return callback();}
+func bridge_error(original Error) throws Error {
+    let error_slot=vec.empty[Error]();
+    let callback=func()usize throws model.SupportError {
+        try {throw original;}
+        catch error Error {vec.push(error_slot,error);throw model.SupportError.Invalid("sema callback failed");}
+    };
+    try {call_support(callback);}
+    catch error model.SupportError {
+        if vec.len(error_slot)>0 {throw error_slot[0];}
+        throw Error.Support(error);
+    }
+}
+func tests()usize throws Error {
+    let text_value="package p; struct Secret {} pub async func f()i32{return 1;} func ident[T](value T)T{return value;} func take(a move i32,b inout i32,c i32){} func g(arg inout i32,own move i32)i32{let x i32=1;take(((move own)),(((inout arg))),((x)));return (((x)));} func use_fn(cb func(inout i32,move i32)Unit){}";
+    let snapshot=sources.snapshot(2,2,2,"/tmp/sema-common/input.wz",text.bytes(text_value));
+    let parsed=parser.parse(lexer.lex(snapshot));
+    let other=sources.snapshot(1,1,1,"/tmp/sema-common/other.wz",text.bytes("package q;"));
+    var project=model.empty_project();project.entry=1;
+    project.files=[parser.parse(lexer.lex(other)),parsed];
+    project.modules=[model.Module(id:0,logical_path:"q",identity:"q",package_name:"q",files:[0],imports:[],foreign_exports:[],binding:option.Option[model.BindingModuleRef].None,c_binding:option.Option[usize].None),model.Module(id:1,logical_path:"p",identity:"p",package_name:"p",files:[1],imports:[],foreign_exports:[],binding:option.Option[model.BindingModuleRef].None,c_binding:option.Option[usize].None)];
+    let resolved=resolve.resolve_project(project);var count usize=0;
+    var parse_ok=false;switch parsed.state {case model.PhaseState.Complete:parse_ok=true;default:{}}
+    require(parse_ok&&resolved.has_value&&vec.len(resolved.diagnostics)==0,"real Source parser/resolver",inout count);
+    var state=empty_checker(hir.empty_module(resolved.value,1,model.CheckConfig(backend:model.Backend.Native,word_bits:64)));
+    for value in resolved.value.symbols {switch value.definition {case option.Option.Some(r):vec.push(state.definitions,NodeSymbolEntry(key:node_key(r),symbol:value.id));case option.Option.None:{}}}
+    for value in resolved.value.occurrences {vec.push(state.occurrences,NodeSymbolEntry(key:node_key(value.source),symbol:value.symbol));}
+    let f=symbol_ref(inout state,"f");let g=symbol_ref(inout state,"g");let location=source(inout state,g);
+    require(parsed_file(inout state,g).lexed.source.id==2,"module-local file to global parse",inout count);
+    require(token(inout state,f,0)=="pub"&&first(inout state,f)=="async"&&first(inout state,g)=="func","token/pub",inout count);
+    require(has_async_marker(inout state,f)&&!has_async_marker(inout state,g),"async marker",inout count);
+    require(definition(inout state,g)==find_symbol(inout state,"g"),"definition",inout count);
+    require(at(g,parsed.root).module==1&&at(g,parsed.root).file==0,"at identity",inout count);
+    require(location.span.snapshot==2&&location.node.node==g.node,"source identity",inout count);
+    let arg=symbol_ref(inout state,"arg");let own=symbol_ref(inout state,"own");let ordinary=symbol_ref(inout state,"c");
+    require(mode_number(mode(inout state,arg))==1&&mode_number(mode(inout state,own))==2&&mode_number(mode(inout state,ordinary))==0,"declaration parameter modes",inout count);
+    var named_modes usize=0;var move_args usize=0;var inout_args usize=0;var ordinary_args usize=0;var found_parenthesized=false;
+    for var id usize=0;id<vec.len(parsed.nodes);id+=1 {
+        let r=model.NodeRef(module:1,file:0,node:id);let n=parsed.nodes[id];
+        switch n.kind {
+            case model.AstKind.Parameter: {
+                let spelling=token(inout state,r,0);
+                if spelling=="inout" {require(mode_number(mode(inout state,r))==1,"unnamed inout parameter",inout count);named_modes+=1;}
+                if spelling=="move" {require(mode_number(mode(inout state,r))==2,"unnamed move parameter",inout count);named_modes+=1;}
+            }
+            case model.AstKind.Argument: {
+                let mode=argument_mode(inout state,r);let requested=mode_number(mode.requested);
+                if requested==2 {move_args+=1;require(mode.has_marker&&token(inout state,mode.marked,0)=="move"&&token(inout state,mode.value,0)=="own","move argument unwrap",inout count);}
+                if requested==1 {inout_args+=1;require(mode.has_marker&&token(inout state,mode.marked,0)=="inout"&&token(inout state,mode.value,0)=="arg","inout argument unwrap",inout count);}
+                if requested==0 {ordinary_args+=1;require(!mode.has_marker&&mode.marked.node==mode.value.node,"ordinary argument marker",inout count);}
+            }
+            case model.AstKind.Parenthesized: {
+                let occ=occurrence(inout state,r);
+                switch occ {case option.Option.Some(symbol_id):{if symbol(inout state,symbol_id).name=="x" {found_parenthesized=true;}}case option.Option.None:{}}
+            }
+            default:{}
+        }
+    }
+    require(named_modes==2&&move_args==1&&inout_args==1&&ordinary_args==1&&found_parenthesized,"mode/occurrence coverage",inout count);
+    require(rejected_matches(reject(inout state,g,"call error","E_CALL_ARGUMENT"),"E_CALL_ARGUMENT","call error",location.span,false),"source rejection",inout count);
+    require(rejected_matches(unavailable(inout state,g,"feature"),"E_CAPABILITY_UNAVAILABLE","feature",location.span,true),"unsupported rejection",inout count);
+    require(rejected_matches(reject_source(location,"custom","E_TYPE_MISMATCH"),"E_TYPE_MISMATCH","custom",location.span,false),"source-only rejection",inout count);
+    let private_id=find_symbol(inout state,"Secret");let leak=private_type_leak(inout state,g,private_id);
+    require(rejected_matches(leak,"E_PRIVATE_TYPE_LEAK","public interface uses private type: Secret",location.span,false),"private leak primary",inout count);
+    switch leak {case Error.Rejected(d,failure):{let declaration=symbol(inout state,private_id).declaration;switch declaration {case option.Option.Some(span):require(vec.len(d.related)==1&&same_span(d.related[0].span,span)&&d.related[0].message=="private type declaration","private leak related",inout count);case option.Option.None:throw internal_error("no private declaration");}}default:throw internal_error("wrong private leak error");}
+    let unit=scalar(inout state,model.TypeKind.Unit,0);let boolean=scalar(inout state,model.TypeKind.Bool,0);let i64_id=scalar(inout state,model.TypeKind.SignedInt,64);
+    state.unit=unit;state.boolean=boolean;state.i64_type=i64_id;
+    require(unit==1&&boolean==2&&i64_id==3,"initial intern ordering",inout count);
+    let i8_id=scalar(inout state,model.TypeKind.SignedInt,8);let u8_id=scalar(inout state,model.TypeKind.UnsignedInt,8);let u64_id=scalar(inout state,model.TypeKind.UnsignedInt,64);let isize=scalar(inout state,model.TypeKind.Isize,0);
+    require(integer(inout state,i8_id)&&!integer(inout state,boolean)&&signed_(inout state,i8_id)&&!signed_(inout state,u8_id),"integer/sign",inout count);
+    require(width(inout state,isize)==64,"target width64",inout count);state.m.config.word_bits=32;
+    require(width(inout state,isize)==32,"target width32",inout count);state.m.config.word_bits=64;
+    require(bigint.format_decimal(modulus(inout state,i8_id))=="256","modulus",inout count);
+    require(bigint.format_decimal(wrap(inout state,bigint.from_i64(-129),i8_id))=="127"&&bigint.format_decimal(wrap(inout state,bigint.from_i64(-1),u8_id))=="255","signed/unsigned wrap",inout count);
+    require(bits(inout state,bigint.from_i64(-128),i8_id)==128&&bits(inout state,bigint.shift_left(bigint.from_i64(1),130),u64_id)==0,"bits exact modulo",inout count);
+    range(inout state,g,bigint.from_i64(-128),i8_id);range(inout state,g,bigint.from_i64(127),i8_id);
+    var rejected=false;try {range(inout state,g,bigint.from_i64(128),i8_id);}catch error Error {rejected=rejected_matches(error,"E_TYPE_MISMATCH","integer constant is outside the target type range",location.span,false);}
+    require(rejected,"range message/span",inout count);
+    let literal=int_literal(inout state,g,bigint.from_i64(-128),i8_id);
+    require(literal.id==0&&literal.value.type_id==i8_id&&state.m.nodes[0].scope==0&&same_span(state.m.nodes[0].source.span,location.span),"int literal node",inout count);
+    switch state.m.nodes[0].data {case hir.NodeData.IntegerLiteral(value):require(value.decimal=="-128"&&value.bits==128,"integer literal payload",inout count);default:throw internal_error("integer payload kind");}
+    var context_rejected=false;try {int_literal(inout state,g,bigint.from_i64(1),boolean);}catch error Error {context_rejected=rejected_matches(error,"E_TYPE_MISMATCH","integer literal requires an integer context",location.span,false);}
+    require(context_rejected,"literal context message",inout count);
+    let children=vec.empty[usize]();vec.push(children,literal.id);
+    let next=node(inout state,g,unit,hir.NodeData.Noop(value:hir.Noop()),children);children[0]=99;
+    require(next==1&&state.m.nodes[next].children[0]==0&&vec.len(state.m.nodes[next].errors)==0&&vec.len(state.m.nodes[next].exits)==0,"node ID/order/children isolation",inout count);
+    var malformed=model.empty_type(model.TypeKind.SignedInt);malformed.bits=7;
+    var intern_rejected=false;try {intern_type(inout state,malformed);}catch error Error {intern_rejected=support_matches(error,"invalid canonical type shape/reference");}
+    require(intern_rejected,"intern types to Support",inout count);
+    var width_rejected=false;try {width(inout state,boolean);}catch error Error {width_rejected=support_matches(error,"type has no numeric width");}
+    require(width_rejected,"width types to Support",inout count);
+    var type_parameter=model.empty_type(model.TypeKind.TypeParameter);type_parameter.declaration=find_symbol(inout state,"T");let parameter_id=intern_type(inout state,type_parameter);
+    var vector=model.empty_type(model.TypeKind.Vec);vector.type_args=[parameter_id];let vector_id=intern_type(inout state,vector);
+    let concrete=substitute_type(inout state,vector_id,[model.Substitution(symbol:type_parameter.declaration,type_id:i8_id)]);
+    require(lookup_type(inout state,concrete).type_args[0]==i8_id,"substitute wrapper",inout count);
+    var sub_rejected=false;try {substitute_type(inout state,0,[]);}catch error Error {switch error {case Error.Support(support):sub_rejected=true;default:{}}}
+    require(sub_rejected,"substitute errors wrapped",inout count);
+    var callback_rejected=false;try {bridge_error(leak);}catch error Error {callback_rejected=rejected_matches(error,"E_PRIVATE_TYPE_LEAK","public interface uses private type: Secret",location.span,false);switch error {case Error.Rejected(d,failure):callback_rejected=callback_rejected&&vec.len(d.related)==1;default:{}}}
+    require(callback_rejected,"callback error slot preserves code/span/related",inout count);
+    checker_cell_tests(inout state,leak,location.span,inout count);
+    return count;
+}
+// An ordinary helper that really interns through the separate inout Context.
+// It is not a stub for source_constant_value and never claims to evaluate it.
+func invoke_cell_context(context inout types.Context,
+    callback func()usize throws model.SupportError, helper_failure bool,
+    observed Vec[usize])usize throws model.SupportError {
+    let callback_type=callback();
+    // Deliberately detach AFTER callback, then append through the helper ctx.
+    // This makes the final state.m.types=context assignment observable.
+    context=types.clone_context(context);
+    var vector=model.empty_type(model.TypeKind.Vec);vector.type_args=[callback_type];
+    var result usize=0;
+    try {result=types.intern(inout context,vector);}
+    catch error types.Error {throw support_from_type_error(error);}
+    observed[1]=result;
+    if helper_failure {throw model.SupportError.Limit("cell helper error");}
+    return result;
+}
+func checker_cell_bridge(state inout Checker,kind model.TypeKind,bits u32,
+    owner usize,parameters Vec[hir.Parameter],callback_failure bool,
+    helper_failure bool,original Error,observed Vec[usize])usize throws Error {
+    let cell=vec.make[Checker](1,state);
+    var context=state.m.types;
+    let error_slot=vec.empty[Error]();
+    let callback=func()usize throws model.SupportError {
+        try {
+            let result=scalar(inout cell[0],kind,bits);
+            cell[0].function=owner;
+            let table=vec.empty[ParametersEntry]();
+            vec.push(table,ParametersEntry(owner:owner,values:parameters));
+            cell[0].parameters=table;
+            observed[0]=result;
+            if callback_failure {throw original;}
+            return result;
+        }catch error Error {
+            vec.push(error_slot,error);
+            throw model.SupportError.Invalid("sema callback failed");
+        }
+    };
+    var value usize=0;
+    var helper_error=option.Option[model.SupportError].None;
+    try {value=invoke_cell_context(inout context,callback,helper_failure,observed);}
+    catch error model.SupportError {helper_error=option.Option[model.SupportError].Some(error);}
+    // Restore BOTH paths before rethrow. Reversing these loses helper ctx edits.
+    state=cell[0];
+    state.m.types=context;
+    if vec.len(error_slot)>0 {throw error_slot[0];}
+    switch helper_error {
+        case option.Option.Some(error):throw Error.Support(error);
+        case option.Option.None:{}
+    }
+    return value;
+}
+func checker_cell_tests(state inout Checker,original Error,span model.Span,
+    count inout usize) throws Error {
+    let f=find_symbol(inout state,"f");let g=find_symbol(inout state,"g");let take=find_symbol(inout state,"take");
+    let arg=find_symbol(inout state,"arg");let own=find_symbol(inout state,"own");
+    let a=find_symbol(inout state,"a");let b=find_symbol(inout state,"b");let c=find_symbol(inout state,"c");
+    let before=types.size(state.m.types);let observed=vec.make[usize](2,0);
+    let normal=checker_cell_bridge(inout state,model.TypeKind.Float,32,f,[],false,false,original,observed);
+    require(state.function==f,"cell scalar retained normal",inout count);
+    require(vec.len(state.parameters)==1&&state.parameters[0].owner==f&&vec.len(state.parameters[0].values)==0,"cell table replacement retained normal",inout count);
+    require(observed[0]==before+1&&normal==before+2&&observed[1]==normal&&types.size(state.m.types)==before+2,"cell TypeId and helper context retained normal",inout count);
+    let normal_type=lookup_type(inout state,normal);let scalar_type=lookup_type(inout state,observed[0]);
+    require(model.type_kind_id(scalar_type.kind)==model.type_kind_id(model.TypeKind.Float)&&scalar_type.bits==32&&normal_type.type_args[0]==observed[0],"cell/context types coherent normal",inout count);
+    let error_before=types.size(state.m.types);let error_observed=vec.make[usize](2,0);var retained_error=false;
+    try {checker_cell_bridge(inout state,model.TypeKind.SignedInt,16,g,[hir.Parameter(symbol:arg,label:"arg"),hir.Parameter(symbol:own,label:"own")],true,false,original,error_observed);}
+    catch error Error {retained_error=rejected_matches(error,"E_PRIVATE_TYPE_LEAK","public interface uses private type: Secret",span,false);switch error {case Error.Rejected(d,failure):retained_error=retained_error&&vec.len(d.related)==1;default:{}}}
+    require(retained_error,"cell callback original error retained",inout count);
+    require(state.function==g&&vec.len(state.parameters)==1&&state.parameters[0].owner==g&&state.parameters[0].values[1].symbol==own,"cell scalar/table retained callback error",inout count);
+    require(error_observed[0]==error_before+1&&error_observed[1]==0&&types.size(state.m.types)==error_before+1&&lookup_type(inout state,error_observed[0]).bits==16,"cell types retained callback error",inout count);
+    let helper_before=types.size(state.m.types);let helper_observed=vec.make[usize](2,0);var helper_error=false;
+    try {checker_cell_bridge(inout state,model.TypeKind.UnsignedInt,16,take,[hir.Parameter(symbol:a,label:"a"),hir.Parameter(symbol:b,label:"b"),hir.Parameter(symbol:c,label:"c")],false,true,original,helper_observed);}
+    catch error Error {switch error {case Error.Support(support):{switch support {case model.SupportError.Limit(message):helper_error=message=="cell helper error";default:{}}}default:{}}}
+    require(helper_error,"cell helper own Support preserved",inout count);
+    require(state.function==take&&state.parameters[0].owner==take&&vec.len(state.parameters[0].values)==3&&state.parameters[0].values[2].symbol==c,"cell scalar/table retained helper error",inout count);
+    require(helper_observed[0]==helper_before+1&&helper_observed[1]==helper_before+2&&types.size(state.m.types)==helper_before+2&&lookup_type(inout state,helper_observed[1]).type_args[0]==helper_observed[0],"cell detached helper context restored on error",inout count);
+}
+
+pub func run_common_tests()i32 throws os.Error {
+    try {let count=tests();io.println("COMMON_HELPERS passed="+strconv.format_u64(u64(count))+" failed=0");return 0;}
+    catch error Error {switch error {case Error.Support(support):{switch support {case model.SupportError.Invalid(message):io.eprintln(message);case model.SupportError.Limit(message):io.eprintln(message);}}case Error.Rejected(d,failure):io.eprintln(d.code+": "+d.message);}return 1;}
+}

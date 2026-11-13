@@ -1,0 +1,1366 @@
+// Complete field-order fingerprint of a HirModule.
+//
+// The walk visits every stored field in published declaration order and folds
+// values into a 64-bit hash.  It exists only for the hirclone tests: it is how
+// the tests show that a clone carries every value and how a single Vec mutation
+// is observed.  Production code never uses this walker.
+//
+// The order below is the order used by oracle.cpp, so the two probe reports can
+// be compared line by line.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub func mix(seed u64, value u64) u64 {
+    var state = seed ^ (value + 0x9e3779b97f4a7c15);
+    state = (state ^ (state >> 30)) * 0xbf58476d1ce4e5b9;
+    state = (state ^ (state >> 27)) * 0x94d049bb133111eb;
+    return state ^ (state >> 31);
+}
+
+func mix_bool(seed u64, value bool) u64 {
+    if value {
+        return mix(seed, 1);
+    }
+    return mix(seed, 0);
+}
+
+func mix_string(seed u64, value string) u64 {
+    var state = mix(mix(seed, u64(text.len(value))), u64(text.byte_len(value)));
+    for rune in value {
+        state = mix(state, u64(rune));
+    }
+    return state;
+}
+
+func mix_usizes(seed u64, values Vec[usize]) u64 {
+    var state = mix(seed, u64(vec.len(values)));
+    for value in values {
+        state = mix(state, u64(value));
+    }
+    return state;
+}
+
+func mix_u32s(seed u64, values Vec[u32]) u64 {
+    var state = mix(seed, u64(vec.len(values)));
+    for value in values {
+        state = mix(state, u64(value));
+    }
+    return state;
+}
+
+func mix_u64s(seed u64, values Vec[u64]) u64 {
+    var state = mix(seed, u64(vec.len(values)));
+    for value in values {
+        state = mix(state, value);
+    }
+    return state;
+}
+
+func mix_bytes(seed u64, values Vec[u8]) u64 {
+    var state = mix(seed, u64(vec.len(values)));
+    for value in values {
+        state = mix(state, u64(value));
+    }
+    return state;
+}
+
+func mix_strings(seed u64, values Vec[string]) u64 {
+    var state = mix(seed, u64(vec.len(values)));
+    for value in values {
+        state = mix_string(state, value);
+    }
+    return state;
+}
+
+// ---------------------------------------------------------------------------
+// Enum ordinals.
+// ---------------------------------------------------------------------------
+
+func phase_state_id(value model.PhaseState) u64 {
+    switch value {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_kind_id(value model.FailureKind) u64 {
+    switch value {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func param_mode_id(value model.ParamMode) u64 {
+    switch value {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func backend_id(value model.Backend) u64 {
+    switch value {
+        case model.Backend.Native: return 0;
+        case model.Backend.Python: return 1;
+    }
+}
+
+func c_type_kind_id(value model.CTypeKind) u64 {
+    switch value {
+        case model.CTypeKind.Scalar: return 0;
+        case model.CTypeKind.Pointer: return 1;
+        case model.CTypeKind.Buffer: return 2;
+        case model.CTypeKind.Named: return 3;
+    }
+}
+
+func c_decl_kind_id(value model.CDeclKind) u64 {
+    switch value {
+        case model.CDeclKind.Record: return 0;
+        case model.CDeclKind.Resource: return 1;
+        case model.CDeclKind.Callback: return 2;
+        case model.CDeclKind.Opaque: return 3;
+    }
+}
+
+func foreign_export_kind_id(value model.ForeignExportKind) u64 {
+    switch value {
+        case model.ForeignExportKind.Type: return 0;
+        case model.ForeignExportKind.Value: return 1;
+        case model.ForeignExportKind.Function: return 2;
+    }
+}
+
+func unary_op_id(value hir.UnaryOp) u64 {
+    switch value {
+        case hir.UnaryOp.Negate: return 0;
+        case hir.UnaryOp.LogicalNot: return 1;
+        case hir.UnaryOp.BitNot: return 2;
+    }
+}
+
+func binary_op_id(value hir.BinaryOp) u64 {
+    switch value {
+        case hir.BinaryOp.Add: return 0;
+        case hir.BinaryOp.Subtract: return 1;
+        case hir.BinaryOp.Multiply: return 2;
+        case hir.BinaryOp.Divide: return 3;
+        case hir.BinaryOp.Remainder: return 4;
+        case hir.BinaryOp.ShiftLeft: return 5;
+        case hir.BinaryOp.ShiftRight: return 6;
+        case hir.BinaryOp.BitAnd: return 7;
+        case hir.BinaryOp.BitOr: return 8;
+        case hir.BinaryOp.BitXor: return 9;
+        case hir.BinaryOp.Equal: return 10;
+        case hir.BinaryOp.NotEqual: return 11;
+        case hir.BinaryOp.Less: return 12;
+        case hir.BinaryOp.LessEqual: return 13;
+        case hir.BinaryOp.Greater: return 14;
+        case hir.BinaryOp.GreaterEqual: return 15;
+    }
+}
+
+func logical_op_id(value hir.LogicalOp) u64 {
+    switch value {
+        case hir.LogicalOp.And: return 0;
+        case hir.LogicalOp.Or: return 1;
+    }
+}
+
+func callee_kind_id(value hir.CalleeKind) u64 {
+    switch value {
+        case hir.CalleeKind.Direct: return 0;
+        case hir.CalleeKind.FunctionValue: return 1;
+        case hir.CalleeKind.Foreign: return 2;
+        case hir.CalleeKind.System: return 3;
+        case hir.CalleeKind.CForeign: return 4;
+    }
+}
+
+func foreign_access_kind_id(value hir.ForeignAccessKind) u64 {
+    switch value {
+        case hir.ForeignAccessKind.PropertyRead: return 0;
+        case hir.ForeignAccessKind.PropertyPlace: return 1;
+        case hir.ForeignAccessKind.IndexRead: return 2;
+        case hir.ForeignAccessKind.IndexPlace: return 3;
+        case hir.ForeignAccessKind.SliceRead: return 4;
+        case hir.ForeignAccessKind.SlicePlace: return 5;
+    }
+}
+
+func owner_kind_id(value hir.OwnerKind) u64 {
+    switch value {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func cleanup_kind_id(value hir.CleanupKind) u64 {
+    switch value {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func use_kind_id(value hir.UseKind) u64 {
+    switch value {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func exit_kind_id(value hir.ExitKind) u64 {
+    switch value {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Option values.
+// ---------------------------------------------------------------------------
+
+func mix_option_usize(seed u64, value option.Option[usize]) u64 {
+    switch value {
+        case option.Option.Some(item): return mix(mix(seed, 1), u64(item));
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func mix_option_u32(seed u64, value option.Option[u32]) u64 {
+    switch value {
+        case option.Option.Some(item): return mix(mix(seed, 1), u64(item));
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func mix_option_string(seed u64, value option.Option[string]) u64 {
+    switch value {
+        case option.Option.Some(item): return mix_string(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_span(seed u64, value model.Span) u64 {
+    var state = mix(seed, value.snapshot);
+    state = mix(state, value.begin_byte);
+    return mix(state, value.end_byte);
+}
+
+func mix_option_span(seed u64, value option.Option[model.Span]) u64 {
+    switch value {
+        case option.Option.Some(item): return fp_span(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_position(seed u64, value model.Position) u64 {
+    return mix(mix(seed, value.line), value.character);
+}
+
+func fp_boundary(seed u64, value model.Boundary) u64 {
+    return fp_position(mix(seed, value.byte), value.position);
+}
+
+func fp_node_ref(seed u64, value model.NodeRef) u64 {
+    var state = mix(mix(seed, u64(value.module)), u64(value.file));
+    return mix(state, u64(value.node));
+}
+
+func mix_option_node_ref(seed u64, value option.Option[model.NodeRef]) u64 {
+    switch value {
+        case option.Option.Some(item): return fp_node_ref(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_foreign_export_ref(seed u64, value model.ForeignExportRef) u64 {
+    return mix(mix(seed, u64(value.module)), u64(value.index));
+}
+
+func mix_option_foreign_export_ref(seed u64,
+        value option.Option[model.ForeignExportRef]) u64 {
+    switch value {
+        case option.Option.Some(item):
+            return fp_foreign_export_ref(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_source(seed u64, value model.Source) u64 {
+    var state = mix(mix(mix(seed, value.file_id), value.revision_id), value.id);
+    state = mix_string(state, value.path);
+    state = mix_bytes(state, value.original);
+    state = mix_bytes(state, value.normalized);
+    state = mix_u64s(state, value.offsets);
+    state = mix(state, u64(vec.len(value.boundaries)));
+    for boundary in value.boundaries {
+        state = fp_boundary(state, boundary);
+    }
+    state = mix_bool(state, value.valid);
+    state = mix(mix(state, value.error_byte), value.error_length);
+    return mix_string(state, value.error_message);
+}
+
+func fp_related(seed u64, value model.Related) u64 {
+    return mix_string(fp_span(seed, value.span), value.message);
+}
+
+func fp_fixit(seed u64, value model.Fixit) u64 {
+    var state = fp_span(seed, value.span);
+    state = mix_string(state, value.replacement);
+    return mix(state, value.revision);
+}
+
+func fp_diagnostic(seed u64, value model.Diagnostic) u64 {
+    var state = mix_string(mix_string(mix_string(mix_string(seed, value.code),
+        value.phase), value.severity), value.message);
+    state = mix_bool(state, value.has_primary);
+    state = fp_span(state, value.primary);
+    state = mix(state, u64(vec.len(value.related)));
+    for related in value.related {
+        state = fp_related(state, related);
+    }
+    state = mix(state, u64(vec.len(value.fixits)));
+    for fixit in value.fixits {
+        state = fp_fixit(state, fixit);
+    }
+    state = mix_strings(state, value.notes);
+    state = mix_bool(state, value.has_expected_type);
+    state = mix_string(state, value.expected_type);
+    state = mix_bool(state, value.has_actual_type);
+    return mix_string(state, value.actual_type);
+}
+
+func fp_trivia(seed u64, value model.Trivia) u64 {
+    var state = mix(seed, u64(model.trivia_kind_id(value.kind)));
+    state = fp_span(state, value.span);
+    return mix_string(state, value.spelling);
+}
+
+func fp_token(seed u64, value model.Token) u64 {
+    var state = mix(seed, u64(model.token_kind_id(value.kind)));
+    state = fp_span(state, value.span);
+    state = mix_string(state, value.spelling);
+    state = mix(state, u64(vec.len(value.leading_trivia)));
+    for trivia in value.leading_trivia {
+        state = fp_trivia(state, trivia);
+    }
+    state = mix_bool(state, value.has_string_value);
+    return mix_string(state, value.string_value);
+}
+
+func fp_lex_result(seed u64, value model.LexResult) u64 {
+    var state = mix(seed, phase_state_id(value.state));
+    state = mix(state, failure_kind_id(value.failure));
+    state = fp_source(state, value.source);
+    state = mix(state, u64(vec.len(value.tokens)));
+    for token in value.tokens {
+        state = fp_token(state, token);
+    }
+    state = mix(state, u64(vec.len(value.diagnostics)));
+    for diagnostic in value.diagnostics {
+        state = fp_diagnostic(state, diagnostic);
+    }
+    return mix_bool(state, value.has_value);
+}
+
+func fp_ast_node(seed u64, value model.AstNode) u64 {
+    var state = mix(seed, u64(model.ast_kind_id(value.kind)));
+    state = fp_span(state, value.span);
+    state = mix(mix(state, u64(value.token_begin)), u64(value.token_end));
+    state = mix_usizes(state, value.children);
+    return mix_bool(state, value.recovered);
+}
+
+func fp_parse_result(seed u64, value model.ParseResult) u64 {
+    var state = mix(seed, phase_state_id(value.state));
+    state = mix(state, failure_kind_id(value.failure));
+    state = fp_lex_result(state, value.lexed);
+    state = mix(state, u64(vec.len(value.nodes)));
+    for node in value.nodes {
+        state = fp_ast_node(state, node);
+    }
+    state = mix(state, u64(value.root));
+    state = mix_bool(state, value.recovered);
+    state = mix(state, u64(vec.len(value.diagnostics)));
+    for diagnostic in value.diagnostics {
+        state = fp_diagnostic(state, diagnostic);
+    }
+    return mix_bool(state, value.has_value);
+}
+
+// ---------------------------------------------------------------------------
+// model/types.
+// ---------------------------------------------------------------------------
+
+func fp_type(seed u64, value model.Type) u64 {
+    var state = mix(seed, u64(model.type_kind_id(value.kind)));
+    state = mix(mix(state, u64(value.bits)), u64(value.declaration));
+    state = mix(state, u64(value.binding));
+    state = mix(state, u64(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        state = mix(mix(state, param_mode_id(parameter.mode)),
+            u64(parameter.type_id));
+    }
+    state = mix(state, u64(value.result));
+    state = mix_option_usize(state, value.throws_type);
+    state = mix_usizes(state, value.type_args);
+    return mix(state, u64(value.c_type));
+}
+
+func fp_context(seed u64, value types.Context) u64 {
+    let count = types.size(value);
+    var state = mix(seed, u64(count));
+    for var index usize = 1; index <= count; index += 1 {
+        let found = types.find(value, index);
+        switch found {
+            case option.Option.Some(item): state = fp_type(state, item);
+            case option.Option.None: state = mix(state, 0xff);
+        }
+    }
+    return state;
+}
+
+// ---------------------------------------------------------------------------
+// Project, binding and C records.
+// ---------------------------------------------------------------------------
+
+func fp_binding_parameter(seed u64, value model.BindingParameter) u64 {
+    var state = mix_string(mix_string(mix_string(seed, value.name),
+        value.type_name), value.kind);
+    state = mix_bool(state, value.optional);
+    state = mix_string(mix_string(state, value.mode), value.escapes);
+    return fp_span(state, value.source);
+}
+
+func fp_binding_type(seed u64, value model.BindingType) u64 {
+    var state = mix_string(mix_string(seed, value.kind), value.copy);
+    state = mix_usizes(state, value.members);
+    state = mix_usizes(state, value.properties);
+    state = mix_usizes(state, value.indexers);
+    return mix_usizes(state, value.slices);
+}
+
+func fp_binding_callable(seed u64, value model.BindingCallable) u64 {
+    var state = mix_string(mix_string(seed, value.call_kind),
+        value.return_ownership);
+    state = mix_option_string(state, value.owner_type);
+    state = mix(state, u64(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        state = fp_binding_parameter(state, parameter);
+    }
+    state = mix_string(state, value.return_type);
+    state = mix_option_string(state, value.error_type);
+    state = mix_string(mix_string(state, value.storage),
+        value.receiver_escapes);
+    return mix_strings(state, value.effects);
+}
+
+func fp_foreign_detail(seed u64, value model.ForeignDetail) u64 {
+    switch value {
+        case model.ForeignDetail.Type(payload):
+            return fp_binding_type(mix(seed, 0), payload);
+        case model.ForeignDetail.Value(payload):
+            return mix_string(mix(seed, 1), payload.type_name);
+        case model.ForeignDetail.Callable(payload):
+            return fp_binding_callable(mix(seed, 2), payload);
+        case model.ForeignDetail.Property(payload):
+            var state = mix(seed, 3);
+            state = mix_string(state, payload.owner_type);
+            state = mix_string(state, payload.name);
+            state = mix_string(state, payload.type_name);
+            state = mix_strings(state, payload.getter);
+            state = mix_strings(state, payload.setter);
+            return mix_string(state, payload.error_type);
+        case model.ForeignDetail.Indexer(payload):
+            var state = mix(seed, 4);
+            state = mix_string(state, payload.owner_type);
+            state = mix_string(state, payload.index_type);
+            state = mix_string(state, payload.result_type);
+            state = mix_string(state, payload.error_type);
+            state = mix_bool(state, payload.readable);
+            return mix_bool(state, payload.writable);
+        case model.ForeignDetail.Slice(payload):
+            var state = mix(seed, 5);
+            state = mix_string(state, payload.owner_type);
+            state = mix_string(state, payload.result_type);
+            state = mix_string(state, payload.error_type);
+            state = mix_option_string(state, payload.start_type);
+            state = mix_option_string(state, payload.end_type);
+            state = mix_bool(state, payload.readable);
+            return mix_bool(state, payload.writable);
+    }
+}
+
+func fp_foreign_declaration(seed u64, value model.ForeignDeclaration) u64 {
+    var state = mix(mix(seed, u64(value.id)), u64(value.bundle));
+    state = fp_span(state, value.source);
+    state = mix_string(mix_string(mix_string(mix_string(mix_string(state,
+        value.json_pointer), value.identity), value.module), value.name),
+        value.stable_identity);
+    state = mix_strings(state, value.host_attribute);
+    return fp_foreign_detail(state, value.detail);
+}
+
+func fp_binding_module(seed u64, value model.BindingModule) u64 {
+    var state = mix_string(mix_string(mix_string(seed, value.logical_path),
+        value.host_module), value.provider);
+    return fp_span(state, value.source);
+}
+
+func fp_package_requirement(seed u64, value model.PackageRequirement) u64 {
+    return fp_span(mix_string(mix_string(seed, value.package_name),
+        value.version_policy), value.source);
+}
+
+func fp_binding_bundle(seed u64, value model.BindingBundle) u64 {
+    var state = mix_string(mix_string(mix_string(mix_string(seed, value.path),
+        value.json), value.sha256), value.contract);
+    state = fp_span(state, value.source);
+    state = mix(state, u64(value.schema_version));
+    state = mix_string(state, value.review_status);
+    state = mix_strings(state, value.allowed_backends);
+    state = mix(state, u64(vec.len(value.package_requirements)));
+    for requirement in value.package_requirements {
+        state = fp_package_requirement(state, requirement);
+    }
+    state = mix(state, u64(vec.len(value.modules)));
+    for module in value.modules {
+        state = fp_binding_module(state, module);
+    }
+    state = mix_usizes(state, value.declarations);
+    return mix_strings(state, value.conformance_required);
+}
+
+func fp_c_type_ref(seed u64, value model.CTypeRef) u64 {
+    var state = mix(seed, c_type_kind_id(value.kind));
+    state = mix_string(mix_string(state, value.scalar), "");
+    state = mix_bool(state, value.writable);
+    state = mix(state, u64(vec.len(value.args)));
+    for arg in value.args {
+        state = fp_c_type_ref(state, arg);
+    }
+    return mix(state, u64(value.named));
+}
+
+func mix_option_c_type_ref(seed u64,
+        value option.Option[model.CTypeRef]) u64 {
+    switch value {
+        case option.Option.Some(item):
+            return fp_c_type_ref(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_c_field(seed u64, value model.CFieldDecl) u64 {
+    var state = fp_c_type_ref(mix_string(seed, value.name), value.type_ref);
+    return fp_span(mix(state, value.offset), value.source);
+}
+
+func fp_c_parameter(seed u64, value model.CParameterDecl) u64 {
+    return fp_span(fp_c_type_ref(mix_string(seed, value.name), value.type_ref),
+        value.source);
+}
+
+func mix_option_registration_decl(seed u64,
+        value option.Option[model.CRegistrationDecl]) u64 {
+    switch value {
+        case option.Option.Some(item):
+            return mix_string(mix(mix(seed, 1), u64(item.callback_type)),
+                item.unregister_symbol);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func mix_option_registration_call(seed u64,
+        value option.Option[model.CRegistrationCall]) u64 {
+    switch value {
+        case option.Option.Some(item):
+            var state = mix(mix(seed, 1), u64(item.callback_parameter));
+            state = mix(mix(state, u64(item.userdata_parameter)),
+                u64(item.callback_userdata_parameter));
+            return state;
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_c_type_decl(seed u64, value model.CTypeDecl) u64 {
+    var state = mix(mix(seed, u64(value.id)), u64(value.bundle));
+    state = fp_span(state, value.source);
+    state = mix_string(mix_string(mix_string(mix_string(mix_string(state,
+        value.identity), value.module), value.name), value.c_name),
+        value.release_symbol);
+    state = mix(state, c_decl_kind_id(value.kind));
+    state = mix(state, u64(vec.len(value.fields)));
+    for field in value.fields {
+        state = fp_c_field(state, field);
+    }
+    state = mix(mix(state, value.size), value.align);
+    state = mix_string(state, value.retain_symbol);
+    state = fp_c_type_ref(state, value.result);
+    state = mix(state, u64(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        state = fp_c_parameter(state, parameter);
+    }
+    return mix_option_registration_decl(state, value.registration);
+}
+
+func fp_c_return(seed u64, value model.CReturnDecl) u64 {
+    var state = fp_c_type_ref(seed, value.type_ref);
+    state = mix_string(mix_string(mix_string(state, value.ownership),
+        value.release_symbol), value.retain_symbol);
+    return fp_span(state, value.source);
+}
+
+func fp_c_callable(seed u64, value model.CCallableDecl) u64 {
+    var state = mix(mix(seed, u64(value.id)), u64(value.bundle));
+    state = fp_span(state, value.source);
+    state = mix_string(mix_string(mix_string(mix_string(mix_string(state,
+        value.identity), value.module), value.name), value.symbol),
+        value.stable_identity);
+    state = mix(state, u64(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        state = fp_c_parameter(state, parameter);
+    }
+    state = fp_c_return(state, value.result);
+    return mix_option_registration_call(state, value.registers);
+}
+
+func fp_c_module(seed u64, value model.CModule) u64 {
+    var state = mix_string(mix_string(mix_string(seed, value.logical_path),
+        value.provider), value.library);
+    return fp_span(state, value.source);
+}
+
+func fp_c_binding_bundle(seed u64, value model.CBindingBundle) u64 {
+    var state = mix_string(mix_string(mix_string(mix_string(seed, value.path),
+        value.json), value.sha256), value.contract);
+    state = fp_span(state, value.source);
+    state = mix(state, u64(value.schema_version));
+    state = mix_string(mix_string(state, value.abi), value.target);
+    state = mix_bool(state, value.requires_hosted);
+    state = mix(state, u64(vec.len(value.modules)));
+    for module in value.modules {
+        state = fp_c_module(state, module);
+    }
+    state = mix_u32s(state, value.types);
+    return mix_u32s(state, value.callables);
+}
+
+func fp_foreign_export(seed u64, value model.ForeignExport) u64 {
+    var state = mix_string(mix_string(seed, value.name), value.identity);
+    state = mix(state, foreign_export_kind_id(value.kind));
+    state = mix(state, u64(value.bundle));
+    state = mix_option_usize(state, value.declaration);
+    state = mix_usizes(state, value.candidates);
+    state = mix_option_u32(state, value.c_type);
+    state = mix_option_u32(state, value.c_callable);
+    return mix_option_c_type_ref(state, value.c_type_ref);
+}
+
+func fp_import(seed u64, value model.Import) u64 {
+    var state = mix(mix(mix(seed, u64(value.file)), u64(value.node)),
+        u64(value.target));
+    state = mix_string(state, value.alias);
+    return fp_span(state, value.span);
+}
+
+func fp_symbol(seed u64, value model.Symbol) u64 {
+    var state = mix(mix(seed, u64(value.id)),
+        u64(model.symbol_kind_id(value.kind)));
+    state = mix_string(state, value.name);
+    state = mix(mix(state, u64(value.module)), 0);
+    state = mix_option_node_ref(state, value.definition);
+    state = mix_option_span(state, value.declaration);
+    state = mix_bool(state, value.exported);
+    state = mix_option_usize(state, value.target);
+    return mix_option_foreign_export_ref(state, value.foreign);
+}
+
+func fp_occurrence(seed u64, value model.Occurrence) u64 {
+    return fp_span(fp_node_ref(mix(seed, u64(value.symbol)), value.source),
+        value.span);
+}
+
+func fp_self_parameter(seed u64, value model.SelfParameter) u64 {
+    return fp_node_ref(mix(seed, u64(value.symbol)), value.source);
+}
+
+func fp_project(seed u64, value model.Project) u64 {
+    var state = mix_string(mix_string(mix_string(seed, value.root),
+        value.package_name), value.backend);
+    state = mix(mix(state, u64(value.word_bits)), 0);
+    state = mix_bool(state, value.hosted);
+    state = mix(state, u64(value.entry));
+    state = mix(state, u64(vec.len(value.files)));
+    for file in value.files {
+        state = fp_parse_result(state, file);
+    }
+    state = mix(state, u64(vec.len(value.modules)));
+    for module in value.modules {
+        state = mix(state, u64(module.id));
+        state = mix_string(state, module.logical_path);
+        state = mix_string(state, module.identity);
+        state = mix_string(state, module.package_name);
+        state = mix_usizes(state, module.files);
+        state = mix(state, u64(vec.len(module.imports)));
+        for import_value in module.imports {
+            state = fp_import(state, import_value);
+        }
+        state = mix(state, u64(vec.len(module.foreign_exports)));
+        for export_value in module.foreign_exports {
+            state = fp_foreign_export(state, export_value);
+        }
+        switch module.binding {
+            case option.Option.Some(item):
+                state = mix(mix(state, 1), u64(item.bundle));
+                state = mix(state, u64(item.index));
+            case option.Option.None:
+                state = mix(state, 0);
+        }
+        state = mix_option_usize(state, module.c_binding);
+    }
+    state = mix(state, u64(vec.len(value.bindings)));
+    for binding in value.bindings {
+        state = fp_binding_bundle(state, binding);
+    }
+    state = mix(state, u64(vec.len(value.foreign_bindings)));
+    for declaration in value.foreign_bindings {
+        state = fp_foreign_declaration(state, declaration);
+    }
+    state = mix(state, u64(vec.len(value.c_bindings)));
+    for binding in value.c_bindings {
+        state = fp_c_binding_bundle(state, binding);
+    }
+    state = mix(state, u64(vec.len(value.c_types)));
+    for declaration in value.c_types {
+        state = fp_c_type_decl(state, declaration);
+    }
+    state = mix(state, u64(vec.len(value.c_callables)));
+    for callable in value.c_callables {
+        state = fp_c_callable(state, callable);
+    }
+    state = mix_strings(state, value.c_libraries);
+    return mix_strings(state, value.c_library_dirs);
+}
+
+func fp_resolved(seed u64, value model.ResolvedProject) u64 {
+    var state = fp_project(seed, value.project);
+    state = mix(state, u64(vec.len(value.symbols)));
+    for symbol in value.symbols {
+        state = fp_symbol(state, symbol);
+    }
+    state = mix(state, u64(vec.len(value.occurrences)));
+    for occurrence in value.occurrences {
+        state = fp_occurrence(state, occurrence);
+    }
+    state = mix(state, u64(vec.len(value.deferred_members)));
+    for member in value.deferred_members {
+        state = fp_node_ref(state, member);
+    }
+    state = mix(state, u64(vec.len(value.self_parameters)));
+    for parameter in value.self_parameters {
+        state = fp_self_parameter(state, parameter);
+    }
+    return state;
+}
+
+// ---------------------------------------------------------------------------
+// HIR nodes and payloads.
+// ---------------------------------------------------------------------------
+
+func fp_hir_source(seed u64, value hir.HirSource) u64 {
+    return fp_span(fp_node_ref(seed, value.node), value.span);
+}
+
+func fp_capture_source(seed u64, value hir.CaptureSource) u64 {
+    var state = mix(mix(seed, u64(value.origin)), u64(value.source));
+    state = mix(state, u64(value.type_id));
+    return mix_bool(state, value.is_move);
+}
+
+func fp_bound_receiver(seed u64, value hir.BoundReceiver) u64 {
+    return mix(mix(seed, u64(value.type_id)), param_mode_id(value.mode));
+}
+
+func mix_option_bound_receiver(seed u64,
+        value option.Option[hir.BoundReceiver]) u64 {
+    switch value {
+        case option.Option.Some(item):
+            return fp_bound_receiver(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_function_value(seed u64, value hir.FunctionValue) u64 {
+    var state = mix(seed, u64(value.symbol));
+    state = mix_usizes(state, value.type_args);
+    state = mix(state, u64(vec.len(value.captures)));
+    for capture in value.captures {
+        state = fp_capture_source(state, capture);
+    }
+    state = mix_bool(state, value.move_capture);
+    return mix_option_bound_receiver(state, value.bound);
+}
+
+func fp_constant_value(seed u64, value hir.ConstantValue) u64 {
+    return fp_constant_data(mix(seed, u64(value.type_id)), value.data);
+}
+
+func fp_constant_data(seed u64, value hir.ConstantData) u64 {
+    switch value {
+        case hir.ConstantData.UnitLiteral(payload):
+            return mix(seed, 0);
+        case hir.ConstantData.BoolLiteral(payload):
+            return mix_bool(mix(seed, 1), payload.value);
+        case hir.ConstantData.IntegerLiteral(payload):
+            var state = mix_string(mix(seed, 2), payload.decimal);
+            return mix(state, payload.bits);
+        case hir.ConstantData.FloatLiteral(payload):
+            return mix(mix(seed, 3), payload.bits);
+        case hir.ConstantData.StringLiteral(payload):
+            return mix_string(mix(seed, 4), payload.utf8);
+        case hir.ConstantData.FunctionValue(payload):
+            return fp_function_value(mix(seed, 5), payload);
+        case hir.ConstantData.ConstantAggregate(payload):
+            var state = mix(seed, 6);
+            state = mix_option_usize(state, payload.variant);
+            state = mix(state, u64(vec.len(payload.fields)));
+            for field in payload.fields {
+                state = fp_constant_value(state, field);
+            }
+            return state;
+    }
+}
+
+func fp_call_arg(seed u64, value hir.CallArg) u64 {
+    var state = mix(mix(seed, u64(value.source_index)),
+        u64(value.parameter_index));
+    state = mix_option_string(state, value.label);
+    state = mix(state, param_mode_id(value.mode));
+    return mix(state, u64(value.expression));
+}
+
+func fp_call(seed u64, value hir.Call) u64 {
+    var state = mix(mix(seed, callee_kind_id(value.kind)),
+        u64(value.signature));
+    state = mix_option_usize(state, value.direct_symbol);
+    state = mix_option_usize(state, value.callee);
+    state = mix(state, u64(vec.len(value.args)));
+    for arg in value.args {
+        state = fp_call_arg(state, arg);
+    }
+    state = mix_usizes(state, value.type_args);
+    state = mix_option_usize(state, value.binding);
+    state = mix_option_u32(state, value.c_callable);
+    state = mix_u32s(state, value.omitted);
+    return mix_option_u32(state, value.system);
+}
+
+func fp_pattern_literal(seed u64, value hir.PatternLiteral) u64 {
+    switch value {
+        case hir.PatternLiteral.BoolLiteral(payload):
+            return mix_bool(mix(seed, 0), payload.value);
+        case hir.PatternLiteral.IntegerLiteral(payload):
+            var state = mix_string(mix(seed, 1), payload.decimal);
+            return mix(state, payload.bits);
+        case hir.PatternLiteral.FloatLiteral(payload):
+            return mix(mix(seed, 2), payload.bits);
+        case hir.PatternLiteral.StringLiteral(payload):
+            return mix_string(mix(seed, 3), payload.utf8);
+    }
+}
+
+func mix_option_pattern_literal(seed u64,
+        value option.Option[hir.PatternLiteral]) u64 {
+    switch value {
+        case option.Option.Some(item):
+            return fp_pattern_literal(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_pattern(seed u64, value hir.Pattern) u64 {
+    var state = mix(seed, u64(value.type_id));
+    state = fp_hir_source(state, value.source);
+    state = mix_option_usize(state, value.variant);
+    state = mix_option_usize(state, value.binding);
+    state = mix(state, u64(vec.len(value.payload)));
+    for item in value.payload {
+        state = fp_pattern(state, item);
+    }
+    return mix_option_pattern_literal(state, value.literal);
+}
+
+func fp_arm(seed u64, value hir.Arm) u64 {
+    var state = fp_pattern(seed, value.pattern);
+    state = mix(mix(state, u64(value.scope)), u64(value.body));
+    return fp_hir_source(state, value.source);
+}
+
+func fp_trait_ref(seed u64, value hir.TraitRef) u64 {
+    return mix_usizes(mix(seed, u64(value.declaration)), value.args);
+}
+
+func mix_option_trait_ref(seed u64,
+        value option.Option[hir.TraitRef]) u64 {
+    switch value {
+        case option.Option.Some(item):
+            return fp_trait_ref(mix(seed, 1), item);
+        case option.Option.None: return mix(seed, 0);
+    }
+}
+
+func fp_catch(seed u64, value hir.Catch) u64 {
+    var state = mix(mix(mix(mix(seed, u64(value.error_type)),
+        u64(value.binding)), u64(value.scope)), u64(value.body));
+    return fp_hir_source(state, value.source);
+}
+
+func fp_node_data(seed u64, value hir.NodeData) u64 {
+    switch value {
+        case hir.NodeData.UnitLiteral(payload): return mix(seed, 0);
+        case hir.NodeData.BoolLiteral(payload):
+            return mix_bool(mix(seed, 1), payload.value);
+        case hir.NodeData.IntegerLiteral(payload):
+            return mix(mix_string(mix(seed, 2), payload.decimal), payload.bits);
+        case hir.NodeData.FloatLiteral(payload):
+            return mix(mix(seed, 3), payload.bits);
+        case hir.NodeData.StringLiteral(payload):
+            return mix_string(mix(seed, 4), payload.utf8);
+        case hir.NodeData.Read(payload):
+            return mix(mix(seed, 5), u64(payload.symbol));
+        case hir.NodeData.Place(payload):
+            return mix(mix(seed, 6), u64(payload.symbol));
+        case hir.NodeData.FunctionValue(payload):
+            return fp_function_value(mix(seed, 7), payload);
+        case hir.NodeData.Binding(payload):
+            var state = mix(mix(seed, 8), u64(payload.symbol));
+            return mix_bool(state, payload.writable);
+        case hir.NodeData.Assign(payload):
+            var state = mix(seed, 9);
+            switch payload.compound {
+                case option.Option.Some(item):
+                    state = mix(mix(state, 1), binary_op_id(item));
+                case option.Option.None: state = mix(state, 0);
+            }
+            return state;
+        case hir.NodeData.Unary(payload):
+            return mix(mix(seed, 10), unary_op_id(payload.op));
+        case hir.NodeData.Binary(payload):
+            return mix(mix(seed, 11), binary_op_id(payload.op));
+        case hir.NodeData.ShortCircuit(payload):
+            return mix(mix(seed, 12), logical_op_id(payload.op));
+        case hir.NodeData.IntegerConvert(payload): return mix(seed, 13);
+        case hir.NodeData.Call(payload): return fp_call(mix(seed, 14), payload);
+        case hir.NodeData.Block(payload): return mix(seed, 15);
+        case hir.NodeData.ExpressionStatement(payload): return mix(seed, 16);
+        case hir.NodeData.If(payload): return mix(seed, 17);
+        case hir.NodeData.For(payload): return mix(seed, 18);
+        case hir.NodeData.Noop(payload): return mix(seed, 19);
+        case hir.NodeData.Return(payload):
+            return mix(mix(seed, 20), u64(payload.function));
+        case hir.NodeData.Break(payload):
+            return mix(mix(seed, 21), u64(payload.loop));
+        case hir.NodeData.Continue(payload):
+            return mix(mix(seed, 22), u64(payload.loop));
+        case hir.NodeData.Unsupported(payload):
+            return mix_string(mix(seed, 23), payload.feature);
+        case hir.NodeData.StructInit(payload):
+            var state = mix(seed, 24);
+            state = mix(state, u64(vec.len(payload.fields)));
+            for field in payload.fields {
+                state = fp_call_arg(state, field);
+            }
+            return state;
+        case hir.NodeData.EnumInit(payload):
+            var state = mix(mix(seed, 25), u64(payload.variant));
+            state = mix(state, u64(vec.len(payload.payload)));
+            for field in payload.payload {
+                state = fp_call_arg(state, field);
+            }
+            return state;
+        case hir.NodeData.FieldRead(payload):
+            return mix(mix(seed, 26), u64(payload.field));
+        case hir.NodeData.FieldPlace(payload):
+            return mix(mix(seed, 27), u64(payload.field));
+        case hir.NodeData.Switch(payload):
+            var state = mix(seed, 28);
+            state = mix(state, u64(vec.len(payload.arms)));
+            for arm in payload.arms {
+                state = fp_arm(state, arm);
+            }
+            return mix_bool(state, payload.exhaustive);
+        case hir.NodeData.ConstraintCall(payload):
+            var state = fp_trait_ref(mix(seed, 29), payload.trait_ref);
+            state = mix(mix(mix(state, u64(payload.method)),
+                u64(payload.receiver)), u64(payload.signature));
+            state = mix(state, u64(vec.len(payload.args)));
+            for arg in payload.args {
+                state = fp_call_arg(state, arg);
+            }
+            return state;
+        case hir.NodeData.Try(payload):
+            var state = mix(seed, 30);
+            state = mix(state, u64(vec.len(payload.catches)));
+            for catch_value in payload.catches {
+                state = fp_catch(state, catch_value);
+            }
+            return state;
+        case hir.NodeData.Defer(payload):
+            var state = mix(mix(seed, 31), u64(payload.owner_scope));
+            return mix_usizes(state, payload.references);
+        case hir.NodeData.Throw(payload): return mix(seed, 32);
+        case hir.NodeData.Move(payload):
+            var state = mix(seed, 33);
+            return mix_option_usize(state, payload.binding);
+        case hir.NodeData.VecInit(payload): return mix(seed, 34);
+        case hir.NodeData.IndexRead(payload): return mix(seed, 35);
+        case hir.NodeData.IndexPlace(payload): return mix(seed, 36);
+        case hir.NodeData.VecSlice(payload):
+            var state = mix(seed, 37);
+            state = mix_option_usize(state, payload.start);
+            return mix_option_usize(state, payload.end);
+        case hir.NodeData.ForIn(payload):
+            var state = mix(mix(mix(seed, 38), u64(payload.element)),
+                u64(payload.body_scope));
+            state = mix(mix(state, u64(payload.body)), 0);
+            switch payload.iterator {
+                case option.Option.Some(item):
+                    state = mix(state, 1);
+                    state = mix(mix(mix(mix(mix(mix(mix(mix(state,
+                        u64(item.cursor)), u64(item.option)), u64(item.next)),
+                        u64(item.iterator)), u64(item.element)), u64(item.some)),
+                        u64(item.none)), u64(item.some_field));
+                case option.Option.None: state = mix(state, 0);
+            }
+            return state;
+        case hir.NodeData.ForeignRead(payload):
+            var state = mix(mix(seed, 39), u64(payload.binding));
+            switch payload.access {
+                case option.Option.Some(item):
+                    state = mix(mix(state, 1), foreign_access_kind_id(item));
+                case option.Option.None: state = mix(state, 0);
+            }
+            state = mix_option_usize(state, payload.start);
+            return mix_option_usize(state, payload.end);
+        case hir.NodeData.ConstantLiteral(payload):
+            return fp_constant_value(mix(seed, 40), payload.value);
+        case hir.NodeData.CFieldRead(payload):
+            return mix(mix(mix(seed, 41), u64(payload.c_type)),
+                u64(payload.field));
+        case hir.NodeData.Await(payload): return mix(seed, 42);
+        case hir.NodeData.TraitObjectInit(payload):
+            var state = fp_trait_ref(mix(seed, 43), payload.trait_ref);
+            state = mix(mix(state, u64(payload.concrete)), 0);
+            state = mix_usizes(state, payload.methods);
+            state = mix(state, u64(vec.len(payload.method_args)));
+            for args in payload.method_args {
+                state = mix_usizes(state, args);
+            }
+            return state;
+        case hir.NodeData.TraitDispatch(payload):
+            var state = fp_trait_ref(mix(seed, 44), payload.trait_ref);
+            state = mix(mix(mix(state, u64(payload.method)),
+                u64(payload.signature)), u64(payload.index));
+            state = mix(state, u64(vec.len(payload.args)));
+            for arg in payload.args {
+                state = fp_call_arg(state, arg);
+            }
+            return state;
+    }
+}
+
+func fp_cleanup_step(seed u64, value hir.CleanupStep) u64 {
+    var state = mix(seed, cleanup_kind_id(value.kind));
+    state = mix(state, owner_kind_id(value.owner.kind));
+    state = mix(state, value.owner.identity);
+    return mix(state, u64(value.type_id));
+}
+
+func fp_exit_plan(seed u64, value hir.ExitPlan) u64 {
+    var state = mix(seed, exit_kind_id(value.kind));
+    state = mix_option_usize(state, value.error_type);
+    switch value.target {
+        case hir.ExitTarget.ScopeExit(payload):
+            state = mix(state, 0);
+            state = mix_option_usize(state, payload.scope);
+        case hir.ExitTarget.FunctionExit(payload):
+            state = mix(state, 1);
+            state = mix(state, u64(payload.function));
+        case hir.ExitTarget.JumpExit(payload):
+            state = mix(state, 2);
+            state = mix(state, u64(payload.node));
+        case hir.ExitTarget.CatchTarget(payload):
+            state = mix(state, 3);
+            state = mix(mix(state, u64(payload.try_node)), u64(payload.index));
+    }
+    state = mix_usizes(state, value.exited_scopes);
+    state = mix_usizes(state, value.defers);
+    state = mix_bool(state, value.saves_value);
+    state = mix(state, u64(vec.len(value.actions)));
+    for action in value.actions {
+        state = fp_cleanup_step(state, action);
+    }
+    return state;
+}
+
+func fp_hir_node(seed u64, value hir.HirNode) u64 {
+    var state = mix(seed, u64(value.type_id));
+    state = fp_hir_source(state, value.source);
+    state = mix(state, u64(value.scope));
+    state = mix_usizes(state, value.children);
+    state = fp_node_data(state, value.data);
+    state = mix_usizes(state, value.errors);
+    state = mix(state, u64(vec.len(value.exits)));
+    for exit in value.exits {
+        state = fp_exit_plan(state, exit);
+    }
+    return state;
+}
+
+func fp_value_use(seed u64, value hir.ValueUse) u64 {
+    var state = mix(mix(seed, u64(value.consumer)), u64(value.operand));
+    state = mix(state, use_kind_id(value.kind));
+    state = mix_option_usize(state, value.root);
+    state = mix(state, u64(value.type_id));
+    return mix_option_usize(state, value.destination);
+}
+
+func fp_temporary(seed u64, value hir.Temporary) u64 {
+    var state = mix(mix(seed, u64(value.producer)),
+        u64(value.full_expression));
+    return mix(state, u64(value.type_id));
+}
+
+func fp_local_lifetime(seed u64, value hir.LocalLifetime) u64 {
+    var state = mix(mix(seed, u64(value.symbol)), u64(value.scope));
+    state = mix(mix(state, u64(value.type_id)), u64(value.order));
+    state = mix(state, param_mode_id(value.mode));
+    return mix_bool(state, value.read_only_capture);
+}
+
+func fp_ownership(seed u64, value hir.Ownership) u64 {
+    var state = mix(seed, u64(vec.len(value.uses)));
+    for use_value in value.uses {
+        state = fp_value_use(state, use_value);
+    }
+    state = mix(state, u64(vec.len(value.temporaries)));
+    for temporary in value.temporaries {
+        state = fp_temporary(state, temporary);
+    }
+    state = mix(state, u64(vec.len(value.locals)));
+    for local in value.locals {
+        state = fp_local_lifetime(state, local);
+    }
+    state = mix(state, u64(vec.len(value.full_expressions)));
+    for expression in value.full_expressions {
+        state = mix(state, u64(expression.node));
+        state = mix(state, u64(vec.len(expression.actions)));
+        for action in expression.actions {
+            state = fp_cleanup_step(state, action);
+        }
+    }
+    state = mix(state, u64(vec.len(value.calls)));
+    for call in value.calls {
+        state = mix(state, u64(call.node));
+        state = mix(state, u64(vec.len(call.on_return)));
+        for action in call.on_return {
+            state = fp_cleanup_step(state, action);
+        }
+    }
+    return state;
+}
+
+func fp_hir_function(seed u64, value hir.HirFunction) u64 {
+    var state = mix(mix(seed, u64(value.symbol)), u64(value.signature));
+    state = mix(state, u64(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        state = mix(mix_string(mix(state, u64(parameter.symbol)),
+            parameter.label), 0);
+    }
+    state = mix(mix(mix(state, u64(value.body)), u64(value.scope)), 0);
+    state = fp_hir_source(state, value.source);
+    state = mix(state, u64(vec.len(value.captures)));
+    for capture in value.captures {
+        state = mix(mix(mix(state, u64(capture.origin)), u64(capture.local)),
+            u64(capture.type_id));
+    }
+    return mix_bool(state, value.is_async);
+}
+
+func fp_generic_param(seed u64, value hir.GenericParam) u64 {
+    var state = mix(seed, u64(value.symbol));
+    state = mix_option_trait_ref(state, value.trait_ref);
+    return fp_hir_source(state, value.source);
+}
+
+func fp_field_decl(seed u64, value hir.FieldDecl) u64 {
+    var state = mix(mix(seed, u64(value.symbol)), u64(value.type_id));
+    state = mix_bool(state, value.exported);
+    return fp_hir_source(state, value.source);
+}
+
+func fp_variant_decl(seed u64, value hir.VariantDecl) u64 {
+    var state = mix(seed, u64(value.symbol));
+    state = mix(state, u64(vec.len(value.payload)));
+    for field in value.payload {
+        state = fp_field_decl(state, field);
+    }
+    return fp_hir_source(state, value.source);
+}
+
+func fp_nominal_decl(seed u64, value hir.NominalDecl) u64 {
+    var state = mix(mix(seed, u64(value.symbol)),
+        u64(model.type_kind_id(value.kind)));
+    state = mix(state, u64(vec.len(value.params)));
+    for parameter in value.params {
+        state = fp_generic_param(state, parameter);
+    }
+    state = mix(state, u64(vec.len(value.fields)));
+    for field in value.fields {
+        state = fp_field_decl(state, field);
+    }
+    state = mix(state, u64(vec.len(value.variants)));
+    for variant in value.variants {
+        state = fp_variant_decl(state, variant);
+    }
+    return fp_hir_source(state, value.source);
+}
+
+func fp_method_prototype(seed u64, value hir.MethodPrototype) u64 {
+    var state = mix(mix(seed, u64(value.symbol)), u64(value.signature));
+    state = mix(state, u64(vec.len(value.parameters)));
+    for parameter in value.parameters {
+        state = mix(mix_string(mix(state, u64(parameter.symbol)),
+            parameter.label), 0);
+    }
+    return fp_hir_source(state, value.source);
+}
+
+func fp_trait_decl(seed u64, value hir.TraitDecl) u64 {
+    var state = mix(mix(seed, u64(value.symbol)), u64(value.self));
+    state = mix(state, u64(vec.len(value.params)));
+    for parameter in value.params {
+        state = fp_generic_param(state, parameter);
+    }
+    state = mix(state, u64(vec.len(value.methods)));
+    for method in value.methods {
+        state = fp_method_prototype(state, method);
+    }
+    return fp_hir_source(state, value.source);
+}
+
+func fp_impl_decl(seed u64, value hir.ImplDecl) u64 {
+    var state = mix(seed, u64(vec.len(value.params)));
+    for parameter in value.params {
+        state = fp_generic_param(state, parameter);
+    }
+    state = mix_option_trait_ref(state, value.trait_ref);
+    state = mix(mix(state, u64(value.self_parameter)), u64(value.self_type));
+    state = mix_usizes(state, value.methods);
+    return fp_hir_source(state, value.source);
+}
+
+func fp_function_template(seed u64, value hir.FunctionTemplate) u64 {
+    var state = fp_hir_function(seed, value.function);
+    state = mix(state, u64(vec.len(value.params)));
+    for parameter in value.params {
+        state = fp_generic_param(state, parameter);
+    }
+    return state;
+}
+
+func fp_function_instance(seed u64, value hir.FunctionInstance) u64 {
+    var state = mix(mix(seed, u64(value.symbol)), u64(value.origin));
+    state = mix_usizes(state, value.type_args);
+    state = mix(state, u64(vec.len(value.renamed)));
+    for rename in value.renamed {
+        state = mix(mix(state, u64(rename.origin)),
+            u64(rename.replacement));
+    }
+    state = mix(state, backend_id(value.target.backend));
+    return mix(state, u64(value.target.word_bits));
+}
+
+func fp_foreign_binding(seed u64, value hir.ForeignBinding) u64 {
+    var state = mix(mix(seed, u64(value.binding)), u64(value.type_id));
+    state = mix_option_usize(state, value.signature);
+    state = mix_option_usize(state, value.owner);
+    return mix(state, u64(value.read_error));
+}
+
+func fp_hir_scope(seed u64, value hir.HirScope) u64 {
+    var state = mix(seed, u64(value.function));
+    state = mix_option_usize(state, value.parent);
+    return fp_hir_source(state, value.source);
+}
+
+pub func fingerprint(module hir.HirModule) u64 {
+    var state = fp_resolved(0x0123456789abcdef, module.resolved);
+    state = mix(state, u64(module.identity));
+    state = fp_context(state, module.types);
+    state = mix(state, backend_id(module.config.backend));
+    state = mix(state, u64(module.config.word_bits));
+    state = mix(state, u64(vec.len(module.functions)));
+    for function in module.functions {
+        state = fp_hir_function(state, function);
+    }
+    state = mix(state, u64(vec.len(module.nodes)));
+    for node in module.nodes {
+        state = fp_hir_node(state, node);
+    }
+    state = mix(state, u64(vec.len(module.scopes)));
+    for scope in module.scopes {
+        state = fp_hir_scope(state, scope);
+    }
+    state = mix(state, u64(vec.len(module.nominals)));
+    for nominal in module.nominals {
+        state = fp_nominal_decl(state, nominal);
+    }
+    state = mix(state, u64(vec.len(module.traits)));
+    for trait_decl in module.traits {
+        state = fp_trait_decl(state, trait_decl);
+    }
+    state = mix(state, u64(vec.len(module.impls)));
+    for impl_decl in module.impls {
+        state = fp_impl_decl(state, impl_decl);
+    }
+    state = mix(state, u64(vec.len(module.templates)));
+    for template in module.templates {
+        state = fp_function_template(state, template);
+    }
+    state = mix(state, u64(vec.len(module.instances)));
+    for instance in module.instances {
+        state = fp_function_instance(state, instance);
+    }
+    state = fp_ownership(state, module.ownership);
+    state = mix(state, u64(vec.len(module.foreign_bindings)));
+    for binding in module.foreign_bindings {
+        state = fp_foreign_binding(state, binding);
+    }
+    return state;
+}

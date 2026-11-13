@@ -122,11 +122,16 @@ valueops.ordinary_copyable(module hir.HirModule, type_id usize) bool throws mode
 valueops.owning_value(module hir.HirModule, type_id usize) bool throws model.SupportError
 valueops.classify_value(module hir.HirModule, type_id usize) hir.ValueOps
     throws model.SupportError
+
+ownership.produce_ownership(module inout hir.HirModule) model.UnitResult
+ownership.verify_ownership(module hir.HirModule) model.UnitResult
 ```
 
 foreign.BoundArguments 字段 parameters/omitted 均为 Vec[u32]，顺序保持现有头文件。`valueops` 只读输入；临时替换需 clone_context，返回字段的 TypeId 必须属于公开 module.types。共享标准类型依真实声明身份查找，不按名称相似或自造记录。
 
-`hirclone.clone_module(module hir.HirModule) hir.HirModule` 必须复制全部可变 Vec，包括 resolved/project、Source 字节/位置表、词法/AST arena、绑定声明、HIR、嵌套模式/常量/清理步骤和 types.Context。不可把只复制顶层 Vec 当作隔离。源 string 值可以共享其不可变存储。新编译器不能调用旧前端进行复制或转储。
+`hirclone.clone_module(module hir.HirModule) hir.HirModule throws model.SupportError` 必须复制全部可变 Vec，包括 resolved/project、Source 字节/位置表、词法/AST arena、绑定声明、HIR、嵌套模式/常量/清理步骤和 types.Context。不可把只复制顶层 Vec 当作隔离。源 string 值可以共享其不可变存储。新编译器不能调用旧前端进行复制或转储。
+
+Sema 的具体实例变换还直接需要 `hirclone.clone_node(value hir.HirNode) hir.HirNode throws model.SupportError`、`clone_function(value hir.HirFunction) hir.HirFunction throws model.SupportError`、`clone_pattern(value hir.Pattern) hir.Pattern throws model.SupportError`、`clone_constant(value hir.ConstantValue) hir.ConstantValue throws model.SupportError`。这些入口复用 clone_module 的相同复制函数，不能再维护另一份45节点复制器。超过内部递归限制或循环时抛 SupportError.Invalid；不得用故意越界或 Panic 代替错误返回。
 
 ```text
 constant.same_constant_value(left hir.ConstantValue,right hir.ConstantValue) bool
@@ -154,6 +159,32 @@ pattern.pattern_domain(module hir.HirModule,type_id usize,context inout types.Co
     pattern.Domain throws model.SupportError
 ```
 
-constant 保留现有 128 深度/100000 次工作限制、源 AST 重新求值与 HIR 求值各自的校验，动态函数调用不在编译期执行。失败的 evaluate_hir_constant 返回 None，不能把非法值填为零。pattern 默认调用方传 budget=100000，递归深度 128，+0/-0 重叠，NaN 不被有限浮点字面量穷尽；保留现有执行次序与错误原文。
+constant 保留现有 128 深度/100000 次工作限制、源 AST 重新求值与 HIR 求值各自的校验，动态函数调用不在编译期执行。失败的 evaluate_hir_constant 返回 None，不能把非法值填为零。pattern 默认调用方传 budget=100000，递归深度 256，+0/-0 重叠，NaN 不被有限浮点字面量穷尽；保留现有执行次序与错误原文。
 
-`hirdump.dump_types(context types.Context) string` / `hirdump.dump_module(module hir.HirModule) string` 对应现有两个 C++ dump 的完整稳定文本，用于移植对照；不得只打印节点种类或依赖旧前端生成内容。
+`hirdump.dump_types(context types.Context) string` / `hirdump.dump_module(module hir.HirModule) string throws model.SupportError` 对应现有两个 C++ dump 的完整稳定文本，用于移植对照；不得只打印节点种类或依赖旧前端生成内容。
+
+## Native CFG 数据
+
+`app/wzcc/nativeir` 保存 `include/lang/ir/native.hpp` 的完整 Op、ExitSite、Instruction、Exit、Terminator、BlockParameter、BasicBlock、Slot、Handler、Function 记录。ID 为 usize，C type/callable 仍为 u32；type 字段为 type_id，async 为 is_async，Slot.inout 为 is_inout，system 为 Option[u32]。枚举顺序和可选的零 ID 沿用 C++。
+
+`nativeir.Module { pub hir hir.HirModule; pub functions Vec[nativeir.Function]; }` 是可变构造数据，不表示已验证。数据阶段不发布 VerifiedModule。后续 nativeverify 必须先验证并隔离其中的完整 HIR，再验证和复制 CFG，才能创建仅该包可写的 VerifiedModule；后端只接收该对象。不得增加可任意填成 true 的 verified 标志。
+
+## 检查与经过验证的 HIR
+
+`sema.check_types(input model.ResolveResult, config Option[model.CheckConfig]) hir.HirResult` 对应现有 check_types：Resolve 的失败/恢复/取消不得继续进入检查器；没有可用配置时使用 Project 的 backend/word_bits。HirResult 与现有普通阶段记录一样保存 state/failure/diagnostics/has_value/value。本函数只产生可变 HIR，不能直接授予代码生成权限。
+
+`app/wzcc/hirverify` 公开 VerifyMode { Backend; StaticOnly; } 和 VerifiedHirModule（所有实例字段私有，只能由本包 verify 创建）。VerifyResult 的公开字段为 state/failure/diagnostics/value，value 是 Option[VerifiedHirModule]，不另存可被填错的 has_value。
+
+```text
+hirverify.verify_types(input hir.HirModule) model.UnitResult
+hirverify.check_backend_capabilities(input hir.HirModule) model.UnitResult
+hirverify.verify(input hir.HirModule, mode hirverify.VerifyMode) hirverify.VerifyResult
+hirverify.snapshot(value hirverify.VerifiedHirModule) hir.HirModule throws model.SupportError
+hirverify.config(value hirverify.VerifiedHirModule) model.CheckConfig
+```
+
+验证器逐项重读 Source/AST/声明，与现有完整 Verifier 一致，不信任生产方的常量、类型、函数实例、effect、ownership 或出口信息。verify 必须先 hirclone.clone_module，再验证后保存；snapshot 再返回独立副本，不能让调用方通过共享 Vec 改写已经验证的数据。backend 模式与 static_only 的差异、只遍历可执行节点的能力检查和现有诊断次序必须保留。
+
+本次 Wz 阶段函数尚未公开 C++ 的共享 stop_token。取消分支不能以普通 bool 冒充；完整 CLI 的 SIGINT 退出和临时输出处理还需在分代测试中检查。
+
+Sema 共用的 Checker/Value/Expr/Constant/Error 和 clone_checker 只由 Root 维护，详见 SELFHOST_SEMA.md。A/B 在同一个 sema 包写不同文件，原 C++ 方法的归属、全部跨文件签名、回调状态单元及错误槽以该文档为准；不各自改名或复制状态。包内 reject 系列构造 Error，调用处必须 throw。所有使用同一个 inout state 的嵌套实参先求值到局部变量。

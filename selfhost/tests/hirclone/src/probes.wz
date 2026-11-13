@@ -1,0 +1,887 @@
+// Two-direction isolation probes for hirclone.clone_module.
+//
+// Each id names one Vec-bearing field.  The probe clones the fixture twice,
+// mutates that field in the left clone, and checks that (a) the left
+// fingerprint moved and (b) the right clone did not move; it then mutates the
+// right clone and repeats in the other direction.  A field that kept a shared
+// Vec would fail one of the two isolation checks.
+//
+// Fields marked wz_only have no mutable C++ counterpart (a C++ SourceSnapshot
+// is immutable and ParseResult diagnostics live outside the C++ module); the
+// C++ oracle prints cpp=none for those names and they are reported as
+// not compared instead of being silently dropped.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+
+pub struct ProbeResult {
+    pub name string;
+    pub wz_only bool;
+    pub left_changed bool;
+    pub right_isolated bool;
+    pub reverse_changed bool;
+    pub reverse_isolated bool;
+}
+
+func flag(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func is_wz_only(id u32) bool {
+    switch id {
+        case 0: return true;
+        case 9: return true;
+        case 10: return true;
+        case 11: return true;
+        case 12: return true;
+        case 15: return true;
+        case 16: return true;
+        case 17: return true;
+        case 18: return true;
+        case 21: return true;
+        case 22: return true;
+        case 119: return true;
+        case 120: return true;
+        case 121: return true;
+        case 122: return true;
+        default: return false;
+    }
+}
+
+func grow(module inout hir.HirModule, value model.Type) {
+    var ok = true;
+    let ignored = intern(inout module.types, value, inout ok);
+}
+
+func mutate(module inout hir.HirModule, id u32) {
+    let span = module.resolved.project.files[0].nodes[0].span;
+    if id == 0 {
+        vec.push(module.resolved.project.files,
+            module.resolved.project.files[0]);
+    } else if id == 1 {
+        vec.push(module.resolved.project.modules,
+            module.resolved.project.modules[0]);
+    } else if id == 2 {
+        vec.push(module.resolved.project.bindings,
+            module.resolved.project.bindings[0]);
+    } else if id == 3 {
+        vec.push(module.resolved.project.foreign_bindings,
+            module.resolved.project.foreign_bindings[0]);
+    } else if id == 4 {
+        vec.push(module.resolved.project.c_bindings,
+            module.resolved.project.c_bindings[0]);
+    } else if id == 5 {
+        vec.push(module.resolved.project.c_types,
+            module.resolved.project.c_types[0]);
+    } else if id == 6 {
+        vec.push(module.resolved.project.c_callables,
+            module.resolved.project.c_callables[0]);
+    } else if id == 7 {
+        vec.push(module.resolved.project.c_libraries, "mut");
+    } else if id == 8 {
+        vec.push(module.resolved.project.c_library_dirs, "/mut");
+    } else if id == 9 {
+        vec.push(module.resolved.project.files[0].lexed.source.original, 0x41);
+    } else if id == 10 {
+        vec.push(module.resolved.project.files[0].lexed.source.normalized, 0x41);
+    } else if id == 11 {
+        vec.push(module.resolved.project.files[0].lexed.source.offsets, 0);
+    } else if id == 12 {
+        vec.push(module.resolved.project.files[0].lexed.source.boundaries,
+            module.resolved.project.files[0].lexed.source.boundaries[0]);
+    } else if id == 13 {
+        vec.push(module.resolved.project.files[0].lexed.tokens,
+            module.resolved.project.files[0].lexed.tokens[0]);
+    } else if id == 14 {
+        vec.push(module.resolved.project.files[0].lexed.tokens[0]
+            .leading_trivia, model.Trivia(kind: model.TriviaKind.LineComment,
+                span: span, spelling: "//mut"));
+    } else if id == 15 {
+        vec.push(module.resolved.project.files[0].lexed.diagnostics,
+            synthetic_diagnostic(span));
+    } else if id == 16 {
+        vec.push(module.resolved.project.files[0].lexed.diagnostics[0].related,
+            model.Related(span: span, message: "mut"));
+    } else if id == 17 {
+        vec.push(module.resolved.project.files[0].lexed.diagnostics[0].fixits,
+            model.Fixit(span: span, replacement: "mut", revision: 9));
+    } else if id == 18 {
+        vec.push(module.resolved.project.files[0].lexed.diagnostics[0].notes,
+            "mut");
+    } else if id == 19 {
+        vec.push(module.resolved.project.files[0].nodes,
+            module.resolved.project.files[0].nodes[0]);
+    } else if id == 20 {
+        vec.push(module.resolved.project.files[0].nodes[0].children, 0);
+    } else if id == 21 {
+        vec.push(module.resolved.project.files[0].diagnostics,
+            synthetic_diagnostic(span));
+    } else if id == 22 {
+        vec.push(module.resolved.project.files[0].diagnostics[0].related,
+            model.Related(span: span, message: "mut"));
+    } else if id == 23 {
+        vec.push(module.resolved.project.modules[0].files, 0);
+    } else if id == 24 {
+        vec.push(module.resolved.project.modules[0].imports,
+            module.resolved.project.modules[0].imports[0]);
+    } else if id == 25 {
+        vec.push(module.resolved.project.modules[0].foreign_exports,
+            module.resolved.project.modules[0].foreign_exports[0]);
+    } else if id == 26 {
+        vec.push(module.resolved.project.modules[0].foreign_exports[0]
+            .candidates, 2);
+    } else if id == 27 {
+        switch module.resolved.project.modules[0].foreign_exports[0]
+            .c_type_ref {
+            case option.Option.Some(item):
+                vec.push(item.args, item.args[0]);
+            case option.Option.None:
+                vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 28 {
+        vec.push(module.resolved.project.bindings[0].allowed_backends, "mut");
+    } else if id == 29 {
+        vec.push(module.resolved.project.bindings[0].package_requirements,
+            module.resolved.project.bindings[0].package_requirements[0]);
+    } else if id == 30 {
+        vec.push(module.resolved.project.bindings[0].modules,
+            module.resolved.project.bindings[0].modules[0]);
+    } else if id == 31 {
+        vec.push(module.resolved.project.bindings[0].declarations, 9);
+    } else if id == 32 {
+        vec.push(module.resolved.project.bindings[0].conformance_required,
+            "mut");
+    } else if id == 33 {
+        vec.push(module.resolved.project.foreign_bindings[0].host_attribute,
+            "mut");
+    } else if id == 34 {
+        switch module.resolved.project.foreign_bindings[0].detail {
+            case model.ForeignDetail.Type(payload): vec.push(payload.members, 9);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 35 {
+        switch module.resolved.project.foreign_bindings[0].detail {
+            case model.ForeignDetail.Type(payload):
+                vec.push(payload.properties, 9);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 36 {
+        switch module.resolved.project.foreign_bindings[0].detail {
+            case model.ForeignDetail.Type(payload):
+                vec.push(payload.indexers, 9);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 37 {
+        switch module.resolved.project.foreign_bindings[0].detail {
+            case model.ForeignDetail.Type(payload):
+                vec.push(payload.slices, 9);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 38 {
+        switch module.resolved.project.foreign_bindings[2].detail {
+            case model.ForeignDetail.Callable(payload):
+                vec.push(payload.parameters, payload.parameters[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 39 {
+        switch module.resolved.project.foreign_bindings[2].detail {
+            case model.ForeignDetail.Callable(payload):
+                vec.push(payload.effects, "mut");
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 40 {
+        switch module.resolved.project.foreign_bindings[3].detail {
+            case model.ForeignDetail.Property(payload):
+                vec.push(payload.getter, "mut");
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 41 {
+        switch module.resolved.project.foreign_bindings[3].detail {
+            case model.ForeignDetail.Property(payload):
+                vec.push(payload.setter, "mut");
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 42 {
+        vec.push(module.resolved.project.c_bindings[0].modules,
+            module.resolved.project.c_bindings[0].modules[0]);
+    } else if id == 43 {
+        vec.push(module.resolved.project.c_bindings[0].types, 2);
+    } else if id == 44 {
+        vec.push(module.resolved.project.c_bindings[0].callables, 2);
+    } else if id == 45 {
+        vec.push(module.resolved.project.c_types[0].fields,
+            module.resolved.project.c_types[0].fields[0]);
+    } else if id == 46 {
+        vec.push(module.resolved.project.c_types[0].fields[1].type_ref.args,
+            module.resolved.project.c_types[0].fields[1].type_ref.args[0]);
+    } else if id == 47 {
+        vec.push(module.resolved.project.c_types[0].result.args,
+            module.resolved.project.c_types[0].result.args[0]);
+    } else if id == 48 {
+        vec.push(module.resolved.project.c_types[0].parameters,
+            module.resolved.project.c_types[0].parameters[0]);
+    } else if id == 49 {
+        vec.push(module.resolved.project.c_callables[0].parameters,
+            module.resolved.project.c_callables[0].parameters[0]);
+    } else if id == 50 {
+        vec.push(module.resolved.project.c_callables[0].result.type_ref.args,
+            module.resolved.project.c_callables[0].result.type_ref.args[0]);
+    } else if id == 51 {
+        vec.push(module.resolved.symbols, module.resolved.symbols[0]);
+    } else if id == 52 {
+        vec.push(module.resolved.occurrences, module.resolved.occurrences[0]);
+    } else if id == 53 {
+        vec.push(module.resolved.deferred_members,
+            module.resolved.deferred_members[0]);
+    } else if id == 54 {
+        vec.push(module.resolved.self_parameters,
+            module.resolved.self_parameters[0]);
+    } else if id == 55 {
+        // A new canonical entry, not one of the fixture's 16 types.
+        var fresh = model.empty_type(model.TypeKind.SignedInt);
+        fresh.bits = 8;
+        grow(inout module, fresh);
+    } else if id == 56 {
+        vec.push(module.functions, module.functions[0]);
+    } else if id == 57 {
+        vec.push(module.functions[0].parameters,
+            module.functions[0].parameters[0]);
+    } else if id == 58 {
+        vec.push(module.functions[0].captures,
+            module.functions[0].captures[0]);
+    } else if id == 59 {
+        vec.push(module.nodes, module.nodes[0]);
+    } else if id == 60 {
+        vec.push(module.nodes[0].children, 0);
+    } else if id == 61 {
+        vec.push(module.nodes[14].errors, 3);
+    } else if id == 62 {
+        vec.push(module.nodes[6].exits, module.nodes[6].exits[0]);
+    } else if id == 63 {
+        vec.push(module.nodes[6].exits[0].exited_scopes, 5);
+    } else if id == 64 {
+        vec.push(module.nodes[6].exits[0].defers, 5);
+    } else if id == 65 {
+        vec.push(module.nodes[6].exits[0].actions,
+            module.nodes[6].exits[0].actions[0]);
+    } else if id == 66 {
+        switch module.nodes[7].data {
+            case hir.NodeData.FunctionValue(payload):
+                vec.push(payload.captures, payload.captures[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 67 {
+        switch module.nodes[7].data {
+            case hir.NodeData.FunctionValue(payload):
+                vec.push(payload.type_args, payload.type_args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 68 {
+        switch module.nodes[14].data {
+            case hir.NodeData.Call(payload):
+                vec.push(payload.args, payload.args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 69 {
+        switch module.nodes[14].data {
+            case hir.NodeData.Call(payload):
+                vec.push(payload.type_args, payload.type_args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 70 {
+        switch module.nodes[14].data {
+            case hir.NodeData.Call(payload): vec.push(payload.omitted, 9);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 71 {
+        switch module.nodes[24].data {
+            case hir.NodeData.StructInit(payload):
+                vec.push(payload.fields, payload.fields[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 72 {
+        switch module.nodes[25].data {
+            case hir.NodeData.EnumInit(payload):
+                vec.push(payload.payload, payload.payload[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 73 {
+        switch module.nodes[28].data {
+            case hir.NodeData.Switch(payload):
+                vec.push(payload.arms, payload.arms[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 74 {
+        switch module.nodes[28].data {
+            case hir.NodeData.Switch(payload):
+                vec.push(payload.arms[0].pattern.payload,
+                    payload.arms[0].pattern.payload[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 75 {
+        switch module.nodes[28].data {
+            case hir.NodeData.Switch(payload):
+                vec.push(payload.arms[0].pattern.payload[0].payload,
+                    payload.arms[0].pattern.payload[0].payload[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 76 {
+        switch module.nodes[29].data {
+            case hir.NodeData.ConstraintCall(payload):
+                vec.push(payload.trait_ref.args, payload.trait_ref.args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 77 {
+        switch module.nodes[29].data {
+            case hir.NodeData.ConstraintCall(payload):
+                vec.push(payload.args, payload.args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 78 {
+        switch module.nodes[30].data {
+            case hir.NodeData.Try(payload):
+                vec.push(payload.catches, payload.catches[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 79 {
+        switch module.nodes[31].data {
+            case hir.NodeData.Defer(payload): vec.push(payload.references, 9);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 80 {
+        switch module.nodes[40].data {
+            case hir.NodeData.ConstantLiteral(payload):
+                switch payload.value.data {
+                    case hir.ConstantData.ConstantAggregate(aggregate):
+                        vec.push(aggregate.fields, aggregate.fields[0]);
+                    default: vec.push(module.resolved.project.c_libraries,
+                        "none");
+                }
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 81 {
+        switch module.nodes[40].data {
+            case hir.NodeData.ConstantLiteral(payload):
+                switch payload.value.data {
+                    case hir.ConstantData.ConstantAggregate(aggregate):
+                        switch aggregate.fields[1].data {
+                            case hir.ConstantData.ConstantAggregate(inner):
+                                vec.push(inner.fields, inner.fields[0]);
+                            default: vec.push(module.resolved.project
+                                .c_libraries, "none");
+                        }
+                    default: vec.push(module.resolved.project.c_libraries,
+                        "none");
+                }
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 82 {
+        switch module.nodes[43].data {
+            case hir.NodeData.TraitObjectInit(payload):
+                vec.push(payload.methods, 21);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 83 {
+        switch module.nodes[43].data {
+            case hir.NodeData.TraitObjectInit(payload):
+                vec.push(payload.method_args, payload.method_args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 84 {
+        switch module.nodes[43].data {
+            case hir.NodeData.TraitObjectInit(payload):
+                vec.push(payload.method_args[0], 7);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 85 {
+        switch module.nodes[44].data {
+            case hir.NodeData.TraitDispatch(payload):
+                vec.push(payload.trait_ref.args, payload.trait_ref.args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 86 {
+        switch module.nodes[44].data {
+            case hir.NodeData.TraitDispatch(payload):
+                vec.push(payload.args, payload.args[0]);
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 87 {
+        vec.push(module.scopes, module.scopes[0]);
+    } else if id == 88 {
+        vec.push(module.nominals, module.nominals[0]);
+    } else if id == 89 {
+        vec.push(module.nominals[0].params, module.nominals[0].params[0]);
+    } else if id == 90 {
+        switch module.nominals[0].params[0].trait_ref {
+            case option.Option.Some(item):
+                vec.push(item.args, item.args[0]);
+            case option.Option.None:
+                vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 91 {
+        vec.push(module.nominals[0].fields, module.nominals[0].fields[0]);
+    } else if id == 92 {
+        vec.push(module.nominals[0].variants,
+            module.nominals[0].variants[0]);
+    } else if id == 93 {
+        vec.push(module.nominals[0].variants[0].payload,
+            module.nominals[0].variants[0].payload[0]);
+    } else if id == 94 {
+        vec.push(module.traits, module.traits[0]);
+    } else if id == 95 {
+        vec.push(module.traits[0].params, module.traits[0].params[0]);
+    } else if id == 96 {
+        vec.push(module.traits[0].methods, module.traits[0].methods[0]);
+    } else if id == 97 {
+        vec.push(module.traits[0].methods[0].parameters,
+            module.traits[0].methods[0].parameters[0]);
+    } else if id == 98 {
+        vec.push(module.impls, module.impls[0]);
+    } else if id == 99 {
+        vec.push(module.impls[0].params, module.impls[0].params[0]);
+    } else if id == 100 {
+        switch module.impls[0].trait_ref {
+            case option.Option.Some(item):
+                vec.push(item.args, item.args[0]);
+            case option.Option.None:
+                vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 101 {
+        vec.push(module.impls[0].methods, 9);
+    } else if id == 102 {
+        vec.push(module.templates, module.templates[0]);
+    } else if id == 103 {
+        vec.push(module.templates[0].function.parameters,
+            module.templates[0].function.parameters[0]);
+    } else if id == 104 {
+        vec.push(module.templates[0].function.captures,
+            module.templates[0].function.captures[0]);
+    } else if id == 105 {
+        vec.push(module.templates[0].params, module.templates[0].params[0]);
+    } else if id == 106 {
+        vec.push(module.instances, module.instances[0]);
+    } else if id == 107 {
+        vec.push(module.instances[0].type_args,
+            module.instances[0].type_args[0]);
+    } else if id == 108 {
+        vec.push(module.instances[0].renamed,
+            module.instances[0].renamed[0]);
+    } else if id == 109 {
+        vec.push(module.ownership.uses, module.ownership.uses[0]);
+    } else if id == 110 {
+        vec.push(module.ownership.temporaries,
+            module.ownership.temporaries[0]);
+    } else if id == 111 {
+        vec.push(module.ownership.locals, module.ownership.locals[0]);
+    } else if id == 112 {
+        vec.push(module.ownership.full_expressions,
+            module.ownership.full_expressions[0]);
+    } else if id == 113 {
+        vec.push(module.ownership.full_expressions[0].actions,
+            module.ownership.full_expressions[0].actions[0]);
+    } else if id == 114 {
+        vec.push(module.ownership.calls, module.ownership.calls[0]);
+    } else if id == 115 {
+        vec.push(module.ownership.calls[0].on_return,
+            module.ownership.calls[0].on_return[0]);
+    } else if id == 116 {
+        vec.push(module.foreign_bindings, module.foreign_bindings[0]);
+    } else if id == 117 {
+        switch module.nodes[40].data {
+            case hir.NodeData.ConstantLiteral(payload):
+                switch payload.value.data {
+                    case hir.ConstantData.ConstantAggregate(aggregate):
+                        switch aggregate.fields[2].data {
+                            case hir.ConstantData.FunctionValue(function):
+                                vec.push(function.captures,
+                                    function.captures[0]);
+                            default: vec.push(module.resolved.project
+                                .c_libraries, "none");
+                        }
+                    default: vec.push(module.resolved.project.c_libraries,
+                        "none");
+                }
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else if id == 118 {
+        switch module.nodes[40].data {
+            case hir.NodeData.ConstantLiteral(payload):
+                switch payload.value.data {
+                    case hir.ConstantData.ConstantAggregate(aggregate):
+                        switch aggregate.fields[2].data {
+                            case hir.ConstantData.FunctionValue(function):
+                                vec.push(function.type_args,
+                                    function.type_args[0]);
+                            default: vec.push(module.resolved.project
+                                .c_libraries, "none");
+                        }
+                    default: vec.push(module.resolved.project.c_libraries,
+                        "none");
+                }
+            default: vec.push(module.resolved.project.c_libraries, "none");
+        }
+    } else {
+        vec.push(module.resolved.project.c_libraries, "unknown");
+    }
+}
+
+func probe(module hir.HirModule, id u32, name string) ProbeResult {
+    var left = module;
+    var right = module;
+    var cloned = true;
+    try {
+        left = hirclone.clone_module(module);
+        right = hirclone.clone_module(module);
+    } catch raised model.SupportError {
+        cloned = false;
+    }
+    if !cloned {
+        return failed_probe(name, is_wz_only(id));
+    }
+    let left_before = fingerprint(left);
+    let right_before = fingerprint(right);
+    mutate(inout left, id);
+    let left_changed = fingerprint(left) != left_before;
+    let right_isolated = fingerprint(right) == right_before;
+    let left_after = fingerprint(left);
+    mutate(inout right, id);
+    let reverse_changed = fingerprint(right) != right_before;
+    let reverse_isolated = fingerprint(left) == left_after;
+    return ProbeResult(name: name, wz_only: is_wz_only(id),
+        left_changed: left_changed, right_isolated: right_isolated,
+        reverse_changed: reverse_changed,
+        reverse_isolated: reverse_isolated);
+}
+
+func report(result ProbeResult) i32 throws os.Error {
+    let line = text.join(["PROBE", result.name,
+        "wz_only=" + flag(result.wz_only),
+        "left_changed=" + flag(result.left_changed),
+        "right_isolated=" + flag(result.right_isolated),
+        "reverse_changed=" + flag(result.reverse_changed),
+        "reverse_isolated=" + flag(result.reverse_isolated)], " ");
+    io.println(line);
+    if !result.left_changed || !result.right_isolated ||
+       !result.reverse_changed || !result.reverse_isolated {
+        return 1;
+    }
+    return 0;
+}
+
+func one(module hir.HirModule, id u32, name string) i32 throws os.Error {
+    return report(probe(module, id, name));
+}
+
+// The four narrow entry points clone one record.  Their probes mirror the
+// module probes: clone twice, mutate a Vec in one copy, and require both copies
+// to stay isolated; the pre-mutation fingerprints also prove value fidelity.
+func switch_pattern(module hir.HirModule) hir.Pattern {
+    var value = hir.Pattern(type_id: 0,
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].None);
+    switch module.nodes[28].data {
+        case hir.NodeData.Switch(payload):
+            value = payload.arms[0].pattern;
+        default:
+    }
+    return value;
+}
+
+func constant_value(module hir.HirModule) hir.ConstantValue {
+    var value = hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.UnitLiteral(value: hir.UnitLiteral()));
+    switch module.nodes[40].data {
+        case hir.NodeData.ConstantLiteral(payload):
+            value = payload.value;
+        default:
+    }
+    return value;
+}
+
+func failed_probe(name string, wz_only bool) ProbeResult {
+    return ProbeResult(name: name, wz_only: wz_only, left_changed: false,
+        right_isolated: false, reverse_changed: false,
+        reverse_isolated: false);
+}
+
+func probe_clone_node(module hir.HirModule) ProbeResult {
+    let name = "entry.clone_node";
+    let original = module.nodes[28];
+    let base = fp_hir_node(0, original);
+    var left = original;
+    var right = original;
+    var cloned = true;
+    try {
+        left = hirclone.clone_node(original);
+        right = hirclone.clone_node(original);
+    } catch raised model.SupportError {
+        cloned = false;
+    }
+    if !cloned || fp_hir_node(0, left) != base ||
+       fp_hir_node(0, right) != base {
+        return failed_probe(name, true);
+    }
+    let left_before = fp_hir_node(0, left);
+    let right_before = fp_hir_node(0, right);
+    switch left.data {
+        case hir.NodeData.Switch(payload):
+            vec.push(payload.arms, payload.arms[0]);
+        default:
+            vec.push(left.children, 0);
+    }
+    let left_changed = fp_hir_node(0, left) != left_before;
+    let right_isolated = fp_hir_node(0, right) == right_before;
+    let left_after = fp_hir_node(0, left);
+    switch right.data {
+        case hir.NodeData.Switch(payload):
+            vec.push(payload.arms, payload.arms[0]);
+        default:
+            vec.push(right.children, 0);
+    }
+    return ProbeResult(name: name, wz_only: true,
+        left_changed: left_changed, right_isolated: right_isolated,
+        reverse_changed: fp_hir_node(0, right) != right_before,
+        reverse_isolated: fp_hir_node(0, left) == left_after);
+}
+
+func probe_clone_function(module hir.HirModule) ProbeResult {
+    let name = "entry.clone_function";
+    let original = module.functions[0];
+    let base = fp_hir_function(0, original);
+    var left = original;
+    var right = original;
+    var cloned = true;
+    try {
+        left = hirclone.clone_function(original);
+        right = hirclone.clone_function(original);
+    } catch raised model.SupportError {
+        cloned = false;
+    }
+    if !cloned || fp_hir_function(0, left) != base ||
+       fp_hir_function(0, right) != base {
+        return failed_probe(name, true);
+    }
+    let left_before = fp_hir_function(0, left);
+    let right_before = fp_hir_function(0, right);
+    vec.push(left.parameters, left.parameters[0]);
+    let left_changed = fp_hir_function(0, left) != left_before;
+    let right_isolated = fp_hir_function(0, right) == right_before;
+    let left_after = fp_hir_function(0, left);
+    vec.push(right.parameters, right.parameters[0]);
+    return ProbeResult(name: name, wz_only: true,
+        left_changed: left_changed, right_isolated: right_isolated,
+        reverse_changed: fp_hir_function(0, right) != right_before,
+        reverse_isolated: fp_hir_function(0, left) == left_after);
+}
+
+func probe_clone_pattern(module hir.HirModule) ProbeResult {
+    let name = "entry.clone_pattern";
+    let original = switch_pattern(module);
+    let base = fp_pattern(0, original);
+    var left = original;
+    var right = original;
+    var cloned = true;
+    try {
+        left = hirclone.clone_pattern(original);
+        right = hirclone.clone_pattern(original);
+    } catch raised model.SupportError {
+        cloned = false;
+    }
+    if !cloned || fp_pattern(0, left) != base ||
+       fp_pattern(0, right) != base {
+        return failed_probe(name, true);
+    }
+    let left_before = fp_pattern(0, left);
+    let right_before = fp_pattern(0, right);
+    vec.push(left.payload, left.payload[0]);
+    let left_changed = fp_pattern(0, left) != left_before;
+    let right_isolated = fp_pattern(0, right) == right_before;
+    let left_after = fp_pattern(0, left);
+    vec.push(right.payload, right.payload[0]);
+    return ProbeResult(name: name, wz_only: true,
+        left_changed: left_changed, right_isolated: right_isolated,
+        reverse_changed: fp_pattern(0, right) != right_before,
+        reverse_isolated: fp_pattern(0, left) == left_after);
+}
+
+func probe_clone_constant(module hir.HirModule) ProbeResult {
+    let name = "entry.clone_constant";
+    let original = constant_value(module);
+    let base = fp_constant_value(0, original);
+    var left = original;
+    var right = original;
+    var cloned = true;
+    try {
+        left = hirclone.clone_constant(original);
+        right = hirclone.clone_constant(original);
+    } catch raised model.SupportError {
+        cloned = false;
+    }
+    if !cloned || fp_constant_value(0, left) != base ||
+       fp_constant_value(0, right) != base {
+        return failed_probe(name, true);
+    }
+    let left_before = fp_constant_value(0, left);
+    let right_before = fp_constant_value(0, right);
+    switch left.data {
+        case hir.ConstantData.ConstantAggregate(payload):
+            vec.push(payload.fields, payload.fields[0]);
+        default:
+    }
+    let left_changed = fp_constant_value(0, left) != left_before;
+    let right_isolated = fp_constant_value(0, right) == right_before;
+    let left_after = fp_constant_value(0, left);
+    switch right.data {
+        case hir.ConstantData.ConstantAggregate(payload):
+            vec.push(payload.fields, payload.fields[0]);
+        default:
+    }
+    return ProbeResult(name: name, wz_only: true,
+        left_changed: left_changed, right_isolated: right_isolated,
+        reverse_changed: fp_constant_value(0, right) != right_before,
+        reverse_isolated: fp_constant_value(0, left) == left_after);
+}
+
+pub func run_probes(module hir.HirModule) i32 throws os.Error {
+    var failures i32 = 0;
+    failures += one(module, 0, "project.files");
+    failures += one(module, 1, "project.modules");
+    failures += one(module, 2, "project.bindings");
+    failures += one(module, 3, "project.foreign_bindings");
+    failures += one(module, 4, "project.c_bindings");
+    failures += one(module, 5, "project.c_types");
+    failures += one(module, 6, "project.c_callables");
+    failures += one(module, 7, "project.c_libraries");
+    failures += one(module, 8, "project.c_library_dirs");
+    failures += one(module, 9, "source.original");
+    failures += one(module, 10, "source.normalized");
+    failures += one(module, 11, "source.offsets");
+    failures += one(module, 12, "source.boundaries");
+    failures += one(module, 13, "lexed.tokens");
+    failures += one(module, 14, "lexed.tokens.trivia");
+    failures += one(module, 15, "lexed.diagnostics");
+    failures += one(module, 16, "lexed.diagnostics.related");
+    failures += one(module, 17, "lexed.diagnostics.fixits");
+    failures += one(module, 18, "lexed.diagnostics.notes");
+    failures += one(module, 19, "parse.nodes");
+    failures += one(module, 20, "parse.nodes.children");
+    failures += one(module, 21, "parse.diagnostics");
+    failures += one(module, 22, "parse.diagnostics.related");
+    failures += one(module, 23, "module.files");
+    failures += one(module, 24, "module.imports");
+    failures += one(module, 25, "module.foreign_exports");
+    failures += one(module, 26, "module.foreign_exports.candidates");
+    failures += one(module, 27, "module.foreign_exports.c_type_ref.args");
+    failures += one(module, 28, "binding.allowed_backends");
+    failures += one(module, 29, "binding.package_requirements");
+    failures += one(module, 30, "binding.modules");
+    failures += one(module, 31, "binding.declarations");
+    failures += one(module, 32, "binding.conformance_required");
+    failures += one(module, 33, "foreign.host_attribute");
+    failures += one(module, 34, "foreign.type.members");
+    failures += one(module, 35, "foreign.type.properties");
+    failures += one(module, 36, "foreign.type.indexers");
+    failures += one(module, 37, "foreign.type.slices");
+    failures += one(module, 38, "foreign.callable.parameters");
+    failures += one(module, 39, "foreign.callable.effects");
+    failures += one(module, 40, "foreign.property.getter");
+    failures += one(module, 41, "foreign.property.setter");
+    failures += one(module, 42, "c_binding.modules");
+    failures += one(module, 43, "c_binding.types");
+    failures += one(module, 44, "c_binding.callables");
+    failures += one(module, 45, "c_type.fields");
+    failures += one(module, 46, "c_type.field.type.args");
+    failures += one(module, 47, "c_type.result.args");
+    failures += one(module, 48, "c_type.parameters");
+    failures += one(module, 49, "c_callable.parameters");
+    failures += one(module, 50, "c_callable.result.type.args");
+    failures += one(module, 51, "resolved.symbols");
+    failures += one(module, 52, "resolved.occurrences");
+    failures += one(module, 53, "resolved.deferred_members");
+    failures += one(module, 54, "resolved.self_parameters");
+    failures += one(module, 55, "types.entries");
+    failures += one(module, 56, "functions");
+    failures += one(module, 57, "functions.parameters");
+    failures += one(module, 58, "functions.captures");
+    failures += one(module, 59, "nodes");
+    failures += one(module, 60, "nodes.children");
+    failures += one(module, 61, "nodes.errors");
+    failures += one(module, 62, "nodes.exits");
+    failures += one(module, 63, "nodes.exits.exited_scopes");
+    failures += one(module, 64, "nodes.exits.defers");
+    failures += one(module, 65, "nodes.exits.actions");
+    failures += one(module, 66, "function_value.captures");
+    failures += one(module, 67, "function_value.type_args");
+    failures += one(module, 68, "call.args");
+    failures += one(module, 69, "call.type_args");
+    failures += one(module, 70, "call.omitted");
+    failures += one(module, 71, "struct_init.fields");
+    failures += one(module, 72, "enum_init.payload");
+    failures += one(module, 73, "switch.arms");
+    failures += one(module, 74, "pattern.payload");
+    failures += one(module, 75, "pattern.payload.nested");
+    failures += one(module, 76, "constraint_call.trait_ref.args");
+    failures += one(module, 77, "constraint_call.args");
+    failures += one(module, 78, "try.catches");
+    failures += one(module, 79, "defer.references");
+    failures += one(module, 80, "constant.aggregate.fields");
+    failures += one(module, 81, "constant.aggregate.nested_fields");
+    failures += one(module, 82, "trait_object.methods");
+    failures += one(module, 83, "trait_object.method_args");
+    failures += one(module, 84, "trait_object.method_args.nested");
+    failures += one(module, 85, "trait_dispatch.trait_ref.args");
+    failures += one(module, 86, "trait_dispatch.args");
+    failures += one(module, 87, "scopes");
+    failures += one(module, 88, "nominals");
+    failures += one(module, 89, "nominals.params");
+    failures += one(module, 90, "nominals.params.trait_ref.args");
+    failures += one(module, 91, "nominals.fields");
+    failures += one(module, 92, "nominals.variants");
+    failures += one(module, 93, "nominals.variants.payload");
+    failures += one(module, 94, "traits");
+    failures += one(module, 95, "traits.params");
+    failures += one(module, 96, "traits.methods");
+    failures += one(module, 97, "traits.methods.parameters");
+    failures += one(module, 98, "impls");
+    failures += one(module, 99, "impls.params");
+    failures += one(module, 100, "impls.trait_ref.args");
+    failures += one(module, 101, "impls.methods");
+    failures += one(module, 102, "templates");
+    failures += one(module, 103, "templates.function.parameters");
+    failures += one(module, 104, "templates.function.captures");
+    failures += one(module, 105, "templates.params");
+    failures += one(module, 106, "instances");
+    failures += one(module, 107, "instances.type_args");
+    failures += one(module, 108, "instances.renamed");
+    failures += one(module, 109, "ownership.uses");
+    failures += one(module, 110, "ownership.temporaries");
+    failures += one(module, 111, "ownership.locals");
+    failures += one(module, 112, "ownership.full_expressions");
+    failures += one(module, 113, "ownership.full_expressions.actions");
+    failures += one(module, 114, "ownership.calls");
+    failures += one(module, 115, "ownership.calls.on_return");
+    failures += one(module, 116, "hir.foreign_bindings");
+    failures += one(module, 117, "constant.function.captures");
+    failures += one(module, 118, "constant.function.type_args");
+    failures += report(probe_clone_node(module));
+    failures += report(probe_clone_function(module));
+    failures += report(probe_clone_pattern(module));
+    failures += report(probe_clone_constant(module));
+    return failures;
+}

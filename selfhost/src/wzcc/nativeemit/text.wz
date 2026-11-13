@@ -1,0 +1,303 @@
+package nativeemit;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func invalid(message string) Error {
+    return Error.Failure("E_IR_INVALID", model.FailureKind.Internal, message);
+}
+func number(value usize) string { return strconv.format_u64(u64(value)); }
+
+pub func typed(value Value) string { return value.type_name + " " + value.reference; }
+
+// LLVM byte strings escape bytes, not Unicode scalar numbers.
+pub func escape_bytes(value Vec[u8]) string throws Error {
+    let hex = text.bytes("0123456789ABCDEF");
+    var out = vec.empty[u8]();
+    for byte in value {
+        if byte >= 32 && byte <= 126 && byte != 34 && byte != 92 {
+            vec.push(out, byte);
+        } else {
+            vec.push(out, 92);
+            vec.push(out, hex[usize(byte / 16)]);
+            vec.push(out, hex[usize(byte % 16)]);
+        }
+    }
+    try { return text.from_bytes(out); }
+    catch error text.Error { throw invalid("LLVM escape produced invalid ASCII"); }
+}
+pub func llvm_bytes(value Vec[u8]) string throws Error {
+    return "c\"" + escape_bytes(value) + "\"";
+}
+pub func llvm_string(value string) string throws Error { return llvm_bytes(text.bytes(value)); }
+pub func quoted_name(name string) string throws Error {
+    return "\"" + escape_bytes(text.bytes(name)) + "\"";
+}
+pub func global_reference(name string) string throws Error { return "@" + quoted_name(name); }
+pub func type_reference(name string) string throws Error { return "%" + quoted_name(name); }
+
+pub func same_signature(left Signature, right Signature) bool {
+    if left.result != right.result || vec.len(left.parameters) != vec.len(right.parameters) { return false; }
+    for var index usize = 0; index < vec.len(left.parameters); index += 1 {
+        if left.parameters[index] != right.parameters[index] { return false; }
+    }
+    return true;
+}
+func copy_signature(value Signature) Signature {
+    var parameters = vec.empty[string]();
+    for parameter in value.parameters { vec.push(parameters, parameter); }
+    return Signature(result: value.result, parameters: parameters);
+}
+func check_function(state Emitter, index usize) throws Error {
+    if index >= vec.len(state.functions) { throw invalid("LLVM function index out of range"); }
+}
+func check_block(state Emitter, function_index usize, block_index usize) throws Error {
+    check_function(state, function_index);
+    if block_index >= vec.len(state.functions[function_index].blocks) { throw invalid("LLVM block index out of range"); }
+}
+func current_function(state Emitter) usize throws Error {
+    switch state.cursor.function_index {
+        case option.Option.None: throw invalid("no LLVM function selected");
+        case option.Option.Some(index): { check_function(state, index); return index; }
+    }
+}
+func current_block(state Emitter) usize throws Error {
+    let function_index = current_function(state);
+    switch state.cursor.block_index {
+        case option.Option.None: throw invalid("no LLVM block selected");
+        case option.Option.Some(index): { check_block(state, function_index, index); return index; }
+    }
+}
+func global_name_available(state Emitter, name string) throws Error {
+    if name == "" { throw invalid("empty LLVM symbol name"); }
+    for global in state.globals {
+        if global.name == name { throw invalid("LLVM symbol already names a global: " + name); }
+    }
+}
+
+pub func define_type(name string, body string, state inout Emitter) string throws Error {
+    if name == "" || body == "" { throw invalid("empty LLVM type definition"); }
+    for item in state.type_definitions {
+        if item.name == name {
+            if item.text != body { throw invalid("conflicting LLVM type definition: " + name); }
+            return type_reference(name);
+        }
+    }
+    vec.push(state.type_definitions, NamedText(name: name, text: body));
+    return type_reference(name);
+}
+pub func declare_runtime_types(state inout Emitter) throws Error {
+    let vec_type = define_type("lang.vec", "{ i64, i64, i64, i64, i64, ptr, ptr, ptr, i64, ptr }", inout state);
+    let fn_type = define_type("lang.fn", "{ ptr, ptr }", inout state);
+    let weak_type = define_type("lang.weak", "{ ptr, ptr }", inout state);
+    let dyn_type = define_type("lang.dyn", "{ ptr, ptr }", inout state);
+    let handle_type = define_type("lang.handle", "{ i64, i64, ptr, ptr }", inout state);
+    let slice_type = define_type("lang.slice", "{ ptr, i64, i64 }", inout state);
+    let string_type = define_type("lang.string", "{ ptr, i64, i64, ptr }", inout state);
+}
+pub func define_global(name string, body string, state inout Emitter) Value throws Error {
+    if name == "" || body == "" { throw invalid("empty LLVM global definition"); }
+    for item in state.globals {
+        if item.name == name {
+            if item.text != body { throw invalid("conflicting LLVM global definition: " + name); }
+            return Value(type_name: "ptr", reference: global_reference(name));
+        }
+    }
+    for item in state.declarations { if item.name == name { throw invalid("LLVM global collides with a function: " + name); } }
+    for item in state.functions { if item.name == name { throw invalid("LLVM global collides with a function: " + name); } }
+    vec.push(state.globals, NamedText(name: name, text: body));
+    return Value(type_name: "ptr", reference: global_reference(name));
+}
+pub func declare_function(name string, signature Signature, state inout Emitter) Value throws Error {
+    global_name_available(state, name);
+    for item in state.functions {
+        if item.name == name {
+            if !same_signature(item.signature, signature) { throw invalid("conflicting LLVM function signature: " + name); }
+            return Value(type_name: "ptr", reference: global_reference(name));
+        }
+    }
+    for item in state.declarations {
+        if item.name == name {
+            if !same_signature(item.signature, signature) { throw invalid("conflicting LLVM declaration: " + name); }
+            return Value(type_name: "ptr", reference: global_reference(name));
+        }
+    }
+    vec.push(state.declarations, Declaration(name: name, signature: copy_signature(signature)));
+    return Value(type_name: "ptr", reference: global_reference(name));
+}
+pub func define_metadata(key string, body string, state inout Emitter) string throws Error {
+    if key == "" || body == "" { throw invalid("empty LLVM metadata definition"); }
+    for var index usize = 0; index < vec.len(state.metadata); index += 1 {
+        if state.metadata[index].key == key {
+            if state.metadata[index].body != body { throw invalid("conflicting LLVM metadata: " + key); }
+            return "!" + number(index);
+        }
+    }
+    let index = vec.len(state.metadata);
+    vec.push(state.metadata, MetadataText(key: key, body: body));
+    return "!" + number(index);
+}
+
+// Adding a function or block does not change cursor or FunctionFrame.
+pub func new_function(name string, signature Signature, linkage string, attributes string, state inout Emitter) usize throws Error {
+    global_name_available(state, name);
+    for item in state.functions { if item.name == name { throw invalid("duplicate LLVM function definition: " + name); } }
+    for item in state.declarations {
+        if item.name == name && !same_signature(item.signature, signature) { throw invalid("conflicting LLVM function signature: " + name); }
+    }
+    let index = vec.len(state.functions);
+    vec.push(state.functions, FunctionText(name: name, signature: copy_signature(signature), linkage: linkage,
+        attributes: attributes, blocks: [], next_value: 0, next_label: 0));
+    return index;
+}
+pub func function_reference(state Emitter, function_index usize) Value throws Error {
+    check_function(state, function_index);
+    return Value(type_name: "ptr", reference: global_reference(state.functions[function_index].name));
+}
+pub func parameter(state Emitter, function_index usize, index usize) Value throws Error {
+    check_function(state, function_index);
+    if index >= vec.len(state.functions[function_index].signature.parameters) { throw invalid("LLVM parameter index out of range"); }
+    return Value(type_name: state.functions[function_index].signature.parameters[index], reference: "%p" + number(index));
+}
+pub func new_block(function_index usize, prefix string, state inout Emitter) BlockRef throws Error {
+    check_function(state, function_index);
+    if prefix == "" { throw invalid("empty LLVM block prefix"); }
+    let label = state.functions[function_index].next_label;
+    if label == 18446744073709551615 { throw invalid("LLVM block label overflow"); }
+    state.functions[function_index].next_label = label + 1;
+    let index = vec.len(state.functions[function_index].blocks);
+    let name = prefix + "." + number(label);
+    vec.push(state.functions[function_index].blocks, BlockText(label: name,
+        prefix: [], lines: [], terminated: false));
+    return BlockRef(function_index: function_index, block_index: index, reference: "%" + quoted_name(name));
+}
+pub func position(block BlockRef, state inout Emitter) throws Error {
+    check_block(state, block.function_index, block.block_index);
+    let expected = "%" + quoted_name(state.functions[block.function_index].blocks[block.block_index].label);
+    if block.reference != expected { throw invalid("LLVM block reference does not match its indices"); }
+    state.cursor = Cursor(function_index: option.Option[usize].Some(block.function_index), block_index: option.Option[usize].Some(block.block_index));
+}
+pub func save_cursor(state Emitter) Cursor { return state.cursor; }
+pub func here(state Emitter) BlockRef throws Error {
+    let function_index = current_function(state);
+    let block_index = current_block(state);
+    return BlockRef(function_index: function_index, block_index: block_index,
+        reference: "%" + quoted_name(state.functions[function_index].blocks[block_index].label));
+}
+pub func restore_cursor(cursor Cursor, state inout Emitter) throws Error {
+    switch cursor.function_index {
+        case option.Option.None: {
+            switch cursor.block_index {
+                case option.Option.Some(index): throw invalid("block cursor without a function");
+                case option.Option.None: { state.cursor = cursor; }
+            }
+        }
+        case option.Option.Some(function_index): {
+            switch cursor.block_index {
+                case option.Option.None: throw invalid("function cursor without a block");
+                case option.Option.Some(block_index): {
+                    check_block(state, function_index, block_index);
+                    state.cursor = cursor;
+                }
+            }
+        }
+    }
+}
+pub func fresh_value(type_name string, state inout Emitter) Value throws Error {
+    let function_index = current_function(state);
+    let block_index = current_block(state);
+    if type_name == "" || type_name == "void" { throw invalid("LLVM SSA value requires a non-void type"); }
+    let index = state.functions[function_index].next_value;
+    if index == 18446744073709551615 { throw invalid("LLVM SSA id overflow"); }
+    state.functions[function_index].next_value = index + 1;
+    return Value(type_name: type_name, reference: "%v" + number(index));
+}
+pub func append(line string, state inout Emitter) throws Error {
+    let function_index = current_function(state);
+    let block_index = current_block(state);
+    if state.functions[function_index].blocks[block_index].terminated { throw invalid("instruction after LLVM terminator"); }
+    vec.push(state.functions[function_index].blocks[block_index].lines, line);
+}
+pub func result(type_name string, expression string, state inout Emitter) Value throws Error {
+    let value = fresh_value(type_name, inout state);
+    append(value.reference + " = " + expression, inout state);
+    return value;
+}
+pub func terminate(line string, state inout Emitter) throws Error {
+    if line == "" { throw invalid("empty LLVM terminator"); }
+    append(line, inout state);
+    let function_index = current_function(state);
+    let block_index = current_block(state);
+    state.functions[function_index].blocks[block_index].terminated = true;
+}
+pub func entry_result(type_name string, expression string, state inout Emitter) Value throws Error {
+    let function_index = current_function(state);
+    check_block(state, function_index, 0);
+    let value = fresh_value(type_name, inout state);
+    vec.push(state.functions[function_index].blocks[0].prefix, value.reference + " = " + expression);
+    return value;
+}
+pub func reserve_prefix(state inout Emitter) PrefixRef throws Error {
+    let function_index = current_function(state);
+    let block_index = current_block(state);
+    let index = vec.len(state.functions[function_index].blocks[block_index].prefix);
+    vec.push(state.functions[function_index].blocks[block_index].prefix, "");
+    return PrefixRef(function_index: function_index, block_index: block_index, index: index);
+}
+pub func set_prefix(slot PrefixRef, line string, state inout Emitter) throws Error {
+    check_block(state, slot.function_index, slot.block_index);
+    if line == "" || slot.index >= vec.len(state.functions[slot.function_index].blocks[slot.block_index].prefix) {
+        throw invalid("invalid LLVM prefix replacement");
+    }
+    state.functions[slot.function_index].blocks[slot.block_index].prefix[slot.index] = line;
+}
+
+pub func allocation_size(type_name string) Value {
+    return Value(type_name: "i64", reference: "ptrtoint (ptr getelementptr (" +
+        type_name + ", ptr null, i32 1) to i64)");
+}
+
+// Chunks keep production output from concatenating the whole module. The
+// driver can write/buffer them; this function does not run any LLVM tool.
+pub func sections(state Emitter) Vec[string] throws Error {
+    var out = vec.empty[string]();
+    vec.push(out, "; ModuleID = 'lang.native.scalars'\nsource_filename = \"lang.native.scalars\"\n");
+    vec.push(out, "target datalayout = \"" + state.data_layout + "\"\ntarget triple = \"" + state.options.triple + "\"\n\n");
+    for item in state.type_definitions { vec.push(out, type_reference(item.name) + " = type " + item.text + "\n"); }
+    for item in state.globals { vec.push(out, global_reference(item.name) + " = " + item.text + "\n"); }
+    for item in state.declarations {
+        var defined = false;
+        for function in state.functions { if function.name == item.name { defined = true; } }
+        if !defined { vec.push(out, "declare " + item.signature.result + " " + global_reference(item.name) +
+            "(" + text.join(item.signature.parameters, ", ") + ")\n"); }
+    }
+    for function in state.functions {
+        if vec.len(function.blocks) == 0 { throw invalid("LLVM function has no blocks: " + function.name); }
+        var parameters = vec.empty[string]();
+        for var index usize = 0; index < vec.len(function.signature.parameters); index += 1 {
+            vec.push(parameters, function.signature.parameters[index] + " %p" + number(index));
+        }
+        var header = "define ";
+        if function.linkage != "" { header += function.linkage + " "; }
+        header += function.signature.result + " " + global_reference(function.name) + "(" + text.join(parameters, ", ") + ")";
+        if function.attributes != "" { header += " " + function.attributes; }
+        vec.push(out, "\n" + header + " {\n");
+        for block in function.blocks {
+            if !block.terminated { throw invalid("LLVM block has no terminator: " + function.name + ":" + block.label); }
+            vec.push(out, quoted_name(block.label) + ":\n");
+            for line in block.prefix {
+                if line == "" { throw invalid("unfilled LLVM prefix: " + function.name + ":" + block.label); }
+                vec.push(out, "  " + line + "\n");
+            }
+            for line in block.lines { vec.push(out, "  " + line + "\n"); }
+        }
+        vec.push(out, "}\n");
+    }
+    for var index usize = 0; index < vec.len(state.metadata); index += 1 {
+        vec.push(out, "!" + number(index) + " = " + state.metadata[index].body + "\n");
+    }
+    return out;
+}

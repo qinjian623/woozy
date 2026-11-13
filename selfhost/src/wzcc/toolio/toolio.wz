@@ -1,0 +1,256 @@
+// Private output staging and fixed-tool execution for the self-hosted driver.
+package toolio;
+
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/path" as path;
+import "std/process" as process;
+import "std/random" as random;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub enum Error {
+    System(problem os.Error);
+    Rollback(backup string, problem os.Error);
+}
+
+pub struct Stage {
+    pub directory string;
+    pub path string;
+    pub preserve bool;
+}
+
+pub struct ProcessResult {
+    pub exit_code i32;
+    pub signalled bool;
+    pub output Vec[u8];
+}
+
+func invalid() os.Error { return os.Error.System(22, 0); }
+
+func no_nul(value string) bool {
+    for byte in text.bytes(value) { if byte == 0 { return false; } }
+    return true;
+}
+
+func safe_name(value string) bool {
+    if value == "" || value == "." || value == ".." { return false; }
+    for byte in text.bytes(value) {
+        if !((byte >= 65 && byte <= 90) || (byte >= 97 && byte <= 122) ||
+             (byte >= 48 && byte <= 57) || byte == 45 || byte == 46 || byte == 95) {
+            return false;
+        }
+    }
+    return true;
+}
+
+// Do not clean '..' before the filesystem resolves an earlier symlink.
+func child(directory string, name string) string {
+    if text.ends_with(directory, "/") { return directory + name; }
+    return directory + "/" + name;
+}
+
+func stage_shape(value Stage) bool {
+    if !path.is_absolute(value.directory) || !path.is_absolute(value.path) ||
+       !no_nul(value.directory) || !no_nul(value.path) { return false; }
+    let name = path.base(value.path);
+    return safe_name(name) && text.starts_with(name, ".woozyc-") &&
+        value.path == child(value.directory, name);
+}
+
+pub func stage(out string, prefix string) Stage throws Error {
+    if out == "" || !no_nul(out) || !safe_name(prefix) {
+        throw Error.System(invalid());
+    }
+    try {
+        var directory = out;
+        if !path.is_absolute(directory) { directory = child(os.getcwd(), directory); }
+        fs.create_dir_all(directory, 0o777);
+        let pid = strconv.format_i64(i64(os.getpid()));
+        for true {
+            let nonce = strconv.format_u64(random.secure_u64());
+            let name = child(directory, ".woozyc-" + prefix + "-" + pid + "-" + nonce);
+            try { os.mkdir(name, 0o700); }
+            catch problem os.Error {
+                switch problem {
+                    case os.Error.System(code, completed): {
+                        if code == 17 { continue; }
+                    }
+                    default: {}
+                }
+                throw problem;
+            }
+            return Stage(directory: directory, path: name, preserve: false);
+        }
+    } catch problem os.Error { throw Error.System(problem); }
+}
+
+func close_quietly(file os.File) {
+    try { os.close(file); } catch problem os.Error {}
+}
+
+func remove_tree(name string) {
+    try {
+        let info = os.lstat(name);
+        if fs.is_dir(info) {
+            for entry in fs.read_dir(name) {
+                try { remove_tree(child(name, fs.name_text(entry))); }
+                catch problem os.Error {}
+            }
+            os.rmdir(name);
+        } else {
+            // lstat sees the link itself; unlink never removes its target.
+            os.unlink(name);
+        }
+    } catch problem os.Error {}
+}
+
+pub func cleanup(value Stage) {
+    if value.preserve || !stage_shape(value) { return; }
+    remove_tree(value.path);
+}
+
+func capture_file(name string) os.File throws os.Error {
+    let opened = vec.empty[os.File]();
+    var created = false;
+    var returned = false;
+    defer {
+        for file in opened {
+            if !returned || os.fd(file) < 3 { close_quietly(file); }
+        }
+        if created { try { os.unlink(name); } catch problem os.Error {} }
+    }
+    var flags = os.O_RDWR | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW;
+    for true {
+        let file = os.open(name, flags, 0o600);
+        vec.push(opened, file);
+        created = true;
+        let info = os.fstat(file);
+        if !fs.is_file(info) { throw invalid(); }
+        let original = os.fstat(opened[0]);
+        if info.device != original.device || info.inode != original.inode { throw invalid(); }
+        if os.fd(file) >= 3 {
+            os.unlink(name);
+            created = false;
+            returned = true;
+            return file;
+        }
+        // Hold every low slot open until a CLOEXEC open obtains fd >= 3.
+        flags = os.O_RDWR | os.O_CLOEXEC | os.O_NOFOLLOW;
+    }
+}
+
+pub func run(argv Vec[string], capture_path string) ProcessResult throws Error {
+    if vec.len(argv) == 0 || argv[0] == "" || !path.is_absolute(argv[0]) ||
+       capture_path == "" || !no_nul(capture_path) {
+        throw Error.System(invalid());
+    }
+    for argument in argv { if !no_nul(argument) { throw Error.System(invalid()); } }
+    try {
+        let file = capture_file(capture_path);
+        defer { close_quietly(file); }
+        let descriptor = os.fd(file);
+        let environment = process.environment();
+        let pid = process.spawn_with(argv[0], argv, environment, -1, descriptor, descriptor);
+        let status = process.wait(pid);
+        os.lseek(file, 0, os.SEEK_SET);
+        let output = io.read_all(file);
+        let signalled = process.signaled(status);
+        var exit_code = process.exit_status(status);
+        if signalled { exit_code = 128 + process.term_signal(status); }
+        return ProcessResult(exit_code: exit_code, signalled: signalled, output: output);
+    } catch problem os.Error { throw Error.System(problem); }
+}
+
+func regular_or_missing(name string) bool throws os.Error {
+    try {
+        let info = os.lstat(name);
+        if !fs.is_file(info) { throw invalid(); }
+        return true;
+    } catch problem os.Error {
+        switch problem {
+            case os.Error.System(code, completed): { if code == 2 { return false; } }
+            default: {}
+        }
+        throw problem;
+    }
+}
+
+func backup_first(source string, directory string, first string,
+                  second string) string throws os.Error {
+    let input = os.open(source, os.O_RDONLY | os.O_CLOEXEC | os.O_NOFOLLOW, 0);
+    defer { close_quietly(input); }
+    let info = os.fstat(input);
+    if !fs.is_file(info) { throw invalid(); }
+    for true {
+        let name = ".woozyc-previous-" + strconv.format_u64(random.secure_u64());
+        if name == first || name == second { continue; }
+        let destination = child(directory, name);
+        var output = os.from_fd(-1);
+        try {
+            output = os.open(destination,
+                os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600);
+        } catch problem os.Error {
+            switch problem {
+                case os.Error.System(code, completed): { if code == 17 { continue; } }
+                default: {}
+            }
+            throw problem;
+        }
+        defer { close_quietly(output); }
+        let buffer = vec.make[u8](16384, 0);
+        for true {
+            var count usize = 0;
+            try { count = os.read(input, buffer, vec.len(buffer)); }
+            catch problem os.Error {
+                switch problem { case os.Error.Interrupted(code, completed): continue; default: throw problem; }
+            }
+            if count == 0 { break; }
+            os.write_all(output, buffer[:count]);
+        }
+        os.fchmod(output, info.mode & 0o7777);
+        return destination;
+    }
+}
+
+pub func publish_pair(value inout Stage, first string, second string) throws Error {
+    if !stage_shape(value) || value.preserve || !safe_name(first) ||
+       !safe_name(second) || first == second { throw Error.System(invalid()); }
+    let directory = value.directory;
+    let staging = value.path;
+    let target_first = child(directory, first);
+    let target_second = child(directory, second);
+    let source_first = child(staging, first);
+    let source_second = child(staging, second);
+    var backup = "";
+    var had_first = false;
+    try {
+        if !fs.is_dir(os.lstat(staging)) { throw invalid(); }
+        had_first = regular_or_missing(target_first);
+        regular_or_missing(target_second);
+        regular_or_missing(source_first);
+        regular_or_missing(source_second);
+        if had_first { backup = backup_first(target_first, staging, first, second); }
+    } catch problem os.Error { throw Error.System(problem); }
+    var published = false;
+    try {
+        os.rename(source_first, target_first);
+        published = true;
+        os.rename(source_second, target_second);
+    } catch problem os.Error {
+        if published {
+            try {
+                if had_first { os.rename(backup, target_first); }
+                else { os.unlink(target_first); }
+            } catch restore os.Error {
+                value.preserve = true;
+                if !had_first { backup = target_first; }
+                throw Error.Rollback(backup: backup, problem: restore);
+            }
+        }
+        throw Error.System(problem);
+    }
+    // shortcut: reported rename errors roll back; process interruption is not transactional.
+}

@@ -1,0 +1,142 @@
+package app;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit" as n;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func input() nativeir.Module {
+    let resolved = model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    return nativeir.empty_module(hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64)));
+}
+func checks() Vec[string] throws n.Error {
+    var state = n.new_emitter(input(), n.default_options());
+    try { let private_type = types.intern(inout state.storage_types, model.empty_type(model.TypeKind.Unit)); }
+    catch error types.Error { return []; }
+    if types.size(state.input.hir.types) != 0 || types.size(state.storage_types) != 1 { return []; }
+    n.declare_runtime_types(inout state);
+    n.declare_runtime_types(inout state);
+    if vec.len(state.type_definitions) != 7 { return []; }
+    let pair = n.define_type("Pair", "{ i32, i32 }", inout state);
+    let pair_again = n.define_type("Pair", "{ i32, i32 }", inout state);
+    if pair != pair_again { return []; }
+    var rejected = false;
+    try { let bad = n.define_type("Pair", "{ i64 }", inout state); }
+    catch error n.Error { rejected = true; }
+    if !rejected { return []; }
+    if n.llvm_bytes([u8(0), u8(34), u8(92), u8(128), u8(255)]) != "c\"\\00\\22\\5C\\80\\FF\"" { return []; }
+    let bytes = n.define_global("bytes", "private constant [5 x i8] " +
+        n.llvm_bytes([u8(0), u8(34), u8(92), u8(128), u8(255)]) + ", align 1", inout state);
+    let bytes_again = n.define_global("bytes", "private constant [5 x i8] " +
+        n.llvm_bytes([u8(0), u8(34), u8(92), u8(128), u8(255)]) + ", align 1", inout state);
+    if vec.len(state.globals) != 1 || bytes.reference != bytes_again.reference { return []; }
+    let signature = n.Signature(result: "i32", parameters: ["i32"]);
+    let target = n.declare_function("twice", signature, inout state);
+    let target_again = n.declare_function("twice", signature, inout state);
+    if vec.len(state.declarations) != 1 || target.reference != target_again.reference { return []; }
+    var mutable_parameters Vec[string] = ["i32"];
+    let mutable_signature = n.Signature(result: "i32", parameters: mutable_parameters);
+    let frozen_declaration = n.declare_function("frozen.decl", mutable_signature, inout state);
+    let frozen_function = n.new_function("frozen.fn", mutable_signature, "internal", "", inout state);
+    mutable_parameters[0] = "i64";
+    vec.push(mutable_parameters, "i32");
+    if vec.len(state.declarations[1].signature.parameters) != 1 ||
+       state.declarations[1].signature.parameters[0] != "i32" ||
+       vec.len(state.functions[frozen_function].signature.parameters) != 1 ||
+       state.functions[frozen_function].signature.parameters[0] != "i32" { return []; }
+    let frozen_entry = n.new_block(frozen_function, "entry", inout state);
+    n.position(frozen_entry, inout state);
+    n.terminate("ret i32 %p0", inout state);
+    let root = n.define_metadata("tbaa.root", "!{!\"test\"}", inout state);
+    let leaf = n.define_metadata("tbaa.leaf", "!{!\"scalar\", " + root + ", i64 0}", inout state);
+    let tag = n.define_metadata("tbaa.tag", "!{" + leaf + ", " + leaf + ", i64 0}", inout state);
+    let same_tag = n.define_metadata("tbaa.tag", "!{" + leaf + ", " + leaf + ", i64 0}", inout state);
+    if tag != same_tag || vec.len(state.metadata) != 3 { return []; }
+    let empty_cursor = n.save_cursor(state);
+    let main = n.new_function("main", n.Signature(result: "i32", parameters: []), "", "", inout state);
+    let entry = n.new_block(main, "entry", inout state);
+    n.position(entry, inout state);
+    vec.push(state.frame.values, n.ValueBinding(value_id: 0, type_id: 0, value: n.Value(type_name: "i32", reference: "42")));
+    let seed = n.result("i32", "add i32 20, 1", inout state);
+    let caller = n.save_cursor(state);
+    let helper = n.new_function("twice", signature, "internal", "", inout state);
+    let helper_entry = n.new_block(helper, "entry", inout state);
+    n.position(helper_entry, inout state);
+    let parameter = n.parameter(state, helper, 0);
+    let doubled = n.result("i32", "mul " + n.typed(parameter) + ", 2", inout state);
+    n.terminate("ret " + n.typed(doubled), inout state);
+    if doubled.reference != seed.reference { return []; }
+    n.restore_cursor(caller, inout state);
+    if vec.len(state.frame.values) != 1 || state.frame.values[0].value.reference != "42" { return []; }
+    let answer = n.result("i32", "call i32 " + target.reference + "(" + n.typed(seed) + ")", inout state);
+    let loop = n.new_block(main, "loop", inout state);
+    let done = n.new_block(main, "done", inout state);
+    let body = n.new_block(main, "body", inout state);
+    n.terminate("br label " + loop.reference, inout state);
+    n.position(loop, inout state);
+    let index = n.fresh_value("i32", inout state);
+    let phi = n.reserve_prefix(inout state);
+    let more = n.result("i1", "icmp slt " + n.typed(index) + ", 2", inout state);
+    n.terminate("br " + n.typed(more) + ", label " + body.reference +
+        ", label " + done.reference, inout state);
+    n.position(body, inout state);
+    let next = n.result("i32", "add " + n.typed(index) + ", 1", inout state);
+    n.terminate("br label " + loop.reference, inout state);
+    n.set_prefix(phi, index.reference + " = phi i32 [ 0, " + entry.reference +
+        " ], [ " + next.reference + ", " + body.reference + " ]", inout state);
+    n.position(done, inout state);
+    let address = n.entry_result("ptr", "alloca i32", inout state);
+    n.append("store " + n.typed(answer) + ", " + n.typed(address) + ", align 4, !tbaa " + tag, inout state);
+    let loaded = n.result("i32", "load i32, " + n.typed(address) + ", align 4, !tbaa " + tag, inout state);
+    let size_ok = n.result("i1", "icmp eq " + n.typed(n.allocation_size(pair)) + ", 8", inout state);
+    let product = n.result("double", "fmul double 1.0, 2.0", inout state);
+    let sum = n.result("double", "fadd " + n.typed(product) + ", 3.0", inout state);
+    let final = n.result("i32", "select " + n.typed(size_ok) + ", " + n.typed(loaded) + ", i32 13", inout state);
+    n.terminate("ret " + n.typed(final), inout state);
+    rejected = false;
+    try { n.append("add i32 1, 2", inout state); }
+    catch error n.Error { rejected = true; }
+    if !rejected { return []; }
+    n.restore_cursor(empty_cursor, inout state);
+    var invalid_options = n.default_options(); invalid_options.features = "+fma";
+    rejected = false;
+    try { let bad = n.new_emitter(input(), invalid_options); }
+    catch error n.Error {
+        switch error {
+            case n.Error.Failure(code, kind, message): {
+                switch kind {
+                    case model.FailureKind.Unsupported:
+                        rejected = code == "E_CAPABILITY_UNAVAILABLE" && message ==
+                            "native scalars supports Linux x86_64, generic CPU, no extra features, O0/O2 only";
+                    default: {}
+                }
+            }
+        }
+    }
+    if !rejected { return []; }
+    var incomplete = n.new_emitter(input(), n.default_options());
+    let incomplete_function = n.new_function("incomplete", n.Signature(result: "void", parameters: []), "", "", inout incomplete);
+    let incomplete_block = n.new_block(incomplete_function, "entry", inout incomplete);
+    rejected = false;
+    try { let bad = n.sections(incomplete); }
+    catch error n.Error { rejected = true; }
+    if !rejected { return []; }
+    return n.sections(state);
+}
+func main() i32 throws os.Error {
+    try {
+        let output = checks();
+        if vec.len(output) == 0 { return 7; }
+        for chunk in output { io.print(chunk); }
+    } catch error n.Error {
+        switch error { case n.Error.Failure(code, kind, message): io.eprintln(code + ": " + message); }
+        return 3;
+    }
+    return 0;
+}

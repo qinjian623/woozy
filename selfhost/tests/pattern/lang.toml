@@ -1,0 +1,14 @@
+schema_version = 1
+
+[package]
+name = "pattern_tests"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "native"
+word_bits = 64
+
+[dependencies.wz]
+kind = "source"
+path = "../.."

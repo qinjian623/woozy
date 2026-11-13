@@ -1,0 +1,869 @@
+// Fixture for the pure-Wz hirclone tests.
+//
+// The module contains a real SourceManager snapshot pair (an old snapshot and
+// a newer one), real lexer and parser output for both, a resolved project with
+// Python and C binding records, and HIR nodes for all 45 NodeData payloads.
+// Every Vec-bearing field is populated so the probes in probes.wz have
+// something to mutate in both directions.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub const CODE_OLD = "\u{feff}package app;\r\n// 第一版 😀\r\nlet answer i32 = 42;\r\nfunc add(a i32, b i32) i32 { return a + b; }\r\n";
+
+pub const CODE_OLD_NORMALIZED = "package app;\n// 第一版 😀\nlet answer i32 = 42;\nfunc add(a i32, b i32) i32 { return a + b; }\n";
+
+pub const CODE_NEW = "package app;\n// 第二版\nlet answer i32 = 43;\nfunc add(a i32, b i32) i32 { return a + b; }\n";
+
+pub struct TypeIds {
+    pub unit_id usize;
+    pub bool_id usize;
+    pub i32_id usize;
+    pub u32_id usize;
+    pub i64_id usize;
+    pub f64_id usize;
+    pub string_id usize;
+    pub usize_id usize;
+    pub vec_i32_id usize;
+    pub slice_i32_id usize;
+    pub weak_i32_id usize;
+    pub signature_id usize;
+    pub throwing_id usize;
+    pub nominal_id usize;
+    pub c_pointer_id usize;
+    pub c_record_id usize;
+}
+
+pub struct TypeTable {
+    pub ids TypeIds;
+    pub context types.Context;
+}
+
+pub struct Fixture {
+    pub module hir.HirModule;
+    pub ids TypeIds;
+    pub ok bool;
+    pub parse_old model.ParseResult;
+    pub parse_new model.ParseResult;
+    pub source_old model.Source;
+    pub source_new model.Source;
+}
+
+// types.intern is the published API and uses a typed error; the fixture reports
+// a failed intern through Fixture.ok so main can fail with a readable line
+// instead of swallowing it.
+func intern(state inout types.Context, value model.Type, ok inout bool) usize {
+    try {
+        return types.intern(inout state, value);
+    } catch error types.Error {
+        ok = false;
+        return 0;
+    }
+}
+
+func type_entry(kind model.TypeKind) model.Type {
+    return model.Type(kind: kind, bits: 0, declaration: 0, binding: 0,
+        parameters: [], result: 0, throws_type: option.Option[usize].None,
+        type_args: [], c_type: 0);
+}
+
+func parameter(mode model.ParamMode, type_id usize) model.ParameterType {
+    return model.ParameterType(mode: mode, type_id: type_id);
+}
+
+func synthetic_diagnostic(span model.Span) model.Diagnostic {
+    return model.Diagnostic(code: "E_TEST", phase: "parse",
+        severity: "error", message: "synthetic diagnostic", has_primary: true,
+        primary: span,
+        related: [model.Related(span: span, message: "related note")],
+        fixits: [model.Fixit(span: span, replacement: "replacement",
+            revision: 3)],
+        notes: ["first note", "second note"], has_expected_type: true,
+        expected_type: "i32", has_actual_type: true, actual_type: "bool");
+}
+
+func ast_source(parsed model.ParseResult, file usize, index usize) hir.HirSource {
+    let at = index % vec.len(parsed.nodes);
+    return hir.HirSource(node: model.NodeRef(module: 0, file: file, node: at),
+        span: parsed.nodes[at].span);
+}
+
+func cleanup(kind hir.CleanupKind, owner hir.OwnerKind, identity u64,
+             type_id usize) hir.CleanupStep {
+    return hir.CleanupStep(kind: kind,
+        owner: hir.OwnerRef(kind: owner, identity: identity),
+        type_id: type_id);
+}
+
+func call_arg(source_index u32, parameter_index u32,
+              label option.Option[string], mode model.ParamMode,
+              expression usize) hir.CallArg {
+    return hir.CallArg(source_index: source_index,
+        parameter_index: parameter_index, label: label, mode: mode,
+        expression: expression);
+}
+
+func pattern(type_id usize, src hir.HirSource, variant option.Option[usize],
+            binding option.Option[usize], payload Vec[hir.Pattern],
+            literal option.Option[hir.PatternLiteral]) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: src, variant: variant,
+        binding: binding, payload: payload, literal: literal);
+}
+
+func constant(type_id usize, data hir.ConstantData) hir.ConstantValue {
+    return hir.ConstantValue(type_id: type_id, data: data);
+}
+
+func add_node(nodes Vec[hir.HirNode], type_id usize, src hir.HirSource,
+              scope usize, children Vec[usize], data hir.NodeData,
+              errors Vec[usize], exits Vec[hir.ExitPlan]) usize {
+    vec.push(nodes, hir.HirNode(type_id: type_id, source: src, scope: scope,
+        children: children, data: data, errors: errors, exits: exits));
+    return vec.len(nodes) - 1;
+}
+
+func build_types(ok inout bool) TypeTable {
+    var state = types.context();
+    let unit = intern(inout state, type_entry(model.TypeKind.Unit), inout ok);
+    let boolean = intern(inout state, type_entry(model.TypeKind.Bool), inout ok);
+    var value = type_entry(model.TypeKind.SignedInt);
+    value.bits = 32;
+    let i32 = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.UnsignedInt);
+    value.bits = 32;
+    let u32 = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.SignedInt);
+    value.bits = 64;
+    let i64 = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.Float);
+    value.bits = 64;
+    let f64 = intern(inout state, value, inout ok);
+    let string = intern(inout state,
+        type_entry(model.TypeKind.String), inout ok);
+    let usize_id = intern(inout state,
+        type_entry(model.TypeKind.Usize), inout ok);
+    value = type_entry(model.TypeKind.Vec);
+    value.type_args = [i32];
+    let vec_i32 = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.Slice);
+    value.type_args = [i32];
+    let slice_i32 = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.Weak);
+    value.type_args = [i32];
+    let weak_i32 = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.Function);
+    value.result = i32;
+    value.parameters = [parameter(model.ParamMode.Ordinary, i32),
+                        parameter(model.ParamMode.Inout, i32)];
+    let signature = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.Function);
+    value.result = i64;
+    value.parameters = [parameter(model.ParamMode.Move, i32)];
+    value.throws_type = option.Option[usize].Some(boolean);
+    let throwing = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.NominalStruct);
+    value.declaration = 5;
+    value.type_args = [i32, boolean];
+    let nominal = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.CForeignPointer);
+    value.type_args = [i32];
+    value.bits = 1;
+    let c_pointer = intern(inout state, value, inout ok);
+    value = type_entry(model.TypeKind.CForeignRecord);
+    value.c_type = 1;
+    let c_record = intern(inout state, value, inout ok);
+    let ids = TypeIds(unit_id: unit, bool_id: boolean, i32_id: i32,
+        u32_id: u32, i64_id: i64, f64_id: f64, string_id: string,
+        usize_id: usize_id, vec_i32_id: vec_i32, slice_i32_id: slice_i32,
+        weak_i32_id: weak_i32, signature_id: signature,
+        throwing_id: throwing, nominal_id: nominal,
+        c_pointer_id: c_pointer, c_record_id: c_record);
+    if types.size(state) != 16 {
+        ok = false;
+    }
+    return TypeTable(ids: ids, context: state);
+}
+
+func build_project(parsed_old model.ParseResult,
+                   parsed_new model.ParseResult) model.Project {
+    let span = parsed_old.nodes[0].span;
+    let imports = vec.empty[model.Import]();
+    vec.push(imports, model.Import(file: 0, node: 0, target: 0, alias: "m",
+        span: span));
+    let candidates = vec.empty[usize]();
+    vec.push(candidates, 0);
+    vec.push(candidates, 1);
+    let exports = vec.empty[model.ForeignExport]();
+    vec.push(exports, model.ForeignExport(name: "Vec", identity: "py:Vec",
+        kind: model.ForeignExportKind.Type, bundle: 0,
+        declaration: option.Option[usize].Some(0), candidates: candidates,
+        c_type: option.Option[u32].None, c_callable: option.Option[u32].None,
+        c_type_ref: option.Option[model.CTypeRef].Some(
+            model.CTypeRef(kind: model.CTypeKind.Pointer, scalar: "u8",
+                writable: true,
+                args: [model.CTypeRef(kind: model.CTypeKind.Scalar,
+                    scalar: "u8", writable: false, args: [], named: 0)],
+                named: 0))));
+    let modules = vec.empty[model.Module]();
+    vec.push(modules, model.Module(id: 0, logical_path: "app",
+        identity: "app:main", package_name: "fixture",
+        files: [0, 1], imports: imports, foreign_exports: exports,
+        binding: option.Option[model.BindingModuleRef].Some(
+            model.BindingModuleRef(bundle: 0, index: 0)),
+        c_binding: option.Option[usize].Some(0)));
+
+    let package_requirements = vec.empty[model.PackageRequirement]();
+    vec.push(package_requirements, model.PackageRequirement(
+        package_name: "numpy", version_policy: "^1.0", source: span));
+    let binding_modules = vec.empty[model.BindingModule]();
+    vec.push(binding_modules, model.BindingModule(logical_path: "py/numpy",
+        host_module: "numpy", provider: "python", source: span));
+    let declarations = vec.empty[usize]();
+    vec.push(declarations, 0);
+    vec.push(declarations, 1);
+    let bindings = vec.empty[model.BindingBundle]();
+    vec.push(bindings, model.BindingBundle(path: "py/numpy.json",
+        json: "{}", sha256: "abc", source: span, schema_version: 1,
+        contract: "v1", review_status: "reviewed",
+        allowed_backends: ["native", "python"],
+        package_requirements: package_requirements, modules: binding_modules,
+        declarations: declarations,
+        conformance_required: ["shape"]));
+
+    let type_members = vec.empty[usize]();
+    vec.push(type_members, 0);
+    vec.push(type_members, 2);
+    let type_properties = vec.empty[usize]();
+    vec.push(type_properties, 1);
+    let type_indexers = vec.empty[usize]();
+    vec.push(type_indexers, 0);
+    let type_slices = vec.empty[usize]();
+    vec.push(type_slices, 0);
+    let callable_parameters = vec.empty[model.BindingParameter]();
+    vec.push(callable_parameters, model.BindingParameter(name: "value",
+        type_name: "i32", kind: "value", optional: false, mode: "ordinary",
+        escapes: "none", source: span));
+    vec.push(callable_parameters, model.BindingParameter(name: "where",
+        type_name: "string", kind: "value", optional: true, mode: "inout",
+        escapes: "borrow", source: span));
+    let getter = vec.empty[string]();
+    vec.push(getter, "shape");
+    let setter = vec.empty[string]();
+    vec.push(setter, "set_shape");
+    let host_attribute = vec.empty[string]();
+    vec.push(host_attribute, "numpy.ndarray");
+    let effects = vec.empty[string]();
+    vec.push(effects, "gpu");
+    let foreign = vec.empty[model.ForeignDeclaration]();
+    vec.push(foreign, model.ForeignDeclaration(id: 0, bundle: 0, source: span,
+        json_pointer: "/types/0", identity: "py:Vec", module: "numpy",
+        name: "Vec", host_attribute: host_attribute,
+        detail: model.ForeignDetail.Type(value: model.BindingType(
+            kind: "class", copy: "share", members: type_members,
+            properties: type_properties, indexers: type_indexers,
+            slices: type_slices)),
+        stable_identity: "stable:type"));
+    vec.push(foreign, model.ForeignDeclaration(id: 1, bundle: 0, source: span,
+        json_pointer: "/values/1", identity: "py:pi", module: "numpy",
+        name: "pi", host_attribute: host_attribute,
+        detail: model.ForeignDetail.Value(value: model.BindingValue(
+            type_name: "f64")),
+        stable_identity: "stable:value"));
+    vec.push(foreign, model.ForeignDeclaration(id: 2, bundle: 0, source: span,
+        json_pointer: "/callables/2", identity: "py:array", module: "numpy",
+        name: "array", host_attribute: host_attribute,
+        detail: model.ForeignDetail.Callable(value: model.BindingCallable(
+            call_kind: "function", owner_type: option.Option[string].None,
+            parameters: callable_parameters, return_type: "Vec",
+            error_type: option.Option[string].Some("py.Error"),
+            return_ownership: "owned", storage: "runtime",
+            receiver_escapes: "none", effects: effects)),
+        stable_identity: "stable:callable"));
+    let empty_strings = vec.empty[string]();
+    vec.push(foreign, model.ForeignDeclaration(id: 3, bundle: 0, source: span,
+        json_pointer: "/properties/3", identity: "py:shape", module: "numpy",
+        name: "shape", host_attribute: empty_strings,
+        detail: model.ForeignDetail.Property(value: model.BindingProperty(
+            owner_type: "Vec", name: "shape", type_name: "Vec[i32]",
+            getter: getter, setter: setter, error_type: "py.Error")),
+        stable_identity: "stable:property"));
+    vec.push(foreign, model.ForeignDeclaration(id: 4, bundle: 0, source: span,
+        json_pointer: "/indexers/4", identity: "py:index", module: "numpy",
+        name: "index", host_attribute: empty_strings,
+        detail: model.ForeignDetail.Indexer(value: model.BindingIndexer(
+            owner_type: "Vec", index_type: "i32", result_type: "i32",
+            error_type: "py.Error", readable: true, writable: true)),
+        stable_identity: "stable:indexer"));
+    vec.push(foreign, model.ForeignDeclaration(id: 5, bundle: 0, source: span,
+        json_pointer: "/slices/5", identity: "py:slice", module: "numpy",
+        name: "slice", host_attribute: empty_strings,
+        detail: model.ForeignDetail.Slice(value: model.BindingSlice(
+            owner_type: "Vec", result_type: "Vec[i32]", error_type: "py.Error",
+            start_type: option.Option[string].Some("i32"),
+            end_type: option.Option[string].None, readable: true,
+            writable: false)),
+        stable_identity: "stable:slice"));
+
+    let c_modules = vec.empty[model.CModule]();
+    vec.push(c_modules, model.CModule(logical_path: "c/math",
+        provider: "c", library: "m", source: span));
+    let c_bindings = vec.empty[model.CBindingBundle]();
+    vec.push(c_bindings, model.CBindingBundle(path: "c/math.json",
+        json: "{}", sha256: "def", source: span, schema_version: 2,
+        contract: "v2", abi: "c", target: "x86_64-linux",
+        requires_hosted: false, modules: c_modules, types: [1],
+        callables: [1]));
+    let c_fields = vec.empty[model.CFieldDecl]();
+    vec.push(c_fields, model.CFieldDecl(name: "x", type_ref:
+        model.CTypeRef(kind: model.CTypeKind.Scalar, scalar: "i32",
+            writable: false, args: [], named: 0), offset: 0, source: span));
+    vec.push(c_fields, model.CFieldDecl(name: "data", type_ref:
+        model.CTypeRef(kind: model.CTypeKind.Pointer, scalar: "",
+            writable: true, args: [model.CTypeRef(
+                kind: model.CTypeKind.Named, scalar: "", writable: false,
+                args: [], named: 1)], named: 0), offset: 8, source: span));
+    let c_parameters = vec.empty[model.CParameterDecl]();
+    vec.push(c_parameters, model.CParameterDecl(name: "value",
+        type_ref: model.CTypeRef(kind: model.CTypeKind.Named, scalar: "",
+            writable: false, args: [], named: 1), source: span));
+    let c_types = vec.empty[model.CTypeDecl]();
+    vec.push(c_types, model.CTypeDecl(id: 1, bundle: 0, source: span,
+        identity: "c:Point", module: "math", name: "Point", c_name: "point",
+        kind: model.CDeclKind.Record, fields: c_fields, size: 16, align: 8,
+        release_symbol: "point_release", retain_symbol: "point_retain",
+        result: model.CTypeRef(kind: model.CTypeKind.Pointer, scalar: "",
+            writable: false, args: [model.CTypeRef(
+                kind: model.CTypeKind.Named, scalar: "", writable: false,
+                args: [], named: 1)], named: 0),
+        parameters: c_parameters,
+        registration: option.Option[model.CRegistrationDecl].Some(
+            model.CRegistrationDecl(callback_type: 1,
+                unregister_symbol: "point_unregister"))));
+    let c_callables = vec.empty[model.CCallableDecl]();
+    vec.push(c_callables, model.CCallableDecl(id: 1, bundle: 0, source: span,
+        identity: "c:point_new", module: "math", name: "point_new",
+        symbol: "point_new", parameters: c_parameters,
+        result: model.CReturnDecl(type_ref: model.CTypeRef(
+            kind: model.CTypeKind.Pointer, scalar: "", writable: false,
+            args: [model.CTypeRef(kind: model.CTypeKind.Named, scalar: "",
+                writable: false, args: [], named: 1)], named: 0),
+            ownership: "owned", release_symbol: "point_release",
+            retain_symbol: "point_retain", source: span),
+        stable_identity: "stable:c:point_new",
+        registers: option.Option[model.CRegistrationCall].Some(
+            model.CRegistrationCall(callback_parameter: 0,
+                userdata_parameter: 1, callback_userdata_parameter: 2))));
+
+    let files = vec.empty[model.ParseResult]();
+    vec.push(files, parsed_old);
+    vec.push(files, parsed_new);
+    return model.Project(root: "/fixture", package_name: "fixture",
+        backend: "native", word_bits: 64, hosted: true, entry: 0, files: files,
+        modules: modules, bindings: bindings, foreign_bindings: foreign,
+        c_bindings: c_bindings, c_types: c_types, c_callables: c_callables,
+        c_libraries: ["m", "c"], c_library_dirs: ["/usr/lib", "/lib"]);
+}
+
+func build_resolved(project model.Project) model.ResolvedProject {
+    let span = project.files[0].nodes[0].span;
+    let symbols = vec.empty[model.Symbol]();
+    vec.push(symbols, model.Symbol(id: 0, name: "main",
+        kind: model.SymbolKind.Function, module: 0,
+        definition: option.Option[model.NodeRef].Some(
+            model.NodeRef(module: 0, file: 0, node: 0)),
+        declaration: option.Option[model.Span].Some(span), exported: true,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None));
+    vec.push(symbols, model.Symbol(id: 1, name: "Vec",
+        kind: model.SymbolKind.Type, module: 0,
+        definition: option.Option[model.NodeRef].None,
+        declaration: option.Option[model.Span].None, exported: true,
+        target: option.Option[usize].Some(0),
+        foreign: option.Option[model.ForeignExportRef].Some(
+            model.ForeignExportRef(module: 0, index: 0))));
+    let occurrences = vec.empty[model.Occurrence]();
+    vec.push(occurrences, model.Occurrence(source:
+        model.NodeRef(module: 0, file: 0, node: 1), symbol: 0, span: span));
+    vec.push(occurrences, model.Occurrence(source:
+        model.NodeRef(module: 0, file: 1, node: 2), symbol: 1, span: span));
+    let deferred = vec.empty[model.NodeRef]();
+    vec.push(deferred, model.NodeRef(module: 0, file: 0, node: 3));
+    let self_parameters = vec.empty[model.SelfParameter]();
+    vec.push(self_parameters, model.SelfParameter(source:
+        model.NodeRef(module: 0, file: 0, node: 4), symbol: 1));
+    return model.ResolvedProject(project: project, symbols: symbols,
+        occurrences: occurrences, deferred_members: deferred,
+        self_parameters: self_parameters);
+}
+
+func build_nodes(ids TypeIds, old model.ParseResult,
+                 new_parse model.ParseResult) Vec[hir.HirNode] {
+    let src0 = ast_source(old, 0, 0);
+    let src1 = ast_source(old, 0, 1);
+    let src2 = ast_source(new_parse, 1, 2);
+    let nodes = vec.empty[hir.HirNode]();
+    let no_ids = vec.empty[usize]();
+    let no_errors = vec.empty[usize]();
+    let no_exits = vec.empty[hir.ExitPlan]();
+
+    let actions_normal = vec.empty[hir.CleanupStep]();
+    vec.push(actions_normal, cleanup(hir.CleanupKind.SaveOutput,
+        hir.OwnerKind.ReturnOutput, 11, ids.i32_id));
+    vec.push(actions_normal, cleanup(hir.CleanupKind.EndBorrow,
+        hir.OwnerKind.Binding, 12, ids.vec_i32_id));
+    let exit_normal = vec.empty[hir.ExitPlan]();
+    vec.push(exit_normal, hir.ExitPlan(kind: hir.ExitKind.Normal,
+        error_type: option.Option[usize].None,
+        target: hir.ExitTarget.ScopeExit(value:
+            hir.ScopeExit(scope: option.Option[usize].Some(0))),
+        exited_scopes: [0, 1], defers: [2], saves_value: false,
+        actions: actions_normal));
+    let actions_return = vec.empty[hir.CleanupStep]();
+    vec.push(actions_return, cleanup(hir.CleanupKind.DestroyIfLive,
+        hir.OwnerKind.Temporary, 13, ids.i64_id));
+    let exit_return = vec.empty[hir.ExitPlan]();
+    vec.push(exit_return, hir.ExitPlan(kind: hir.ExitKind.Return,
+        error_type: option.Option[usize].None,
+        target: hir.ExitTarget.FunctionExit(value:
+            hir.FunctionExit(function: 1)),
+        exited_scopes: [1], defers: no_ids, saves_value: true,
+        actions: actions_return));
+    let actions_break = vec.empty[hir.CleanupStep]();
+    vec.push(actions_break, cleanup(hir.CleanupKind.Defer,
+        hir.OwnerKind.Iteration, 14, ids.i32_id));
+    let exit_break = vec.empty[hir.ExitPlan]();
+    vec.push(exit_break, hir.ExitPlan(kind: hir.ExitKind.Break,
+        error_type: option.Option[usize].None,
+        target: hir.ExitTarget.JumpExit(value: hir.JumpExit(node: 21)),
+        exited_scopes: [2], defers: [3], saves_value: false,
+        actions: actions_break));
+    let actions_error = vec.empty[hir.CleanupStep]();
+    vec.push(actions_error, cleanup(hir.CleanupKind.EndIteration,
+        hir.OwnerKind.ErrorOutput, 15, ids.bool_id));
+    let exit_error = vec.empty[hir.ExitPlan]();
+    vec.push(exit_error, hir.ExitPlan(kind: hir.ExitKind.Error,
+        error_type: option.Option[usize].Some(ids.i32_id),
+        target: hir.ExitTarget.CatchTarget(value:
+            hir.CatchTarget(try_node: 30, index: 0)),
+        exited_scopes: [0], defers: no_ids, saves_value: false,
+        actions: actions_error));
+
+    let captures = vec.empty[hir.CaptureSource]();
+    vec.push(captures, hir.CaptureSource(origin: 21, source: 22,
+        type_id: ids.i32_id, is_move: false));
+    vec.push(captures, hir.CaptureSource(origin: 23, source: 24,
+        type_id: ids.vec_i32_id, is_move: true));
+    let type_args = vec.empty[usize]();
+    vec.push(type_args, ids.i32_id);
+    vec.push(type_args, ids.bool_id);
+
+    add_node(nodes, ids.unit_id, src0, 0, no_ids,
+        hir.NodeData.UnitLiteral(value: hir.UnitLiteral()), no_errors,
+        no_exits);
+    add_node(nodes, ids.bool_id, src0, 0, no_ids,
+        hir.NodeData.BoolLiteral(value: hir.BoolLiteral(value: true)),
+        no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, no_ids,
+        hir.NodeData.IntegerLiteral(value: hir.IntegerLiteral(
+            decimal: "18446744073709551615", bits: 18446744073709551615)),
+        no_errors, no_exits);
+    add_node(nodes, ids.f64_id, src0, 0, no_ids,
+        hir.NodeData.FloatLiteral(value: hir.FloatLiteral(
+            bits: 4607182418800017408)), no_errors, no_exits);
+    add_node(nodes, ids.string_id, src0, 0, no_ids,
+        hir.NodeData.StringLiteral(value: hir.StringLiteral(
+            utf8: "héllo😀")), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, no_ids,
+        hir.NodeData.Read(value: hir.Read(symbol: 7)), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, no_ids,
+        hir.NodeData.Place(value: hir.Place(symbol: 8)), no_errors,
+        exit_normal);
+    add_node(nodes, ids.signature_id, src0, 0, [1, 4],
+        hir.NodeData.FunctionValue(value: hir.FunctionValue(symbol: 9,
+            type_args: type_args, captures: captures, move_capture: true,
+            bound: option.Option[hir.BoundReceiver].Some(
+                hir.BoundReceiver(type_id: ids.i32_id,
+                    mode: model.ParamMode.Inout)))), no_errors,
+        no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, [2],
+        hir.NodeData.Binding(value: hir.Binding(symbol: 9, writable: true)),
+        no_errors, no_exits);
+    // Assign.compound is Option[BinaryOp]; Add has numeric order 0, so this
+    // also pins that Some(0) survives the clone.
+    add_node(nodes, ids.unit_id, src0, 0, [2, 3],
+        hir.NodeData.Assign(value: hir.Assign(compound:
+            option.Option[hir.BinaryOp].Some(hir.BinaryOp.Add))),
+        no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, [2],
+        hir.NodeData.Unary(value: hir.Unary(op: hir.UnaryOp.Negate)),
+        no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, [2, 3],
+        hir.NodeData.Binary(value: hir.Binary(op: hir.BinaryOp.Multiply)),
+        no_errors, no_exits);
+    add_node(nodes, ids.bool_id, src0, 0, [1, 12],
+        hir.NodeData.ShortCircuit(value: hir.ShortCircuit(
+            op: hir.LogicalOp.And)), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, [2],
+        hir.NodeData.IntegerConvert(value: hir.IntegerConvert()),
+        no_errors, no_exits);
+    let call_args = vec.empty[hir.CallArg]();
+    vec.push(call_args, call_arg(0, 1, option.Option[string].Some("b"),
+        model.ParamMode.Inout, 2));
+    vec.push(call_args, call_arg(1, 0, option.Option[string].None,
+        model.ParamMode.Move, 3));
+    add_node(nodes, ids.i32_id, src0, 0, [1, 2, 3],
+        hir.NodeData.Call(value: hir.Call(kind: hir.CalleeKind.CForeign,
+            signature: ids.signature_id,
+            direct_symbol: option.Option[usize].Some(0),
+            callee: option.Option[usize].Some(1), args: call_args,
+            type_args: type_args,
+            binding: option.Option[usize].Some(0),
+            c_callable: option.Option[u32].Some(0), omitted: [0, 2],
+            system: option.Option[u32].Some(0))), [1, 2], no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, [0, 1],
+        hir.NodeData.Block(value: hir.Block()), no_errors, no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, [14],
+        hir.NodeData.ExpressionStatement(value: hir.ExpressionStatement()),
+        no_errors, no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, [1, 15],
+        hir.NodeData.If(value: hir.If()), no_errors, no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, [8, 1, 9, 15],
+        hir.NodeData.For(value: hir.For()), no_errors, no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, no_ids,
+        hir.NodeData.Noop(value: hir.Noop()), no_errors, no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, [2],
+        hir.NodeData.Return(value: hir.Return(function: 1)), no_errors,
+        exit_return);
+    add_node(nodes, ids.unit_id, src0, 0, no_ids,
+        hir.NodeData.Break(value: hir.Break(loop: 45)), no_errors,
+        exit_break);
+    add_node(nodes, ids.unit_id, src0, 0, no_ids,
+        hir.NodeData.Continue(value: hir.Continue(loop: 46)), no_errors,
+        no_exits);
+    add_node(nodes, ids.unit_id, src0, 0, no_ids,
+        hir.NodeData.Unsupported(value: hir.Unsupported(
+            feature: "async cancellation")), no_errors, no_exits);
+    let struct_fields = vec.empty[hir.CallArg]();
+    vec.push(struct_fields, call_arg(0, 0, option.Option[string].Some("x"),
+        model.ParamMode.Ordinary, 2));
+    vec.push(struct_fields, call_arg(1, 1, option.Option[string].None,
+        model.ParamMode.Inout, 3));
+    add_node(nodes, ids.nominal_id, src0, 0, [2, 3],
+        hir.NodeData.StructInit(value: hir.StructInit(
+            fields: struct_fields)), no_errors, no_exits);
+    add_node(nodes, ids.nominal_id, src0, 0, [2, 3],
+        hir.NodeData.EnumInit(value: hir.EnumInit(variant: 0,
+            payload: struct_fields)), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, [2],
+        hir.NodeData.FieldRead(value: hir.FieldRead(field: 0)), no_errors,
+        no_exits);
+    add_node(nodes, ids.i32_id, src0, 0, [2],
+        hir.NodeData.FieldPlace(value: hir.FieldPlace(field: 1)),
+        no_errors, no_exits);
+    let inner_payload = vec.empty[hir.Pattern]();
+    vec.push(inner_payload, pattern(ids.i32_id, src1,
+        option.Option[usize].Some(2), option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.IntegerLiteral(value: hir.IntegerLiteral(
+                decimal: "0", bits: 0)))));
+    let outer_payload = vec.empty[hir.Pattern]();
+    vec.push(outer_payload, pattern(ids.vec_i32_id, src1,
+        option.Option[usize].Some(1), option.Option[usize].Some(0),
+        inner_payload, option.Option[hir.PatternLiteral].None));
+    let arms = vec.empty[hir.Arm]();
+    vec.push(arms, hir.Arm(pattern: pattern(ids.vec_i32_id, src1,
+        option.Option[usize].Some(0), option.Option[usize].Some(0),
+        outer_payload, option.Option[hir.PatternLiteral].None),
+        scope: 1, body: 15, source: src1));
+    vec.push(arms, hir.Arm(pattern: pattern(ids.bool_id, src2,
+        option.Option[usize].None, option.Option[usize].Some(0), [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.BoolLiteral(value: hir.BoolLiteral(
+                value: false)))), scope: 2, body: 16, source: src2));
+    add_node(nodes, ids.unit_id, src1, 1, [1],
+        hir.NodeData.Switch(value: hir.Switch(arms: arms,
+            exhaustive: true)), no_errors, no_exits);
+    let trait_args = vec.empty[usize]();
+    vec.push(trait_args, ids.i32_id);
+    vec.push(trait_args, ids.bool_id);
+    add_node(nodes, ids.i32_id, src1, 1, [14],
+        hir.NodeData.ConstraintCall(value: hir.ConstraintCall(
+            trait_ref: hir.TraitRef(declaration: 9, args: trait_args),
+            method: 10, receiver: 11, signature: ids.signature_id,
+            args: call_args)), no_errors, no_exits);
+    let catches = vec.empty[hir.Catch]();
+    vec.push(catches, hir.Catch(error_type: ids.i32_id, binding: 12, scope: 1,
+        body: 15, source: src1));
+    vec.push(catches, hir.Catch(error_type: ids.string_id, binding: 13, scope: 2,
+        body: 16, source: src2));
+    add_node(nodes, ids.unit_id, src1, 1, [14],
+        hir.NodeData.Try(value: hir.Try(catches: catches)), no_errors,
+        exit_error);
+    let references = vec.empty[usize]();
+    vec.push(references, 3);
+    vec.push(references, 4);
+    vec.push(references, 5);
+    add_node(nodes, ids.unit_id, src1, 1, [2],
+        hir.NodeData.Defer(value: hir.Defer(owner_scope: 2,
+            references: references)), no_errors, no_exits);
+    add_node(nodes, ids.unit_id, src1, 1, [2],
+        hir.NodeData.Throw(value: hir.Throw()), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src1, 1, [8],
+        hir.NodeData.Move(value: hir.Move(binding:
+            option.Option[usize].Some(0))), no_errors, no_exits);
+    add_node(nodes, ids.vec_i32_id, src1, 1, [2, 3],
+        hir.NodeData.VecInit(value: hir.VecInit()), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src1, 1, [2, 3],
+        hir.NodeData.IndexRead(value: hir.IndexRead()), no_errors,
+        no_exits);
+    add_node(nodes, ids.i32_id, src1, 1, [2, 3],
+        hir.NodeData.IndexPlace(value: hir.IndexPlace()), no_errors,
+        no_exits);
+    add_node(nodes, ids.slice_i32_id, src1, 1, [2],
+        hir.NodeData.VecSlice(value: hir.VecSlice(start:
+            option.Option[usize].Some(0), end:
+            option.Option[usize].None)), no_errors, no_exits);
+    let iterator = hir.IteratorFor(cursor: 20, option: 21, next: 22,
+        iterator: 23, element: 24, some: 25, none: 26, some_field: 27);
+    add_node(nodes, ids.unit_id, src1, 1, [2, 15],
+        hir.NodeData.ForIn(value: hir.ForIn(element: 12, body_scope: 3,
+            body: 15, iterator: option.Option[hir.IteratorFor].Some(
+                iterator))), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src1, 1, [2, 3],
+        hir.NodeData.ForeignRead(value: hir.ForeignRead(binding: 3,
+            access: option.Option[hir.ForeignAccessKind].Some(
+                hir.ForeignAccessKind.SlicePlace),
+            start: option.Option[usize].Some(0),
+            end: option.Option[usize].Some(2))), no_errors, no_exits);
+    let aggregate_fields = vec.empty[hir.ConstantValue]();
+    vec.push(aggregate_fields, constant(ids.i32_id,
+        hir.ConstantData.IntegerLiteral(value: hir.IntegerLiteral(
+            decimal: "-0", bits: 0))));
+    let inner_fields = vec.empty[hir.ConstantValue]();
+    vec.push(inner_fields, constant(ids.bool_id,
+        hir.ConstantData.BoolLiteral(value: hir.BoolLiteral(value: false))));
+    vec.push(inner_fields, constant(ids.string_id,
+        hir.ConstantData.StringLiteral(value: hir.StringLiteral(
+            utf8: "nested\u{0}value"))));
+    vec.push(aggregate_fields, constant(ids.nominal_id,
+        hir.ConstantData.ConstantAggregate(value: hir.ConstantAggregate(
+            variant: option.Option[usize].Some(0), fields: inner_fields))));
+    let constant_captures = vec.empty[hir.CaptureSource]();
+    vec.push(constant_captures, hir.CaptureSource(origin: 31, source: 32,
+        type_id: ids.i32_id, is_move: true));
+    vec.push(aggregate_fields, constant(ids.signature_id,
+        hir.ConstantData.FunctionValue(value: hir.FunctionValue(symbol: 33,
+            type_args: [ids.i32_id], captures: constant_captures,
+            move_capture: false,
+            bound: option.Option[hir.BoundReceiver].Some(
+                hir.BoundReceiver(type_id: ids.i64_id,
+                    mode: model.ParamMode.Move))))));
+    add_node(nodes, ids.i32_id, src2, 2, no_ids,
+        hir.NodeData.ConstantLiteral(value: hir.ConstantLiteral(value:
+            constant(ids.nominal_id, hir.ConstantData.ConstantAggregate(value:
+                hir.ConstantAggregate(variant:
+                    option.Option[usize].Some(0),
+                    fields: aggregate_fields))))), no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src2, 2, [2],
+        hir.NodeData.CFieldRead(value: hir.CFieldRead(c_type: 0, field: 0)),
+        no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src2, 2, [2],
+        hir.NodeData.Await(value: hir.Await()), no_errors, no_exits);
+    let method_args = vec.empty[Vec[usize]]();
+    vec.push(method_args, [ids.i32_id]);
+    vec.push(method_args, [ids.i32_id, ids.bool_id]);
+    vec.push(method_args, []);
+    add_node(nodes, ids.nominal_id, src2, 2, [2],
+        hir.NodeData.TraitObjectInit(value: hir.TraitObjectInit(
+            trait_ref: hir.TraitRef(declaration: 9, args: trait_args),
+            concrete: 13, methods: [21, 22], method_args: method_args)),
+        no_errors, no_exits);
+    add_node(nodes, ids.i32_id, src2, 2, [2, 3],
+        hir.NodeData.TraitDispatch(value: hir.TraitDispatch(
+            trait_ref: hir.TraitRef(declaration: 9, args: trait_args),
+            method: 14, signature: ids.signature_id, index: 0,
+            args: call_args)), no_errors, no_exits);
+    return nodes;
+}
+
+func build_ownership(ids TypeIds) hir.Ownership {
+    let uses = vec.empty[hir.ValueUse]();
+    vec.push(uses, hir.ValueUse(consumer: 2, operand: 0,
+        kind: hir.UseKind.Borrow, root: option.Option[usize].Some(0),
+        type_id: ids.i32_id, destination: option.Option[usize].Some(0)));
+    vec.push(uses, hir.ValueUse(consumer: 3, operand: 1,
+        kind: hir.UseKind.Copy, root: option.Option[usize].None,
+        type_id: ids.vec_i32_id, destination: option.Option[usize].None));
+    vec.push(uses, hir.ValueUse(consumer: 4, operand: 2,
+        kind: hir.UseKind.Take, root: option.Option[usize].Some(2),
+        type_id: ids.i32_id, destination: option.Option[usize].Some(1)));
+    vec.push(uses, hir.ValueUse(consumer: 5, operand: 3,
+        kind: hir.UseKind.Inout, root: option.Option[usize].Some(3),
+        type_id: ids.i64_id, destination: option.Option[usize].None));
+    let temporaries = vec.empty[hir.Temporary]();
+    vec.push(temporaries, hir.Temporary(producer: 2, full_expression: 8,
+        type_id: ids.i32_id));
+    vec.push(temporaries, hir.Temporary(producer: 3, full_expression: 9,
+        type_id: ids.vec_i32_id));
+    let locals = vec.empty[hir.LocalLifetime]();
+    vec.push(locals, hir.LocalLifetime(symbol: 0, scope: 0, type_id: ids.i32_id,
+        order: 0, mode: model.ParamMode.Ordinary, read_only_capture: false));
+    vec.push(locals, hir.LocalLifetime(symbol: 1, scope: 1,
+        type_id: ids.vec_i32_id, order: 1, mode: model.ParamMode.Inout,
+        read_only_capture: true));
+    let actions = vec.empty[hir.CleanupStep]();
+    vec.push(actions, cleanup(hir.CleanupKind.SaveOutput,
+        hir.OwnerKind.Binding, 40, ids.i32_id));
+    vec.push(actions, cleanup(hir.CleanupKind.EndBorrow,
+        hir.OwnerKind.Temporary, 41, ids.string_id));
+    let expressions = vec.empty[hir.FullExpression]();
+    vec.push(expressions, hir.FullExpression(node: 14, actions: actions));
+    vec.push(expressions, hir.FullExpression(node: 20, actions: actions));
+    let returns = vec.empty[hir.CleanupStep]();
+    vec.push(returns, cleanup(hir.CleanupKind.DestroyIfLive,
+        hir.OwnerKind.ErrorOutput, 42, ids.i64_id));
+    vec.push(returns, cleanup(hir.CleanupKind.EndIteration,
+        hir.OwnerKind.Iteration, 43, ids.bool_id));
+    let calls = vec.empty[hir.CallLifetime]();
+    vec.push(calls, hir.CallLifetime(node: 14, on_return: returns));
+    return hir.Ownership(uses: uses, temporaries: temporaries, locals: locals,
+        full_expressions: expressions, calls: calls);
+}
+
+pub func fixture() Fixture {
+    var ok = true;
+    // Two snapshots of the same file: the old revision stays available in the
+    // manager and both parsed arenas are stored in the module's project.
+    var manager = source.manager();
+    let file_id = source.add_file(inout manager, "app/main.wz");
+    let first = source.update(inout manager, file_id, text.bytes(CODE_OLD));
+    let second = source.update(inout manager, file_id, text.bytes(CODE_NEW));
+    let first_parsed = parser.parse(lexer.lex(first));
+    let second_parsed = parser.parse(lexer.lex(second));
+    if vec.len(manager.snapshots) != 2 ||
+       !first_parsed.has_value || !second_parsed.has_value ||
+       first.revision_id != 1 || second.revision_id != 2 ||
+       first.id != 1 || second.id != 2 {
+        ok = false;
+    }
+    // Give the lexer and parser arenas a diagnostic with every nested list
+    // populated.  The parser emits none for valid source, but the vectors are
+    // part of ParseResult/LexResult and must be cloned independently.
+    let diag_span = first_parsed.nodes[0].span;
+    vec.push(first_parsed.lexed.diagnostics, synthetic_diagnostic(diag_span));
+    vec.push(first_parsed.diagnostics, synthetic_diagnostic(diag_span));
+    if vec.len(first_parsed.lexed.diagnostics) != 1 ||
+       vec.len(first_parsed.diagnostics) != 1 {
+        ok = false;
+    }
+    let project = build_project(first_parsed, second_parsed);
+    let resolved = build_resolved(project);
+    let table = build_types(inout ok);
+    let ids = table.ids;
+    let nodes = build_nodes(ids, first_parsed, second_parsed);
+    let parameters = vec.empty[hir.Parameter]();
+    vec.push(parameters, hir.Parameter(symbol: 0, label: "a"));
+    vec.push(parameters, hir.Parameter(symbol: 1, label: "b"));
+    let captures = vec.empty[hir.CaptureBinding]();
+    vec.push(captures, hir.CaptureBinding(origin: 20, local: 21,
+        type_id: ids.i32_id));
+    vec.push(captures, hir.CaptureBinding(origin: 22, local: 23,
+        type_id: ids.vec_i32_id));
+    let functions = vec.empty[hir.HirFunction]();
+    vec.push(functions, hir.HirFunction(symbol: 0, signature: ids.signature_id,
+        parameters: parameters, body: 15, scope: 0,
+        source: ast_source(first_parsed, 0, 5), captures: captures,
+        is_async: true));
+    vec.push(functions, hir.HirFunction(symbol: 1, signature: ids.throwing_id,
+        parameters: [], body: 20, scope: 2,
+        source: ast_source(second_parsed, 1, 6), captures: [],
+        is_async: false));
+    let scopes = vec.empty[hir.HirScope]();
+    vec.push(scopes, hir.HirScope(function: 0,
+        parent: option.Option[usize].None,
+        source: ast_source(first_parsed, 0, 7)));
+    vec.push(scopes, hir.HirScope(function: 1,
+        parent: option.Option[usize].Some(0),
+        source: ast_source(first_parsed, 0, 8)));
+    vec.push(scopes, hir.HirScope(function: 1,
+        parent: option.Option[usize].Some(1),
+        source: ast_source(second_parsed, 1, 9)));
+    let generic_params = vec.empty[hir.GenericParam]();
+    vec.push(generic_params, hir.GenericParam(symbol: 2,
+        trait_ref: option.Option[hir.TraitRef].Some(hir.TraitRef(
+            declaration: 9, args: [ids.i32_id])),
+        source: ast_source(first_parsed, 0, 10)));
+    vec.push(generic_params, hir.GenericParam(symbol: 3,
+        trait_ref: option.Option[hir.TraitRef].None,
+        source: ast_source(first_parsed, 0, 11)));
+    let fields = vec.empty[hir.FieldDecl]();
+    vec.push(fields, hir.FieldDecl(symbol: 4, type_id: ids.i32_id,
+        exported: true, source: ast_source(first_parsed, 0, 12)));
+    vec.push(fields, hir.FieldDecl(symbol: 5, type_id: ids.string_id,
+        exported: false, source: ast_source(first_parsed, 0, 13)));
+    let variants = vec.empty[hir.VariantDecl]();
+    vec.push(variants, hir.VariantDecl(symbol: 6, payload: fields,
+        source: ast_source(first_parsed, 0, 14)));
+    vec.push(variants, hir.VariantDecl(symbol: 7, payload: [],
+        source: ast_source(first_parsed, 0, 15)));
+    let nominals = vec.empty[hir.NominalDecl]();
+    vec.push(nominals, hir.NominalDecl(symbol: 8,
+        kind: model.TypeKind.NominalEnum, params: generic_params,
+        fields: fields, variants: variants,
+        source: ast_source(first_parsed, 0, 16)));
+    let prototypes = vec.empty[hir.MethodPrototype]();
+    vec.push(prototypes, hir.MethodPrototype(symbol: 9,
+        signature: ids.signature_id, parameters: parameters,
+        source: ast_source(first_parsed, 0, 17)));
+    vec.push(prototypes, hir.MethodPrototype(symbol: 10,
+        signature: ids.throwing_id, parameters: [],
+        source: ast_source(first_parsed, 0, 18)));
+    let traits = vec.empty[hir.TraitDecl]();
+    vec.push(traits, hir.TraitDecl(symbol: 11, self: ids.nominal_id,
+        params: generic_params, methods: prototypes,
+        source: ast_source(first_parsed, 0, 19)));
+    let impls = vec.empty[hir.ImplDecl]();
+    vec.push(impls, hir.ImplDecl(params: generic_params,
+        trait_ref: option.Option[hir.TraitRef].Some(hir.TraitRef(
+            declaration: 9, args: [ids.i32_id, ids.bool_id])),
+        self_parameter: 12, self_type: ids.nominal_id, methods: [9, 10],
+        source: ast_source(first_parsed, 0, 20)));
+    let templates = vec.empty[hir.FunctionTemplate]();
+    vec.push(templates, hir.FunctionTemplate(function: functions[0],
+        params: generic_params));
+    let renamed = vec.empty[hir.SymbolRename]();
+    vec.push(renamed, hir.SymbolRename(origin: 0, replacement: 100));
+    vec.push(renamed, hir.SymbolRename(origin: 1, replacement: 101));
+    let instances = vec.empty[hir.FunctionInstance]();
+    vec.push(instances, hir.FunctionInstance(symbol: 13, origin: 0,
+        type_args: [ids.i32_id, ids.bool_id], renamed: renamed,
+        target: model.CheckConfig(backend: model.Backend.Python,
+            word_bits: 64)));
+    let foreign_bindings = vec.empty[hir.ForeignBinding]();
+    vec.push(foreign_bindings, hir.ForeignBinding(binding: 0,
+        type_id: ids.c_pointer_id,
+        signature: option.Option[usize].Some(0),
+        owner: option.Option[usize].Some(1), read_error: 0));
+    vec.push(foreign_bindings, hir.ForeignBinding(binding: 1,
+        type_id: ids.c_record_id,
+        signature: option.Option[usize].None,
+        owner: option.Option[usize].None, read_error: 2));
+    let module = hir.HirModule(resolved: resolved, identity: 3,
+        types: table.context,
+        config: model.CheckConfig(backend: model.Backend.Native,
+            word_bits: 64), functions: functions, nodes: nodes,
+        scopes: scopes, nominals: nominals, traits: traits, impls: impls,
+        templates: templates, instances: instances,
+        ownership: build_ownership(ids), foreign_bindings: foreign_bindings);
+    return Fixture(module: module, ids: ids, ok: ok,
+        parse_old: first_parsed, parse_new: second_parsed,
+        source_old: first, source_new: second);
+}

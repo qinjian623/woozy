@@ -1,0 +1,526 @@
+// Compiler-private system operation signatures.
+//
+// Counterpart of src/hir/system_operation.cpp.  The operation table comes from
+// app/wzcc/system, which mirrors include/lang/hir/system_operation.hpp.  A
+// standard-library value type is accepted only through its real nominal
+// declaration (logical path + exported symbol), never a look-alike record.
+package signature;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/system" as system;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct FieldSpec {
+    name string;
+    type_name string;
+}
+
+func invalid(message string) model.SupportError {
+    return model.SupportError.Invalid(message);
+}
+
+func value_error() model.SupportError {
+    return model.SupportError.Invalid("unknown system operation value type");
+}
+
+func empty_type_value() model.Type {
+    return model.empty_type(model.TypeKind.Error);
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func intern_type(state inout types.Context,
+                 value model.Type) usize throws model.SupportError {
+    try {
+        return types.intern(inout state, value);
+    } catch error types.Error {
+        var message = "";
+        switch error {
+            case types.Error.Invalid(text_value): message = text_value;
+        }
+        throw invalid(message);
+    }
+}
+
+func substring(value string, start usize, finish usize) string {
+    let data = text.bytes(value);
+    if start > finish || finish > vec.len(data) {
+        return "";
+    }
+    let out = vec.empty[u8]();
+    vec.reserve(out, finish - start);
+    var index = start;
+    for index < finish {
+        vec.push(out, data[index]);
+        index += 1;
+    }
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func is_digit(byte u8) bool {
+    return byte >= 48 && byte <= 57;
+}
+
+// from_chars into u32 requires the whole spelling and a value <= UINT32_MAX.
+func parse_bits(data Vec[u8]) u32 throws model.SupportError {
+    if vec.len(data) == 0 {
+        throw value_error();
+    }
+    var result u64 = 0;
+    for byte in data {
+        if !is_digit(byte) {
+            throw value_error();
+        }
+        result = result * 10 + (u64(byte) - 48);
+        if result > 4294967295 {
+            throw value_error();
+        }
+    }
+    return u32(result);
+}
+
+func field(specs Vec[FieldSpec], name string, type_name string) {
+    vec.push(specs, FieldSpec(name: name, type_name: type_name));
+}
+
+// The frozen structural contract of each standard record.  An unrelated
+// std/ type has an empty list and is accepted by declaration identity only.
+func standard_fields(base string) Vec[FieldSpec] {
+    let fields = vec.empty[FieldSpec]();
+    if base == "std/os.File" {
+        field(fields, "descriptor", "i32");
+    } else if base == "std/os.Timespec" {
+        field(fields, "seconds", "i64");
+        field(fields, "nanoseconds", "i64");
+    } else if base == "std/os.Pipe" {
+        field(fields, "read_end", "std/os.File");
+        field(fields, "write_end", "std/os.File");
+    } else if base == "std/os.FileInfo" {
+        field(fields, "device", "u64");
+        field(fields, "inode", "u64");
+        field(fields, "links", "u64");
+        field(fields, "mode", "u32");
+        field(fields, "uid", "u32");
+        field(fields, "gid", "u32");
+        field(fields, "rdev", "u64");
+        field(fields, "size", "i64");
+        field(fields, "block_size", "i64");
+        field(fields, "blocks", "i64");
+        field(fields, "accessed", "std/os.Timespec");
+        field(fields, "modified", "std/os.Timespec");
+        field(fields, "changed", "std/os.Timespec");
+    }
+    if base == "std/net.Socket" {
+        field(fields, "descriptor", "i32");
+    } else if base == "std/net.Address" {
+        field(fields, "family", "i32");
+        field(fields, "port", "u16");
+        field(fields, "flags", "u16");
+        field(fields, "scope", "u32");
+        field(fields, "reserved", "u32");
+        field(fields, "data", "Vec[u8]");
+    } else if base == "std/net.Accepted" {
+        field(fields, "socket", "std/net.Socket");
+        field(fields, "address", "std/net.Address");
+    } else if base == "std/net.Received" {
+        field(fields, "count", "usize");
+        field(fields, "address", "std/net.Address");
+    } else if base == "std/net.Pair" {
+        field(fields, "first", "std/net.Socket");
+        field(fields, "second", "std/net.Socket");
+    } else if base == "std/net.PollFd" {
+        field(fields, "fd", "i32");
+        field(fields, "events", "i16");
+        field(fields, "revents", "i16");
+    }
+    if base == "std/math.Fraction" {
+        field(fields, "fraction", "f64");
+        field(fields, "exponent", "i32");
+    }
+    if base == "std/process.WaitStatus" {
+        field(fields, "pid", "i32");
+        field(fields, "status", "i32");
+    } else if base == "std/signal.Info" {
+        field(fields, "number", "i32");
+        field(fields, "code", "i32");
+        field(fields, "pid", "i32");
+        field(fields, "uid", "u32");
+        field(fields, "status", "i32");
+        field(fields, "reserved", "u32");
+        field(fields, "value", "i64");
+    }
+    return fields;
+}
+
+// -1: missing; -2: duplicate; otherwise the nominal index.
+func find_nominal(module hir.HirModule, logical_path string,
+                  spelling string) i64 {
+    var found i64 = -1;
+    for var index usize = 0; index < vec.len(module.nominals); index += 1 {
+        let nominal = module.nominals[index];
+        if nominal.symbol >= vec.len(module.resolved.symbols) {
+            continue;
+        }
+        let symbol = module.resolved.symbols[nominal.symbol];
+        if symbol.module >= vec.len(module.resolved.project.modules) {
+            continue;
+        }
+        let source = module.resolved.project.modules[symbol.module];
+        if source.logical_path == logical_path && symbol.name == spelling &&
+           kind_is_symbol(symbol.kind, model.SymbolKind.Type) &&
+           symbol.exported && option.is_none(source.binding) {
+            if found >= 0 {
+                return -2;
+            }
+            found = i64(index);
+        }
+    }
+    return found;
+}
+
+func kind_is_symbol(kind model.SymbolKind, expected model.SymbolKind) bool {
+    return model.symbol_kind_id(kind) == model.symbol_kind_id(expected);
+}
+
+func is_buffer_element(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.SignedInt) ||
+           kind_is(kind, model.TypeKind.UnsignedInt) ||
+           kind_is(kind, model.TypeKind.Isize) ||
+           kind_is(kind, model.TypeKind.Usize) ||
+           kind_is(kind, model.TypeKind.Float) ||
+           kind_is(kind, model.TypeKind.Bool) ||
+           kind_is(kind, model.TypeKind.TypeParameter);
+}
+
+func require_module(module option.Option[hir.HirModule]) hir.HirModule
+    throws model.SupportError {
+    switch module {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            throw invalid("system operation requires its standard type module");
+        }
+    }
+}
+
+func value_type(context inout types.Context,
+                module option.Option[hir.HirModule],
+                arguments Vec[usize], name string, depth usize) usize
+    throws model.SupportError {
+    if depth > 128 {
+        throw value_error();
+    }
+    if name == "A" || name == "B" {
+        var index usize = 0;
+        if name == "B" {
+            index = 1;
+        }
+        if index >= vec.len(arguments) {
+            throw value_error();
+        }
+        return arguments[index];
+    }
+    var value = empty_type_value();
+    if name == "func(A) i64" || name == "func(A) Unit" {
+        value.kind = model.TypeKind.Function;
+        value.result = value_type(inout context, module, arguments,
+            substring(name, 8, text.byte_len(name)), depth + 1);
+        vec.push(value.parameters, model.ParameterType(
+            mode: model.ParamMode.Ordinary,
+            type_id: value_type(inout context, module, arguments, "A", depth + 1)));
+        return intern_type(inout context, value);
+    }
+    var base = name;
+    let parameters = vec.empty[usize]();
+    let bracket = text.find(name, "[");
+    var has_bracket = false;
+    var open usize = 0;
+    switch bracket {
+        case option.Option.Some(index): {
+            has_bracket = true;
+            open = index;
+        }
+        case option.Option.None: {}
+    }
+    if has_bracket {
+        base = substring(name, 0, open);
+        if !text.ends_with(name, "]") {
+            throw value_error();
+        }
+        let inner = substring(name, open + 1, text.byte_len(name) - 1);
+        let data = text.bytes(inner);
+        var start usize = 0;
+        var nesting usize = 0;
+        for var position usize = 0; position <= vec.len(data); position += 1 {
+            var split = position == vec.len(data);
+            if !split && data[position] == 44 && nesting == 0 {
+                split = true;
+            }
+            if split {
+                if position == start {
+                    throw value_error();
+                }
+                vec.push(parameters, value_type(inout context, module, arguments,
+                    substring(inner, start, position), depth + 1));
+                start = position + 1;
+            } else if data[position] == 91 {
+                nesting += 1;
+            } else if data[position] == 93 {
+                if nesting == 0 {
+                    throw value_error();
+                }
+                nesting -= 1;
+            }
+        }
+        if nesting != 0 {
+            throw value_error();
+        }
+    }
+    if base == "Vec" || base == "Slice" || base == "Weak" {
+        if vec.len(parameters) != 1 {
+            throw value_error();
+        }
+        if base == "Vec" {
+            value.kind = model.TypeKind.Vec;
+        } else if base == "Slice" {
+            value.kind = model.TypeKind.Slice;
+        } else {
+            value.kind = model.TypeKind.Weak;
+        }
+        value.type_args = parameters;
+        return intern_type(inout context, value);
+    }
+    if base == "Task" {
+        if vec.len(parameters) != 2 {
+            throw value_error();
+        }
+        value.kind = model.TypeKind.Task;
+        value.type_args = parameters;
+        return intern_type(inout context, value);
+    }
+    if base == "Ptr" || base == "PtrMut" {
+        if vec.len(parameters) != 1 {
+            throw value_error();
+        }
+        value.kind = model.TypeKind.CForeignPointer;
+        value.bits = 0;
+        if base == "PtrMut" {
+            value.bits = 1;
+        }
+        value.type_args = parameters;
+        return intern_type(inout context, value);
+    }
+    if base == "Buffer" || base == "BufferMut" {
+        if vec.len(parameters) != 1 {
+            throw value_error();
+        }
+        let element = types.find(context, parameters[0]);
+        var element_kind = model.TypeKind.Error;
+        var has_element = false;
+        switch element {
+            case option.Option.Some(found): {
+                element_kind = found.kind;
+                has_element = true;
+            }
+            case option.Option.None: {}
+        }
+        if !has_element || !is_buffer_element(element_kind) {
+            throw value_error();
+        }
+        value.kind = model.TypeKind.CForeignBuffer;
+        value.bits = 0;
+        if base == "BufferMut" {
+            value.bits = 1;
+        }
+        value.type_args = parameters;
+        return intern_type(inout context, value);
+    }
+    if base == "Result" || base == "Option" || text.starts_with(base, "std/") {
+        let std_module = require_module(module);
+        var logical_path = base;
+        if base == "Result" {
+            logical_path = "std/result";
+        } else if base == "Option" {
+            logical_path = "std/option";
+        }
+        var spelling = base;
+        if base != "Result" && base != "Option" {
+            let dot = text.find(base, ".");
+            switch dot {
+                case option.Option.Some(index): {
+                    logical_path = substring(base, 0, index);
+                    spelling = substring(base, index + 1, text.byte_len(base));
+                }
+                case option.Option.None: {
+                    logical_path = base;
+                }
+            }
+        }
+        let found_index = find_nominal(std_module, logical_path, spelling);
+        if found_index == -2 {
+            throw value_error();
+        }
+        if found_index < 0 {
+            throw invalid("system operation standard type is missing or has wrong arity");
+        }
+        let found = std_module.nominals[usize(found_index)];
+        if vec.len(found.params) != vec.len(parameters) {
+            throw invalid("system operation standard type is missing or has wrong arity");
+        }
+        if base == "Result" || base == "Option" {
+            let is_result = base == "Result";
+            if !kind_is(found.kind, model.TypeKind.NominalEnum) ||
+               vec.len(found.variants) != 2 {
+                throw value_error();
+            }
+            for var variant_index usize = 0; variant_index < 2;
+                variant_index += 1 {
+                let variant = found.variants[variant_index];
+                let symbol = std_module.resolved.symbols[variant.symbol];
+                var expected = "Some";
+                var payload usize = 0;
+                var parameter usize = 0;
+                if is_result {
+                    expected = "Ok";
+                    if variant_index == 1 {
+                        expected = "Err";
+                    }
+                    payload = 1;
+                    parameter = variant_index;
+                } else if variant_index == 0 {
+                    expected = "None";
+                } else {
+                    payload = 1;
+                }
+                if symbol.name != expected ||
+                   vec.len(variant.payload) != payload {
+                    throw value_error();
+                }
+                if payload != 0 {
+                    let field_type = types.find(context,
+                        variant.payload[0].type_id);
+                    var field_kind = model.TypeKind.Error;
+                    var field_declaration usize = 0;
+                    var has_field = false;
+                    switch field_type {
+                        case option.Option.Some(found_field): {
+                            field_kind = found_field.kind;
+                            field_declaration = found_field.declaration;
+                            has_field = true;
+                        }
+                        case option.Option.None: {}
+                    }
+                    if !has_field ||
+                       !kind_is(field_kind, model.TypeKind.TypeParameter) ||
+                       field_declaration != found.params[parameter].symbol {
+                        throw value_error();
+                    }
+                }
+            }
+        }
+        let fields = standard_fields(base);
+        if vec.len(fields) != 0 {
+            if !kind_is(found.kind, model.TypeKind.NominalStruct) ||
+               vec.len(found.fields) != vec.len(fields) {
+                throw value_error();
+            }
+            for var field_index usize = 0; field_index < vec.len(fields);
+                field_index += 1 {
+                let declaration = found.fields[field_index];
+                let symbol = std_module.resolved.symbols[declaration.symbol];
+                if symbol.name != fields[field_index].name ||
+                   declaration.type_id != value_type(inout context, module,
+                       arguments, fields[field_index].type_name, depth + 1) {
+                    throw value_error();
+                }
+            }
+        }
+        value.kind = found.kind;
+        value.declaration = found.symbol;
+        value.type_args = parameters;
+        return intern_type(inout context, value);
+    }
+    if vec.len(parameters) != 0 {
+        throw value_error();
+    }
+    if name == "Unit" {
+        value.kind = model.TypeKind.Unit;
+    } else if name == "bool" {
+        value.kind = model.TypeKind.Bool;
+    } else if name == "string" {
+        value.kind = model.TypeKind.String;
+    } else if name == "usize" {
+        value.kind = model.TypeKind.Usize;
+    } else if name == "isize" {
+        value.kind = model.TypeKind.Isize;
+    } else if name == "__woozy_Thread" {
+        value.kind = model.TypeKind.ThreadHandle;
+    } else if name == "__woozy_Mutex" {
+        value.kind = model.TypeKind.MutexHandle;
+    } else if name == "__woozy_Condvar" {
+        value.kind = model.TypeKind.CondvarHandle;
+    } else if name == "__woozy_AtomicI64" {
+        value.kind = model.TypeKind.AtomicI64Handle;
+    } else if name == "__woozy_IpcHandle" {
+        value.kind = model.TypeKind.IpcHandle;
+    } else if text.byte_len(name) >= 2 &&
+              (name[0] == 105 || name[0] == 117 || name[0] == 102) {
+        value.bits = parse_bits(text.bytes(
+            substring(name, 1, text.byte_len(name))));
+        if name[0] == 105 {
+            value.kind = model.TypeKind.SignedInt;
+        } else if name[0] == 117 {
+            value.kind = model.TypeKind.UnsignedInt;
+        } else {
+            value.kind = model.TypeKind.Float;
+        }
+    } else {
+        throw value_error();
+    }
+    return intern_type(inout context, value);
+}
+
+pub func system_operation_signature(context inout types.Context,
+                                    module option.Option[hir.HirModule],
+                                    operation u32,
+                                    arguments Vec[usize]) usize
+    throws model.SupportError {
+    let specs = system.operations();
+    var found = false;
+    var spec = system.OperationSpec(operation: 0, name: "", result: "",
+        parameters: [], owner: "", type_arity: 0);
+    for candidate in specs {
+        if !found && candidate.operation == operation {
+            spec = candidate;
+            found = true;
+        }
+    }
+    if !found || u32(vec.len(arguments)) != spec.type_arity {
+        throw invalid("unknown system operation or type argument count");
+    }
+    for argument in arguments {
+        if option.is_none(types.find(context, argument)) {
+            throw invalid("system operation type argument is not public");
+        }
+    }
+    var signature = empty_type_value();
+    signature.kind = model.TypeKind.Function;
+    signature.result = value_type(inout context, module, arguments, spec.result, 0);
+    // system.OperationSpec.parameters is already trimmed to the frozen count,
+    // so the C++ count <= parameters.size() invariant cannot be violated here.
+    for parameter in spec.parameters {
+        vec.push(signature.parameters, model.ParameterType(
+            mode: model.ParamMode.Ordinary,
+            type_id: value_type(inout context, module, arguments, parameter, 0)));
+    }
+    return intern_type(inout context, signature);
+}

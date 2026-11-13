@@ -1,0 +1,104 @@
+// Shared state for the sema package; declaration/body algorithms are separate.
+// CPP src/sema/check.cpp:19-127. IDs keep the accepted model/HIR conventions.
+package sema;
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+
+struct NodeKey { module usize; file usize; node usize; }
+struct TraitKey { actual usize; declaration usize; args Vec[usize]; }
+struct InstanceKey { origin usize; args Vec[usize]; }
+struct Value {
+    type_id usize;
+    integer option.Option[bigint.BigInt];
+    boolean option.Option[bool];
+    floating option.Option[u64];
+    string_value option.Option[string];
+}
+struct Expr { id usize; value Value; }
+struct Local {
+    type_id usize; writable bool;
+    ordinary_parameter bool; read_only_capture bool;
+}
+struct Constant {
+    value Value; function option.Option[usize];
+    type_args Vec[usize]; aggregate option.Option[hir.ConstantValue];
+}
+struct Selection { method usize; substitutions Vec[model.Substitution]; }
+struct ClosureInfo {
+    bindings Vec[hir.CaptureBinding]; sources Vec[hir.CaptureSource]; is_move bool;
+}
+// A C++ const ImplDecl* becomes a stable index in state.m.impls.
+struct IteratorCandidate {
+    impl_index option.Option[usize]; substitutions Vec[model.Substitution]; element usize;
+}
+struct ArgumentMode {
+    value model.NodeRef; marked model.NodeRef;
+    requested model.ParamMode; has_marker bool;
+}
+struct MethodPrototypeRef { trait_index usize; method_index usize; }
+struct TraitMethodSource {
+    impl_index usize; trait_index usize; prototype_index usize;
+}
+// CPP Ieee is the already-published number.Ieee; no second IEEE record needed.
+struct ListHint { contextual bool; floating bool; depth option.Option[usize]; }
+struct PlacePath { is_index bool; known bool; value u64; }
+struct ContainerPath { indexes Vec[PlacePath]; fields Vec[u64]; }
+struct PlaceAccess { root usize; path Vec[PlacePath]; }
+struct CaptureUse { origin usize; environment usize; type_id usize; first_use model.NodeRef; }
+struct Flow { falls bool; errors Vec[usize]; breaks Vec[usize]; continues Vec[usize]; }
+struct Statement { id usize; falls bool; breaks bool; }
+// CPP annotate's local Cleanup record, not persistent Checker state.
+struct AnnotationCleanup {
+    handler_floor usize; body usize; external Vec[usize]; references Vec[usize];
+}
+
+// Named entry records replace CPP maps, never maps keyed by formatted strings.
+struct NodeSymbolEntry { key NodeKey; symbol usize; }
+struct SymbolTypeEntry { symbol usize; type_id usize; }
+struct TraitSignatureEntry { method usize; trait_self usize; trait_self_callback bool; }
+struct ParametersEntry { owner usize; values Vec[hir.Parameter]; }
+struct LocalEntry { symbol usize; value Local; }
+struct ConstantEntry { symbol usize; value Constant; }
+struct CNamedTypeEntry { c_type u32; type_id usize; }
+struct NominalIdEntry { symbol usize; index usize; }
+struct GenericParamsEntry { owner usize; params Vec[hir.GenericParam]; }
+struct BoundEntry { symbol usize; trait_ref option.Option[hir.TraitRef]; }
+struct BodyEntry { symbol usize; source model.NodeRef; }
+struct TemplateIdEntry { symbol usize; index usize; }
+struct InstanceEntry { key InstanceKey; symbol usize; }
+struct TraitResultEntry { key TraitKey; value bool; }
+struct ClosureEntry { symbol usize; value ClosureInfo; }
+struct CaptureOriginEntry { origin usize; local usize; }
+struct CaptureLocalEntry { local usize; value hir.CaptureBinding; }
+
+struct Checker {
+    m hir.HirModule;
+    // CPP stop_token has no current Wz facade equivalent: no fake bool/token.
+    occurrences Vec[NodeSymbolEntry]; definitions Vec[NodeSymbolEntry];
+    signatures Vec[SymbolTypeEntry];
+    trait_signature_context Vec[TraitSignatureEntry];
+    parameters Vec[ParametersEntry];
+    locals Vec[LocalEntry]; constants Vec[ConstantEntry]; evaluating Vec[usize];
+    function usize; scope usize; cleanup_depth usize;
+    async_function bool; current_result usize;
+    current_async_error option.Option[usize]; unsafe_depth u32;
+    c_named_types Vec[CNamedTypeEntry];
+    unit usize; boolean usize; i64_type usize;
+    loops Vec[usize]; break_targets Vec[usize];
+    // CPP owned and m.resolved are one mutable state.m.resolved in Wz.
+    nominal_ids Vec[NominalIdEntry]; self_types Vec[SymbolTypeEntry];
+    generic_params Vec[GenericParamsEntry]; bounds Vec[BoundEntry];
+    trait_parameters Vec[GenericParamsEntry]; bodies Vec[BodyEntry];
+    template_ids Vec[TemplateIdEntry]; instance_cache Vec[InstanceEntry];
+    instantiation_depth usize; constraint_depth usize;
+    trait_results Vec[TraitResultEntry];
+    active_constraints Vec[TraitKey]; active_trait_bounds Vec[TraitKey];
+    instantiated_nodes usize; active_params Vec[hir.GenericParam];
+    signature_parameters Vec[usize];
+    async_functions Vec[usize]; closures Vec[ClosureEntry];
+    capture_by_origin Vec[CaptureOriginEntry]; capture_by_local Vec[CaptureLocalEntry];
+    current_captures Vec[hir.CaptureBinding];
+    weak_validated Vec[usize]; nominal_fields_ready bool;
+}

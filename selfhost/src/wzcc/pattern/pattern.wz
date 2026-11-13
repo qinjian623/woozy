@@ -1,0 +1,699 @@
+// Maranget-style pattern coverage analysis for switch exhaustiveness.
+//
+// Pure-Wz counterpart of src/hir/pattern_analysis.{hpp,cpp}.  The C++ code is
+// internal support shared by semantic checking and the independent HIR
+// verifier; nothing here becomes part of HirModule or a backend interface.
+//
+// The analysis never enumerates a payload Cartesian product up front:
+// - enum variants are specialized only when the query/matrix actually names
+//   them (and a nullary wildcard row short-circuits the whole matrix),
+// - literal columns use the distinct values already present plus one internal
+//   Other constructor, except for a genuinely complete small bool/integer
+//   domain.
+//
+// Every failure of the C++ PatternAnalysisLimit stays a
+// model.SupportError.Limit with the original text, because C++ uses one
+// exception type for shape errors and resource limits alike.  A types.Error
+// raised by the canonical type table or by substitution is converted to
+// model.SupportError.Invalid with the original text instead of panicking.
+//
+// Coverage owns a deep copy of every matrix row, so a caller that keeps and
+// later mutates the Vec payload of a pattern passed to add() cannot change the
+// accumulated matrix.  The lookup closure and its captures belong to the
+// caller; this package never invokes a frontend or a host helper.
+package pattern;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Complete type-domain classification for coverage, in the C++ enum order.
+// An ordinary empty enum is uninhabited; every non-enum type has at least the
+// internal Other class.
+pub enum DomainKind {
+    NominalEnum;
+    BoolDomain;
+    IntegerDomain;
+    FloatDomain;
+    StringDomain;
+    Opaque;
+}
+
+pub enum ConstructorKind { Variant; Literal; Other; }
+
+// Shared constructor view.  `variant` is a SymbolId for Variant, `literal_key`
+// is the canonical target value for Literal, and `fields` are the substituted
+// payload types.
+pub struct Constructor {
+    pub kind ConstructorKind;
+    pub variant usize;
+    pub literal_key string;
+    pub fields Vec[usize];
+}
+
+pub struct Domain {
+    pub kind DomainKind;
+    pub constructors Vec[Constructor];
+    pub bits u32;
+}
+
+pub func domain_kind_id(kind DomainKind) u32 {
+    switch kind {
+        case DomainKind.NominalEnum: return 0;
+        case DomainKind.BoolDomain: return 1;
+        case DomainKind.IntegerDomain: return 2;
+        case DomainKind.FloatDomain: return 3;
+        case DomainKind.StringDomain: return 4;
+        case DomainKind.Opaque: return 5;
+    }
+}
+
+pub func constructor_kind_id(kind ConstructorKind) u32 {
+    switch kind {
+        case ConstructorKind.Variant: return 0;
+        case ConstructorKind.Literal: return 1;
+        case ConstructorKind.Other: return 2;
+    }
+}
+
+func domain_is(kind DomainKind, expected DomainKind) bool {
+    return domain_kind_id(kind) == domain_kind_id(expected);
+}
+
+func constructor_is(kind ConstructorKind, expected ConstructorKind) bool {
+    return constructor_kind_id(kind) == constructor_kind_id(expected);
+}
+
+func type_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func is_integer_type(kind model.TypeKind) bool {
+    return type_is(kind, model.TypeKind.SignedInt) ||
+           type_is(kind, model.TypeKind.UnsignedInt) ||
+           type_is(kind, model.TypeKind.Isize) ||
+           type_is(kind, model.TypeKind.Usize);
+}
+
+func limit_error(message string) model.SupportError {
+    return model.SupportError.Limit(message);
+}
+
+func invalid_error(message string) model.SupportError {
+    return model.SupportError.Invalid(message);
+}
+
+func type_error_message(error types.Error) string {
+    switch error {
+        case types.Error.Invalid(message): return message;
+    }
+}
+
+// The C++ Source/Pattern defaults.  Wildcards have no source node and no span.
+func empty_source() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+}
+
+func wildcard(type_id usize) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: empty_source(),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].None);
+}
+
+// A wildcard or a binding is total at its column position.
+func total(pattern hir.Pattern) bool {
+    return !option.is_some(pattern.variant) && !option.is_some(pattern.literal);
+}
+
+func copy_pattern(value hir.Pattern) hir.Pattern {
+    let payload = vec.empty[hir.Pattern]();
+    vec.reserve(payload, vec.len(value.payload));
+    for item in value.payload {
+        vec.push(payload, copy_pattern(item));
+    }
+    return hir.Pattern(type_id: value.type_id, source: value.source,
+        variant: value.variant, binding: value.binding, payload: payload,
+        literal: value.literal);
+}
+
+func copy_constructor(value Constructor) Constructor {
+    let fields = vec.empty[usize]();
+    vec.reserve(fields, vec.len(value.fields));
+    for field in value.fields {
+        vec.push(fields, field);
+    }
+    return Constructor(kind: value.kind, variant: value.variant,
+        literal_key: value.literal_key, fields: fields);
+}
+
+func copy_constructors(values Vec[Constructor]) Vec[Constructor] {
+    let out = vec.empty[Constructor]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, copy_constructor(value));
+    }
+    return out;
+}
+
+func copy_domain(value Domain) Domain {
+    return Domain(kind: value.kind,
+        constructors: copy_constructors(value.constructors), bits: value.bits);
+}
+
+func copy_matrix(matrix Vec[Vec[hir.Pattern]]) Vec[Vec[hir.Pattern]] {
+    let out = vec.empty[Vec[hir.Pattern]]();
+    vec.reserve(out, vec.len(matrix));
+    for row in matrix {
+        let cells = vec.empty[hir.Pattern]();
+        vec.reserve(cells, vec.len(row));
+        for cell in row {
+            vec.push(cells, copy_pattern(cell));
+        }
+        vec.push(out, cells);
+    }
+    return out;
+}
+
+func literal_constructor(key string) Constructor {
+    return Constructor(kind: ConstructorKind.Literal, variant: 0,
+        literal_key: key, fields: vec.empty[usize]());
+}
+
+func other_constructor() Constructor {
+    return Constructor(kind: ConstructorKind.Other, variant: 0,
+        literal_key: "", fields: vec.empty[usize]());
+}
+
+// Byte-wise std::string ordering: string keys are ASCII prefixes plus the
+// original UTF-8 bytes, and std::string compares char values as unsigned.
+func string_less(left string, right string) bool {
+    let left_bytes = text.bytes(left);
+    let right_bytes = text.bytes(right);
+    var index usize = 0;
+    for index < vec.len(left_bytes) && index < vec.len(right_bytes) {
+        if left_bytes[index] != right_bytes[index] {
+            return left_bytes[index] < right_bytes[index];
+        }
+        index += 1;
+    }
+    return vec.len(left_bytes) < vec.len(right_bytes);
+}
+
+// std::set<std::string> iteration order: insert in sorted position and skip
+// duplicates, so constructor exploration order matches the C++ code.
+func insert_key(keys Vec[string], key string) {
+    var position usize = 0;
+    for position < vec.len(keys) && string_less(keys[position], key) {
+        position += 1;
+    }
+    if position < vec.len(keys) && !string_less(key, keys[position]) {
+        return;
+    }
+    vec.push(keys, key);
+    for var index usize = vec.len(keys) - 1; index > position; index -= 1 {
+        keys[index] = keys[index - 1];
+    }
+    keys[position] = key;
+}
+
+// Shared constructor view for a concrete nominal enum type.  Field types are
+// substituted with the type's actual arguments; interning stays in the
+// caller's TypeContext copy.
+pub func pattern_constructors(module hir.HirModule, type_id usize,
+                              context inout types.Context)
+    Vec[Constructor] throws model.SupportError {
+    let found = types.find(context, type_id);
+    var value = model.empty_type(model.TypeKind.Error);
+    switch found {
+        case option.Option.Some(item): value = item;
+        case option.Option.None:
+            throw limit_error("enum pattern constructor type is missing");
+    }
+    if !type_is(value.kind, model.TypeKind.NominalEnum) {
+        return vec.empty[Constructor]();
+    }
+    var declaration i64 = -1;
+    for var index usize = 0; index < vec.len(module.nominals); index += 1 {
+        if module.nominals[index].symbol == value.declaration {
+            declaration = i64(index);
+        }
+    }
+    if declaration < 0 ||
+       vec.len(module.nominals[usize(declaration)].params) !=
+           vec.len(value.type_args) {
+        throw limit_error(
+            "enum pattern constructor declaration/type arguments mismatch");
+    }
+    let nominal = module.nominals[usize(declaration)];
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    let constructors = vec.empty[Constructor]();
+    for variant in nominal.variants {
+        let fields = vec.empty[usize]();
+        vec.reserve(fields, vec.len(variant.payload));
+        for field in variant.payload {
+            try {
+                vec.push(fields, types.substitute(field.type_id, substitutions,
+                    inout context));
+            } catch error types.Error {
+                throw invalid_error(type_error_message(error));
+            }
+        }
+        vec.push(constructors, Constructor(kind: ConstructorKind.Variant,
+            variant: variant.symbol, literal_key: "", fields: fields));
+    }
+    return constructors;
+}
+
+// Complete type-domain classification.  An ordinary empty enum is still a
+// nominal enum domain with zero constructors.
+pub func pattern_domain(module hir.HirModule, type_id usize,
+                       context inout types.Context)
+    Domain throws model.SupportError {
+    let found = types.find(context, type_id);
+    var value = model.empty_type(model.TypeKind.Error);
+    switch found {
+        case option.Option.Some(item): value = item;
+        case option.Option.None:
+            throw limit_error("pattern coverage type is missing");
+    }
+    if type_is(value.kind, model.TypeKind.NominalEnum) {
+        return Domain(kind: DomainKind.NominalEnum,
+            constructors: pattern_constructors(module, type_id, inout context),
+            bits: 0);
+    }
+    if type_is(value.kind, model.TypeKind.Bool) {
+        return Domain(kind: DomainKind.BoolDomain,
+            constructors: vec.empty[Constructor](), bits: 1);
+    }
+    if is_integer_type(value.kind) {
+        var width u32 = 0;
+        try {
+            width = types.bit_width(value, module.config);
+        } catch error types.Error {
+            throw invalid_error(type_error_message(error));
+        }
+        return Domain(kind: DomainKind.IntegerDomain,
+            constructors: vec.empty[Constructor](), bits: width);
+    }
+    if type_is(value.kind, model.TypeKind.Float) {
+        return Domain(kind: DomainKind.FloatDomain,
+            constructors: vec.empty[Constructor](), bits: value.bits);
+    }
+    if type_is(value.kind, model.TypeKind.String) {
+        return Domain(kind: DomainKind.StringDomain,
+            constructors: vec.empty[Constructor](), bits: 0);
+    }
+    return Domain(kind: DomainKind.Opaque, constructors: vec.empty[Constructor](),
+        bits: 0);
+}
+
+struct CacheEntry {
+    key usize;
+    value Domain;
+}
+
+pub struct Coverage {
+    scrutinee usize;
+    lookup func(usize) Domain throws model.SupportError;
+    budget usize;
+    cache Vec[CacheEntry];
+    matrix Vec[Vec[hir.Pattern]];
+}
+
+// Default caller budget for one switch is 100000 units; one unit is one matrix
+// row, query cell, constructor or cached domain entry charged by spend().
+pub func coverage(scrutinee usize,
+                  lookup func(usize) Domain throws model.SupportError,
+                  budget usize) Coverage {
+    return Coverage(scrutinee: scrutinee, lookup: lookup, budget: budget,
+        cache: vec.empty[CacheEntry](),
+        matrix: vec.empty[Vec[hir.Pattern]]());
+}
+
+func spend(state inout Coverage, amount usize) throws model.SupportError {
+    if amount > state.budget {
+        throw limit_error(
+            "switch pattern coverage analysis exceeded its resource budget");
+    }
+    state.budget -= amount;
+}
+
+func domain(state inout Coverage, type_id usize) Domain throws model.SupportError {
+    for var index usize = 0; index < vec.len(state.cache); index += 1 {
+        if state.cache[index].key == type_id {
+            return copy_domain(state.cache[index].value);
+        }
+    }
+    let lookup = state.lookup;
+    let entries = lookup(type_id);
+    spend(inout state, vec.len(entries.constructors) + 1);
+    vec.push(state.cache, CacheEntry(key: type_id, value: copy_domain(entries)));
+    return entries;
+}
+
+func literal_key(value hir.Pattern, d Domain) string throws model.SupportError {
+    let found = value.literal;
+    switch found {
+        case option.Option.None:
+            throw limit_error("missing literal pattern value");
+        case option.Option.Some(literal): {
+            switch literal {
+                case hir.PatternLiteral.BoolLiteral(flag): {
+                    if !domain_is(d.kind, DomainKind.BoolDomain) {
+                        throw limit_error("bool literal pattern type mismatch");
+                    }
+                    if flag.value {
+                        return "b:1";
+                    }
+                    return "b:0";
+                }
+                case hir.PatternLiteral.IntegerLiteral(number): {
+                    if !domain_is(d.kind, DomainKind.IntegerDomain) {
+                        throw limit_error(
+                            "integer literal pattern type mismatch");
+                    }
+                    return "i:" + strconv.format_u64(u64(d.bits)) + ":" +
+                        strconv.format_u64(number.bits);
+                }
+                case hir.PatternLiteral.FloatLiteral(number): {
+                    if !domain_is(d.kind, DomainKind.FloatDomain) {
+                        throw limit_error("float literal pattern type mismatch");
+                    }
+                    // +0 and -0 are the same value for overlap purposes.
+                    var bits = number.bits;
+                    if d.bits == 32 {
+                        bits = bits & 0xffffffff;
+                        if (bits & 0x80000000) != 0 &&
+                           (bits & 0x7fffffff) == 0 {
+                            bits = 0;
+                        }
+                    } else if d.bits == 64 {
+                        if (bits & 0x8000000000000000) != 0 &&
+                           (bits & 0x7fffffffffffffff) == 0 {
+                            bits = 0;
+                        }
+                    }
+                    return "f:" + strconv.format_u64(u64(d.bits)) + ":" +
+                        strconv.format_u64(bits);
+                }
+                case hir.PatternLiteral.StringLiteral(value_text): {
+                    if !domain_is(d.kind, DomainKind.StringDomain) {
+                        throw limit_error(
+                            "string literal pattern type mismatch");
+                    }
+                    return "s:" +
+                        strconv.format_u64(u64(text.byte_len(value_text.utf8))) +
+                        ":" + value_text.utf8;
+                }
+            }
+        }
+    }
+}
+
+func add_literal_key(keys Vec[string], cell hir.Pattern, type_id usize,
+                   d Domain) throws model.SupportError {
+    if option.is_some(cell.variant) {
+        throw limit_error("enum variant pattern outside an enum domain");
+    }
+    if cell.type_id != type_id {
+        throw limit_error("pattern coverage column type mismatch");
+    }
+    if option.is_some(cell.literal) {
+        insert_key(keys, literal_key(cell, d));
+    }
+}
+
+func collect_literals(type_id usize, d Domain,
+                    matrix Vec[Vec[hir.Pattern]],
+                    query Vec[hir.Pattern]) Vec[string] throws model.SupportError {
+    let keys = vec.empty[string]();
+    for row in matrix {
+        if vec.len(row) > 0 {
+            add_literal_key(keys, row[0], type_id, d);
+        }
+    }
+    if vec.len(query) > 0 {
+        add_literal_key(keys, query[0], type_id, d);
+    }
+    return keys;
+}
+
+func constructors(state inout Coverage, type_id usize,
+                matrix Vec[Vec[hir.Pattern]],
+                query Vec[hir.Pattern]) Vec[Constructor]
+    throws model.SupportError {
+    let d = domain(inout state, type_id);
+    spend(inout state, vec.len(matrix) + vec.len(query) + 1);
+    if domain_is(d.kind, DomainKind.NominalEnum) {
+        return copy_constructors(d.constructors);
+    }
+    if domain_is(d.kind, DomainKind.BoolDomain) {
+        let result = vec.empty[Constructor]();
+        vec.push(result, literal_constructor("b:0"));
+        vec.push(result, literal_constructor("b:1"));
+        return result;
+    }
+    if domain_is(d.kind, DomainKind.Opaque) {
+        let result = vec.empty[Constructor]();
+        vec.push(result, other_constructor());
+        return result;
+    }
+    let keys = collect_literals(type_id, d, matrix, query);
+    let result = vec.empty[Constructor]();
+    if domain_is(d.kind, DomainKind.IntegerDomain) {
+        var full = false;
+        if u64(d.bits) < 64 {
+            let domain_size = u64(1) << u64(d.bits);
+            full = u64(vec.len(keys)) == domain_size;
+        }
+        for key in keys {
+            vec.push(result, literal_constructor(key));
+        }
+        if !full {
+            vec.push(result, other_constructor());
+        }
+        return result;
+    }
+    // Float and string: the distinct values present plus one Other class.
+    for key in keys {
+        vec.push(result, literal_constructor(key));
+    }
+    vec.push(result, other_constructor());
+    return result;
+}
+
+func specialize(state inout Coverage, constructor Constructor,
+              matrix Vec[Vec[hir.Pattern]]) Vec[Vec[hir.Pattern]]
+    throws model.SupportError {
+    let result = vec.empty[Vec[hir.Pattern]]();
+    for row in matrix {
+        if vec.len(row) == 0 {
+            throw limit_error("switch pattern coverage row is empty");
+        }
+        let cell = row[0];
+        if option.is_some(cell.variant) && option.is_some(cell.literal) {
+            throw limit_error("pattern has both variant and literal");
+        }
+        var specialized = vec.empty[hir.Pattern]();
+        if total(cell) {
+            for field in constructor.fields {
+                vec.push(specialized, wildcard(field));
+            }
+        } else if option.is_some(cell.variant) {
+            if !constructor_is(constructor.kind, ConstructorKind.Variant) {
+                continue;
+            }
+            if option.unwrap_or(cell.variant, 0) != constructor.variant {
+                continue;
+            }
+            if vec.len(cell.payload) != vec.len(constructor.fields) {
+                throw limit_error(
+                    "enum pattern matrix payload differs from its constructor");
+            }
+            for item in cell.payload {
+                vec.push(specialized, item);
+            }
+        } else {
+            if !option.is_some(cell.literal) {
+                throw limit_error("unknown pattern column category");
+            }
+            if !constructor_is(constructor.kind, ConstructorKind.Literal) {
+                continue;
+            }
+            let d = domain(inout state, cell.type_id);
+            if literal_key(cell, d) != constructor.literal_key {
+                continue;
+            }
+            if vec.len(cell.payload) != 0 || option.is_some(cell.binding) {
+                throw limit_error("literal pattern has payload or binding");
+            }
+        }
+        for var index usize = 1; index < vec.len(row); index += 1 {
+            vec.push(specialized, row[index]);
+        }
+        vec.push(result, specialized);
+    }
+    return result;
+}
+
+func row_total(row Vec[hir.Pattern]) bool {
+    for cell in row {
+        if !total(cell) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func constructor_for(all Vec[Constructor], kind ConstructorKind,
+                   variant usize, key string) i64 {
+    for var index usize = 0; index < vec.len(all); index += 1 {
+        if !constructor_is(all[index].kind, kind) {
+            continue;
+        }
+        if constructor_is(kind, ConstructorKind.Variant) {
+            if all[index].variant == variant {
+                return i64(index);
+            }
+        } else if all[index].literal_key == key {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func useful(state inout Coverage, matrix Vec[Vec[hir.Pattern]],
+          query Vec[hir.Pattern], depth usize) bool throws model.SupportError {
+    // Match the C++ depth limit before charging the work budget.
+    if depth > 256 {
+        throw limit_error(
+            "switch pattern coverage analysis exceeded its nesting budget");
+    }
+    spend(inout state, vec.len(matrix) + vec.len(query) + 1);
+    if vec.len(query) == 0 {
+        return vec.len(matrix) == 0;
+    }
+    // A row made only of wildcard/binding patterns covers every tuple in this
+    // matrix, so no query can add a new value.  Besides being correct, this
+    // keeps a final `case _` from expanding every nested constructor
+    // combination.
+    for row in matrix {
+        if row_total(row) {
+            return false;
+        }
+    }
+
+    let head = query[0];
+    if option.is_some(head.variant) && option.is_some(head.literal) {
+        throw limit_error("pattern has both variant and literal");
+    }
+    let head_type = head.type_id;
+    if option.is_some(head.variant) || option.is_some(head.literal) {
+        let all = constructors(inout state, head_type, matrix, query);
+        var found i64 = -1;
+        if option.is_some(head.variant) {
+            if option.is_some(head.binding) || option.is_some(head.literal) {
+                throw limit_error("variant pattern has invalid fields");
+            }
+            found = constructor_for(all, ConstructorKind.Variant,
+                option.unwrap_or(head.variant, 0), "");
+        } else {
+            if option.is_some(head.binding) || vec.len(head.payload) != 0 {
+                throw limit_error("literal pattern has invalid fields");
+            }
+            let d = domain(inout state, head_type);
+            found = constructor_for(all, ConstructorKind.Literal, 0,
+                literal_key(head, d));
+        }
+        if found < 0 {
+            throw limit_error(
+                "pattern constructor is absent from its declared type");
+        }
+        let selected = all[usize(found)];
+        var next_query = vec.empty[hir.Pattern]();
+        if option.is_some(head.variant) {
+            if vec.len(head.payload) != vec.len(selected.fields) {
+                throw limit_error(
+                    "enum pattern payload count differs from its constructor");
+            }
+            for item in head.payload {
+                vec.push(next_query, item);
+            }
+        }
+        for var index usize = 1; index < vec.len(query); index += 1 {
+            vec.push(next_query, query[index]);
+        }
+        let next_matrix = specialize(inout state, selected, matrix);
+        return useful(inout state, next_matrix, next_query, depth + 1);
+    }
+
+    // A binding and a wildcard are both total at their position.  Non-enum
+    // domains must retain an internal Other class; an actual empty enum has no
+    // values at all and is handled as uninhabited rather than as a total
+    // wildcard.
+    let all = constructors(inout state, head_type, matrix, query);
+    if vec.len(all) == 0 {
+        return vec.len(matrix) == 0;
+    }
+    if vec.len(matrix) == 0 {
+        return true;
+    }
+    let tail = vec.empty[hir.Pattern]();
+    for var index usize = 1; index < vec.len(query); index += 1 {
+        vec.push(tail, query[index]);
+    }
+    for constructor in all {
+        var next_query = vec.empty[hir.Pattern]();
+        for field in constructor.fields {
+            vec.push(next_query, wildcard(field));
+        }
+        for item in tail {
+            vec.push(next_query, item);
+        }
+        let next_matrix = specialize(inout state, constructor, matrix);
+        if useful(inout state, next_matrix, next_query, depth + 1) {
+            return true;
+        }
+    }
+    return false;
+}
+
+// Returns false when the pattern cannot match any value not already covered.
+// A useful pattern is appended to the matrix as an independent deep copy.
+pub func add(state inout Coverage, value hir.Pattern) bool
+    throws model.SupportError {
+    let query = vec.empty[hir.Pattern]();
+    vec.push(query, copy_pattern(value));
+    let matrix = copy_matrix(state.matrix);
+    if !useful(inout state, matrix, query, 0) {
+        return false;
+    }
+    vec.push(state.matrix, query);
+    return true;
+}
+
+// True only when the accumulated matrix covers every value.
+pub func exhaustive(state inout Coverage) bool throws model.SupportError {
+    let scrutinee = state.scrutinee;
+    let d = domain(inout state, scrutinee);
+    if domain_is(d.kind, DomainKind.NominalEnum) &&
+       vec.len(d.constructors) == 0 {
+        return true;
+    }
+    let matrix = copy_matrix(state.matrix);
+    let query = vec.empty[hir.Pattern]();
+    vec.push(query, wildcard(scrutinee));
+    return !useful(inout state, matrix, query, 0);
+}

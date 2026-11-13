@@ -1,0 +1,157 @@
+// CPP check.cpp:6799-6898. Public phase forwarding does not grant HIR trust.
+package sema;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func check_complete(state model.PhaseState) bool {
+    switch state { case model.PhaseState.Complete: return true; default: return false; }
+}
+
+func check_cancelled_phase(state model.PhaseState) bool {
+    switch state { case model.PhaseState.Cancelled: return true; default: return false; }
+}
+
+func check_success(state model.PhaseState, has_value bool,
+                   diagnostics Vec[model.Diagnostic]) bool {
+    if !check_complete(state) || !has_value { return false; }
+    for diagnostic in diagnostics { if diagnostic.severity == "error" { return false; } }
+    return true;
+}
+
+func check_copy_diagnostics(values Vec[model.Diagnostic]) Vec[model.Diagnostic] {
+    let result = vec.empty[model.Diagnostic]();
+    for value in values {
+        var copied = value;
+        copied.related = vec.empty[model.Related]();
+        for related in value.related { vec.push(copied.related, related); }
+        copied.fixits = vec.empty[model.Fixit]();
+        for fixit in value.fixits { vec.push(copied.fixits, fixit); }
+        copied.notes = vec.empty[string]();
+        for note in value.notes { vec.push(copied.notes, note); }
+        vec.push(result, copied);
+    }
+    return result;
+}
+
+func check_empty_result() hir.HirResult {
+    let resolved = model.ResolvedProject(project: model.empty_project(), symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    let module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    return hir.HirResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Internal, diagnostics: [], has_value: false,
+        value: module);
+}
+
+func check_internal(message string) hir.HirResult {
+    var result = check_empty_result();
+    var diagnostic = model.diagnostic("E_INTERNAL_ERROR", "type", message,
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    vec.push(result.diagnostics, diagnostic);
+    return result;
+}
+
+func check_error(error Error) hir.HirResult {
+    switch error {
+        case Error.Rejected(diagnostic, failure): {
+            var result = check_empty_result();
+            result.failure = failure;
+            result.diagnostics = check_copy_diagnostics([diagnostic]);
+            return result;
+        }
+        case Error.Support(support): {
+            switch support {
+                case model.SupportError.Invalid(message): return check_internal(message);
+                case model.SupportError.Limit(message): return check_internal(message);
+            }
+        }
+    }
+}
+
+func check_forward_resolve(input model.ResolveResult) hir.HirResult {
+    var result = check_empty_result();
+    result.state = input.state;
+    result.failure = input.failure;
+    result.diagnostics = check_copy_diagnostics(input.diagnostics);
+    if check_complete(result.state) { result.state = model.PhaseState.Failed; }
+    if vec.len(result.diagnostics) == 0 && !check_cancelled_phase(result.state) {
+        return check_internal("resolve did not successfully complete");
+    }
+    return result;
+}
+
+func check_native(backend model.Backend) bool {
+    switch backend { case model.Backend.Native: return true; case model.Backend.Python: return false; }
+}
+
+func check_config(project model.Project, supplied option.Option[model.CheckConfig])
+    model.CheckConfig throws Error {
+    if project.backend != "native" && project.backend != "python" {
+        throw internal_error("invalid project backend");
+    }
+    var backend = model.Backend.Native;
+    if project.backend == "python" { backend = model.Backend.Python; }
+    let config = model.CheckConfig(backend: backend, word_bits: project.word_bits);
+    switch supplied {
+        case option.Option.Some(value): {
+            if check_native(value.backend) != check_native(config.backend) ||
+               value.word_bits != config.word_bits {
+                throw internal_error("CheckConfig does not match Project target");
+            }
+        }
+        case option.Option.None: {}
+    }
+    if config.word_bits != 32 && config.word_bits != 64 {
+        throw internal_error("target word_bits must be 32 or 64");
+    }
+    return config;
+}
+
+pub func check_types(input model.ResolveResult,
+                     config option.Option[model.CheckConfig]) hir.HirResult {
+    if !check_success(input.state, input.has_value, input.diagnostics) {
+        return check_forward_resolve(input);
+    }
+    try {
+        let actual_config = check_config(input.value.project, config);
+        var checker = make_checker(input.value, actual_config);
+        let ownership = run_checker(inout checker);
+        if !check_success(ownership.state, ownership.has_value, ownership.diagnostics) {
+            if vec.len(ownership.diagnostics) == 0 {
+                var cancelled = check_empty_result();
+                cancelled.state = model.PhaseState.Cancelled;
+                return cancelled;
+            }
+            return check_error(Error.Rejected(diagnostic: ownership.diagnostics[0],
+                failure: ownership.failure));
+        }
+        let module = checker.m;
+        let verified = hirverify.verify_types(module);
+        var result = check_empty_result();
+        result.state = verified.state;
+        result.failure = verified.failure;
+        result.diagnostics = verified.diagnostics;
+        if check_success(verified.state, verified.has_value, verified.diagnostics) {
+            result.has_value = true;
+            result.value = module;
+        }
+        return result;
+    } catch error Error { return check_error(error); }
+}
+
+pub func check_project(input model.ResolveResult,
+                       config option.Option[model.CheckConfig],
+                       mode hirverify.VerifyMode) hirverify.VerifyResult {
+    let typed = check_types(input, config);
+    if check_success(typed.state, typed.has_value, typed.diagnostics) {
+        return hirverify.verify(typed.value, mode);
+    }
+    return hirverify.VerifyResult(state: typed.state, failure: typed.failure,
+        diagnostics: typed.diagnostics,
+        value: option.Option[hirverify.VerifiedHirModule].None);
+}

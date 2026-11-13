@@ -1,0 +1,108 @@
+// Real Wz source used only as the Source/AST record fixture for the HIR dump
+// comparison.  Both harnesses parse these exact bytes; every HirSource below
+// therefore points at a real AstNode and its real SourceSpan.
+package fixture;
+
+import "std/option" as option;
+import "std/vec" as vec;
+
+struct Pair[T] {
+    first T;
+    second i64;
+}
+
+struct Empty {
+}
+
+enum Shape {
+    Circle(radius f64);
+    Square(side i64);
+    Nothing;
+}
+
+trait Show {
+    func show(value Self) string;
+    func size(value Self) i64;
+}
+
+impl Show for Pair[i64] {
+    func show(value Self) string {
+        return "pair";
+    }
+
+    func size(value Self) i64 {
+        return 2;
+    }
+}
+
+func arithmetic(a i64, b i64) i64 {
+    let sum = a + b;
+    let difference = a - b;
+    let product = a * b;
+    let quotient = a / b;
+    let remainder = a % b;
+    let shifted = a << 2;
+    let bits = (a & b) | (a ^ b);
+    let compared = (a < b) && (a <= b) || (a > b);
+    let negated = -a;
+    let inverted = ~a;
+    let logical = !true;
+    return sum + difference + product + quotient + remainder + shifted +
+        bits + compared + negated + inverted + logical;
+}
+
+func calls(values Vec[i64], pair Pair[i64]) i64 {
+    let value = pair.first;
+    values[0] = value;
+    let part = values[0:2];
+    let list = [1, 2, 3];
+    return arithmetic(values[0], values[1]) + i64(vec.len(part)) +
+        i64(vec.len(list));
+}
+
+func control(values Vec[i64]) i64 {
+    var total = 0;
+    if total == 0 {
+        total = 1;
+    } else {
+        total = 2;
+    }
+    for var index = 0; index < 4; index += 1 {
+        total += index;
+    }
+    for item in values {
+        total += item;
+    }
+    return total;
+}
+
+func patterns(value option.Option[i64]) i64 {
+    switch value {
+        case option.Option.Some(item):
+            return item;
+        case option.Option.None:
+            return 0;
+        default:
+            return 1;
+    }
+}
+
+func errors() i64 throws i64 {
+    defer { cleanup(); }
+    try {
+        throw 1;
+    } catch error i64 {
+        return error;
+    }
+}
+
+func cleanup() {
+}
+
+func work() i64 {
+    return 1;
+}
+
+async func perform() i64 {
+    return await work();
+}

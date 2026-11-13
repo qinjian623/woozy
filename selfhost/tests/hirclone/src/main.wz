@@ -1,0 +1,606 @@
+// Pure-Wz hirclone check/build/run tests.
+//
+// Default run: build the fixture (real Source/AST/foreign/HIR), clone it, check
+// value fidelity and every Vec field in both directions, and print a stable
+// PROBE/CHECK report.  The report is compared with the C++ oracle report by
+// run.py.
+//
+// Recursion handling: clone_module copies Pattern payloads, ConstantAggregate
+// fields and CTypeRef arguments recursively with an explicit depth budget.  A
+// shared-Vec cycle cannot exist in the C++ value model, and a module nested
+// past the budget is an internal invariant failure: the clone Panics instead of
+// recursing to stack exhaustion or returning a shallow alias.  The modes below
+// exercise the successful nesting path and both failure paths in separate
+// processes.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func bytes_equal(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func same_span(left model.Span, right model.Span) bool {
+    return left.snapshot == right.snapshot &&
+           left.begin_byte == right.begin_byte &&
+           left.end_byte == right.end_byte;
+}
+
+func payload_kinds_ordered(module hir.HirModule) bool {
+    if vec.len(module.nodes) != 45 {
+        return false;
+    }
+    for var index usize = 0; index < 45; index += 1 {
+        if u64(hir.node_kind_id(hir.node_kind(module.nodes[index].data))) !=
+           u64(index) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func call_some_zero(module hir.HirModule) bool {
+    switch module.nodes[14].data {
+        case hir.NodeData.Call(payload):
+            if option.is_none(payload.direct_symbol) {
+                return false;
+            }
+            if option.is_none(payload.binding) {
+                return false;
+            }
+            if option.is_none(payload.c_callable) {
+                return false;
+            }
+            if option.is_none(payload.system) {
+                return false;
+            }
+            if option.unwrap_or(payload.direct_symbol, 99) != 0 ||
+               option.unwrap_or(payload.binding, 99) != 0 ||
+               option.unwrap_or(payload.c_callable, 99) != 0 ||
+               option.unwrap_or(payload.system, 99) != 0 {
+                return false;
+            }
+        default:
+            return false;
+    }
+    switch module.nodes[9].data {
+        case hir.NodeData.Assign(payload):
+            if option.is_none(payload.compound) {
+                return false;
+            }
+            if binary_op_id(option.unwrap_or(payload.compound,
+                hir.BinaryOp.Divide)) != 0 {
+                return false;
+            }
+        default:
+            return false;
+    }
+    switch module.nodes[33].data {
+        case hir.NodeData.Move(payload):
+            if option.unwrap_or(payload.binding, 99) != 0 {
+                return false;
+            }
+        default:
+            return false;
+    }
+    switch module.nodes[37].data {
+        case hir.NodeData.VecSlice(payload):
+            if option.is_none(payload.start) ||
+               option.unwrap_or(payload.start, 99) != 0 {
+                return false;
+            }
+            if option.is_some(payload.end) {
+                return false;
+            }
+        default:
+            return false;
+    }
+    switch module.nodes[40].data {
+        case hir.NodeData.ConstantLiteral(payload):
+            switch payload.value.data {
+                case hir.ConstantData.ConstantAggregate(aggregate):
+                    if option.is_none(aggregate.variant) ||
+                       option.unwrap_or(aggregate.variant, 99) != 0 {
+                        return false;
+                    }
+                default:
+                    return false;
+            }
+        default:
+            return false;
+    }
+    switch module.resolved.project.modules[0].foreign_exports[0].declaration {
+        case option.Option.Some(item):
+            if item != 0 {
+                return false;
+            }
+        case option.Option.None:
+            return false;
+    }
+    switch module.resolved.project.foreign_bindings[0].detail {
+        case model.ForeignDetail.Type(payload):
+            if vec.len(payload.members) != 2 {
+                return false;
+            }
+        default:
+            return false;
+    }
+    return true;
+}
+
+func nested_pattern_ok(module hir.HirModule) bool {
+    switch module.nodes[28].data {
+        case hir.NodeData.Switch(payload):
+            if vec.len(payload.arms) != 2 {
+                return false;
+            }
+            let outer = payload.arms[0].pattern;
+            if vec.len(outer.payload) != 1 {
+                return false;
+            }
+            let inner = outer.payload[0];
+            if vec.len(inner.payload) != 1 ||
+               option.is_none(inner.binding) {
+                return false;
+            }
+            switch inner.payload[0].literal {
+                case option.Option.Some(item):
+                    switch item {
+                        case hir.PatternLiteral.IntegerLiteral(literal):
+                            return literal.decimal == "0" &&
+                                   literal.bits == 0;
+                        default: return false;
+                    }
+                case option.Option.None:
+                    return false;
+            }
+        default:
+            return false;
+    }
+}
+
+func nested_constant_ok(module hir.HirModule) bool {
+    switch module.nodes[40].data {
+        case hir.NodeData.ConstantLiteral(payload):
+            switch payload.value.data {
+                case hir.ConstantData.ConstantAggregate(aggregate):
+                    if vec.len(aggregate.fields) != 3 {
+                        return false;
+                    }
+                    switch aggregate.fields[1].data {
+                        case hir.ConstantData.ConstantAggregate(inner):
+                            if vec.len(inner.fields) != 2 {
+                                return false;
+                            }
+                            switch inner.fields[1].data {
+                                case hir.ConstantData.StringLiteral(literal):
+                                    return literal.utf8 == "nested\u{0}value";
+                                default: return false;
+                            }
+                        default: return false;
+                    }
+                default: return false;
+            }
+        default: return false;
+    }
+}
+
+func foreign_details_ok(module hir.HirModule) bool {
+    let foreign = module.resolved.project.foreign_bindings;
+    if vec.len(foreign) != 6 {
+        return false;
+    }
+    switch foreign[5].detail {
+        case model.ForeignDetail.Slice(payload):
+            if payload.result_type != "Vec[i32]" {
+                return false;
+            }
+            switch payload.start_type {
+                case option.Option.Some(item):
+                    if item != "i32" {
+                        return false;
+                    }
+                case option.Option.None: return false;
+            }
+            if option.is_some(payload.end_type) {
+                return false;
+            }
+        default: return false;
+    }
+    switch foreign[2].detail {
+        case model.ForeignDetail.Callable(payload):
+            return vec.len(payload.parameters) == 2 &&
+                   vec.len(payload.effects) == 1;
+        default: return false;
+    }
+    return true;
+}
+
+func context_isolation_ok(module hir.HirModule) bool {
+    var copy = module;
+    try {
+        copy = hirclone.clone_module(module);
+    } catch raised model.SupportError {
+        return false;
+    }
+    let original_size = types.size(module.types);
+    if types.size(copy.types) != original_size {
+        return false;
+    }
+    let found = types.find(copy.types, 12);
+    switch found {
+        case option.Option.Some(item):
+            if model.type_kind_id(item.kind) == model.type_kind_id(model.TypeKind.Function) {
+                if vec.len(item.parameters) != 2 {
+                    return false;
+                }
+                vec.push(item.parameters, model.ParameterType(
+                    mode: model.ParamMode.Move, type_id: 1));
+                let again = types.find(copy.types, 12);
+                switch again {
+                    case option.Option.Some(check):
+                        if vec.len(check.parameters) != 2 {
+                            return false;
+                        }
+                    case option.Option.None: return false;
+                }
+            }
+        case option.Option.None:
+            return false;
+    }
+    var fresh = model.empty_type(model.TypeKind.SignedInt);
+    fresh.bits = 8;
+    var ok = true;
+    let ignored = intern(inout copy.types, fresh, inout ok);
+    if !ok || types.size(copy.types) != original_size + 1 {
+        return false;
+    }
+    return types.size(module.types) == original_size;
+}
+
+func empty_module_clone_ok() bool {
+    let empty = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    let module = hir.empty_module(empty, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    var copy = module;
+    try {
+        copy = hirclone.clone_module(module);
+    } catch raised model.SupportError {
+        return false;
+    }
+    return fingerprint(module) == fingerprint(copy) &&
+           types.size(copy.types) == 0 && vec.len(copy.nodes) == 0 &&
+           vec.len(copy.functions) == 0 &&
+           vec.len(copy.resolved.project.files) == 0;
+}
+
+func check(name string, ok bool) i32 throws os.Error {
+    if ok {
+        io.println("CHECK " + name + " ok=1");
+        return 0;
+    }
+    io.println("CHECK " + name + " ok=0");
+    return 1;
+}
+
+func wz_only_check(name string, ok bool) i32 throws os.Error {
+    if ok {
+        io.println("CHECK " + name + " wz_only=1 ok=1");
+        return 0;
+    }
+    io.println("CHECK " + name + " wz_only=1 ok=0");
+    return 1;
+}
+
+// A module whose switch pattern nests `depth` levels.  The construction is
+// iterative so the test itself does not depend on deep recursion.
+func nested_module(base hir.HirModule, depth usize) hir.HirModule
+        throws model.SupportError {
+    var module = hirclone.clone_module(base);
+    let src = module.nodes[28].source;
+    var inner = hir.Pattern(type_id: 0, source: src,
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].None);
+    for var level usize = 0; level < depth; level += 1 {
+        let payload = vec.empty[hir.Pattern]();
+        vec.push(payload, inner);
+        inner = hir.Pattern(type_id: level, source: src,
+            variant: option.Option[usize].None,
+            binding: option.Option[usize].None, payload: payload,
+            literal: option.Option[hir.PatternLiteral].None);
+    }
+    let arms = vec.empty[hir.Arm]();
+    vec.push(arms, hir.Arm(pattern: inner, scope: 0, body: 0, source: src));
+    module.nodes[28].data = hir.NodeData.Switch(value: hir.Switch(
+        arms: arms, exhaustive: true));
+    return module;
+}
+
+// A Pattern whose payload vector contains the pattern itself.  Woozy Vec is a
+// shared handle, so this is representable here while C++ std::vector<Pattern>
+// cannot form the cycle; the clone must detect it through its depth budget.
+func cyclic_module(base hir.HirModule) hir.HirModule
+        throws model.SupportError {
+    var module = hirclone.clone_module(base);
+    let src = module.nodes[28].source;
+    let payload = vec.empty[hir.Pattern]();
+    let inner = hir.Pattern(type_id: 1, source: src,
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None, payload: payload,
+        literal: option.Option[hir.PatternLiteral].None);
+    vec.push(payload, inner);
+    let arms = vec.empty[hir.Arm]();
+    vec.push(arms, hir.Arm(pattern: inner, scope: 0, body: 0, source: src));
+    module.nodes[28].data = hir.NodeData.Switch(value: hir.Switch(
+        arms: arms, exhaustive: true));
+    return module;
+}
+
+func pattern_depth(value hir.Pattern) usize {
+    var current = value;
+    var depth usize = 0;
+    for true {
+        if vec.len(current.payload) == 0 {
+            return depth;
+        }
+        current = current.payload[0];
+        depth += 1;
+    }
+}
+
+// The 4 narrow entry points must be value copies of exactly one record.
+func entry_points_value(module hir.HirModule) bool {
+    var ok = true;
+    try {
+        let node = hirclone.clone_node(module.nodes[28]);
+        let function = hirclone.clone_function(module.functions[0]);
+        let pattern = hirclone.clone_pattern(switch_pattern(module));
+        let constant = hirclone.clone_constant(constant_value(module));
+        ok = fp_hir_node(0, node) == fp_hir_node(0, module.nodes[28]) &&
+             fp_hir_function(0, function) ==
+                 fp_hir_function(0, module.functions[0]) &&
+             fp_pattern(0, pattern) == fp_pattern(0, switch_pattern(module)) &&
+             fp_constant_value(0, constant) ==
+                 fp_constant_value(0, constant_value(module));
+    } catch raised model.SupportError {
+        ok = false;
+    }
+    return ok;
+}
+
+// The depth guard is a normal typed error: the attempt is caught, the exact
+// message is checked, and both the input module and the over-nested module are
+// unchanged afterwards.  No Panic and no partially published copy.
+func catch_limit(module hir.HirModule) bool {
+    let before = fingerprint(module);
+    var deep = module;
+    var built = true;
+    try {
+        deep = nested_module(module, 1100);
+    } catch raised model.SupportError {
+        built = false;
+    }
+    if !built {
+        return false;
+    }
+    let deep_before = fingerprint(deep);
+    var caught = false;
+    var completed = false;
+    try {
+        let copy = hirclone.clone_module(deep);
+        completed = fingerprint(copy) == fingerprint(deep);
+    } catch raised model.SupportError {
+        switch raised {
+            case model.SupportError.Invalid(message):
+                caught = message == "HIR clone nesting limit exceeded";
+            case model.SupportError.Limit(message):
+                caught = false;
+        }
+    }
+    return !completed && caught && fingerprint(module) == before &&
+           fingerprint(deep) == deep_before;
+}
+
+// fingerprint() itself is recursive, so it must not walk the cyclic pattern.
+// Two explicit shallow levels are enough to show that the input structure was
+// not modified by the failed clone.
+func cycle_shape(module hir.HirModule) usize {
+    switch module.nodes[28].data {
+        case hir.NodeData.Switch(payload):
+            if vec.len(payload.arms) != 1 ||
+               vec.len(payload.arms[0].pattern.payload) != 1 {
+                return 0;
+            }
+            return 100 + vec.len(payload.arms[0].pattern.payload[0].payload);
+        default:
+            return 0;
+    }
+}
+
+func catch_cycle(module hir.HirModule) bool {
+    let before = fingerprint(module);
+    var cyclic = module;
+    var built = true;
+    try {
+        cyclic = cyclic_module(module);
+    } catch raised model.SupportError {
+        built = false;
+    }
+    if !built {
+        return false;
+    }
+    let shape_before = cycle_shape(cyclic);
+    var caught = false;
+    var completed = false;
+    try {
+        let copy = hirclone.clone_module(cyclic);
+        completed = true;
+        if vec.len(copy.nodes) == 0 {
+            completed = false;
+        }
+    } catch raised model.SupportError {
+        switch raised {
+            case model.SupportError.Invalid(message):
+                caught = message == "HIR clone nesting limit exceeded";
+            case model.SupportError.Limit(message):
+                caught = false;
+        }
+    }
+    return !completed && caught && fingerprint(module) == before &&
+           cycle_shape(cyclic) == shape_before && shape_before != 0;
+}
+
+func run_all() i32 throws os.Error {
+    let built = fixture();
+    var failures i32 = 0;
+    var measured i32 = 0;
+    measured = check("fixture", built.ok);
+    failures += measured;
+    if !built.ok {
+        io.println("SUMMARY probes=0 failures=1 wz_only=15");
+        return 1;
+    }
+    let module = built.module;
+    let baseline = fingerprint(module);
+    io.println("hirclone-report v1");
+    var copy = module;
+    var cloned = true;
+    try {
+        copy = hirclone.clone_module(module);
+    } catch raised model.SupportError {
+        cloned = false;
+    }
+    measured = check("clone_fields_equal",
+        cloned && fingerprint(copy) == baseline);
+    failures += measured;
+    measured = wz_only_check("payload_kinds", payload_kinds_ordered(copy));
+    failures += measured;
+    measured = check("option_some_zero", call_some_zero(copy));
+    failures += measured;
+    measured = check("context_isolation", context_isolation_ok(module));
+    failures += measured;
+    measured = check("empty_module_clone", empty_module_clone_ok());
+    failures += measured;
+    measured = wz_only_check("raw_bytes",
+        bytes_equal(copy.resolved.project.files[0].lexed.source.original,
+            text.bytes(CODE_OLD)) &&
+        bytes_equal(copy.resolved.project.files[0].lexed.source.normalized,
+            text.bytes(CODE_OLD_NORMALIZED)) &&
+        copy.resolved.project.files[0].lexed.source.valid &&
+        copy.resolved.project.files[0].lexed.source.offsets[0] == 3);
+    failures += measured;
+    measured = wz_only_check("old_snapshots",
+        vec.len(copy.resolved.project.files) == 2 &&
+        copy.resolved.project.files[0].lexed.source.revision_id == 1 &&
+        copy.resolved.project.files[1].lexed.source.revision_id == 2 &&
+        copy.resolved.project.files[0].lexed.source.id == 1 &&
+        copy.resolved.project.files[1].lexed.source.id == 2 &&
+        same_span(copy.nodes[0].source.span,
+            copy.resolved.project.files[0].nodes[0].span));
+    failures += measured;
+    measured = wz_only_check("nested_patterns", nested_pattern_ok(copy));
+    failures += measured;
+    measured = wz_only_check("nested_constants", nested_constant_ok(copy));
+    failures += measured;
+    measured = wz_only_check("foreign_records", foreign_details_ok(copy));
+    failures += measured;
+    measured = wz_only_check("entry_points_value",
+        entry_points_value(module));
+    failures += measured;
+    measured = wz_only_check("error_limit_caught",
+        catch_limit(module));
+    failures += measured;
+    measured = wz_only_check("error_cycle_caught",
+        catch_cycle(module));
+    failures += measured;
+    measured = run_probes(module);
+    failures += measured;
+    measured = wz_only_check("original_unchanged",
+        fingerprint(module) == baseline);
+    failures += measured;
+    io.println("SUMMARY probes=123 failures=" +
+        strconv.format_i64(i64(failures)) + " wz_only=15");
+    if failures != 0 {
+        return 1;
+    }
+    return 0;
+}
+
+func run_mode(name string) i32 throws os.Error {
+    let built = fixture();
+    if !built.ok {
+        io.println("CHECK fixture ok=0");
+        return 1;
+    }
+    if name == "deep-ok" {
+        var copy = built.module;
+        var cloned = true;
+        try {
+            copy = hirclone.clone_module(nested_module(built.module, 300));
+        } catch raised model.SupportError {
+            cloned = false;
+        }
+        if !cloned {
+            return 4;
+        }
+        switch copy.nodes[28].data {
+            case hir.NodeData.Switch(payload):
+                if pattern_depth(payload.arms[0].pattern) != 300 {
+                    return 2;
+                }
+            default: return 3;
+        }
+        io.println("DEEP ok depth=300");
+        return 0;
+    }
+    if name == "deep-limit" {
+        if !catch_limit(built.module) {
+            io.println("LIMIT failed=1");
+            return 1;
+        }
+        io.println("LIMIT caught=1 message_ok=1 original_unchanged=1 "
+            + "deep_unchanged=1");
+        return 0;
+    }
+    if name == "cycle" {
+        if !catch_cycle(built.module) {
+            io.println("CYCLE failed=1");
+            return 1;
+        }
+        io.println("CYCLE caught=1 message_ok=1 original_unchanged=1 "
+            + "cyclic_unchanged=1");
+        return 0;
+    }
+    io.println("unknown mode");
+    return 2;
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) > 1 {
+        return run_mode(arguments[1]);
+    }
+    return run_all();
+}

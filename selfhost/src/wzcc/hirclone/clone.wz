@@ -1,0 +1,817 @@
+// Deep value clone of HirModule and everything reachable from it.
+//
+// C++ counterpart: the deep-copy step in src/hir/hir.cpp (freeze, around line
+// 7916 of the stage0 sources).  freeze() copies HirModule by value, then
+// copies ResolvedProject, Project and every AstFile arena.  A C++ Source
+// snapshot stays shared because SourceSnapshot is an immutable support
+// object; the Woozy model keeps the same data in a model.Source value whose
+// byte/offset/position vectors are mutable Vec handles.
+//
+// Woozy Vec is a shared owning handle: copying a struct copies the handle,
+// not the elements.  A faithful clone therefore rebuilds every value Vec that
+// is reachable from HirModule: source bytes and position tables, lexer and AST
+// arenas, project/module/binding/C records (including recursive CTypeRef
+// arguments), the whole HIR arena (all 45 NodeData payloads, nested patterns,
+// constant aggregates, cleanup steps and exits), generic/nominal/instance
+// records and the TypeContext.  String values share their immutable storage,
+// which is the logical equivalent of a C++ std::string copy.
+//
+// Leaf element vectors whose element type cannot itself own a mutable Vec use
+// the generic slice-copy helper: a slice already allocates a fresh array and
+// copies element values.  Every other record is reconstructed field by field.
+// This is one direct copy helper per record; there is no separate
+// serialization framework and no call into the C++ frontend.
+//
+// Pattern payloads, ConstantAggregate fields and CTypeRef arguments are the
+// only value-recursive records.  Their copies carry an explicit depth budget
+// (CLONE_DEPTH_LIMIT).  The source parser itself stops at depth 256, so real
+// modules stay far below it; C type expressions come from binding metadata.
+// A module nested beyond the budget, including an accidental shared-Vec cycle
+// that C++ value semantics cannot represent, throws
+// model.SupportError.Invalid("HIR clone nesting limit exceeded") instead of
+// exhausting the stack, Panicking or silently returning an alias.  Verifiers
+// can therefore report E_IR_INVALID and keep the input module unchanged.
+package hirclone;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+const CLONE_DEPTH_LIMIT usize = 1024;
+
+// The recursion budget is a checker-visible failure, not a Panic: verifiers
+// turn this into a normal E_IR_INVALID diagnostic and keep the input module
+// alive for diagnostics.  A shared-Vec cycle (representable in Woozy but not
+// in C++ value semantics) hits the same guard.
+func nesting_limit() model.SupportError {
+    return model.SupportError.Invalid("HIR clone nesting limit exceeded");
+}
+
+// A slice allocates a new Vec and copies the logical values of the elements.
+// That is sufficient exactly when the element type owns no mutable Vec.
+func copy_plain[T](values Vec[T]) Vec[T] {
+    return values[0:vec.len(values)];
+}
+
+// ---------------------------------------------------------------------------
+// Source, lexer and AST arenas.
+// ---------------------------------------------------------------------------
+
+func copy_source(value model.Source) model.Source {
+    return model.Source(file_id: value.file_id, revision_id: value.revision_id,
+        id: value.id, path: value.path,
+        original: copy_plain(value.original),
+        normalized: copy_plain(value.normalized),
+        offsets: copy_plain(value.offsets),
+        boundaries: copy_plain(value.boundaries),
+        valid: value.valid, error_byte: value.error_byte,
+        error_length: value.error_length, error_message: value.error_message);
+}
+
+func copy_diagnostic(value model.Diagnostic) model.Diagnostic {
+    return model.Diagnostic(code: value.code, phase: value.phase,
+        severity: value.severity, message: value.message,
+        has_primary: value.has_primary, primary: value.primary,
+        related: copy_plain(value.related), fixits: copy_plain(value.fixits),
+        notes: copy_plain(value.notes),
+        has_expected_type: value.has_expected_type,
+        expected_type: value.expected_type,
+        has_actual_type: value.has_actual_type,
+        actual_type: value.actual_type);
+}
+
+func copy_token(value model.Token) model.Token {
+    return model.Token(kind: value.kind, span: value.span,
+        spelling: value.spelling,
+        leading_trivia: copy_plain(value.leading_trivia),
+        has_string_value: value.has_string_value,
+        string_value: value.string_value);
+}
+
+func copy_diagnostics(values Vec[model.Diagnostic]) Vec[model.Diagnostic] {
+    let out = vec.empty[model.Diagnostic]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, copy_diagnostic(value));
+    }
+    return out;
+}
+
+func copy_lex_result(value model.LexResult) model.LexResult {
+    let tokens = vec.empty[model.Token]();
+    vec.reserve(tokens, vec.len(value.tokens));
+    for token in value.tokens {
+        vec.push(tokens, copy_token(token));
+    }
+    return model.LexResult(state: value.state, failure: value.failure,
+        source: copy_source(value.source), tokens: tokens,
+        diagnostics: copy_diagnostics(value.diagnostics),
+        has_value: value.has_value);
+}
+
+func copy_ast_node(value model.AstNode) model.AstNode {
+    return model.AstNode(kind: value.kind, span: value.span,
+        token_begin: value.token_begin, token_end: value.token_end,
+        children: copy_plain(value.children),
+        recovered: value.recovered);
+}
+
+func copy_parse_result(value model.ParseResult) model.ParseResult {
+    let nodes = vec.empty[model.AstNode]();
+    vec.reserve(nodes, vec.len(value.nodes));
+    for node in value.nodes {
+        vec.push(nodes, copy_ast_node(node));
+    }
+    return model.ParseResult(state: value.state, failure: value.failure,
+        lexed: copy_lex_result(value.lexed), nodes: nodes, root: value.root,
+        recovered: value.recovered,
+        diagnostics: copy_diagnostics(value.diagnostics),
+        has_value: value.has_value);
+}
+
+// ---------------------------------------------------------------------------
+// Project, modules, binding bundles and C declarations.
+// ---------------------------------------------------------------------------
+
+func copy_binding_type(value model.BindingType) model.BindingType {
+    return model.BindingType(kind: value.kind, copy: value.copy,
+        members: copy_plain(value.members),
+        properties: copy_plain(value.properties),
+        indexers: copy_plain(value.indexers),
+        slices: copy_plain(value.slices));
+}
+
+func copy_binding_callable(value model.BindingCallable) model.BindingCallable {
+    return model.BindingCallable(call_kind: value.call_kind,
+        owner_type: value.owner_type,
+        parameters: copy_plain(value.parameters),
+        return_type: value.return_type, error_type: value.error_type,
+        return_ownership: value.return_ownership, storage: value.storage,
+        receiver_escapes: value.receiver_escapes,
+        effects: copy_plain(value.effects));
+}
+
+func copy_foreign_detail(value model.ForeignDetail) model.ForeignDetail {
+    switch value {
+        case model.ForeignDetail.Type(payload):
+            return model.ForeignDetail.Type(value: copy_binding_type(payload));
+        case model.ForeignDetail.Value(payload):
+            return model.ForeignDetail.Value(value: payload);
+        case model.ForeignDetail.Callable(payload):
+            return model.ForeignDetail.Callable(
+                value: copy_binding_callable(payload));
+        case model.ForeignDetail.Property(payload):
+            return model.ForeignDetail.Property(value:
+                model.BindingProperty(owner_type: payload.owner_type,
+                    name: payload.name, type_name: payload.type_name,
+                    getter: copy_plain(payload.getter),
+                    setter: copy_plain(payload.setter),
+                    error_type: payload.error_type));
+        case model.ForeignDetail.Indexer(payload):
+            return model.ForeignDetail.Indexer(value: payload);
+        case model.ForeignDetail.Slice(payload):
+            return model.ForeignDetail.Slice(value: payload);
+    }
+}
+
+func copy_foreign_declaration(value model.ForeignDeclaration)
+        model.ForeignDeclaration {
+    return model.ForeignDeclaration(id: value.id, bundle: value.bundle,
+        source: value.source, json_pointer: value.json_pointer,
+        identity: value.identity, module: value.module, name: value.name,
+        host_attribute: copy_plain(value.host_attribute),
+        detail: copy_foreign_detail(value.detail),
+        stable_identity: value.stable_identity);
+}
+
+func copy_binding_bundle(value model.BindingBundle) model.BindingBundle {
+    return model.BindingBundle(path: value.path, json: value.json,
+        sha256: value.sha256, source: value.source,
+        schema_version: value.schema_version, contract: value.contract,
+        review_status: value.review_status,
+        allowed_backends: copy_plain(value.allowed_backends),
+        package_requirements: copy_plain(value.package_requirements),
+        modules: copy_plain(value.modules),
+        declarations: copy_plain(value.declarations),
+        conformance_required: copy_plain(value.conformance_required));
+}
+
+func copy_c_type_ref(value model.CTypeRef, depth usize) model.CTypeRef
+        throws model.SupportError {
+    if depth >= CLONE_DEPTH_LIMIT {
+        throw nesting_limit();
+    }
+    let args = vec.empty[model.CTypeRef]();
+    vec.reserve(args, vec.len(value.args));
+    for arg in value.args {
+        vec.push(args, copy_c_type_ref(arg, depth + 1));
+    }
+    return model.CTypeRef(kind: value.kind, scalar: value.scalar,
+        writable: value.writable, args: args, named: value.named);
+}
+
+func copy_c_type_ref_option(value option.Option[model.CTypeRef])
+        option.Option[model.CTypeRef] throws model.SupportError {
+    switch value {
+        case option.Option.Some(item):
+            return option.Option[model.CTypeRef].Some(
+                copy_c_type_ref(item, 0));
+        case option.Option.None:
+            return option.Option[model.CTypeRef].None;
+    }
+}
+
+func copy_c_field(value model.CFieldDecl) model.CFieldDecl
+        throws model.SupportError {
+    return model.CFieldDecl(name: value.name,
+        type_ref: copy_c_type_ref(value.type_ref, 0),
+        offset: value.offset, source: value.source);
+}
+
+func copy_c_parameter(value model.CParameterDecl) model.CParameterDecl
+        throws model.SupportError {
+    return model.CParameterDecl(name: value.name,
+        type_ref: copy_c_type_ref(value.type_ref, 0),
+        source: value.source);
+}
+
+func copy_c_fields(values Vec[model.CFieldDecl]) Vec[model.CFieldDecl]
+        throws model.SupportError {
+    let out = vec.empty[model.CFieldDecl]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, copy_c_field(value));
+    }
+    return out;
+}
+
+func copy_c_parameters(values Vec[model.CParameterDecl])
+        Vec[model.CParameterDecl] throws model.SupportError {
+    let out = vec.empty[model.CParameterDecl]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, copy_c_parameter(value));
+    }
+    return out;
+}
+
+func copy_c_return(value model.CReturnDecl) model.CReturnDecl throws model.SupportError {
+    return model.CReturnDecl(type_ref: copy_c_type_ref(value.type_ref, 0),
+        ownership: value.ownership, release_symbol: value.release_symbol,
+        retain_symbol: value.retain_symbol, source: value.source);
+}
+
+func copy_c_type_decl(value model.CTypeDecl) model.CTypeDecl throws model.SupportError {
+    return model.CTypeDecl(id: value.id, bundle: value.bundle,
+        source: value.source, identity: value.identity, module: value.module,
+        name: value.name, c_name: value.c_name, kind: value.kind,
+        fields: copy_c_fields(value.fields), size: value.size,
+        align: value.align, release_symbol: value.release_symbol,
+        retain_symbol: value.retain_symbol,
+        result: copy_c_type_ref(value.result, 0),
+        parameters: copy_c_parameters(value.parameters),
+        registration: value.registration);
+}
+
+func copy_c_callable(value model.CCallableDecl) model.CCallableDecl throws model.SupportError {
+    return model.CCallableDecl(id: value.id, bundle: value.bundle,
+        source: value.source, identity: value.identity, module: value.module,
+        name: value.name, symbol: value.symbol,
+        parameters: copy_c_parameters(value.parameters),
+        result: copy_c_return(value.result),
+        stable_identity: value.stable_identity,
+        registers: value.registers);
+}
+
+func copy_c_binding_bundle(value model.CBindingBundle) model.CBindingBundle {
+    return model.CBindingBundle(path: value.path, json: value.json,
+        sha256: value.sha256, source: value.source,
+        schema_version: value.schema_version, contract: value.contract,
+        abi: value.abi, target: value.target,
+        requires_hosted: value.requires_hosted,
+        modules: copy_plain(value.modules), types: copy_plain(value.types),
+        callables: copy_plain(value.callables));
+}
+
+func copy_foreign_export(value model.ForeignExport) model.ForeignExport
+        throws model.SupportError {
+    return model.ForeignExport(name: value.name, identity: value.identity,
+        kind: value.kind, bundle: value.bundle, declaration: value.declaration,
+        candidates: copy_plain(value.candidates), c_type: value.c_type,
+        c_callable: value.c_callable,
+        c_type_ref: copy_c_type_ref_option(value.c_type_ref));
+}
+
+func copy_module(value model.Module) model.Module
+        throws model.SupportError {
+    let foreign_exports = vec.empty[model.ForeignExport]();
+    vec.reserve(foreign_exports, vec.len(value.foreign_exports));
+    for export in value.foreign_exports {
+        vec.push(foreign_exports, copy_foreign_export(export));
+    }
+    return model.Module(id: value.id, logical_path: value.logical_path,
+        identity: value.identity, package_name: value.package_name,
+        files: copy_plain(value.files), imports: copy_plain(value.imports),
+        foreign_exports: foreign_exports, binding: value.binding,
+        c_binding: value.c_binding);
+}
+
+func copy_project(value model.Project) model.Project
+        throws model.SupportError {
+    let files = vec.empty[model.ParseResult]();
+    vec.reserve(files, vec.len(value.files));
+    for file in value.files {
+        vec.push(files, copy_parse_result(file));
+    }
+    let modules = vec.empty[model.Module]();
+    vec.reserve(modules, vec.len(value.modules));
+    for module in value.modules {
+        vec.push(modules, copy_module(module));
+    }
+    let bindings = vec.empty[model.BindingBundle]();
+    vec.reserve(bindings, vec.len(value.bindings));
+    for binding in value.bindings {
+        vec.push(bindings, copy_binding_bundle(binding));
+    }
+    let foreign = vec.empty[model.ForeignDeclaration]();
+    vec.reserve(foreign, vec.len(value.foreign_bindings));
+    for declaration in value.foreign_bindings {
+        vec.push(foreign, copy_foreign_declaration(declaration));
+    }
+    let c_bindings = vec.empty[model.CBindingBundle]();
+    vec.reserve(c_bindings, vec.len(value.c_bindings));
+    for binding in value.c_bindings {
+        vec.push(c_bindings, copy_c_binding_bundle(binding));
+    }
+    let c_types = vec.empty[model.CTypeDecl]();
+    vec.reserve(c_types, vec.len(value.c_types));
+    for declaration in value.c_types {
+        vec.push(c_types, copy_c_type_decl(declaration));
+    }
+    let c_callables = vec.empty[model.CCallableDecl]();
+    vec.reserve(c_callables, vec.len(value.c_callables));
+    for callable in value.c_callables {
+        vec.push(c_callables, copy_c_callable(callable));
+    }
+    return model.Project(root: value.root, package_name: value.package_name,
+        backend: value.backend, word_bits: value.word_bits,
+        hosted: value.hosted, entry: value.entry, files: files,
+        modules: modules, bindings: bindings, foreign_bindings: foreign,
+        c_bindings: c_bindings, c_types: c_types, c_callables: c_callables,
+        c_libraries: copy_plain(value.c_libraries),
+        c_library_dirs: copy_plain(value.c_library_dirs));
+}
+
+func copy_resolved(value model.ResolvedProject) model.ResolvedProject
+        throws model.SupportError {
+    return model.ResolvedProject(project: copy_project(value.project),
+        symbols: copy_plain(value.symbols),
+        occurrences: copy_plain(value.occurrences),
+        deferred_members: copy_plain(value.deferred_members),
+        self_parameters: copy_plain(value.self_parameters));
+}
+
+// ---------------------------------------------------------------------------
+// HIR nodes: values, patterns, constants, calls and all NodeData payloads.
+// ---------------------------------------------------------------------------
+
+func copy_function_value(value hir.FunctionValue) hir.FunctionValue {
+    return hir.FunctionValue(symbol: value.symbol,
+        type_args: copy_plain(value.type_args),
+        captures: copy_plain(value.captures),
+        move_capture: value.move_capture, bound: value.bound);
+}
+
+func copy_constant_value(value hir.ConstantValue, depth usize)
+        hir.ConstantValue throws model.SupportError {
+    return hir.ConstantValue(type_id: value.type_id,
+        data: copy_constant_data(value.data, depth));
+}
+
+func copy_constant_data(value hir.ConstantData, depth usize)
+        hir.ConstantData throws model.SupportError {
+    if depth >= CLONE_DEPTH_LIMIT {
+        throw nesting_limit();
+    }
+    switch value {
+        case hir.ConstantData.UnitLiteral(payload):
+            return hir.ConstantData.UnitLiteral(value: payload);
+        case hir.ConstantData.BoolLiteral(payload):
+            return hir.ConstantData.BoolLiteral(value: payload);
+        case hir.ConstantData.IntegerLiteral(payload):
+            return hir.ConstantData.IntegerLiteral(value: payload);
+        case hir.ConstantData.FloatLiteral(payload):
+            return hir.ConstantData.FloatLiteral(value: payload);
+        case hir.ConstantData.StringLiteral(payload):
+            return hir.ConstantData.StringLiteral(value: payload);
+        case hir.ConstantData.FunctionValue(payload):
+            return hir.ConstantData.FunctionValue(
+                value: copy_function_value(payload));
+        case hir.ConstantData.ConstantAggregate(payload):
+            let fields = vec.empty[hir.ConstantValue]();
+            vec.reserve(fields, vec.len(payload.fields));
+            for field in payload.fields {
+                vec.push(fields, copy_constant_value(field, depth + 1));
+            }
+            return hir.ConstantData.ConstantAggregate(value:
+                hir.ConstantAggregate(variant: payload.variant,
+                    fields: fields));
+    }
+}
+
+func copy_constant_literal(value hir.ConstantLiteral) hir.ConstantLiteral
+        throws model.SupportError {
+    return hir.ConstantLiteral(value: copy_constant_value(value.value, 0));
+}
+
+func copy_call(value hir.Call) hir.Call {
+    return hir.Call(kind: value.kind, signature: value.signature,
+        direct_symbol: value.direct_symbol, callee: value.callee,
+        args: copy_plain(value.args), type_args: copy_plain(value.type_args),
+        binding: value.binding, c_callable: value.c_callable,
+        omitted: copy_plain(value.omitted), system: value.system);
+}
+
+func copy_struct_init(value hir.StructInit) hir.StructInit {
+    return hir.StructInit(fields: copy_plain(value.fields));
+}
+
+func copy_enum_init(value hir.EnumInit) hir.EnumInit {
+    return hir.EnumInit(variant: value.variant,
+        payload: copy_plain(value.payload));
+}
+
+func copy_pattern(value hir.Pattern, depth usize) hir.Pattern
+        throws model.SupportError {
+    if depth >= CLONE_DEPTH_LIMIT {
+        throw nesting_limit();
+    }
+    let payload = vec.empty[hir.Pattern]();
+    vec.reserve(payload, vec.len(value.payload));
+    for item in value.payload {
+        vec.push(payload, copy_pattern(item, depth + 1));
+    }
+    return hir.Pattern(type_id: value.type_id, source: value.source,
+        variant: value.variant, binding: value.binding, payload: payload,
+        literal: value.literal);
+}
+
+func copy_arm(value hir.Arm) hir.Arm throws model.SupportError {
+    return hir.Arm(pattern: copy_pattern(value.pattern, 0),
+        scope: value.scope, body: value.body, source: value.source);
+}
+
+func copy_switch(value hir.Switch) hir.Switch throws model.SupportError {
+    let arms = vec.empty[hir.Arm]();
+    vec.reserve(arms, vec.len(value.arms));
+    for arm in value.arms {
+        vec.push(arms, copy_arm(arm));
+    }
+    return hir.Switch(arms: arms, exhaustive: value.exhaustive);
+}
+
+func copy_trait_ref(value hir.TraitRef) hir.TraitRef {
+    return hir.TraitRef(declaration: value.declaration,
+        args: copy_plain(value.args));
+}
+
+func copy_trait_ref_option(value option.Option[hir.TraitRef])
+        option.Option[hir.TraitRef] {
+    switch value {
+        case option.Option.Some(item):
+            return option.Option[hir.TraitRef].Some(copy_trait_ref(item));
+        case option.Option.None:
+            return option.Option[hir.TraitRef].None;
+    }
+}
+
+func copy_constraint_call(value hir.ConstraintCall) hir.ConstraintCall {
+    return hir.ConstraintCall(trait_ref: copy_trait_ref(value.trait_ref),
+        method: value.method, receiver: value.receiver,
+        signature: value.signature, args: copy_plain(value.args));
+}
+
+func copy_try(value hir.Try) hir.Try {
+    return hir.Try(catches: copy_plain(value.catches));
+}
+
+func copy_trait_object_init(value hir.TraitObjectInit) hir.TraitObjectInit {
+    let method_args = vec.empty[Vec[usize]]();
+    vec.reserve(method_args, vec.len(value.method_args));
+    for args in value.method_args {
+        vec.push(method_args, copy_plain(args));
+    }
+    return hir.TraitObjectInit(trait_ref: copy_trait_ref(value.trait_ref),
+        concrete: value.concrete, methods: copy_plain(value.methods),
+        method_args: method_args);
+}
+
+func copy_trait_dispatch(value hir.TraitDispatch) hir.TraitDispatch {
+    return hir.TraitDispatch(trait_ref: copy_trait_ref(value.trait_ref),
+        method: value.method, signature: value.signature, index: value.index,
+        args: copy_plain(value.args));
+}
+
+func copy_node_data(value hir.NodeData) hir.NodeData
+        throws model.SupportError {
+    switch value {
+        case hir.NodeData.UnitLiteral(payload):
+            return hir.NodeData.UnitLiteral(value: payload);
+        case hir.NodeData.BoolLiteral(payload):
+            return hir.NodeData.BoolLiteral(value: payload);
+        case hir.NodeData.IntegerLiteral(payload):
+            return hir.NodeData.IntegerLiteral(value: payload);
+        case hir.NodeData.FloatLiteral(payload):
+            return hir.NodeData.FloatLiteral(value: payload);
+        case hir.NodeData.StringLiteral(payload):
+            return hir.NodeData.StringLiteral(value: payload);
+        case hir.NodeData.Read(payload):
+            return hir.NodeData.Read(value: payload);
+        case hir.NodeData.Place(payload):
+            return hir.NodeData.Place(value: payload);
+        case hir.NodeData.FunctionValue(payload):
+            return hir.NodeData.FunctionValue(
+                value: copy_function_value(payload));
+        case hir.NodeData.Binding(payload):
+            return hir.NodeData.Binding(value: payload);
+        case hir.NodeData.Assign(payload):
+            return hir.NodeData.Assign(value: payload);
+        case hir.NodeData.Unary(payload):
+            return hir.NodeData.Unary(value: payload);
+        case hir.NodeData.Binary(payload):
+            return hir.NodeData.Binary(value: payload);
+        case hir.NodeData.ShortCircuit(payload):
+            return hir.NodeData.ShortCircuit(value: payload);
+        case hir.NodeData.IntegerConvert(payload):
+            return hir.NodeData.IntegerConvert(value: payload);
+        case hir.NodeData.Call(payload):
+            return hir.NodeData.Call(value: copy_call(payload));
+        case hir.NodeData.Block(payload):
+            return hir.NodeData.Block(value: payload);
+        case hir.NodeData.ExpressionStatement(payload):
+            return hir.NodeData.ExpressionStatement(value: payload);
+        case hir.NodeData.If(payload):
+            return hir.NodeData.If(value: payload);
+        case hir.NodeData.For(payload):
+            return hir.NodeData.For(value: payload);
+        case hir.NodeData.Noop(payload):
+            return hir.NodeData.Noop(value: payload);
+        case hir.NodeData.Return(payload):
+            return hir.NodeData.Return(value: payload);
+        case hir.NodeData.Break(payload):
+            return hir.NodeData.Break(value: payload);
+        case hir.NodeData.Continue(payload):
+            return hir.NodeData.Continue(value: payload);
+        case hir.NodeData.Unsupported(payload):
+            return hir.NodeData.Unsupported(value: payload);
+        case hir.NodeData.StructInit(payload):
+            return hir.NodeData.StructInit(value: copy_struct_init(payload));
+        case hir.NodeData.EnumInit(payload):
+            return hir.NodeData.EnumInit(value: copy_enum_init(payload));
+        case hir.NodeData.FieldRead(payload):
+            return hir.NodeData.FieldRead(value: payload);
+        case hir.NodeData.FieldPlace(payload):
+            return hir.NodeData.FieldPlace(value: payload);
+        case hir.NodeData.Switch(payload):
+            return hir.NodeData.Switch(value: copy_switch(payload));
+        case hir.NodeData.ConstraintCall(payload):
+            return hir.NodeData.ConstraintCall(
+                value: copy_constraint_call(payload));
+        case hir.NodeData.Try(payload):
+            return hir.NodeData.Try(value: copy_try(payload));
+        case hir.NodeData.Defer(payload):
+            return hir.NodeData.Defer(value:
+                hir.Defer(owner_scope: payload.owner_scope,
+                    references: copy_plain(payload.references)));
+        case hir.NodeData.Throw(payload):
+            return hir.NodeData.Throw(value: payload);
+        case hir.NodeData.Move(payload):
+            return hir.NodeData.Move(value: payload);
+        case hir.NodeData.VecInit(payload):
+            return hir.NodeData.VecInit(value: payload);
+        case hir.NodeData.IndexRead(payload):
+            return hir.NodeData.IndexRead(value: payload);
+        case hir.NodeData.IndexPlace(payload):
+            return hir.NodeData.IndexPlace(value: payload);
+        case hir.NodeData.VecSlice(payload):
+            return hir.NodeData.VecSlice(value: payload);
+        case hir.NodeData.ForIn(payload):
+            return hir.NodeData.ForIn(value: payload);
+        case hir.NodeData.ForeignRead(payload):
+            return hir.NodeData.ForeignRead(value: payload);
+        case hir.NodeData.ConstantLiteral(payload):
+            return hir.NodeData.ConstantLiteral(
+                value: copy_constant_literal(payload));
+        case hir.NodeData.CFieldRead(payload):
+            return hir.NodeData.CFieldRead(value: payload);
+        case hir.NodeData.Await(payload):
+            return hir.NodeData.Await(value: payload);
+        case hir.NodeData.TraitObjectInit(payload):
+            return hir.NodeData.TraitObjectInit(
+                value: copy_trait_object_init(payload));
+        case hir.NodeData.TraitDispatch(payload):
+            return hir.NodeData.TraitDispatch(
+                value: copy_trait_dispatch(payload));
+    }
+}
+
+func copy_exit_plan(value hir.ExitPlan) hir.ExitPlan {
+    return hir.ExitPlan(kind: value.kind, error_type: value.error_type,
+        target: value.target,
+        exited_scopes: copy_plain(value.exited_scopes),
+        defers: copy_plain(value.defers), saves_value: value.saves_value,
+        actions: copy_plain(value.actions));
+}
+
+func copy_hir_node(value hir.HirNode) hir.HirNode
+        throws model.SupportError {
+    let exits = vec.empty[hir.ExitPlan]();
+    vec.reserve(exits, vec.len(value.exits));
+    for exit in value.exits {
+        vec.push(exits, copy_exit_plan(exit));
+    }
+    return hir.HirNode(type_id: value.type_id, source: value.source,
+        scope: value.scope, children: copy_plain(value.children),
+        data: copy_node_data(value.data), errors: copy_plain(value.errors),
+        exits: exits);
+}
+
+// ---------------------------------------------------------------------------
+// Ownership, declarations and the module itself.
+// ---------------------------------------------------------------------------
+
+func copy_ownership(value hir.Ownership) hir.Ownership {
+    let full_expressions = vec.empty[hir.FullExpression]();
+    vec.reserve(full_expressions, vec.len(value.full_expressions));
+    for expression in value.full_expressions {
+        vec.push(full_expressions, hir.FullExpression(
+            node: expression.node,
+            actions: copy_plain(expression.actions)));
+    }
+    let calls = vec.empty[hir.CallLifetime]();
+    vec.reserve(calls, vec.len(value.calls));
+    for call in value.calls {
+        vec.push(calls, hir.CallLifetime(node: call.node,
+            on_return: copy_plain(call.on_return)));
+    }
+    return hir.Ownership(uses: copy_plain(value.uses),
+        temporaries: copy_plain(value.temporaries),
+        locals: copy_plain(value.locals),
+        full_expressions: full_expressions, calls: calls);
+}
+
+func copy_hir_function(value hir.HirFunction) hir.HirFunction {
+    return hir.HirFunction(symbol: value.symbol,
+        signature: value.signature,
+        parameters: copy_plain(value.parameters), body: value.body,
+        scope: value.scope, source: value.source,
+        captures: copy_plain(value.captures), is_async: value.is_async);
+}
+
+func copy_generic_param(value hir.GenericParam) hir.GenericParam {
+    return hir.GenericParam(symbol: value.symbol,
+        trait_ref: copy_trait_ref_option(value.trait_ref),
+        source: value.source);
+}
+
+func copy_generic_params(values Vec[hir.GenericParam])
+        Vec[hir.GenericParam] {
+    let out = vec.empty[hir.GenericParam]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, copy_generic_param(value));
+    }
+    return out;
+}
+
+func copy_variant_decl(value hir.VariantDecl) hir.VariantDecl {
+    return hir.VariantDecl(symbol: value.symbol,
+        payload: copy_plain(value.payload), source: value.source);
+}
+
+func copy_nominal_decl(value hir.NominalDecl) hir.NominalDecl {
+    let variants = vec.empty[hir.VariantDecl]();
+    vec.reserve(variants, vec.len(value.variants));
+    for variant in value.variants {
+        vec.push(variants, copy_variant_decl(variant));
+    }
+    return hir.NominalDecl(symbol: value.symbol, kind: value.kind,
+        params: copy_generic_params(value.params),
+        fields: copy_plain(value.fields), variants: variants,
+        source: value.source);
+}
+
+func copy_method_prototype(value hir.MethodPrototype)
+        hir.MethodPrototype {
+    return hir.MethodPrototype(symbol: value.symbol,
+        signature: value.signature,
+        parameters: copy_plain(value.parameters), source: value.source);
+}
+
+func copy_trait_decl(value hir.TraitDecl) hir.TraitDecl {
+    let methods = vec.empty[hir.MethodPrototype]();
+    vec.reserve(methods, vec.len(value.methods));
+    for method in value.methods {
+        vec.push(methods, copy_method_prototype(method));
+    }
+    return hir.TraitDecl(symbol: value.symbol, self: value.self,
+        params: copy_generic_params(value.params), methods: methods,
+        source: value.source);
+}
+
+func copy_impl_decl(value hir.ImplDecl) hir.ImplDecl {
+    return hir.ImplDecl(params: copy_generic_params(value.params),
+        trait_ref: copy_trait_ref_option(value.trait_ref),
+        self_parameter: value.self_parameter, self_type: value.self_type,
+        methods: copy_plain(value.methods), source: value.source);
+}
+
+func copy_function_template(value hir.FunctionTemplate)
+        hir.FunctionTemplate {
+    return hir.FunctionTemplate(function: copy_hir_function(value.function),
+        params: copy_generic_params(value.params));
+}
+
+func copy_function_instance(value hir.FunctionInstance)
+        hir.FunctionInstance {
+    return hir.FunctionInstance(symbol: value.symbol, origin: value.origin,
+        type_args: copy_plain(value.type_args),
+        renamed: copy_plain(value.renamed), target: value.target);
+}
+
+// clone_module returns a value copy of the whole module graph.  Every mutable
+// Vec reachable from the argument is rebuilt; later pushes, pops or element
+// writes through either module cannot be observed by the other.  String
+// storage is immutable and stays shared, as in C++.
+pub func clone_module(module hir.HirModule) hir.HirModule
+        throws model.SupportError {
+    let functions = vec.empty[hir.HirFunction]();
+    vec.reserve(functions, vec.len(module.functions));
+    for function in module.functions {
+        vec.push(functions, copy_hir_function(function));
+    }
+    let nodes = vec.empty[hir.HirNode]();
+    vec.reserve(nodes, vec.len(module.nodes));
+    for node in module.nodes {
+        vec.push(nodes, copy_hir_node(node));
+    }
+    let nominals = vec.empty[hir.NominalDecl]();
+    vec.reserve(nominals, vec.len(module.nominals));
+    for nominal in module.nominals {
+        vec.push(nominals, copy_nominal_decl(nominal));
+    }
+    let traits = vec.empty[hir.TraitDecl]();
+    vec.reserve(traits, vec.len(module.traits));
+    for trait_decl in module.traits {
+        vec.push(traits, copy_trait_decl(trait_decl));
+    }
+    let impls = vec.empty[hir.ImplDecl]();
+    vec.reserve(impls, vec.len(module.impls));
+    for impl_decl in module.impls {
+        vec.push(impls, copy_impl_decl(impl_decl));
+    }
+    let templates = vec.empty[hir.FunctionTemplate]();
+    vec.reserve(templates, vec.len(module.templates));
+    for template in module.templates {
+        vec.push(templates, copy_function_template(template));
+    }
+    let instances = vec.empty[hir.FunctionInstance]();
+    vec.reserve(instances, vec.len(module.instances));
+    for instance in module.instances {
+        vec.push(instances, copy_function_instance(instance));
+    }
+    return hir.HirModule(resolved: copy_resolved(module.resolved),
+        identity: module.identity,
+        types: types.clone_context(module.types), config: module.config,
+        functions: functions, nodes: nodes,
+        scopes: copy_plain(module.scopes), nominals: nominals,
+        traits: traits, impls: impls, templates: templates,
+        instances: instances, ownership: copy_ownership(module.ownership),
+        foreign_bindings: copy_plain(module.foreign_bindings));
+}
+
+// Narrow public entry points for verifier/sema code that needs a value copy of
+// one record.  They reuse the same copy helpers as clone_module; no second
+// copier and no hidden Panic path.  The recursion budget applies to the nested
+// Pattern/ConstantValue records inside these values.
+pub func clone_node(value hir.HirNode) hir.HirNode
+        throws model.SupportError {
+    return copy_hir_node(value);
+}
+
+pub func clone_function(value hir.HirFunction) hir.HirFunction
+        throws model.SupportError {
+    return copy_hir_function(value);
+}
+
+pub func clone_pattern(value hir.Pattern) hir.Pattern
+        throws model.SupportError {
+    return copy_pattern(value, 0);
+}
+
+pub func clone_constant(value hir.ConstantValue) hir.ConstantValue
+        throws model.SupportError {
+    return copy_constant_value(value, 0);
+}

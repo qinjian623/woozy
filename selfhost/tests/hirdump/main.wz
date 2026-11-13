@@ -1,0 +1,889 @@
+// Test-only Wz harness for the pure-Wz HIR dumps.
+//
+// It parses the same real fixture source as oracle.cpp, builds the same
+// TypeContext/HirModule records, and prints the dump text.  This is an
+// independent construction from real Source/AST records; it does not call the
+// C++ frontend, helpers or dump.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirdump" as hirdump;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct BuiltTypes {
+    context types.Context;
+    signature usize;
+}
+
+func usize_text(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func intern_type(state inout types.Context,
+                 value model.Type) usize throws model.SupportError {
+    try { return types.intern(inout state, value); }
+    catch error types.Error {
+        switch error {
+            case types.Error.Invalid(message):
+                throw model.SupportError.Invalid(message);
+        }
+    }
+}
+
+func build_types() BuiltTypes throws model.SupportError {
+    var context = types.context();
+    let unit = intern_type(inout context, model.empty_type(model.TypeKind.Unit));
+    let boolean = intern_type(inout context,
+        model.empty_type(model.TypeKind.Bool));
+    var signed_int = model.empty_type(model.TypeKind.SignedInt);
+    signed_int.bits = 8;
+    let i8 = intern_type(inout context, signed_int);
+    var unsigned_int = model.empty_type(model.TypeKind.UnsignedInt);
+    unsigned_int.bits = 16;
+    let u16 = intern_type(inout context, unsigned_int);
+    var f32 = model.empty_type(model.TypeKind.Float);
+    f32.bits = 32;
+    let float32 = intern_type(inout context, f32);
+    let string_type = intern_type(inout context,
+        model.empty_type(model.TypeKind.String));
+    let isize = intern_type(inout context, model.empty_type(model.TypeKind.Isize));
+    let usize_type = intern_type(inout context,
+        model.empty_type(model.TypeKind.Usize));
+
+    var function_type = model.empty_type(model.TypeKind.Function);
+    function_type.parameters = [
+        model.ParameterType(mode: model.ParamMode.Ordinary, type_id: boolean),
+        model.ParameterType(mode: model.ParamMode.Inout, type_id: i8),
+        model.ParameterType(mode: model.ParamMode.Move, type_id: usize_type)
+    ];
+    function_type.result = unit;
+    function_type.throws_type = option.Option[usize].Some(i8);
+    let signature = intern_type(inout context, function_type);
+
+    var struct_type = model.empty_type(model.TypeKind.NominalStruct);
+    struct_type.declaration = 100;
+    struct_type.type_args = [boolean, i8];
+    let ignored_struct = intern_type(inout context, struct_type);
+
+    var enum_type = model.empty_type(model.TypeKind.NominalEnum);
+    enum_type.declaration = 101;
+    enum_type.type_args = [u16];
+    let ignored_enum = intern_type(inout context, enum_type);
+
+    var parameter = model.empty_type(model.TypeKind.TypeParameter);
+    parameter.declaration = 102;
+    let ignored_parameter = intern_type(inout context, parameter);
+
+    var foreign_opaque = model.empty_type(model.TypeKind.ForeignOpaque);
+    foreign_opaque.declaration = 103;
+    foreign_opaque.binding = 200;
+    let ignored_foreign_opaque = intern_type(inout context, foreign_opaque);
+
+    let error = intern_type(inout context, model.empty_type(model.TypeKind.Error));
+
+    var vec_type = model.empty_type(model.TypeKind.Vec);
+    vec_type.type_args = [boolean];
+    let ignored_vec = intern_type(inout context, vec_type);
+
+    var foreign_callable = model.empty_type(model.TypeKind.ForeignCallable);
+    foreign_callable.declaration = 104;
+    foreign_callable.binding = 201;
+    let ignored_foreign_callable = intern_type(inout context, foreign_callable);
+
+    var c_pointer = model.empty_type(model.TypeKind.CForeignPointer);
+    c_pointer.type_args = [boolean];
+    c_pointer.bits = 1;
+    let ignored_c_pointer = intern_type(inout context, c_pointer);
+
+    var c_buffer = model.empty_type(model.TypeKind.CForeignBuffer);
+    c_buffer.type_args = [string_type];
+    let ignored_c_buffer = intern_type(inout context, c_buffer);
+
+    var c_record = model.empty_type(model.TypeKind.CForeignRecord);
+    c_record.c_type = 1;
+    let ignored_c_record = intern_type(inout context, c_record);
+    var c_resource = model.empty_type(model.TypeKind.CForeignResource);
+    c_resource.c_type = 2;
+    let ignored_c_resource = intern_type(inout context, c_resource);
+    var c_callback = model.empty_type(model.TypeKind.CForeignCallback);
+    c_callback.c_type = 3;
+    let ignored_c_callback = intern_type(inout context, c_callback);
+    var c_opaque = model.empty_type(model.TypeKind.CForeignOpaque);
+    c_opaque.c_type = 4;
+    let ignored_c_opaque = intern_type(inout context, c_opaque);
+
+    let ignored_thread = intern_type(inout context,
+        model.empty_type(model.TypeKind.ThreadHandle));
+    let ignored_mutex = intern_type(inout context,
+        model.empty_type(model.TypeKind.MutexHandle));
+    let ignored_condvar = intern_type(inout context,
+        model.empty_type(model.TypeKind.CondvarHandle));
+    let ignored_atomic = intern_type(inout context,
+        model.empty_type(model.TypeKind.AtomicI64Handle));
+    let ignored_ipc = intern_type(inout context,
+        model.empty_type(model.TypeKind.IpcHandle));
+
+    var slice = model.empty_type(model.TypeKind.Slice);
+    slice.type_args = [usize_type];
+    let ignored_slice = intern_type(inout context, slice);
+
+    var weak = model.empty_type(model.TypeKind.Weak);
+    weak.type_args = [boolean];
+    let ignored_weak = intern_type(inout context, weak);
+
+    var task = model.empty_type(model.TypeKind.Task);
+    task.type_args = [unit, error];
+    let ignored_task = intern_type(inout context, task);
+
+    var trait_object = model.empty_type(model.TypeKind.TraitObject);
+    trait_object.declaration = 105;
+    trait_object.type_args = [boolean];
+    let ignored_trait_object = intern_type(inout context, trait_object);
+    return BuiltTypes(context: context, signature: signature);
+}
+
+func source_at(parsed model.ParseResult, index usize) hir.HirSource {
+    let node = parsed.nodes[index];
+    return hir.HirSource(
+        node: model.NodeRef(module: 2, file: 1, node: index),
+        span: node.span);
+}
+
+func at(parsed model.ParseResult, index usize) hir.HirSource {
+    return source_at(parsed,
+        (index * 13 + 5) % vec.len(parsed.nodes));
+}
+
+func type_at(index usize) usize {
+    return 1 + index % 31;
+}
+
+func scope_at(index usize) usize {
+    return index % 4;
+}
+
+func param(symbol usize, label string) hir.Parameter {
+    return hir.Parameter(symbol: symbol, label: label);
+}
+
+func trait_ref(declaration usize, args Vec[usize]) hir.TraitRef {
+    return hir.TraitRef(declaration: declaration, args: args);
+}
+
+func generic(symbol usize, bound option.Option[hir.TraitRef],
+             source hir.HirSource) hir.GenericParam {
+    return hir.GenericParam(symbol: symbol, trait_ref: bound, source: source);
+}
+
+func field_decl(symbol usize, type_id usize, exported bool,
+                source hir.HirSource) hir.FieldDecl {
+    return hir.FieldDecl(symbol: symbol, type_id: type_id,
+        exported: exported, source: source);
+}
+
+func call_arg(source_index u32, parameter_index u32,
+              label option.Option[string], mode model.ParamMode,
+              expression usize) hir.CallArg {
+    return hir.CallArg(source_index: source_index,
+        parameter_index: parameter_index, label: label, mode: mode,
+        expression: expression);
+}
+
+func cleanup(kind hir.CleanupKind, owner_kind hir.OwnerKind, identity u64,
+             type_id usize) hir.CleanupStep {
+    return hir.CleanupStep(kind: kind,
+        owner: hir.OwnerRef(kind: owner_kind, identity: identity),
+        type_id: type_id);
+}
+
+func exit_plan(kind hir.ExitKind, error_type option.Option[usize],
+               target hir.ExitTarget, exited_scopes Vec[usize],
+               defers Vec[usize], saves_value bool,
+               actions Vec[hir.CleanupStep]) hir.ExitPlan {
+    return hir.ExitPlan(kind: kind, error_type: error_type, target: target,
+        exited_scopes: exited_scopes, defers: defers,
+        saves_value: saves_value, actions: actions);
+}
+
+func pattern(type_id usize, source hir.HirSource,
+             variant option.Option[usize], binding option.Option[usize],
+             payload Vec[hir.Pattern],
+             literal option.Option[hir.PatternLiteral]) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source, variant: variant,
+        binding: binding, payload: payload, literal: literal);
+}
+
+func constant(type_id usize, data hir.ConstantData) hir.ConstantValue {
+    return hir.ConstantValue(type_id: type_id, data: data);
+}
+
+func function(symbol usize, signature usize, parameters Vec[hir.Parameter],
+              body usize, scope usize, source hir.HirSource,
+              captures Vec[hir.CaptureBinding], is_async bool) hir.HirFunction {
+    return hir.HirFunction(symbol: symbol, signature: signature,
+        parameters: parameters, body: body, scope: scope, source: source,
+        captures: captures, is_async: is_async);
+}
+
+func push_node(module inout hir.HirModule, parsed model.ParseResult,
+               data hir.NodeData, source_index usize,
+               children Vec[usize], errors Vec[usize],
+               exits Vec[hir.ExitPlan]) {
+    let index = vec.len(module.nodes);
+    vec.push(module.nodes, hir.HirNode(type_id: type_at(index),
+        source: at(parsed, source_index), scope: scope_at(index),
+        children: children, data: data, errors: errors, exits: exits));
+}
+
+func push_full(module inout hir.HirModule, parsed model.ParseResult,
+               data hir.NodeData, source_index usize) {
+    push_node(inout module, parsed, data, source_index, [1, 3], [3, 14], []);
+}
+
+func build_module(parsed model.ParseResult, context types.Context,
+                  signature usize, project model.Project) hir.HirModule {
+    let resolved = model.ResolvedProject(project: project, symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    var module = hir.empty_module(resolved, 7,
+        model.CheckConfig(backend: model.Backend.Python, word_bits: 32));
+
+    let trait_ref_value = trait_ref(501, [2, 3, 9]);
+    let parameter_with_bound = generic(500, option.Option[hir.TraitRef].Some(
+        trait_ref_value), at(parsed, 40));
+    let parameter_without_bound = generic(502,
+        option.Option[hir.TraitRef].None, at(parsed, 41));
+
+    var nominal_params = vec.empty[hir.GenericParam]();
+    vec.push(nominal_params, parameter_with_bound);
+    vec.push(nominal_params, parameter_without_bound);
+    var nominal_fields = vec.empty[hir.FieldDecl]();
+    vec.push(nominal_fields, field_decl(504, 10, true, at(parsed, 42)));
+    vec.push(nominal_fields, field_decl(505, 11, false, at(parsed, 43)));
+    var nominal_variants = vec.empty[hir.VariantDecl]();
+    var first_payload = vec.empty[hir.FieldDecl]();
+    vec.push(first_payload, field_decl(507, 12, true, at(parsed, 44)));
+    vec.push(nominal_variants, hir.VariantDecl(symbol: 506,
+        payload: first_payload, source: at(parsed, 45)));
+    var second_payload = vec.empty[hir.FieldDecl]();
+    vec.push(second_payload, field_decl(509, 13, false, at(parsed, 46)));
+    vec.push(second_payload, field_decl(510, 14, true, at(parsed, 47)));
+    vec.push(nominal_variants, hir.VariantDecl(symbol: 508,
+        payload: second_payload, source: at(parsed, 48)));
+    vec.push(module.nominals, hir.NominalDecl(symbol: 503,
+        kind: model.TypeKind.NominalStruct, params: nominal_params,
+        fields: nominal_fields, variants: nominal_variants, source: at(parsed, 39)));
+    vec.push(module.nominals, hir.NominalDecl(symbol: 511,
+        kind: model.TypeKind.NominalEnum, params: [], fields: [],
+        variants: [], source: at(parsed, 49)));
+
+    var trait_params = vec.empty[hir.GenericParam]();
+    vec.push(trait_params, parameter_with_bound);
+    var trait_methods = vec.empty[hir.MethodPrototype]();
+    var first_method_params = vec.empty[hir.Parameter]();
+    vec.push(first_method_params, param(523, "first"));
+    vec.push(first_method_params, param(524, "quote\"slash\\tab\t"));
+    vec.push(trait_methods, hir.MethodPrototype(symbol: 522,
+        signature: signature, parameters: first_method_params,
+        source: at(parsed, 50)));
+    var second_method_params = vec.empty[hir.Parameter]();
+    vec.push(second_method_params, param(526, ""));
+    vec.push(trait_methods, hir.MethodPrototype(symbol: 525,
+        signature: signature, parameters: second_method_params,
+        source: at(parsed, 51)));
+    vec.push(module.traits, hir.TraitDecl(symbol: 520, self: 521,
+        params: trait_params, methods: trait_methods, source: at(parsed, 52)));
+
+    var impl_params = vec.empty[hir.GenericParam]();
+    vec.push(impl_params, parameter_with_bound);
+    vec.push(module.impls, hir.ImplDecl(params: impl_params,
+        trait_ref: option.Option[hir.TraitRef].Some(trait_ref_value),
+        self_parameter: 530, self_type: 10, methods: [531, 532],
+        source: at(parsed, 53)));
+    vec.push(module.impls, hir.ImplDecl(params: [],
+        trait_ref: option.Option[hir.TraitRef].None,
+        self_parameter: 533, self_type: 11, methods: [],
+        source: at(parsed, 54)));
+
+    var template_captures = vec.empty[hir.CaptureBinding]();
+    vec.push(template_captures, hir.CaptureBinding(origin: 543, local: 544,
+        type_id: 3));
+    var template_params = vec.empty[hir.Parameter]();
+    vec.push(template_params, param(541, "left"));
+    vec.push(template_params, param(542, ""));
+    var template_generics = vec.empty[hir.GenericParam]();
+    vec.push(template_generics, parameter_with_bound);
+    vec.push(template_generics, parameter_without_bound);
+    vec.push(module.templates, hir.FunctionTemplate(
+        function: function(540, signature, template_params, 5, 2,
+            at(parsed, 55), template_captures, true),
+        params: template_generics));
+
+    var renamed = vec.empty[hir.SymbolRename]();
+    vec.push(renamed, hir.SymbolRename(origin: 552, replacement: 553));
+    vec.push(renamed, hir.SymbolRename(origin: 554, replacement: 555));
+    vec.push(module.instances, hir.FunctionInstance(symbol: 550, origin: 551,
+        type_args: [2, 10, 28], renamed: renamed,
+        target: model.CheckConfig(backend: model.Backend.Native,
+            word_bits: 64)));
+
+    var first_function_params = vec.empty[hir.Parameter]();
+    vec.push(first_function_params, param(561, "alpha"));
+    vec.push(first_function_params, param(562, "beta\"gamma\\delta\n"));
+    var first_function_captures = vec.empty[hir.CaptureBinding]();
+    vec.push(first_function_captures, hir.CaptureBinding(origin: 563,
+        local: 564, type_id: 5));
+    vec.push(first_function_captures, hir.CaptureBinding(origin: 565,
+        local: 566, type_id: 6));
+    vec.push(module.functions, function(560, signature, first_function_params,
+        8, 1, at(parsed, 56), first_function_captures, true));
+    vec.push(module.functions, function(567, signature, [], 9, 3,
+        at(parsed, 57), [], false));
+
+    vec.push(module.scopes, hir.HirScope(function: 560,
+        parent: option.Option[usize].Some(0), source: at(parsed, 58)));
+    vec.push(module.scopes, hir.HirScope(function: 560,
+        parent: option.Option[usize].None, source: at(parsed, 59)));
+    vec.push(module.scopes, hir.HirScope(function: 567,
+        parent: option.Option[usize].Some(1), source: at(parsed, 60)));
+
+    var all_actions = vec.empty[hir.CleanupStep]();
+    vec.push(all_actions, cleanup(hir.CleanupKind.SaveOutput,
+        hir.OwnerKind.Binding, 700, 1));
+    vec.push(all_actions, cleanup(hir.CleanupKind.EndBorrow,
+        hir.OwnerKind.Temporary, 701, 2));
+    vec.push(all_actions, cleanup(hir.CleanupKind.DestroyIfLive,
+        hir.OwnerKind.ReturnOutput, 702, 3));
+    vec.push(all_actions, cleanup(hir.CleanupKind.Defer,
+        hir.OwnerKind.ErrorOutput, 703, 4));
+    vec.push(all_actions, cleanup(hir.CleanupKind.EndIteration,
+        hir.OwnerKind.Iteration, 704, 5));
+    var all_exits = vec.empty[hir.ExitPlan]();
+    vec.push(all_exits, exit_plan(hir.ExitKind.Normal,
+        option.Option[usize].None,
+        hir.ExitTarget.ScopeExit(hir.ScopeExit(scope: option.Option[usize].Some(3))),
+        [4, 5], [6], true, all_actions));
+    vec.push(all_exits, exit_plan(hir.ExitKind.Return,
+        option.Option[usize].Some(3),
+        hir.ExitTarget.FunctionExit(hir.FunctionExit(function: 710)),
+        [], [], false, []));
+    vec.push(all_exits, exit_plan(hir.ExitKind.Break,
+        option.Option[usize].None,
+        hir.ExitTarget.JumpExit(hir.JumpExit(node: 11)),
+        [6], [12], true, []));
+    vec.push(all_exits, exit_plan(hir.ExitKind.Continue,
+        option.Option[usize].None,
+        hir.ExitTarget.JumpExit(hir.JumpExit(node: 13)),
+        [], [], false, []));
+    vec.push(all_exits, exit_plan(hir.ExitKind.Error,
+        option.Option[usize].Some(14),
+        hir.ExitTarget.CatchTarget(hir.CatchTarget(try_node: 14, index: 7)),
+        [7], [15], true, []));
+    vec.push(all_exits, exit_plan(hir.ExitKind.Cancel,
+        option.Option[usize].None,
+        hir.ExitTarget.ScopeExit(hir.ScopeExit(
+            scope: option.Option[usize].None)),
+        [8], [], false, []));
+
+    push_full(inout module, parsed, hir.NodeData.UnitLiteral(hir.UnitLiteral()), 0);
+    push_full(inout module, parsed, hir.NodeData.BoolLiteral(
+        hir.BoolLiteral(value: true)), 1);
+    push_full(inout module, parsed, hir.NodeData.IntegerLiteral(
+        hir.IntegerLiteral(decimal: "-12345678901234567890",
+            bits: 18446744073709551615)), 2);
+    push_full(inout module, parsed, hir.NodeData.FloatLiteral(
+        hir.FloatLiteral(bits: 4614256656552045848)), 3);
+    push_full(inout module, parsed, hir.NodeData.StringLiteral(
+        hir.StringLiteral(utf8: "quote\" slash\\ newline\n tab\t unicode-中")), 4);
+    push_full(inout module, parsed, hir.NodeData.Read(
+        hir.Read(symbol: 600)), 5);
+    push_full(inout module, parsed, hir.NodeData.Place(
+        hir.Place(symbol: 601)), 6);
+    var capture_sources = vec.empty[hir.CaptureSource]();
+    vec.push(capture_sources, hir.CaptureSource(origin: 603, source: 604,
+        type_id: 4, is_move: true));
+    vec.push(capture_sources, hir.CaptureSource(origin: 605, source: 606,
+        type_id: 5, is_move: false));
+    push_full(inout module, parsed, hir.NodeData.FunctionValue(
+        hir.FunctionValue(symbol: 602, type_args: [2, 3, 9],
+            captures: capture_sources, move_capture: true,
+            bound: option.Option[hir.BoundReceiver].Some(
+                hir.BoundReceiver(type_id: 6,
+                    mode: model.ParamMode.Move)))), 7);
+    push_full(inout module, parsed, hir.NodeData.Binding(
+        hir.Binding(symbol: 607, writable: true)), 8);
+    push_full(inout module, parsed, hir.NodeData.Assign(
+        hir.Assign(compound: option.Option[hir.BinaryOp].Some(
+            hir.BinaryOp.GreaterEqual))), 9);
+    push_full(inout module, parsed, hir.NodeData.Unary(
+        hir.Unary(op: hir.UnaryOp.BitNot)), 10);
+    push_full(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.ShiftRight)), 11);
+    push_full(inout module, parsed, hir.NodeData.ShortCircuit(
+        hir.ShortCircuit(op: hir.LogicalOp.Or)), 12);
+    push_full(inout module, parsed, hir.NodeData.IntegerConvert(
+        hir.IntegerConvert()), 13);
+    var call_args = vec.empty[hir.CallArg]();
+    vec.push(call_args, call_arg(0, 1, option.Option[string].Some("label\"one"),
+        model.ParamMode.Ordinary, 17));
+    vec.push(call_args, call_arg(1, 2, option.Option[string].None,
+        model.ParamMode.Inout, 18));
+    push_full(inout module, parsed, hir.NodeData.Call(hir.Call(
+        kind: hir.CalleeKind.CForeign, signature: signature,
+        direct_symbol: option.Option[usize].Some(610),
+        callee: option.Option[usize].Some(16), args: call_args,
+        type_args: [2, 10], binding: option.Option[usize].Some(611),
+        c_callable: option.Option[u32].Some(9), omitted: [1, 3, 5],
+        system: option.Option[u32].Some(42))), 14);
+    push_full(inout module, parsed, hir.NodeData.Block(hir.Block()), 15);
+    push_full(inout module, parsed, hir.NodeData.ExpressionStatement(
+        hir.ExpressionStatement()), 16);
+    push_full(inout module, parsed, hir.NodeData.If(hir.If()), 17);
+    push_full(inout module, parsed, hir.NodeData.For(hir.For()), 18);
+    push_full(inout module, parsed, hir.NodeData.Noop(hir.Noop()), 19);
+    push_full(inout module, parsed, hir.NodeData.Return(
+        hir.Return(function: 612)), 20);
+    push_full(inout module, parsed, hir.NodeData.Break(
+        hir.Break(loop: 19)), 21);
+    push_full(inout module, parsed, hir.NodeData.Continue(
+        hir.Continue(loop: 20)), 22);
+    push_full(inout module, parsed, hir.NodeData.Unsupported(
+        hir.Unsupported(feature: "neutral[ bracket ] quote\" slash\\ newline\n")), 23);
+    var struct_fields = vec.empty[hir.CallArg]();
+    vec.push(struct_fields, call_arg(0, 1, option.Option[string].Some("first"),
+        model.ParamMode.Ordinary, 21));
+    vec.push(struct_fields, call_arg(2, 3, option.Option[string].None,
+        model.ParamMode.Move, 22));
+    push_full(inout module, parsed, hir.NodeData.StructInit(
+        hir.StructInit(fields: struct_fields)), 24);
+    var enum_payload = vec.empty[hir.CallArg]();
+    vec.push(enum_payload, call_arg(1, 2,
+        option.Option[string].Some("payload"), model.ParamMode.Inout, 23));
+    push_full(inout module, parsed, hir.NodeData.EnumInit(
+        hir.EnumInit(variant: 613, payload: enum_payload)), 25);
+    push_full(inout module, parsed, hir.NodeData.FieldRead(
+        hir.FieldRead(field: 614)), 26);
+    push_full(inout module, parsed, hir.NodeData.FieldPlace(
+        hir.FieldPlace(field: 615)), 27);
+
+    var nested_payload = vec.empty[hir.Pattern]();
+    var nested_nested = vec.empty[hir.Pattern]();
+    vec.push(nested_nested, pattern(2, at(parsed, 71),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.BoolLiteral(hir.BoolLiteral(value: false)))));
+    vec.push(nested_payload, pattern(3, at(parsed, 70),
+        option.Option[usize].None, option.Option[usize].Some(616),
+        nested_nested,
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.IntegerLiteral(hir.IntegerLiteral(
+                decimal: "-42", bits: 12345678901234567890)))));
+    vec.push(nested_payload, pattern(1, at(parsed, 72),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].None));
+    var arms = vec.empty[hir.Arm]();
+    vec.push(arms, hir.Arm(pattern: pattern(5, at(parsed, 69),
+        option.Option[usize].Some(617), option.Option[usize].None,
+        nested_payload, option.Option[hir.PatternLiteral].None),
+        scope: 9, body: 24, source: at(parsed, 68)));
+    vec.push(arms, hir.Arm(pattern: pattern(4, at(parsed, 73),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.FloatLiteral(
+                hir.FloatLiteral(bits: 4607182418800017408)))),
+        scope: 10, body: 25, source: at(parsed, 74)));
+    vec.push(arms, hir.Arm(pattern: pattern(7, at(parsed, 75),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.IntegerLiteral(hir.IntegerLiteral(
+                decimal: "7", bits: 7)))),
+        scope: 11, body: 26, source: at(parsed, 76)));
+    vec.push(arms, hir.Arm(pattern: pattern(8, at(parsed, 77),
+        option.Option[usize].None, option.Option[usize].Some(618), [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.IntegerLiteral(hir.IntegerLiteral(
+                decimal: "8", bits: 8)))),
+        scope: 12, body: 27, source: at(parsed, 78)));
+    vec.push(arms, hir.Arm(pattern: pattern(6, at(parsed, 79),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.StringLiteral(
+                hir.StringLiteral(utf8: "pattern\"\\\n")))),
+        scope: 13, body: 28, source: at(parsed, 80)));
+    vec.push(arms, hir.Arm(pattern: pattern(2, at(parsed, 81),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.BoolLiteral(hir.BoolLiteral(value: true)))),
+        scope: 14, body: 29, source: at(parsed, 82)));
+    vec.push(arms, hir.Arm(pattern: pattern(1, at(parsed, 83),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].None),
+        scope: 15, body: 30, source: at(parsed, 84)));
+    push_full(inout module, parsed, hir.NodeData.Switch(
+        hir.Switch(arms: arms, exhaustive: true)), 28);
+
+    var constraint_args = vec.empty[hir.CallArg]();
+    vec.push(constraint_args, call_arg(0, 1,
+        option.Option[string].Some("receiver"), model.ParamMode.Ordinary, 31));
+    push_full(inout module, parsed, hir.NodeData.ConstraintCall(
+        hir.ConstraintCall(trait_ref: trait_ref_value, method: 620,
+            receiver: 10, signature: signature, args: constraint_args)), 29);
+    var catches = vec.empty[hir.Catch]();
+    vec.push(catches, hir.Catch(error_type: 14, binding: 621, scope: 16,
+        body: 32, source: at(parsed, 85)));
+    vec.push(catches, hir.Catch(error_type: 3, binding: 622, scope: 17,
+        body: 33, source: at(parsed, 86)));
+    push_full(inout module, parsed, hir.NodeData.Try(
+        hir.Try(catches: catches)), 30);
+    push_full(inout module, parsed, hir.NodeData.Defer(
+        hir.Defer(owner_scope: 18, references: [623, 624, 625])), 31);
+    push_full(inout module, parsed, hir.NodeData.Throw(hir.Throw()), 32);
+    push_full(inout module, parsed, hir.NodeData.Move(
+        hir.Move(binding: option.Option[usize].Some(626))), 33);
+    push_full(inout module, parsed, hir.NodeData.VecInit(hir.VecInit()), 34);
+    push_full(inout module, parsed, hir.NodeData.IndexRead(hir.IndexRead()), 35);
+    push_full(inout module, parsed, hir.NodeData.IndexPlace(hir.IndexPlace()), 36);
+    push_full(inout module, parsed, hir.NodeData.VecSlice(
+        hir.VecSlice(start: option.Option[usize].Some(34),
+            end: option.Option[usize].Some(35))), 37);
+    push_full(inout module, parsed, hir.NodeData.ForIn(hir.ForIn(
+        element: 627, body_scope: 19, body: 36,
+        iterator: option.Option[hir.IteratorFor].Some(hir.IteratorFor(
+            cursor: 628, option: 629, next: 37, iterator: 15,
+            element: 2, some: 630, none: 631, some_field: 632)))), 38);
+    push_full(inout module, parsed, hir.NodeData.ForeignRead(hir.ForeignRead(
+        binding: 633, access: option.Option[hir.ForeignAccessKind].Some(
+            hir.ForeignAccessKind.SlicePlace),
+        start: option.Option[usize].Some(38),
+        end: option.Option[usize].Some(39))), 39);
+
+    var constant_fields = vec.empty[hir.ConstantValue]();
+    vec.push(constant_fields, constant(1,
+        hir.ConstantData.UnitLiteral(hir.UnitLiteral())));
+    vec.push(constant_fields, constant(2,
+        hir.ConstantData.BoolLiteral(hir.BoolLiteral(value: true))));
+    vec.push(constant_fields, constant(3,
+        hir.ConstantData.IntegerLiteral(hir.IntegerLiteral(
+            decimal: "-9", bits: 18446744073709551615))));
+    vec.push(constant_fields, constant(4,
+        hir.ConstantData.FloatLiteral(
+            hir.FloatLiteral(bits: 4614256656552045848))));
+    vec.push(constant_fields, constant(6,
+        hir.ConstantData.StringLiteral(hir.StringLiteral(
+            utf8: "constant\" slash\\ newline\n tab\t"))));
+    var constant_captures = vec.empty[hir.CaptureSource]();
+    vec.push(constant_captures, hir.CaptureSource(origin: 642, source: 643,
+        type_id: 4, is_move: true));
+    vec.push(constant_fields, constant(9,
+        hir.ConstantData.FunctionValue(hir.FunctionValue(symbol: 641,
+            type_args: [2, 3], captures: constant_captures,
+            move_capture: true,
+            bound: option.Option[hir.BoundReceiver].Some(
+                hir.BoundReceiver(type_id: 5,
+                    mode: model.ParamMode.Inout))))));
+    var nested_constant_fields = vec.empty[hir.ConstantValue]();
+    vec.push(nested_constant_fields, constant(1,
+        hir.ConstantData.UnitLiteral(hir.UnitLiteral())));
+    vec.push(constant_fields, constant(15,
+        hir.ConstantData.ConstantAggregate(hir.ConstantAggregate(
+            variant: option.Option[usize].None,
+            fields: nested_constant_fields))));
+    push_full(inout module, parsed, hir.NodeData.ConstantLiteral(
+        hir.ConstantLiteral(value: constant(10,
+            hir.ConstantData.ConstantAggregate(hir.ConstantAggregate(
+                variant: option.Option[usize].Some(640),
+                fields: constant_fields))))), 40);
+    push_full(inout module, parsed, hir.NodeData.CFieldRead(
+        hir.CFieldRead(c_type: 9, field: 7)), 41);
+    push_full(inout module, parsed, hir.NodeData.Await(hir.Await()), 42);
+    var trait_methods_init = vec.empty[usize]();
+    vec.push(trait_methods_init, 644);
+    vec.push(trait_methods_init, 645);
+    vec.push(trait_methods_init, 646);
+    var trait_method_args = vec.empty[Vec[usize]]();
+    vec.push(trait_method_args, [2, 3]);
+    vec.push(trait_method_args, [4]);
+    push_full(inout module, parsed, hir.NodeData.TraitObjectInit(
+        hir.TraitObjectInit(trait_ref: trait_ref_value, concrete: 10,
+            methods: trait_methods_init, method_args: trait_method_args)), 43);
+    var dispatch_args = vec.empty[hir.CallArg]();
+    vec.push(dispatch_args, call_arg(0, 1, option.Option[string].Some("self"),
+        model.ParamMode.Inout, 40));
+    vec.push(dispatch_args, call_arg(1, 2, option.Option[string].None,
+        model.ParamMode.Move, 41));
+    push_full(inout module, parsed, hir.NodeData.TraitDispatch(
+        hir.TraitDispatch(trait_ref: trait_ref_value, method: 647,
+            signature: signature, index: 11, args: dispatch_args)), 44);
+
+    push_node(inout module, parsed, hir.NodeData.Assign(
+        hir.Assign(compound: option.Option[hir.BinaryOp].None)), 0,
+        [], [], []);
+    push_node(inout module, parsed, hir.NodeData.FunctionValue(
+        hir.FunctionValue(symbol: 650, type_args: [], captures: [],
+            move_capture: false,
+            bound: option.Option[hir.BoundReceiver].None)), 1, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.ConstantLiteral(
+        hir.ConstantLiteral(value: constant(1,
+            hir.ConstantData.UnitLiteral(hir.UnitLiteral())))), 2, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.VecSlice(hir.VecSlice(
+        start: option.Option[usize].None,
+        end: option.Option[usize].None)), 3, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.ForIn(hir.ForIn(
+        element: 651, body_scope: 20, body: 42,
+        iterator: option.Option[hir.IteratorFor].None)), 4, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Call(hir.Call(
+        kind: hir.CalleeKind.Direct, signature: signature,
+        direct_symbol: option.Option[usize].None,
+        callee: option.Option[usize].None, args: [], type_args: [],
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].None)), 5, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Move(
+        hir.Move(binding: option.Option[usize].None)), 6, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.ForeignRead(hir.ForeignRead(
+        binding: 652, access: option.Option[hir.ForeignAccessKind].None,
+        start: option.Option[usize].None,
+        end: option.Option[usize].None)), 7, [], [], []);
+    var empty_method_args = vec.empty[Vec[usize]]();
+    push_node(inout module, parsed, hir.NodeData.TraitObjectInit(
+        hir.TraitObjectInit(trait_ref: trait_ref_value, concrete: 10,
+            methods: [653, 654], method_args: empty_method_args)), 8, [], [], []);
+    var wildcard_arms = vec.empty[hir.Arm]();
+    vec.push(wildcard_arms, hir.Arm(pattern: pattern(1, at(parsed, 90),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].None),
+        scope: 21, body: 43, source: at(parsed, 91)));
+    vec.push(wildcard_arms, hir.Arm(pattern: pattern(999, at(parsed, 92),
+        option.Option[usize].None, option.Option[usize].None, [],
+        option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.IntegerLiteral(hir.IntegerLiteral(
+                decimal: "5", bits: 5)))),
+        scope: 22, body: 44, source: at(parsed, 93)));
+    push_node(inout module, parsed, hir.NodeData.Switch(
+        hir.Switch(arms: wildcard_arms, exhaustive: false)), 9, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.UnitLiteral(
+        hir.UnitLiteral()), 10, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Unary(
+        hir.Unary(op: hir.UnaryOp.Negate)), 11, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Unary(
+        hir.Unary(op: hir.UnaryOp.LogicalNot)), 12, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Add)), 13, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Subtract)), 14, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Multiply)), 15, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Divide)), 16, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Remainder)), 17, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.ShiftLeft)), 18, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.ShiftRight)), 19, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.BitAnd)), 20, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.BitOr)), 21, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.BitXor)), 22, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Equal)), 23, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.NotEqual)), 24, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Less)), 25, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.LessEqual)), 26, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.Greater)), 27, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Binary(
+        hir.Binary(op: hir.BinaryOp.GreaterEqual)), 28, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.ShortCircuit(
+        hir.ShortCircuit(op: hir.LogicalOp.And)), 29, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Call(hir.Call(
+        kind: hir.CalleeKind.FunctionValue, signature: signature,
+        direct_symbol: option.Option[usize].Some(670),
+        callee: option.Option[usize].Some(70), args: [], type_args: [],
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].None)), 30, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Call(hir.Call(
+        kind: hir.CalleeKind.Foreign, signature: signature,
+        direct_symbol: option.Option[usize].Some(671),
+        callee: option.Option[usize].None, args: [], type_args: [],
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].None)), 31, [], [], []);
+    push_node(inout module, parsed, hir.NodeData.Call(hir.Call(
+        kind: hir.CalleeKind.System, signature: signature,
+        direct_symbol: option.Option[usize].None,
+        callee: option.Option[usize].None, args: [], type_args: [],
+        binding: option.Option[usize].None,
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].Some(1))), 32, [], [], []);
+    module.nodes[0].exits = all_exits;
+    module.nodes[vec.len(module.nodes) - 1].type_id = 999;
+    module.nodes[vec.len(module.nodes) - 1].scope = 99;
+
+    var foreign_bindings = vec.empty[hir.ForeignBinding]();
+    vec.push(foreign_bindings, hir.ForeignBinding(binding: 5, type_id: 1,
+        signature: option.Option[usize].Some(signature),
+        owner: option.Option[usize].Some(10), read_error: 14));
+    vec.push(foreign_bindings, hir.ForeignBinding(binding: 6, type_id: 2,
+        signature: option.Option[usize].None,
+        owner: option.Option[usize].None, read_error: 13));
+    module.foreign_bindings = foreign_bindings;
+
+    var uses = vec.empty[hir.ValueUse]();
+    vec.push(uses, hir.ValueUse(consumer: 60, operand: 3,
+        kind: hir.UseKind.Inout, root: option.Option[usize].Some(660),
+        type_id: 10, destination: option.Option[usize].Some(661)));
+    vec.push(uses, hir.ValueUse(consumer: 61, operand: 4,
+        kind: hir.UseKind.Take, root: option.Option[usize].None,
+        type_id: 11, destination: option.Option[usize].None));
+    vec.push(uses, hir.ValueUse(consumer: 66, operand: 5,
+        kind: hir.UseKind.Borrow, root: option.Option[usize].None,
+        type_id: 12, destination: option.Option[usize].None));
+    vec.push(uses, hir.ValueUse(consumer: 67, operand: 6,
+        kind: hir.UseKind.Copy, root: option.Option[usize].None,
+        type_id: 13, destination: option.Option[usize].None));
+    module.ownership.uses = uses;
+    var temporaries = vec.empty[hir.Temporary]();
+    vec.push(temporaries, hir.Temporary(producer: 62,
+        full_expression: 63, type_id: 12));
+    module.ownership.temporaries = temporaries;
+    var locals = vec.empty[hir.LocalLifetime]();
+    vec.push(locals, hir.LocalLifetime(symbol: 662, scope: 22, type_id: 13,
+        order: 9, mode: model.ParamMode.Inout, read_only_capture: true));
+    vec.push(locals, hir.LocalLifetime(symbol: 663, scope: 23, type_id: 14,
+        order: 10, mode: model.ParamMode.Ordinary, read_only_capture: false));
+    module.ownership.locals = locals;
+    var full_actions = vec.empty[hir.CleanupStep]();
+    vec.push(full_actions, cleanup(hir.CleanupKind.Defer,
+        hir.OwnerKind.Iteration, 705, 15));
+    vec.push(full_actions, cleanup(hir.CleanupKind.EndIteration,
+        hir.OwnerKind.Binding, 706, 16));
+    var full_expressions = vec.empty[hir.FullExpression]();
+    vec.push(full_expressions, hir.FullExpression(node: 64,
+        actions: full_actions));
+    module.ownership.full_expressions = full_expressions;
+    var call_actions = vec.empty[hir.CleanupStep]();
+    vec.push(call_actions, cleanup(hir.CleanupKind.DestroyIfLive,
+        hir.OwnerKind.ErrorOutput, 707, 17));
+    var calls = vec.empty[hir.CallLifetime]();
+    vec.push(calls, hir.CallLifetime(node: 65, on_return: call_actions));
+    module.ownership.calls = calls;
+
+    module.types = context;
+    return module;
+}
+
+func public_module_dump(module hir.HirModule) string throws model.SupportError {
+    return hirdump.dump_module(module);
+}
+
+func public_types_dump(context types.Context) string {
+    return hirdump.dump_types(context);
+}
+
+func bool_text(value bool) string {
+    if value { return "1"; }
+    return "0";
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func run(fixture string, mode_name string) i32 throws os.Error {
+    let bytes = fs.read_file(fixture);
+    let snapshot = source.snapshot(1, 1, 1, "fixture.wz", bytes);
+    let lexed = lexer.lex(snapshot);
+    let parsed = parser.parse(lexed);
+    var parsed_ok = false;
+    switch parsed.state {
+        case model.PhaseState.Complete: parsed_ok = true;
+        case model.PhaseState.Recovered: parsed_ok = true;
+        default: {}
+    }
+    if !parsed_ok || !parsed.has_value || vec.len(parsed.nodes) == 0 {
+        io.eprintln("parse failed: state=" +
+            strconv.format_u64(u64(phase_id(parsed.state))) +
+            " has=" + bool_text(parsed.has_value) +
+            " nodes=" + usize_text(vec.len(parsed.nodes)));
+        return 3;
+    }
+    var built = BuiltTypes(context: types.context(), signature: 0);
+    try { built = build_types(); }
+    catch error model.SupportError {
+        switch error {
+            case model.SupportError.Invalid(message):
+                io.eprintln("type build failed: " + message);
+            case model.SupportError.Limit(message):
+                io.eprintln("type build limit: " + message);
+        }
+        return 4;
+    }
+    var module = build_module(parsed, built.context, built.signature,
+        model.empty_project());
+    if mode_name == "width-error" {
+        module.config.word_bits = 48;
+        try { let ignored = hirdump.dump_module(module); }
+        catch error model.SupportError {
+            switch error {
+                case model.SupportError.Invalid(message):
+                    io.println("ERROR: " + message);
+                    return 0;
+                case model.SupportError.Limit(message):
+                    io.eprintln("width-error: unexpected limit: " + message);
+                    return 5;
+            }
+        }
+        io.eprintln("width-error: no exception");
+        return 5;
+    }
+    var output = "";
+    try {
+    output = "== types\n" + public_types_dump(module.types) +
+        "== module\n" + public_module_dump(module);
+    output += "== empty-types\ntypes=" +
+        usize_text(types.size(types.context())) + "\n";
+    let empty_resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    let empty_module = hir.empty_module(empty_resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    output += "== empty-module\n" + public_module_dump(empty_module);
+    } catch error model.SupportError {
+        io.eprintln("unexpected dump error");
+        return 6;
+    }
+    io.print(output);
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 2 {
+        io.eprintln("usage: program FIXTURE [width-error]");
+        return 2;
+    }
+    var mode_name = "full";
+    if vec.len(arguments) > 2 { mode_name = arguments[2]; }
+    return run(arguments[1], mode_name);
+}

@@ -51,23 +51,24 @@
       "id": "SH06",
       "title": "exact constants, type checking, generics and typed HIR",
       "status": "in_progress",
-      "verified": "Exact integer/rational/IEEE arithmetic, type table, and complete HIR data records accepted. Constant evaluation, pattern checking, signatures, ownership, HIR copy/dump are in progress; full Sema/verifier remain."
+      "verified": "Type/HIR records, HIR dump, pattern coverage, foreign/system signatures and full HIR clone accepted with C++/Wz O0/O2 comparisons. Sema shared helpers/constructor/facade written with standalone checks; complete Sema and HIR verifier remain in progress."
     },
     {
       "id": "SH07",
       "title": "ownership and Native control flow IR",
       "status": "in_progress",
-      "verified": "Ownership/value operations port assigned; Native CFG lowering and verification not implemented."
+      "verified": "All 53 Native CFG Op and 9 Exit records accepted (77-line oracle at O0/O2). Ownership/value operations, complete lowering and independent CFG/ownership verifier are in progress."
     },
     {
       "id": "SH08",
       "title": "complete Native LLVM text generation and tool driver",
-      "status": "planned"
+      "status": "in_progress",
+      "verified": "Shared LLVM text helpers passed actual Wz O0/O2 -> LLVM verification/object/link/execution (42), including Signature Vec isolation. Four full emitter groups assigned. Tool I/O has separate 40-case O0/O2 and low-FD tests; language emission and new CLI not yet complete."
     },
     {
       "id": "SH09",
       "title": "complete Python emitter",
-      "status": "planned"
+      "status": "in_progress"
     },
     {
       "id": "SH10",
@@ -85,7 +86,8 @@
     {
       "id": "SH05j",
       "scope": "Python/C binding bundle loader",
-      "task": "a3621c4a-1194-405b-9194-b4a7e3be1752"
+      "task": "3f16e55f-51a6-4a2e-a8c1-ae5e127302d4",
+      "status": "correction_in_progress"
     },
     {
       "id": "SH05i",
@@ -95,32 +97,102 @@
     {
       "id": "SH06d",
       "scope": "source/HIR constant evaluation and literal patterns",
-      "task": "750e5118-fb73-47a4-9c59-e86046adc1d0"
+      "task": "1aba94f3-3f45-435b-b4ac-d2ee8bf86ecb",
+      "status": "correction_in_progress"
     },
     {
       "id": "SH06e",
-      "scope": "pattern usefulness and exhaustiveness",
-      "task": "66976582-a7c2-484c-837b-357946d21403"
+      "scope": "pattern usefulness/exhaustiveness, recovered after Pi write errno122",
+      "task": "82151917-fc24-4f77-839c-8e3d56c8a558",
+      "status": "accepted"
     },
     {
       "id": "SH06f",
       "scope": "foreign types and system signatures",
-      "task": "d5ac11e7-62f5-4a77-b6ed-6f39a5d49b2d"
+      "task": "d5ac11e7-62f5-4a77-b6ed-6f39a5d49b2d",
+      "status": "accepted"
     },
     {
       "id": "SH07a",
       "scope": "ownership, value operations and layouts",
-      "task": "cbcc16de-8407-4819-a9c4-1889cf23cfdc"
+      "task": "343c01e4-8a42-484e-b6bd-f6f67b11223c"
     },
     {
       "id": "SH06g",
       "scope": "deep copy of HIR and all mutable source/project data",
-      "task": "099ac75c-5f6c-484f-ba88-e841b7f4bf40"
+      "task": "e4899d8e-f2a5-40b3-9d82-d96c8fdd74d7",
+      "status": "accepted"
     },
     {
       "id": "SH06h",
       "scope": "complete stable HIR/type dump",
-      "task": "e66b3868-0782-41b4-ada9-d41aa0de7077"
+      "task": "e66b3868-0782-41b4-ada9-d41aa0de7077",
+      "status": "accepted"
+    },
+    {
+      "id": "SH07b",
+      "scope": "Native CFG data definitions",
+      "task": "6a8f5654-b054-48ca-afc3-3b645809dd31",
+      "status": "accepted"
+    },
+    {
+      "id": "SH06i",
+      "scope": "complete independent HIR verification; queued for accepted algorithms",
+      "task": "8455e560-57dc-44bc-8845-0908eb30b034"
+    },
+    {
+      "id": "SH06j",
+      "scope": "Sema A declarations/generics",
+      "task": "666de601-76a3-49a7-83b1-e33f360f1db9",
+      "status": "assigned"
+    },
+    {
+      "id": "SH06k",
+      "scope": "Sema B expressions/flow/bodies",
+      "task": "d6aa9de2-f404-4074-bb1d-f7cccecc79df",
+      "status": "assigned"
+    },
+    {
+      "id": "SH07c",
+      "scope": "complete Native CFG lowering/dump",
+      "task": "00a803ba-ffaf-4fdf-bcae-f38dee11cf46",
+      "status": "assigned"
+    },
+    {
+      "id": "SH07d",
+      "scope": "complete Native CFG verification/layout",
+      "task": "1cc9bde6-0879-4e7b-8a85-882a41155df3",
+      "status": "assigned"
+    },
+    {
+      "id": "SH09a",
+      "scope": "complete pure Python emitter",
+      "task": "1751469e-97cf-45ad-ae58-74f6db4e42bc",
+      "status": "assigned"
+    },
+    {
+      "id": "SH08b",
+      "scope": "Native scalar/types/CFG functions and main",
+      "task": "4e173c8a-e023-4ea2-87fb-ba209995ce61",
+      "status": "assigned"
+    },
+    {
+      "id": "SH08c",
+      "scope": "Native values/ARC/Weak/Fn/trait/thread",
+      "task": "965d1dfd-076e-4710-8674-8ced14c2da65",
+      "status": "assigned"
+    },
+    {
+      "id": "SH08d",
+      "scope": "Native coroutine/async/GC",
+      "task": "5890e095-f1f4-412a-94ab-47c49d5efb5a",
+      "status": "assigned"
+    },
+    {
+      "id": "SH08e",
+      "scope": "Native full system calls and C ABI adapter",
+      "task": "e77d03a6-72c8-4fdb-9d8d-8adf1dc7a1c0",
+      "status": "assigned"
     }
   ],
   "accepted_foundations": [

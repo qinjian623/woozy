@@ -1,0 +1,584 @@
+// Foreign binding declarations and C ABI signature construction.
+//
+// Counterpart of src/hir/foreign.hpp and modules::c_source_parameter_indices
+// from include/lang/modules/project.hpp.  Only declaration types enter the
+// type table: no host module is loaded, reflected on or consulted here.
+// Binding/Callback/Record/Resource identities are the frozen project IDs.
+package foreign;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "app/wzcc/hir" as hir;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Labels are in source order; omitted indices are in declaration order.
+pub struct BoundArguments {
+    pub parameters Vec[u32];
+    pub omitted Vec[u32];
+}
+
+func invalid(message string) model.SupportError {
+    return model.SupportError.Invalid(message);
+}
+
+func empty_type_value() model.Type {
+    return model.empty_type(model.TypeKind.Error);
+}
+
+func is_type_kind(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+// Preserve the original types.Error text; the checker combines positions.
+func intern_type(state inout types.Context,
+                 value model.Type) usize throws model.SupportError {
+    try {
+        return types.intern(inout state, value);
+    } catch error types.Error {
+        var message = "";
+        switch error {
+            case types.Error.Invalid(text_value): message = text_value;
+        }
+        throw invalid(message);
+    }
+}
+
+func substring(value string, start usize, finish usize) string {
+    let data = text.bytes(value);
+    if start > finish || finish > vec.len(data) {
+        return "";
+    }
+    let out = vec.empty[u8]();
+    vec.reserve(out, finish - start);
+    var index = start;
+    for index < finish {
+        vec.push(out, data[index]);
+        index += 1;
+    }
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func is_digit(byte u8) bool {
+    return byte >= 48 && byte <= 57;
+}
+
+// std::stoul accepts a leading digit run and ignores trailing text.  A
+// missing digit run or u64 overflow reports "stoul" exactly like libstdc++.
+func stoul_leading(value string) u64 throws model.SupportError {
+    let data = text.bytes(value);
+    var index usize = 0;
+    var result u64 = 0;
+    for index < vec.len(data) && is_digit(data[index]) {
+        let digit = u64(data[index]) - 48;
+        if result > (18446744073709551615 - digit) / 10 {
+            throw invalid("stoul");
+        }
+        result = result * 10 + digit;
+        index += 1;
+    }
+    if index == 0 {
+        throw invalid("stoul");
+    }
+    return result;
+}
+
+// Only declaration types enter this conversion.
+pub func binding_type(project model.Project, context inout types.Context,
+                      name string) usize throws model.SupportError {
+    for declaration in project.foreign_bindings {
+        if declaration.identity == name {
+            var declared_type = false;
+            switch declaration.detail {
+                case model.ForeignDetail.Type(value): declared_type = true;
+                default: {}
+            }
+            if declared_type {
+                var found = empty_type_value();
+                found.kind = model.TypeKind.ForeignOpaque;
+                found.binding = declaration.id;
+                return intern_type(inout context, found);
+            }
+        }
+    }
+    var value = empty_type_value();
+    if name == "Unit" {
+        value.kind = model.TypeKind.Unit;
+    } else if name == "bool" {
+        value.kind = model.TypeKind.Bool;
+    } else if name == "string" {
+        value.kind = model.TypeKind.String;
+    } else if name == "isize" {
+        value.kind = model.TypeKind.Isize;
+    } else if name == "usize" {
+        value.kind = model.TypeKind.Usize;
+    } else if name == "f32" || name == "f64" {
+        value.kind = model.TypeKind.Float;
+        value.bits = 32;
+        if name == "f64" {
+            value.bits = 64;
+        }
+    } else if name == "i8" || name == "i16" || name == "i32" || name == "i64" ||
+              name == "u8" || name == "u16" || name == "u32" || name == "u64" {
+        if name[0] == 105 {
+            value.kind = model.TypeKind.SignedInt;
+        } else {
+            value.kind = model.TypeKind.UnsignedInt;
+        }
+        value.bits = u32(stoul_leading(substring(name, 1, text.byte_len(name))) &
+            4294967295);
+    } else {
+        throw invalid("unknown foreign declaration type: " + name);
+    }
+    return intern_type(inout context, value);
+}
+
+pub func binding_records(project model.Project,
+                         context inout types.Context)
+    Vec[hir.ForeignBinding] throws model.SupportError {
+    let out = vec.empty[hir.ForeignBinding]();
+    if vec.len(project.foreign_bindings) == 0 {
+        return out;
+    }
+    let read_error = binding_type(project, inout context, "lang.py.Error");
+    for declaration in project.foreign_bindings {
+        if declaration.id != vec.len(out) {
+            throw invalid("foreign declaration index/identity mismatch");
+        }
+        var record = hir.ForeignBinding(binding: declaration.id, type_id: 0,
+            signature: option.Option[usize].None,
+            owner: option.Option[usize].None, read_error: read_error);
+        switch declaration.detail {
+            case model.ForeignDetail.Type(value): {
+                record.type_id = binding_type(project, inout context,
+                    declaration.identity);
+            }
+            case model.ForeignDetail.Value(value): {
+                record.type_id = binding_type(project, inout context,
+                    value.type_name);
+            }
+            case model.ForeignDetail.Callable(value): {
+                var signature = empty_type_value();
+                signature.kind = model.TypeKind.Function;
+                signature.result = binding_type(project, inout context,
+                    value.return_type);
+                switch value.error_type {
+                    case option.Option.Some(text_value): {
+                        signature.throws_type = option.Option[usize].Some(
+                            binding_type(project, inout context, text_value));
+                    }
+                    case option.Option.None: {}
+                }
+                for parameter in value.parameters {
+                    var mode = model.ParamMode.Inout;
+                    if parameter.mode == "ordinary" {
+                        mode = model.ParamMode.Ordinary;
+                    } else if parameter.mode == "move" {
+                        mode = model.ParamMode.Move;
+                    }
+                    vec.push(signature.parameters,
+                        model.ParameterType(mode: mode,
+                            type_id: binding_type(project, inout context,
+                                parameter.type_name)));
+                }
+                record.signature = option.Option[usize].Some(
+                    intern_type(inout context, signature));
+                switch value.owner_type {
+                    case option.Option.Some(text_value): {
+                        record.owner = option.Option[usize].Some(
+                            binding_type(project, inout context, text_value));
+                    }
+                    case option.Option.None: {}
+                }
+                var target = empty_type_value();
+                target.kind = model.TypeKind.ForeignCallable;
+                target.binding = declaration.id;
+                record.type_id = intern_type(inout context, target);
+            }
+            case model.ForeignDetail.Property(value): {
+                record.type_id = binding_type(project, inout context,
+                    value.type_name);
+            }
+            case model.ForeignDetail.Indexer(value): {
+                record.type_id = binding_type(project, inout context,
+                    value.result_type);
+            }
+            case model.ForeignDetail.Slice(value): {
+                record.type_id = binding_type(project, inout context,
+                    value.result_type);
+            }
+        }
+        vec.push(out, record);
+    }
+    return out;
+}
+
+// A None result means this candidate cannot bind this argument list.
+pub func bind_arguments(callable model.BindingCallable,
+                        labels Vec[option.Option[string]])
+    option.Option[BoundArguments] {
+    let parameters = vec.empty[u32]();
+    let omitted = vec.empty[u32]();
+    let seen = vec.empty[bool]();
+    for parameter in callable.parameters {
+        vec.push(seen, false);
+    }
+    var named = false;
+    var positional usize = 0;
+    for label in labels {
+        var index = positional;
+        switch label {
+            case option.Option.Some(name): {
+                named = true;
+                index = 0;
+                for index < vec.len(callable.parameters) &&
+                      callable.parameters[index].name != name {
+                    index += 1;
+                }
+                if index == vec.len(callable.parameters) ||
+                   callable.parameters[index].kind == "positional_only" {
+                    return option.Option[BoundArguments].None;
+                }
+            }
+            case option.Option.None: {
+                if named || index >= vec.len(callable.parameters) ||
+                   callable.parameters[index].kind == "keyword_only" {
+                    return option.Option[BoundArguments].None;
+                }
+                positional += 1;
+            }
+        }
+        if seen[index] {
+            return option.Option[BoundArguments].None;
+        }
+        seen[index] = true;
+        vec.push(parameters, u32(index));
+    }
+    for var index usize = 0; index < vec.len(seen); index += 1 {
+        if !seen[index] {
+            if !callable.parameters[index].optional {
+                return option.Option[BoundArguments].None;
+            }
+            vec.push(omitted, u32(index));
+        }
+    }
+    return option.Option[BoundArguments].Some(BoundArguments(
+        parameters: parameters, omitted: omitted));
+}
+
+// Canonical source parameter order: a registering callable's own userdata
+// slot is not a source parameter.
+pub func c_source_parameter_indices(callable model.CCallableDecl) Vec[usize] {
+    let result = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(callable.parameters); index += 1 {
+        var keep = true;
+        switch callable.registers {
+            case option.Option.Some(registers): {
+                if index == registers.userdata_parameter {
+                    keep = false;
+                }
+            }
+            case option.Option.None: {}
+        }
+        if keep {
+            vec.push(result, index);
+        }
+    }
+    return result;
+}
+
+func scalar_type(name string) model.Type throws model.SupportError {
+    var value = empty_type_value();
+    if name == "Unit" {
+        value.kind = model.TypeKind.Unit;
+    } else if name == "bool" {
+        value.kind = model.TypeKind.Bool;
+    } else if name == "isize" {
+        value.kind = model.TypeKind.Isize;
+    } else if name == "usize" {
+        value.kind = model.TypeKind.Usize;
+    } else if name == "f32" || name == "f64" {
+        value.kind = model.TypeKind.Float;
+        value.bits = 32;
+        if name == "f64" {
+            value.bits = 64;
+        }
+    } else if text.byte_len(name) >= 2 && (name[0] == 105 || name[0] == 117) {
+        if name[0] == 105 {
+            value.kind = model.TypeKind.SignedInt;
+        } else {
+            value.kind = model.TypeKind.UnsignedInt;
+        }
+        value.bits = u32(stoul_leading(substring(name, 1, text.byte_len(name))) &
+            4294967295);
+    } else {
+        throw invalid("unknown C scalar type");
+    }
+    return value;
+}
+
+func c_type_id_at(project model.Project, context inout types.Context,
+                  ref model.CTypeRef, depth usize) usize
+    throws model.SupportError {
+    if depth > 32 {
+        throw invalid("C type nesting exceeds the limit");
+    }
+    var value = empty_type_value();
+    switch ref.kind {
+        case model.CTypeKind.Scalar: {
+            return intern_type(inout context, scalar_type(ref.scalar));
+        }
+        case model.CTypeKind.Pointer: {
+            if vec.len(ref.args) != 1 {
+                throw invalid("C pointer/buffer arity");
+            }
+            value.kind = model.TypeKind.CForeignPointer;
+            value.bits = 0;
+            if ref.writable {
+                value.bits = 1;
+            }
+            vec.push(value.type_args,
+                c_type_id_at(project, inout context, ref.args[0], depth + 1));
+            return intern_type(inout context, value);
+        }
+        case model.CTypeKind.Buffer: {
+            if vec.len(ref.args) != 1 {
+                throw invalid("C pointer/buffer arity");
+            }
+            value.kind = model.TypeKind.CForeignBuffer;
+            value.bits = 0;
+            if ref.writable {
+                value.bits = 1;
+            }
+            vec.push(value.type_args,
+                c_type_id_at(project, inout context, ref.args[0], depth + 1));
+            return intern_type(inout context, value);
+        }
+        case model.CTypeKind.Named: {
+            if ref.named == 0 ||
+               usize(ref.named) > vec.len(project.c_types) {
+                throw invalid("C type index");
+            }
+            let declaration = project.c_types[usize(ref.named) - 1];
+            value.c_type = ref.named;
+            switch declaration.kind {
+                case model.CDeclKind.Record: {
+                    value.kind = model.TypeKind.CForeignRecord;
+                }
+                case model.CDeclKind.Resource: {
+                    value.kind = model.TypeKind.CForeignResource;
+                }
+                case model.CDeclKind.Callback: {
+                    value.kind = model.TypeKind.CForeignCallback;
+                }
+                case model.CDeclKind.Opaque: {
+                    value.kind = model.TypeKind.CForeignOpaque;
+                }
+            }
+            return intern_type(inout context, value);
+        }
+    }
+}
+
+// Canonical TypeId for one frozen C binding type expression.
+pub func c_type_id(project model.Project, context inout types.Context,
+                   ref model.CTypeRef) usize throws model.SupportError {
+    return c_type_id_at(project, inout context, ref, 0);
+}
+
+// Source-facing function type for one C callback declaration.  The callback's
+// C userdata slot is not a Source argument.
+pub func c_callback_closure_signature(project model.Project,
+                                      context inout types.Context,
+                                      callback_type u32,
+                                      userdata_index usize) usize
+    throws model.SupportError {
+    if callback_type == 0 || usize(callback_type) > vec.len(project.c_types) {
+        throw invalid("C callback type index");
+    }
+    let declaration = project.c_types[usize(callback_type) - 1];
+    if !is_decl_callback(declaration.kind) {
+        throw invalid("C callback declaration kind");
+    }
+    if userdata_index >= vec.len(declaration.parameters) {
+        throw invalid("C callback userdata index");
+    }
+    var signature = empty_type_value();
+    signature.kind = model.TypeKind.Function;
+    for var index usize = 0; index < vec.len(declaration.parameters);
+        index += 1 {
+        if index != userdata_index {
+            vec.push(signature.parameters, model.ParameterType(
+                mode: model.ParamMode.Ordinary,
+                type_id: c_type_id(project, inout context,
+                    declaration.parameters[index].type_ref)));
+        }
+    }
+    signature.result = c_type_id(project, inout context, declaration.result);
+    return intern_type(inout context, signature);
+}
+
+func is_decl_callback(kind model.CDeclKind) bool {
+    switch kind {
+        case model.CDeclKind.Callback: return true;
+        default: return false;
+    }
+}
+
+// Canonical Source signature of a frozen C callable.  A registering callable
+// omits only its own userdata parameter and exposes its retained callback
+// parameter without the callback userdata slot.
+pub func c_callable_signature(project model.Project, context inout types.Context,
+                              callable model.CCallableDecl) usize
+    throws model.SupportError {
+    var signature = empty_type_value();
+    signature.kind = model.TypeKind.Function;
+    let source = c_source_parameter_indices(callable);
+    for index in source {
+        if index >= vec.len(callable.parameters) {
+            throw invalid("C callable parameter index");
+        }
+        let parameter = callable.parameters[index];
+        var replaced = false;
+        var registers_callback = false;
+        var callback_userdata usize = 0;
+        switch callable.registers {
+            case option.Option.Some(registers): {
+                if index == registers.callback_parameter {
+                    registers_callback = true;
+                    callback_userdata = registers.callback_userdata_parameter;
+                }
+            }
+            case option.Option.None: {}
+        }
+        if registers_callback {
+            var named = false;
+            switch parameter.type_ref.kind {
+                case model.CTypeKind.Named: named = true;
+                default: {}
+            }
+            if !named {
+                throw invalid("C registering callback is not named");
+            }
+            vec.push(signature.parameters, model.ParameterType(
+                mode: model.ParamMode.Ordinary,
+                type_id: c_callback_closure_signature(project, inout context,
+                    parameter.type_ref.named, callback_userdata)));
+            replaced = true;
+        }
+        if !replaced {
+            vec.push(signature.parameters, model.ParameterType(
+                mode: model.ParamMode.Ordinary,
+                type_id: c_type_id(project, inout context, parameter.type_ref)));
+        }
+    }
+    signature.result = c_type_id(project, inout context, callable.result.type_ref);
+    return intern_type(inout context, signature);
+}
+
+func mark_visited(visited Vec[u64], id u64) bool {
+    for value in visited {
+        if value == id {
+            return false;
+        }
+    }
+    vec.push(visited, id);
+    return true;
+}
+
+func private_visit(context types.Context, resolved model.ResolvedProject,
+                   root usize, visited Vec[u64]) option.Option[usize] {
+    if !mark_visited(visited, u64(root)) {
+        return option.Option[usize].None;
+    }
+    let found = types.find(context, root);
+    var value = empty_type_value();
+    var present = false;
+    switch found {
+        case option.Option.Some(type_value): {
+            value = type_value;
+            present = true;
+        }
+        case option.Option.None: {}
+    }
+    if !present {
+        return option.Option[usize].None;
+    }
+    if is_type_kind(value.kind, model.TypeKind.NominalStruct) ||
+       is_type_kind(value.kind, model.TypeKind.NominalEnum) ||
+       is_type_kind(value.kind, model.TypeKind.TraitObject) {
+        if value.declaration >= vec.len(resolved.symbols) {
+            return option.Option[usize].None;
+        }
+        let symbol = resolved.symbols[value.declaration];
+        let is_type = is_type_kind_of(symbol.kind, model.SymbolKind.Type);
+        let is_trait = is_type_kind_of(symbol.kind, model.SymbolKind.Trait);
+        if (is_type || is_trait) && !symbol.exported {
+            return option.Option[usize].Some(symbol.id);
+        }
+    }
+    for argument in value.type_args {
+        let nested = private_visit(context, resolved, argument, visited);
+        switch nested {
+            case option.Option.Some(symbol): {
+                return option.Option[usize].Some(symbol);
+            }
+            case option.Option.None: {}
+        }
+    }
+    if !is_type_kind(value.kind, model.TypeKind.Function) {
+        return option.Option[usize].None;
+    }
+    for parameter in value.parameters {
+        let nested = private_visit(context, resolved, parameter.type_id,
+            visited);
+        switch nested {
+            case option.Option.Some(symbol): {
+                return option.Option[usize].Some(symbol);
+            }
+            case option.Option.None: {}
+        }
+    }
+    let result = private_visit(context, resolved, value.result, visited);
+    switch result {
+        case option.Option.Some(symbol): {
+            return option.Option[usize].Some(symbol);
+        }
+        case option.Option.None: {}
+    }
+    switch value.throws_type {
+        case option.Option.Some(throws_id): {
+            return private_visit(context, resolved, throws_id, visited);
+        }
+        case option.Option.None: {}
+    }
+    return option.Option[usize].None;
+}
+
+func is_type_kind_of(kind model.SymbolKind, expected model.SymbolKind) bool {
+    return model.symbol_kind_id(kind) == model.symbol_kind_id(expected);
+}
+
+// A public source interface may name a nominal type only through an exported
+// declaration.  Walk the final TypeId graph without following a nominal
+// declaration's private implementation fields.
+pub func private_interface_type(context types.Context,
+                                resolved model.ResolvedProject,
+                                roots Vec[usize]) option.Option[usize] {
+    let visited = vec.empty[u64]();
+    for root in roots {
+        let found = private_visit(context, resolved, root, visited);
+        switch found {
+            case option.Option.Some(symbol): {
+                return option.Option[usize].Some(symbol);
+            }
+            case option.Option.None: {}
+        }
+    }
+    return option.Option[usize].None;
+}

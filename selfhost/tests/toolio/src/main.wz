@@ -1,0 +1,161 @@
+package app;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func error_code(problem os.Error)i32 {
+    switch problem {
+        case os.Error.System(code,completed):return code;
+        case os.Error.Interrupted(code,completed):return code;
+        case os.Error.WouldBlock(code,completed):return code;
+        case os.Error.NoProgress(completed):return -1;
+    }
+}
+func require(ok bool,label string,count inout usize) throws os.Error {
+    count+=1;if !ok {io.eprintln("FAIL: "+label);throw os.Error.System(5,0);}
+}
+func make_stage(out string)toolio.Stage throws os.Error {
+    try {return toolio.stage(out,"tests");}
+    catch problem toolio.Error {switch problem {case toolio.Error.System(error):throw error;case toolio.Error.Rollback(backup,error):throw error;}}
+}
+func run(argv Vec[string],capture string)toolio.ProcessResult throws os.Error {
+    try {return toolio.run(argv,capture);}
+    catch problem toolio.Error {switch problem {case toolio.Error.System(error):throw error;case toolio.Error.Rollback(backup,error):throw error;}}
+}
+func publish(value inout toolio.Stage,first string,second string) throws os.Error {
+    try {toolio.publish_pair(inout value,first,second);}
+    catch problem toolio.Error {switch problem {case toolio.Error.System(error):throw error;case toolio.Error.Rollback(backup,error):throw error;}}
+}
+func rejected(argv Vec[string],capture string,code i32)bool {
+    try {toolio.run(argv,capture);return false;}
+    catch problem toolio.Error {switch problem {case toolio.Error.System(error):return error_code(error)==code;default:return false;}}
+}
+func missing(name string)bool throws os.Error {
+    try {os.lstat(name);return false;}
+    catch problem os.Error {if error_code(problem)==2{return true;}throw problem;}
+}
+func publish_rejected(value inout toolio.Stage,first string,second string,code i32)bool {
+    try {toolio.publish_pair(inout value,first,second);return false;}
+    catch problem toolio.Error {switch problem {case toolio.Error.System(error):return error_code(error)==code;default:return false;}}
+}
+func write_outputs(value toolio.Stage,first string,second string) throws os.Error {
+    fs.write_text(value.path+"/"+first,"new first",0o640);
+    fs.write_text(value.path+"/"+second,"new second",0o640);
+}
+func tests(root string,tool string)usize throws os.Error {
+    var count usize=0;
+    var scratch=make_stage(root+"/process");defer {toolio.cleanup(scratch);}
+    let info=os.lstat(scratch.path);
+    require(fs.is_dir(info)&&(info.mode&0o777)==0o700,"private stage mode",inout count);
+    require(text.starts_with(scratch.path,scratch.directory+"/.woozyc-tests-")&&!scratch.preserve,"private stage fields",inout count);
+    let other=make_stage(scratch.directory);defer {toolio.cleanup(other);}
+    require(scratch.path!=other.path,"secure unique stages",inout count);
+    let capture=scratch.path+"/capture";
+    let ok=run([tool,"ok"],capture);
+    require(ok.exit_code==0&&!ok.signalled,"success exit",inout count);
+    let expected Vec[u8]=[111,117,116,10,101,114,114,10,0,255,192];
+    var equal=vec.len(ok.output)==vec.len(expected);
+    if equal {for var index usize=0;index<vec.len(expected);index+=1 {if ok.output[index]!=expected[index]{equal=false;}}}
+    require(equal,"merged raw stdout stderr",inout count);
+    require(missing(capture),"capture file unlinked",inout count);
+    let failed=run([tool,"fail"],capture);
+    require(failed.exit_code==23&&!failed.signalled&&io.decode(failed.output)=="failed\n","nonzero exit",inout count);
+    let signalled=run([tool,"signal"],capture);
+    require(signalled.signalled&&signalled.exit_code==143,"signal exit",inout count);
+    let large=run([tool,"large"],capture);
+    require(large.exit_code==0&&vec.len(large.output)==2097152,"large capture size",inout count);
+    var ordered=true;
+    for var index usize=0;index<vec.len(large.output);index+=1 {
+        var expected_byte u8=65;if (index%512)>=256 {expected_byte=66;}
+        if large.output[index]!=expected_byte {ordered=false;break;}
+    }
+    require(ordered,"large merged byte order",inout count);
+    require(rejected([],capture,22),"empty argv",inout count);
+    require(rejected([""],capture,22),"empty argv0",inout count);
+    require(rejected(["relative-tool"],capture,22),"absolute argv0 required",inout count);
+    require(rejected([tool,"bad\0argument"],capture,22),"NUL argument",inout count);
+    require(rejected([tool+"\0suffix"],capture,22),"NUL argv0",inout count);
+    require(rejected([tool,"ok"],capture+"\0suffix",22),"NUL capture",inout count);
+    require(rejected([scratch.path+"/missing-tool"],capture,2),"missing tool",inout count);
+    require(missing(capture),"missing tool capture cleanup",inout count);
+    fs.write_text(capture,"old capture",0o600);
+    require(rejected([tool,"ok"],capture,17)&&fs.read_text(capture)=="old capture","capture existing file untouched",inout count);
+    os.unlink(capture);
+
+    var success=make_stage(root+"/success");defer {toolio.cleanup(success);}
+    fs.write_text(success.directory+"/first","old first",0o751);
+    fs.write_text(success.directory+"/second","old second",0o600);
+    write_outputs(success,"first","second");publish(inout success,"first","second");
+    require(fs.read_text(success.directory+"/first")=="new first"&&fs.read_text(success.directory+"/second")=="new second","publish replaces pair",inout count);
+    toolio.cleanup(success);
+    require(missing(success.path)&&fs.read_text(success.directory+"/first")=="new first","cleanup only stage",inout count);
+
+    var directory=make_stage(root+"/directory");defer {toolio.cleanup(directory);}
+    fs.write_text(directory.directory+"/first","old first",0o600);
+    os.mkdir(directory.directory+"/second",0o700);write_outputs(directory,"first","second");
+    require(publish_rejected(inout directory,"first","second",22),"directory target rejected",inout count);
+    require(fs.read_text(directory.directory+"/first")=="old first"&&fs.is_dir(os.lstat(directory.directory+"/second")),"directory target leaves pair",inout count);
+
+    var links=make_stage(root+"/links");defer {toolio.cleanup(links);}
+    fs.write_text(links.directory+"/outside","outside",0o600);
+    os.symlink("outside",links.directory+"/first");fs.write_text(links.directory+"/second","old second",0o600);
+    write_outputs(links,"first","second");
+    require(publish_rejected(inout links,"first","second",22),"regular symlink target rejected",inout count);
+    require(fs.is_symlink(os.lstat(links.directory+"/first"))&&fs.read_text(links.directory+"/outside")=="outside"&&fs.read_text(links.directory+"/second")=="old second","symlink target untouched",inout count);
+    os.unlink(links.directory+"/first");fs.write_text(links.directory+"/first","old first",0o600);
+    os.unlink(links.directory+"/second");os.symlink("absent",links.directory+"/second");
+    require(publish_rejected(inout links,"first","second",22)&&fs.read_text(links.directory+"/first")=="old first","dangling target symlink rejected",inout count);
+    os.unlink(links.directory+"/second");os.symlink(links.directory,links.directory+"/second");
+    require(publish_rejected(inout links,"first","second",22)&&fs.read_text(links.directory+"/first")=="old first","directory symlink rejected",inout count);
+    os.unlink(links.directory+"/second");os.mkfifo(links.directory+"/second",0o600);
+    require(publish_rejected(inout links,"first","second",22)&&fs.read_text(links.directory+"/first")=="old first","FIFO target rejected without open",inout count);
+
+    var rollback=make_stage(root+"/rollback");defer {toolio.cleanup(rollback);}
+    fs.write_text(rollback.directory+"/first","old first",0o751);
+    fs.write_text(rollback.directory+"/second","old second",0o600);
+    fs.write_text(rollback.path+"/first","new first",0o640);
+    require(publish_rejected(inout rollback,"first","second",2),"second rename fails",inout count);
+    require(fs.read_text(rollback.directory+"/first")=="old first"&&fs.read_text(rollback.directory+"/second")=="old second","first restored after failure",inout count);
+    require(missing(rollback.path+"/first")&&vec.len(fs.read_dir(rollback.path))==0,"first rename and backup restore actually executed",inout count);
+    require((os.stat(rollback.directory+"/first").mode&0o7777)==0o751&&!rollback.preserve,"restored first permissions",inout count);
+    var absent=make_stage(root+"/absent");defer {toolio.cleanup(absent);}
+    fs.write_text(absent.path+"/first","new first",0o600);
+    require(publish_rejected(inout absent,"first","second",2)&&missing(absent.directory+"/first")&&missing(absent.path+"/first"),"new first removed on failure",inout count);
+    require(publish_rejected(inout absent,"../escape","second",22),"name traversal rejected",inout count);
+    require(publish_rejected(inout absent,"first","first",22),"same names rejected",inout count);
+    require(publish_rejected(inout absent,"first","bad\0name",22),"NUL names rejected",inout count);
+
+    var tree=make_stage(root+"/cleanup");
+    fs.create_dir_all(tree.directory+"/outside/nested",0o700);
+    fs.write_text(tree.directory+"/outside/nested/keep","retained",0o600);
+    os.mkdir(tree.path+"/nested",0o700);fs.write_text(tree.path+"/nested/file","gone",0o600);
+    os.symlink(tree.directory+"/outside",tree.path+"/link");
+    toolio.cleanup(tree);
+    require(missing(tree.path)&&fs.read_text(tree.directory+"/outside/nested/keep")=="retained","cleanup does not follow nested symlink",inout count);
+    let replaced=make_stage(root+"/replace-stage");
+    os.rmdir(replaced.path);os.symlink(tree.directory+"/outside",replaced.path);toolio.cleanup(replaced);
+    require(missing(replaced.path)&&fs.read_text(tree.directory+"/outside/nested/keep")=="retained","cleanup does not follow stage symlink",inout count);
+    var preserved=make_stage(root+"/preserve");preserved.preserve=true;toolio.cleanup(preserved);
+    require(fs.is_dir(os.lstat(preserved.path)),"preserve skips cleanup",inout count);
+    preserved.preserve=false;toolio.cleanup(preserved);
+    require(missing(preserved.path),"preserve can be explicitly cleared",inout count);
+    return count;
+}
+func low_fds(root string,tool string,closed usize) throws os.Error {
+    let value=make_stage(root);let capture=value.path+"/capture";
+    for var fd usize=0;fd<closed;fd+=1 {try {os.close(os.from_fd(i32(fd)));}catch problem os.Error {}}
+    let result=run([tool,"fds"],capture);
+    if result.exit_code!=0||result.signalled||io.decode(result.output)!="fds=0\n" {os.exit(81);}
+    toolio.cleanup(value);fs.write_text(root+"/lowfd-ok","passed",0o600);
+}
+func main()i32 throws os.Error {
+    let args=process.args();if vec.len(args)!=4 {return 80;}
+    if args[3]=="all" {let count=tests(args[1],args[2]);io.println("TOOLIO passed="+strconv.format_u64(u64(count))+" failed=0");return 0;}
+    var closed usize=1;if args[3]=="low2" {closed=2;}if args[3]=="low3" {closed=3;}
+    low_fds(args[1],args[2],closed);return 0;
+}

@@ -1,0 +1,902 @@
+// Real execution driver for the pure-Wz pattern coverage port (SH06e).
+//
+// It builds the same fixtures as oracle.cpp (the real C++
+// src/hir/pattern_analysis.cpp translation unit) and prints the canonical dump
+// compared by run.py.  The driver is test-only; the compiler never imports it.
+//
+// Fixture type interning order is identical to oracle.cpp so the TypeContext
+// table (and every substituted field TypeId) can be compared directly.  The
+// coverage lookup closure copies the captured Context value into a writable
+// local before calling pattern_domain; Context's entry Vec is a shared handle,
+// so interning from pattern_domain is still visible to the driver's table.
+package app;
+
+import "wz/wzcc/hir" as hir;
+import "wz/wzcc/model" as model;
+import "wz/wzcc/pattern" as pattern;
+import "wz/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func number(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func number64(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func number32(value u32) string {
+    return strconv.format_u64(u64(value));
+}
+
+func flag(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func hex_digit(value u8) u8 {
+    if value < 10 {
+        return u8(48) + value;
+    }
+    return u8(55) + value;
+}
+
+// Same canonical quoting as oracle.cpp: printable ASCII stays, backslash and
+// quote are escaped, every other byte becomes \xNN.
+func quote(value string) string {
+    let bytes = text.bytes(value);
+    let out = vec.empty[u8]();
+    vec.push(out, u8(34));
+    for byte in bytes {
+        if byte == 92 {
+            vec.push(out, u8(92));
+            vec.push(out, u8(92));
+        } else if byte == 34 {
+            vec.push(out, u8(92));
+            vec.push(out, u8(34));
+        } else if byte >= 32 && byte <= 126 {
+            vec.push(out, byte);
+        } else {
+            vec.push(out, u8(92));
+            vec.push(out, u8(120));
+            vec.push(out, hex_digit(byte >> 4));
+            vec.push(out, hex_digit(byte & 15));
+        }
+    }
+    vec.push(out, u8(34));
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        // Unreachable: quote only emits ASCII bytes.
+        return "<invalid-quote>";
+    }
+}
+
+func ids(values Vec[usize]) string {
+    var out = "";
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index > 0 {
+            out = out + ",";
+        }
+        out = out + number(values[index]);
+    }
+    return out;
+}
+
+func mode_id(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func source0() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+}
+
+func type_signature(context types.Context, id usize) string {
+    let found = types.find(context, id);
+    switch found {
+        case option.Option.None: return "missing";
+        case option.Option.Some(value): {
+            var out = number(usize(model.type_kind_id(value.kind))) + ":" +
+                number32(value.bits) + ":" + number(value.declaration) + ":";
+            for var index usize = 0; index < vec.len(value.type_args);
+                index += 1 {
+                if index > 0 {
+                    out = out + ".";
+                }
+                out = out + number(value.type_args[index]);
+            }
+            return out;
+        }
+    }
+}
+
+func fields_text(context types.Context, fields Vec[usize]) string {
+    var out = "";
+    for var index usize = 0; index < vec.len(fields); index += 1 {
+        if index > 0 {
+            out = out + ",";
+        }
+        out = out + type_signature(context, fields[index]);
+    }
+    return out;
+}
+
+func type_line(id usize, value model.Type) string {
+    var params = "";
+    for var index usize = 0; index < vec.len(value.parameters); index += 1 {
+        if index > 0 {
+            params = params + ",";
+        }
+        params = params + number(usize(mode_id(value.parameters[index].mode))) +
+            ":" + number(value.parameters[index].type_id);
+    }
+    var throws_text = "none";
+    switch value.throws_type {
+        case option.Option.Some(item): throws_text = number(item);
+        case option.Option.None: { }
+    }
+    return "type " + number(id) + " index=" + number(id - 1) + " kind=" +
+        number(usize(model.type_kind_id(value.kind))) + " bits=" +
+        number32(value.bits) + " decl=" + number(value.declaration) +
+        " binding=" + number(value.binding) + " params=" + params +
+        " result=" + number(value.result) + " throws=" + throws_text +
+        " args=" + ids(value.type_args) + " ctype=" + number32(value.c_type);
+}
+
+func dump_types(out Vec[string], context types.Context) {
+    let total = types.size(context);
+    vec.push(out, "types " + number(total));
+    for var id usize = 1; id <= total; id += 1 {
+        let found = types.find(context, id);
+        switch found {
+            case option.Option.Some(value):
+                vec.push(out, type_line(id, value));
+            case option.Option.None:
+                vec.push(out, "type " + number(id) + " missing");
+        }
+    }
+}
+
+func ctor_line(label string, index usize, context types.Context,
+               value pattern.Constructor) string {
+    return "ctor " + label + " " + number(index) + " kind=" +
+        number(usize(pattern.constructor_kind_id(value.kind))) + " variant=" +
+        number(value.variant) + " key=" + quote(value.literal_key) +
+        " fields=" + ids(value.fields) + " sigs=" +
+        fields_text(context, value.fields);
+}
+
+func dump_constructors(out Vec[string], label string, context types.Context,
+                       values Vec[pattern.Constructor]) {
+    vec.push(out, "constructors " + label + " n=" + number(vec.len(values)));
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        vec.push(out, ctor_line(label, index, context, values[index]));
+    }
+}
+
+func dump_domain(out Vec[string], label string, context types.Context,
+                 value pattern.Domain) {
+    vec.push(out, "domain " + label + " kind=" +
+        number(usize(pattern.domain_kind_id(value.kind))) + " bits=" +
+        number32(value.bits) + " n=" + number(vec.len(value.constructors)));
+    for var index usize = 0; index < vec.len(value.constructors);
+        index += 1 {
+        vec.push(out, ctor_line(label, index, context,
+            value.constructors[index]));
+    }
+}
+
+func error_line(label string, error model.SupportError) string {
+    switch error {
+        case model.SupportError.Invalid(message):
+            return "error " + label + " Invalid " + quote(message);
+        case model.SupportError.Limit(message):
+            return "error " + label + " Limit " + quote(message);
+    }
+}
+
+func test_constructors(out Vec[string], label string, module hir.HirModule,
+                       type_id usize, context inout types.Context) {
+    try {
+        let values = pattern.pattern_constructors(module, type_id,
+            inout context);
+        dump_constructors(out, label, context, values);
+    } catch error model.SupportError {
+        vec.push(out, error_line(label, error));
+    }
+}
+
+func test_domain(out Vec[string], label string, module hir.HirModule,
+                 type_id usize, context inout types.Context) {
+    try {
+        let value = pattern.pattern_domain(module, type_id, inout context);
+        dump_domain(out, label, context, value);
+    } catch error model.SupportError {
+        vec.push(out, error_line(label, error));
+    }
+}
+
+func fixture(scrutinee usize, module hir.HirModule, context types.Context,
+             budget usize) pattern.Coverage {
+    let lookup = func(type_id usize) pattern.Domain throws model.SupportError {
+        var scratch = context;
+        return pattern.pattern_domain(module, type_id, inout scratch);
+    };
+    return pattern.coverage(scrutinee, lookup, budget);
+}
+
+func do_add(out Vec[string], cover inout pattern.Coverage, label string,
+            value hir.Pattern) {
+    try {
+        let useful = pattern.add(inout cover, value);
+        vec.push(out, "add " + label + " " + flag(useful));
+    } catch error model.SupportError {
+        vec.push(out, error_line(label, error));
+    }
+}
+
+func do_exhaustive(out Vec[string], cover inout pattern.Coverage,
+                   label string) {
+    try {
+        let done = pattern.exhaustive(inout cover);
+        vec.push(out, "exhaust " + label + " " + flag(done));
+    } catch error model.SupportError {
+        vec.push(out, error_line(label, error));
+    }
+}
+
+func one(value usize) Vec[usize] {
+    let out = vec.empty[usize]();
+    vec.push(out, value);
+    return out;
+}
+
+func two(left usize, right usize) Vec[usize] {
+    let out = vec.empty[usize]();
+    vec.push(out, left);
+    vec.push(out, right);
+    return out;
+}
+
+func wild(type_id usize) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source0(),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].None);
+}
+
+func binding_pattern(type_id usize, symbol usize) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source0(),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].Some(symbol),
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].None);
+}
+
+func variant_pattern(type_id usize, symbol usize,
+                     payload Vec[hir.Pattern]) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source0(),
+        variant: option.Option[usize].Some(symbol),
+        binding: option.Option[usize].None, payload: payload,
+        literal: option.Option[hir.PatternLiteral].None);
+}
+
+func bool_pattern(type_id usize, value bool) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source0(),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.BoolLiteral(hir.BoolLiteral(value: value))));
+}
+
+func int_pattern(type_id usize, bits u64) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source0(),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.IntegerLiteral(
+                hir.IntegerLiteral(decimal: "0", bits: bits))));
+}
+
+func float_pattern(type_id usize, bits u64) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source0(),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.FloatLiteral(hir.FloatLiteral(bits: bits))));
+}
+
+func string_pattern(type_id usize, value string) hir.Pattern {
+    return hir.Pattern(type_id: type_id, source: source0(),
+        variant: option.Option[usize].None,
+        binding: option.Option[usize].None,
+        payload: vec.empty[hir.Pattern](),
+        literal: option.Option[hir.PatternLiteral].Some(
+            hir.PatternLiteral.StringLiteral(hir.StringLiteral(utf8: value))));
+}
+
+func field(symbol usize, type_id usize) hir.FieldDecl {
+    return hir.FieldDecl(symbol: symbol, type_id: type_id, exported: false,
+        source: source0());
+}
+
+func parameter(symbol usize) hir.GenericParam {
+    return hir.GenericParam(symbol: symbol,
+        trait_ref: option.Option[hir.TraitRef].None, source: source0());
+}
+
+func variant_decl(symbol usize,
+                  payload Vec[hir.FieldDecl]) hir.VariantDecl {
+    return hir.VariantDecl(symbol: symbol, payload: payload, source: source0());
+}
+
+func p1(value hir.Pattern) Vec[hir.Pattern] {
+    let out = vec.empty[hir.Pattern]();
+    vec.push(out, value);
+    return out;
+}
+
+func p2(left hir.Pattern, right hir.Pattern) Vec[hir.Pattern] {
+    let out = vec.empty[hir.Pattern]();
+    vec.push(out, left);
+    vec.push(out, right);
+    return out;
+}
+
+func intern(kind model.TypeKind, bits u32, declaration usize,
+            args Vec[usize], context inout types.Context) usize
+    throws types.Error {
+    let value = model.Type(kind: kind, bits: bits, declaration: declaration,
+        binding: 0, parameters: [], result: 0,
+        throws_type: option.Option[usize].None, type_args: args, c_type: 0);
+    return types.intern(inout context, value);
+}
+
+func build(out Vec[string]) types.Context throws types.Error {
+    var context = types.context();
+
+    let tid_unit = intern(model.TypeKind.Unit, 0, 0, [], inout context);
+    let tid_boolean = intern(model.TypeKind.Bool, 0, 0, [], inout context);
+    let tid_i8 = intern(model.TypeKind.SignedInt, 8, 0, [], inout context);
+    let tid_u8 = intern(model.TypeKind.UnsignedInt, 8, 0, [], inout context);
+    let tid_i16 = intern(model.TypeKind.SignedInt, 16, 0, [], inout context);
+    let tid_u16 = intern(model.TypeKind.UnsignedInt, 16, 0, [], inout context);
+    let tid_i32 = intern(model.TypeKind.SignedInt, 32, 0, [], inout context);
+    let tid_u32 = intern(model.TypeKind.UnsignedInt, 32, 0, [], inout context);
+    let tid_i64 = intern(model.TypeKind.SignedInt, 64, 0, [], inout context);
+    let tid_u64 = intern(model.TypeKind.UnsignedInt, 64, 0, [], inout context);
+    let tid_isize = intern(model.TypeKind.Isize, 0, 0, [], inout context);
+    let tid_usize = intern(model.TypeKind.Usize, 0, 0, [], inout context);
+    let tid_f32 = intern(model.TypeKind.Float, 32, 0, [], inout context);
+    let tid_f64 = intern(model.TypeKind.Float, 64, 0, [], inout context);
+    let tid_string = intern(model.TypeKind.String, 0, 0, [], inout context);
+
+    let tp400 = intern(model.TypeKind.TypeParameter, 0, 400, [],
+        inout context);
+    let tp401 = intern(model.TypeKind.TypeParameter, 0, 401, [],
+        inout context);
+    let tp402 = intern(model.TypeKind.TypeParameter, 0, 402, [],
+        inout context);
+    let tp403 = intern(model.TypeKind.TypeParameter, 0, 403, [],
+        inout context);
+    let tp404 = intern(model.TypeKind.TypeParameter, 0, 404, [],
+        inout context);
+    let tp405 = intern(model.TypeKind.TypeParameter, 0, 405, [],
+        inout context);
+
+    let list_self = intern(model.TypeKind.NominalEnum, 0, 104, one(tp403),
+        inout context);
+    let vec_holder = intern(model.TypeKind.Vec, 0, 0, one(tp404),
+        inout context);
+    let vec_wrap = intern(model.TypeKind.Vec, 0, 0, one(tp405),
+        inout context);
+    let struct_type = intern(model.TypeKind.NominalStruct, 0, 106, [],
+        inout context);
+    let empty_enum_type = intern(model.TypeKind.NominalEnum, 0, 100, [],
+        inout context);
+    let e1_type = intern(model.TypeKind.NominalEnum, 0, 101, [],
+        inout context);
+    let option_i32 = intern(model.TypeKind.NominalEnum, 0, 102, one(tid_i32),
+        inout context);
+    let option_string = intern(model.TypeKind.NominalEnum, 0, 102,
+        one(tid_string), inout context);
+    let pair_i32_f64 = intern(model.TypeKind.NominalEnum, 0, 103,
+        two(tid_i32, tid_f64), inout context);
+    let holder_i32 = intern(model.TypeKind.NominalEnum, 0, 105, one(tid_i32),
+        inout context);
+    let option_option_i32 = intern(model.TypeKind.NominalEnum, 0, 102,
+        one(option_i32), inout context);
+    let list_i32 = intern(model.TypeKind.NominalEnum, 0, 104, one(tid_i32),
+        inout context);
+    let wrap_u8 = intern(model.TypeKind.NominalEnum, 0, 107, one(tid_u8),
+        inout context);
+    let e1_with_args = intern(model.TypeKind.NominalEnum, 0, 101, one(tid_i32),
+        inout context);
+    let orphan_enum = intern(model.TypeKind.NominalEnum, 0, 777, [],
+        inout context);
+    let vec_i32 = intern(model.TypeKind.Vec, 0, 0, one(tid_i32),
+        inout context);
+
+    let empty_decl = hir.NominalDecl(symbol: 100,
+        kind: model.TypeKind.NominalEnum, params: [], fields: [],
+        variants: [], source: source0());
+    let e1_decl = hir.NominalDecl(symbol: 101,
+        kind: model.TypeKind.NominalEnum, params: [], fields: [],
+        variants: [variant_decl(200, []),
+            variant_decl(201, [field(300, tid_i32), field(301, tid_boolean)]),
+            variant_decl(202, [field(302, tid_boolean), field(303, tid_boolean)])],
+        source: source0());
+    let option_decl = hir.NominalDecl(symbol: 102,
+        kind: model.TypeKind.NominalEnum, params: [parameter(400)], fields: [],
+        variants: [variant_decl(203, []),
+            variant_decl(204, [field(310, tp400)])],
+        source: source0());
+    let pair_decl = hir.NominalDecl(symbol: 103,
+        kind: model.TypeKind.NominalEnum,
+        params: [parameter(401), parameter(402)], fields: [],
+        variants: [variant_decl(205,
+                [field(311, tp401), field(312, tp402)]),
+            variant_decl(206, [])],
+        source: source0());
+    let list_decl = hir.NominalDecl(symbol: 104,
+        kind: model.TypeKind.NominalEnum, params: [parameter(403)], fields: [],
+        variants: [variant_decl(207, []),
+            variant_decl(208, [field(313, list_self)])],
+        source: source0());
+    let holder_decl = hir.NominalDecl(symbol: 105,
+        kind: model.TypeKind.NominalEnum, params: [parameter(404)], fields: [],
+        variants: [variant_decl(209, [field(314, vec_holder)])],
+        source: source0());
+    let wrap_decl = hir.NominalDecl(symbol: 107,
+        kind: model.TypeKind.NominalEnum, params: [parameter(405)], fields: [],
+        variants: [variant_decl(210, [field(315, vec_wrap)])],
+        source: source0());
+    let struct_decl = hir.NominalDecl(symbol: 106,
+        kind: model.TypeKind.NominalStruct, params: [],
+        fields: [field(316, tid_i32)], variants: [], source: source0());
+
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    var module = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    module.nominals = [empty_decl, e1_decl, option_decl, pair_decl, list_decl,
+        holder_decl, wrap_decl, struct_decl];
+
+    // 1. Domain classification.
+    test_domain(out, "d_unit", module, tid_unit, inout context);
+    test_domain(out, "d_bool", module, tid_boolean, inout context);
+    test_domain(out, "d_i8", module, tid_i8, inout context);
+    test_domain(out, "d_u8", module, tid_u8, inout context);
+    test_domain(out, "d_i16", module, tid_i16, inout context);
+    test_domain(out, "d_u16", module, tid_u16, inout context);
+    test_domain(out, "d_i32", module, tid_i32, inout context);
+    test_domain(out, "d_u32", module, tid_u32, inout context);
+    test_domain(out, "d_i64", module, tid_i64, inout context);
+    test_domain(out, "d_u64", module, tid_u64, inout context);
+    test_domain(out, "d_isize", module, tid_isize, inout context);
+    test_domain(out, "d_usize", module, tid_usize, inout context);
+    test_domain(out, "d_f32", module, tid_f32, inout context);
+    test_domain(out, "d_f64", module, tid_f64, inout context);
+    test_domain(out, "d_string", module, tid_string, inout context);
+    test_domain(out, "d_struct", module, struct_type, inout context);
+    test_domain(out, "d_empty_enum", module, empty_enum_type, inout context);
+    test_domain(out, "d_list_i32", module, list_i32, inout context);
+    test_domain(out, "d_option_i32", module, option_i32, inout context);
+    test_domain(out, "d_pair_i32_f64", module, pair_i32_f64, inout context);
+    test_domain(out, "d_holder_i32", module, holder_i32, inout context);
+    test_domain(out, "d_wrap_u8", module, wrap_u8, inout context);
+
+    // 2. Constructor views, including substituted generic fields.
+    test_constructors(out, "c_i32", module, tid_i32, inout context);
+    test_constructors(out, "c_bool", module, tid_boolean, inout context);
+    test_constructors(out, "c_struct", module, struct_type, inout context);
+    test_constructors(out, "c_empty_enum", module, empty_enum_type,
+        inout context);
+    test_constructors(out, "c_e1", module, e1_type, inout context);
+    test_constructors(out, "c_option_i32", module, option_i32, inout context);
+    test_constructors(out, "c_option_string", module, option_string,
+        inout context);
+    test_constructors(out, "c_pair_i32_f64", module, pair_i32_f64,
+        inout context);
+    test_constructors(out, "c_holder_i32", module, holder_i32, inout context);
+    test_constructors(out, "c_option_option_i32", module, option_option_i32,
+        inout context);
+    test_constructors(out, "c_list_i32", module, list_i32, inout context);
+    test_constructors(out, "c_wrap_u8", module, wrap_u8, inout context);
+    test_constructors(out, "c_missing_type", module, 9999, inout context);
+    test_constructors(out, "c_zero_type", module, 0, inout context);
+    test_constructors(out, "c_e1_args", module, e1_with_args, inout context);
+    test_constructors(out, "c_orphan", module, orphan_enum, inout context);
+
+    // Duplicate declaration symbol: the last matching nominal wins.
+    var duplicate_module = module;
+    duplicate_module.nominals = [hir.NominalDecl(symbol: 101,
+            kind: model.TypeKind.NominalEnum, params: [], fields: [],
+            variants: [variant_decl(200, [])], source: source0()), e1_decl];
+    test_constructors(out, "c_duplicate_last", duplicate_module, e1_type,
+        inout context);
+    duplicate_module.nominals[0].variants = e1_decl.variants;
+    duplicate_module.nominals[1].variants = [variant_decl(200, [])];
+    test_constructors(out, "c_duplicate_first", duplicate_module, e1_type,
+        inout context);
+
+    // 3. Target widths come from the module config.
+    var module32 = module;
+    module32.config = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 32);
+    test_domain(out, "d32_isize", module32, tid_isize, inout context);
+    test_domain(out, "d32_usize", module32, tid_usize, inout context);
+    test_domain(out, "d32_i32", module32, tid_i32, inout context);
+    test_domain(out, "d32_f64", module32, tid_f64, inout context);
+    test_constructors(out, "c32_e1", module32, e1_type, inout context);
+    var module48 = module;
+    module48.config = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 48);
+    test_domain(out, "d48_i32", module48, tid_i32, inout context);
+    test_domain(out, "d48_isize", module48, tid_isize, inout context);
+    test_domain(out, "d48_bool", module48, tid_boolean, inout context);
+    test_domain(out, "d48_f32", module48, tid_f32, inout context);
+    test_constructors(out, "c48_e1", module48, e1_type, inout context);
+
+    // 4. Missing domain types.
+    test_domain(out, "d_missing_type", module, 9999, inout context);
+    test_domain(out, "d_zero_type", module, 0, inout context);
+
+    // 5. Coverage.
+    {
+        var cover = fixture(e1_type, module, context, 100000);
+        do_add(out, inout cover, "e1_add_A", variant_pattern(e1_type, 200, []));
+        do_add(out, inout cover, "e1_add_A_again",
+            variant_pattern(e1_type, 200, []));
+        do_exhaustive(out, inout cover, "e1_after_A");
+        do_add(out, inout cover, "e1_add_B",
+            variant_pattern(e1_type, 201, p2(wild(tid_i32), wild(tid_boolean))));
+        do_exhaustive(out, inout cover, "e1_after_AB");
+        do_add(out, inout cover, "e1_add_C_true",
+            variant_pattern(e1_type, 202,
+                p2(bool_pattern(tid_boolean, true), wild(tid_boolean))));
+        do_exhaustive(out, inout cover, "e1_after_C_true");
+        do_add(out, inout cover, "e1_add_C_false",
+            variant_pattern(e1_type, 202,
+                p2(bool_pattern(tid_boolean, false), wild(tid_boolean))));
+        do_exhaustive(out, inout cover, "e1_complete");
+        do_add(out, inout cover, "e1_add_C_false_again",
+            variant_pattern(e1_type, 202,
+                p2(bool_pattern(tid_boolean, false), wild(tid_boolean))));
+        do_add(out, inout cover, "e1_add_wild", wild(e1_type));
+        do_add(out, inout cover, "e1_add_B_again",
+            variant_pattern(e1_type, 201, p2(wild(tid_i32), wild(tid_boolean))));
+        do_exhaustive(out, inout cover, "e1_still_complete");
+    }
+    {
+        var cover = fixture(e1_type, module, context, 100000);
+        do_add(out, inout cover, "e1p_add_B_true",
+            variant_pattern(e1_type, 201,
+                p2(wild(tid_i32), bool_pattern(tid_boolean, true))));
+        do_exhaustive(out, inout cover, "e1p_after_B_true");
+        do_add(out, inout cover, "e1p_add_B_false",
+            variant_pattern(e1_type, 201,
+                p2(wild(tid_i32), bool_pattern(tid_boolean, false))));
+        do_exhaustive(out, inout cover, "e1p_B_complete");
+        do_add(out, inout cover, "e1_never_added_A",
+            variant_pattern(e1_type, 200, []));
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 100000);
+        do_add(out, inout cover, "bool_add_true",
+            bool_pattern(tid_boolean, true));
+        do_add(out, inout cover, "bool_add_false",
+            bool_pattern(tid_boolean, false));
+        do_exhaustive(out, inout cover, "bool_complete");
+        do_add(out, inout cover, "bool_add_true_again",
+            bool_pattern(tid_boolean, true));
+        do_add(out, inout cover, "bool_add_wild", wild(tid_boolean));
+        do_exhaustive(out, inout cover, "bool_still_complete");
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 100000);
+        do_add(out, inout cover, "bool_bind", binding_pattern(tid_boolean, 700));
+        do_exhaustive(out, inout cover, "bool_bind_complete");
+        do_add(out, inout cover, "bool_bind_then_true",
+            bool_pattern(tid_boolean, true));
+    }
+    {
+        var cover = fixture(tid_u8, module, context, 1000000);
+        for var value usize = 0; value <= 255; value += 1 {
+            do_add(out, inout cover, "u8_add_" + number(value),
+                int_pattern(tid_u8, u64(value)));
+        }
+        do_exhaustive(out, inout cover, "u8_complete");
+        do_add(out, inout cover, "u8_add_0_again", int_pattern(tid_u8, 0));
+        do_add(out, inout cover, "u8_add_255_again", int_pattern(tid_u8, 255));
+        do_add(out, inout cover, "u8_add_wild", wild(tid_u8));
+    }
+    {
+        var cover = fixture(tid_u8, module, context, 1000000);
+        for var value usize = 0; value <= 254; value += 1 {
+            do_add(out, inout cover, "u8p_add_" + number(value),
+                int_pattern(tid_u8, u64(value)));
+        }
+        do_exhaustive(out, inout cover, "u8_partial");
+        do_add(out, inout cover, "u8p_add_255", int_pattern(tid_u8, 255));
+        do_exhaustive(out, inout cover, "u8_partial_complete");
+    }
+    {
+        var cover = fixture(tid_i32, module, context, 100000);
+        do_add(out, inout cover, "i32_add_0", int_pattern(tid_i32, 0));
+        do_add(out, inout cover, "i32_add_1", int_pattern(tid_i32, 1));
+        do_add(out, inout cover, "i32_add_1_again", int_pattern(tid_i32, 1));
+        do_exhaustive(out, inout cover, "i32_partial");
+        do_add(out, inout cover, "i32_add_wild", wild(tid_i32));
+        do_exhaustive(out, inout cover, "i32_complete");
+        do_add(out, inout cover, "i32_add_2_after_wild", int_pattern(tid_i32, 2));
+    }
+    {
+        var cover = fixture(tid_f32, module, context, 100000);
+        do_add(out, inout cover, "f32_add_pos0",
+            float_pattern(tid_f32, 0x00000000));
+        do_add(out, inout cover, "f32_add_neg0",
+            float_pattern(tid_f32, 0x80000000));
+        do_add(out, inout cover, "f32_add_one",
+            float_pattern(tid_f32, 0x3f800000));
+        do_add(out, inout cover, "f32_add_pos0_again",
+            float_pattern(tid_f32, 0x00000000));
+        do_exhaustive(out, inout cover, "f32_partial");
+        do_add(out, inout cover, "f32_add_nan",
+            float_pattern(tid_f32, 0x7fc00000));
+        do_add(out, inout cover, "f32_add_inf",
+            float_pattern(tid_f32, 0x7f800000));
+        do_exhaustive(out, inout cover, "f32_still_partial");
+        do_add(out, inout cover, "f32_add_wild", wild(tid_f32));
+        do_exhaustive(out, inout cover, "f32_complete");
+    }
+    {
+        var cover = fixture(tid_f64, module, context, 100000);
+        do_add(out, inout cover, "f64_add_pos0", float_pattern(tid_f64, 0));
+        do_add(out, inout cover, "f64_add_neg0",
+            float_pattern(tid_f64, 0x8000000000000000));
+        do_add(out, inout cover, "f64_add_one",
+            float_pattern(tid_f64, 0x3ff0000000000000));
+        do_exhaustive(out, inout cover, "f64_partial");
+        do_add(out, inout cover, "f64_add_wild", wild(tid_f64));
+        do_exhaustive(out, inout cover, "f64_complete");
+    }
+    {
+        var cover = fixture(tid_string, module, context, 100000);
+        do_add(out, inout cover, "str_add_empty",
+            string_pattern(tid_string, ""));
+        do_add(out, inout cover, "str_add_empty_again",
+            string_pattern(tid_string, ""));
+        do_add(out, inout cover, "str_add_a",
+            string_pattern(tid_string, "a"));
+        do_add(out, inout cover, "str_add_a_again",
+            string_pattern(tid_string, "a"));
+        do_add(out, inout cover, "str_add_cjk",
+            string_pattern(tid_string, "中文"));
+        do_add(out, inout cover, "str_add_ab",
+            string_pattern(tid_string, "ab"));
+        do_exhaustive(out, inout cover, "str_partial");
+        do_add(out, inout cover, "str_add_wild", wild(tid_string));
+        do_exhaustive(out, inout cover, "str_complete");
+    }
+    {
+        var cover = fixture(struct_type, module, context, 100000);
+        do_exhaustive(out, inout cover, "opaque_partial");
+        do_add(out, inout cover, "opaque_add_wild", wild(struct_type));
+        do_exhaustive(out, inout cover, "opaque_complete");
+        do_add(out, inout cover, "opaque_add_wild_again", wild(struct_type));
+    }
+    {
+        var cover = fixture(empty_enum_type, module, context, 100000);
+        do_exhaustive(out, inout cover, "empty_complete");
+        do_add(out, inout cover, "empty_add_wild", wild(empty_enum_type));
+        do_exhaustive(out, inout cover, "empty_still_complete");
+        do_add(out, inout cover, "empty_add_A",
+            variant_pattern(empty_enum_type, 200, []));
+    }
+    {
+        var cover = fixture(list_i32, module, context, 100000);
+        do_add(out, inout cover, "list_add_cons_cons_nil",
+            variant_pattern(list_i32, 208,
+                p1(variant_pattern(list_i32, 208,
+                    p1(variant_pattern(list_i32, 207, []))))));
+        do_add(out, inout cover, "list_add_nil",
+            variant_pattern(list_i32, 207, []));
+        do_exhaustive(out, inout cover, "list_after_two");
+        do_add(out, inout cover, "list_add_cons_nil",
+            variant_pattern(list_i32, 208,
+                p1(variant_pattern(list_i32, 207, []))));
+        do_exhaustive(out, inout cover, "list_after_three");
+        do_add(out, inout cover, "list_add_wild", wild(list_i32));
+        do_exhaustive(out, inout cover, "list_complete");
+        do_add(out, inout cover, "list_add_cons_wild",
+            variant_pattern(list_i32, 208, p1(wild(list_i32))));
+    }
+    {
+        var cover = fixture(list_i32, module, context, 10);
+        do_add(out, inout cover, "lazy_add_wild", wild(list_i32));
+        do_exhaustive(out, inout cover, "lazy_complete");
+    }
+    {
+        var cover = fixture(list_i32, module, context, 9);
+        do_add(out, inout cover, "lazy9_add_wild", wild(list_i32));
+        do_exhaustive(out, inout cover, "lazy9_exhaust");
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 0);
+        do_add(out, inout cover, "budget0_add_wild", wild(tid_boolean));
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 1);
+        do_add(out, inout cover, "budget1_add_wild", wild(tid_boolean));
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 2);
+        do_add(out, inout cover, "budget2_add_wild", wild(tid_boolean));
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 3);
+        do_add(out, inout cover, "budget3_add_wild", wild(tid_boolean));
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 4);
+        do_add(out, inout cover, "budget4_add_wild", wild(tid_boolean));
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 5);
+        do_add(out, inout cover, "budget5_add_wild", wild(tid_boolean));
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 7);
+        do_add(out, inout cover, "budget7_add_wild", wild(tid_boolean));
+        do_exhaustive(out, inout cover, "budget7_exhaust");
+    }
+    {
+        var cover = fixture(tid_boolean, module, context, 8);
+        do_add(out, inout cover, "budget8_add_wild", wild(tid_boolean));
+        do_exhaustive(out, inout cover, "budget8_exhaust");
+    }
+    {
+        var cover = fixture(tid_u8, module, context, 2);
+        do_add(out, inout cover, "budget_u8_2_add", int_pattern(tid_u8, 0));
+    }
+    {
+        var cover = fixture(e1_type, module, context, 100000);
+        do_add(out, inout cover, "err_variant_outside",
+            variant_pattern(tid_i32, 200, []));
+    }
+    {
+        var both = bool_pattern(tid_boolean, true);
+        both.variant = option.Option[usize].Some(200);
+        var cover = fixture(tid_boolean, module, context, 100000);
+        do_add(out, inout cover, "err_both", both);
+    }
+    {
+        var value = variant_pattern(tid_boolean, 200, []);
+        value.binding = option.Option[usize].Some(700);
+        var cover = fixture(tid_boolean, module, context, 100000);
+        do_add(out, inout cover, "err_variant_binding", value);
+    }
+    {
+        var value = bool_pattern(tid_boolean, true);
+        value.binding = option.Option[usize].Some(700);
+        var cover = fixture(tid_boolean, module, context, 100000);
+        do_add(out, inout cover, "err_literal_binding", value);
+    }
+    {
+        var value = bool_pattern(tid_boolean, true);
+        value.payload = p1(wild(tid_boolean));
+        var cover = fixture(tid_boolean, module, context, 100000);
+        do_add(out, inout cover, "err_literal_payload", value);
+    }
+    {
+        var cover = fixture(e1_type, module, context, 100000);
+        do_add(out, inout cover, "err_payload_count",
+            variant_pattern(e1_type, 201, p1(wild(tid_i32))));
+    }
+    {
+        var cover = fixture(e1_type, module, context, 100000);
+        do_add(out, inout cover, "column_seed",
+            variant_pattern(e1_type, 201,
+                p2(int_pattern(tid_u8, 0), wild(tid_boolean))));
+        do_add(out, inout cover, "err_column",
+            variant_pattern(e1_type, 201,
+                p2(int_pattern(tid_i32, 5), wild(tid_boolean))));
+    }
+    {
+        var cover = fixture(tid_i32, module, context, 100000);
+        do_add(out, inout cover, "err_bool_on_int",
+            bool_pattern(tid_i32, true));
+    }
+    {
+        var cover = fixture(tid_string, module, context, 100000);
+        do_add(out, inout cover, "err_int_on_string",
+            int_pattern(tid_string, 0));
+    }
+    {
+        var cover = fixture(tid_string, module, context, 100000);
+        do_add(out, inout cover, "err_float_on_string",
+            float_pattern(tid_string, 0));
+    }
+    {
+        var cover = fixture(tid_f32, module, context, 100000);
+        do_add(out, inout cover, "err_string_on_float",
+            string_pattern(tid_f32, "x"));
+    }
+    {
+        var cover = fixture(struct_type, module, context, 100000);
+        do_add(out, inout cover, "err_opaque_literal",
+            bool_pattern(struct_type, true));
+    }
+    {
+        var cover = fixture(e1_type, module, context, 100000);
+        do_add(out, inout cover, "err_variant_absent",
+            variant_pattern(e1_type, 999, []));
+    }
+    {
+        var cover = fixture(empty_enum_type, module, context, 100000);
+        do_add(out, inout cover, "err_empty_variant_absent",
+            variant_pattern(empty_enum_type, 200, []));
+    }
+    {
+        var cover = fixture(list_i32, module, context, 100000);
+        var nested = variant_pattern(list_i32, 207, []);
+        for var depth usize = 0; depth < 260; depth += 1 {
+            nested = variant_pattern(list_i32, 208, p1(nested));
+        }
+        do_add(out, inout cover, "err_depth", nested);
+    }
+    {
+        var cover = fixture(list_i32, module, context, 100000);
+        var nested = variant_pattern(list_i32, 207, []);
+        for var depth usize = 0; depth < 200; depth += 1 {
+            nested = variant_pattern(list_i32, 208, p1(nested));
+        }
+        do_add(out, inout cover, "depth_200_add", nested);
+        do_exhaustive(out, inout cover, "depth_200_exhaust");
+    }
+
+    return context;
+}
+
+func main() i32 throws os.Error {
+    let out = vec.empty[string]();
+    var context = types.context();
+    var failed = false;
+    try {
+        context = build(out);
+    } catch error types.Error {
+        failed = true;
+    }
+    if failed {
+        io.println("woozy-pattern/1");
+        io.println("types 0");
+        return 2;
+    }
+    let type_out = vec.empty[string]();
+    dump_types(type_out, context);
+    io.println("woozy-pattern/1");
+    for line in type_out {
+        io.println(line);
+    }
+    for line in out {
+        io.println(line);
+    }
+    return 0;
+}

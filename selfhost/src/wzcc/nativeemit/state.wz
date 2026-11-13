@@ -1,0 +1,291 @@
+package nativeemit;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+
+pub const RUNTIME_ABI string = "lang-native-scalars/1";
+pub const OWNERSHIP_RUNTIME_ABI string = "lang-native-values/1";
+// Captured from the fixed Clang 22.1.8 Linux x86_64 probe, not host sizeof.
+pub const DATA_LAYOUT string = "e-m:e-p270:32:32-p271:32:32-p272:64:64-i64:64-i128:128-f80:128-n8:16:32:64-S128";
+pub const VEC_TYPE string = "%\"lang.vec\"";
+pub const FN_TYPE string = "%\"lang.fn\"";
+pub const WEAK_TYPE string = "%\"lang.weak\"";
+pub const DYN_TYPE string = "%\"lang.dyn\"";
+pub const HANDLE_TYPE string = "%\"lang.handle\"";
+pub const SLICE_TYPE string = "%\"lang.slice\"";
+pub const STRING_TYPE string = "%\"lang.string\"";
+
+pub struct Options {
+    pub triple string;
+    pub cpu string;
+    pub features string;
+    pub optimization u32;
+}
+pub struct Output {
+    // Pre-optimization text only; the Root driver owns tools and object bytes.
+    pub llvm_sections Vec[string];
+    pub c_adapter_source string;
+    pub triple string;
+    pub data_layout string;
+    pub has_async bool;
+}
+pub struct EmitResult {
+    pub state model.PhaseState;
+    pub failure model.FailureKind;
+    pub diagnostics Vec[model.Diagnostic];
+    pub value option.Option[Output];
+}
+
+pub func default_options() Options {
+    return Options(triple: "x86_64-unknown-linux-gnu", cpu: "generic",
+        features: "", optimization: 0);
+}
+
+pub enum Error {
+    Failure(code string, kind model.FailureKind, message string);
+}
+
+// LLVM spelling only. Language type identity stays in the caches below.
+pub struct Value { pub type_name string; pub reference string; }
+pub struct Signature { pub result string; pub parameters Vec[string]; }
+pub struct NamedText { pub name string; pub text string; }
+pub struct Declaration { pub name string; pub signature Signature; }
+pub struct MetadataText { pub key string; pub body string; }
+
+pub struct BlockText {
+    pub label string;
+    // Entry allocas or PHI lines; reserved empty lines must be filled.
+    pub prefix Vec[string];
+    pub lines Vec[string];
+    pub terminated bool;
+}
+pub struct FunctionText {
+    pub name string;
+    pub signature Signature;
+    pub linkage string;
+    pub attributes string;
+    pub blocks Vec[BlockText];
+    pub next_value usize;
+    pub next_label usize;
+}
+pub struct BlockRef {
+    pub function_index usize;
+    pub block_index usize;
+    pub reference string;
+}
+pub struct Cursor {
+    pub function_index option.Option[usize];
+    pub block_index option.Option[usize];
+}
+pub struct PrefixRef {
+    pub function_index usize;
+    pub block_index usize;
+    pub index usize;
+}
+
+// B owns these entries. IDs are the accepted HIR/NativeIR IDs.
+pub struct TypeLayout { pub type_id usize; pub type_name string; }
+pub struct SourceFunction {
+    pub symbol usize;
+    pub signature usize;
+    pub native_index usize;
+    pub text_index usize;
+    pub hir_index option.Option[usize];
+    pub code Value;
+}
+pub struct ValueBinding { pub value_id usize; pub type_id usize; pub value Value; }
+pub struct ValueConstant { pub value_id usize; pub value Value; }
+pub struct SlotStorage {
+    pub address Value;
+    pub active option.Option[Value];
+    pub iteration_length option.Option[Value];
+    pub iteration_index option.Option[Value];
+}
+pub struct IncomingValue {
+    pub block usize;
+    pub type_id usize;
+    pub address option.Option[Value];
+}
+pub struct TryOutput {
+    pub block usize;
+    pub value option.Option[Value];
+    pub error Value;
+}
+pub struct BState {
+    pub layouts Vec[TypeLayout];
+    pub source_functions Vec[SourceFunction];
+    pub vec_header_tag option.Option[string];
+    pub vec_data_tag option.Option[string];
+}
+
+// C owns these caches. Ordered field IDs replace the C++ id_list string key.
+pub struct FunctionValueInfo { pub value_id usize; pub symbol usize; pub dynamic bool; }
+pub struct SymbolFunction { pub symbol usize; pub function Value; }
+pub struct TypeFunction { pub type_id usize; pub function Value; }
+pub struct TypeGlobal { pub type_id usize; pub global Value; }
+pub struct ValueOperation { pub type_id usize; pub copy bool; pub function Value; }
+pub struct EnvironmentType { pub fields Vec[usize]; pub type_name string; }
+pub struct EnvironmentOperation { pub fields Vec[usize]; pub copy bool; pub function Value; }
+pub struct BoundAdapter {
+    pub symbol usize;
+    pub receiver_type usize;
+    pub mode model.ParamMode;
+    pub function Value;
+}
+pub struct TraitVtable { pub dyn_type usize; pub concrete_type usize; pub global Value; }
+pub struct ThreadBridge {
+    pub entry_type usize;
+    pub context_type string;
+    pub entry Value;
+    pub copy Value;
+    pub drop Value;
+}
+pub struct CState {
+    pub value_ops Vec[ValueOperation];
+    pub thunks Vec[SymbolFunction];
+    pub environment_types Vec[EnvironmentType];
+    pub environment_ops Vec[EnvironmentOperation];
+    pub bound_adapters Vec[BoundAdapter];
+    pub trait_vtables Vec[TraitVtable];
+    pub trait_drop Vec[TypeFunction];
+    pub trait_clone Vec[TypeFunction];
+    pub thread_bridges Vec[ThreadBridge];
+    pub vec_retain_fast option.Option[Value];
+    pub vec_release_fast option.Option[Value];
+}
+
+// D owns these entries; absent Unit promise slots are Options, not -1.
+pub struct PromiseLayout {
+    pub task_type usize;
+    pub type_name string;
+    pub result_slot option.Option[u32];
+    pub error_slot option.Option[u32];
+}
+pub struct AsyncSymbols {
+    pub symbol usize;
+    pub coroutine Value;
+    pub start Value;
+    pub resume Value;
+    pub destroy Value;
+}
+pub struct FieldsFunction { pub fields Vec[usize]; pub function Value; }
+pub struct FieldsGlobal { pub fields Vec[usize]; pub global Value; }
+pub struct AsyncFrameGcPlan {
+    pub metadata_type string;
+    pub metadata Value;
+    pub ops Value;
+    pub trace bool;
+}
+pub struct AsyncState {
+    pub task_type usize;
+    pub promise_type string;
+    pub promise Value;
+    pub token Value;
+    pub handle Value;
+    pub final_block BlockRef;
+    pub suspend_return_block BlockRef;
+    pub frame_metadata option.Option[Value];
+    pub frame_ops option.Option[Value];
+}
+pub struct LoopSafepoints { pub headers Vec[usize]; pub exits Vec[usize]; }
+pub struct DState {
+    pub async_symbols Vec[AsyncSymbols];
+    pub promises Vec[PromiseLayout];
+    pub trace_vecs Vec[TypeFunction];
+    pub trace_fields Vec[FieldsFunction];
+    pub ops_vecs Vec[TypeGlobal];
+    pub ops_fields Vec[FieldsGlobal];
+    pub gc_ops_type option.Option[string];
+    pub gc_invalidate option.Option[Value];
+    pub gc_program_required bool;
+    pub closure_owns_c_resource bool;
+    pub trait_box_owns_c_resource bool;
+}
+
+// E owns these C schema-v2 caches and the exact used-ID sets.
+pub struct CRecordLayout { pub c_type u32; pub type_name string; }
+pub struct CallbackBridge { pub symbol usize; pub c_type u32; pub function Value; }
+pub struct RegistrationDispatcher { pub c_type u32; pub userdata usize; pub function Value; }
+pub struct UsedCallback { pub symbol usize; pub c_type u32; }
+pub struct RegistrationBorrow { pub token Value; pub present Value; pub raw Value; }
+pub struct RegistrationCallback {
+    pub resource_type u32;
+    pub callback_type u32;
+    pub callback_parameter usize;
+    pub userdata_parameter usize;
+    pub callback_userdata_parameter usize;
+}
+pub struct EState {
+    pub c_records Vec[CRecordLayout];
+    pub callback_bridges Vec[CallbackBridge];
+    pub registration_dispatchers Vec[RegistrationDispatcher];
+    pub used_callables Vec[u32];
+    pub used_resources Vec[u32];
+    pub used_callbacks Vec[UsedCallback];
+    pub adapter_source string;
+}
+
+// Source-function bookkeeping is separate from the LLVM text cursor. A helper
+// can change cursor without replacing the caller's NativeIR values or slots.
+pub struct FunctionFrame {
+    pub native_index option.Option[usize];
+    pub values Vec[ValueBinding];
+    pub constants Vec[ValueConstant];
+    pub function_values Vec[FunctionValueInfo];
+    pub slots Vec[SlotStorage];
+    pub blocks Vec[BlockRef];
+    pub try_outputs Vec[TryOutput];
+    pub incoming Vec[IncomingValue];
+    pub async_state option.Option[AsyncState];
+}
+pub struct Emitter {
+    // Mutable construction data only; no Verified flag or public emit claim.
+    pub input nativeir.Module;
+    // AggregateTypes' private copy; storage-only substitutions never enter input.
+    pub storage_types types.Context;
+    pub options Options;
+    pub data_layout string;
+    pub type_definitions Vec[NamedText];
+    pub declarations Vec[Declaration];
+    pub globals Vec[NamedText];
+    pub metadata Vec[MetadataText];
+    pub functions Vec[FunctionText];
+    pub cursor Cursor;
+    pub frame FunctionFrame;
+    pub b BState;
+    pub c CState;
+    pub d DState;
+    pub e EState;
+    pub gc_entry_symbol option.Option[usize];
+}
+
+pub func empty_frame() FunctionFrame {
+    return FunctionFrame(native_index: option.Option[usize].None,
+        values: [], constants: [], function_values: [], slots: [], blocks: [],
+        try_outputs: [], incoming: [], async_state: option.Option[AsyncState].None);
+}
+
+pub func new_emitter(input nativeir.Module, options Options) Emitter throws Error {
+    if options.triple != "x86_64-unknown-linux-gnu" || options.cpu != "generic" ||
+       options.features != "" || (options.optimization != 0 && options.optimization != 2) {
+        throw Error.Failure("E_CAPABILITY_UNAVAILABLE", model.FailureKind.Unsupported,
+            "native scalars supports Linux x86_64, generic CPU, no extra features, O0/O2 only");
+    }
+    return Emitter(input: input, storage_types: types.clone_context(input.hir.types), options: options, data_layout: DATA_LAYOUT,
+        type_definitions: [], declarations: [], globals: [], metadata: [], functions: [],
+        cursor: Cursor(function_index: option.Option[usize].None, block_index: option.Option[usize].None),
+        frame: empty_frame(),
+        b: BState(layouts: [], source_functions: [], vec_header_tag: option.Option[string].None,
+            vec_data_tag: option.Option[string].None),
+        c: CState(value_ops: [], thunks: [], environment_types: [], environment_ops: [],
+            bound_adapters: [], trait_vtables: [], trait_drop: [], trait_clone: [], thread_bridges: [],
+            vec_retain_fast: option.Option[Value].None, vec_release_fast: option.Option[Value].None),
+        d: DState(async_symbols: [], promises: [], trace_vecs: [], trace_fields: [], ops_vecs: [],
+            ops_fields: [], gc_ops_type: option.Option[string].None, gc_invalidate: option.Option[Value].None,
+            gc_program_required: false, closure_owns_c_resource: false, trait_box_owns_c_resource: false),
+        e: EState(c_records: [], callback_bridges: [], registration_dispatchers: [],
+            used_callables: [], used_resources: [], used_callbacks: [], adapter_source: ""),
+        gc_entry_symbol: option.Option[usize].None);
+}

@@ -1,0 +1,11 @@
+package hir;
+
+import "app/wzcc/model" as model;
+
+pub struct HirResult {
+    pub state model.PhaseState;
+    pub failure model.FailureKind;
+    pub diagnostics Vec[model.Diagnostic];
+    pub has_value bool;
+    pub value HirModule;
+}

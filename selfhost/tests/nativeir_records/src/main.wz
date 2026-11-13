@@ -1,0 +1,421 @@
+// Constructive data tests for the Native CFG records.
+//
+// The program builds every Op/Exit ordinal, value-initialized and fully
+// populated Instruction/Terminator records, blocks, parameters, slots,
+// handlers, functions and two mutable builder Modules, then reads the fields
+// back into a trace.  oracle.cpp derives the same trace from the frozen C++
+// header.  This is data construction only: no lowering, verification or code
+// emission is claimed, and no VerifiedModule exists.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeir" as nativeir;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func num64(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func flag(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func some(id usize) option.Option[usize] {
+    return option.Option[usize].Some(id);
+}
+
+func none() option.Option[usize] {
+    return option.Option[usize].None;
+}
+
+func some32(id u32) option.Option[u32] {
+    return option.Option[u32].Some(id);
+}
+
+func none32() option.Option[u32] {
+    return option.Option[u32].None;
+}
+
+// "presence/id" keeps Some(0) distinct from None.
+func opt_usize(value option.Option[usize]) string {
+    switch value {
+        case option.Option.Some(item): return "1/" + num(item);
+        case option.Option.None: return "0/0";
+    }
+}
+
+func opt_u32(value option.Option[u32]) string {
+    switch value {
+        case option.Option.Some(item): return "1/" + num(usize(item));
+        case option.Option.None: return "0/0";
+    }
+}
+
+func unary_id(value hir.UnaryOp) u32 {
+    switch value {
+        case hir.UnaryOp.Negate: return 0;
+        case hir.UnaryOp.LogicalNot: return 1;
+        case hir.UnaryOp.BitNot: return 2;
+    }
+}
+
+func binary_id(value hir.BinaryOp) u32 {
+    switch value {
+        case hir.BinaryOp.Add: return 0;
+        case hir.BinaryOp.Subtract: return 1;
+        case hir.BinaryOp.Multiply: return 2;
+        case hir.BinaryOp.Divide: return 3;
+        case hir.BinaryOp.Remainder: return 4;
+        case hir.BinaryOp.ShiftLeft: return 5;
+        case hir.BinaryOp.ShiftRight: return 6;
+        case hir.BinaryOp.BitAnd: return 7;
+        case hir.BinaryOp.BitOr: return 8;
+        case hir.BinaryOp.BitXor: return 9;
+        case hir.BinaryOp.Equal: return 10;
+        case hir.BinaryOp.NotEqual: return 11;
+        case hir.BinaryOp.Less: return 12;
+        case hir.BinaryOp.LessEqual: return 13;
+        case hir.BinaryOp.Greater: return 14;
+        case hir.BinaryOp.GreaterEqual: return 15;
+    }
+}
+
+func exit_kind_id(value hir.ExitKind) u32 {
+    switch value {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func owner_kind_id(value hir.OwnerKind) u32 {
+    switch value {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func id_list(values Vec[usize]) string {
+    var out = num(vec.len(values));
+    for value in values {
+        out = out + "/" + num(value);
+    }
+    return out;
+}
+
+func opt_exit(value option.Option[nativeir.ExitSite]) string {
+    switch value {
+        case option.Option.Some(site):
+            return "1/" + num(site.origin) + "/" +
+                num(usize(exit_kind_id(site.kind))) + "/" +
+                opt_usize(site.error_type);
+        case option.Option.None: return "0/0/0/0/0";
+    }
+}
+
+func opt_owner(value option.Option[hir.OwnerRef]) string {
+    switch value {
+        case option.Option.Some(ref):
+            return "1/" + num(usize(owner_kind_id(ref.kind))) + "/" +
+                num64(ref.identity);
+        case option.Option.None: return "0/0/0";
+    }
+}
+
+func span_trace(value model.Span) string {
+    return num64(value.snapshot) + "/" + num64(value.begin_byte) + "/" +
+        num64(value.end_byte);
+}
+
+func instruction_trace(value nativeir.Instruction) string {
+    return "op=" + num(usize(nativeir.op_id(value.op))) + " result=" +
+        opt_usize(value.result) + " type=" + num(value.type_id) + " inputs=" +
+        id_list(value.inputs) + " slot=" + num(value.slot) + " function=" +
+        num(value.function) + " signature=" + num(value.signature) +
+        " system=" + opt_u32(value.system) + " c_callable=" +
+        opt_u32(value.c_callable) + " methods=" + id_list(value.methods) +
+        " c_type=" + num(usize(value.c_type)) + " c_field=" +
+        num(usize(value.c_field)) + " field=" + num(value.field) +
+        " variant=" + num(value.variant) + " bits=" + num64(value.bits) +
+        " utf8=" + num(text.len(value.utf8)) + " exit=" +
+        opt_exit(value.exit) + " cleanup=" + opt_usize(value.cleanup) +
+        " origin=" + opt_usize(value.origin) + " owner=" +
+        opt_owner(value.owner) + " unary=" +
+        num(usize(unary_id(value.unary))) + " binary=" +
+        num(usize(binary_id(value.binary))) + " source=" +
+        span_trace(value.source);
+}
+
+func terminator_trace(value nativeir.Terminator) string {
+    return "kind=" + num(usize(nativeir.exit_id(value.kind))) + " inputs=" +
+        id_list(value.inputs) + " targets=" + id_list(value.targets) +
+        " source=" + span_trace(value.source) + " signature=" +
+        num(value.signature) + " exit=" + opt_exit(value.exit) +
+        " origin=" + opt_usize(value.origin);
+}
+
+func parameter_trace(value nativeir.BlockParameter) string {
+    return "value=" + num(value.value) + " type=" + num(value.type_id) +
+        " call=" + num(value.call) + " error=" + flag(value.error);
+}
+
+func slot_trace(value nativeir.Slot) string {
+    return "type=" + num(value.type_id) + " parameter=" +
+        opt_u32(value.parameter) + " inout=" + flag(value.is_inout) +
+        " owner=" + opt_owner(value.owner) + " owning=" +
+        flag(value.owning_parameter) + " binding=" +
+        opt_usize(value.binding);
+}
+
+func handler_trace(value nativeir.Handler) string {
+    return "block=" + num(value.block) + " slot=" + num(value.slot) +
+        " protected_entry=" + num(value.protected_entry) + " try_node=" +
+        num(value.target.try_node) + " index=" + num(usize(value.target.index));
+}
+
+func op_values() Vec[nativeir.Op] {
+    let out = vec.empty[nativeir.Op]();
+    vec.push(out, nativeir.Op.Constant);
+    vec.push(out, nativeir.Op.Function);
+    vec.push(out, nativeir.Op.Load);
+    vec.push(out, nativeir.Op.Address);
+    vec.push(out, nativeir.Op.Store);
+    vec.push(out, nativeir.Op.Unary);
+    vec.push(out, nativeir.Op.Binary);
+    vec.push(out, nativeir.Op.Convert);
+    vec.push(out, nativeir.Op.Call);
+    vec.push(out, nativeir.Op.StructInit);
+    vec.push(out, nativeir.Op.EnumInit);
+    vec.push(out, nativeir.Op.FieldRead);
+    vec.push(out, nativeir.Op.FieldAddress);
+    vec.push(out, nativeir.Op.LoadIndirect);
+    vec.push(out, nativeir.Op.StoreIndirect);
+    vec.push(out, nativeir.Op.EnumTest);
+    vec.push(out, nativeir.Op.EnumPayload);
+    vec.push(out, nativeir.Op.StringLiteral);
+    vec.push(out, nativeir.Op.ExitBegin);
+    vec.push(out, nativeir.Op.CleanupBegin);
+    vec.push(out, nativeir.Op.CleanupEnd);
+    vec.push(out, nativeir.Op.Copy);
+    vec.push(out, nativeir.Op.Move);
+    vec.push(out, nativeir.Op.Take);
+    vec.push(out, nativeir.Op.Destroy);
+    vec.push(out, nativeir.Op.Borrow);
+    vec.push(out, nativeir.Op.EndBorrow);
+    vec.push(out, nativeir.Op.SaveOutput);
+    vec.push(out, nativeir.Op.VecInit);
+    vec.push(out, nativeir.Op.VecRead);
+    vec.push(out, nativeir.Op.VecSet);
+    vec.push(out, nativeir.Op.VecSlice);
+    vec.push(out, nativeir.Op.IterationBegin);
+    vec.push(out, nativeir.Op.IterationEnd);
+    vec.push(out, nativeir.Op.VecLength);
+    vec.push(out, nativeir.Op.IterationTest);
+    vec.push(out, nativeir.Op.IterationRead);
+    vec.push(out, nativeir.Op.IterationNext);
+    vec.push(out, nativeir.Op.OwnershipBegin);
+    vec.push(out, nativeir.Op.OwnershipEnd);
+    vec.push(out, nativeir.Op.ReplaceIndirect);
+    vec.push(out, nativeir.Op.BeginBorrow);
+    vec.push(out, nativeir.Op.VecCheck);
+    vec.push(out, nativeir.Op.VecElementAddress);
+    vec.push(out, nativeir.Op.SystemCall);
+    vec.push(out, nativeir.Op.ForeignCall);
+    vec.push(out, nativeir.Op.CFieldRead);
+    vec.push(out, nativeir.Op.CPtrRead);
+    vec.push(out, nativeir.Op.CPtrWrite);
+    vec.push(out, nativeir.Op.CBufferRead);
+    vec.push(out, nativeir.Op.CBufferWrite);
+    vec.push(out, nativeir.Op.TraitObject);
+    vec.push(out, nativeir.Op.TraitCall);
+    return out;
+}
+
+func exit_values() Vec[nativeir.Exit] {
+    let out = vec.empty[nativeir.Exit]();
+    vec.push(out, nativeir.Exit.Missing);
+    vec.push(out, nativeir.Exit.Branch);
+    vec.push(out, nativeir.Exit.Conditional);
+    vec.push(out, nativeir.Exit.Return);
+    vec.push(out, nativeir.Exit.Unreachable);
+    vec.push(out, nativeir.Exit.TryCall);
+    vec.push(out, nativeir.Exit.ErrorReturn);
+    vec.push(out, nativeir.Exit.Await);
+    vec.push(out, nativeir.Exit.CancelReturn);
+    return out;
+}
+
+func option_zero_instruction() nativeir.Instruction {
+    return nativeir.Instruction(op: nativeir.Op.ExitBegin, result: some(0),
+        type_id: 0, inputs: [], slot: 0, function: 0, signature: 0,
+        system: none32(), c_callable: none32(), methods: [], c_type: 0,
+        c_field: 0, field: 0, variant: 0, bits: 0, utf8: "",
+        exit: option.Option[nativeir.ExitSite].None, cleanup: none(),
+        origin: none(), owner: option.Option[hir.OwnerRef].None,
+        unary: hir.UnaryOp.Negate, binary: hir.BinaryOp.Add,
+        source: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+}
+
+func rich_instruction() nativeir.Instruction {
+    let inputs = vec.empty[usize]();
+    vec.push(inputs, 3);
+    vec.push(inputs, 5);
+    let methods = vec.empty[usize]();
+    vec.push(methods, 23);
+    vec.push(methods, 29);
+    return nativeir.Instruction(op: nativeir.Op.TraitCall,
+        result: some(7), type_id: 11, inputs: inputs, slot: 13,
+        function: 17, signature: 19, system: some32(0), c_callable: some32(3),
+        methods: methods, c_type: 31, c_field: 37, field: 41, variant: 43,
+        bits: 1099511627776, utf8: "trace", exit: option.Option[
+            nativeir.ExitSite].Some(nativeir.ExitSite(origin: 0,
+                kind: hir.ExitKind.Cancel, error_type: some(0))),
+        cleanup: some(0), origin: some(0), owner: option.Option[
+            hir.OwnerRef].Some(hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                identity: 0)), unary: hir.UnaryOp.BitNot,
+        binary: hir.BinaryOp.GreaterEqual,
+        source: model.Span(snapshot: 47, begin_byte: 53, end_byte: 59));
+}
+
+func rich_terminator() nativeir.Terminator {
+    let inputs = vec.empty[usize]();
+    vec.push(inputs, 2);
+    let targets = vec.empty[usize]();
+    vec.push(targets, 0);
+    vec.push(targets, 4);
+    return nativeir.Terminator(kind: nativeir.Exit.TryCall, inputs: inputs,
+        targets: targets, source: model.Span(snapshot: 11, begin_byte: 13,
+            end_byte: 17), signature: 7, exit: option.Option[
+            nativeir.ExitSite].Some(nativeir.ExitSite(origin: 0,
+                kind: hir.ExitKind.Normal,
+                error_type: option.Option[usize].None)), origin: some(0));
+}
+
+func build_function() nativeir.Function {
+    let parameters = vec.empty[nativeir.BlockParameter]();
+    vec.push(parameters, nativeir.BlockParameter(value: 0, type_id: 0,
+        call: 0, error: false));
+    vec.push(parameters, nativeir.BlockParameter(value: 9, type_id: 13,
+        call: 17, error: true));
+    let instructions = vec.empty[nativeir.Instruction]();
+    vec.push(instructions, nativeir.empty_instruction());
+    vec.push(instructions, rich_instruction());
+    let blocks = vec.empty[nativeir.BasicBlock]();
+    vec.push(blocks, nativeir.BasicBlock(instructions: instructions,
+        terminator: rich_terminator(), parameters: parameters));
+    vec.push(blocks, nativeir.BasicBlock(instructions: [],
+        terminator: nativeir.empty_terminator(),
+        parameters: vec.empty[nativeir.BlockParameter]()));
+
+    let slots = vec.empty[nativeir.Slot]();
+    vec.push(slots, nativeir.Slot(type_id: 0, parameter: some32(0),
+        is_inout: true, owner: option.Option[hir.OwnerRef].Some(
+            hir.OwnerRef(kind: hir.OwnerKind.Binding, identity: 0)),
+        owning_parameter: true, binding: some(0)));
+    vec.push(slots, nativeir.Slot(type_id: 5, parameter: none32(),
+        is_inout: false, owner: option.Option[hir.OwnerRef].None,
+        owning_parameter: false, binding: none()));
+
+    let handlers = vec.empty[nativeir.Handler]();
+    vec.push(handlers, nativeir.Handler(target: hir.CatchTarget(try_node: 0,
+        index: 0), block: 1, slot: 0, protected_entry: 0));
+
+    return nativeir.Function(symbol: 0, signature: 0, is_async: true,
+        slots: slots, blocks: blocks, source: model.Span(snapshot: 7,
+            begin_byte: 11, end_byte: 13), handlers: handlers);
+}
+
+func empty_hir_module() hir.HirModule {
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [], self_parameters: []);
+    return hir.empty_module(resolved, 0, model.CheckConfig(
+        backend: model.Backend.Native, word_bits: 64));
+}
+
+func main() i32 throws os.Error {
+    let ops = op_values();
+    for var index usize = 0; index < vec.len(ops); index += 1 {
+        io.println("op i=" + num(index) + " id=" +
+            num(usize(nativeir.op_id(ops[index]))));
+    }
+    let exits = exit_values();
+    for var index usize = 0; index < vec.len(exits); index += 1 {
+        io.println("exit i=" + num(index) + " id=" +
+            num(usize(nativeir.exit_id(exits[index]))));
+    }
+
+    io.println("instruction_default " + instruction_trace(
+        nativeir.empty_instruction()));
+    io.println("instruction_zero_id " + instruction_trace(
+        option_zero_instruction()));
+    io.println("instruction_rich " + instruction_trace(rich_instruction()));
+    io.println("terminator_default " + terminator_trace(
+        nativeir.empty_terminator()));
+    io.println("terminator_rich " + terminator_trace(rich_terminator()));
+
+    let function = build_function();
+    let parameters = function.blocks[0].parameters;
+    for var index usize = 0; index < vec.len(parameters); index += 1 {
+        io.println("block_parameter i=" + num(index) + " " +
+            parameter_trace(parameters[index]));
+    }
+    for var index usize = 0; index < vec.len(function.slots); index += 1 {
+        io.println("slot i=" + num(index) + " " +
+            slot_trace(function.slots[index]));
+    }
+    for var index usize = 0; index < vec.len(function.handlers); index += 1 {
+        io.println("handler i=" + num(index) + " " +
+            handler_trace(function.handlers[index]));
+    }
+
+    io.println("function symbol=" + num(function.symbol) + " signature=" +
+        num(function.signature) + " is_async=" + flag(function.is_async) +
+        " slots=" + num(vec.len(function.slots)) + " blocks=" +
+        num(vec.len(function.blocks)) + " handlers=" +
+        num(vec.len(function.handlers)) + " source=" +
+        span_trace(function.source));
+    for var index usize = 0; index < vec.len(function.blocks); index += 1 {
+        let block = function.blocks[index];
+        io.println("block i=" + num(index) + " instructions=" +
+            num(vec.len(block.instructions)) + " parameters=" +
+            num(vec.len(block.parameters)) + " terminator=" +
+            num(usize(nativeir.exit_id(block.terminator.kind))));
+    }
+
+    let hmodule = empty_hir_module();
+    let empty = nativeir.empty_module(hmodule);
+    io.println("module_empty hir_identity=" + num(empty.hir.identity) +
+        " hir_word_bits=" + num(usize(empty.hir.config.word_bits)) +
+        " functions=" + num(vec.len(empty.functions)));
+    let functions = vec.empty[nativeir.Function]();
+    vec.push(functions, function);
+    let built = nativeir.Module(hir: hmodule, functions: functions);
+    io.println("module_built hir_identity=" + num(built.hir.identity) +
+        " hir_word_bits=" + num(usize(built.hir.config.word_bits)) +
+        " functions=" + num(vec.len(built.functions)) + " function0_symbol=" +
+        num(built.functions[0].symbol) + " function0_blocks=" +
+        num(vec.len(built.functions[0].blocks)) + " function0_slots=" +
+        num(vec.len(built.functions[0].slots)) + " function0_handlers=" +
+        num(vec.len(built.functions[0].handlers)) + " function0_async=" +
+        flag(built.functions[0].is_async));
+    return 0;
+}

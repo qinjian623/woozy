@@ -1,0 +1,302 @@
+// Native CFG data records.
+//
+// This is a data-only migration of include/lang/ir/native.hpp.  It carries
+// ids, value types and ownership plans that a future lowering pass will fill
+// in; nothing here lowers, verifies or emits code.  In particular there is no
+// VerifiedModule and no flag that could be set to claim verification.  A later
+// nativeverify stage must validate and deeply copy this builder data before it
+// may publish a VerifiedModule.
+//
+// Identities are usize as in the frozen HIR.  C type and callable indices
+// remain u32.  `type` is spelled type_id and `async` is spelled is_async.
+// Slot's `inout` is a Woozy keyword, so that field is spelled is_inout, the
+// same way the HIR records spell move/async as is_move/is_async.
+// Enum order, record field order and the optional zero ids follow the C++
+// header exactly; zero is a valid id here even where it is an invalid TypeId.
+package nativeir;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+
+pub enum Op {
+    Constant;
+    Function;
+    Load;
+    Address;
+    Store;
+    Unary;
+    Binary;
+    Convert;
+    Call;
+    StructInit;
+    EnumInit;
+    FieldRead;
+    FieldAddress;
+    LoadIndirect;
+    StoreIndirect;
+    EnumTest;
+    EnumPayload;
+    StringLiteral;
+    ExitBegin;
+    CleanupBegin;
+    CleanupEnd;
+    Copy;
+    Move;
+    Take;
+    Destroy;
+    Borrow;
+    EndBorrow;
+    SaveOutput;
+    VecInit;
+    VecRead;
+    VecSet;
+    VecSlice;
+    IterationBegin;
+    IterationEnd;
+    VecLength;
+    IterationTest;
+    IterationRead;
+    IterationNext;
+    OwnershipBegin;
+    OwnershipEnd;
+    ReplaceIndirect;
+    BeginBorrow;
+    VecCheck;
+    VecElementAddress;
+    SystemCall;
+    ForeignCall;
+    CFieldRead;
+    CPtrRead;
+    CPtrWrite;
+    CBufferRead;
+    CBufferWrite;
+    TraitObject;
+    TraitCall;
+}
+
+/// Immutable HIR plan identity consumed by exit_begin/terminators.
+pub struct ExitSite {
+    pub origin usize;
+    pub kind hir.ExitKind;
+    pub error_type option.Option[usize];
+}
+
+pub struct Instruction {
+    pub op Op;
+    pub result option.Option[usize];
+    // Pointee type for address, Unit for store.
+    pub type_id usize;
+    // call: callee then already evaluated formals.
+    pub inputs Vec[usize];
+    pub slot usize;
+    pub function usize;
+    pub signature usize;
+    // system_call only.
+    pub system option.Option[u32];
+    // foreign_call: 1-based frozen callable index.
+    pub c_callable option.Option[u32];
+    // trait_object only: concrete implementation targets in trait order.
+    pub methods Vec[usize];
+    // C named type/record index.
+    pub c_type u32;
+    // C record field index.
+    pub c_field u32;
+    // Resolved declaration identity, never a source name.
+    pub field usize;
+    // enum declaration identity; enum_test produces bool.
+    pub variant usize;
+    pub bits u64;
+    // Only string_literal: validated UTF-8 bytes in immortal read-only
+    // storage.  Literal storage has no dynamic owner.
+    pub utf8 string;
+    // exit_begin only.
+    pub exit option.Option[ExitSite];
+    // cleanup_begin/end: defer registration.
+    pub cleanup option.Option[usize];
+    // call/convert: source HIR identity, including inline copies.
+    pub origin option.Option[usize];
+    pub owner option.Option[hir.OwnerRef];
+    pub unary hir.UnaryOp;
+    pub binary hir.BinaryOp;
+    pub source model.Span;
+}
+
+pub enum Exit {
+    Missing;
+    Branch;
+    Conditional;
+    Return;
+    Unreachable;
+    TryCall;
+    ErrorReturn;
+    // await: inputs = {future}; targets = {ready, error, cancel}.
+    Await;
+    // Cancellation exit after the await's cancel cleanup plan has run.
+    CancelReturn;
+}
+
+pub struct Terminator {
+    pub kind Exit;
+    pub inputs Vec[usize];
+    pub targets Vec[usize];
+    pub source model.Span;
+    // try_call only; inputs: callee then evaluated formals.
+    pub signature usize;
+    // Consumes exit_begin after all planned cleanups.
+    pub exit option.Option[ExitSite];
+    // return/throw/call, or concrete Try entry branch.
+    pub origin option.Option[usize];
+}
+
+pub struct BlockParameter {
+    pub value usize;
+    pub type_id usize;
+    pub call usize;
+    // Independently identifies which TryCall edge defines it.
+    pub error bool;
+}
+
+pub struct BasicBlock {
+    pub instructions Vec[Instruction];
+    pub terminator Terminator;
+    // Only TryCall edges carry a value: success result (including Unit), or
+    // error.
+    pub parameters Vec[BlockParameter];
+}
+
+pub struct Slot {
+    pub type_id usize;
+    pub parameter option.Option[u32];
+    // C++ field `inout`; a Woozy keyword, so named like is_async/is_move.
+    pub is_inout bool;
+    pub owner option.Option[hir.OwnerRef];
+    pub owning_parameter bool;
+    pub binding option.Option[usize];
+}
+
+pub struct Handler {
+    pub target hir.CatchTarget;
+    pub block usize;
+    pub slot usize;
+    // Concrete Try instance; the same HIR can be expanded repeatedly.
+    pub protected_entry usize;
+}
+
+pub struct Function {
+    pub symbol usize;
+    pub signature usize;
+    // Async functions are lowered to a resumable state machine; every slot
+    // below becomes a field of the coroutine frame.
+    pub is_async bool;
+    pub slots Vec[Slot];
+    // Block 0 is entry.
+    pub blocks Vec[BasicBlock];
+    pub source model.Span;
+    pub handlers Vec[Handler];
+}
+
+/// Mutable construction data.  This is not a verified module.
+pub struct Module {
+    pub hir hir.HirModule;
+    pub functions Vec[Function];
+}
+
+pub func op_id(op Op) u32 {
+    switch op {
+        case Op.Constant: return 0;
+        case Op.Function: return 1;
+        case Op.Load: return 2;
+        case Op.Address: return 3;
+        case Op.Store: return 4;
+        case Op.Unary: return 5;
+        case Op.Binary: return 6;
+        case Op.Convert: return 7;
+        case Op.Call: return 8;
+        case Op.StructInit: return 9;
+        case Op.EnumInit: return 10;
+        case Op.FieldRead: return 11;
+        case Op.FieldAddress: return 12;
+        case Op.LoadIndirect: return 13;
+        case Op.StoreIndirect: return 14;
+        case Op.EnumTest: return 15;
+        case Op.EnumPayload: return 16;
+        case Op.StringLiteral: return 17;
+        case Op.ExitBegin: return 18;
+        case Op.CleanupBegin: return 19;
+        case Op.CleanupEnd: return 20;
+        case Op.Copy: return 21;
+        case Op.Move: return 22;
+        case Op.Take: return 23;
+        case Op.Destroy: return 24;
+        case Op.Borrow: return 25;
+        case Op.EndBorrow: return 26;
+        case Op.SaveOutput: return 27;
+        case Op.VecInit: return 28;
+        case Op.VecRead: return 29;
+        case Op.VecSet: return 30;
+        case Op.VecSlice: return 31;
+        case Op.IterationBegin: return 32;
+        case Op.IterationEnd: return 33;
+        case Op.VecLength: return 34;
+        case Op.IterationTest: return 35;
+        case Op.IterationRead: return 36;
+        case Op.IterationNext: return 37;
+        case Op.OwnershipBegin: return 38;
+        case Op.OwnershipEnd: return 39;
+        case Op.ReplaceIndirect: return 40;
+        case Op.BeginBorrow: return 41;
+        case Op.VecCheck: return 42;
+        case Op.VecElementAddress: return 43;
+        case Op.SystemCall: return 44;
+        case Op.ForeignCall: return 45;
+        case Op.CFieldRead: return 46;
+        case Op.CPtrRead: return 47;
+        case Op.CPtrWrite: return 48;
+        case Op.CBufferRead: return 49;
+        case Op.CBufferWrite: return 50;
+        case Op.TraitObject: return 51;
+        case Op.TraitCall: return 52;
+    }
+}
+
+pub func exit_id(kind Exit) u32 {
+    switch kind {
+        case Exit.Missing: return 0;
+        case Exit.Branch: return 1;
+        case Exit.Conditional: return 2;
+        case Exit.Return: return 3;
+        case Exit.Unreachable: return 4;
+        case Exit.TryCall: return 5;
+        case Exit.ErrorReturn: return 6;
+        case Exit.Await: return 7;
+        case Exit.CancelReturn: return 8;
+    }
+}
+
+// The C++ defaults that a value-initialized Instruction gets.
+pub func empty_instruction() Instruction {
+    return Instruction(op: Op.Constant, result: option.Option[usize].None,
+        type_id: 0, inputs: [], slot: 0, function: 0, signature: 0,
+        system: option.Option[u32].None,
+        c_callable: option.Option[u32].None, methods: [], c_type: 0,
+        c_field: 0, field: 0, variant: 0, bits: 0, utf8: "",
+        exit: option.Option[ExitSite].None, cleanup: option.Option[usize].None,
+        origin: option.Option[usize].None,
+        owner: option.Option[hir.OwnerRef].None, unary: hir.UnaryOp.Negate,
+        binary: hir.BinaryOp.Add, source: model.Span(snapshot: 0, begin_byte: 0,
+            end_byte: 0));
+}
+
+// The C++ defaults that a value-initialized Terminator gets.
+pub func empty_terminator() Terminator {
+    return Terminator(kind: Exit.Missing, inputs: [], targets: [],
+        source: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0),
+        signature: 0, exit: option.Option[ExitSite].None,
+        origin: option.Option[usize].None);
+}
+
+// Mutable builder module holding the HIR it was built from; no verification.
+pub func empty_module(hir hir.HirModule) Module {
+    return Module(hir: hir, functions: []);
+}

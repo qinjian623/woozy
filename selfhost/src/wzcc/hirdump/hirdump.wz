@@ -1,0 +1,876 @@
+// Stable textual dumps for the canonical type table and the typed HIR.
+//
+// This is the pure-Wz counterpart of lang::hir::dump in src/hir/hir.cpp.  The
+// output is byte-for-byte the C++ text: the classic locale, std::quoted
+// escaping, decimal enum ordinals, optional '-' placeholders, zero-based
+// scope/node ids and one-based TypeIds are all preserved.
+package hirdump;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const CONTRACT_VERSION string = "compiler-dev/1";
+
+func usize_text(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func u32_text(value u32) string {
+    return strconv.format_u64(u64(value));
+}
+
+func u64_text(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func bool_text(value bool) string {
+    if value { return "1"; }
+    return "0";
+}
+
+// std::quoted with the classic locale: wrap in double quotes and prefix only
+// a double quote or a backslash with one backslash.
+func quoted(value string) string {
+    var out = "\"";
+    for var index usize = 0; index < text.len(value); index += 1 {
+        let rune = value[index];
+        if rune == 34 || rune == 92 {
+            out += "\\";
+        }
+        out += value[index:index + 1];
+    }
+    out += "\"";
+    return out;
+}
+
+func param_mode_id(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func backend_id(backend model.Backend) u32 {
+    switch backend {
+        case model.Backend.Native: return 0;
+        case model.Backend.Python: return 1;
+    }
+}
+
+func unary_op_id(op hir.UnaryOp) u32 {
+    switch op {
+        case hir.UnaryOp.Negate: return 0;
+        case hir.UnaryOp.LogicalNot: return 1;
+        case hir.UnaryOp.BitNot: return 2;
+    }
+}
+
+func binary_op_id(op hir.BinaryOp) u32 {
+    switch op {
+        case hir.BinaryOp.Add: return 0;
+        case hir.BinaryOp.Subtract: return 1;
+        case hir.BinaryOp.Multiply: return 2;
+        case hir.BinaryOp.Divide: return 3;
+        case hir.BinaryOp.Remainder: return 4;
+        case hir.BinaryOp.ShiftLeft: return 5;
+        case hir.BinaryOp.ShiftRight: return 6;
+        case hir.BinaryOp.BitAnd: return 7;
+        case hir.BinaryOp.BitOr: return 8;
+        case hir.BinaryOp.BitXor: return 9;
+        case hir.BinaryOp.Equal: return 10;
+        case hir.BinaryOp.NotEqual: return 11;
+        case hir.BinaryOp.Less: return 12;
+        case hir.BinaryOp.LessEqual: return 13;
+        case hir.BinaryOp.Greater: return 14;
+        case hir.BinaryOp.GreaterEqual: return 15;
+    }
+}
+
+func logical_op_id(op hir.LogicalOp) u32 {
+    switch op {
+        case hir.LogicalOp.And: return 0;
+        case hir.LogicalOp.Or: return 1;
+    }
+}
+
+func callee_kind_id(kind hir.CalleeKind) u32 {
+    switch kind {
+        case hir.CalleeKind.Direct: return 0;
+        case hir.CalleeKind.FunctionValue: return 1;
+        case hir.CalleeKind.Foreign: return 2;
+        case hir.CalleeKind.System: return 3;
+        case hir.CalleeKind.CForeign: return 4;
+    }
+}
+
+func constant_data_id(data hir.ConstantData) u32 {
+    switch data {
+        case hir.ConstantData.UnitLiteral(value): return 0;
+        case hir.ConstantData.BoolLiteral(value): return 1;
+        case hir.ConstantData.IntegerLiteral(value): return 2;
+        case hir.ConstantData.FloatLiteral(value): return 3;
+        case hir.ConstantData.StringLiteral(value): return 4;
+        case hir.ConstantData.FunctionValue(value): return 5;
+        case hir.ConstantData.ConstantAggregate(value): return 6;
+    }
+}
+
+func owner_kind_id(kind hir.OwnerKind) u32 {
+    switch kind {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func cleanup_kind_id(kind hir.CleanupKind) u32 {
+    switch kind {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func use_kind_id(kind hir.UseKind) u32 {
+    switch kind {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func exit_kind_id(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func source_text(source hir.HirSource) string {
+    return " src=" + usize_text(source.node.module) + ":" +
+        usize_text(source.node.file) + ":" + usize_text(source.node.node) +
+        "@" + u64_text(source.span.snapshot) + ":" +
+        u64_text(source.span.begin_byte) + ":" +
+        u64_text(source.span.end_byte);
+}
+
+func trait_ref_text(reference hir.TraitRef) string {
+    var out = usize_text(reference.declaration) + "[";
+    for var index usize = 0; index < vec.len(reference.args); index += 1 {
+        if index != 0 { out += ","; }
+        out += usize_text(reference.args[index]);
+    }
+    out += "]";
+    return out;
+}
+
+func generic_text(params Vec[hir.GenericParam]) string {
+    var out = "";
+    for param in params {
+        out += " generic=" + usize_text(param.symbol) + ":";
+        switch param.trait_ref {
+            case option.Option.Some(reference): out += trait_ref_text(reference);
+            case option.Option.None: out += "-";
+        }
+    }
+    return out;
+}
+
+func field_text(field hir.FieldDecl) string {
+    return " field=" + usize_text(field.symbol) + ":" +
+        usize_text(field.type_id) + ":" + bool_text(field.exported);
+}
+
+func cleanup_text(action hir.CleanupStep) string {
+    return " action=" + u32_text(cleanup_kind_id(action.kind)) + ":" +
+        u32_text(owner_kind_id(action.owner.kind)) + ":" +
+        u64_text(action.owner.identity) + ":" + usize_text(action.type_id);
+}
+
+func actions_text(actions Vec[hir.CleanupStep]) string {
+    var out = "";
+    for action in actions {
+        out += cleanup_text(action);
+    }
+    out += "\n";
+    return out;
+}
+
+func init_arg_text(arg hir.CallArg) string {
+    return " arg=" + u32_text(arg.source_index) + ":" +
+        u32_text(arg.parameter_index) + ":" + usize_text(arg.expression);
+}
+
+func dispatch_arg_text(arg hir.CallArg) string {
+    return " arg=" + u32_text(arg.source_index) + ":" +
+        u32_text(arg.parameter_index) + ":" +
+        u32_text(param_mode_id(arg.mode)) + ":" +
+        usize_text(arg.expression);
+}
+
+func call_arg_text(arg hir.CallArg) string {
+    var out = " arg=" + u32_text(arg.source_index) + ":" +
+        u32_text(arg.parameter_index) + ":" +
+        u32_text(param_mode_id(arg.mode)) + ":" +
+        usize_text(arg.expression) + ":";
+    switch arg.label {
+        case option.Option.Some(label): out += quoted(label);
+        case option.Option.None: out += "-";
+    }
+    return out;
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func width_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.Float) ||
+        kind_is(kind, model.TypeKind.SignedInt) ||
+        kind_is(kind, model.TypeKind.UnsignedInt) ||
+        kind_is(kind, model.TypeKind.Isize) ||
+        kind_is(kind, model.TypeKind.Usize);
+}
+
+func width_unchecked(context types.Context, config model.CheckConfig,
+                     type_id usize) u32 {
+    let found = types.find(context, type_id);
+    switch found {
+        case option.Option.None: return 0;
+        case option.Option.Some(value): {
+            if kind_is(value.kind, model.TypeKind.Isize) ||
+               kind_is(value.kind, model.TypeKind.Usize) {
+                return config.word_bits;
+            }
+            if width_kind(value.kind) {
+                return value.bits;
+            }
+            return 0;
+        }
+    }
+}
+
+// Match bit_width failures before publishing any dump text.
+func width_checked(context types.Context, config model.CheckConfig,
+                   type_id usize) throws model.SupportError {
+    let found = types.find(context, type_id);
+    switch found {
+        case option.Option.None: {}
+        case option.Option.Some(value): {
+            if !width_kind(value.kind) {
+                return;
+            }
+            try { let ignored = types.bit_width(value, config); }
+            catch error types.Error {
+                switch error {
+                    case types.Error.Invalid(message):
+                        throw model.SupportError.Invalid(message);
+                }
+            }
+        }
+    }
+}
+
+func pattern_text(context types.Context, config model.CheckConfig,
+                  pattern hir.Pattern) string {
+    var out = " pattern=" + usize_text(pattern.type_id) + ":";
+    switch pattern.variant {
+        case option.Option.Some(variant): out += usize_text(variant);
+        case option.Option.None: out += "-";
+    }
+    out += ":";
+    switch pattern.binding {
+        case option.Option.Some(binding): out += usize_text(binding);
+        case option.Option.None: out += "-";
+    }
+    out += " literal=";
+    switch pattern.literal {
+        case option.Option.None: out += "-";
+        case option.Option.Some(literal): {
+            let width = width_unchecked(context, config, pattern.type_id);
+            switch literal {
+                case hir.PatternLiteral.BoolLiteral(value):
+                    out += "bool:" + bool_text(value.value);
+                case hir.PatternLiteral.IntegerLiteral(value):
+                    out += "int:" + quoted(value.decimal) + ":" +
+                        u32_text(width) + ":" + u64_text(value.bits);
+                case hir.PatternLiteral.FloatLiteral(value):
+                    out += "float:" + u32_text(width) + ":" +
+                        u64_text(value.bits);
+                case hir.PatternLiteral.StringLiteral(value):
+                    out += "string:" + quoted(value.utf8);
+            }
+        }
+    }
+    for child in pattern.payload {
+        out += pattern_text(context, config, child);
+    }
+    return out;
+}
+
+func constant_text(value hir.ConstantValue) string {
+    var out = " const=" + usize_text(value.type_id) + ":" +
+        u32_text(constant_data_id(value.data));
+    switch value.data {
+        case hir.ConstantData.UnitLiteral(item): {}
+        case hir.ConstantData.BoolLiteral(item):
+            out += ":" + bool_text(item.value);
+        case hir.ConstantData.IntegerLiteral(item):
+            out += ":" + item.decimal + ":" + u64_text(item.bits);
+        case hir.ConstantData.FloatLiteral(item):
+            out += ":" + u64_text(item.bits);
+        case hir.ConstantData.StringLiteral(item):
+            out += ":" + quoted(item.utf8);
+        case hir.ConstantData.FunctionValue(item): {
+            out += ":" + usize_text(item.symbol);
+            for arg in item.type_args {
+                out += ":" + usize_text(arg);
+            }
+            if vec.len(item.captures) != 0 {
+                out += " captures=" + usize_text(vec.len(item.captures));
+            }
+            if item.move_capture { out += " move_capture"; }
+            switch item.bound {
+                case option.Option.None: {}
+                case option.Option.Some(receiver):
+                    out += " bound=" + usize_text(receiver.type_id) + ":" +
+                        u32_text(param_mode_id(receiver.mode));
+            }
+        }
+        case hir.ConstantData.ConstantAggregate(item): {
+            switch item.variant {
+                case option.Option.Some(variant):
+                    out += " variant=" + usize_text(variant);
+                case option.Option.None: {}
+            }
+            out += "[";
+            for field in item.fields {
+                out += constant_text(field);
+            }
+            out += "]";
+        }
+    }
+    return out;
+}
+
+func exit_text(plan hir.ExitPlan) string {
+    var out = " exit=" + u32_text(exit_kind_id(plan.kind)) +
+        " saves_value=" + bool_text(plan.saves_value);
+    switch plan.error_type {
+        case option.Option.Some(value):
+            out += " error_type=" + usize_text(value);
+        case option.Option.None: {}
+    }
+    switch plan.target {
+        case hir.ExitTarget.ScopeExit(value): {
+            out += " resume_scope=";
+            switch value.scope {
+                case option.Option.Some(scope): out += usize_text(scope);
+                case option.Option.None: out += "-";
+            }
+        }
+        case hir.ExitTarget.FunctionExit(value):
+            out += " function=" + usize_text(value.function);
+        case hir.ExitTarget.JumpExit(value):
+            out += " jump=" + usize_text(value.node);
+        case hir.ExitTarget.CatchTarget(value):
+            out += " handler=" + usize_text(value.try_node) + ":" +
+                u32_text(value.index);
+    }
+    out += " exited_scopes=";
+    for scope in plan.exited_scopes {
+        out += usize_text(scope) + ",";
+    }
+    out += " defers=";
+    for deferred in plan.defers {
+        out += usize_text(deferred) + ",";
+    }
+    for action in plan.actions {
+        out += cleanup_text(action);
+    }
+    return out;
+}
+
+func node_text(context types.Context, config model.CheckConfig, index usize,
+               node hir.HirNode) string {
+    var out = "node " + usize_text(index) + " kind=" +
+        u32_text(hir.node_kind_id(hir.node_kind(node.data))) + " type=" +
+        usize_text(node.type_id) + " scope=" + usize_text(node.scope) +
+        source_text(node.source) + " children=";
+    for child in node.children {
+        out += usize_text(child) + ",";
+    }
+    switch node.data {
+        case hir.NodeData.UnitLiteral(data): {}
+        case hir.NodeData.BoolLiteral(data):
+            out += " bool=" + bool_text(data.value);
+        case hir.NodeData.IntegerLiteral(data):
+            out += " decimal=" + quoted(data.decimal) + " bits=" +
+                u64_text(data.bits);
+        case hir.NodeData.FloatLiteral(data):
+            out += " bits=" + u64_text(data.bits);
+        case hir.NodeData.StringLiteral(data):
+            out += " utf8=" + quoted(data.utf8);
+        case hir.NodeData.Read(data):
+            out += " symbol=" + usize_text(data.symbol);
+        case hir.NodeData.Place(data):
+            out += " symbol=" + usize_text(data.symbol);
+        case hir.NodeData.FunctionValue(data): {
+            out += " symbol=" + usize_text(data.symbol);
+            for arg in data.type_args {
+                out += " type_arg=" + usize_text(arg);
+            }
+            for capture in data.captures {
+                out += " capture=" + usize_text(capture.origin) + ":" +
+                    usize_text(capture.source) + ":" +
+                    usize_text(capture.type_id) + ":" +
+                    bool_text(capture.is_move);
+            }
+            if data.move_capture { out += " move_capture"; }
+            switch data.bound {
+                case option.Option.None: {}
+                case option.Option.Some(receiver):
+                    out += " bound=" + usize_text(receiver.type_id) + ":" +
+                        u32_text(param_mode_id(receiver.mode));
+            }
+        }
+        case hir.NodeData.Binding(data):
+            out += " symbol=" + usize_text(data.symbol) + " writable=" +
+                bool_text(data.writable);
+        case hir.NodeData.Assign(data): {
+            out += " compound=";
+            switch data.compound {
+                case option.Option.Some(op): out += u32_text(binary_op_id(op));
+                case option.Option.None: out += "-";
+            }
+        }
+        case hir.NodeData.Unary(data):
+            out += " op=" + u32_text(unary_op_id(data.op));
+        case hir.NodeData.Binary(data):
+            out += " op=" + u32_text(binary_op_id(data.op));
+        case hir.NodeData.ShortCircuit(data):
+            out += " op=" + u32_text(logical_op_id(data.op));
+        case hir.NodeData.IntegerConvert(data): {}
+        case hir.NodeData.Call(data): {
+            for arg in data.type_args {
+                out += " type_arg=" + usize_text(arg);
+            }
+            switch data.binding {
+                case option.Option.Some(binding):
+                    out += " binding=" + usize_text(binding);
+                case option.Option.None: {}
+            }
+            switch data.c_callable {
+                case option.Option.Some(callable):
+                    out += " c_callable=" + u32_text(callable);
+                case option.Option.None: {}
+            }
+            switch data.system {
+                case option.Option.Some(system):
+                    out += " system=" + u32_text(system);
+                case option.Option.None: {}
+            }
+            for omitted in data.omitted {
+                out += " omitted=" + u32_text(omitted);
+            }
+            out += " callee_kind=" + u32_text(callee_kind_id(data.kind)) +
+                " signature=" + usize_text(data.signature) + " direct=";
+            switch data.direct_symbol {
+                case option.Option.Some(symbol): out += usize_text(symbol);
+                case option.Option.None: out += "-";
+            }
+            out += " callee=";
+            switch data.callee {
+                case option.Option.Some(callee): out += usize_text(callee);
+                case option.Option.None: out += "-";
+            }
+            for arg in data.args {
+                out += call_arg_text(arg);
+            }
+        }
+        case hir.NodeData.Block(data): {}
+        case hir.NodeData.ExpressionStatement(data): {}
+        case hir.NodeData.If(data): {}
+        case hir.NodeData.For(data): {}
+        case hir.NodeData.Noop(data): {}
+        case hir.NodeData.Return(data):
+            out += " function=" + usize_text(data.function);
+        case hir.NodeData.Break(data):
+            out += " loop=" + usize_text(data.loop);
+        case hir.NodeData.Continue(data):
+            out += " loop=" + usize_text(data.loop);
+        case hir.NodeData.Unsupported(data):
+            out += " unsupported=" + quoted(data.feature);
+        case hir.NodeData.StructInit(data):
+            for field in data.fields {
+                out += init_arg_text(field);
+            }
+        case hir.NodeData.EnumInit(data): {
+            out += " variant=" + usize_text(data.variant);
+            for field in data.payload {
+                out += init_arg_text(field);
+            }
+        }
+        case hir.NodeData.FieldRead(data):
+            out += " field=" + usize_text(data.field);
+        case hir.NodeData.FieldPlace(data):
+            out += " field=" + usize_text(data.field);
+        case hir.NodeData.Switch(data): {
+            out += " exhaustive=" + bool_text(data.exhaustive);
+            for arm in data.arms {
+                out += " arm=" + usize_text(arm.scope) + ":" +
+                    usize_text(arm.body);
+                out += pattern_text(context, config, arm.pattern);
+            }
+        }
+        case hir.NodeData.ConstraintCall(data): {
+            out += " trait=" + trait_ref_text(data.trait_ref) + " method=" +
+                usize_text(data.method) + " receiver=" +
+                usize_text(data.receiver) + " signature=" +
+                usize_text(data.signature);
+            for arg in data.args {
+                out += init_arg_text(arg);
+            }
+        }
+        case hir.NodeData.Try(data):
+            for catch_item in data.catches {
+                out += " catch=" + usize_text(catch_item.error_type) + ":" +
+                    usize_text(catch_item.binding) + ":" +
+                    usize_text(catch_item.scope) + ":" +
+                    usize_text(catch_item.body);
+                out += source_text(catch_item.source);
+            }
+        case hir.NodeData.Defer(data): {
+            out += " owner_scope=" + usize_text(data.owner_scope);
+            for reference in data.references {
+                out += " reference=" + usize_text(reference);
+            }
+        }
+        case hir.NodeData.Throw(data): {}
+        case hir.NodeData.Move(data): {
+            out += " moved_binding=";
+            switch data.binding {
+                case option.Option.Some(binding): out += usize_text(binding);
+                case option.Option.None: out += "-";
+            }
+        }
+        case hir.NodeData.VecInit(data): {}
+        case hir.NodeData.IndexRead(data): {}
+        case hir.NodeData.IndexPlace(data): {}
+        case hir.NodeData.VecSlice(data): {
+            out += " slice_start=";
+            switch data.start {
+                case option.Option.Some(start): out += usize_text(start);
+                case option.Option.None: out += "-";
+            }
+            out += " slice_end=";
+            switch data.end {
+                case option.Option.Some(end): out += usize_text(end);
+                case option.Option.None: out += "-";
+            }
+        }
+        case hir.NodeData.ForIn(data): {
+            out += " element=" + usize_text(data.element) + " body_scope=" +
+                usize_text(data.body_scope) + " body=" +
+                usize_text(data.body);
+            switch data.iterator {
+                case option.Option.None: {}
+                case option.Option.Some(iterator):
+                    out += " iterator_cursor=" +
+                        usize_text(iterator.cursor) + " iterator_option=" +
+                        usize_text(iterator.option) + " iterator_next=" +
+                        usize_text(iterator.next) + " iterator_type=" +
+                        usize_text(iterator.iterator) + " iterator_element=" +
+                        usize_text(iterator.element) + " iterator_some=" +
+                        usize_text(iterator.some) + " iterator_none=" +
+                        usize_text(iterator.none) + " iterator_field=" +
+                        usize_text(iterator.some_field);
+            }
+        }
+        case hir.NodeData.ForeignRead(data): {
+            out += " foreign_read=" + usize_text(data.binding);
+        }
+        case hir.NodeData.ConstantLiteral(data):
+            out += constant_text(data.value);
+        case hir.NodeData.CFieldRead(data):
+            out += " c_record=" + u32_text(data.c_type) + " c_field=" +
+                u32_text(data.field);
+        case hir.NodeData.Await(data): {}
+        case hir.NodeData.TraitObjectInit(data): {
+            out += " trait=" + trait_ref_text(data.trait_ref) + " concrete=" +
+                usize_text(data.concrete) + " methods=";
+            for var index usize = 0; index < vec.len(data.methods); index += 1 {
+                out += usize_text(data.methods[index]) + ":";
+                if index < vec.len(data.method_args) {
+                    for arg in data.method_args[index] {
+                        out += usize_text(arg) + ",";
+                    }
+                }
+                out += ";";
+            }
+        }
+        case hir.NodeData.TraitDispatch(data): {
+            out += " trait=" + trait_ref_text(data.trait_ref) + " method=" +
+                usize_text(data.method) + " signature=" +
+                usize_text(data.signature) + " vtable_index=" +
+                u32_text(data.index);
+            for arg in data.args {
+                out += dispatch_arg_text(arg);
+            }
+        }
+    }
+    for error in node.errors {
+        out += " error=" + usize_text(error);
+    }
+    for plan in node.exits {
+        out += exit_text(plan);
+    }
+    out += "\n";
+    return out;
+}
+
+pub func dump_types(context types.Context) string {
+    var out = "";
+    for var index usize = 1; index <= types.size(context); index += 1 {
+        let found = types.find(context, index);
+        switch found {
+            case option.Option.None: {}
+            case option.Option.Some(value): {
+                out += "type " + usize_text(index) + " kind=" +
+                    u32_text(model.type_kind_id(value.kind)) + " bits=" +
+                    u32_text(value.bits) + " declaration=" +
+                    usize_text(value.declaration) + " binding=" +
+                    usize_text(value.binding) + " result=" +
+                    usize_text(value.result) + " throws=";
+                switch value.throws_type {
+                    case option.Option.Some(throws_type):
+                        out += usize_text(throws_type);
+                    case option.Option.None:
+                        out += "-";
+                }
+                for parameter in value.parameters {
+                    out += " p=" + u32_text(param_mode_id(parameter.mode)) +
+                        ":" + usize_text(parameter.type_id);
+                }
+                for argument in value.type_args {
+                    out += " arg=" + usize_text(argument);
+                }
+                out += "\n";
+            }
+        }
+    }
+    return out;
+}
+
+func validate_pattern(context types.Context, config model.CheckConfig,
+                      pattern hir.Pattern) throws model.SupportError {
+    switch pattern.literal {
+        case option.Option.None: {}
+        case option.Option.Some(literal):
+            width_checked(context, config, pattern.type_id);
+    }
+    for child in pattern.payload {
+        validate_pattern(context, config, child);
+    }
+}
+
+func validate_module_widths(module hir.HirModule) throws model.SupportError {
+    for node in module.nodes {
+        switch node.data {
+            case hir.NodeData.Switch(data):
+                for arm in data.arms {
+                    validate_pattern(module.types, module.config, arm.pattern);
+                }
+            default: {}
+        }
+    }
+}
+
+pub func dump_module(module hir.HirModule) string throws model.SupportError {
+    validate_module_widths(module);
+    var out = CONTRACT_VERSION + " scalar-v1 module=" +
+        usize_text(module.identity) + " backend=" +
+        u32_text(backend_id(module.config.backend)) + " word_bits=" +
+        u32_text(module.config.word_bits) + "\n";
+    out += dump_types(module.types);
+    for binding in module.foreign_bindings {
+        out += "foreign " + usize_text(binding.binding) + " type=" +
+            usize_text(binding.type_id) + " signature=";
+        switch binding.signature {
+            case option.Option.Some(signature): out += usize_text(signature);
+            case option.Option.None: out += "-";
+        }
+        out += " owner=";
+        switch binding.owner {
+            case option.Option.Some(owner): out += usize_text(owner);
+            case option.Option.None: out += "-";
+        }
+        out += " read_error=" + usize_text(binding.read_error) + "\n";
+    }
+    for declaration in module.nominals {
+        out += "nominal " + usize_text(declaration.symbol) + " kind=" +
+            u32_text(model.type_kind_id(declaration.kind));
+        out += generic_text(declaration.params);
+        out += source_text(declaration.source);
+        for field in declaration.fields {
+            out += field_text(field);
+        }
+        out += "\n";
+        for variant in declaration.variants {
+            out += "variant " + usize_text(variant.symbol) + " owner=" +
+                usize_text(declaration.symbol);
+            for field in variant.payload {
+                out += field_text(field);
+            }
+            out += source_text(variant.source);
+            out += "\n";
+        }
+    }
+    for declaration in module.traits {
+        out += "trait " + usize_text(declaration.symbol) + " self=" +
+            usize_text(declaration.self);
+        out += generic_text(declaration.params);
+        out += source_text(declaration.source);
+        out += "\n";
+        for method in declaration.methods {
+            out += "prototype " + usize_text(method.symbol) + " signature=" +
+                usize_text(method.signature);
+            for parameter in method.parameters {
+                out += " param=" + usize_text(parameter.symbol) + ":" +
+                    quoted(parameter.label);
+            }
+            out += source_text(method.source);
+            out += "\n";
+        }
+    }
+    for declaration in module.impls {
+        out += "impl self=" + usize_text(declaration.self_type) +
+            " self_parameter=" + usize_text(declaration.self_parameter) +
+            " trait=";
+        switch declaration.trait_ref {
+            case option.Option.Some(reference):
+                out += trait_ref_text(reference);
+            case option.Option.None:
+                out += "-";
+        }
+        out += generic_text(declaration.params);
+        for method in declaration.methods {
+            out += " method=" + usize_text(method);
+        }
+        out += source_text(declaration.source);
+        out += "\n";
+    }
+    for template in module.templates {
+        out += "template " + usize_text(template.function.symbol) +
+            " signature=" + usize_text(template.function.signature) +
+            " scope=" + usize_text(template.function.scope) + " body=" +
+            usize_text(template.function.body);
+        out += generic_text(template.params);
+        out += source_text(template.function.source);
+        for parameter in template.function.parameters {
+            out += " param=" + usize_text(parameter.symbol) + ":" +
+                quoted(parameter.label);
+        }
+        for capture in template.function.captures {
+            out += " capture=" + usize_text(capture.origin) + ":" +
+                usize_text(capture.local) + ":" + usize_text(capture.type_id);
+        }
+        out += "\n";
+    }
+    for instance in module.instances {
+        out += "instance " + usize_text(instance.symbol) + " origin=" +
+            usize_text(instance.origin) + " backend=" +
+            u32_text(backend_id(instance.target.backend)) + " word_bits=" +
+            u32_text(instance.target.word_bits);
+        for argument in instance.type_args {
+            out += " arg=" + usize_text(argument);
+        }
+        for rename in instance.renamed {
+            out += " renamed=" + usize_text(rename.origin) + ":" +
+                usize_text(rename.replacement);
+        }
+        out += "\n";
+    }
+    for function in module.functions {
+        out += "function " + usize_text(function.symbol) + " signature=" +
+            usize_text(function.signature) + " scope=" +
+            usize_text(function.scope) + " body=" + usize_text(function.body);
+        out += source_text(function.source);
+        for parameter in function.parameters {
+            out += " param=" + usize_text(parameter.symbol) + ":" +
+                quoted(parameter.label);
+        }
+        for capture in function.captures {
+            out += " capture=" + usize_text(capture.origin) + ":" +
+                usize_text(capture.local) + ":" + usize_text(capture.type_id);
+        }
+        out += "\n";
+    }
+    for var index usize = 0; index < vec.len(module.scopes); index += 1 {
+        let scope = module.scopes[index];
+        out += "scope " + usize_text(index) + " function=" +
+            usize_text(scope.function) + " parent=";
+        switch scope.parent {
+            case option.Option.Some(parent): out += usize_text(parent);
+            case option.Option.None: out += "-";
+        }
+        out += source_text(scope.source);
+        out += "\n";
+    }
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+        out += node_text(module.types, module.config, index, module.nodes[index]);
+    }
+    for use in module.ownership.uses {
+        out += "use " + usize_text(use.consumer) + ":" +
+            u32_text(use.operand) + ":" + u32_text(use_kind_id(use.kind)) +
+            ":" + usize_text(use.type_id) + " root=";
+        switch use.root {
+            case option.Option.Some(root): out += usize_text(root);
+            case option.Option.None: out += "-";
+        }
+        switch use.destination {
+            case option.Option.Some(destination):
+                out += " destination=" + usize_text(destination);
+            case option.Option.None: {}
+        }
+        out += "\n";
+    }
+    for temporary in module.ownership.temporaries {
+        out += "temporary " + usize_text(temporary.producer) + " full=" +
+            usize_text(temporary.full_expression) + " type=" +
+            usize_text(temporary.type_id) + "\n";
+    }
+    for lifetime in module.ownership.locals {
+        out += "lifetime " + usize_text(lifetime.symbol) + " scope=" +
+            usize_text(lifetime.scope) + " type=" +
+            usize_text(lifetime.type_id) + " order=" +
+            u32_text(lifetime.order) + " mode=" +
+            u32_text(param_mode_id(lifetime.mode));
+        if lifetime.read_only_capture { out += " read_only_capture"; }
+        out += "\n";
+    }
+    for expression in module.ownership.full_expressions {
+        out += "full_expression " + usize_text(expression.node);
+        out += actions_text(expression.actions);
+    }
+    for call in module.ownership.calls {
+        out += "call_return " + usize_text(call.node);
+        out += actions_text(call.on_return);
+    }
+    return out;
+}
