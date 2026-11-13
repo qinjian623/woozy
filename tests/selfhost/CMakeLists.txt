@@ -92,6 +92,26 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON)
     COMMAND ${LANG_TEST_PYTHON} ${PROJECT_SOURCE_DIR}/selfhost/tests/toolio/run.py
       --woozyc $<TARGET_FILE:woozyc>
       --work-dir ${CMAKE_CURRENT_BINARY_DIR}/toolio)
+  add_test(NAME selfhost.bindings
+    COMMAND ${LANG_TEST_PYTHON} ${PROJECT_SOURCE_DIR}/selfhost/tests/bindings/run.py
+      --stage0 $<TARGET_FILE:woozyc> --lib-dir $<TARGET_FILE_DIR:woozyc>
+      --work-dir ${CMAKE_CURRENT_BINARY_DIR}/bindings)
+  add_test(NAME selfhost.project
+    COMMAND ${LANG_TEST_PYTHON} ${PROJECT_SOURCE_DIR}/selfhost/tests/project/run.py
+      --woozyc $<TARGET_FILE:woozyc> --oracle-build-dir $<TARGET_FILE_DIR:woozyc>
+      --work-dir ${CMAKE_CURRENT_BINARY_DIR}/project)
+  add_test(NAME selfhost.nativebuild
+    COMMAND ${LANG_TEST_PYTHON} ${PROJECT_SOURCE_DIR}/selfhost/tests/nativebuild/run.py
+      --woozyc $<TARGET_FILE:woozyc>
+      --work-dir ${CMAKE_CURRENT_BINARY_DIR}/nativebuild)
+  add_test(NAME selfhost.constant
+    COMMAND ${LANG_TEST_PYTHON} ${PROJECT_SOURCE_DIR}/selfhost/tests/constant/run.py
+      --woozyc $<TARGET_FILE:woozyc> --lib-dir $<TARGET_FILE_DIR:woozyc>
+      --work-dir ${CMAKE_CURRENT_BINARY_DIR}/constant)
+  add_test(NAME selfhost.ownership
+    COMMAND ${LANG_TEST_PYTHON} ${PROJECT_SOURCE_DIR}/selfhost/tests/ownership/run.py
+      --woozyc $<TARGET_FILE:woozyc> --oracle
+      --work-dir ${CMAKE_CURRENT_BINARY_DIR}/ownership)
   set_tests_properties(selfhost.source selfhost.parser selfhost.bigint
     selfhost.frontend selfhost.cli selfhost.toml selfhost.digest selfhost.input
     selfhost.paths selfhost.system selfhost.number selfhost.types
@@ -99,5 +119,7 @@ if(LANG_ENABLE_LLVM AND LANG_TEST_PYTHON)
     selfhost.resolve_differential selfhost.hir_records selfhost.hirdump
     selfhost.nativeir_records selfhost.foreign_signature selfhost.sema_common
     selfhost.pattern selfhost.hirclone selfhost.nativeemit_text selfhost.toolio
+    selfhost.bindings selfhost.project selfhost.nativebuild selfhost.constant
+    selfhost.ownership
     PROPERTIES TIMEOUT 1200)
 endif()

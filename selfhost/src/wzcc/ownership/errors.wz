@@ -1,0 +1,36 @@
+// Internal failure carrier for the ownership producer and verifier.
+//
+// A source failure keeps the exact HIR source and diagnostic code so the
+// public UnitResult can report the same category/span as the C++ phase.  An
+// internal failure becomes E_IR_INVALID/lowering without a primary span.
+package ownership;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+
+struct Problem {
+    has_source bool;
+    source hir.HirSource;
+    code string;
+    message string;
+}
+
+func empty_hir_source() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+}
+
+func empty_problem() Problem {
+    return Problem(has_source: false, source: empty_hir_source(), code: "",
+        message: "");
+}
+
+func source_problem(source hir.HirSource, code string, message string) Problem {
+    return Problem(has_source: true, source: source, code: code,
+        message: message);
+}
+
+func internal_problem(message string) Problem {
+    return Problem(has_source: false, source: empty_hir_source(), code: "",
+        message: message);
+}

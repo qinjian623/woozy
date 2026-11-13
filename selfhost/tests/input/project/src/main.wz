@@ -109,6 +109,8 @@ func check_io(state inout Checks, label string, result input.ReadResult,
     check(inout state, label+": manager unchanged",
         vec.len(manager.files) == 0 && vec.len(manager.snapshots) == 0 &&
         manager.revision == 0);
+    // run.py compares this line against the real std::ifstream oracle.
+    io.println("IO\t"+diagnostic.message);
 }
 
 func check_valid(state inout Checks, label string, result input.ReadResult,
@@ -146,6 +148,13 @@ func main() i32 throws os.Error {
     let args = process.args();
     if vec.len(args) < 2 { return 2; }
     let base = args[1];
+    // Permission fixtures only fail for an unprivileged user; root sees them as
+    // readable, so the harness asks for these checks to be skipped instead of
+    // inventing a different expectation.
+    var permission_checks = true;
+    if vec.len(args) > 2 && args[2] == "skip-permissions" {
+        permission_checks = false;
+    }
     var state = Checks(passed: 0, failed: 0);
 
     let valid_original Vec[u8] =
@@ -237,19 +246,68 @@ func main() i32 throws os.Error {
     var missing_manager = source.manager();
     let missing_result = input.read(missing,inout missing_manager);
     check_io(inout state, "missing file", missing_result, missing_manager,
-        missing+": cannot read input (os error 2)");
+        missing+": cannot open input: iostream error");
 
     let directory = base+"/directory";
     var directory_manager = source.manager();
     let directory_result = input.read(directory,inout directory_manager);
     check_io(inout state, "directory read", directory_result,
         directory_manager,
-        directory+": cannot read input (os error 21)");
+        directory+": cannot read input: iostream error");
 
     var empty_path_manager = source.manager();
     let empty_path_result = input.read("",inout empty_path_manager);
     check_io(inout state, "empty path", empty_path_result,
-        empty_path_manager, ": cannot read input (os error 2)");
+        empty_path_manager, ": cannot open input: iostream error");
+
+    // Ifstream wording comes from the failing syscall: open rejects the path,
+    // while an opened stream that cannot produce bytes reports a read failure.
+    if permission_checks {
+        let unreadable_file = base+"/unreadable.bin";
+        var unreadable_file_manager = source.manager();
+        let unreadable_file_result = input.read(unreadable_file,
+            inout unreadable_file_manager);
+        check_io(inout state, "unreadable file", unreadable_file_result,
+            unreadable_file_manager,
+            unreadable_file+": cannot open input: iostream error");
+
+        let unreadable_directory = base+"/unreadable-directory";
+        var unreadable_directory_manager = source.manager();
+        let unreadable_directory_result = input.read(unreadable_directory,
+            inout unreadable_directory_manager);
+        check_io(inout state, "unreadable directory", unreadable_directory_result,
+            unreadable_directory_manager,
+            unreadable_directory+": cannot open input: iostream error");
+    }
+
+    let loop = base+"/loop.bin";
+    var loop_manager = source.manager();
+    let loop_result = input.read(loop,inout loop_manager);
+    check_io(inout state, "symlink loop", loop_result, loop_manager,
+        loop+": cannot open input: iostream error");
+
+    let dangling = base+"/dangling.bin";
+    var dangling_manager = source.manager();
+    let dangling_result = input.read(dangling,inout dangling_manager);
+    check_io(inout state, "dangling symlink", dangling_result,
+        dangling_manager, dangling+": cannot open input: iostream error");
+
+    let not_a_directory = base+"/file.bin/x";
+    var not_a_directory_manager = source.manager();
+    let not_a_directory_result = input.read(not_a_directory,
+        inout not_a_directory_manager);
+    check_io(inout state, "path below a file", not_a_directory_result,
+        not_a_directory_manager,
+        not_a_directory+": cannot open input: iostream error");
+
+    // Spaces and non-ASCII bytes are part of the path spelling and of the
+    // message; a successful read keeps them byte for byte.
+    let spaced_name = base+"/dir with space/\u{fc}n\u{ef}code \u{6c49}.bin";
+    let spaced_bytes Vec[u8] = [0x73,0x70,0x61,0x63,0x65,0x64];
+    var spaced_manager = source.manager();
+    let spaced = input.read(spaced_name,inout spaced_manager);
+    check_valid(inout state, "space and unicode path", spaced, spaced_manager,
+        spaced_bytes, spaced_bytes, 1, 1, 1);
 
     // A second read gets a new snapshot, while the first value and the
     // manager's retained snapshot keep the old bytes.
@@ -277,7 +335,7 @@ func main() i32 throws os.Error {
     var sequence_manager = source.manager();
     let missing_again = input.read(missing,inout sequence_manager);
     check_io(inout state, "missing before sequence", missing_again,
-        sequence_manager, missing+": cannot read input (os error 2)");
+        sequence_manager, missing+": cannot open input: iostream error");
     let sequence_invalid = input.read(base+"/invalid-nul.bin",
         inout sequence_manager);
     check_invalid(inout state, "invalid in sequence", sequence_invalid,

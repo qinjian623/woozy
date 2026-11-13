@@ -1,0 +1,1995 @@
+// Typed-HIR constant evaluation and source-literal evaluation.
+//
+// This is the pure-Wz counterpart of src/hir/constant_value.cpp.  Integer,
+// rational and IEEE arithmetic all go through app/wzcc/number and
+// app/wzcc/bigint; there is no host floating point or old-frontend call.
+// Source evaluation always re-reads the real lexer/parser AST and asks the
+// caller for type and function identities through the frozen callbacks.
+package constant;
+
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirclone" as hirclone;
+import "app/wzcc/model" as model;
+import "app/wzcc/number" as number;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+const DEPTH_LIMIT usize = 128;
+const WORK_LIMIT usize = 100000;
+const F32_INFINITY u64 = 0x7f800000;
+const F64_INFINITY u64 = 0x7ff0000000000000;
+const F32_NAN u64 = 0x7fc00000;
+const F64_NAN u64 = 0x7ff8000000000000;
+
+func float_infinity(width u32) u64 {
+    if width == 32 { return F32_INFINITY; }
+    return F64_INFINITY;
+}
+
+func float_nan(width u32) u64 {
+    if width == 32 { return F32_NAN; }
+    return F64_NAN;
+}
+
+func unary_is_not(op hir.UnaryOp) bool {
+    switch op {
+        case hir.UnaryOp.LogicalNot: { return true; }
+        case hir.UnaryOp.Negate: { return false; }
+        case hir.UnaryOp.BitNot: { return false; }
+    }
+}
+
+func unary_is_negate(op hir.UnaryOp) bool {
+    switch op {
+        case hir.UnaryOp.LogicalNot: { return false; }
+        case hir.UnaryOp.Negate: { return true; }
+        case hir.UnaryOp.BitNot: { return false; }
+    }
+}
+
+func logical_is_and(op hir.LogicalOp) bool {
+    switch op {
+        case hir.LogicalOp.And: { return true; }
+        case hir.LogicalOp.Or: { return false; }
+    }
+}
+
+func logical_is_or(op hir.LogicalOp) bool {
+    switch op {
+        case hir.LogicalOp.And: { return false; }
+        case hir.LogicalOp.Or: { return true; }
+    }
+}
+
+func bad(message string) throws model.SupportError {
+    throw model.SupportError.Invalid(message);
+}
+
+// Public results and callback returns must not alias any mutable Vec inside
+// the input HIR or a callback cache.  The accepted hirclone package owns the
+// one recursive ConstantValue/FunctionValue copier; this package never keeps
+// a second implementation.
+func clone_value(value hir.ConstantValue)
+                hir.ConstantValue throws model.SupportError {
+    return hirclone.clone_constant(value);
+}
+
+func clone_function_value(value hir.FunctionValue)
+                          hir.FunctionValue throws model.SupportError {
+    let wrapper = hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.FunctionValue(value: value));
+    let cloned = hirclone.clone_constant(wrapper);
+    switch cloned.data {
+        case hir.ConstantData.FunctionValue(payload): { return payload; }
+        default: { bad("constant function clone failed"); }
+    }
+    return value;
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func ast_is(kind model.AstKind, expected model.AstKind) bool {
+    return model.ast_kind_id(kind) == model.ast_kind_id(expected);
+}
+
+func token_is(kind model.TokenKind, expected model.TokenKind) bool {
+    return model.token_kind_id(kind) == model.token_kind_id(expected);
+}
+
+func integral(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.SignedInt) ||
+           kind_is(kind, model.TypeKind.UnsignedInt) ||
+           kind_is(kind, model.TypeKind.Isize) ||
+           kind_is(kind, model.TypeKind.Usize);
+}
+
+func signed_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.SignedInt) ||
+           kind_is(kind, model.TypeKind.Isize);
+}
+
+func type_failure(error types.Error) model.SupportError {
+    switch error {
+        case types.Error.Invalid(message): {
+            return model.SupportError.Invalid(message);
+        }
+    }
+}
+
+func number_failure(error number.Error) model.SupportError {
+    switch error {
+        case number.Error.InvalidLiteral(message): {
+            return model.SupportError.Invalid(message);
+        }
+        case number.Error.InvalidWidth: {
+            return model.SupportError.Invalid(
+                "floating literal has unsupported IEEE width");
+        }
+        case number.Error.ZeroDenominator: {
+            return model.SupportError.Invalid("exact ratio division fault");
+        }
+        case number.Error.NonFiniteInteger: {
+            return model.SupportError.Invalid(
+                "non-finite constant integer conversion");
+        }
+        case number.Error.IntegerRange: {
+            return model.SupportError.Invalid(
+                "constant integer out of range");
+        }
+    }
+}
+
+func bigint_failure() model.SupportError {
+    return model.SupportError.Invalid("integer arithmetic fault");
+}
+
+func require_type(context types.Context, id usize,
+                  message string) model.Type throws model.SupportError {
+    switch types.find(context, id) {
+        case option.Option.Some(value): { return value; }
+        case option.Option.None: { bad(message); }
+    }
+    return model.empty_type(model.TypeKind.Error);
+}
+
+func one() bigint.BigInt {
+    return bigint.from_u64(1);
+}
+
+func pow2(bits u32) bigint.BigInt {
+    return bigint.shift_left(one(), u64(bits));
+}
+
+func parse_decimal(value string) bigint.BigInt throws model.SupportError {
+    try {
+        return bigint.parse_digits(value, 10);
+    } catch error bigint.Error {
+        throw model.SupportError.Invalid("invalid integer constant decimal");
+    }
+}
+
+func to_u64(value bigint.BigInt,
+            message string) u64 throws model.SupportError {
+    try {
+        return bigint.to_u64(value);
+    } catch error bigint.Error {
+        bad(message);
+    }
+    return 0;
+}
+
+func positive_remainder(value bigint.BigInt, modulus bigint.BigInt)
+                        bigint.BigInt throws model.SupportError {
+    try {
+        let parts = bigint.divrem(value, modulus);
+        if parts.remainder.sign < 0 {
+            return bigint.add(parts.remainder, modulus);
+        }
+        return parts.remainder;
+    } catch error bigint.Error {
+        throw bigint_failure();
+    }
+}
+
+func width_mask(width u32) u64 {
+    if width >= 64 { return 0xFFFFFFFFFFFFFFFF; }
+    return (u64(1) << u64(width)) - 1;
+}
+
+func low_bits(value bigint.BigInt, width u32) u64 throws model.SupportError {
+    let modulus = pow2(width);
+    let residue = positive_remainder(value, modulus);
+    return to_u64(residue, "integer magnitude does not fit") & width_mask(width);
+}
+
+func bitwise_value(op string, left bigint.BigInt, right bigint.BigInt,
+                   width u32) bigint.BigInt throws model.SupportError {
+    let a = low_bits(left, width);
+    let b = low_bits(right, width);
+    var result u64 = 0;
+    if op == "&" {
+        result = a & b;
+    } else if op == "|" {
+        result = a | b;
+    } else {
+        result = a ^ b;
+    }
+    return bigint.from_u64(result);
+}
+
+func bitwise_not_value(value bigint.BigInt,
+                       width u32) bigint.BigInt throws model.SupportError {
+    let low = low_bits(value, width);
+    return bigint.from_u64(width_mask(width) ^ low);
+}
+
+// GMP's right shift is an arithmetic (floor) shift for negative values.  The
+// bigint package exposes a magnitude shift, so adjust the negative remainder
+// explicitly instead of silently changing the wrapped result.
+func arithmetic_shift_right(value bigint.BigInt,
+                            amount u32) bigint.BigInt
+                            throws model.SupportError {
+    if value.sign >= 0 {
+        return bigint.shift_right(value, u64(amount));
+    }
+    let magnitude = bigint.absolute(value);
+    let divisor = pow2(amount);
+    try {
+        let parts = bigint.divrem(magnitude, divisor);
+        var quotient = parts.quotient;
+        if parts.remainder.sign != 0 {
+            quotient = bigint.add(quotient, one());
+        }
+        return bigint.negate(quotient);
+    } catch error bigint.Error {
+        throw bigint_failure();
+    }
+}
+
+func bool_value(value hir.ConstantValue) bool throws model.SupportError {
+    switch value.data {
+        case hir.ConstantData.BoolLiteral(payload): { return payload.value; }
+        default: { bad("constant operands are not scalar"); }
+    }
+    return false;
+}
+
+func integer_literal(value hir.ConstantValue)
+                     hir.IntegerLiteral throws model.SupportError {
+    switch value.data {
+        case hir.ConstantData.IntegerLiteral(payload): { return payload; }
+        default: { bad("constant integer operand"); }
+    }
+    return hir.IntegerLiteral(decimal: "0", bits: 0);
+}
+
+func float_literal(value hir.ConstantValue)
+                   hir.FloatLiteral throws model.SupportError {
+    switch value.data {
+        case hir.ConstantData.FloatLiteral(payload): { return payload; }
+        default: { bad("constant float operand"); }
+    }
+    return hir.FloatLiteral(bits: 0);
+}
+
+func bool_constant(type_id usize, value bool) hir.ConstantValue {
+    return hir.ConstantValue(type_id: type_id,
+        data: hir.ConstantData.BoolLiteral(
+            value: hir.BoolLiteral(value: value)));
+}
+
+func integer_constant(type_id usize, decimal string,
+                      bits u64) hir.ConstantValue {
+    return hir.ConstantValue(type_id: type_id,
+        data: hir.ConstantData.IntegerLiteral(
+            value: hir.IntegerLiteral(decimal: decimal, bits: bits)));
+}
+
+func float_constant(type_id usize, bits u64) hir.ConstantValue {
+    return hir.ConstantValue(type_id: type_id,
+        data: hir.ConstantData.FloatLiteral(
+            value: hir.FloatLiteral(bits: bits)));
+}
+
+func string_constant(type_id usize, utf8 string) hir.ConstantValue {
+    return hir.ConstantValue(type_id: type_id,
+        data: hir.ConstantData.StringLiteral(
+            value: hir.StringLiteral(utf8: utf8)));
+}
+
+func unit_placeholder() hir.ConstantValue {
+    return hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.UnitLiteral(value: hir.UnitLiteral()));
+}
+
+struct Number {
+    q number.Rational;
+    negative bool;
+    special u32; // 0 finite, 1 infinity, 2 NaN
+}
+
+func number_zero() number.Rational {
+    return number.Rational(numerator: bigint.zero(),
+        denominator: bigint.from_u64(1));
+}
+
+func number_is_zero(value Number) bool {
+    if value.special != 0 { return false; }
+    return value.q.numerator.sign == 0;
+}
+
+func number_negate(value Number) Number {
+    var result = value;
+    if result.q.numerator.sign != 0 {
+        result.q = number.Rational(numerator: bigint.negate(result.q.numerator),
+            denominator: result.q.denominator);
+    }
+    result.negative = !result.negative;
+    return result;
+}
+
+func decode_number(bits u64, width u32) Number throws model.SupportError {
+    if width != 32 && width != 64 {
+        bad("constant float width");
+    }
+    var fraction_bits u32 = 52;
+    var exponent_bits u32 = 11;
+    var bias i64 = 1023;
+    if width == 32 {
+        fraction_bits = 23;
+        exponent_bits = 8;
+        bias = 127;
+    }
+    let negative = ((bits >> u64(width - 1)) & 1) != 0;
+    let exponent_mask = (u64(1) << u64(exponent_bits)) - 1;
+    let fraction_mask = (u64(1) << u64(fraction_bits)) - 1;
+    let exponent = (bits >> u64(fraction_bits)) & exponent_mask;
+    let fraction = bits & fraction_mask;
+    if exponent == exponent_mask {
+        var special u32 = 1;
+        if fraction != 0 { special = 2; }
+        return Number(q: number_zero(), negative: negative, special: special);
+    }
+    var significand = bigint.from_u64(fraction);
+    if exponent != 0 {
+        significand = bigint.add(significand, pow2(fraction_bits));
+    }
+    var exponent_value i64 = 1 - bias;
+    if exponent != 0 {
+        exponent_value = i64(exponent) - bias;
+    }
+    let shift = exponent_value - i64(fraction_bits);
+    var q = number_zero();
+    try {
+        if shift >= 0 {
+            q = number.make_ratio(
+                bigint.shift_left(significand, u64(shift)), one());
+        } else {
+            q = number.make_ratio(significand,
+                bigint.shift_left(one(), u64(-shift)));
+        }
+    } catch error number.Error {
+        throw number_failure(error);
+    }
+    if negative && q.numerator.sign != 0 {
+        q = number.Rational(numerator: bigint.negate(q.numerator),
+            denominator: q.denominator);
+    }
+    return Number(q: q, negative: negative, special: 0);
+}
+
+// ---------------------------------------------------------------------------
+// Source AST evaluation
+
+struct SourceKey {
+    module usize;
+    file usize;
+    node usize;
+}
+
+struct SourceState {
+    module hir.HirModule;
+    types types.Context;
+    parse func(model.NodeRef) usize throws model.SupportError;
+    function func(model.NodeRef, usize) hir.FunctionValue
+             throws model.SupportError;
+    work usize;
+    active Vec[SourceKey];
+}
+
+func source_file(state SourceState,
+                 r model.NodeRef) model.ParseResult throws model.SupportError {
+    let project = state.module.resolved.project;
+    if r.module >= vec.len(project.modules) {
+        bad("constant source module is invalid");
+    }
+    let module = project.modules[r.module];
+    if r.file >= vec.len(module.files) {
+        bad("constant source file is invalid");
+    }
+    let index = module.files[r.file];
+    if index >= vec.len(project.files) {
+        bad("constant source file is invalid");
+    }
+    return project.files[index];
+}
+
+func source_ast(state SourceState,
+                r model.NodeRef) model.AstNode throws model.SupportError {
+    let file = source_file(state, r);
+    if r.node >= vec.len(file.nodes) {
+        bad("constant source is invalid");
+    }
+    return file.nodes[r.node];
+}
+
+func source_child(state SourceState, r model.NodeRef,
+                  index usize) model.NodeRef throws model.SupportError {
+    let node = source_ast(state, r);
+    if index >= vec.len(node.children) {
+        bad("constant source child is invalid");
+    }
+    return model.NodeRef(module: r.module, file: r.file,
+        node: node.children[index]);
+}
+
+func source_token(state SourceState, r model.NodeRef,
+                  index usize) model.Token throws model.SupportError {
+    let file = source_file(state, r);
+    if index >= vec.len(file.lexed.tokens) {
+        bad("constant source token is invalid");
+    }
+    return file.lexed.tokens[index];
+}
+
+func source_symbol(state SourceState,
+                   r model.NodeRef) option.Option[usize] {
+    var found = option.Option[usize].None;
+    for occurrence in state.module.resolved.occurrences {
+        if occurrence.source.module == r.module &&
+           occurrence.source.file == r.file &&
+           occurrence.source.node == r.node {
+            found = option.Option[usize].Some(occurrence.symbol);
+        }
+    }
+    return found;
+}
+
+func source_symbol_kind(state SourceState,
+                        symbol usize) model.SymbolKind throws model.SupportError {
+    if symbol >= vec.len(state.module.resolved.symbols) {
+        bad("constant symbol is invalid");
+    }
+    return state.module.resolved.symbols[symbol].kind;
+}
+
+func source_scalar(state inout SourceState, kind model.TypeKind,
+                   bits u32) usize throws model.SupportError {
+    let value = model.Type(kind: kind, bits: bits, declaration: 0,
+        binding: 0, parameters: vec.empty[model.ParameterType](),
+        result: 0, throws_type: option.Option[usize].None,
+        type_args: vec.empty[usize](), c_type: 0);
+    try {
+        return types.intern(inout state.types, value);
+    } catch error types.Error {
+        throw type_failure(error);
+    }
+}
+
+func source_width(state SourceState,
+                  value model.Type) u32 throws model.SupportError {
+    try {
+        return types.bit_width(value, state.module.config);
+    } catch error types.Error {
+        throw type_failure(error);
+    }
+}
+
+func source_nominal(state SourceState,
+                    id usize) hir.NominalDecl throws model.SupportError {
+    let info = require_type(state.types, id,
+        "constant source type is missing");
+    for nominal in state.module.nominals {
+        if nominal.symbol == info.declaration {
+            return nominal;
+        }
+    }
+    bad("constant nominal declaration missing");
+    return hir.NominalDecl(symbol: 0, kind: model.TypeKind.Error,
+        params: vec.empty[hir.GenericParam](),
+        fields: vec.empty[hir.FieldDecl](),
+        variants: vec.empty[hir.VariantDecl](),
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
+}
+
+func source_field_type(state inout SourceState, id usize,
+                       field hir.FieldDecl) usize throws model.SupportError {
+    let nominal = source_nominal(state, id);
+    let args = require_type(state.types, id,
+        "constant source type is missing").type_args;
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(args); index += 1 {
+        if index >= vec.len(nominal.params) {
+            bad("constant nominal parameter missing");
+        }
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol, type_id: args[index]));
+    }
+    try {
+        return types.substitute(field.type_id, substitutions,
+            inout state.types);
+    } catch error types.Error {
+        throw type_failure(error);
+    }
+}
+
+func source_integer(state inout SourceState, value bigint.BigInt,
+                    id usize, wrap bool) hir.ConstantValue
+                    throws model.SupportError {
+    let info = require_type(state.types, id,
+        "constant source type is missing");
+    if !integral(info.kind) {
+        bad("constant integer type");
+    }
+    let width = source_width(state, info);
+    let modulus = pow2(width);
+    var z = value;
+    if wrap {
+        z = positive_remainder(z, modulus);
+        let half = bigint.shift_right(modulus, 1);
+        if signed_kind(info.kind) &&
+           bigint.compare(z, half) >= 0 {
+            z = bigint.subtract(z, modulus);
+        }
+    }
+    var low = bigint.zero();
+    var high = modulus;
+    if signed_kind(info.kind) {
+        high = bigint.shift_right(modulus, 1);
+        low = bigint.negate(high);
+    }
+    if bigint.compare(z, low) < 0 || bigint.compare(z, high) >= 0 {
+        bad("constant integer out of range");
+    }
+    var unsigned = z;
+    if unsigned.sign < 0 {
+        unsigned = bigint.add(unsigned, modulus);
+    }
+    return integer_constant(id, bigint.format_decimal(z),
+        low_bits(unsigned, width));
+}
+
+func source_round(state SourceState, value Number,
+                  id usize) u64 throws model.SupportError {
+    let info = require_type(state.types, id,
+        "constant source type is missing");
+    let width = info.bits;
+    if width != 32 && width != 64 {
+        bad("constant float width");
+    }
+    var sign_bits u64 = 0;
+    if value.negative {
+        sign_bits = u64(1) << u64(width - 1);
+    }
+    if value.special == 2 {
+        return float_nan(width);
+    }
+    if value.special == 1 {
+        return sign_bits | float_infinity(width);
+    }
+    let negative = value.q.numerator.sign < 0 ||
+                   (value.q.numerator.sign == 0 && value.negative);
+    let magnitude = bigint.absolute(value.q.numerator);
+    try {
+        return number.exact_ratio_to_ieee(negative, magnitude,
+            value.q.denominator, width);
+    } catch error number.Error {
+        throw number_failure(error);
+    }
+}
+
+func ieee_bits(spelling string, negative bool,
+               width u32) u64 throws model.SupportError {
+    try {
+        return number.ieee_float_bits(spelling, negative, width);
+    } catch error number.Error {
+        throw number_failure(error);
+    }
+}
+
+func source_convert(state inout SourceState, value hir.ConstantValue,
+                    to usize) hir.ConstantValue throws model.SupportError {
+    let from = require_type(state.types, value.type_id,
+        "constant source type is missing");
+    let destination = require_type(state.types, to,
+        "constant source type is missing");
+    if integral(destination.kind) {
+        switch value.data {
+            case hir.ConstantData.IntegerLiteral(payload): {
+                return source_integer(inout state,
+                    parse_decimal(payload.decimal), to, false);
+            }
+            case hir.ConstantData.FloatLiteral(payload): {
+                let decoded = decode_number(payload.bits, from.bits);
+                if decoded.special != 0 {
+                    bad("non-finite constant integer conversion");
+                }
+                try {
+                    let parts = bigint.divrem(decoded.q.numerator,
+                        decoded.q.denominator);
+                    return source_integer(inout state, parts.quotient,
+                        to, false);
+                } catch error bigint.Error {
+                    throw bigint_failure();
+                }
+            }
+            default: { bad("unsupported constant conversion"); }
+        }
+    }
+    if kind_is(destination.kind, model.TypeKind.Float) {
+        switch value.data {
+            case hir.ConstantData.IntegerLiteral(payload): {
+                var decoded = Number(q: number_zero(), negative: false,
+                    special: 0);
+                try {
+                    decoded.q = number.make_ratio(
+                        parse_decimal(payload.decimal), one());
+                } catch error number.Error {
+                    throw number_failure(error);
+                }
+                return float_constant(to,
+                    source_round(state, decoded, to));
+            }
+            case hir.ConstantData.FloatLiteral(payload): {
+                if from.bits == destination.bits {
+                    return float_constant(to, payload.bits);
+                }
+                let decoded = decode_number(payload.bits, from.bits);
+                return float_constant(to,
+                    source_round(state, decoded, to));
+            }
+            default: { bad("unsupported constant conversion"); }
+        }
+    }
+    bad("unsupported constant conversion");
+    return unit_placeholder();
+}
+
+func source_contextual(state SourceState, r model.NodeRef)
+                       bool throws model.SupportError {
+    let node = source_ast(state, r);
+    if ast_is(node.kind, model.AstKind.Parenthesized) {
+        return source_contextual(state, source_child(state, r, 0));
+    }
+    if ast_is(node.kind, model.AstKind.Unary) {
+        let spelling = source_token(state, r, node.token_begin).spelling;
+        return (spelling == "+" || spelling == "-") &&
+               source_contextual(state, source_child(state, r, 0));
+    }
+    if ast_is(node.kind, model.AstKind.Literal) {
+        let kind = source_token(state, r, node.token_begin).kind;
+        return token_is(kind, model.TokenKind.Integer) ||
+               token_is(kind, model.TokenKind.Floating);
+    }
+    if ast_is(node.kind, model.AstKind.Binary) {
+        return source_contextual(state, source_child(state, r, 0)) &&
+               source_contextual(state, source_child(state, r, 1));
+    }
+    return false;
+}
+
+func compare_operator(op string, comparison i32) bool {
+    if op == "==" { return comparison == 0; }
+    if op == "!=" { return comparison != 0; }
+    if op == "<" { return comparison < 0; }
+    if op == "<=" { return comparison <= 0; }
+    if op == ">" { return comparison > 0; }
+    return comparison >= 0;
+}
+
+func source_binary(state inout SourceState, op string,
+                   left hir.ConstantValue,
+                   right hir.ConstantValue) hir.ConstantValue
+                   throws model.SupportError {
+    let boolean = source_scalar(inout state, model.TypeKind.Bool, 0);
+    let comparison = op == "==" || op == "!=" || op == "<" ||
+                     op == "<=" || op == ">" || op == ">=";
+    if left.type_id != right.type_id && op != "<<" && op != ">>" {
+        bad("constant operand type mismatch");
+    }
+    switch left.data {
+        case hir.ConstantData.BoolLiteral(payload): {
+            let other = bool_value(right);
+            if op == "&&" || op == "||" {
+                var result = false;
+                if op == "&&" {
+                    result = payload.value && other;
+                } else {
+                    result = payload.value || other;
+                }
+                return bool_constant(boolean, result);
+            }
+            if op == "==" || op == "!=" {
+                var result = false;
+                if op == "==" {
+                    result = payload.value == other;
+                } else {
+                    result = payload.value != other;
+                }
+                return bool_constant(boolean, result);
+            }
+            bad("constant bool operator");
+        }
+        case hir.ConstantData.IntegerLiteral(payload): {
+            let x = parse_decimal(payload.decimal);
+            let y = parse_decimal(integer_literal(right).decimal);
+            if comparison {
+                return bool_constant(boolean,
+                    compare_operator(op, bigint.compare(x, y)));
+            }
+            let left_type = require_type(state.types, left.type_id,
+                "constant source type is missing");
+            let width = source_width(state, left_type);
+            var z = bigint.zero();
+            if op == "+" {
+                z = bigint.add(x, y);
+            } else if op == "-" {
+                z = bigint.subtract(x, y);
+            } else if op == "*" {
+                z = bigint.multiply(x, y);
+            } else if op == "/" || op == "%" {
+                if y.sign == 0 {
+                    bad("constant operation would Panic");
+                }
+                try {
+                    let parts = bigint.divrem(x, y);
+                    if op == "/" {
+                        z = parts.quotient;
+                    } else {
+                        z = parts.remainder;
+                    }
+                } catch error bigint.Error {
+                    throw bigint_failure();
+                }
+            } else if op == "&" || op == "|" || op == "^" {
+                z = bitwise_value(op, x, y, width);
+            } else if op == "<<" || op == ">>" {
+                if y.sign < 0 ||
+                   bigint.compare(y, bigint.from_u64(u64(width))) >= 0 {
+                    bad("constant shift would Panic");
+                }
+                let amount = u32(to_u64(y, "constant shift is invalid"));
+                if op == "<<" {
+                    z = bigint.shift_left(x, u64(amount));
+                } else {
+                    z = arithmetic_shift_right(x, amount);
+                }
+            } else {
+                bad("unsupported constant integer operator");
+            }
+            return source_integer(inout state, z, left.type_id, true);
+        }
+        case hir.ConstantData.FloatLiteral(payload): {
+            let left_type = require_type(state.types, left.type_id,
+                "constant source type is missing");
+            let right_type = require_type(state.types, right.type_id,
+                "constant source type is missing");
+            let x = decode_number(payload.bits, left_type.bits);
+            var y = decode_number(float_literal(right).bits, right_type.bits);
+            if comparison {
+                if x.special == 2 || y.special == 2 {
+                    return bool_constant(boolean, op == "!=");
+                }
+                var ordering i32 = 0;
+                if x.special == 1 {
+                    if y.special == 1 {
+                        if x.negative == y.negative {
+                            ordering = 0;
+                        } else if x.negative {
+                            ordering = -1;
+                        } else {
+                            ordering = 1;
+                        }
+                    } else if x.negative {
+                        ordering = -1;
+                    } else {
+                        ordering = 1;
+                    }
+                } else if y.special == 1 {
+                    if y.negative {
+                        ordering = 1;
+                    } else {
+                        ordering = -1;
+                    }
+                } else {
+                    ordering = number.ratio_compare(x.q, y.q);
+                }
+                return bool_constant(boolean,
+                    compare_operator(op, ordering));
+            }
+            var z = Number(q: number_zero(), negative: false, special: 0);
+            var operation = op;
+            if operation == "-" {
+                y = number_negate(y);
+                operation = "+";
+            }
+            if x.special == 2 || y.special == 2 {
+                z.special = 2;
+            } else if operation == "+" {
+                if x.special != 0 || y.special != 0 {
+                    if x.special != 0 {
+                        z = x;
+                    } else {
+                        z = y;
+                    }
+                    if x.special != 0 && y.special != 0 &&
+                       x.negative != y.negative {
+                        z.special = 2;
+                    }
+                } else {
+                    z.q = number.ratio_add(x.q, y.q);
+                    z.negative = z.q.numerator.sign < 0 ||
+                                 (z.q.numerator.sign == 0 &&
+                                  x.negative && y.negative);
+                }
+            } else if operation == "*" || operation == "/" {
+                z.negative = x.negative != y.negative;
+                if operation == "*" {
+                    if (x.special != 0 && number_is_zero(y)) ||
+                       (y.special != 0 && number_is_zero(x)) {
+                        z.special = 2;
+                    } else if x.special != 0 || y.special != 0 {
+                        z.special = 1;
+                    } else {
+                        z.q = number.ratio_multiply(x.q, y.q);
+                    }
+                } else {
+                    if (x.special != 0 && y.special != 0) ||
+                       (x.special == 0 && y.special == 0 &&
+                        number_is_zero(x) && number_is_zero(y)) {
+                        z.special = 2;
+                    } else if x.special != 0 ||
+                              (y.special == 0 && number_is_zero(y)) {
+                        z.special = 1;
+                    } else if y.special == 0 {
+                        try {
+                            z.q = number.ratio_divide(x.q, y.q);
+                        } catch error number.Error {
+                            throw number_failure(error);
+                        }
+                    }
+                }
+            } else {
+                bad("unsupported constant float operator");
+            }
+            return float_constant(left.type_id,
+                source_round(state, z, left.type_id));
+        }
+        default: {
+            bad("constant operands are not scalar");
+        }
+    }
+    return unit_placeholder();
+}
+
+func finish_source(value hir.ConstantValue,
+                   expected option.Option[usize])
+                   hir.ConstantValue throws model.SupportError {
+    if option.is_some(expected) {
+        let wanted = option.unwrap_or(expected, 0);
+        if value.type_id != wanted {
+            bad("constant source type mismatch");
+        }
+    }
+    return value;
+}
+
+func source_eval(state inout SourceState, r model.NodeRef,
+                 expected option.Option[usize],
+                 depth usize) hir.ConstantValue throws model.SupportError {
+    // Consecutive parentheses are a pure wrapper chain.  Walk them
+    // iteratively so the frozen 128-depth rule is enforced without consuming
+    // one large native stack frame per wrapper; every wrapper still performs
+    // the same work/active bookkeeping as the recursive C++ form.
+    var current = r;
+    var current_depth = depth;
+    var pushed usize = 0;
+    var result = unit_placeholder();
+    var done = false;
+    for !done {
+        if current_depth > DEPTH_LIMIT || state.work + 1 > WORK_LIMIT {
+            bad("constant evaluation exceeds budget");
+        }
+        state.work += 1;
+        let key = SourceKey(module: current.module, file: current.file,
+            node: current.node);
+        for active in state.active {
+            if active.module == key.module && active.file == key.file &&
+               active.node == key.node {
+                bad("constant source cycle");
+            }
+        }
+        vec.push(state.active, key);
+        pushed += 1;
+        let node = source_ast(state, current);
+        if ast_is(node.kind, model.AstKind.Parenthesized) ||
+           ast_is(node.kind, model.AstKind.BracketItem) {
+            current = source_child(state, current, 0);
+            current_depth += 1;
+        } else {
+            result = source_eval_body(inout state, current, expected,
+                current_depth);
+            done = true;
+        }
+    }
+    for pushed > 0 {
+        vec.pop(state.active);
+        pushed -= 1;
+    }
+    return result;
+}
+
+func source_literal(state inout SourceState, r model.NodeRef,
+                    node model.AstNode,
+                    expected option.Option[usize]) hir.ConstantValue
+                    throws model.SupportError {
+        let token = source_token(state, r, node.token_begin);
+        if token_is(token.kind, model.TokenKind.Integer) {
+            let fallback = source_scalar(inout state,
+                model.TypeKind.SignedInt, 64);
+            let target = option.unwrap_or(expected, fallback);
+            return finish_source(source_integer(inout state,
+                parse_spelling(token.spelling), target, false), expected);
+        }
+        if token_is(token.kind, model.TokenKind.Floating) {
+            let fallback = source_scalar(inout state,
+                model.TypeKind.Float, 64);
+            let target = option.unwrap_or(expected, fallback);
+            let info = require_type(state.types, target,
+                "constant source type is missing");
+            if !kind_is(info.kind, model.TypeKind.Float) {
+                bad("constant float context");
+            }
+            return finish_source(float_constant(target,
+                ieee_bits(token.spelling, false, info.bits)), expected);
+        }
+        if token_is(token.kind, model.TokenKind.StringLiteral) {
+            if !token.has_string_value {
+                bad("constant string literal is missing a value");
+            }
+            let target = source_scalar(inout state,
+                model.TypeKind.String, 0);
+            return finish_source(string_constant(target,
+                token.string_value), expected);
+        }
+        if token.spelling == "true" || token.spelling == "false" {
+            let target = source_scalar(inout state, model.TypeKind.Bool, 0);
+            return finish_source(bool_constant(target,
+                token.spelling == "true"), expected);
+        }
+    bad("unsupported constant source expression");
+    return unit_placeholder();
+}
+
+func source_name(state inout SourceState, r model.NodeRef,
+                 node model.AstNode, expected option.Option[usize],
+                 depth usize) hir.ConstantValue throws model.SupportError {
+    let kind = node.kind;
+        let symbol = source_symbol(state, r);
+        if option.is_some(symbol) &&
+           model.symbol_kind_id(source_symbol_kind(state,
+               option.unwrap_or(symbol, 0))) ==
+           model.symbol_kind_id(model.SymbolKind.Constant) {
+            let declaration = state.module.resolved.symbols[
+                option.unwrap_or(symbol, 0)];
+            if !option.is_some(declaration.definition) {
+                bad("constant has no definition");
+            }
+            let definition = option.unwrap_or(declaration.definition,
+                model.NodeRef(module: 0, file: 0, node: 0));
+            let written = source_ast(state, definition);
+            var annotation = option.Option[usize].None;
+            if vec.len(written.children) > 1 {
+                annotation = option.Option[usize].Some(
+                    state.parse(source_child(state, definition, 0)));
+            }
+            if !option.is_some(annotation) && option.is_some(expected) {
+                let wanted = option.unwrap_or(expected, 0);
+                let wanted_type = require_type(state.types, wanted,
+                    "constant source type is missing");
+                if kind_is(wanted_type.kind, model.TypeKind.Function) {
+                    annotation = expected;
+                }
+            }
+            if vec.len(written.children) == 0 {
+                bad("constant has no initializer");
+            }
+            let last = vec.len(written.children) - 1;
+            let initializer = source_child(state, definition, last);
+            return finish_source(source_eval(inout state,
+                initializer, annotation, depth + 1), expected);
+        }
+        if ast_is(kind, model.AstKind.Member) && !option.is_some(symbol) {
+            var base_symbol = source_symbol(state,
+                source_child(state, r, 0));
+            if ast_is(source_ast(state,
+                       source_child(state, r, 0)).kind,
+                       model.AstKind.NeutralBracket) {
+                base_symbol = source_symbol(state,
+                    source_child(state, source_child(state, r, 0), 0));
+            }
+            var is_type = false;
+            if option.is_some(base_symbol) {
+                let base_kind = source_symbol_kind(state,
+                    option.unwrap_or(base_symbol, 0));
+                is_type =
+                    model.symbol_kind_id(base_kind) ==
+                        model.symbol_kind_id(model.SymbolKind.Type) ||
+                    model.symbol_kind_id(base_kind) ==
+                        model.symbol_kind_id(model.SymbolKind.TypeParameter) ||
+                    model.symbol_kind_id(base_kind) ==
+                        model.symbol_kind_id(model.SymbolKind.BuiltinType);
+            }
+            if is_type {
+                let id = state.parse(source_child(state, r, 0));
+                let info = require_type(state.types, id,
+                    "constant source type is missing");
+                if kind_is(info.kind, model.TypeKind.NominalEnum) {
+                    let variant_name = source_token(state, r,
+                        node.token_end - 1).spelling;
+                    let nominal = source_nominal(state, id);
+                    for variant in nominal.variants {
+                        if state.module.resolved.symbols[
+                               variant.symbol].name == variant_name &&
+                           vec.len(variant.payload) == 0 {
+                            return finish_source(hir.ConstantValue(
+                                type_id: id,
+                                data: hir.ConstantData.ConstantAggregate(
+                                    value: hir.ConstantAggregate(
+                                        variant: option.Option[usize].Some(
+                                            variant.symbol),
+                                        fields: vec.empty[
+                                            hir.ConstantValue]()))), expected);
+                        }
+                    }
+                }
+            } else {
+                let base_expression = source_child(state, r, 0);
+                let base = source_eval(inout state, base_expression,
+                    option.Option[usize].None, depth + 1);
+                let info = require_type(state.types, base.type_id,
+                    "constant source type is missing");
+                if !kind_is(info.kind, model.TypeKind.NominalStruct) {
+                    bad("constant field requires struct");
+                }
+                switch base.data {
+                    case hir.ConstantData.ConstantAggregate(aggregate): {
+                        let field_name = source_token(state, r,
+                            node.token_end - 1).spelling;
+                        let nominal = source_nominal(state, base.type_id);
+                        for var index usize = 0; index < vec.len(nominal.fields); index += 1 {
+                            let field = nominal.fields[index];
+                            if state.module.resolved.symbols[field.symbol].name ==
+                               field_name {
+                                if state.module.resolved.symbols[
+                                       field.symbol].module != r.module &&
+                                   !field.exported {
+                                    bad("constant field is private");
+                                }
+                                if index >= vec.len(aggregate.fields) {
+                                    bad("constant field missing");
+                                }
+                                return finish_source(
+                                    aggregate.fields[index], expected);
+                            }
+                        }
+                        bad("constant field does not exist");
+                    }
+                    default: {
+                        bad("constant field requires struct");
+                    }
+                }
+            }
+        }
+        if option.is_some(expected) {
+            let wanted = option.unwrap_or(expected, 0);
+            let wanted_type = require_type(state.types, wanted,
+                "constant source type is missing");
+            if kind_is(wanted_type.kind, model.TypeKind.Function) {
+                var reference = r;
+                for ast_is(source_ast(state, reference).kind,
+                             model.AstKind.Parenthesized) ||
+                      ast_is(source_ast(state, reference).kind,
+                             model.AstKind.NeutralBracket) {
+                    reference = source_child(state, reference, 0);
+                }
+                let target = source_symbol(state, reference);
+                var callable = ast_is(source_ast(state, reference).kind,
+                                      model.AstKind.FunctionLiteral);
+                if option.is_some(target) &&
+                   model.symbol_kind_id(source_symbol_kind(state,
+                       option.unwrap_or(target, 0))) ==
+                   model.symbol_kind_id(model.SymbolKind.Function) {
+                    callable = true;
+                }
+                if ast_is(source_ast(state, reference).kind,
+                          model.AstKind.Member) && !option.is_some(target) {
+                    var base = source_child(state, reference, 0);
+                    for ast_is(source_ast(state, base).kind,
+                                 model.AstKind.NeutralBracket) {
+                        base = source_child(state, base, 0);
+                    }
+                    let base_symbol = source_symbol(state, base);
+                    if option.is_some(base_symbol) {
+                        let base_kind = source_symbol_kind(state,
+                            option.unwrap_or(base_symbol, 0));
+                        callable =
+                            model.symbol_kind_id(base_kind) ==
+                                model.symbol_kind_id(model.SymbolKind.Type) ||
+                            model.symbol_kind_id(base_kind) ==
+                                model.symbol_kind_id(
+                                    model.SymbolKind.TypeParameter) ||
+                            model.symbol_kind_id(base_kind) ==
+                                model.symbol_kind_id(
+                                    model.SymbolKind.BuiltinType);
+                    }
+                }
+                if callable {
+                    return finish_source(hir.ConstantValue(
+                        type_id: wanted,
+                        data: hir.ConstantData.FunctionValue(
+                            value: state.function(r, wanted))), expected);
+                }
+            }
+        }
+        bad("constant source is a runtime value");
+    return unit_placeholder();
+}
+
+func source_unary(state inout SourceState, r model.NodeRef,
+                  node model.AstNode, expected option.Option[usize],
+                  depth usize) hir.ConstantValue throws model.SupportError {
+        let operation = source_token(state, r, node.token_begin).spelling;
+        var inner = source_child(state, r, 0);
+        for ast_is(source_ast(state, inner).kind,
+                     model.AstKind.Parenthesized) {
+            inner = source_child(state, inner, 0);
+        }
+        if operation == "-" &&
+           ast_is(source_ast(state, inner).kind, model.AstKind.Literal) {
+            let inner_node = source_ast(state, inner);
+            let inner_token = source_token(state, inner,
+                inner_node.token_begin);
+            if token_is(inner_token.kind, model.TokenKind.Integer) {
+                let fallback = source_scalar(inout state,
+                    model.TypeKind.SignedInt, 64);
+                let target = option.unwrap_or(expected, fallback);
+                return finish_source(source_integer(inout state,
+                    bigint.negate(parse_spelling(inner_token.spelling)),
+                    target, false), expected);
+            }
+        }
+        var argument = expected;
+        if operation == "!" {
+            argument = option.Option[usize].Some(
+                source_scalar(inout state, model.TypeKind.Bool, 0));
+        }
+        let operand = source_child(state, r, 0);
+        let value = source_eval(inout state, operand, argument, depth + 1);
+        if operation == "+" {
+            return finish_source(value, expected);
+        }
+        switch value.data {
+            case hir.ConstantData.IntegerLiteral(payload): {
+                let z = parse_decimal(payload.decimal);
+                if operation == "-" {
+                    return finish_source(source_integer(inout state,
+                        bigint.negate(z), value.type_id, true), expected);
+                }
+                if operation == "~" {
+                    let info = require_type(state.types, value.type_id,
+                        "constant source type is missing");
+                    let width = source_width(state, info);
+                    return finish_source(source_integer(inout state,
+                        bitwise_not_value(z, width), value.type_id, true),
+                        expected);
+                }
+            }
+            case hir.ConstantData.FloatLiteral(payload): {
+                if operation == "-" {
+                    let info = require_type(state.types, value.type_id,
+                        "constant source type is missing");
+                    let bits = payload.bits ^ (u64(1) << u64(info.bits - 1));
+                    return finish_source(
+                        float_constant(value.type_id, bits), expected);
+                }
+            }
+            case hir.ConstantData.BoolLiteral(payload): {
+                if operation == "!" {
+                    return finish_source(
+                        bool_constant(value.type_id, !payload.value),
+                        expected);
+                }
+            }
+            default: {}
+        }
+        bad("unsupported constant unary operator");
+    return unit_placeholder();
+}
+
+func source_binary_expr(state inout SourceState, r model.NodeRef,
+                        node model.AstNode,
+                        expected option.Option[usize],
+                        depth usize) hir.ConstantValue
+                        throws model.SupportError {
+        let left_node = source_ast(state, source_child(state, r, 0));
+        let operation = source_token(state, r, left_node.token_end).spelling;
+        let comparison = operation == "==" || operation == "!=" ||
+                         operation == "<" || operation == "<=" ||
+                         operation == ">" || operation == ">=";
+        var context = expected;
+        if comparison || operation == "&&" || operation == "||" {
+            context = option.Option[usize].None;
+        }
+        let shift = operation == "<<" || operation == ">>";
+        let left_expression = source_child(state, r, 0);
+        let right_expression = source_child(state, r, 1);
+        if !shift && operation != "&&" && operation != "||" &&
+           source_contextual(state, left_expression) &&
+           !source_contextual(state, right_expression) {
+            let right = source_eval(inout state, right_expression,
+                context, depth + 1);
+            let left = source_eval(inout state, left_expression,
+                option.Option[usize].Some(right.type_id), depth + 1);
+            return finish_source(source_binary(inout state, operation,
+                left, right), expected);
+        }
+        let left = source_eval(inout state, left_expression,
+            context, depth + 1);
+        if (operation == "&&" || operation == "||") &&
+           is_bool_constant(left) {
+            let value = bool_value(left);
+            if (operation == "&&" && !value) ||
+               (operation == "||" && value) {
+                return finish_source(left, expected);
+            }
+            let right = source_eval(inout state, right_expression,
+                option.Option[usize].Some(left.type_id), depth + 1);
+            return finish_source(source_binary(inout state, operation,
+                left, right), expected);
+        }
+        var right_expected = option.Option[usize].Some(left.type_id);
+        if shift {
+            right_expected = option.Option[usize].None;
+        }
+        let right = source_eval(inout state, right_expression,
+            right_expected, depth + 1);
+        return finish_source(source_binary(inout state, operation,
+            left, right), expected);
+}
+
+func source_call(state inout SourceState, r model.NodeRef,
+                 node model.AstNode, expected option.Option[usize],
+                 depth usize) hir.ConstantValue throws model.SupportError {
+        var callee = source_child(state, r, 0);
+        var symbol = source_symbol(state, callee);
+        if ast_is(source_ast(state, callee).kind,
+                  model.AstKind.NeutralBracket) {
+            symbol = source_symbol(state, source_child(state, callee, 0));
+        }
+        var variant = option.Option[usize].None;
+        if ast_is(source_ast(state, callee).kind, model.AstKind.Member) &&
+           !option.is_some(symbol) {
+            let callee_node = source_ast(state, callee);
+            let name = source_token(state, callee,
+                callee_node.token_end - 1).spelling;
+            let type_id = state.parse(source_child(state, callee, 0));
+            let info = require_type(state.types, type_id,
+                "constant source type is missing");
+            if !kind_is(info.kind, model.TypeKind.NominalEnum) {
+                bad("ordinary calls are not constant");
+            }
+            let nominal = source_nominal(state, type_id);
+            for candidate in nominal.variants {
+                if state.module.resolved.symbols[candidate.symbol].name ==
+                   name {
+                    variant = option.Option[usize].Some(candidate.symbol);
+                }
+            }
+            if !option.is_some(variant) {
+                bad("constant enum variant missing");
+            }
+            callee = source_child(state, callee, 0);
+        } else if !option.is_some(symbol) ||
+                  (model.symbol_kind_id(source_symbol_kind(state,
+                       option.unwrap_or(symbol, 0))) !=
+                       model.symbol_kind_id(model.SymbolKind.Type) &&
+                   model.symbol_kind_id(source_symbol_kind(state,
+                       option.unwrap_or(symbol, 0))) !=
+                       model.symbol_kind_id(
+                           model.SymbolKind.BuiltinType)) {
+            bad("ordinary calls are not constant");
+        }
+        let type_id = state.parse(callee);
+        let info = require_type(state.types, type_id,
+            "constant source type is missing");
+        if integral(info.kind) ||
+           kind_is(info.kind, model.TypeKind.Float) {
+            if vec.len(node.children) != 2 {
+                bad("constant conversion arity");
+            }
+            let argument = source_child(state,
+                source_child(state, r, 1), 0);
+            var literal_node = argument;
+            for ast_is(source_ast(state, literal_node).kind,
+                         model.AstKind.Parenthesized) {
+                literal_node = source_child(state, literal_node, 0);
+            }
+            if ast_is(source_ast(state, literal_node).kind,
+                      model.AstKind.Unary) {
+                let literal_ast = source_ast(state, literal_node);
+                let operation = source_token(state, literal_node,
+                    literal_ast.token_begin).spelling;
+                if operation == "+" || operation == "-" {
+                    literal_node = source_child(state, literal_node, 0);
+                    for ast_is(source_ast(state, literal_node).kind,
+                                 model.AstKind.Parenthesized) {
+                        literal_node = source_child(state, literal_node, 0);
+                    }
+                }
+            }
+            var integer_literal_argument = false;
+            if ast_is(source_ast(state, literal_node).kind,
+                      model.AstKind.Literal) {
+                let literal_ast = source_ast(state, literal_node);
+                integer_literal_argument = token_is(source_token(state,
+                    literal_node, literal_ast.token_begin).kind,
+                    model.TokenKind.Integer);
+            }
+            var argument_expected = option.Option[usize].None;
+            if integral(info.kind) && integer_literal_argument {
+                argument_expected = option.Option[usize].Some(type_id);
+            }
+            let converted = source_eval(inout state, argument,
+                argument_expected, depth + 1);
+            return finish_source(source_convert(inout state,
+                converted, type_id), expected);
+        }
+        if !kind_is(info.kind, model.TypeKind.NominalStruct) &&
+           !kind_is(info.kind, model.TypeKind.NominalEnum) {
+            bad("constant aggregate type unsupported");
+        }
+        let nominal = source_nominal(state, type_id);
+        var fields = nominal.fields;
+        if option.is_some(variant) {
+            fields = vec.empty[hir.FieldDecl]();
+            let wanted = option.unwrap_or(variant, 0);
+            for candidate in nominal.variants {
+                if candidate.symbol == wanted {
+                    fields = candidate.payload;
+                }
+            }
+        }
+        if vec.len(node.children) != vec.len(fields) + 1 {
+            bad("constant aggregate arity");
+        }
+        var aggregate = hir.ConstantAggregate(variant: variant,
+            fields: vec.empty[hir.ConstantValue]());
+        vec.resize(aggregate.fields, vec.len(fields), unit_placeholder());
+        let seen = vec.empty[usize]();
+        var named = false;
+        for var child_index usize = 1; child_index < vec.len(node.children); child_index += 1 {
+            let argument = source_child(state, r, child_index);
+            let argument_node = source_ast(state, argument);
+            var index = child_index - 1;
+            let label = source_token(state, argument,
+                argument_node.token_begin + 1).spelling;
+            if label == ":" {
+                named = true;
+                let name = source_token(state, argument,
+                    argument_node.token_begin).spelling;
+                index = 0;
+                for index < vec.len(fields) && state.module.resolved.symbols[fields[index].symbol].name != name {
+                    index += 1;
+                }
+            } else if !option.is_some(variant) || named {
+                bad("constant aggregate argument labels/order");
+            }
+            if index >= vec.len(fields) || seen_contains(seen, index) {
+                bad("constant aggregate field mapping");
+            }
+            vec.push(seen, index);
+            if !option.is_some(variant) &&
+               state.module.resolved.symbols[fields[index].symbol].module !=
+                   r.module &&
+               !fields[index].exported {
+                bad("constant constructor field is private");
+            }
+            let field_expression = source_child(state, argument, 0);
+            let field_type_id = source_field_type(inout state, type_id,
+                fields[index]);
+            aggregate.fields[index] = source_eval(inout state,
+                field_expression,
+                option.Option[usize].Some(field_type_id), depth + 1);
+        }
+        return finish_source(hir.ConstantValue(type_id: type_id,
+            data: hir.ConstantData.ConstantAggregate(value: aggregate)),
+            expected);
+}
+
+func source_eval_body(state inout SourceState, r model.NodeRef,
+                      expected option.Option[usize],
+                      depth usize) hir.ConstantValue
+                      throws model.SupportError {
+    let node = source_ast(state, r);
+    let kind = node.kind;
+    if ast_is(kind, model.AstKind.Literal) {
+        return source_literal(inout state, r, node, expected);
+    }
+    if ast_is(kind, model.AstKind.Name) ||
+       ast_is(kind, model.AstKind.Member) ||
+       ast_is(kind, model.AstKind.NeutralBracket) ||
+       ast_is(kind, model.AstKind.FunctionLiteral) {
+        return source_name(inout state, r, node, expected, depth);
+    }
+    if ast_is(kind, model.AstKind.Unary) {
+        return source_unary(inout state, r, node, expected, depth);
+    }
+    if ast_is(kind, model.AstKind.Binary) {
+        return source_binary_expr(inout state, r, node, expected, depth);
+    }
+    if ast_is(kind, model.AstKind.Call) {
+        return source_call(inout state, r, node, expected, depth);
+    }
+    bad("unsupported constant source expression");
+    return unit_placeholder();
+}
+
+func parse_spelling(spelling string) bigint.BigInt
+                    throws model.SupportError {
+    try {
+        return number.parse_integer_spelling(spelling);
+    } catch error number.Error {
+        throw number_failure(error);
+    }
+}
+
+func is_bool_constant(value hir.ConstantValue) bool {
+    switch value.data {
+        case hir.ConstantData.BoolLiteral(payload): { return true; }
+        default: { return false; }
+    }
+}
+
+func seen_contains(values Vec[usize], value usize) bool {
+    for item in values {
+        if item == value { return true; }
+    }
+    return false;
+}
+
+// ---------------------------------------------------------------------------
+// Public source entry point
+
+func unused_parse(node model.NodeRef) usize throws model.SupportError {
+    bad("constant HIR parse callback is unavailable");
+    return 0;
+}
+
+func unused_function(node model.NodeRef,
+                     expected usize) hir.FunctionValue
+                     throws model.SupportError {
+    bad("constant HIR function callback is unavailable");
+    return hir.FunctionValue(symbol: 0, type_args: vec.empty[usize](),
+        captures: vec.empty[hir.CaptureSource](), move_capture: false,
+        bound: option.Option[hir.BoundReceiver].None);
+}
+
+func empty_source_state(module hir.HirModule,
+                        context types.Context) SourceState {
+    return SourceState(module: module, types: context, parse: unused_parse,
+        function: unused_function, work: 0,
+        active: vec.empty[SourceKey]());
+}
+
+pub func source_constant_value(module hir.HirModule,
+    context inout types.Context, node model.NodeRef, expected usize,
+    parse func(model.NodeRef) usize throws model.SupportError,
+    function func(model.NodeRef, usize) hir.FunctionValue
+             throws model.SupportError) hir.ConstantValue
+             throws model.SupportError {
+    var state = SourceState(module: module, types: context, parse: parse,
+        function: function, work: 0, active: vec.empty[SourceKey]());
+    let value = source_eval(inout state, node,
+        option.Option[usize].Some(expected), 0);
+    return clone_value(value);
+}
+
+// ---------------------------------------------------------------------------
+// HIR evaluation
+
+struct HirState {
+    module hir.HirModule;
+    context types.Context;
+    math SourceState;
+    active Vec[usize];
+    work usize;
+}
+
+func hir_symbol_kind(state HirState,
+                     symbol usize) model.SymbolKind throws model.SupportError {
+    if symbol >= vec.len(state.module.resolved.symbols) {
+        bad("constant symbol is invalid");
+    }
+    return state.module.resolved.symbols[symbol].kind;
+}
+
+func hir_require_type(state HirState, id usize) model.Type
+                      throws model.SupportError {
+    return require_type(state.context, id,
+        "constant HIR type is missing");
+}
+
+func hir_active_contains(state HirState, id usize) bool {
+    for active in state.active {
+        if active == id { return true; }
+    }
+    return false;
+}
+
+func hir_eval(state inout HirState, id usize,
+              depth usize) hir.ConstantValue throws model.SupportError {
+    if depth > DEPTH_LIMIT || state.work + 1 > WORK_LIMIT ||
+       hir_active_contains(state, id) {
+        bad("constant HIR evaluation budget/cycle");
+    }
+    state.work += 1;
+    vec.push(state.active, id);
+    let result = hir_eval_body(inout state, id, depth);
+    vec.pop(state.active);
+    return result;
+}
+
+func binary_spelling(op hir.BinaryOp) string {
+    switch op {
+        case hir.BinaryOp.Add: { return "+"; }
+        case hir.BinaryOp.Subtract: { return "-"; }
+        case hir.BinaryOp.Multiply: { return "*"; }
+        case hir.BinaryOp.Divide: { return "/"; }
+        case hir.BinaryOp.Remainder: { return "%"; }
+        case hir.BinaryOp.ShiftLeft: { return "<<"; }
+        case hir.BinaryOp.ShiftRight: { return ">>"; }
+        case hir.BinaryOp.BitAnd: { return "&"; }
+        case hir.BinaryOp.BitOr: { return "|"; }
+        case hir.BinaryOp.BitXor: { return "^"; }
+        case hir.BinaryOp.Equal: { return "=="; }
+        case hir.BinaryOp.NotEqual: { return "!="; }
+        case hir.BinaryOp.Less: { return "<"; }
+        case hir.BinaryOp.LessEqual: { return "<="; }
+        case hir.BinaryOp.Greater: { return ">"; }
+        case hir.BinaryOp.GreaterEqual: { return ">="; }
+    }
+}
+
+func hir_aggregate(state inout HirState, type_id usize,
+                   variant option.Option[usize],
+                   arguments Vec[hir.CallArg],
+                   depth usize) hir.ConstantValue
+                   throws model.SupportError {
+    var result = hir.ConstantAggregate(variant: variant,
+        fields: vec.empty[hir.ConstantValue]());
+    vec.resize(result.fields, vec.len(arguments), unit_placeholder());
+    for argument in arguments {
+        let index = usize(argument.parameter_index);
+        if index >= vec.len(result.fields) {
+            bad("constant aggregate field mapping");
+        }
+        result.fields[index] = hir_eval(inout state,
+            argument.expression, depth + 1);
+    }
+    return hir.ConstantValue(type_id: type_id,
+        data: hir.ConstantData.ConstantAggregate(value: result));
+}
+
+func hir_literal(type_id usize, data hir.ConstantData)
+                hir.ConstantValue {
+    return hir.ConstantValue(type_id: type_id, data: data);
+}
+
+func hir_read(state inout HirState, node hir.HirNode, symbol usize,
+              depth usize) hir.ConstantValue throws model.SupportError {
+    if model.symbol_kind_id(hir_symbol_kind(state, symbol)) !=
+       model.symbol_kind_id(model.SymbolKind.Constant) {
+        bad("runtime read is not constant");
+    }
+    for binding in state.module.nodes {
+        switch binding.data {
+            case hir.NodeData.Binding(value): {
+                if value.symbol == symbol {
+                    if vec.len(binding.children) == 0 {
+                        bad("constant binding is missing");
+                    }
+                    return hir_eval(inout state, binding.children[0],
+                        depth + 1);
+                }
+            }
+            default: {}
+        }
+    }
+    bad("constant binding is missing");
+    return unit_placeholder();
+}
+
+func hir_field(state inout HirState, node hir.HirNode, field usize,
+               depth usize) hir.ConstantValue throws model.SupportError {
+    if vec.len(node.children) == 0 {
+        bad("constant field read is missing a base");
+    }
+    let base = hir_eval(inout state, node.children[0], depth + 1);
+    let info = hir_require_type(state, base.type_id);
+    switch base.data {
+        case hir.ConstantData.ConstantAggregate(aggregate): {
+            for nominal in state.module.nominals {
+                if nominal.symbol == info.declaration {
+                    for var index usize = 0;
+                        index < vec.len(nominal.fields); index += 1 {
+                        if nominal.fields[index].symbol == field {
+                            if index >= vec.len(aggregate.fields) {
+                                bad("constant field missing");
+                            }
+                            return aggregate.fields[index];
+                        }
+                    }
+                }
+            }
+            bad("constant field missing");
+        }
+        default: {
+            bad("constant field requires an aggregate");
+        }
+    }
+    return unit_placeholder();
+}
+
+func hir_binary_node(state inout HirState, node hir.HirNode,
+                     op hir.BinaryOp,
+                     depth usize) hir.ConstantValue throws model.SupportError {
+    if vec.len(node.children) != 2 {
+        bad("constant binary arity");
+    }
+    let left = hir_eval(inout state, node.children[0], depth + 1);
+    let right = hir_eval(inout state, node.children[1], depth + 1);
+    return source_binary(inout state.math, binary_spelling(op), left, right);
+}
+
+func hir_short(state inout HirState, node hir.HirNode, op hir.LogicalOp,
+               depth usize) hir.ConstantValue throws model.SupportError {
+    if vec.len(node.children) != 2 {
+        bad("constant short-circuit arity");
+    }
+    let left = hir_eval(inout state, node.children[0], depth + 1);
+    if !is_bool_constant(left) {
+        bad("constant short-circuit requires bool");
+    }
+    let value = bool_value(left);
+    if (logical_is_and(op) && !value) || (logical_is_or(op) && value) {
+        return left;
+    }
+    return hir_eval(inout state, node.children[1], depth + 1);
+}
+
+func hir_convert_node(state inout HirState, node hir.HirNode,
+                      depth usize) hir.ConstantValue
+                      throws model.SupportError {
+    if vec.len(node.children) != 1 {
+        bad("constant conversion arity");
+    }
+    let converted = hir_eval(inout state, node.children[0], depth + 1);
+    return source_convert(inout state.math, converted, node.type_id);
+}
+
+func hir_unary(state inout HirState, node hir.HirNode, op hir.UnaryOp,
+               depth usize) hir.ConstantValue throws model.SupportError {
+    if vec.len(node.children) != 1 {
+        bad("constant unary arity");
+    }
+    let value = hir_eval(inout state, node.children[0], depth + 1);
+    if unary_is_not(op) {
+        return bool_constant(value.type_id, !bool_value(value));
+    }
+    switch value.data {
+        case hir.ConstantData.FloatLiteral(literal): {
+            let info = hir_require_type(state, value.type_id);
+            let bits = literal.bits ^ (u64(1) << u64(info.bits - 1));
+            return float_constant(value.type_id, bits);
+        }
+        default: {}
+    }
+    let info = hir_require_type(state, value.type_id);
+    let width = source_width(state.math, info);
+    let zero = integer_constant(value.type_id, "0", 0);
+    if unary_is_negate(op) {
+        return source_binary(inout state.math, "-", zero, value);
+    }
+    let mask = integer_constant(value.type_id, "-1", width_mask(width));
+    return source_binary(inout state.math, "^", value, mask);
+}
+
+func hir_eval_body(state inout HirState, id usize,
+                   depth usize) hir.ConstantValue
+                   throws model.SupportError {
+    if id >= vec.len(state.module.nodes) {
+        bad("constant HIR node is invalid");
+    }
+    let node = state.module.nodes[id];
+    switch node.data {
+        case hir.NodeData.ConstantLiteral(payload): {
+            return payload.value;
+        }
+        case hir.NodeData.UnitLiteral(payload): {
+            return hir_literal(node.type_id,
+                hir.ConstantData.UnitLiteral(value: payload));
+        }
+        case hir.NodeData.BoolLiteral(payload): {
+            return hir_literal(node.type_id,
+                hir.ConstantData.BoolLiteral(value: payload));
+        }
+        case hir.NodeData.IntegerLiteral(payload): {
+            return hir_literal(node.type_id,
+                hir.ConstantData.IntegerLiteral(value: payload));
+        }
+        case hir.NodeData.FloatLiteral(payload): {
+            return hir_literal(node.type_id,
+                hir.ConstantData.FloatLiteral(value: payload));
+        }
+        case hir.NodeData.StringLiteral(payload): {
+            return hir_literal(node.type_id,
+                hir.ConstantData.StringLiteral(value: payload));
+        }
+        case hir.NodeData.FunctionValue(payload): {
+            return hir_literal(node.type_id,
+                hir.ConstantData.FunctionValue(value: payload));
+        }
+        case hir.NodeData.Read(payload): {
+            return hir_read(inout state, node, payload.symbol, depth);
+        }
+        case hir.NodeData.StructInit(payload): {
+            return hir_aggregate(inout state, node.type_id,
+                option.Option[usize].None, payload.fields, depth);
+        }
+        case hir.NodeData.EnumInit(payload): {
+            return hir_aggregate(inout state, node.type_id,
+                option.Option[usize].Some(payload.variant),
+                payload.payload, depth);
+        }
+        case hir.NodeData.FieldRead(payload): {
+            return hir_field(inout state, node, payload.field, depth);
+        }
+        case hir.NodeData.Binary(payload): {
+            return hir_binary_node(inout state, node, payload.op, depth);
+        }
+        case hir.NodeData.ShortCircuit(payload): {
+            return hir_short(inout state, node, payload.op, depth);
+        }
+        case hir.NodeData.IntegerConvert(payload): {
+            return hir_convert_node(inout state, node, depth);
+        }
+        case hir.NodeData.Unary(payload): {
+            return hir_unary(inout state, node, payload.op, depth);
+        }
+        default: {}
+    }
+    bad("initializer is not a pure compile-time value");
+    return unit_placeholder();
+}
+
+func hir_state(module hir.HirModule) HirState {
+    let context = types.clone_context(module.types);
+    let math = empty_source_state(module, context);
+    return HirState(module: module, context: context, math: math,
+        active: vec.empty[usize](), work: 0);
+}
+
+pub func evaluate_hir_constant(module hir.HirModule,
+    node usize) option.Option[hir.ConstantValue] {
+    try {
+        var state = hir_state(module);
+        let value = hir_eval(inout state, node, 0);
+        return option.Option[hir.ConstantValue].Some(clone_value(value));
+    } catch error model.SupportError {
+        return option.Option[hir.ConstantValue].None;
+    }
+}
+
+// ---------------------------------------------------------------------------
+// Public utilities
+
+func same_ids(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func same_variant(left option.Option[usize],
+                  right option.Option[usize]) bool {
+    if option.is_some(left) != option.is_some(right) { return false; }
+    if !option.is_some(left) { return true; }
+    return option.unwrap_or(left, 0) == option.unwrap_or(right, 0);
+}
+
+pub func same_constant_value(left hir.ConstantValue,
+                             right hir.ConstantValue) bool {
+    if left.type_id != right.type_id { return false; }
+    switch left.data {
+        case hir.ConstantData.UnitLiteral(payload): {
+            switch right.data {
+                case hir.ConstantData.UnitLiteral(other): { return true; }
+                default: { return false; }
+            }
+        }
+        case hir.ConstantData.BoolLiteral(payload): {
+            switch right.data {
+                case hir.ConstantData.BoolLiteral(other): {
+                    return payload.value == other.value;
+                }
+                default: { return false; }
+            }
+        }
+        case hir.ConstantData.IntegerLiteral(payload): {
+            switch right.data {
+                case hir.ConstantData.IntegerLiteral(other): {
+                    return payload.bits == other.bits &&
+                           payload.decimal == other.decimal;
+                }
+                default: { return false; }
+            }
+        }
+        case hir.ConstantData.FloatLiteral(payload): {
+            switch right.data {
+                case hir.ConstantData.FloatLiteral(other): {
+                    return payload.bits == other.bits;
+                }
+                default: { return false; }
+            }
+        }
+        case hir.ConstantData.StringLiteral(payload): {
+            switch right.data {
+                case hir.ConstantData.StringLiteral(other): {
+                    return payload.utf8 == other.utf8;
+                }
+                default: { return false; }
+            }
+        }
+        case hir.ConstantData.FunctionValue(payload): {
+            switch right.data {
+                case hir.ConstantData.FunctionValue(other): {
+                    return payload.symbol == other.symbol &&
+                           same_ids(payload.type_args, other.type_args);
+                }
+                default: { return false; }
+            }
+        }
+        case hir.ConstantData.ConstantAggregate(payload): {
+            switch right.data {
+                case hir.ConstantData.ConstantAggregate(other): {
+                    if !same_variant(payload.variant, other.variant) ||
+                       vec.len(payload.fields) != vec.len(other.fields) {
+                        return false;
+                    }
+                    for var index usize = 0; index < vec.len(payload.fields); index += 1 {
+                        if !same_constant_value(payload.fields[index],
+                                                other.fields[index]) {
+                            return false;
+                        }
+                    }
+                    return true;
+                }
+                default: { return false; }
+            }
+        }
+    }
+}
+
+pub func transform_constant(value inout hir.ConstantValue,
+    substitutions Vec[model.Substitution], context inout types.Context,
+    transform func(hir.FunctionValue) hir.FunctionValue
+             throws model.SupportError) throws model.SupportError {
+    try {
+        value.type_id = types.substitute(value.type_id, substitutions,
+            inout context);
+    } catch error types.Error {
+        throw type_failure(error);
+    }
+    switch value.data {
+        case hir.ConstantData.FunctionValue(payload): {
+            for var index usize = 0; index < vec.len(payload.type_args); index += 1 {
+                try {
+                    payload.type_args[index] = types.substitute(
+                        payload.type_args[index], substitutions,
+                        inout context);
+                } catch error types.Error {
+                    throw type_failure(error);
+                }
+            }
+            let changed = transform(payload);
+            let isolated = clone_function_value(changed);
+            value.data = hir.ConstantData.FunctionValue(value: isolated);
+        }
+        case hir.ConstantData.ConstantAggregate(payload): {
+            for var index usize = 0; index < vec.len(payload.fields); index += 1 {
+                var field = payload.fields[index];
+                try {
+                    transform_constant(inout field, substitutions,
+                        inout context, transform);
+                } catch error model.SupportError {
+                    // C++ mutates the nested field in place.  Preserve the
+                    // type_id/type_args substitutions completed before a
+                    // callback throw instead of dropping the copied field.
+                    payload.fields[index] = field;
+                    throw error;
+                }
+                payload.fields[index] = field;
+            }
+        }
+        default: {}
+    }
+}
+
+pub func aggregate_constant_expression(module hir.HirModule,
+    root usize) bool {
+    let seen = vec.empty[usize]();
+    let pending = vec.empty[usize]();
+    vec.push(pending, root);
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let id = option.unwrap_or(popped, 0);
+        if seen_contains(seen, id) { continue; }
+        vec.push(seen, id);
+        if id >= vec.len(module.nodes) { continue; }
+        let node = module.nodes[id];
+        let kind = hir.node_kind(node.data);
+        if hir.node_kind_id(kind) ==
+               hir.node_kind_id(hir.NodeKind.StructInit) ||
+           hir.node_kind_id(kind) ==
+               hir.node_kind_id(hir.NodeKind.EnumInit) ||
+           hir.node_kind_id(kind) ==
+               hir.node_kind_id(hir.NodeKind.FieldRead) ||
+           hir.node_kind_id(kind) ==
+               hir.node_kind_id(hir.NodeKind.ConstantLiteral) {
+            return true;
+        }
+        switch node.data {
+            case hir.NodeData.Read(payload): {
+                if model.symbol_kind_id(module.resolved.symbols[
+                       payload.symbol].kind) ==
+                   model.symbol_kind_id(model.SymbolKind.Constant) {
+                    for binding in module.nodes {
+                        switch binding.data {
+                            case hir.NodeData.Binding(value): {
+                                if value.symbol == payload.symbol {
+                                    if vec.len(binding.children) > 0 {
+                                        vec.push(pending,
+                                            binding.children[0]);
+                                    }
+                                }
+                            }
+                            default: {}
+                        }
+                    }
+                }
+            }
+            default: {}
+        }
+        for child in node.children {
+            vec.push(pending, child);
+        }
+    }
+    return false;
+}

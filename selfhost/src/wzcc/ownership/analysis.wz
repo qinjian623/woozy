@@ -1,0 +1,2923 @@
+// Independent ownership derivation for typed HIR.
+//
+// This is a direct port of the Analysis class in src/hir/ownership.cpp.  It
+// derives records and exit plans from the HIR tree and never consults a
+// supplied ownership/exits result.  The producer publishes the derived tree;
+// the verifier compares it field by field with a freshly derived one.
+package ownership;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueops;
+import "std/option" as option;
+import "std/vec" as vec;
+
+const STATE_LIVE u32 = 1;
+const STATE_MOVED u32 = 2;
+
+struct StateEntry {
+    symbol usize;
+    value u32;
+}
+
+struct State {
+    entries Vec[StateEntry];
+}
+
+struct Edge {
+    kind hir.ExitKind;
+    target usize;
+    error usize;
+    state State;
+}
+
+struct Flow {
+    has_normal bool;
+    normal State;
+    edges Vec[Edge];
+}
+
+struct LocalEntry {
+    symbol usize;
+    value hir.LocalLifetime;
+}
+
+struct DeclEntry {
+    symbol usize;
+    node usize;
+}
+
+struct ScopeNodeEntry {
+    scope usize;
+    node usize;
+}
+
+struct ScopeLocalsEntry {
+    scope usize;
+    symbols Vec[usize];
+}
+
+struct PrefixEntry {
+    node usize;
+    actions Vec[hir.CleanupStep];
+}
+
+struct SubjectEntry {
+    scope usize;
+    node usize;
+}
+
+struct EffectEntry {
+    root usize;
+    effects Vec[usize];
+}
+
+struct Derived {
+    records hir.Ownership;
+    exits Vec[Vec[hir.ExitPlan]];
+    checked_nodes Vec[usize];
+}
+
+struct Analysis {
+    module hir.HirModule;
+    out Derived;
+    parents Vec[option.Option[usize]];
+    locals Vec[LocalEntry];
+    declarations Vec[DeclEntry];
+    scope_nodes Vec[ScopeNodeEntry];
+    scope_locals Vec[ScopeLocalsEntry];
+    failure_prefix Vec[PrefixEntry];
+    enabled Vec[usize];
+    active_borrows Vec[hir.CleanupStep];
+    switch_subjects Vec[SubjectEntry];
+    function hir.HirFunction;
+    has_function bool;
+    parameter_symbols Vec[usize];
+    safe_borrow_receivers Vec[usize];
+    full_expression_root option.Option[usize];
+    full_expression_effects Vec[EffectEntry];
+}
+
+func empty_ownership() hir.Ownership {
+    return hir.Ownership(uses: [], temporaries: [], locals: [],
+        full_expressions: [], calls: []);
+}
+
+func empty_local_lifetime() hir.LocalLifetime {
+    return hir.LocalLifetime(symbol: 0, scope: 0, type_id: 0, order: 0,
+        mode: model.ParamMode.Ordinary, read_only_capture: false);
+}
+
+func empty_hir_function() hir.HirFunction {
+    return hir.HirFunction(symbol: 0, signature: 0, parameters: [], body: 0,
+        scope: 0, source: empty_hir_source(), captures: [], is_async: false);
+}
+
+func empty_state() State {
+    return State(entries: []);
+}
+
+func empty_flow() Flow {
+    return Flow(has_normal: false, normal: empty_state(), edges: []);
+}
+
+func copy_state(state State) State {
+    let entries = vec.empty[StateEntry]();
+    vec.reserve(entries, vec.len(state.entries));
+    for entry in state.entries {
+        vec.push(entries, entry);
+    }
+    return State(entries: entries);
+}
+
+func state_index(state State, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(state.entries); index += 1 {
+        if state.entries[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func state_get(state State, symbol usize) u32 {
+    let found = state_index(state, symbol);
+    if found < 0 {
+        return 0;
+    }
+    return state.entries[usize(found)].value;
+}
+
+func state_set(state State, symbol usize, value u32) {
+    let found = state_index(state, symbol);
+    if found < 0 {
+        vec.push(state.entries, StateEntry(symbol: symbol, value: value));
+    } else {
+        state.entries[usize(found)].value = value;
+    }
+}
+
+func state_erase(state State, symbol usize) {
+    let found = state_index(state, symbol);
+    if found < 0 {
+        return;
+    }
+    let position = usize(found);
+    let last = vec.len(state.entries) - 1;
+    if position != last {
+        state.entries[position] = state.entries[last];
+    }
+    let discarded = vec.pop(state.entries);
+}
+
+func state_equal(left State, right State) bool {
+    if vec.len(left.entries) != vec.len(right.entries) {
+        return false;
+    }
+    for entry in left.entries {
+        let found = state_index(right, entry.symbol);
+        if found < 0 || right.entries[usize(found)].value != entry.value {
+            return false;
+        }
+    }
+    return true;
+}
+
+func flow_join(flow inout Flow, source State) {
+    if !flow.has_normal {
+        flow.normal = copy_state(source);
+        flow.has_normal = true;
+        return;
+    }
+    for entry in source.entries {
+        let found = state_index(flow.normal, entry.symbol);
+        if found < 0 {
+            vec.push(flow.normal.entries, entry);
+        } else {
+            flow.normal.entries[usize(found)].value |= entry.value;
+        }
+    }
+}
+
+func flow_set_normal(flow inout Flow, source State) {
+    flow.normal = copy_state(source);
+    flow.has_normal = true;
+}
+
+func flow_clear_normal(flow inout Flow) {
+    flow.has_normal = false;
+    flow.normal = empty_state();
+}
+
+func flow_edge(flow Flow, kind hir.ExitKind, target usize, error usize,
+               state State) {
+    vec.push(flow.edges, Edge(kind: kind, target: target, error: error,
+        state: copy_state(state)));
+}
+
+func edge_flow(flow Flow, edge Edge) {
+    vec.push(flow.edges, Edge(kind: edge.kind, target: edge.target,
+        error: edge.error, state: copy_state(edge.state)));
+}
+
+func flow_edges(to Flow, from Flow) {
+    for edge in from.edges {
+        edge_flow(to, edge);
+    }
+}
+
+func ids_contains(values Vec[usize], value usize) bool {
+    for item in values {
+        if item == value {
+            return true;
+        }
+    }
+    return false;
+}
+
+func ids_insert(values Vec[usize], value usize) bool {
+    if ids_contains(values, value) {
+        return false;
+    }
+    vec.push(values, value);
+    return true;
+}
+
+func int_index(values Vec[usize], value usize) i64 {
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if values[index] == value {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func int_remove(values Vec[usize], value usize) {
+    let found = int_index(values, value);
+    if found < 0 {
+        return;
+    }
+    let position = usize(found);
+    let last = vec.len(values) - 1;
+    if position != last {
+        values[position] = values[last];
+    }
+    let discarded = vec.pop(values);
+}
+
+func node_at(analysis Analysis, id usize) hir.HirNode throws Problem {
+    if id >= vec.len(analysis.module.nodes) {
+        throw internal_problem("ownership node index is out of range");
+    }
+    return analysis.module.nodes[id];
+}
+
+func scope_at(analysis Analysis, id usize) hir.HirScope throws Problem {
+    if id >= vec.len(analysis.module.scopes) {
+        throw internal_problem("ownership scope index is out of range");
+    }
+    return analysis.module.scopes[id];
+}
+
+func type_at(module hir.HirModule, id usize) model.Type throws Problem {
+    switch types.find(module.types, id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None:
+            throw internal_problem(
+                "ownership type is not in public TypeContext");
+    }
+}
+
+func support_error_message(error model.SupportError) string {
+    switch error {
+        case model.SupportError.Invalid(message): return message;
+        case model.SupportError.Limit(message): return message;
+    }
+}
+
+func classify(module hir.HirModule, id usize) hir.ValueOps throws Problem {
+    try {
+        return valueops.classify_value(module, id);
+    } catch error model.SupportError {
+        throw internal_problem(support_error_message(error));
+    }
+}
+
+func contains_type_parameter(module hir.HirModule, id usize) bool
+    throws Problem {
+    try {
+        return valueops_contains_type_parameter(module, id);
+    } catch error model.SupportError {
+        throw internal_problem(support_error_message(error));
+    }
+}
+
+func inout_data_type(module hir.HirModule, id usize) bool throws Problem {
+    try {
+        return valueops.inout_data_type(module, id, vec.empty[usize]());
+    } catch error model.SupportError {
+        throw internal_problem(support_error_message(error));
+    }
+}
+
+func valueops_contains_type_parameter(module hir.HirModule, root usize) bool
+    throws model.SupportError {
+    let pending = vec.empty[usize]();
+    vec.push(pending, root);
+    let seen = vec.empty[usize]();
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        var id usize = 0;
+        switch popped {
+            case option.Option.Some(item): id = item;
+            case option.Option.None: continue;
+        }
+        if !ids_contains(seen, id) {
+            vec.push(seen, id);
+            if vec.len(seen) > 65536 {
+                throw model.SupportError.Invalid(
+                    "concrete ownership type traversal budget exceeded");
+            }
+            var value = model.empty_type(model.TypeKind.Error);
+            switch types.find(module.types, id) {
+                case option.Option.Some(found): value = found;
+                case option.Option.None:
+                    throw model.SupportError.Invalid(
+                        "ownership type is not in public TypeContext");
+            }
+            if model.type_kind_id(value.kind) == model.type_kind_id(
+                    model.TypeKind.TypeParameter) {
+                return true;
+            }
+            for argument in value.type_args {
+                vec.push(pending, argument);
+            }
+            for parameter in value.parameters {
+                vec.push(pending, parameter.type_id);
+            }
+            if model.type_kind_id(value.kind) == model.type_kind_id(
+                    model.TypeKind.Function) {
+                vec.push(pending, value.result);
+                switch value.throws_type {
+                    case option.Option.Some(item): vec.push(pending, item);
+                    case option.Option.None: {}
+                }
+            }
+        }
+    }
+    return false;
+}
+
+func kind_of(node hir.HirNode) hir.NodeKind {
+    return hir.node_kind(node.data);
+}
+
+func kind_is(kind hir.NodeKind, expected hir.NodeKind) bool {
+    return hir.node_kind_id(kind) == hir.node_kind_id(expected);
+}
+
+func type_kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func node_read(node hir.HirNode) option.Option[hir.Read] {
+    switch node.data {
+        case hir.NodeData.Read(value): return option.Option[hir.Read].Some(value);
+        case _: return option.Option[hir.Read].None;
+    }
+}
+
+func node_place(node hir.HirNode) option.Option[hir.Place] {
+    switch node.data {
+        case hir.NodeData.Place(value): return option.Option[hir.Place].Some(value);
+        case _: return option.Option[hir.Place].None;
+    }
+}
+
+func node_move(node hir.HirNode) option.Option[hir.Move] {
+    switch node.data {
+        case hir.NodeData.Move(value): return option.Option[hir.Move].Some(value);
+        case _: return option.Option[hir.Move].None;
+    }
+}
+
+func node_binding(node hir.HirNode) option.Option[hir.Binding] {
+    switch node.data {
+        case hir.NodeData.Binding(value): return option.Option[hir.Binding].Some(value);
+        case _: return option.Option[hir.Binding].None;
+    }
+}
+
+func node_assign(node hir.HirNode) option.Option[hir.Assign] {
+    switch node.data {
+        case hir.NodeData.Assign(value): return option.Option[hir.Assign].Some(value);
+        case _: return option.Option[hir.Assign].None;
+    }
+}
+
+func node_call(node hir.HirNode) option.Option[hir.Call] {
+    switch node.data {
+        case hir.NodeData.Call(value): return option.Option[hir.Call].Some(value);
+        case _: return option.Option[hir.Call].None;
+    }
+}
+
+func node_constraint(node hir.HirNode) option.Option[hir.ConstraintCall] {
+    switch node.data {
+        case hir.NodeData.ConstraintCall(value):
+            return option.Option[hir.ConstraintCall].Some(value);
+        case _: return option.Option[hir.ConstraintCall].None;
+    }
+}
+
+func node_dispatch(node hir.HirNode) option.Option[hir.TraitDispatch] {
+    switch node.data {
+        case hir.NodeData.TraitDispatch(value):
+            return option.Option[hir.TraitDispatch].Some(value);
+        case _: return option.Option[hir.TraitDispatch].None;
+    }
+}
+
+func node_fortin(node hir.HirNode) option.Option[hir.ForIn] {
+    switch node.data {
+        case hir.NodeData.ForIn(value): return option.Option[hir.ForIn].Some(value);
+        case _: return option.Option[hir.ForIn].None;
+    }
+}
+
+func node_switch(node hir.HirNode) option.Option[hir.Switch] {
+    switch node.data {
+        case hir.NodeData.Switch(value): return option.Option[hir.Switch].Some(value);
+        case _: return option.Option[hir.Switch].None;
+    }
+}
+
+func node_try(node hir.HirNode) option.Option[hir.Try] {
+    switch node.data {
+        case hir.NodeData.Try(value): return option.Option[hir.Try].Some(value);
+        case _: return option.Option[hir.Try].None;
+    }
+}
+
+func node_foreign_read(node hir.HirNode) option.Option[hir.ForeignRead] {
+    switch node.data {
+        case hir.NodeData.ForeignRead(value):
+            return option.Option[hir.ForeignRead].Some(value);
+        case _: return option.Option[hir.ForeignRead].None;
+    }
+}
+
+func node_bool_literal(node hir.HirNode) option.Option[hir.BoolLiteral] {
+    switch node.data {
+        case hir.NodeData.BoolLiteral(value):
+            return option.Option[hir.BoolLiteral].Some(value);
+        case _: return option.Option[hir.BoolLiteral].None;
+    }
+}
+
+func node_short_circuit(node hir.HirNode) option.Option[hir.ShortCircuit] {
+    switch node.data {
+        case hir.NodeData.ShortCircuit(value):
+            return option.Option[hir.ShortCircuit].Some(value);
+        case _: return option.Option[hir.ShortCircuit].None;
+    }
+}
+
+func node_function_value(node hir.HirNode) option.Option[hir.FunctionValue] {
+    switch node.data {
+        case hir.NodeData.FunctionValue(value):
+            return option.Option[hir.FunctionValue].Some(value);
+        case _: return option.Option[hir.FunctionValue].None;
+    }
+}
+
+func node_unary(node hir.HirNode) option.Option[hir.Unary] {
+    switch node.data {
+        case hir.NodeData.Unary(value): return option.Option[hir.Unary].Some(value);
+        case _: return option.Option[hir.Unary].None;
+    }
+}
+
+func node_binary(node hir.HirNode) option.Option[hir.Binary] {
+    switch node.data {
+        case hir.NodeData.Binary(value): return option.Option[hir.Binary].Some(value);
+        case _: return option.Option[hir.Binary].None;
+    }
+}
+
+func node_break(node hir.HirNode) option.Option[hir.Break] {
+    switch node.data {
+        case hir.NodeData.Break(value): return option.Option[hir.Break].Some(value);
+        case _: return option.Option[hir.Break].None;
+    }
+}
+
+func node_continue(node hir.HirNode) option.Option[hir.Continue] {
+    switch node.data {
+        case hir.NodeData.Continue(value):
+            return option.Option[hir.Continue].Some(value);
+        case _: return option.Option[hir.Continue].None;
+    }
+}
+
+func local_lookup(analysis Analysis, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(analysis.locals); index += 1 {
+        if analysis.locals[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func local_of(analysis Analysis, symbol usize) hir.LocalLifetime throws Problem {
+    let found = local_lookup(analysis, symbol);
+    if found < 0 {
+        throw internal_problem("ownership local symbol is missing");
+    }
+    return analysis.locals[usize(found)].value;
+}
+
+func declaration_lookup(analysis Analysis, symbol usize) i64 {
+    for var index usize = 0; index < vec.len(analysis.declarations); index += 1 {
+        if analysis.declarations[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func scope_node_lookup(analysis Analysis, scope usize) i64 {
+    for var index usize = 0; index < vec.len(analysis.scope_nodes); index += 1 {
+        if analysis.scope_nodes[index].scope == scope {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func scope_locals_lookup(analysis Analysis, scope usize) i64 {
+    for var index usize = 0; index < vec.len(analysis.scope_locals); index += 1 {
+        if analysis.scope_locals[index].scope == scope {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func scope_locals_for(analysis inout Analysis, scope usize) Vec[usize] {
+    let found = scope_locals_lookup(analysis, scope);
+    if found >= 0 {
+        return analysis.scope_locals[usize(found)].symbols;
+    }
+    let symbols = vec.empty[usize]();
+    vec.push(analysis.scope_locals,
+        ScopeLocalsEntry(scope: scope, symbols: symbols));
+    return symbols;
+}
+
+func prefix_lookup(analysis Analysis, node usize) i64 {
+    for var index usize = 0; index < vec.len(analysis.failure_prefix); index += 1 {
+        if analysis.failure_prefix[index].node == node {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func subject_lookup(analysis Analysis, scope usize) i64 {
+    for var index usize = 0; index < vec.len(analysis.switch_subjects); index += 1 {
+        if analysis.switch_subjects[index].scope == scope {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func effect_lookup(analysis Analysis, node usize) i64 {
+    for var index usize = 0; index < vec.len(analysis.full_expression_effects); index += 1 {
+        if analysis.full_expression_effects[index].root == node {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func issue(analysis Analysis, id usize, code string, message string) throws Problem {
+    let node = node_at(analysis, id);
+    throw source_problem(node.source, code, message);
+}
+
+func inert_function_value(node hir.HirNode) bool {
+    if !kind_is(kind_of(node), hir.NodeKind.FunctionValue) {
+        return false;
+    }
+    switch node_function_value(node) {
+        case option.Option.Some(value):
+            if vec.len(value.captures) != 0 {
+                return false;
+            }
+            switch value.bound {
+                case option.Option.Some(_): return false;
+                case option.Option.None: return true;
+            }
+        case option.Option.None: return false;
+    }
+}
+
+func local_add(analysis inout Analysis, symbol usize, scope usize,
+               type_id usize, mode model.ParamMode, read_only bool) {
+    let order = u32(vec.len(scope_locals_for(inout analysis, scope)));
+    if local_lookup(analysis, symbol) < 0 {
+        vec.push(analysis.locals, LocalEntry(symbol: symbol,
+            value: hir.LocalLifetime(symbol: symbol, scope: scope,
+                type_id: type_id, order: order, mode: mode,
+                read_only_capture: read_only)));
+    }
+    vec.push(scope_locals_for(inout analysis, scope), symbol);
+}
+
+func pattern_gather(analysis inout Analysis, pattern hir.Pattern, scope usize) {
+    switch pattern.binding {
+        case option.Option.Some(symbol):
+            local_add(inout analysis, symbol, scope, pattern.type_id,
+                model.ParamMode.Move, false);
+        case option.Option.None: {}
+    }
+    for child in pattern.payload {
+        pattern_gather(inout analysis, child, scope);
+    }
+}
+
+func child_at(node hir.HirNode, index usize) usize throws Problem {
+    if index >= vec.len(node.children) {
+        throw internal_problem("ownership node child index is out of range");
+    }
+    return node.children[index];
+}
+
+func gather(analysis inout Analysis, id usize, parent option.Option[usize])
+    throws Problem {
+    if id >= vec.len(analysis.parents) {
+        throw internal_problem("ownership node index is out of range");
+    }
+    analysis.parents[id] = parent;
+    let node = node_at(analysis, id);
+    let kind = kind_of(node);
+    if kind_is(kind, hir.NodeKind.Block) ||
+       kind_is(kind, hir.NodeKind.For) ||
+       kind_is(kind, hir.NodeKind.ForIn) {
+        var found = false;
+        for var index usize = 0; index < vec.len(analysis.scope_nodes); index += 1 {
+            if analysis.scope_nodes[index].scope == node.scope {
+                analysis.scope_nodes[index].node = id;
+                found = true;
+                break;
+            }
+        }
+        if !found {
+            vec.push(analysis.scope_nodes,
+                ScopeNodeEntry(scope: node.scope, node: id));
+        }
+    }
+    let operations = classify(analysis.module, node.type_id);
+    if same_value_kind(operations.kind, hir.ValueKind.Unsupported) {
+        issue(analysis, id, "E_CAPABILITY_UNAVAILABLE", operations.reason);
+    }
+    let inert = inert_function_value(node);
+    if (operations.needs_drop || kind_is(kind, hir.NodeKind.Move) ||
+        kind_is(kind, hir.NodeKind.ForIn)) && !inert {
+        ids_insert(analysis.enabled, analysis.function.symbol);
+    }
+    switch node_fortin(node) {
+        case option.Option.Some(data): {
+            let collection_node = node_at(analysis, child_at(node, 0));
+            let collection = type_at(analysis.module, collection_node.type_id);
+            var element usize = 0;
+            switch data.iterator {
+                case option.Option.Some(iterator):
+                    local_add(inout analysis, iterator.cursor, node.scope,
+                        iterator.iterator, model.ParamMode.Move, false);
+                    let next_type = node_at(analysis, iterator.next).type_id;
+                    local_add(inout analysis, iterator.option, data.body_scope,
+                        next_type, model.ParamMode.Move, false);
+                    element = iterator.element;
+                case option.Option.None:
+                    if type_kind_is(collection.kind, model.TypeKind.String) {
+                        var found_u32 = false;
+                        for var candidate usize = 1;
+                            candidate <= types.size(analysis.module.types);
+                            candidate += 1 {
+                            switch types.find(analysis.module.types, candidate) {
+                                case option.Option.Some(value):
+                                    if type_kind_is(value.kind,
+                                           model.TypeKind.UnsignedInt) &&
+                                       value.bits == 32 {
+                                        element = candidate;
+                                        found_u32 = true;
+                                    }
+                                case option.Option.None: {}
+                            }
+                            if found_u32 {
+                                break;
+                            }
+                        }
+                        if !found_u32 {
+                            throw internal_problem(
+                                "String iteration has no public u32 type");
+                        }
+                    } else {
+                        if vec.len(collection.type_args) != 1 {
+                            throw internal_problem(
+                                "ownership for-in collection element arity");
+                        }
+                        element = collection.type_args[0];
+                    }
+            }
+            local_add(inout analysis, data.element, data.body_scope, element,
+                model.ParamMode.Move, false);
+        }
+        case option.Option.None: {}
+    }
+    switch node_switch(node) {
+        case option.Option.Some(data):
+            for arm in data.arms {
+                pattern_gather(inout analysis, arm.pattern, arm.scope);
+            }
+        case option.Option.None: {}
+    }
+    switch node_try(node) {
+        case option.Option.Some(data):
+            for catcher in data.catches {
+                local_add(inout analysis, catcher.binding, catcher.scope,
+                    catcher.error_type, model.ParamMode.Move, false);
+            }
+        case option.Option.None: {}
+    }
+    for child in node.children {
+        gather(inout analysis, child, option.Option[usize].Some(id));
+    }
+    switch node_binding(node) {
+        case option.Option.Some(data):
+            if declaration_lookup(analysis, data.symbol) < 0 {
+                vec.push(analysis.declarations,
+                    DeclEntry(symbol: data.symbol, node: id));
+            }
+            let initializer = node_at(analysis, child_at(node, 0));
+            local_add(inout analysis, data.symbol, node.scope,
+                initializer.type_id, model.ParamMode.Move, false);
+        case option.Option.None: {}
+    }
+}
+
+func temp_cleanup(analysis Analysis, live Vec[usize]) Vec[hir.CleanupStep] {
+    let actions = vec.empty[hir.CleanupStep]();
+    var index usize = vec.len(live);
+    for index > 0 {
+        index -= 1;
+        let id = live[index];
+        let node = analysis.module.nodes[id];
+        vec.push(actions, hir.CleanupStep(kind: hir.CleanupKind.DestroyIfLive,
+            owner: hir.OwnerRef(kind: hir.OwnerKind.Temporary, identity: u64(id)),
+            type_id: node.type_id));
+    }
+    return actions;
+}
+
+func consume_live(live Vec[usize], id usize) {
+    let found = int_index(live, id);
+    if found < 0 {
+        return;
+    }
+    let position = usize(found);
+    var index = position;
+    for index + 1 < vec.len(live) {
+        live[index] = live[index + 1];
+        index += 1;
+    }
+    let discarded = vec.pop(live);
+}
+
+func is_borrowed_param(analysis Analysis, symbol usize) bool {
+    if !ids_contains(analysis.parameter_symbols, symbol) {
+        return false;
+    }
+    let found = local_lookup(analysis, symbol);
+    if found < 0 {
+        return false;
+    }
+    return !mode_is(analysis.locals[usize(found)].value.mode,
+        model.ParamMode.Move);
+}
+
+func mode_is(left model.ParamMode, right model.ParamMode) bool {
+    return same_local_mode(left) == same_local_mode(right);
+}
+
+func expr_consumes_symbol(analysis Analysis, expr_id usize, symbol usize)
+    bool throws Problem {
+    let node = node_at(analysis, expr_id);
+    switch node_move(node) {
+        case option.Option.Some(value):
+            switch value.binding {
+                case option.Option.Some(binding):
+                    if binding == symbol {
+                        return true;
+                    }
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+    if kind_is(kind_of(node), hir.NodeKind.Assign) {
+        let place = node_at(analysis, child_at(node, 0));
+        switch node_place(place) {
+            case option.Option.Some(value):
+                if value.symbol == symbol {
+                    return true;
+                }
+            case option.Option.None: {}
+        }
+    }
+    switch call_arguments(node) {
+        case option.Option.Some(args):
+            for argument in args {
+                if mode_is(argument.mode, model.ParamMode.Move) ||
+                   mode_is(argument.mode, model.ParamMode.Inout) {
+                    let root = borrow_root(analysis, argument.expression);
+                    switch root {
+                        case option.Option.Some(value):
+                            if value == symbol {
+                                return true;
+                            }
+                        case option.Option.None: {}
+                    }
+                }
+            }
+        case option.Option.None: {}
+    }
+    for child in node.children {
+        if expr_consumes_symbol(analysis, child, symbol) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func collect_effects(analysis Analysis, expr_id usize, out Vec[usize])
+    throws Problem {
+    let node = node_at(analysis, expr_id);
+    switch node_move(node) {
+        case option.Option.Some(value):
+            switch value.binding {
+                case option.Option.Some(binding): ids_insert(out, binding);
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+    if kind_is(kind_of(node), hir.NodeKind.Assign) {
+        let place = node_at(analysis, child_at(node, 0));
+        switch node_place(place) {
+            case option.Option.Some(value): ids_insert(out, value.symbol);
+            case option.Option.None: {}
+        }
+    }
+    switch call_arguments(node) {
+        case option.Option.Some(args):
+            for argument in args {
+                if mode_is(argument.mode, model.ParamMode.Move) ||
+                   mode_is(argument.mode, model.ParamMode.Inout) {
+                    switch borrow_root(analysis, argument.expression) {
+                        case option.Option.Some(root): ids_insert(out, root);
+                        case option.Option.None: {}
+                    }
+                }
+            }
+        case option.Option.None: {}
+    }
+    for child in node.children {
+        collect_effects(analysis, child, out);
+    }
+}
+
+func full_effects(analysis inout Analysis) Vec[usize] throws Problem {
+    var root usize = 0;
+    switch analysis.full_expression_root {
+        case option.Option.Some(value): root = value;
+        case option.Option.None:
+            throw internal_problem("ownership full expression root is missing");
+    }
+    let found = effect_lookup(analysis, root);
+    if found >= 0 {
+        return analysis.full_expression_effects[usize(found)].effects;
+    }
+    let effects = vec.empty[usize]();
+    collect_effects(analysis, root, effects);
+    vec.push(analysis.full_expression_effects,
+        EffectEntry(root: root, effects: effects));
+    return effects;
+}
+
+func integer_index_kind(kind model.TypeKind) bool {
+    return type_kind_is(kind, model.TypeKind.SignedInt) ||
+           type_kind_is(kind, model.TypeKind.UnsignedInt) ||
+           type_kind_is(kind, model.TypeKind.Isize) ||
+           type_kind_is(kind, model.TypeKind.Usize);
+}
+
+func pure_integer_index(analysis Analysis, id usize) bool throws Problem {
+    let node = node_at(analysis, id);
+    let kind = kind_of(node);
+    let value = type_at(analysis.module, node.type_id);
+    if !integer_index_kind(value.kind) {
+        return false;
+    }
+    if kind_is(kind, hir.NodeKind.IntegerLiteral) ||
+       kind_is(kind, hir.NodeKind.Read) {
+        return true;
+    }
+    if kind_is(kind, hir.NodeKind.Unary) {
+        var unary = hir.Unary(op: hir.UnaryOp.Negate);
+        switch node_unary(node) {
+            case option.Option.Some(found): unary = found;
+            case option.Option.None:
+                throw internal_problem("ownership unary payload missing");
+        }
+        let op = unary.op;
+        return vec.len(node.children) == 1 &&
+               (unary_is(op, hir.UnaryOp.Negate) ||
+                unary_is(op, hir.UnaryOp.BitNot)) &&
+               pure_integer_index(analysis, node.children[0]);
+    }
+    if !kind_is(kind, hir.NodeKind.Binary) || vec.len(node.children) != 2 {
+        return false;
+    }
+    var binary = hir.Binary(op: hir.BinaryOp.Add);
+    switch node_binary(node) {
+        case option.Option.Some(found): binary = found;
+        case option.Option.None:
+            throw internal_problem("ownership binary payload missing");
+    }
+    if binary_pure(binary.op) {
+        return pure_integer_index(analysis, node.children[0]) &&
+               pure_integer_index(analysis, node.children[1]);
+    }
+    return false;
+}
+
+func unary_is(left hir.UnaryOp, right hir.UnaryOp) bool {
+    switch left {
+        case hir.UnaryOp.Negate:
+            switch right {
+                case hir.UnaryOp.Negate: return true;
+                case _: return false;
+            }
+        case hir.UnaryOp.LogicalNot:
+            switch right {
+                case hir.UnaryOp.LogicalNot: return true;
+                case _: return false;
+            }
+        case hir.UnaryOp.BitNot:
+            switch right {
+                case hir.UnaryOp.BitNot: return true;
+                case _: return false;
+            }
+    }
+}
+
+func binary_pure(op hir.BinaryOp) bool {
+    switch op {
+        case hir.BinaryOp.Add: return true;
+        case hir.BinaryOp.Subtract: return true;
+        case hir.BinaryOp.Multiply: return true;
+        case hir.BinaryOp.Divide: return true;
+        case hir.BinaryOp.Remainder: return true;
+        case hir.BinaryOp.ShiftLeft: return true;
+        case hir.BinaryOp.ShiftRight: return true;
+        case hir.BinaryOp.BitAnd: return true;
+        case hir.BinaryOp.BitOr: return true;
+        case hir.BinaryOp.BitXor: return true;
+        case _: return false;
+    }
+}
+
+func local_index_borrow(analysis Analysis, receiver usize, index usize)
+    bool throws Problem {
+    let receiver_node = node_at(analysis, receiver);
+    var symbol usize = 0;
+    switch node_read(receiver_node) {
+        case option.Option.Some(value): symbol = value.symbol;
+        case option.Option.None: return false;
+    }
+    if declaration_lookup(analysis, symbol) < 0 ||
+       ids_contains(analysis.parameter_symbols, symbol) {
+        return false;
+    }
+    let found = local_lookup(analysis, symbol);
+    if found < 0 {
+        return false;
+    }
+    let local = analysis.locals[usize(found)].value;
+    if scope_at(analysis, local.scope).function != analysis.function.symbol {
+        return false;
+    }
+    let receiver_type = type_at(analysis.module, receiver_node.type_id);
+    if !type_kind_is(receiver_type.kind, model.TypeKind.Vec) ||
+       vec.len(receiver_type.type_args) != 1 {
+        return false;
+    }
+    let element = receiver_type.type_args[0];
+    if contains_type_parameter(analysis.module, element) ||
+       owned(analysis, element) {
+        return false;
+    }
+    return pure_integer_index(analysis, index);
+}
+
+func local_index_can_borrow(analysis inout Analysis, receiver usize,
+                            index usize, root usize) bool throws Problem {
+    var has_root = false;
+    switch analysis.full_expression_root {
+        case option.Option.Some(_): has_root = true;
+        case option.Option.None: {}
+    }
+    if !has_root || !local_index_borrow(analysis, receiver, index) {
+        return false;
+    }
+    return !ids_contains(full_effects(inout analysis), root);
+}
+
+func place_borrow_root(analysis Analysis, id usize) option.Option[usize]
+    throws Problem {
+    let node = node_at(analysis, id);
+    switch node_read(node) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch node_place(node) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    let kind = kind_of(node);
+    if kind_is(kind, hir.NodeKind.FieldRead) ||
+       kind_is(kind, hir.NodeKind.FieldPlace) ||
+       kind_is(kind, hir.NodeKind.IndexRead) ||
+       kind_is(kind, hir.NodeKind.IndexPlace) {
+        return place_borrow_root(analysis, child_at(node, 0));
+    }
+    return option.Option[usize].None;
+}
+
+func borrow_root(analysis Analysis, id usize) option.Option[usize]
+    throws Problem {
+    let node = node_at(analysis, id);
+    switch node_read(node) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch node_place(node) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    let kind = kind_of(node);
+    if kind_is(kind, hir.NodeKind.FieldRead) ||
+       kind_is(kind, hir.NodeKind.FieldPlace) {
+        return borrow_root(analysis, child_at(node, 0));
+    }
+    if kind_is(kind, hir.NodeKind.IndexPlace) {
+        return place_borrow_root(analysis, child_at(node, 0));
+    }
+    return option.Option[usize].None;
+}
+
+func assignment_field_root(analysis Analysis, id usize) option.Option[usize]
+    throws Problem {
+    let node = node_at(analysis, id);
+    switch node_read(node) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch node_place(node) {
+        case option.Option.Some(value):
+            return option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    let kind = kind_of(node);
+    if kind_is(kind, hir.NodeKind.FieldRead) ||
+       kind_is(kind, hir.NodeKind.FieldPlace) {
+        return assignment_field_root(analysis, child_at(node, 0));
+    }
+    return option.Option[usize].None;
+}
+
+func prefix_cleanup(analysis Analysis, live Vec[usize]) Vec[hir.CleanupStep] {
+    let actions = vec.empty[hir.CleanupStep]();
+    var index usize = vec.len(analysis.active_borrows);
+    for index > 0 {
+        index -= 1;
+        vec.push(actions, analysis.active_borrows[index]);
+    }
+    for action in temp_cleanup(analysis, live) {
+        vec.push(actions, action);
+    }
+    return actions;
+}
+
+func push_use(analysis inout Analysis, id usize, operand u32, child usize,
+              kind hir.UseKind) throws Problem {
+    let node = node_at(analysis, child);
+    if use_is(kind, hir.UseKind.Borrow) && inert_function_value(node) {
+        return;
+    }
+    var root = borrow_root(analysis, child);
+    if use_is(kind, hir.UseKind.Borrow) && !owned(analysis, node.type_id) {
+        switch root {
+            case option.Option.Some(_): {}
+            case option.Option.None: return;
+        }
+    }
+    if !owned(analysis, node.type_id) &&
+       !kind_is(kind_of(node), hir.NodeKind.Move) &&
+       !use_is(kind, hir.UseKind.Inout) &&
+       !(use_is(kind, hir.UseKind.Borrow) && option_is_some(root)) {
+        return;
+    }
+    switch node_read(node) {
+        case option.Option.Some(value):
+            root = option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch node_place(node) {
+        case option.Option.Some(value):
+            root = option.Option[usize].Some(value.symbol);
+        case option.Option.None: {}
+    }
+    switch node_move(node) {
+        case option.Option.Some(value):
+            if !use_is(kind, hir.UseKind.Borrow) {
+                root = value.binding;
+            }
+        case option.Option.None: {}
+    }
+    vec.push(analysis.out.records.uses, hir.ValueUse(consumer: id,
+        operand: operand, kind: kind, root: root, type_id: node.type_id,
+        destination: option.Option[usize].None));
+}
+
+func use_is(left hir.UseKind, right hir.UseKind) bool {
+    return same_use_id(left) == same_use_id(right);
+}
+
+func option_is_some_binary(value option.Option[hir.BinaryOp]) bool {
+    switch value {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func option_is_some(value option.Option[usize]) bool {
+    switch value {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func call_arguments(node hir.HirNode) option.Option[Vec[hir.CallArg]] {
+    switch node_call(node) {
+        case option.Option.Some(value):
+            return option.Option[Vec[hir.CallArg]].Some(value.args);
+        case option.Option.None: {}
+    }
+    switch node_constraint(node) {
+        case option.Option.Some(value):
+            return option.Option[Vec[hir.CallArg]].Some(value.args);
+        case option.Option.None: {}
+    }
+    switch node_dispatch(node) {
+        case option.Option.Some(value):
+            return option.Option[Vec[hir.CallArg]].Some(value.args);
+        case option.Option.None: {}
+    }
+    return option.Option[Vec[hir.CallArg]].None;
+}
+
+func call_callee(node hir.HirNode) option.Option[usize] {
+    switch node_call(node) {
+        case option.Option.Some(value): return value.callee;
+        case option.Option.None: return option.Option[usize].None;
+    }
+}
+
+func owned(analysis Analysis, type_id usize) bool throws Problem {
+    return classify(analysis.module, type_id).needs_drop;
+}
+
+func borrow_step(owner_kind hir.OwnerKind, identity usize, type_id usize)
+    hir.CleanupStep {
+    return hir.CleanupStep(kind: hir.CleanupKind.EndBorrow,
+        owner: hir.OwnerRef(kind: owner_kind, identity: u64(identity)),
+        type_id: type_id);
+}
+
+func prefix_put(analysis inout Analysis, node usize,
+                actions Vec[hir.CleanupStep]) {
+    let found = prefix_lookup(analysis, node);
+    if found >= 0 {
+        analysis.failure_prefix[usize(found)].actions = actions;
+    } else {
+        vec.push(analysis.failure_prefix,
+            PrefixEntry(node: node, actions: actions));
+    }
+}
+
+func prefix_try_put(analysis inout Analysis, node usize,
+                    actions Vec[hir.CleanupStep]) {
+    if prefix_lookup(analysis, node) < 0 {
+        vec.push(analysis.failure_prefix,
+            PrefixEntry(node: node, actions: actions));
+    }
+}
+
+func copy_steps(actions Vec[hir.CleanupStep]) Vec[hir.CleanupStep] {
+    let out = vec.empty[hir.CleanupStep]();
+    vec.reserve(out, vec.len(actions));
+    for action in actions {
+        vec.push(out, action);
+    }
+    return out;
+}
+
+func expression_use(analysis inout Analysis, id usize, operand u32,
+                    child usize, kind hir.UseKind) throws Problem {
+    push_use(inout analysis, id, operand, child, kind);
+}
+
+func expr_records(analysis inout Analysis, id usize, fe usize,
+                  live Vec[usize], borrowed_value bool) throws Problem {
+    let node = node_at(analysis, id);
+    let kind = kind_of(node);
+    var short_circuit = false;
+    switch node_short_circuit(node) {
+        case option.Option.Some(data):
+            expr_records(inout analysis, child_at(node, 0), fe, live, false);
+            let branch = vec.empty[usize]();
+            for value in live {
+                vec.push(branch, value);
+            }
+            expr_records(inout analysis, child_at(node, 1), fe, branch, false);
+            for value in branch {
+                if !ids_contains(live, value) {
+                    vec.push(live, value);
+                }
+            }
+            short_circuit = true;
+        case option.Option.None: {}
+    }
+    var has_arguments = false;
+    var arguments = vec.empty[hir.CallArg]();
+    switch call_arguments(node) {
+        case option.Option.Some(values):
+            has_arguments = true;
+            arguments = values;
+        case option.Option.None: {}
+    }
+    if has_arguments {
+        let floor = vec.len(analysis.active_borrows);
+        switch call_callee(node) {
+            case option.Option.Some(callee):
+                let callee_node = node_at(analysis, callee);
+                let root = borrow_root(analysis, callee);
+                let borrowed = option_is_some(root);
+                expr_records(inout analysis, callee, fe, live, borrowed);
+                if borrowed {
+                    var symbol usize = 0;
+                    switch root {
+                        case option.Option.Some(value): symbol = value;
+                        case option.Option.None: {}
+                    }
+                    vec.push(analysis.active_borrows, borrow_step(
+                        hir.OwnerKind.Binding, symbol,
+                        local_of(analysis, symbol).type_id));
+                } else if owned(analysis, callee_node.type_id) &&
+                          !inert_function_value(callee_node) {
+                    vec.push(analysis.active_borrows, borrow_step(
+                        hir.OwnerKind.Temporary, callee,
+                        callee_node.type_id));
+                }
+            case option.Option.None: {}
+        }
+        for argument in arguments {
+            var root = option.Option[usize].None;
+            if mode_is(argument.mode, model.ParamMode.Ordinary) {
+                root = borrow_root(analysis, argument.expression);
+            }
+            expr_records(inout analysis, argument.expression, fe, live,
+                option_is_some(root));
+            if option_is_some(root) {
+                var symbol usize = 0;
+                switch root {
+                    case option.Option.Some(value): symbol = value;
+                    case option.Option.None: {}
+                }
+                vec.push(analysis.active_borrows, borrow_step(
+                    hir.OwnerKind.Binding, symbol,
+                    local_of(analysis, symbol).type_id));
+            } else {
+                let argument_node = node_at(analysis, argument.expression);
+                if mode_is(argument.mode, model.ParamMode.Ordinary) &&
+                   owned(analysis, argument_node.type_id) &&
+                   !inert_function_value(argument_node) {
+                    vec.push(analysis.active_borrows, borrow_step(
+                        hir.OwnerKind.Temporary, argument.expression,
+                        argument_node.type_id));
+                } else if mode_is(argument.mode, model.ParamMode.Inout) {
+                    switch borrow_root(analysis, argument.expression) {
+                        case option.Option.Some(symbol):
+                            vec.push(analysis.active_borrows, borrow_step(
+                                hir.OwnerKind.Binding, symbol,
+                                argument_node.type_id));
+                        case option.Option.None: {}
+                    }
+                }
+            }
+        }
+        let ends = vec.empty[hir.CleanupStep]();
+        var index usize = vec.len(analysis.active_borrows);
+        for index > floor {
+            index -= 1;
+            vec.push(ends, analysis.active_borrows[index]);
+        }
+        if vec.len(ends) > 0 {
+            vec.push(analysis.out.records.calls, hir.CallLifetime(node: id,
+                on_return: ends));
+        }
+        for argument in arguments {
+            if mode_is(argument.mode, model.ParamMode.Move) {
+                consume_live(live, argument.expression);
+            }
+        }
+        let prefix_actions = prefix_cleanup(analysis, live);
+        prefix_put(inout analysis, id, prefix_actions);
+        for vec.len(analysis.active_borrows) > floor {
+            let discarded = vec.pop(analysis.active_borrows);
+        }
+    } else if kind_is(kind, hir.NodeKind.IndexRead) {
+        let receiver = child_at(node, 0);
+        let index = child_at(node, 1);
+        let root = borrow_root(analysis, receiver);
+        var can_borrow = false;
+        switch root {
+            case option.Option.Some(symbol):
+                can_borrow = is_borrowed_param(analysis, symbol) &&
+                    !expr_consumes_symbol(analysis, index, symbol);
+                if !can_borrow {
+                    can_borrow = local_index_can_borrow(inout analysis,
+                        receiver, index, symbol);
+                }
+            case option.Option.None: {}
+        }
+        expr_records(inout analysis, receiver, fe, live, can_borrow);
+        expr_records(inout analysis, index, fe, live, false);
+    } else if kind_is(kind, hir.NodeKind.IndexPlace) {
+        let receiver = child_at(node, 0);
+        let index = child_at(node, 1);
+        let can_borrow = ids_contains(analysis.safe_borrow_receivers, receiver);
+        expr_records(inout analysis, receiver, fe, live, can_borrow);
+        expr_records(inout analysis, index, fe, live, false);
+    } else if !short_circuit {
+        for child in node.children {
+            expr_records(inout analysis, child, fe, live,
+                borrowed_value && kind_is(kind, hir.NodeKind.FieldRead));
+        }
+    }
+    if !has_arguments {
+        let prefix_actions = prefix_cleanup(analysis, live);
+        prefix_put(inout analysis, id, prefix_actions);
+    }
+    for var index usize = 0; index < vec.len(node.children); index += 1 {
+        let child = node.children[index];
+        var use_kind = hir.UseKind.Borrow;
+        if kind_is(kind, hir.NodeKind.StructInit) ||
+           kind_is(kind, hir.NodeKind.EnumInit) ||
+           kind_is(kind, hir.NodeKind.VecInit) ||
+           kind_is(kind, hir.NodeKind.FunctionValue) ||
+           kind_is(kind, hir.NodeKind.Move) {
+            use_kind = hir.UseKind.Take;
+        }
+        if has_arguments {
+            var offset usize = 0;
+            switch call_callee(node) {
+                case option.Option.Some(_): offset = 1;
+                case option.Option.None: {}
+            }
+            if index >= offset && index - offset < vec.len(arguments) {
+                let argument = arguments[index - offset];
+                if mode_is(argument.mode, model.ParamMode.Move) {
+                    use_kind = hir.UseKind.Take;
+                } else if mode_is(argument.mode, model.ParamMode.Inout) {
+                    use_kind = hir.UseKind.Inout;
+                } else {
+                    use_kind = hir.UseKind.Borrow;
+                }
+            }
+        }
+        expression_use(inout analysis, id, u32(index), child, use_kind);
+        if use_is(use_kind, hir.UseKind.Take) {
+            consume_live(live, child);
+        }
+    }
+    switch node_read(node) {
+        case option.Option.Some(value):
+            if owned(analysis, node.type_id) || borrowed_value {
+                var read_kind = hir.UseKind.Copy;
+                if borrowed_value {
+                    read_kind = hir.UseKind.Borrow;
+                }
+                vec.push(analysis.out.records.uses, hir.ValueUse(
+                    consumer: id, operand: 0, kind: read_kind,
+                    root: option.Option[usize].Some(value.symbol),
+                    type_id: node.type_id,
+                    destination: option.Option[usize].None));
+            }
+        case option.Option.None: {}
+    }
+    switch node_move(node) {
+        case option.Option.Some(value):
+            switch value.binding {
+                case option.Option.Some(binding):
+                    vec.push(analysis.out.records.uses, hir.ValueUse(
+                        consumer: id, operand: 0, kind: hir.UseKind.Take,
+                        root: option.Option[usize].Some(binding),
+                        type_id: node.type_id,
+                        destination: option.Option[usize].None));
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+    if !borrowed_value && owned(analysis, node.type_id) &&
+       !kind_is(kind, hir.NodeKind.Place) &&
+       !kind_is(kind, hir.NodeKind.FieldPlace) &&
+       !kind_is(kind, hir.NodeKind.IndexPlace) &&
+       !inert_function_value(node) {
+        vec.push(analysis.out.records.temporaries, hir.Temporary(producer: id,
+            full_expression: fe, type_id: node.type_id));
+        vec.push(live, id);
+    }
+}
+
+func full_expression(analysis inout Analysis, root usize, expression usize,
+                     transfer bool) throws Problem {
+    let live = vec.empty[usize]();
+    for vec.len(analysis.active_borrows) > 0 {
+        let discarded = vec.pop(analysis.active_borrows);
+    }
+    analysis.full_expression_root = option.Option[usize].Some(expression);
+    expr_records(inout analysis, expression, root, live, false);
+    if transfer {
+        push_use(inout analysis, root, 0, expression, hir.UseKind.Take);
+        consume_live(live, expression);
+    }
+    vec.push(analysis.out.records.full_expressions, hir.FullExpression(
+        node: root, actions: temp_cleanup(analysis, live)));
+    let cleanup_actions = temp_cleanup(analysis, live);
+    prefix_try_put(inout analysis, root, cleanup_actions);
+}
+
+func pattern_copies(analysis inout Analysis, pattern hir.Pattern, body usize,
+                    root option.Option[usize]) throws Problem {
+    switch pattern.binding {
+        case option.Option.Some(binding):
+            if owned(analysis, pattern.type_id) {
+                vec.push(analysis.out.records.uses, hir.ValueUse(consumer: body,
+                    operand: 0, kind: hir.UseKind.Copy, root: root,
+                    type_id: pattern.type_id,
+                    destination: option.Option[usize].Some(binding)));
+            }
+        case option.Option.None: {}
+    }
+    for child in pattern.payload {
+        pattern_copies(inout analysis, child, body, root);
+    }
+}
+
+func records(analysis inout Analysis, id usize) throws Problem {
+    let node = node_at(analysis, id);
+    let kind = kind_of(node);
+    if kind_is(kind, hir.NodeKind.Binding) ||
+       kind_is(kind, hir.NodeKind.Return) ||
+       kind_is(kind, hir.NodeKind.Throw) {
+        if vec.len(node.children) > 0 {
+            full_expression(inout analysis, id, node.children[0], true);
+        }
+        return;
+    }
+    if kind_is(kind, hir.NodeKind.Assign) {
+        let live = vec.empty[usize]();
+        for vec.len(analysis.active_borrows) > 0 {
+            let discarded = vec.pop(analysis.active_borrows);
+        }
+        analysis.full_expression_root = option.Option[usize].Some(id);
+        let place_id = child_at(node, 0);
+        let place = node_at(analysis, place_id);
+        if kind_is(kind_of(place), hir.NodeKind.IndexPlace) {
+            let receiver = child_at(place, 0);
+            let index = child_at(place, 1);
+            let root = borrow_root(analysis, receiver);
+            switch root {
+                case option.Option.Some(symbol):
+                    if is_borrowed_param(analysis, symbol) &&
+                       !expr_consumes_symbol(analysis, index, symbol) &&
+                       !expr_consumes_symbol(analysis, child_at(node, 1),
+                           symbol) {
+                        ids_insert(analysis.safe_borrow_receivers, receiver);
+                    } else if local_index_can_borrow(inout analysis,
+                            receiver, index, symbol) {
+                        ids_insert(analysis.safe_borrow_receivers, receiver);
+                    }
+                case option.Option.None: {}
+            }
+        }
+        expr_records(inout analysis, place_id, id, live, false);
+        if kind_is(kind_of(place), hir.NodeKind.FieldPlace) {
+            switch assignment_field_root(analysis, place_id) {
+                case option.Option.Some(symbol):
+                    vec.push(analysis.active_borrows, borrow_step(
+                        hir.OwnerKind.Binding, symbol,
+                        local_of(analysis, symbol).type_id));
+                case option.Option.None: {}
+            }
+        }
+        let right = child_at(node, 1);
+        expr_records(inout analysis, right, id, live, false);
+        push_use(inout analysis, id, 0, place_id, hir.UseKind.Borrow);
+        var compound = false;
+        switch node_assign(node) {
+            case option.Option.Some(assign):
+                compound = option_is_some_binary(assign.compound);
+            case option.Option.None: {}
+        }
+        let place_node = node_at(analysis, place_id);
+        let place_type = type_at(analysis.module, place_node.type_id);
+        let text_compound = compound &&
+            type_kind_is(place_type.kind, model.TypeKind.String);
+        var right_use = hir.UseKind.Take;
+        if text_compound {
+            right_use = hir.UseKind.Borrow;
+        }
+        push_use(inout analysis, id, 1, right, right_use);
+        if !text_compound {
+            consume_live(live, right);
+        }
+        vec.push(analysis.out.records.full_expressions, hir.FullExpression(
+            node: id, actions: prefix_cleanup(analysis, live)));
+        for vec.len(analysis.active_borrows) > 0 {
+            let discarded = vec.pop(analysis.active_borrows);
+        }
+        return;
+    }
+    if kind_is(kind, hir.NodeKind.ExpressionStatement) {
+        full_expression(inout analysis, id, child_at(node, 0), false);
+        return;
+    }
+    if kind_is(kind, hir.NodeKind.If) {
+        let condition = child_at(node, 0);
+        full_expression(inout analysis, condition, condition, false);
+        for var index usize = 1; index < vec.len(node.children); index += 1 {
+            records(inout analysis, node.children[index]);
+        }
+        return;
+    }
+    if kind_is(kind, hir.NodeKind.For) {
+        records(inout analysis, child_at(node, 0));
+        let condition = child_at(node, 1);
+        full_expression(inout analysis, condition, condition, false);
+        records(inout analysis, child_at(node, 2));
+        records(inout analysis, child_at(node, 3));
+        return;
+    }
+    if kind_is(kind, hir.NodeKind.ForIn) {
+        full_expression(inout analysis, id, child_at(node, 0), true);
+        var data = hir.ForIn(element: 0, body_scope: 0, body: 0,
+            iterator: option.Option[hir.IteratorFor].None);
+        switch node_fortin(node) {
+            case option.Option.Some(found): data = found;
+            case option.Option.None:
+                throw internal_problem("ownership for-in payload missing");
+        }
+        let element_type = local_of(analysis, data.element).type_id;
+        switch data.iterator {
+            case option.Option.Some(iterator):
+                full_expression(inout analysis, iterator.next, iterator.next,
+                    true);
+                if owned(analysis, element_type) {
+                    vec.push(analysis.out.records.uses, hir.ValueUse(
+                        consumer: id, operand: 0, kind: hir.UseKind.Copy,
+                        root: option.Option[usize].None,
+                        type_id: element_type,
+                        destination: option.Option[usize].Some(data.element)));
+                }
+            case option.Option.None:
+                if owned(analysis, element_type) {
+                    vec.push(analysis.out.records.uses, hir.ValueUse(
+                        consumer: id, operand: 0, kind: hir.UseKind.Copy,
+                        root: option.Option[usize].None,
+                        type_id: element_type,
+                        destination: option.Option[usize].Some(data.element)));
+                }
+        }
+        records(inout analysis, child_at(node, 1));
+        return;
+    }
+    if kind_is(kind, hir.NodeKind.Switch) {
+        let subject = child_at(node, 0);
+        let subject_node = node_at(analysis, subject);
+        if owned(analysis, subject_node.type_id) {
+            switch node_read(subject_node) {
+                case option.Option.Some(read_data): {
+                    let root = read_data.symbol;
+                    vec.push(analysis.out.records.uses, hir.ValueUse(
+                        consumer: id, operand: 0, kind: hir.UseKind.Borrow,
+                        root: option.Option[usize].Some(root),
+                        type_id: subject_node.type_id,
+                        destination: option.Option[usize].None));
+                    var switch_data = hir.Switch(arms: [], exhaustive: false);
+                    switch node_switch(node) {
+                        case option.Option.Some(found): switch_data = found;
+                        case option.Option.None:
+                            throw internal_problem(
+                                "ownership switch payload missing");
+                    }
+                    for arm in switch_data.arms {
+                        pattern_copies(inout analysis, arm.pattern, arm.body,
+                            option.Option[usize].Some(root));
+                    }
+                    let actions = vec.empty[hir.CleanupStep]();
+                    vec.push(actions, borrow_step(hir.OwnerKind.Binding, root,
+                        subject_node.type_id));
+                    vec.push(analysis.out.records.full_expressions,
+                        hir.FullExpression(node: id, actions: actions));
+                }
+                case option.Option.None: {
+                    let live = vec.empty[usize]();
+                    for vec.len(analysis.active_borrows) > 0 {
+                        let discarded = vec.pop(analysis.active_borrows);
+                    }
+                    analysis.full_expression_root =
+                        option.Option[usize].Some(subject);
+                    expr_records(inout analysis, subject, id, live, false);
+                    consume_live(live, subject);
+                    vec.push(analysis.out.records.full_expressions,
+                        hir.FullExpression(node: id,
+                            actions: prefix_cleanup(analysis, live)));
+                    var switch_data = hir.Switch(arms: [], exhaustive: false);
+                    switch node_switch(node) {
+                        case option.Option.Some(found): switch_data = found;
+                        case option.Option.None:
+                            throw internal_problem(
+                                "ownership switch payload missing");
+                    }
+                    for arm in switch_data.arms {
+                        pattern_copies(inout analysis, arm.pattern, arm.body,
+                            option.Option[usize].None);
+                    }
+                    for arm in switch_data.arms {
+                        let found = subject_lookup(analysis, arm.scope);
+                        if found < 0 {
+                            vec.push(analysis.switch_subjects,
+                                SubjectEntry(scope: arm.scope, node: subject));
+                        }
+                    }
+                }
+            }
+        } else {
+            full_expression(inout analysis, subject, subject, false);
+        }
+        for var index usize = 1; index < vec.len(node.children); index += 1 {
+            records(inout analysis, node.children[index]);
+        }
+        return;
+    }
+    if kind_is(kind, hir.NodeKind.Try) {
+        records(inout analysis, child_at(node, 0));
+        var try_data = hir.Try(catches: []);
+        switch node_try(node) {
+            case option.Option.Some(found): try_data = found;
+            case option.Option.None:
+                throw internal_problem("ownership try payload missing");
+        }
+        for catcher in try_data.catches {
+            if owned(analysis, catcher.error_type) {
+                vec.push(analysis.out.records.uses, hir.ValueUse(
+                    consumer: catcher.body, operand: 0,
+                    kind: hir.UseKind.Take, root: option.Option[usize].None,
+                    type_id: catcher.error_type,
+                    destination: option.Option[usize].Some(catcher.binding)));
+            }
+            records(inout analysis, catcher.body);
+        }
+        return;
+    }
+    for child in node.children {
+        records(inout analysis, child);
+    }
+}
+
+func contains_node(analysis Analysis, outer usize, id usize) bool {
+    var current = option.Option[usize].Some(id);
+    for option_is_some_usize(current) {
+        var value usize = 0;
+        switch current {
+            case option.Option.Some(found): value = found;
+            case option.Option.None: return false;
+        }
+        if value == outer {
+            return true;
+        }
+        if value >= vec.len(analysis.parents) {
+            return false;
+        }
+        current = analysis.parents[value];
+    }
+    return false;
+}
+
+func option_is_some_usize(value option.Option[usize]) bool {
+    switch value {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func error_type_of(analysis Analysis, node hir.HirNode) option.Option[usize]
+    throws Problem {
+    switch node_call(node) {
+        case option.Option.Some(value):
+            return type_at(analysis.module, value.signature).throws_type;
+        case option.Option.None: {}
+    }
+    switch node_constraint(node) {
+        case option.Option.Some(value):
+            return type_at(analysis.module, value.signature).throws_type;
+        case option.Option.None: {}
+    }
+    switch node_foreign_read(node) {
+        case option.Option.Some(value):
+            if value.binding >= vec.len(analysis.module.foreign_bindings) {
+                throw internal_problem(
+                    "ownership foreign binding index is out of range");
+            }
+            return option.Option[usize].Some(
+                analysis.module.foreign_bindings[value.binding].read_error);
+        case option.Option.None: {}
+    }
+    if kind_is(kind_of(node), hir.NodeKind.Throw) {
+        let child = node_at(analysis, child_at(node, 0));
+        return option.Option[usize].Some(child.type_id);
+    }
+    if kind_is(kind_of(node), hir.NodeKind.Await) {
+        let child = node_at(analysis, child_at(node, 0));
+        let task = type_at(analysis.module, child.type_id);
+        if vec.len(task.type_args) != 2 {
+            throw internal_problem("await task arity");
+        }
+        let error = task.type_args[1];
+        if !type_kind_is(type_at(analysis.module, error).kind,
+                model.TypeKind.Unit) {
+            return option.Option[usize].Some(error);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func action_owned(analysis Analysis, type_id usize) bool throws Problem {
+    return owned(analysis, type_id);
+}
+
+func emit_exit(analysis inout Analysis, id usize, kind hir.ExitKind,
+               target hir.ExitTarget, keep option.Option[usize],
+               error option.Option[usize], save bool) throws Problem {
+    let node = node_at(analysis, id);
+    var plan = hir.ExitPlan(kind: kind, error_type: error, target: target,
+        exited_scopes: [], defers: [], saves_value: save, actions: []);
+    if save {
+        var type_id usize = 0;
+        switch error {
+            case option.Option.Some(value): type_id = value;
+            case option.Option.None:
+                type_id = node_at(analysis, child_at(node, 0)).type_id;
+        }
+        if action_owned(analysis, type_id) {
+            var owner_kind = hir.OwnerKind.ReturnOutput;
+            if option_is_some_usize(error) {
+                owner_kind = hir.OwnerKind.ErrorOutput;
+            }
+            vec.push(plan.actions, hir.CleanupStep(
+                kind: hir.CleanupKind.SaveOutput,
+                owner: hir.OwnerRef(kind: owner_kind, identity: u64(id)),
+                type_id: type_id));
+        }
+    }
+    let prefix = prefix_lookup(analysis, id);
+    if prefix >= 0 && !kind_is_exit(kind, hir.ExitKind.Normal) {
+        for action in analysis.failure_prefix[usize(prefix)].actions {
+            vec.push(plan.actions, action);
+        }
+    }
+    var scope = option.Option[usize].Some(node.scope);
+    var reached_keep = false;
+    for option_is_some_usize(scope) {
+        var current usize = 0;
+        switch scope {
+            case option.Option.Some(value): current = value;
+            case option.Option.None: break;
+        }
+        var stop_at_keep = false;
+        switch keep {
+            case option.Option.Some(value):
+                if current == value {
+                    stop_at_keep = true;
+                }
+            case option.Option.None: {}
+        }
+        if stop_at_keep {
+            reached_keep = true;
+            break;
+        }
+        vec.push(plan.exited_scopes, current);
+        let construct_index = scope_node_lookup(analysis, current);
+        if construct_index < 0 {
+            throw internal_problem("ownership scope construct is missing");
+        }
+        let construct = analysis.scope_nodes[usize(construct_index)].node;
+        let block = node_at(analysis, construct);
+        if kind_is(kind_of(block), hir.NodeKind.Block) {
+            var index usize = vec.len(block.children);
+            for index > 0 {
+                index -= 1;
+                let child = block.children[index];
+                if id != construct && !contains_node(analysis, construct, id) {
+                    throw internal_problem("ownership scope");
+                }
+                if id != construct {
+                    var before = false;
+                    for candidate in block.children {
+                        if contains_node(analysis, candidate, id) {
+                            break;
+                        }
+                        if candidate == child {
+                            before = true;
+                        }
+                    }
+                    if !before {
+                        continue;
+                    }
+                }
+                if kind_is(kind_of(node_at(analysis, child)),
+                        hir.NodeKind.Defer) {
+                    vec.push(plan.defers, child);
+                    vec.push(plan.actions, hir.CleanupStep(
+                        kind: hir.CleanupKind.Defer,
+                        owner: hir.OwnerRef(kind: hir.OwnerKind.Temporary,
+                            identity: u64(child)),
+                        type_id: 0));
+                }
+            }
+        }
+        let locals_index = scope_locals_lookup(analysis, current);
+        if locals_index >= 0 {
+            let symbols = analysis.scope_locals[usize(locals_index)].symbols;
+            var local_index usize = vec.len(symbols);
+            for local_index > 0 {
+                local_index -= 1;
+                let local = local_of(analysis, symbols[local_index]);
+                if !mode_is(local.mode, model.ParamMode.Move) ||
+                   !owned(analysis, local.type_id) {
+                    continue;
+                }
+                var visible = true;
+                let declaration = declaration_lookup(analysis, local.symbol);
+                if declaration >= 0 {
+                    let binding = analysis.declarations[usize(declaration)].node;
+                    if contains_node(analysis, binding, id) {
+                        visible = false;
+                    } else if id != construct {
+                        var found_binding = false;
+                        for var candidate_index usize = 0;
+                            candidate_index < vec.len(block.children);
+                            candidate_index += 1 {
+                            if block.children[candidate_index] == binding {
+                                found_binding = true;
+                            }
+                        }
+                        if found_binding {
+                            visible = false;
+                            for candidate in block.children {
+                                if contains_node(analysis, candidate, id) {
+                                    break;
+                                }
+                                if candidate == binding {
+                                    visible = true;
+                                }
+                            }
+                        }
+                    }
+                }
+                if visible {
+                    vec.push(plan.actions, hir.CleanupStep(
+                        kind: hir.CleanupKind.DestroyIfLive,
+                        owner: hir.OwnerRef(kind: hir.OwnerKind.Binding,
+                            identity: u64(local.symbol)),
+                        type_id: local.type_id));
+                }
+            }
+        }
+        if kind_is(kind_of(block), hir.NodeKind.ForIn) {
+            var forin = hir.ForIn(element: 0, body_scope: 0, body: 0,
+                iterator: option.Option[hir.IteratorFor].None);
+            switch node_fortin(block) {
+                case option.Option.Some(value): forin = value;
+                case option.Option.None:
+                    throw internal_problem("ownership for-in payload missing");
+            }
+            if !option_is_some_for(forin.iterator) &&
+               !contains_node(analysis, child_at(block, 0), id) {
+                vec.push(plan.actions, hir.CleanupStep(
+                    kind: hir.CleanupKind.EndIteration,
+                    owner: hir.OwnerRef(kind: hir.OwnerKind.Iteration,
+                        identity: u64(construct)), type_id: 0));
+                vec.push(plan.actions, hir.CleanupStep(
+                    kind: hir.CleanupKind.DestroyIfLive,
+                    owner: hir.OwnerRef(kind: hir.OwnerKind.Iteration,
+                        identity: u64(construct)),
+                    type_id: node_at(analysis, child_at(block, 0)).type_id));
+            }
+        }
+        let subject = subject_lookup(analysis, current);
+        if subject >= 0 {
+            let subject_node = analysis.switch_subjects[usize(subject)].node;
+            vec.push(plan.actions, hir.CleanupStep(
+                kind: hir.CleanupKind.DestroyIfLive,
+                owner: hir.OwnerRef(kind: hir.OwnerKind.Temporary,
+                    identity: u64(subject_node)),
+                type_id: node_at(analysis, subject_node).type_id));
+        }
+        scope = scope_at(analysis, current).parent;
+    }
+    if option_is_some_usize(keep) && !reached_keep {
+        throw internal_problem("ownership exit target not ancestor");
+    }
+    if option_is_some_usize(error) || vec.len(plan.actions) > 0 {
+        if id >= vec.len(analysis.out.exits) {
+            throw internal_problem("ownership exit node index is out of range");
+        }
+        vec.push(analysis.out.exits[id], plan);
+    }
+}
+
+func option_is_some_for(value option.Option[hir.IteratorFor]) bool {
+    switch value {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func kind_is_exit(kind hir.ExitKind, expected hir.ExitKind) bool {
+    return same_exit_id(kind) == same_exit_id(expected);
+}
+
+func exit_records(analysis inout Analysis, id usize) throws Problem {
+    let node = node_at(analysis, id);
+    let function_symbol = analysis.function.symbol;
+    ids_insert(analysis.out.checked_nodes, id);
+    let kind = kind_of(node);
+    switch error_type_of(analysis, node) {
+        case option.Option.Some(error):
+            var handler = option.Option[hir.CatchTarget].None;
+            var branch = id;
+            var parent = analysis.parents[id];
+            for option_is_some_usize(parent) {
+                var parent_id usize = 0;
+                switch parent {
+                    case option.Option.Some(value): parent_id = value;
+                    case option.Option.None: break;
+                }
+                let candidate = node_at(analysis, parent_id);
+                if kind_is(kind_of(candidate), hir.NodeKind.Defer) {
+                    break;
+                }
+                var found_handler = false;
+                switch node_try(candidate) {
+                    case option.Option.Some(data):
+                        if branch == child_at(candidate, 0) {
+                            for var index usize = 0;
+                                index < vec.len(data.catches); index += 1 {
+                                if data.catches[index].error_type == error {
+                                    handler = option.Option[hir.CatchTarget].Some(
+                                        hir.CatchTarget(try_node: parent_id,
+                                            index: u32(index)));
+                                    found_handler = true;
+                                    break;
+                                }
+                            }
+                        }
+                    case option.Option.None: {}
+                }
+                if found_handler {
+                    break;
+                }
+                branch = parent_id;
+                parent = analysis.parents[parent_id];
+            }
+            switch handler {
+                case option.Option.Some(target):
+                    let try_node = node_at(analysis, target.try_node);
+                    emit_exit(inout analysis, id, hir.ExitKind.Error,
+                        hir.ExitTarget.CatchTarget(value: target),
+                        option.Option[usize].Some(try_node.scope),
+                        option.Option[usize].Some(error), true);
+                case option.Option.None:
+                    emit_exit(inout analysis, id, hir.ExitKind.Error,
+                        hir.ExitTarget.FunctionExit(
+                            value: hir.FunctionExit(
+                                function: function_symbol)),
+                        option.Option[usize].None,
+                        option.Option[usize].Some(error), true);
+            }
+        case option.Option.None: {}
+    }
+    if kind_is(kind, hir.NodeKind.Return) {
+        emit_exit(inout analysis, id, hir.ExitKind.Return,
+            hir.ExitTarget.FunctionExit(
+                value: hir.FunctionExit(function: function_symbol)),
+            option.Option[usize].None, option.Option[usize].None,
+            vec.len(node.children) > 0);
+    }
+    if kind_is(kind, hir.NodeKind.Await) {
+        emit_exit(inout analysis, id, hir.ExitKind.Cancel,
+            hir.ExitTarget.FunctionExit(
+                value: hir.FunctionExit(function: function_symbol)),
+            option.Option[usize].None, option.Option[usize].None, false);
+    }
+    var jump_target usize = 0;
+    var jump = false;
+    if kind_is(kind, hir.NodeKind.Break) {
+        switch node_break(node) {
+            case option.Option.Some(value): jump_target = value.loop;
+            case option.Option.None:
+                throw internal_problem("ownership break payload missing");
+        }
+        jump = true;
+    } else if kind_is(kind, hir.NodeKind.Continue) {
+        switch node_continue(node) {
+            case option.Option.Some(value): jump_target = value.loop;
+            case option.Option.None:
+                throw internal_problem("ownership continue payload missing");
+        }
+        jump = true;
+    }
+    if jump {
+        let destination = node_at(analysis, jump_target);
+        var keep = option.Option[usize].Some(destination.scope);
+        if kind_is(kind, hir.NodeKind.Break) &&
+           (kind_is(kind_of(destination), hir.NodeKind.For) ||
+            kind_is(kind_of(destination), hir.NodeKind.ForIn)) {
+            keep = scope_at(analysis, destination.scope).parent;
+        }
+        var exit_kind = hir.ExitKind.Continue;
+        if kind_is(kind, hir.NodeKind.Break) {
+            exit_kind = hir.ExitKind.Break;
+        }
+        emit_exit(inout analysis, id, exit_kind,
+            hir.ExitTarget.JumpExit(value: hir.JumpExit(node: jump_target)),
+            keep, option.Option[usize].None, false);
+    }
+    if kind_is(kind, hir.NodeKind.Block) ||
+       kind_is(kind, hir.NodeKind.For) ||
+       kind_is(kind, hir.NodeKind.ForIn) {
+        let parent_scope = scope_at(analysis, node.scope).parent;
+        emit_exit(inout analysis, id, hir.ExitKind.Normal,
+            hir.ExitTarget.ScopeExit(value: hir.ScopeExit(scope: parent_scope)),
+            parent_scope, option.Option[usize].None, false);
+    }
+    for child in node.children {
+        exit_records(inout analysis, child);
+    }
+}
+
+func readable(analysis Analysis, id usize, symbol usize, state State)
+    throws Problem {
+    if state_get(state, symbol) != STATE_LIVE {
+        issue(analysis, id, "E_OWNERSHIP_USE_AFTER_MOVE",
+            "binding was moved or may have been moved");
+    }
+}
+
+func option_is_some_bool(value option.Option[hir.BoolLiteral]) bool {
+    switch value {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func expression(analysis Analysis, id usize, start State, borrowed_input Vec[usize])
+    Flow throws Problem {
+    let node = node_at(analysis, id);
+    let borrowed = vec.empty[usize]();
+    for value in borrowed_input {
+        vec.push(borrowed, value);
+    }
+    var out = Flow(has_normal: true, normal: copy_state(start), edges: []);
+    switch node_read(node) {
+        case option.Option.Some(value):
+            readable(analysis, id, value.symbol, start);
+        case option.Option.None: {}
+    }
+    let kind = kind_of(node);
+    if kind_is(kind, hir.NodeKind.FieldPlace) {
+        var base = child_at(node, 0);
+        for kind_is(kind_of(node_at(analysis, base)), hir.NodeKind.FieldPlace) {
+            base = child_at(node_at(analysis, base), 0);
+        }
+        switch node_place(node_at(analysis, base)) {
+            case option.Option.Some(value):
+                readable(analysis, id, value.symbol, start);
+            case option.Option.None: {}
+        }
+    }
+    if kind_is(kind, hir.NodeKind.BoolLiteral) ||
+       kind_is(kind, hir.NodeKind.StringLiteral) ||
+       kind_is(kind, hir.NodeKind.ConstantLiteral) {
+        let reference = node.source.node;
+        for occurrence in analysis.module.resolved.occurrences {
+            if occurrence.source.module == reference.module &&
+               occurrence.source.file == reference.file &&
+               occurrence.source.node == reference.node {
+                var symbol = occurrence.symbol;
+                for instance in analysis.module.instances {
+                    if instance.symbol == analysis.function.symbol {
+                        for rename in instance.renamed {
+                            if rename.origin == symbol {
+                                symbol = rename.replacement;
+                                break;
+                            }
+                        }
+                    }
+                }
+                if local_lookup(analysis, symbol) >= 0 {
+                    readable(analysis, id, symbol, start);
+                }
+            }
+        }
+    }
+    switch node_move(node) {
+        case option.Option.Some(value):
+            switch value.binding {
+                case option.Option.Some(binding): {
+                    let local = local_of(analysis, binding);
+                    if !mode_is(local.mode, model.ParamMode.Move) {
+                        issue(analysis, id, "E_CALL_ARGUMENT",
+                            "borrowed parameter cannot be moved");
+                    }
+                    if ids_contains(borrowed, binding) {
+                        issue(analysis, id, "E_CALL_ARGUMENT",
+                            "binding is borrowed by an earlier argument or assignment target");
+                    }
+                    readable(analysis, id, binding, start);
+                    state_set(out.normal, binding, STATE_MOVED);
+                }
+                case option.Option.None: {}
+            }
+        case option.Option.None: {}
+    }
+    switch node_short_circuit(node) {
+        case option.Option.Some(short):
+            let first = expression(analysis, child_at(node, 0), start, borrowed);
+            out = Flow(has_normal: first.has_normal,
+                normal: copy_state(first.normal), edges: []);
+            flow_edges(out, first);
+            let known = node_bool_literal(node_at(analysis, child_at(node, 0)));
+            var take = true;
+            if option_is_some_bool(known) {
+                var value = true;
+                switch known {
+                    case option.Option.Some(found): value = found.value;
+                    case option.Option.None: {}
+                }
+                var is_and = true;
+                switch short.op {
+                    case hir.LogicalOp.And: is_and = true;
+                    case hir.LogicalOp.Or: is_and = false;
+                }
+                if is_and {
+                    take = value;
+                } else {
+                    take = !value;
+                }
+            }
+            if take && first.has_normal {
+                let second = expression(analysis, child_at(node, 1),
+                    first.normal, borrowed);
+                flow_edges(out, second);
+                if option_is_some_bool(known) {
+                    out.has_normal = second.has_normal;
+                    out.normal = copy_state(second.normal);
+                    if !out.has_normal {
+                        out.normal = empty_state();
+                    }
+                } else if second.has_normal {
+                    flow_join(inout out, second.normal);
+                }
+            }
+            return out;
+        case option.Option.None: {}
+    }
+    var has_arguments = false;
+    var arguments = vec.empty[hir.CallArg]();
+    switch call_arguments(node) {
+        case option.Option.Some(values):
+            has_arguments = true;
+            arguments = values;
+        case option.Option.None: {}
+    }
+    if has_arguments {
+        switch call_callee(node) {
+            case option.Option.Some(callee):
+                let callee_flow = expression(analysis, callee, out.normal,
+                    borrowed);
+                out.has_normal = callee_flow.has_normal;
+                out.normal = copy_state(callee_flow.normal);
+                if !out.has_normal {
+                    out.normal = empty_state();
+                }
+                flow_edges(out, callee_flow);
+            case option.Option.None: {}
+        }
+        for argument in arguments {
+            if !out.has_normal {
+                break;
+            }
+            let argument_flow = expression(analysis, argument.expression,
+                out.normal, borrowed);
+            out.has_normal = argument_flow.has_normal;
+            out.normal = copy_state(argument_flow.normal);
+            if !out.has_normal {
+                out.normal = empty_state();
+            }
+            flow_edges(out, argument_flow);
+            if mode_is(argument.mode, model.ParamMode.Ordinary) {
+                switch borrow_root(analysis, argument.expression) {
+                    case option.Option.Some(root): ids_insert(borrowed, root);
+                    case option.Option.None: {}
+                }
+            }
+        }
+        let error = error_type_of(analysis, node);
+        if option_is_some_usize(error) && out.has_normal {
+            var error_id usize = 0;
+            switch error {
+                case option.Option.Some(value): error_id = value;
+                case option.Option.None: {}
+            }
+            flow_edge(out, hir.ExitKind.Error, 0, error_id, out.normal);
+        }
+        return out;
+    }
+    for child in node.children {
+        if !out.has_normal {
+            break;
+        }
+        let child_flow = expression(analysis, child, out.normal, borrowed);
+        out.has_normal = child_flow.has_normal;
+        out.normal = copy_state(child_flow.normal);
+        if !out.has_normal {
+            out.normal = empty_state();
+        }
+        flow_edges(out, child_flow);
+    }
+    let error = error_type_of(analysis, node);
+    if option_is_some_usize(error) && out.has_normal {
+        var error_id usize = 0;
+        switch error {
+            case option.Option.Some(value): error_id = value;
+            case option.Option.None: {}
+        }
+        flow_edge(out, hir.ExitKind.Error, 0, error_id, out.normal);
+    }
+    if kind_is(kind, hir.NodeKind.Await) && out.has_normal {
+        flow_edge(out, hir.ExitKind.Cancel, analysis.function.symbol, 0,
+            out.normal);
+    }
+    return out;
+}
+
+func initialize_pattern(pattern hir.Pattern, state State) {
+    switch pattern.binding {
+        case option.Option.Some(binding): state_set(state, binding, STATE_LIVE);
+        case option.Option.None: {}
+    }
+    for child in pattern.payload {
+        initialize_pattern(child, state);
+    }
+}
+
+func cleanup(analysis Analysis, start State, defers Vec[usize], scope usize)
+    option.Option[State] throws Problem {
+    var state = copy_state(start);
+    var index usize = vec.len(defers);
+    for index > 0 {
+        index -= 1;
+        let defer_node = node_at(analysis, defers[index]);
+        let flow = statement(analysis, child_at(defer_node, 0), state);
+        if vec.len(flow.edges) > 0 {
+            throw internal_problem("escaping ownership cleanup");
+        }
+        if !flow.has_normal {
+            return option.Option[State].None;
+        }
+        state = copy_state(flow.normal);
+    }
+    for local in analysis.locals {
+        if local.value.scope == scope {
+            state_erase(state, local.symbol);
+        }
+    }
+    return option.Option[State].Some(state);
+}
+
+func clean_edges(analysis Analysis, flow inout Flow, defers Vec[usize],
+                 scope usize) throws Problem {
+    let edges = vec.empty[Edge]();
+    for edge in flow.edges {
+        let cleaned = cleanup(analysis, edge.state, defers, scope);
+        switch cleaned {
+            case option.Option.Some(state):
+                vec.push(edges, Edge(kind: edge.kind, target: edge.target,
+                    error: edge.error, state: state));
+            case option.Option.None: {}
+        }
+    }
+    flow.edges = edges;
+}
+
+func statement(analysis Analysis, id usize, start State) Flow throws Problem {
+    let node = node_at(analysis, id);
+    let kind = kind_of(node);
+    var out = Flow(has_normal: true, normal: copy_state(start), edges: []);
+    if kind_is(kind, hir.NodeKind.Block) {
+        let defers = vec.empty[usize]();
+        for child in node.children {
+            if !out.has_normal {
+                break;
+            }
+            if kind_is(kind_of(node_at(analysis, child)), hir.NodeKind.Defer) {
+                vec.push(defers, child);
+                continue;
+            }
+            var child_flow = statement(analysis, child, out.normal);
+            clean_edges(analysis, inout child_flow, defers, node.scope);
+            flow_edges(out, child_flow);
+            out.has_normal = child_flow.has_normal;
+            out.normal = copy_state(child_flow.normal);
+            if !out.has_normal {
+                out.normal = empty_state();
+            }
+        }
+        if out.has_normal {
+            let cleaned = cleanup(analysis, out.normal, defers, node.scope);
+            switch cleaned {
+                case option.Option.Some(state):
+                    out.normal = state;
+                case option.Option.None:
+                    out.has_normal = false;
+                    out.normal = empty_state();
+            }
+        }
+        return out;
+    }
+    if kind_is(kind, hir.NodeKind.Binding) {
+        let flow = expression(analysis, child_at(node, 0), start,
+            vec.empty[usize]());
+        if flow.has_normal {
+            var binding = hir.Binding(symbol: 0, writable: false);
+            switch node_binding(node) {
+                case option.Option.Some(found): binding = found;
+                case option.Option.None:
+                    throw internal_problem("ownership binding payload missing");
+            }
+            state_set(flow.normal, binding.symbol, STATE_LIVE);
+        }
+        return flow;
+    }
+    if kind_is(kind, hir.NodeKind.Assign) {
+        let place_id = child_at(node, 0);
+        let place = node_at(analysis, place_id);
+        var flow = expression(analysis, place_id, start,
+            vec.empty[usize]());
+        var compound = false;
+        switch node_assign(node) {
+            case option.Option.Some(assign):
+                compound = option_is_some_binary(assign.compound);
+            case option.Option.None: {}
+        }
+        switch node_place(place) {
+            case option.Option.Some(value):
+                if compound {
+                    readable(analysis, place_id, value.symbol, start);
+                }
+            case option.Option.None: {}
+        }
+        if flow.has_normal {
+            let protected = vec.empty[usize]();
+            var needs_protection = false;
+            if kind_is(kind_of(place), hir.NodeKind.FieldPlace) {
+                needs_protection = true;
+            }
+            if compound &&
+               type_kind_is(type_at(analysis.module, place.type_id).kind,
+                   model.TypeKind.String) {
+                needs_protection = true;
+            }
+            if needs_protection {
+                switch assignment_field_root(analysis, place_id) {
+                    case option.Option.Some(root): ids_insert(protected, root);
+                    case option.Option.None: {}
+                }
+            }
+            let rhs = expression(analysis, child_at(node, 1), flow.normal,
+                protected);
+            flow_edges(flow, rhs);
+            flow.has_normal = rhs.has_normal;
+            flow.normal = copy_state(rhs.normal);
+            if !flow.has_normal {
+                flow.normal = empty_state();
+            }
+        }
+        if flow.has_normal {
+            switch node_place(place) {
+                case option.Option.Some(value):
+                    state_set(flow.normal, value.symbol, STATE_LIVE);
+                case option.Option.None: {}
+            }
+        }
+        return flow;
+    }
+    if kind_is(kind, hir.NodeKind.Return) ||
+       kind_is(kind, hir.NodeKind.Throw) {
+        if vec.len(node.children) > 0 {
+            out = expression(analysis, child_at(node, 0), start,
+                vec.empty[usize]());
+        }
+        if out.has_normal {
+            var error usize = 0;
+            if kind_is(kind, hir.NodeKind.Throw) {
+                error = node_at(analysis, child_at(node, 0)).type_id;
+            }
+            var exit_kind = hir.ExitKind.Error;
+            if kind_is(kind, hir.NodeKind.Return) {
+                exit_kind = hir.ExitKind.Return;
+            }
+            flow_edge(out, exit_kind, analysis.function.symbol, error,
+                out.normal);
+        }
+        out.has_normal = false;
+        out.normal = empty_state();
+        return out;
+    }
+    if kind_is(kind, hir.NodeKind.Break) ||
+       kind_is(kind, hir.NodeKind.Continue) {
+        var target usize = 0;
+        if kind_is(kind, hir.NodeKind.Break) {
+            switch node_break(node) {
+                case option.Option.Some(value): target = value.loop;
+                case option.Option.None:
+                    throw internal_problem("ownership break payload missing");
+            }
+        } else {
+            switch node_continue(node) {
+                case option.Option.Some(value): target = value.loop;
+                case option.Option.None:
+                    throw internal_problem("ownership continue payload missing");
+            }
+        }
+        var exit_kind = hir.ExitKind.Continue;
+        if kind_is(kind, hir.NodeKind.Break) {
+            exit_kind = hir.ExitKind.Break;
+        }
+        flow_edge(out, exit_kind, target, 0, start);
+        out.has_normal = false;
+        out.normal = empty_state();
+        return out;
+    }
+    if kind_is(kind, hir.NodeKind.If) {
+        let condition = expression(analysis, child_at(node, 0), start,
+            vec.empty[usize]());
+        out.has_normal = false;
+        out.normal = empty_state();
+        out.edges = vec.empty[Edge]();
+        flow_edges(out, condition);
+        let known = node_bool_literal(node_at(analysis, child_at(node, 0)));
+        if condition.has_normal {
+            for var index usize = 1; index < vec.len(node.children); index += 1 {
+                var take = true;
+                if option_is_some_bool(known) {
+                    var value = true;
+                    switch known {
+                        case option.Option.Some(found): value = found.value;
+                        case option.Option.None: {}
+                    }
+                    if value {
+                        take = index == 1;
+                    } else {
+                        take = index == 2;
+                    }
+                }
+                if take {
+                    let branch = statement(analysis, node.children[index],
+                        condition.normal);
+                    flow_edges(out, branch);
+                    if branch.has_normal {
+                        flow_join(inout out, branch.normal);
+                    }
+                }
+            }
+            if vec.len(node.children) == 2 &&
+               (!option_is_some_bool(known) ||
+                !bool_value(known)) {
+                flow_join(inout out, condition.normal);
+            }
+        }
+        return out;
+    }
+    if kind_is(kind, hir.NodeKind.Try) {
+        let body = statement(analysis, child_at(node, 0), start);
+        out.has_normal = body.has_normal;
+        out.normal = copy_state(body.normal);
+        out.edges = vec.empty[Edge]();
+        var try_data = hir.Try(catches: []);
+        switch node_try(node) {
+            case option.Option.Some(found): try_data = found;
+            case option.Option.None:
+                throw internal_problem("ownership try payload missing");
+        }
+        let entries = vec.empty[option.Option[State]]();
+        for catcher in try_data.catches {
+            vec.push(entries, option.Option[State].None);
+        }
+        for edge in body.edges {
+            var index usize = 0;
+            if kind_is_exit(edge.kind, hir.ExitKind.Error) {
+                for index < vec.len(try_data.catches) &&
+                        try_data.catches[index].error_type != edge.error {
+                    index += 1;
+                }
+            } else {
+                index = vec.len(try_data.catches);
+            }
+            if index == vec.len(try_data.catches) {
+                edge_flow(out, edge);
+            } else {
+                switch entries[index] {
+                    case option.Option.Some(state):
+                        for entry in edge.state.entries {
+                            state_set(state, entry.symbol,
+                                state_get(state, entry.symbol) | entry.value);
+                        }
+                    case option.Option.None:
+                        entries[index] = option.Option[State].Some(
+                            copy_state(edge.state));
+                }
+            }
+        }
+        for var index usize = 0; index < vec.len(try_data.catches); index += 1 {
+            switch entries[index] {
+                case option.Option.Some(state):
+                    state_set(state, try_data.catches[index].binding,
+                        STATE_LIVE);
+                    let branch = statement(analysis,
+                        try_data.catches[index].body, state);
+                    flow_edges(out, branch);
+                    if branch.has_normal {
+                        flow_join(inout out, branch.normal);
+                    }
+                case option.Option.None: {}
+            }
+        }
+        return out;
+    }
+    if kind_is(kind, hir.NodeKind.Switch) {
+        let value = expression(analysis, child_at(node, 0), start,
+            vec.empty[usize]());
+        out.has_normal = false;
+        out.normal = empty_state();
+        out.edges = vec.empty[Edge]();
+        flow_edges(out, value);
+        var switch_data = hir.Switch(arms: [], exhaustive: false);
+        switch node_switch(node) {
+            case option.Option.Some(found): switch_data = found;
+            case option.Option.None:
+                throw internal_problem("ownership switch payload missing");
+        }
+        if value.has_normal {
+            for arm in switch_data.arms {
+                let entry = copy_state(value.normal);
+                initialize_pattern(arm.pattern, entry);
+                let branch = statement(analysis, arm.body, entry);
+                if branch.has_normal {
+                    flow_join(inout out, branch.normal);
+                }
+                for edge in branch.edges {
+                    if kind_is_exit(edge.kind, hir.ExitKind.Break) &&
+                       edge.target == id {
+                        flow_join(inout out, edge.state);
+                    } else {
+                        edge_flow(out, edge);
+                    }
+                }
+            }
+        }
+        return out;
+    }
+    if kind_is(kind, hir.NodeKind.For) ||
+       kind_is(kind, hir.NodeKind.ForIn) {
+        let forin = kind_is(kind, hir.NodeKind.ForIn);
+        var init = Flow(has_normal: false, normal: empty_state(), edges: []);
+        if forin {
+            init = expression(analysis, child_at(node, 0), start,
+                vec.empty[usize]());
+        } else {
+            init = statement(analysis, child_at(node, 0), start);
+        }
+        out.has_normal = false;
+        out.normal = empty_state();
+        out.edges = vec.empty[Edge]();
+        flow_edges(out, init);
+        if !init.has_normal {
+            return out;
+        }
+        var head = copy_state(init.normal);
+        var loop_data = hir.ForIn(element: 0, body_scope: 0, body: 0,
+            iterator: option.Option[hir.IteratorFor].None);
+        var has_loop_data = false;
+        if forin {
+            switch node_fortin(node) {
+                case option.Option.Some(found):
+                    loop_data = found;
+                    has_loop_data = true;
+                case option.Option.None:
+                    throw internal_problem("ownership for-in payload missing");
+            }
+            switch loop_data.iterator {
+                case option.Option.Some(iterator):
+                    state_set(head, iterator.cursor, STATE_LIVE);
+                case option.Option.None: {}
+            }
+        }
+        var known = option.Option[hir.BoolLiteral].None;
+        if !forin {
+            known = node_bool_literal(node_at(analysis, child_at(node, 1)));
+        }
+        var iteration usize = 0;
+        let limit = vec.len(analysis.locals) * 2 + 2;
+        for iteration <= limit {
+            var condition = Flow(has_normal: true,
+                normal: copy_state(head), edges: []);
+            if !forin {
+                condition = expression(analysis, child_at(node, 1), head,
+                    vec.empty[usize]());
+            }
+            flow_edges(out, condition);
+            if !condition.has_normal {
+                break;
+            }
+            if forin || !option_is_some_bool(known) || !bool_value(known) {
+                flow_join(inout out, condition.normal);
+            }
+            if option_is_some_bool(known) && !bool_value(known) {
+                break;
+            }
+            let entry = copy_state(condition.normal);
+            if forin {
+                state_set(entry, loop_data.element, STATE_LIVE);
+                switch loop_data.iterator {
+                    case option.Option.Some(iterator):
+                        state_set(entry, iterator.option, STATE_LIVE);
+                    case option.Option.None: {}
+                }
+            }
+            var body_index usize = 3;
+            if forin {
+                body_index = 1;
+            }
+            let body = statement(analysis, node.children[body_index], entry);
+            var back = option.Option[State].None;
+            if body.has_normal {
+                back = option.Option[State].Some(copy_state(body.normal));
+            }
+            for edge in body.edges {
+                if edge.target == id && kind_is_exit(edge.kind,
+                        hir.ExitKind.Break) {
+                    flow_join(inout out, edge.state);
+                } else if edge.target == id && kind_is_exit(edge.kind,
+                        hir.ExitKind.Continue) {
+                    switch back {
+                        case option.Option.Some(state):
+                            for entry_value in edge.state.entries {
+                                state_set(state, entry_value.symbol,
+                                    state_get(state, entry_value.symbol) |
+                                    entry_value.value);
+                            }
+                        case option.Option.None:
+                            back = option.Option[State].Some(
+                                copy_state(edge.state));
+                    }
+                } else {
+                    edge_flow(out, edge);
+                }
+            }
+            if !forin {
+                switch back {
+                    case option.Option.Some(back_state):
+                        let step = statement(analysis, child_at(node, 2),
+                            back_state);
+                        flow_edges(out, step);
+                        if step.has_normal {
+                            back = option.Option[State].Some(
+                                copy_state(step.normal));
+                        } else {
+                            back = option.Option[State].None;
+                        }
+                    case option.Option.None: {}
+                }
+            }
+            let next = copy_state(head);
+            switch back {
+                case option.Option.Some(back_state):
+                    for entry_value in back_state.entries {
+                        state_set(next, entry_value.symbol,
+                            state_get(next, entry_value.symbol) |
+                            entry_value.value);
+                    }
+                case option.Option.None: {}
+            }
+            if state_equal(next, head) {
+                break;
+            }
+            head = next;
+            if iteration == limit {
+                throw internal_problem("ownership loop fixed point budget");
+            }
+            iteration += 1;
+        }
+        if out.has_normal {
+            let cleaned = cleanup(analysis, out.normal, vec.empty[usize](),
+                node.scope);
+            switch cleaned {
+                case option.Option.Some(state): out.normal = state;
+                case option.Option.None:
+                    out.has_normal = false;
+                    out.normal = empty_state();
+            }
+        }
+        clean_edges(analysis, inout out, vec.empty[usize](), node.scope);
+        return out;
+    }
+    if kind_is(kind, hir.NodeKind.ExpressionStatement) {
+        return expression(analysis, child_at(node, 0), start,
+            vec.empty[usize]());
+    }
+    if kind_is(kind, hir.NodeKind.Noop) ||
+       kind_is(kind, hir.NodeKind.Defer) {
+        return out;
+    }
+    return expression(analysis, id, start, vec.empty[usize]());
+}
+
+func bool_value(value option.Option[hir.BoolLiteral]) bool {
+    switch value {
+        case option.Option.Some(found): return found.value;
+        case option.Option.None: return false;
+    }
+}
+
+func supported(analysis inout Analysis, type_id usize) throws Problem {
+    let operations = classify(analysis.module, type_id);
+    if same_value_kind(operations.kind, hir.ValueKind.Unsupported) {
+        issue(analysis, analysis.function.body, "E_CAPABILITY_UNAVAILABLE",
+            operations.reason);
+    }
+}
+
+func sorted_local_indices(analysis Analysis, function usize) Vec[usize] throws Problem {
+    let indices = vec.empty[usize]();
+    for var index usize = 0; index < vec.len(analysis.locals); index += 1 {
+        let local = analysis.locals[index].value;
+        if scope_at(analysis, local.scope).function == function {
+            vec.push(indices, index);
+        }
+    }
+    for var index usize = 1; index < vec.len(indices); index += 1 {
+        let value = indices[index];
+        let symbol = analysis.locals[value].symbol;
+        var position = index;
+        for position > 0 &&
+                analysis.locals[indices[position - 1]].symbol > symbol {
+            indices[position] = indices[position - 1];
+            position -= 1;
+        }
+        indices[position] = value;
+    }
+    return indices;
+}
+
+func analyze_function(analysis inout Analysis, function hir.HirFunction)
+    throws Problem {
+    analysis.function = function;
+    analysis.has_function = true;
+    let signature = type_at(analysis.module, function.signature);
+    supported(inout analysis, signature.result);
+    switch signature.throws_type {
+        case option.Option.Some(error):
+            supported(inout analysis, error);
+        case option.Option.None: {}
+    }
+    if vec.len(signature.parameters) != vec.len(function.parameters) {
+        throw internal_problem("ownership signature parameter count");
+    }
+    for var index usize = 0; index < vec.len(function.parameters); index += 1 {
+        let parameter = signature.parameters[index];
+        supported(inout analysis, parameter.type_id);
+        local_add(inout analysis, function.parameters[index].symbol,
+            function.scope, parameter.type_id, parameter.mode, false);
+        ids_insert(analysis.parameter_symbols,
+            function.parameters[index].symbol);
+        if mode_is(parameter.mode, model.ParamMode.Move) ||
+           owned(analysis, parameter.type_id) {
+            ids_insert(analysis.enabled, function.symbol);
+        }
+    }
+    for capture in function.captures {
+        supported(inout analysis, capture.type_id);
+        local_add(inout analysis, capture.local, function.scope,
+            capture.type_id, model.ParamMode.Ordinary, true);
+    }
+    gather(inout analysis, function.body, option.Option[usize].None);
+    if !ids_contains(analysis.enabled, function.symbol) {
+        return;
+    }
+    for index in sorted_local_indices(analysis, function.symbol) {
+        vec.push(analysis.out.records.locals, analysis.locals[index].value);
+    }
+    records(inout analysis, function.body);
+    exit_records(inout analysis, function.body);
+    let state = empty_state();
+    for parameter in function.parameters {
+        state_set(state, parameter.symbol, STATE_LIVE);
+    }
+    for capture in function.captures {
+        state_set(state, capture.local, STATE_LIVE);
+    }
+    let flow = statement(analysis, function.body, state);
+    // The resulting flow is intentionally not published: reachable exits are
+    // represented by the exit plans, exactly as in the C++ analysis.
+}
+
+func run(analysis inout Analysis) Derived throws Problem {
+    analysis.out = Derived(records: empty_ownership(),
+        exits: vec.empty[Vec[hir.ExitPlan]](),
+        checked_nodes: vec.empty[usize]());
+    for var index usize = 0; index < vec.len(analysis.module.nodes); index += 1 {
+        vec.push(analysis.out.exits, vec.empty[hir.ExitPlan]());
+    }
+    for function in analysis.module.functions {
+        analyze_function(inout analysis, function);
+    }
+    for template in analysis.module.templates {
+        analyze_function(inout analysis, template.function);
+    }
+    return analysis.out;
+}
+
+func new_analysis(module hir.HirModule) Analysis {
+    let parents = vec.empty[option.Option[usize]]();
+    for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+        vec.push(parents, option.Option[usize].None);
+    }
+    return Analysis(module: module,
+        out: Derived(records: empty_ownership(),
+            exits: vec.empty[Vec[hir.ExitPlan]](),
+            checked_nodes: vec.empty[usize]()),
+        parents: parents, locals: [], declarations: [], scope_nodes: [],
+        scope_locals: [], failure_prefix: [], enabled: [],
+        active_borrows: [], switch_subjects: [], function: empty_hir_function(),
+        has_function: false, parameter_symbols: [], safe_borrow_receivers: [],
+        full_expression_root: option.Option[usize].None,
+        full_expression_effects: []);
+}
+
+func derive(module hir.HirModule) Derived throws Problem {
+    var analysis = new_analysis(module);
+    return run(inout analysis);
+}

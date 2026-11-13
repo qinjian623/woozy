@@ -1,0 +1,233 @@
+package nativebuild;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/resources" as resources;
+import "app/wzcc/toolio" as toolio;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+enum Failure { Abort(kind model.FailureKind, diagnostic model.Diagnostic); }
+
+func diagnostic(code string, phase string, message string, notes Vec[string]) model.Diagnostic {
+    var result = model.diagnostic(code, phase, message, model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    result.has_primary = false;
+    result.notes = notes;
+    return result;
+}
+func failed(kind model.FailureKind, value model.Diagnostic) model.UnitResult {
+    return model.UnitResult(state: model.PhaseState.Failed, failure: kind,
+        diagnostics: [value], has_value: false);
+}
+func abort(code string, phase string, kind model.FailureKind, message string,
+           notes Vec[string]) Failure {
+    return Failure.Abort(kind, diagnostic(code, phase, message, notes));
+}
+func os_text(problem os.Error) string {
+    switch problem {
+        case os.Error.System(code, completed):
+            return "os error " + strconv.format_i64(i64(code)) + ", completed=" + strconv.format_u64(u64(completed));
+        case os.Error.Interrupted(code, completed):
+            return "os error " + strconv.format_i64(i64(code)) + ", completed=" + strconv.format_u64(u64(completed));
+        case os.Error.WouldBlock(code, completed):
+            return "os error " + strconv.format_i64(i64(code)) + ", completed=" + strconv.format_u64(u64(completed));
+        case os.Error.NoProgress(completed):
+            return "no progress, completed=" + strconv.format_u64(u64(completed));
+    }
+}
+func toolio_failure(problem toolio.Error, phase string, message string) Failure {
+    switch problem {
+        case toolio.Error.System(error):
+            return abort("E_TOOLCHAIN_MISSING", phase, model.FailureKind.Environment,
+                message + ": " + os_text(error), []);
+        case toolio.Error.Rollback(backup, error):
+            return abort("E_INPUT_IO", phase, model.FailureKind.Environment,
+                "output recovery failed; retained at " + backup + ": " + os_text(error), [backup]);
+    }
+}
+
+// Valid UTF-8 stays unchanged; otherwise hex preserves every original byte.
+func output_text(bytes Vec[u8]) string throws Failure {
+    try { return text.from_bytes(bytes); }
+    catch error text.Error {}
+    let hex = text.bytes("0123456789ABCDEF");
+    let escaped = text.bytes("raw tool output bytes:");
+    for byte in bytes {
+        vec.push(escaped, 32);
+        vec.push(escaped, hex[usize(byte / 16)]);
+        vec.push(escaped, hex[usize(byte % 16)]);
+    }
+    try { return text.from_bytes(escaped); }
+    catch error text.Error {
+        throw abort("E_INTERNAL_ERROR", "codegen", model.FailureKind.Internal,
+            "cannot encode ASCII tool diagnostic", []);
+    }
+}
+func run(argv Vec[string], capture string, phase string) toolio.ProcessResult throws Failure {
+    try { return toolio.run(argv, capture); }
+    catch problem toolio.Error { throw toolio_failure(problem, phase, "cannot execute " + argv[0]); }
+}
+func version_is_fixed(value string) bool {
+    let words = text.split(text.replace(text.replace(text.replace(value, "\r", " "), "\n", " "), "\t", " "), " ");
+    var previous = "";
+    for word in words {
+        if word == "22.1.8" && (previous == "version" || previous == "LLD") { return true; }
+        if word != "" { previous = word; }
+    }
+    return false;
+}
+func check_versions(directory string, capture string) throws Failure {
+    for name in ["opt", "llc", "clang", "ld.lld"] {
+        let tool = directory + "/" + name;
+        let result = run([tool, "--version"], capture, "codegen");
+        let note = output_text(result.output);
+        if result.exit_code != 0 || result.signalled || !version_is_fixed(note) {
+            throw abort("E_TOOLCHAIN_MISSING", "codegen", model.FailureKind.Environment,
+                "LLVM 22.1.8 required: " + tool, [note]);
+        }
+    }
+}
+func require_runtime(name string) throws Failure {
+    try {
+        if !fs.is_file(os.stat(name)) {
+            throw abort("E_TOOLCHAIN_MISSING", "link", model.FailureKind.Environment,
+                "runtime archive is not a regular file: " + name, []);
+        }
+    } catch problem os.Error {
+        throw abort("E_TOOLCHAIN_MISSING", "link", model.FailureKind.Environment,
+            "cannot read runtime archive " + name + ": " + os_text(problem), []);
+    }
+}
+func write_sections(name string, sections Vec[string]) throws Failure {
+    try {
+        let file = os.open(name, os.O_WRONLY | os.O_CREAT | os.O_EXCL | os.O_CLOEXEC | os.O_NOFOLLOW, 0o600);
+        var closed = false;
+        defer { if !closed { try { os.close(file); } catch problem os.Error {} } }
+        for section in sections { os.write_all_text(file, section); }
+        closed = true;
+        os.close(file);
+    } catch problem os.Error {
+        throw abort("E_INPUT_IO", "codegen", model.FailureKind.Environment,
+            "cannot write " + name + ": " + os_text(problem), []);
+    }
+}
+func llvm_tool(argv Vec[string], capture string, name string) throws Failure {
+    let result = run(argv, capture, "codegen");
+    if result.exit_code != 0 || result.signalled {
+        throw abort("E_IR_INVALID", "codegen", model.FailureKind.Internal,
+            "LLVM " + name + " exited with status " + strconv.format_i64(i64(result.exit_code)),
+            [output_text(result.output)]);
+    }
+}
+func link_tool(argv Vec[string], capture string, adapter bool) throws Failure {
+    let result = run(argv, capture, "link");
+    if result.exit_code != 0 || result.signalled {
+        let environment = result.signalled || result.exit_code == 126 || result.exit_code == 127;
+        var code = "E_LINK_FAILED";
+        var kind = model.FailureKind.Source;
+        if environment { code = "E_TOOLCHAIN_MISSING"; kind = model.FailureKind.Environment; }
+        var message = "native linker exited with status ";
+        if adapter { message = "C adapter compilation failed with status "; }
+        throw abort(code, "link", kind, message + strconv.format_i64(i64(result.exit_code)),
+            [output_text(result.output)]);
+    }
+}
+
+func compile(output nativeemit.Output, project model.Project, stage toolio.Stage,
+             optimization u32, root string) throws Failure {
+    let tools = root + "/toolchain";
+    let capture = stage.path + "/tool-output";
+    let source = stage.path + "/input.ll";
+    let optimized = stage.path + "/verified.ll";
+    let object = stage.path + "/program.o";
+    let program = stage.path + "/program";
+    let native_runtime = root + "/runtime/liblang_native_runtime.a";
+    let hosted_runtime = root + "/runtime/liblang_hosted_runtime.a";
+    check_versions(tools, capture);
+    require_runtime(native_runtime);
+    if project.hosted { require_runtime(hosted_runtime); }
+    write_sections(source, output.llvm_sections);
+    var passes = "verify";
+    if optimization == 2 { passes = "verify,default<O2>,verify"; }
+    else if output.has_async { passes = "verify,default<O0>,verify"; }
+    llvm_tool([tools + "/opt", "-S", "-passes=" + passes, "-verify-each",
+        "-mtriple=" + output.triple, "-mcpu=generic", source, "-o", optimized], capture, "opt");
+    llvm_tool([tools + "/llc", "-filetype=obj", "-O=" + strconv.format_u64(u64(optimization)),
+        "-mtriple=" + output.triple, "-mcpu=generic", "-relocation-model=pic",
+        "-code-model=small", optimized, "-o", object], capture, "llc");
+    let adapter_source = stage.path + "/c_adapter.c";
+    let adapter_object = stage.path + "/c_adapter.o";
+    let adapter = output.c_adapter_source != "";
+    if adapter {
+        write_sections(adapter_source, [output.c_adapter_source]);
+        link_tool([tools + "/clang", "--target=" + output.triple, "-std=c11", "-O2", "-fPIC", "-c",
+            adapter_source, "-o", adapter_object], capture, true);
+    }
+    var arguments = [tools + "/clang", "--target=" + output.triple];
+    if project.hosted {
+        vec.push(arguments, "-Wl,-u,lang_hosted_startup_v1");
+        vec.push(arguments, "-pthread");
+    } else {
+        vec.push(arguments, "-nostdlib");
+        vec.push(arguments, "-static");
+    }
+    vec.push(arguments, "--ld-path=" + tools + "/ld.lld");
+    vec.push(arguments, object);
+    if adapter { vec.push(arguments, adapter_object); }
+    if project.hosted { vec.push(arguments, hosted_runtime); }
+    else { vec.push(arguments, native_runtime); }
+    for directory in project.c_library_dirs { vec.push(arguments, "-L" + directory); }
+    for library in project.c_libraries { vec.push(arguments, "-l" + library); }
+    vec.push(arguments, "-o");
+    vec.push(arguments, program);
+    link_tool(arguments, capture, false);
+}
+
+pub func build(output nativeemit.Output, project model.Project, out_directory string,
+               optimization u32) model.UnitResult {
+    if output.triple != "x86_64-unknown-linux-gnu" {
+        return failed(model.FailureKind.Unsupported, diagnostic("E_TARGET_UNSUPPORTED", "codegen",
+            "native executable target only supports Linux x86_64: " + output.triple, []));
+    }
+    if optimization != 0 && optimization != 2 {
+        return failed(model.FailureKind.Unsupported, diagnostic("E_CAPABILITY_UNAVAILABLE", "codegen",
+            "native scalars supports Linux x86_64, generic CPU, no extra features, O0/O2 only", []));
+    }
+    try {
+        var stage = toolio.stage(out_directory, "native");
+        defer { toolio.cleanup(stage); }
+        try {
+            let root = resources.directory();
+            compile(output, project, stage, optimization, root);
+            toolio.publish_pair(inout stage, "program.o", "program");
+        } catch problem Failure {
+            switch problem { case Failure.Abort(kind, value): return failed(kind, value); }
+        } catch problem os.Error {
+            return failed(model.FailureKind.Environment, diagnostic("E_INPUT_IO", "codegen",
+                "cannot find compiler resources: " + os_text(problem), []));
+        } catch problem toolio.Error {
+            switch problem {
+                case toolio.Error.System(error):
+                    return failed(model.FailureKind.Environment, diagnostic("E_INPUT_IO", "codegen",
+                        "cannot publish native outputs: " + os_text(error), []));
+                case toolio.Error.Rollback(backup, error):
+                    return failed(model.FailureKind.Environment, diagnostic("E_INPUT_IO", "codegen",
+                        "output recovery failed; retained at " + backup + ": " + os_text(error), [backup]));
+            }
+        }
+        return model.UnitResult(state: model.PhaseState.Complete, failure: model.FailureKind.Source,
+            diagnostics: [], has_value: true);
+    } catch problem toolio.Error {
+        switch problem {
+            case toolio.Error.System(error):
+                return failed(model.FailureKind.Environment, diagnostic("E_INPUT_IO", "codegen",
+                    "cannot create native output stage: " + os_text(error), []));
+            case toolio.Error.Rollback(backup, error):
+                return failed(model.FailureKind.Environment, diagnostic("E_INPUT_IO", "codegen",
+                    "output recovery failed; retained at " + backup + ": " + os_text(error), [backup]));
+        }
+    }
+}

@@ -1,0 +1,264 @@
+// Source-only literal decoding shared by a future checker and the HIR
+// verifier.  This is the pure-Wz counterpart of src/hir/literal_value.cpp.
+//
+// The integer spelling, exact rational-to-IEEE decision and decimal float
+// spelling decoder are the published app/wzcc/number algorithms; this package
+// does not duplicate them.  A literal is always re-read from the real lexer
+// and parser AST range; producer-provided literal data is never consulted.
+package literal;
+
+import "app/wzcc/bigint" as bigint;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/number" as number;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func bad(message string) throws model.SupportError {
+    throw model.SupportError.Invalid(message);
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func integer_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.SignedInt) ||
+           kind_is(kind, model.TypeKind.UnsignedInt) ||
+           kind_is(kind, model.TypeKind.Isize) ||
+           kind_is(kind, model.TypeKind.Usize);
+}
+
+func signed_kind(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.SignedInt) ||
+           kind_is(kind, model.TypeKind.Isize);
+}
+
+func number_failure(error number.Error) model.SupportError {
+    switch error {
+        case number.Error.InvalidLiteral(message): {
+            return model.SupportError.Invalid(message);
+        }
+        case number.Error.InvalidWidth: {
+            return model.SupportError.Invalid(
+                "floating literal has unsupported IEEE width");
+        }
+        case number.Error.ZeroDenominator: {
+            return model.SupportError.Invalid("exact ratio division fault");
+        }
+        case number.Error.NonFiniteInteger: {
+            return model.SupportError.Invalid(
+                "non-finite constant integer conversion");
+        }
+        case number.Error.IntegerRange: {
+            return model.SupportError.Invalid(
+                "integer constant is outside the target type range");
+        }
+    }
+}
+
+func type_failure(error types.Error) model.SupportError {
+    switch error {
+        case types.Error.Invalid(message): {
+            return model.SupportError.Invalid(message);
+        }
+    }
+}
+
+func require_type(state types.Context, id usize,
+                  message string) model.Type throws model.SupportError {
+    switch types.find(state, id) {
+        case option.Option.Some(value): { return value; }
+        case option.Option.None: { bad(message); }
+    }
+    return model.empty_type(model.TypeKind.Error);
+}
+
+func target_width(value model.Type,
+                  config model.CheckConfig) u32 throws model.SupportError {
+    try {
+        return types.bit_width(value, config);
+    } catch error types.Error {
+        throw type_failure(error);
+    }
+}
+
+func parse_integer(spelling string) bigint.BigInt throws model.SupportError {
+    try {
+        return number.parse_integer_spelling(spelling);
+    } catch error number.Error {
+        throw number_failure(error);
+    }
+}
+
+func floating_bits(spelling string, negative bool,
+                   width u32) u64 throws model.SupportError {
+    try {
+        return number.ieee_float_bits(spelling, negative, width);
+    } catch error number.Error {
+        throw number_failure(error);
+    }
+}
+
+func positive_remainder(value bigint.BigInt,
+                        modulus bigint.BigInt) bigint.BigInt
+                        throws model.SupportError {
+    try {
+        let parts = bigint.divrem(value, modulus);
+        if parts.remainder.sign < 0 {
+            return bigint.add(parts.remainder, modulus);
+        }
+        return parts.remainder;
+    } catch error bigint.Error {
+        bad("integer modulus fault");
+    }
+    return bigint.zero();
+}
+
+func residue_u64(value bigint.BigInt,
+                 width u32) u64 throws model.SupportError {
+    let modulus = bigint.shift_left(bigint.from_u64(1), u64(width));
+    let residue = positive_remainder(value, modulus);
+    try {
+        if width >= 64 { return bigint.to_u64(residue); }
+        return bigint.to_u64(residue) & ((u64(1) << u64(width)) - 1);
+    } catch error bigint.Error {
+        bad("integer literal magnitude does not fit");
+    }
+    return 0;
+}
+
+// Unicode scalar validation for a decoded string literal.  std/text owns the
+// same UTF-8 rules as the C++ support layer; this wrapper only maps failure to
+// the literal diagnostic.
+func valid_utf8(value string) bool {
+    try {
+        let checked = text.from_bytes(text.bytes(value));
+        return text.byte_len(checked) == text.byte_len(value);
+    } catch error text.Error {
+        return false;
+    }
+}
+
+pub func decode_pattern_literal(project model.Project, context types.Context,
+                                node model.NodeRef, expected usize,
+                                config model.CheckConfig)
+                                hir.PatternLiteral throws model.SupportError {
+    let target = require_type(context, expected,
+                              "literal pattern type is missing");
+    if node.module >= vec.len(project.modules) {
+        bad("literal pattern module is invalid");
+    }
+    let module = project.modules[node.module];
+    if module.id != node.module || node.file >= vec.len(module.files) {
+        bad("literal pattern file is invalid");
+    }
+    let file_index = module.files[node.file];
+    if file_index >= vec.len(project.files) {
+        bad("literal pattern file is invalid");
+    }
+    let file = project.files[file_index];
+    if node.node >= vec.len(file.nodes) {
+        bad("literal pattern source is invalid");
+    }
+    let syntax = file.nodes[node.node];
+    if model.ast_kind_id(syntax.kind) !=
+           model.ast_kind_id(model.AstKind.LiteralPattern) ||
+       syntax.recovered {
+        bad("literal pattern source kind is not a literal");
+    }
+    var first = syntax.token_begin;
+    if first >= syntax.token_end ||
+       syntax.token_end > vec.len(file.lexed.tokens) {
+        bad("literal pattern token range is invalid");
+    }
+    var negative = false;
+    if file.lexed.tokens[first].spelling == "-" {
+        negative = true;
+        first += 1;
+    }
+    if first + 1 != syntax.token_end {
+        bad("literal pattern has an unexpected token sequence");
+    }
+    let token = file.lexed.tokens[first];
+
+    if kind_is(target.kind, model.TypeKind.Bool) {
+        if negative {
+            bad("boolean literal pattern cannot be negative");
+        }
+        if token.spelling == "true" {
+            return hir.PatternLiteral.BoolLiteral(
+                value: hir.BoolLiteral(value: true));
+        }
+        if token.spelling == "false" {
+            return hir.PatternLiteral.BoolLiteral(
+                value: hir.BoolLiteral(value: false));
+        }
+        bad("boolean literal pattern requires true or false");
+    }
+
+    if integer_kind(target.kind) {
+        if model.token_kind_id(token.kind) !=
+               model.token_kind_id(model.TokenKind.Integer) {
+            bad("integer literal pattern requires an integer token");
+        }
+        var value = parse_integer(token.spelling);
+        if negative {
+            value = bigint.negate(value);
+        }
+        let width = target_width(target, config);
+        if width == 0 || width > 64 {
+            bad("integer literal pattern has an invalid target width");
+        }
+        let modulus = bigint.shift_left(bigint.from_u64(1), u64(width));
+        let is_signed = signed_kind(target.kind);
+        var high = modulus;
+        var low = bigint.zero();
+        if is_signed {
+            high = bigint.shift_right(modulus, 1);
+            low = bigint.negate(high);
+        }
+        if bigint.compare(value, low) < 0 ||
+           bigint.compare(value, high) >= 0 {
+            bad("integer constant is outside the target type range");
+        }
+        let bits = residue_u64(value, width);
+        return hir.PatternLiteral.IntegerLiteral(
+            value: hir.IntegerLiteral(
+                decimal: bigint.format_decimal(value), bits: bits));
+    }
+
+    if kind_is(target.kind, model.TypeKind.Float) {
+        if model.token_kind_id(token.kind) !=
+               model.token_kind_id(model.TokenKind.Floating) {
+            bad("floating literal pattern requires a floating token");
+        }
+        if target.bits != 32 && target.bits != 64 {
+            bad("floating literal pattern has an invalid target width");
+        }
+        return hir.PatternLiteral.FloatLiteral(
+            value: hir.FloatLiteral(
+                bits: floating_bits(token.spelling, negative, target.bits)));
+    }
+
+    if kind_is(target.kind, model.TypeKind.String) {
+        if negative {
+            bad("string literal pattern cannot be negative");
+        }
+        if model.token_kind_id(token.kind) !=
+               model.token_kind_id(model.TokenKind.StringLiteral) ||
+           !token.has_string_value {
+            bad("string literal pattern requires a decoded string token");
+        }
+        if !valid_utf8(token.string_value) {
+            bad("invalid UTF-8 string literal");
+        }
+        return hir.PatternLiteral.StringLiteral(
+            value: hir.StringLiteral(utf8: token.string_value));
+    }
+
+    bad("literal pattern requires bool, integer, float, or string");
+    return hir.PatternLiteral.BoolLiteral(value: hir.BoolLiteral(value: false));
+}

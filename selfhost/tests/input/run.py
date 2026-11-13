@@ -37,7 +37,27 @@ FIXTURES = {
     "invalid-truncated.bin": bytes([0xE2, 0x82]),
     "invalid-overlong.bin": bytes([0xC0, 0x80]),
     "invalid-scalar.bin": bytes([0xED, 0xA0, 0x80]),
+    "file.bin": b"not a directory\n",
+    "unreadable.bin": b"secret\n",
+    "dir with space/\u00fcn\u00efcode \u6c49.bin": b"spaced",
 }
+
+# Permission-restricted fixtures are restored even when a check fails.
+RESTORE: list[tuple[Path, int]] = []
+
+
+def restrict(path: Path) -> None:
+    RESTORE.append((path, path.stat().st_mode & 0o7777))
+    os.chmod(path, 0o000)
+
+
+def restore_permissions() -> None:
+    for path, mode in RESTORE:
+        try:
+            os.chmod(path, mode)
+        except OSError:
+            pass
+    RESTORE.clear()
 
 
 def stage_project(root: Path) -> Path:
@@ -85,19 +105,48 @@ def run(opt: str) -> tuple[int, int]:
         base = root / "fs"
         base.mkdir()
         for name, data in FIXTURES.items():
-            (base / name).write_bytes(data)
+            path = base / name
+            path.parent.mkdir(parents=True, exist_ok=True)
+            path.write_bytes(data)
         (base / "directory").mkdir()
+        (base / "unreadable-directory").mkdir()
+        os.symlink("loop.bin", base / "loop.bin")
+        os.symlink("absent.bin", base / "dangling.bin")
+        restrict(base / "unreadable.bin")
+        restrict(base / "unreadable-directory")
+        permission_checks = os.geteuid() != 0
+        if not permission_checks:
+            print("skip: unreadable fixtures are readable as root", file=sys.stderr)
+        # The oracle is the read loop of src/support/input.cpp, so the expected
+        # open/read wording is produced by the real std::ifstream.
+        oracle = root / "oracle"
+        cxx = os.environ.get("CXX", "g++")
+        built = subprocess.run(
+            [cxx, "-std=c++20", "-O2", str(HERE / "oracle.cpp"), "-o", str(oracle)],
+            text=True, capture_output=True, env=dict(os.environ, LC_ALL="C"), timeout=120,
+        )
+        if built.returncode != 0:
+            raise RuntimeError(f"input oracle build failed: {built.stderr}")
+        oracle_run = subprocess.run(
+            [str(oracle), str(base)], cwd=base, text=True, capture_output=True,
+            env=dict(os.environ, LC_ALL="C"), timeout=60,
+        )
+        if oracle_run.returncode != 0:
+            raise RuntimeError(f"input oracle failed: {oracle_run.stderr}")
+        wanted = {line for line in oracle_run.stdout.splitlines() if line.startswith("IO\t")}
         project = stage_project(root)
         build(opt, out_dir, project)
         result = subprocess.run(
-            [str(out_dir / "program"), str(base)],
+            [str(out_dir / "program"), str(base),
+             *([] if permission_checks else ["skip-permissions"])],
             cwd=base,
             text=True,
             capture_output=True,
-            env=dict(os.environ, LD_LIBRARY_PATH=LD_LIBRARY_PATH), timeout=60,
+            env=dict(os.environ, LD_LIBRARY_PATH=LD_LIBRARY_PATH, LC_ALL="C"), timeout=60,
         )
         passed = failed = 0
         summary_seen = False
+        actual = set()
         for line in result.stdout.splitlines():
             if line.startswith("SUMMARY\t"):
                 _, p, f = line.split("\t")
@@ -106,6 +155,14 @@ def run(opt: str) -> tuple[int, int]:
                 summary_seen = True
             elif line.startswith("FAIL\t"):
                 print(line)
+            elif line.startswith("IO\t"):
+                actual.add(line)
+        for line in sorted(wanted - actual):
+            failed += 1
+            print(f"FAIL\tC++ oracle I/O message missing: {line}")
+        for line in sorted(actual - wanted):
+            failed += 1
+            print(f"FAIL\tI/O message differs from the C++ oracle: {line}")
         if not summary_seen:
             failed += 1
             print("FAIL\tmissing SUMMARY")
@@ -120,6 +177,7 @@ def run(opt: str) -> tuple[int, int]:
         )
         return passed, failed
     finally:
+        restore_permissions()
         shutil.rmtree(root)
 
 

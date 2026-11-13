@@ -1,0 +1,493 @@
+// Test driver for app/wzcc/bindings.
+//
+// Reads one JSON request from standard input:
+//   {"hosted": bool, "ops": [{"kind": "python"|"c", "path": "..."}]}
+// and executes the operations in order against one SourceManager and one
+// BindingStore. The report is a deterministic length-prefixed token tree:
+//   s<byte-len>:<bytes>   string
+//   n<digits>             unsigned number
+//   t / f                 boolean
+//   z                     absent value
+//   [ ... ] / { ... }     list / record
+// The C++ oracle (oracle.cpp) prints the same tree for a project loaded by
+// src/modules/project.cpp, so the Python runner compares every published
+// binding record and every diagnostic byte for byte.
+package app;
+
+import "app/wzcc/bindings" as bindings;
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func sq(value string) string {
+    return "s" + strconv.format_u64(u64(text.byte_len(value))) + ":" + value;
+}
+
+func num(value u64) string {
+    return "n" + strconv.format_u64(value);
+}
+
+func boolean(value bool) string {
+    if value {
+        return "t";
+    }
+    return "f";
+}
+
+func absent() string {
+    return "z";
+}
+
+func opt_string(value option.Option[string]) string {
+    switch value {
+        case option.Option.Some(item): return sq(item);
+        case option.Option.None: return absent();
+    }
+}
+
+func string_list(values Vec[string]) string {
+    var out = "[";
+    for item in values {
+        out += sq(item);
+    }
+    return out + "]";
+}
+
+func id_list(values Vec[usize]) string {
+    var out = "[";
+    for item in values {
+        out += num(u64(item));
+    }
+    return out + "]";
+}
+
+func u32_list(values Vec[u32]) string {
+    var out = "[";
+    for item in values {
+        out += num(u64(item));
+    }
+    return out + "]";
+}
+
+func span_dump(manager source.Manager, span model.Span) string {
+    if span.snapshot == 0 {
+        return absent();
+    }
+    let snapshot = source.get(manager, span.snapshot);
+    return "{" + sq(snapshot.path) + num(span.begin_byte) +
+        num(span.end_byte) + "}";
+}
+
+func state_id(state model.PhaseState) string {
+    switch state {
+        case model.PhaseState.Complete: return "complete";
+        case model.PhaseState.Recovered: return "recovered";
+        case model.PhaseState.Failed: return "failed";
+        case model.PhaseState.Cancelled: return "cancelled";
+    }
+}
+
+func failure_id(kind model.FailureKind) string {
+    switch kind {
+        case model.FailureKind.Source: return "source";
+        case model.FailureKind.Unsupported: return "unsupported";
+        case model.FailureKind.Environment: return "environment";
+        case model.FailureKind.Internal: return "internal";
+    }
+}
+
+func diagnostic_dump(manager source.Manager, value model.Diagnostic) string {
+    var out = "{" + sq(value.code) + sq(value.phase) + sq(value.severity) +
+        sq(value.message);
+    if value.has_primary {
+        out += span_dump(manager, value.primary);
+    } else {
+        out += absent();
+    }
+    out += "[";
+    for related in value.related {
+        out += "{" + sq(related.message) +
+            span_dump(manager, related.span) + "}";
+    }
+    out += "]}";
+    return out;
+}
+
+func diagnostics_dump(manager source.Manager,
+                      values Vec[model.Diagnostic]) string {
+    var out = "[";
+    for value in values {
+        out += diagnostic_dump(manager, value);
+    }
+    return out + "]";
+}
+
+func kind_id(kind model.CTypeKind) string {
+    switch kind {
+        case model.CTypeKind.Scalar: return "scalar";
+        case model.CTypeKind.Pointer: return "pointer";
+        case model.CTypeKind.Buffer: return "buffer";
+        case model.CTypeKind.Named: return "named";
+    }
+}
+
+func decl_kind_id(kind model.CDeclKind) string {
+    switch kind {
+        case model.CDeclKind.Record: return "record";
+        case model.CDeclKind.Resource: return "resource";
+        case model.CDeclKind.Callback: return "callback";
+        case model.CDeclKind.Opaque: return "opaque";
+    }
+}
+
+func type_ref_dump(value model.CTypeRef) string {
+    var args = "[";
+    for item in value.args {
+        args += type_ref_dump(item);
+    }
+    args += "]";
+    return "{" + sq(kind_id(value.kind)) + sq(value.scalar) +
+        boolean(value.writable) + args + num(u64(value.named)) + "}";
+}
+
+// ---------------------------------------------------------------------------
+// Python v1 records.
+
+func python_parameter_dump(manager source.Manager,
+                           value model.BindingParameter) string {
+    return "{" + sq(value.name) + sq(value.type_name) + sq(value.kind) +
+        boolean(value.optional) + sq(value.mode) + sq(value.escapes) +
+        span_dump(manager, value.source) + "}";
+}
+
+func python_bundle_dump(manager source.Manager,
+                        value model.BindingBundle) string {
+    var requirements = "[";
+    for item in value.package_requirements {
+        requirements += "{" + sq(item.package_name) + sq(item.version_policy) +
+            span_dump(manager, item.source) + "}";
+    }
+    requirements += "]";
+    var modules = "[";
+    for item in value.modules {
+        modules += "{" + sq(item.logical_path) + sq(item.host_module) +
+            sq(item.provider) + span_dump(manager, item.source) + "}";
+    }
+    modules += "]";
+    return "{" + sq(value.path) + sq(value.json) + sq(value.sha256) +
+        span_dump(manager, value.source) + num(u64(value.schema_version)) +
+        sq(value.contract) + sq(value.review_status) +
+        string_list(value.allowed_backends) + requirements + modules +
+        id_list(value.declarations) +
+        string_list(value.conformance_required) + "}";
+}
+
+func python_decl_dump(manager source.Manager,
+                      value model.ForeignDeclaration) string {
+    var out = "{" + num(u64(value.id)) + num(u64(value.bundle)) +
+        span_dump(manager, value.source) + sq(value.json_pointer) +
+        sq(value.identity) + sq(value.module) + sq(value.name) +
+        string_list(value.host_attribute) + sq(value.stable_identity);
+    switch value.detail {
+        case model.ForeignDetail.Type(item): {
+            out += "{" + sq("type") + sq(item.kind) + sq(item.copy) +
+                id_list(item.members) + id_list(item.properties) +
+                id_list(item.indexers) + id_list(item.slices) + "}";
+        }
+        case model.ForeignDetail.Value(item): {
+            out += "{" + sq("value") + sq(item.type_name) + "}";
+        }
+        case model.ForeignDetail.Callable(item): {
+            var parameters = "[";
+            for parameter in item.parameters {
+                parameters += python_parameter_dump(manager, parameter);
+            }
+            parameters += "]";
+            out += "{" + sq("callable") + sq(item.call_kind) +
+                opt_string(item.owner_type) + parameters + sq(item.return_type) +
+                opt_string(item.error_type) + sq(item.return_ownership) +
+                sq(item.storage) + sq(item.receiver_escapes) +
+                string_list(item.effects) + "}";
+        }
+        case model.ForeignDetail.Property(item): {
+            out += "{" + sq("property") + sq(item.owner_type) + sq(item.name) +
+                sq(item.type_name) + string_list(item.getter) +
+                string_list(item.setter) + sq(item.error_type) + "}";
+        }
+        case model.ForeignDetail.Indexer(item): {
+            out += "{" + sq("indexer") + sq(item.owner_type) +
+                sq(item.index_type) + sq(item.result_type) +
+                sq(item.error_type) + boolean(item.readable) +
+                boolean(item.writable) + "}";
+        }
+        case model.ForeignDetail.Slice(item): {
+            out += "{" + sq("slice") + sq(item.owner_type) +
+                sq(item.result_type) + sq(item.error_type) +
+                opt_string(item.start_type) + opt_string(item.end_type) +
+                boolean(item.readable) + boolean(item.writable) + "}";
+        }
+    }
+    return out + "}";
+}
+
+// ---------------------------------------------------------------------------
+// C ABI v2 records.
+
+func c_parameter_dump(manager source.Manager,
+                      value model.CParameterDecl) string {
+    return "{" + sq(value.name) + type_ref_dump(value.type_ref) +
+        span_dump(manager, value.source) + "}";
+}
+
+func c_field_dump(manager source.Manager, value model.CFieldDecl) string {
+    return "{" + sq(value.name) + type_ref_dump(value.type_ref) +
+        num(value.offset) + span_dump(manager, value.source) + "}";
+}
+
+func c_bundle_dump(manager source.Manager, value model.CBindingBundle) string {
+    var modules = "[";
+    for item in value.modules {
+        modules += "{" + sq(item.logical_path) + sq(item.provider) +
+            sq(item.library) + span_dump(manager, item.source) + "}";
+    }
+    modules += "]";
+    return "{" + sq(value.path) + sq(value.json) + sq(value.sha256) +
+        span_dump(manager, value.source) + num(u64(value.schema_version)) +
+        sq(value.contract) + sq(value.abi) + sq(value.target) +
+        boolean(value.requires_hosted) + modules + u32_list(value.types) +
+        u32_list(value.callables) + "}";
+}
+
+func c_type_dump(manager source.Manager, value model.CTypeDecl) string {
+    var fields = "[";
+    for item in value.fields {
+        fields += c_field_dump(manager, item);
+    }
+    fields += "]";
+    var parameters = "[";
+    for item in value.parameters {
+        parameters += c_parameter_dump(manager, item);
+    }
+    parameters += "]";
+    var registration = absent();
+    switch value.registration {
+        case option.Option.Some(item): {
+            registration = "{" + num(u64(item.callback_type)) +
+                sq(item.unregister_symbol) + "}";
+        }
+        case option.Option.None: {}
+    }
+    return "{" + num(u64(value.id)) + num(u64(value.bundle)) +
+        span_dump(manager, value.source) + sq(value.identity) +
+        sq(value.module) + sq(value.name) + sq(value.c_name) +
+        sq(decl_kind_id(value.kind)) + fields + num(value.size) +
+        num(value.align) + sq(value.release_symbol) +
+        sq(value.retain_symbol) + type_ref_dump(value.result) + parameters +
+        registration + "}";
+}
+
+func c_callable_dump(manager source.Manager, value model.CCallableDecl) string {
+    var parameters = "[";
+    for item in value.parameters {
+        parameters += c_parameter_dump(manager, item);
+    }
+    parameters += "]";
+    var registers = absent();
+    switch value.registers {
+        case option.Option.Some(item): {
+            registers = "{" + num(u64(item.callback_parameter)) +
+                num(u64(item.userdata_parameter)) +
+                num(u64(item.callback_userdata_parameter)) + "}";
+        }
+        case option.Option.None: {}
+    }
+    let result = "{" + type_ref_dump(value.result.type_ref) +
+        sq(value.result.ownership) + sq(value.result.release_symbol) +
+        sq(value.result.retain_symbol) +
+        span_dump(manager, value.result.source) + "}";
+    return "{" + num(u64(value.id)) + num(u64(value.bundle)) +
+        span_dump(manager, value.source) + sq(value.identity) +
+        sq(value.module) + sq(value.name) + sq(value.symbol) + parameters +
+        result + sq(value.stable_identity) + registers + "}";
+}
+
+// ---------------------------------------------------------------------------
+// Store snapshot.
+
+func paths_dump(values Vec[model.PathIndex]) string {
+    var out = "[";
+    for item in values {
+        out += "{" + sq(item.path) + num(u64(item.index)) + "}";
+    }
+    return out + "]";
+}
+
+func identities_dump(manager source.Manager,
+                     values Vec[model.IdentitySpan]) string {
+    var out = "[";
+    for item in values {
+        out += "{" + sq(item.identity) + span_dump(manager, item.span) + "}";
+    }
+    return out + "]";
+}
+
+func store_dump(manager source.Manager, store model.BindingStore) string {
+    var python_bundles = "[";
+    for item in store.bindings {
+        python_bundles += python_bundle_dump(manager, item);
+    }
+    python_bundles += "]";
+    var foreign = "[";
+    for item in store.foreign_bindings {
+        foreign += python_decl_dump(manager, item);
+    }
+    foreign += "]";
+    var c_bundles = "[";
+    for item in store.c_bindings {
+        c_bundles += c_bundle_dump(manager, item);
+    }
+    c_bundles += "]";
+    var c_types = "[";
+    for item in store.c_types {
+        c_types += c_type_dump(manager, item);
+    }
+    c_types += "]";
+    var c_callables = "[";
+    for item in store.c_callables {
+        c_callables += c_callable_dump(manager, item);
+    }
+    c_callables += "]";
+    return "{" + python_bundles + foreign + c_bundles + c_types + c_callables +
+        paths_dump(store.python_paths) + paths_dump(store.c_paths) +
+        identities_dump(manager, store.python_identities) +
+        identities_dump(manager, store.c_type_identities) +
+        identities_dump(manager, store.c_callable_identities) + "}";
+}
+
+func sizes_dump(manager source.Manager, store model.BindingStore) string {
+    return "{" + num(u64(vec.len(manager.snapshots))) + num(manager.revision) +
+        num(u64(vec.len(store.bindings))) +
+        num(u64(vec.len(store.foreign_bindings))) +
+        num(u64(vec.len(store.c_bindings))) +
+        num(u64(vec.len(store.c_types))) +
+        num(u64(vec.len(store.c_callables))) + "}";
+}
+
+// ---------------------------------------------------------------------------
+// Request reading.
+
+func member(value json.Value, name string) option.Option[json.Value] {
+    switch value {
+        case json.Value.Object(items): {
+            for item in items {
+                if item.name == name {
+                    return option.Option[json.Value].Some(item.value);
+                }
+            }
+        }
+        case _: {}
+    }
+    return option.Option[json.Value].None;
+}
+
+func request_bool(value json.Value, name string) bool {
+    switch member(value, name) {
+        case option.Option.Some(item): {
+            switch item {
+                case json.Value.Bool(flag): return flag;
+                case _: {}
+            }
+        }
+        case option.Option.None: {}
+    }
+    return false;
+}
+
+func request_string(value json.Value, name string) string throws json.Error {
+    switch member(value, name) {
+        case option.Option.Some(item): {
+            switch item {
+                case json.Value.String(text_value): return text_value;
+                case _: throw json.Error.InvalidNumber;
+            }
+        }
+        case option.Option.None: {}
+    }
+    throw json.Error.InvalidNumber;
+}
+
+func request_array(value json.Value, name string) Vec[json.Value] throws json.Error {
+    switch member(value, name) {
+        case option.Option.Some(item): {
+            switch item {
+                case json.Value.Array(items): return items;
+                case _: {}
+            }
+        }
+        case option.Option.None: {}
+    }
+    throw json.Error.InvalidNumber;
+}
+
+func op_dump(manager source.Manager, store model.BindingStore,
+             value model.BundleResult) string {
+    return "{" + sq(state_id(value.state)) + sq(failure_id(value.failure)) +
+        boolean(value.has_value) + num(u64(value.value)) +
+        diagnostics_dump(manager, value.diagnostics) +
+        sizes_dump(manager, store) + "}";
+}
+
+func main() i32 throws os.Error {
+    let raw = io.read_all(os.stdin());
+    var request = json.Value.Null;
+    try {
+        request = json.parse(text.from_bytes(raw));
+    } catch error text.Error {
+        return 2;
+    } catch error json.Error {
+        return 2;
+    }
+    let hosted = request_bool(request, "hosted");
+    var operations = vec.empty[json.Value]();
+    try {
+        operations = request_array(request, "ops");
+    } catch error json.Error {
+        return 2;
+    }
+    var manager = source.manager();
+    var store = model.binding_store();
+    store.hosted = hosted;
+    var ops = "[";
+    for operation in operations {
+        var kind = "";
+        var path = "";
+        try {
+            kind = request_string(operation, "kind");
+            path = request_string(operation, "path");
+        } catch error json.Error {
+            return 2;
+        }
+        var result = model.BundleResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Internal,
+            diagnostics: vec.empty[model.Diagnostic](), has_value: false,
+            value: 0);
+        if kind == "python" {
+            result = bindings.load_python(path, inout manager, inout store);
+        } else if kind == "c" {
+            result = bindings.load_c(path, inout manager, inout store);
+        } else {
+            return 2;
+        }
+        ops += op_dump(manager, store, result);
+    }
+    ops += "]";
+    var out = "{" + ops + store_dump(manager, store) + "}";
+    os.write_all_text(os.stdout(), out);
+    return 0;
+}

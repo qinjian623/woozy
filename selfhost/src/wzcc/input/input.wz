@@ -10,7 +10,6 @@ package input;
 import "app/wzcc/model" as model;
 import "app/wzcc/source" as source;
 import "std/os" as os;
-import "std/strconv" as strconv;
 import "std/vec" as vec;
 
 pub struct ReadResult {
@@ -28,25 +27,24 @@ func empty_source() model.Source {
         valid: false, error_byte: 0, error_length: 0, error_message: "");
 }
 
-func error_text(error os.Error) string {
-    switch error {
-        case os.Error.Interrupted(code,completed):
-            return "os error "+strconv.format_i64(i64(code));
-        case os.Error.WouldBlock(code,completed):
-            return "os error "+strconv.format_i64(i64(code));
-        case os.Error.System(code,completed):
-            return "os error "+strconv.format_i64(i64(code));
-        case os.Error.NoProgress(completed):
-            return "no progress";
-    }
+// Private context for a failed read: std::ifstream reports "cannot open input"
+// when the stream never opened and "cannot read input" when a later read
+// failed, both with the libstdc++ iostream category text. The os.Error is kept
+// for callers that need to distinguish the syscall, but it does not appear in
+// the message because the C++ wording never includes it.
+enum Failure { Open(problem os.Error); Read(problem os.Error); }
+
+func open_input(path string) os.File throws Failure {
+    try { return os.open(path,os.O_RDONLY|os.O_CLOEXEC,0); }
+    catch problem os.Error { throw Failure.Open(problem); }
 }
 
 // Read all bytes with the existing typed os calls. The C++ implementation uses
-// std::ifstream and reports libstdc++ wording ("cannot open input" or "cannot
-// read input"); this implementation reports
-// "PATH: cannot read input (os error CODE)" for open, read and close failures.
-func read_bytes(path string) Vec[u8] throws os.Error {
-    let file = os.open(path,os.O_RDONLY|os.O_CLOEXEC,0);
+// std::ifstream; opening a directory succeeds there and fails on the first
+// read, so the open/read split follows the syscall that failed. Closing is
+// ignored because an ifstream destructor never reports a close failure.
+func read_bytes(path string) Vec[u8] throws Failure {
+    let file = open_input(path);
     var closed = false;
     defer { if !closed { try { os.close(file); } catch error os.Error {} } }
     let out = vec.empty[u8]();
@@ -54,10 +52,10 @@ func read_bytes(path string) Vec[u8] throws os.Error {
     for true {
         var count usize = 0;
         try { count = os.read(file,buffer,vec.len(buffer)); }
-        catch error os.Error {
-            switch error {
+        catch problem os.Error {
+            switch problem {
                 case os.Error.Interrupted(code,completed): continue;
-                default: throw error;
+                default: throw Failure.Read(problem);
             }
         }
         if count == 0 { break; }
@@ -66,13 +64,13 @@ func read_bytes(path string) Vec[u8] throws os.Error {
         }
     }
     closed = true;
-    os.close(file);
+    try { os.close(file); } catch problem os.Error {}
     return out;
 }
 
-func io_result(path string, error os.Error) ReadResult {
+func io_result(path string, operation string) ReadResult {
     var diagnostic = model.diagnostic("E_INPUT_IO","toolchain",
-        path+": cannot read input ("+error_text(error)+")",
+        path+": "+operation+": iostream error",
         model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
     // E_INPUT_IO has no primary span; model.diagnostic always supplies one, so
     // clear it explicitly rather than exposing a fake snapshot 0 location.
@@ -85,7 +83,12 @@ func io_result(path string, error os.Error) ReadResult {
 pub func read(path string, state inout source.Manager) ReadResult {
     var bytes = vec.empty[u8]();
     try { bytes = read_bytes(path); }
-    catch error os.Error { return io_result(path,error); }
+    catch failure Failure {
+        switch failure {
+            case Failure.Open(problem): return io_result(path,"cannot open input");
+            case Failure.Read(problem): return io_result(path,"cannot read input");
+        }
+    }
 
     let file_id = source.add_file(inout state,path);
     let snapshot = source.update(inout state,file_id,bytes);

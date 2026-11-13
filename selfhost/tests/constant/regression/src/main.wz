@@ -1,0 +1,126 @@
+package app;
+import "compiler/wzcc/constant" as constant;
+import "compiler/wzcc/literal" as literal;
+import "compiler/wzcc/hir" as hir;
+import "compiler/wzcc/model" as model;
+import "compiler/wzcc/types" as types;
+import "compiler/wzcc/source" as source;
+import "compiler/wzcc/lexer" as lexer;
+import "compiler/wzcc/parser" as parser;
+import "std/option" as option;
+import "std/vec" as vec;
+import "std/io" as io;
+import "std/os" as os;
+import "std/text" as text;
+import "std/strconv" as strconv;
+func n(v usize) string { return strconv.format_u64(u64(v)); }
+func bt(v bool) string { if v { return "1"; } return "0"; }
+func line(k string,v string) throws os.Error { io.println(k+"="+v); }
+func config() model.CheckConfig { return model.CheckConfig(backend:model.Backend.Native,word_bits:64); }
+func ty(t inout types.Context,k model.TypeKind,bits u32,decl usize,args Vec[usize]) usize {
+ var v=model.empty_type(k);v.bits=bits;v.declaration=decl;v.type_args=args;
+ try { return types.intern(inout t,v); } catch e types.Error { return 0; }
+}
+func ft(t inout types.Context,arg usize) usize {
+ var v=model.empty_type(model.TypeKind.Function);v.parameters=[model.ParameterType(mode:model.ParamMode.Ordinary,type_id:arg)];v.result=arg;
+ try { return types.intern(inout t,v); } catch e types.Error { return 0; }
+}
+func empty_source() hir.HirSource { return hir.HirSource(node:model.NodeRef(module:0,file:0,node:0),span:model.Span(snapshot:0,begin_byte:0,end_byte:0)); }
+func node(t usize,d hir.NodeData,ch Vec[usize]) hir.HirNode { return hir.HirNode(type_id:t,source:empty_source(),scope:0,children:ch,data:d,errors:[],exits:[]); }
+func fun(t usize) hir.FunctionValue { return hir.FunctionValue(symbol:10,type_args:[t],captures:[hir.CaptureSource(origin:3,source:1,type_id:t,is_move:false)],move_capture:false,bound:option.Option[hir.BoundReceiver].None); }
+func iv(t usize,v string,b u64) hir.ConstantValue { return hir.ConstantValue(type_id:t,data:hir.ConstantData.IntegerLiteral(value:hir.IntegerLiteral(decimal:v,bits:b))); }
+func fv(t usize,f hir.FunctionValue) hir.ConstantValue { return hir.ConstantValue(type_id:t,data:hir.ConstantData.FunctionValue(value:f)); }
+func av(t usize,v option.Option[usize],fields Vec[hir.ConstantValue]) hir.ConstantValue { return hir.ConstantValue(type_id:t,data:hir.ConstantData.ConstantAggregate(value:hir.ConstantAggregate(variant:v,fields:fields))); }
+func module(t types.Context) hir.HirModule {
+ let r=model.ResolvedProject(project:model.empty_project(),symbols:[],occurrences:[],deferred_members:[],self_parameters:[]);
+ var m=hir.empty_module(r,1,config());m.types=t;return m;
+}
+func mode(v model.ParamMode) string { switch v {case model.ParamMode.Ordinary:return "0";case model.ParamMode.Inout:return "1";case model.ParamMode.Move:return "2";} }
+func hex(v string) string {let digits=["0","1","2","3","4","5","6","7","8","9","a","b","c","d","e","f"];var out="";for b in text.bytes(v) {out=out+digits[usize(b>>4)]+digits[usize(b&15)];}return out;}
+func cv(v hir.ConstantValue) string {
+ let p=n(v.type_id)+":";
+ switch v.data {
+  case hir.ConstantData.UnitLiteral(x): return p+"unit";
+  case hir.ConstantData.BoolLiteral(x): return p+"bool:"+bt(x.value);
+  case hir.ConstantData.IntegerLiteral(x): return p+"int:"+x.decimal+":"+strconv.format_u64(x.bits);
+  case hir.ConstantData.FloatLiteral(x): return p+"float:"+strconv.format_u64(x.bits);
+  case hir.ConstantData.StringLiteral(x): return p+"string:"+hex(x.utf8);
+  case hir.ConstantData.FunctionValue(x): {
+   var s=p+"fn:"+n(x.symbol)+":args[";for a in x.type_args { s=s+n(a)+","; }s=s+"]caps[";
+   for c in x.captures { s=s+n(c.origin)+":"+n(c.source)+":"+n(c.type_id)+":"+bt(c.is_move)+","; }
+   s=s+"]move="+bt(x.move_capture)+":bound=";
+   switch x.bound { case option.Option.None: s=s+"none";case option.Option.Some(b): s=s+n(b.type_id)+":"+mode(b.mode); }
+   return s;
+  }
+  case hir.ConstantData.ConstantAggregate(x): {
+   var s=p+"agg:";switch x.variant {case option.Option.None:s=s+"none";case option.Option.Some(a):s=s+n(a);}
+   s=s+"[";for f in x.fields { s=s+cv(f)+";"; }return s+"]";
+  }
+ }
+}
+func err(e model.SupportError) string { switch e {case model.SupportError.Invalid(x):return x;case model.SupportError.Limit(x):return x;} }
+func hir_tests() throws os.Error {
+ var t=types.context();let b=ty(inout t,model.TypeKind.Bool,0,0,[]);let i=ty(inout t,model.TypeKind.SignedInt,8,0,[]);let tp=ty(inout t,model.TypeKind.TypeParameter,0,42,[]);let f=ft(inout t,i);let inner=ty(inout t,model.TypeKind.NominalEnum,0,80,[]);let outer=ty(inout t,model.TypeKind.NominalEnum,0,82,[]);
+ var m=module(t);m.nodes=[node(f,hir.NodeData.FunctionValue(value:fun(i)),[]),node(i,hir.NodeData.IntegerLiteral(value:hir.IntegerLiteral(decimal:"7",bits:7)),[])];
+ switch constant.evaluate_hir_constant(m,0) {
+  case option.Option.None:line("fn.result.before","none");
+  case option.Option.Some(v): {
+   line("fn.result.before",cv(v));switch v.data {case hir.ConstantData.FunctionValue(x):{x.type_args[0]=b;var c=x.captures[0];c.type_id=b;x.captures[0]=c;}default:{}}
+   line("fn.result.after",cv(v));switch m.nodes[0].data {case hir.NodeData.FunctionValue(x):line("fn.source.after",cv(fv(f,x)));default:{}}
+  }
+ }
+ let root=av(outer,option.Option[usize].Some(83),[av(inner,option.Option[usize].Some(81),[iv(i,"7",7)]),fv(f,fun(i))]);
+ var a=module(t);a.nodes=[node(outer,hir.NodeData.ConstantLiteral(value:hir.ConstantLiteral(value:root)),[])];
+ switch constant.evaluate_hir_constant(a,0) {
+  case option.Option.None:line("agg.result.before","none");
+  case option.Option.Some(v): {
+   line("agg.result.before",cv(v));switch v.data {case hir.ConstantData.ConstantAggregate(x):{switch x.fields[0].data {case hir.ConstantData.ConstantAggregate(y):y.fields[0]=iv(i,"9",9);default:{}}vec.push(x.fields,iv(i,"11",11));}default:{}}
+   line("agg.result.after",cv(v));switch a.nodes[0].data {case hir.NodeData.ConstantLiteral(x):line("agg.source.after",cv(x.value));default:{}}
+  }
+ }
+ var small=types.context();let it=ty(inout small,model.TypeKind.SignedInt,8,0,[]);var sm=module(small);sm.nodes=[node(it,hir.NodeData.IntegerLiteral(value:hir.IntegerLiteral(decimal:"3",bits:3)),[]),node(it,hir.NodeData.IntegerLiteral(value:hir.IntegerLiteral(decimal:"4",bits:4)),[]),node(it,hir.NodeData.Binary(value:hir.Binary(op:hir.BinaryOp.Add)),[0,1])];
+ switch constant.evaluate_hir_constant(sm,2) {case option.Option.Some(v):line("hir.context.value",cv(v));case option.Option.None:line("hir.context.value","none");}line("hir.context.size",n(types.size(sm.types)));
+ let generic=ft(inout t,tp);let concrete=ft(inout t,b);let pair=ty(inout t,model.TypeKind.NominalStruct,0,87,[tp]);let out=ty(inout t,model.TypeKind.NominalStruct,0,88,[tp]);var f2=fun(tp);f2.symbol=20;
+ var value=av(out,option.Option[usize].None,[av(pair,option.Option[usize].None,[fv(generic,fun(tp)),fv(generic,f2)])]);
+ let trace=vec.empty[string]();let change=func(x hir.FunctionValue) hir.FunctionValue throws model.SupportError {vec.push(trace,n(x.symbol)+":"+n(x.type_args[0])+",");if x.symbol==20 {throw model.SupportError.Invalid("callback marker");}var r=x;r.symbol+=100;return r;};
+ try {constant.transform_constant(inout value,[model.Substitution(symbol:42,type_id:b)],inout t,change);}catch e model.SupportError {line("transform.error",err(e));}
+ var joined="";for piece in trace {joined=joined+piece;}line("transform.trace",joined);line("transform.after",cv(value));
+}
+func parsed(v string) model.ParseResult { return parser.parse(lexer.lex(source.snapshot(1,1,1,"control.wz",text.bytes(v)))); }
+func project(p model.ParseResult) model.Project {var v=model.empty_project();v.files=[p];v.modules=[model.Module(id:0,logical_path:"app",identity:"app",package_name:"app",files:[0],imports:[],foreign_exports:[],binding:option.Option[model.BindingModuleRef].None,c_binding:option.Option[usize].None)];return v;}
+func root_expr(p model.ParseResult) usize {var out usize=0;for x in p.nodes {if model.ast_kind_id(x.kind)==model.ast_kind_id(model.AstKind.Return) || model.ast_kind_id(x.kind)==model.ast_kind_id(model.AstKind.Binding) {out=x.children[vec.len(x.children)-1];}}return out;}
+func source_callback(expression string) throws os.Error {
+ var t=types.context();let b=ty(inout t,model.TypeKind.Bool,0,0,[]);let i=ty(inout t,model.TypeKind.SignedInt,8,0,[]);let f=ft(inout t,i);let holder=ty(inout t,model.TypeKind.NominalStruct,0,1,[]);
+ let p=parsed("package app;\nfunc identity[T](x T) T { return x; }\nstruct Holder { call func(i8) i8; }\nconst Chosen = "+expression+";\n");
+ let names=["identity","Holder","call"];let kinds=[model.SymbolKind.Function,model.SymbolKind.Type,model.SymbolKind.Field];let symbols=vec.empty[model.Symbol]();
+ for var a usize=0;a<3;a+=1 {vec.push(symbols,model.Symbol(id:a,name:names[a],kind:kinds[a],module:0,definition:option.Option[model.NodeRef].None,declaration:option.Option[model.Span].None,exported:false,target:option.Option[usize].None,foreign:option.Option[model.ForeignExportRef].None));}
+ let occ=vec.empty[model.Occurrence]();for var a usize=0;a<vec.len(p.nodes);a+=1 {let x=p.nodes[a];if model.ast_kind_id(x.kind)!=model.ast_kind_id(model.AstKind.Name) {continue;}let name=p.lexed.tokens[x.token_begin].spelling;for var k usize=0;k<3;k+=1 {if name==names[k] {vec.push(occ,model.Occurrence(source:model.NodeRef(module:0,file:0,node:a),symbol:k,span:x.span));}}}
+ var m=module(t);m.resolved=model.ResolvedProject(project:project(p),symbols:symbols,occurrences:occ,deferred_members:[],self_parameters:[]);m.nominals=[hir.NominalDecl(symbol:1,kind:model.TypeKind.NominalStruct,params:[],fields:[hir.FieldDecl(symbol:2,type_id:f,exported:true,source:empty_source())],variants:[],source:empty_source())];
+ var cache=fun(i);cache.captures=[];var label="source.field";if expression=="identity[i8]" {label="source.fn";}
+ let parse_type=func(r model.NodeRef) usize throws model.SupportError {if p.lexed.tokens[p.nodes[r.node].token_begin].spelling=="Holder" {return holder;}throw model.SupportError.Invalid("unexpected parse callback");return 0;};
+ let function=func(r model.NodeRef,expected usize) hir.FunctionValue throws model.SupportError {let s=p.nodes[r.node].span;try {line(label+".callback",strconv.format_u64(s.begin_byte)+":"+strconv.format_u64(s.end_byte)+":"+n(expected));}catch e os.Error {}return cache;};
+ try {let v=constant.source_constant_value(m,inout t,model.NodeRef(module:0,file:0,node:root_expr(p)),f,parse_type,function);line(label+".result.before",cv(v));switch v.data {case hir.ConstantData.FunctionValue(x):x.type_args[0]=b;default:{}}line(label+".result.after",cv(v));line(label+".cache.after",cv(fv(f,cache)));}catch e model.SupportError {line(label,err(e));}
+}
+func unused_type(r model.NodeRef) usize throws model.SupportError {throw model.SupportError.Invalid("unused parse");return 0;}
+func unused_function(r model.NodeRef,t usize) hir.FunctionValue throws model.SupportError {throw model.SupportError.Invalid("unused function");return fun(0);}
+func source_depth(depth usize) throws os.Error {
+ var t=types.context();let i=ty(inout t,model.TypeKind.SignedInt,8,0,[]);var exp="";for var a usize=0;a<depth;a+=1 {exp=exp+"(";}exp=exp+"7";for var a usize=0;a<depth;a+=1 {exp=exp+")";}let p=parsed("package app; func f() i8 { return "+exp+"; }");var m=module(t);m.resolved=model.ResolvedProject(project:project(p),symbols:[],occurrences:[],deferred_members:[],self_parameters:[]);let label="depth"+n(depth);
+ try {let v=constant.source_constant_value(m,inout t,model.NodeRef(module:0,file:0,node:root_expr(p)),i,unused_type,unused_function);line(label,cv(v));}catch e model.SupportError {line(label,"error:"+err(e));}line(label+".types",n(types.size(t)));
+}
+func source_short(expression string) throws os.Error {
+ var t=types.context();let b=ty(inout t,model.TypeKind.Bool,0,0,[]);let p=parsed("package app; const Loop = Loop; func f() bool { return "+expression+"; }");var definition=option.Option[model.NodeRef].None;let occ=vec.empty[model.Occurrence]();
+ for var a usize=0;a<vec.len(p.nodes);a+=1 {let x=p.nodes[a];if model.ast_kind_id(x.kind)==model.ast_kind_id(model.AstKind.Binding) {definition=option.Option[model.NodeRef].Some(model.NodeRef(module:0,file:0,node:a));}if model.ast_kind_id(x.kind)==model.ast_kind_id(model.AstKind.Name) && p.lexed.tokens[x.token_begin].spelling=="Loop" {vec.push(occ,model.Occurrence(source:model.NodeRef(module:0,file:0,node:a),symbol:0,span:x.span));}}
+ let symbol=model.Symbol(id:0,name:"Loop",kind:model.SymbolKind.Constant,module:0,definition:definition,declaration:option.Option[model.Span].None,exported:false,target:option.Option[usize].None,foreign:option.Option[model.ForeignExportRef].None);var m=module(t);m.resolved=model.ResolvedProject(project:project(p),symbols:[symbol],occurrences:occ,deferred_members:[],self_parameters:[]);
+ try {let v=constant.source_constant_value(m,inout t,model.NodeRef(module:0,file:0,node:root_expr(p)),b,unused_type,unused_function);line("short."+expression,cv(v));}catch e model.SupportError {line("short."+expression,"error:"+err(e));}line("short."+expression+".types",n(types.size(t)));
+}
+func literal_extra(label string,spelling string,kind model.TypeKind,bits u32) throws os.Error {
+ var t=types.context();let expected=ty(inout t,kind,bits,0,[]);let p=parsed("\u{feff}package app;\r\n// 汉😀\r\nfunc f(x i8) i8 { switch x { case "+spelling+": return 0; default: return 1; } }\r\n");var idx usize=0;for var a usize=0;a<vec.len(p.nodes);a+=1 {if model.ast_kind_id(p.nodes[a].kind)==model.ast_kind_id(model.AstKind.LiteralPattern) {idx=a;}}let s=p.nodes[idx].span;line(label+".span",strconv.format_u64(s.snapshot)+":"+strconv.format_u64(s.begin_byte)+":"+strconv.format_u64(s.end_byte));
+ try {let v=literal.decode_pattern_literal(project(p),t,model.NodeRef(module:0,file:0,node:idx),expected,config());switch v {case hir.PatternLiteral.BoolLiteral(x):line(label,cv(hir.ConstantValue(type_id:expected,data:hir.ConstantData.BoolLiteral(value:x))));case hir.PatternLiteral.IntegerLiteral(x):line(label,cv(hir.ConstantValue(type_id:expected,data:hir.ConstantData.IntegerLiteral(value:x))));case hir.PatternLiteral.FloatLiteral(x):line(label,cv(hir.ConstantValue(type_id:expected,data:hir.ConstantData.FloatLiteral(value:x))));case hir.PatternLiteral.StringLiteral(x):line(label,cv(hir.ConstantValue(type_id:expected,data:hir.ConstantData.StringLiteral(value:x))));}}catch e model.SupportError {line(label,"error:"+err(e));}
+}
+
+func transform_return() throws os.Error {
+ var t=types.context();let i=ty(inout t,model.TypeKind.SignedInt,8,0,[]);let b=ty(inout t,model.TypeKind.Bool,0,0,[]);let id=ft(inout t,b);var cached=fun(b);cached.symbol=30;var value=fv(id,fun(b));let callback=func(f hir.FunctionValue) hir.FunctionValue throws model.SupportError {return cached;};
+ try {constant.transform_constant(inout value,[],inout t,callback);}catch e model.SupportError {line("transform.return",err(e));}line("transform.return.before",cv(value));switch value.data {case hir.ConstantData.FunctionValue(f):{f.type_args[0]=i;var c=f.captures[0];c.type_id=i;f.captures[0]=c;}default:{}}line("transform.return.after",cv(value));line("transform.return.cache",cv(fv(id,cached)));
+}
+
+func main() i32 throws os.Error {hir_tests();source_callback("identity[i8]");source_callback("Holder(call: identity[i8]).call");source_depth(0);source_depth(128);source_depth(129);source_short("false && Loop");source_short("true || Loop");source_short("true && Loop");source_short("false || Loop");literal_extra("literal.i8","-0x80",model.TypeKind.SignedInt,8);literal_extra("literal.f32","-1e-50",model.TypeKind.Float,32);literal_extra("literal.string","\"汉\\u{0}😀\\n\"",model.TypeKind.String,0);literal_extra("literal.raw","`汉\r\n😀`",model.TypeKind.String,0);transform_return();return 0;}

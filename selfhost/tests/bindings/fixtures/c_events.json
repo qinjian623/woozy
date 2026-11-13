@@ -1,0 +1,63 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {"logical_path": "events/lib", "provider": "native_library", "library": "events_fixture"}
+  ],
+  "types": [
+    {"id": "events.Callback", "module": "events/lib", "name": "Callback", "kind": "callback", "result": "i32", "parameters": [
+      {"name": "kind", "type": "i32"},
+      {"name": "context", "type": "PtrMut[Unit]"},
+      {"name": "value", "type": "i32"}
+    ]},
+    {"id": "events.FirstCallback", "module": "events/lib", "name": "FirstCallback", "kind": "callback", "result": "bool", "parameters": [
+      {"name": "context", "type": "PtrMut[Unit]"},
+      {"name": "value", "type": "i32"}
+    ]},
+    {"id": "events.LastCallback", "module": "events/lib", "name": "LastCallback", "kind": "callback", "result": "Unit", "parameters": [
+      {"name": "value", "type": "i32"},
+      {"name": "context", "type": "PtrMut[Unit]"}
+    ]},
+    {"id": "events.Subscription", "module": "events/lib", "name": "Subscription", "kind": "resource",
+     "registration": {"callback": "events.Callback", "unregister_symbol": "events_unsubscribe"}},
+    {"id": "events.First", "module": "events/lib", "name": "First", "kind": "resource",
+     "registration": {"callback": "events.FirstCallback", "unregister_symbol": "events_first_close"}},
+    {"id": "events.Last", "module": "events/lib", "name": "Last", "kind": "resource",
+     "registration": {"callback": "events.LastCallback", "unregister_symbol": "events_last_close"}}
+  ],
+  "callables": [
+    {"id": "events.subscribe", "module": "events/lib", "name": "subscribe", "symbol": "events_subscribe", "parameters": [
+      {"name": "callback", "type": "events.Callback"},
+      {"name": "userdata", "type": "PtrMut[Unit]"},
+      {"name": "priority", "type": "i32"}
+    ], "result": {"type": "events.Subscription", "ownership": "owned"},
+     "registers": {"callback_parameter": "callback", "userdata_parameter": "userdata", "callback_userdata_parameter": "context"}},
+    {"id": "events.unsubscribe", "module": "events/lib", "name": "unsubscribe", "symbol": "events_unsubscribe", "parameters": [
+      {"name": "subscription", "type": "events.Subscription"}
+    ], "result": {"type": "Unit", "ownership": "unit"}},
+    {"id": "events.poll", "module": "events/lib", "name": "poll", "symbol": "events_poll", "parameters": [
+      {"name": "subscription", "type": "events.Subscription"}
+    ], "result": {"type": "i32", "ownership": "value"}},
+    {"id": "events.subscribe_first", "module": "events/lib", "name": "subscribe_first", "symbol": "events_subscribe_first", "parameters": [
+      {"name": "userdata", "type": "PtrMut[Unit]"},
+      {"name": "callback", "type": "events.FirstCallback"},
+      {"name": "id", "type": "i32"}
+    ], "result": {"type": "events.First", "ownership": "owned"},
+     "registers": {"callback_parameter": "callback", "userdata_parameter": "userdata", "callback_userdata_parameter": "context"}},
+    {"id": "events.close_first", "module": "events/lib", "name": "close_first", "symbol": "events_first_close", "parameters": [
+      {"name": "first", "type": "events.First"}
+    ], "result": {"type": "Unit", "ownership": "unit"}},
+    {"id": "events.subscribe_last", "module": "events/lib", "name": "subscribe_last", "symbol": "events_subscribe_last", "parameters": [
+      {"name": "callback", "type": "events.LastCallback"},
+      {"name": "tag", "type": "i32"},
+      {"name": "userdata", "type": "PtrMut[Unit]"}
+    ], "result": {"type": "events.Last", "ownership": "owned"},
+     "registers": {"callback_parameter": "callback", "userdata_parameter": "userdata", "callback_userdata_parameter": "context"}},
+    {"id": "events.close_last", "module": "events/lib", "name": "close_last", "symbol": "events_last_close", "parameters": [
+      {"name": "last", "type": "events.Last"}
+    ], "result": {"type": "Unit", "ownership": "unit"}}
+  ]
+}

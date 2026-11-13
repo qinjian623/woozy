@@ -1,0 +1,86 @@
+// Public ownership producer and independent verifier.
+package ownership;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/vec" as vec;
+
+func success_result() model.UnitResult {
+    return model.UnitResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Internal, diagnostics: [], has_value: true);
+}
+
+func failure_result(error Problem, source_phase bool) model.UnitResult {
+    let diagnostics = vec.empty[model.Diagnostic]();
+    var failure = model.FailureKind.Internal;
+    if source_phase && error.has_source {
+        if error.code == "E_CAPABILITY_UNAVAILABLE" {
+            failure = model.FailureKind.Unsupported;
+        } else {
+            failure = model.FailureKind.Source;
+        }
+        vec.push(diagnostics, model.diagnostic(error.code, "type",
+            error.message, error.source.span));
+    } else if error.has_source {
+        // The independent verifier still reports a source-derived rejection
+        // with the original HIR span, but as an internal invalid-IR phase.
+        vec.push(diagnostics, model.diagnostic("E_IR_INVALID", "lowering",
+            error.message, error.source.span));
+    } else {
+        vec.push(diagnostics, model.Diagnostic(code: "E_IR_INVALID",
+            phase: "lowering", severity: "error", message: error.message,
+            has_primary: false,
+            primary: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0),
+            related: [], fixits: [], notes: [],
+            has_expected_type: false, expected_type: "",
+            has_actual_type: false, actual_type: ""));
+    }
+    return model.UnitResult(state: model.PhaseState.Failed, failure: failure,
+        diagnostics: diagnostics, has_value: false);
+}
+
+pub func produce_ownership(module inout hir.HirModule) model.UnitResult {
+    try {
+        complete_ownership(inout module);
+        let derived = derive(module);
+        module.ownership = derived.records;
+        for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+            if ids_contains(derived.checked_nodes, index) {
+                module.nodes[index].exits = derived.exits[index];
+            }
+        }
+        return success_result();
+    } catch error Problem {
+        return failure_result(error, true);
+    }
+}
+
+pub func verify_ownership(module hir.HirModule) model.UnitResult {
+    try {
+        let derived = derive(module);
+        if !same_ownership(module.ownership, derived.records) {
+            throw internal_problem(
+                "ownership records differ from independently recomputed tree obligations");
+        }
+        for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+            if ids_contains(derived.checked_nodes, index) &&
+               !same_exits(module.nodes[index].exits, derived.exits[index]) {
+                throw internal_problem(
+                    "ownership exit actions/active output/prefix differ from independently recomputed obligations");
+            }
+        }
+        for var index usize = 0; index < vec.len(module.nodes); index += 1 {
+            if !ids_contains(derived.checked_nodes, index) {
+                for plan in module.nodes[index].exits {
+                    if vec.len(plan.actions) > 0 {
+                        throw internal_problem(
+                            "unexpected ownership action on a trivial function");
+                    }
+                }
+            }
+        }
+        return success_result();
+    } catch error Problem {
+        return failure_result(error, false);
+    }
+}

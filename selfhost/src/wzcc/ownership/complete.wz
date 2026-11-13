@@ -1,0 +1,238 @@
+// Concrete public type completion for ownership production.
+//
+// The producer interns each concrete member type before publishing records so
+// later backends can classify a public field TypeId.  This walk only mutates
+// the caller-provided module TypeContext through types.substitute; verification
+// never calls it and therefore never changes a submitted module.types.
+package ownership;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+const MEMBER_DEPTH usize = 128;
+const MEMBER_TYPES usize = 4096;
+
+struct RootBudget {
+    source hir.HirSource;
+    expanded Vec[usize];
+}
+
+func node_of(module hir.HirModule, id usize) hir.HirNode throws Problem {
+    if id >= vec.len(module.nodes) {
+        throw internal_problem("ownership node index is out of range");
+    }
+    return module.nodes[id];
+}
+
+func budget_account(budget inout RootBudget, id usize, depth usize)
+    throws Problem {
+    if depth > MEMBER_DEPTH {
+        throw source_problem(budget.source, "E_CAPABILITY_UNAVAILABLE",
+            "concrete ownership member/type expansion budget exceeded");
+    }
+    if !ids_contains(budget.expanded, id) {
+        vec.push(budget.expanded, id);
+        if vec.len(budget.expanded) > MEMBER_TYPES {
+            throw source_problem(budget.source, "E_CAPABILITY_UNAVAILABLE",
+                "concrete ownership member/type expansion budget exceeded");
+        }
+    }
+}
+
+func error_message(error types.Error) string {
+    switch error {
+        case types.Error.Invalid(message): return message;
+    }
+}
+
+func substitute_public(module inout hir.HirModule, id usize,
+                       substitutions Vec[model.Substitution]) usize
+    throws Problem {
+    try {
+        return types.substitute(id, substitutions, inout module.types);
+    } catch error types.Error {
+        throw internal_problem(error_message(error));
+    }
+}
+
+func nominal_declaration(module hir.HirModule, id usize) hir.NominalDecl
+    throws Problem {
+    for nominal in module.nominals {
+        if nominal.symbol == id {
+            return nominal;
+        }
+    }
+    throw internal_problem("ownership nominal declaration missing");
+}
+
+func intern_members(module inout hir.HirModule, id usize, done Vec[usize],
+                    active Vec[usize], budget inout RootBudget, depth usize)
+    throws Problem {
+    if ids_contains(done, id) {
+        return;
+    }
+    // An exact concrete TypeId back-edge is the finite reference cycle.
+    if ids_contains(active, id) {
+        return;
+    }
+    budget_account(inout budget, id, depth);
+    let value = type_at(module, id);
+    if type_kind_is(value.kind, model.TypeKind.Vec) ||
+       type_kind_is(value.kind, model.TypeKind.Slice) {
+        if vec.len(value.type_args) != 1 {
+            throw internal_problem("ownership Vec/Slice member arity");
+        }
+        let element = value.type_args[0];
+        if !contains_type_parameter(module, element) {
+            intern_members(inout module, element, done, active, inout budget,
+                depth + 1);
+        }
+        ids_insert(done, id);
+        return;
+    }
+    if !type_kind_is(value.kind, model.TypeKind.NominalStruct) &&
+       !type_kind_is(value.kind, model.TypeKind.NominalEnum) {
+        ids_insert(done, id);
+        return;
+    }
+    let nominal = nominal_declaration(module, value.declaration);
+    if vec.len(value.type_args) != vec.len(nominal.params) {
+        throw internal_problem("ownership nominal type argument count");
+    }
+    ids_insert(active, id);
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    for field in nominal.fields {
+        let concrete = substitute_public(inout module, field.type_id,
+            substitutions);
+        intern_members(inout module, concrete, done, active, inout budget,
+            depth + 1);
+    }
+    for variant in nominal.variants {
+        for field in variant.payload {
+            let concrete = substitute_public(inout module, field.type_id,
+                substitutions);
+            intern_members(inout module, concrete, done, active, inout budget,
+                depth + 1);
+        }
+    }
+    int_remove(active, id);
+    ids_insert(done, id);
+}
+
+func complete_root(module inout hir.HirModule, root usize,
+                   source hir.HirSource, done Vec[usize]) throws Problem {
+    var budget = RootBudget(source: source, expanded: vec.empty[usize]());
+    let active = vec.empty[usize]();
+    let value = type_at(module, root);
+    if type_kind_is(value.kind, model.TypeKind.Function) {
+        switch value.throws_type {
+            case option.Option.Some(error):
+                intern_members(inout module, error, done, active,
+                    inout budget, 0);
+            case option.Option.None: {}
+        }
+        for parameter in value.parameters {
+            intern_members(inout module, parameter.type_id, done, active,
+                inout budget, 0);
+        }
+        intern_members(inout module, value.result, done, active, inout budget,
+            0);
+    } else {
+        intern_members(inout module, root, done, active, inout budget, 0);
+    }
+}
+
+func complete_pattern(module inout hir.HirModule, pattern hir.Pattern,
+                      done Vec[usize]) throws Problem {
+    complete_root(inout module, pattern.type_id, pattern.source, done);
+    for child in pattern.payload {
+        complete_pattern(inout module, child, done);
+    }
+}
+
+func complete_function(module inout hir.HirModule, function hir.HirFunction,
+                       done Vec[usize]) throws Problem {
+    complete_root(inout module, function.signature, function.source, done);
+    let pending = vec.empty[usize]();
+    vec.push(pending, function.body);
+    let seen = vec.empty[usize]();
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        var id usize = 0;
+        switch popped {
+            case option.Option.Some(value): id = value;
+            case option.Option.None: continue;
+        }
+        if !ids_insert(seen, id) {
+            continue;
+        }
+        let node = node_of(module, id);
+        complete_root(inout module, node.type_id, node.source, done);
+        let call_value = node_call(node);
+        switch call_value {
+            case option.Option.Some(call):
+                complete_root(inout module, call.signature, node.source, done);
+            case option.Option.None: {}
+        }
+        let constraint_value = node_constraint(node);
+        switch constraint_value {
+            case option.Option.Some(call):
+                complete_root(inout module, call.signature, node.source, done);
+                complete_root(inout module, call.receiver, node.source, done);
+            case option.Option.None: {}
+        }
+        let try_value = node_try(node);
+        switch try_value {
+            case option.Option.Some(attempts):
+                for catcher in attempts.catches {
+                    complete_root(inout module, catcher.error_type,
+                        catcher.source, done);
+                }
+            case option.Option.None: {}
+        }
+        let switch_value = node_switch(node);
+        switch switch_value {
+            case option.Option.Some(branches):
+                for arm in branches.arms {
+                    complete_pattern(inout module, arm.pattern, done);
+                }
+            case option.Option.None: {}
+        }
+        let function_value = node_function_value(node);
+        switch function_value {
+            case option.Option.Some(value):
+                for capture in value.captures {
+                    complete_root(inout module, capture.type_id,
+                        node.source, done);
+                }
+                switch value.bound {
+                    case option.Option.Some(receiver):
+                        complete_root(inout module, receiver.type_id,
+                            node.source, done);
+                    case option.Option.None: {}
+                }
+            case option.Option.None: {}
+        }
+        for child in node.children {
+            vec.push(pending, child);
+        }
+    }
+}
+
+func complete_ownership(module inout hir.HirModule) throws Problem {
+    let done = vec.empty[usize]();
+    for function in module.functions {
+        complete_function(inout module, function, done);
+    }
+    for template in module.templates {
+        complete_function(inout module, template.function, done);
+    }
+}

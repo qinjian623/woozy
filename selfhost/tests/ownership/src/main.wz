@@ -1,0 +1,1460 @@
+package app;
+
+// Direct HIR ownership scenarios for the pure-Wz producer and verifier.
+// No stage0 helper or old frontend is called: every module below is built from
+// the published model/HIR records and compared against independently derived
+// obligations.
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/ownership" as ownership;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueops;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct Checks {
+    ok bool;
+    failures Vec[string];
+}
+
+func number(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func signed_number(value i64) string {
+    return strconv.format_i64(value);
+}
+
+func option_text(value option.Option[usize]) string {
+    switch value {
+        case option.Option.Some(found): return number(found);
+        case option.Option.None: return "-";
+    }
+}
+
+func classification_number(kind hir.ValueKind) u32 {
+    return classification_kind(kind);
+}
+
+func slot_number(slot hir.InoutSlot) u32 {
+    return classification_slot(slot);
+}
+
+func cleanup_number(kind hir.CleanupKind) u32 {
+    switch kind {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func owner_number(kind hir.OwnerKind) u32 {
+    switch kind {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func mode_number(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func use_number(kind hir.UseKind) u32 {
+    switch kind {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func exit_number(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func action_text(action hir.CleanupStep) string {
+    return number(usize(cleanup_number(action.kind))) + ":" +
+           number(usize(owner_number(action.owner.kind))) + ":" +
+           number(usize(action.owner.identity)) + ":" +
+           number(action.type_id);
+}
+
+func actions_text(actions Vec[hir.CleanupStep]) string {
+    var text = "";
+    for var index usize = 0; index < vec.len(actions); index += 1 {
+        if index > 0 {
+            text += ",";
+        }
+        text += action_text(actions[index]);
+    }
+    return text;
+}
+
+func ids_text(values Vec[usize]) string {
+    var text = "";
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index > 0 {
+            text += ",";
+        }
+        text += number(values[index]);
+    }
+    return text;
+}
+
+func target_text(target hir.ExitTarget) string {
+    switch target {
+        case hir.ExitTarget.ScopeExit(value):
+            return "S:" + option_text(value.scope);
+        case hir.ExitTarget.FunctionExit(value):
+            return "F:" + number(value.function);
+        case hir.ExitTarget.JumpExit(value):
+            return "J:" + number(value.node);
+        case hir.ExitTarget.CatchTarget(value):
+            return "C:" + number(value.try_node) + ":" +
+                   number(usize(value.index));
+    }
+}
+
+func dump_facts(state inout Checks, module hir.HirModule, ids Vec[usize])
+    throws os.Error {
+    for var id usize = 1; id <= types.size(module.types); id += 1 {
+        let operations = classify(module, id);
+        io.println("ORACLE classify " + number(id) + " " +
+            number(usize(classification_number(operations.kind))) + " " +
+            (if_bool(operations.needs_drop)) + " " +
+            (if_bool(operations.pod_inout)) + " " +
+            number(vec.len(operations.fields)));
+        for var index usize = 0; index < vec.len(operations.fields);
+            index += 1 {
+            let field = operations.fields[index];
+            io.println("ORACLE field " + number(id) + " " + number(index) +
+                " " + option_text(field.variant) + " " + number(field.field) +
+                " " + number(field.type_id));
+        }
+    }
+    let cycle = classify(module, ids[21]);
+    io.println("ORACLE cycle " + if_bool(
+        classification_kind(cycle.kind) == 5));
+    var layout = option.Option[usize].None;
+    try {
+        layout = valueops.infinite_value_layout(module);
+    } catch error model.SupportError {}
+    io.println("ORACLE layout " + option_text(layout));
+
+    for var id usize = 1; id <= types.size(module.types); id += 1 {
+        var data = false;
+        var slot = hir.InoutSlot.Unsupported;
+        var copy = false;
+        var own = false;
+        try {
+            data = valueops.inout_data_type(module, id, []);
+            slot = valueops.inout_slot(module, id, []);
+            copy = valueops.ordinary_copyable(module, id);
+            own = valueops.owning_value(module, id);
+        } catch error model.SupportError {}
+        io.println("ORACLE helpers " + number(id) + " " + if_bool(data) +
+            " " + number(usize(slot_number(slot))) + " " + if_bool(copy) +
+            " " + if_bool(own));
+    }
+
+    for use in module.ownership.uses {
+        io.println("ORACLE use " + number(use.consumer) + " " +
+            number(usize(use.operand)) + " " +
+            number(usize(use_number(use.kind))) + " " +
+            option_text(use.root) + " " + number(use.type_id) + " " +
+            option_text(use.destination));
+    }
+    for temporary in module.ownership.temporaries {
+        io.println("ORACLE temp " + number(temporary.producer) + " " +
+            number(temporary.full_expression) + " " +
+            number(temporary.type_id));
+    }
+    for local in module.ownership.locals {
+        io.println("ORACLE local " + number(local.symbol) + " " +
+            number(local.scope) + " " + number(local.type_id) + " " +
+            number(usize(local.order)) + " " +
+            number(usize(mode_number(local.mode))) + " " +
+            if_bool(local.read_only_capture));
+    }
+    for full in module.ownership.full_expressions {
+        io.println("ORACLE full " + number(full.node) + " " +
+            actions_text(full.actions));
+    }
+    for call in module.ownership.calls {
+        io.println("ORACLE call " + number(call.node) + " " +
+            actions_text(call.on_return));
+    }
+    for var node_index usize = 0; node_index < vec.len(module.nodes);
+        node_index += 1 {
+        for var plan_index usize = 0;
+            plan_index < vec.len(module.nodes[node_index].exits);
+            plan_index += 1 {
+            let plan = module.nodes[node_index].exits[plan_index];
+            io.println("ORACLE exit " + number(node_index) + " " +
+                number(plan_index) + " " + number(usize(exit_number(
+                    plan.kind))) + " " + option_text(plan.error_type) + " " +
+                target_text(plan.target) + " " +
+                ids_text(plan.exited_scopes) + " " + ids_text(plan.defers) +
+                " " + if_bool(plan.saves_value) + " " +
+                actions_text(plan.actions));
+        }
+    }
+}
+
+func if_bool(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func phase_complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        case _: return false;
+    }
+}
+
+func mode_ordinary(mode model.ParamMode) bool {
+    switch mode {
+        case model.ParamMode.Ordinary: return true;
+        case _: return false;
+    }
+}
+
+func need(state inout Checks, condition bool, label string) {
+    if !condition {
+        state.ok = false;
+        vec.push(state.failures, label);
+    }
+}
+
+func span() model.Span {
+    return model.Span(snapshot: 1, begin_byte: 0, end_byte: 1);
+}
+
+func source() hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+        span: span());
+}
+
+func symbol(id usize, name string, kind model.SymbolKind, module usize,
+            exported bool) model.Symbol {
+    return model.Symbol(id: id, name: name, kind: kind, module: module,
+        definition: option.Option[model.NodeRef].Some(model.NodeRef(
+            module: module, file: 0, node: id)),
+        declaration: option.Option[model.Span].None, exported: exported,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+}
+
+func add_type(state inout types.Context, value model.Type) usize {
+    var id usize = 0;
+    try {
+        id = types.intern(inout state, value);
+    } catch error types.Error {
+        id = 0;
+    }
+    return id;
+}
+
+func base(kind model.TypeKind, bits u32) model.Type {
+    return model.Type(kind: kind, bits: bits, declaration: 0, binding: 0,
+        parameters: [], result: 0,
+        throws_type: option.Option[usize].None, type_args: [], c_type: 0);
+}
+
+func named(kind model.TypeKind, declaration usize,
+           arguments Vec[usize]) model.Type {
+    return model.Type(kind: kind, bits: 0, declaration: declaration,
+        binding: 0, parameters: [], result: 0,
+        throws_type: option.Option[usize].None, type_args: arguments,
+        c_type: 0);
+}
+
+func function_type(parameters Vec[model.ParameterType], result usize,
+                   error option.Option[usize]) model.Type {
+    return model.Type(kind: model.TypeKind.Function, bits: 0,
+        declaration: 0, binding: 0, parameters: parameters, result: result,
+        throws_type: error, type_args: [], c_type: 0);
+}
+
+func parameter(mode model.ParamMode, type_id usize) model.ParameterType {
+    return model.ParameterType(mode: mode, type_id: type_id);
+}
+
+func node(type_id usize, scope usize, children Vec[usize],
+          data hir.NodeData) hir.HirNode {
+    return hir.HirNode(type_id: type_id, source: source(), scope: scope,
+        children: children, data: data, errors: [], exits: []);
+}
+
+func hir_scope(function usize, parent option.Option[usize]) hir.HirScope {
+    return hir.HirScope(function: function, parent: parent, source: source());
+}
+
+func empty_nominal() hir.NominalDecl {
+    return hir.NominalDecl(symbol: 0, kind: model.TypeKind.Unit, params: [],
+        fields: [], variants: [], source: source());
+}
+
+func field(symbol_id usize, type_id usize) hir.FieldDecl {
+    return hir.FieldDecl(symbol: symbol_id, type_id: type_id, exported: false,
+        source: source());
+}
+
+struct Setup {
+    module hir.HirModule;
+    ids Vec[usize];
+}
+
+func fixture() Setup {
+    let app = model.Module(id: 0, logical_path: "app", identity: "app",
+        package_name: "app", files: [], imports: [], foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None);
+    let box_module = model.Module(id: 1, logical_path: "std/box",
+        identity: "std/box", package_name: "std", files: [], imports: [],
+        foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None);
+    let symbols = vec.empty[model.Symbol]();
+    vec.push(symbols, symbol(0, "i32", model.SymbolKind.BuiltinType, 0, true));
+    vec.push(symbols, symbol(1, "Vec", model.SymbolKind.BuiltinType, 0, true));
+    vec.push(symbols, symbol(2, "S", model.SymbolKind.Type, 0, true));
+    vec.push(symbols, symbol(3, "items", model.SymbolKind.Field, 0, false));
+    vec.push(symbols, symbol(4, "count", model.SymbolKind.Field, 0, false));
+    vec.push(symbols, symbol(5, "E", model.SymbolKind.Type, 0, true));
+    vec.push(symbols, symbol(6, "Some", model.SymbolKind.Variant, 0, true));
+    vec.push(symbols, symbol(7, "v", model.SymbolKind.Field, 0, false));
+    vec.push(symbols, symbol(8, "Box", model.SymbolKind.Type, 1, true));
+    vec.push(symbols, symbol(9, "cell", model.SymbolKind.Field, 1, false));
+    vec.push(symbols, symbol(10, "T", model.SymbolKind.Trait, 0, true));
+    vec.push(symbols, symbol(11, "f", model.SymbolKind.Function, 0, false));
+    vec.push(symbols, symbol(12, "g", model.SymbolKind.Function, 0, false));
+    vec.push(symbols, symbol(13, "h", model.SymbolKind.Function, 0, false));
+    vec.push(symbols, symbol(14, "a", model.SymbolKind.Function, 0, false));
+    vec.push(symbols, symbol(15, "c", model.SymbolKind.Function, 0, false));
+    vec.push(symbols, symbol(16, "bad", model.SymbolKind.Function, 0, false));
+    vec.push(symbols, symbol(17, "P", model.SymbolKind.Type, 0, true));
+    vec.push(symbols, symbol(18, "Box", model.SymbolKind.Type, 0, true));
+    vec.push(symbols, symbol(19, "Node", model.SymbolKind.Type, 0, true));
+    vec.push(symbols, symbol(20, "NodeVec", model.SymbolKind.Type, 0, true));
+    vec.push(symbols, symbol(21, "x", model.SymbolKind.Field, 0, false));
+    vec.push(symbols, symbol(22, "next", model.SymbolKind.Field, 0, false));
+    vec.push(symbols, symbol(23, "children", model.SymbolKind.Field, 0, false));
+    vec.push(symbols, symbol(24, "sw", model.SymbolKind.Function, 0, false));
+    vec.push(symbols, symbol(25, "or_f", model.SymbolKind.Function, 0, false));
+    let scalar = model.CTypeRef(kind: model.CTypeKind.Scalar, scalar: "i32",
+        writable: false, args: [], named: 0);
+    let c_types = vec.empty[model.CTypeDecl]();
+    vec.push(c_types, model.CTypeDecl(id: 1, bundle: 0, source: span(),
+        identity: "app.Resource", module: "app", name: "Resource",
+        c_name: "resource", kind: model.CDeclKind.Resource, fields: [],
+        size: 8, align: 8, release_symbol: "release_resource",
+        retain_symbol: "retain_resource", result: scalar, parameters: [],
+        registration: option.Option[model.CRegistrationDecl].None));
+    vec.push(c_types, model.CTypeDecl(id: 2, bundle: 0, source: span(),
+        identity: "app.Plain", module: "app", name: "Plain",
+        c_name: "plain", kind: model.CDeclKind.Resource, fields: [], size: 8,
+        align: 8, release_symbol: "release_plain", retain_symbol: "",
+        result: scalar, parameters: [],
+        registration: option.Option[model.CRegistrationDecl].None));
+    let modules = vec.empty[model.Module]();
+    vec.push(modules, app);
+    vec.push(modules, box_module);
+    let project = model.Project(root: "", package_name: "app",
+        backend: "native", word_bits: 64, hosted: false, entry: 0, files: [],
+        modules: modules, bindings: [], foreign_bindings: [], c_bindings: [],
+        c_types: c_types, c_callables: [], c_libraries: [],
+        c_library_dirs: []);
+    let resolved = model.ResolvedProject(project: project, symbols: symbols,
+        occurrences: [], deferred_members: [], self_parameters: []);
+
+    var context = types.context();
+    let unit_id = add_type(inout context, base(model.TypeKind.Unit, 0));
+    let bool_id = add_type(inout context, base(model.TypeKind.Bool, 0));
+    let i32_id = add_type(inout context, base(model.TypeKind.SignedInt, 32));
+    let u32_id = add_type(inout context, base(model.TypeKind.UnsignedInt, 32));
+    let string_id = add_type(inout context, base(model.TypeKind.String, 0));
+    let handle_id = add_type(inout context,
+        base(model.TypeKind.ThreadHandle, 0));
+    let error_id = add_type(inout context, base(model.TypeKind.Error, 0));
+    let parameter_id = add_type(inout context,
+        named(model.TypeKind.TypeParameter, 90, []));
+    let e_id = add_type(inout context,
+        named(model.TypeKind.NominalEnum, 5, []));
+    let vec_i32_id = add_type(inout context,
+        named(model.TypeKind.Vec, 0, [i32_id]));
+    let vec_vec_id = add_type(inout context,
+        named(model.TypeKind.Vec, 0, [vec_i32_id]));
+    let vec_param_id = add_type(inout context,
+        named(model.TypeKind.Vec, 0, [parameter_id]));
+    let slice_id = add_type(inout context,
+        named(model.TypeKind.Slice, 0, [i32_id]));
+    let weak_id = add_type(inout context,
+        named(model.TypeKind.Weak, 0, [vec_i32_id]));
+    let task_id = add_type(inout context,
+        named(model.TypeKind.Task, 0, [i32_id, e_id]));
+    let trait_object_id = add_type(inout context,
+        named(model.TypeKind.TraitObject, 10, []));
+    let c_resource = model.Type(kind: model.TypeKind.CForeignResource,
+        bits: 0, declaration: 0, binding: 0, parameters: [], result: 0,
+        throws_type: option.Option[usize].None, type_args: [], c_type: 1);
+    let c_plain = model.Type(kind: model.TypeKind.CForeignResource,
+        bits: 0, declaration: 0, binding: 0, parameters: [], result: 0,
+        throws_type: option.Option[usize].None, type_args: [], c_type: 2);
+    let c_pointer = model.Type(kind: model.TypeKind.CForeignPointer, bits: 0,
+        declaration: 0, binding: 0, parameters: [], result: 0,
+        throws_type: option.Option[usize].None, type_args: [i32_id],
+        c_type: 0);
+    let c_resource_id = add_type(inout context, c_resource);
+    let c_plain_id = add_type(inout context, c_plain);
+    let c_pointer_id = add_type(inout context, c_pointer);
+    let s_id = add_type(inout context,
+        named(model.TypeKind.NominalStruct, 2, []));
+    let p_id = add_type(inout context,
+        named(model.TypeKind.NominalStruct, 17, []));
+    let node_id = add_type(inout context,
+        named(model.TypeKind.NominalStruct, 19, []));
+    let node_vec_id = add_type(inout context,
+        named(model.TypeKind.NominalStruct, 20, []));
+    let node_vec_vec_id = add_type(inout context,
+        named(model.TypeKind.Vec, 0, [node_vec_id]));
+    let box_id = add_type(inout context,
+        named(model.TypeKind.NominalStruct, 8, [vec_i32_id]));
+    let wrong_box_id = add_type(inout context,
+        named(model.TypeKind.NominalStruct, 18, [vec_i32_id]));
+    let function_f_id = add_type(inout context, function_type([
+        parameter(model.ParamMode.Ordinary, vec_i32_id)], vec_i32_id,
+        option.Option[usize].None));
+    let function_g_id = add_type(inout context, function_type([
+        parameter(model.ParamMode.Ordinary, vec_vec_id)], vec_i32_id,
+        option.Option[usize].None));
+    let function_h_id = add_type(inout context, function_type([
+        parameter(model.ParamMode.Ordinary, i32_id)], i32_id,
+        option.Option[usize].Some(e_id)));
+    let function_a_id = add_type(inout context, function_type([
+        parameter(model.ParamMode.Move, task_id)], i32_id,
+        option.Option[usize].Some(e_id)));
+    let function_c_id = add_type(inout context, function_type([],
+        unit_id, option.Option[usize].None));
+    let function_sw_id = add_type(inout context, function_type([],
+        i32_id, option.Option[usize].None));
+    let function_or_id = add_type(inout context, function_type([
+        parameter(model.ParamMode.Ordinary, bool_id),
+        parameter(model.ParamMode.Ordinary, bool_id),
+        parameter(model.ParamMode.Move, string_id)], unit_id,
+        option.Option[usize].None));
+
+    let s_nominal = hir.NominalDecl(symbol: 2,
+        kind: model.TypeKind.NominalStruct, params: [], fields: [
+            field(3, vec_i32_id), field(4, i32_id)], variants: [],
+        source: source());
+    let e_nominal = hir.NominalDecl(symbol: 5,
+        kind: model.TypeKind.NominalEnum, params: [], fields: [], variants: [
+            hir.VariantDecl(symbol: 6, payload: [field(7, vec_i32_id)],
+                source: source())], source: source());
+    let box_nominal = hir.NominalDecl(symbol: 8,
+        kind: model.TypeKind.NominalStruct, params: [
+            hir.GenericParam(symbol: 90,
+                trait_ref: option.Option[hir.TraitRef].None, source: source())],
+        fields: [field(9, vec_param_id)], variants: [], source: source());
+    let p_nominal = hir.NominalDecl(symbol: 17,
+        kind: model.TypeKind.NominalStruct, params: [], fields: [
+            field(21, i32_id)], variants: [], source: source());
+    let node_nominal = hir.NominalDecl(symbol: 19,
+        kind: model.TypeKind.NominalStruct, params: [], fields: [
+            field(22, node_id)], variants: [], source: source());
+    let node_vec_nominal = hir.NominalDecl(symbol: 20,
+        kind: model.TypeKind.NominalStruct, params: [], fields: [
+            field(23, node_vec_vec_id)],
+        variants: [], source: source());
+    let nominals = vec.empty[hir.NominalDecl]();
+    vec.push(nominals, s_nominal);
+    vec.push(nominals, e_nominal);
+    vec.push(nominals, box_nominal);
+    vec.push(nominals, p_nominal);
+    vec.push(nominals, node_nominal);
+    vec.push(nominals, node_vec_nominal);
+
+    let scopes = vec.empty[hir.HirScope]();
+    vec.push(scopes, hir_scope(11, option.Option[usize].None));
+    vec.push(scopes, hir_scope(11, option.Option[usize].Some(0)));
+    vec.push(scopes, hir_scope(12, option.Option[usize].None));
+    vec.push(scopes, hir_scope(12, option.Option[usize].Some(2)));
+    vec.push(scopes, hir_scope(13, option.Option[usize].None));
+    vec.push(scopes, hir_scope(13, option.Option[usize].Some(4)));
+    vec.push(scopes, hir_scope(13, option.Option[usize].Some(4)));
+    vec.push(scopes, hir_scope(14, option.Option[usize].None));
+    vec.push(scopes, hir_scope(15, option.Option[usize].None));
+    vec.push(scopes, hir_scope(24, option.Option[usize].None));
+    vec.push(scopes, hir_scope(24, option.Option[usize].Some(9)));
+    vec.push(scopes, hir_scope(25, option.Option[usize].None));
+
+    let nodes = vec.empty[hir.HirNode]();
+    // f: v Vec[i32] { let copy = []; defer { copy[0]; } return v; }
+    vec.push(nodes, node(unit_id, 0, [1, 2, 3],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 0, [4],
+        hir.NodeData.Binding(value: hir.Binding(symbol: 101,
+            writable: false))));
+    vec.push(nodes, node(unit_id, 0, [5],
+        hir.NodeData.Defer(value: hir.Defer(owner_scope: 0,
+            references: []))));
+    vec.push(nodes, node(unit_id, 0, [6],
+        hir.NodeData.Return(value: hir.Return(function: 11))));
+    vec.push(nodes, node(vec_i32_id, 0, [],
+        hir.NodeData.VecInit(value: hir.VecInit())));
+    vec.push(nodes, node(unit_id, 1, [7],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(vec_i32_id, 0, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 100))));
+    vec.push(nodes, node(unit_id, 1, [8],
+        hir.NodeData.ExpressionStatement(
+            value: hir.ExpressionStatement())));
+    vec.push(nodes, node(vec_i32_id, 1, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 101))));
+
+    // g: v Vec[Vec[i32]] { for e in v { return e; } }
+    vec.push(nodes, node(unit_id, 2, [10],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 2, [11, 12],
+        hir.NodeData.ForIn(value: hir.ForIn(element: 201, body_scope: 3,
+            body: 12, iterator: option.Option[hir.IteratorFor].None))));
+    vec.push(nodes, node(vec_vec_id, 2, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 200))));
+    vec.push(nodes, node(unit_id, 3, [13],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 3, [14],
+        hir.NodeData.Return(value: hir.Return(function: 12))));
+    vec.push(nodes, node(vec_i32_id, 3, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 201))));
+
+    // Keep the hand-written node ids aligned with the published arena.
+    for var padding usize = 15; padding < 20; padding += 1 {
+        vec.push(nodes, node(unit_id, 0, [],
+            hir.NodeData.Noop(value: hir.Noop())));
+    }
+    // h: i32 { try { bad(); } catch e E { e; } }
+    vec.push(nodes, node(unit_id, 4, [21],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 4, [22, 24],
+        hir.NodeData.Try(value: hir.Try(catches: [
+            hir.Catch(error_type: e_id, binding: 301, scope: 6, body: 24,
+                source: source())]))));
+    vec.push(nodes, node(unit_id, 5, [23],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(i32_id, 5, [],
+        hir.NodeData.Call(value: hir.Call(kind: hir.CalleeKind.Direct,
+            signature: function_h_id,
+            direct_symbol: option.Option[usize].Some(16),
+            callee: option.Option[usize].None, args: [], type_args: [],
+            binding: option.Option[usize].None,
+            c_callable: option.Option[u32].None, omitted: [],
+            system: option.Option[u32].None))));
+    vec.push(nodes, node(unit_id, 6, [25],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 6, [26],
+        hir.NodeData.ExpressionStatement(
+            value: hir.ExpressionStatement())));
+    vec.push(nodes, node(e_id, 6, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 301))));
+
+    for var padding usize = 27; padding < 30; padding += 1 {
+        vec.push(nodes, node(unit_id, 0, [],
+            hir.NodeData.Noop(value: hir.Noop())));
+    }
+    // a: task Task[i32,E] { await task; }
+    vec.push(nodes, node(unit_id, 7, [31],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(i32_id, 7, [32],
+        hir.NodeData.Await(value: hir.Await())));
+    vec.push(nodes, node(task_id, 7, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 400))));
+
+    for var padding usize = 33; padding < 40; padding += 1 {
+        vec.push(nodes, node(unit_id, 0, [],
+            hir.NodeData.Noop(value: hir.Noop())));
+    }
+    // c: capture Vec[i32] { capture; }
+    vec.push(nodes, node(unit_id, 8, [41],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 8, [42],
+        hir.NodeData.ExpressionStatement(
+            value: hir.ExpressionStatement())));
+    vec.push(nodes, node(vec_i32_id, 8, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 501))));
+
+    for var padding usize = 43; padding < 50; padding += 1 {
+        vec.push(nodes, node(unit_id, 0, [],
+            hir.NodeData.Noop(value: hir.Noop())));
+    }
+    // sw: () i32 { switch E.Some([1]) { case E.Some(v): return 0; } }
+    vec.push(nodes, node(unit_id, 9, [51],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 9, [52, 54],
+        hir.NodeData.Switch(value: hir.Switch(arms: [
+            hir.Arm(pattern: hir.Pattern(type_id: e_id,
+                source: source(), variant: option.Option[usize].Some(6),
+                binding: option.Option[usize].None, payload: [
+                    hir.Pattern(type_id: vec_i32_id, source: source(),
+                        variant: option.Option[usize].None,
+                        binding: option.Option[usize].Some(600),
+                        payload: [],
+                        literal: option.Option[hir.PatternLiteral].None)],
+                literal: option.Option[hir.PatternLiteral].None),
+                scope: 10, body: 54, source: source())],
+            exhaustive: false))));
+    vec.push(nodes, node(e_id, 9, [53],
+        hir.NodeData.EnumInit(value: hir.EnumInit(variant: 6, payload: [
+            hir.CallArg(source_index: 0, parameter_index: 0,
+                label: option.Option[string].None,
+                mode: model.ParamMode.Ordinary, expression: 53)]))));
+    vec.push(nodes, node(vec_i32_id, 9, [],
+        hir.NodeData.VecInit(value: hir.VecInit())));
+    vec.push(nodes, node(unit_id, 10, [55],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 10, [56],
+        hir.NodeData.Return(value: hir.Return(function: 24))));
+    vec.push(nodes, node(i32_id, 10, [],
+        hir.NodeData.IntegerLiteral(value: hir.IntegerLiteral(
+            decimal: "0", bits: 0))));
+    // or_f: (a bool, b bool, move text string) { a || b; }
+    vec.push(nodes, node(unit_id, 11, [58],
+        hir.NodeData.Block(value: hir.Block())));
+    vec.push(nodes, node(unit_id, 11, [59],
+        hir.NodeData.ExpressionStatement(
+            value: hir.ExpressionStatement())));
+    vec.push(nodes, node(bool_id, 11, [60, 61],
+        hir.NodeData.ShortCircuit(value: hir.ShortCircuit(
+            op: hir.LogicalOp.Or))));
+    vec.push(nodes, node(bool_id, 11, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 700))));
+    vec.push(nodes, node(bool_id, 11, [],
+        hir.NodeData.Read(value: hir.Read(symbol: 701))));
+
+    for var node_index usize = 0; node_index < vec.len(nodes);
+        node_index += 1 {
+        nodes[node_index].source = hir.HirSource(
+            node: model.NodeRef(module: 0, file: 0, node: node_index),
+            span: model.Span(snapshot: 1, begin_byte: u64(node_index),
+                end_byte: u64(node_index + 1)));
+    }
+    let functions = vec.empty[hir.HirFunction]();
+    vec.push(functions, hir.HirFunction(symbol: 11, signature: function_f_id,
+        parameters: [hir.Parameter(symbol: 100, label: "v")], body: 0,
+        scope: 0, source: source(), captures: [], is_async: false));
+    vec.push(functions, hir.HirFunction(symbol: 12, signature: function_g_id,
+        parameters: [hir.Parameter(symbol: 200, label: "v")], body: 9,
+        scope: 2, source: source(), captures: [], is_async: false));
+    vec.push(functions, hir.HirFunction(symbol: 13, signature: function_h_id,
+        parameters: [hir.Parameter(symbol: 300, label: "n")], body: 20,
+        scope: 4, source: source(), captures: [], is_async: false));
+    vec.push(functions, hir.HirFunction(symbol: 14, signature: function_a_id,
+        parameters: [hir.Parameter(symbol: 400, label: "task")], body: 30,
+        scope: 7, source: source(), captures: [], is_async: true));
+    vec.push(functions, hir.HirFunction(symbol: 15, signature: function_c_id,
+        parameters: [], body: 40, scope: 8, source: source(),
+        captures: [hir.CaptureBinding(origin: 500, local: 501,
+            type_id: vec_i32_id)], is_async: false));
+    vec.push(functions, hir.HirFunction(symbol: 24, signature: function_sw_id,
+        parameters: [], body: 50, scope: 9, source: source(), captures: [],
+        is_async: false));
+    vec.push(functions, hir.HirFunction(symbol: 25, signature: function_or_id,
+        parameters: [hir.Parameter(symbol: 700, label: "a"),
+            hir.Parameter(symbol: 701, label: "b"),
+            hir.Parameter(symbol: 702, label: "text")], body: 57,
+        scope: 11, source: source(), captures: [], is_async: false));
+
+    let ids = [unit_id, bool_id, i32_id, u32_id, string_id, handle_id,
+        error_id, function_f_id, vec_i32_id, parameter_id, task_id,
+        parameter_id, weak_id, trait_object_id, c_resource_id, c_plain_id,
+        c_pointer_id, wrong_box_id, s_id, e_id, p_id, node_id, box_id,
+        slice_id, node_vec_id];
+    return Setup(module: hir.HirModule(resolved: resolved, identity: 0,
+        types: context, config: model.CheckConfig(
+            backend: model.Backend.Native, word_bits: 64),
+        functions: functions, nodes: nodes, scopes: scopes,
+        nominals: nominals, traits: [], impls: [], templates: [],
+        instances: [], ownership: hir.empty_ownership(),
+        foreign_bindings: []), ids: ids);
+}
+
+func classify(module hir.HirModule, id usize) hir.ValueOps {
+    var out = hir.ValueOps(kind: hir.ValueKind.Unsupported, needs_drop: false,
+        pod_inout: false, fields: [], reason: "");
+    try {
+        out = valueops.classify_value(module, id);
+    } catch error model.SupportError {
+        out.kind = hir.ValueKind.Unsupported;
+    }
+    return out;
+}
+
+func option_has(value option.Option[usize], expected usize) bool {
+    switch value {
+        case option.Option.Some(found): return found == expected;
+        case option.Option.None: return false;
+    }
+}
+
+func option_is_none(value option.Option[usize]) bool {
+    switch value {
+        case option.Option.Some(_): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func classification_kind(kind hir.ValueKind) u32 {
+    switch kind {
+        case hir.ValueKind.Trivial: return 0;
+        case hir.ValueKind.Vec: return 1;
+        case hir.ValueKind.Structure: return 2;
+        case hir.ValueKind.Enumeration: return 3;
+        case hir.ValueKind.Dependent: return 4;
+        case hir.ValueKind.Unsupported: return 5;
+        case hir.ValueKind.ForeignReference: return 6;
+        case hir.ValueKind.ForeignCallable: return 7;
+        case hir.ValueKind.ForeignError: return 8;
+        case hir.ValueKind.CPointer: return 9;
+        case hir.ValueKind.CBuffer: return 10;
+        case hir.ValueKind.CRecord: return 11;
+        case hir.ValueKind.CResource: return 12;
+        case hir.ValueKind.CCallback: return 13;
+        case hir.ValueKind.RuntimeHandle: return 14;
+        case hir.ValueKind.String: return 15;
+        case hir.ValueKind.Slice: return 16;
+        case hir.ValueKind.Function: return 17;
+        case hir.ValueKind.Weak: return 18;
+        case hir.ValueKind.TraitObject: return 19;
+    }
+}
+
+func same_cleanup(left hir.CleanupKind, right hir.CleanupKind) bool {
+    switch left {
+        case hir.CleanupKind.SaveOutput:
+            switch right { case hir.CleanupKind.SaveOutput: return true; case _: return false; }
+        case hir.CleanupKind.EndBorrow:
+            switch right { case hir.CleanupKind.EndBorrow: return true; case _: return false; }
+        case hir.CleanupKind.DestroyIfLive:
+            switch right { case hir.CleanupKind.DestroyIfLive: return true; case _: return false; }
+        case hir.CleanupKind.Defer:
+            switch right { case hir.CleanupKind.Defer: return true; case _: return false; }
+        case hir.CleanupKind.EndIteration:
+            switch right { case hir.CleanupKind.EndIteration: return true; case _: return false; }
+    }
+}
+
+func same_exit_kind(left hir.ExitKind, right hir.ExitKind) bool {
+    switch left {
+        case hir.ExitKind.Normal:
+            switch right { case hir.ExitKind.Normal: return true; case _: return false; }
+        case hir.ExitKind.Return:
+            switch right { case hir.ExitKind.Return: return true; case _: return false; }
+        case hir.ExitKind.Break:
+            switch right { case hir.ExitKind.Break: return true; case _: return false; }
+        case hir.ExitKind.Continue:
+            switch right { case hir.ExitKind.Continue: return true; case _: return false; }
+        case hir.ExitKind.Error:
+            switch right { case hir.ExitKind.Error: return true; case _: return false; }
+        case hir.ExitKind.Cancel:
+            switch right { case hir.ExitKind.Cancel: return true; case _: return false; }
+    }
+}
+
+func has_action(plan hir.ExitPlan, kind hir.CleanupKind) bool {
+    for action in plan.actions {
+        if same_cleanup(action.kind, kind) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func has_exit(module hir.HirModule, id usize, kind hir.ExitKind) bool {
+    for plan in module.nodes[id].exits {
+        if same_exit_kind(plan.kind, kind) {
+            return true;
+        }
+    }
+    return false;
+}
+
+func use_is(left hir.UseKind, right hir.UseKind) bool {
+    switch left {
+        case hir.UseKind.Borrow:
+            switch right { case hir.UseKind.Borrow: return true; case _: return false; }
+        case hir.UseKind.Copy:
+            switch right { case hir.UseKind.Copy: return true; case _: return false; }
+        case hir.UseKind.Take:
+            switch right { case hir.UseKind.Take: return true; case _: return false; }
+        case hir.UseKind.Inout:
+            switch right { case hir.UseKind.Inout: return true; case _: return false; }
+    }
+}
+
+func owner_is(owner hir.OwnerRef, kind hir.OwnerKind,
+              identity u64) bool {
+    if owner.identity != identity {
+        return false;
+    }
+    switch kind {
+        case hir.OwnerKind.Binding:
+            switch owner.kind { case hir.OwnerKind.Binding: return true; case _: return false; }
+        case hir.OwnerKind.Temporary:
+            switch owner.kind { case hir.OwnerKind.Temporary: return true; case _: return false; }
+        case hir.OwnerKind.Iteration:
+            switch owner.kind { case hir.OwnerKind.Iteration: return true; case _: return false; }
+        case hir.OwnerKind.ReturnOutput:
+            switch owner.kind { case hir.OwnerKind.ReturnOutput: return true; case _: return false; }
+        case hir.OwnerKind.ErrorOutput:
+            switch owner.kind { case hir.OwnerKind.ErrorOutput: return true; case _: return false; }
+    }
+}
+
+func owner_position(plan hir.ExitPlan, kind hir.CleanupKind,
+                    owner_kind hir.OwnerKind, identity u64) i64 {
+    for var index usize = 0; index < vec.len(plan.actions); index += 1 {
+        let action = plan.actions[index];
+        if same_cleanup(action.kind, kind) &&
+           owner_is(action.owner, owner_kind, identity) {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func same_types(left types.Context, right types.Context) bool {
+    if types.size(left) != types.size(right) {
+        return false;
+    }
+    for var index usize = 1; index <= types.size(left); index += 1 {
+        switch types.find(left, index) {
+            case option.Option.Some(a):
+                switch types.find(right, index) {
+                    case option.Option.Some(b):
+                        if !types.equal(a, b) {
+                            return false;
+                        }
+                    case option.Option.None: return false;
+                }
+            case option.Option.None:
+                switch types.find(right, index) {
+                    case option.Option.Some(_): return false;
+                    case option.Option.None: {}
+                }
+        }
+    }
+    return true;
+}
+
+
+func failure_number(kind model.FailureKind) u32 {
+    switch kind {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func diagnostic_span(result model.UnitResult) string {
+    if vec.len(result.diagnostics) == 0 ||
+       !result.diagnostics[0].has_primary {
+        return "-";
+    }
+    return number(usize(result.diagnostics[0].primary.begin_byte));
+}
+
+func print_error_line(label string, result model.UnitResult) throws os.Error {
+    var code = "-";
+    if vec.len(result.diagnostics) > 0 {
+        code = result.diagnostics[0].code;
+    }
+    io.println("ORACLE error " + label + " " +
+        number(usize(failure_number(result.failure))) + " " + code + " " +
+        diagnostic_span(result));
+}
+
+func failure_unsupported(kind model.FailureKind) bool {
+    switch kind {
+        case model.FailureKind.Unsupported: return true;
+        case _: return false;
+    }
+}
+
+func failure_is_unsupported(result model.UnitResult) bool {
+    if result.has_value || vec.len(result.diagnostics) == 0 {
+        return false;
+    }
+    return failure_unsupported(result.failure) &&
+           result.diagnostics[0].code == "E_CAPABILITY_UNAVAILABLE" &&
+           result.diagnostics[0].has_primary;
+}
+
+func failure_internal_at(result model.UnitResult, begin u64) bool {
+    if result.has_value || vec.len(result.diagnostics) == 0 {
+        return false;
+    }
+    return result.diagnostics[0].code == "E_IR_INVALID" &&
+           result.diagnostics[0].has_primary &&
+           result.diagnostics[0].primary.begin_byte == begin;
+}
+
+func failure_is_internal(result model.UnitResult) bool {
+    if result.has_value || vec.len(result.diagnostics) == 0 {
+        return false;
+    }
+    return result.diagnostics[0].code == "E_IR_INVALID";
+}
+
+func test_classification(state inout Checks, module hir.HirModule,
+                         ids Vec[usize]) {
+    let int_ops = classify(module, ids[2]);
+    need(inout state, classification_kind(int_ops.kind) == 0 &&
+        !int_ops.needs_drop && int_ops.pod_inout, "i32 trivial/pod");
+
+    let vec_ops = classify(module, ids[8]);
+    need(inout state, classification_kind(vec_ops.kind) == 1 &&
+        vec_ops.needs_drop && !vec_ops.pod_inout, "Vec[i32] owned");
+
+    let string_ops = classify(module, ids[4]);
+    need(inout state, classification_kind(string_ops.kind) == 15 &&
+        string_ops.needs_drop && !string_ops.pod_inout, "string owned");
+
+    let weak_ops = classify(module, ids[12]);
+    need(inout state, classification_kind(weak_ops.kind) == 18 &&
+        weak_ops.needs_drop, "Weak owned");
+
+    let function_ops = classify(module, ids[7]);
+    need(inout state, classification_kind(function_ops.kind) == 17 &&
+        function_ops.needs_drop, "function owned");
+
+    let trait_ops = classify(module, ids[13]);
+    need(inout state, classification_kind(trait_ops.kind) == 19 &&
+        trait_ops.needs_drop, "dyn trait owned");
+
+    let handle_ops = classify(module, ids[5]);
+    need(inout state, classification_kind(handle_ops.kind) == 14 &&
+        handle_ops.needs_drop, "runtime handle owned");
+
+    let resource_ops = classify(module, ids[14]);
+    need(inout state, classification_kind(resource_ops.kind) == 12 &&
+        resource_ops.needs_drop, "C resource owned");
+
+    let pointer_ops = classify(module, ids[16]);
+    need(inout state, classification_kind(pointer_ops.kind) == 9 &&
+        !pointer_ops.needs_drop, "C pointer borrowed");
+
+    let struct_ops = classify(module, ids[18]);
+    need(inout state, classification_kind(struct_ops.kind) == 2 &&
+        struct_ops.needs_drop && vec.len(struct_ops.fields) == 2 &&
+        option_is_none(struct_ops.fields[0].variant),
+        "struct fields in declaration order");
+
+    let enum_ops = classify(module, ids[19]);
+    need(inout state, classification_kind(enum_ops.kind) == 3 &&
+        enum_ops.needs_drop && vec.len(enum_ops.fields) == 1,
+        "enum variant field");
+
+    let error_ops = classify(module, ids[6]);
+    need(inout state, classification_kind(error_ops.kind) == 5 &&
+        error_ops.reason != "", "dynamic error unsupported");
+
+    let cycle_ops = classify(module, ids[21]);
+    need(inout state, classification_kind(cycle_ops.kind) == 5,
+        "cyclic value classification stops instead of looping");
+}
+
+func test_helpers(state inout Checks, module hir.HirModule, ids Vec[usize]) {
+    var layout = option.Option[usize].None;
+    try {
+        layout = valueops.infinite_value_layout(module);
+    } catch error model.SupportError {
+        layout = option.Option[usize].None;
+    }
+    need(inout state, option_has(layout, 19),
+        "direct value cycle is infinite");
+
+    var vec_layout = option.Option[usize].None;
+    try {
+        vec_layout = valueops.infinite_value_layout(module);
+    } catch error model.SupportError {}
+    need(inout state, !option_has(vec_layout, 20),
+        "Vec-recursive member stays finite");
+
+    var data_i32 = false;
+    var data_vec = true;
+    var data_pod = false;
+    var data_string = false;
+    var data_unit = true;
+    try {
+        data_i32 = valueops.inout_data_type(module, ids[2], []);
+        data_vec = valueops.inout_data_type(module, ids[8], []);
+        data_pod = valueops.inout_data_type(module, ids[20], []);
+        data_string = valueops.inout_data_type(module, ids[4], []);
+        data_unit = valueops.inout_data_type(module, ids[0], []);
+    } catch error model.SupportError {
+        data_i32 = false; data_vec = true; data_pod = false;
+        data_string = false; data_unit = true;
+    }
+    need(inout state, data_i32 && !data_vec && data_pod && !data_string &&
+        !data_unit, "inout data classification");
+
+    var unit_slot = hir.InoutSlot.Unsupported;
+    var task_slot = hir.InoutSlot.Unsupported;
+    var external_slot = hir.InoutSlot.Unsupported;
+    var type_slot = hir.InoutSlot.Unsupported;
+    var int_slot = hir.InoutSlot.Unsupported;
+    var vec_slot = hir.InoutSlot.Unsupported;
+    try {
+        unit_slot = valueops.inout_slot(module, ids[0], []);
+        task_slot = valueops.inout_slot(module, ids[10], []);
+        external_slot = valueops.inout_slot(module, ids[14], []);
+        type_slot = valueops.inout_slot(module, ids[11], []);
+        int_slot = valueops.inout_slot(module, ids[2], []);
+        vec_slot = valueops.inout_slot(module, ids[8], []);
+    } catch error model.SupportError {}
+    need(inout state, classification_slot(unit_slot) == 1 &&
+        classification_slot(task_slot) == 2 &&
+        classification_slot(external_slot) == 3 &&
+        classification_slot(type_slot) == 4 &&
+        classification_slot(int_slot) == 0 &&
+        classification_slot(vec_slot) == 0, "inout slot kinds");
+    need(inout state,
+        valueops.inout_slot_reason(hir.InoutSlot.Unit) ==
+            "inout of Unit is not a writable value place" &&
+        valueops.inout_slot_reason(hir.InoutSlot.Task) ==
+            "Task inout is not supported: the executor owns its completion lifetime" &&
+        valueops.inout_slot_reason(hir.InoutSlot.External) ==
+            "external C resource inout is not supported: no verified retain/release pairing" &&
+        valueops.inout_slot_reason(hir.InoutSlot.TypeParameter) ==
+            "inout type parameter has no concrete value" &&
+        valueops.inout_slot_reason(hir.InoutSlot.Allowed) == "",
+        "inout slot reasons");
+
+    var copy_int = false;
+    var copy_param = true;
+    var copy_resource = false;
+    var copy_plain = true;
+    var copy_error = true;
+    try {
+        copy_int = valueops.ordinary_copyable(module, ids[2]);
+        copy_param = valueops.ordinary_copyable(module, ids[9]);
+        copy_resource = valueops.ordinary_copyable(module, ids[14]);
+        copy_plain = valueops.ordinary_copyable(module, ids[15]);
+        copy_error = valueops.ordinary_copyable(module, ids[6]);
+    } catch error model.SupportError {}
+    need(inout state, copy_int && !copy_param && copy_resource && !copy_plain &&
+        !copy_error, "ordinary copyability");
+
+    var own_int = true;
+    var own_vec = false;
+    var own_pod = true;
+    var own_struct = false;
+    try {
+        own_int = valueops.owning_value(module, ids[2]);
+        own_vec = valueops.owning_value(module, ids[8]);
+        own_pod = valueops.owning_value(module, ids[20]);
+        own_struct = valueops.owning_value(module, ids[18]);
+    } catch error model.SupportError {}
+    need(inout state, !own_int && own_vec && !own_pod && own_struct,
+        "owning move intent");
+
+    need(inout state, valueops.weak_target(module, ids[8]) &&
+        valueops.weak_target(module, ids[7]) &&
+        valueops.weak_target(module, ids[22]) &&
+        !valueops.weak_target(module, ids[17]) &&
+        !valueops.weak_target(module, ids[23]) &&
+        !valueops.weak_target(module, ids[24]),
+        "canonical weak targets only");
+}
+
+func classification_slot(slot hir.InoutSlot) u32 {
+    switch slot {
+        case hir.InoutSlot.Allowed: return 0;
+        case hir.InoutSlot.Unit: return 1;
+        case hir.InoutSlot.Task: return 2;
+        case hir.InoutSlot.External: return 3;
+        case hir.InoutSlot.TypeParameter: return 4;
+        case hir.InoutSlot.Unsupported: return 5;
+    }
+}
+
+func test_production(state inout Checks, ids Vec[usize]) throws os.Error {
+    var produced_setup = fixture();
+    var produced = produced_setup.module;
+    let before = types.size(produced.types);
+    let result = ownership.produce_ownership(inout produced);
+    if !result.has_value {
+        for diagnostic in result.diagnostics {
+            io.println("produce diagnostic: " + diagnostic.code);
+        }
+    }
+    need(inout state, result.has_value &&
+        phase_complete(result.state), "produce succeeds");
+    need(inout state, types.size(produced.types) >= before,
+        "producer keeps the public type table");
+
+    let after_produce = types.size(produced.types);
+    let type_snapshot = types.clone_context(produced.types);
+    let verified = ownership.verify_ownership(produced);
+    if !verified.has_value {
+        for diagnostic in verified.diagnostics {
+            io.println("verify diagnostic: " + diagnostic.code);
+        }
+    }
+    need(inout state, verified.has_value &&
+        phase_complete(verified.state), "independent verify");
+    need(inout state, types.size(produced.types) == after_produce &&
+        same_types(type_snapshot, produced.types),
+        "verify leaves module types intact");
+
+    let f_return = produced.nodes[3].exits;
+    need(inout state, vec.len(f_return) == 1 &&
+        same_exit_kind(f_return[0].kind, hir.ExitKind.Return) &&
+        vec.len(f_return[0].actions) >= 2 &&
+        same_cleanup(f_return[0].actions[0].kind,
+            hir.CleanupKind.SaveOutput) &&
+        same_cleanup(f_return[0].actions[vec.len(f_return[0].actions) - 1].kind,
+            hir.CleanupKind.DestroyIfLive), "return save/drop order");
+
+    var saw_defer_cleanup = false;
+    for full in produced.ownership.full_expressions {
+        if full.node == 7 {
+            for action in full.actions {
+                if same_cleanup(action.kind, hir.CleanupKind.DestroyIfLive) {
+                    saw_defer_cleanup = true;
+                }
+            }
+        }
+    }
+    need(inout state, saw_defer_cleanup, "defer body temporary cleanup");
+
+    need(inout state, has_exit(produced, 13, hir.ExitKind.Return),
+        "for-in return exit");
+    var saw_iteration = false;
+    for plan in produced.nodes[13].exits {
+        if same_exit_kind(plan.kind, hir.ExitKind.Return) &&
+           has_action(plan, hir.CleanupKind.EndIteration) {
+            saw_iteration = true;
+        }
+    }
+    need(inout state, saw_iteration, "for-in end_iteration on return");
+
+    need(inout state, has_exit(produced, 23, hir.ExitKind.Error),
+        "call typed error exit");
+    var caught = false;
+    for plan in produced.nodes[23].exits {
+        if same_exit_kind(plan.kind, hir.ExitKind.Error) {
+            switch plan.target {
+                case hir.ExitTarget.CatchTarget(value):
+                    caught = value.try_node == 21;
+                case _: {}
+            }
+        }
+    }
+    need(inout state, caught, "typed error uses catch target");
+    var error_save = false;
+    for plan in produced.nodes[23].exits {
+        if same_exit_kind(plan.kind, hir.ExitKind.Error) &&
+           owner_position(plan, hir.CleanupKind.SaveOutput,
+               hir.OwnerKind.ErrorOutput, 23) >= 0 {
+            error_save = true;
+        }
+    }
+    need(inout state, error_save, "typed error saves its output before cleanup");
+
+    need(inout state, has_exit(produced, 31, hir.ExitKind.Error) &&
+        has_exit(produced, 31, hir.ExitKind.Cancel), "await error/cancel exits");
+    var await_error_cleanup = false;
+    var await_cancel_cleanup = false;
+    for plan in produced.nodes[31].exits {
+        if same_exit_kind(plan.kind, hir.ExitKind.Error) &&
+           owner_position(plan, hir.CleanupKind.SaveOutput,
+               hir.OwnerKind.ErrorOutput, 31) >= 0 {
+            await_error_cleanup = true;
+        }
+        if same_exit_kind(plan.kind, hir.ExitKind.Cancel) &&
+           owner_position(plan, hir.CleanupKind.DestroyIfLive,
+               hir.OwnerKind.Binding, 400) >= 0 {
+            await_cancel_cleanup = true;
+        }
+    }
+    need(inout state, await_error_cleanup && await_cancel_cleanup,
+        "await preserves error output and move-local cancel cleanup");
+
+    need(inout state, has_exit(produced, 55, hir.ExitKind.Return),
+        "computed switch return exit");
+    var binding_position = i64(-1);
+    var subject_position = i64(-1);
+    for plan in produced.nodes[55].exits {
+        if same_exit_kind(plan.kind, hir.ExitKind.Return) {
+            binding_position = owner_position(plan,
+                hir.CleanupKind.DestroyIfLive, hir.OwnerKind.Binding, 600);
+            subject_position = owner_position(plan,
+                hir.CleanupKind.DestroyIfLive, hir.OwnerKind.Temporary, 52);
+        }
+    }
+    need(inout state, binding_position >= 0 && subject_position >= 0 &&
+        binding_position < subject_position,
+        "arm binding drops before the held switch subject");
+    var subject_temporary = false;
+    for temporary in produced.ownership.temporaries {
+        if temporary.producer == 52 && temporary.full_expression == 51 {
+            subject_temporary = true;
+        }
+    }
+    need(inout state, subject_temporary, "switch subject is a real temporary");
+
+    var captured_copy = false;
+    for use in produced.ownership.uses {
+        if use_is(use.kind, hir.UseKind.Copy) &&
+           option_has(use.destination, 600) && option_is_none(use.root) {
+            captured_copy = true;
+        }
+    }
+    need(inout state, captured_copy, "computed switch pattern copy destination");
+    var capture_checked = false;
+    for local in produced.ownership.locals {
+        if local.symbol == 501 && local.read_only_capture &&
+           mode_ordinary(local.mode) {
+            capture_checked = true;
+        }
+    }
+    need(inout state, capture_checked, "read-only capture local");
+
+    var or_first = false;
+    var or_second = false;
+    for use in produced.ownership.uses {
+        if use.consumer == 59 && use.operand == 0 &&
+           use_is(use.kind, hir.UseKind.Borrow) &&
+           option_has(use.root, 700) && use.type_id == ids[1] {
+            or_first = true;
+        }
+        if use.consumer == 59 && use.operand == 1 &&
+           use_is(use.kind, hir.UseKind.Borrow) &&
+           option_has(use.root, 701) && use.type_id == ids[1] {
+            or_second = true;
+        }
+    }
+    need(inout state, or_first && or_second,
+        "|| records both bool operand borrows");
+    var or_cleanup = false;
+    for plan in produced.nodes[57].exits {
+        if same_exit_kind(plan.kind, hir.ExitKind.Normal) &&
+           owner_position(plan, hir.CleanupKind.DestroyIfLive,
+               hir.OwnerKind.Binding, 702) >= 0 {
+            or_cleanup = true;
+        }
+    }
+    need(inout state, or_cleanup, "|| function keeps normal move-local cleanup");
+
+    var tampered_setup = fixture();
+    var tampered = tampered_setup.module;
+    ownership.produce_ownership(inout tampered);
+    if vec.len(tampered.ownership.temporaries) > 0 {
+        let discarded = vec.pop(tampered.ownership.temporaries);
+    }
+    need(inout state, failure_is_internal(ownership.verify_ownership(tampered)),
+        "tampered temporary rejected");
+
+    var reordered_setup = fixture();
+    var reordered = reordered_setup.module;
+    ownership.produce_ownership(inout reordered);
+    if vec.len(reordered.nodes[3].exits) > 0 &&
+       vec.len(reordered.nodes[3].exits[0].actions) > 1 {
+        let first = reordered.nodes[3].exits[0].actions[0];
+        reordered.nodes[3].exits[0].actions[0] =
+            reordered.nodes[3].exits[0].actions[1];
+        reordered.nodes[3].exits[0].actions[1] = first;
+    }
+    need(inout state, failure_is_internal(ownership.verify_ownership(reordered)),
+        "tampered cleanup order rejected");
+
+    var forged_setup = fixture();
+    var forged = forged_setup.module;
+    ownership.produce_ownership(inout forged);
+    let extra_action = hir.CleanupStep(kind: hir.CleanupKind.DestroyIfLive,
+        owner: hir.OwnerRef(kind: hir.OwnerKind.Temporary, identity: 999),
+        type_id: 1);
+    vec.push(forged.nodes, node(1, 0, [], hir.NodeData.Noop(
+        value: hir.Noop())));
+    vec.push(forged.nodes[vec.len(forged.nodes) - 1].exits,
+        hir.ExitPlan(kind: hir.ExitKind.Normal, error_type:
+            option.Option[usize].None,
+            target: hir.ExitTarget.FunctionExit(value:
+                hir.FunctionExit(function: 0)), exited_scopes: [], defers: [],
+            saves_value: false, actions: [extra_action]));
+    need(inout state, failure_is_internal(ownership.verify_ownership(forged)),
+        "unchecked node cleanup rejected");
+
+    var broken_setup = fixture();
+    var broken = broken_setup.module;
+    broken.functions[0].body = 9999;
+    let broken_result = ownership.verify_ownership(broken);
+    need(inout state, failure_is_internal(broken_result),
+        "out-of-range node is a typed failure, not a panic");
+}
+
+func chain_module(depth usize) hir.HirModule {
+    var context = types.context();
+    let nominals = vec.empty[hir.NominalDecl]();
+    var previous usize = 0;
+    for var step usize = depth; step > 0; step -= 1 {
+        let index = step - 1;
+        let type_id = add_type(inout context,
+            named(model.TypeKind.NominalStruct, 1000 + index, []));
+        let fields = vec.empty[hir.FieldDecl]();
+        if previous != 0 {
+            vec.push(fields, field(2000 + index, previous));
+        }
+        vec.push(nominals, hir.NominalDecl(symbol: 1000 + index,
+            kind: model.TypeKind.NominalStruct, params: [], fields: fields,
+            variants: [], source: source()));
+        previous = type_id;
+    }
+    let functions = vec.empty[hir.HirFunction]();
+    let signature = add_type(inout context,
+        function_type([], previous, option.Option[usize].None));
+    vec.push(functions, hir.HirFunction(symbol: 1, signature: signature,
+        parameters: [], body: 0, scope: 0, source: source(), captures: [],
+        is_async: false));
+    let project = model.Project(root: "", package_name: "app",
+        backend: "native", word_bits: 64, hosted: false, entry: 0, files: [],
+        modules: [], bindings: [], foreign_bindings: [], c_bindings: [],
+        c_types: [], c_callables: [], c_libraries: [], c_library_dirs: []);
+    let resolved = model.ResolvedProject(project: project, symbols: [],
+        occurrences: [], deferred_members: [], self_parameters: []);
+    return hir.HirModule(resolved: resolved, identity: 0, types: context,
+        config: model.CheckConfig(backend: model.Backend.Native,
+            word_bits: 64), functions: functions, nodes: [], scopes: [],
+        nominals: nominals, traits: [], impls: [], templates: [],
+        instances: [], ownership: hir.empty_ownership(),
+        foreign_bindings: []);
+}
+
+func test_budgets(state inout Checks) throws os.Error {
+    var chain = chain_module(520);
+    var layout = option.Option[usize].None;
+    try {
+        layout = valueops.infinite_value_layout(chain);
+    } catch error model.SupportError {}
+    need(inout state, option_is_none(layout),
+        "deep finite layout is not an infinite cycle");
+
+    // The chain root is the first nominal type in the generated context.
+    var classification = hir.ValueOps(kind: hir.ValueKind.Trivial,
+        needs_drop: false, pod_inout: false, fields: [], reason: "");
+    var root_id usize = 0;
+    for var index usize = 1; index <= types.size(chain.types); index += 1 {
+        switch types.find(chain.types, index) {
+            case option.Option.Some(value):
+                if value.declaration == 1000 {
+                    root_id = index;
+                }
+            case option.Option.None: {}
+        }
+    }
+    need(inout state, root_id != 0, "chain root type present");
+    try {
+        classification = valueops.classify_value(chain, root_id);
+    } catch error model.SupportError {
+        classification.kind = hir.ValueKind.Unsupported;
+    }
+    need(inout state, classification_kind(classification.kind) == 5,
+        "classification depth budget stops at 512");
+
+    let budget_result = ownership.produce_ownership(inout chain);
+    need(inout state, failure_is_unsupported(budget_result) &&
+        vec.len(budget_result.diagnostics) > 0 &&
+        budget_result.diagnostics[0].message != "",
+        "producer completion depth budget is a source capability failure");
+}
+
+func test_error_paths(state inout Checks, ids Vec[usize]) throws os.Error {
+    var setup = fixture();
+    var unsupported = setup.module;
+    unsupported.nodes[4].type_id = ids[6];
+    let source_failure = ownership.produce_ownership(inout unsupported);
+    print_error_line("produce_unsupported", source_failure);
+    need(inout state, failure_is_unsupported(source_failure) &&
+        source_failure.diagnostics[0].primary.begin_byte == 4,
+        "source capability failure keeps code and node span");
+
+    var source_setup = fixture();
+    var source_issue = source_setup.module;
+    ownership.produce_ownership(inout source_issue);
+    source_issue.nodes[6].data =
+        hir.NodeData.Read(value: hir.Read(symbol: 999));
+    let source_result = ownership.verify_ownership(source_issue);
+    print_error_line("verify_source", source_result);
+    need(inout state, failure_internal_at(source_result, 6),
+        "verifier keeps the source HIR span on an internal rejection");
+
+    var tampered_setup = fixture();
+    var tampered = tampered_setup.module;
+    ownership.produce_ownership(inout tampered);
+    if vec.len(tampered.ownership.locals) > 0 {
+        tampered.ownership.locals[0].type_id = ids[2];
+    }
+    let tampered_result = ownership.verify_ownership(tampered);
+    print_error_line("verify_tamper", tampered_result);
+    need(inout state, failure_is_internal(tampered_result),
+        "tampered local type is recomputed, not trusted");
+
+    var broken_setup = fixture();
+    var broken = broken_setup.module;
+    broken.functions[0].body = 9999;
+    let broken_result = ownership.verify_ownership(broken);
+    print_error_line("verify_bounds", broken_result);
+    need(inout state, failure_is_internal(broken_result),
+        "out-of-range node is a typed failure, not a panic");
+}
+
+func run() Checks throws os.Error {
+    var checks = Checks(ok: true, failures: vec.empty[string]());
+    let setup = fixture();
+    test_classification(inout checks, setup.module, setup.ids);
+    test_helpers(inout checks, setup.module, setup.ids);
+    test_production(inout checks, setup.ids);
+    test_error_paths(inout checks, setup.ids);
+    test_budgets(inout checks);
+    var dump_setup = fixture();
+    var dumped = dump_setup.module;
+    ownership.produce_ownership(inout dumped);
+    dump_facts(inout checks, dumped, dump_setup.ids);
+    return checks;
+}
+
+func main() i32 throws os.Error {
+    let checks = run();
+    for failure in checks.failures {
+        io.println("FAIL: " + failure);
+    }
+    if checks.ok {
+        io.println("PASS: ownership scenarios");
+        return 0;
+    }
+    return 1;
+}

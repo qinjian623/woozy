@@ -60,7 +60,17 @@ func main() i32 throws os.Error {
     same(inout state, "join name/trailing slash", paths.join("a","b/"), "a/b/");
     same(inout state, "join empty/dot", paths.join("","."), ".");
 
+    // The libstdc++ filesystem_error wording needs glibc errno text without
+    // linking libc; these lines are compared with generic_category in run.py.
+    let errno_cases Vec[i32] = [2,5,12,13,17,20,21,22,23,24,36,40,9999];
+    for code in errno_cases {
+        io.println("ERRNO\t"+strconv.format_i64(i64(code))+"\t"+
+            paths.errno_text(code));
+    }
+
     // Remaining arguments are canonical cases supplied by the test harness.
+    // The harness compares each line with a std::filesystem::canonical oracle,
+    // including the full error message for failures.
     let args = process.args();
     var index usize = 1;
     for index < vec.len(args) {
@@ -70,7 +80,8 @@ func main() i32 throws os.Error {
             io.println("CANON\t"+value+"\tOK\t"+result);
         } catch error os.Error {
             io.println("CANON\t"+value+"\tERR\t"+
-                strconv.format_i64(i64(error_code(error))));
+                strconv.format_i64(i64(error_code(error)))+"\t"+
+                paths.error_message("cannot make canonical path",value,error));
         }
         index += 1;
     }

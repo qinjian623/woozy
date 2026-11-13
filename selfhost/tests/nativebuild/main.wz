@@ -1,0 +1,39 @@
+package app;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/nativebuild" as nativebuild;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/render" as render;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// Handmade Output tests the tool driver; it does not assert verified language IR.
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) != 9 { return 64; }
+    let source = fs.read_text(arguments[1]);
+    var sections Vec[string] = [];
+    for line in text.split(source, "\n") { vec.push(sections, line + "\n"); }
+    var adapter = "";
+    if arguments[6] != "" { adapter = fs.read_text(arguments[6]); }
+    let output = nativeemit.Output(llvm_sections: sections, c_adapter_source: adapter,
+        triple: arguments[8], data_layout: nativeemit.DATA_LAYOUT, has_async: arguments[5] == "1");
+    var project = model.empty_project();
+    project.hosted = arguments[4] == "1";
+    if arguments[7] != "" {
+        project.c_library_dirs = [arguments[7]];
+        project.c_libraries = ["fixture"];
+    }
+    var optimization u32 = 9;
+    if arguments[3] == "0" { optimization = 0; }
+    if arguments[3] == "2" { optimization = 2; }
+    let result = nativebuild.build(output, project, arguments[2], optimization);
+    try {
+        io.println(render.document([], result.state, result.failure, result.has_value, result.diagnostics));
+    } catch error render.Error { return 70; }
+    return render.exit_code(result.state, result.failure, result.has_value, result.diagnostics);
+}

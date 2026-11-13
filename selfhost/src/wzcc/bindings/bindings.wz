@@ -1,0 +1,2823 @@
+// Python schema-v1 and C ABI schema-v2 binding-bundle reader for the
+// self-hosted compiler (SH05j).
+//
+// Frozen API (development/docs/SELFHOST_CONTRACT.md):
+//   bindings.load_python(path string, manager inout source.Manager,
+//                        store inout model.BindingStore) model.BundleResult
+//   bindings.load_c(path string, manager inout source.Manager,
+//                   store inout model.BindingStore) model.BundleResult
+//
+// The observable parsing rules, diagnostics and publication order follow the
+// bundle readers in src/modules/project.cpp. The JSON document itself is read
+// by the accepted app/wzcc/jsondoc module (json-c 0.19 token language,
+// duplicate/NUL key rejection, original-byte spans); schema validation is done
+// here. Every record, whitelist, missing-field check, duplicate check, name
+// shape, logical/dotted/provider/version/ownership/effect/owner/overload and
+// access-signature rule is reproduced. C type expressions, record layout,
+// recursive-value rejection, padding/offsets/size/align, resource copies,
+// retain/release and callback registration (three-slot validation plus hosted
+// checks) are parsed and validated before anything is published.
+//
+// Ownership of published state is all-or-nothing: declarations, C type and
+// callable tables, bundle entries, path caches and identity conflicts are
+// committed only after the whole bundle passes. Repeating a successful path
+// returns the cached bundle index and reads no additional Source snapshot.
+// Python declarations keep 0-based Project-wide indexes; C type and callable
+// IDs are 1-based and rebased, including nested `type_ref` named indexes and
+// registration callback indexes.
+//
+// SHA-256 covers the original source bytes. Stable identities use the UTF-8
+// byte length (not code point count) as the length prefix. std/json is used
+// only as the value container; numeric kinds are decided here with the
+// json-c int64 rules used by project.cpp, because jsondoc keeps non-RFC
+// number tokens such as NaN/Infinity verbatim.
+//
+// The standalone load_* API has no import site for a missing binding path;
+// the project loader handles canonical-path failures at the import instead.
+// JSON failures retain the real json-c message and original-byte span.
+package bindings;
+
+import "app/wzcc/digest" as digest;
+import "app/wzcc/input" as input;
+import "app/wzcc/jsondoc" as jsondoc;
+import "app/wzcc/model" as model;
+import "app/wzcc/paths" as paths;
+import "app/wzcc/source" as source;
+import "std/json" as json;
+import "std/map" as map;
+import "std/option" as option;
+import "std/os" as os;
+import "std/set" as set;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const MAX_C_TYPE_DEPTH usize = 32;
+const MAX_JSON_BYTES u64 = 2147483647;
+
+enum Abort { Failed; }
+
+// Validation state: the first rejection wins, matching project.cpp's
+// fail()/Abort behavior.
+struct Context {
+    source model.Source;
+    spans map.Map[string, model.Span];
+    failed bool;
+    diagnostic model.Diagnostic;
+    failure model.FailureKind;
+}
+
+struct Node {
+    pointer string;
+    present bool;
+    value json.Value;
+}
+
+struct PythonPending {
+    bundle model.BindingBundle;
+    declarations Vec[model.ForeignDeclaration];
+    identities Vec[model.IdentitySpan];
+}
+
+struct CPendingRegistration {
+    type_index usize;
+    callback string;
+    unregister_symbol string;
+    source model.Span;
+}
+
+struct CPendingRegisters {
+    callable_index usize;
+    callback_parameter string;
+    userdata_parameter string;
+    callback_userdata_parameter string;
+    source model.Span;
+}
+
+struct CPending {
+    bundle model.CBindingBundle;
+    types Vec[model.CTypeDecl];
+    callables Vec[model.CCallableDecl];
+    type_identities Vec[model.IdentitySpan];
+    callable_identities Vec[model.IdentitySpan];
+}
+
+func empty_diagnostic() model.Diagnostic {
+    return model.diagnostic("", "", "",
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+}
+
+func error_text(error os.Error) string {
+    switch error {
+        case os.Error.Interrupted(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.WouldBlock(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.System(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.NoProgress(completed):
+            return "no progress";
+    }
+}
+
+func whole_span(snapshot model.Source) model.Span {
+    return source.raw_span(snapshot, 0, u64(vec.len(snapshot.original)));
+}
+
+func context(snapshot model.Source, document jsondoc.Document) Context {
+    let spans = map.new[string, model.Span]();
+    for item in document.spans {
+        if !map.contains(spans, item.pointer) {
+            let ignored = map.insert(spans, item.pointer, item.span);
+        }
+    }
+    return Context(source: snapshot, spans: spans, failed: false,
+        diagnostic: empty_diagnostic(), failure: model.FailureKind.Source);
+}
+
+func pointer_part(value string) string {
+    var out = "";
+    for var index usize = 0; index < text.len(value); index += 1 {
+        let rune = value[index];
+        if rune == 126 {
+            out += "~0";
+        } else if rune == 47 {
+            out += "~1";
+        } else {
+            out += value[index:index + 1];
+        }
+    }
+    return out;
+}
+
+func location(state Context, value Node) model.Span {
+    switch map.get(state.spans, value.pointer) {
+        case option.Option.Some(item): return item;
+        case option.Option.None: {}
+    }
+    switch map.get(state.spans, "") {
+        case option.Option.Some(item): return item;
+        case option.Option.None:
+            return model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    }
+}
+
+func fail_at(state inout Context, code string, message string, span model.Span,
+             kind model.FailureKind) throws Abort {
+    if !state.failed {
+        state.failed = true;
+        state.diagnostic = model.diagnostic(code, "resolve", message, span);
+        state.failure = kind;
+    }
+    throw Abort.Failed;
+}
+
+func invalid_at(state inout Context, code string, message string,
+                span model.Span) throws Abort {
+    fail_at(inout state, code, message, span, model.FailureKind.Source);
+}
+
+func invalid(state inout Context, value Node, message string) throws Abort {
+    let span = location(state, value);
+    let message_text = value.pointer + ": " + message;
+    invalid_at(inout state, "E_BINDING_INVALID", message_text, span);
+}
+
+func failure_result(state Context) model.BundleResult {
+    return model.BundleResult(state: model.PhaseState.Failed,
+        failure: state.failure, diagnostics: [state.diagnostic],
+        has_value: false, value: 0);
+}
+
+func success_result(index usize) model.BundleResult {
+    return model.BundleResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Source, diagnostics: [],
+        has_value: true, value: index);
+}
+
+// C++ project.cpp converts a filesystem_error in Loader::run into
+// E_INPUT_IO/Environment with no primary span. paths.canonical preserves the
+// errno, so the code/classification match; only the libstdc++ wording differs.
+func canonical_failure(path string, error os.Error) model.BundleResult {
+    var diagnostic = model.diagnostic("E_INPUT_IO", "resolve",
+        path + ": cannot canonicalize (" + error_text(error) + ")",
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    return model.BundleResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Environment, diagnostics: [diagnostic],
+        has_value: false, value: 0);
+}
+
+func json_invalid(snapshot model.Source, message string,
+                  span model.Span) model.BundleResult {
+    return model.BundleResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Source,
+        diagnostics: [model.diagnostic("E_BINDING_INVALID", "resolve", message,
+            span)],
+        has_value: false, value: 0);
+}
+
+func read_result(value input.ReadResult) model.BundleResult {
+    return model.BundleResult(state: value.state, failure: value.failure,
+        diagnostics: value.diagnostics, has_value: false, value: 0);
+}
+
+func find_path(paths_value Vec[model.PathIndex], path string) option.Option[usize] {
+    for item in paths_value {
+        if item.path == path {
+            return option.Option[usize].Some(item.index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func contains_identity(identities Vec[model.IdentitySpan],
+                       identity string) bool {
+    for item in identities {
+        if item.identity == identity {
+            return true;
+        }
+    }
+    return false;
+}
+
+func source_text(snapshot model.Source) string {
+    try {
+        return text.from_bytes(snapshot.original);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+// Length-delimited stable identity. Sizes are UTF-8 byte counts.
+func stable_identity(parts Vec[string]) string {
+    var out = "";
+    for part in parts {
+        out += strconv.format_u64(u64(text.byte_len(part))) + ":" + part;
+    }
+    return out;
+}
+
+func length_prefixed(value string) string {
+    return strconv.format_u64(u64(text.byte_len(value))) + ":" + value;
+}
+
+// ---------------------------------------------------------------------------
+// Name shapes. These mirror ident/logical/dotted/c_ident in project.cpp.
+func alpha(rune u32) bool {
+    return (rune >= 65 && rune <= 90) || (rune >= 97 && rune <= 122) ||
+        rune == 95;
+}
+
+func ident(value string) bool {
+    if text.len(value) == 0 {
+        return false;
+    }
+    if !alpha(value[0]) {
+        return false;
+    }
+    for rune in value {
+        if !alpha(rune) && !(rune >= 48 && rune <= 57) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func logical(value string) bool {
+    var start usize = 0;
+    for true {
+        var stop = text.len(value);
+        switch text.find_from(value, "/", start) {
+            case option.Option.Some(index): stop = index;
+            case option.Option.None: {}
+        }
+        if !ident(value[start:stop]) {
+            return false;
+        }
+        if stop == text.len(value) {
+            return true;
+        }
+        start = stop + 1;
+    }
+}
+
+func dotted(value string) bool {
+    if text.contains(value, "/") {
+        return false;
+    }
+    return logical(text.replace(value, ".", "/"));
+}
+
+func c_keyword(value string) bool {
+    let keywords Vec[string] = [
+        "auto", "break", "case", "char", "const", "continue", "default", "do",
+        "double", "else", "enum", "extern", "float", "for", "goto", "if",
+        "inline", "int", "long", "register", "restrict", "return", "short",
+        "signed", "sizeof", "static", "struct", "switch", "typedef", "union",
+        "unsigned", "void", "volatile", "while", "_Alignas", "_Alignof",
+        "_Atomic", "_Bool", "_Complex", "_Generic", "_Imaginary", "_Noreturn",
+        "_Static_assert", "_Thread_local",
+    ];
+    for word in keywords {
+        if value == word {
+            return true;
+        }
+    }
+    return false;
+}
+
+func c_ident(value string) bool {
+    return ident(value) && !c_keyword(value);
+}
+
+func builtin(value string) bool {
+    let names Vec[string] = [
+        "Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+        "isize", "usize", "f32", "f64", "string",
+    ];
+    for name in names {
+        if value == name {
+            return true;
+        }
+    }
+    return false;
+}
+
+func c_scalar(value string) bool {
+    let names Vec[string] = [
+        "Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16", "u32", "u64",
+        "isize", "usize", "f32", "f64",
+    ];
+    for name in names {
+        if value == name {
+            return true;
+        }
+    }
+    return false;
+}
+
+func same_strings(left Vec[string], right Vec[string]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+// ---------------------------------------------------------------------------
+// std/json.Value access with json-c-compatible type checks.
+func null_node(pointer string) Node {
+    return Node(pointer: pointer, present: false, value: json.Value.Null);
+}
+
+func field(value Node, key string) Node {
+    switch value.value {
+        case json.Value.Object(members): {
+            for member in members {
+                if member.name == key {
+                    return Node(pointer: value.pointer + "/" +
+                        pointer_part(key), present: true, value: member.value);
+                }
+            }
+        }
+        case _: {}
+    }
+    return null_node(value.pointer + "/" + pointer_part(key));
+}
+
+// C++ project.cpp guards the optional C ABI payload fields with
+// `field(...).value`, i.e. a non-null json_object*. Explicit JSON null and a
+// missing key are both "absent" there. object()'s required-key check and the
+// Python optional access arrays keep key presence instead, so this helper is
+// used only at those C guards.
+func non_null(value Node) bool {
+    if !value.present {
+        return false;
+    }
+    switch value.value {
+        case json.Value.Null: return false;
+        case _: return true;
+    }
+}
+
+func object(state inout Context, value Node, required Vec[string],
+            optional Vec[string]) throws Abort {
+    let members = members_of(inout state, value);
+    for key in required {
+        var found = false;
+        for member in members {
+            if member.name == key {
+                found = true;
+            }
+        }
+        if !found {
+            invalid(inout state, value, "missing field: " + key);
+        }
+    }
+    for member in members {
+        var known = false;
+        for key in required {
+            if member.name == key {
+                known = true;
+            }
+        }
+        for key in optional {
+            if member.name == key {
+                known = true;
+            }
+        }
+        if !known {
+            invalid(inout state, Node(pointer: value.pointer + "/" +
+                pointer_part(member.name), present: true, value: member.value),
+                "unknown field");
+        }
+    }
+}
+
+func members_of(state inout Context, value Node) Vec[json.Member] throws Abort {
+    switch value.value {
+        case json.Value.Object(members): return members;
+        case _: invalid(inout state, value, "expected object");
+    }
+    return vec.empty[json.Member]();
+}
+
+func array(state inout Context, value Node) Vec[Node] throws Abort {
+    var items = vec.empty[json.Value]();
+    switch value.value {
+        case json.Value.Array(list): items = list;
+        case _: invalid(inout state, value, "expected array");
+    }
+    let out = vec.empty[Node]();
+    for var index usize = 0; index < vec.len(items); index += 1 {
+        vec.push(out, Node(pointer: value.pointer + "/" +
+            strconv.format_u64(u64(index)), present: true, value: items[index]));
+    }
+    return out;
+}
+
+func string_of(state inout Context, value Node) string throws Abort {
+    switch value.value {
+        case json.Value.String(item): return item;
+        case _: invalid(inout state, value, "expected string");
+    }
+    return "";
+}
+
+func identity_of(state inout Context, value Node) string throws Abort {
+    let item = string_of(inout state, value);
+    if text.len(item) == 0 || has_nul(item) {
+        invalid(inout state, value, "empty identity or embedded NUL");
+    }
+    return item;
+}
+
+func has_nul(value string) bool {
+    for rune in value {
+        if rune == 0 {
+            return true;
+        }
+    }
+    return false;
+}
+
+func identifier_of(state inout Context, value Node) string throws Abort {
+    let item = string_of(inout state, value);
+    if !ident(item) {
+        invalid(inout state, value, "expected identifier");
+    }
+    return item;
+}
+
+func choice(state inout Context, value Node,
+            choices Vec[string]) string throws Abort {
+    let item = string_of(inout state, value);
+    var known = false;
+    for candidate in choices {
+        if item == candidate {
+            known = true;
+        }
+    }
+    if !known {
+        invalid(inout state, value, "invalid enum value");
+    }
+    return item;
+}
+
+func nullable(state inout Context, value Node) option.Option[string] throws Abort {
+    switch value.value {
+        case json.Value.Null: return option.Option[string].None;
+        case _: return option.Option[string].Some(identity_of(inout state, value));
+    }
+}
+
+func strings_of(state inout Context, value Node, attributes bool) Vec[string] throws Abort {
+    let out = vec.empty[string]();
+    for item in array(inout state, value) {
+        if attributes {
+            vec.push(out, identifier_of(inout state, item));
+        } else {
+            vec.push(out, string_of(inout state, item));
+        }
+    }
+    return out;
+}
+
+func boolean_of(state inout Context, value Node) bool throws Abort {
+    switch value.value {
+        case json.Value.Bool(item): return item;
+        case _: invalid(inout state, value, "expected boolean");
+    }
+    return false;
+}
+
+// Fraction/exponent spellings are doubles; integral spellings keep json-c
+// signed/unsigned storage and the saturation rules implemented below.
+func is_integer_token(token string) bool {
+    for byte in text.bytes(token) {
+        if byte == 46 || byte == 101 || byte == 69 {
+            return false;
+        }
+    }
+    return true;
+}
+
+// json-c stores an integer token as json_type_int when its magnitude fits
+// int64 (negative) or uint64 (non-negative). json_object_get_int64 returns the
+// value for int64 and saturates positive uint64 values above INT64_MAX to
+// INT64_MAX. Fraction/exponent/NaN/Infinity tokens are doubles and are not
+// accepted where project.cpp requires json_type_int. jsondoc has already
+// rejected integer tokens outside [INT64_MIN, UINT64_MAX].
+func parse_integer_token(token string) option.Option[i64] {
+    let digits = text.bytes(token);
+    var index usize = 0;
+    var negative = false;
+    if vec.len(digits) > 0 && digits[0] == 45 {
+        negative = true;
+        index = 1;
+    }
+    let maximum u64 = 18446744073709551615;
+    var magnitude u64 = 0;
+    for index < vec.len(digits) {
+        let byte = digits[index];
+        if byte < 48 || byte > 57 {
+            return option.Option[i64].None;
+        }
+        let digit = u64(byte - 48);
+        if magnitude > (maximum - digit) / 10 {
+            return option.Option[i64].None;
+        }
+        magnitude = magnitude * 10 + digit;
+        index += 1;
+    }
+    if negative {
+        let int64_minimum_magnitude u64 = 9223372036854775808;
+        if magnitude > int64_minimum_magnitude {
+            return option.Option[i64].None;
+        }
+        if magnitude == int64_minimum_magnitude {
+            let minimum i64 = -9223372036854775807 - 1;
+            return option.Option[i64].Some(minimum);
+        }
+        return option.Option[i64].Some(-i64(magnitude));
+    }
+    let int64_maximum u64 = 9223372036854775807;
+    if magnitude > int64_maximum {
+        return option.Option[i64].Some(i64(int64_maximum));
+    }
+    return option.Option[i64].Some(i64(magnitude));
+}
+
+func json_int(value Node) option.Option[i64] {
+    switch value.value {
+        case json.Value.Number(token): {
+            if is_integer_token(token) {
+                // json-c accepts leading-zero integer tokens such as 00
+                // (only zeros, per its finalization rule); parse the digits
+                // directly so no host decimal parser narrows that language.
+                return parse_integer_token(token);
+            }
+        }
+        case _: {}
+    }
+    return option.Option[i64].None;
+}
+
+func contract_values() Vec[string] {
+    return ["compiler-dev/1"];
+}
+
+// ---------------------------------------------------------------------------
+// Python v1 bundle (project.cpp Loader::bundle).
+
+func decl_node(value model.ForeignDeclaration) Node {
+    return Node(pointer: value.json_pointer, present: true,
+        value: json.Value.Null);
+}
+
+func py_kind(declarations Vec[model.ForeignDeclaration], index usize) string {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Type(item): return item.kind;
+        case _: return "";
+    }
+}
+
+func py_copy(declarations Vec[model.ForeignDeclaration], index usize) string {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Type(item): return item.copy;
+        case _: return "";
+    }
+}
+
+func py_add_member(declarations Vec[model.ForeignDeclaration], index usize,
+                   id usize) {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Type(item): vec.push(item.members, id);
+        case _: {}
+    }
+}
+
+func py_add_property(declarations Vec[model.ForeignDeclaration], index usize,
+                     id usize) {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Type(item): vec.push(item.properties, id);
+        case _: {}
+    }
+}
+
+func py_add_indexer(declarations Vec[model.ForeignDeclaration], index usize,
+                    id usize) {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Type(item): vec.push(item.indexers, id);
+        case _: {}
+    }
+}
+
+func py_add_slice(declarations Vec[model.ForeignDeclaration], index usize,
+                  id usize) {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Type(item): vec.push(item.slices, id);
+        case _: {}
+    }
+}
+
+func py_access_count(declarations Vec[model.ForeignDeclaration], index usize,
+                      which u32) usize {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Type(item): {
+            if which == 1 { return vec.len(item.properties); }
+            if which == 2 { return vec.len(item.indexers); }
+            return vec.len(item.slices);
+        }
+        case _: return 0;
+    }
+}
+
+func py_callable(declarations Vec[model.ForeignDeclaration],
+                 index usize) model.BindingCallable {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Callable(item): return item;
+        case _: {
+            return model.BindingCallable(call_kind: "",
+                owner_type: option.Option[string].None,
+                parameters: vec.empty[model.BindingParameter](),
+                return_type: "", error_type: option.Option[string].None,
+                return_ownership: "", storage: "", receiver_escapes: "",
+                effects: vec.empty[string]());
+        }
+    }
+}
+
+func py_value_type(declarations Vec[model.ForeignDeclaration],
+                   index usize) string {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Value(item): return item.type_name;
+        case _: return "";
+    }
+}
+
+func py_owner_type(call model.BindingCallable) option.Option[string] {
+    return call.owner_type;
+}
+
+// type_ref: a builtin name is accepted without a declaration; any other name
+// must be a declared type. Returns the declaration index for named types.
+func py_type_ref(state inout Context, declarations Vec[model.ForeignDeclaration],
+                 types map.Map[string, usize], name string,
+                 at Node) option.Option[usize] throws Abort {
+    if builtin(name) {
+        return option.Option[usize].None;
+    }
+    if !map.contains(types, name) {
+        invalid(inout state, at, "unknown type: " + name);
+    }
+    return option.Option[usize].Some(py_type_index(types, name));
+}
+
+// Callers check map.contains first; the fallback keeps the value type plain.
+func py_type_index(types map.Map[string, usize], name string) usize {
+    switch map.get(types, name) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: return 0;
+    }
+}
+
+func py_access_owner(state inout Context,
+                     declarations Vec[model.ForeignDeclaration],
+                     types map.Map[string, usize], module string,
+                     owner_name string, at Node) usize throws Abort {
+    if !map.contains(types, owner_name) {
+        invalid(inout state, at, "unknown owner type: " + owner_name);
+    }
+    let index = py_type_index(types, owner_name);
+    if declarations[index].module != module {
+        invalid(inout state, at, "owner type must be declared in the same module");
+    }
+    let kind = py_kind(declarations, index);
+    if kind != "host_reference" && kind != "opaque_protocol" {
+        invalid(inout state, at, "owner type must be a host object type");
+    }
+    return index;
+}
+
+func py_access_value(state inout Context,
+                     declarations Vec[model.ForeignDeclaration],
+                     types map.Map[string, usize], name string,
+                     at Node) throws Abort {
+    if builtin(name) {
+        if name == "Unit" {
+            invalid(inout state, at, "Unit is not a host access value type");
+        }
+        return;
+    }
+    if !map.contains(types, name) {
+        invalid(inout state, at, "unknown type: " + name);
+    }
+    let kind = py_kind(declarations, py_type_index(types, name));
+    if kind != "host_reference" && kind != "opaque_protocol" {
+        invalid(inout state, at, "host access value must be scalar or host reference");
+    }
+}
+
+func py_access_integer(state inout Context, name string, at Node) throws Abort {
+    let integers Vec[string] = ["i8", "i16", "i32", "i64", "u8", "u16",
+        "u32", "u64", "isize", "usize"];
+    var found = false;
+    for candidate in integers {
+        if name == candidate {
+            found = true;
+        }
+    }
+    if !found {
+        invalid(inout state, at, "expected a builtin integer type");
+    }
+}
+
+func py_access_index(state inout Context,
+                     declarations Vec[model.ForeignDeclaration],
+                     types map.Map[string, usize], name string,
+                     at Node) throws Abort {
+    if builtin(name) {
+        py_access_integer(inout state, name, at);
+        return;
+    }
+    if !map.contains(types, name) {
+        invalid(inout state, at, "unknown type: " + name);
+    }
+    let kind = py_kind(declarations, py_type_index(types, name));
+    if kind != "host_reference" && kind != "opaque_protocol" {
+        invalid(inout state, at, "index type must be integer or a host object");
+    }
+}
+
+func py_access_error(state inout Context,
+                     declarations Vec[model.ForeignDeclaration],
+                     types map.Map[string, usize], name string,
+                     at Node) throws Abort {
+    if name != "lang.py.Error" {
+        invalid(inout state, at, "error_type must be lang.py.Error");
+    }
+    if !map.contains(types, name) ||
+       py_kind(declarations, py_type_index(types, name)) != "runtime_error" {
+        invalid(inout state, at, "error must reference runtime_error");
+    }
+}
+
+func parse_python(state inout Context, snapshot model.Source,
+                  document jsondoc.Document,
+                  known_identities Vec[model.IdentitySpan], base usize,
+                  bundle_index usize) PythonPending throws Abort {
+    let root = Node(pointer: "", present: true, value: document.root);
+    let required Vec[string] = ["schema_version", "contract", "review_status",
+        "allowed_backends", "package_requirements", "modules", "types",
+        "values", "callables", "conformance_required"];
+    let optional Vec[string] = ["properties", "indexers", "slices"];
+    object(inout state, root, required, optional);
+
+    var bundle = model.BindingBundle(path: snapshot.path,
+        json: source_text(snapshot), sha256: digest.sha256(snapshot.original),
+        source: whole_span(snapshot), schema_version: 0, contract: "",
+        review_status: "", allowed_backends: vec.empty[string](),
+        package_requirements: vec.empty[model.PackageRequirement](),
+        modules: vec.empty[model.BindingModule](),
+        declarations: vec.empty[usize](),
+        conformance_required: vec.empty[string]());
+
+    let version = field(root, "schema_version");
+    var version_value i64 = -1;
+    switch json_int(version) {
+        case option.Option.Some(item): version_value = item;
+        case option.Option.None: {}
+    }
+    if version_value != 1 {
+        invalid(inout state, version, "schema_version must be 1");
+    }
+    bundle.schema_version = 1;
+    bundle.contract = choice(inout state, field(root, "contract"),
+        contract_values());
+    bundle.review_status = choice(inout state, field(root, "review_status"),
+        ["draft_requires_conformance", "verified_against_lock"]);
+    bundle.allowed_backends = strings_of(inout state,
+        field(root, "allowed_backends"), false);
+    if !(vec.len(bundle.allowed_backends) == 1 &&
+         bundle.allowed_backends[0] == "python") {
+        invalid(inout state, field(root, "allowed_backends"),
+            "allowed_backends must be [python]");
+    }
+    bundle.conformance_required = strings_of(inout state,
+        field(root, "conformance_required"), false);
+
+    let packages = set.new[string]();
+    for item in array(inout state, field(root, "package_requirements")) {
+        object(inout state, item, ["package", "version_policy"], []);
+        let package_name = identity_of(inout state, field(item, "package"));
+        let version_policy = string_of(inout state,
+            field(item, "version_policy"));
+        let requirement = model.PackageRequirement(package_name: package_name,
+            version_policy: version_policy, source: location(state, item));
+        if !set.add(packages, requirement.package_name) {
+            invalid(inout state, item, "duplicate package requirement");
+        }
+        vec.push(bundle.package_requirements, requirement);
+    }
+
+    let mods = map.new[string, usize]();
+    for item in array(inout state, field(root, "modules")) {
+        object(inout state, item, ["logical_path", "host_module", "provider"],
+            []);
+        let logical_path = string_of(inout state,
+            field(item, "logical_path"));
+        let host_module = string_of(inout state, field(item, "host_module"));
+        let provider = choice(inout state, field(item, "provider"),
+            ["python_package", "language_runtime"]);
+        if !logical(logical_path) {
+            invalid(inout state, field(item, "logical_path"),
+                "invalid logical module");
+        }
+        if !dotted(host_module) {
+            invalid(inout state, field(item, "host_module"),
+                "invalid host module");
+        }
+        if (logical_path == "std" || text.starts_with(logical_path, "std/")) &&
+           provider != "language_runtime" {
+            invalid(inout state, field(item, "provider"),
+                "std requires language_runtime provider");
+        }
+        if logical_path == "app" || text.starts_with(logical_path, "app/") {
+            invalid(inout state, field(item, "logical_path"),
+                "app is reserved for source modules");
+        }
+        if map.contains(mods, logical_path) {
+            invalid(inout state, item, "duplicate binding module");
+        }
+        let ignored = map.insert(mods, logical_path, vec.len(bundle.modules));
+        vec.push(bundle.modules, model.BindingModule(
+            logical_path: logical_path, host_module: host_module,
+            provider: provider, source: location(state, item)));
+    }
+
+    let categories Vec[string] = ["types", "values", "callables", "properties",
+        "indexers", "slices"];
+    let declarations = vec.empty[model.ForeignDeclaration]();
+    let kinds = vec.empty[u32]();
+    let identities = vec.empty[model.IdentitySpan]();
+    let ids = map.new[string, model.Span]();
+    let types = map.new[string, usize]();
+    for category in categories {
+        let list = field(root, category);
+        if !list.present {
+            continue;
+        }
+        for item in array(inout state, list) {
+            let is_type = category == "types";
+            let is_value = category == "values";
+            let is_callable = category == "callables";
+            let is_property = category == "properties";
+            let is_indexer = category == "indexers";
+            if is_type {
+                object(inout state, item, ["id", "module", "name", "kind",
+                    "host_attribute", "copy"], []);
+            } else if is_value {
+                object(inout state, item, ["module", "name", "type",
+                    "host_attribute"], []);
+            } else if is_callable {
+                object(inout state, item, ["id", "module", "name",
+                    "call_kind", "owner_type", "host_attribute", "parameters",
+                    "return_type", "error_type", "ownership", "effects",
+                    "receiver_escapes"], []);
+            } else if is_property {
+                object(inout state, item, ["id", "module", "owner_type",
+                    "name", "type", "getter", "setter", "error_type"], []);
+            } else if is_indexer {
+                object(inout state, item, ["id", "module", "owner_type",
+                    "index_type", "result_type", "readable", "writable",
+                    "error_type"], []);
+            } else {
+                object(inout state, item, ["id", "module", "owner_type",
+                    "start_type", "end_type", "result_type", "readable",
+                    "writable", "error_type"], []);
+            }
+
+            let item_source = location(state, item);
+            let module = string_of(inout state, field(item, "module"));
+            if !map.contains(mods, module) {
+                invalid(inout state, field(item, "module"), "undeclared module");
+            }
+            var name = "";
+            if !is_indexer && !is_slice(category) {
+                name = identifier_of(inout state, field(item, "name"));
+            }
+            if name == "_" {
+                invalid(inout state, field(item, "name"), "export cannot be _");
+            }
+            var host_attribute = vec.empty[string]();
+            if is_type || is_value || is_callable {
+                host_attribute = strings_of(inout state,
+                    field(item, "host_attribute"), true);
+            }
+            var identity = "";
+            if is_value {
+                identity = module + "/" + name;
+            } else {
+                identity = identity_of(inout state, field(item, "id"));
+            }
+            if !is_value {
+                if builtin(identity) || map.contains(ids, identity) ||
+                   contains_identity(known_identities, identity) {
+                    invalid(inout state, field(item, "id"),
+                        "duplicate or reserved declaration id");
+                }
+                let ignored = map.insert(ids, identity, item_source);
+            }
+            let parts = vec.empty[string]();
+            vec.push(parts, bundle.contract);
+            vec.push(parts, bundle.sha256);
+            vec.push(parts, module);
+            vec.push(parts, category);
+            vec.push(parts, identity);
+            let stable = stable_identity(parts);
+
+            var detail = model.ForeignDetail.Value(
+                model.BindingValue(type_name: ""));
+            if is_type {
+                let kind = choice(inout state, field(item, "kind"),
+                    ["host_reference", "opaque_protocol", "runtime_error"]);
+                let copy = choice(inout state, field(item, "copy"),
+                    ["shared_reference", "error_payload_copy"]);
+                detail = model.ForeignDetail.Type(model.BindingType(kind: kind,
+                    copy: copy, members: vec.empty[usize](),
+                    properties: vec.empty[usize](),
+                    indexers: vec.empty[usize](), slices: vec.empty[usize]()));
+            } else if is_value {
+                let value_type = identity_of(inout state, field(item, "type"));
+                detail = model.ForeignDetail.Value(
+                    model.BindingValue(type_name: value_type));
+            } else if is_property {
+                let owner_type = identity_of(inout state,
+                    field(item, "owner_type"));
+                let property_name = identifier_of(inout state,
+                    field(item, "name"));
+                let type_name = identity_of(inout state, field(item, "type"));
+                let getter = strings_of(inout state, field(item, "getter"),
+                    true);
+                var setter = vec.empty[string]();
+                let setter_node = field(item, "setter");
+                switch setter_node.value {
+                    case json.Value.Null: {}
+                    case _: {
+                        setter = strings_of(inout state, setter_node, true);
+                        if vec.len(setter) == 0 {
+                            invalid(inout state, setter_node,
+                                "property setter path must not be empty");
+                        }
+                    }
+                }
+                let error_type = identity_of(inout state,
+                    field(item, "error_type"));
+                detail = model.ForeignDetail.Property(model.BindingProperty(
+                    owner_type: owner_type, name: property_name,
+                    type_name: type_name, getter: getter, setter: setter,
+                    error_type: error_type));
+                name = property_name;
+            } else if is_indexer {
+                let owner_type = identity_of(inout state,
+                    field(item, "owner_type"));
+                let index_type = identity_of(inout state,
+                    field(item, "index_type"));
+                let result_type = identity_of(inout state,
+                    field(item, "result_type"));
+                let error_type = identity_of(inout state,
+                    field(item, "error_type"));
+                let readable = boolean_of(inout state, field(item, "readable"));
+                let writable = boolean_of(inout state, field(item, "writable"));
+                detail = model.ForeignDetail.Indexer(model.BindingIndexer(
+                    owner_type: owner_type, index_type: index_type,
+                    result_type: result_type, error_type: error_type,
+                    readable: readable, writable: writable));
+            } else if is_slice(category) {
+                let owner_type = identity_of(inout state,
+                    field(item, "owner_type"));
+                let result_type = identity_of(inout state,
+                    field(item, "result_type"));
+                let error_type = identity_of(inout state,
+                    field(item, "error_type"));
+                let start_type = nullable(inout state,
+                    field(item, "start_type"));
+                let end_type = nullable(inout state, field(item, "end_type"));
+                let readable = boolean_of(inout state, field(item, "readable"));
+                let writable = boolean_of(inout state, field(item, "writable"));
+                detail = model.ForeignDetail.Slice(model.BindingSlice(
+                    owner_type: owner_type, result_type: result_type,
+                    error_type: error_type, start_type: start_type,
+                    end_type: end_type, readable: readable,
+                    writable: writable));
+            } else {
+                let call_kind = choice(inout state, field(item, "call_kind"),
+                    ["function", "constructor", "method", "callable"]);
+                let owner_type = nullable(inout state,
+                    field(item, "owner_type"));
+                let return_type = identity_of(inout state,
+                    field(item, "return_type"));
+                let error_type = nullable(inout state,
+                    field(item, "error_type"));
+                var has_error = false;
+                var error_name = "";
+                switch error_type {
+                    case option.Option.Some(value): {
+                        has_error = true;
+                        error_name = value;
+                    }
+                    case option.Option.None: {}
+                }
+                if has_error && error_name != "lang.py.Error" {
+                    invalid(inout state, field(item, "error_type"),
+                        "invalid error type");
+                }
+                let receiver_escapes = choice(inout state,
+                    field(item, "receiver_escapes"),
+                    ["no", "may_retain", "not_applicable"]);
+                let own = field(item, "ownership");
+                object(inout state, own, ["return", "storage"], []);
+                let return_ownership = choice(inout state,
+                    field(own, "return"), ["python_reference", "unit", "value"]);
+                let storage = choice(inout state, field(own, "storage"),
+                    ["host_defined", "copy", "view_or_alias",
+                     "no_tensor_storage"]);
+                let effects = vec.empty[string]();
+                for effect in array(inout state, field(item, "effects")) {
+                    vec.push(effects, choice(inout state, effect,
+                        ["reads_arguments", "mutates_receiver",
+                         "retains_arguments", "mutates_host_rng", "autograd",
+                         "consumes_iterator", "retains_receiver"]));
+                }
+                let parameters = vec.empty[model.BindingParameter]();
+                for parameter in array(inout state, field(item, "parameters")) {
+                    object(inout state, parameter, ["name", "type", "kind",
+                        "optional", "mode", "escapes"], []);
+                    let parameter_name = identifier_of(inout state,
+                        field(parameter, "name"));
+                    let parameter_type = identity_of(inout state,
+                        field(parameter, "type"));
+                    let parameter_kind = choice(inout state,
+                        field(parameter, "kind"),
+                        ["positional_only", "positional_or_keyword",
+                         "keyword_only"]);
+                    let optional_value = boolean_of(inout state,
+                        field(parameter, "optional"));
+                    let mode = choice(inout state, field(parameter, "mode"),
+                        ["ordinary", "move", "inout"]);
+                    let escapes = choice(inout state,
+                        field(parameter, "escapes"), ["no", "may_retain"]);
+                    vec.push(parameters, model.BindingParameter(
+                        name: parameter_name, type_name: parameter_type,
+                        kind: parameter_kind, optional: optional_value,
+                        mode: mode, escapes: escapes,
+                        source: location(state, parameter)));
+                }
+                detail = model.ForeignDetail.Callable(model.BindingCallable(
+                    call_kind: call_kind, owner_type: owner_type,
+                    parameters: parameters, return_type: return_type,
+                    error_type: error_type,
+                    return_ownership: return_ownership, storage: storage,
+                    receiver_escapes: receiver_escapes, effects: effects));
+            }
+            vec.push(declarations, model.ForeignDeclaration(
+                id: base + vec.len(declarations), bundle: bundle_index,
+                source: item_source, json_pointer: item.pointer,
+                identity: identity, module: module, name: name,
+                host_attribute: host_attribute, detail: detail,
+                stable_identity: stable));
+            if is_type {
+                let ignored = map.insert(types, identity,
+                    vec.len(declarations) - 1);
+            }
+            if is_type {
+                vec.push(kinds, u32(0));
+            } else if is_value {
+                vec.push(kinds, u32(1));
+            } else if is_callable {
+                vec.push(kinds, u32(2));
+            } else if is_property {
+                vec.push(kinds, u32(3));
+            } else if is_indexer {
+                vec.push(kinds, u32(4));
+            } else {
+                vec.push(kinds, u32(5));
+            }
+            if !is_value {
+                vec.push(identities, model.IdentitySpan(identity: identity,
+                    span: item_source));
+            }
+        }
+    }
+
+    // All fields passed format checks; references and combinations follow in
+    // the same order as project.cpp.
+    let names = map.new[string, usize]();
+    for var index usize = 0; index < vec.len(declarations); index += 1 {
+        let current = declarations[index];
+        let kind = kinds[index];
+        let at = decl_node(current);
+        if kind == 0 {
+            let type_kind = py_kind(declarations, index);
+            let type_copy = py_copy(declarations, index);
+            if (type_kind == "runtime_error") !=
+               (type_copy == "error_payload_copy") {
+                invalid(inout state, at, "type kind/copy mismatch");
+            }
+            if (type_kind == "opaque_protocol") !=
+               (vec.len(current.host_attribute) == 0) {
+                invalid(inout state, at, "type host_attribute mismatch");
+            }
+            if type_kind == "runtime_error" {
+                var valid_provider = false;
+                switch map.get(mods, current.module) {
+                    case option.Option.Some(module_index): {
+                        valid_provider = current.identity == "lang.py.Error" &&
+                            current.module == "std/py" &&
+                            bundle.modules[module_index].provider ==
+                                "language_runtime";
+                    }
+                    case option.Option.None: {}
+                }
+                if !valid_provider {
+                    invalid(inout state, at,
+                        "invalid runtime error identity/provider");
+                }
+            }
+        }
+        if kind == 0 || kind == 1 {
+            let key = current.module + "/" + current.name;
+            if map.contains(names, key) {
+                invalid(inout state, at, "duplicate export name");
+            }
+            let ignored = map.insert(names, key, index);
+        }
+        if kind == 1 {
+            let value_type = py_value_type(declarations, index);
+            let ignored = py_type_ref(inout state, declarations, types,
+                value_type, field(at, "type"));
+            if vec.len(current.host_attribute) == 0 {
+                invalid(inout state, at, "value requires a host attribute");
+            }
+        }
+    }
+
+    let signatures = set.new[string]();
+    for var index usize = 0; index < vec.len(declarations); index += 1 {
+        if kinds[index] != 2 {
+            continue;
+        }
+        let current = declarations[index];
+        let at = decl_node(current);
+        let call = py_callable(declarations, index);
+        let receiver = call.call_kind == "method" ||
+            call.call_kind == "callable";
+        var has_owner = false;
+        var owner_name = "";
+        switch call.owner_type {
+            case option.Option.Some(value): {
+                has_owner = true;
+                owner_name = value;
+            }
+            case option.Option.None: {}
+        }
+        if receiver != has_owner {
+            invalid(inout state, field(at, "owner_type"),
+                "call kind/owner mismatch");
+        }
+        if receiver == (call.receiver_escapes == "not_applicable") {
+            invalid(inout state, field(at, "receiver_escapes"),
+                "call kind/receiver escape mismatch");
+        }
+        if (call.call_kind == "callable") !=
+           (vec.len(current.host_attribute) == 0) {
+            invalid(inout state, field(at, "host_attribute"),
+                "call kind/host attribute mismatch");
+        }
+        if receiver {
+            let owner_result = py_type_ref(inout state, declarations, types,
+                owner_name, field(at, "owner_type"));
+            var owner_index usize = 0;
+            switch owner_result {
+                case option.Option.Some(value): owner_index = value;
+                case option.Option.None: {
+                    invalid(inout state, field(at, "owner_type"),
+                        "owner must be an object type in the same module");
+                }
+            }
+            if declarations[owner_index].module != current.module ||
+               py_kind(declarations, owner_index) == "runtime_error" {
+                invalid(inout state, field(at, "owner_type"),
+                    "owner must be an object type in the same module");
+            }
+            py_add_member(declarations, owner_index, current.id);
+        } else if call.call_kind == "constructor" {
+            switch map.get(names, current.module + "/" + current.name) {
+                case option.Option.Some(target): {
+                    if kinds[target] != 0 {
+                        invalid(inout state, at,
+                            "constructor requires same-name type");
+                    }
+                    if declarations[target].identity != call.return_type ||
+                       py_kind(declarations, target) != "host_reference" ||
+                       !same_strings(declarations[target].host_attribute,
+                           current.host_attribute) {
+                        invalid(inout state, at,
+                            "constructor target/return mismatch");
+                    }
+                }
+                case option.Option.None: {
+                    invalid(inout state, at,
+                        "constructor requires same-name type");
+                }
+            }
+        } else {
+            if map.contains(names, current.module + "/" + current.name) {
+                invalid(inout state, at,
+                    "function conflicts with type/value export");
+            }
+        }
+        let return_result = py_type_ref(inout state, declarations, types,
+            call.return_type, field(at, "return_type"));
+        var has_declared_return = false;
+        switch return_result {
+            case option.Option.Some(value): {
+                let ignored = value;
+                has_declared_return = true;
+            }
+            case option.Option.None: {}
+        }
+        var expected = "value";
+        if has_declared_return {
+            expected = "python_reference";
+        } else if call.return_type == "Unit" {
+            expected = "unit";
+        }
+        if call.return_ownership != expected ||
+           (!has_declared_return && call.storage != "no_tensor_storage") {
+            invalid(inout state, field(at, "ownership"),
+                "return type/ownership/storage mismatch");
+        }
+        switch call.error_type {
+            case option.Option.Some(error_name): {
+                let error_result = py_type_ref(inout state, declarations,
+                    types, error_name, field(at, "error_type"));
+                var references_error = false;
+                switch error_result {
+                    case option.Option.Some(error_index): {
+                        references_error =
+                            py_kind(declarations, error_index) ==
+                                "runtime_error";
+                    }
+                    case option.Option.None: {}
+                }
+                if !references_error {
+                    invalid(inout state, field(at, "error_type"),
+                        "error must reference runtime_error");
+                }
+            }
+            case option.Option.None: {}
+        }
+        let parameter_names = set.new[string]();
+        var previous_kind i32 = 0;
+        var optional_positional = false;
+        var retains = false;
+        var signature = "";
+        signature += length_prefixed(current.module);
+        signature += length_prefixed(owner_name);
+        signature += length_prefixed(call.call_kind);
+        signature += length_prefixed(current.name);
+        for var parameter_index usize = 0;
+            parameter_index < vec.len(call.parameters);
+            parameter_index += 1 {
+            let parameter = call.parameters[parameter_index];
+            let at_parameter = Node(pointer: at.pointer + "/parameters/" +
+                strconv.format_u64(u64(parameter_index)), present: true,
+                value: json.Value.Null);
+            if set.contains(parameter_names, parameter.name) ||
+               parameter.name == "_" {
+                invalid(inout state, at_parameter,
+                    "duplicate or discard parameter name");
+            }
+            let added = set.add(parameter_names, parameter.name);
+            let ignored_added = added;
+            let ignored = py_type_ref(inout state, declarations, types,
+                parameter.type_name, field(at_parameter, "type"));
+            var parameter_kind i32 = 2;
+            if parameter.kind == "positional_only" {
+                parameter_kind = 0;
+            } else if parameter.kind == "positional_or_keyword" {
+                parameter_kind = 1;
+            }
+            if parameter_kind < previous_kind {
+                invalid(inout state, at_parameter,
+                    "invalid parameter kind order");
+            }
+            previous_kind = parameter_kind;
+            if parameter_kind < 2 {
+                if optional_positional && !parameter.optional {
+                    invalid(inout state, at_parameter,
+                        "required positional parameter after optional parameter");
+                }
+                optional_positional = optional_positional || parameter.optional;
+            }
+            if parameter.mode == "inout" && parameter.escapes != "no" {
+                invalid(inout state, at_parameter,
+                    "inout parameter cannot escape");
+            }
+            retains = retains || parameter.escapes == "may_retain";
+            signature += length_prefixed(parameter.name);
+            signature += length_prefixed(parameter.type_name);
+            signature += length_prefixed(parameter.kind);
+            signature += length_prefixed(parameter.mode);
+            if parameter.optional {
+                signature += length_prefixed("optional");
+            } else {
+                signature += length_prefixed("required");
+            }
+        }
+        if !set.add(signatures, signature) {
+            invalid(inout state, at, "duplicate callable signature");
+        }
+        let effects = set.new[string]();
+        for effect in call.effects {
+            if !set.add(effects, effect) {
+                invalid(inout state, field(at, "effects"), "duplicate effect");
+            }
+        }
+        if retains != set.contains(effects, "retains_arguments") {
+            invalid(inout state, field(at, "effects"),
+                "parameter escape/retains_arguments mismatch");
+        }
+        if (call.receiver_escapes == "may_retain") !=
+           set.contains(effects, "retains_receiver") {
+            invalid(inout state, field(at, "effects"),
+                "receiver escape/retains_receiver mismatch");
+        }
+        if !receiver && set.contains(effects, "mutates_receiver") {
+            invalid(inout state, field(at, "effects"),
+                "mutates_receiver requires an owner");
+        }
+    }
+
+    let property_names = set.new[string]();
+    for var index usize = 0; index < vec.len(declarations); index += 1 {
+        let current = declarations[index];
+        let at = decl_node(current);
+        if kinds[index] == 3 {
+            let property = py_property(declarations, index);
+            let owner = py_access_owner(inout state, declarations, types,
+                current.module, property.owner_type, field(at, "owner_type"));
+            if vec.len(property.getter) == 0 {
+                invalid(inout state, field(at, "getter"),
+                    "property getter path must not be empty");
+            }
+            if !set.add(property_names,
+                        property.owner_type + "/" + property.name) {
+                invalid(inout state, field(at, "name"),
+                    "duplicate property declaration");
+            }
+            for var other usize = 0; other < vec.len(declarations); other += 1 {
+                if kinds[other] != 2 {
+                    continue;
+                }
+                let call = py_callable(declarations, other);
+                switch call.owner_type {
+                    case option.Option.Some(call_owner): {
+                        if call_owner == property.owner_type &&
+                           declarations[other].name == property.name {
+                            invalid(inout state, field(at, "name"),
+                                "property conflicts with a callable");
+                        }
+                    }
+                    case option.Option.None: {}
+                }
+            }
+            py_access_value(inout state, declarations, types, property.type_name,
+                field(at, "type"));
+            py_access_error(inout state, declarations, types,
+                property.error_type, field(at, "error_type"));
+            py_add_property(declarations, owner, current.id);
+        } else if kinds[index] == 4 {
+            let indexer = py_indexer(declarations, index);
+            let owner = py_access_owner(inout state, declarations, types,
+                current.module, indexer.owner_type, field(at, "owner_type"));
+            if !indexer.readable && !indexer.writable {
+                invalid(inout state, field(at, "readable"),
+                    "indexer must be readable or writable");
+            }
+            py_access_index(inout state, declarations, types,
+                indexer.index_type, field(at, "index_type"));
+            py_access_value(inout state, declarations, types,
+                indexer.result_type, field(at, "result_type"));
+            py_access_error(inout state, declarations, types,
+                indexer.error_type, field(at, "error_type"));
+            if py_access_count(declarations, owner, 2) != 0 {
+                invalid(inout state, at, "duplicate indexer for owner");
+            }
+            py_add_indexer(declarations, owner, current.id);
+        } else if kinds[index] == 5 {
+            let slice = py_slice(declarations, index);
+            let owner = py_access_owner(inout state, declarations, types,
+                current.module, slice.owner_type, field(at, "owner_type"));
+            if !slice.readable && !slice.writable {
+                invalid(inout state, field(at, "readable"),
+                    "slice must be readable or writable");
+            }
+            switch slice.start_type {
+                case option.Option.Some(value): {
+                    py_access_integer(inout state, value,
+                        field(at, "start_type"));
+                }
+                case option.Option.None: {}
+            }
+            switch slice.end_type {
+                case option.Option.Some(value): {
+                    py_access_integer(inout state, value,
+                        field(at, "end_type"));
+                }
+                case option.Option.None: {}
+            }
+            py_access_value(inout state, declarations, types,
+                slice.result_type, field(at, "result_type"));
+            py_access_error(inout state, declarations, types,
+                slice.error_type, field(at, "error_type"));
+            if py_access_count(declarations, owner, 3) != 0 {
+                invalid(inout state, at, "duplicate slice for owner");
+            }
+            py_add_slice(declarations, owner, current.id);
+        }
+    }
+
+    for var index usize = 0; index < vec.len(declarations); index += 1 {
+        vec.push(bundle.declarations, declarations[index].id);
+    }
+    return PythonPending(bundle: bundle, declarations: declarations,
+        identities: identities);
+}
+
+func is_slice(category string) bool {
+    return category == "slices";
+}
+
+func py_property(declarations Vec[model.ForeignDeclaration],
+                 index usize) model.BindingProperty {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Property(item): return item;
+        case _: {
+            return model.BindingProperty(owner_type: "", name: "",
+                type_name: "", getter: vec.empty[string](),
+                setter: vec.empty[string](), error_type: "");
+        }
+    }
+}
+
+func py_indexer(declarations Vec[model.ForeignDeclaration],
+                index usize) model.BindingIndexer {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Indexer(item): return item;
+        case _: {
+            return model.BindingIndexer(owner_type: "", index_type: "",
+                result_type: "", error_type: "", readable: false,
+                writable: false);
+        }
+    }
+}
+
+func py_slice(declarations Vec[model.ForeignDeclaration],
+              index usize) model.BindingSlice {
+    switch declarations[index].detail {
+        case model.ForeignDetail.Slice(item): return item;
+        case _: {
+            return model.BindingSlice(owner_type: "", result_type: "",
+                error_type: "", start_type: option.Option[string].None,
+                end_type: option.Option[string].None, readable: false,
+                writable: false);
+        }
+    }
+}
+
+pub func load_python(path string, manager inout source.Manager,
+                     store inout model.BindingStore) model.BundleResult {
+    var canonical = "";
+    try {
+        canonical = paths.canonical(path);
+    } catch error os.Error {
+        return canonical_failure(path, error);
+    }
+    switch find_path(store.python_paths, canonical) {
+        case option.Option.Some(index): return success_result(index);
+        case option.Option.None: {}
+    }
+    let read = input.read(canonical, inout manager);
+    if !read.has_value {
+        return read_result(read);
+    }
+    let snapshot = read.value;
+    if u64(vec.len(snapshot.original)) >= MAX_JSON_BYTES {
+        return json_invalid(snapshot, "binding JSON is too large",
+            whole_span(snapshot));
+    }
+    var document = jsondoc.Document(root: json.Value.Null,
+        spans: vec.empty[jsondoc.LocatedSpan]());
+    try {
+        document = jsondoc.parse(snapshot);
+    } catch error jsondoc.Error {
+        var message = "";
+        var span = whole_span(snapshot);
+        switch error {
+            case jsondoc.Error.Invalid(text_value, at): {
+                message = text_value;
+                span = at;
+            }
+        }
+        return json_invalid(snapshot, message, span);
+    }
+    var state = context(snapshot, document);
+    let bundle_index = vec.len(store.bindings);
+    var pending = PythonPending(bundle: model.BindingBundle(path: "",
+        json: "", sha256: "", source: whole_span(snapshot), schema_version: 0,
+        contract: "", review_status: "", allowed_backends: vec.empty[string](),
+        package_requirements: vec.empty[model.PackageRequirement](),
+        modules: vec.empty[model.BindingModule](),
+        declarations: vec.empty[usize](),
+        conformance_required: vec.empty[string]()),
+        declarations: vec.empty[model.ForeignDeclaration](),
+        identities: vec.empty[model.IdentitySpan]());
+    try {
+        pending = parse_python(inout state, snapshot, document,
+            store.python_identities, vec.len(store.foreign_bindings),
+            bundle_index);
+    } catch error Abort {
+        return failure_result(state);
+    }
+    vec.push(store.bindings, pending.bundle);
+    for declaration in pending.declarations {
+        vec.push(store.foreign_bindings, declaration);
+    }
+    for identity in pending.identities {
+        vec.push(store.python_identities, identity);
+    }
+    vec.push(store.python_paths, model.PathIndex(path: canonical,
+        index: bundle_index));
+    return success_result(bundle_index);
+}
+
+// ---------------------------------------------------------------------------
+// C ABI v2 bundle (project.cpp Loader::c_bundle).
+
+
+// Enum values are matched, not compared directly.
+func c_ref_kind(kind model.CTypeKind) u32 {
+    switch kind {
+        case model.CTypeKind.Scalar: return 0;
+        case model.CTypeKind.Pointer: return 1;
+        case model.CTypeKind.Buffer: return 2;
+        case model.CTypeKind.Named: return 3;
+    }
+}
+
+func c_decl_kind(kind model.CDeclKind) u32 {
+    switch kind {
+        case model.CDeclKind.Record: return 0;
+        case model.CDeclKind.Resource: return 1;
+        case model.CDeclKind.Callback: return 2;
+        case model.CDeclKind.Opaque: return 3;
+    }
+}
+
+func trim_type(value string) string {
+    var start usize = 0;
+    var end = text.len(value);
+    for start < end && (value[start] == 32 || value[start] == 9) {
+        start += 1;
+    }
+    for end > start && (value[end - 1] == 32 || value[end - 1] == 9) {
+        end -= 1;
+    }
+    return value[start:end];
+}
+
+func c_decl_named(value string, named map.Map[string, u32]) option.Option[u32] {
+    return map.get(named, value);
+}
+
+func c_type_expr(state inout Context, value string,
+                 named map.Map[string, u32],
+                 types Vec[model.CTypeDecl], at Node, depth usize,
+                 pointer_target bool) model.CTypeRef throws Abort {
+    if depth > MAX_C_TYPE_DEPTH {
+        invalid(inout state, at, "C type nesting exceeds the limit");
+    }
+    let spelling = trim_type(value);
+    if text.len(spelling) == 0 || has_nul(spelling) {
+        invalid(inout state, at, "empty or NUL C type");
+    }
+    var has_bracket = false;
+    var bracket_at usize = 0;
+    switch text.find(spelling, "[") {
+        case option.Option.Some(index): {
+            has_bracket = true;
+            bracket_at = index;
+        }
+        case option.Option.None: {}
+    }
+    if has_bracket {
+        if !text.ends_with(spelling, "]") {
+            invalid(inout state, at, "malformed C type");
+        }
+        let base = trim_type(spelling[0:bracket_at]);
+        let inner = trim_type(spelling[bracket_at + 1:text.len(spelling) - 1]);
+        if text.len(inner) == 0 || text.contains(inner, "[") ||
+           text.contains(inner, ",") {
+            invalid(inout state, at,
+                "C pointer/buffer requires exactly one type argument");
+        }
+        var result = model.CTypeRef(kind: model.CTypeKind.Scalar,
+            scalar: "", writable: false, args: vec.empty[model.CTypeRef](),
+            named: 0);
+        let pointer = base == "Ptr" || base == "PtrMut";
+        if pointer || base == "Buffer" || base == "BufferMut" {
+            if pointer {
+                result.kind = model.CTypeKind.Pointer;
+            } else {
+                result.kind = model.CTypeKind.Buffer;
+            }
+            result.writable = base == "PtrMut" || base == "BufferMut";
+            vec.push(result.args, c_type_expr(inout state, inner, named, types,
+                at, depth + 1, pointer));
+            if pointer {
+                switch result.args[0].kind {
+                    case model.CTypeKind.Named: {
+                        let kind = types[usize(result.args[0].named) - 1].kind;
+                        if c_decl_kind(kind) == 1 || c_decl_kind(kind) == 2 {
+                            invalid(inout state, at,
+                                "pointer to resource/callback must use the named C type");
+                        }
+                    }
+                    case _: {}
+                }
+            } else {
+                let element = result.args[0];
+                let scalar = c_ref_kind(element.kind) == 0 &&
+                    element.scalar != "Unit";
+                if !scalar {
+                    invalid(inout state, at,
+                        "Buffer element must be a fixed-size C scalar");
+                }
+            }
+            return result;
+        }
+        invalid(inout state, at, "unknown C parameterized type: " + base);
+    }
+    if c_scalar(spelling) {
+        return model.CTypeRef(kind: model.CTypeKind.Scalar, scalar: spelling,
+            writable: false, args: vec.empty[model.CTypeRef](), named: 0);
+    }
+    switch c_decl_named(spelling, named) {
+        case option.Option.Some(index): {
+            if c_decl_kind(types[usize(index) - 1].kind) == 3 &&
+               !pointer_target {
+                invalid(inout state, at,
+                    "opaque C type must be used through Ptr[T]");
+            }
+            return model.CTypeRef(kind: model.CTypeKind.Named, scalar: "",
+                writable: false, args: vec.empty[model.CTypeRef](),
+                named: index);
+        }
+        case option.Option.None: {}
+    }
+    invalid(inout state, at, "unknown C type: " + spelling);
+    return model.CTypeRef(kind: model.CTypeKind.Scalar, scalar: "",
+        writable: false, args: vec.empty[model.CTypeRef](), named: 0);
+}
+
+func scalar_align(value string) u64 {
+    if value == "i8" || value == "u8" || value == "bool" {
+        return 1;
+    }
+    if value == "i16" || value == "u16" {
+        return 2;
+    }
+    if value == "i32" || value == "u32" || value == "f32" {
+        return 4;
+    }
+    if value == "Unit" {
+        return 1;
+    }
+    return 8;
+}
+
+func c_layout(state inout Context, ref model.CTypeRef,
+              types Vec[model.CTypeDecl], active set.Set[u32],
+              size inout u64, align inout u64) throws Abort {
+    switch ref.kind {
+        case model.CTypeKind.Pointer: {
+            size = 8;
+            align = 8;
+            return;
+        }
+        case model.CTypeKind.Buffer: {
+            size = 16;
+            align = 8;
+            return;
+        }
+        case model.CTypeKind.Scalar: {
+            align = scalar_align(ref.scalar);
+            if ref.scalar == "Unit" {
+                size = 0;
+            } else {
+                size = align;
+            }
+            return;
+        }
+        case model.CTypeKind.Named: {}
+    }
+    let decl = types[usize(ref.named) - 1];
+    if c_decl_kind(decl.kind) == 1 || c_decl_kind(decl.kind) == 2 ||
+       c_decl_kind(decl.kind) == 3 {
+        size = 8;
+        align = 8;
+        return;
+    }
+    if !set.add(active, ref.named) {
+        fail_at(inout state, "E_BINDING_INVALID",
+            "C record contains itself by value", decl.source,
+            model.FailureKind.Source);
+    }
+    var offset u64 = 0;
+    var alignment u64 = 1;
+    for field in decl.fields {
+        var field_size u64 = 0;
+        var field_align u64 = 1;
+        c_layout(inout state, field.type_ref, types, active, inout field_size,
+            inout field_align);
+        if field_size == 0 {
+            fail_at(inout state, "E_BINDING_INVALID",
+                "record field has zero size", field.source,
+                model.FailureKind.Source);
+        }
+        offset = ((offset + field_align - 1) / field_align) * field_align;
+        if offset != field.offset {
+            fail_at(inout state, "E_BINDING_INVALID",
+                decl.identity + "." + field.name +
+                    ": declared offset does not match natural C layout",
+                field.source, model.FailureKind.Source);
+        }
+        offset += field_size;
+        if field_align > alignment {
+            alignment = field_align;
+        }
+    }
+    size = ((offset + alignment - 1) / alignment) * alignment;
+    align = alignment;
+    if decl.size != size || decl.align != align {
+        fail_at(inout state, "E_BINDING_INVALID",
+            decl.identity +
+                ": declared size/align does not match natural C layout",
+            decl.source, model.FailureKind.Source);
+    }
+    let ignored = set.remove(active, ref.named);
+}
+
+func validate_c_layout(state inout Context, types Vec[model.CTypeDecl]) throws Abort {
+    for parsed in types {
+        if c_decl_kind(parsed.kind) != 0 {
+            continue;
+        }
+        let active = set.new[u32]();
+        var size u64 = 0;
+        var align u64 = 1;
+        let ref = model.CTypeRef(kind: model.CTypeKind.Named, scalar: "",
+            writable: false, args: vec.empty[model.CTypeRef](),
+            named: parsed.id);
+        c_layout(inout state, ref, types, active, inout size, inout align);
+    }
+}
+
+func c_managed(ref model.CTypeRef, types Vec[model.CTypeDecl]) bool {
+    if c_ref_kind(ref.kind) != 3 {
+        return false;
+    }
+    switch types[usize(ref.named) - 1].registration {
+        case option.Option.Some(item): {
+            let ignored = item.callback_type;
+            return true;
+        }
+        case option.Option.None: return false;
+    }
+}
+
+func c_parameter_slot(callable model.CCallableDecl,
+                      name string) option.Option[usize] {
+    for var index usize = 0; index < vec.len(callable.parameters); index += 1 {
+        if callable.parameters[index].name == name {
+            return option.Option[usize].Some(index);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func c_userdata_type(ref model.CTypeRef) bool {
+    if c_ref_kind(ref.kind) != 1 || !ref.writable ||
+       vec.len(ref.args) != 1 {
+        return false;
+    }
+    let element = ref.args[0];
+    return c_ref_kind(element.kind) == 0 && element.scalar == "Unit";
+}
+
+func rebase_ref(ref model.CTypeRef, base u32) model.CTypeRef {
+    let args = vec.empty[model.CTypeRef]();
+    for item in ref.args {
+        vec.push(args, rebase_ref(item, base));
+    }
+    var named = ref.named;
+    if c_ref_kind(ref.kind) == 3 {
+        named = named + base;
+    }
+    return model.CTypeRef(kind: ref.kind, scalar: ref.scalar,
+        writable: ref.writable, args: args, named: named);
+}
+
+func rebase_field(field model.CFieldDecl, base u32) model.CFieldDecl {
+    return model.CFieldDecl(name: field.name,
+        type_ref: rebase_ref(field.type_ref, base), offset: field.offset,
+        source: field.source);
+}
+
+func rebase_parameter(parameter model.CParameterDecl,
+                      base u32) model.CParameterDecl {
+    return model.CParameterDecl(name: parameter.name,
+        type_ref: rebase_ref(parameter.type_ref, base),
+        source: parameter.source);
+}
+
+// Commit a C type record with its local named indexes, registration callback
+// index and 1-based ID rebased into the store-wide table.
+func rebase_type(value model.CTypeDecl, base u32,
+                 bundle_index usize) model.CTypeDecl {
+    let fields = vec.empty[model.CFieldDecl]();
+    for item in value.fields {
+        vec.push(fields, rebase_field(item, base));
+    }
+    let parameters = vec.empty[model.CParameterDecl]();
+    for item in value.parameters {
+        vec.push(parameters, rebase_parameter(item, base));
+    }
+    var registration = option.Option[model.CRegistrationDecl].None;
+    switch value.registration {
+        case option.Option.Some(item): {
+            registration = option.Option[model.CRegistrationDecl].Some(
+                model.CRegistrationDecl(
+                    callback_type: item.callback_type + base,
+                    unregister_symbol: item.unregister_symbol));
+        }
+        case option.Option.None: {}
+    }
+    var result = value.result;
+    if c_decl_kind(value.kind) == 2 {
+        result = rebase_ref(value.result, base);
+    }
+    return model.CTypeDecl(id: base + value.id, bundle: bundle_index,
+        source: value.source, identity: value.identity, module: value.module,
+        name: value.name, c_name: value.c_name, kind: value.kind,
+        fields: fields, size: value.size, align: value.align,
+        release_symbol: value.release_symbol,
+        retain_symbol: value.retain_symbol, result: result,
+        parameters: parameters, registration: registration);
+}
+
+func rebase_callable(value model.CCallableDecl, base u32,
+                     callable_base u32, bundle_index usize) model.CCallableDecl {
+    let parameters = vec.empty[model.CParameterDecl]();
+    for item in value.parameters {
+        vec.push(parameters, rebase_parameter(item, base));
+    }
+    let result = model.CReturnDecl(
+        type_ref: rebase_ref(value.result.type_ref, base),
+        ownership: value.result.ownership,
+        release_symbol: value.result.release_symbol,
+        retain_symbol: value.result.retain_symbol,
+        source: value.result.source);
+    return model.CCallableDecl(id: callable_base + value.id,
+        bundle: bundle_index, source: value.source, identity: value.identity,
+        module: value.module, name: value.name, symbol: value.symbol,
+        parameters: parameters, result: result,
+        stable_identity: value.stable_identity, registers: value.registers);
+}
+
+func parse_c(state inout Context, snapshot model.Source,
+             document jsondoc.Document,
+             known_type_identities Vec[model.IdentitySpan],
+             known_callable_identities Vec[model.IdentitySpan], base usize,
+             callable_base usize, bundle_index usize,
+             hosted bool) CPending throws Abort {
+    let root = Node(pointer: "", present: true, value: document.root);
+    let required Vec[string] = ["schema_version", "contract", "abi", "target",
+        "requires_hosted", "modules", "types", "callables"];
+    object(inout state, root, required, []);
+
+    var bundle = model.CBindingBundle(path: snapshot.path,
+        json: source_text(snapshot), sha256: digest.sha256(snapshot.original),
+        source: whole_span(snapshot), schema_version: 0, contract: "",
+        abi: "", target: "", requires_hosted: false,
+        modules: vec.empty[model.CModule](), types: vec.empty[u32](),
+        callables: vec.empty[u32]());
+
+    let version = field(root, "schema_version");
+    var version_value i64 = -1;
+    switch json_int(version) {
+        case option.Option.Some(item): version_value = item;
+        case option.Option.None: {}
+    }
+    if version_value != 2 {
+        invalid(inout state, version,
+            "schema_version must be 2 for a C ABI bundle");
+    }
+    bundle.schema_version = 2;
+    bundle.contract = choice(inout state, field(root, "contract"),
+        contract_values());
+    bundle.abi = choice(inout state, field(root, "abi"), ["c"]);
+    bundle.target = choice(inout state, field(root, "target"),
+        ["x86_64-linux-gnu"]);
+    bundle.requires_hosted = boolean_of(inout state,
+        field(root, "requires_hosted"));
+
+    let mods = map.new[string, usize]();
+    for item in array(inout state, field(root, "modules")) {
+        object(inout state, item, ["logical_path", "provider", "library"], []);
+        let logical_path = string_of(inout state,
+            field(item, "logical_path"));
+        let provider = choice(inout state, field(item, "provider"),
+            ["native_library"]);
+        let library = string_of(inout state, field(item, "library"));
+        if !logical(logical_path) {
+            invalid(inout state, field(item, "logical_path"),
+                "invalid logical module");
+        }
+        if logical_path == "app" || text.starts_with(logical_path, "app/") {
+            invalid(inout state, field(item, "logical_path"),
+                "app is reserved for source modules");
+        }
+        if text.len(library) != 0 &&
+           (library[0] == 45 || has_nul(library) || !library_name(library)) {
+            invalid(inout state, field(item, "library"),
+                "invalid native library name");
+        }
+        if map.contains(mods, logical_path) {
+            invalid(inout state, item, "duplicate C binding module");
+        }
+        let ignored = map.insert(mods, logical_path, vec.len(bundle.modules));
+        vec.push(bundle.modules, model.CModule(logical_path: logical_path,
+            provider: provider, library: library,
+            source: location(state, item)));
+    }
+    if vec.len(bundle.modules) == 0 {
+        invalid(inout state, field(root, "modules"),
+            "C binding requires a module");
+    }
+
+    let types = vec.empty[model.CTypeDecl]();
+    let type_identities = vec.empty[model.IdentitySpan]();
+    let callables = vec.empty[model.CCallableDecl]();
+    let callable_identities = vec.empty[model.IdentitySpan]();
+    let registrations = vec.empty[CPendingRegistration]();
+    let type_ids = map.new[string, u32]();
+    let type_names = map.new[string, u32]();
+    let type_nodes = array(inout state, field(root, "types"));
+    for item in type_nodes {
+        object(inout state, item, ["id", "module", "name", "kind"],
+            ["c_name", "fields", "size", "align", "release_symbol",
+             "retain_symbol", "result", "parameters", "registration"]);
+        let item_source = location(state, item);
+        let identity = identity_of(inout state, field(item, "id"));
+        if !dotted(identity) || map.contains(type_ids, identity) ||
+           contains_identity(known_type_identities, identity) {
+            invalid(inout state, field(item, "id"),
+                "duplicate or invalid C type id");
+        }
+        let module = string_of(inout state, field(item, "module"));
+        if !map.contains(mods, module) {
+            invalid(inout state, field(item, "module"), "undeclared module");
+        }
+        let name = identifier_of(inout state, field(item, "name"));
+        if name == "_" {
+            invalid(inout state, field(item, "name"), "export cannot be _");
+        }
+        let kind_name = choice(inout state, field(item, "kind"),
+            ["record", "resource", "callback", "opaque"]);
+        var kind = model.CDeclKind.Opaque;
+        if kind_name == "record" {
+            kind = model.CDeclKind.Record;
+        } else if kind_name == "resource" {
+            kind = model.CDeclKind.Resource;
+        } else if kind_name == "callback" {
+            kind = model.CDeclKind.Callback;
+        }
+        var c_name = "";
+        if non_null(field(item, "c_name")) {
+            c_name = string_of(inout state, field(item, "c_name"));
+        }
+        var has_registration = false;
+        var registration = CPendingRegistration(type_index: 0, callback: "",
+            unregister_symbol: "", source: item_source);
+        if non_null(field(item, "registration")) {
+            if c_decl_kind(kind) != 1 {
+                invalid(inout state, field(item, "registration"),
+                    "registration is only valid on a resource type");
+            }
+            let at_registration = field(item, "registration");
+            object(inout state, at_registration,
+                ["callback", "unregister_symbol"], []);
+            let callback = identity_of(inout state,
+                field(at_registration, "callback"));
+            let unregister_symbol = identity_of(inout state,
+                field(at_registration, "unregister_symbol"));
+            if !c_ident(unregister_symbol) || unregister_symbol == "_" {
+                invalid(inout state,
+                    field(at_registration, "unregister_symbol"),
+                    "invalid unregister symbol");
+            }
+            registration = CPendingRegistration(type_index: 0,
+                callback: callback, unregister_symbol: unregister_symbol,
+                source: location(state, at_registration));
+            has_registration = true;
+        }
+        let local = u32(vec.len(types) + 1);
+        let ignored = map.insert(type_ids, identity, local);
+        let ignored_names = map.insert(type_names, identity, local);
+        vec.push(types, model.CTypeDecl(id: local, bundle: bundle_index,
+            source: item_source, identity: identity, module: module,
+            name: name, c_name: c_name, kind: kind,
+            fields: vec.empty[model.CFieldDecl](), size: 0, align: 0,
+            release_symbol: "", retain_symbol: "",
+            result: model.CTypeRef(kind: model.CTypeKind.Scalar, scalar: "",
+                writable: false, args: vec.empty[model.CTypeRef](),
+                named: 0),
+            parameters: vec.empty[model.CParameterDecl](),
+            registration: option.Option[model.CRegistrationDecl].None));
+        vec.push(type_identities, model.IdentitySpan(identity: identity,
+            span: item_source));
+        if has_registration {
+            registration.type_index = vec.len(types) - 1;
+            vec.push(registrations, registration);
+        }
+    }
+
+    // Registration is a hosted lifetime contract; resolve named targets only
+    // after every named type exists.
+    if vec.len(registrations) != 0 && !hosted {
+        fail_at(inout state, "E_CAPABILITY_UNAVAILABLE",
+            "C callback registration requires [build.native] runtime = hosted",
+            registrations[0].source, model.FailureKind.Source);
+    }
+    let unregister_symbols = set.new[string]();
+    for pending in registrations {
+        switch map.get(type_ids, pending.callback) {
+            case option.Option.Some(callback): {
+                if c_decl_kind(types[usize(callback) - 1].kind) != 2 {
+                    fail_at(inout state, "E_BINDING_INVALID",
+                        "registration callback must name a callback type",
+                        pending.source, model.FailureKind.Source);
+                }
+                if !set.add(unregister_symbols, pending.unregister_symbol) {
+                    fail_at(inout state, "E_BINDING_INVALID",
+                        "duplicate C unregister symbol: " +
+                            pending.unregister_symbol,
+                        pending.source, model.FailureKind.Source);
+                }
+                types[pending.type_index].registration =
+                    option.Option[model.CRegistrationDecl].Some(model.CRegistrationDecl(
+                        callback_type: callback,
+                        unregister_symbol: pending.unregister_symbol));
+                types[pending.type_index].release_symbol =
+                    pending.unregister_symbol;
+            }
+            case option.Option.None: {
+                fail_at(inout state, "E_BINDING_INVALID",
+                    "registration callback is not a declared C type: " +
+                        pending.callback,
+                    pending.source, model.FailureKind.Source);
+            }
+        }
+    }
+
+    for var type_index usize = 0; type_index < vec.len(types); type_index += 1 {
+        let item = type_nodes[type_index];
+        let kind = types[type_index].kind;
+        if c_decl_kind(kind) == 0 {
+            if !non_null(field(item, "size")) ||
+               !non_null(field(item, "align")) {
+                invalid(inout state, item, "record requires size and align");
+            }
+            var size_value i64 = -1;
+            var align_value i64 = -1;
+            switch json_int(field(item, "size")) {
+                case option.Option.Some(value): size_value = value;
+                case option.Option.None: {}
+            }
+            switch json_int(field(item, "align")) {
+                case option.Option.Some(value): align_value = value;
+                case option.Option.None: {}
+            }
+            if size_value < 0 || align_value <= 0 {
+                invalid(inout state, item,
+                    "record size/align must be positive integers");
+            }
+            types[type_index].size = u64(size_value);
+            types[type_index].align = u64(align_value);
+            if !non_null(field(item, "fields")) {
+                invalid(inout state, item, "record requires fields");
+            }
+            let names = set.new[string]();
+            for field_node in array(inout state, field(item, "fields")) {
+                object(inout state, field_node, ["name", "type", "offset"],
+                    []);
+                let field_name = identifier_of(inout state,
+                    field(field_node, "name"));
+                if !c_ident(field_name) {
+                    invalid(inout state, field(field_node, "name"),
+                        "record field name is a C keyword");
+                }
+                if !set.add(names, field_name) {
+                    invalid(inout state, field_node,
+                        "duplicate record field");
+                }
+                let field_spelling = string_of(inout state,
+                    field(field_node, "type"));
+                let field_type = c_type_expr(inout state, field_spelling,
+                    type_names, types, field(field_node, "type"), 0, false);
+                var offset_value i64 = -1;
+                switch json_int(field(field_node, "offset")) {
+                    case option.Option.Some(value): offset_value = value;
+                    case option.Option.None: {}
+                }
+                if offset_value < 0 {
+                    invalid(inout state, field(field_node, "offset"),
+                        "field offset must be a nonnegative integer");
+                }
+                vec.push(types[type_index].fields, model.CFieldDecl(
+                    name: field_name, type_ref: field_type,
+                    offset: u64(offset_value),
+                    source: location(state, field_node)));
+            }
+            for field_decl in types[type_index].fields {
+                if c_ref_kind(field_decl.type_ref.kind) != 3 {
+                    continue;
+                }
+                let field_kind =
+                    types[usize(field_decl.type_ref.named) - 1].kind;
+                if c_decl_kind(field_kind) == 1 || c_decl_kind(field_kind) == 2 {
+                    fail_at(inout state, "E_BINDING_INVALID",
+                        "record field " + field_decl.name +
+                            " cannot be an owning resource or callback value",
+                        field_decl.source, model.FailureKind.Source);
+                }
+            }
+        } else if c_decl_kind(kind) == 1 {
+            switch types[type_index].registration {
+                case option.Option.Some(item_registration): {
+                    let ignored = item_registration;
+                    if non_null(field(item, "release_symbol")) ||
+                       non_null(field(item, "retain_symbol")) {
+                        invalid(inout state, item,
+                            "managed registration resource has no declared release/retain symbol");
+                    }
+                }
+                case option.Option.None: {
+                    let release_symbol = string_of(inout state,
+                        field(item, "release_symbol"));
+                    if !c_ident(release_symbol) || release_symbol == "_" {
+                        invalid(inout state, field(item, "release_symbol"),
+                            "resource requires a valid release symbol");
+                    }
+                    types[type_index].release_symbol = release_symbol;
+                    if non_null(field(item, "retain_symbol")) {
+                        let retain_symbol = string_of(inout state,
+                            field(item, "retain_symbol"));
+                        if !c_ident(retain_symbol) || retain_symbol == "_" {
+                            invalid(inout state, field(item, "retain_symbol"),
+                                "invalid retain symbol");
+                        }
+                        types[type_index].retain_symbol = retain_symbol;
+                    }
+                }
+            }
+        } else if c_decl_kind(kind) == 2 {
+            if !non_null(field(item, "result")) {
+                invalid(inout state, item, "callback requires result");
+            }
+            let result_spelling = string_of(inout state,
+                field(item, "result"));
+            let result = c_type_expr(inout state, result_spelling, type_names,
+                types, field(item, "result"), 0, false);
+            types[type_index].result = result;
+            if !non_null(field(item, "parameters")) {
+                invalid(inout state, item, "callback requires parameters");
+            }
+            let names = set.new[string]();
+            for parameter in array(inout state, field(item, "parameters")) {
+                object(inout state, parameter, ["name", "type"], []);
+                let parameter_name = identifier_of(inout state,
+                    field(parameter, "name"));
+                if parameter_name == "_" ||
+                   !set.add(names, parameter_name) {
+                    invalid(inout state, parameter,
+                        "duplicate or discard callback parameter");
+                }
+                let callback_parameter_spelling = string_of(inout state,
+                    field(parameter, "type"));
+                let parameter_type = c_type_expr(inout state,
+                    callback_parameter_spelling, type_names, types,
+                    field(parameter, "type"), 0, false);
+                if c_ref_kind(parameter_type.kind) == 0 &&
+                   parameter_type.scalar == "Unit" {
+                    invalid(inout state, field(parameter, "type"),
+                        "Unit is not a C callback value parameter");
+                }
+                vec.push(types[type_index].parameters,
+                    model.CParameterDecl(name: parameter_name,
+                        type_ref: parameter_type,
+                        source: location(state, parameter)));
+            }
+        }
+    }
+
+    for parsed in types {
+        if c_decl_kind(parsed.kind) != 2 {
+            continue;
+        }
+        if c_managed(parsed.result, types) {
+            fail_at(inout state, "E_BINDING_INVALID",
+                parsed.identity +
+                    ": callback result cannot be a managed registration resource",
+                parsed.source, model.FailureKind.Source);
+        }
+        for parameter in parsed.parameters {
+            if c_managed(parameter.type_ref, types) {
+                fail_at(inout state, "E_BINDING_INVALID",
+                    parsed.identity + "." + parameter.name +
+                        ": callback parameter cannot be a managed registration resource",
+                    parameter.source, model.FailureKind.Source);
+            }
+        }
+    }
+    validate_c_layout(inout state, types);
+
+    let registration_calls = vec.empty[CPendingRegisters]();
+    let callable_ids = map.new[string, u32]();
+    let export_names = set.new[string]();
+    for parsed in types {
+        if !set.add(export_names, parsed.module + "/" + parsed.name) {
+            fail_at(inout state, "E_BINDING_INVALID",
+                "duplicate C export name: " + parsed.name, parsed.source,
+                model.FailureKind.Source);
+        }
+    }
+    for item in array(inout state, field(root, "callables")) {
+        object(inout state, item,
+            ["id", "module", "name", "symbol", "parameters", "result"],
+            ["registers"]);
+        let item_source = location(state, item);
+        let identity = identity_of(inout state, field(item, "id"));
+        if !dotted(identity) || map.contains(callable_ids, identity) ||
+           contains_identity(known_callable_identities, identity) {
+            invalid(inout state, field(item, "id"),
+                "duplicate or invalid C callable id");
+        }
+        let local_id = u32(vec.len(callables) + 1);
+        let module = string_of(inout state, field(item, "module"));
+        if !map.contains(mods, module) {
+            invalid(inout state, field(item, "module"), "undeclared module");
+        }
+        let name = identifier_of(inout state, field(item, "name"));
+        let symbol = string_of(inout state, field(item, "symbol"));
+        if !c_ident(symbol) || symbol == "_" {
+            invalid(inout state, field(item, "symbol"), "invalid C symbol");
+        }
+        if name == "_" || !set.add(export_names, module + "/" + name) {
+            invalid(inout state, field(item, "name"),
+                "duplicate or invalid C export name");
+        }
+        var has_registers = false;
+        var pending_registers = CPendingRegisters(callable_index: 0,
+            callback_parameter: "", userdata_parameter: "",
+            callback_userdata_parameter: "", source: item_source);
+        if non_null(field(item, "registers")) {
+            let at_registers = field(item, "registers");
+            object(inout state, at_registers, ["callback_parameter",
+                "userdata_parameter", "callback_userdata_parameter"], []);
+            let callback_parameter = c_slot_name(inout state,
+                field(at_registers, "callback_parameter"));
+            let userdata_parameter = c_slot_name(inout state,
+                field(at_registers, "userdata_parameter"));
+            let callback_userdata_parameter = c_slot_name(inout state,
+                field(at_registers, "callback_userdata_parameter"));
+            if callback_parameter == userdata_parameter {
+                invalid(inout state, at_registers,
+                    "callback and userdata parameters must differ");
+            }
+            pending_registers = CPendingRegisters(callable_index: 0,
+                callback_parameter: callback_parameter,
+                userdata_parameter: userdata_parameter,
+                callback_userdata_parameter: callback_userdata_parameter,
+                source: location(state, at_registers));
+            has_registers = true;
+        }
+        let parameters = vec.empty[model.CParameterDecl]();
+        let names = set.new[string]();
+        for parameter in array(inout state, field(item, "parameters")) {
+            object(inout state, parameter, ["name", "type"], []);
+            let parameter_name = identifier_of(inout state,
+                field(parameter, "name"));
+            if parameter_name == "_" || !set.add(names, parameter_name) {
+                invalid(inout state, parameter,
+                    "duplicate or discard C parameter name");
+            }
+            let callable_parameter_spelling = string_of(inout state,
+                field(parameter, "type"));
+            let parameter_type = c_type_expr(inout state,
+                callable_parameter_spelling, type_names, types,
+                field(parameter, "type"), 0, false);
+            if c_ref_kind(parameter_type.kind) == 0 &&
+               parameter_type.scalar == "Unit" {
+                invalid(inout state, field(parameter, "type"),
+                    "Unit is not a C value parameter");
+            }
+            vec.push(parameters, model.CParameterDecl(name: parameter_name,
+                type_ref: parameter_type,
+                source: location(state, parameter)));
+        }
+        let result_node = field(item, "result");
+        object(inout state, result_node, ["type", "ownership"],
+            ["release_symbol", "retain_symbol"]);
+        let result_spelling = string_of(inout state,
+            field(result_node, "type"));
+        let result_type = c_type_expr(inout state, result_spelling, type_names,
+            types, field(result_node, "type"), 0, false);
+        let ownership = choice(inout state,
+            field(result_node, "ownership"),
+            ["value", "owned", "borrowed", "unit"]);
+        var release_symbol = "";
+        if non_null(field(result_node, "release_symbol")) {
+            release_symbol = string_of(inout state,
+                field(result_node, "release_symbol"));
+            if !c_ident(release_symbol) || release_symbol == "_" {
+                invalid(inout state, field(result_node, "release_symbol"),
+                    "invalid release symbol");
+            }
+        }
+        var retain_symbol = "";
+        if non_null(field(result_node, "retain_symbol")) {
+            retain_symbol = string_of(inout state,
+                field(result_node, "retain_symbol"));
+            if !c_ident(retain_symbol) || retain_symbol == "_" {
+                invalid(inout state, field(result_node, "retain_symbol"),
+                    "invalid retain symbol");
+            }
+        }
+        if ownership != "owned" &&
+           (text.len(release_symbol) != 0 || text.len(retain_symbol) != 0) {
+            invalid(inout state, result_node,
+                "release/retain symbols require owned ownership");
+        }
+        let unit_result = c_ref_kind(result_type.kind) == 0 &&
+            result_type.scalar == "Unit";
+        var resource = false;
+        var resource_index usize = 0;
+        if c_ref_kind(result_type.kind) == 3 {
+            resource_index = usize(result_type.named) - 1;
+            resource = c_decl_kind(types[resource_index].kind) == 1;
+        }
+        if (ownership == "unit") != unit_result {
+            invalid(inout state, result_node,
+                "unit ownership requires Unit result");
+        }
+        if ownership == "owned" {
+            if !resource {
+                invalid(inout state, result_node,
+                    "owned result must name a resource type");
+            }
+            if text.len(release_symbol) == 0 {
+                release_symbol = types[resource_index].release_symbol;
+            }
+            if text.len(release_symbol) == 0 {
+                invalid(inout state, result_node,
+                    "owned result requires release_symbol");
+            }
+            if release_symbol != types[resource_index].release_symbol {
+                invalid(inout state, result_node,
+                    "owned result release_symbol differs from resource type");
+            }
+            if text.len(retain_symbol) == 0 {
+                retain_symbol = types[resource_index].retain_symbol;
+            }
+            if retain_symbol != types[resource_index].retain_symbol {
+                invalid(inout state, result_node,
+                    "owned result retain_symbol differs from resource type");
+            }
+        } else if resource {
+            invalid(inout state, result_node,
+                "resource result must use owned ownership");
+        } else if ownership == "borrowed" && unit_result {
+            invalid(inout state, result_node, "Unit cannot be borrowed");
+        }
+        let parts = vec.empty[string]();
+        vec.push(parts, bundle.contract);
+        vec.push(parts, bundle.sha256);
+        vec.push(parts, module);
+        vec.push(parts, "callable");
+        vec.push(parts, identity);
+        let stable = stable_identity(parts);
+        let ignored = map.insert(callable_ids, identity, local_id);
+        if has_registers {
+            pending_registers.callable_index = vec.len(callables);
+            vec.push(registration_calls, pending_registers);
+        }
+        vec.push(callables, model.CCallableDecl(id: local_id,
+            bundle: bundle_index, source: item_source, identity: identity,
+            module: module, name: name, symbol: symbol, parameters: parameters,
+            result: model.CReturnDecl(type_ref: result_type,
+                ownership: ownership, release_symbol: release_symbol,
+                retain_symbol: retain_symbol,
+                source: location(state, result_node)),
+            stable_identity: stable, registers: option.Option[model.CRegistrationCall].None));
+        vec.push(callable_identities, model.IdentitySpan(identity: identity,
+            span: item_source));
+    }
+
+    let callback_userdata = map.new[u32, usize]();
+    for pending in registration_calls {
+        let callable = callables[pending.callable_index];
+        var managed_resource = false;
+        var resource_index usize = 0;
+        if c_ref_kind(callable.result.type_ref.kind) == 3 {
+            resource_index = usize(callable.result.type_ref.named) - 1;
+            switch types[resource_index].registration {
+                case option.Option.Some(item): {
+                    let ignored = item.callback_type;
+                    managed_resource = true;
+                }
+                case option.Option.None: {}
+            }
+        }
+        if !managed_resource {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": registers requires an owned managed resource result",
+                pending.source, model.FailureKind.Source);
+        }
+        let callback_slot = c_parameter_slot(callable,
+            pending.callback_parameter);
+        let userdata_slot = c_parameter_slot(callable,
+            pending.userdata_parameter);
+        var callback_index usize = 0;
+        var userdata_index usize = 0;
+        var found_callback = false;
+        var found_userdata = false;
+        switch callback_slot {
+            case option.Option.Some(index): {
+                callback_index = index;
+                found_callback = true;
+            }
+            case option.Option.None: {}
+        }
+        switch userdata_slot {
+            case option.Option.Some(index): {
+                userdata_index = index;
+                found_userdata = true;
+            }
+            case option.Option.None: {}
+        }
+        if !found_callback {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": registers callback_parameter is not a declared C parameter",
+                pending.source, model.FailureKind.Source);
+        }
+        if !found_userdata {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": registers userdata_parameter is not a declared C parameter",
+                pending.source, model.FailureKind.Source);
+        }
+        if callback_index == userdata_index {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": callback and userdata parameters must differ",
+                pending.source, model.FailureKind.Source);
+        }
+        let callback_parameter = callable.parameters[callback_index];
+        var callback_type u32 = 0;
+        switch types[resource_index].registration {
+            case option.Option.Some(item): callback_type = item.callback_type;
+            case option.Option.None: {}
+        }
+        if c_ref_kind(callback_parameter.type_ref.kind) != 3 ||
+           callback_parameter.type_ref.named != callback_type {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": callback parameter type differs from the resource registration callback",
+                callback_parameter.source, model.FailureKind.Source);
+        }
+        if !c_userdata_type(callable.parameters[userdata_index].type_ref) {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": registration userdata parameter must be PtrMut[Unit]",
+                callable.parameters[userdata_index].source,
+                model.FailureKind.Source);
+        }
+        let callback_decl = types[usize(callback_type) - 1];
+        var userdata_position usize = 0;
+        var found_position = false;
+        for var index usize = 0;
+            index < vec.len(callback_decl.parameters); index += 1 {
+            if callback_decl.parameters[index].name ==
+               pending.callback_userdata_parameter {
+                userdata_position = index;
+                found_position = true;
+            }
+        }
+        if !found_position {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": callback_userdata_parameter is not a declared callback parameter",
+                pending.source, model.FailureKind.Source);
+        }
+        if !c_userdata_type(callback_decl.parameters[userdata_position].type_ref) {
+            fail_at(inout state, "E_BINDING_INVALID",
+                callable.identity +
+                    ": callback userdata parameter must be PtrMut[Unit]",
+                callback_decl.parameters[userdata_position].source,
+                model.FailureKind.Source);
+        }
+        switch map.get(callback_userdata, callback_type) {
+            case option.Option.Some(previous): {
+                if previous != userdata_position {
+                    fail_at(inout state, "E_BINDING_INVALID",
+                        "callback userdata position differs between registration constructors",
+                        pending.source, model.FailureKind.Source);
+                }
+            }
+            case option.Option.None: {
+                let ignored = map.insert(callback_userdata, callback_type,
+                    userdata_position);
+            }
+        }
+        callables[pending.callable_index].registers =
+            option.Option[model.CRegistrationCall].Some(model.CRegistrationCall(
+                callback_parameter: callback_index,
+                userdata_parameter: userdata_index,
+                callback_userdata_parameter: userdata_position));
+    }
+
+    for parsed in callables {
+        let managed = c_ref_kind(parsed.result.type_ref.kind) == 3 &&
+            c_managed(parsed.result.type_ref, types);
+        if managed {
+            switch parsed.registers {
+                case option.Option.Some(item): {
+                    let ignored = item.callback_parameter;
+                }
+                case option.Option.None: {
+                    fail_at(inout state, "E_BINDING_INVALID",
+                        parsed.identity +
+                            ": managed resource result requires registers metadata",
+                        parsed.source, model.FailureKind.Source);
+                }
+            }
+        }
+    }
+
+    let symbol_declarations = map.new[string, Vec[usize]]();
+    for var index usize = 0; index < vec.len(callables); index += 1 {
+        let key = callables[index].symbol;
+        switch map.get(symbol_declarations, key) {
+            case option.Option.Some(existing): {
+                vec.push(existing, index);
+            }
+            case option.Option.None: {
+                let fresh = vec.empty[usize]();
+                vec.push(fresh, index);
+                let ignored = map.insert(symbol_declarations, key, fresh);
+            }
+        }
+    }
+    for parsed in types {
+        var has_registration = false;
+        var callback_type u32 = 0;
+        var unregister_symbol = "";
+        switch parsed.registration {
+            case option.Option.Some(item): {
+                has_registration = true;
+                callback_type = item.callback_type;
+                unregister_symbol = item.unregister_symbol;
+            }
+            case option.Option.None: {}
+        }
+        if !has_registration {
+            continue;
+        }
+        let ignored_callback = callback_type;
+        switch map.get(symbol_declarations, unregister_symbol) {
+            case option.Option.Some(found): {
+                if vec.len(found) != 1 {
+                    fail_at(inout state, "E_BINDING_INVALID",
+                        parsed.identity +
+                            ": unregister symbol may be declared by at most one explicit close callable",
+                        parsed.source, model.FailureKind.Source);
+                }
+                let close = callables[found[0]];
+                let unit_result =
+                    c_ref_kind(close.result.type_ref.kind) == 0 &&
+                    close.result.type_ref.scalar == "Unit" &&
+                    close.result.ownership == "unit";
+                let matches = vec.len(close.parameters) == 1 &&
+                    c_ref_kind(close.parameters[0].type_ref.kind) == 3 &&
+                    close.parameters[0].type_ref.named == parsed.id &&
+                    unit_result;
+                if !matches {
+                    fail_at(inout state, "E_BINDING_INVALID",
+                        close.identity +
+                            ": unregister symbol must be the explicit close operation for " +
+                            parsed.identity,
+                        close.source, model.FailureKind.Source);
+                }
+            }
+            case option.Option.None: {}
+        }
+    }
+
+    if vec.len(callables) == 0 && vec.len(types) == 0 {
+        invalid(inout state, field(root, "callables"),
+            "C binding declares no exports");
+    }
+
+    // Commit: rebase local named indexes into the store-wide tables. The
+    // records are rebuilt instead of borrowed in place because a Vec element
+    // read is not writable storage.
+    let base_u32 = u32(base);
+    let callable_base_u32 = u32(callable_base);
+    let committed_types = vec.empty[model.CTypeDecl]();
+    let committed_callables = vec.empty[model.CCallableDecl]();
+    for parsed in types {
+        let committed = rebase_type(parsed, base_u32, bundle_index);
+        vec.push(bundle.types, committed.id);
+        vec.push(committed_types, committed);
+    }
+    for parsed in callables {
+        let committed = rebase_callable(parsed, base_u32, callable_base_u32,
+            bundle_index);
+        vec.push(bundle.callables, committed.id);
+        vec.push(committed_callables, committed);
+    }
+    return CPending(bundle: bundle, types: committed_types,
+        callables: committed_callables,
+        type_identities: type_identities,
+        callable_identities: callable_identities);
+}
+
+func library_name(value string) bool {
+    for rune in value {
+        if !((rune >= 65 && rune <= 90) || (rune >= 97 && rune <= 122) ||
+             (rune >= 48 && rune <= 57) || rune == 95 || rune == 43 ||
+             rune == 45 || rune == 46) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func c_slot_name(state inout Context, value Node) string throws Abort {
+    let name = string_of(inout state, value);
+    if text.len(name) == 0 || has_nul(name) {
+        invalid(inout state, value, "invalid registration parameter name");
+    }
+    return name;
+}
+
+pub func load_c(path string, manager inout source.Manager,
+                store inout model.BindingStore) model.BundleResult {
+    var canonical = "";
+    try {
+        canonical = paths.canonical(path);
+    } catch error os.Error {
+        return canonical_failure(path, error);
+    }
+    switch find_path(store.c_paths, canonical) {
+        case option.Option.Some(index): return success_result(index);
+        case option.Option.None: {}
+    }
+    let read = input.read(canonical, inout manager);
+    if !read.has_value {
+        return read_result(read);
+    }
+    let snapshot = read.value;
+    if u64(vec.len(snapshot.original)) >= MAX_JSON_BYTES {
+        return json_invalid(snapshot, "C binding JSON is too large",
+            whole_span(snapshot));
+    }
+    var document = jsondoc.Document(root: json.Value.Null,
+        spans: vec.empty[jsondoc.LocatedSpan]());
+    try {
+        document = jsondoc.parse(snapshot);
+    } catch error jsondoc.Error {
+        var message = "";
+        var span = whole_span(snapshot);
+        switch error {
+            case jsondoc.Error.Invalid(text_value, at): {
+                message = text_value;
+                span = at;
+            }
+        }
+        // project.cpp uses the C-specific syntax message. Duplicate-key,
+        // NUL-key and every other located message stays byte-identical.
+        if message == "invalid JSON binding bundle" {
+            message = "invalid JSON C binding bundle";
+        }
+        return json_invalid(snapshot, message, span);
+    }
+    var state = context(snapshot, document);
+    let bundle_index = vec.len(store.c_bindings);
+    let type_count = vec.len(store.c_types);
+    let callable_count = vec.len(store.c_callables);
+    var pending = CPending(bundle: model.CBindingBundle(path: "",
+        json: "", sha256: "", source: whole_span(snapshot), schema_version: 0,
+        contract: "", abi: "", target: "", requires_hosted: false,
+        modules: vec.empty[model.CModule](), types: vec.empty[u32](),
+        callables: vec.empty[u32]()),
+        types: vec.empty[model.CTypeDecl](),
+        callables: vec.empty[model.CCallableDecl](),
+        type_identities: vec.empty[model.IdentitySpan](),
+        callable_identities: vec.empty[model.IdentitySpan]());
+    try {
+        pending = parse_c(inout state, snapshot, document,
+            store.c_type_identities, store.c_callable_identities,
+            type_count, callable_count, bundle_index, store.hosted);
+    } catch error Abort {
+        return failure_result(state);
+    }
+    for parsed in pending.types {
+        vec.push(store.c_types, parsed);
+    }
+    for parsed in pending.callables {
+        vec.push(store.c_callables, parsed);
+    }
+    vec.push(store.c_bindings, pending.bundle);
+    for identity in pending.type_identities {
+        vec.push(store.c_type_identities, identity);
+    }
+    for identity in pending.callable_identities {
+        vec.push(store.c_callable_identities, identity);
+    }
+    vec.push(store.c_paths, model.PathIndex(path: canonical,
+        index: bundle_index));
+    return success_result(bundle_index);
+}

@@ -1,11 +1,11 @@
 #!/usr/bin/env python3
 """Build and run the isolated selfhost paths test project at O0 and O2.
 
-The canonical oracle calls os.stat before os.path.realpath(strict=True), so
-the kernel checks file/. spellings and the symlink limit. The empty spelling
-follows std::filesystem::canonical and reports EINVAL, while Python realpath
-would return the current directory. A temporary project links the current
-selfhost modules; the prebuilt stage0 compiler builds the driver.
+Every canonical result is compared with a compiled std::filesystem::canonical
+oracle: successful spellings, the errno code and the exact filesystem_error
+text. The empty spelling follows canonical and reports EINVAL. A temporary
+project links the current selfhost modules; the prebuilt stage0 compiler builds
+the driver.
 """
 from __future__ import annotations
 
@@ -118,20 +118,25 @@ def fixtures(base: Path) -> list[str]:
     ]
 
 
-def expected(base: Path, case: str) -> tuple[str, str]:
-    if case == "":
-        # std::filesystem::canonical rejects the empty spelling with EINVAL;
-        # Python realpath("", strict=True) returns the current directory.
-        return ("ERR", "22")
-    # str(base / case) would drop trailing separators and dot components before
-    # the oracle could observe them.
-    target = case if os.path.isabs(case) else str(base) + "/" + case
-    try:
-        # Python 3.12 realpath skips file/. checks and the kernel's link limit.
-        os.stat(target)
-        return ("OK", os.path.realpath(target, strict=True))
-    except OSError as error:
-        return ("ERR", str(error.errno))
+def oracle_results(root: Path, base: Path, cases: list[str]) -> tuple[list[str], list[str]]:
+    """Run the C++ oracle; return its CANON lines and ERRNO lines."""
+    oracle = root / "oracle"
+    cxx = os.environ.get("CXX", "g++")
+    built = subprocess.run(
+        [cxx, "-std=c++20", "-O2", str(HERE / "oracle.cpp"), "-o", str(oracle)],
+        text=True, capture_output=True, env=dict(os.environ, LC_ALL="C"), timeout=120,
+    )
+    if built.returncode != 0:
+        raise RuntimeError(f"paths oracle build failed: {built.stderr}")
+    result = subprocess.run(
+        [str(oracle), *cases], cwd=base, text=True, capture_output=True,
+        env=dict(os.environ, LC_ALL="C"), timeout=60,
+    )
+    if result.returncode != 0:
+        raise RuntimeError(f"paths oracle failed: {result.stderr}")
+    lines = result.stdout.splitlines()
+    return ([line for line in lines if line.startswith("CANON\t")],
+            [line for line in lines if line.startswith("ERRNO\t")])
 
 
 def run(opt: str) -> tuple[int, int]:
@@ -140,19 +145,21 @@ def run(opt: str) -> tuple[int, int]:
         out_dir = root / "build"
         base = root / "fs"
         base.mkdir()
+        cases = fixtures(base)
+        expected_lines, expected_errno = oracle_results(root, base, cases)
         project = stage_project(root)
         build(opt, out_dir, project)
-        cases = fixtures(base)
         binary = out_dir / "program"
         result = subprocess.run(
             [str(binary), *cases],
             cwd=base,
             text=True,
             capture_output=True,
-            env=dict(os.environ, LD_LIBRARY_PATH=LD_LIBRARY_PATH), timeout=60,
+            env=dict(os.environ, LD_LIBRARY_PATH=LD_LIBRARY_PATH, LC_ALL="C"), timeout=60,
         )
         passed = failed = 0
-        canonical_seen = 0
+        actual_lines = []
+        actual_errno = []
         for line in result.stdout.splitlines():
             if line.startswith("SUMMARY\t"):
                 _, p, f = line.split("\t")
@@ -160,22 +167,29 @@ def run(opt: str) -> tuple[int, int]:
                 failed += int(f)
             elif line.startswith("FAIL\t"):
                 print(line)
-                failed += 0
             elif line.startswith("CANON\t"):
-                _, case, kind, payload = line.split("\t", 3)
-                want = expected(base, case)
-                got = (kind, payload)
-                canonical_seen += 1
-                if got == want:
-                    passed += 1
-                else:
-                    failed += 1
-                    print(f"FAIL\tcanonical [{case}] got={got} want={want}")
-        if canonical_seen != len(cases):
-            failed += len(cases) - canonical_seen
-            print(
-                f"FAIL\tcanonical count got={canonical_seen} want={len(cases)}"
-            )
+                actual_lines.append(line)
+            elif line.startswith("ERRNO\t"):
+                actual_errno.append(line)
+        # The errno text table is compared with the local generic_category.
+        for line in sorted(set(expected_errno) - set(actual_errno)):
+            failed += 1
+            print(f"FAIL\terrno text missing: {line}")
+        for line in sorted(set(actual_errno) - set(expected_errno)):
+            failed += 1
+            print(f"FAIL\terrno text differs: {line}")
+        matched_errno = len(set(expected_errno) & set(actual_errno))
+        passed += matched_errno
+        # Every canonical result, including the full filesystem_error text, is
+        # compared with the real C++ oracle in order.
+        for index in range(max(len(expected_lines), len(actual_lines))):
+            want = expected_lines[index] if index < len(expected_lines) else "<missing>"
+            got = actual_lines[index] if index < len(actual_lines) else "<missing>"
+            if got == want:
+                passed += 1
+            else:
+                failed += 1
+                print(f"FAIL\tcanonical [{index}]\n  oracle={want}\n  wzcc  ={got}")
         if result.stderr:
             print(result.stderr, file=sys.stderr, end="")
         if result.returncode != 0 and failed == 0:
@@ -183,7 +197,8 @@ def run(opt: str) -> tuple[int, int]:
             print(f"FAIL\tprogram exit {result.returncode}")
         print(
             f"paths --opt {opt}: passed={passed} failed={failed} "
-            f"checks={passed + failed} (join=16 canonical={len(cases)})"
+            f"checks={passed + failed} (join=16 errno={matched_errno} "
+            f"canonical={len(cases)})"
         )
         return passed, failed
     finally:

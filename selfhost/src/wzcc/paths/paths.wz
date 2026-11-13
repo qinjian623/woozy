@@ -6,11 +6,54 @@
 // preceding symlink was resolved, and ENOENT/ENOTDIR/ELOOP are preserved.
 // join is deliberately lexical: it never removes "." or "..", because doing so
 // before canonical would change the meaning around symlinks.
+//
+// error_message reproduces libstdc++ filesystem_error::what() without linking
+// libc's strerror: "filesystem error: OPERATION: MESSAGE [PATH]". The message
+// table only covers errno values reachable through these path operations; any
+// other code is reported the way std::generic_category()/strerror does on this
+// system, as "Unknown error N".
 package paths;
 
 import "std/os" as os;
+import "std/strconv" as strconv;
 import "std/text" as text;
 import "std/vec" as vec;
+
+// Linux/glibc generic_category text for the errno values these operations can
+// surface (ENOENT, EIO, ENOMEM, EACCES, EEXIST, ENOTDIR, EISDIR, EINVAL,
+// ENFILE, EMFILE, ENAMETOOLONG, ELOOP).
+pub func errno_text(code i32) string {
+    switch code {
+        case 2: return "No such file or directory";
+        case 5: return "Input/output error";
+        case 12: return "Cannot allocate memory";
+        case 13: return "Permission denied";
+        case 17: return "File exists";
+        case 20: return "Not a directory";
+        case 21: return "Is a directory";
+        case 22: return "Invalid argument";
+        case 23: return "Too many open files in system";
+        case 24: return "Too many open files";
+        case 36: return "File name too long";
+        case 40: return "Too many levels of symbolic links";
+        default: {}
+    }
+    return "Unknown error "+strconv.format_i64(i64(code));
+}
+
+// The path is the spelling passed to the filesystem operation, not a resolved
+// component; libstdc++ reports the argument it was given, including a trailing
+// separator, spaces and non-ASCII bytes.
+pub func error_message(operation string, name string, problem os.Error) string {
+    var detail = "no progress";
+    switch problem {
+        case os.Error.System(code,completed): detail=errno_text(code);
+        case os.Error.Interrupted(code,completed): detail=errno_text(code);
+        case os.Error.WouldBlock(code,completed): detail=errno_text(code);
+        case os.Error.NoProgress(completed): {}
+    }
+    return "filesystem error: "+operation+": "+detail+" ["+name+"]";
+}
 
 func is_absolute(value string) bool { return text.starts_with(value,"/"); }
 

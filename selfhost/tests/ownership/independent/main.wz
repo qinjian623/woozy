@@ -1,0 +1,236 @@
+package app;
+
+// Direct HIR ownership scenarios for the pure-Wz producer and verifier.
+// No stage0 helper or old frontend is called: every module below is built from
+// the published model/HIR records and compared against independently derived
+// obligations.
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/ownership" as ownership;
+import "app/wzcc/types" as types;
+import "app/wzcc/valueops" as valueops;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+import "app/wzcc/source" as src;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/parser" as parser;
+import "std/text" as text;
+
+struct Checks {
+    ok bool;
+    failures Vec[string];
+}
+
+func number(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func signed_number(value i64) string {
+    return strconv.format_i64(value);
+}
+
+func option_text(value option.Option[usize]) string {
+    switch value {
+        case option.Option.Some(found): return number(found);
+        case option.Option.None: return "-";
+    }
+}
+
+func cleanup_number(kind hir.CleanupKind) u32 {
+    switch kind {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func owner_number(kind hir.OwnerKind) u32 {
+    switch kind {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func mode_number(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func use_number(kind hir.UseKind) u32 {
+    switch kind {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func exit_number(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func action_text(action hir.CleanupStep) string {
+    return number(usize(cleanup_number(action.kind))) + ":" +
+           number(usize(owner_number(action.owner.kind))) + ":" +
+           number(usize(action.owner.identity)) + ":" +
+           number(action.type_id);
+}
+
+func actions_text(actions Vec[hir.CleanupStep]) string {
+    var text = "";
+    for var index usize = 0; index < vec.len(actions); index += 1 {
+        if index > 0 {
+            text += ",";
+        }
+        text += action_text(actions[index]);
+    }
+    return text;
+}
+
+func ids_text(values Vec[usize]) string {
+    var text = "";
+    for var index usize = 0; index < vec.len(values); index += 1 {
+        if index > 0 {
+            text += ",";
+        }
+        text += number(values[index]);
+    }
+    return text;
+}
+
+func target_text(target hir.ExitTarget) string {
+    switch target {
+        case hir.ExitTarget.ScopeExit(value):
+            return "S:" + option_text(value.scope);
+        case hir.ExitTarget.FunctionExit(value):
+            return "F:" + number(value.function);
+        case hir.ExitTarget.JumpExit(value):
+            return "J:" + number(value.node);
+        case hir.ExitTarget.CatchTarget(value):
+            return "C:" + number(value.try_node) + ":" +
+                   number(usize(value.index));
+    }
+}
+
+func if_bool(v bool) string {if v {return "1";}return "0";}
+func source() hir.HirSource {return hir.HirSource(node:model.NodeRef(module:0,file:0,node:0),span:model.Span(snapshot:7,begin_byte:0,end_byte:1));}
+func add(m inout hir.HirModule,k model.TypeKind,bits u32,a Vec[usize],d usize) usize throws model.SupportError {var t=model.empty_type(k);t.bits=bits;t.type_args=a;t.declaration=d;try {return types.intern(inout m.types,t);}catch e types.Error {switch e {case types.Error.Invalid(s):throw model.SupportError.Invalid(s);}}return 0;}
+func pt(mode model.ParamMode,t usize) model.ParameterType {return model.ParameterType(mode:mode,type_id:t);}
+func sig(m inout hir.HirModule,p Vec[model.ParameterType],r usize,e option.Option[usize]) usize throws model.SupportError {var t=model.empty_type(model.TypeKind.Function);t.parameters=p;t.result=r;t.throws_type=e;try {return types.intern(inout m.types,t);}catch e types.Error {switch e {case types.Error.Invalid(s):throw model.SupportError.Invalid(s);}}return 0;}
+func fresh() hir.HirModule throws model.SupportError {let r=model.ResolvedProject(project:model.empty_project(),symbols:[],occurrences:[],deferred_members:[],self_parameters:[]);var m=hir.empty_module(r,0,model.CheckConfig(backend:model.Backend.Native,word_bits:64));add(inout m,model.TypeKind.Unit,0,[],0);add(inout m,model.TypeKind.Bool,0,[],0);add(inout m,model.TypeKind.String,0,[],0);add(inout m,model.TypeKind.SignedInt,32,[],0);add(inout m,model.TypeKind.Isize,0,[],0);add(inout m,model.TypeKind.Usize,0,[],0);add(inout m,model.TypeKind.Vec,0,[4],0);add(inout m,model.TypeKind.Weak,0,[7],0);add(inout m,model.TypeKind.Task,0,[4,3],0);return m;}
+func push(m inout hir.HirModule,t usize,s usize,d hir.NodeData,c Vec[usize]) {let id=vec.len(m.nodes);var src=source();src.span.begin_byte=u64(id*10+3);src.span.end_byte=u64(id*10+5);vec.push(m.nodes,hir.HirNode(type_id:t,source:src,scope:s,children:c,data:d,errors:[],exits:[]));}
+func function(m inout hir.HirModule,sym usize,s usize,params Vec[usize],body usize,sc usize,a bool) {let p=vec.empty[hir.Parameter]();for x in params {vec.push(p,hir.Parameter(symbol:x,label:"x"));}vec.push(m.functions,hir.HirFunction(symbol:sym,signature:s,parameters:p,body:body,scope:sc,source:source(),captures:[],is_async:a));}
+func scope(m inout hir.HirModule,f usize,p option.Option[usize]) {vec.push(m.scopes,hir.HirScope(function:f,parent:p,source:source()));}
+func non() option.Option[usize] {return option.Option[usize].None;}
+func some(v usize) option.Option[usize] {return option.Option[usize].Some(v);}
+func actions(a Vec[hir.CleanupStep]) string {var out="";for x in a {out=out+action_text(x)+",";}return out;}
+func target(t hir.ExitTarget) string {switch t {case hir.ExitTarget.ScopeExit(v):return "S"+option_text(v.scope);case hir.ExitTarget.FunctionExit(v):return "F"+number(v.function);case hir.ExitTarget.JumpExit(v):return "J"+number(v.node);case hir.ExitTarget.CatchTarget(v):return "C"+number(v.try_node)+"/"+number(usize(v.index));}}
+func comma_ids(a Vec[usize]) string {var out="";for x in a {out=out+number(x)+",";}return out;}
+func records_text(m hir.HirModule) string {var out="";for x in m.ownership.uses {out=out+"use "+number(x.consumer)+":"+number(usize(x.operand))+":"+number(usize(use_number(x.kind)))+":"+option_text(x.root)+":"+number(x.type_id)+":"+option_text(x.destination)+"\n";}for x in m.ownership.temporaries {out=out+"temp "+number(x.producer)+":"+number(x.full_expression)+":"+number(x.type_id)+"\n";}for x in m.ownership.locals {out=out+"local "+number(x.symbol)+":"+number(x.scope)+":"+number(x.type_id)+":"+number(usize(x.order))+":"+number(usize(mode_number(x.mode)))+":"+if_bool(x.read_only_capture)+"\n";}for x in m.ownership.full_expressions {out=out+"full "+number(x.node)+":"+actions(x.actions)+"\n";}for x in m.ownership.calls {out=out+"call "+number(x.node)+":"+actions(x.on_return)+"\n";}for var i usize=0;i<vec.len(m.nodes);i+=1 {for x in m.nodes[i].exits {out=out+"exit "+number(i)+":"+number(usize(exit_number(x.kind)))+":"+option_text(x.error_type)+":"+target(x.target)+":"+comma_ids(x.exited_scopes)+":"+comma_ids(x.defers)+":"+if_bool(x.saves_value)+":"+actions(x.actions)+"\n";}}return out;}
+func failure(k model.FailureKind) string {switch k {case model.FailureKind.Source:return "0";case model.FailureKind.Unsupported:return "1";case model.FailureKind.Environment:return "2";case model.FailureKind.Internal:return "3";}}
+func phase(k model.PhaseState) string {switch k {case model.PhaseState.Complete:return "0";case model.PhaseState.Recovered:return "1";case model.PhaseState.Failed:return "2";case model.PhaseState.Cancelled:return "3";}}
+func result(label string,r model.UnitResult) throws os.Error {var out=label+"="+if_bool(r.has_value)+":"+phase(r.state)+":"+failure(r.failure);for d in r.diagnostics {var span="-";if d.has_primary {span=strconv.format_u64(d.primary.snapshot)+":"+strconv.format_u64(d.primary.begin_byte)+":"+strconv.format_u64(d.primary.end_byte);}out=out+"|"+d.code+":"+d.phase+":"+d.severity+":"+d.message+":"+span;}io.println(out);}
+func report(name string,m inout hir.HirModule) throws os.Error {io.println("CASE "+name);result("produce",ownership.produce_ownership(inout m));io.print(records_text(m));let before=records_text(m);let tc=types.size(m.types);result("verify",ownership.verify_ownership(m));io.println("verify.unchanged="+if_bool(before==records_text(m)&&tc==types.size(m.types)));result("repeat",ownership.produce_ownership(inout m));io.println("repeat.same="+if_bool(before==records_text(m)&&tc==types.size(m.types)));io.println("types="+number(types.size(m.types)));}
+func arg(i u32,mode model.ParamMode,e usize) hir.CallArg {return hir.CallArg(source_index:i,parameter_index:i,label:option.Option[string].None,mode:mode,expression:e);}
+func call_case() hir.HirModule throws model.SupportError {var m=fresh();scope(inout m,50,non());scope(inout m,60,non());let g=sig(inout m,[pt(model.ParamMode.Move,3),pt(model.ParamMode.Ordinary,3),pt(model.ParamMode.Ordinary,3)],1,some(3));let f=sig(inout m,[],1,some(3));push(inout m,1,0,hir.NodeData.Block(value:hir.Block()),[5]);push(inout m,3,0,hir.NodeData.StringLiteral(value:hir.StringLiteral(utf8:"a")),[]);push(inout m,3,0,hir.NodeData.StringLiteral(value:hir.StringLiteral(utf8:"b")),[]);push(inout m,3,0,hir.NodeData.StringLiteral(value:hir.StringLiteral(utf8:"c")),[]);let c=hir.Call(kind:hir.CalleeKind.Direct,signature:g,direct_symbol:some(60),callee:non(),args:[arg(0,model.ParamMode.Move,1),arg(1,model.ParamMode.Ordinary,2),arg(2,model.ParamMode.Ordinary,3)],type_args:[],binding:non(),c_callable:option.Option[u32].None,omitted:[],system:option.Option[u32].None);push(inout m,1,0,hir.NodeData.Call(value:c),[1,2,3]);push(inout m,1,0,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[4]);push(inout m,1,1,hir.NodeData.Block(value:hir.Block()),[]);function(inout m,50,f,[],0,0,false);function(inout m,60,g,[63,61,62],6,1,false);return m;}
+func short_case() hir.HirModule throws model.SupportError {var m=fresh();scope(inout m,50,non());let f=sig(inout m,[pt(model.ParamMode.Ordinary,2),pt(model.ParamMode.Ordinary,2),pt(model.ParamMode.Move,3)],1,non());push(inout m,1,0,hir.NodeData.Block(value:hir.Block()),[4]);push(inout m,2,0,hir.NodeData.Read(value:hir.Read(symbol:30)),[]);push(inout m,2,0,hir.NodeData.Read(value:hir.Read(symbol:10)),[]);push(inout m,2,0,hir.NodeData.ShortCircuit(value:hir.ShortCircuit(op:hir.LogicalOp.And)),[1,2]);push(inout m,1,0,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[3]);function(inout m,50,f,[30,10,20],0,0,false);return m;}
+func params_case(bad bool) hir.HirModule throws model.SupportError {var m=fresh();scope(inout m,50,non());let f=sig(inout m,[pt(model.ParamMode.Ordinary,3),pt(model.ParamMode.Inout,7),pt(model.ParamMode.Move,3)],1,non());push(inout m,1,0,hir.NodeData.Block(value:hir.Block()),[2,6,8,9]);push(inout m,3,0,hir.NodeData.Read(value:hir.Read(symbol:30)),[]);push(inout m,1,0,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[1]);push(inout m,7,0,hir.NodeData.Read(value:hir.Read(symbol:10)),[]);push(inout m,4,0,hir.NodeData.IntegerLiteral(value:hir.IntegerLiteral(decimal:"0",bits:0)),[]);push(inout m,4,0,hir.NodeData.IndexRead(value:hir.IndexRead()),[3,4]);push(inout m,1,0,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[5]);var binding usize=20;if bad {binding=30;}push(inout m,3,0,hir.NodeData.Move(value:hir.Move(binding:some(binding))),[]);push(inout m,1,0,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[7]);push(inout m,1,0,hir.NodeData.Return(value:hir.Return(function:50)),[]);function(inout m,50,f,[30,10,20],0,0,false);return m;}
+func index_case(pure bool) hir.HirModule throws model.SupportError {var m=fresh();scope(inout m,50,non());let f=sig(inout m,[],1,non());push(inout m,1,0,hir.NodeData.Block(value:hir.Block()),[1,11,4,10]);push(inout m,1,0,hir.NodeData.Binding(value:hir.Binding(symbol:35,writable:false)),[2]);push(inout m,7,0,hir.NodeData.VecInit(value:hir.VecInit()),[3]);push(inout m,4,0,hir.NodeData.IntegerLiteral(value:hir.IntegerLiteral(decimal:"9",bits:9)),[]);push(inout m,1,0,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[5]);push(inout m,4,0,hir.NodeData.IndexRead(value:hir.IndexRead()),[6,7]);push(inout m,7,0,hir.NodeData.Read(value:hir.Read(symbol:35)),[]);if pure {push(inout m,4,0,hir.NodeData.Binary(value:hir.Binary(op:hir.BinaryOp.Add)),[8,9]);}else {push(inout m,5,0,hir.NodeData.IntegerConvert(value:hir.IntegerConvert()),[8]);}push(inout m,4,0,hir.NodeData.IntegerLiteral(value:hir.IntegerLiteral(decimal:"0",bits:0)),[]);push(inout m,4,0,hir.NodeData.IntegerLiteral(value:hir.IntegerLiteral(decimal:"0",bits:0)),[]);push(inout m,1,0,hir.NodeData.Return(value:hir.Return(function:50)),[]);push(inout m,1,0,hir.NodeData.Binding(value:hir.Binding(symbol:5,writable:false)),[12]);push(inout m,3,0,hir.NodeData.StringLiteral(value:hir.StringLiteral(utf8:"hold")),[]);function(inout m,50,f,[],0,0,false);return m;}
+func await_case() hir.HirModule throws model.SupportError {var m=fresh();scope(inout m,50,non());scope(inout m,50,some(0));scope(inout m,50,some(0));scope(inout m,50,some(0));let f=sig(inout m,[pt(model.ParamMode.Move,9),pt(model.ParamMode.Move,3)],1,some(3));push(inout m,1,0,hir.NodeData.Block(value:hir.Block()),[1,4,13]);push(inout m,1,0,hir.NodeData.Defer(value:hir.Defer(owner_scope:0,references:[20])),[2]);push(inout m,1,1,hir.NodeData.Block(value:hir.Block()),[3]);push(inout m,1,1,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[14]);let tr=hir.Try(catches:[hir.Catch(error_type:3,binding:40,scope:3,body:9,source:source())]);push(inout m,1,0,hir.NodeData.Try(value:tr),[5,9]);push(inout m,1,2,hir.NodeData.Block(value:hir.Block()),[6]);push(inout m,1,2,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[7]);push(inout m,4,2,hir.NodeData.Await(value:hir.Await()),[8]);push(inout m,9,2,hir.NodeData.Read(value:hir.Read(symbol:30)),[]);push(inout m,1,3,hir.NodeData.Block(value:hir.Block()),[10]);push(inout m,1,3,hir.NodeData.ExpressionStatement(value:hir.ExpressionStatement()),[11]);push(inout m,3,3,hir.NodeData.Read(value:hir.Read(symbol:40)),[]);push(inout m,1,0,hir.NodeData.Noop(value:hir.Noop()),[]);push(inout m,1,0,hir.NodeData.Return(value:hir.Return(function:50)),[]);push(inout m,3,1,hir.NodeData.Read(value:hir.Read(symbol:20)),[]);function(inout m,50,f,[30,20],0,0,true);return m;}
+func nominal(sym usize,params Vec[hir.GenericParam],fields Vec[hir.FieldDecl]) hir.NominalDecl {return hir.NominalDecl(symbol:sym,kind:model.TypeKind.NominalStruct,params:params,fields:fields,variants:[],source:source());}
+func gp(sym usize) hir.GenericParam {return hir.GenericParam(symbol:sym,trait_ref:option.Option[hir.TraitRef].None,source:source());}
+func field(sym usize,t usize) hir.FieldDecl {return hir.FieldDecl(symbol:sym,type_id:t,exported:false,source:source());}
+func support_message(e model.SupportError) string {switch e {case model.SupportError.Invalid(s):return s;case model.SupportError.Limit(s):return s;}}
+func values() throws os.Error {try {var m=fresh();for id in [usize(5),usize(6),usize(7),usize(8),usize(9)] {io.println("copy."+number(id)+"="+if_bool(valueops.ordinary_copyable(m,id)));}let t=add(inout m,model.TypeKind.TypeParameter,0,[],100);let inner=add(inout m,model.TypeKind.NominalStruct,0,[t],101);let v=add(inout m,model.TypeKind.Vec,0,[t],0);let innervec=add(inout m,model.TypeKind.NominalStruct,0,[v],101);let outerstr=add(inout m,model.TypeKind.NominalStruct,0,[3],102);m.nominals=[nominal(101,[gp(100)],[field(111,t)]),nominal(102,[gp(100)],[field(112,innervec)])];let count=types.size(m.types);let copy=valueops.ordinary_copyable(m,outerstr);let own=valueops.owning_value(m,outerstr);let data=valueops.inout_data_type(m,outerstr,[]);let slot=valueops.inout_slot(m,outerstr,[]);var slot_id="0";switch slot {case hir.InoutSlot.Allowed:slot_id="0";case hir.InoutSlot.Unit:slot_id="1";case hir.InoutSlot.Task:slot_id="2";case hir.InoutSlot.External:slot_id="3";case hir.InoutSlot.TypeParameter:slot_id="4";case hir.InoutSlot.Unsupported:slot_id="5";}io.println("generic.private="+if_bool(copy)+":"+if_bool(own)+":"+if_bool(data)+":"+slot_id+":"+if_bool(count==types.size(m.types)));scope(inout m,50,non());let f=sig(inout m,[pt(model.ParamMode.Ordinary,outerstr)],1,non());push(inout m,1,0,hir.NodeData.Block(value:hir.Block()),[]);function(inout m,50,f,[30],0,0,false);report("generic-completion",inout m);ownership.produce_ownership(inout m);let ops=valueops.classify_value(m,outerstr);var out="generic.fields=";for f in ops.fields {out=out+number(f.field)+":"+number(f.type_id)+",";}io.println(out);ops.fields[0].type_id=2;let next=valueops.classify_value(m,outerstr);io.println("generic.field.isolated="+if_bool(next.fields[0].type_id!=2));}catch e model.SupportError {io.println("values.error="+support_message(e));}}
+func layout(infinite bool) throws os.Error {try {var m=fresh();let t=add(inout m,model.TypeKind.TypeParameter,0,[],100);let u=add(inout m,model.TypeKind.TypeParameter,0,[],101);let rec=add(inout m,model.TypeKind.NominalStruct,0,[],200);var args Vec[usize]=[4,rec];if infinite {args=[rec,4];}let pair=add(inout m,model.TypeKind.NominalStruct,0,args,201);m.nominals=[nominal(200,[],[field(210,pair)]),nominal(201,[gp(100),gp(101)],[field(211,t)])];let before=types.size(m.types);let v=valueops.infinite_value_layout(m);io.println("layout."+if_bool(infinite)+"="+option_text(v)+":"+if_bool(before==types.size(m.types)));}catch e model.SupportError {io.println("layout.error="+support_message(e));}}
+func classification_kind(kind hir.ValueKind) u32 {
+    switch kind {
+        case hir.ValueKind.Trivial: return 0;
+        case hir.ValueKind.Vec: return 1;
+        case hir.ValueKind.Structure: return 2;
+        case hir.ValueKind.Enumeration: return 3;
+        case hir.ValueKind.Dependent: return 4;
+        case hir.ValueKind.Unsupported: return 5;
+        case hir.ValueKind.ForeignReference: return 6;
+        case hir.ValueKind.ForeignCallable: return 7;
+        case hir.ValueKind.ForeignError: return 8;
+        case hir.ValueKind.CPointer: return 9;
+        case hir.ValueKind.CBuffer: return 10;
+        case hir.ValueKind.CRecord: return 11;
+        case hir.ValueKind.CResource: return 12;
+        case hir.ValueKind.CCallback: return 13;
+        case hir.ValueKind.RuntimeHandle: return 14;
+        case hir.ValueKind.String: return 15;
+        case hir.ValueKind.Slice: return 16;
+        case hir.ValueKind.Function: return 17;
+        case hir.ValueKind.Weak: return 18;
+        case hir.ValueKind.TraitObject: return 19;
+    }
+}
+
+func classification_slot(slot hir.InoutSlot) u32 {
+    switch slot {
+        case hir.InoutSlot.Allowed: return 0;
+        case hir.InoutSlot.Unit: return 1;
+        case hir.InoutSlot.Task: return 2;
+        case hir.InoutSlot.External: return 3;
+        case hir.InoutSlot.TypeParameter: return 4;
+        case hir.InoutSlot.Unsupported: return 5;
+    }
+}
+
+
+
+func sym(id usize,name string,kind model.SymbolKind,module usize,node usize,exported bool) model.Symbol {return model.Symbol(id:id,name:name,kind:kind,module:module,definition:option.Option[model.NodeRef].Some(model.NodeRef(module:module,file:0,node:node)),declaration:option.Option[model.Span].None,exported:exported,target:non(),foreign:option.Option[model.ForeignExportRef].None);}
+func module_record(id usize,path string,files Vec[usize]) model.Module {return model.Module(id:id,logical_path:path,identity:path,package_name:"box",files:files,imports:[],foreign_exports:[],binding:option.Option[model.BindingModuleRef].None,c_binding:non());}
+func box_case() throws os.Error {try {var m=fresh();let raw=`// A shared mutable value cell.
+//
+// Box[T] stores exactly one T in a private one-element Vec[T].  Copying a Box
+// copies the Vec handle by the ordinary value rules, so every copy refers to
+// the same cell.  The field is private: callers can only observe the cell
+// through new, get and set.  There is no public API for its raw storage or for
+// changing the cell length.
+package box;
+
+import "std/vec" as vec;
+
+pub struct Box[T] {
+    cell Vec[T];
+}
+
+// new creates a cell holding one ordinary copy of value.
+pub func new[T](value T) Box[T] {
+    return Box[T](cell: vec.make[T](1, value));
+}
+
+// get returns an ordinary owned copy of the current value.
+pub func get[T](value Box[T]) T {
+    return value.cell[0];
+}
+
+// set replaces the current value with an ordinary copy of next.  Vec element
+// assignment drops the previous element exactly once and installs that copy.
+pub func set[T](value Box[T], next T) {
+    value.cell[0] = next;
+}
+`;let p=parser.parse(lexer.lex(src.snapshot(8,1,8,"stdlib/box/box.wz",text.bytes(raw))));if !p.has_value || p.recovered {io.println("Box parse error");return;}var st usize=0;var fd usize=0;var param usize=0;for var i usize=0;i<vec.len(p.nodes);i+=1 {if model.ast_kind_id(p.nodes[i].kind)==model.ast_kind_id(model.AstKind.Struct) {st=i;}if model.ast_kind_id(p.nodes[i].kind)==model.ast_kind_id(model.AstKind.Field) {fd=i;}}for ch in p.nodes[st].children {if model.ast_kind_id(p.nodes[ch].kind)==model.ast_kind_id(model.AstKind.GenericParameter) {param=ch;}}var project=model.empty_project();project.modules=[module_record(0,"app",[]),module_record(1,"std/box",[0])];project.files=[p];m.resolved=model.ResolvedProject(project:project,symbols:[sym(0,"i32",model.SymbolKind.BuiltinType,0,0,true),sym(1,"Box",model.SymbolKind.Type,1,st,true),sym(2,"cell",model.SymbolKind.Field,1,fd,false),sym(3,"T",model.SymbolKind.TypeParameter,1,param,false)],occurrences:[],deferred_members:[],self_parameters:[]);let tp=add(inout m,model.TypeKind.TypeParameter,0,[],3);let v=add(inout m,model.TypeKind.Vec,0,[tp],0);let box=add(inout m,model.TypeKind.NominalStruct,0,[4],1);let weak=add(inout m,model.TypeKind.Weak,0,[box],0);m.nominals=[nominal(1,[gp(3)],[field(2,v)])];let size=types.size(m.types);let ops=valueops.classify_value(m,box);io.println("box.actual="+if_bool(valueops.weak_target(m,box))+":"+if_bool(valueops.weak_target(m,weak))+":"+if_bool(valueops.ordinary_copyable(m,box))+":"+if_bool(valueops.owning_value(m,box))+":"+if_bool(valueops.inout_data_type(m,box,[]))+":"+number(usize(classification_slot(valueops.inout_slot(m,box,[]))))+":"+number(usize(classification_kind(ops.kind)))+":"+if_bool(ops.needs_drop)+":"+number(ops.fields[0].type_id)+":"+if_bool(size==types.size(m.types)));m.resolved.project.modules[1].logical_path="app/box";io.println("box.user="+if_bool(valueops.weak_target(m,box)));}catch e model.SupportError {io.println("box.error="+support_message(e));}}
+
+func main() i32 throws os.Error {box_case();values();layout(false);layout(true);try {var a=call_case();report("call-temp-order",inout a);var b=short_case();report("short-bool-borrows",inout b);var c=params_case(false);report("param-modes",inout c);var d=params_case(true);report("borrowed-move-error",inout d);var e=index_case(true);report("local-index-pure",inout e);var f=index_case(false);report("local-index-convert",inout f);var g=await_case();report("await-try-defer",inout g);}catch e model.SupportError {io.println("driver.error="+support_message(e));return 2;}return 0;}

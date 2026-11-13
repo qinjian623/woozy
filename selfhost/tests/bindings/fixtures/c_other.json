@@ -1,0 +1,28 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {"logical_path": "other/lib", "provider": "native_library", "library": "other_fixture"}
+  ],
+  "types": [
+    {"id": "other.Handler", "module": "other/lib", "name": "Handler", "kind": "callback", "result": "i32", "parameters": [
+      {"name": "value", "type": "i32"},
+      {"name": "context", "type": "PtrMut[Unit]"}
+    ]},
+    {"id": "other.Session", "module": "other/lib", "name": "Session", "kind": "resource",
+     "registration": {"callback": "other.Handler", "unregister_symbol": "other_close"}}
+  ],
+  "callables": [
+    {"id": "other.open", "module": "other/lib", "name": "open", "symbol": "other_open", "parameters": [
+      {"name": "handler", "type": "other.Handler"},
+      {"name": "context", "type": "PtrMut[Unit]"}
+    ], "result": {"type": "other.Session", "ownership": "owned"},
+     "registers": {"callback_parameter": "handler", "userdata_parameter": "context", "callback_userdata_parameter": "context"}},
+    {"id": "other.close", "module": "other/lib", "name": "close", "symbol": "other_close", "parameters": [
+      {"name": "session", "type": "other.Session"}
+    ], "result": {"type": "Unit", "ownership": "unit"}}
+  ]
+}

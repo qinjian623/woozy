@@ -1,0 +1,261 @@
+// Structural equality for published ownership records and exit plans.
+//
+// The independent verifier compares re-derived values field by field in the
+// same order as the C++ generated equality, never by pointer/handle identity.
+package ownership;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+func same_id(id hir.OwnerKind) u32 {
+    switch id {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func same_cleanup_id(id hir.CleanupKind) u32 {
+    switch id {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func same_use_id(id hir.UseKind) u32 {
+    switch id {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func same_exit_id(id hir.ExitKind) u32 {
+    switch id {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func same_mode(left hir.OwnerRef, right hir.OwnerRef) bool {
+    return same_id(left.kind) == same_id(right.kind) &&
+           left.identity == right.identity;
+}
+
+func same_owner(left hir.CleanupStep, right hir.CleanupStep) bool {
+    return same_cleanup_id(left.kind) == same_cleanup_id(right.kind) &&
+           same_mode(left.owner, right.owner) && left.type_id == right.type_id;
+}
+
+func same_optional(left option.Option[usize], right option.Option[usize]) bool {
+    switch left {
+        case option.Option.Some(a):
+            switch right {
+                case option.Option.Some(b): return a == b;
+                case option.Option.None: return false;
+            }
+        case option.Option.None:
+            switch right {
+                case option.Option.Some(_): return false;
+                case option.Option.None: return true;
+            }
+    }
+}
+
+func same_use(left hir.ValueUse, right hir.ValueUse) bool {
+    return left.consumer == right.consumer && left.operand == right.operand &&
+           same_use_id(left.kind) == same_use_id(right.kind) &&
+           same_optional(left.root, right.root) &&
+           left.type_id == right.type_id &&
+           same_optional(left.destination, right.destination);
+}
+
+func same_steps(left Vec[hir.CleanupStep], right Vec[hir.CleanupStep]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if !same_owner(left[index], right[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func same_ids(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func same_ownership(left hir.Ownership, right hir.Ownership) bool {
+    if vec.len(left.uses) != vec.len(right.uses) ||
+       vec.len(left.temporaries) != vec.len(right.temporaries) ||
+       vec.len(left.locals) != vec.len(right.locals) ||
+       vec.len(left.full_expressions) != vec.len(right.full_expressions) ||
+       vec.len(left.calls) != vec.len(right.calls) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left.uses); index += 1 {
+        if !same_use(left.uses[index], right.uses[index]) {
+            return false;
+        }
+    }
+    for var index usize = 0; index < vec.len(left.temporaries); index += 1 {
+        let a = left.temporaries[index];
+        let b = right.temporaries[index];
+        if a.producer != b.producer ||
+           a.full_expression != b.full_expression || a.type_id != b.type_id {
+            return false;
+        }
+    }
+    for var index usize = 0; index < vec.len(left.locals); index += 1 {
+        let a = left.locals[index];
+        let b = right.locals[index];
+        if a.symbol != b.symbol || a.scope != b.scope ||
+           a.type_id != b.type_id || a.order != b.order ||
+           same_local_mode(a.mode) != same_local_mode(b.mode) ||
+           a.read_only_capture != b.read_only_capture {
+            return false;
+        }
+    }
+    for var index usize = 0; index < vec.len(left.full_expressions); index += 1 {
+        let a = left.full_expressions[index];
+        let b = right.full_expressions[index];
+        if a.node != b.node || !same_steps(a.actions, b.actions) {
+            return false;
+        }
+    }
+    for var index usize = 0; index < vec.len(left.calls); index += 1 {
+        let a = left.calls[index];
+        let b = right.calls[index];
+        if a.node != b.node || !same_steps(a.on_return, b.on_return) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func same_local_mode(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func same_target(left hir.ExitTarget, right hir.ExitTarget) bool {
+    switch left {
+        case hir.ExitTarget.ScopeExit(a):
+            switch right {
+                case hir.ExitTarget.ScopeExit(b):
+                    return same_optional(a.scope, b.scope);
+                case _: return false;
+            }
+        case hir.ExitTarget.FunctionExit(a):
+            switch right {
+                case hir.ExitTarget.FunctionExit(b):
+                    return a.function == b.function;
+                case _: return false;
+            }
+        case hir.ExitTarget.JumpExit(a):
+            switch right {
+                case hir.ExitTarget.JumpExit(b):
+                    return a.node == b.node;
+                case _: return false;
+            }
+        case hir.ExitTarget.CatchTarget(a):
+            switch right {
+                case hir.ExitTarget.CatchTarget(b):
+                    return a.try_node == b.try_node && a.index == b.index;
+                case _: return false;
+            }
+    }
+}
+
+func same_exit(left hir.ExitPlan, right hir.ExitPlan) bool {
+    return same_exit_id(left.kind) == same_exit_id(right.kind) &&
+           same_optional(left.error_type, right.error_type) &&
+           same_target(left.target, right.target) &&
+           same_ids(left.exited_scopes, right.exited_scopes) &&
+           same_ids(left.defers, right.defers) &&
+           left.saves_value == right.saves_value &&
+           same_steps(left.actions, right.actions);
+}
+
+func same_exits(left Vec[hir.ExitPlan], right Vec[hir.ExitPlan]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if !same_exit(left[index], right[index]) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func same_value_kind(left hir.ValueKind, right hir.ValueKind) bool {
+    return value_kind_id(left) == value_kind_id(right);
+}
+
+func value_kind_id(kind hir.ValueKind) u32 {
+    switch kind {
+        case hir.ValueKind.Trivial: return 0;
+        case hir.ValueKind.Vec: return 1;
+        case hir.ValueKind.Structure: return 2;
+        case hir.ValueKind.Enumeration: return 3;
+        case hir.ValueKind.Dependent: return 4;
+        case hir.ValueKind.Unsupported: return 5;
+        case hir.ValueKind.ForeignReference: return 6;
+        case hir.ValueKind.ForeignCallable: return 7;
+        case hir.ValueKind.ForeignError: return 8;
+        case hir.ValueKind.CPointer: return 9;
+        case hir.ValueKind.CBuffer: return 10;
+        case hir.ValueKind.CRecord: return 11;
+        case hir.ValueKind.CResource: return 12;
+        case hir.ValueKind.CCallback: return 13;
+        case hir.ValueKind.RuntimeHandle: return 14;
+        case hir.ValueKind.String: return 15;
+        case hir.ValueKind.Slice: return 16;
+        case hir.ValueKind.Function: return 17;
+        case hir.ValueKind.Weak: return 18;
+        case hir.ValueKind.TraitObject: return 19;
+    }
+}
+
+func same_value_ops(left hir.ValueOps, right hir.ValueOps) bool {
+    if !same_value_kind(left.kind, right.kind) ||
+       left.needs_drop != right.needs_drop ||
+       left.pod_inout != right.pod_inout || left.reason != right.reason ||
+       vec.len(left.fields) != vec.len(right.fields) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left.fields); index += 1 {
+        if !same_optional(left.fields[index].variant,
+                right.fields[index].variant) ||
+           left.fields[index].field != right.fields[index].field ||
+           left.fields[index].type_id != right.fields[index].type_id {
+            return false;
+        }
+    }
+    return true;
+}

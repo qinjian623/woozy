@@ -1,0 +1,1669 @@
+// Pure-Wz value classification for typed HIR.
+//
+// This package is the stage-1 counterpart of Classifier and the value helpers
+// in src/hir/ownership.cpp plus infinite_value_layout from src/hir/hir.cpp.
+// Every public operation only reads its HirModule.  Substitution uses a
+// private clone of the module TypeContext so storage-only member types never
+// escape into the caller's table.  Shared standard types are found by their
+// real resolved declaration, never by a similar name or a fabricated record.
+package valueops;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+import "std/vec" as vec;
+
+const COMPLETION_DEPTH usize = 128;
+const COMPLETION_TYPES usize = 4096;
+const CLASSIFICATION_DEPTH usize = 512;
+const CLASSIFICATION_TYPES usize = 65536;
+const MAX_WEIGHT usize = 18446744073709551615;
+
+struct UsedEntry {
+    declaration usize;
+    indices Vec[usize];
+}
+
+struct DependencyEntry {
+    declaration usize;
+    targets Vec[usize];
+}
+
+struct DependentsEntry {
+    target usize;
+    parents Vec[usize];
+}
+
+struct ActiveNominal {
+    declaration usize;
+    function_depth usize;
+    weight usize;
+}
+
+struct MemoEntry {
+    type_id usize;
+    slot hir.InoutSlot;
+}
+
+struct Support {
+    kind hir.ValueKind;
+    reason string;
+}
+
+struct Classifier {
+    scratch types.Context;
+    support_seen Vec[usize];
+    support_count usize;
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func type_missing(state types.Context, id usize) bool {
+    switch types.find(state, id) {
+        case option.Option.Some(_): return false;
+        case option.Option.None: return true;
+    }
+}
+
+func type_of(module hir.HirModule, id usize) model.Type throws model.SupportError {
+    switch types.find(module.types, id) {
+        case option.Option.Some(value): return value;
+        case option.Option.None:
+            throw model.SupportError.Invalid(
+                "ownership type is not in public TypeContext");
+    }
+}
+
+func declaration_of(module hir.HirModule, id usize) hir.NominalDecl
+    throws model.SupportError {
+    for nominal in module.nominals {
+        if nominal.symbol == id {
+            return nominal;
+        }
+    }
+    throw model.SupportError.Invalid("ownership nominal declaration missing");
+}
+
+func option_usize(value option.Option[usize]) usize {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+func ids_contains(values Vec[usize], value usize) bool {
+    for item in values {
+        if item == value {
+            return true;
+        }
+    }
+    return false;
+}
+
+func ids_insert(values Vec[usize], value usize) bool {
+    if ids_contains(values, value) {
+        return false;
+    }
+    vec.push(values, value);
+    return true;
+}
+
+func copy_ids(values Vec[usize]) Vec[usize] {
+    let out = vec.empty[usize]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, value);
+    }
+    return out;
+}
+
+func used_index(entries Vec[UsedEntry], declaration usize) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].declaration == declaration {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func dependency_index(entries Vec[DependencyEntry], declaration usize) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].declaration == declaration {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func dependents_index(entries Vec[DependentsEntry], target usize) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].target == target {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func add_used(entries Vec[UsedEntry], declaration usize, index usize) bool {
+    let found = used_index(entries, declaration);
+    if found < 0 {
+        return false;
+    }
+    return ids_insert(entries[usize(found)].indices, index);
+}
+
+func used_at(entries Vec[UsedEntry], declaration usize) Vec[usize]
+    throws model.SupportError {
+    let found = used_index(entries, declaration);
+    if found < 0 {
+        throw model.SupportError.Invalid("layout has invalid type");
+    }
+    return entries[usize(found)].indices;
+}
+
+// Walks one declared field type.  In layout mode the declaration's parameter
+// positions demanded by the type graph are collected.  In dependency mode the
+// nominal declarations reached through those demanded arguments are collected.
+func walk_layout(module hir.HirModule, used Vec[UsedEntry], root usize,
+                 used_mode bool, declaration usize,
+                 parameters Vec[hir.GenericParam], dependencies Vec[usize])
+    throws model.SupportError {
+    let pending = vec.empty[usize]();
+    vec.push(pending, root);
+    let seen = vec.empty[usize]();
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let id = option_usize(popped);
+        if !ids_insert(seen, id) {
+            continue;
+        }
+        let value = type_of(module, id);
+        if used_mode {
+            if kind_is(value.kind, model.TypeKind.TypeParameter) {
+                for var index usize = 0; index < vec.len(parameters); index += 1 {
+                    if value.declaration == parameters[index].symbol {
+                        add_used(used, declaration, index);
+                    }
+                }
+            }
+        } else {
+            if kind_is(value.kind, model.TypeKind.NominalStruct) ||
+               kind_is(value.kind, model.TypeKind.NominalEnum) {
+                ids_insert(dependencies, value.declaration);
+            }
+        }
+        if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+           !kind_is(value.kind, model.TypeKind.NominalEnum) {
+            continue;
+        }
+        let demanded = used_at(used, value.declaration);
+        for index in demanded {
+            if index >= vec.len(value.type_args) {
+                throw model.SupportError.Invalid("layout has invalid type");
+            }
+            vec.push(pending, value.type_args[index]);
+        }
+    }
+}
+
+pub func infinite_value_layout(module hir.HirModule) option.Option[usize]
+    throws model.SupportError {
+    // A value layout depends on a subset of its type arguments.  Find that
+    // subset from declarations without substituting or interning new types.
+    let used = vec.empty[UsedEntry]();
+    for nominal in module.nominals {
+        vec.push(used, UsedEntry(declaration: nominal.symbol, indices: []));
+    }
+    var changed = true;
+    for changed {
+        changed = false;
+        for nominal in module.nominals {
+            let found = used_index(used, nominal.symbol);
+            if found < 0 {
+                continue;
+            }
+            let before = vec.len(used[usize(found)].indices);
+            for field in nominal.fields {
+                walk_layout(module, used, field.type_id, true, nominal.symbol,
+                    nominal.params, vec.empty[usize]());
+            }
+            for variant in nominal.variants {
+                for field in variant.payload {
+                    walk_layout(module, used, field.type_id, true,
+                        nominal.symbol, nominal.params, vec.empty[usize]());
+                }
+            }
+            if vec.len(used[usize(found)].indices) != before {
+                changed = true;
+            }
+        }
+    }
+
+    // Only demanded argument types contribute declaration dependencies.
+    // Removing all finite leaves leaves exactly cycles and their dependents.
+    let dependencies = vec.empty[DependencyEntry]();
+    for nominal in module.nominals {
+        let targets = vec.empty[usize]();
+        for field in nominal.fields {
+            walk_layout(module, used, field.type_id, false, nominal.symbol,
+                nominal.params, targets);
+        }
+        for variant in nominal.variants {
+            for field in variant.payload {
+                walk_layout(module, used, field.type_id, false,
+                    nominal.symbol, nominal.params, targets);
+            }
+        }
+        vec.push(dependencies,
+            DependencyEntry(declaration: nominal.symbol, targets: targets));
+    }
+    let dependents = vec.empty[DependentsEntry]();
+    let leaves = vec.empty[usize]();
+    for entry in dependencies {
+        for target in entry.targets {
+            let found = dependents_index(dependents, target);
+            if found < 0 {
+                let parents = vec.empty[usize]();
+                vec.push(parents, entry.declaration);
+                vec.push(dependents,
+                    DependentsEntry(target: target, parents: parents));
+            } else if !ids_contains(
+                           dependents[usize(found)].parents,
+                           entry.declaration) {
+                vec.push(dependents[usize(found)].parents, entry.declaration);
+            }
+        }
+        if vec.len(entry.targets) == 0 {
+            vec.push(leaves, entry.declaration);
+        }
+    }
+    for vec.len(leaves) > 0 {
+        let popped = vec.pop(leaves);
+        let finite = option_usize(popped);
+        let found = dependents_index(dependents, finite);
+        if found < 0 {
+            continue;
+        }
+        let parents = copy_ids(dependents[usize(found)].parents);
+        for parent in parents {
+            let position = dependency_index(dependencies, parent);
+            if position < 0 {
+                continue;
+            }
+            let targets = dependencies[usize(position)].targets;
+            var remove = -1;
+            for var index usize = 0; index < vec.len(targets); index += 1 {
+                if targets[index] == finite {
+                    remove = i64(index);
+                    break;
+                }
+            }
+            if remove < 0 {
+                continue;
+            }
+            let last = vec.len(targets) - 1;
+            if usize(remove) != last {
+                targets[usize(remove)] = targets[last];
+            }
+            let discarded = vec.pop(targets);
+            if vec.len(targets) == 0 {
+                vec.push(leaves, parent);
+            }
+        }
+    }
+    for nominal in module.nominals {
+        let position = dependency_index(dependencies, nominal.symbol);
+        if position >= 0 && vec.len(dependencies[usize(position)].targets) > 0 {
+            return option.Option[usize].Some(nominal.symbol);
+        }
+    }
+    return option.Option[usize].None;
+}
+
+func type_weight(scratch types.Context, id usize, depth usize) usize {
+    if depth > COMPLETION_DEPTH {
+        return MAX_WEIGHT;
+    }
+    switch types.find(scratch, id) {
+        case option.Option.None: return MAX_WEIGHT;
+        case option.Option.Some(value): {
+            var result usize = 1;
+            for argument in value.type_args {
+                let weight = type_weight(scratch, argument, depth + 1);
+                if weight == MAX_WEIGHT || result > MAX_WEIGHT - weight {
+                    return MAX_WEIGHT;
+                }
+                result += weight;
+            }
+            return result;
+        }
+    }
+}
+
+func substitute_support(scratch inout types.Context, id usize,
+                        substitutions Vec[model.Substitution]) usize
+    throws model.SupportError {
+    try {
+        return types.substitute(id, substitutions, inout scratch);
+    } catch error types.Error {
+        switch error {
+            case types.Error.Invalid(message):
+                throw model.SupportError.Invalid(message);
+        }
+    }
+}
+
+func active_contains(active Vec[ActiveNominal], declaration usize,
+                     function_depth usize, weight usize) bool {
+    for item in active {
+        if item.declaration == declaration &&
+           item.function_depth == function_depth &&
+           weight >= item.weight {
+            return true;
+        }
+    }
+    return false;
+}
+
+func inout_data_visit(module hir.HirModule, scratch inout types.Context,
+                      parameters Vec[usize], active inout Vec[ActiveNominal],
+                      id usize, member bool, depth usize,
+                      function_depth usize) bool throws model.SupportError {
+    if depth > COMPLETION_DEPTH {
+        return false;
+    }
+    var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(scratch, id) {
+        case option.Option.Some(found): value = found;
+        case option.Option.None: return false;
+    }
+    if kind_is(value.kind, model.TypeKind.Unit) {
+        return member;
+    }
+    if kind_is(value.kind, model.TypeKind.Function) {
+        return false;
+    }
+    if kind_is(value.kind, model.TypeKind.Bool) ||
+       kind_is(value.kind, model.TypeKind.SignedInt) ||
+       kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+       kind_is(value.kind, model.TypeKind.Isize) ||
+       kind_is(value.kind, model.TypeKind.Usize) ||
+       kind_is(value.kind, model.TypeKind.Float) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.TypeParameter) {
+        return ids_contains(parameters, value.declaration);
+    }
+    if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+       !kind_is(value.kind, model.TypeKind.NominalEnum) {
+        return false;
+    }
+    var nominal = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Unit,
+        params: [], fields: [], variants: [],
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
+    var found_nominal = false;
+    for candidate in module.nominals {
+        if candidate.symbol == value.declaration {
+            nominal = candidate;
+            found_nominal = true;
+            break;
+        }
+    }
+    if !found_nominal ||
+       vec.len(value.type_args) != vec.len(nominal.params) {
+        return false;
+    }
+    let weight = type_weight(scratch, id, depth);
+    if active_contains(active, value.declaration, function_depth, weight) {
+        return false;
+    }
+    vec.push(active, ActiveNominal(declaration: value.declaration,
+        function_depth: function_depth, weight: weight));
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    var ok = true;
+    for field in nominal.fields {
+        let concrete = substitute_support(inout scratch, field.type_id,
+            substitutions);
+        if !inout_data_visit(module, inout scratch, parameters, inout active,
+                concrete, true, depth + 1, function_depth) {
+            ok = false;
+            break;
+        }
+    }
+    if ok {
+        for variant in nominal.variants {
+            for field in variant.payload {
+                let concrete = substitute_support(inout scratch, field.type_id,
+                    substitutions);
+                if !inout_data_visit(module, inout scratch, parameters,
+                        inout active, concrete, true, depth + 1,
+                        function_depth) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                break;
+            }
+        }
+    }
+    let discarded = vec.pop(active);
+    return ok;
+}
+
+pub func inout_data_type(module hir.HirModule, type_id usize,
+                         parameters Vec[usize]) bool throws model.SupportError {
+    var scratch = types.clone_context(module.types);
+    var active = vec.empty[ActiveNominal]();
+    return inout_data_visit(module, inout scratch, parameters, inout active,
+        type_id, false, 0, 0);
+}
+
+pub func inout_slot_reason(slot hir.InoutSlot) string {
+    switch slot {
+        case hir.InoutSlot.Allowed: return "";
+        case hir.InoutSlot.Unit:
+            return "inout of Unit is not a writable value place";
+        case hir.InoutSlot.Task:
+            return "Task inout is not supported: the executor owns its completion lifetime";
+        case hir.InoutSlot.External:
+            return "external C resource inout is not supported: no verified retain/release pairing";
+        case hir.InoutSlot.TypeParameter:
+            return "inout type parameter has no concrete value";
+        case hir.InoutSlot.Unsupported: break;
+    }
+    return "inout requires a whole Woozy value place: numeric/bool, POD aggregate, Vec, Slice, string, function value, Weak, dyn trait object, runtime handle, or an owning struct/enum";
+}
+
+func memo_find(memo Vec[MemoEntry], id usize) i64 {
+    for var index usize = 0; index < vec.len(memo); index += 1 {
+        if memo[index].type_id == id {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func memo_remove(memo Vec[MemoEntry], id usize) {
+    let found = memo_find(memo, id);
+    if found < 0 {
+        return;
+    }
+    let position = usize(found);
+    let last = vec.len(memo) - 1;
+    if position != last {
+        memo[position] = memo[last];
+    }
+    let discarded = vec.pop(memo);
+}
+
+func memo_put(memo Vec[MemoEntry], id usize, slot hir.InoutSlot) {
+    memo_remove(memo, id);
+    vec.push(memo, MemoEntry(type_id: id, slot: slot));
+}
+
+func inout_slot_visit(module hir.HirModule, scratch inout types.Context,
+                      parameters Vec[usize], memo Vec[MemoEntry],
+                      visited inout usize, id usize, member bool, depth usize)
+    hir.InoutSlot throws model.SupportError {
+    if depth > COMPLETION_DEPTH {
+        return hir.InoutSlot.Unsupported;
+    }
+    visited += 1;
+    if visited > CLASSIFICATION_TYPES {
+        return hir.InoutSlot.Unsupported;
+    }
+    let known = memo_find(memo, id);
+    if known >= 0 {
+        return memo[usize(known)].slot;
+    }
+    var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(scratch, id) {
+        case option.Option.Some(found): value = found;
+        case option.Option.None: return hir.InoutSlot.Unsupported;
+    }
+    var result = hir.InoutSlot.Allowed;
+    if kind_is(value.kind, model.TypeKind.Unit) {
+        if member { result = hir.InoutSlot.Allowed; }
+        else { result = hir.InoutSlot.Unit; }
+    } else if kind_is(value.kind, model.TypeKind.Bool) ||
+              kind_is(value.kind, model.TypeKind.SignedInt) ||
+              kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+              kind_is(value.kind, model.TypeKind.Isize) ||
+              kind_is(value.kind, model.TypeKind.Usize) ||
+              kind_is(value.kind, model.TypeKind.Float) ||
+              kind_is(value.kind, model.TypeKind.String) ||
+              kind_is(value.kind, model.TypeKind.Function) ||
+              kind_is(value.kind, model.TypeKind.TraitObject) ||
+              kind_is(value.kind, model.TypeKind.ThreadHandle) ||
+              kind_is(value.kind, model.TypeKind.MutexHandle) ||
+              kind_is(value.kind, model.TypeKind.CondvarHandle) ||
+              kind_is(value.kind, model.TypeKind.AtomicI64Handle) ||
+              kind_is(value.kind, model.TypeKind.IpcHandle) {
+        result = hir.InoutSlot.Allowed;
+    } else if kind_is(value.kind, model.TypeKind.Vec) ||
+              kind_is(value.kind, model.TypeKind.Slice) ||
+              kind_is(value.kind, model.TypeKind.Weak) {
+        for argument in value.type_args {
+            let nested = inout_slot_visit(module, inout scratch, parameters,
+                memo, inout visited, argument, true, depth + 1);
+            if !kind_is_slot(nested, hir.InoutSlot.Allowed) {
+                result = nested;
+                break;
+            }
+        }
+    } else if kind_is(value.kind, model.TypeKind.TypeParameter) {
+        if ids_contains(parameters, value.declaration) {
+            result = hir.InoutSlot.Allowed;
+        } else {
+            result = hir.InoutSlot.TypeParameter;
+        }
+    } else if kind_is(value.kind, model.TypeKind.Task) {
+        result = hir.InoutSlot.Task;
+    } else if kind_is(value.kind, model.TypeKind.CForeignResource) ||
+              kind_is(value.kind, model.TypeKind.CForeignPointer) ||
+              kind_is(value.kind, model.TypeKind.CForeignBuffer) ||
+              kind_is(value.kind, model.TypeKind.CForeignRecord) ||
+              kind_is(value.kind, model.TypeKind.CForeignCallback) ||
+              kind_is(value.kind, model.TypeKind.CForeignOpaque) ||
+              kind_is(value.kind, model.TypeKind.ForeignOpaque) ||
+              kind_is(value.kind, model.TypeKind.ForeignCallable) {
+        result = hir.InoutSlot.External;
+    } else if kind_is(value.kind, model.TypeKind.Error) {
+        result = hir.InoutSlot.Unsupported;
+    } else if kind_is(value.kind, model.TypeKind.NominalStruct) ||
+              kind_is(value.kind, model.TypeKind.NominalEnum) {
+        var found_nominal = false;
+        var nominal = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Unit,
+            params: [], fields: [], variants: [],
+            source: hir.HirSource(node: model.NodeRef(module: 0, file: 0,
+                node: 0), span: model.Span(snapshot: 0, begin_byte: 0,
+                end_byte: 0)));
+        for candidate in module.nominals {
+            if candidate.symbol == value.declaration {
+                nominal = candidate;
+                found_nominal = true;
+                break;
+            }
+        }
+        if !found_nominal ||
+           vec.len(value.type_args) != vec.len(nominal.params) {
+            result = hir.InoutSlot.Unsupported;
+        } else {
+            // A recursive value layout is impossible for a finite struct/enum;
+            // a revisit therefore means a handle broke the cycle.
+            memo_put(memo, id, hir.InoutSlot.Allowed);
+            let substitutions = vec.empty[model.Substitution]();
+            for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+                vec.push(substitutions, model.Substitution(
+                    symbol: nominal.params[index].symbol,
+                    type_id: value.type_args[index]));
+            }
+            var outcome = hir.InoutSlot.Allowed;
+            for field in nominal.fields {
+                let concrete = substitute_support(inout scratch, field.type_id,
+                    substitutions);
+                let nested = inout_slot_visit(module, inout scratch,
+                    parameters, memo, inout visited, concrete, true,
+                    depth + 1);
+                if !kind_is_slot(nested, hir.InoutSlot.Allowed) {
+                    outcome = nested;
+                    break;
+                }
+            }
+            if kind_is_slot(outcome, hir.InoutSlot.Allowed) {
+                for variant in nominal.variants {
+                    for field in variant.payload {
+                        let concrete = substitute_support(inout scratch,
+                            field.type_id, substitutions);
+                        let nested = inout_slot_visit(module, inout scratch,
+                            parameters, memo, inout visited, concrete, true,
+                            depth + 1);
+                        if !kind_is_slot(nested, hir.InoutSlot.Allowed) {
+                            outcome = nested;
+                            break;
+                        }
+                    }
+                    if !kind_is_slot(outcome, hir.InoutSlot.Allowed) {
+                        break;
+                    }
+                }
+            }
+            memo_remove(memo, id);
+            result = outcome;
+        }
+    }
+    memo_put(memo, id, result);
+    return result;
+}
+
+func kind_is_slot(left hir.InoutSlot, right hir.InoutSlot) bool {
+    switch left {
+        case hir.InoutSlot.Allowed:
+            switch right {
+                case hir.InoutSlot.Allowed: return true;
+                case _: return false;
+            }
+        case hir.InoutSlot.Unit:
+            switch right {
+                case hir.InoutSlot.Unit: return true;
+                case _: return false;
+            }
+        case hir.InoutSlot.Task:
+            switch right {
+                case hir.InoutSlot.Task: return true;
+                case _: return false;
+            }
+        case hir.InoutSlot.External:
+            switch right {
+                case hir.InoutSlot.External: return true;
+                case _: return false;
+            }
+        case hir.InoutSlot.TypeParameter:
+            switch right {
+                case hir.InoutSlot.TypeParameter: return true;
+                case _: return false;
+            }
+        case hir.InoutSlot.Unsupported:
+            switch right {
+                case hir.InoutSlot.Unsupported: return true;
+                case _: return false;
+            }
+    }
+}
+
+pub func inout_slot(module hir.HirModule, type_id usize,
+                    parameters Vec[usize]) hir.InoutSlot
+    throws model.SupportError {
+    var scratch = types.clone_context(module.types);
+    let memo = vec.empty[MemoEntry]();
+    var visited usize = 0;
+    return inout_slot_visit(module, inout scratch, parameters, memo,
+        inout visited, type_id, false, 0);
+}
+
+func symbol_at(module hir.HirModule, symbol usize) option.Option[model.Symbol] {
+    if symbol >= vec.len(module.resolved.symbols) {
+        return option.Option[model.Symbol].None;
+    }
+    return option.Option[model.Symbol].Some(module.resolved.symbols[symbol]);
+}
+
+func module_at(module hir.HirModule, id usize) option.Option[model.Module] {
+    if id >= vec.len(module.resolved.project.modules) {
+        return option.Option[model.Module].None;
+    }
+    return option.Option[model.Module].Some(module.resolved.project.modules[id]);
+}
+
+func has_definition(symbol model.Symbol) bool {
+    switch symbol.definition {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func has_foreign(symbol model.Symbol) bool {
+    switch symbol.foreign {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func module_is_binding(module model.Module) bool {
+    switch module.binding {
+        case option.Option.Some(_): return true;
+        case option.Option.None: return false;
+    }
+}
+
+struct Canonical {
+    path string;
+    name string;
+    field string;
+    handle model.TypeKind;
+    arity usize;
+}
+
+func canonical_for(path string, name string, arity usize) option.Option[Canonical] {
+    let table = [
+        Canonical(path: "std/thread", name: "Thread", field: "state",
+            handle: model.TypeKind.ThreadHandle, arity: 0),
+        Canonical(path: "std/sync", name: "Mutex", field: "state",
+            handle: model.TypeKind.MutexHandle, arity: 0),
+        Canonical(path: "std/sync", name: "Condvar", field: "state",
+            handle: model.TypeKind.CondvarHandle, arity: 0),
+        Canonical(path: "std/sync", name: "AtomicI64", field: "state",
+            handle: model.TypeKind.AtomicI64Handle, arity: 0),
+        Canonical(path: "std/ipc", name: "Memory", field: "handle",
+            handle: model.TypeKind.IpcHandle, arity: 0),
+        Canonical(path: "std/box", name: "Box", field: "cell",
+            handle: model.TypeKind.Vec, arity: 1),
+    ];
+    for candidate in table {
+        if candidate.path == path && candidate.name == name &&
+           candidate.arity == arity {
+            return option.Option[Canonical].Some(candidate);
+        }
+    }
+    return option.Option[Canonical].None;
+}
+
+pub func weak_target(module hir.HirModule, type_id usize) bool {
+    var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(module.types, type_id) {
+        case option.Option.Some(found): value = found;
+        case option.Option.None: return false;
+    }
+    if kind_is(value.kind, model.TypeKind.Vec) ||
+       kind_is(value.kind, model.TypeKind.Function) {
+        return true;
+    }
+    if !kind_is(value.kind, model.TypeKind.NominalStruct) ||
+       value.declaration == 0 ||
+       value.declaration >= vec.len(module.resolved.symbols) {
+        return false;
+    }
+    let declaration = module.resolved.symbols[value.declaration];
+    if !kind_is_symbol(declaration.kind, model.SymbolKind.Type) ||
+       !declaration.exported || !has_definition(declaration) ||
+       has_foreign(declaration) {
+        return false;
+    }
+    var owner = model.Module(id: 0, logical_path: "", identity: "",
+        package_name: "", files: [], imports: [], foreign_exports: [],
+        binding: option.Option[model.BindingModuleRef].None, c_binding:
+        option.Option[usize].None);
+    switch module_at(module, declaration.module) {
+        case option.Option.Some(found): owner = found;
+        case option.Option.None: return false;
+    }
+    if module_is_binding(owner) {
+        return false;
+    }
+    var canonical = Canonical(path: "", name: "", field: "", handle:
+        model.TypeKind.Unit, arity: 0);
+    switch canonical_for(owner.logical_path, declaration.name,
+            vec.len(value.type_args)) {
+        case option.Option.Some(found): canonical = found;
+        case option.Option.None: return false;
+    }
+    // Require the unique real exported declaration, not a duplicated symbol
+    // that merely carries the same module/name fields.
+    var matches usize = 0;
+    for symbol in module.resolved.symbols {
+        if symbol.module == declaration.module &&
+           kind_is_symbol(symbol.kind, model.SymbolKind.Type) &&
+           symbol.exported && has_definition(symbol) &&
+           symbol.name == declaration.name {
+            matches += 1;
+        }
+    }
+    if matches != 1 {
+        return false;
+    }
+    var nominal = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Unit,
+        params: [], fields: [], variants: [],
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
+    var found_nominal = false;
+    for candidate in module.nominals {
+        if candidate.symbol == value.declaration {
+            nominal = candidate;
+            found_nominal = true;
+            break;
+        }
+    }
+    if !found_nominal ||
+       !kind_is(nominal.kind, model.TypeKind.NominalStruct) ||
+       vec.len(nominal.params) != canonical.arity ||
+       vec.len(nominal.fields) != 1 || vec.len(nominal.variants) != 0 {
+        return false;
+    }
+    let field = nominal.fields[0];
+    if field.exported {
+        return false;
+    }
+    var field_symbol = model.Symbol(id: 0, name: "", kind:
+        model.SymbolKind.Value, module: 0,
+        definition: option.Option[model.NodeRef].None,
+        declaration: option.Option[model.Span].None, exported: false,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    switch symbol_at(module, field.symbol) {
+        case option.Option.Some(found): field_symbol = found;
+        case option.Option.None: return false;
+    }
+    if field_symbol.name != canonical.field {
+        return false;
+    }
+    var field_type = model.empty_type(model.TypeKind.Error);
+    switch types.find(module.types, field.type_id) {
+        case option.Option.Some(found): field_type = found;
+        case option.Option.None: return false;
+    }
+    if !kind_is(canonical.handle, model.TypeKind.Vec) {
+        return kind_is(field_type.kind, canonical.handle);
+    }
+    if !kind_is(field_type.kind, model.TypeKind.Vec) ||
+       vec.len(field_type.type_args) != 1 {
+        return false;
+    }
+    var element = model.empty_type(model.TypeKind.Error);
+    switch types.find(module.types, field_type.type_args[0]) {
+        case option.Option.Some(found): element = found;
+        case option.Option.None: return false;
+    }
+    return kind_is(element.kind, model.TypeKind.TypeParameter) &&
+           element.declaration == nominal.params[0].symbol;
+}
+
+func kind_is_symbol(kind model.SymbolKind, expected model.SymbolKind) bool {
+    return model.symbol_kind_id(kind) == model.symbol_kind_id(expected);
+}
+
+struct CopyState {
+    scratch types.Context;
+    active Vec[usize];
+    visited usize;
+}
+
+func copyable_visit(module hir.HirModule, state inout CopyState, id usize,
+                    depth usize) bool throws model.SupportError {
+    if depth > COMPLETION_DEPTH {
+        return false;
+    }
+    state.visited += 1;
+    if state.visited > CLASSIFICATION_TYPES {
+        return false;
+    }
+    var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(state.scratch, id) {
+        case option.Option.Some(found): value = found;
+        case option.Option.None: return false;
+    }
+    if kind_is(value.kind, model.TypeKind.Unit) ||
+       kind_is(value.kind, model.TypeKind.Bool) ||
+       kind_is(value.kind, model.TypeKind.SignedInt) ||
+       kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+       kind_is(value.kind, model.TypeKind.Float) ||
+       kind_is(value.kind, model.TypeKind.Isize) ||
+       kind_is(value.kind, model.TypeKind.Usize) ||
+       kind_is(value.kind, model.TypeKind.String) ||
+       kind_is(value.kind, model.TypeKind.Vec) ||
+       kind_is(value.kind, model.TypeKind.Slice) ||
+       kind_is(value.kind, model.TypeKind.Weak) ||
+       kind_is(value.kind, model.TypeKind.ThreadHandle) ||
+       kind_is(value.kind, model.TypeKind.MutexHandle) ||
+       kind_is(value.kind, model.TypeKind.CondvarHandle) ||
+       kind_is(value.kind, model.TypeKind.AtomicI64Handle) ||
+       kind_is(value.kind, model.TypeKind.IpcHandle) ||
+       kind_is(value.kind, model.TypeKind.Task) ||
+       kind_is(value.kind, model.TypeKind.Function) ||
+       kind_is(value.kind, model.TypeKind.TraitObject) ||
+       kind_is(value.kind, model.TypeKind.ForeignOpaque) ||
+       kind_is(value.kind, model.TypeKind.ForeignCallable) ||
+       kind_is(value.kind, model.TypeKind.CForeignPointer) ||
+       kind_is(value.kind, model.TypeKind.CForeignBuffer) ||
+       kind_is(value.kind, model.TypeKind.CForeignRecord) ||
+       kind_is(value.kind, model.TypeKind.CForeignCallback) ||
+       kind_is(value.kind, model.TypeKind.CForeignOpaque) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignResource) {
+        if value.c_type == 0 ||
+           usize(value.c_type) > vec.len(module.resolved.project.c_types) {
+            return false;
+        }
+        let declaration = module.resolved.project.c_types[value.c_type - 1];
+        return declaration.retain_symbol != "";
+    }
+    if kind_is(value.kind, model.TypeKind.TypeParameter) ||
+       kind_is(value.kind, model.TypeKind.Error) {
+        return false;
+    }
+    if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+       !kind_is(value.kind, model.TypeKind.NominalEnum) {
+        return false;
+    }
+    if !ids_insert(state.active, id) {
+        return false; // Value-storage cycle has no finite copy rule.
+    }
+    var nominal = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Unit,
+        params: [], fields: [], variants: [],
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
+    var found_declaration = false;
+    for candidate in module.nominals {
+        if candidate.symbol == value.declaration {
+            nominal = candidate;
+            found_declaration = true;
+            break;
+        }
+    }
+    if !found_declaration ||
+       vec.len(nominal.params) != vec.len(value.type_args) {
+        remove_active(state.active, id);
+        return false;
+    }
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    var ok = true;
+    for field in nominal.fields {
+        let concrete = substitute_support(inout state.scratch, field.type_id,
+            substitutions);
+        if type_missing(state.scratch, concrete) ||
+           !copyable_visit(module, inout state, concrete, depth + 1) {
+            ok = false;
+            break;
+        }
+    }
+    if ok {
+        for variant in nominal.variants {
+            for field in variant.payload {
+                let concrete = substitute_support(inout state.scratch,
+                    field.type_id, substitutions);
+                if type_missing(state.scratch, concrete) ||
+                   !copyable_visit(module, inout state, concrete, depth + 1) {
+                    ok = false;
+                    break;
+                }
+            }
+            if !ok {
+                break;
+            }
+        }
+    }
+    remove_active(state.active, id);
+    return ok;
+}
+
+func remove_active(active Vec[usize], id usize) {
+    var found = -1;
+    for var index usize = 0; index < vec.len(active); index += 1 {
+        if active[index] == id {
+            found = i64(index);
+            break;
+        }
+    }
+    if found < 0 {
+        return;
+    }
+    let position = usize(found);
+    let last = vec.len(active) - 1;
+    if position != last {
+        active[position] = active[last];
+    }
+    let discarded = vec.pop(active);
+}
+
+pub func ordinary_copyable(module hir.HirModule, type_id usize) bool
+    throws model.SupportError {
+    // Logical copyability for closure captures and bound receivers.  Fn itself
+    // shares its environment and is copyable even when the environment contains
+    // a non-copyable resource.
+    var state = CopyState(scratch: types.clone_context(module.types),
+        active: vec.empty[usize](), visited: 0);
+    if type_missing(module.types, type_id) {
+        return false;
+    }
+    return copyable_visit(module, inout state, type_id, 0);
+}
+
+struct DropState {
+    scratch types.Context;
+    active Vec[usize];
+    visited usize;
+}
+
+func owning_visit(module hir.HirModule, state inout DropState, id usize,
+                  depth usize) bool throws model.SupportError {
+    if depth > COMPLETION_DEPTH {
+        return true;
+    }
+    state.visited += 1;
+    if state.visited > CLASSIFICATION_TYPES {
+        return true;
+    }
+    var value = model.empty_type(model.TypeKind.Error);
+    switch types.find(state.scratch, id) {
+        case option.Option.Some(found): value = found;
+        case option.Option.None: return true;
+    }
+    if kind_is(value.kind, model.TypeKind.Vec) ||
+       kind_is(value.kind, model.TypeKind.Slice) ||
+       kind_is(value.kind, model.TypeKind.String) ||
+       kind_is(value.kind, model.TypeKind.Weak) ||
+       kind_is(value.kind, model.TypeKind.ForeignOpaque) ||
+       kind_is(value.kind, model.TypeKind.ForeignCallable) ||
+       kind_is(value.kind, model.TypeKind.CForeignResource) ||
+       kind_is(value.kind, model.TypeKind.Function) ||
+       kind_is(value.kind, model.TypeKind.TraitObject) ||
+       kind_is(value.kind, model.TypeKind.ThreadHandle) ||
+       kind_is(value.kind, model.TypeKind.MutexHandle) ||
+       kind_is(value.kind, model.TypeKind.CondvarHandle) ||
+       kind_is(value.kind, model.TypeKind.AtomicI64Handle) ||
+       kind_is(value.kind, model.TypeKind.IpcHandle) {
+        return true;
+    }
+    if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+       !kind_is(value.kind, model.TypeKind.NominalEnum) {
+        return false;
+    }
+    if !ids_insert(state.active, id) {
+        return false;
+    }
+    var nominal = hir.NominalDecl(symbol: 0, kind: model.TypeKind.Unit,
+        params: [], fields: [], variants: [],
+        source: hir.HirSource(node: model.NodeRef(module: 0, file: 0, node: 0),
+            span: model.Span(snapshot: 0, begin_byte: 0, end_byte: 0)));
+    var found_declaration = false;
+    for candidate in module.nominals {
+        if candidate.symbol == value.declaration {
+            nominal = candidate;
+            found_declaration = true;
+            break;
+        }
+    }
+    if !found_declaration ||
+       vec.len(nominal.params) != vec.len(value.type_args) {
+        remove_active(state.active, id);
+        return true;
+    }
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    var result = false;
+    for field in nominal.fields {
+        let concrete = substitute_support(inout state.scratch, field.type_id,
+            substitutions);
+        if owning_visit(module, inout state, concrete, depth + 1) {
+            result = true;
+        }
+    }
+    for variant in nominal.variants {
+        for field in variant.payload {
+            let concrete = substitute_support(inout state.scratch,
+                field.type_id, substitutions);
+            if owning_visit(module, inout state, concrete, depth + 1) {
+                result = true;
+            }
+        }
+    }
+    remove_active(state.active, id);
+    return result;
+}
+
+pub func owning_value(module hir.HirModule, type_id usize) bool
+    throws model.SupportError {
+    // Move-intent classification used while checking a closure creation site.
+    var state = DropState(scratch: types.clone_context(module.types),
+        active: vec.empty[usize](), visited: 0);
+    if type_missing(module.types, type_id) {
+        return false;
+    }
+    return owning_visit(module, inout state, type_id, 0);
+}
+
+func provisional_kind(value model.Type) hir.ValueKind {
+    if kind_is(value.kind, model.TypeKind.ThreadHandle) ||
+       kind_is(value.kind, model.TypeKind.MutexHandle) ||
+       kind_is(value.kind, model.TypeKind.CondvarHandle) ||
+       kind_is(value.kind, model.TypeKind.AtomicI64Handle) ||
+       kind_is(value.kind, model.TypeKind.IpcHandle) ||
+       kind_is(value.kind, model.TypeKind.Task) {
+        return hir.ValueKind.RuntimeHandle;
+    }
+    if kind_is(value.kind, model.TypeKind.Vec) { return hir.ValueKind.Vec; }
+    if kind_is(value.kind, model.TypeKind.Slice) { return hir.ValueKind.Slice; }
+    if kind_is(value.kind, model.TypeKind.Function) { return hir.ValueKind.Function; }
+    if kind_is(value.kind, model.TypeKind.TraitObject) { return hir.ValueKind.TraitObject; }
+    if kind_is(value.kind, model.TypeKind.NominalStruct) { return hir.ValueKind.Structure; }
+    if kind_is(value.kind, model.TypeKind.NominalEnum) { return hir.ValueKind.Enumeration; }
+    if kind_is(value.kind, model.TypeKind.TypeParameter) { return hir.ValueKind.Dependent; }
+    if kind_is(value.kind, model.TypeKind.ForeignOpaque) { return hir.ValueKind.ForeignReference; }
+    if kind_is(value.kind, model.TypeKind.ForeignCallable) { return hir.ValueKind.ForeignCallable; }
+    if kind_is(value.kind, model.TypeKind.CForeignPointer) { return hir.ValueKind.CPointer; }
+    if kind_is(value.kind, model.TypeKind.CForeignBuffer) { return hir.ValueKind.CBuffer; }
+    if kind_is(value.kind, model.TypeKind.CForeignRecord) { return hir.ValueKind.CRecord; }
+    if kind_is(value.kind, model.TypeKind.CForeignResource) { return hir.ValueKind.CResource; }
+    if kind_is(value.kind, model.TypeKind.CForeignCallback) { return hir.ValueKind.CCallback; }
+    if kind_is(value.kind, model.TypeKind.CForeignOpaque) { return hir.ValueKind.CPointer; }
+    if kind_is(value.kind, model.TypeKind.Error) { return hir.ValueKind.Unsupported; }
+    return hir.ValueKind.Trivial;
+}
+
+func contains_type_parameter_visit(module hir.HirModule, root usize) bool
+    throws model.SupportError {
+    let pending = vec.empty[usize]();
+    vec.push(pending, root);
+    let seen = vec.empty[usize]();
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let id = option_usize(popped);
+        if !ids_insert(seen, id) {
+            continue;
+        }
+        if vec.len(seen) > CLASSIFICATION_TYPES {
+            throw model.SupportError.Invalid(
+                "concrete ownership type traversal budget exceeded");
+        }
+        let value = type_of(module, id);
+        if kind_is(value.kind, model.TypeKind.TypeParameter) {
+            return true;
+        }
+        for argument in value.type_args {
+            vec.push(pending, argument);
+        }
+        for parameter in value.parameters {
+            vec.push(pending, parameter.type_id);
+        }
+        if kind_is(value.kind, model.TypeKind.Function) {
+            vec.push(pending, value.result);
+            switch value.throws_type {
+                case option.Option.Some(item): vec.push(pending, item);
+                case option.Option.None: {}
+            }
+        }
+    }
+    return false;
+}
+
+func support(module hir.HirModule, state inout Classifier, id usize,
+             depth usize, collect_fields bool, fields Vec[hir.ValueField])
+    Support throws model.SupportError {
+    if depth > CLASSIFICATION_DEPTH {
+        throw model.SupportError.Invalid(
+            "concrete ownership type expansion budget exceeded");
+    }
+    let value = type_of(module, id);
+    if kind_is(value.kind, model.TypeKind.TypeParameter) {
+        return Support(kind: hir.ValueKind.Dependent, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.String) {
+        return Support(kind: hir.ValueKind.String, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.ThreadHandle) ||
+       kind_is(value.kind, model.TypeKind.MutexHandle) ||
+       kind_is(value.kind, model.TypeKind.CondvarHandle) ||
+       kind_is(value.kind, model.TypeKind.AtomicI64Handle) ||
+       kind_is(value.kind, model.TypeKind.IpcHandle) ||
+       kind_is(value.kind, model.TypeKind.Task) {
+        return Support(kind: hir.ValueKind.RuntimeHandle, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.ForeignOpaque) ||
+       kind_is(value.kind, model.TypeKind.ForeignCallable) {
+        if kind_is(value.kind, model.TypeKind.ForeignCallable) {
+            return Support(kind: hir.ValueKind.ForeignCallable, reason: "");
+        }
+        if value.binding >= vec.len(module.resolved.project.foreign_bindings) {
+            throw model.SupportError.Invalid(
+                "ownership foreign binding index is out of range");
+        }
+        let declaration =
+            module.resolved.project.foreign_bindings[value.binding];
+        var binding_kind = "";
+        switch declaration.detail {
+            case model.ForeignDetail.Type(detail): binding_kind = detail.kind;
+            case _:
+                throw model.SupportError.Invalid(
+                    "ownership foreign type declaration is not a binding type");
+        }
+        if binding_kind == "runtime_error" {
+            return Support(kind: hir.ValueKind.ForeignError, reason: "");
+        }
+        return Support(kind: hir.ValueKind.ForeignReference, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignPointer) {
+        return Support(kind: hir.ValueKind.CPointer, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignBuffer) {
+        return Support(kind: hir.ValueKind.CBuffer, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignRecord) {
+        return Support(kind: hir.ValueKind.CRecord, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignCallback) {
+        return Support(kind: hir.ValueKind.CCallback, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignOpaque) {
+        return Support(kind: hir.ValueKind.CPointer, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignResource) {
+        return Support(kind: hir.ValueKind.CResource, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.Weak) {
+        return Support(kind: hir.ValueKind.Weak, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.Function) {
+        return Support(kind: hir.ValueKind.Function, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.TraitObject) {
+        return Support(kind: hir.ValueKind.TraitObject, reason: "");
+    }
+    if kind_is(value.kind, model.TypeKind.Error) {
+        return Support(kind: hir.ValueKind.Unsupported,
+            reason: "dynamic string/foreign/error value ownership is not supported");
+    }
+    if !kind_is(value.kind, model.TypeKind.Vec) &&
+       !kind_is(value.kind, model.TypeKind.Slice) &&
+       !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+       !kind_is(value.kind, model.TypeKind.NominalEnum) {
+        return Support(kind: hir.ValueKind.Trivial, reason: "");
+    }
+    if ids_contains(state.support_seen, id) {
+        return Support(kind: provisional_kind(value), reason: "");
+    }
+    state.support_count += 1;
+    if state.support_count > CLASSIFICATION_TYPES {
+        throw model.SupportError.Invalid(
+            "concrete ownership type expansion budget exceeded");
+    }
+    vec.push(state.support_seen, id);
+    if kind_is(value.kind, model.TypeKind.Vec) ||
+       kind_is(value.kind, model.TypeKind.Slice) {
+        var container = hir.ValueKind.Slice;
+        if kind_is(value.kind, model.TypeKind.Vec) {
+            container = hir.ValueKind.Vec;
+        }
+        if vec.len(value.type_args) != 1 {
+            throw model.SupportError.Invalid(
+                "concrete ownership element arity");
+        }
+        let element = value.type_args[0];
+        if contains_type_parameter_visit(module, element) {
+            return Support(kind: container, reason: "");
+        }
+        let nested = support(module, inout state, element, depth + 1, false,
+            vec.empty[hir.ValueField]());
+        if kind_is_value(nested.kind, hir.ValueKind.Unsupported) ||
+           kind_is_value(nested.kind, hir.ValueKind.ForeignCallable) {
+            return Support(kind: hir.ValueKind.Unsupported,
+                reason: fallback_reason(nested.reason,
+                    "external callable values in Vec/Slice are not supported"));
+        }
+        return Support(kind: container, reason: "");
+    }
+    let nominal = declaration_of(module, value.declaration);
+    if vec.len(value.type_args) != vec.len(nominal.params) {
+        throw model.SupportError.Invalid(
+            "ownership nominal type argument count");
+    }
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    var result = Support(kind: hir.ValueKind.Enumeration, reason: "");
+    if kind_is(value.kind, model.TypeKind.NominalStruct) {
+        result.kind = hir.ValueKind.Structure;
+    }
+    for field in nominal.fields {
+        let concrete = substitute_support(inout state.scratch, field.type_id,
+            substitutions);
+        if type_missing(module.types, concrete) {
+            throw model.SupportError.Invalid(
+                "concrete ownership member type was not interned publicly");
+        }
+        if collect_fields {
+            vec.push(fields, hir.ValueField(
+                variant: option.Option[usize].None,
+                field: field.symbol, type_id: concrete));
+        }
+        let nested = support(module, inout state, concrete, depth + 1, false,
+            vec.empty[hir.ValueField]());
+        if kind_is_value(nested.kind, hir.ValueKind.Unsupported) ||
+           kind_is_value(nested.kind, hir.ValueKind.ForeignCallable) {
+            result.kind = hir.ValueKind.Unsupported;
+            if result.reason == "" {
+                result.reason = fallback_reason(nested.reason,
+                    "external callable aggregate fields are not supported");
+            }
+        }
+    }
+    for variant in nominal.variants {
+        for field in variant.payload {
+            let concrete = substitute_support(inout state.scratch,
+                field.type_id, substitutions);
+            if type_missing(module.types, concrete) {
+                throw model.SupportError.Invalid(
+                    "concrete ownership member type was not interned publicly");
+            }
+            if collect_fields {
+                vec.push(fields, hir.ValueField(
+                    variant: option.Option[usize].Some(variant.symbol),
+                    field: field.symbol, type_id: concrete));
+            }
+            let nested = support(module, inout state, concrete, depth + 1, false,
+                vec.empty[hir.ValueField]());
+            if kind_is_value(nested.kind, hir.ValueKind.Unsupported) ||
+               kind_is_value(nested.kind, hir.ValueKind.ForeignCallable) {
+                result.kind = hir.ValueKind.Unsupported;
+                if result.reason == "" {
+                    result.reason = fallback_reason(nested.reason,
+                        "external callable aggregate fields are not supported");
+                }
+            }
+        }
+    }
+    return result;
+}
+
+func fallback_reason(value string, fallback string) string {
+    if value == "" {
+        return fallback;
+    }
+    return value;
+}
+
+func kind_is_value(left hir.ValueKind, right hir.ValueKind) bool {
+    switch left {
+        case hir.ValueKind.Trivial:
+            switch right {
+                case hir.ValueKind.Trivial: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Vec:
+            switch right {
+                case hir.ValueKind.Vec: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Structure:
+            switch right {
+                case hir.ValueKind.Structure: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Enumeration:
+            switch right {
+                case hir.ValueKind.Enumeration: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Dependent:
+            switch right {
+                case hir.ValueKind.Dependent: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Unsupported:
+            switch right {
+                case hir.ValueKind.Unsupported: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.ForeignReference:
+            switch right {
+                case hir.ValueKind.ForeignReference: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.ForeignCallable:
+            switch right {
+                case hir.ValueKind.ForeignCallable: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.ForeignError:
+            switch right {
+                case hir.ValueKind.ForeignError: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.CPointer:
+            switch right {
+                case hir.ValueKind.CPointer: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.CBuffer:
+            switch right {
+                case hir.ValueKind.CBuffer: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.CRecord:
+            switch right {
+                case hir.ValueKind.CRecord: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.CResource:
+            switch right {
+                case hir.ValueKind.CResource: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.CCallback:
+            switch right {
+                case hir.ValueKind.CCallback: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.RuntimeHandle:
+            switch right {
+                case hir.ValueKind.RuntimeHandle: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.String:
+            switch right {
+                case hir.ValueKind.String: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Slice:
+            switch right {
+                case hir.ValueKind.Slice: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Function:
+            switch right {
+                case hir.ValueKind.Function: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.Weak:
+            switch right {
+                case hir.ValueKind.Weak: return true;
+                case _: return false;
+            }
+        case hir.ValueKind.TraitObject:
+            switch right {
+                case hir.ValueKind.TraitObject: return true;
+                case _: return false;
+            }
+    }
+}
+
+func needs_drop_visit(module hir.HirModule, state inout Classifier, id usize,
+                      active Vec[usize], depth usize) bool
+    throws model.SupportError {
+    if depth > CLASSIFICATION_DEPTH {
+        throw model.SupportError.Invalid(
+            "concrete ownership value dependency budget exceeded");
+    }
+    let value = type_of(module, id);
+    if kind_is(value.kind, model.TypeKind.Vec) ||
+       kind_is(value.kind, model.TypeKind.Slice) ||
+       kind_is(value.kind, model.TypeKind.String) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.ThreadHandle) ||
+       kind_is(value.kind, model.TypeKind.MutexHandle) ||
+       kind_is(value.kind, model.TypeKind.CondvarHandle) ||
+       kind_is(value.kind, model.TypeKind.AtomicI64Handle) ||
+       kind_is(value.kind, model.TypeKind.IpcHandle) ||
+       kind_is(value.kind, model.TypeKind.Task) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.ForeignOpaque) ||
+       kind_is(value.kind, model.TypeKind.ForeignCallable) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignResource) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.Weak) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.Function) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.TraitObject) {
+        return true;
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignPointer) ||
+       kind_is(value.kind, model.TypeKind.CForeignBuffer) ||
+       kind_is(value.kind, model.TypeKind.CForeignRecord) ||
+       kind_is(value.kind, model.TypeKind.CForeignCallback) ||
+       kind_is(value.kind, model.TypeKind.CForeignOpaque) {
+        return false;
+    }
+    if !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+       !kind_is(value.kind, model.TypeKind.NominalEnum) {
+        return false;
+    }
+    if !ids_insert(active, id) {
+        throw model.SupportError.Invalid("cyclic value ownership dependency");
+    }
+    let nominal = declaration_of(module, value.declaration);
+    if vec.len(value.type_args) != vec.len(nominal.params) {
+        remove_active(active, id);
+        throw model.SupportError.Invalid(
+            "ownership nominal type argument count");
+    }
+    let substitutions = vec.empty[model.Substitution]();
+    for var index usize = 0; index < vec.len(nominal.params); index += 1 {
+        vec.push(substitutions, model.Substitution(
+            symbol: nominal.params[index].symbol,
+            type_id: value.type_args[index]));
+    }
+    var result = false;
+    for field in nominal.fields {
+        let concrete = substitute_support(inout state.scratch, field.type_id,
+            substitutions);
+        if type_missing(module.types, concrete) {
+            throw model.SupportError.Invalid(
+                "concrete ownership member type was not interned publicly");
+        }
+        if needs_drop_visit(module, inout state, concrete, active, depth + 1) {
+            result = true;
+        }
+    }
+    for variant in nominal.variants {
+        for field in variant.payload {
+            let concrete = substitute_support(inout state.scratch,
+                field.type_id, substitutions);
+            if type_missing(module.types, concrete) {
+                throw model.SupportError.Invalid(
+                    "concrete ownership member type was not interned publicly");
+            }
+            if needs_drop_visit(module, inout state, concrete, active, depth + 1) {
+                result = true;
+            }
+        }
+    }
+    remove_active(active, id);
+    return result;
+}
+
+pub func classify_value(module hir.HirModule, type_id usize) hir.ValueOps
+    throws model.SupportError {
+    var state = Classifier(scratch: types.clone_context(module.types),
+        support_seen: vec.empty[usize](), support_count: 0);
+    let fields = vec.empty[hir.ValueField]();
+    let support_result = support(module, inout state, type_id, 0, true, fields);
+    var out = hir.ValueOps(kind: hir.ValueKind.Trivial, needs_drop: false,
+        pod_inout: false, fields: fields, reason: "");
+    let value = type_of(module, type_id);
+    // The field array is published before later classification decisions,
+    // matching the C++ ValueOps construction order.
+    if kind_is(value.kind, model.TypeKind.TypeParameter) {
+        out.kind = hir.ValueKind.Dependent;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.String) {
+        out.kind = hir.ValueKind.String;
+        out.needs_drop = true;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.ThreadHandle) ||
+       kind_is(value.kind, model.TypeKind.MutexHandle) ||
+       kind_is(value.kind, model.TypeKind.CondvarHandle) ||
+       kind_is(value.kind, model.TypeKind.AtomicI64Handle) ||
+       kind_is(value.kind, model.TypeKind.IpcHandle) ||
+       kind_is(value.kind, model.TypeKind.Task) {
+        out.kind = hir.ValueKind.RuntimeHandle;
+        out.needs_drop = true;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.ForeignOpaque) ||
+       kind_is(value.kind, model.TypeKind.ForeignCallable) {
+        out.kind = support_result.kind;
+        out.needs_drop = true;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignResource) {
+        out.kind = hir.ValueKind.CResource;
+        out.needs_drop = true;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.Weak) {
+        out.kind = hir.ValueKind.Weak;
+        out.needs_drop = true;
+        out.pod_inout = false;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.Function) {
+        out.kind = hir.ValueKind.Function;
+        out.needs_drop = true;
+        out.pod_inout = false;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.TraitObject) {
+        out.kind = hir.ValueKind.TraitObject;
+        out.needs_drop = true;
+        out.pod_inout = false;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.CForeignPointer) ||
+       kind_is(value.kind, model.TypeKind.CForeignBuffer) ||
+       kind_is(value.kind, model.TypeKind.CForeignRecord) ||
+       kind_is(value.kind, model.TypeKind.CForeignCallback) ||
+       kind_is(value.kind, model.TypeKind.CForeignOpaque) {
+        out.kind = support_result.kind;
+        return out;
+    }
+    if kind_is(value.kind, model.TypeKind.Error) {
+        out.kind = hir.ValueKind.Unsupported;
+        out.reason = support_result.reason;
+        return out;
+    }
+    if !kind_is(value.kind, model.TypeKind.Vec) &&
+       !kind_is(value.kind, model.TypeKind.Slice) &&
+       !kind_is(value.kind, model.TypeKind.NominalStruct) &&
+       !kind_is(value.kind, model.TypeKind.NominalEnum) {
+        out.kind = hir.ValueKind.Trivial;
+        out.pod_inout = kind_is(value.kind, model.TypeKind.Bool) ||
+                        kind_is(value.kind, model.TypeKind.SignedInt) ||
+                        kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+                        kind_is(value.kind, model.TypeKind.Isize) ||
+                        kind_is(value.kind, model.TypeKind.Usize) ||
+                        kind_is(value.kind, model.TypeKind.Float);
+        return out;
+    }
+    out.kind = support_result.kind;
+    out.reason = support_result.reason;
+    if kind_is(value.kind, model.TypeKind.Vec) ||
+       kind_is(value.kind, model.TypeKind.Slice) {
+        out.needs_drop = !kind_is_value(out.kind, hir.ValueKind.Unsupported);
+        return out;
+    }
+    let active = vec.empty[usize]();
+    out.needs_drop = needs_drop_visit(module, inout state, type_id, active, 0);
+    out.pod_inout = inout_data_type(module, type_id, vec.empty[usize]());
+    return out;
+}

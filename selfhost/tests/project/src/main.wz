@@ -1,0 +1,135 @@
+// Test-only dump of the real production project loader. run.py links src/wzcc
+// to the checkout; no production module implementation is copied here.
+package project_graph_tests;
+import "app/wzcc/model" as m;
+import "app/wzcc/source" as source;
+import "app/wzcc/project" as project;
+import "app/wzcc/render" as render;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func s(v string) json.Value { return json.Value.String(v); }
+func n(v u64) json.Value { return json.Value.Number(strconv.format_u64(v)); }
+func ix(v usize) json.Value { return n(u64(v)); }
+func b(v bool) json.Value { return json.Value.Bool(v); }
+func field(name string,value json.Value) json.Member { return json.Member(name:name,value:value); }
+func o(v Vec[json.Member]) json.Value { return json.Value.Object(v); }
+func strings(v Vec[string]) json.Value {
+    let a=vec.empty[json.Value]();for x in v { vec.push(a,s(x)); }return json.Value.Array(a);
+}
+func indices(v Vec[usize]) json.Value {
+    let a=vec.empty[json.Value]();for x in v { vec.push(a,ix(x)); }return json.Value.Array(a);
+}
+func indices32(v Vec[u32]) json.Value {
+    let a=vec.empty[json.Value]();for x in v { vec.push(a,n(u64(x))); }return json.Value.Array(a);
+}
+func optional_index(v option.Option[usize]) json.Value {
+    switch v { case option.Option.Some(x):return ix(x);case option.Option.None:return json.Value.Null; }
+}
+func optional32(v option.Option[u32]) json.Value {
+    switch v { case option.Option.Some(x):return n(u64(x));case option.Option.None:return json.Value.Null; }
+}
+func hex(v Vec[u8]) string {
+    let digits=text.bytes("0123456789abcdef");let out=vec.empty[u8]();vec.reserve(out,vec.len(v)*2);
+    for x in v { vec.push(out,digits[usize(x>>4)]);vec.push(out,digits[usize(x&15)]); }
+    try { return text.from_bytes(out); }catch problem text.Error { return "INVALID_HEX"; }
+}
+func span(v m.Span,manager source.Manager) json.Value {
+    let snapshot=source.get(manager,v.snapshot);
+    return o([field("snapshot",n(v.snapshot)),field("path",s(snapshot.path)),field("begin",n(v.begin_byte)),field("end",n(v.end_byte))]);
+}
+func source_doc(v m.Source) json.Value {
+    var normalized=json.Value.Null;var problem=json.Value.Null;
+    if v.valid { normalized=s(hex(v.normalized)); }
+    else { problem=o([field("byte",n(v.error_byte)),field("length",n(v.error_length)),field("message",s(v.error_message))]); }
+    return o([field("file_id",n(v.file_id)),field("revision_id",n(v.revision_id)),field("id",n(v.id)),field("path",s(v.path)),field("raw_hex",s(hex(v.original))),field("valid",b(v.valid)),field("normalized_hex",normalized),field("error",problem)]);
+}
+func diagnostic(v m.Diagnostic,manager source.Manager) json.Value {
+    var primary=json.Value.Null;var expected=json.Value.Null;var actual=json.Value.Null;
+    if v.has_primary { primary=span(v.primary,manager); }
+    if v.has_expected_type { expected=s(v.expected_type); }if v.has_actual_type { actual=s(v.actual_type); }
+    let related=vec.empty[json.Value]();for x in v.related { vec.push(related,o([field("span",span(x.span,manager)),field("message",s(x.message))])); }
+    let fixits=vec.empty[json.Value]();for x in v.fixits { vec.push(fixits,o([field("span",span(x.span,manager)),field("replacement",s(x.replacement)),field("revision",n(x.revision))])); }
+    return o([field("code",s(v.code)),field("phase",s(v.phase)),field("severity",s(v.severity)),field("message",s(v.message)),field("primary",primary),field("related",json.Value.Array(related)),field("fixits",json.Value.Array(fixits)),field("notes",strings(v.notes)),field("expected_type",expected),field("actual_type",actual)]);
+}
+func c_kind(v m.CTypeKind) u64 {
+    switch v {case m.CTypeKind.Scalar:return 0;case m.CTypeKind.Pointer:return 1;case m.CTypeKind.Buffer:return 2;case m.CTypeKind.Named:return 3;}
+}
+func c_decl_kind(v m.CDeclKind) u64 {
+    switch v {case m.CDeclKind.Record:return 0;case m.CDeclKind.Resource:return 1;case m.CDeclKind.Callback:return 2;case m.CDeclKind.Opaque:return 3;}
+}
+func foreign_kind(v m.ForeignExportKind) u64 {
+    switch v {case m.ForeignExportKind.Type:return 0;case m.ForeignExportKind.Value:return 1;case m.ForeignExportKind.Function:return 2;}
+}
+func detail_kind(v m.ForeignDetail) u64 {
+    switch v {case m.ForeignDetail.Type(x):return 0;case m.ForeignDetail.Value(x):return 1;case m.ForeignDetail.Callable(x):return 2;case m.ForeignDetail.Property(x):return 3;case m.ForeignDetail.Indexer(x):return 4;case m.ForeignDetail.Slice(x):return 5;}
+}
+func c_ref(v m.CTypeRef) json.Value {
+    let args=vec.empty[json.Value]();for x in v.args { vec.push(args,c_ref(x)); }
+    return o([field("kind",n(c_kind(v.kind))),field("scalar",s(v.scalar)),field("writable",b(v.writable)),field("named",n(u64(v.named))),field("args",json.Value.Array(args))]);
+}
+func export_doc(v m.ForeignExport) json.Value {
+    var type_ref=json.Value.Null;
+    switch v.c_type_ref {case option.Option.Some(x):type_ref=c_ref(x);case option.Option.None:{}}
+    return o([field("name",s(v.name)),field("identity",s(v.identity)),field("kind",n(foreign_kind(v.kind))),field("bundle",ix(v.bundle)),field("declaration",optional_index(v.declaration)),field("candidates",indices(v.candidates)),field("c_type",optional32(v.c_type)),field("c_callable",optional32(v.c_callable)),field("c_type_ref",type_ref)]);
+}
+func module_doc(v m.Module,manager source.Manager) json.Value {
+    let imports=vec.empty[json.Value]();for x in v.imports { vec.push(imports,o([field("file",ix(x.file)),field("node",ix(x.node)),field("target",ix(x.target)),field("alias",s(x.alias)),field("span",span(x.span,manager))])); }
+    let exports=vec.empty[json.Value]();for x in v.foreign_exports { vec.push(exports,export_doc(x)); }
+    var binding=json.Value.Null;
+    switch v.binding {case option.Option.Some(x):binding=o([field("bundle",ix(x.bundle)),field("index",ix(x.index))]);case option.Option.None:{}}
+    return o([field("id",ix(v.id)),field("logical_path",s(v.logical_path)),field("identity",s(v.identity)),field("package_name",s(v.package_name)),field("files",indices(v.files)),field("imports",json.Value.Array(imports)),field("foreign_exports",json.Value.Array(exports)),field("binding",binding),field("c_binding",optional_index(v.c_binding))]);
+}
+func binding_doc(v m.BindingBundle,manager source.Manager) json.Value {
+    let modules=vec.empty[json.Value]();for x in v.modules { vec.push(modules,o([field("logical_path",s(x.logical_path)),field("host_module",s(x.host_module)),field("provider",s(x.provider)),field("source",span(x.source,manager))])); }
+    return o([field("path",s(v.path)),field("sha256",s(v.sha256)),field("source",span(v.source,manager)),field("schema_version",n(u64(v.schema_version))),field("contract",s(v.contract)),field("modules",json.Value.Array(modules)),field("declarations",indices(v.declarations))]);
+}
+func declaration_doc(v m.ForeignDeclaration,manager source.Manager) json.Value {
+    return o([field("id",ix(v.id)),field("bundle",ix(v.bundle)),field("source",span(v.source,manager)),field("json_pointer",s(v.json_pointer)),field("identity",s(v.identity)),field("module",s(v.module)),field("name",s(v.name)),field("stable_identity",s(v.stable_identity)),field("detail_kind",n(detail_kind(v.detail)))]);
+}
+func c_binding_doc(v m.CBindingBundle,manager source.Manager) json.Value {
+    let modules=vec.empty[json.Value]();for x in v.modules { vec.push(modules,o([field("logical_path",s(x.logical_path)),field("provider",s(x.provider)),field("library",s(x.library)),field("source",span(x.source,manager))])); }
+    return o([field("path",s(v.path)),field("sha256",s(v.sha256)),field("source",span(v.source,manager)),field("schema_version",n(u64(v.schema_version))),field("contract",s(v.contract)),field("abi",s(v.abi)),field("target",s(v.target)),field("requires_hosted",b(v.requires_hosted)),field("types",indices32(v.types)),field("callables",indices32(v.callables)),field("modules",json.Value.Array(modules))]);
+}
+func c_type_doc(v m.CTypeDecl,manager source.Manager) json.Value {
+    return o([field("id",n(u64(v.id))),field("bundle",ix(v.bundle)),field("source",span(v.source,manager)),field("identity",s(v.identity)),field("module",s(v.module)),field("name",s(v.name)),field("kind",n(c_decl_kind(v.kind)))]);
+}
+func c_callable_doc(v m.CCallableDecl,manager source.Manager) json.Value {
+    return o([field("id",n(u64(v.id))),field("bundle",ix(v.bundle)),field("source",span(v.source,manager)),field("identity",s(v.identity)),field("module",s(v.module)),field("name",s(v.name)),field("stable_identity",s(v.stable_identity))]);
+}
+func project_doc(v m.Project,manager source.Manager) json.Value {
+    let files=vec.empty[json.Value]();for x in v.files { vec.push(files,o([field("source",n(x.lexed.source.id)),field("root",ix(x.root)),field("nodes",ix(vec.len(x.nodes))),field("tokens",ix(vec.len(x.lexed.tokens))),field("recovered",b(x.recovered))])); }
+    let modules=vec.empty[json.Value]();for x in v.modules { vec.push(modules,module_doc(x,manager)); }
+    let bundles=vec.empty[json.Value]();for x in v.bindings { vec.push(bundles,binding_doc(x,manager)); }
+    let declarations=vec.empty[json.Value]();for x in v.foreign_bindings { vec.push(declarations,declaration_doc(x,manager)); }
+    let c_bundles=vec.empty[json.Value]();for x in v.c_bindings { vec.push(c_bundles,c_binding_doc(x,manager)); }
+    let c_types=vec.empty[json.Value]();for x in v.c_types { vec.push(c_types,c_type_doc(x,manager)); }
+    let c_calls=vec.empty[json.Value]();for x in v.c_callables { vec.push(c_calls,c_callable_doc(x,manager)); }
+    return o([field("root",s(v.root)),field("package_name",s(v.package_name)),field("backend",s(v.backend)),field("word_bits",n(u64(v.word_bits))),field("hosted",b(v.hosted)),field("entry",ix(v.entry)),field("files",json.Value.Array(files)),field("modules",json.Value.Array(modules)),field("bindings",json.Value.Array(bundles)),field("foreign_bindings",json.Value.Array(declarations)),field("c_bindings",json.Value.Array(c_bundles)),field("c_types",json.Value.Array(c_types)),field("c_callables",json.Value.Array(c_calls)),field("c_libraries",strings(v.c_libraries)),field("c_library_dirs",strings(v.c_library_dirs))]);
+}
+func phase_name(v m.PhaseState) string {
+    switch v {case m.PhaseState.Complete:return "complete";case m.PhaseState.Recovered:return "recovered";case m.PhaseState.Failed:return "failed";case m.PhaseState.Cancelled:return "cancelled";}
+}
+func failure_name(v m.FailureKind) string {
+    switch v {case m.FailureKind.Source:return "source";case m.FailureKind.Unsupported:return "unsupported";case m.FailureKind.Environment:return "environment";case m.FailureKind.Internal:return "internal";}
+}
+func document(v m.ProjectResult,manager source.Manager) json.Value {
+    let diagnostics=vec.empty[json.Value]();for x in v.diagnostics { vec.push(diagnostics,diagnostic(x,manager)); }
+    let snapshots=vec.empty[json.Value]();for x in manager.snapshots { vec.push(snapshots,source_doc(x)); }
+    var value=json.Value.Null;if v.has_value { value=project_doc(v.value,manager); }
+    return o([field("state",s(phase_name(v.state))),field("failure",s(failure_name(v.failure))),field("has_value",b(v.has_value)),field("success",b(render.succeeded(v.state,v.has_value,v.diagnostics))),field("exit_code",n(u64(render.exit_code(v.state,v.failure,v.has_value,v.diagnostics)))),field("diagnostics",json.Value.Array(diagnostics)),field("sources",json.Value.Array(snapshots)),field("project",value)]);
+}
+func main() i32 throws os.Error {
+    let args=process.args();if vec.len(args)!=4 { os.write_all_text(os.stderr(),"usage: program MANIFEST STD_SOURCE_OR_DASH STD_BINDING_OR_DASH\n");return 99; }
+    var std_source=option.Option[string].None;var std_binding=option.Option[string].None;
+    if args[2]!="-" { std_source=option.Option[string].Some(args[2]); }if args[3]!="-" { std_binding=option.Option[string].Some(args[3]); }
+    var manager=source.manager();let result=project.load(m.ProjectOptions(manifest:args[1],std_source_root:std_source,std_binding_bundle:std_binding),inout manager);
+    try { os.write_all_text(os.stdout(),json.serialize(document(result,manager))+"\n"); }
+    catch problem json.Error { os.write_all_text(os.stderr(),"project dump JSON serialization failed\n");return 98; }
+    return 0;
+}

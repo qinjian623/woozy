@@ -1,0 +1,446 @@
+package project;
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "app/wzcc/input" as input;
+import "app/wzcc/paths" as paths;
+import "app/wzcc/manifest" as manifest;
+import "app/wzcc/bindings" as bindings;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/render" as render;
+import "app/wzcc/resources" as resources;
+import "std/fs" as fs;
+import "std/os" as os;
+import "std/path" as path;
+import "std/option" as option;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+// A filesystem failure keeps the operation and the path spelling that failed so
+// the diagnostic can reproduce the C++ filesystem_error text. An empty
+// operation means the failure has no std::filesystem counterpart (for example a
+// non-UTF-8 entry name); those keep the historical os.Error wording.
+struct IoFailure { operation string; path string; problem os.Error; }
+enum Stop { Abort; Io(problem IoFailure); }
+func io_failure(operation string, name string, problem os.Error) IoFailure {
+    return IoFailure(operation:operation,path:name,problem:problem);
+}
+func canonical_path(name string) string throws Stop {
+    try {return paths.canonical(name);} catch problem os.Error {throw Stop.Io(io_failure("cannot make canonical path",name,problem));}
+}
+func exists(name string) bool throws Stop {
+    try {return fs.exists(name);} catch problem os.Error {throw Stop.Io(io_failure("status",name,problem));}
+}
+func read_directory(name string) Vec[fs.DirEntry] throws Stop {
+    try {return fs.read_dir(name);} catch problem os.Error {throw Stop.Io(io_failure("directory iterator cannot open directory",name,problem));}
+}
+func entry_name(entry fs.DirEntry) string throws Stop {
+    try {return fs.name_text(entry);} catch problem os.Error {throw Stop.Io(io_failure("","",problem));}
+}
+func standard_library() string throws Stop {
+    try {return resources.standard_library();} catch problem os.Error {throw Stop.Io(io_failure("","",problem));}
+}
+struct Claim { name string; identity string; }
+struct Loader {
+    options model.ProjectOptions;
+    project model.Project;
+    store model.BindingStore;
+    diagnostics Vec[model.Diagnostic];
+    failure model.FailureKind;
+    configs Vec[model.ManifestConfig];
+    identities Vec[model.PathIndex];
+    claims Vec[Claim];
+}
+
+func error(state inout Loader, code string, message string,
+           where option.Option[model.Span], failure model.FailureKind) {
+    var diagnostic=model.diagnostic(code,"resolve",message,
+        model.Span(snapshot:0,begin_byte:0,end_byte:0));
+    switch where {
+        case option.Option.Some(span):diagnostic.primary=span;
+        case option.Option.None:diagnostic.has_primary=false;
+    }
+    vec.push(state.diagnostics,diagnostic);
+    switch failure {case model.FailureKind.Environment:state.failure=failure;default:{}}
+}
+func fail(state inout Loader, code string, message string,
+          where option.Option[model.Span], failure model.FailureKind) throws Stop {
+    error(inout state,code,message,where,failure);
+    throw Stop.Abort;
+}
+func append_diagnostics(state inout Loader, diagnostics Vec[model.Diagnostic], failure model.FailureKind) {
+    for diagnostic in diagnostics {vec.push(state.diagnostics,diagnostic);}
+    switch failure {case model.FailureKind.Environment:state.failure=failure;default:{}}
+}
+func io_error(state inout Loader, failure IoFailure, where option.Option[model.Span]) {
+    var message="I/O operation failed";
+    if failure.operation!="" {
+        message=paths.error_message(failure.operation,failure.path,failure.problem);
+    } else {
+        switch failure.problem {
+            case os.Error.System(code,completed):message+=" (os error "+strconv.format_i64(i64(code))+")";
+            case os.Error.Interrupted(code,completed):message+=" (os error "+strconv.format_i64(i64(code))+")";
+            case os.Error.WouldBlock(code,completed):message+=" (os error "+strconv.format_i64(i64(code))+")";
+            case os.Error.NoProgress(completed):message+=" (no progress)";
+        }
+    }
+    error(inout state,"E_INPUT_IO",message,where,model.FailureKind.Environment);
+}
+func ident(value string) bool {
+    if value=="" {return false;}
+    let first=value[0];
+    if !((first>=65&&first<=90)||(first>=97&&first<=122)||first==95) {return false;}
+    for rune in value {
+        if !((rune>=65&&rune<=90)||(rune>=97&&rune<=122)||(rune>=48&&rune<=57)||rune==95) {return false;}
+    }
+    return true;
+}
+func logical(value string) bool {
+    for part in text.split(value,"/") {if !ident(part) {return false;}}
+    return true;
+}
+func sorted(values Vec[string]) {
+    for var index usize=1;index<vec.len(values);index+=1 {
+        let value=values[index];var next=index;
+        for next>0&&value<values[next-1] {values[next]=values[next-1];next-=1;}
+        values[next]=value;
+    }
+}
+func unique_push(values Vec[string], value string) {
+    for item in values {if item==value {return;}}
+    vec.push(values,value);
+}
+func is_kind(name string, directory bool) bool throws Stop {
+    try {
+        let info=os.stat(name);
+        if directory {return fs.is_dir(info);}
+        return fs.is_file(info);
+    } catch problem os.Error {
+        switch problem {
+            case os.Error.System(code,completed): {if code==2||code==20 {return false;}}
+            default:{}
+        }
+        throw Stop.Io(io_failure("status",name,problem));
+    }
+}
+func configuration(state inout Loader, manager inout source.Manager,
+                   manifest_path string) model.ManifestConfig throws Stop {
+    let canonical=canonical_path(manifest_path);
+    for config in state.configs {if config.manifest==canonical {return config;}}
+    let main_path=canonical_path(state.options.manifest);
+    let result=manifest.load(canonical,canonical==main_path,inout manager);
+    append_diagnostics(inout state,result.diagnostics,result.failure);
+    if !render.succeeded(result.state,result.has_value,result.diagnostics) {throw Stop.Abort;}
+    vec.push(state.configs,result.value);
+    return result.value;
+}
+func claim(state inout Loader, name string, identity string,
+           where option.Option[model.Span]) throws Stop {
+    for item in state.claims {
+        if item.name==name {
+            if item.identity!=identity {
+                fail(inout state,"E_MODULE_CONFLICT","different sources for logical module "+name,where,model.FailureKind.Source);
+            }
+            return;
+        }
+    }
+    vec.push(state.claims,Claim(name:name,identity:identity));
+}
+func known_identity(state Loader, identity string) option.Option[usize] {
+    for item in state.identities {if item.path==identity {return option.Option[usize].Some(item.index);}}
+    return option.Option[usize].None;
+}
+func new_module(state inout Loader, name string, identity string, package_name string) usize {
+    let id=vec.len(state.project.modules);
+    vec.push(state.identities,model.PathIndex(path:identity,index:id));
+    vec.push(state.project.modules,model.Module(id:id,logical_path:name,identity:identity,
+        package_name:package_name,files:[],imports:[],foreign_exports:[],
+        binding:option.Option[model.BindingModuleRef].None,c_binding:option.Option[usize].None));
+    return id;
+}
+func new_export(name string, identity string, kind model.ForeignExportKind, bundle usize) model.ForeignExport {
+    return model.ForeignExport(name:name,identity:identity,kind:kind,bundle:bundle,
+        declaration:option.Option[usize].None,candidates:[],c_type:option.Option[u32].None,
+        c_callable:option.Option[u32].None,c_type_ref:option.Option[model.CTypeRef].None);
+}
+func export_index(exports Vec[model.ForeignExport], name string) option.Option[usize] {
+    for var index usize=0;index<vec.len(exports);index+=1 {
+        if exports[index].name==name {return option.Option[usize].Some(index);}
+    }
+    return option.Option[usize].None;
+}
+func sorted_exports(exports Vec[model.ForeignExport]) {
+    for var index usize=1;index<vec.len(exports);index+=1 {
+        let value=exports[index];var next=index;
+        for next>0&&value.name<exports[next-1].name {exports[next]=exports[next-1];next-=1;}
+        exports[next]=value;
+    }
+}
+func bundle_result(state inout Loader, result model.BundleResult) usize throws Stop {
+    append_diagnostics(inout state,result.diagnostics,result.failure);
+    if !render.succeeded(result.state,result.has_value,result.diagnostics) {throw Stop.Abort;}
+    return result.value;
+}
+func python_module(state inout Loader,manager inout source.Manager,name string,
+                   bundle_path string,host string,where option.Option[model.Span]) usize throws Stop {
+    let canonical_bundle=canonical_path(bundle_path);
+    let result=bindings.load_python(canonical_bundle,inout manager,inout state.store);
+    let index=bundle_result(inout state,result);
+    let bundle=state.store.bindings[index];
+    var module_index option.Option[usize]=option.Option[usize].None;
+    for var item usize=0;item<vec.len(bundle.modules);item+=1 {
+        if bundle.modules[item].logical_path==name {module_index=option.Option[usize].Some(item);break;}
+    }
+    if option.is_none(module_index) {
+        fail(inout state,"E_BINDING_INVALID","bundle does not declare module "+name,
+            option.Option[model.Span].Some(option.unwrap_or(where,bundle.source)),model.FailureKind.Source);
+    }
+    if host!="" {
+        var present=false;
+        for requirement in bundle.package_requirements {if requirement.package_name==host {present=true;}}
+        if !present {fail(inout state,"E_BINDING_INVALID","bundle does not declare host package "+host,
+            option.Option[model.Span].Some(bundle.source),model.FailureKind.Source);}
+    }
+    let identity="binding:"+bundle.path+":"+name;
+    claim(inout state,name,identity,where);
+    switch known_identity(state,identity) {case option.Option.Some(id):return id;case option.Option.None:{}}
+    let id=new_module(inout state,name,identity,name);
+    state.project.modules[id].binding=option.Option[model.BindingModuleRef].Some(
+        model.BindingModuleRef(bundle:index,index:option.unwrap_or(module_index,0)));
+    let exports=vec.empty[model.ForeignExport]();
+    for binding in bundle.declarations {
+        let declaration=state.store.foreign_bindings[binding];
+        if declaration.module!=name {continue;}
+        switch declaration.detail {
+            case model.ForeignDetail.Type(detail): {
+                var item=new_export(declaration.name,declaration.stable_identity,model.ForeignExportKind.Type,index);
+                item.declaration=option.Option[usize].Some(binding);vec.push(exports,item);
+            }
+            case model.ForeignDetail.Value(detail): {
+                var item=new_export(declaration.name,declaration.stable_identity,model.ForeignExportKind.Value,index);
+                item.declaration=option.Option[usize].Some(binding);vec.push(exports,item);
+            }
+            default:{}
+        }
+    }
+    for binding in bundle.declarations {
+        let declaration=state.store.foreign_bindings[binding];
+        if declaration.module!=name {continue;}
+        switch declaration.detail {
+            case model.ForeignDetail.Callable(callable): {
+                if option.is_some(callable.owner_type) {continue;}
+                switch export_index(exports,declaration.name) {
+                    case option.Option.Some(existing):vec.push(exports[existing].candidates,binding);
+                    case option.Option.None: {
+                        var item=new_export(declaration.name,declaration.stable_identity,model.ForeignExportKind.Function,index);
+                        vec.push(item.candidates,binding);vec.push(exports,item);
+                    }
+                }
+            }
+            default:{}
+        }
+    }
+    sorted_exports(exports);state.project.modules[id].foreign_exports=exports;
+    return id;
+}
+func c_module(state inout Loader,manager inout source.Manager,name string,
+              dependency model.Dependency,where option.Option[model.Span]) usize throws Stop {
+    let canonical_bundle=canonical_path(dependency.binding);
+    let result=bindings.load_c(canonical_bundle,inout manager,inout state.store);
+    let index=bundle_result(inout state,result);
+    let bundle=state.store.c_bindings[index];
+    if bundle.requires_hosted&&!state.project.hosted {
+        fail(inout state,"E_CAPABILITY_UNAVAILABLE","C binding requires [build.native] runtime = hosted",
+            option.Option[model.Span].Some(option.unwrap_or(where,bundle.source)),model.FailureKind.Source);
+    }
+    var selected option.Option[usize]=option.Option[usize].None;
+    for var item usize=0;item<vec.len(bundle.modules);item+=1 {
+        if bundle.modules[item].logical_path==name {selected=option.Option[usize].Some(item);break;}
+    }
+    if option.is_none(selected) {
+        fail(inout state,"E_BINDING_INVALID","C binding does not declare module "+name,
+            option.Option[model.Span].Some(option.unwrap_or(where,bundle.source)),model.FailureKind.Source);
+    }
+    let identity="c-binding:"+bundle.path+":"+name;
+    claim(inout state,name,identity,where);
+    switch known_identity(state,identity) {case option.Option.Some(id):return id;case option.Option.None:{}}
+    for library in dependency.libraries {unique_push(state.project.c_libraries,library);}
+    let module=bundle.modules[option.unwrap_or(selected,0)];
+    if module.library!="" {unique_push(state.project.c_libraries,module.library);}
+    for directory in dependency.library_dirs {unique_push(state.project.c_library_dirs,canonical_path(directory));}
+    let id=new_module(inout state,name,identity,name);
+    state.project.modules[id].c_binding=option.Option[usize].Some(index);
+    let exports=vec.empty[model.ForeignExport]();
+    for type_id in bundle.types {
+        let declaration=state.store.c_types[usize(type_id-1)];
+        if declaration.module!=name {continue;}
+        var item=new_export(declaration.name,declaration.identity,model.ForeignExportKind.Type,index);
+        item.c_type=option.Option[u32].Some(type_id);vec.push(exports,item);
+    }
+    for callable_id in bundle.callables {
+        let declaration=state.store.c_callables[usize(callable_id-1)];
+        if declaration.module!=name {continue;}
+        var item=new_export(declaration.name,declaration.identity,model.ForeignExportKind.Function,index);
+        item.c_callable=option.Option[u32].Some(callable_id);vec.push(exports,item);
+    }
+    sorted_exports(exports);state.project.modules[id].foreign_exports=exports;
+    return id;
+}
+func resolve(state inout Loader,manager inout source.Manager,name string,
+             context model.ManifestConfig,where option.Option[model.Span]) usize throws Stop {
+    if !logical(name) {fail(inout state,"E_IMPORT_PATH","invalid logical import: "+name,where,model.FailureKind.Source);}
+    let parts=text.split(name,"/");let head=parts[0];
+    var suffix="";
+    if vec.len(parts)>1 {suffix=text.join(parts[1:],"/");}
+    var config=context;var root="";
+    if head=="app" {root=config.root;}
+    else if head=="std" {
+        if option.is_some(state.options.std_source_root)&&option.is_some(state.options.std_binding_bundle) {
+            fail(inout state,"E_MODULE_CONFLICT","two explicit std sources",where,model.FailureKind.Source);
+        }
+        switch state.options.std_binding_bundle {
+            case option.Option.Some(bundle):return python_module(inout state,inout manager,name,bundle,"",where);
+            case option.Option.None:{}
+        }
+        switch state.options.std_source_root {
+            case option.Option.Some(directory):root=directory;
+            case option.Option.None:root=standard_library();
+        }
+        if !is_kind(paths.join(root,suffix),true) {
+            fail(inout state,"E_IMPORT_NOT_FOUND","standard module is not provided: "+name,where,model.FailureKind.Source);
+        }
+    } else {
+        var found=false;
+        for dependency in config.dependencies {
+            if dependency.name!=head {continue;}
+            found=true;
+            if dependency.kind=="python" {
+                return python_module(inout state,inout manager,name,dependency.binding,dependency.host_package,where);
+            }
+            if dependency.kind=="native" {return c_module(inout state,inout manager,name,dependency,where);}
+            root=canonical_path(dependency.source);
+            if exists(paths.join(root,"lang.toml")) {
+                config=configuration(inout state,inout manager,paths.join(root,"lang.toml"));root=config.root;
+            } else {config.root=root;config.dependencies=[];}
+            break;
+        }
+        if !found {fail(inout state,"E_IMPORT_NOT_FOUND","undeclared dependency "+head,where,model.FailureKind.Source);}
+    }
+    var directory=root;
+    if suffix!="" {directory=paths.join(root,suffix);}
+    directory=canonical_path(directory);
+    let identity="source:"+directory;
+    var logical_name=name;
+    if head=="app" {logical_name="app@"+config.root+":"+name;}
+    claim(inout state,logical_name,identity,where);
+    switch known_identity(state,identity) {case option.Option.Some(id):return id;case option.Option.None:{}}
+    let id=new_module(inout state,name,identity,"");
+    let files=vec.empty[string]();
+    for entry in read_directory(directory) {
+        // directory_entry uses the cached kind, following links when needed.
+        let size=vec.len(entry.name);
+        let possible=size>3&&entry.name[size-3]==46&&entry.name[size-2]==119&&entry.name[size-1]==122;
+        if entry.kind!=0&&entry.kind!=10 {
+            if entry.kind!=8||!possible {continue;}
+        }
+        let filename=entry_name(entry);let filename_path=paths.join(directory,filename);
+        if (entry.kind==8||is_kind(filename_path,false))&&path.extension(filename)==".wz" {vec.push(files,filename_path);}
+    }
+    sorted(files);
+    if vec.len(files)==0 {
+        fail(inout state,"E_MODULE_EMPTY","no .wz files in "+directory,where,model.FailureKind.Environment);
+    }
+    for filename in files {
+        let reading=input.read(filename,inout manager);
+        append_diagnostics(inout state,reading.diagnostics,reading.failure);
+        if !render.succeeded(reading.state,reading.has_value,reading.diagnostics) {throw Stop.Abort;}
+        let lexed=lexer.lex(reading.value);
+        append_diagnostics(inout state,lexed.diagnostics,lexed.failure);
+        if !render.succeeded(lexed.state,lexed.has_value,lexed.diagnostics) {throw Stop.Abort;}
+        let parsed=parser.parse(lexed);
+        // parse already includes lex diagnostics; lex was clean at this point.
+        append_diagnostics(inout state,parsed.diagnostics,parsed.failure);
+        if !render.succeeded(parsed.state,parsed.has_value,parsed.diagnostics) {throw Stop.Abort;}
+        let package_node=parsed.nodes[parsed.nodes[parsed.root].children[0]];
+        let package_name=parsed.lexed.tokens[package_node.token_begin+1].spelling;
+        if vec.len(state.project.modules[id].files)==0 {state.project.modules[id].package_name=package_name;}
+        else if state.project.modules[id].package_name!=package_name {
+            error(inout state,"E_PACKAGE_MISMATCH","inconsistent package name",option.Option[model.Span].Some(package_node.span),model.FailureKind.Source);
+            let first=state.project.files[state.project.modules[id].files[0]];
+            let first_package=first.nodes[first.nodes[first.root].children[0]];
+            vec.push(state.diagnostics[vec.len(state.diagnostics)-1].related,
+                model.Related(span:first_package.span,message:"first package declaration"));
+            throw Stop.Abort;
+        }
+        let file_id=vec.len(state.project.files);vec.push(state.project.files,parsed);
+        vec.push(state.project.modules[id].files,file_id);
+    }
+    let count=vec.len(state.project.modules[id].files);
+    for var file usize=0;file<count;file+=1 {
+        let ast=state.project.files[state.project.modules[id].files[file]];
+        for node_id in ast.nodes[ast.root].children {
+            let node=ast.nodes[node_id];
+            if model.ast_kind_id(node.kind)!=model.ast_kind_id(model.AstKind.Import) {continue;}
+            let token=ast.lexed.tokens[node.token_begin+1];
+            if !token.has_string_value||!logical(token.string_value) {
+                error(inout state,"E_IMPORT_PATH","invalid logical import",option.Option[model.Span].Some(node.span),model.FailureKind.Source);continue;
+            }
+            let import_name=token.string_value;let import_parts=text.split(import_name,"/");
+            var alias=import_parts[vec.len(import_parts)-1];
+            if node.token_end-node.token_begin>3 {alias=ast.lexed.tokens[node.token_begin+3].spelling;}
+            try {
+                let target=resolve(inout state,inout manager,import_name,config,option.Option[model.Span].Some(node.span));
+                vec.push(state.project.modules[id].imports,model.Import(file:file,node:node_id,target:target,alias:alias,span:node.span));
+            } catch stopped Stop {
+                switch stopped {case Stop.Abort:{} case Stop.Io(problem):io_error(inout state,problem,option.Option[model.Span].Some(node.span));}
+            }
+        }
+    }
+    return id;
+}
+func cycle_visit(state inout Loader,id usize,colors Vec[u8],stack Vec[usize],edges Vec[model.Span]) {
+    colors[id]=1;vec.push(stack,id);
+    for edge in state.project.modules[id].imports {
+        if colors[edge.target]==0 {
+            vec.push(edges,edge.span);cycle_visit(inout state,edge.target,colors,stack,edges);
+            let removed=vec.pop(edges);
+        } else if colors[edge.target]==1 {
+            var start usize=0;
+            for start<vec.len(stack)&&stack[start]!=edge.target {start+=1;}
+            var message="import cycle: ";
+            for var index=start;index<vec.len(stack);index+=1 {message+=state.project.modules[stack[index]].logical_path+" -> ";}
+            message+=state.project.modules[edge.target].logical_path;
+            error(inout state,"E_IMPORT_CYCLE",message,option.Option[model.Span].Some(edge.span),model.FailureKind.Source);
+            for var index=start;index<vec.len(edges);index+=1 {
+                vec.push(state.diagnostics[vec.len(state.diagnostics)-1].related,model.Related(span:edges[index],message:"cycle import"));
+            }
+        }
+    }
+    let removed=vec.pop(stack);colors[id]=2;
+}
+pub func load(options model.ProjectOptions,manager inout source.Manager) model.ProjectResult {
+    var state=Loader(options:options,project:model.empty_project(),store:model.binding_store(),
+        diagnostics:[],failure:model.FailureKind.Source,configs:[],identities:[],claims:[]);
+    var has_value=false;
+    try {
+        state.project.root=path.dir(canonical_path(options.manifest));
+        let config=configuration(inout state,inout manager,options.manifest);
+        state.project.package_name=config.package_name;state.project.backend=config.backend;
+        state.project.word_bits=config.word_bits;state.project.hosted=config.hosted;state.store.hosted=config.hosted;
+        state.project.entry=resolve(inout state,inout manager,config.entry,config,option.Option[model.Span].None);
+        let colors=vec.make[u8](vec.len(state.project.modules),0);
+        let stack=vec.empty[usize]();let edges=vec.empty[model.Span]();
+        for var id usize=0;id<vec.len(state.project.modules);id+=1 {
+            if colors[id]==0 {cycle_visit(inout state,id,colors,stack,edges);}
+        }
+        has_value=true;
+    } catch stopped Stop {
+        switch stopped {case Stop.Abort:{} case Stop.Io(problem):io_error(inout state,problem,option.Option[model.Span].None);}
+    }
+    state.project.bindings=state.store.bindings;state.project.foreign_bindings=state.store.foreign_bindings;
+    state.project.c_bindings=state.store.c_bindings;state.project.c_types=state.store.c_types;state.project.c_callables=state.store.c_callables;
+    var phase=model.PhaseState.Failed;
+    if has_value {phase=model.PhaseState.Complete;if vec.len(state.diagnostics)!=0 {phase=model.PhaseState.Recovered;}}
+    return model.ProjectResult(state:phase,failure:state.failure,diagnostics:state.diagnostics,has_value:has_value,value:state.project);
+}
