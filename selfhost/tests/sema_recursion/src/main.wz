@@ -1,0 +1,54 @@
+package app;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/project" as project;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func phase_text(value model.PhaseState) string {
+    switch value {
+        case model.PhaseState.Complete: return "Complete";
+        case model.PhaseState.Recovered: return "Recovered";
+        case model.PhaseState.Failed: return "Failed";
+        case model.PhaseState.Cancelled: return "Cancelled";
+    }
+}
+
+func yes(value bool) string { if value { return "1"; } return "0"; }
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) < 3 { io.println("usage: program MANIFEST STDROOT"); return 2; }
+    var manager = source.manager();
+    let options = model.ProjectOptions(manifest: args[1],
+        std_source_root: option.Option[string].Some(args[2]),
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(options, inout manager);
+    if !loaded.has_value { io.println("LOAD failed"); return 3; }
+    let resolved = resolve.resolve_project(loaded.value);
+    if !resolved.has_value { io.println("RESOLVE failed"); return 4; }
+    let checked = sema.check_types(resolved, option.Option[model.CheckConfig].None);
+    io.println("STATE " + phase_text(checked.state) + " has=" + yes(checked.has_value) +
+        " diags=" + strconv.format_u64(u64(vec.len(checked.diagnostics))));
+    for diagnostic in checked.diagnostics {
+        var path = "";
+        for item in manager.snapshots {
+            if item.id == diagnostic.primary.snapshot { path = item.path; }
+        }
+        io.println("DIAG " + diagnostic.code + "|" + diagnostic.phase + "|" +
+            diagnostic.severity + "|" + diagnostic.message + "|" + path + "|" +
+            strconv.format_u64(diagnostic.primary.begin_byte) + "|" +
+            strconv.format_u64(diagnostic.primary.end_byte) + "|" +
+            strconv.format_u64(u64(vec.len(diagnostic.related))) + "|" +
+            strconv.format_u64(u64(vec.len(diagnostic.fixits))) + "|" +
+            strconv.format_u64(u64(vec.len(diagnostic.notes))));
+    }
+    return 0;
+}

@@ -605,14 +605,7 @@ func a_instantiate_constant_functions(state inout Checker,
         default: {}
     }
 }
-func transform_node(state inout Checker,id usize,depth usize,
-    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
-    if depth>512 {throw internal_error("HIR transform nesting limit");}
-    if id>=vec.len(state.m.nodes) {throw internal_error("invalid HIR node reference");}
-    var node=hir.HirNode(type_id:0,source:state.m.nodes[id].source,scope:0,
-        children:[],data:hir.NodeData.Noop(value:hir.Noop()),errors:[],exits:[]);
-    try {node=hirclonelib.clone_node(state.m.nodes[id]);}
-    catch error model.SupportError {throw Error.Support(error);}
+func a_transform_constant(state inout Checker,node inout hir.HirNode) throws Error {
     switch node.data {
         case hir.NodeData.ConstantLiteral(payload): {
             var value=payload.value;
@@ -630,6 +623,8 @@ func transform_node(state inout Checker,id usize,depth usize,
         }
         default: {}
     }
+}
+func a_transform_call(state inout Checker,node inout hir.HirNode) throws Error {
     switch node.data {
         case hir.NodeData.Call(payload): {
             var value=payload;
@@ -651,6 +646,9 @@ func transform_node(state inout Checker,id usize,depth usize,
         }
         default: {}
     }
+}
+func a_transform_trait_prototype(state inout Checker,node inout hir.HirNode,
+    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
     switch node.data {
         case hir.NodeData.FunctionValue(payload): {
             let prototype_found=trait_prototype(inout state,payload.symbol);
@@ -740,6 +738,8 @@ func transform_node(state inout Checker,id usize,depth usize,
         }
         default: {}
     }
+}
+func a_transform_function_value(state inout Checker,node inout hir.HirNode) throws Error {
     switch node.data {
         case hir.NodeData.FunctionValue(payload): {
             var found=a_template_get(state.template_ids,payload.symbol);
@@ -756,6 +756,9 @@ func transform_node(state inout Checker,id usize,depth usize,
         }
         default: {}
     }
+}
+func a_transform_bound(state inout Checker,node inout hir.HirNode,
+    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
     switch node.data {
         case hir.NodeData.FunctionValue(payload): {
             var value=payload;
@@ -776,6 +779,8 @@ func transform_node(state inout Checker,id usize,depth usize,
         }
         default: {}
     }
+}
+func a_transform_trait_object(state inout Checker,node inout hir.HirNode) throws Error {
     switch node.data {
         case hir.NodeData.TraitObjectInit(payload): {
             var value=payload;
@@ -796,6 +801,9 @@ func transform_node(state inout Checker,id usize,depth usize,
         }
         default: {}
     }
+}
+func a_transform_constraint_call(state inout Checker,node inout hir.HirNode,
+    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
     switch node.data {
         case hir.NodeData.ConstraintCall(payload): {
             let name=symbol(inout state,payload.method).name;
@@ -842,8 +850,33 @@ func transform_node(state inout Checker,id usize,depth usize,
         }
         default: {}
     }
+}
+
+func a_transform_node_apply(state inout Checker,node inout hir.HirNode,
+    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
+    a_transform_constant(inout state,inout node);
+    a_transform_call(inout state,inout node);
+    a_transform_trait_prototype(inout state,inout node,instance_sub);
+    a_transform_function_value(inout state,inout node);
+    a_transform_bound(inout state,inout node,instance_sub);
+    a_transform_trait_object(inout state,inout node);
+    a_transform_constraint_call(inout state,inout node,instance_sub);
+}
+func a_transform_node_ready(state inout Checker,id usize,
+    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
+    var node=hir.HirNode(type_id:0,source:state.m.nodes[id].source,scope:0,
+        children:[],data:hir.NodeData.Noop(value:hir.Noop()),errors:[],exits:[]);
+    try {node=hirclonelib.clone_node(state.m.nodes[id]);}
+    catch error model.SupportError {throw Error.Support(error);}
+    a_transform_node_apply(inout state,inout node,instance_sub);
     state.m.nodes[id]=node;
-    for child_id in node.children {
+}
+func transform_node(state inout Checker,id usize,depth usize,
+    instance_sub option.Option[Vec[model.Substitution]]) throws Error {
+    if depth>512 {throw internal_error("HIR transform nesting limit");}
+    if id>=vec.len(state.m.nodes) {throw internal_error("invalid HIR node reference");}
+    a_transform_node_ready(inout state,id,instance_sub);
+    for child_id in state.m.nodes[id].children {
         transform_node(inout state,child_id,depth+1,instance_sub);
     }
 }
@@ -857,53 +890,9 @@ func a_sort_renames(values Vec[hir.SymbolRename]) {
         values[position]=current;
     }
 }
-func instantiate(state inout Checker,origin usize,arguments Vec[usize],use model.NodeRef) usize throws Error {
-    let template_found=a_template_get(state.template_ids,origin);
-    var template_index usize=0;
-    switch template_found {
-        case option.Option.None:throw internal_error("missing generic template");
-        case option.Option.Some(value):template_index=value;
-    }
-    if template_index>=vec.len(state.m.templates) {throw internal_error("invalid generic template");}
-    let stored=state.m.templates[template_index];
-    var function=hir.HirFunction(symbol:0,signature:0,parameters:[],body:0,scope:0,
-        source:stored.function.source,captures:[],is_async:false);
-    try {function=hirclonelib.clone_function(stored.function);}
-    catch error model.SupportError {throw Error.Support(error);}
-    let parameters=a_copy_generic_params(stored.params);
-    if vec.len(arguments)!=vec.len(parameters) {
-        throw internal_error("instance type argument count");
-    }
-    let sub=vec.empty[model.Substitution]();
-    for var index usize=0;index<vec.len(parameters);index+=1 {
-        vec.push(sub,model.Substitution(symbol:parameters[index].symbol,type_id:arguments[index]));
-    }
-    check_constraints(inout state,use,parameters,arguments,
-        option.Option[Vec[model.Substitution]].Some(sub));
-    let ids=vec.empty[usize]();
-    for argument in arguments {
-        if contains_parameter(inout state,argument) {
-            throw internal_error("nonconcrete instance request");
-        }
-        vec.push(ids,argument);
-    }
-    let key=InstanceKey(origin:origin,args:a_copy_ids(ids));
-    let cached=a_instance_get(state.instance_cache,key);
-    switch cached {
-        case option.Option.Some(value):return value;
-        case option.Option.None: {}
-    }
-    if vec.len(state.instance_cache)>=4096 {
-        throw reject(inout state,use,"generic instance count budget exceeded (4096)",
-            "E_INSTANTIATION_LIMIT");
-    }
-    if state.instantiation_depth>=48 {
-        throw reject(inout state,use,"generic instantiation depth budget exceeded (48)",
-            "E_INSTANTIATION_LIMIT");
-    }
-    state.instantiation_depth+=1;
-    let result=duplicate_symbol(inout state,origin);
-    a_instance_set(state.instance_cache,key,result);
+func a_instantiate_prepare(state inout Checker,origin usize,use model.NodeRef,
+    function inout hir.HirFunction,parameters Vec[hir.GenericParam],
+    sub Vec[model.Substitution],ids Vec[usize],result usize) throws Error {
     var work=AInstantiateWork(result:result,sub:sub,renamed:[],
         scopes:[],nodes:[]);
     vec.push(work.renamed,hir.SymbolRename(origin:origin,replacement:result));
@@ -958,6 +947,55 @@ func instantiate(state inout Checker,origin usize,arguments Vec[usize],use model
         type_args:a_copy_ids(ids),renamed:renamed,target:state.m.config);
     vec.push(state.m.instances,instance);
     vec.push(state.m.functions,function);
+}
+func instantiate(state inout Checker,origin usize,arguments Vec[usize],use model.NodeRef) usize throws Error {
+    let template_found=a_template_get(state.template_ids,origin);
+    var template_index usize=0;
+    switch template_found {
+        case option.Option.None:throw internal_error("missing generic template");
+        case option.Option.Some(value):template_index=value;
+    }
+    if template_index>=vec.len(state.m.templates) {throw internal_error("invalid generic template");}
+    let stored=state.m.templates[template_index];
+    var function=hir.HirFunction(symbol:0,signature:0,parameters:[],body:0,scope:0,
+        source:stored.function.source,captures:[],is_async:false);
+    try {function=hirclonelib.clone_function(stored.function);}
+    catch error model.SupportError {throw Error.Support(error);}
+    let parameters=a_copy_generic_params(stored.params);
+    if vec.len(arguments)!=vec.len(parameters) {
+        throw internal_error("instance type argument count");
+    }
+    let sub=vec.empty[model.Substitution]();
+    for var index usize=0;index<vec.len(parameters);index+=1 {
+        vec.push(sub,model.Substitution(symbol:parameters[index].symbol,type_id:arguments[index]));
+    }
+    check_constraints(inout state,use,parameters,arguments,
+        option.Option[Vec[model.Substitution]].Some(sub));
+    let ids=vec.empty[usize]();
+    for argument in arguments {
+        if contains_parameter(inout state,argument) {
+            throw internal_error("nonconcrete instance request");
+        }
+        vec.push(ids,argument);
+    }
+    let key=InstanceKey(origin:origin,args:a_copy_ids(ids));
+    let cached=a_instance_get(state.instance_cache,key);
+    switch cached {
+        case option.Option.Some(value):return value;
+        case option.Option.None: {}
+    }
+    if vec.len(state.instance_cache)>=4096 {
+        throw reject(inout state,use,"generic instance count budget exceeded (4096)",
+            "E_INSTANTIATION_LIMIT");
+    }
+    if state.instantiation_depth>=48 {
+        throw reject(inout state,use,"generic instantiation depth budget exceeded (48)",
+            "E_INSTANTIATION_LIMIT");
+    }
+    state.instantiation_depth+=1;
+    let result=duplicate_symbol(inout state,origin);
+    a_instance_set(state.instance_cache,key,result);
+    a_instantiate_prepare(inout state,origin,use,inout function,parameters,sub,ids,result);
     transform_node(inout state,function.body,0,
         option.Option[Vec[model.Substitution]].Some(sub));
     annotate(inout state,function);
