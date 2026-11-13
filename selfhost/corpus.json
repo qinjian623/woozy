@@ -48871,21 +48871,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/backpressure/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -48895,21 +48901,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/close-drain/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -48919,21 +48931,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/close-submit-race/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -48943,21 +48961,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/invalid-arguments/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -48967,21 +48991,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/lifecycle/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -48991,21 +49021,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/multi-submit-wait/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -49015,21 +49051,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/owned-results/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -49039,21 +49081,28 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/panic-task/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "status": "panic",
+        "exit": 101,
+        "stdout_base64": "",
+        "panic_stderr_prefix": "LANG_NATIVE_PANIC:v1:division-by-zero:"
+      },
+      "execution_repetitions": 1,
+      "execution_timeout_seconds": 20,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -49063,21 +49112,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/parallel/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -49087,21 +49142,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/result-error/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 2,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -49111,21 +49172,27 @@
       "kind": "project",
       "operation": "build_native",
       "operations": [
-        "check",
         "build_native"
       ],
       "backend": "native",
       "manifest": "tests/native/threadpool/self-join/lang.toml",
-      "expected": null,
-      "run_expectation": {
-        "status": "unrecorded"
+      "expected": {
+        "status": "ok",
+        "build_status": "ok",
+        "no_stderr": true
       },
-      "support": "existing_runner",
-      "adaptation": "required",
-      "enabled": false,
+      "run_expectation": {
+        "exit": 0,
+        "stdout_base64": "",
+        "stderr_base64": ""
+      },
+      "execution_repetitions": 3,
+      "execution_timeout_seconds": 60,
+      "support": "public_cli",
+      "adaptation": "ready",
+      "enabled": true,
       "runner": "tests/native/threadpool/run_threadpool.py",
-      "runner_status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated",
+      "runner_status": "public_cli",
       "tags": [
         "project"
       ]
@@ -78103,8 +78170,8 @@
     },
     {
       "path": "tests/native/threadpool/run_threadpool.py",
-      "status": "adaptation_required",
-      "reason": "runner/generator declares its own compiler/helper/probe pipeline; compilation branch must be migrated"
+      "status": "public_cli",
+      "reason": "public CLI native O0/O2 builds; execution_repetitions preserve the original 1/2/3 program runs and output/Panic rules"
     },
     {
       "path": "tests/native/timezone/run.py",

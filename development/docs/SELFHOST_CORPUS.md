@@ -1,12 +1,12 @@
 # 自举语料执行器
 
-状态日期：2026-11-13。本文件说明 `selfhost/corpus.py`、`selfhost/corpus.json` 和
+状态日期：2026-11-14。本文件说明 `selfhost/corpus.py`、`selfhost/corpus.json` 和
 `tests/selfhost/corpus_test.py` 的实际范围。它是进行中的执行器，不是完整自举或全语料
 通过证明。
 
-当前清单共 1234 项，启用 870、未启用 364。Native 161 项、Python 65 项、迭代器等双后端 178 项、闭包等 Native 98 项均已独立复测并合入；原 285 项记录仍保留。482 个文件尚无已启用用例，335 项仍需改写运行方式，100 个复杂 runner 尚未接入。额外诊断字段只记录来源，执行器仍以两版完整 JSON 对照判断，尚未单独检查这些字段。
+当前清单共 1234 项，启用 881、未启用 353。Native 161 项、Python 65 项、迭代器等双后端 178 项、闭包等 Native 98 项均已独立复测并合入；原 285 项记录仍保留。线程池另 11 项已按参考记录合入。471 个文件尚无已启用用例，324 项仍需改写运行方式，99 个复杂 runner 尚未接入。额外诊断字段只记录来源，执行器仍以两版完整 JSON 对照判断，尚未单独检查这些字段。
 
-源文件 SHA、角色、大小和 runner 清单没有随合并改变；Python 批次追加 131 条文件分配，最新双后端批次另追加 178 条。清单仍因四处工具、状态或入口修改报告旧哈希，尚未正式重新冻结。完整候选语料与第二、三代自举未运行。以下 285 项的数量和命令记录描述的是之前那批结果。
+源文件 SHA、角色、大小和 runner 路径清单没有随用例合并改变；线程池 runner 的分类已从 adaptation_required 改为 public_cli；Python 批次追加 131 条文件分配，最新双后端批次另追加 178 条。随后接受的类型分类和字节路径修改、新增测试尚未写入冻结清单；执行器仍会拒绝这些旧哈希和缺项，不能把参考记录当作当前候选编译器通过。完整候选语料与第二、三代自举未运行。以下 285 项的数量和命令记录描述的是之前那批结果。
 
 最新 178 项来自 89 个项目，每项保留 Native/Python 两个独立 ID，并追加 178 条文件分配。另 98 项中，78 项执行了 Native O0/O2，20 项只做静态检查。11 个浮点项目的 main 没有数值比较，因此这些记录只证明能编译并运行到入口返回，不能证明舍入、NaN/Inf、非正规数或 FMA 规则；原数值观察测试仍未接入。
 
@@ -364,9 +364,10 @@ reference/candidate 全 JSON 对比；stage0 作为候选会调用旧 native hel
 
 ## 7. 待适配 runner 精确清单
 
-以下 100 项来自 catalog `runners` 中 `status=adaptation_required` 的条目；完整原因和
-其余 component/public_cli 分类见 `selfhost/corpus.json`。逐项 `required` 字段在
-`checks/SH10f-corpus-public-cli-20261113/runner_gaps.json`，本轮按真实源码扫描归类：
+以下 100 项保留线程池合入前的历史清单；其中 `tests/native/threadpool/run_threadpool.py`
+已在 2026-11-14 改为 public_cli，当前仍为 adaptation_required 的有 99 项。完整原因和
+其余 component/public_cli 分类见 `selfhost/corpus.json`。旧逐项 `required` 字段在
+`checks/SH10f-corpus-public-cli-20261113/runner_gaps.json`，当时按真实源码扫描归类：
 
 | 类别 | 数量 | 剩余改动 |
 |---|---:|---|
@@ -506,3 +507,14 @@ python3 tests/selfhost/corpus_test.py \
 本轮派生脚本与 checks/SH10f-corpus-public-cli-20261113/ 原始证据保留在开发工作目录 `/home/qin/.local/state/cli-agent-bridge/worktrees/295bf1a9b0de0cddc75560ee`；该相对路径和生成命令指这个工作目录，不是安装后的编译器接口。Root已补五项not_ready分类断言；这批结果只是参考C++兼容性记录，完整候选对照和相对exec修复另行检查。
 
 相对exec路径拒绝已与bootstrap修正合并；保留绝对路径白名单、超时/信号和有限清理检查。完整Source候选、完整语料和三代构建仍未执行。
+
+
+## 重复执行与线程池用例（2026-11-14）
+
+`execution_repetitions` 指一次成功构建后执行程序的次数，默认 1，必须是正整数，不能用 bool 或浮点数。`execution_timeout_seconds` 指每次执行的独立时限，默认沿用命令行时限；必须是可转换为有限正数的 int/float，bool、NaN/Inf、非正值以及过大的 JSON 整数均报配置错误。这两个字段只允许用于会执行程序的成功 Native/Python 构建。
+
+每次执行都保留独立的 `executions/<index>/` 标准输出、标准错误、trace 和退出记录。各次都检查运行期望，并按相同序号比较参考与候选；次数不足或多出、任一次错误、超时、信号退出或清理未完成均失败。两侧相同的错误输出仍会因不满足运行期望而失败。
+
+已复核的 `SH10n-threadpool-corpus-repeats-20261114` delta 现已应用到 Root：只更改 11 个既有线程池用例与 `tests/native/threadpool/run_threadpool.py` 的分类。其他 1223 个用例、2672 条文件记录和 210 个 runner 保持原值。parallel、multi-submit-wait、backpressure、close-drain、close-submit-race、owned-results、self-join、lifecycle 在每个 O0/O2 程序上各运行 3 次，result-error 各 2 次，invalid-arguments 和 panic-task 各 1 次，共 22 次构建、56 次执行。普通用例每次限时 60 秒、exit 0 且输出为空；panic-task 每次限时 20 秒、exit 101，并检查 division-by-zero Panic 前缀。
+
+这 22 次构建和 56 次执行来自已保留的 C++ 参考编译器记录。新增 Woozy 候选、881 项启用子集、完整语料及三代自举没有因本次合入获得通过结论。原 delta 文件和参考记录保留原字节，其中“尚未应用”描述生成该文件时的状态；本次 Root 应用状态、前后清单与逐项差异记在 `checks/threadpool-root-delta-integration-20261114/`。本次没有刷新源码 hash、文件角色、文件分配或其他冻结字段；已知陈旧 hash 与缺项仍会失败，`formal_freeze_ready` 保持 false。

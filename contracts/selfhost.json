@@ -12,7 +12,7 @@
       "title": "shared records and CLI",
       "status": "in_progress",
       "owner": "Root",
-      "verified": "Wz CLI syntax-only: 80 existing syntax cases passed O0/O2; rendering JSON tested; project/check/build still incomplete"
+      "verified": "Syntax CLI O0/O2 passed 80 cases. Full 116-file stage1 built; public Native/Python simple programs pass. Two Native source builds and IO check still fail or time out; current retry is in progress."
     },
     {
       "id": "SH01",
@@ -45,35 +45,37 @@
       "id": "SH05",
       "title": "project/TOML/bindings/modules/resolve",
       "status": "in_progress",
-      "verified": "Pure-Wz input/path/system/JSON/TOML/manifest/name resolver accepted after O0/O2 comparisons. Python/C bindings and project graph integration remain in progress."
+      "verified": "Bindings, resolver and project components accepted. Byte-path stat is integrated with matching seed/stdlib; 51 real-FS cases match. Invalid UTF8 error filename display remains undecided; full Source integration is pending."
     },
     {
       "id": "SH06",
       "title": "exact constants, type checking, generics and typed HIR",
       "status": "in_progress",
-      "verified": "Type/HIR records, HIR dump, pattern coverage, foreign/system signatures and full HIR clone accepted with C++/Wz O0/O2 comparisons. Sema shared helpers/constructor/facade written with standalone checks; complete Sema and HIR verifier remain in progress."
+      "verified": "Sema A47 and B27 component checks, 15-file HIRVerifier fixes and exit-identity regression accepted. Current 58-file frontend commit is held until HIR tests have a reproducible repository runner."
     },
     {
       "id": "SH07",
       "title": "ownership and Native control flow IR",
       "status": "in_progress",
-      "verified": "All 53 Native CFG Op and 9 Exit records accepted (77-line oracle at O0/O2). Ownership/value operations, complete lowering and independent CFG/ownership verifier are in progress."
+      "verified": "Ownership/classification, NativeIR records, lowering and verifier components accepted. NativeVerifier Function reads the wrong signature field for direct calls; SH08g tests the correction and complete Source compiler."
     },
     {
       "id": "SH08",
       "title": "complete Native LLVM text generation and tool driver",
       "status": "in_progress",
-      "verified": "Shared LLVM text helpers passed actual Wz O0/O2 -> LLVM verification/object/link/execution (42), including Signature Vec isolation. Four full emitter groups assigned. Tool I/O has separate 40-case O0/O2 and low-FD tests; language emission and new CLI not yet complete."
+      "verified": "Native components and Function identity correction integrated; current6178 stage1 builds/runs generic and enum/closure O0/O2 with independent exec audits. Full corpus not passed."
     },
     {
       "id": "SH09",
       "title": "complete Python emitter",
-      "status": "in_progress"
+      "status": "in_progress",
+      "verified": "Python emitter component comparisons and simple stage1 public programs pass. Full candidate Python corpus and floating numerical observations remain pending."
     },
     {
       "id": "SH10",
       "title": "stage0/1/2/3 and semantic/diagnostic/execution parity",
-      "status": "planned"
+      "status": "in_progress",
+      "verified": "1234 catalog/881 enabled reference cases/353disabled. Full candidate corpus not_run; freeze stale. Same116source seccomp check running after measured trace overhead; stage2/3 prepared but not yet built."
     }
   ],
   "completion": [
@@ -87,18 +89,20 @@
       "id": "SH05j",
       "scope": "Python/C binding bundle loader",
       "task": "3f16e55f-51a6-4a2e-a8c1-ae5e127302d4",
-      "status": "correction_in_progress"
+      "status": "accepted"
     },
     {
       "id": "SH05i",
       "scope": "project graph, source and foreign modules, integration",
-      "owner": "Root"
+      "owner": "Root",
+      "status": "component_accepted_full_source_pending",
+      "verified": "51 real-FS CPP/Wz O0/O2 comparisons accepted. Raw non-UTF8 entries use stat_bytes before decoding; error-path display choice remains pending."
     },
     {
       "id": "SH06d",
       "scope": "source/HIR constant evaluation and literal patterns",
       "task": "1aba94f3-3f45-435b-b4ac-d2ee8bf86ecb",
-      "status": "correction_in_progress"
+      "status": "accepted"
     },
     {
       "id": "SH06e",
@@ -115,7 +119,9 @@
     {
       "id": "SH07a",
       "scope": "ownership, value operations and layouts",
-      "task": "343c01e4-8a42-484e-b6bd-f6f67b11223c"
+      "task": "4cf8370b-9f7b-4855-8b64-87459ef6b37b",
+      "status": "accepted",
+      "verified": "Root139 and independent149 CPP/Wz lines match at O0/O2; three defects fixed; six production files integrated before accepting dependencies"
     },
     {
       "id": "SH06g",
@@ -137,62 +143,248 @@
     },
     {
       "id": "SH06i",
-      "scope": "complete independent HIR verification; queued for accepted algorithms",
-      "task": "8455e560-57dc-44bc-8845-0908eb30b034"
+      "scope": "complete independent HIR verification",
+      "task": "5a05e04f-2da9-4ddc-be4b-6a4807bebdc2",
+      "status": "four_fixes_accepted_integrated_public_source_next",
+      "verified": "15file snapshot integrated;23independent executions/28hashes match. TrueAst/manualHIR sixmodes fouroldbugs reject;fourfixes accepted. SourceSema/HIR allfields/corpus notproven; mutationisolation onlyUnit."
     },
     {
       "id": "SH06j",
       "scope": "Sema A declarations/generics",
-      "task": "666de601-76a3-49a7-83b1-e33f360f1db9",
-      "status": "assigned"
+      "task": "9687ae93-ef9d-4dde-85fb-597b9c998660",
+      "status": "three_fixes_and_root_test_repairs_accepted_integrated_public_pending",
+      "verified": "Independent production diff and CPP control correct. Root repaired borrowed-move fixture, distinct Saved/T/P restoration and minimal empty Holder test. Real check/build/run O0/O2 all0,47 checks each.4production+6test/docs integrated. Full public Checker/instantiate/transform runtime not_run."
     },
     {
       "id": "SH06k",
       "scope": "Sema B expressions/flow/bodies",
-      "task": "d6aa9de2-f404-4074-bb1d-f7cccecc79df",
-      "status": "assigned"
+      "task": "eb1d47ed-ebb0-417a-a37e-7c89535f33c2",
+      "status": "three_fixes_body27_accepted_integrated_public_source_next",
+      "early_review": "effects mutual-exclusive visitor and PropertyRead Some statically corrected in current8daebc56/b573a46a snapshot. New definite bug b_valid_utf8 uses codepoint index with byte bound and wrong2byte first threshold. Extracted unchanged function O0/O2:ASCII0,é/中/🙂false17,À/πvec-index Panic101;CPP public sameSource accepts. FullWzChecker notrun.",
+      "verified": "8file snapshot integrated. Independentfinal5O0/O2 27assertions on18Sourcecases andHIRmarkers,17Cppcases firstdiagfields match. No genericcall/fullfacade. Raw0xff lowlex vsCLI difference retracted:real input.read6fields matchCpp;no Lexer change."
     },
     {
       "id": "SH07c",
       "scope": "complete Native CFG lowering/dump",
-      "task": "00a803ba-ffaf-4fdf-bcae-f38dee11cf46",
-      "status": "assigned"
+      "task": "30644f00-ef84-4b58-abda-8136d03ef0d0",
+      "status": "five_fixes_accepted_full_validation_pending",
+      "verified": "Only the five reported fixes reviewed/accepted; helper/dump O0/O2 provisional evidence retained in native tool records. Public lower and real-source CFG comparison not_run; Root also added missing nativeirdump test dependency.",
+      "remaining": [
+        "full public lower check/build/run with real accepted verifiers",
+        "real-source Wz CFG versus C++ comparison",
+        "snapshot/failure behavior at integrated public entry"
+      ]
     },
     {
       "id": "SH07d",
       "scope": "complete Native CFG verification/layout",
-      "task": "1cc9bde6-0879-4e7b-8a85-882a41155df3",
-      "status": "assigned"
+      "task": "d2da5161-c2c4-4478-81a4-8e6f9de90753",
+      "status": "implementation_snapshot_accepted_full_validation_pending",
+      "verified": "Independent complete source comparison found no confirmed defect; actual8 binaries rerun: obligations7 andlayout27 lines CPP/O0/O2 exact, package helpers failures0. Public facade syntax-only; full CFG/cleanup/ownership runtime and malformed rejection pending real HIR verifier.",
+      "remaining": [
+        "public nativeverify.verify and snapshot with genuine HIR verifier",
+        "real lower to verify integration",
+        "malformed CFG/SSA/initialization/cleanup/ownership rejection and no-output behavior"
+      ]
     },
     {
       "id": "SH09a",
       "scope": "complete pure Python emitter",
-      "task": "1751469e-97cf-45ad-ae58-74f6db4e42bc",
-      "status": "assigned"
+      "task": "8e1ab2f0-c12a-496e-98bb-0ddeeedde971",
+      "status": "two_fixes_accepted_full_validation_pending",
+      "verified": "Six production hashes match integrated candidate; independent ten groups at O0/O2 match real C++ byte-for-byte, all nine old differences removed. Public snapshot SupportError handling reviewed statically. No fake verifier used.",
+      "remaining": [
+        "public emit check/build/run with real accepted HIR verifier",
+        "snapshot failure through real public entry",
+        "whole-corpus Python3.12 execution and code/runtime/source_map/symbol comparison"
+      ]
     },
     {
       "id": "SH08b",
       "scope": "Native scalar/types/CFG functions and main",
-      "task": "4e173c8a-e023-4ea2-87fb-ba209995ce61",
-      "status": "assigned"
+      "task": "17222f8e-289c-43ab-9710-ade36f188315",
+      "status": "constant_fix_and_latest_raw_joint_accepted_public_pending",
+      "verified": "Boolfalse/true/Unit now CPP-equivalent;7 numeric controls andVecIR O0/O2 executed. Shared widths unchanged. Frozen oldvalueops/D used; latest cross-group task70c38809 now released."
     },
     {
       "id": "SH08c",
       "scope": "Native values/ARC/Weak/Fn/trait/thread",
-      "task": "965d1dfd-076e-4710-8674-8ced14c2da65",
-      "status": "assigned"
+      "task": "70c38809-67c1-47d5-ad6c-9ee2ef74516b",
+      "status": "latest_raw_joint_tests_accepted_integrated_public_pending",
+      "verified": "Independent33 commands all0:11 Wz drivers,10 O0/O2 binaries,12 LLVM checks;28 source/staged hashes match,93 original records correct. Formal FunctionValue environment/op branches executed; standins removed. Full Verified/fullSource/corpus not_run."
     },
     {
       "id": "SH08d",
       "scope": "Native coroutine/async/GC",
-      "task": "5890e095-f1f4-412a-94ab-47c49d5efb5a",
-      "status": "assigned"
+      "task": "0de8a35d-2c64-4700-8b4e-12e75d139990",
+      "status": "two_fixes_and_latest_raw_joint_accepted_public_pending",
+      "verified": "D80fa patch integrated after independent40 short commands;18 programs original IR verify/exit/stderr correct. Frozen oldB/valueops tested; latest combined/public/corpus stillpending."
     },
     {
       "id": "SH08e",
       "scope": "Native full system calls and C ABI adapter",
-      "task": "e77d03a6-72c8-4fdb-9d8d-8adf1dc7a1c0",
-      "status": "assigned"
+      "task": "a7d024da-ac69-4565-83fa-0943e98d44bb",
+      "status": "three_fixes_accepted_full_validation_pending",
+      "verified": "Independent O0/O2 output equal,6 unchanged LLVM modules verify0, runtime boundaries pass,3835-byte adapter CPP exact. Root repaired test cond race and forced schedule test10 executions0; missing runtime now fails. Full public/system corpus not_run.",
+      "remaining": [
+        "complete Verified public emitter",
+        "all system operations and whole language corpus"
+      ]
+    },
+    {
+      "id": "SH05k",
+      "scope": "filesystem and source I/O diagnostic text parity",
+      "task": "617b69c3-4d1a-4433-b23e-eaac20f58559",
+      "status": "io_text_and_stat_components_accepted",
+      "verified": "45 IO text cases and old34 replay passed; byte-path stat is now integrated. Linux errno wording 624 checks accepted. Raw invalid-UTF8 error rendering remains pending.",
+      "remaining": [
+        "nonUTF8 non.wz symlink status via stat_bytes",
+        "directory-advance fault wording",
+        "errno message coverage"
+      ]
+    },
+    {
+      "id": "SH05l",
+      "scope": "raw-byte stat213 and nonUTF8 non.wz symlink parity",
+      "task": "4fc3b036-9d35-4d28-8381-83b4cbc89625",
+      "status": "integrated_reference_support_pushed",
+      "verified": "6 production files, 2 C++ tests and 14 regression files integrated locally; matching Root seed/helper rebuilt and 176 core tests passed. C++/stdlib/Wz system table and typed stat fixture pushed as 8c765d2 (12 files). Wz project/E tests are still local; raw error rendering pending.",
+      "early_review": "Confirmed Wz E bugs:213 absent from public system_call dispatch; generic e_extra_fs_actual expands every Vec data,len and breaks old50/51/52/75/76 descriptor ABI. Existing stat probe bypasses public dispatch. Not integrated."
+    },
+    {
+      "id": "SH05m",
+      "scope": "Linux generic-category errno text completeness",
+      "task": "1f3a3dc4-dcf2-4892-8a3b-6d7af74e9879",
+      "status": "accepted",
+      "verified": "624 independent CPP/Wz O0/O2 checks; strict260-errno-line order and negative missing/duplicate/reordered tests pass. Linux/glibc2.44 C locale only, no libc dependency."
+    },
+    {
+      "id": "SH10c",
+      "scope": "frozen whole-source corpus inventory and actual comparison runner",
+      "task": "733424a2-956f-48d8-8ebc-61e9b8336040",
+      "status": "six_fixes_accepted_integrated_coverage_pending",
+      "verified": "Original six negatives and extra controls independently pass. Root made defaults/tests portable and paired input controls: matching private input unit0, stale original inventory still rejects. Formalfreezefalse;100runner adapters/14expectations and fullcorpus remainpending. Root portable integration independently checked12CLI probes,60 production AST unchanged. Current inventory deliberately stale after contract metadata changes; no false fresh full-run claim.",
+      "remaining_trace_fix": "Relativeexec rejection accepted with bootstrap/corpus script fixes and actualnegative controls; fullcorpus stillpending."
+    },
+    {
+      "id": "SH10d",
+      "scope": "whole CLI WIP interface check and stage0 profiling",
+      "owner": "Root/native read-only review",
+      "status": "historical_cpp_check_passed",
+      "verified": "Same old 117-file snapshot checked with isolated seed in 285.848s. This is a historical C++ check, not current full selfhosting."
+    },
+    {
+      "id": "SH10e",
+      "scope": "stage0 ownership query-copy optimization with isolated seed",
+      "task": "637885c5-592b-4d7d-9f01-c6ee96edb76a",
+      "status": "accepted_pushed_matching_root_seed_rebuilt",
+      "verified": "C++ ownership optimization pushed as 1744fa5. Root later rebuilt with stat214: compiler6e6a436f/helper8c900652. Old seed5caa/0df resources remain preserved for historical evidence."
+    },
+    {
+      "id": "SH10f",
+      "scope": "existing publicCLI Source corpus cases and runtime expectations",
+      "task": "82054aef-7d49-45e2-8ac8-19368b76a95a",
+      "status": "285_reference_cases_integrated",
+      "verified": "Historical first285 batch independently checked and integrated; current combined catalog is 1234/870. Full candidate corpus remains not_run."
+    },
+    {
+      "id": "SH10g",
+      "scope": "bootstrap bounded process cleanup, resource immutability, real stage0 inputs and exec tracing",
+      "task": "db8740dd-9f62-4364-a313-9a1ea03d82ab",
+      "status": "script_fixes_accepted_integrated",
+      "verified": "Original4+residual3 script defects fixed;independent12controls+Rootbootstraptest+3waymergedcorpuspairedunit pass. ActualCMake input records andrelativeexec rejection kept. Synthetic controls only; no real3stage/fullcorpus."
+    },
+    {
+      "id": "SH10h",
+      "scope": "Native core Source corpus existing static projects",
+      "task": "6a99869e-99b8-4ad3-9a09-acede8915d26",
+      "status": "161_reference_cases_accepted_integrated",
+      "verified": "Independent813 originalrecords checked;15cases/65 freshcommands and105controls pass.161existingNativecases enabled by exact-ID delta; Sourcehashes/runners preserved. Archive timed_out bool repair14f49427 accepted after Root5 actualCLI controls. Candidate/fullcorpus not_run."
+    },
+    {
+      "id": "SH10i",
+      "scope": "Python3.12 existing static Source corpus",
+      "task": "9042ecae-eebf-497a-ae95-cea33881d92d",
+      "status": "65_python_reference_cases_integrated",
+      "verified": "65 Python3.12 cases and131 file assignments accepted and integrated. Current combined catalog is1234/870; full candidate execution not_run."
+    },
+    {
+      "id": "SH11a",
+      "scope": "complete116file native stage1 compiler and real public Source Native/Python pipeline",
+      "task": "fcd066d7-67ee-407d-8604-7e17e0dd7ea4",
+      "status": "partial_public_gate_rejected_actual_failures_preserved",
+      "verified": "Final5ca ELF57,527,960B from116files;Native/Py case01/05exit42;03/04check+Py pass butNative4builds fail verifiers wrongsignature field;IOchecktimeout180. Independent257frozen/58records/42traces/53candidateexec+6shortreplays verified. Case02 has no finalcommand/trace so notsameauditclaim; nofullcorpus/3stage. Flow independentlyintegrated, analysis251eprototypeexcluded.",
+      "remaining": "Initialcase01 realNativeO0/O2+Python exits42. Oldcase02 check180s timeout. Fixedflow directNodeId ELF d014bd88 built; option/result/vec/strconv/text check0,os/io150s timeout. Generic/complexSource/fullfixedsuite stillnotproved; independentflowcounterexample running."
+    },
+    {
+      "id": "SH11b",
+      "scope": "Wz ownership classification private cache/lazy TypeContext copy",
+      "task": "2b840595-7633-44e4-b218-9616085f94c5",
+      "status": "accepted_integrated_pushed",
+      "verified": "Pushed084a1e5. Independent13 controls perO level accepted; Root currentstat214 seed fullownership139+independent149 Cpp comparisons passO0/O2 in165.48s. Full Source/stages pending."
+    },
+    {
+      "id": "SH10j",
+      "scope": "iterator/inout/owning-inout/trait/numeric static Source reference cases",
+      "task": "200cd3f4-0fc3-4226-a0bd-1c35ffa75d59",
+      "status": "178_reference_cases_integrated",
+      "verified": "178 cases accepted after independent replay; merged as adb8736. Archive strict process flags correction separately accepted. These are reference records, not candidate passes."
+    },
+    {
+      "id": "SH05n",
+      "scope": "stat component runner bounded timeout cleanup and latest B/C/D joint",
+      "task": "2f212db4-f408-4ecf-886a-7ac90b6ab54c",
+      "status": "accepted_integrated",
+      "verified": "Current B/C/D plus stat E joint O0/O2 passed with bounded cleanup and retained programs. 14 test files copied Root; current full Wz Source validation remains pending."
+    },
+    {
+      "id": "SH10k",
+      "scope": "reference values/floating/backendcommon/sema/ownership source reference cases",
+      "task": "6026e2b0-831c-4568-a039-07bd1aa6cc9e",
+      "status": "98_reference_cases_integrated",
+      "verified": "98 cases accepted after independent replay; merged as adb8736. Archive process guards corrected and independently checked. Eleven floating projects still need numerical observation."
+    },
+    {
+      "id": "SH08g",
+      "scope": "NativeVerifier no-origin Function comparetype field and realSource correction",
+      "task": "20d7eee8-7477-4e0c-a8a0-1715fc33cdf4",
+      "status": "production_and_test_correction_accepted_integrated",
+      "verified": "No-origin Function now compares instruction.type_id; production and corrected tests accepted via dde0. Root six independent Source variants passed; fullSource check live, no full corpus/stage2/3 pass."
+    },
+    {
+      "id": "SH10m",
+      "scope": "pure Wz floating observer test driver",
+      "task": "9496ac46-5c8c-45b8-8a77-42472dd83ee2",
+      "status": "component_returned_pending_independent_review",
+      "verified": "87representativeprobes; producer174Native+87Python withold5ca02provisionalCLI, no current6178 canonical/fullnumeric corpus claim."
+    },
+    {
+      "id": "SH10n",
+      "scope": "threadpool corpus repeated execution",
+      "task": "69ec00ee-1b79-4313-901e-36777d0b069e",
+      "status": "11_reference_cases_integrated",
+      "verified": "11case22build56reference executions preserved; Root catalog1234/881/353, old1223cases/files210runners unchanged. No candidate corpus run."
+    },
+    {
+      "id": "SH06l",
+      "scope": "reproducible HIRVerifier tests and bounded Sema runners",
+      "task": "9260749f-7b52-4f77-95db-630829a2a4e7",
+      "status": "accepted_integrated_pushed",
+      "verified": "11testfiles independentlyreviewed;27recordedcommands/16shortreplays match;Root12processcontrols passed. Combined frontend62files pushed37f5555. FullSource/corpus/stage2/3 remainpending."
+    },
+    {
+      "id": "SH08h",
+      "scope": "Native call regression test correction only",
+      "task": "dde0a535-0679-480a-9367-30a9dc41cde0",
+      "status": "accepted_integrated",
+      "verified": "Independent34+11controls/14ELFreplays/46records; Root replaced unused private fake-control reference and reran34controls. Accepted proof checks/native-function-type-fix-accepted-20261114.json."
+    },
+    {
+      "id": "SH10o",
+      "scope": "threadpool configuration error correction",
+      "task": "bbeb9801-ae4d-44fd-8354-6ffbb7e8909b",
+      "status": "accepted_integrated",
+      "verified": "Huge JSON timeout properly rejected; independent12checks/CLI, Root registered new check and14smalltests+5privateCLI pass."
     }
   ],
   "accepted_foundations": [
@@ -228,5 +420,10 @@
       "name": "HIR records",
       "task": "a5319081-cc94-4ccd-9e42-70ab61724e2f"
     }
-  ]
+  ],
+  "scheduling": {
+    "ollama_max_active_tasks": 3,
+    "overflow_profile": "pi-deepseek",
+    "overflow_model": "deepseek-flash"
+  }
 }

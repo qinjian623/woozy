@@ -21,6 +21,7 @@ import ast
 import base64
 import hashlib
 import json
+import math
 import os
 from pathlib import Path
 import re
@@ -415,6 +416,89 @@ def expected_status(expected):
     return value
 
 
+def _case_executes(case):
+    expected = case.get("expected")
+    if not (case.get("operation") in ("build_native", "build_python")
+            and isinstance(expected, dict)):
+        return False
+    status = expected_status(expected)
+    return status == "ok" and expected.get("build_status", status) == "ok"
+
+
+def execution_repetitions(case):
+    value = case.get("execution_repetitions", 1)
+    if not _is_integer(value) or value <= 0:
+        raise CorpusError(
+            f"{case.get('id', '<case>')}: execution_repetitions must be a "
+            "positive integer")
+    if "execution_repetitions" in case and not _case_executes(case):
+        raise CorpusError(
+            f"{case.get('id', '<case>')}: execution_repetitions requires a "
+            "runnable successful build case")
+    return value
+
+
+def _timeout_number(value):
+    """Return a positive finite float budget or None.
+
+    JSON can contain integers too large for a float.  Converting them raises
+    OverflowError, which is a configuration error, not a harness crash.
+    """
+    if isinstance(value, bool) or not isinstance(value, (int, float)):
+        return None
+    try:
+        numeric = float(value)
+    except (OverflowError, ValueError):
+        return None
+    if not math.isfinite(numeric) or numeric <= 0:
+        return None
+    return numeric
+
+
+def execution_timeout(case, default):
+    value = case.get("execution_timeout_seconds", default)
+    numeric = _timeout_number(value)
+    if numeric is None:
+        raise CorpusError(
+            f"{case.get('id', '<case>')}: execution_timeout_seconds must be "
+            "a positive finite number")
+    if "execution_timeout_seconds" in case and not _case_executes(case):
+        raise CorpusError(
+            f"{case.get('id', '<case>')}: execution_timeout_seconds requires "
+            "a runnable successful build case")
+    return numeric
+
+
+def execution_configuration_errors(case):
+    errors = []
+    executable = _case_executes(case)
+    if "execution_repetitions" in case:
+        value = case["execution_repetitions"]
+        if not _is_integer(value):
+            errors.append(
+                f"{case.get('id', '<case>')}: execution_repetitions is not an "
+                "integer")
+        elif value <= 0:
+            errors.append(
+                f"{case.get('id', '<case>')}: execution_repetitions is not "
+                "positive")
+        elif not executable:
+            errors.append(
+                f"{case.get('id', '<case>')}: execution_repetitions requires "
+                "a runnable successful build case")
+    if "execution_timeout_seconds" in case:
+        value = case["execution_timeout_seconds"]
+        if _timeout_number(value) is None:
+            errors.append(
+                f"{case.get('id', '<case>')}: execution_timeout_seconds is "
+                "not a positive finite number")
+        elif not executable:
+            errors.append(
+                f"{case.get('id', '<case>')}: execution_timeout_seconds "
+                "requires a runnable successful build case")
+    return errors
+
+
 def run_expectation_errors(case):
     if "run_expectation" not in case:
         return []
@@ -526,6 +610,26 @@ def _decode_expected_bytes(expected, key):
         return base64.b64decode(expected[key], validate=True)
     except (ValueError, TypeError) as error:
         raise CorpusError(f"invalid {key} in run expectation: {error}") from error
+
+
+def check_run_expectations(case, executions):
+    """Check the exact repetition count and every recorded execution."""
+    failures = []
+    if "run_expectation" in case or "execution_repetitions" in case:
+        try:
+            expected = execution_repetitions(case)
+        except CorpusError as error:
+            return [str(error)]
+        if len(executions) != expected:
+            failures.append(
+                f"expected {expected} program executions, got "
+                f"{len(executions)}")
+    if "run_expectation" not in case:
+        return failures
+    for index, execution in enumerate(executions):
+        errors = check_run_expectation(case, execution)
+        failures.extend(f"execution[{index}]: {error}" for error in errors)
+    return failures
 
 
 def check_run_expectation(case, execution):
@@ -846,7 +950,8 @@ def _compiler_allowed(compiler, tools, extra):
         str(path.resolve()) for path in extra}
 
 
-def _execute_artifact(case, directory, python, cwd, env, timeout, strace):
+def _execute_artifact(case, directory, python, cwd, env, timeout, strace,
+                      index=0):
     if case["operation"] == "build_native":
         artifact = directory / "out" / "program"
         argv = [str(artifact)]
@@ -859,15 +964,19 @@ def _execute_artifact(case, directory, python, cwd, env, timeout, strace):
         return None
     execution_env = dict(env)
     execution_env["PYTHONDONTWRITEBYTECODE"] = "1"
-    trace_path = directory / "execute.exec.log"
-    traced = [str(strace), "-f", "-qq", "-s", "16384",
+    execution_dir = directory / "executions" / str(index)
+    execution_dir.mkdir(parents=True, exist_ok=False)
+    trace_path = execution_dir / "execute.exec.log"
+    traced = [str(strace), "--seccomp-bpf", "-f", "-qq", "-s", "16384",
               "-e", "trace=execve,execveat", "-o", str(trace_path), *argv]
     process = _run_process_impl(traced, cwd, execution_env, timeout)
     exit_code, stdout, stderr = (
         process["exit"], process["stdout"], process["stderr"])
     timed_out = process["timed_out"]
-    (directory / "execute.stdout.bin").write_bytes(stdout)
-    (directory / "execute.stderr.bin").write_bytes(stderr)
+    stdout_path = execution_dir / "execute.stdout.bin"
+    stderr_path = execution_dir / "execute.stderr.bin"
+    stdout_path.write_bytes(stdout)
+    stderr_path.write_bytes(stderr)
     try:
         observed = parse_trace(trace_path)
         execution_trace = {"status": "ok", "observed": observed,
@@ -875,22 +984,25 @@ def _execute_artifact(case, directory, python, cwd, env, timeout, strace):
     except TraceError as error:
         execution_trace = {"status": "unverified", "error": str(error),
                            "policy": "program execution; not compiler whitelist"}
+    relative = execution_dir.relative_to(directory)
     record = {
+        "index": index,
+        "directory": str(relative),
         "argv": argv,
         "cwd": str(cwd),
         "exit": exit_code,
         "timed_out": timed_out,
         "cleanup_complete": process["cleanup_complete"],
         "abandoned_pipes": process["abandoned_pipes"],
-        "stdout_path": "execute.stdout.bin",
-        "stderr_path": "execute.stderr.bin",
+        "stdout_path": str(relative / "execute.stdout.bin"),
+        "stderr_path": str(relative / "execute.stderr.bin"),
         "stdout_sha256": digest_bytes(stdout),
         "stderr_sha256": digest_bytes(stderr),
-        "trace_path": "execute.exec.log",
+        "trace_path": str(relative / "execute.exec.log"),
         "trace_scope": "program_execution_not_compiler_whitelist",
         "trace": execution_trace,
     }
-    write_json(directory / "execute.json", record)
+    write_json(execution_dir / "execute.json", record)
     record["_stdout"] = stdout
     record["_stderr"] = stderr
     return record
@@ -919,7 +1031,7 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
     }
     write_json(directory / "argv.json", argv_record)
     trace_path = directory / "exec.log"
-    traced = [str(context["strace"]), "-f", "-qq", "-s", "16384",
+    traced = [str(context["strace"]), "--seccomp-bpf", "-f", "-qq", "-s", "16384",
               "-e", "trace=execve,execveat", "-o", str(trace_path), *command]
     process = _run_process_impl(
         traced, context["root"], context["env"], context["timeout"])
@@ -965,24 +1077,40 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
         failures.append(json_error)
     artifacts = _artifact_info(case, directory, preexisting)
     write_json(directory / "artifacts.json", artifacts)
-    execution = None
+    repetitions = execution_repetitions(case)
+    execution_timeout_value = execution_timeout(case, context["timeout"])
+    executions = []
     if (case["operation"].startswith("build_")
             and exit_code == 0 and not timed_out
             and process["cleanup_complete"] and document is not None
             and document["status"] == "ok"
             and artifacts["published"]
             and trace["status"] == "ok"):
-        execution = _execute_artifact(
-            case, directory, context["python"], directory / "out",
-            context["env"], context["timeout"], context["strace"])
-        if execution is not None:
+        for index in range(repetitions):
+            execution = _execute_artifact(
+                case, directory, context["python"], directory / "out",
+                context["env"], execution_timeout_value, context["strace"],
+                index)
+            if execution is None:
+                failures.append(
+                    f"program execution {index} did not run: missing artifact")
+                break
+            executions.append(execution)
             if execution["timed_out"]:
-                failures.append("program timed out and was terminated")
+                failures.append(
+                    f"program execution {index} timed out and was terminated")
             if _is_integer(execution["exit"]) and execution["exit"] < 0:
                 failures.append(
-                    f"program terminated by signal {-execution['exit']}")
+                    f"program execution {index} terminated by signal "
+                    f"{-execution['exit']}")
             if execution.get("cleanup_complete") is not True:
-                failures.append("program execution cleanup was incomplete")
+                failures.append(
+                    f"program execution {index} cleanup was incomplete")
+        if len(executions) != repetitions:
+            failures.append(
+                f"program executed {len(executions)} of {repetitions} "
+                "required repetitions")
+    execution = executions[0] if executions else None
     record = {
         "case": case["id"],
         "role": role,
@@ -1004,23 +1132,36 @@ def run_one(case, compiler, role, out_root, context, variant, is_reference):
                              else None),
         "json_error": json_error,
         "artifacts": artifacts,
-        "execution": None if execution is None else {
-            key: value for key, value in execution.items()
-            if not key.startswith("_")},
+        "execution_repetitions": repetitions,
+        "executions": [public_execution(item) for item in executions],
+        "execution": public_execution(execution),
         "trace": trace,
         "status": "passed" if not failures else "failed",
         "failures": failures,
         "_document": document,
         "_normalized": normalized,
         "_normalized_stderr": normalized_stderr,
-        "_execution": execution,
+        "_executions": executions,
     }
     return record
+
+
+def public_execution(execution):
+    return None if execution is None else {
+        key: value for key, value in execution.items()
+        if not key.startswith("_")}
 
 
 def public_run(record):
     return {key: value for key, value in record.items()
             if not key.startswith("_")}
+
+
+def _execution_sequence(record):
+    if "_executions" in record:
+        return record["_executions"] or []
+    execution = record.get("_execution")
+    return [] if execution is None else [execution]
 
 
 def compare_runs(case, reference, candidate):
@@ -1054,19 +1195,31 @@ def compare_runs(case, reference, candidate):
             "candidate": candidate["_normalized_stderr"].decode(
                 "utf-8", "backslashreplace")[-4000:],
         }
-    reference_execution = reference["_execution"]
-    candidate_execution = candidate["_execution"]
-    if (reference_execution is None) != (candidate_execution is None):
-        failures.append("program execution presence differs")
-    elif reference_execution is not None:
+    reference_executions = _execution_sequence(reference)
+    candidate_executions = _execution_sequence(candidate)
+    if len(reference_executions) != len(candidate_executions):
+        failures.append(
+            f"program execution count differs: reference "
+            f"{len(reference_executions)}, candidate "
+            f"{len(candidate_executions)}")
+    for index, (reference_execution, candidate_execution) in enumerate(
+            zip(reference_executions, candidate_executions)):
         if reference_execution["exit"] != candidate_execution["exit"]:
             failures.append(
-                f"program exit differs: {reference_execution['exit']} vs "
+                f"execution[{index}] program exit differs: "
+                f"{reference_execution['exit']} vs "
                 f"{candidate_execution['exit']}")
+        for key in ("timed_out", "cleanup_complete"):
+            if reference_execution.get(key) != candidate_execution.get(key):
+                failures.append(
+                    f"execution[{index}] program {key} differs: "
+                    f"{reference_execution.get(key)} vs "
+                    f"{candidate_execution.get(key)}")
         for stream in ("stdout", "stderr"):
             if reference_execution["_" + stream] != candidate_execution["_" + stream]:
-                failures.append(f"program {stream} differs")
-                evidence["program_" + stream] = {
+                failures.append(
+                    f"execution[{index}] program {stream} differs")
+                evidence[f"program_{stream}_execution_{index}"] = {
                     "reference": reference_execution["_" + stream].decode(
                         "utf-8", "backslashreplace")[-4000:],
                     "candidate": candidate_execution["_" + stream].decode(
@@ -1090,8 +1243,8 @@ def run_case(case, reference, candidates, out_root, context):
                 case, reference_run["_document"], reference_run["exit"],
                 reference_run["_normalized_stderr"], reference_run["artifacts"])
         reference_failures += reference_run["failures"]
-        reference_failures += check_run_expectation(
-            case, reference_run["_execution"])
+        reference_failures += check_run_expectations(
+            case, reference_run["_executions"])
         variant_record = {
             "variant": variant,
             "reference": public_run(reference_run),
@@ -1113,8 +1266,8 @@ def run_case(case, reference, candidates, out_root, context):
                     case, candidate_run["_document"], candidate_run["exit"],
                     candidate_run["_normalized_stderr"],
                     candidate_run["artifacts"])
-            candidate_failures += check_run_expectation(
-                case, candidate_run["_execution"])
+            candidate_failures += check_run_expectations(
+                case, candidate_run["_executions"])
             differences, evidence = compare_runs(
                 case, reference_run, candidate_run)
             all_failures = candidate_failures + differences
@@ -1178,6 +1331,7 @@ def _case_classification_errors(case):
             errors.append(f"{case_id}: enabled case is not public_cli")
         if case.get("adaptation") != "ready":
             errors.append(f"{case_id}: enabled case is not adaptation=ready")
+    errors.extend(execution_configuration_errors(case))
     return errors
 
 

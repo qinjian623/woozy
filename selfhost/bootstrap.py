@@ -465,7 +465,7 @@ def run(args):
             trace = stage / "exec.log"
             traced = command
             if generation > 1:
-                traced = [str(strace), "-f", "-qq", "-s", "16384",
+                traced = [str(strace), "--seccomp-bpf", "-f", "-qq", "-s", "16384",
                           "-e", "trace=execve,execveat", "-o", str(trace), *command]
             print(f"building {stage_label} with {compiler}", flush=True)
             record = {"generation": generation, "compiler": str(compiler),

@@ -182,6 +182,48 @@ def check_trace_audit():
         expect_error(corpus.parse_trace, trace)
 
 
+def check_seccomp_exec_trace():
+    """Real exec controls for the fixed strace 7.2 on Linux x86_64."""
+    with tempfile.TemporaryDirectory(prefix="woozy-corpus-seccomp-") as directory:
+        work = Path(directory)
+        script = work / "child.py"
+        script.write_text(
+            "import ctypes, os, sys\n"
+            "pid = os.fork()\n"
+            "if pid == 0:\n"
+            "    if sys.argv[1] == 'execve':\n"
+            "        os.execv('/usr/bin/true', ['/usr/bin/true'])\n"
+            "    libc = ctypes.CDLL(None, use_errno=True)\n"
+            "    libc.execveat.argtypes = [ctypes.c_int, ctypes.c_char_p,\n"
+            "        ctypes.POINTER(ctypes.c_char_p),\n"
+            "        ctypes.POINTER(ctypes.c_char_p), ctypes.c_int]\n"
+            "    argv = (ctypes.c_char_p * 2)(b'/usr/bin/true', None)\n"
+            "    envp = (ctypes.c_char_p * 1)(None)\n"
+            "    libc.execveat(-100, b'/usr/bin/true', argv, envp, 0)\n"
+            "    raise OSError(ctypes.get_errno(), 'execveat failed')\n"
+            "_, status = os.waitpid(pid, 0)\n"
+            "raise SystemExit(os.waitstatus_to_exitcode(status))\n")
+        python = Path(sys.executable).resolve()
+        true = Path("/usr/bin/true").resolve()
+        allowed = {str(python), str(true)}
+        for call in ("execve", "execveat"):
+            trace = work / f"{call}.log"
+            result = corpus._run_process_impl([
+                str(corpus.DEFAULT_STRACE), "--seccomp-bpf", "-f", "-qq",
+                "-s", "16384", "-e", "trace=execve,execveat", "-o", str(trace),
+                str(python), "-B", str(script), call,
+            ], work, None, 10)
+            assert result["exit"] == 0, result
+            assert result["timed_out"] is False, result
+            assert result["cleanup_complete"] is True, result
+            assert result["abandoned_pipes"] is False, result
+            assert result["stdout"] == result["stderr"] == b"", result
+            assert f"{call}(" in trace.read_text(), call
+            assert corpus.audit_trace(trace, allowed)["observed"] == sorted(allowed)
+            expect_error(corpus.audit_trace, trace, {str(python)})
+    print("PASS: seccomp execve/execveat records and extra-tool rejection")
+
+
 def check_inventory():
     inventory = corpus.load_inventory(INVENTORY)
     report = corpus.check_inventory(CORPUS_ROOT, inventory)
@@ -372,6 +414,415 @@ def check_run_expectations():
                     "_stderr": b""})
     signalled = dict(execution, exit=-9, timed_out=False)
     assert corpus.check_run_expectation(valid, signalled)
+
+
+def check_execution_repetition_validation():
+    runnable = {
+        "id": "repeat-validation",
+        "operation": "build_native",
+        "expected": {"status": "ok"},
+    }
+    for value in (1, 2, 3):
+        case = dict(runnable, execution_repetitions=value)
+        assert not corpus.execution_configuration_errors(case), case
+        assert corpus.execution_repetitions(case) == value
+    for value in (True, False, 0, -1, 1.0, "3", None):
+        case = dict(runnable, execution_repetitions=value)
+        assert corpus.execution_configuration_errors(case), (value, case)
+        expect_error(corpus.execution_repetitions, case)
+    for case in (
+            dict(runnable, operation="check", execution_repetitions=2),
+            dict(runnable, operation="syntax", execution_repetitions=2),
+            dict(runnable, expected={"status": "error"},
+                 execution_repetitions=2),
+            dict(runnable, expected=None, execution_repetitions=2)):
+        assert corpus.execution_configuration_errors(case), case
+    assert corpus.execution_repetitions({"id": "default"}) == 1
+    classified = {
+        "id": "repeat-classification", "enabled": False,
+        "support": "public_cli", "adaptation": "ready",
+        "operation": "build_native", "expected": {"status": "ok"},
+        "execution_repetitions": 0,
+    }
+    assert any("execution_repetitions" in error
+               for error in corpus._case_classification_errors(classified))
+    classified["execution_repetitions"] = 2
+    classified["execution_timeout_seconds"] = float("inf")
+    assert any("execution_timeout_seconds" in error
+               for error in corpus._case_classification_errors(classified))
+
+    for value in (60, 60.0):
+        case = dict(runnable, execution_timeout_seconds=value)
+        assert not corpus.execution_configuration_errors(case), case
+        assert corpus.execution_timeout(case, 7) == 60.0
+    for value in (True, False, 0, -1, float("nan"), float("inf"),
+                  float("-inf"), "60", None, 10**500, -(10**500)):
+        case = dict(runnable, execution_timeout_seconds=value)
+        assert corpus.execution_configuration_errors(case), (value, case)
+        expect_error(corpus.execution_timeout, case, 7)
+    assert corpus.execution_timeout({}, 7) == 7.0
+    assert corpus.execution_configuration_errors(
+        dict(runnable, operation="check", execution_timeout_seconds=2))
+
+
+def check_large_timeout_configuration():
+    decoded = json.loads(
+        '{"execution_timeout_seconds": 1' + "0" * 500 + "}")
+    huge = decoded["execution_timeout_seconds"]
+    assert type(huge) is int and huge == 10**500
+    runnable = {
+        "id": "huge-timeout",
+        "operation": "build_native",
+        "expected": {"status": "ok"},
+        "execution_timeout_seconds": huge,
+    }
+    errors = corpus.execution_configuration_errors(runnable)
+    assert any("execution_timeout_seconds" in error for error in errors), errors
+    try:
+        corpus.execution_timeout(runnable, 7)
+    except corpus.CorpusError as error:
+        assert "execution_timeout_seconds" in str(error)
+    except OverflowError as error:
+        raise AssertionError(f"raw OverflowError leaked: {error}") from error
+    else:
+        raise AssertionError("accepted a timeout that cannot be a finite float")
+
+    classified = {
+        "id": "huge-timeout-classification",
+        "enabled": False,
+        "support": "public_cli",
+        "adaptation": "ready",
+        "operation": "build_native",
+        "expected": {"status": "ok"},
+        "execution_timeout_seconds": huge,
+    }
+    classification_errors = corpus._case_classification_errors(classified)
+    assert any("execution_timeout_seconds" in error
+               for error in classification_errors), classification_errors
+    coverage = corpus.coverage_report(
+        {"cases": [classified], "files": [], "runners": []})
+    assert classified["id"] in coverage["invalid_cases"], coverage["invalid_cases"]
+
+    for value in (20, 60, 20.0, 60.0):
+        case = {
+            "id": "normal-timeout",
+            "operation": "build_native",
+            "expected": {"status": "ok"},
+            "execution_timeout_seconds": value,
+        }
+        assert not corpus.execution_configuration_errors(case), case
+        assert corpus.execution_timeout(case, 7) == float(value)
+
+
+def execution_record(index, exit_code=0, stdout=b"", stderr=b"",
+                     timed_out=False, cleanup_complete=True):
+    return {
+        "index": index,
+        "exit": exit_code,
+        "timed_out": timed_out,
+        "cleanup_complete": cleanup_complete,
+        "_stdout": stdout,
+        "_stderr": stderr,
+    }
+
+
+def check_execution_repetition_expectations():
+    case = {
+        "id": "repeat-expectation",
+        "operation": "build_native",
+        "expected": {"status": "ok"},
+        "execution_repetitions": 3,
+        "run_expectation": {
+            "exit": 0, "stdout_base64": "", "stderr_base64": "",
+        },
+    }
+    good = [execution_record(index) for index in range(3)]
+    assert not corpus.check_run_expectations(case, good)
+    for changed in (
+            execution_record(1, exit_code=7),
+            execution_record(1, stdout=b"unexpected"),
+            execution_record(1, stderr=b"unexpected"),
+            execution_record(1, timed_out=True),
+            execution_record(1, cleanup_complete=False),
+            execution_record(1, exit_code=-9)):
+        failures = corpus.check_run_expectations(
+            case, [good[0], changed, good[2]])
+        assert any("execution[1]" in failure for failure in failures), failures
+    failures = corpus.check_run_expectations(case, good[:2])
+    assert any("expected 3" in failure and "got 2" in failure
+               for failure in failures), failures
+    failures = corpus.check_run_expectations(case, good + [execution_record(3)])
+    assert any("expected 3" in failure and "got 4" in failure
+               for failure in failures), failures
+
+    panic = {
+        "id": "repeat-panic",
+        "operation": "build_native",
+        "expected": {"status": "ok"},
+        "execution_repetitions": 2,
+        "run_expectation": {
+            "status": "panic", "exit": 101, "stdout_base64": "",
+            "panic_stderr_prefix": "LANG_NATIVE_PANIC:v1:division-by-zero:",
+        },
+    }
+    valid_panic = execution_record(
+        0, exit_code=101, stderr=b"LANG_NATIVE_PANIC:v1:division-by-zero:9:1\n")
+    wrong_panic = execution_record(1, exit_code=101, stderr=b"wrong panic\n")
+    assert not corpus.check_run_expectations(
+        panic, [valid_panic, dict(valid_panic, index=1)])
+    failures = corpus.check_run_expectations(
+        panic, [valid_panic, wrong_panic])
+    assert any("execution[1]" in failure and "start with" in failure
+               for failure in failures), failures
+
+    count_only = {
+        "id": "repeat-count-only",
+        "operation": "build_native",
+        "expected": {"status": "ok"},
+        "execution_repetitions": 2,
+    }
+    assert corpus.check_run_expectations(count_only, good[:1])
+
+
+def check_execution_repetition_comparison():
+    def run_record(executions):
+        return {
+            "trace": {"status": "ok"},
+            "exit": 0,
+            "timed_out": False,
+            "_normalized_stderr": b"",
+            "_normalized": document(status="ok"),
+            "_executions": executions,
+            "artifacts": {"published": ["program"]},
+        }
+
+    reference = run_record([execution_record(index) for index in range(3)])
+    candidate = run_record([
+        execution_record(0),
+        execution_record(1, exit_code=7),
+        execution_record(2),
+    ])
+    failures, _ = corpus.compare_runs(None, reference, candidate)
+    assert any("execution[1]" in failure and "exit" in failure
+               for failure in failures), failures
+
+    candidate = run_record([
+        execution_record(0),
+        execution_record(1),
+        execution_record(2, stdout=b"extra"),
+    ])
+    failures, evidence = corpus.compare_runs(None, reference, candidate)
+    assert any("execution[2]" in failure and "stdout" in failure
+               for failure in failures), failures
+    assert evidence["program_stdout_execution_2"]["candidate"] == "extra"
+
+    candidate = run_record([
+        execution_record(0),
+        execution_record(1, timed_out=True),
+        execution_record(2),
+    ])
+    assert any("execution[1]" in failure and "timed_out" in failure
+               for failure in corpus.compare_runs(
+                   None, reference, candidate)[0])
+
+    candidate = run_record([
+        execution_record(0),
+        execution_record(1, cleanup_complete=False),
+        execution_record(2),
+    ])
+    assert any("execution[1]" in failure and "cleanup_complete" in failure
+               for failure in corpus.compare_runs(
+                   None, reference, candidate)[0])
+
+    candidate = run_record([execution_record(0), execution_record(1)])
+    failures, _ = corpus.compare_runs(None, reference, candidate)
+    assert any("execution count differs" in failure for failure in failures), failures
+
+    # A record from the old single-execution schema still compares as one run.
+    old_left = run_record([])
+    old_right = run_record([])
+    del old_left["_executions"]
+    del old_right["_executions"]
+    old_left["_execution"] = execution_record(0)
+    old_right["_execution"] = execution_record(0)
+    assert not corpus.compare_runs(None, old_left, old_right)[0]
+
+
+def write_fake_compiler(work, name, behaviors):
+    """Write a fake compiler that publishes a scripted Native program."""
+    directory = work / name
+    directory.mkdir(parents=True, exist_ok=True)
+    program_source = (
+        "#!" + str(Path(sys.executable).resolve()) + "\n"
+        "import json, os, pathlib, signal, subprocess, sys, time\n"
+        "behaviors = " + repr(behaviors) + "\n"
+        "state = pathlib.Path(__file__).with_name('fake-run-count.json')\n"
+        "count = json.loads(state.read_text()) if state.exists() else 0\n"
+        "count += 1\n"
+        "state.write_text(json.dumps(count))\n"
+        "behavior = behaviors[min(count - 1, len(behaviors) - 1)] "
+        "if behaviors else 'ok'\n"
+        "if behavior == 'exit7':\n"
+        "    print('second-run-noise', flush=True)\n"
+        "    raise SystemExit(7)\n"
+        "if behavior == 'stdout':\n"
+        "    print('unexpected stdout', flush=True)\n"
+        "if behavior == 'stderr':\n"
+        "    print('unexpected stderr', file=sys.stderr, flush=True)\n"
+        "if behavior == 'signal':\n"
+        "    os.kill(os.getpid(), signal.SIGKILL)\n"
+        "if behavior == 'timeout':\n"
+        "    time.sleep(5)\n"
+        "if behavior == 'cleanup':\n"
+        "    subprocess.Popen([sys.executable, '-c', "
+        "'import time; time.sleep(1.2)'], start_new_session=True)\n"
+        "    time.sleep(5)\n"
+        "if behavior == 'remove':\n"
+        "    pathlib.Path(__file__).unlink()\n"
+        "raise SystemExit(0)\n"
+    )
+    compiler = directory / "woozyc"
+    compiler.write_text(
+        "#!" + str(Path(sys.executable).resolve()) + "\n"
+        "import json, pathlib, sys\n"
+        "args = sys.argv[1:]\n"
+        "out = pathlib.Path(args[args.index('--out-dir') + 1])\n"
+        "out.mkdir(parents=True, exist_ok=True)\n"
+        "program_source = " + repr(program_source) + "\n"
+        "program = out / 'program'\n"
+        "program.write_text(program_source)\n"
+        "program.chmod(0o700)\n"
+        "print(json.dumps({'schema_version': 1, "
+        "'compiler_version': 'fake', 'source_revision': 'fake', "
+        "'status': 'ok', 'diagnostics': []}))\n"
+    )
+    compiler.chmod(0o700)
+    return compiler
+
+
+def fake_repeat_case(case_id, repetitions=None):
+    case = {
+        "id": case_id,
+        "operation": "build_native",
+        "manifest": "lang.toml",
+        "opt": [0],
+        "expected": {"status": "ok", "build_status": "ok",
+                     "no_stderr": True},
+        "run_expectation": {
+            "exit": 0, "stdout_base64": "", "stderr_base64": "",
+        },
+        "execution_timeout_seconds": 1.0,
+    }
+    if repetitions is not None:
+        case["execution_repetitions"] = repetitions
+    return case
+
+
+def check_execution_fixture_repetitions():
+    with tempfile.TemporaryDirectory(prefix="woozy-corpus-repeat-") as directory:
+        work = Path(directory)
+        context = probe_context(work)
+        context["timeout"] = 2.0
+        ok = write_fake_compiler(work, "fake-ok", ["ok", "ok", "ok"])
+        bad_exit = write_fake_compiler(
+            work, "fake-bad-exit", ["ok", "exit7", "ok"])
+        bad_stdout = write_fake_compiler(
+            work, "fake-bad-stdout", ["ok", "ok", "stdout"])
+
+        case = fake_repeat_case("fake-repeat", 3)
+        record = corpus.run_case(
+            case, ok, [], work / "out-repeat", context)
+        assert record["status"] == "passed", record
+        reference = record["variants"][0]["reference"]
+        assert reference["execution_repetitions"] == 3
+        assert len(reference["executions"]) == 3
+        assert reference["execution"] == reference["executions"][0]
+        run_dir = work / "out-repeat" / reference["directory"]
+        assert (run_dir / "out" / "program").is_file()
+        assert "program" in reference["artifacts"]["published"]
+        seen_paths = set()
+        for index, execution in enumerate(reference["executions"]):
+            assert execution["index"] == index, execution
+            assert execution["exit"] == 0, execution
+            assert execution["timed_out"] is False, execution
+            assert execution["cleanup_complete"] is True, execution
+            assert execution["abandoned_pipes"] is False, execution
+            assert execution["trace"]["status"] == "ok", execution
+            for key in ("stdout_path", "stderr_path", "trace_path"):
+                path = execution[key]
+                assert path not in seen_paths, (path, seen_paths)
+                seen_paths.add(path)
+                assert (run_dir / path).is_file(), (run_dir, path)
+            assert (run_dir / execution["directory"] / "execute.json").is_file()
+            stored = json.loads((run_dir / execution["directory"] /
+                                 "execute.json").read_text())
+            assert stored["index"] == index
+            assert stored["argv"] == execution["argv"]
+        assert len(seen_paths) == 9, seen_paths
+
+        case = fake_repeat_case("fake-bad", 3)
+        record = corpus.run_case(
+            case, ok, [bad_exit, bad_stdout], work / "out-bad", context)
+        assert record["status"] == "failed", record
+        reference = record["variants"][0]["reference"]
+        assert reference["status"] == "passed", reference
+        first, second = record["variants"][0]["candidates"]
+        assert first["status"] == "failed", first
+        assert second["status"] == "failed", second
+        assert any("execution[1]" in failure and "exit 7" in failure
+                   for failure in first["expected_failures"]), first
+        assert any("execution[1]" in failure and "exit" in failure
+                   for failure in first["comparison_failures"]), first
+        assert any("execution[2]" in failure and "stdout" in failure
+                   for failure in second["expected_failures"]), second
+        assert any("execution[2]" in failure and "stdout" in failure
+                   for failure in second["comparison_failures"]), second
+        assert "program_stdout_execution_2" in second["evidence"], second
+        bad_exit_dir = work / "out-bad" / first["run"]["directory"]
+        bad_stdout_dir = work / "out-bad" / second["run"]["directory"]
+        assert (bad_exit_dir / first["run"]["executions"][0]["stdout_path"]
+                ).read_bytes() == b""
+        assert (bad_exit_dir / first["run"]["executions"][1]["stdout_path"]
+                ).read_bytes() == b"second-run-noise\n"
+        assert (bad_stdout_dir / second["run"]["executions"][2]["stdout_path"]
+                ).read_bytes() == b"unexpected stdout\n"
+
+        case = fake_repeat_case("fake-single")
+        record = corpus.run_case(
+            case, ok, [], work / "out-single", context)
+        assert record["status"] == "passed", record
+        reference = record["variants"][0]["reference"]
+        assert reference["execution_repetitions"] == 1
+        assert len(reference["executions"]) == 1
+        assert reference["execution"] == reference["executions"][0]
+        single_dir = work / "out-single" / reference["directory"]
+        assert not (single_dir / "executions" / "1").exists()
+
+        case = fake_repeat_case("fake-missing", 3)
+        original = corpus._execute_artifact
+
+        def skip_third(*args, **kwargs):
+            index = kwargs.get("index", args[-1] if args else None)
+            if index == 2:
+                return None
+            return original(*args, **kwargs)
+
+        corpus._execute_artifact = skip_third
+        try:
+            record = corpus.run_case(
+                case, ok, [], work / "out-missing", context)
+        finally:
+            corpus._execute_artifact = original
+        assert record["status"] == "failed", record
+        reference = record["variants"][0]["reference"]
+        assert len(reference["executions"]) == 2, reference
+        failures = "\n".join(record["variants"][0]["reference_failures"])
+        assert "program execution 2 did not run" in failures, failures
+        assert "program executed 2 of 3" in failures, failures
+        assert "expected 3 program executions, got 2" in failures, failures
+        missing_dir = work / "out-missing" / reference["directory"]
+        assert (missing_dir / "executions" / "1").is_dir()
+        assert not (missing_dir / "executions" / "2").exists()
 
 
 def write_fixture(work, name, body):
@@ -631,6 +1082,10 @@ def run_harness():
                     for name in ("argv.json", "exec.log", "stdout.bin",
                                  "stderr.bin", "input.json"):
                         assert (run_dir / name).is_file(), (run_dir, name)
+                    execution = candidate["run"]["execution"]
+                    for key in ("stdout_path", "stderr_path", "trace_path"):
+                        assert (run_dir / execution[key]).is_file(), (
+                            run_dir, key)
         python_case = next(
             case for case in result["cases"]
             if case["id"] == "harness:build-python-run")
@@ -643,7 +1098,9 @@ def run_harness():
         assert execution["trace"]["status"] == "ok"
         execute_dir = out / python_case["variants"][0]["candidates"][0][
             "run"]["directory"]
-        assert (execute_dir / "execute.exec.log").is_file()
+        execution = python_case["variants"][0]["candidates"][0]["run"][
+            "execution"]
+        assert (execute_dir / execution["trace_path"]).is_file()
 
 
 def check_native_helper_guard():
@@ -706,14 +1163,20 @@ def check_full_coverage_is_not_a_pass():
 check_diagnostics_and_normalization()
 check_strict_json_types()
 check_trace_audit()
+check_seccomp_exec_trace()
 check_inventory()
 check_public_cli_expectations()
 check_run_expectations()
+check_execution_repetition_validation()
+check_large_timeout_configuration()
+check_execution_repetition_expectations()
+check_execution_repetition_comparison()
+check_execution_fixture_repetitions()
 check_timeout_signal_artifacts_and_cleanup()
 check_runner_and_expectation_inventory_negative()
 run_harness()
 check_native_helper_guard()
 check_full_coverage_is_not_a_pass()
 print("PASS: strict JSON, timeout/signal, cleanup, artifacts, expectations, "
-      "coverage, public-CLI harness expectations, stage0 harness, and "
-      "legacy-helper rejection")
+      "repetitions, coverage, public-CLI harness expectations, stage0 harness, "
+      "and legacy-helper rejection")
