@@ -292,6 +292,18 @@ func scan_number(state inout Walk) string throws Abort {
     if integer_digits + fraction_digits == 0 {
         throw Abort.Syntax;
     }
+    if !has_dot && !has_exponent {
+        var limit u64 = 18446744073709551615;
+        var index = start;
+        if negative { limit = 9223372036854775808; index += 1; }
+        var magnitude u64 = 0;
+        for index < end {
+            let digit = u64(state.bytes[index] - 48);
+            if magnitude > (limit - digit) / 10 { throw Abort.Syntax; }
+            magnitude = magnitude * 10 + digit;
+            index += 1;
+        }
+    }
     if !has_dot && !has_exponent && !negative && integer_digits > 1 &&
        state.bytes[start] == 48 {
         for var index usize = start; index < end; index += 1 {
