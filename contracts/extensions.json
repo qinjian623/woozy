@@ -72,8 +72,8 @@
     {
       "id": "CON03",
       "title": "Async functions, await and task execution",
-      "status": "planned",
-      "owner": "unassigned",
+      "status": "in_progress",
+      "owner": "Root: entry/result cleanup implemented; async parameter copies under review; Source frame GC running; fork integration pending",
       "depends_on": [
         "LANG01",
         "MEM02",
@@ -118,7 +118,7 @@
       "id": "LANG03",
       "title": "Slice views, typed pointers and richer mutable places",
       "status": "in_progress",
-      "owner": "Root field/index POD integration and nested shared-container correction; owning non-POD inout pending",
+      "owner": "Root: whole/field/index owning inout implemented in b37474f; Task and foreign inout remain rejected",
       "depends_on": [
         "MEM01",
         "FFI01"
@@ -174,7 +174,7 @@
       "id": "FFI01",
       "title": "Native C ABI and explicit hosted-library mode",
       "status": "in_progress",
-      "owner": "root C ABI; pi-hosted-runtime",
+      "owner": "Root: typed C ABI and static retained callback GC scopes implemented; capturing callbacks remain pending",
       "depends_on": [],
       "acceptance": [
         "Declared C ABI functions, supported aggregate layout and typed pointer/buffer arguments",
