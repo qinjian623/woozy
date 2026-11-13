@@ -1,0 +1,6 @@
+package p;
+trait Rel[A] {}
+trait Edit[A Rel[Self]] { func f(x Self); }
+struct Host {}
+impl[P Rel[Self]] Rel[P] for Host { func g(x Self) {} }
+pub func h[T Rel[Self]](x T) { let g = func() i32 { let x Self = 0; return 0; }; }

@@ -1,0 +1,12 @@
+schema_version = 1
+[package]
+name = "system_metadata_test"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[dependencies]
+# Reuse the selfhost source root so app/wzcc/system is compiled exactly as
+# checked in. The test entry lives in this project.
+wzcc = { kind = "source", path = "../../" }

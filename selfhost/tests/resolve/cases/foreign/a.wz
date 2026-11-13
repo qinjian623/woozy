@@ -1,0 +1,2 @@
+package p;
+pub func use(x Host) { host_call(); }

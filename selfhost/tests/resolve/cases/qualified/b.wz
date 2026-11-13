@@ -1,0 +1,3 @@
+package q;
+pub struct T {}
+pub func value() {}

@@ -1,0 +1,3 @@
+package p;
+import "dep" as d;
+func f() { d.visible(); (d).hidden(); }

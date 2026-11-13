@@ -1,0 +1,4 @@
+package p;
+const C = A;
+struct T { x i32; }
+pub func h(x T) { f(x.x); }

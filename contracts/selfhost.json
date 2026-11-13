@@ -32,31 +32,32 @@
       "id": "SH03",
       "title": "complete parser and recovery",
       "status": "done",
-      "task": "ff05026d-6a75-4483-818f-229fd4945fe1",
+      "task": "75ee4554-d6c3-4927-8b08-0112d9d78ca6",
       "verified": "3484 pretokenized checks O0/O2; AST/recovery fields match121realinputs"
     },
     {
       "id": "SH04",
       "title": "frontend field-by-field differential tests",
       "status": "done",
-      "task": "bbc85883-bdca-4452-8273-598c468f10a5",
       "verified": "C++oracle121/121; realWzO0/O2 each121/121; live modules required; no copied compiler fixture fallback"
     },
     {
       "id": "SH05",
       "title": "project/TOML/bindings/modules/resolve",
       "status": "in_progress",
-      "verified": "Source/lexer/parser/CLI integrated. BigInt,TOML,SHA256 actualO0/O2 tests passed. Project loading/name resolution not yet implemented."
+      "verified": "Pure-Wz input/path/system/JSON/TOML/manifest/name resolver accepted after O0/O2 comparisons. Python/C bindings and project graph integration remain in progress."
     },
     {
       "id": "SH06",
       "title": "exact constants, type checking, generics and typed HIR",
-      "status": "in_progress"
+      "status": "in_progress",
+      "verified": "Exact integer/rational/IEEE arithmetic, type table, and complete HIR data records accepted. Constant evaluation, pattern checking, signatures, ownership, HIR copy/dump are in progress; full Sema/verifier remain."
     },
     {
       "id": "SH07",
       "title": "ownership and Native control flow IR",
-      "status": "planned"
+      "status": "in_progress",
+      "verified": "Ownership/value operations port assigned; Native CFG lowering and verification not implemented."
     },
     {
       "id": "SH08",
@@ -82,19 +83,78 @@
   ],
   "active_tasks": [
     {
-      "id": "SH05d",
-      "scope": "ordered builtin/system-operation metadata",
-      "task": "c2dfaad4-4213-4111-84ea-2c9227f8b465"
+      "id": "SH05j",
+      "scope": "Python/C binding bundle loader",
+      "task": "a3621c4a-1194-405b-9194-b4a7e3be1752"
     },
     {
-      "id": "SH05e",
-      "scope": "file input and canonical Linux paths",
+      "id": "SH05i",
+      "scope": "project graph, source and foreign modules, integration",
+      "owner": "Root"
+    },
+    {
+      "id": "SH06d",
+      "scope": "source/HIR constant evaluation and literal patterns",
+      "task": "750e5118-fb73-47a4-9c59-e86046adc1d0"
+    },
+    {
+      "id": "SH06e",
+      "scope": "pattern usefulness and exhaustiveness",
+      "task": "66976582-a7c2-484c-837b-357946d21403"
+    },
+    {
+      "id": "SH06f",
+      "scope": "foreign types and system signatures",
+      "task": "d5ac11e7-62f5-4a77-b6ed-6f39a5d49b2d"
+    },
+    {
+      "id": "SH07a",
+      "scope": "ownership, value operations and layouts",
+      "task": "cbcc16de-8407-4819-a9c4-1889cf23cfdc"
+    },
+    {
+      "id": "SH06g",
+      "scope": "deep copy of HIR and all mutable source/project data",
+      "task": "099ac75c-5f6c-484f-ba88-e841b7f4bf40"
+    },
+    {
+      "id": "SH06h",
+      "scope": "complete stable HIR/type dump",
+      "task": "e66b3868-0782-41b4-ada9-d41aa0de7077"
+    }
+  ],
+  "accepted_foundations": [
+    {
+      "name": "input/paths",
       "task": "2bbc25c1-af5f-4b42-bf13-bfecf55b2bfa"
     },
     {
-      "id": "SH06a",
-      "scope": "exact rational/IEEE numerical foundation",
+      "name": "system metadata",
+      "task": "c2dfaad4-4213-4111-84ea-2c9227f8b465"
+    },
+    {
+      "name": "jsondoc",
+      "task": "cae25e32-61f6-4ec4-ad1f-b4db4671aaaf"
+    },
+    {
+      "name": "manifest",
+      "task": "3737c266-ba45-441f-bb14-97238f5d67c9"
+    },
+    {
+      "name": "resolve",
+      "task": "3c604986-9825-44f0-bb91-65bd6a6763b5"
+    },
+    {
+      "name": "number",
       "task": "e2332eb9-17d8-4008-800f-495754ca0ac7"
+    },
+    {
+      "name": "types",
+      "task": "9ca32b03-2609-40c9-8aae-271a2d04affe"
+    },
+    {
+      "name": "HIR records",
+      "task": "a5319081-cc94-4ccd-9e42-70ab61724e2f"
     }
   ]
 }

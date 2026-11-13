@@ -1,0 +1,1075 @@
+// Stage-1 port of src/modules/resolve.cpp.
+//
+// The resolver is deliberately independent of the old frontend: callers give
+// it the already parsed Project records shared through app/wzcc/model.  It
+// follows the C++ collection order and scope rules byte for byte, including
+// file-only import aliases, initializer-before-binding visibility, the shared
+// parameter/body scope, anonymous function identities, foreign exports and
+// constant-cycle detection (function bodies do not contribute const edges).
+package resolve;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/system" as system;
+import "std/option" as option;
+import "std/vec" as vec;
+
+// Frozen AstKind ordinals from app/wzcc/model.
+const AST_FILE u32 = 0;
+const AST_PACKAGE u32 = 1;
+const AST_IMPORT u32 = 2;
+const AST_BINDING u32 = 3;
+const AST_FUNCTION u32 = 4;
+const AST_STRUCT u32 = 5;
+const AST_ENUM u32 = 6;
+const AST_TRAIT u32 = 7;
+const AST_IMPL u32 = 8;
+const AST_FIELD u32 = 9;
+const AST_VARIANT u32 = 10;
+const AST_GENERIC_PARAMETER u32 = 11;
+const AST_PARAMETER u32 = 12;
+const AST_NAMED_TYPE u32 = 15;
+const AST_FUNCTION_TYPE u32 = 16;
+const AST_PARENTHESIZED_TYPE u32 = 17;
+const AST_BLOCK u32 = 18;
+const AST_FOR u32 = 22;
+const AST_FORIN u32 = 23;
+const AST_CASE u32 = 25;
+const AST_CATCH u32 = 27;
+const AST_NAME u32 = 34;
+const AST_MEMBER u32 = 40;
+const AST_BRACKET_ITEM u32 = 42;
+const AST_FUNCTION_LITERAL u32 = 45;
+const AST_PARENTHESIZED u32 = 46;
+const AST_BIND_PATTERN u32 = 47;
+const AST_LITERAL_PATTERN u32 = 48;
+const AST_VARIANT_PATTERN u32 = 49;
+const AST_TRAIT_OBJECT_TYPE u32 = 51;
+
+struct Found {
+    ok bool;
+    id usize;
+}
+
+func missing() Found {
+    return Found(ok: false, id: 0);
+}
+
+func present(id usize) Found {
+    return Found(ok: true, id: id);
+}
+
+struct ScopeName {
+    name string;
+    symbol usize;
+}
+
+struct Scope {
+    parent_has bool;
+    parent usize;
+    names Vec[ScopeName];
+}
+
+struct Declaration {
+    snapshot u64;
+    node usize;
+    symbol usize;
+}
+
+struct ConstEdge {
+    target usize;
+    span model.Span;
+}
+
+struct Resolver {
+    project model.Project;
+    symbols Vec[model.Symbol];
+    occurrences Vec[model.Occurrence];
+    deferred_members Vec[model.NodeRef];
+    self_parameters Vec[model.SelfParameter];
+    diagnostics Vec[model.Diagnostic];
+
+    scopes Vec[Scope];
+    prelude usize;
+    packages Vec[usize];
+
+    declarations Vec[Declaration];
+    const_edges Vec[Vec[ConstEdge]];
+    active_const_has bool;
+    active_const usize;
+
+    module usize;
+    file usize;
+    parse_index usize;
+}
+
+func node(state Resolver, id usize) model.AstNode {
+    return state.project.files[state.parse_index].nodes[id];
+}
+
+func token(state Resolver, position usize) model.Token {
+    return state.project.files[state.parse_index].lexed.tokens[position];
+}
+
+func parse_root(state Resolver) usize {
+    return state.project.files[state.parse_index].root;
+}
+
+func source_id(state Resolver) u64 {
+    return state.project.files[state.parse_index].lexed.source.id;
+}
+
+func reference(state Resolver, id usize) model.NodeRef {
+    return model.NodeRef(module: state.module, file: state.file, node: id);
+}
+
+func kind_id(kind model.AstKind) u32 {
+    return model.ast_kind_id(kind);
+}
+
+func is_type_node(kind model.AstKind) bool {
+    let id = kind_id(kind);
+    return id == AST_NAMED_TYPE || id == AST_FUNCTION_TYPE ||
+        id == AST_PARENTHESIZED_TYPE || id == AST_TRAIT_OBJECT_TYPE;
+}
+
+func is_type_kind(kind model.SymbolKind) bool {
+    switch kind {
+        case model.SymbolKind.Type: return true;
+        case model.SymbolKind.Trait: return true;
+        case model.SymbolKind.TypeParameter: return true;
+        case model.SymbolKind.BuiltinType: return true;
+        default: return false;
+    }
+}
+
+func is_constant_kind(kind model.SymbolKind) bool {
+    switch kind {
+        case model.SymbolKind.Constant: return true;
+        default: return false;
+    }
+}
+
+func is_leak_kind(kind model.SymbolKind) bool {
+    switch kind {
+        case model.SymbolKind.Type: return true;
+        case model.SymbolKind.Trait: return true;
+        default: return false;
+    }
+}
+
+func underscore_allowed(kind model.SymbolKind) bool {
+    switch kind {
+        case model.SymbolKind.Value: return true;
+        case model.SymbolKind.Constant: return true;
+        default: return false;
+    }
+}
+
+func option_span_has(value option.Option[model.Span]) bool {
+    switch value {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func option_span_get(value option.Option[model.Span]) model.Span {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.Span(snapshot: 0, begin_byte: 0,
+                                                    end_byte: 0);
+    }
+}
+
+func option_node_has(value option.Option[model.NodeRef]) bool {
+    switch value {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func option_usize_has(value option.Option[usize]) bool {
+    switch value {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func option_usize_get(value option.Option[usize]) usize {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+func new_scope(state inout Resolver, parent_has bool, parent usize) usize {
+    let id = vec.len(state.scopes);
+    vec.push(state.scopes, Scope(parent_has: parent_has, parent: parent,
+                                 names: vec.empty[ScopeName]()));
+    return id;
+}
+
+func direct_find(state Resolver, scope usize, name string) Found {
+    let names = state.scopes[scope].names;
+    for var index usize = 0; index < vec.len(names); index += 1 {
+        if names[index].name == name {
+            return present(names[index].symbol);
+        }
+    }
+    return missing();
+}
+
+func scope_find(state Resolver, scope usize, name string) Found {
+    var current = scope;
+    for {
+        let found = direct_find(state, current, name);
+        if found.ok { return found; }
+        if !state.scopes[current].parent_has { return missing(); }
+        current = state.scopes[current].parent;
+    }
+}
+
+func add_error(state inout Resolver, code string, message string,
+               span model.Span) {
+    vec.push(state.diagnostics,
+        model.diagnostic(code, "resolve", message, span));
+}
+
+func add_error_previous(state inout Resolver, code string, message string,
+                        span model.Span, has_previous bool,
+                        previous model.Span) {
+    var diagnostic = model.diagnostic(code, "resolve", message, span);
+    if has_previous {
+        vec.push(diagnostic.related,
+            model.Related(span: previous, message: "previous declaration"));
+    }
+    vec.push(state.diagnostics, diagnostic);
+}
+
+func add(state inout Resolver, scope usize, name string,
+         kind model.SymbolKind, has_definition bool,
+         definition model.NodeRef, has_span bool, span model.Span,
+         exported bool, has_target bool, target usize) usize {
+    if name == "_" && !underscore_allowed(kind) && has_span {
+        add_error(inout state, "E_NAME_KIND", "named declaration cannot be _", span);
+    }
+    if name != "_" {
+        let existing = direct_find(state, scope, name);
+        if existing.ok {
+            if has_span {
+                let previous = state.symbols[existing.id].declaration;
+                switch previous {
+                    case option.Option.Some(previous_span):
+                        add_error_previous(inout state, "E_NAME_DUPLICATE",
+                            "duplicate declaration: " + name, span, true,
+                            previous_span);
+                    case option.Option.None:
+                        add_error_previous(inout state, "E_NAME_DUPLICATE",
+                            "duplicate declaration: " + name, span, false,
+                            span);
+                }
+            }
+            return existing.id;
+        }
+    }
+    let id = vec.len(state.symbols);
+    var symbol = model.Symbol(id: id, name: name, kind: kind,
+        module: state.module,
+        definition: option.Option[model.NodeRef].None,
+        declaration: option.Option[model.Span].None,
+        exported: exported,
+        target: option.Option[usize].None,
+        foreign: option.Option[model.ForeignExportRef].None);
+    if has_definition {
+        symbol.definition = option.Option[model.NodeRef].Some(definition);
+    }
+    if has_span {
+        symbol.declaration = option.Option[model.Span].Some(span);
+    }
+    if has_target {
+        symbol.target = option.Option[usize].Some(target);
+    }
+    vec.push(state.symbols, symbol);
+    if name != "_" {
+        vec.push(state.scopes[scope].names,
+            ScopeName(name: name, symbol: id));
+    }
+    return id;
+}
+
+func ensure_const_edges(state inout Resolver, symbol usize) {
+    for vec.len(state.const_edges) <= symbol {
+        vec.push(state.const_edges, vec.empty[ConstEdge]());
+    }
+}
+
+func record(state inout Resolver, id usize, symbol usize, span model.Span) {
+    vec.push(state.occurrences,
+        model.Occurrence(source: reference(state, id), symbol: symbol,
+                         span: span));
+    if state.active_const_has &&
+       is_constant_kind(state.symbols[symbol].kind) {
+        let owner = state.active_const;
+        ensure_const_edges(inout state, owner);
+        vec.push(state.const_edges[owner],
+            ConstEdge(target: symbol, span: node(state, id).span));
+    }
+}
+
+func resolve_name(state inout Resolver, id usize, scope usize,
+                  spelling string, span model.Span, require_type bool,
+                  public_type bool) Found {
+    let found = scope_find(state, scope, spelling);
+    if !found.ok || spelling == "_" {
+        add_error(inout state, "E_NAME_NOT_FOUND",
+            "unknown name: " + spelling, span);
+        return missing();
+    }
+    let symbol = state.symbols[found.id];
+    if require_type && !is_type_kind(symbol.kind) {
+        let previous = symbol.declaration;
+        switch previous {
+            case option.Option.Some(previous_span):
+                add_error_previous(inout state, "E_NAME_KIND",
+                    "name is not a type: " + spelling, span, true,
+                    previous_span);
+            case option.Option.None:
+                add_error_previous(inout state, "E_NAME_KIND",
+                    "name is not a type: " + spelling, span, false, span);
+        }
+        return missing();
+    }
+    if public_type && symbol.module == state.module &&
+       option_node_has(symbol.definition) && is_leak_kind(symbol.kind) &&
+       !symbol.exported {
+        let previous = symbol.declaration;
+        switch previous {
+            case option.Option.Some(previous_span):
+                add_error_previous(inout state, "E_PRIVATE_TYPE_LEAK",
+                    "public interface uses private type: " + symbol.name,
+                    span, true, previous_span);
+            case option.Option.None:
+                add_error_previous(inout state, "E_PRIVATE_TYPE_LEAK",
+                    "public interface uses private type: " + symbol.name,
+                    span, false, span);
+        }
+    }
+    record(inout state, id, found.id, span);
+    return found;
+}
+
+func resolve_member(state inout Resolver, id usize, base usize,
+                    spelling string, span model.Span,
+                    require_type bool) Found {
+    let base_symbol = state.symbols[base];
+    if !option_usize_has(base_symbol.target) {
+        if require_type && !is_type_kind(base_symbol.kind) {
+            let previous = base_symbol.declaration;
+            switch previous {
+                case option.Option.Some(previous_span):
+                    add_error_previous(inout state, "E_NAME_KIND",
+                        "type qualifier is not a module or a type", span,
+                        true, previous_span);
+                case option.Option.None:
+                    add_error_previous(inout state, "E_NAME_KIND",
+                        "type qualifier is not a module or a type", span,
+                        false, span);
+            }
+            return missing();
+        }
+        vec.push(state.deferred_members, reference(state, id));
+        return missing();
+    }
+    let target = option_usize_get(base_symbol.target);
+    let found = direct_find(state, state.packages[target], spelling);
+    if !found.ok {
+        add_error(inout state, "E_NAME_NOT_FOUND",
+            "module has no declaration: " + spelling, span);
+        return missing();
+    }
+    let symbol = state.symbols[found.id];
+    if target != state.module && !symbol.exported {
+        let previous = symbol.declaration;
+        switch previous {
+            case option.Option.Some(previous_span):
+                add_error_previous(inout state, "E_PRIVATE_ACCESS",
+                    "declaration is private: " + symbol.name, span, true,
+                    previous_span);
+            case option.Option.None:
+                add_error_previous(inout state, "E_PRIVATE_ACCESS",
+                    "declaration is private: " + symbol.name, span, false,
+                    span);
+        }
+        return missing();
+    }
+    if require_type && !is_type_kind(symbol.kind) {
+        let previous = symbol.declaration;
+        switch previous {
+            case option.Option.Some(previous_span):
+                add_error_previous(inout state, "E_NAME_KIND",
+                    "module declaration is not a type: " + symbol.name,
+                    span, true, previous_span);
+            case option.Option.None:
+                add_error_previous(inout state, "E_NAME_KIND",
+                    "module declaration is not a type: " + symbol.name,
+                    span, false, span);
+        }
+        return missing();
+    }
+    record(inout state, id, found.id, span);
+    return found;
+}
+
+func start_token(state Resolver, n model.AstNode) usize {
+    var position = n.token_begin;
+    if token(state, position).spelling == "pub" { position += 1; }
+    return position;
+}
+
+func name_token(state Resolver, n model.AstNode) usize {
+    var position = start_token(state, n);
+    if kind_id(n.kind) == AST_FUNCTION &&
+       token(state, position).spelling == "async" {
+        position += 1;
+    }
+    return position + 1;
+}
+
+func resolve_type(state inout Resolver, id usize, scope usize,
+                  public_type bool, require_type bool) {
+    let n = node(state, id);
+    if kind_id(n.kind) != AST_NAMED_TYPE {
+        let inherited = require_type || kind_id(n.kind) == AST_FUNCTION_TYPE;
+        for child in n.children {
+            resolve_type(inout state, child, scope, public_type, inherited);
+        }
+        return;
+    }
+    let first = token(state, n.token_begin);
+    // Only the final unqualified name must be a type; a qualified name starts
+    // with a module or a type and its later parts are checked by resolve_member.
+    var current = resolve_name(inout state, id, scope, first.spelling,
+        first.span, false, public_type);
+    var depth usize = 0;
+    var qualified = false;
+    var position = n.token_begin + 1;
+    for position < n.token_end {
+        let text = token(state, position).spelling;
+        if text == "[" {
+            depth += 1;
+        } else if text == "]" {
+            depth -= 1;
+        } else if text == "." && depth == 0 {
+            qualified = true;
+            position += 1;
+            if position < n.token_end {
+                let part = token(state, position);
+                if current.ok {
+                    current = resolve_member(inout state, id, current.id,
+                        part.spelling, part.span, require_type);
+                }
+            }
+        }
+        position += 1;
+    }
+    if require_type && current.ok && !qualified &&
+       !is_type_kind(state.symbols[current.id].kind) {
+        let symbol = state.symbols[current.id];
+        let previous = symbol.declaration;
+        switch previous {
+            case option.Option.Some(previous_span):
+                add_error_previous(inout state, "E_NAME_KIND",
+                    "name is not a type: " + first.spelling, first.span,
+                    true, previous_span);
+            case option.Option.None:
+                add_error_previous(inout state, "E_NAME_KIND",
+                    "name is not a type: " + first.spelling, first.span,
+                    false, first.span);
+        }
+    }
+    for child in n.children {
+        resolve_type(inout state, child, scope, public_type, require_type);
+    }
+}
+
+func resolve_generics(state inout Resolver, n model.AstNode, scope usize,
+                      exported bool) {
+    for child in n.children {
+        let c = node(state, child);
+        if kind_id(c.kind) != AST_GENERIC_PARAMETER { continue; }
+        let t = token(state, c.token_begin);
+        let definition = reference(state, child);
+        add(inout state, scope, t.spelling, model.SymbolKind.TypeParameter,
+            true, definition, true, t.span, false, false, 0);
+    }
+    for child in n.children {
+        let c = node(state, child);
+        if kind_id(c.kind) != AST_GENERIC_PARAMETER { continue; }
+        for constraint in c.children {
+            resolve_type(inout state, constraint, scope, exported, true);
+        }
+    }
+}
+
+func function_body(state inout Resolver, id usize, outer usize,
+                   exported bool) {
+    let n = node(state, id);
+    let previous_const_has = state.active_const_has;
+    let previous_const = state.active_const;
+    state.active_const_has = false;
+    let scope = new_scope(inout state, true, outer);
+    resolve_generics(inout state, n, scope, exported);
+    for child in n.children {
+        let c = node(state, child);
+        if kind_id(c.kind) == AST_PARAMETER {
+            for t in c.children {
+                resolve_type(inout state, t, scope, exported, true);
+            }
+        } else if is_type_node(c.kind) {
+            resolve_type(inout state, child, scope, exported, true);
+        }
+    }
+    for child in n.children {
+        let c = node(state, child);
+        if kind_id(c.kind) != AST_PARAMETER { continue; }
+        let t = token(state, c.token_begin);
+        let definition = reference(state, child);
+        add(inout state, scope, t.spelling, model.SymbolKind.Value, true,
+            definition, true, t.span, false, false, 0);
+    }
+    for child in n.children {
+        let c = node(state, child);
+        if kind_id(c.kind) != AST_BLOCK { continue; }
+        for statement in c.children {
+            visit(inout state, statement, scope);
+        }
+    }
+    state.active_const_has = previous_const_has;
+    state.active_const = previous_const;
+}
+
+func resolve_pattern(state inout Resolver, id usize, scope usize) {
+    let n = node(state, id);
+    let kind = kind_id(n.kind);
+    if kind == AST_BIND_PATTERN {
+        let t = token(state, n.token_begin);
+        let definition = reference(state, id);
+        add(inout state, scope, t.spelling, model.SymbolKind.Value, true,
+            definition, true, t.span, false, false, 0);
+        return;
+    }
+    if kind != AST_VARIANT_PATTERN { return; }
+    let t = token(state, n.token_begin);
+    // The last top-level dot names the variant; preceding dots qualify its
+    // enum. Parentheses inside type arguments are not payloads.
+    var dots = vec.empty[usize]();
+    var depth usize = 0;
+    for var position usize = n.token_begin; position < n.token_end;
+        position += 1 {
+        let text = token(state, position).spelling;
+        if text == "(" && depth == 0 { break; }
+        if text == "[" {
+            depth += 1;
+        } else if text == "]" {
+            depth -= 1;
+        } else if text == "." && depth == 0 {
+            vec.push(dots, position);
+        }
+    }
+    var current = resolve_name(inout state, id, scope, t.spelling, t.span,
+        false, false);
+    for var index usize = 0; index + 1 < vec.len(dots); index += 1 {
+        let part = token(state, dots[index] + 1);
+        if current.ok {
+            current = resolve_member(inout state, id, current.id,
+                part.spelling, part.span, index + 2 == vec.len(dots));
+        }
+    }
+    if current.ok && !is_type_kind(state.symbols[current.id].kind) {
+        add_error(inout state, "E_NAME_KIND",
+            "pattern qualifier is not a type", t.span);
+    }
+    vec.push(state.deferred_members, reference(state, id));
+    for child in n.children {
+        let c = node(state, child);
+        if is_type_node(c.kind) {
+            resolve_type(inout state, child, scope, false, true);
+        } else {
+            resolve_pattern(inout state, child, scope);
+        }
+    }
+}
+
+func visit(state inout Resolver, id usize, scope usize) {
+    let n = node(state, id);
+    let kind = kind_id(n.kind);
+    if is_type_node(n.kind) {
+        resolve_type(inout state, id, scope, false, true);
+        return;
+    }
+    if kind == AST_NAME || kind == AST_MEMBER ||
+       kind == AST_FUNCTION_LITERAL {
+        expression(inout state, id, scope);
+        return;
+    }
+    if kind == AST_BRACKET_ITEM {
+        for child in n.children {
+            let c = node(state, child);
+            if kind_id(c.kind) == AST_PARENTHESIZED_TYPE {
+                resolve_type(inout state, child, scope, false, false);
+            } else {
+                visit(inout state, child, scope);
+            }
+        }
+        return;
+    }
+    if kind == AST_BLOCK || kind == AST_FOR || kind == AST_CASE {
+        let child_scope = new_scope(inout state, true, scope);
+        for child in n.children {
+            let c = node(state, child);
+            let ck = kind_id(c.kind);
+            if ck == AST_BIND_PATTERN || ck == AST_VARIANT_PATTERN ||
+               ck == AST_LITERAL_PATTERN {
+                resolve_pattern(inout state, child, child_scope);
+            } else {
+                visit(inout state, child, child_scope);
+            }
+        }
+        return;
+    }
+    if kind == AST_FORIN {
+        visit(inout state, n.children[0], scope);
+        let child_scope = new_scope(inout state, true, scope);
+        let t = token(state, n.token_begin + 1);
+        let definition = reference(state, id);
+        add(inout state, child_scope, t.spelling, model.SymbolKind.Value,
+            true, definition, true, t.span, false, false, 0);
+        let body = node(state, n.children[vec.len(n.children) - 1]);
+        for child in body.children {
+            visit(inout state, child, child_scope);
+        }
+        return;
+    }
+    if kind == AST_CATCH {
+        resolve_type(inout state, n.children[0], scope, false, true);
+        let child_scope = new_scope(inout state, true, scope);
+        let t = token(state, n.token_begin + 1);
+        let definition = reference(state, id);
+        add(inout state, child_scope, t.spelling, model.SymbolKind.Value,
+            true, definition, true, t.span, false, false, 0);
+        let body = node(state, n.children[vec.len(n.children) - 1]);
+        for child in body.children {
+            visit(inout state, child, child_scope);
+        }
+        return;
+    }
+    if kind == AST_BINDING {
+        let position = start_token(state, n);
+        let t = token(state, position + 1);
+        for var index usize = 0; index + 1 < vec.len(n.children);
+            index += 1 {
+            visit(inout state, n.children[index], scope);
+        }
+        if vec.len(n.children) > 0 {
+            visit(inout state, n.children[vec.len(n.children) - 1], scope);
+        }
+        var symbol_kind = model.SymbolKind.Value;
+        if token(state, position).spelling == "const" {
+            symbol_kind = model.SymbolKind.Constant;
+        }
+        let definition = reference(state, id);
+        add(inout state, scope, t.spelling, symbol_kind, true,
+            definition, true, t.span, false, false, 0);
+        return;
+    }
+    for child in n.children {
+        visit(inout state, child, scope);
+    }
+}
+
+func expression(state inout Resolver, id usize, scope usize) Found {
+    let n = node(state, id);
+    let kind = kind_id(n.kind);
+    if kind == AST_NAME {
+        let t = token(state, n.token_begin);
+        return resolve_name(inout state, id, scope, t.spelling, n.span,
+            false, false);
+    }
+    if kind == AST_MEMBER {
+        let base = expression(inout state, n.children[0], scope);
+        let t = token(state, n.token_end - 1);
+        if base.ok {
+            return resolve_member(inout state, id, base.id, t.spelling,
+                t.span, false);
+        }
+        vec.push(state.deferred_members, reference(state, id));
+        return missing();
+    }
+    if kind == AST_PARENTHESIZED {
+        return expression(inout state, n.children[0], scope);
+    }
+    if kind == AST_FUNCTION_LITERAL {
+        // Anonymous identities never enter a lexical names table.
+        let identity = vec.len(state.symbols);
+        vec.push(state.symbols, model.Symbol(id: identity, name: "",
+            kind: model.SymbolKind.Function, module: state.module,
+            definition: option.Option[model.NodeRef].Some(
+                reference(state, id)),
+            declaration: option.Option[model.Span].Some(n.span),
+            exported: false, target: option.Option[usize].None,
+            foreign: option.Option[model.ForeignExportRef].None));
+        function_body(inout state, id, scope, false);
+        return missing();
+    }
+    for child in n.children {
+        visit(inout state, child, scope);
+    }
+    return missing();
+}
+
+func foreign_source(state Resolver, value model.ForeignExport) model.Span {
+    switch value.c_type {
+        case option.Option.Some(id):
+            return state.project.c_types[usize(id) - 1].source;
+        case option.Option.None: {}
+    }
+    switch value.c_callable {
+        case option.Option.Some(id):
+            return state.project.c_callables[usize(id) - 1].source;
+        case option.Option.None: {}
+    }
+    var binding_index usize = 0;
+    switch value.declaration {
+        case option.Option.Some(index): binding_index = index;
+        case option.Option.None: binding_index = value.candidates[0];
+    }
+    return state.project.foreign_bindings[binding_index].source;
+}
+
+func setup_prelude(state inout Resolver) {
+    let prelude = new_scope(inout state, false, 0);
+    state.prelude = prelude;
+    let no_node = model.NodeRef(module: 0, file: 0, node: 0);
+    let no_span = model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+    for name in system.builtin_types() {
+        add(inout state, prelude, name, model.SymbolKind.BuiltinType,
+            false, no_node, false, no_span, false, false, 0);
+    }
+    for name in ["assert", "panic", "share"] {
+        add(inout state, prelude, name, model.SymbolKind.BuiltinFunction,
+            false, no_node, false, no_span, false, false, 0);
+    }
+    for spec in system.operations() {
+        add(inout state, prelude, spec.name,
+            model.SymbolKind.BuiltinFunction, false, no_node, false,
+            no_span, false, false, 0);
+    }
+}
+
+func collect(state inout Resolver) {
+    let module_count = vec.len(state.project.modules);
+    state.packages = vec.empty[usize]();
+    for var module_index usize = 0; module_index < module_count;
+        module_index += 1 {
+        let prelude = state.prelude;
+        let package_scope = new_scope(inout state, true, prelude);
+        vec.push(state.packages, package_scope);
+    }
+    let no_node = model.NodeRef(module: 0, file: 0, node: 0);
+    for var module_index usize = 0; module_index < module_count;
+        module_index += 1 {
+        state.module = module_index;
+        let current = state.project.modules[module_index];
+        let package_scope = state.packages[module_index];
+        for var export_index usize = 0;
+            export_index < vec.len(current.foreign_exports);
+            export_index += 1 {
+            let export = current.foreign_exports[export_index];
+            let span = foreign_source(state, export);
+            var symbol_kind = model.SymbolKind.Value;
+            switch export.kind {
+                case model.ForeignExportKind.Type:
+                    symbol_kind = model.SymbolKind.Type;
+                case model.ForeignExportKind.Function:
+                    symbol_kind = model.SymbolKind.Function;
+                default: {}
+            }
+            let symbol = add(inout state, package_scope, export.name,
+                symbol_kind, false, no_node, true, span, true, false, 0);
+            state.symbols[symbol].foreign =
+                option.Option[model.ForeignExportRef].Some(
+                    model.ForeignExportRef(module: module_index,
+                        index: export_index));
+        }
+        for var file_index usize = 0; file_index < vec.len(current.files);
+            file_index += 1 {
+            state.file = file_index;
+            state.parse_index = current.files[file_index];
+            let root = parse_root(state);
+            let root_node = node(state, root);
+            for id in root_node.children {
+                let declaration_node = node(state, id);
+                let kind = kind_id(declaration_node.kind);
+                if kind == AST_PACKAGE || kind == AST_IMPORT ||
+                   kind == AST_IMPL {
+                    continue;
+                }
+                let position = start_token(state, declaration_node);
+                if kind == AST_BINDING &&
+                   token(state, position).spelling != "const" {
+                    add_error(inout state, "E_CAPABILITY_UNAVAILABLE",
+                        "top-level let/var is unavailable",
+                        declaration_node.span);
+                    continue;
+                }
+                var symbol_kind = model.SymbolKind.Value;
+                var known = true;
+                if kind == AST_FUNCTION {
+                    symbol_kind = model.SymbolKind.Function;
+                } else if kind == AST_STRUCT || kind == AST_ENUM {
+                    symbol_kind = model.SymbolKind.Type;
+                } else if kind == AST_TRAIT {
+                    symbol_kind = model.SymbolKind.Trait;
+                } else if kind == AST_BINDING {
+                    symbol_kind = model.SymbolKind.Constant;
+                } else {
+                    known = false;
+                }
+                if !known { continue; }
+                let t = token(state, name_token(state, declaration_node));
+                if t.spelling == "_" && kind != AST_BINDING {
+                    add_error(inout state, "E_NAME_KIND",
+                        "named top-level declaration cannot be _", t.span);
+                    continue;
+                }
+                let definition = reference(state, id);
+                let symbol = add(inout state, package_scope, t.spelling,
+                    symbol_kind, true, definition, true, t.span,
+                    position != declaration_node.token_begin, false, 0);
+                vec.push(state.declarations,
+                    Declaration(snapshot: source_id(state), node: id,
+                                symbol: symbol));
+            }
+        }
+    }
+}
+
+func find_declaration(state Resolver, snapshot u64, id usize) Found {
+    for declaration in state.declarations {
+        if declaration.snapshot == snapshot && declaration.node == id {
+            return present(declaration.symbol);
+        }
+    }
+    return missing();
+}
+
+func resolve_declaration(state inout Resolver, id usize, scope usize) {
+    let n = node(state, id);
+    let kind = kind_id(n.kind);
+    if kind == AST_PACKAGE || kind == AST_IMPORT { return; }
+    let exported = token(state, n.token_begin).spelling == "pub";
+    if kind == AST_FUNCTION {
+        function_body(inout state, id, scope, exported);
+        return;
+    }
+    if kind == AST_BINDING {
+        let found = find_declaration(state, source_id(state), id);
+        if !found.ok { return; }
+        state.active_const_has = true;
+        state.active_const = found.id;
+        for child in n.children {
+            let c = node(state, child);
+            if is_type_node(c.kind) {
+                resolve_type(inout state, child, scope, exported, true);
+            } else {
+                visit(inout state, child, scope);
+            }
+        }
+        state.active_const_has = false;
+        return;
+    }
+    let inner = new_scope(inout state, true, scope);
+    // A trait/impl's real Self is visible in its own generic parameter bounds,
+    // but nowhere else outside that declaration.
+    if kind == AST_TRAIT || kind == AST_IMPL {
+        let no_node = model.NodeRef(module: 0, file: 0, node: 0);
+        let no_span = model.Span(snapshot: 0, begin_byte: 0, end_byte: 0);
+        let self = add(inout state, inner, "Self",
+            model.SymbolKind.TypeParameter, false, no_node, false, no_span,
+            false, false, 0);
+        vec.push(state.self_parameters,
+            model.SelfParameter(source: reference(state, id), symbol: self));
+    }
+    resolve_generics(inout state, n, inner, exported);
+    let members = new_scope(inout state, false, 0);
+    for child in n.children {
+        let c = node(state, child);
+        let ck = kind_id(c.kind);
+        if ck == AST_GENERIC_PARAMETER { continue; }
+        if ck == AST_FUNCTION {
+            let t = token(state, name_token(state, c));
+            let member_exported = token(state, c.token_begin).spelling == "pub";
+            let definition = reference(state, child);
+            add(inout state, members, t.spelling,
+                model.SymbolKind.Function, true, definition,
+                true, t.span, member_exported, false, 0);
+            function_body(inout state, child, inner,
+                exported || member_exported);
+        } else if ck == AST_FIELD || ck == AST_VARIANT {
+            let t = token(state, start_token(state, c));
+            var field_kind = model.SymbolKind.Field;
+            if ck == AST_VARIANT {
+                field_kind = model.SymbolKind.Variant;
+            }
+            let definition = reference(state, child);
+            add(inout state, members, t.spelling, field_kind, true,
+                definition, true, t.span, false, false, 0);
+            if ck == AST_VARIANT {
+                let fields = new_scope(inout state, false, 0);
+                for field_id in c.children {
+                    let field = node(state, field_id);
+                    let field_token = token(state, start_token(state, field));
+                    let definition = reference(state, field_id);
+                    add(inout state, fields, field_token.spelling,
+                        model.SymbolKind.Field, true,
+                        definition, true, field_token.span,
+                        false, false, 0);
+                    for type_id in field.children {
+                        resolve_type(inout state, type_id, inner, exported,
+                            true);
+                    }
+                }
+            } else {
+                let field_exported = exported &&
+                    token(state, c.token_begin).spelling == "pub";
+                for type_id in c.children {
+                    resolve_type(inout state, type_id, inner, field_exported,
+                        true);
+                }
+            }
+        } else {
+            resolve_type(inout state, child, inner, false, true);
+        }
+    }
+}
+
+func check_constants(state inout Resolver) {
+    let symbol_count = vec.len(state.symbols);
+    var color = vec.make[usize](symbol_count, 0);
+    var stack = vec.empty[usize]();
+    var cursors = vec.empty[usize]();
+    for var key usize = 0; key < symbol_count; key += 1 {
+        if color[key] != 0 { continue; }
+        vec.push(stack, key);
+        vec.push(cursors, 0);
+        color[key] = 1;
+        for vec.len(stack) > 0 {
+            let id = stack[vec.len(stack) - 1];
+            var edges = vec.empty[ConstEdge]();
+            if id < vec.len(state.const_edges) {
+                edges = state.const_edges[id];
+            }
+            let cursor = cursors[vec.len(cursors) - 1];
+            if cursor == vec.len(edges) {
+                color[id] = 2;
+                let removed = vec.pop(stack);
+                let removed_cursor = vec.pop(cursors);
+                continue;
+            }
+            let edge = edges[cursor];
+            cursors[vec.len(cursors) - 1] = cursor + 1;
+            let next = edge.target;
+            if color[next] == 0 {
+                color[next] = 1;
+                vec.push(stack, next);
+                vec.push(cursors, 0);
+                continue;
+            }
+            if color[next] != 1 { continue; }
+            var begin usize = 0;
+            for var index usize = 0; index < vec.len(stack); index += 1 {
+                if stack[index] == next {
+                    begin = index;
+                    break;
+                }
+            }
+            var path = "";
+            for var index usize = begin; index < vec.len(stack);
+                index += 1 {
+                path += state.symbols[stack[index]].name + " -> ";
+            }
+            path += state.symbols[next].name;
+            add_error(inout state, "E_CONSTANT_CYCLE", "constant cycle: " + path,
+                edge.span);
+            for var index usize = begin; index < vec.len(stack);
+                index += 1 {
+                let symbol = state.symbols[stack[index]];
+                let declaration = symbol.declaration;
+                switch declaration {
+                    case option.Option.Some(span):
+                        vec.push(state.diagnostics[vec.len(state.diagnostics) - 1].related,
+                            model.Related(span: span, message: symbol.name));
+                    case option.Option.None: {}
+                }
+            }
+        }
+    }
+}
+
+pub func resolve_project(project model.Project) model.ResolveResult {
+    var state = Resolver(project: project,
+        symbols: vec.empty[model.Symbol](),
+        occurrences: vec.empty[model.Occurrence](),
+        deferred_members: vec.empty[model.NodeRef](),
+        self_parameters: vec.empty[model.SelfParameter](),
+        diagnostics: vec.empty[model.Diagnostic](),
+        scopes: vec.empty[Scope](), prelude: 0,
+        packages: vec.empty[usize](),
+        declarations: vec.empty[Declaration](),
+        const_edges: vec.empty[Vec[ConstEdge]](),
+        active_const_has: false, active_const: 0,
+        module: 0, file: 0, parse_index: 0);
+    setup_prelude(inout state);
+    collect(inout state);
+    let module_count = vec.len(state.project.modules);
+    for var module_index usize = 0; module_index < module_count;
+        module_index += 1 {
+        state.module = module_index;
+        let current = state.project.modules[module_index];
+        for var file_index usize = 0; file_index < vec.len(current.files);
+            file_index += 1 {
+            state.file = file_index;
+            state.parse_index = current.files[file_index];
+            let package_scope = state.packages[module_index];
+            let scope = new_scope(inout state, true, package_scope);
+            for import_value in current.imports {
+                if import_value.file == file_index &&
+                   import_value.alias != "_" {
+                    let definition = reference(state, import_value.node);
+                    let alias = import_value.alias;
+                    let import_span = import_value.span;
+                    let target = import_value.target;
+                    add(inout state, scope, alias,
+                        model.SymbolKind.Module, true,
+                        definition, true, import_span, false, true, target);
+                }
+            }
+            let root = parse_root(state);
+            let root_node = node(state, root);
+            for id in root_node.children {
+                resolve_declaration(inout state, id, scope);
+            }
+        }
+    }
+    check_constants(inout state);
+    var result = model.ResolveResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Source,
+        diagnostics: state.diagnostics, has_value: true,
+        value: model.ResolvedProject(project: state.project,
+            symbols: state.symbols, occurrences: state.occurrences,
+            deferred_members: state.deferred_members,
+            self_parameters: state.self_parameters));
+    if vec.len(state.diagnostics) > 0 {
+        result.state = model.PhaseState.Recovered;
+    }
+    return result;
+}

@@ -1,0 +1,81 @@
+package app;
+
+import "app/wzcc/paths" as paths;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct Checks {
+    pub passed usize;
+    pub failed usize;
+}
+
+func check(state inout Checks, name string, condition bool) throws os.Error {
+    if condition {
+        state.passed += 1;
+    } else {
+        state.failed += 1;
+        io.println("FAIL\t"+name);
+    }
+}
+
+func same(state inout Checks, name string, actual string, expected string) throws os.Error {
+    if actual == expected {
+        state.passed += 1;
+    } else {
+        state.failed += 1;
+        io.println("FAIL\t"+name+"\tactual=["+actual+"] expected=["+expected+"]");
+    }
+}
+
+func error_code(error os.Error) i32 {
+    switch error {
+        case os.Error.Interrupted(code,completed): return code;
+        case os.Error.WouldBlock(code,completed): return code;
+        case os.Error.System(code,completed): return code;
+        case os.Error.NoProgress(completed): return 5;
+    }
+}
+
+func main() i32 throws os.Error {
+    var state = Checks(passed: 0, failed: 0);
+
+    // Lexical join semantics. No component removal is allowed here.
+    same(inout state, "join empty/empty", paths.join("",""), "");
+    same(inout state, "join empty/name", paths.join("","b"), "b");
+    same(inout state, "join name/empty", paths.join("a",""), "a/");
+    same(inout state, "join slash/empty", paths.join("a/",""), "a/");
+    same(inout state, "join name/name", paths.join("a","b"), "a/b");
+    same(inout state, "join slash/name", paths.join("a/","b"), "a/b");
+    same(inout state, "join name/absolute", paths.join("a","/b"), "/b");
+    same(inout state, "join empty/root", paths.join("","/"), "/");
+    same(inout state, "join root/empty", paths.join("/",""), "/");
+    same(inout state, "join dot/dot", paths.join(".","."), "./.");
+    same(inout state, "join name/dotdot", paths.join("a","../b"), "a/../b");
+    same(inout state, "join interior slash/dot", paths.join("a//b","."), "a//b/.");
+    same(inout state, "join empty/double absolute", paths.join("","//b"), "//b");
+    same(inout state, "join root/double absolute", paths.join("/a","//b"), "//b");
+    same(inout state, "join name/trailing slash", paths.join("a","b/"), "a/b/");
+    same(inout state, "join empty/dot", paths.join("","."), ".");
+
+    // Remaining arguments are canonical cases supplied by the test harness.
+    let args = process.args();
+    var index usize = 1;
+    for index < vec.len(args) {
+        let value = args[index];
+        try {
+            let result = paths.canonical(value);
+            io.println("CANON\t"+value+"\tOK\t"+result);
+        } catch error os.Error {
+            io.println("CANON\t"+value+"\tERR\t"+
+                strconv.format_i64(i64(error_code(error))));
+        }
+        index += 1;
+    }
+    io.println("SUMMARY\t"+strconv.format_i64(i64(state.passed))+"\t"+
+        strconv.format_i64(i64(state.failed)));
+    if state.failed != 0 { return 1; }
+    return 0;
+}

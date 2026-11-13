@@ -1,0 +1,85 @@
+package model;
+import "std/option" as option;
+
+pub enum TypeKind {
+    Unit;
+    Bool;
+    SignedInt;
+    UnsignedInt;
+    Float;
+    String;
+    Isize;
+    Usize;
+    Function;
+    NominalStruct;
+    NominalEnum;
+    TypeParameter;
+    ForeignOpaque;
+    Error;
+    Vec;
+    ForeignCallable;
+    CForeignPointer;
+    CForeignBuffer;
+    CForeignRecord;
+    CForeignResource;
+    CForeignCallback;
+    CForeignOpaque;
+    ThreadHandle;
+    MutexHandle;
+    CondvarHandle;
+    AtomicI64Handle;
+    IpcHandle;
+    Slice;
+    Weak;
+    Task;
+    TraitObject;
+}
+pub enum ParamMode { Ordinary; Inout; Move; }
+pub struct ParameterType { pub mode ParamMode; pub type_id usize; }
+pub struct Type {
+    pub kind TypeKind; pub bits u32; pub declaration usize; pub binding usize;
+    pub parameters Vec[ParameterType]; pub result usize; pub throws_type option.Option[usize];
+    pub type_args Vec[usize]; pub c_type u32;
+}
+pub enum Backend { Native; Python; }
+pub struct CheckConfig { pub backend Backend; pub word_bits u32; }
+pub struct Substitution { pub symbol usize; pub type_id usize; }
+pub func empty_type(kind TypeKind) Type {
+    return Type(kind:kind, bits:0, declaration:0, binding:0, parameters:[], result:0,
+        throws_type:option.Option[usize].None, type_args:[], c_type:0);
+}
+pub func type_kind_id(kind TypeKind) u32 {
+    switch kind {
+        case TypeKind.Unit: return 0;
+        case TypeKind.Bool: return 1;
+        case TypeKind.SignedInt: return 2;
+        case TypeKind.UnsignedInt: return 3;
+        case TypeKind.Float: return 4;
+        case TypeKind.String: return 5;
+        case TypeKind.Isize: return 6;
+        case TypeKind.Usize: return 7;
+        case TypeKind.Function: return 8;
+        case TypeKind.NominalStruct: return 9;
+        case TypeKind.NominalEnum: return 10;
+        case TypeKind.TypeParameter: return 11;
+        case TypeKind.ForeignOpaque: return 12;
+        case TypeKind.Error: return 13;
+        case TypeKind.Vec: return 14;
+        case TypeKind.ForeignCallable: return 15;
+        case TypeKind.CForeignPointer: return 16;
+        case TypeKind.CForeignBuffer: return 17;
+        case TypeKind.CForeignRecord: return 18;
+        case TypeKind.CForeignResource: return 19;
+        case TypeKind.CForeignCallback: return 20;
+        case TypeKind.CForeignOpaque: return 21;
+        case TypeKind.ThreadHandle: return 22;
+        case TypeKind.MutexHandle: return 23;
+        case TypeKind.CondvarHandle: return 24;
+        case TypeKind.AtomicI64Handle: return 25;
+        case TypeKind.IpcHandle: return 26;
+        case TypeKind.Slice: return 27;
+        case TypeKind.Weak: return 28;
+        case TypeKind.Task: return 29;
+        case TypeKind.TraitObject: return 30;
+    }
+}

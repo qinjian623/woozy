@@ -1,0 +1,185 @@
+package model;
+import "std/option" as option;
+
+pub struct BindingParameter {
+    pub name string; pub type_name string; pub kind string; pub optional bool;
+    pub mode string; pub escapes string; pub source Span;
+}
+pub struct BindingType {
+    pub kind string; pub copy string; pub members Vec[usize];
+    pub properties Vec[usize]; pub indexers Vec[usize]; pub slices Vec[usize];
+}
+pub struct BindingValue { pub type_name string; }
+pub struct BindingProperty {
+    pub owner_type string; pub name string; pub type_name string;
+    pub getter Vec[string]; pub setter Vec[string]; pub error_type string;
+}
+pub struct BindingIndexer {
+    pub owner_type string; pub index_type string; pub result_type string;
+    pub error_type string; pub readable bool; pub writable bool;
+}
+pub struct BindingSlice {
+    pub owner_type string; pub result_type string; pub error_type string;
+    pub start_type option.Option[string]; pub end_type option.Option[string];
+    pub readable bool; pub writable bool;
+}
+pub struct BindingCallable {
+    pub call_kind string; pub owner_type option.Option[string];
+    pub parameters Vec[BindingParameter]; pub return_type string;
+    pub error_type option.Option[string]; pub return_ownership string;
+    pub storage string; pub receiver_escapes string; pub effects Vec[string];
+}
+pub enum ForeignDetail {
+    Type(value BindingType); Value(value BindingValue); Callable(value BindingCallable);
+    Property(value BindingProperty); Indexer(value BindingIndexer); Slice(value BindingSlice);
+}
+pub struct ForeignDeclaration {
+    pub id usize; pub bundle usize; pub source Span; pub json_pointer string;
+    pub identity string; pub module string; pub name string;
+    pub host_attribute Vec[string]; pub detail ForeignDetail; pub stable_identity string;
+}
+pub struct BindingModule {
+    pub logical_path string; pub host_module string; pub provider string; pub source Span;
+}
+pub struct PackageRequirement { pub package_name string; pub version_policy string; pub source Span; }
+pub struct BindingModuleRef { pub bundle usize; pub index usize; }
+pub struct ForeignExportRef { pub module usize; pub index usize; }
+pub enum ForeignExportKind { Type; Value; Function; }
+pub struct BindingBundle {
+    pub path string; pub json string; pub sha256 string; pub source Span;
+    pub schema_version i32; pub contract string; pub review_status string;
+    pub allowed_backends Vec[string]; pub package_requirements Vec[PackageRequirement];
+    pub modules Vec[BindingModule]; pub declarations Vec[usize]; pub conformance_required Vec[string];
+}
+
+pub enum CTypeKind { Scalar; Pointer; Buffer; Named; }
+pub struct CTypeRef {
+    pub kind CTypeKind; pub scalar string; pub writable bool;
+    pub args Vec[CTypeRef]; pub named u32;
+}
+pub enum CDeclKind { Record; Resource; Callback; Opaque; }
+pub struct CFieldDecl { pub name string; pub type_ref CTypeRef; pub offset u64; pub source Span; }
+pub struct CParameterDecl { pub name string; pub type_ref CTypeRef; pub source Span; }
+pub struct CRegistrationDecl { pub callback_type u32; pub unregister_symbol string; }
+pub struct CRegistrationCall {
+    pub callback_parameter usize; pub userdata_parameter usize; pub callback_userdata_parameter usize;
+}
+pub struct CTypeDecl {
+    pub id u32; pub bundle usize; pub source Span; pub identity string;
+    pub module string; pub name string; pub c_name string; pub kind CDeclKind;
+    pub fields Vec[CFieldDecl]; pub size u64; pub align u64;
+    pub release_symbol string; pub retain_symbol string; pub result CTypeRef;
+    pub parameters Vec[CParameterDecl]; pub registration option.Option[CRegistrationDecl];
+}
+pub struct CReturnDecl {
+    pub type_ref CTypeRef; pub ownership string; pub release_symbol string;
+    pub retain_symbol string; pub source Span;
+}
+pub struct CCallableDecl {
+    pub id u32; pub bundle usize; pub source Span; pub identity string;
+    pub module string; pub name string; pub symbol string;
+    pub parameters Vec[CParameterDecl]; pub result CReturnDecl;
+    pub stable_identity string; pub registers option.Option[CRegistrationCall];
+}
+pub struct CModule { pub logical_path string; pub provider string; pub library string; pub source Span; }
+pub struct CBindingBundle {
+    pub path string; pub json string; pub sha256 string; pub source Span;
+    pub schema_version i32; pub contract string; pub abi string; pub target string;
+    pub requires_hosted bool; pub modules Vec[CModule]; pub types Vec[u32]; pub callables Vec[u32];
+}
+pub struct ForeignExport {
+    pub name string; pub identity string; pub kind ForeignExportKind; pub bundle usize;
+    pub declaration option.Option[usize]; pub candidates Vec[usize];
+    pub c_type option.Option[u32]; pub c_callable option.Option[u32]; pub c_type_ref option.Option[CTypeRef];
+}
+pub struct Import { pub file usize; pub node usize; pub target usize; pub alias string; pub span Span; }
+pub struct Module {
+    pub id usize; pub logical_path string; pub identity string; pub package_name string;
+    pub files Vec[usize]; pub imports Vec[Import]; pub foreign_exports Vec[ForeignExport];
+    pub binding option.Option[BindingModuleRef]; pub c_binding option.Option[usize];
+}
+pub struct ProjectOptions {
+    pub manifest string; pub std_source_root option.Option[string]; pub std_binding_bundle option.Option[string];
+}
+pub struct Project {
+    pub root string; pub package_name string; pub backend string; pub word_bits u32; pub hosted bool;
+    pub entry usize; pub files Vec[ParseResult]; pub modules Vec[Module];
+    pub bindings Vec[BindingBundle]; pub foreign_bindings Vec[ForeignDeclaration];
+    pub c_bindings Vec[CBindingBundle]; pub c_types Vec[CTypeDecl]; pub c_callables Vec[CCallableDecl];
+    pub c_libraries Vec[string]; pub c_library_dirs Vec[string];
+}
+pub struct ProjectResult {
+    pub state PhaseState; pub failure FailureKind; pub diagnostics Vec[Diagnostic];
+    pub has_value bool; pub value Project;
+}
+pub struct Dependency {
+    pub name string; pub kind string; pub source string; pub binding string; pub host_package string;
+    pub libraries Vec[string]; pub library_dirs Vec[string];
+}
+pub struct ManifestConfig {
+    pub manifest string; pub root string; pub package_name string; pub entry string;
+    pub backend string; pub word_bits u32; pub hosted bool; pub dependencies Vec[Dependency]; pub source Span;
+}
+pub struct ManifestResult {
+    pub state PhaseState; pub failure FailureKind; pub diagnostics Vec[Diagnostic];
+    pub has_value bool; pub value ManifestConfig;
+}
+pub struct PathIndex { pub path string; pub index usize; }
+pub struct IdentitySpan { pub identity string; pub span Span; }
+pub struct BindingStore {
+    pub hosted bool;
+    pub bindings Vec[BindingBundle]; pub foreign_bindings Vec[ForeignDeclaration];
+    pub c_bindings Vec[CBindingBundle]; pub c_types Vec[CTypeDecl]; pub c_callables Vec[CCallableDecl];
+    pub python_paths Vec[PathIndex]; pub c_paths Vec[PathIndex];
+    pub python_identities Vec[IdentitySpan]; pub c_type_identities Vec[IdentitySpan];
+    pub c_callable_identities Vec[IdentitySpan];
+}
+pub struct BundleResult {
+    pub state PhaseState; pub failure FailureKind; pub diagnostics Vec[Diagnostic];
+    pub has_value bool; pub value usize;
+}
+
+pub enum SymbolKind {
+    Value; Constant; Function; Type; Trait; TypeParameter; Module;
+    Field; Variant; BuiltinType; BuiltinFunction;
+}
+pub struct NodeRef { pub module usize; pub file usize; pub node usize; }
+pub struct Symbol {
+    pub id usize; pub name string; pub kind SymbolKind; pub module usize;
+    pub definition option.Option[NodeRef]; pub declaration option.Option[Span];
+    pub exported bool; pub target option.Option[usize]; pub foreign option.Option[ForeignExportRef];
+}
+pub struct Occurrence { pub source NodeRef; pub symbol usize; pub span Span; }
+pub struct SelfParameter { pub source NodeRef; pub symbol usize; }
+pub struct ResolvedProject {
+    pub project Project; pub symbols Vec[Symbol]; pub occurrences Vec[Occurrence];
+    pub deferred_members Vec[NodeRef]; pub self_parameters Vec[SelfParameter];
+}
+pub struct ResolveResult {
+    pub state PhaseState; pub failure FailureKind; pub diagnostics Vec[Diagnostic];
+    pub has_value bool; pub value ResolvedProject;
+}
+
+pub func empty_project() Project {
+    return Project(root: "", package_name: "", backend: "native", word_bits: 64, hosted: false,
+        entry: 0, files: [], modules: [], bindings: [], foreign_bindings: [], c_bindings: [],
+        c_types: [], c_callables: [], c_libraries: [], c_library_dirs: []);
+}
+pub func empty_manifest() ManifestConfig {
+    return ManifestConfig(manifest: "", root: "", package_name: "", entry: "", backend: "native",
+        word_bits: 64, hosted: false, dependencies: [], source: Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+}
+pub func binding_store() BindingStore {
+    return BindingStore(hosted: false, bindings: [], foreign_bindings: [], c_bindings: [], c_types: [], c_callables: [],
+        python_paths: [], c_paths: [], python_identities: [], c_type_identities: [], c_callable_identities: []);
+}
+pub func symbol_kind_id(kind SymbolKind) u32 {
+    switch kind {
+        case SymbolKind.Value: return 0; case SymbolKind.Constant: return 1;
+        case SymbolKind.Function: return 2; case SymbolKind.Type: return 3;
+        case SymbolKind.Trait: return 4; case SymbolKind.TypeParameter: return 5;
+        case SymbolKind.Module: return 6; case SymbolKind.Field: return 7;
+        case SymbolKind.Variant: return 8; case SymbolKind.BuiltinType: return 9;
+        case SymbolKind.BuiltinFunction: return 10;
+    }
+}

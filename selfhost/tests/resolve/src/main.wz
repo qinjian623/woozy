@@ -1,0 +1,853 @@
+package app;
+
+// Resolver tests.  Every Project is built from text through the real accepted
+// source, lexer and parser packages; there is no stub resolver and no call
+// into the old C++ frontend from this program.
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/source" as source;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const AST_PACKAGE u32 = 1;
+const AST_IMPORT u32 = 2;
+const AST_FUNCTION u32 = 4;
+const AST_STRUCT u32 = 5;
+const AST_ENUM u32 = 6;
+const AST_TRAIT u32 = 7;
+const AST_IMPL u32 = 8;
+const AST_FUNCTION_LITERAL u32 = 45;
+
+struct Test {
+    checks usize;
+    failures usize;
+    failed Vec[string];
+}
+
+struct Builder {
+    files Vec[model.ParseResult];
+    sources Vec[model.Source];
+    next_snapshot u64;
+}
+
+func check(t inout Test, ok bool, label string) {
+    t.checks += 1;
+    if !ok {
+        t.failures += 1;
+        vec.push(t.failed, label);
+    }
+}
+
+func is_complete(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func is_recovered(state model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Recovered: return true;
+        default: return false;
+    }
+}
+
+func is_type_symbol_kind(kind model.SymbolKind) bool {
+    switch kind {
+        case model.SymbolKind.Type: return true;
+        default: return false;
+    }
+}
+
+func is_function_kind(kind model.SymbolKind) bool {
+    switch kind {
+        case model.SymbolKind.Function: return true;
+        default: return false;
+    }
+}
+
+func is_source_failure(kind model.FailureKind) bool {
+    switch kind {
+        case model.FailureKind.Source: return true;
+        default: return false;
+    }
+}
+
+func has_error(result model.ResolveResult, code string) bool {
+    for diagnostic in result.diagnostics {
+        if diagnostic.code == code { return true; }
+    }
+    return false;
+}
+
+func error_count(result model.ResolveResult, code string) usize {
+    var count usize = 0;
+    for diagnostic in result.diagnostics {
+        if diagnostic.code == code { count += 1; }
+    }
+    return count;
+}
+
+func option_span_has(value option.Option[model.Span]) bool {
+    switch value {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func option_span_get(value option.Option[model.Span]) model.Span {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.Span(snapshot: 0, begin_byte: 0,
+                                                     end_byte: 0);
+    }
+}
+
+func option_node_has(value option.Option[model.NodeRef]) bool {
+    switch value {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func option_node_get(value option.Option[model.NodeRef]) model.NodeRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.NodeRef(module: 0, file: 0,
+                                                       node: 0);
+    }
+}
+
+func option_foreign_has(value option.Option[model.ForeignExportRef]) bool {
+    switch value {
+        case option.Option.Some(item): return true;
+        case option.Option.None: return false;
+    }
+}
+
+func option_foreign_get(value option.Option[model.ForeignExportRef]) model.ForeignExportRef {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return model.ForeignExportRef(module: 0, index: 0);
+    }
+}
+
+func add_source(state inout Builder, path string, contents string) usize {
+    let snapshot_id = state.next_snapshot;
+    state.next_snapshot += 1;
+    let input = source.snapshot(snapshot_id, snapshot_id, snapshot_id, path,
+        text.bytes(contents));
+    let lexed = lexer.lex(input);
+    let parsed = parser.parse(lexed);
+    let index = vec.len(state.files);
+    vec.push(state.files, parsed);
+    vec.push(state.sources, input);
+    return index;
+}
+
+func build(modules Vec[Vec[string]]) model.Project {
+    var state = Builder(files: vec.empty[model.ParseResult](),
+        sources: vec.empty[model.Source](), next_snapshot: 1);
+    var result = model.empty_project();
+    result.entry = 0;
+    for var module_index usize = 0; module_index < vec.len(modules);
+        module_index += 1 {
+        let logical = "module" + strconv.format_u64(u64(module_index));
+        var module = model.Module(id: module_index, logical_path: logical,
+            identity: logical, package_name: "p",
+            files: vec.empty[usize](), imports: vec.empty[model.Import](),
+            foreign_exports: vec.empty[model.ForeignExport](),
+            binding: option.Option[model.BindingModuleRef].None,
+            c_binding: option.Option[usize].None);
+        for var file_index usize = 0;
+            file_index < vec.len(modules[module_index]); file_index += 1 {
+            let path = logical + "/" + strconv.format_u64(u64(file_index)) +
+                ".wz";
+            let index = add_source(inout state, path,
+                modules[module_index][file_index]);
+            vec.push(module.files, index);
+        }
+        vec.push(result.modules, module);
+    }
+    result.files = state.files;
+    return result;
+}
+
+func source_of(project model.Project, module_index usize,
+               file_index usize) model.Source {
+    let parse_index = project.modules[module_index].files[file_index];
+    return project.files[parse_index].lexed.source;
+}
+
+func expect_ok(t inout Test, label string, modules Vec[Vec[string]]) model.ResolveResult {
+    let project = build(modules);
+    let result = resolve.resolve_project(project);
+    check(inout t, result.has_value, label + ": has value");
+    check(inout t, is_complete(result.state),
+        label + ": complete");
+    check(inout t, vec.len(result.diagnostics) == 0, label + ": no diagnostics");
+    check(inout t, vec.len(result.value.project.modules) ==
+        vec.len(project.modules), label + ": project retained");
+    return result;
+}
+
+func expect_error(t inout Test, label string, modules Vec[Vec[string]],
+                  code string) model.ResolveResult {
+    let project = build(modules);
+    let result = resolve.resolve_project(project);
+    check(inout t, result.has_value, label + ": has value");
+    check(inout t, is_recovered(result.state),
+        label + ": recovered");
+    check(inout t, has_error(result, code), label + ": " + code);
+    return result;
+}
+
+func one(source_text string) Vec[Vec[string]] {
+    return [[source_text]];
+}
+
+func top_declaration(file model.ParseResult, kind u32, name string) usize {
+    let root = file.nodes[file.root];
+    for id in root.children {
+        let n = file.nodes[id];
+        if model.ast_kind_id(n.kind) != kind { continue; }
+        var position = n.token_begin;
+        if file.lexed.tokens[position].spelling == "pub" { position += 1; }
+        if name == "" || file.lexed.tokens[position + 1].spelling == name {
+            return id;
+        }
+    }
+    return 0;
+}
+
+func self_of(resolved model.ResolvedProject, owner usize) usize {
+    for value in resolved.self_parameters {
+        if value.source.module == 0 && value.source.file == 0 &&
+           value.source.node == owner {
+            return value.symbol;
+        }
+    }
+    return 0;
+}
+
+func self_occurrences(t inout Test, resolved model.ResolvedProject,
+                      file model.ParseResult, owner usize, expected usize,
+                      label string) {
+    let self = self_of(resolved, owner);
+    let declaration = file.nodes[owner];
+    var found usize = 0;
+    for occurrence in resolved.occurrences {
+        if occurrence.span.snapshot != file.lexed.source.id ||
+           occurrence.span.begin_byte < declaration.span.begin_byte ||
+           occurrence.span.end_byte > declaration.span.end_byte {
+            continue;
+        }
+        if resolved.symbols[occurrence.symbol].name != "Self" { continue; }
+        if occurrence.symbol != self {
+            check(inout t, false, label + ": Self bound elsewhere");
+        }
+        found += 1;
+    }
+    check(inout t, found == expected, label + ": Self occurrence count");
+}
+
+func test_self_declarations(t inout Test) {
+    let project = build(one("package p; trait Rel[A] {} " +
+        "trait Edit[A Rel[Self]] { func f(x Self); } " +
+        "trait View[B Rel[Self]] {} struct Host {} " +
+        "impl[P Rel[Self]] Rel[P] for Host { func g(x Self) {} }"));
+    let result = resolve.resolve_project(project);
+    check(inout t, result.has_value && is_complete(result.state),
+        "self: valid header bounds");
+    let file = project.files[project.modules[0].files[0]];
+    let edit = top_declaration(file, AST_TRAIT, "Edit");
+    let view = top_declaration(file, AST_TRAIT, "View");
+    let implementation = top_declaration(file, AST_IMPL, "");
+    let edit_self = self_of(result.value, edit);
+    let view_self = self_of(result.value, view);
+    let impl_self = self_of(result.value, implementation);
+    check(inout t, edit_self != view_self && edit_self != impl_self &&
+        view_self != impl_self, "self: independent declarations");
+    self_occurrences(inout t, result.value, file, edit, 2, "self edit");
+    self_occurrences(inout t, result.value, file, view, 1, "self view");
+    self_occurrences(inout t, result.value, file, implementation, 2,
+        "self impl");
+}
+
+func test_existing_examples(t inout Test) {
+    expect_ok(inout t, "nested scope",
+        one("package p; func f(x i32) i32 { { let x = 2; } return x; }"));
+    expect_ok(inout t, "outer initializer",
+        one("package p; func f() { let x = 1; { let x = x + 1; } }"));
+    expect_error(inout t, "self initializer",
+        one("package p; func f() { let x = x + 1; }"), "E_NAME_NOT_FOUND");
+    expect_error(inout t, "parameter duplicate",
+        one("package p; func f(x i32) { let x = 2; }"), "E_NAME_DUPLICATE");
+    expect_error(inout t, "missing name",
+        one("package p; func f() { let x = missing; }"), "E_NAME_NOT_FOUND");
+    expect_error(inout t, "value used as type",
+        one("package p; struct T {} func f() { let T = 2; let x T = 3; }"),
+        "E_NAME_KIND");
+    expect_error(inout t, "for binding scope",
+        one("package p; func f() { for let i = 0; i < 2; i += 1 {} let x = i; }"),
+        "E_NAME_NOT_FOUND");
+    expect_error(inout t, "for-in scope",
+        one("package p; func f() { for x in [1, 2] { let y = x; } let z = x; }"),
+        "E_NAME_NOT_FOUND");
+    expect_error(inout t, "catch scope",
+        one("package p; struct E {} func f() { try {} catch e E { let x = e; } let x = e; }"),
+        "E_NAME_NOT_FOUND");
+    expect_error(inout t, "case scope",
+        one("package p; func f() { switch 1 { case x: let y = x; default: let z = x; } }"),
+        "E_NAME_NOT_FOUND");
+    expect_error(inout t, "underscore read",
+        one("package p; func f() { let _ = 1; let x = _; }"),
+        "E_NAME_NOT_FOUND");
+    expect_ok(inout t, "underscore declarations",
+        one("package p; const _ = 1; func f() { const _ = 2; }"));
+    expect_error(inout t, "underscore constant initializer",
+        one("package p; const _ = missing;"), "E_NAME_NOT_FOUND");
+    expect_error(inout t, "Self outside declaration",
+        one("package p; func f() { let x Self = 0; }"), "E_NAME_NOT_FOUND");
+    expect_error(inout t, "Self parameter outside declaration",
+        one("package p; func f(x Self) {}"), "E_NAME_NOT_FOUND");
+    expect_error(inout t, "Self field outside declaration",
+        one("package p; struct T { x Self; }"), "E_NAME_NOT_FOUND");
+    expect_error(inout t, "Self variant outside declaration",
+        one("package p; enum E { V(x Self); }"), "E_NAME_NOT_FOUND");
+    expect_error(inout t, "Self constant outside declaration",
+        one("package p; const X Self = 1;"), "E_NAME_NOT_FOUND");
+    expect_ok(inout t, "trait Self", one("package p; trait A { func f(x Self); }"));
+    expect_ok(inout t, "impl Self",
+        one("package p; struct T {} impl T { func f(x Self) {} }"));
+    expect_error(inout t, "generic duplicate",
+        one("package p; trait A[T, T] {}"), "E_NAME_DUPLICATE");
+    expect_error(inout t, "generic Self duplicate",
+        one("package p; trait A[Self] {}"), "E_NAME_DUPLICATE");
+    expect_error(inout t, "private parameter type",
+        one("package p; struct T {} pub func f(x T) {}"),
+        "E_PRIVATE_TYPE_LEAK");
+    expect_error(inout t, "private variant type",
+        one("package p; struct Secret {} pub enum Reply { Value(value Secret); }"),
+        "E_PRIVATE_TYPE_LEAK");
+    expect_ok(inout t, "neutral bracket",
+        one("package p; func f() { let a = [1]; let i = 0; let x = a[(i)]; }"));
+    expect_error(inout t, "constant two cycle",
+        one("package p; const A = B; const B = A;"), "E_CONSTANT_CYCLE");
+    expect_error(inout t, "constant self cycle",
+        one("package p; const A = A;"), "E_CONSTANT_CYCLE");
+    expect_error(inout t, "private generic constraint",
+        one("package p; trait Hidden {} pub func f[T Hidden](x T) {}"),
+        "E_PRIVATE_TYPE_LEAK");
+    expect_ok(inout t, "constant function body",
+        one("package p; const f = func() { f(); };"));
+    expect_error(inout t, "top-level var",
+        one("package p; var x = 1;"), "E_CAPABILITY_UNAVAILABLE");
+    expect_ok(inout t, "capture resolved as value",
+        one("package p; func f() { let x = 1; let g = func() i32 { return x; }; }"));
+    expect_ok(inout t, "literal parameter",
+        one("package p; func f() { let g = func(x i32) i32 { return x; }; }"));
+    expect_ok(inout t, "cross-file recursion",
+        [["package p; func a() { b(); }",
+          "package p; func b() { a(); }"]]);
+}
+
+func test_imports(t inout Test) {
+    var project = build([[
+        "package p; import \"dep\" as d; func f() { d.hidden(); }"],
+        ["package q; func hidden() {} pub func visible() {}"]]);
+    let first = project.files[project.modules[0].files[0]];
+    for id in first.nodes[first.root].children {
+        if model.ast_kind_id(first.nodes[id].kind) == AST_IMPORT {
+            vec.push(project.modules[0].imports,
+                model.Import(file: 0, node: id, target: 1, alias: "d",
+                    span: first.nodes[id].span));
+        }
+    }
+    var result = resolve.resolve_project(project);
+    check(inout t, has_error(result, "E_PRIVATE_ACCESS"),
+        "import: private access");
+
+    project = build([[
+        "package p; import \"dep\" as d; func f() { (d).hidden(); }"],
+        ["package q; func hidden() {}"]]);
+    let parenthesized = project.files[project.modules[0].files[0]];
+    for id in parenthesized.nodes[parenthesized.root].children {
+        if model.ast_kind_id(parenthesized.nodes[id].kind) == AST_IMPORT {
+            vec.push(project.modules[0].imports,
+                model.Import(file: 0, node: id, target: 1, alias: "d",
+                    span: parenthesized.nodes[id].span));
+        }
+    }
+    check(inout t, has_error(resolve.resolve_project(project),
+        "E_PRIVATE_ACCESS"), "import: parentheses keep visibility");
+
+    project = build([[
+        "package p; import \"dep\" as d; func f() { d.visible(); }",
+        "package p; func g() { d.visible(); }"],
+        ["package q; pub func visible() {}"]]);
+    let second = project.files[project.modules[0].files[0]];
+    for id in second.nodes[second.root].children {
+        if model.ast_kind_id(second.nodes[id].kind) == AST_IMPORT {
+            vec.push(project.modules[0].imports,
+                model.Import(file: 0, node: id, target: 1, alias: "d",
+                    span: second.nodes[id].span));
+        }
+    }
+    result = resolve.resolve_project(project);
+    check(inout t, vec.len(result.diagnostics) == 1 &&
+        has_error(result, "E_NAME_NOT_FOUND"), "import: file alias leak");
+    check(inout t, vec.len(result.diagnostics) == 1 &&
+        result.diagnostics[0].has_primary &&
+        result.diagnostics[0].primary.snapshot ==
+            source_of(project, 0, 1).id, "import: alias diagnostic file");
+}
+
+func test_literals(t inout Test) {
+    let project = build(one("package p; func f() { let a = func(x i32) i32 { return x; }; " +
+        "let b = func() { let c = func(y i32) i32 { return y; }; }; }"));
+    let result = resolve.resolve_project(project);
+    check(inout t, result.has_value && is_complete(result.state),
+        "literal: valid");
+    var literals usize = 0;
+    for symbol in result.value.symbols {
+        if !is_function_kind(symbol.kind) || symbol.name != "" {
+            continue;
+        }
+        literals += 1;
+        check(inout t, symbol.id < vec.len(result.value.symbols),
+            "literal: identity in range");
+        check(inout t, option_node_has(symbol.definition) &&
+            option_span_has(symbol.declaration), "literal: source");
+        let reference = option_node_get(symbol.definition);
+        let file = project.files[project.modules[reference.module].files[
+            reference.file]];
+        let literal = file.nodes[reference.node];
+        check(inout t, model.ast_kind_id(literal.kind) == AST_FUNCTION_LITERAL &&
+            symbol.module == reference.module && !symbol.exported,
+            "literal: identity");
+        let declaration = option_span_get(symbol.declaration);
+        check(inout t, declaration.begin_byte == literal.span.begin_byte &&
+            declaration.end_byte == literal.span.end_byte &&
+            declaration.snapshot == literal.span.snapshot,
+            "literal: declaration span");
+        for occurrence in result.value.occurrences {
+            if occurrence.symbol == symbol.id {
+                check(inout t, false, "literal: not a name reference");
+            }
+        }
+    }
+    check(inout t, literals == 3, "literal: count");
+    expect_ok(inout t, "literal: nested capture",
+        one("package p; func f() { let a = func(x i32) { let b = func() i32 { return x; }; }; }"));
+}
+
+func test_long_constant_chain(t inout Test) {
+    var chain = "package p; ";
+    for var index usize = 0; index < 3000; index += 1 {
+        chain += "const C" + strconv.format_u64(u64(index)) + " = C" +
+            strconv.format_u64(u64(index + 1)) + "; ";
+    }
+    chain += "const C3000 = 1;";
+    expect_ok(inout t, "constant chain", one(chain));
+}
+
+func test_empty_project(t inout Test) {
+    let result = resolve.resolve_project(model.empty_project());
+    check(inout t, result.has_value, "empty: has value");
+    check(inout t, is_complete(result.state),
+        "empty: complete");
+    check(inout t, vec.len(result.diagnostics) == 0, "empty: no diagnostics");
+    check(inout t, is_source_failure(result.failure),
+        "empty: source failure kind");
+    check(inout t, vec.len(result.value.symbols) > 0, "empty: prelude symbols");
+    check(inout t, result.value.symbols[0].name == "Unit",
+        "empty: builtin order");
+}
+
+func test_prelude_order(t inout Test) {
+    let result = resolve.resolve_project(model.empty_project());
+    let types = ["Unit", "bool", "i8", "i16", "i32", "i64", "u8", "u16",
+        "u32", "u64", "isize", "usize", "f32", "f64", "string", "Vec",
+        "Slice", "Weak", "Task", "Result", "Ptr", "PtrMut", "Buffer",
+        "BufferMut", "__woozy_Thread", "__woozy_Mutex", "__woozy_Condvar",
+        "__woozy_AtomicI64", "__woozy_IpcHandle"];
+    for var index usize = 0; index < vec.len(types); index += 1 {
+        check(inout t, result.value.symbols[index].name == types[index],
+            "prelude: builtin type order");
+    }
+    let base = vec.len(types);
+    check(inout t, result.value.symbols[base].name == "assert",
+        "prelude: assert after builtin types");
+    check(inout t, result.value.symbols[base + 1].name == "panic",
+        "prelude: panic after assert");
+    check(inout t, result.value.symbols[base + 2].name == "share",
+        "prelude: share after panic");
+    check(inout t, result.value.symbols[base + 3].name == "__woozy_os_read",
+        "prelude: operations after builtins");
+}
+
+func test_foreign_exports(t inout Test) {
+    var project = build([[
+        "package p;"]]);
+    let file = project.files[project.modules[0].files[0]];
+    let span = file.nodes[file.root].span;
+    vec.push(project.foreign_bindings,
+        model.ForeignDeclaration(id: 0, bundle: 0, source: span,
+            json_pointer: "", identity: "HostType", module: "host",
+            name: "HostType", host_attribute: [],
+            detail: model.ForeignDetail.Value(
+                value: model.BindingValue(type_name: "i32")),
+            stable_identity: "host:type:HostType"));
+    vec.push(project.foreign_bindings,
+        model.ForeignDeclaration(id: 1, bundle: 0, source: span,
+            json_pointer: "", identity: "host_call", module: "host",
+            name: "host_call", host_attribute: [],
+            detail: model.ForeignDetail.Value(
+                value: model.BindingValue(type_name: "i32")),
+            stable_identity: "host:value:host_call"));
+    vec.push(project.modules[0].foreign_exports,
+        model.ForeignExport(name: "HostType", identity: "HostType",
+            kind: model.ForeignExportKind.Type, bundle: 0,
+            declaration: option.Option[usize].Some(0),
+            candidates: vec.empty[usize](),
+            c_type: option.Option[u32].None,
+            c_callable: option.Option[u32].None,
+            c_type_ref: option.Option[model.CTypeRef].None));
+    vec.push(project.modules[0].foreign_exports,
+        model.ForeignExport(name: "host_call", identity: "host_call",
+            kind: model.ForeignExportKind.Function, bundle: 0,
+            declaration: option.Option[usize].None,
+            candidates: [1],
+            c_type: option.Option[u32].None,
+            c_callable: option.Option[u32].None,
+            c_type_ref: option.Option[model.CTypeRef].None));
+    let result = resolve.resolve_project(project);
+    check(inout t, result.has_value && is_complete(result.state),
+        "foreign: valid exports");
+    var host_type usize = 0;
+    var host_call usize = 0;
+    for symbol in result.value.symbols {
+        if symbol.name == "HostType" { host_type = symbol.id; }
+        if symbol.name == "host_call" { host_call = symbol.id; }
+    }
+    check(inout t, result.value.symbols[host_type].exported,
+        "foreign: type exported");
+    check(inout t, is_type_symbol_kind(
+        result.value.symbols[host_type].kind), "foreign: type kind");
+    check(inout t, is_function_kind(
+        result.value.symbols[host_call].kind), "foreign: function kind");
+    let type_reference = option_foreign_get(
+        result.value.symbols[host_type].foreign);
+    check(inout t, option_foreign_has(
+        result.value.symbols[host_type].foreign) &&
+        type_reference.module == 0 && type_reference.index == 0,
+        "foreign: type identity");
+    let call_reference = option_foreign_get(
+        result.value.symbols[host_call].foreign);
+    check(inout t, option_foreign_has(
+        result.value.symbols[host_call].foreign) &&
+        call_reference.module == 0 && call_reference.index == 1,
+        "foreign: function identity");
+
+    project = build([["package p; pub func f() {}",
+        "package p; func g() { f(); }"]]);
+    let cross_result = resolve.resolve_project(project);
+    check(inout t, cross_result.has_value && is_complete(cross_result.state),
+        "node ref: cross-file module");
+    var checked = false;
+    for occurrence in cross_result.value.occurrences {
+        if cross_result.value.symbols[occurrence.symbol].name != "f" { continue; }
+        checked = true;
+        check(inout t, occurrence.source.module == 0 &&
+            occurrence.source.file == 1, "node ref: local file index");
+        let parse_index = project.modules[0].files[occurrence.source.file];
+        check(inout t, project.files[parse_index].lexed.source.path ==
+            "module0/1.wz", "node ref: resolves through module file");
+    }
+    check(inout t, checked, "node ref: occurrence found");
+}
+
+func test_async_declarations(t inout Test) {
+    let result = expect_ok(inout t, "async declarations",
+        one("package p; pub async func a() {} struct S {} impl S { pub async func m() {} }"));
+    var top usize = 0;
+    var member usize = 0;
+    for symbol in result.value.symbols {
+        if symbol.name == "a" { top = symbol.id; }
+        if symbol.name == "m" { member = symbol.id; }
+    }
+    check(inout t, result.value.symbols[top].exported,
+        "async: public top declaration exported");
+    check(inout t, result.value.symbols[member].exported,
+        "async: public member exported");
+    check(inout t, option_span_has(result.value.symbols[top].declaration),
+        "async: top declaration span");
+    check(inout t, option_span_has(result.value.symbols[member].declaration),
+        "async: member declaration span");
+}
+
+
+func fixture_number(value string) usize {
+    try { return usize(strconv.parse_u64(value)); }
+    catch error strconv.Error { return 0; }
+}
+
+func fixture_path(base string, name string) string {
+    if text.len(base) > 0 && base[text.len(base) - 1] == 47 {
+        return base + name;
+    }
+    return base + "/" + name;
+}
+
+func import_node(file model.ParseResult, ordinal usize) usize {
+    var found usize = 0;
+    for id in file.nodes[file.root].children {
+        if model.ast_kind_id(file.nodes[id].kind) == AST_IMPORT {
+            if found == ordinal { return id; }
+            found += 1;
+        }
+    }
+    return 0;
+}
+
+func fixture_span(file model.ParseResult) model.Span {
+    return file.nodes[file.root].span;
+}
+
+func fixture_build(case_dir string) model.Project throws os.Error {
+    var state = Builder(files: vec.empty[model.ParseResult](),
+        sources: vec.empty[model.Source](), next_snapshot: 1);
+    var result = model.empty_project();
+    let manifest = fs.read_text(fixture_path(case_dir, "project.txt"));
+    let lines = text.split(manifest, "\n");
+    var module_count usize = 0;
+    for line in lines {
+        let entry = text.trim(line);
+        if entry == "" || entry[0] == 35 { continue; }
+        let fields = text.split(entry, " ");
+        if vec.len(fields) < 2 || fields[0] != "module" { continue; }
+        let logical = fields[1];
+        var module = model.Module(id: module_count, logical_path: logical,
+            identity: logical, package_name: "p",
+            files: vec.empty[usize](), imports: vec.empty[model.Import](),
+            foreign_exports: vec.empty[model.ForeignExport](),
+            binding: option.Option[model.BindingModuleRef].None,
+            c_binding: option.Option[usize].None);
+        for var index usize = 2; index < vec.len(fields); index += 1 {
+            let index_value = add_source(inout state,
+                fixture_path(case_dir, fields[index]),
+                fs.read_text(fixture_path(case_dir, fields[index])));
+            vec.push(module.files, index_value);
+        }
+        vec.push(result.modules, module);
+        module_count += 1;
+    }
+    result.files = state.files;
+    for line in lines {
+        let entry = text.trim(line);
+        if entry == "" || entry[0] == 35 { continue; }
+        let fields = text.split(entry, " ");
+        if vec.len(fields) >= 6 && fields[0] == "import" {
+            let module_index = fixture_number(fields[1]);
+            let file_index = fixture_number(fields[2]);
+            let target = fixture_number(fields[3]);
+            let alias = fields[4];
+            let ordinal = fixture_number(fields[5]);
+            let parse_index = result.modules[module_index].files[file_index];
+            let file = result.files[parse_index];
+            let node_id = import_node(file, ordinal);
+            vec.push(result.modules[module_index].imports,
+                model.Import(file: file_index, node: node_id, target: target,
+                    alias: alias, span: file.nodes[node_id].span));
+        }
+    }
+    for line in lines {
+        let entry = text.trim(line);
+        if entry == "" || entry[0] == 35 { continue; }
+        let fields = text.split(entry, " ");
+        if vec.len(fields) >= 5 && fields[0] == "foreign" {
+            let module_index = fixture_number(fields[1]);
+            let name = fields[2];
+            let kind_number = fixture_number(fields[3]);
+            let file_index = fixture_number(fields[4]);
+            let parse_index = result.modules[module_index].files[file_index];
+            let span = fixture_span(result.files[parse_index]);
+            let declaration_index = vec.len(result.foreign_bindings);
+            vec.push(result.foreign_bindings,
+                model.ForeignDeclaration(id: declaration_index, bundle: 0,
+                    source: span, json_pointer: "", identity: name,
+                    module: "host", name: name, host_attribute: [],
+                    detail: model.ForeignDetail.Value(
+                        value: model.BindingValue(type_name: "i32")),
+                    stable_identity: name));
+            var export_kind = model.ForeignExportKind.Value;
+            if kind_number == 0 {
+                export_kind = model.ForeignExportKind.Type;
+            } else if kind_number == 2 {
+                export_kind = model.ForeignExportKind.Function;
+            }
+            vec.push(result.modules[module_index].foreign_exports,
+                model.ForeignExport(name: name, identity: name,
+                    kind: export_kind, bundle: 0,
+                    declaration: option.Option[usize].Some(
+                        declaration_index),
+                    candidates: vec.empty[usize](),
+                    c_type: option.Option[u32].None,
+                    c_callable: option.Option[u32].None,
+                    c_type_ref: option.Option[model.CTypeRef].None));
+        }
+    }
+    return result;
+}
+
+func bool_text(value bool) string {
+    if value { return "1"; }
+    return "0";
+}
+
+func state_number(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_number(failure model.FailureKind) u32 {
+    switch failure {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func span_text(span model.Span) string {
+    return strconv.format_u64(span.snapshot) + ":" +
+        strconv.format_u64(span.begin_byte) + ":" +
+        strconv.format_u64(span.end_byte);
+}
+
+func node_text(value model.NodeRef) string {
+    return strconv.format_u64(u64(value.module)) + ":" +
+        strconv.format_u64(u64(value.file)) + ":" +
+        strconv.format_u64(u64(value.node));
+}
+
+func option_span_text(value option.Option[model.Span]) string {
+    switch value {
+        case option.Option.Some(span): return span_text(span);
+        case option.Option.None: return "-";
+    }
+}
+
+func option_node_text(value option.Option[model.NodeRef]) string {
+    switch value {
+        case option.Option.Some(node): return node_text(node);
+        case option.Option.None: return "-";
+    }
+}
+
+func option_usize_text(value option.Option[usize]) string {
+    switch value {
+        case option.Option.Some(item): return strconv.format_u64(u64(item));
+        case option.Option.None: return "-";
+    }
+}
+
+func option_foreign_text(value option.Option[model.ForeignExportRef]) string {
+    switch value {
+        case option.Option.Some(reference_value):
+            return strconv.format_u64(u64(reference_value.module)) + ":" +
+                strconv.format_u64(u64(reference_value.index));
+        case option.Option.None: return "-";
+    }
+}
+
+func dump_project(result model.ResolveResult) throws os.Error {
+    io.println("H|" + strconv.format_u64(u64(state_number(result.state))) +
+        "|" + strconv.format_u64(u64(failure_number(result.failure))) +
+        "|" + bool_text(result.has_value) + "|" +
+        strconv.format_u64(u64(vec.len(result.diagnostics))));
+    for diagnostic in result.diagnostics {
+        var primary = "-";
+        if diagnostic.has_primary { primary = span_text(diagnostic.primary); }
+        io.println("D|" + diagnostic.code + "|" + diagnostic.phase + "|" +
+            diagnostic.severity + "|" + diagnostic.message + "|" +
+            bool_text(diagnostic.has_primary) + "|" + primary + "|" +
+            strconv.format_u64(u64(vec.len(diagnostic.related))));
+        for related in diagnostic.related {
+            io.println("R|" + span_text(related.span) + "|" + related.message);
+        }
+    }
+    io.println("N|" + strconv.format_u64(u64(vec.len(result.value.symbols))));
+    for symbol in result.value.symbols {
+        io.println("S|" + strconv.format_u64(u64(symbol.id)) + "|" +
+            symbol.name + "|" + strconv.format_u64(
+                u64(model.symbol_kind_id(symbol.kind))) + "|" +
+            strconv.format_u64(u64(symbol.module)) + "|" +
+            option_node_text(symbol.definition) + "|" +
+            option_span_text(symbol.declaration) + "|" +
+            bool_text(symbol.exported) + "|" +
+            option_usize_text(symbol.target) + "|" +
+            option_foreign_text(symbol.foreign));
+    }
+    io.println("O|" + strconv.format_u64(u64(vec.len(result.value.occurrences))));
+    for occurrence in result.value.occurrences {
+        io.println("O|" + node_text(occurrence.source) + "|" +
+            strconv.format_u64(u64(occurrence.symbol)) + "|" +
+            span_text(occurrence.span));
+    }
+    io.println("M|" + strconv.format_u64(
+        u64(vec.len(result.value.deferred_members))));
+    for reference_value in result.value.deferred_members {
+        io.println("M|" + node_text(reference_value));
+    }
+    io.println("P|" + strconv.format_u64(
+        u64(vec.len(result.value.self_parameters))));
+    for value in result.value.self_parameters {
+        io.println("P|" + node_text(value.source) + "|" +
+            strconv.format_u64(u64(value.symbol)));
+    }
+    io.println("E");
+}
+
+func dump_case(case_dir string) i32 throws os.Error {
+    let project = fixture_build(case_dir);
+    let result = resolve.resolve_project(project);
+    dump_project(result);
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) >= 3 && arguments[1] == "dump" {
+        return dump_case(arguments[2]);
+    }
+    var test = Test(checks: 0, failures: 0, failed: vec.empty[string]());
+    test_self_declarations(inout test);
+    test_existing_examples(inout test);
+    test_imports(inout test);
+    test_literals(inout test);
+    test_foreign_exports(inout test);
+    test_async_declarations(inout test);
+    test_long_constant_chain(inout test);
+    test_empty_project(inout test);
+    test_prelude_order(inout test);
+    for label in test.failed { io.eprintln("resolve-test FAIL: " + label); }
+    io.println("resolve-test checks");
+    io.println(test.checks);
+    io.println("resolve-test failures");
+    io.println(test.failures);
+    return i32(test.failures);
+}

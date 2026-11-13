@@ -1,0 +1,3 @@
+package p;
+import "dep" as d;
+func f(x d.T) { d.value; d.value(); }

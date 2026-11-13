@@ -1,0 +1,4 @@
+package p;
+enum E { A(x i32); B; }
+struct T { f i32; }
+func h(e E) { switch e { case E.A(x): let y = x; case E.B: {} } let a = [1]; let i = 0; let x = a[(i)]; let z = T.f; }

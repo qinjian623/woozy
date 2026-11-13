@@ -1,0 +1,133 @@
+// Typed-HIR ownership, cleanup and exit-plan records.
+//
+// These are the data records from include/lang/hir/hir.hpp.  No ownership
+// computation, verifier or liveness algorithm is defined here; callers can
+// carry the records but cannot claim a verified HIR from them.
+package hir;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+
+pub enum OwnerKind {
+    Binding;
+    Temporary;
+    ReturnOutput;
+    ErrorOutput;
+    Iteration;
+}
+
+pub struct OwnerRef {
+    pub kind OwnerKind;
+    pub identity u64;
+}
+
+pub enum CleanupKind {
+    SaveOutput;
+    EndBorrow;
+    DestroyIfLive;
+    Defer;
+    EndIteration;
+}
+
+pub struct CleanupStep {
+    pub kind CleanupKind;
+    pub owner OwnerRef;
+    pub type_id usize;
+}
+
+pub enum UseKind {
+    Borrow;
+    Copy;
+    Take;
+    Inout;
+}
+
+pub struct ValueUse {
+    pub consumer usize;
+    pub operand u32;
+    pub kind UseKind;
+    pub root option.Option[usize];
+    pub type_id usize;
+    pub destination option.Option[usize];
+}
+
+pub struct Temporary {
+    pub producer usize;
+    pub full_expression usize;
+    pub type_id usize;
+}
+
+pub struct LocalLifetime {
+    pub symbol usize;
+    pub scope usize;
+    pub type_id usize;
+    pub order u32;
+    pub mode model.ParamMode;
+    pub read_only_capture bool;
+}
+
+pub struct FullExpression {
+    pub node usize;
+    pub actions Vec[CleanupStep];
+}
+
+pub struct CallLifetime {
+    pub node usize;
+    pub on_return Vec[CleanupStep];
+}
+
+pub struct Ownership {
+    pub uses Vec[ValueUse];
+    pub temporaries Vec[Temporary];
+    pub locals Vec[LocalLifetime];
+    pub full_expressions Vec[FullExpression];
+    pub calls Vec[CallLifetime];
+}
+
+pub enum ExitKind {
+    Normal;
+    Return;
+    Break;
+    Continue;
+    Error;
+    Cancel;
+}
+
+pub struct ScopeExit {
+    pub scope option.Option[usize];
+}
+
+pub struct FunctionExit {
+    pub function usize;
+}
+
+pub struct JumpExit {
+    pub node usize;
+}
+
+pub struct CatchTarget {
+    pub try_node usize;
+    pub index u32;
+}
+
+pub enum ExitTarget {
+    ScopeExit(value ScopeExit);
+    FunctionExit(value FunctionExit);
+    JumpExit(value JumpExit);
+    CatchTarget(value CatchTarget);
+}
+
+pub struct ExitPlan {
+    pub kind ExitKind;
+    pub error_type option.Option[usize];
+    pub target ExitTarget;
+    pub exited_scopes Vec[usize];
+    pub defers Vec[usize];
+    pub saves_value bool;
+    pub actions Vec[CleanupStep];
+}
+
+pub func empty_ownership() Ownership {
+    return Ownership(uses: [], temporaries: [], locals: [],
+        full_expressions: [], calls: []);
+}

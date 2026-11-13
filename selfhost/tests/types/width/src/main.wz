@@ -1,0 +1,73 @@
+// Independent bit_width error/effect trace.
+//
+// Each line is either "<label>=ok:<width>" or
+// "<label>=error:<message>".  The C++ oracle prints the same trace from the
+// frozen lang::hir::bit_width implementation.
+package app;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+
+func scalar(kind model.TypeKind, bits u32) model.Type {
+    var value = model.empty_type(kind);
+    value.bits = bits;
+    return value;
+}
+
+func width(label string, value model.Type,
+           config model.CheckConfig) throws os.Error {
+    try {
+        let result = types.bit_width(value, config);
+        io.println(label + "=ok:" + strconv.format_u64(u64(result)));
+    } catch error types.Error {
+        switch error {
+            case types.Error.Invalid(message):
+                io.println(label + "=error:" + message);
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let cfg64 = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 64);
+    let cfg32 = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 32);
+    let cfg16 = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 16);
+    let cfg0 = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 0);
+    let cfg128 = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 128);
+
+    width("i8_64", scalar(model.TypeKind.SignedInt, 8), cfg64);
+    width("i16_64", scalar(model.TypeKind.SignedInt, 16), cfg64);
+    width("i32_64", scalar(model.TypeKind.SignedInt, 32), cfg64);
+    width("i64_64", scalar(model.TypeKind.SignedInt, 64), cfg64);
+    width("u8_64", scalar(model.TypeKind.UnsignedInt, 8), cfg64);
+    width("u64_64", scalar(model.TypeKind.UnsignedInt, 64), cfg64);
+    width("f32_32", scalar(model.TypeKind.Float, 32), cfg32);
+    width("f64_64", scalar(model.TypeKind.Float, 64), cfg64);
+    width("isize_64", model.empty_type(model.TypeKind.Isize), cfg64);
+    width("isize_32", model.empty_type(model.TypeKind.Isize), cfg32);
+    width("usize_64", model.empty_type(model.TypeKind.Usize), cfg64);
+    width("usize_32", model.empty_type(model.TypeKind.Usize), cfg32);
+    width("i32_16", scalar(model.TypeKind.SignedInt, 32), cfg16);
+    width("unit_16", model.empty_type(model.TypeKind.Unit), cfg16);
+    width("f64_0", scalar(model.TypeKind.Float, 64), cfg0);
+    width("i32_128", scalar(model.TypeKind.SignedInt, 32), cfg128);
+    width("unit_64", model.empty_type(model.TypeKind.Unit), cfg64);
+    width("bool_64", model.empty_type(model.TypeKind.Bool), cfg64);
+    width("string_64", model.empty_type(model.TypeKind.String), cfg64);
+    width("error_64", model.empty_type(model.TypeKind.Error), cfg64);
+    width("nominal_64", model.empty_type(model.TypeKind.NominalStruct),
+        cfg64);
+    width("function_64", model.empty_type(model.TypeKind.Function), cfg64);
+    width("vec_64", model.empty_type(model.TypeKind.Vec), cfg64);
+    width("task_64", model.empty_type(model.TypeKind.Task), cfg64);
+    width("cptr_64", model.empty_type(model.TypeKind.CForeignPointer),
+        cfg64);
+    return 0;
+}

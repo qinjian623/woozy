@@ -1,0 +1,639 @@
+// Real manifest-loader checks for SH05.
+//
+// The runner builds this program with stage0 at O0 and O2. Every case writes
+// a real manifest under the work directory, so canonical source roots,
+// manifest symlinks, dependency paths and whole-original-byte spans are
+// exercised instead of mocked in memory. A list of every repository lang.toml
+// is passed as the second argument and loaded as a dependency manifest to
+// keep the existing legal-manifest corpus covered.
+package app;
+
+import "app/wzcc/manifest" as manifest;
+import "app/wzcc/model" as model;
+import "app/wzcc/paths" as paths;
+import "app/wzcc/source" as source;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct Stats {
+    pub passed usize;
+    pub failed usize;
+}
+
+struct BadCase {
+    pub name string;
+    pub text string;
+    pub message string;
+    pub is_main bool;
+}
+
+const PACKAGE string = "[package]\nname = \"x\"\nsource_root = \"src\"\nentry = \"app\"\n";
+const BASE string = "schema_version = 1\n[package]\nname = \"x\"\nsource_root = \"src\"\nentry = \"app\"\n";
+
+func phase_is(state model.PhaseState, want model.PhaseState) bool {
+    switch state {
+        case model.PhaseState.Complete: return phase_id(state) == phase_id(want);
+        case model.PhaseState.Recovered: return phase_id(state) == phase_id(want);
+        case model.PhaseState.Failed: return phase_id(state) == phase_id(want);
+        case model.PhaseState.Cancelled: return phase_id(state) == phase_id(want);
+    }
+}
+
+func phase_id(state model.PhaseState) u32 {
+    switch state {
+        case model.PhaseState.Complete: return 0;
+        case model.PhaseState.Recovered: return 1;
+        case model.PhaseState.Failed: return 2;
+        case model.PhaseState.Cancelled: return 3;
+    }
+}
+
+func failure_is(value model.FailureKind, want model.FailureKind) bool {
+    switch value {
+        case model.FailureKind.Source: return failure_id(value) == failure_id(want);
+        case model.FailureKind.Unsupported: return failure_id(value) == failure_id(want);
+        case model.FailureKind.Environment: return failure_id(value) == failure_id(want);
+        case model.FailureKind.Internal: return failure_id(value) == failure_id(want);
+    }
+}
+
+func failure_id(value model.FailureKind) u32 {
+    switch value {
+        case model.FailureKind.Source: return 0;
+        case model.FailureKind.Unsupported: return 1;
+        case model.FailureKind.Environment: return 2;
+        case model.FailureKind.Internal: return 3;
+    }
+}
+
+func bytes_equal(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func check(stats inout Stats, value bool, label string) bool throws os.Error {
+    if value {
+        stats.passed += 1;
+    } else {
+        stats.failed += 1;
+        io.println("FAIL: "+label);
+    }
+    return value;
+}
+
+func write_case(base string, name string, value string) string throws os.Error {
+    let directory = base+"/"+name;
+    fs.create_dir_all(directory+"/src",0o755);
+    let path = directory+"/lang.toml";
+    fs.write_text(path,value,0o644);
+    return path;
+}
+
+func expect_invalid(stats inout Stats, base string, bad BadCase) throws os.Error {
+    let path = write_case(base,bad.name,bad.text);
+    var manager = source.manager();
+    let result = manifest.load(path,bad.is_main,inout manager);
+    var ok = !result.has_value &&
+        phase_is(result.state,model.PhaseState.Failed) &&
+        failure_is(result.failure,model.FailureKind.Environment) &&
+        vec.len(result.diagnostics) == 1;
+    if ok {
+        let diagnostic = result.diagnostics[0];
+        ok = diagnostic.code == "E_MANIFEST_INVALID" &&
+            diagnostic.phase == "resolve" &&
+            diagnostic.severity == "error" &&
+            diagnostic.has_primary &&
+            diagnostic.primary.snapshot != 0 &&
+            diagnostic.primary.begin_byte == 0 &&
+            diagnostic.primary.end_byte == u64(text.byte_len(bad.text));
+        if bad.message != "" { ok = ok && diagnostic.message == bad.message; }
+        if ok {
+            let snapshot = source.get(manager,diagnostic.primary.snapshot);
+            ok = snapshot.path == paths.canonical(path) &&
+                diagnostic.primary.end_byte == u64(vec.len(snapshot.original)) &&
+                bytes_equal(snapshot.original,fs.read_file(path));
+        }
+    }
+    check(inout stats,ok,"invalid: "+bad.name);
+}
+
+func expect_io(stats inout Stats, base string, name string, value string,
+               snapshots usize) throws os.Error {
+    let directory = base+"/"+name;
+    fs.create_dir_all(directory,0o755);
+    let path = directory+"/lang.toml";
+    if value != "" { fs.write_text(path,value,0o644); }
+    var manager = source.manager();
+    let result = manifest.load(path,true,inout manager);
+    var ok = !result.has_value &&
+        phase_is(result.state,model.PhaseState.Failed) &&
+        failure_is(result.failure,model.FailureKind.Environment) &&
+        vec.len(result.diagnostics) == 1 &&
+        vec.len(manager.snapshots) == snapshots;
+    if ok {
+        let diagnostic = result.diagnostics[0];
+        ok = diagnostic.code == "E_INPUT_IO" &&
+            diagnostic.phase == "resolve" &&
+            diagnostic.severity == "error" &&
+            !diagnostic.has_primary;
+    }
+    check(inout stats,ok,"io: "+name);
+}
+
+func test_main_config(stats inout Stats, base string) throws os.Error {
+    let directory = base+"/main";
+    fs.create_dir_all(directory+"/real/src-real",0o755);
+    fs.create_dir_all(directory+"/real/bindings",0o755);
+    fs.create_dir_all(directory+"/real/vendor/zeta",0o755);
+    fs.create_dir_all(directory+"/real/libs",0o755);
+    os.symlink(directory+"/real/src-real",directory+"/real/src-link");
+    let source_text = text.join([
+        "schema_version = 1",
+        "[package]",
+        "name = \"demo\"",
+        "source_root = \"src-link\"",
+        "entry = \"app\"",
+        "[build]",
+        "backend = \"python\"",
+        "word_bits = 32",
+        "[build.native]",
+        "runtime = \"hosted\"",
+        "[dependencies.zeta]",
+        "kind = \"source\"",
+        "path = \"vendor/zeta\"",
+        "[dependencies.alpha]",
+        "kind = \"python\"",
+        "binding = \"bindings/a.json\"",
+        "host_package = \"host\"",
+        "[dependencies.beta]",
+        "kind = \"native\"",
+        "binding = \"bindings/b.json\"",
+        "libraries = [\"z\", \"libfoo.so\", \"A_b+c-d.e\"]",
+        "library_dirs = [\"libs\", \"/abs/dir\"]"
+    ],"\n")+"\n";
+    let real_manifest = directory+"/real/lang.toml";
+    fs.write_text(real_manifest,source_text,0o644);
+    os.symlink(real_manifest,directory+"/link.toml");
+    var manager = source.manager();
+    let result = manifest.load(directory+"/link.toml",true,inout manager);
+    if !check(inout stats,result.has_value &&
+        phase_is(result.state,model.PhaseState.Complete) &&
+        failure_is(result.failure,model.FailureKind.Internal) &&
+        vec.len(result.diagnostics) == 0,"main manifest accepted") {
+        return;
+    }
+    let config = result.value;
+    let manifest_dir = paths.canonical(directory+"/real");
+    check(inout stats,config.manifest == paths.canonical(real_manifest),
+        "main canonical manifest through symlink");
+    check(inout stats,config.root == paths.canonical(directory+"/real/src-link"),
+        "main canonical source root through symlink");
+    check(inout stats,config.package_name == "demo","main package name");
+    check(inout stats,config.entry == "app","main entry");
+    check(inout stats,config.backend == "python","main backend");
+    check(inout stats,config.word_bits == 32,"main word_bits");
+    check(inout stats,config.hosted,"main hosted runtime");
+    check(inout stats,vec.len(manager.snapshots) == 1 &&
+        vec.len(manager.files) == 1,"main manager snapshot count");
+    check(inout stats,config.source.snapshot != 0 &&
+        config.source.begin_byte == 0 &&
+        config.source.end_byte == u64(text.byte_len(source_text)),
+        "main whole-original span");
+    if config.source.snapshot != 0 {
+        let snapshot = source.get(manager,config.source.snapshot);
+        check(inout stats,snapshot.path == config.manifest &&
+            bytes_equal(snapshot.original,fs.read_file(real_manifest)),
+            "main source snapshot bytes/path");
+    }
+    if check(inout stats,vec.len(config.dependencies) == 3,
+            "main sorted dependency count") {
+        let alpha = config.dependencies[0];
+        let beta = config.dependencies[1];
+        let zeta = config.dependencies[2];
+        check(inout stats,alpha.name == "alpha","main dependency order alpha");
+        check(inout stats,alpha.kind == "python" &&
+            alpha.binding == paths.join(manifest_dir,"bindings/a.json") &&
+            alpha.host_package == "host" &&
+            alpha.source == "" &&
+            vec.len(alpha.libraries) == 0 &&
+            vec.len(alpha.library_dirs) == 0,
+            "main python dependency fields");
+        check(inout stats,beta.name == "beta" && beta.kind == "native" &&
+            beta.binding == paths.join(manifest_dir,"bindings/b.json") &&
+            beta.host_package == "" && beta.source == "",
+            "main native dependency identity fields");
+        if check(inout stats,vec.len(beta.libraries) == 3 &&
+                vec.len(beta.library_dirs) == 2,
+                "main native dependency array lengths") {
+            check(inout stats,beta.libraries[0] == "z" &&
+                beta.libraries[1] == "libfoo.so" &&
+                beta.libraries[2] == "A_b+c-d.e",
+                "main native library names/order");
+            check(inout stats,
+                beta.library_dirs[0] == paths.join(manifest_dir,"libs") &&
+                beta.library_dirs[1] == "/abs/dir",
+                "main native library dirs/join");
+        }
+        check(inout stats,zeta.name == "zeta" && zeta.kind == "source" &&
+            zeta.source == paths.join(manifest_dir,"vendor/zeta") &&
+            zeta.binding == "" && zeta.host_package == "" &&
+            vec.len(zeta.libraries) == 0 &&
+            vec.len(zeta.library_dirs) == 0,
+            "main source dependency fields");
+    }
+}
+
+func test_non_main(stats inout Stats, base string) throws os.Error {
+    let directory = base+"/non-main";
+    fs.create_dir_all(directory+"/src",0o755);
+    let source_text = text.join([
+        "schema_version = 1",
+        "[package]",
+        "name = \"dep\"",
+        "source_root = \"src\"",
+        "[build]",
+        "backend = 123",
+        "word_bits = \"wide\"",
+        "[build.native]",
+        "runtime = \"hosted\"",
+        "[dependencies.q]",
+        "kind = \"source\"",
+        "path = \"vendor/q\""
+    ],"\n")+"\n";
+    let path = directory+"/lang.toml";
+    fs.write_text(path,source_text,0o644);
+    var manager = source.manager();
+    let result = manifest.load(path,false,inout manager);
+    if !check(inout stats,result.has_value &&
+        phase_is(result.state,model.PhaseState.Complete) &&
+        vec.len(result.diagnostics) == 0,"non-main manifest accepted") {
+        return;
+    }
+    let config = result.value;
+    check(inout stats,config.entry == "app","non-main default entry");
+    check(inout stats,config.backend == "native","non-main unused backend default");
+    check(inout stats,config.word_bits == 64,"non-main unused word_bits default");
+    check(inout stats,config.hosted,"non-main hosted runtime");
+    check(inout stats,vec.len(config.dependencies) == 1 &&
+        config.dependencies[0].name == "q" &&
+        config.dependencies[0].source ==
+            paths.join(paths.canonical(directory),"vendor/q"),
+        "non-main dependency config");
+}
+
+func test_integer_bounds(stats inout Stats, base string) throws os.Error {
+    let directory = base+"/integers";
+    fs.create_dir_all(directory+"/src",0o755);
+    let source_text = text.join([
+        "schema_version = 1",
+        "[package]",
+        "name = \"bounds\"",
+        "source_root = \"src\"",
+        "entry = \"app\"",
+        "[limits]",
+        "maximum = 9223372036854775807",
+        "minimum = -9223372036854775808",
+        "hex_max = 0x7FFFFFFFFFFFFFFF",
+        "octal_max = 0o777777777777777777777",
+        "binary_max = 0b111111111111111111111111111111111111111111111111111111111111111",
+        "nested = [{ value = -9_223_372_036_854_775_808 }]"
+    ],"\n")+"\n";
+    let path = directory+"/lang.toml";
+    fs.write_text(path,source_text,0o644);
+    var manager = source.manager();
+    let result = manifest.load(path,true,inout manager);
+    check(inout stats,result.has_value &&
+        phase_is(result.state,model.PhaseState.Complete) &&
+        vec.len(result.diagnostics) == 0,"signed-64 boundary integers accepted");
+    if result.has_value {
+        check(inout stats,result.value.backend == "native" &&
+            result.value.word_bits == 64 &&
+            !result.value.hosted,"defaults without build table");
+        check(inout stats,vec.len(result.value.dependencies) == 0,
+            "no dependencies in boundary manifest");
+    }
+}
+
+func test_schema_forms(stats inout Stats, base string) throws os.Error {
+    let accepted Vec[string] = [
+        "1", "+1", "0x1", "1.0", "1e0", "1_0e-1",
+        "0.9999999999999999999999999", "1.00000000000000001", "true"
+    ];
+    let directory = base+"/schema-forms";
+    fs.create_dir_all(directory+"/src",0o755);
+    let path = directory+"/lang.toml";
+    for value in accepted {
+        fs.write_text(path,"schema_version = "+value+"\n"+PACKAGE,0o644);
+        var manager = source.manager();
+        let result = manifest.load(path,true,inout manager);
+        check(inout stats,result.has_value &&
+            phase_is(result.state,model.PhaseState.Complete) &&
+            vec.len(result.diagnostics) == 0,
+            "schema accepted: "+value);
+    }
+}
+
+func test_io_paths(stats inout Stats, base string) throws os.Error {
+    expect_io(inout stats,base,"missing-manifest","",0);
+    let missing_root = text.join([
+        "schema_version = 1",
+        "[package]",
+        "name = \"x\"",
+        "source_root = \"does-not-exist\"",
+        "entry = \"app\""
+    ],"\n")+"\n";
+    expect_io(inout stats,base,"missing-source-root",missing_root,1);
+}
+
+func test_invalid_cases(stats inout Stats, base string) throws os.Error {
+    let cases Vec[BadCase] = [
+        BadCase(name: "missing-schema", text: PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-string", text: "schema_version = \"1\"\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "missing-name", text: text.join([
+            "schema_version = 1","[package]","source_root = \"src\"","entry = \"app\""
+        ],"\n")+"\n", message: "missing or invalid name", is_main: true),
+        BadCase(name: "invalid-name", text: text.join([
+            "schema_version = 1","[package]","name = \"9x\"","source_root = \"src\"","entry = \"app\""
+        ],"\n")+"\n", message: "invalid package name", is_main: true),
+        BadCase(name: "missing-root", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","entry = \"app\""
+        ],"\n")+"\n", message: "missing or invalid source_root", is_main: true),
+        BadCase(name: "empty-root", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"\"","entry = \"app\""
+        ],"\n")+"\n", message: "missing or invalid source_root", is_main: true),
+        BadCase(name: "nul-root", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\\u0000x\"","entry = \"app\""
+        ],"\n")+"\n", message: "missing or invalid source_root", is_main: true),
+        BadCase(name: "entry-number", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\"","entry = 1"
+        ],"\n")+"\n", message: "entry must be a string", is_main: true),
+        BadCase(name: "missing-entry-main", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\""
+        ],"\n")+"\n", message: "missing or invalid entry", is_main: true),
+        BadCase(name: "empty-entry-main", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\"","entry = \"\""
+        ],"\n")+"\n", message: "missing or invalid entry", is_main: true),
+        BadCase(name: "nul-entry-main", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\"","entry = \"app\\u0000\""
+        ],"\n")+"\n", message: "missing or invalid entry", is_main: true),
+        BadCase(name: "entry-not-app", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\"","entry = \"lib\""
+        ],"\n")+"\n", message: "project entry must be an app logical module", is_main: true),
+        BadCase(name: "entry-empty-nonmain", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\"","entry = \"\""
+        ],"\n")+"\n", message: "entry must be a logical module", is_main: false),
+        BadCase(name: "entry-number-nonmain", text: text.join([
+            "schema_version = 1","[package]","name = \"x\"","source_root = \"src\"","entry = 1"
+        ],"\n")+"\n", message: "entry must be a string", is_main: false),
+        BadCase(name: "dependencies-array",
+            text: "schema_version = 1\ndependencies = []\n"+PACKAGE,
+            message: "dependencies must be a table", is_main: true),
+        BadCase(name: "reserved-dependency-sorted", text: BASE+
+            "[dependencies.std]\nkind = \"source\"\npath = \"s\"\n"+
+            "[dependencies.app]\nkind = \"source\"\npath = \"a\"\n",
+            message: "reserved or invalid dependency: app", is_main: true),
+        BadCase(name: "invalid-dependency-name", text: BASE+
+            "[dependencies.\"9bad\"]\nkind = \"source\"\npath = \"x\"\n",
+            message: "reserved or invalid dependency: 9bad", is_main: true),
+        BadCase(name: "dependency-not-table", text: BASE+"[dependencies]\nfoo = 1\n",
+            message: "dependency must be a table", is_main: true),
+        BadCase(name: "unknown-dep-key-sorted", text: BASE+
+            "[dependencies.foo]\nkind = \"source\"\npath = \"x\"\nzzz = 1\naaa = 2\n",
+            message: "unknown dependency key: aaa", is_main: true),
+        BadCase(name: "missing-kind", text: BASE+
+            "[dependencies.foo]\npath = \"x\"\n",
+            message: "missing or invalid kind", is_main: true),
+        BadCase(name: "source-missing-path", text: BASE+
+            "[dependencies.foo]\nkind = \"source\"\n",
+            message: "missing or invalid path", is_main: true),
+        BadCase(name: "source-unknown-key", text: BASE+
+            "[dependencies.foo]\nkind = \"source\"\npath = \"x\"\nextra = 1\n",
+            message: "unknown dependency key: extra", is_main: true),
+        BadCase(name: "python-missing-binding", text: BASE+
+            "[dependencies.foo]\nkind = \"python\"\nhost_package = \"h\"\n",
+            message: "missing or invalid binding", is_main: true),
+        BadCase(name: "python-missing-host", text: BASE+
+            "[dependencies.foo]\nkind = \"python\"\nbinding = \"b.json\"\n",
+            message: "missing or invalid host_package", is_main: true),
+        BadCase(name: "python-nul-binding", text: BASE+
+            "[dependencies.foo]\nkind = \"python\"\nbinding = \"b\\u0000.json\"\nhost_package = \"h\"\n",
+            message: "missing or invalid binding", is_main: true),
+        BadCase(name: "native-missing-libraries", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\n",
+            message: "native dependency requires a libraries array", is_main: true),
+        BadCase(name: "native-libraries-string", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = \"z\"\n",
+            message: "native dependency requires a libraries array", is_main: true),
+        BadCase(name: "native-library-leading-dash", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = [\"-bad\"]\n",
+            message: "invalid native library name", is_main: true),
+        BadCase(name: "native-library-slash", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = [\"bad/name\"]\n",
+            message: "invalid native library name", is_main: true),
+        BadCase(name: "native-library-at", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = [\"bad@name\"]\n",
+            message: "invalid native library name", is_main: true),
+        BadCase(name: "native-library-empty", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = [\"\"]\n",
+            message: "invalid native library name", is_main: true),
+        BadCase(name: "native-library-number", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = [1]\n",
+            message: "invalid native library name", is_main: true),
+        BadCase(name: "native-nul-binding", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b\\u0000.json\"\nlibraries = []\n",
+            message: "missing or invalid binding", is_main: true),
+        BadCase(name: "native-dirs-not-array", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = []\nlibrary_dirs = \"lib\"\n",
+            message: "library_dirs must be an array", is_main: true),
+        BadCase(name: "native-dir-empty", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = []\nlibrary_dirs = [\"\"]\n",
+            message: "invalid native library directory", is_main: true),
+        BadCase(name: "native-dir-leading-dash", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = []\nlibrary_dirs = [\"-lib\"]\n",
+            message: "invalid native library directory", is_main: true),
+        BadCase(name: "native-dir-nul", text: BASE+
+            "[dependencies.foo]\nkind = \"native\"\nbinding = \"b.json\"\nlibraries = []\nlibrary_dirs = [\"lib\\u0000dir\"]\n",
+            message: "invalid native library directory", is_main: true),
+        BadCase(name: "unknown-dependency-kind", text: BASE+
+            "[dependencies.foo]\nkind = \"rust\"\n",
+            message: "unknown dependency kind", is_main: true),
+        BadCase(name: "build-not-table",
+            text: "schema_version = 1\nbuild = 1\n"+PACKAGE,
+            message: "build must be a table", is_main: true),
+        BadCase(name: "unknown-build-key-sorted", text: BASE+
+            "[build]\nzzz = 1\naaa = 2\n",
+            message: "unknown build key: aaa", is_main: true),
+        BadCase(name: "native-not-table", text: BASE+
+            "[build]\nnative = 1\n",
+            message: "build.native must be a table", is_main: true),
+        BadCase(name: "unknown-native-key-sorted", text: BASE+
+            "[build.native]\nzzz = 1\naaa = 2\n",
+            message: "unknown build.native key: aaa", is_main: true),
+        BadCase(name: "runtime-not-string", text: BASE+
+            "[build.native]\nruntime = 1\n",
+            message: "build.native.runtime must be a string", is_main: true),
+        BadCase(name: "runtime-invalid", text: BASE+
+            "[build.native]\nruntime = \"static\"\n",
+            message: "build.native.runtime must be freestanding or hosted", is_main: true),
+        BadCase(name: "backend-number", text: BASE+
+            "[build]\nbackend = 1\n",
+            message: "backend must be a string", is_main: true),
+        BadCase(name: "word-bits-string", text: BASE+
+            "[build]\nword_bits = \"64\"\n",
+            message: "word_bits must be an integer", is_main: true),
+        BadCase(name: "type-check-order", text: BASE+
+            "[build]\nbackend = \"rust\"\nword_bits = \"64\"\n",
+            message: "word_bits must be an integer", is_main: true),
+        BadCase(name: "backend-invalid", text: BASE+
+            "[build]\nbackend = \"rust\"\n",
+            message: "invalid backend", is_main: true),
+        BadCase(name: "word-bits-31", text: BASE+
+            "[build]\nword_bits = 31\n",
+            message: "word_bits must be 32 or 64", is_main: true),
+        BadCase(name: "schema-float-1.1",
+            text: "schema_version = 1.1\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-float-1.9",
+            text: "schema_version = 1.9\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-float-next",
+            text: "schema_version = 1.0000000000000002\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-float-below",
+            text: "schema_version = 0.9999999999999999\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-bool-false",
+            text: "schema_version = false\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-nan",
+            text: "schema_version = nan\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-plus-nan",
+            text: "schema_version = +nan\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-minus-nan",
+            text: "schema_version = -nan\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-inf",
+            text: "schema_version = inf\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-plus-inf",
+            text: "schema_version = +inf\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "schema-minus-inf",
+            text: "schema_version = -inf\n"+PACKAGE,
+            message: "schema_version must be 1", is_main: true),
+        BadCase(name: "word-bits-float",
+            text: BASE+"[build]\nword_bits = 64.0\n",
+            message: "word_bits must be an integer", is_main: true),
+        BadCase(name: "word-bits-bool",
+            text: BASE+"[build]\nword_bits = true\n",
+            message: "word_bits must be an integer", is_main: true),
+        BadCase(name: "integer-decimal-overflow",
+            text: "schema_version = 1\n[extra]\nvalue = 9223372036854775808\n"+PACKAGE,
+            message: "integer value is out of range: 9223372036854775808", is_main: true),
+        BadCase(name: "integer-negative-overflow",
+            text: "schema_version = 1\n[extra]\nvalue = -9223372036854775809\n"+PACKAGE,
+            message: "integer value is out of range: -9223372036854775809", is_main: true),
+        BadCase(name: "integer-hex-overflow",
+            text: "schema_version = 1\n[extra]\nvalue = 0x8000000000000000\n"+PACKAGE,
+            message: "integer value is out of range: 0x8000000000000000", is_main: true),
+        BadCase(name: "integer-binary-overflow",
+            text: "schema_version = 1\n[extra]\nvalue = 0b1111111111111111111111111111111111111111111111111111111111111111\n"+PACKAGE,
+            message: "", is_main: true),
+        BadCase(name: "integer-octal-overflow",
+            text: "schema_version = 1\n[extra]\nvalue = 0o1000000000000000000000\n"+PACKAGE,
+            message: "", is_main: true),
+        BadCase(name: "integer-nested-unknown",
+            text: "schema_version = 1\nextra = [{ value = 9223372036854775808 }]\n"+PACKAGE,
+            message: "integer value is out of range: 9223372036854775808", is_main: true),
+        BadCase(name: "toml-syntax",
+            text: "schema_version = 1\nbroken = [\n",
+            message: "", is_main: true)
+    ];
+    for bad in cases {
+        expect_invalid(inout stats,base,bad);
+    }
+}
+
+func repeated(value string,count usize) string {
+    var result="";for var index usize=0;index<count;index+=1 {result+=value;}return result;
+}
+func test_numeric_representation(stats inout Stats,base string) throws os.Error {
+    let invalid_values=["1e309","-1e309","1.7976931348623159e308",
+        "1e9999999999999999999999999", "1."+repeated("0",127),
+        "0x"+repeated("0",128)+"1", "0b"+repeated("0",128)+"1",
+        "00:00:00."+repeated("1",65),"2000-01-01T00:00:00."+repeated("1",65),
+        "2000-01-01T00:00:00."+repeated("1",65)+"+08:00"];
+    for var index usize=0;index<vec.len(invalid_values);index+=1 {
+        expect_invalid(inout stats,base,BadCase(name:"numeric-representation-"+strconv.format_u64(u64(index)),
+            text:"schema_version=1\nunused=[{value="+invalid_values[index]+"}]\n"+PACKAGE,
+            message:"",is_main:true));
+    }
+    let valid_values=["1.7976931348623158e308","1e-9999","-1e-9999","1e-324","5e-324",
+        "0e9999999999999999999999999","-0e9999999999999999999999999","nan","+nan","-nan","inf","+inf","-inf",
+        "1."+repeated("0",126),"-1."+repeated("0",126),
+        "0x"+repeated("0",127)+"1","0b"+repeated("0",127)+"1",
+        "00:00:00."+repeated("1",64),"2000-01-01T00:00:00."+repeated("1",64),
+        "2000-01-01T00:00:00."+repeated("1",64)+"Z"];
+    for var index usize=0;index<vec.len(valid_values);index+=1 {
+        let directory=base+"/numeric-valid-"+strconv.format_u64(u64(index));
+        fs.create_dir_all(directory+"/src",493);
+        fs.write_text(directory+"/lang.toml","schema_version=1\nunused=["+valid_values[index]+"]\n"+PACKAGE,420);
+        var manager=source.manager();let result=manifest.load(directory+"/lang.toml",true,inout manager);
+        check(inout stats,result.has_value&&phase_is(result.state,model.PhaseState.Complete)&&vec.len(result.diagnostics)==0,
+            "TOML numeric representation accepted");
+    }
+}
+
+func test_corpus(stats inout Stats, list_path string) throws os.Error {
+    let listing = fs.read_text(list_path);
+    var loaded usize = 0;
+    for line in text.split(listing,"\n") {
+        if line == "" { continue; }
+        var manager = source.manager();
+        let result = manifest.load(line,false,inout manager);
+        let ok = result.has_value &&
+            phase_is(result.state,model.PhaseState.Complete) &&
+            vec.len(result.diagnostics) == 0;
+        if !ok {
+            io.println("FAIL: corpus "+line);
+        }
+        check(inout stats,ok,"corpus manifest accepted");
+        loaded += 1;
+    }
+    io.println("corpus manifests checked: "+strconv.format_u64(u64(loaded)));
+}
+
+func main() i32 throws os.Error {
+    let arguments = process.args();
+    if vec.len(arguments) < 3 {
+        io.eprintln("usage: program WORK_DIR CORPUS_LIST");
+        return 2;
+    }
+    let base = arguments[1];
+    let corpus = arguments[2];
+    var stats = Stats(passed: 0, failed: 0);
+    test_main_config(inout stats,base);
+    test_non_main(inout stats,base);
+    test_integer_bounds(inout stats,base);
+    test_schema_forms(inout stats,base);
+    test_io_paths(inout stats,base);
+    test_invalid_cases(inout stats,base);
+    test_numeric_representation(inout stats,base);
+    test_corpus(inout stats,corpus);
+    io.println("MANIFEST_COUNTS passed="+strconv.format_u64(u64(stats.passed))+
+        " failed="+strconv.format_u64(u64(stats.failed)));
+    if stats.failed != 0 { return 1; }
+    return 0;
+}

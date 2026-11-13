@@ -1,0 +1,123 @@
+// Linux path operations for the self-hosted compiler.
+//
+// canonical follows the same observable rules as std::filesystem::canonical on
+// an existing Linux path: relative paths start at getcwd(), every symlink is
+// followed (including a symlink in the final component), ".." applies after the
+// preceding symlink was resolved, and ENOENT/ENOTDIR/ELOOP are preserved.
+// join is deliberately lexical: it never removes "." or "..", because doing so
+// before canonical would change the meaning around symlinks.
+package paths;
+
+import "std/os" as os;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func is_absolute(value string) bool { return text.starts_with(value,"/"); }
+
+// std::filesystem operator/ semantics: an absolute right side replaces left,
+// an empty left side leaves right unchanged, and otherwise a separator is only
+// inserted when left does not already end in one.
+pub func join(left string, right string) string {
+    if is_absolute(right) { return right; }
+    if left == "" { return right; }
+    if text.ends_with(left,"/") { return left+right; }
+    return left+"/"+right;
+}
+
+func is_directory(info os.FileInfo) bool {
+    return (info.mode & os.S_IFMT) == os.S_IFDIR;
+}
+
+func is_symlink(info os.FileInfo) bool {
+    return (info.mode & os.S_IFMT) == os.S_IFLNK;
+}
+
+func absolute(parts Vec[string]) string {
+    if vec.len(parts) == 0 { return "/"; }
+    return "/"+text.join(parts,"/");
+}
+
+func child(parts Vec[string], name string) string {
+    if vec.len(parts) == 0 { return "/"+name; }
+    return "/"+text.join(parts,"/")+"/"+name;
+}
+
+// Vec.pop returns Option; a LIFO stack only needs the removed spelling, so
+// shorten in place and read the element first.
+func take(parts Vec[string]) string {
+    let length = vec.len(parts);
+    if length == 0 { return ""; }
+    let value = parts[length-1];
+    vec.resize(parts,length-1,"");
+    return value;
+}
+
+func push_reversed(parts Vec[string], value string) {
+    let split = text.split(value,"/");
+    for var index = vec.len(split); index > 0; index -= 1 {
+        vec.push(parts,split[index-1]);
+    }
+}
+
+pub func canonical(value string) string throws os.Error {
+    // std::filesystem::canonical reports EINVAL for an empty spelling; do not
+    // silently turn it into the current directory.
+    if value == "" { throw os.Error.System(22,0); }
+
+    let resolved = vec.empty[string]();
+    let pending = vec.empty[string]();
+    if !is_absolute(value) {
+        let current = os.getcwd();
+        for part in text.split(current,"/") {
+            if part != "" { vec.push(resolved,part); }
+        }
+    }
+    push_reversed(pending,value);
+
+    var links usize = 0;
+    for vec.len(pending) != 0 {
+        let part = take(pending);
+        if part == "" {
+            // A trailing separator requires the final object to be a directory;
+            // interior empty components are just repeated separators.
+            if vec.len(pending) == 0 {
+                let info = os.stat(absolute(resolved));
+                if !is_directory(info) { throw os.Error.System(20,0); }
+            }
+            continue;
+        }
+        if part == "." { continue; }
+        if part == ".." {
+            if vec.len(resolved) != 0 {
+                vec.resize(resolved,vec.len(resolved)-1,"");
+            }
+            continue;
+        }
+        let here = child(resolved,part);
+        let info = os.lstat(here);
+        if is_symlink(info) {
+            links += 1;
+            if links > 40 { throw os.Error.System(40,0); }
+            let target = os.readlink(here);
+            if is_absolute(target) {
+                vec.resize(resolved,0,"");
+            }
+            let split = text.split(target,"/");
+            var count = vec.len(split);
+            // A separator inside a symlink target followed by more path
+            // components is only a separator, not a directory requirement.
+            if count != 0 && split[count-1] == "" && vec.len(pending) != 0 {
+                count -= 1;
+            }
+            for var index = count; index > 0; index -= 1 {
+                vec.push(pending,split[index-1]);
+            }
+            continue;
+        }
+        if !is_directory(info) && vec.len(pending) != 0 {
+            throw os.Error.System(20,0);
+        }
+        vec.push(resolved,part);
+    }
+    return absolute(resolved);
+}

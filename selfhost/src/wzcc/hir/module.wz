@@ -1,0 +1,167 @@
+// Typed-HIR module, declaration and value-classification records.
+//
+// This is a data-only migration of include/lang/hir/hir.hpp.  The module
+// holds values already produced by a future checker; it is not a verifier and
+// must not be presented as a published or verified HIR.
+package hir;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/option" as option;
+
+pub struct Parameter {
+    pub symbol usize;
+    pub label string;
+}
+
+pub struct HirFunction {
+    pub symbol usize;
+    pub signature usize;
+    pub parameters Vec[Parameter];
+    pub body usize;
+    pub scope usize;
+    pub source HirSource;
+    pub captures Vec[CaptureBinding];
+    pub is_async bool;
+}
+
+pub struct GenericParam {
+    pub symbol usize;
+    pub trait_ref option.Option[TraitRef];
+    pub source HirSource;
+}
+
+pub struct FieldDecl {
+    pub symbol usize;
+    pub type_id usize;
+    pub exported bool;
+    pub source HirSource;
+}
+
+pub struct VariantDecl {
+    pub symbol usize;
+    pub payload Vec[FieldDecl];
+    pub source HirSource;
+}
+
+pub struct NominalDecl {
+    pub symbol usize;
+    pub kind model.TypeKind;
+    pub params Vec[GenericParam];
+    pub fields Vec[FieldDecl];
+    pub variants Vec[VariantDecl];
+    pub source HirSource;
+}
+
+pub struct MethodPrototype {
+    pub symbol usize;
+    pub signature usize;
+    pub parameters Vec[Parameter];
+    pub source HirSource;
+}
+
+pub struct TraitDecl {
+    pub symbol usize;
+    pub self usize;
+    pub params Vec[GenericParam];
+    pub methods Vec[MethodPrototype];
+    pub source HirSource;
+}
+
+pub struct ImplDecl {
+    pub params Vec[GenericParam];
+    pub trait_ref option.Option[TraitRef];
+    pub self_parameter usize;
+    pub self_type usize;
+    pub methods Vec[usize];
+    pub source HirSource;
+}
+
+pub struct FunctionTemplate {
+    pub function HirFunction;
+    pub params Vec[GenericParam];
+}
+
+pub struct SymbolRename {
+    pub origin usize;
+    pub replacement usize;
+}
+
+pub struct FunctionInstance {
+    pub symbol usize;
+    pub origin usize;
+    pub type_args Vec[usize];
+    pub renamed Vec[SymbolRename];
+    pub target model.CheckConfig;
+}
+
+pub struct HirModule {
+    pub resolved model.ResolvedProject;
+    pub identity usize;
+    pub types types.Context;
+    pub config model.CheckConfig;
+    pub functions Vec[HirFunction];
+    pub nodes Vec[HirNode];
+    pub scopes Vec[HirScope];
+    pub nominals Vec[NominalDecl];
+    pub traits Vec[TraitDecl];
+    pub impls Vec[ImplDecl];
+    pub templates Vec[FunctionTemplate];
+    pub instances Vec[FunctionInstance];
+    pub ownership Ownership;
+    pub foreign_bindings Vec[ForeignBinding];
+}
+
+pub enum ValueKind {
+    Trivial;
+    Vec;
+    Structure;
+    Enumeration;
+    Dependent;
+    Unsupported;
+    ForeignReference;
+    ForeignCallable;
+    ForeignError;
+    CPointer;
+    CBuffer;
+    CRecord;
+    CResource;
+    CCallback;
+    RuntimeHandle;
+    String;
+    Slice;
+    Function;
+    Weak;
+    TraitObject;
+}
+
+pub struct ValueField {
+    pub variant option.Option[usize];
+    pub field usize;
+    pub type_id usize;
+}
+
+pub struct ValueOps {
+    pub kind ValueKind;
+    pub needs_drop bool;
+    pub pod_inout bool;
+    pub fields Vec[ValueField];
+    pub reason string;
+}
+
+pub enum InoutSlot {
+    Allowed;
+    Unit;
+    Task;
+    External;
+    TypeParameter;
+    Unsupported;
+}
+
+pub func empty_module(resolved model.ResolvedProject, identity usize,
+                      config model.CheckConfig) HirModule {
+    return HirModule(resolved: resolved, identity: identity,
+        types: types.context(), config: config, functions: [], nodes: [],
+        scopes: [], nominals: [], traits: [], impls: [], templates: [],
+        instances: [], ownership: empty_ownership(), foreign_bindings: []);
+}

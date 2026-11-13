@@ -66,3 +66,9 @@ wrap_integer(value BigInt, width u32, signed bool) IntegerValue throws Error
 `app/wzcc/input` 依赖 SourceManager，公开 `ReadResult { pub state model.PhaseState; pub failure model.FailureKind; pub diagnostics Vec[model.Diagnostic]; pub has_value bool; pub value model.Source; }` 和 `read(path string, state inout source.Manager) ReadResult`。对应 `src/support/input.cpp`：文件 I/O 失败为 Environment/E_INPUT_IO/toolchain；非法源文件为 Source/E_INVALID_SOURCE/lex，span 使用快照原始字节错误区间；有效源文件 Complete。失败时 value 不用于下游分析，SourceManager 仍保留已读到的非法快照。不要绕过已有 Source 验证。
 
 `app/wzcc/paths` 公开 `canonical(value string) string throws os.Error`，对应 Linux 已存在路径的 `std::filesystem::canonical`；解析符号链接和相对路径，不能先 clean 掉符号链接之前的 `..`，保留 ENOENT/ENOTDIR/ELOOP 错误。`join(left string,right string) string` 只拼接路径，right 绝对路径时替换 left；不消除 `.`/`..`，避免提前改变符号链接含义。目录枚举和排序由 project 负责。
+
+## jsondoc
+
+`app/wzcc/jsondoc` 读取已经验证的 model.Source，公开 `parse(input model.Source) Document throws Error`。Document 有 pub root std/json.Value、pub spans Vec[LocatedSpan]；LocatedSpan 有 pub pointer string/span model.Span。pointer 使用 JSON Pointer 的 `~0`/`~1` 转义，根为 ""；span 记录原始 JSON 字节里值的完整区间，不含区间外空白，顺序为现有 index_json 的后序。
+
+Error.Invalid(message string,span model.Span) 供 bindings 包装成 E_BINDING_INVALID。严格按现有 JSON 输入行为拒绝尾随内容、重复的解码对象键和 NUL 键；错误位置保留原编码字节（重复键指第二个完整带引号键）。普通值里的转义 NUL 仍允许。Source BOM/CRLF 不得改变原 JSON 的摘要或 span。使用 std/json 的已有 Value 与字符串/数字处理，不另定义 JSON 值系统；它默认替换重复键，必须在替换前检查。参考 project.cpp:338–400 的索引顺序和错误消息。

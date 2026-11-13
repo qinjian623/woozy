@@ -1,0 +1,574 @@
+// Typed-HIR node payload records.
+//
+// This file is a data-only counterpart of the records in
+// include/lang/hir/hir.hpp from TypeContext through NodeData/HirNode.  It
+// preserves the published field order and the C++ NodeData/NodeKind order.
+// There is deliberately no builder, verifier, ownership analysis or backend
+// here; constructing these values does not publish a verified module.
+package hir;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+
+pub struct HirSource {
+    pub node model.NodeRef;
+    pub span model.Span;
+}
+
+pub struct HirScope {
+    pub function usize;
+    pub parent option.Option[usize];
+    pub source HirSource;
+}
+
+pub enum UnaryOp {
+    Negate;
+    LogicalNot;
+    BitNot;
+}
+
+pub enum BinaryOp {
+    Add;
+    Subtract;
+    Multiply;
+    Divide;
+    Remainder;
+    ShiftLeft;
+    ShiftRight;
+    BitAnd;
+    BitOr;
+    BitXor;
+    Equal;
+    NotEqual;
+    Less;
+    LessEqual;
+    Greater;
+    GreaterEqual;
+}
+
+pub enum LogicalOp {
+    And;
+    Or;
+}
+
+pub struct UnitLiteral {}
+
+pub struct BoolLiteral {
+    pub value bool;
+}
+
+pub struct IntegerLiteral {
+    pub decimal string;
+    pub bits u64;
+}
+
+pub struct FloatLiteral {
+    pub bits u64;
+}
+
+pub struct StringLiteral {
+    pub utf8 string;
+}
+
+pub struct Read {
+    pub symbol usize;
+}
+
+pub struct Place {
+    pub symbol usize;
+}
+
+pub struct CaptureBinding {
+    pub origin usize;
+    pub local usize;
+    pub type_id usize;
+}
+
+pub struct CaptureSource {
+    pub origin usize;
+    pub source usize;
+    pub type_id usize;
+    pub is_move bool;
+}
+
+pub struct BoundReceiver {
+    pub type_id usize;
+    pub mode model.ParamMode;
+}
+
+pub struct FunctionValue {
+    pub symbol usize;
+    pub type_args Vec[usize];
+    pub captures Vec[CaptureSource];
+    pub move_capture bool;
+    pub bound option.Option[BoundReceiver];
+}
+
+pub struct ConstantAggregate {
+    pub variant option.Option[usize];
+    pub fields Vec[ConstantValue];
+}
+
+pub enum ConstantData {
+    UnitLiteral(value UnitLiteral);
+    BoolLiteral(value BoolLiteral);
+    IntegerLiteral(value IntegerLiteral);
+    FloatLiteral(value FloatLiteral);
+    StringLiteral(value StringLiteral);
+    FunctionValue(value FunctionValue);
+    ConstantAggregate(value ConstantAggregate);
+}
+
+pub struct ConstantValue {
+    pub type_id usize;
+    pub data ConstantData;
+}
+
+pub struct ConstantLiteral {
+    pub value ConstantValue;
+}
+
+pub struct Binding {
+    pub symbol usize;
+    pub writable bool;
+}
+
+pub struct Assign {
+    pub compound option.Option[BinaryOp];
+}
+
+pub struct Unary {
+    pub op UnaryOp;
+}
+
+pub struct Binary {
+    pub op BinaryOp;
+}
+
+pub struct ShortCircuit {
+    pub op LogicalOp;
+}
+
+pub struct IntegerConvert {}
+
+pub enum CalleeKind {
+    Direct;
+    FunctionValue;
+    Foreign;
+    System;
+    CForeign;
+}
+
+pub struct CallArg {
+    pub source_index u32;
+    pub parameter_index u32;
+    pub label option.Option[string];
+    pub mode model.ParamMode;
+    pub expression usize;
+}
+
+pub struct Call {
+    pub kind CalleeKind;
+    pub signature usize;
+    pub direct_symbol option.Option[usize];
+    pub callee option.Option[usize];
+    pub args Vec[CallArg];
+    pub type_args Vec[usize];
+    pub binding option.Option[usize];
+    pub c_callable option.Option[u32];
+    pub omitted Vec[u32];
+    // C++ stores std::optional<SystemOperation>.  The shared system package
+    // publishes the same numeric operation value in OperationSpec.operation;
+    // this record keeps the optional value without duplicating that enum.
+    pub system option.Option[u32];
+}
+
+pub struct Block {}
+
+pub struct ExpressionStatement {}
+
+pub struct If {}
+
+pub struct For {}
+
+pub struct Noop {}
+
+pub struct Return {
+    pub function usize;
+}
+
+pub struct Break {
+    pub loop usize;
+}
+
+pub struct Continue {
+    pub loop usize;
+}
+
+pub struct Unsupported {
+    pub feature string;
+}
+
+pub struct StructInit {
+    pub fields Vec[CallArg];
+}
+
+pub struct EnumInit {
+    pub variant usize;
+    pub payload Vec[CallArg];
+}
+
+pub struct FieldRead {
+    pub field usize;
+}
+
+pub struct FieldPlace {
+    pub field usize;
+}
+
+pub struct CFieldRead {
+    pub c_type u32;
+    pub field u32;
+}
+
+pub enum PatternLiteral {
+    BoolLiteral(value BoolLiteral);
+    IntegerLiteral(value IntegerLiteral);
+    FloatLiteral(value FloatLiteral);
+    StringLiteral(value StringLiteral);
+}
+
+pub struct Pattern {
+    pub type_id usize;
+    pub source HirSource;
+    pub variant option.Option[usize];
+    pub binding option.Option[usize];
+    pub payload Vec[Pattern];
+    pub literal option.Option[PatternLiteral];
+}
+
+pub struct Arm {
+    pub pattern Pattern;
+    pub scope usize;
+    pub body usize;
+    pub source HirSource;
+}
+
+pub struct Switch {
+    pub arms Vec[Arm];
+    pub exhaustive bool;
+}
+
+pub struct TraitRef {
+    pub declaration usize;
+    pub args Vec[usize];
+}
+
+pub struct ConstraintCall {
+    pub trait_ref TraitRef;
+    pub method usize;
+    pub receiver usize;
+    pub signature usize;
+    pub args Vec[CallArg];
+}
+
+pub struct Catch {
+    pub error_type usize;
+    pub binding usize;
+    pub scope usize;
+    pub body usize;
+    pub source HirSource;
+}
+
+pub struct Try {
+    pub catches Vec[Catch];
+}
+
+pub struct Defer {
+    pub owner_scope usize;
+    pub references Vec[usize];
+}
+
+pub struct Throw {}
+
+pub struct Await {}
+
+pub struct TraitObjectInit {
+    pub trait_ref TraitRef;
+    pub concrete usize;
+    pub methods Vec[usize];
+    pub method_args Vec[Vec[usize]];
+}
+
+pub struct TraitDispatch {
+    pub trait_ref TraitRef;
+    pub method usize;
+    pub signature usize;
+    pub index u32;
+    pub args Vec[CallArg];
+}
+
+pub struct Move {
+    pub binding option.Option[usize];
+}
+
+pub struct VecInit {}
+
+pub struct IndexRead {}
+
+pub struct IndexPlace {}
+
+pub struct VecSlice {
+    pub start option.Option[usize];
+    pub end option.Option[usize];
+}
+
+pub struct IteratorFor {
+    pub cursor usize;
+    pub option usize;
+    pub next usize;
+    pub iterator usize;
+    pub element usize;
+    pub some usize;
+    pub none usize;
+    pub some_field usize;
+}
+
+pub struct ForIn {
+    pub element usize;
+    pub body_scope usize;
+    pub body usize;
+    pub iterator option.Option[IteratorFor];
+}
+
+pub enum ForeignAccessKind {
+    PropertyRead;
+    PropertyPlace;
+    IndexRead;
+    IndexPlace;
+    SliceRead;
+    SlicePlace;
+}
+
+pub struct ForeignRead {
+    pub binding usize;
+    pub access option.Option[ForeignAccessKind];
+    pub start option.Option[usize];
+    pub end option.Option[usize];
+}
+
+pub struct ForeignBinding {
+    pub binding usize;
+    pub type_id usize;
+    pub signature option.Option[usize];
+    pub owner option.Option[usize];
+    pub read_error usize;
+}
+
+// NodeData alternatives and their order are the frozen C++ std::variant order.
+pub enum NodeData {
+    UnitLiteral(value UnitLiteral);
+    BoolLiteral(value BoolLiteral);
+    IntegerLiteral(value IntegerLiteral);
+    FloatLiteral(value FloatLiteral);
+    StringLiteral(value StringLiteral);
+    Read(value Read);
+    Place(value Place);
+    FunctionValue(value FunctionValue);
+    Binding(value Binding);
+    Assign(value Assign);
+    Unary(value Unary);
+    Binary(value Binary);
+    ShortCircuit(value ShortCircuit);
+    IntegerConvert(value IntegerConvert);
+    Call(value Call);
+    Block(value Block);
+    ExpressionStatement(value ExpressionStatement);
+    If(value If);
+    For(value For);
+    Noop(value Noop);
+    Return(value Return);
+    Break(value Break);
+    Continue(value Continue);
+    Unsupported(value Unsupported);
+    StructInit(value StructInit);
+    EnumInit(value EnumInit);
+    FieldRead(value FieldRead);
+    FieldPlace(value FieldPlace);
+    Switch(value Switch);
+    ConstraintCall(value ConstraintCall);
+    Try(value Try);
+    Defer(value Defer);
+    Throw(value Throw);
+    Move(value Move);
+    VecInit(value VecInit);
+    IndexRead(value IndexRead);
+    IndexPlace(value IndexPlace);
+    VecSlice(value VecSlice);
+    ForIn(value ForIn);
+    ForeignRead(value ForeignRead);
+    ConstantLiteral(value ConstantLiteral);
+    CFieldRead(value CFieldRead);
+    Await(value Await);
+    TraitObjectInit(value TraitObjectInit);
+    TraitDispatch(value TraitDispatch);
+}
+
+pub enum NodeKind {
+    UnitLiteral;
+    BoolLiteral;
+    IntegerLiteral;
+    FloatLiteral;
+    StringLiteral;
+    Read;
+    Place;
+    FunctionValue;
+    Binding;
+    Assign;
+    Unary;
+    Binary;
+    ShortCircuit;
+    IntegerConvert;
+    Call;
+    Block;
+    ExpressionStatement;
+    If;
+    For;
+    Noop;
+    Return;
+    Break;
+    Continue;
+    Unsupported;
+    StructInit;
+    EnumInit;
+    FieldRead;
+    FieldPlace;
+    Switch;
+    ConstraintCall;
+    Try;
+    Defer;
+    Throw;
+    Move;
+    VecInit;
+    IndexRead;
+    IndexPlace;
+    VecSlice;
+    ForIn;
+    ForeignRead;
+    ConstantLiteral;
+    CFieldRead;
+    Await;
+    TraitObjectInit;
+    TraitDispatch;
+}
+
+pub struct HirNode {
+    pub type_id usize;
+    pub source HirSource;
+    pub scope usize;
+    pub children Vec[usize];
+    pub data NodeData;
+    pub errors Vec[usize];
+    pub exits Vec[ExitPlan];
+}
+
+// The node kind is derived from the payload, never stored independently.
+pub func node_kind(data NodeData) NodeKind {
+    switch data {
+        case NodeData.UnitLiteral(payload): return NodeKind.UnitLiteral;
+        case NodeData.BoolLiteral(payload): return NodeKind.BoolLiteral;
+        case NodeData.IntegerLiteral(payload): return NodeKind.IntegerLiteral;
+        case NodeData.FloatLiteral(payload): return NodeKind.FloatLiteral;
+        case NodeData.StringLiteral(payload): return NodeKind.StringLiteral;
+        case NodeData.Read(payload): return NodeKind.Read;
+        case NodeData.Place(payload): return NodeKind.Place;
+        case NodeData.FunctionValue(payload): return NodeKind.FunctionValue;
+        case NodeData.Binding(payload): return NodeKind.Binding;
+        case NodeData.Assign(payload): return NodeKind.Assign;
+        case NodeData.Unary(payload): return NodeKind.Unary;
+        case NodeData.Binary(payload): return NodeKind.Binary;
+        case NodeData.ShortCircuit(payload): return NodeKind.ShortCircuit;
+        case NodeData.IntegerConvert(payload): return NodeKind.IntegerConvert;
+        case NodeData.Call(payload): return NodeKind.Call;
+        case NodeData.Block(payload): return NodeKind.Block;
+        case NodeData.ExpressionStatement(payload): return NodeKind.ExpressionStatement;
+        case NodeData.If(payload): return NodeKind.If;
+        case NodeData.For(payload): return NodeKind.For;
+        case NodeData.Noop(payload): return NodeKind.Noop;
+        case NodeData.Return(payload): return NodeKind.Return;
+        case NodeData.Break(payload): return NodeKind.Break;
+        case NodeData.Continue(payload): return NodeKind.Continue;
+        case NodeData.Unsupported(payload): return NodeKind.Unsupported;
+        case NodeData.StructInit(payload): return NodeKind.StructInit;
+        case NodeData.EnumInit(payload): return NodeKind.EnumInit;
+        case NodeData.FieldRead(payload): return NodeKind.FieldRead;
+        case NodeData.FieldPlace(payload): return NodeKind.FieldPlace;
+        case NodeData.Switch(payload): return NodeKind.Switch;
+        case NodeData.ConstraintCall(payload): return NodeKind.ConstraintCall;
+        case NodeData.Try(payload): return NodeKind.Try;
+        case NodeData.Defer(payload): return NodeKind.Defer;
+        case NodeData.Throw(payload): return NodeKind.Throw;
+        case NodeData.Move(payload): return NodeKind.Move;
+        case NodeData.VecInit(payload): return NodeKind.VecInit;
+        case NodeData.IndexRead(payload): return NodeKind.IndexRead;
+        case NodeData.IndexPlace(payload): return NodeKind.IndexPlace;
+        case NodeData.VecSlice(payload): return NodeKind.VecSlice;
+        case NodeData.ForIn(payload): return NodeKind.ForIn;
+        case NodeData.ForeignRead(payload): return NodeKind.ForeignRead;
+        case NodeData.ConstantLiteral(payload): return NodeKind.ConstantLiteral;
+        case NodeData.CFieldRead(payload): return NodeKind.CFieldRead;
+        case NodeData.Await(payload): return NodeKind.Await;
+        case NodeData.TraitObjectInit(payload): return NodeKind.TraitObjectInit;
+        case NodeData.TraitDispatch(payload): return NodeKind.TraitDispatch;
+    }
+}
+
+pub func node_kind_id(kind NodeKind) u32 {
+    switch kind {
+        case NodeKind.UnitLiteral: return 0;
+        case NodeKind.BoolLiteral: return 1;
+        case NodeKind.IntegerLiteral: return 2;
+        case NodeKind.FloatLiteral: return 3;
+        case NodeKind.StringLiteral: return 4;
+        case NodeKind.Read: return 5;
+        case NodeKind.Place: return 6;
+        case NodeKind.FunctionValue: return 7;
+        case NodeKind.Binding: return 8;
+        case NodeKind.Assign: return 9;
+        case NodeKind.Unary: return 10;
+        case NodeKind.Binary: return 11;
+        case NodeKind.ShortCircuit: return 12;
+        case NodeKind.IntegerConvert: return 13;
+        case NodeKind.Call: return 14;
+        case NodeKind.Block: return 15;
+        case NodeKind.ExpressionStatement: return 16;
+        case NodeKind.If: return 17;
+        case NodeKind.For: return 18;
+        case NodeKind.Noop: return 19;
+        case NodeKind.Return: return 20;
+        case NodeKind.Break: return 21;
+        case NodeKind.Continue: return 22;
+        case NodeKind.Unsupported: return 23;
+        case NodeKind.StructInit: return 24;
+        case NodeKind.EnumInit: return 25;
+        case NodeKind.FieldRead: return 26;
+        case NodeKind.FieldPlace: return 27;
+        case NodeKind.Switch: return 28;
+        case NodeKind.ConstraintCall: return 29;
+        case NodeKind.Try: return 30;
+        case NodeKind.Defer: return 31;
+        case NodeKind.Throw: return 32;
+        case NodeKind.Move: return 33;
+        case NodeKind.VecInit: return 34;
+        case NodeKind.IndexRead: return 35;
+        case NodeKind.IndexPlace: return 36;
+        case NodeKind.VecSlice: return 37;
+        case NodeKind.ForIn: return 38;
+        case NodeKind.ForeignRead: return 39;
+        case NodeKind.ConstantLiteral: return 40;
+        case NodeKind.CFieldRead: return 41;
+        case NodeKind.Await: return 42;
+        case NodeKind.TraitObjectInit: return 43;
+        case NodeKind.TraitDispatch: return 44;
+    }
+}

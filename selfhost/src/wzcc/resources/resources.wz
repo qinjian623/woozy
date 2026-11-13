@@ -1,0 +1,12 @@
+package resources;
+
+import "std/os" as os;
+import "std/path" as path;
+
+pub func directory() string throws os.Error {
+    return path.dir(os.readlink("/proc/self/exe"));
+}
+
+pub func standard_library() string throws os.Error {
+    return path.join(directory(),"stdlib");
+}

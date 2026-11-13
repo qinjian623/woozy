@@ -1,0 +1,119 @@
+// Test driver for app/wzcc/jsondoc. Reads raw JSON bytes from standard input,
+// wraps them in a model.Source, then prints one JSON report with the parsed
+// std/json.Value, the postorder pointer/raw-span index, and both byte buffers.
+// The Python runner owns all expectations; this program never starts Python.
+package app;
+
+import "app/wzcc/jsondoc" as jsondoc;
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "std/io" as io;
+import "std/json" as json;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func quote(value string) string {
+    try {
+        return json.serialize(json.Value.String(value));
+    } catch error json.Error {
+        return "\"\"";
+    }
+}
+
+func dump_value(value json.Value) string {
+    switch value {
+        case json.Value.Null: return "{\"k\":\"null\"}";
+        case json.Value.Bool(item): {
+            if item { return "{\"k\":\"bool\",\"v\":true}"; }
+            return "{\"k\":\"bool\",\"v\":false}";
+        }
+        case json.Value.String(item):
+            return "{\"k\":\"string\",\"v\":" + quote(item) + "}";
+        case json.Value.Number(token):
+            return "{\"k\":\"number\",\"v\":" + quote(token) + "}";
+        case json.Value.Array(items): {
+            var out = "{\"k\":\"array\",\"v\":[";
+            for var index usize = 0; index < vec.len(items); index += 1 {
+                if index != 0 { out += ","; }
+                out += dump_value(items[index]);
+            }
+            return out + "]}";
+        }
+        case json.Value.Object(members): {
+            var out = "{\"k\":\"object\",\"v\":[";
+            for var index usize = 0; index < vec.len(members); index += 1 {
+                if index != 0 { out += ","; }
+                out += "{\"name\":" + quote(members[index].name) +
+                    ",\"value\":" + dump_value(members[index].value) + "}";
+            }
+            return out + "]}";
+        }
+    }
+}
+
+func hex(bytes Vec[u8]) string {
+    let digits = "0123456789abcdef";
+    let out = vec.empty[u8]();
+    for byte in bytes {
+        vec.push(out, u8(digits[usize(byte >> 4)]));
+        vec.push(out, u8(digits[usize(byte & 15)]));
+    }
+    try {
+        return text.from_bytes(out);
+    } catch error text.Error {
+        return "";
+    }
+}
+
+func span_text(item jsondoc.LocatedSpan) string {
+    return "{\"pointer\":" + quote(item.pointer) +
+        ",\"snapshot\":" + strconv.format_u64(item.span.snapshot) +
+        ",\"begin\":" + strconv.format_u64(item.span.begin_byte) +
+        ",\"end\":" + strconv.format_u64(item.span.end_byte) + "}";
+}
+
+func buffer_text(input model.Source) string {
+    return ",\"original\":\"" + hex(input.original) +
+        "\",\"normalized\":\"" + hex(input.normalized) + "\"}\n";
+}
+
+func process(raw Vec[u8]) i32 throws os.Error {
+    let input = source.snapshot(1, 1, 7, "input.json", raw);
+    try {
+        let document = jsondoc.parse(input);
+        var out = "{\"status\":\"ok\",\"root\":" + dump_value(document.root) +
+            ",\"spans\":[";
+        for var index usize = 0; index < vec.len(document.spans); index += 1 {
+            if index != 0 { out += ","; }
+            out += span_text(document.spans[index]);
+        }
+        out += "]";
+        out += buffer_text(input);
+        os.write_all_text(os.stdout(), out);
+        return 0;
+    } catch error jsondoc.Error {
+        var message = "";
+        var begin u64 = 0;
+        var end u64 = 0;
+        switch error {
+            case jsondoc.Error.Invalid(text_value, span): {
+                message = text_value;
+                begin = span.begin_byte;
+                end = span.end_byte;
+            }
+        }
+        var out = "{\"status\":\"error\",\"message\":" + quote(message) +
+            ",\"begin\":" + strconv.format_u64(begin) +
+            ",\"end\":" + strconv.format_u64(end);
+        out += buffer_text(input);
+        os.write_all_text(os.stdout(), out);
+        return 2;
+    }
+}
+
+func main() i32 throws os.Error {
+    let raw = io.read_all(os.stdin());
+    return process(raw);
+}

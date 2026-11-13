@@ -1,0 +1,4 @@
+package p;
+const A = B;
+const B = 1;
+func f(x i32) i32 { { let x = 2; } let g = func() i32 { return x; }; return A; }

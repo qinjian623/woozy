@@ -1,0 +1,611 @@
+// Constructive data tests for the shared typed-HIR records.
+//
+// The program builds every NodeData/ConstantData/PatternLiteral alternative,
+// an arena of 45 HirNode values, and representative declaration, ownership
+// and exit-plan records.  It prints a trace that oracle.cpp derives from the
+// frozen C++ header.  This is data construction only: no verified module or
+// ownership analysis is claimed.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func num(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+
+func num64(value u64) string {
+    return strconv.format_u64(value);
+}
+
+func flag(value bool) string {
+    if value {
+        return "1";
+    }
+    return "0";
+}
+
+func some(id usize) option.Option[usize] {
+    return option.Option[usize].Some(id);
+}
+
+func none() option.Option[usize] {
+    return option.Option[usize].None;
+}
+
+func opt_string(value string) option.Option[string] {
+    return option.Option[string].Some(value);
+}
+
+func backend_id(value model.Backend) u32 {
+    switch value {
+        case model.Backend.Native: return 0;
+        case model.Backend.Python: return 1;
+    }
+}
+
+func mode_id(value model.ParamMode) u32 {
+    switch value {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func source(index usize) hir.HirSource {
+    return hir.HirSource(node: model.NodeRef(module: index, file: index,
+        node: index), span: model.Span(snapshot: u64(index),
+        begin_byte: u64(index), end_byte: u64(index) + 1));
+}
+
+func trait_ref() hir.TraitRef {
+    return hir.TraitRef(declaration: 0, args: []);
+}
+
+func constant_unit() hir.ConstantValue {
+    return hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.UnitLiteral(hir.UnitLiteral()));
+}
+
+func data_list() Vec[hir.NodeData] {
+    let out = vec.empty[hir.NodeData]();
+    vec.push(out, hir.NodeData.UnitLiteral(hir.UnitLiteral()));
+    vec.push(out, hir.NodeData.BoolLiteral(hir.BoolLiteral(value: false)));
+    vec.push(out, hir.NodeData.IntegerLiteral(
+        hir.IntegerLiteral(decimal: "0", bits: 0)));
+    vec.push(out, hir.NodeData.FloatLiteral(hir.FloatLiteral(bits: 0)));
+    vec.push(out, hir.NodeData.StringLiteral(
+        hir.StringLiteral(utf8: "")));
+    vec.push(out, hir.NodeData.Read(hir.Read(symbol: 0)));
+    vec.push(out, hir.NodeData.Place(hir.Place(symbol: 0)));
+    vec.push(out, hir.NodeData.FunctionValue(hir.FunctionValue(
+        symbol: 0, type_args: [], captures: [], move_capture: false,
+        bound: option.Option[hir.BoundReceiver].None)));
+    vec.push(out, hir.NodeData.Binding(hir.Binding(symbol: 0,
+        writable: false)));
+    vec.push(out, hir.NodeData.Assign(hir.Assign(
+        compound: option.Option[hir.BinaryOp].None)));
+    vec.push(out, hir.NodeData.Unary(hir.Unary(op: hir.UnaryOp.Negate)));
+    vec.push(out, hir.NodeData.Binary(hir.Binary(op: hir.BinaryOp.Add)));
+    vec.push(out, hir.NodeData.ShortCircuit(
+        hir.ShortCircuit(op: hir.LogicalOp.And)));
+    vec.push(out, hir.NodeData.IntegerConvert(hir.IntegerConvert()));
+    vec.push(out, hir.NodeData.Call(hir.Call(kind: hir.CalleeKind.Direct,
+        signature: 0, direct_symbol: none(), callee: none(), args: [],
+        type_args: [], binding: none(),
+        c_callable: option.Option[u32].None, omitted: [],
+        system: option.Option[u32].None)));
+    vec.push(out, hir.NodeData.Block(hir.Block()));
+    vec.push(out, hir.NodeData.ExpressionStatement(
+        hir.ExpressionStatement()));
+    vec.push(out, hir.NodeData.If(hir.If()));
+    vec.push(out, hir.NodeData.For(hir.For()));
+    vec.push(out, hir.NodeData.Noop(hir.Noop()));
+    vec.push(out, hir.NodeData.Return(hir.Return(function: 0)));
+    vec.push(out, hir.NodeData.Break(hir.Break(loop: 0)));
+    vec.push(out, hir.NodeData.Continue(hir.Continue(loop: 0)));
+    vec.push(out, hir.NodeData.Unsupported(
+        hir.Unsupported(feature: "")));
+    vec.push(out, hir.NodeData.StructInit(hir.StructInit(fields: [])));
+    vec.push(out, hir.NodeData.EnumInit(hir.EnumInit(variant: 0,
+        payload: [])));
+    vec.push(out, hir.NodeData.FieldRead(hir.FieldRead(field: 0)));
+    vec.push(out, hir.NodeData.FieldPlace(hir.FieldPlace(field: 0)));
+    vec.push(out, hir.NodeData.Switch(hir.Switch(arms: [],
+        exhaustive: false)));
+    vec.push(out, hir.NodeData.ConstraintCall(hir.ConstraintCall(
+        trait_ref: trait_ref(), method: 0, receiver: 0, signature: 0,
+        args: [])));
+    vec.push(out, hir.NodeData.Try(hir.Try(catches: [])));
+    vec.push(out, hir.NodeData.Defer(hir.Defer(owner_scope: 0,
+        references: [])));
+    vec.push(out, hir.NodeData.Throw(hir.Throw()));
+    vec.push(out, hir.NodeData.Move(hir.Move(binding: none())));
+    vec.push(out, hir.NodeData.VecInit(hir.VecInit()));
+    vec.push(out, hir.NodeData.IndexRead(hir.IndexRead()));
+    vec.push(out, hir.NodeData.IndexPlace(hir.IndexPlace()));
+    vec.push(out, hir.NodeData.VecSlice(hir.VecSlice(start: none(),
+        end: none())));
+    vec.push(out, hir.NodeData.ForIn(hir.ForIn(element: 0, body_scope: 0,
+        body: 0, iterator: option.Option[hir.IteratorFor].None)));
+    vec.push(out, hir.NodeData.ForeignRead(hir.ForeignRead(binding: 0,
+        access: option.Option[hir.ForeignAccessKind].None, start: none(),
+        end: none())));
+    vec.push(out, hir.NodeData.ConstantLiteral(
+        hir.ConstantLiteral(value: constant_unit())));
+    vec.push(out, hir.NodeData.CFieldRead(hir.CFieldRead(c_type: 0,
+        field: 0)));
+    vec.push(out, hir.NodeData.Await(hir.Await()));
+    vec.push(out, hir.NodeData.TraitObjectInit(hir.TraitObjectInit(
+        trait_ref: trait_ref(), concrete: 0, methods: [], method_args: [])));
+    vec.push(out, hir.NodeData.TraitDispatch(hir.TraitDispatch(
+        trait_ref: trait_ref(), method: 0, signature: 0, index: 0,
+        args: [])));
+    return out;
+}
+
+func build_arena() Vec[hir.HirNode] {
+    let data = data_list();
+    let nodes = vec.empty[hir.HirNode]();
+    for var index usize = 0; index < vec.len(data); index += 1 {
+        let children = vec.empty[usize]();
+        let child_count = index % 3;
+        for var child usize = 0; child < child_count; child += 1 {
+            vec.push(children, 0);
+        }
+        let errors = vec.empty[usize]();
+        let error_count = index % 2;
+        for var error_index usize = 0; error_index < error_count;
+            error_index += 1 {
+            vec.push(errors, 0);
+        }
+        vec.push(nodes, hir.HirNode(type_id: index, source: source(index),
+            scope: index, children: children, data: data[index],
+            errors: errors, exits: []));
+    }
+    return nodes;
+}
+
+func constant_values() Vec[hir.ConstantValue] {
+    let out = vec.empty[hir.ConstantValue]();
+    vec.push(out, constant_unit());
+    vec.push(out, hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.BoolLiteral(hir.BoolLiteral(value: true))));
+    vec.push(out, hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.IntegerLiteral(
+            hir.IntegerLiteral(decimal: "-7", bits: 7))));
+    vec.push(out, hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.FloatLiteral(hir.FloatLiteral(bits: 0))));
+    vec.push(out, hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.StringLiteral(hir.StringLiteral(utf8: "x"))));
+    let captures = vec.empty[hir.CaptureSource]();
+    vec.push(captures, hir.CaptureSource(origin: 0, source: 0, type_id: 0,
+        is_move: true));
+    vec.push(out, hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.FunctionValue(hir.FunctionValue(symbol: 0,
+            type_args: [0], captures: captures, move_capture: true,
+            bound: option.Option[hir.BoundReceiver].Some(
+                hir.BoundReceiver(type_id: 0,
+                    mode: model.ParamMode.Move))))));
+    let fields = vec.empty[hir.ConstantValue]();
+    vec.push(fields, constant_unit());
+    vec.push(out, hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.ConstantAggregate(
+            hir.ConstantAggregate(variant: some(0), fields: fields))));
+    return out;
+}
+
+func constant_index(data hir.ConstantData) u32 {
+    switch data {
+        case hir.ConstantData.UnitLiteral(value): return 0;
+        case hir.ConstantData.BoolLiteral(value): return 1;
+        case hir.ConstantData.IntegerLiteral(value): return 2;
+        case hir.ConstantData.FloatLiteral(value): return 3;
+        case hir.ConstantData.StringLiteral(value): return 4;
+        case hir.ConstantData.FunctionValue(value): return 5;
+        case hir.ConstantData.ConstantAggregate(value): return 6;
+    }
+}
+
+func pattern_values() Vec[hir.PatternLiteral] {
+    let out = vec.empty[hir.PatternLiteral]();
+    vec.push(out, hir.PatternLiteral.BoolLiteral(hir.BoolLiteral(
+        value: false)));
+    vec.push(out,hir.PatternLiteral.IntegerLiteral(hir.IntegerLiteral(
+        decimal: "0", bits: 0)));
+    vec.push(out, hir.PatternLiteral.FloatLiteral(hir.FloatLiteral(bits: 0)));
+    vec.push(out, hir.PatternLiteral.StringLiteral(hir.StringLiteral(
+        utf8: "")));
+    return out;
+}
+
+func pattern_index(literal hir.PatternLiteral) u32 {
+    switch literal {
+        case hir.PatternLiteral.BoolLiteral(value): return 0;
+        case hir.PatternLiteral.IntegerLiteral(value): return 1;
+        case hir.PatternLiteral.FloatLiteral(value): return 2;
+        case hir.PatternLiteral.StringLiteral(value): return 3;
+    }
+}
+
+func owner_kind_id(kind hir.OwnerKind) u32 {
+    switch kind {
+        case hir.OwnerKind.Binding: return 0;
+        case hir.OwnerKind.Temporary: return 1;
+        case hir.OwnerKind.ReturnOutput: return 2;
+        case hir.OwnerKind.ErrorOutput: return 3;
+        case hir.OwnerKind.Iteration: return 4;
+    }
+}
+
+func cleanup_kind_id(kind hir.CleanupKind) u32 {
+    switch kind {
+        case hir.CleanupKind.SaveOutput: return 0;
+        case hir.CleanupKind.EndBorrow: return 1;
+        case hir.CleanupKind.DestroyIfLive: return 2;
+        case hir.CleanupKind.Defer: return 3;
+        case hir.CleanupKind.EndIteration: return 4;
+    }
+}
+
+func use_kind_id(kind hir.UseKind) u32 {
+    switch kind {
+        case hir.UseKind.Borrow: return 0;
+        case hir.UseKind.Copy: return 1;
+        case hir.UseKind.Take: return 2;
+        case hir.UseKind.Inout: return 3;
+    }
+}
+
+func exit_kind_id(kind hir.ExitKind) u32 {
+    switch kind {
+        case hir.ExitKind.Normal: return 0;
+        case hir.ExitKind.Return: return 1;
+        case hir.ExitKind.Break: return 2;
+        case hir.ExitKind.Continue: return 3;
+        case hir.ExitKind.Error: return 4;
+        case hir.ExitKind.Cancel: return 5;
+    }
+}
+
+func value_kind_id(kind hir.ValueKind) u32 {
+    switch kind {
+        case hir.ValueKind.Trivial: return 0;
+        case hir.ValueKind.Vec: return 1;
+        case hir.ValueKind.Structure: return 2;
+        case hir.ValueKind.Enumeration: return 3;
+        case hir.ValueKind.Dependent: return 4;
+        case hir.ValueKind.Unsupported: return 5;
+        case hir.ValueKind.ForeignReference: return 6;
+        case hir.ValueKind.ForeignCallable: return 7;
+        case hir.ValueKind.ForeignError: return 8;
+        case hir.ValueKind.CPointer: return 9;
+        case hir.ValueKind.CBuffer: return 10;
+        case hir.ValueKind.CRecord: return 11;
+        case hir.ValueKind.CResource: return 12;
+        case hir.ValueKind.CCallback: return 13;
+        case hir.ValueKind.RuntimeHandle: return 14;
+        case hir.ValueKind.String: return 15;
+        case hir.ValueKind.Slice: return 16;
+        case hir.ValueKind.Function: return 17;
+        case hir.ValueKind.Weak: return 18;
+        case hir.ValueKind.TraitObject: return 19;
+    }
+}
+
+func inout_slot_id(slot hir.InoutSlot) u32 {
+    switch slot {
+        case hir.InoutSlot.Allowed: return 0;
+        case hir.InoutSlot.Unit: return 1;
+        case hir.InoutSlot.Task: return 2;
+        case hir.InoutSlot.External: return 3;
+        case hir.InoutSlot.TypeParameter: return 4;
+        case hir.InoutSlot.Unsupported: return 5;
+    }
+}
+
+func main() i32 throws os.Error {
+    let nodes = build_arena();
+    for var index usize = 0; index < vec.len(nodes); index += 1 {
+        let node = nodes[index];
+        io.println("node i=" + num(index) + " type=" + num(node.type_id) +
+            " kind=" + num(usize(hir.node_kind_id(hir.node_kind(node.data)))) +
+            " children=" + num(vec.len(node.children)) + " errors=" +
+            num(vec.len(node.errors)) + " exits=" + num(vec.len(node.exits)) +
+            " source=" + num(node.source.node.module) + "/" +
+            num(node.source.node.file) + "/" + num(node.source.node.node) +
+            " span=" + num64(node.source.span.snapshot) + "/" +
+            num64(node.source.span.begin_byte) + "/" +
+            num64(node.source.span.end_byte) + " scope=" + num(node.scope));
+    }
+
+    let constants = constant_values();
+    for var index usize = 0; index < vec.len(constants); index += 1 {
+        io.println("constant i=" + num(index) + " type=" +
+            num(constants[index].type_id) + " data=" +
+            num(usize(constant_index(constants[index].data))));
+    }
+    let patterns = pattern_values();
+    for var index usize = 0; index < vec.len(patterns); index += 1 {
+        io.println("pattern i=" + num(index) + " kind=" +
+            num(usize(pattern_index(patterns[index]))));
+    }
+
+    let some_scope = hir.HirScope(function: 0, parent: some(0),
+        source: source(0));
+    switch some_scope.parent {
+        case option.Option.Some(parent):
+            io.println("scope some function=" + num(some_scope.function) +
+                " parent=" + num(parent) + " has_parent=1");
+        case option.Option.None: io.println("scope some missing_parent");
+    }
+    let root_scope = hir.HirScope(function: 0, parent: none(),
+        source: source(0));
+    switch root_scope.parent {
+        case option.Option.Some(parent):
+            io.println("scope none parent=" + num(parent));
+        case option.Option.None:
+            io.println("scope none function=" + num(root_scope.function) +
+                " has_parent=0");
+    }
+
+    let pattern_payload = vec.empty[hir.Pattern]();
+    vec.push(pattern_payload, hir.Pattern(type_id: 0, source: source(1),
+        variant: none(), binding: none(), payload: [],
+        literal: option.Option[hir.PatternLiteral].None));
+    let pattern_literal = option.Option[hir.PatternLiteral].Some(
+        hir.PatternLiteral.BoolLiteral(hir.BoolLiteral(value: false)));
+    let rich_pattern = hir.Pattern(type_id: 0, source: source(2),
+        variant: some(0), binding: some(0), payload: pattern_payload,
+        literal: pattern_literal);
+    io.println("pattern_rich type=" + num(rich_pattern.type_id) +
+        " variant=1 variant_id=0 binding=1 binding_id=0 payload=" +
+        num(vec.len(rich_pattern.payload)) + " literal=1 literal_kind=0");
+    switch rich_pattern.literal {
+        case option.Option.Some(value):
+            io.println("pattern_literal kind=" +
+                num(usize(pattern_index(value))));
+        case option.Option.None: io.println("pattern_literal missing");
+    }
+
+    let rich_fields = vec.empty[hir.ConstantValue]();
+    vec.push(rich_fields, constant_unit());
+    let rich_constant = hir.ConstantValue(type_id: 0,
+        data: hir.ConstantData.ConstantAggregate(hir.ConstantAggregate(
+            variant: some(0), fields: rich_fields)));
+    switch rich_constant.data {
+        case hir.ConstantData.ConstantAggregate(value):
+            switch value.variant {
+                case option.Option.Some(variant):
+                    io.println("constant_rich type=" +
+                        num(rich_constant.type_id) + " data=6 variant=1" +
+                        " variant_id=" + num(variant) + " fields=" +
+                        num(vec.len(value.fields)));
+                case option.Option.None:
+                    io.println("constant_rich missing_variant");
+            }
+        case _: io.println("constant_rich missing_aggregate");
+    }
+
+    let parameters = vec.empty[hir.Parameter]();
+    vec.push(parameters, hir.Parameter(symbol: 0, label: ""));
+    let captures = vec.empty[hir.CaptureBinding]();
+    vec.push(captures, hir.CaptureBinding(origin: 0, local: 0,
+        type_id: 0));
+    let function = hir.HirFunction(symbol: 0, signature: 0,
+        parameters: parameters, body: 0, scope: 0, source: source(3),
+        captures: captures, is_async: true);
+    io.println("function symbol=" + num(function.symbol) + " signature=" +
+        num(function.signature) + " params=" + num(vec.len(function.parameters)) +
+        " param_symbol=" + num(function.parameters[0].symbol) + " params_label=" +
+        num(text.len(function.parameters[0].label)) + " captures=" +
+        num(vec.len(function.captures)) + " capture=" +
+        num(function.captures[0].origin) + "/" +
+        num(function.captures[0].local) + "/" +
+        num(function.captures[0].type_id) + " body=" + num(function.body) +
+        " scope=" + num(function.scope) + " is_async=" +
+        flag(function.is_async));
+
+    let renames = vec.empty[hir.SymbolRename]();
+    vec.push(renames, hir.SymbolRename(origin: 0, replacement: 0));
+    let instance = hir.FunctionInstance(symbol: 0, origin: 0,
+        type_args: [0], renamed: renames,
+        target: model.CheckConfig(backend: model.Backend.Native,
+            word_bits: 64));
+    io.println("instance symbol=" + num(instance.symbol) + " origin=" +
+        num(instance.origin) + " type_args=" + num(vec.len(instance.type_args)) +
+        " type_arg=" + num(instance.type_args[0]) + " renamed=" +
+        num(vec.len(instance.renamed)) + " rename=" +
+        num(instance.renamed[0].origin) + "/" +
+        num(instance.renamed[0].replacement) + " backend=" +
+        num(usize(backend_id(instance.target.backend))) + " word_bits=" +
+        num(usize(instance.target.word_bits)));
+
+    let call_args = vec.empty[hir.CallArg]();
+    vec.push(call_args, hir.CallArg(source_index: 0, parameter_index: 0,
+        label: opt_string("x"), mode: model.ParamMode.Move, expression: 0));
+    let call = hir.Call(kind: hir.CalleeKind.CForeign, signature: 0,
+        direct_symbol: some(0), callee: some(0), args: call_args,
+        type_args: [0], binding: some(0),
+        c_callable: option.Option[u32].Some(0), omitted: [0],
+        system: option.Option[u32].Some(0));
+    io.println("call kind=4 signature=" + num(call.signature) +
+        " direct=1 direct_id=0 callee=1 callee_id=0 args=1 arg=0/0/1/2/0" +
+        " type_args=1 binding=1 binding_id=0 c_callable=1 c_callable_id=0" +
+        " omitted=1 omitted0=0 system=1 system_op=0" +
+        " label_len=" + num(text.len("x")) );
+
+    let foreign = hir.ForeignBinding(binding: 0, type_id: 0,
+        signature: some(0), owner: none(), read_error: 0);
+    io.println("foreign binding=" + num(foreign.binding) + " type=" +
+        num(foreign.type_id) + " signature=1 signature_id=0 owner=0" +
+        " read_error=" + num(foreign.read_error));
+
+    let step = hir.CleanupStep(kind: hir.CleanupKind.SaveOutput,
+        owner: hir.OwnerRef(kind: hir.OwnerKind.Binding, identity: 0),
+        type_id: 0);
+    io.println("cleanup kind=" + num(usize(cleanup_kind_id(step.kind))) +
+        " owner_kind=" + num(usize(owner_kind_id(step.owner.kind))) +
+        " owner_identity=" + num64(step.owner.identity) + " type=" +
+        num(step.type_id));
+    let use = hir.ValueUse(consumer: 0, operand: 0, kind: hir.UseKind.Borrow,
+        root: some(0), type_id: 0, destination: none());
+    io.println("use consumer=" + num(use.consumer) + " operand=" +
+        num(usize(use.operand)) + " kind=" +
+        num(usize(use_kind_id(use.kind))) + " root=1 root_id=0 type=" +
+        num(use.type_id) + " destination=0");
+    let temporary = hir.Temporary(producer: 0, full_expression: 0,
+        type_id: 0);
+    let local = hir.LocalLifetime(symbol: 0, scope: 0, type_id: 0, order: 0,
+        mode: model.ParamMode.Move, read_only_capture: false);
+    let full_actions = vec.empty[hir.CleanupStep]();
+    vec.push(full_actions, step);
+    let full = hir.FullExpression(node: 0, actions: full_actions);
+    let call_actions = vec.empty[hir.CleanupStep]();
+    vec.push(call_actions, step);
+    let call_lifetime = hir.CallLifetime(node: 0, on_return: call_actions);
+    let uses = vec.empty[hir.ValueUse]();
+    vec.push(uses, use);
+    let temporaries = vec.empty[hir.Temporary]();
+    vec.push(temporaries, temporary);
+    let locals = vec.empty[hir.LocalLifetime]();
+    vec.push(locals, local);
+    let fulls = vec.empty[hir.FullExpression]();
+    vec.push(fulls, full);
+    let calls = vec.empty[hir.CallLifetime]();
+    vec.push(calls, call_lifetime);
+    let ownership = hir.Ownership(uses: uses, temporaries: temporaries,
+        locals: locals, full_expressions: fulls, calls: calls);
+    io.println("ownership uses=" + num(vec.len(ownership.uses)) +
+        " temporaries=" + num(vec.len(ownership.temporaries)) + " locals=" +
+        num(vec.len(ownership.locals)) + " full_expressions=" +
+        num(vec.len(ownership.full_expressions)) + " calls=" +
+        num(vec.len(ownership.calls)));
+    io.println("temporary producer=" + num(temporary.producer) +
+        " full_expression=" + num(temporary.full_expression) + " type=" +
+        num(temporary.type_id));
+    io.println("local symbol=" + num(local.symbol) + " scope=" +
+        num(local.scope) + " type=" + num(local.type_id) + " order=" +
+        num(usize(local.order)) + " mode=" +
+        num(usize(mode_id(local.mode))) + " read_only_capture=" +
+        flag(local.read_only_capture));
+    io.println("full node=" + num(full.node) + " actions=" +
+        num(vec.len(full.actions)));
+    io.println("call_lifetime node=" + num(call_lifetime.node) +
+        " on_return=" + num(vec.len(call_lifetime.on_return)));
+
+    let actions = vec.empty[hir.CleanupStep]();
+    vec.push(actions, step);
+    let exited_scopes = vec.empty[usize]();
+    vec.push(exited_scopes, 0);
+    let defers = vec.empty[usize]();
+    vec.push(defers, 0);
+    let exit = hir.ExitPlan(kind: hir.ExitKind.Cancel, error_type: some(0),
+        target: hir.ExitTarget.CatchTarget(hir.CatchTarget(try_node: 0,
+            index: 0)), exited_scopes: exited_scopes, defers: defers,
+        saves_value: true, actions: actions);
+    io.println("exit kind=" + num(usize(exit_kind_id(exit.kind))) +
+        " error=1 error_id=0 scopes=" + num(vec.len(exit.exited_scopes)) +
+        " defers=" + num(vec.len(exit.defers)) + " saves=" +
+        flag(exit.saves_value) + " actions=" + num(vec.len(exit.actions)));
+    switch exit.target {
+        case hir.ExitTarget.CatchTarget(value):
+            io.println("exit_target catch index=0 try_node=" +
+                num(value.try_node) + " index_id=" + num(usize(value.index)));
+        case _: io.println("exit_target missing_catch");
+    }
+
+    let generic_params = vec.empty[hir.GenericParam]();
+    vec.push(generic_params, hir.GenericParam(symbol: 0,
+        trait_ref: option.Option[hir.TraitRef].Some(trait_ref()),
+        source: source(4)));
+    let fields = vec.empty[hir.FieldDecl]();
+    vec.push(fields, hir.FieldDecl(symbol: 0, type_id: 0, exported: false,
+        source: source(5)));
+    let variants = vec.empty[hir.VariantDecl]();
+    vec.push(variants, hir.VariantDecl(symbol: 0, payload: fields,
+        source: source(6)));
+    let nominal = hir.NominalDecl(symbol: 0, kind: model.TypeKind.NominalStruct,
+        params: generic_params, fields: fields, variants: variants,
+        source: source(7));
+    io.println("nominal symbol=" + num(nominal.symbol) + " kind=9 params=" +
+        num(vec.len(nominal.params)) + " fields=" + num(vec.len(nominal.fields)) +
+        " variants=" + num(vec.len(nominal.variants)) + " variant_payload=" +
+        num(vec.len(nominal.variants[0].payload)) + " field_exported=" +
+        flag(nominal.fields[0].exported));
+    let methods = vec.empty[hir.MethodPrototype]();
+    vec.push(methods, hir.MethodPrototype(symbol: 0, signature: 0,
+        parameters: parameters, source: source(8)));
+    let trait_decl = hir.TraitDecl(symbol: 0, self: 0, params: generic_params,
+        methods: methods, source: source(9));
+    io.println("trait symbol=" + num(trait_decl.symbol) + " self=" +
+        num(trait_decl.self) + " params=" + num(vec.len(trait_decl.params)) +
+        " methods=" + num(vec.len(trait_decl.methods)) + " method_sig=" +
+        num(trait_decl.methods[0].signature));
+    let impl_methods = vec.empty[usize]();
+    vec.push(impl_methods, 0);
+    let impl_decl = hir.ImplDecl(params: generic_params,
+        trait_ref: option.Option[hir.TraitRef].Some(trait_ref()),
+        self_parameter: 0, self_type: 0, methods: impl_methods,
+        source: source(10));
+    io.println("impl params=" + num(vec.len(impl_decl.params)) + " trait=1" +
+        " self_parameter=" + num(impl_decl.self_parameter) + " self_type=" +
+        num(impl_decl.self_type) + " methods=" + num(vec.len(impl_decl.methods)));
+    let template = hir.FunctionTemplate(function: function, params: generic_params);
+    io.println("template function_symbol=" + num(template.function.symbol) +
+        " params=" + num(vec.len(template.params)) + " capture=" +
+        num(template.function.captures[0].local));
+
+    let resolved = model.ResolvedProject(project: model.empty_project(),
+        symbols: [], occurrences: [], deferred_members: [],
+        self_parameters: []);
+    let empty = hir.empty_module(resolved, 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    io.println("empty_module resolved_symbols=" +
+        num(vec.len(empty.resolved.symbols)) + " identity=" + num(empty.identity) +
+        " types=" + num(types.size(empty.types)) + " backend=" +
+        num(usize(backend_id(empty.config.backend))) + " word_bits=" +
+        num(usize(empty.config.word_bits)) + " functions=" +
+        num(vec.len(empty.functions)) + " nodes=" + num(vec.len(empty.nodes)) +
+        " scopes=" + num(vec.len(empty.scopes)) + " nominals=" +
+        num(vec.len(empty.nominals)) + " traits=" + num(vec.len(empty.traits)) +
+        " impls=" + num(vec.len(empty.impls)) + " templates=" +
+        num(vec.len(empty.templates)) + " instances=" +
+        num(vec.len(empty.instances)) + " uses=" +
+        num(vec.len(empty.ownership.uses)) + " temporaries=" +
+        num(vec.len(empty.ownership.temporaries)) + " locals=" +
+        num(vec.len(empty.ownership.locals)) + " full_expressions=" +
+        num(vec.len(empty.ownership.full_expressions)) + " calls=" +
+        num(vec.len(empty.ownership.calls)) + " foreign=" +
+        num(vec.len(empty.foreign_bindings)));
+
+    let value_fields = vec.empty[hir.ValueField]();
+    vec.push(value_fields, hir.ValueField(variant: some(0), field: 0,
+        type_id: 0));
+    let value_ops = hir.ValueOps(kind: hir.ValueKind.TraitObject,
+        needs_drop: true, pod_inout: false, fields: value_fields,
+        reason: "test");
+    io.println("value_ops kind=" + num(usize(value_kind_id(value_ops.kind))) +
+        " needs_drop=" + flag(value_ops.needs_drop) + " pod_inout=" +
+        flag(value_ops.pod_inout) + " fields=" + num(vec.len(value_ops.fields)) +
+        " field_variant=1 type=" + num(value_ops.fields[0].type_id) +
+        " reason=" + value_ops.reason);
+    let slots = vec.empty[hir.InoutSlot]();
+    vec.push(slots, hir.InoutSlot.Allowed);
+    vec.push(slots, hir.InoutSlot.Unit);
+    vec.push(slots, hir.InoutSlot.Task);
+    vec.push(slots, hir.InoutSlot.External);
+    vec.push(slots, hir.InoutSlot.TypeParameter);
+    vec.push(slots, hir.InoutSlot.Unsupported);
+    for slot in slots {
+        io.println("inout_slot id=" + num(usize(inout_slot_id(slot))));
+    }
+    return 0;
+}

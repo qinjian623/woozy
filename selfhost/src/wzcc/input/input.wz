@@ -1,0 +1,104 @@
+// Read one source file and accept it through SourceManager.
+//
+// This mirrors src/support/input.cpp: an I/O failure is
+// Environment/E_INPUT_IO/toolchain, an invalid source snapshot is
+// Source/E_INVALID_SOURCE/lex with a primary span in original bytes, and a
+// valid snapshot is Complete. The invalid snapshot stays in SourceManager, and
+// an I/O failure does not add a file or snapshot.
+package input;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+pub struct ReadResult {
+    pub state model.PhaseState;
+    pub failure model.FailureKind;
+    pub diagnostics Vec[model.Diagnostic];
+    pub has_value bool;
+    pub value model.Source;
+}
+
+func empty_source() model.Source {
+    return model.Source(file_id: 0, revision_id: 0, id: 0, path: "",
+        original: vec.empty[u8](), normalized: vec.empty[u8](),
+        offsets: vec.empty[u64](), boundaries: vec.empty[model.Boundary](),
+        valid: false, error_byte: 0, error_length: 0, error_message: "");
+}
+
+func error_text(error os.Error) string {
+    switch error {
+        case os.Error.Interrupted(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.WouldBlock(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.System(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.NoProgress(completed):
+            return "no progress";
+    }
+}
+
+// Read all bytes with the existing typed os calls. The C++ implementation uses
+// std::ifstream and reports libstdc++ wording ("cannot open input" or "cannot
+// read input"); this implementation reports
+// "PATH: cannot read input (os error CODE)" for open, read and close failures.
+func read_bytes(path string) Vec[u8] throws os.Error {
+    let file = os.open(path,os.O_RDONLY|os.O_CLOEXEC,0);
+    var closed = false;
+    defer { if !closed { try { os.close(file); } catch error os.Error {} } }
+    let out = vec.empty[u8]();
+    let buffer = vec.make[u8](65536,0);
+    for true {
+        var count usize = 0;
+        try { count = os.read(file,buffer,vec.len(buffer)); }
+        catch error os.Error {
+            switch error {
+                case os.Error.Interrupted(code,completed): continue;
+                default: throw error;
+            }
+        }
+        if count == 0 { break; }
+        for var index usize = 0; index < count; index += 1 {
+            vec.push(out,buffer[index]);
+        }
+    }
+    closed = true;
+    os.close(file);
+    return out;
+}
+
+func io_result(path string, error os.Error) ReadResult {
+    var diagnostic = model.diagnostic("E_INPUT_IO","toolchain",
+        path+": cannot read input ("+error_text(error)+")",
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    // E_INPUT_IO has no primary span; model.diagnostic always supplies one, so
+    // clear it explicitly rather than exposing a fake snapshot 0 location.
+    diagnostic.has_primary = false;
+    return ReadResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Environment, diagnostics: [diagnostic],
+        has_value: false, value: empty_source());
+}
+
+pub func read(path string, state inout source.Manager) ReadResult {
+    var bytes = vec.empty[u8]();
+    try { bytes = read_bytes(path); }
+    catch error os.Error { return io_result(path,error); }
+
+    let file_id = source.add_file(inout state,path);
+    let snapshot = source.update(inout state,file_id,bytes);
+    if !snapshot.valid {
+        let diagnostic = model.diagnostic("E_INVALID_SOURCE","lex",
+            snapshot.error_message,
+            source.raw_span(snapshot,snapshot.error_byte,
+                snapshot.error_byte+snapshot.error_length));
+        return ReadResult(state: model.PhaseState.Failed,
+            failure: model.FailureKind.Source, diagnostics: [diagnostic],
+            has_value: false, value: empty_source());
+    }
+    return ReadResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Internal, diagnostics: [],
+        has_value: true, value: snapshot);
+}

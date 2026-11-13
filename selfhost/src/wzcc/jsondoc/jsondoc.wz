@@ -1,0 +1,499 @@
+// json-c-compatible located JSON reader for validated model.Source snapshots.
+//
+// The public surface is frozen by development/docs/SELFHOST_FOUNDATION.md:
+//   parse(input model.Source) Document throws Error
+//   Document.root is std/json.Value
+//   Document.spans is the existing index_json postorder with JSON Pointers
+//
+// This reader follows the actual json-c 0.19 tokener used by project.cpp
+// (JSON_TOKENER_STRICT | JSON_TOKENER_VALIDATE_UTF8), including its accepted
+// non-RFC number spellings, NaN/Infinity/-Infinity, surrogate replacement and
+// 32-container stack boundary. It scans Source.original directly; raw spans
+// are therefore the same byte ranges index_json records in project.cpp.
+// Strings and normal escapes are ultimately decoded by std/json after
+// unpaired UTF-16 escapes are repaired to U+FFFD. Values remain std/json.Value.
+package jsondoc;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "std/json" as json;
+import "std/set" as set;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+pub struct LocatedSpan {
+    pub pointer string;
+    pub span model.Span;
+}
+
+pub struct Document {
+    pub root json.Value;
+    pub spans Vec[LocatedSpan];
+}
+
+pub enum Error {
+    Invalid(message string, span model.Span);
+}
+
+enum Abort { Syntax; }
+
+const MAX_DEPTH usize = 32;
+
+struct Walk {
+    input model.Source;
+    bytes Vec[u8];
+    cursor usize;
+    spans Vec[LocatedSpan];
+    has_invalid bool;
+    invalid_message string;
+    invalid_span model.Span;
+}
+
+func whole_span(input model.Source) model.Span {
+    return source.raw_span(input, 0, u64(vec.len(input.original)));
+}
+
+func invalid_whole(input model.Source) Error {
+    return Error.Invalid("invalid JSON binding bundle", whole_span(input));
+}
+
+func is_space(byte u8) bool {
+    return byte == 32 || byte == 9 || byte == 10 || byte == 13;
+}
+
+func skip_space(state inout Walk) {
+    for state.cursor < vec.len(state.bytes) && is_space(state.bytes[state.cursor]) {
+        state.cursor += 1;
+    }
+}
+
+func record_invalid(state inout Walk, message string, span model.Span) {
+    if !state.has_invalid {
+        state.has_invalid = true;
+        state.invalid_message = message;
+        state.invalid_span = span;
+    }
+}
+
+func pointer_part(value string) string {
+    var out = "";
+    for var index usize = 0; index < text.len(value); index += 1 {
+        let rune = value[index];
+        if rune == 126 {
+            out += "~0";
+        } else if rune == 47 {
+            out += "~1";
+        } else {
+            out += value[index:index + 1];
+        }
+    }
+    return out;
+}
+
+func key_has_nul(value string) bool {
+    for rune in value {
+        if rune == 0 {
+            return true;
+        }
+    }
+    return false;
+}
+
+func hex_digit(byte u8) i32 {
+    if byte >= 48 && byte <= 57 { return i32(byte - 48); }
+    if byte >= 65 && byte <= 70 { return i32(byte - 55); }
+    if byte >= 97 && byte <= 102 { return i32(byte - 87); }
+    return -1;
+}
+
+func hex4_at(bytes Vec[u8], at usize) i32 {
+    if at + 4 > vec.len(bytes) {
+        return -1;
+    }
+    var value i32 = 0;
+    for var index usize = 0; index < 4; index += 1 {
+        let digit = hex_digit(bytes[at + index]);
+        if digit < 0 {
+            return -1;
+        }
+        value = value * 16 + digit;
+    }
+    return value;
+}
+
+func append_bytes(out Vec[u8], bytes Vec[u8], begin usize, end usize) {
+    for var index usize = begin; index < end; index += 1 {
+        vec.push(out, bytes[index]);
+    }
+}
+
+func push_replacement(out Vec[u8]) {
+    vec.push(out, 0xEF);
+    vec.push(out, 0xBF);
+    vec.push(out, 0xBD);
+}
+
+// scan_string consumes one JSON string and returns its decoded value. Valid
+// surrogate pairs stay as escapes for std/json. Unpaired high or low escapes
+// become U+FFFD, matching json-c. All other escapes and raw UTF-8 bytes are
+// handed to std/json for the existing string decoder.
+func scan_string(state inout Walk) string throws Abort {
+    state.cursor += 1;
+    let repaired = vec.empty[u8]();
+    vec.push(repaired, 34);
+    for true {
+        if state.cursor >= vec.len(state.bytes) {
+            throw Abort.Syntax;
+        }
+        let byte = state.bytes[state.cursor];
+        if byte == 34 {
+            state.cursor += 1;
+            vec.push(repaired, 34);
+            break;
+        }
+        if byte < 0x20 {
+            throw Abort.Syntax;
+        }
+        if byte != 92 {
+            vec.push(repaired, byte);
+            state.cursor += 1;
+            continue;
+        }
+        if state.cursor + 1 >= vec.len(state.bytes) {
+            throw Abort.Syntax;
+        }
+        let escape = state.bytes[state.cursor + 1];
+        if escape == 117 {
+            let code = hex4_at(state.bytes, state.cursor + 2);
+            if code < 0 {
+                throw Abort.Syntax;
+            }
+            if code >= 0xD800 && code <= 0xDBFF {
+                var paired = false;
+                if state.cursor + 12 <= vec.len(state.bytes) &&
+                   state.bytes[state.cursor + 6] == 92 &&
+                   state.bytes[state.cursor + 7] == 117 {
+                    let low = hex4_at(state.bytes, state.cursor + 8);
+                    if low >= 0xDC00 && low <= 0xDFFF {
+                        append_bytes(repaired, state.bytes, state.cursor,
+                            state.cursor + 12);
+                        state.cursor += 12;
+                        paired = true;
+                    }
+                }
+                if paired {
+                    continue;
+                }
+                push_replacement(repaired);
+                state.cursor += 6;
+                continue;
+            }
+            if code >= 0xDC00 && code <= 0xDFFF {
+                push_replacement(repaired);
+                state.cursor += 6;
+                continue;
+            }
+            append_bytes(repaired, state.bytes, state.cursor, state.cursor + 6);
+            state.cursor += 6;
+            continue;
+        }
+        if escape == 34 || escape == 92 || escape == 47 || escape == 98 ||
+           escape == 102 || escape == 110 || escape == 114 || escape == 116 {
+            vec.push(repaired, 92);
+            vec.push(repaired, escape);
+            state.cursor += 2;
+            continue;
+        }
+        throw Abort.Syntax;
+    }
+    var literal = "";
+    try {
+        literal = text.from_bytes(repaired);
+    } catch error text.Error {
+        throw Abort.Syntax;
+    }
+    try {
+        let value = json.parse(literal);
+        switch value {
+            case json.Value.String(item): return item;
+            case _: throw Abort.Syntax;
+        }
+    } catch error json.Error {
+        throw Abort.Syntax;
+    }
+}
+
+func is_digit(byte u8) bool {
+    return byte >= 48 && byte <= 57;
+}
+
+func match_literal(state inout Walk, word string) bool {
+    let expected = text.bytes(word);
+    let length = vec.len(expected);
+    if length > vec.len(state.bytes) - state.cursor {
+        return false;
+    }
+    for var index usize = 0; index < length; index += 1 {
+        if state.bytes[state.cursor + index] != expected[index] {
+            return false;
+        }
+    }
+    state.cursor += length;
+    return true;
+}
+
+// scan_number accepts the json-c tokener's number language, not RFC 8259.
+// Integer-finalization also has json-c's leading-zero rule: a positive
+// integer whose first digit is 0 may contain only zeros, while a number that
+// has a fraction/exponent (or a leading minus) bypasses that rule.
+func scan_number(state inout Walk) string throws Abort {
+    let start = state.cursor;
+    var end = start;
+    var negative = false;
+    if state.bytes[end] == 45 {
+        negative = true;
+        end += 1;
+    }
+    var integer_digits usize = 0;
+    for end < vec.len(state.bytes) && is_digit(state.bytes[end]) {
+        integer_digits += 1;
+        end += 1;
+    }
+    var has_dot = false;
+    var fraction_digits usize = 0;
+    if end < vec.len(state.bytes) && state.bytes[end] == 46 {
+        has_dot = true;
+        end += 1;
+        for end < vec.len(state.bytes) && is_digit(state.bytes[end]) {
+            fraction_digits += 1;
+            end += 1;
+        }
+    }
+    var has_exponent = false;
+    if end < vec.len(state.bytes) &&
+       (state.bytes[end] == 101 || state.bytes[end] == 69) &&
+       integer_digits + fraction_digits > 0 {
+        has_exponent = true;
+        end += 1;
+        if end < vec.len(state.bytes) &&
+           (state.bytes[end] == 43 || state.bytes[end] == 45) {
+            end += 1;
+        }
+        var exponent_digits usize = 0;
+        for end < vec.len(state.bytes) && is_digit(state.bytes[end]) {
+            exponent_digits += 1;
+            end += 1;
+        }
+        if exponent_digits == 0 {
+            throw Abort.Syntax;
+        }
+    }
+    if integer_digits + fraction_digits == 0 {
+        throw Abort.Syntax;
+    }
+    if !has_dot && !has_exponent && !negative && integer_digits > 1 &&
+       state.bytes[start] == 48 {
+        for var index usize = start; index < end; index += 1 {
+            if state.bytes[index] != 48 {
+                throw Abort.Syntax;
+            }
+        }
+    }
+    state.cursor = end;
+    try {
+        return text.from_bytes(state.bytes[start:end]);
+    } catch error text.Error {
+        throw Abort.Syntax;
+    }
+}
+
+func parse_array(state inout Walk, depth usize, path string) json.Value throws Abort {
+    state.cursor += 1;
+    skip_space(inout state);
+    let items = vec.empty[json.Value]();
+    if state.cursor >= vec.len(state.bytes) {
+        throw Abort.Syntax;
+    }
+    if state.bytes[state.cursor] == 93 {
+        state.cursor += 1;
+        return json.Value.Array(items);
+    }
+    var index usize = 0;
+    for true {
+        let item = parse_value(inout state, depth + 1,
+            path + "/" + strconv.format_u64(u64(index)));
+        vec.push(items, item);
+        index += 1;
+        skip_space(inout state);
+        if state.cursor >= vec.len(state.bytes) {
+            throw Abort.Syntax;
+        }
+        if state.bytes[state.cursor] == 44 {
+            state.cursor += 1;
+            skip_space(inout state);
+            continue;
+        }
+        if state.bytes[state.cursor] == 93 {
+            state.cursor += 1;
+            return json.Value.Array(items);
+        }
+        throw Abort.Syntax;
+    }
+    return json.Value.Array(items);
+}
+
+func parse_object(state inout Walk, depth usize, path string) json.Value throws Abort {
+    state.cursor += 1;
+    skip_space(inout state);
+    let members = vec.empty[json.Member]();
+    let keys = set.new[string]();
+    if state.cursor >= vec.len(state.bytes) {
+        throw Abort.Syntax;
+    }
+    if state.bytes[state.cursor] == 125 {
+        state.cursor += 1;
+        return json.Value.Object(members);
+    }
+    for true {
+        if state.cursor >= vec.len(state.bytes) ||
+           state.bytes[state.cursor] != 34 {
+            throw Abort.Syntax;
+        }
+        let key_begin = state.cursor;
+        let name = scan_string(inout state);
+        let key_end = state.cursor;
+        let key_span = source.raw_span(state.input, u64(key_begin), u64(key_end));
+        if key_has_nul(name) {
+            record_invalid(inout state, "JSON field name contains NUL", key_span);
+        }
+        if !set.add(keys, name) {
+            record_invalid(inout state, "duplicate JSON field: " + name, key_span);
+        }
+        skip_space(inout state);
+        if state.cursor >= vec.len(state.bytes) ||
+           state.bytes[state.cursor] != 58 {
+            throw Abort.Syntax;
+        }
+        state.cursor += 1;
+        let member_value = parse_value(inout state, depth + 1,
+            path + "/" + pointer_part(name));
+        vec.push(members, json.Member(name: name, value: member_value));
+        skip_space(inout state);
+        if state.cursor >= vec.len(state.bytes) {
+            throw Abort.Syntax;
+        }
+        if state.bytes[state.cursor] == 44 {
+            state.cursor += 1;
+            skip_space(inout state);
+            continue;
+        }
+        if state.bytes[state.cursor] == 125 {
+            state.cursor += 1;
+            return json.Value.Object(members);
+        }
+        throw Abort.Syntax;
+    }
+    return json.Value.Object(members);
+}
+
+func parse_value(state inout Walk, depth usize, path string) json.Value throws Abort {
+    if depth >= MAX_DEPTH {
+        throw Abort.Syntax;
+    }
+    skip_space(inout state);
+    let begin = state.cursor;
+    if state.cursor >= vec.len(state.bytes) {
+        throw Abort.Syntax;
+    }
+    let lead = state.bytes[state.cursor];
+    var value = json.Value.Null;
+    if lead == 123 {
+        value = parse_object(inout state, depth, path);
+    } else if lead == 91 {
+        value = parse_array(inout state, depth, path);
+    } else if lead == 34 {
+        value = json.Value.String(scan_string(inout state));
+    } else if lead == 45 {
+        if state.cursor + 9 <= vec.len(state.bytes) &&
+           match_literal(inout state, "-Infinity") {
+            value = json.Value.Number("-Infinity");
+        } else {
+            value = json.Value.Number(scan_number(inout state));
+        }
+    } else if is_digit(lead) {
+        value = json.Value.Number(scan_number(inout state));
+    } else if lead == 116 {
+        if !match_literal(inout state, "true") {
+            throw Abort.Syntax;
+        }
+        value = json.Value.Bool(true);
+    } else if lead == 102 {
+        if !match_literal(inout state, "false") {
+            throw Abort.Syntax;
+        }
+        value = json.Value.Bool(false);
+    } else if lead == 110 {
+        if !match_literal(inout state, "null") {
+            throw Abort.Syntax;
+        }
+        value = json.Value.Null;
+    } else if lead == 78 {
+        if !match_literal(inout state, "NaN") {
+            throw Abort.Syntax;
+        }
+        value = json.Value.Number("NaN");
+    } else if lead == 73 {
+        if !match_literal(inout state, "Infinity") {
+            throw Abort.Syntax;
+        }
+        value = json.Value.Number("Infinity");
+    } else {
+        throw Abort.Syntax;
+    }
+    vec.push(state.spans, LocatedSpan(pointer: path,
+        span: source.raw_span(state.input, u64(begin), u64(state.cursor))));
+    return value;
+}
+
+func needs_scalar_terminator(value json.Value) bool {
+    switch value {
+        case json.Value.Number(token): return true;
+        case json.Value.Bool(item): return true;
+        case _: return false;
+    }
+}
+
+pub func parse(input model.Source) Document throws Error {
+    if !input.valid {
+        throw invalid_whole(input);
+    }
+    let spans = vec.empty[LocatedSpan]();
+    var state = Walk(input: input, bytes: input.original, cursor: 0, spans: spans,
+        has_invalid: false, invalid_message: "",
+        invalid_span: source.raw_span(input, 0, 0));
+    var root = json.Value.Null;
+    try {
+        root = parse_value(inout state, 0, "");
+        let value_end = state.cursor;
+        if needs_scalar_terminator(root) &&
+           (value_end >= vec.len(state.bytes) ||
+            !is_space(state.bytes[value_end])) {
+            throw Abort.Syntax;
+        }
+        skip_space(inout state);
+        if state.cursor != vec.len(state.bytes) {
+            throw Abort.Syntax;
+        }
+        switch root {
+            case json.Value.Null: throw Abort.Syntax;
+            case _: {}
+        }
+    } catch error Abort {
+        throw invalid_whole(input);
+    }
+    if state.has_invalid {
+        throw Error.Invalid(state.invalid_message, state.invalid_span);
+    }
+    return Document(root: root, spans: state.spans);
+}

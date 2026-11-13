@@ -1,0 +1,678 @@
+// Project manifest loading for the self-hosted compiler (SH05).
+//
+// This mirrors the manifest part of src/modules/project.cpp. It uses the
+// accepted-input path, the pure-Wz TOML reader and the self-hosted canonical
+// path operation; it never invokes the old compiler, toml++ or another host
+// parser/executable.
+//
+// Observable rules kept from the C++ implementation:
+// * the manifest and package.source_root are canonical; the manifest span is
+//   the whole original byte range;
+// * E_MANIFEST_INVALID is an Environment failure with phase "resolve", while
+//   an I/O/canonical failure is E_INPUT_IO/Environment;
+// * package name, main entry, dependency and build checks run in the same
+//   order, and toml++ table iteration is reproduced by sorting keys;
+// * non-main dependencies ignore build.backend/word_bits instead of
+//   validating types that the C++ code does not use.
+//
+// Two intentional text differences are documented in the test runner:
+// TOML syntax/range errors report the Woozy reader's text/range description,
+// not toml++'s wording; the diagnostic code, classification and whole-source
+// span stay exact. The generic TOML reader keeps arbitrary integer text, so
+// this module recursively applies the toml++ signed-64 limit to every
+// integer (including unused and unknown fields) before reading any config.
+package manifest;
+
+import "app/wzcc/input" as input;
+import "app/wzcc/model" as model;
+import "app/wzcc/paths" as paths;
+import "app/wzcc/source" as source;
+import "app/wzcc/toml" as toml;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+func error_text(error os.Error) string {
+    switch error {
+        case os.Error.Interrupted(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.WouldBlock(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.System(code,completed):
+            return "os error "+strconv.format_i64(i64(code));
+        case os.Error.NoProgress(completed):
+            return "no progress";
+    }
+}
+
+func invalid(span model.Span, message string) model.ManifestResult {
+    return model.ManifestResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Environment,
+        diagnostics: [model.diagnostic("E_MANIFEST_INVALID","resolve",message,span)],
+        has_value: false, value: model.empty_manifest());
+}
+
+func io_failure(path string, message string) model.ManifestResult {
+    var diagnostic = model.diagnostic("E_INPUT_IO","resolve",
+        path+": "+message,
+        model.Span(snapshot: 0, begin_byte: 0, end_byte: 0));
+    diagnostic.has_primary = false;
+    return model.ManifestResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Environment, diagnostics: [diagnostic],
+        has_value: false, value: model.empty_manifest());
+}
+
+func canonical_io(path string, error os.Error) model.ManifestResult {
+    return io_failure(path,"cannot canonicalize ("+error_text(error)+")");
+}
+
+func copied_read_failure(value input.ReadResult) model.ManifestResult {
+    return model.ManifestResult(state: value.state, failure: value.failure,
+        diagnostics: value.diagnostics, has_value: false,
+        value: model.empty_manifest());
+}
+
+func parent_path(value string) string {
+    var slash i64 = -1;
+    for var index usize = 0; index < text.len(value); index += 1 {
+        if value[index] == 47 { slash = i64(index); }
+    }
+    if slash < 0 { return value; }
+    if slash == 0 { return "/"; }
+    return value[0:usize(slash)];
+}
+
+func ident(value string) bool {
+    if value == "" { return false; }
+    let first = value[0];
+    let alpha = (first >= 65 && first <= 90) || (first >= 97 && first <= 122) ||
+        first == 95;
+    if !alpha { return false; }
+    for rune in value {
+        if !((rune >= 65 && rune <= 90) || (rune >= 97 && rune <= 122) ||
+             (rune >= 48 && rune <= 57) || rune == 95) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func logical(value string) bool {
+    var start usize = 0;
+    for true {
+        var end = text.find_from(value,"/",start);
+        var stop usize = text.len(value);
+        switch end {
+            case option.Option.Some(index): stop = index;
+            case option.Option.None: {}
+        }
+        if !ident(value[start:stop]) { return false; }
+        if stop == text.len(value) { return true; }
+        start = stop + 1;
+    }
+}
+
+func valid_library(value string) bool {
+    if value == "" || value[0] == 45 { return false; }
+    for rune in value {
+        if !((rune >= 65 && rune <= 90) || (rune >= 97 && rune <= 122) ||
+             (rune >= 48 && rune <= 57) || rune == 95 || rune == 43 ||
+             rune == 45 || rune == 46) {
+            return false;
+        }
+    }
+    return true;
+}
+
+func valid_library_dir(value string) bool {
+    return value != "" && value[0] != 45 && !text.contains(value,"\u{0}");
+}
+
+func find_entry(entries Vec[toml.Entry], key string) i64 {
+    for var index usize = 0; index < vec.len(entries); index += 1 {
+        if entries[index].key == key { return i64(index); }
+    }
+    return -1;
+}
+
+func table_entries(value toml.Value) Vec[toml.Entry] {
+    switch value {
+        case toml.Value.Table(entries): return entries;
+        case _: return vec.empty[toml.Entry]();
+    }
+}
+
+func is_table(value toml.Value) bool {
+    switch value {
+        case toml.Value.Table(entries): return true;
+        case _: return false;
+    }
+}
+
+func is_array_value(value toml.Value) bool {
+    switch value {
+        case toml.Value.Array(items): return true;
+        case _: return false;
+    }
+}
+
+func build_entries_of(root_entries Vec[toml.Entry]) Vec[toml.Entry] {
+    let index = find_entry(root_entries,"build");
+    if index < 0 { return vec.empty[toml.Entry](); }
+    return table_entries(root_entries[usize(index)].value);
+}
+
+func string_value(value toml.Value) string {
+    switch value {
+        case toml.Value.String(value): return value;
+        case _: return "";
+    }
+}
+
+func required_field(entries Vec[toml.Entry], key string) string {
+    let index = find_entry(entries,key);
+    if index < 0 { return ""; }
+    return string_value(entries[usize(index)].value);
+}
+
+func required_ok(value string) bool {
+    return value != "" && !text.contains(value,"\u{0}");
+}
+
+func contains(values Vec[string], value string) bool {
+    for item in values {
+        if item == value { return true; }
+    }
+    return false;
+}
+
+func sorted_keys(entries Vec[toml.Entry]) Vec[string] {
+    let keys = vec.empty[string]();
+    for entry in entries {
+        vec.push(keys,entry.key);
+    }
+    for var index usize = 1; index < vec.len(keys); index += 1 {
+        let value = keys[index];
+        var position = index;
+        for position > 0 && value < keys[position - 1] {
+            keys[position] = keys[position - 1];
+            position -= 1;
+        }
+        keys[position] = value;
+    }
+    return keys;
+}
+
+func unknown_key(entries Vec[toml.Entry], allowed Vec[string], prefix string) string {
+    for key in sorted_keys(entries) {
+        if !contains(allowed,key) { return prefix+key; }
+    }
+    return "";
+}
+
+func digit_value(rune u32, base u32) u32 {
+    if rune >= 48 && rune <= 57 { return rune - 48; }
+    if base == 16 {
+        if rune >= 65 && rune <= 70 { return rune - 55; }
+        if rune >= 97 && rune <= 102 { return rune - 87; }
+    }
+    return 0;
+}
+
+func integer_base(raw string, start usize) u32 {
+    if start+2 <= text.len(raw) && raw[start] == 48 {
+        if raw[start + 1] == 120 { return 16; }
+        if raw[start + 1] == 111 { return 8; }
+        if raw[start + 1] == 98 { return 2; }
+    }
+    return 10;
+}
+
+func integer_start(raw string) usize {
+    if text.len(raw) != 0 && (raw[0] == 43 || raw[0] == 45) { return 1; }
+    return 0;
+}
+
+func integer_magnitude(raw string, start usize, base u32) u64 {
+    var magnitude u64 = 0;
+    for var index = start; index < text.len(raw); index += 1 {
+        let rune = raw[index];
+        if rune == 95 { continue; }
+        magnitude = magnitude * u64(base) + u64(digit_value(rune,base));
+    }
+    return magnitude;
+}
+
+// Mirrors toml++ parse_integer<base>: decimal is signed and limited to 19
+// digits; hex/octal/binary are unsigned, trim leading zeroes for the digit
+// limit, and still must fit int64_t. Underscores are not digits.
+func integer_fits_i64(raw string) bool {
+    let start = integer_start(raw);
+    let base = integer_base(raw,start);
+    var digits_start = start;
+    if base != 10 { digits_start = start + 2; }
+    var negative = false;
+    if base == 10 && text.len(raw) != 0 && raw[0] == 45 { negative = true; }
+
+    var digits usize = 0;
+    var significant usize = 0;
+    var magnitude u64 = 0;
+    var leading = true;
+    for var index = digits_start; index < text.len(raw); index += 1 {
+        let rune = raw[index];
+        if rune == 95 { continue; }
+        digits += 1;
+        let digit = digit_value(rune,base);
+        if leading && digit == 0 && base != 10 { continue; }
+        leading = false;
+        significant += 1;
+        magnitude = magnitude * u64(base) + u64(digit);
+    }
+    if base == 10 {
+        if digits > 19 { return false; }
+    } else {
+        if base == 16 && significant > 16 { return false; }
+        if base == 8 && significant > 21 { return false; }
+        if base == 2 && significant > 63 { return false; }
+    }
+    let maximum u64 = u64(9223372036854775807);
+    if negative {
+        if magnitude > maximum + 1 { return false; }
+    } else if magnitude > maximum {
+        return false;
+    }
+    return true;
+}
+
+func integer_to_i64(raw string) i64 {
+    let start = integer_start(raw);
+    let base = integer_base(raw,start);
+    var digits_start = start;
+    if base != 10 { digits_start = start + 2; }
+    let magnitude = integer_magnitude(raw,digits_start,base);
+    let maximum u64 = u64(9223372036854775807);
+    if base == 10 && text.len(raw) != 0 && raw[0] == 45 {
+        if magnitude == maximum + 1 { return -9223372036854775807 - 1; }
+        return -i64(magnitude);
+    }
+    return i64(magnitude);
+}
+
+struct NumberCheck { ok bool; message string; }
+
+func number_text(raw string, integer bool) string {
+    var start=integer_start(raw);
+    if integer && integer_base(raw,start)!=10 {start+=2;}
+    var out="";
+    for var index=start;index<text.len(raw);index+=1 {
+        if raw[index]!=95 {out+=raw[index:index+1];}
+    }
+    return out;
+}
+func float_in_range(raw string) bool {
+    var cleaned="";
+    for var index usize=0;index<text.len(raw);index+=1 {
+        if raw[index]!=95 {cleaned+=raw[index:index+1];}
+    }
+    try {let value=strconv.parse_f64(cleaned);return true;}
+    catch error strconv.Error {return false;}
+}
+func time_precision(raw string) bool {
+    switch text.find(raw,".") {
+        case option.Option.None:return true;
+        case option.Option.Some(point): {
+            var end=point+1;
+            for end<text.len(raw)&&raw[end]>=48&&raw[end]<=57 {end+=1;}
+            return end-point-1<=64;
+        }
+    }
+}
+func check_numbers(value toml.Value) NumberCheck {
+    switch value {
+        case toml.Value.Integer(raw): {
+            if text.len(number_text(raw,true))>128 {
+                return NumberCheck(ok:false,message:"number exceeds TOML reader limit of 128 characters");
+            }
+            if !integer_fits_i64(raw) {
+                return NumberCheck(ok:false,message:"integer value is out of range: "+raw);
+            }
+        }
+        case toml.Value.Float(raw): {
+            if text.len(number_text(raw,false))>128 {
+                return NumberCheck(ok:false,message:"number exceeds TOML reader limit of 128 characters");
+            }
+            if !float_in_range(raw) {
+                return NumberCheck(ok:false,message:"floating value is out of range: "+raw);
+            }
+        }
+        case toml.Value.LocalTime(raw): {
+            if !time_precision(raw) {return NumberCheck(ok:false,message:"time fraction exceeds TOML reader limit of 64 digits");}
+        }
+        case toml.Value.LocalDateTime(raw): {
+            if !time_precision(raw) {return NumberCheck(ok:false,message:"time fraction exceeds TOML reader limit of 64 digits");}
+        }
+        case toml.Value.OffsetDateTime(raw): {
+            if !time_precision(raw) {return NumberCheck(ok:false,message:"time fraction exceeds TOML reader limit of 64 digits");}
+        }
+        case toml.Value.Array(items): {
+            for item in items {let result=check_numbers(item);if !result.ok {return result;}}
+        }
+        case toml.Value.Table(entries): {
+            for entry in entries {let result=check_numbers(entry.value);if !result.ok {return result;}}
+        }
+        default:{}
+    }
+    return NumberCheck(ok:true,message:"");
+}
+
+func schema_number_is_one(raw string) bool {
+    var value f64 = 0.0;
+    try { value = strconv.parse_f64(text.replace(raw,"_","")); }
+    catch error strconv.Error { return false; }
+    return value == 1.0;
+}
+
+
+pub func load(path string, is_main bool,
+              manager inout source.Manager) model.ManifestResult {
+    var manifest_path = "";
+    try { manifest_path = paths.canonical(path); }
+    catch error os.Error { return canonical_io(path,error); }
+
+    let reading = input.read(manifest_path,inout manager);
+    if !reading.has_value { return copied_read_failure(reading); }
+    let snapshot = reading.value;
+    let span = source.raw_span(snapshot,0,u64(vec.len(snapshot.original)));
+
+    var normalized = "";
+    try { normalized = text.from_bytes(snapshot.normalized); }
+    catch error text.Error { return invalid(span,"invalid UTF-8 in manifest"); }
+
+    var document = toml.Document(root: toml.Value.Table(vec.empty[toml.Entry]()));
+    var syntax_message = "";
+    try { document = toml.parse(normalized); }
+    catch error toml.Error {
+        switch error {
+            case toml.Error.Syntax(offset,message): syntax_message = message;
+        }
+        if syntax_message == "" { syntax_message = "invalid TOML"; }
+        return invalid(span,"TOML syntax error: "+syntax_message);
+    }
+
+    let numbers = check_numbers(document.root);
+    if !numbers.ok {return invalid(span,numbers.message);}
+
+    let root_entries = table_entries(document.root);
+    let schema_index = find_entry(root_entries,"schema_version");
+    var schema_ok = false;
+    if schema_index >= 0 {
+        switch root_entries[usize(schema_index)].value {
+            case toml.Value.Integer(raw): {
+                if integer_to_i64(raw) == 1 { schema_ok = true; }
+            }
+            case toml.Value.Boolean(value): {
+                if value { schema_ok = true; }
+            }
+            case toml.Value.Float(raw): {
+                if schema_number_is_one(raw) { schema_ok = true; }
+            }
+            case _: {}
+        }
+    }
+    if !schema_ok {
+        return invalid(span,"schema_version must be 1");
+    }
+
+    var package_entries = vec.empty[toml.Entry]();
+    let package_index = find_entry(root_entries,"package");
+    if package_index >= 0 {
+        package_entries = table_entries(root_entries[usize(package_index)].value);
+    }
+
+    let package_name = required_field(package_entries,"name");
+    if !required_ok(package_name) {
+        return invalid(span,"missing or invalid name");
+    }
+    if !ident(package_name) {
+        return invalid(span,"invalid package name");
+    }
+
+    let manifest_dir = parent_path(manifest_path);
+    let source_root_text = required_field(package_entries,"source_root");
+    if !required_ok(source_root_text) {
+        return invalid(span,"missing or invalid source_root");
+    }
+    let source_root_path = paths.join(manifest_dir,source_root_text);
+    var root = "";
+    try { root = paths.canonical(source_root_path); }
+    catch error os.Error { return canonical_io(source_root_path,error); }
+
+    let entry_index = find_entry(package_entries,"entry");
+    var entry_present = entry_index >= 0;
+    var entry = "";
+    if entry_present {
+        switch package_entries[usize(entry_index)].value {
+            case toml.Value.String(value): entry = value;
+            case _: return invalid(span,"entry must be a string");
+        }
+    }
+    if is_main {
+        entry = required_field(package_entries,"entry");
+        if !required_ok(entry) {
+            return invalid(span,"missing or invalid entry");
+        }
+    } else if !entry_present {
+        entry = "app";
+    }
+    if !logical(entry) {
+        return invalid(span,"entry must be a logical module");
+    }
+
+    let dependencies = vec.empty[model.Dependency]();
+    let dependencies_index = find_entry(root_entries,"dependencies");
+    if dependencies_index >= 0 {
+        let dependencies_value = root_entries[usize(dependencies_index)].value;
+        if !is_table(dependencies_value) {
+            return invalid(span,"dependencies must be a table");
+        }
+        let dependency_table = table_entries(dependencies_value);
+        for name in sorted_keys(dependency_table) {
+            if !ident(name) || name == "std" || name == "app" {
+                return invalid(span,"reserved or invalid dependency: "+name);
+            }
+            let position = find_entry(dependency_table,name);
+            let dep_value = dependency_table[usize(position)].value;
+            if !is_table(dep_value) {
+                return invalid(span,"dependency must be a table");
+            }
+            let dep_entries = table_entries(dep_value);
+            var dep = model.Dependency(name: name, kind: "", source: "",
+                binding: "", host_package: "",
+                libraries: vec.empty[string](),
+                library_dirs: vec.empty[string]());
+            dep.kind = required_field(dep_entries,"kind");
+            if !required_ok(dep.kind) {
+                return invalid(span,"missing or invalid kind");
+            }
+            if dep.kind == "source" {
+                let message = unknown_key(dep_entries,["kind","path"],
+                    "unknown dependency key: ");
+                if message != "" { return invalid(span,message); }
+                let source_path = required_field(dep_entries,"path");
+                if !required_ok(source_path) {
+                    return invalid(span,"missing or invalid path");
+                }
+                dep.source = paths.join(manifest_dir,source_path);
+            } else if dep.kind == "python" {
+                let message = unknown_key(dep_entries,
+                    ["kind","binding","host_package"],
+                    "unknown dependency key: ");
+                if message != "" { return invalid(span,message); }
+                let binding = required_field(dep_entries,"binding");
+                if !required_ok(binding) {
+                    return invalid(span,"missing or invalid binding");
+                }
+                dep.binding = paths.join(manifest_dir,binding);
+                let host = required_field(dep_entries,"host_package");
+                if !required_ok(host) {
+                    return invalid(span,"missing or invalid host_package");
+                }
+                dep.host_package = host;
+            } else if dep.kind == "native" {
+                let message = unknown_key(dep_entries,
+                    ["kind","binding","libraries","library_dirs"],
+                    "unknown dependency key: ");
+                if message != "" { return invalid(span,message); }
+                let binding = required_field(dep_entries,"binding");
+                if !required_ok(binding) {
+                    return invalid(span,"missing or invalid binding");
+                }
+                dep.binding = paths.join(manifest_dir,binding);
+                let libraries_index = find_entry(dep_entries,"libraries");
+                if libraries_index < 0 {
+                    return invalid(span,
+                        "native dependency requires a libraries array");
+                }
+                let libraries_value =
+                    dep_entries[usize(libraries_index)].value;
+                if !is_array_value(libraries_value) {
+                    return invalid(span,
+                        "native dependency requires a libraries array");
+                }
+                switch libraries_value {
+                    case toml.Value.Array(items): {
+                        for item in items {
+                            let library = string_value(item);
+                            if !valid_library(library) {
+                                return invalid(span,"invalid native library name");
+                            }
+                            vec.push(dep.libraries,library);
+                        }
+                    }
+                    case _: {}
+                }
+                let dirs_index = find_entry(dep_entries,"library_dirs");
+                if dirs_index >= 0 {
+                    let dirs_value = dep_entries[usize(dirs_index)].value;
+                    if !is_array_value(dirs_value) {
+                        return invalid(span,"library_dirs must be an array");
+                    }
+                    switch dirs_value {
+                        case toml.Value.Array(items): {
+                            for item in items {
+                                let dir = string_value(item);
+                                if !valid_library_dir(dir) {
+                                    return invalid(span,
+                                        "invalid native library directory");
+                                }
+                                vec.push(dep.library_dirs,
+                                    paths.join(manifest_dir,dir));
+                            }
+                        }
+                        case _: {}
+                    }
+                }
+            } else {
+                return invalid(span,"unknown dependency kind");
+            }
+            vec.push(dependencies,dep);
+        }
+    }
+
+    let build_index = find_entry(root_entries,"build");
+    var hosted = false;
+    if build_index >= 0 {
+        let build_value = root_entries[usize(build_index)].value;
+        if !is_table(build_value) {
+            return invalid(span,"build must be a table");
+        }
+        let build_entries = table_entries(build_value);
+        let build_message = unknown_key(build_entries,
+            ["backend","word_bits","native"],"unknown build key: ");
+        if build_message != "" { return invalid(span,build_message); }
+        let native_index = find_entry(build_entries,"native");
+        if native_index >= 0 {
+            let native_value = build_entries[usize(native_index)].value;
+            if !is_table(native_value) {
+                return invalid(span,"build.native must be a table");
+            }
+            let native_entries = table_entries(native_value);
+            let native_message = unknown_key(native_entries,["runtime"],
+                "unknown build.native key: ");
+            if native_message != "" { return invalid(span,native_message); }
+            let runtime_index = find_entry(native_entries,"runtime");
+            var runtime = "freestanding";
+            if runtime_index >= 0 {
+                let runtime_value = native_entries[usize(runtime_index)].value;
+                var runtime_is_string = false;
+                switch runtime_value {
+                    case toml.Value.String(value): {
+                        runtime = value;
+                        runtime_is_string = true;
+                    }
+                    case _: {}
+                }
+                if !runtime_is_string {
+                    return invalid(span,"build.native.runtime must be a string");
+                }
+            }
+            if runtime != "freestanding" && runtime != "hosted" {
+                return invalid(span,
+                    "build.native.runtime must be freestanding or hosted");
+            }
+            hosted = runtime == "hosted";
+        }
+    }
+
+    var backend = "native";
+    var word_bits u32 = 64;
+    if is_main {
+        if !(entry == "app" || text.starts_with(entry,"app/")) {
+            return invalid(span,"project entry must be an app logical module");
+        }
+        let main_build = build_entries_of(root_entries);
+        let backend_index = find_entry(main_build,"backend");
+        if backend_index >= 0 {
+            switch main_build[usize(backend_index)].value {
+                case toml.Value.String(value): {}
+                case _: return invalid(span,"backend must be a string");
+            }
+        }
+        let bits_index = find_entry(main_build,"word_bits");
+        if bits_index >= 0 {
+            switch main_build[usize(bits_index)].value {
+                case toml.Value.Integer(raw): {}
+                case _: return invalid(span,"word_bits must be an integer");
+            }
+        }
+        if backend_index >= 0 {
+            switch main_build[usize(backend_index)].value {
+                case toml.Value.String(value): backend = value;
+                case _: {}
+            }
+        }
+        if backend != "native" && backend != "python" {
+            return invalid(span,"invalid backend");
+        }
+        if bits_index >= 0 {
+            var bits i64 = 64;
+            switch main_build[usize(bits_index)].value {
+                case toml.Value.Integer(raw): bits = integer_to_i64(raw);
+                case _: {}
+            }
+            if bits != 32 && bits != 64 {
+                return invalid(span,"word_bits must be 32 or 64");
+            }
+            word_bits = u32(bits);
+        }
+    }
+
+    return model.ManifestResult(state: model.PhaseState.Complete,
+        failure: model.FailureKind.Internal, diagnostics: [], has_value: true,
+        value: model.ManifestConfig(manifest: manifest_path, root: root,
+            package_name: package_name, entry: entry, backend: backend,
+            word_bits: word_bits, hosted: hosted,
+            dependencies: dependencies, source: span));
+}

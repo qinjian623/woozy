@@ -1,0 +1,3 @@
+package p;
+struct Secret {}
+pub impl Secret { func f() {} }

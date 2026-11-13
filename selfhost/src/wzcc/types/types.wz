@@ -1,0 +1,538 @@
+// Canonical type table and structural type operations.
+//
+// This is the pure-Wz counterpart of lang::hir::TypeContext in
+// include/lang/hir/hir.hpp and src/hir/hir.cpp.  TypeId values are 1-based;
+// zero is invalid.  Intern validates only the canonical shape and references
+// already present in this table.  Declarations, bindings and C type indices
+// are ordinary identity fields here; checking that they name real project
+// declarations belongs to source/public-type validation, not to this table.
+//
+// Vec is a shared handle in Woozy.  Every value stored in the table and every
+// value handed back by find therefore owns independent parameter/type_args
+// arrays.  Otherwise a caller could mutate a table entry through an alias.
+package types;
+
+import "app/wzcc/model" as model;
+import "std/option" as option;
+import "std/vec" as vec;
+
+pub struct Context {
+    entries Vec[model.Type];
+}
+
+pub enum Error {
+    Invalid(message string);
+}
+
+struct CacheEntry {
+    key usize;
+    value usize;
+}
+
+struct BindingEntry {
+    symbol usize;
+    type_id usize;
+}
+
+struct Pair {
+    left usize;
+    right usize;
+}
+
+func invalid_error() Error {
+    return Error.Invalid("invalid canonical type shape/reference");
+}
+
+func is_nominal(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.NominalStruct) ||
+           kind_is(kind, model.TypeKind.NominalEnum) ||
+           kind_is(kind, model.TypeKind.TypeParameter);
+}
+
+func is_c_declared(kind model.TypeKind) bool {
+    return kind_is(kind, model.TypeKind.CForeignRecord) ||
+           kind_is(kind, model.TypeKind.CForeignResource) ||
+           kind_is(kind, model.TypeKind.CForeignCallback) ||
+           kind_is(kind, model.TypeKind.CForeignOpaque);
+}
+
+func kind_is(kind model.TypeKind, expected model.TypeKind) bool {
+    return model.type_kind_id(kind) == model.type_kind_id(expected);
+}
+
+func mode_id(mode model.ParamMode) u32 {
+    switch mode {
+        case model.ParamMode.Ordinary: return 0;
+        case model.ParamMode.Inout: return 1;
+        case model.ParamMode.Move: return 2;
+    }
+}
+
+func mode_valid(mode model.ParamMode) bool {
+    let id = mode_id(mode);
+    return id == 0 || id == 1 || id == 2;
+}
+
+// Copy parameter arrays.  Vec slices copy elements, but this explicit copy
+// also documents the ownership boundary required by the table's API.
+func copy_parameters(values Vec[model.ParameterType]) Vec[model.ParameterType] {
+    let out = vec.empty[model.ParameterType]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, model.ParameterType(mode: value.mode,
+            type_id: value.type_id));
+    }
+    return out;
+}
+
+func copy_ids(values Vec[usize]) Vec[usize] {
+    let out = vec.empty[usize]();
+    vec.reserve(out, vec.len(values));
+    for value in values {
+        vec.push(out, value);
+    }
+    return out;
+}
+
+func copy_type(value model.Type) model.Type {
+    return model.Type(kind: value.kind, bits: value.bits,
+        declaration: value.declaration, binding: value.binding,
+        parameters: copy_parameters(value.parameters), result: value.result,
+        throws_type: value.throws_type,
+        type_args: copy_ids(value.type_args), c_type: value.c_type);
+}
+
+func parameters_equal(left Vec[model.ParameterType],
+                      right Vec[model.ParameterType]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if mode_id(left[index].mode) != mode_id(right[index].mode) ||
+           left[index].type_id != right[index].type_id {
+            return false;
+        }
+    }
+    return true;
+}
+
+func ids_equal(left Vec[usize], right Vec[usize]) bool {
+    if vec.len(left) != vec.len(right) {
+        return false;
+    }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] {
+            return false;
+        }
+    }
+    return true;
+}
+
+func option_usize(value option.Option[usize]) usize {
+    switch value {
+        case option.Option.Some(item): return item;
+        case option.Option.None: return 0;
+    }
+}
+
+func throws_equal(left option.Option[usize],
+                  right option.Option[usize]) bool {
+    if option.is_some(left) != option.is_some(right) {
+        return false;
+    }
+    if !option.is_some(left) {
+        return true;
+    }
+    return option_usize(left) == option_usize(right);
+}
+
+pub func context() Context {
+    return Context(entries: vec.empty[model.Type]());
+}
+
+// A genuine value copy of the C++ TypeContext for table-copy experiments.
+// Every entry and its nested arrays are independent, and IDs in the source
+// context are untouched.
+pub func clone_context(state Context) Context {
+    let out = vec.empty[model.Type]();
+    vec.reserve(out, vec.len(state.entries));
+    for value in state.entries {
+        vec.push(out, copy_type(value));
+    }
+    return Context(entries: out);
+}
+
+func has_type(state Context, id usize) bool {
+    return id != 0 && id <= vec.len(state.entries);
+}
+
+func find_cached(cache Vec[CacheEntry], key usize) i64 {
+    for var index usize = 0; index < vec.len(cache); index += 1 {
+        if cache[index].key == key {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func find_binding(bindings Vec[BindingEntry], symbol usize) i64 {
+    for var index usize = 0; index < vec.len(bindings); index += 1 {
+        if bindings[index].symbol == symbol {
+            return i64(index);
+        }
+    }
+    return -1;
+}
+
+func set_binding(bindings Vec[BindingEntry], symbol usize, type_id usize) {
+    let found = find_binding(bindings, symbol);
+    if found >= 0 {
+        bindings[usize(found)].type_id = type_id;
+    } else {
+        vec.push(bindings, BindingEntry(symbol: symbol, type_id: type_id));
+    }
+}
+
+pub func intern(state inout Context, value model.Type) usize throws Error {
+    let kind = value.kind;
+    if kind_is(kind, model.TypeKind.SignedInt) || kind_is(kind, model.TypeKind.UnsignedInt) {
+        if value.bits != 8 && value.bits != 16 && value.bits != 32 &&
+           value.bits != 64 {
+            throw invalid_error();
+        }
+    } else if kind_is(kind, model.TypeKind.Float) {
+        if value.bits != 32 && value.bits != 64 {
+            throw invalid_error();
+        }
+    } else if kind_is(kind, model.TypeKind.Vec) || kind_is(kind, model.TypeKind.Slice) {
+        if vec.len(value.type_args) != 1 {
+            throw invalid_error();
+        }
+    } else if kind_is(kind, model.TypeKind.Weak) {
+        if vec.len(value.type_args) != 1 {
+            throw invalid_error();
+        }
+    } else if kind_is(kind, model.TypeKind.Task) {
+        if vec.len(value.type_args) != 2 {
+            throw invalid_error();
+        }
+    } else if kind_is(kind, model.TypeKind.TraitObject) {
+        // Trait argument arity is a declaration check in HIR verification.
+        // Interning enforces only the structural fat-pointer shape.
+        if value.declaration == 0 || value.bits != 0 || value.binding != 0 ||
+           value.c_type != 0 || vec.len(value.parameters) != 0 ||
+           value.result != 0 || option.is_some(value.throws_type) {
+            throw invalid_error();
+        }
+    } else if kind_is(kind, model.TypeKind.CForeignPointer) ||
+              kind_is(kind, model.TypeKind.CForeignBuffer) {
+        if vec.len(value.type_args) != 1 || value.bits > 1 ||
+           value.c_type != 0 {
+            throw invalid_error();
+        }
+    } else if is_c_declared(kind) {
+        if value.c_type == 0 || vec.len(value.type_args) != 0 ||
+           value.bits != 0 {
+            throw invalid_error();
+        }
+    } else if kind_is(kind, model.TypeKind.Function) {
+        if !has_type(state, value.result) ||
+           (option.is_some(value.throws_type) &&
+            !has_type(state, option_usize(value.throws_type))) {
+            throw invalid_error();
+        }
+        for parameter in value.parameters {
+            if !has_type(state, parameter.type_id) ||
+               !mode_valid(parameter.mode) {
+                throw invalid_error();
+            }
+        }
+    } else if kind_is(kind, model.TypeKind.Unit) || kind_is(kind, model.TypeKind.Bool) ||
+              kind_is(kind, model.TypeKind.String) ||
+              kind_is(kind, model.TypeKind.Isize) ||
+              kind_is(kind, model.TypeKind.Usize) ||
+              kind_is(kind, model.TypeKind.NominalStruct) ||
+              kind_is(kind, model.TypeKind.NominalEnum) ||
+              kind_is(kind, model.TypeKind.TypeParameter) ||
+              kind_is(kind, model.TypeKind.ForeignOpaque) ||
+              kind_is(kind, model.TypeKind.ForeignCallable) ||
+              kind_is(kind, model.TypeKind.ThreadHandle) ||
+              kind_is(kind, model.TypeKind.MutexHandle) ||
+              kind_is(kind, model.TypeKind.CondvarHandle) ||
+              kind_is(kind, model.TypeKind.AtomicI64Handle) ||
+              kind_is(kind, model.TypeKind.IpcHandle) ||
+              kind_is(kind, model.TypeKind.Error) {
+        // Canonical leaf or nominal identity shape; fields are checked below.
+    } else {
+        throw invalid_error();
+    }
+
+    if !kind_is(kind, model.TypeKind.Function) &&
+       (vec.len(value.parameters) != 0 || value.result != 0 ||
+        option.is_some(value.throws_type)) {
+        throw invalid_error();
+    }
+    if !kind_is(kind, model.TypeKind.SignedInt) &&
+       !kind_is(kind, model.TypeKind.UnsignedInt) &&
+       !kind_is(kind, model.TypeKind.Float) &&
+       !kind_is(kind, model.TypeKind.CForeignPointer) &&
+       !kind_is(kind, model.TypeKind.CForeignBuffer) && value.bits != 0 {
+        throw invalid_error();
+    }
+    if !is_nominal(kind) && !kind_is(kind, model.TypeKind.TraitObject) &&
+       !kind_is(kind, model.TypeKind.ForeignOpaque) &&
+       !kind_is(kind, model.TypeKind.ForeignCallable) &&
+       (value.declaration != 0 || value.binding != 0) {
+        throw invalid_error();
+    }
+    if is_nominal(kind) && value.binding != 0 {
+        throw invalid_error();
+    }
+    if !kind_is(kind, model.TypeKind.NominalStruct) &&
+       !kind_is(kind, model.TypeKind.NominalEnum) &&
+       !kind_is(kind, model.TypeKind.Vec) &&
+       !kind_is(kind, model.TypeKind.Slice) &&
+       !kind_is(kind, model.TypeKind.Weak) &&
+       !kind_is(kind, model.TypeKind.Task) &&
+       !kind_is(kind, model.TypeKind.TraitObject) &&
+       !kind_is(kind, model.TypeKind.CForeignPointer) &&
+       !kind_is(kind, model.TypeKind.CForeignBuffer) &&
+       vec.len(value.type_args) != 0 {
+        throw invalid_error();
+    }
+    if is_c_declared(kind) != (value.c_type != 0) {
+        throw invalid_error();
+    }
+    for type_arg in value.type_args {
+        if !has_type(state, type_arg) {
+            throw invalid_error();
+        }
+    }
+
+    for var index usize = 0; index < vec.len(state.entries); index += 1 {
+        if equal(state.entries[index], value) {
+            return index + 1;
+        }
+    }
+    vec.push(state.entries, copy_type(value));
+    return vec.len(state.entries);
+}
+
+pub func find(state Context, id usize) option.Option[model.Type] {
+    if id == 0 || id > vec.len(state.entries) {
+        return option.Option[model.Type].None;
+    }
+    return option.Option[model.Type].Some(copy_type(state.entries[id - 1]));
+}
+
+pub func size(state Context) usize {
+    return vec.len(state.entries);
+}
+
+pub func equal(left model.Type, right model.Type) bool {
+    return kind_is(left.kind, right.kind) && left.bits == right.bits &&
+           left.declaration == right.declaration &&
+           left.binding == right.binding &&
+           parameters_equal(left.parameters, right.parameters) &&
+           left.result == right.result &&
+           throws_equal(left.throws_type, right.throws_type) &&
+           ids_equal(left.type_args, right.type_args) &&
+           left.c_type == right.c_type;
+}
+
+// Target width, never host sizeof.  The configuration is checked before the
+// type, so an invalid word_bits reports "target word_bits" even for a
+// non-numeric type.
+pub func bit_width(value model.Type, config model.CheckConfig) u32 throws Error {
+    if config.word_bits != 32 && config.word_bits != 64 {
+        throw Error.Invalid("target word_bits");
+    }
+    if kind_is(value.kind, model.TypeKind.Isize) ||
+       kind_is(value.kind, model.TypeKind.Usize) {
+        return config.word_bits;
+    }
+    if kind_is(value.kind, model.TypeKind.SignedInt) ||
+       kind_is(value.kind, model.TypeKind.UnsignedInt) ||
+       kind_is(value.kind, model.TypeKind.Float) {
+        return value.bits;
+    }
+    throw Error.Invalid("type has no numeric width");
+}
+
+func require_type(state Context, id usize, message string) model.Type throws Error {
+    let found = find(state, id);
+    switch found {
+        case option.Option.Some(value): return value;
+        case option.Option.None: throw Error.Invalid(message);
+    }
+}
+
+func substitute_visit(current usize, substitutions Vec[model.Substitution],
+                      state inout Context,
+                      cache Vec[CacheEntry]) usize throws Error {
+    let cached = find_cached(cache, current);
+    if cached >= 0 {
+        return cache[usize(cached)].value;
+    }
+    var value = require_type(state, current, "substitution missing type");
+    if kind_is(value.kind, model.TypeKind.TypeParameter) {
+        for substitution in substitutions {
+            if substitution.symbol == value.declaration {
+                vec.push(cache, CacheEntry(key: current,
+                    value: substitution.type_id));
+                return substitution.type_id;
+            }
+        }
+        vec.push(cache, CacheEntry(key: current, value: current));
+        return current;
+    }
+    for var index usize = 0; index < vec.len(value.type_args); index += 1 {
+        value.type_args[index] = substitute_visit(value.type_args[index],
+            substitutions, inout state, cache);
+    }
+    for var index usize = 0; index < vec.len(value.parameters); index += 1 {
+        value.parameters[index].type_id = substitute_visit(
+            value.parameters[index].type_id, substitutions, inout state, cache);
+    }
+    if kind_is(value.kind, model.TypeKind.Function) {
+        value.result = substitute_visit(value.result, substitutions,
+            inout state, cache);
+        if option.is_some(value.throws_type) {
+            value.throws_type = option.Option[usize].Some(substitute_visit(
+                option_usize(value.throws_type), substitutions, inout state,
+                cache));
+        }
+    }
+    let result = intern(inout state, value);
+    vec.push(cache, CacheEntry(key: current, value: result));
+    return result;
+}
+
+pub func substitute(id usize, substitutions Vec[model.Substitution],
+                    state inout Context) usize throws Error {
+    let cache = vec.empty[CacheEntry]();
+    return substitute_visit(id, substitutions, inout state, cache);
+}
+
+func dereference(id usize, bindings Vec[BindingEntry],
+                 state Context) usize throws Error {
+    var current = id;
+    var depth usize = 0;
+    for true {
+        let value = require_type(state, current, "overlap type reference");
+        if !kind_is(value.kind, model.TypeKind.TypeParameter) {
+            break;
+        }
+        if depth > vec.len(bindings) {
+            throw Error.Invalid("cyclic type pattern bindings");
+        }
+        let found = find_binding(bindings, value.declaration);
+        if found < 0 {
+            break;
+        }
+        current = bindings[usize(found)].type_id;
+        depth += 1;
+    }
+    return current;
+}
+
+func id_seen(seen Vec[usize], id usize) bool {
+    for value in seen {
+        if value == id {
+            return true;
+        }
+    }
+    return false;
+}
+
+func occurs(variable usize, root usize, bindings Vec[BindingEntry],
+            state Context) bool throws Error {
+    let pending = vec.empty[usize]();
+    let seen = vec.empty[usize]();
+    vec.push(pending, root);
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let id = dereference(option_usize(popped), bindings, state);
+        if id_seen(seen, id) {
+            continue;
+        }
+        vec.push(seen, id);
+        let value = require_type(state, id, "overlap type reference");
+        if kind_is(value.kind, model.TypeKind.TypeParameter) &&
+           value.declaration == variable {
+            return true;
+        }
+        for type_arg in value.type_args {
+            vec.push(pending, type_arg);
+        }
+        for parameter in value.parameters {
+            vec.push(pending, parameter.type_id);
+        }
+        if kind_is(value.kind, model.TypeKind.Function) {
+            vec.push(pending, value.result);
+            if option.is_some(value.throws_type) {
+                vec.push(pending, option_usize(value.throws_type));
+            }
+        }
+    }
+    return false;
+}
+
+pub func patterns_overlap(left usize, right usize,
+                          state Context) bool throws Error {
+    let bindings = vec.empty[BindingEntry]();
+    let pending = vec.empty[Pair]();
+    vec.push(pending, Pair(left: left, right: right));
+    for vec.len(pending) > 0 {
+        let popped = vec.pop(pending);
+        let pair = option.unwrap_or(popped, Pair(left: 0, right: 0));
+        let x = dereference(pair.left, bindings, state);
+        let y = dereference(pair.right, bindings, state);
+        if x == y {
+            continue;
+        }
+        let tx = require_type(state, x, "overlap type reference");
+        let ty = require_type(state, y, "overlap type reference");
+        if kind_is(tx.kind, model.TypeKind.TypeParameter) {
+            if occurs(tx.declaration, y, bindings, state) {
+                return false;
+            }
+            set_binding(bindings, tx.declaration, y);
+            continue;
+        }
+        if kind_is(ty.kind, model.TypeKind.TypeParameter) {
+            if occurs(ty.declaration, x, bindings, state) {
+                return false;
+            }
+            set_binding(bindings, ty.declaration, x);
+            continue;
+        }
+        if !kind_is(tx.kind, ty.kind) || tx.bits != ty.bits ||
+           tx.declaration != ty.declaration || tx.binding != ty.binding ||
+           vec.len(tx.parameters) != vec.len(ty.parameters) ||
+           vec.len(tx.type_args) != vec.len(ty.type_args) ||
+           option.is_some(tx.throws_type) != option.is_some(ty.throws_type) {
+            return false;
+        }
+        for var index usize = 0; index < vec.len(tx.type_args); index += 1 {
+            vec.push(pending, Pair(left: tx.type_args[index],
+                right: ty.type_args[index]));
+        }
+        if kind_is(tx.kind, model.TypeKind.Function) {
+            vec.push(pending, Pair(left: tx.result, right: ty.result));
+            if option.is_some(tx.throws_type) {
+                vec.push(pending, Pair(left: option_usize(tx.throws_type),
+                    right: option_usize(ty.throws_type)));
+            }
+            for var index usize = 0; index < vec.len(tx.parameters);
+                index += 1 {
+                if mode_id(tx.parameters[index].mode) != mode_id(ty.parameters[index].mode) {
+                    return false;
+                }
+                vec.push(pending, Pair(left: tx.parameters[index].type_id,
+                    right: ty.parameters[index].type_id));
+            }
+        }
+    }
+    return true;
+}

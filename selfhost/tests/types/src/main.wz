@@ -1,0 +1,637 @@
+// Executable tests for the pure-Wz canonical type table.
+//
+// The trace is compared byte-for-byte with oracle.cpp, which links the frozen
+// C++ lang_hir TypeContext/substitute/type_patterns_overlap implementation.
+// Labels and call order must stay in sync with that file.  The test also
+// checks the Vec ownership boundaries: interned entries and values returned
+// by find must never observe later mutation through another handle.
+package app;
+
+import "app/wzcc/model" as model;
+import "app/wzcc/types" as types;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func some(id usize) option.Option[usize] {
+    return option.Option[usize].Some(id);
+}
+
+func none() option.Option[usize] {
+    return option.Option[usize].None;
+}
+
+func scalar(kind model.TypeKind, bits u32) model.Type {
+    var value = model.empty_type(kind);
+    value.bits = bits;
+    return value;
+}
+
+func nominal(kind model.TypeKind, declaration usize,
+             type_args Vec[usize]) model.Type {
+    var value = model.empty_type(kind);
+    value.declaration = declaration;
+    value.type_args = type_args;
+    return value;
+}
+
+func foreign(kind model.TypeKind, declaration usize,
+             binding usize) model.Type {
+    var value = model.empty_type(kind);
+    value.declaration = declaration;
+    value.binding = binding;
+    return value;
+}
+
+func collection(kind model.TypeKind, type_args Vec[usize]) model.Type {
+    var value = model.empty_type(kind);
+    value.type_args = type_args;
+    return value;
+}
+
+func c_pointer(kind model.TypeKind, bits u32,
+               type_args Vec[usize]) model.Type {
+    var value = model.empty_type(kind);
+    value.bits = bits;
+    value.type_args = type_args;
+    return value;
+}
+
+func c_declared(kind model.TypeKind, c_type u32) model.Type {
+    var value = model.empty_type(kind);
+    value.c_type = c_type;
+    return value;
+}
+
+func trait_object(declaration usize, type_args Vec[usize]) model.Type {
+    var value = model.empty_type(model.TypeKind.TraitObject);
+    value.declaration = declaration;
+    value.type_args = type_args;
+    return value;
+}
+
+func param(mode model.ParamMode, type_id usize) model.ParameterType {
+    return model.ParameterType(mode: mode, type_id: type_id);
+}
+
+func ids1(a usize) Vec[usize] {
+    let out = vec.empty[usize]();
+    vec.push(out, a);
+    return out;
+}
+
+func ids2(a usize, b usize) Vec[usize] {
+    let out = vec.empty[usize]();
+    vec.push(out, a);
+    vec.push(out, b);
+    return out;
+}
+
+func function2(mode1 model.ParamMode, type1 usize, mode2 model.ParamMode,
+               type2 usize, result usize,
+               throws_type option.Option[usize]) model.Type {
+    let parameters = vec.empty[model.ParameterType]();
+    vec.push(parameters, param(mode1, type1));
+    vec.push(parameters, param(mode2, type2));
+    var value = model.empty_type(model.TypeKind.Function);
+    value.parameters = parameters;
+    value.result = result;
+    value.throws_type = throws_type;
+    return value;
+}
+
+func alias_function(i32_id usize, i64_id usize) model.Type {
+    return function2(model.ParamMode.Ordinary, i32_id,
+        model.ParamMode.Inout, i64_id, i32_id, none());
+}
+
+func alias_nominal(i32_id usize, i64_id usize) model.Type {
+    return nominal(model.TypeKind.NominalStruct, 42, ids2(i32_id, i64_id));
+}
+
+func safe_intern(state inout types.Context, value model.Type) usize {
+    try {
+        return types.intern(inout state, value);
+    } catch error types.Error {
+        return 0;
+    }
+}
+
+func safe_substitute(id usize, substitutions Vec[model.Substitution],
+                     state inout types.Context) usize {
+    try {
+        return types.substitute(id, substitutions, inout state);
+    } catch error types.Error {
+        return 0;
+    }
+}
+
+func safe_overlap(left usize, right usize, state types.Context) i32 {
+    try {
+        if types.patterns_overlap(left, right, state) {
+            return 1;
+        }
+        return 0;
+    } catch error types.Error {
+        return -1;
+    }
+}
+
+func safe_width(value model.Type, config model.CheckConfig) usize {
+    try {
+        return usize(types.bit_width(value, config));
+    } catch error types.Error {
+        return 0;
+    }
+}
+
+func find_type(state types.Context, id usize) model.Type {
+    let found = types.find(state, id);
+    switch found {
+        case option.Option.Some(value): return value;
+        case option.Option.None:
+            return model.empty_type(model.TypeKind.Error);
+    }
+}
+
+func print_id(label string, id usize) throws os.Error {
+    io.println(label + "=" + strconv.format_u64(u64(id)));
+}
+
+func print_i32(label string, value i32) throws os.Error {
+    io.println(label + "=" + strconv.format_i64(i64(value)));
+}
+
+func print_flag(label string, value bool) throws os.Error {
+    if value {
+        io.println(label + "=1");
+    } else {
+        io.println(label + "=0");
+    }
+}
+
+func print_overlap(label string, left usize, right usize,
+                   state types.Context) throws os.Error {
+    print_i32(label, safe_overlap(left, right, state));
+}
+
+func main() i32 throws os.Error {
+    var ctx = types.context();
+    print_id("size0", types.size(ctx));
+    print_flag("find0", option.is_some(types.find(ctx, 0)));
+    print_flag("find9999", option.is_some(types.find(ctx, 9999)));
+
+    let unit = model.empty_type(model.TypeKind.Unit);
+    let unit_id = safe_intern(inout ctx, unit);
+    print_id("unit", unit_id);
+    print_id("unit_dup", safe_intern(inout ctx, unit));
+
+    let signed_bits Vec[u32] = [8, 16, 32, 64];
+    for bits in signed_bits {
+        let id = safe_intern(inout ctx, scalar(model.TypeKind.SignedInt,
+            bits));
+        print_id("si" + strconv.format_u64(u64(bits)), id);
+    }
+    for bits in signed_bits {
+        let id = safe_intern(inout ctx, scalar(model.TypeKind.UnsignedInt,
+            bits));
+        print_id("ui" + strconv.format_u64(u64(bits)), id);
+    }
+    let float_bits Vec[u32] = [32, 64];
+    for bits in float_bits {
+        let id = safe_intern(inout ctx, scalar(model.TypeKind.Float, bits));
+        print_id("f" + strconv.format_u64(u64(bits)), id);
+    }
+    let i8_id = safe_intern(inout ctx, scalar(model.TypeKind.SignedInt, 8));
+    let i16_id = safe_intern(inout ctx, scalar(model.TypeKind.SignedInt, 16));
+    let i32_id = safe_intern(inout ctx, scalar(model.TypeKind.SignedInt, 32));
+    let i64_id = safe_intern(inout ctx, scalar(model.TypeKind.SignedInt, 64));
+    let u8_id = safe_intern(inout ctx, scalar(model.TypeKind.UnsignedInt, 8));
+    let u16_id = safe_intern(inout ctx, scalar(model.TypeKind.UnsignedInt, 16));
+    let u32_id = safe_intern(inout ctx, scalar(model.TypeKind.UnsignedInt, 32));
+    let u64_id = safe_intern(inout ctx, scalar(model.TypeKind.UnsignedInt, 64));
+    let f32_id = safe_intern(inout ctx, scalar(model.TypeKind.Float, 32));
+    let f64_id = safe_intern(inout ctx, scalar(model.TypeKind.Float, 64));
+
+    let bool_type = model.empty_type(model.TypeKind.Bool);
+    let bool_id = safe_intern(inout ctx, bool_type);
+    print_id("bool", bool_id);
+    let string_type = model.empty_type(model.TypeKind.String);
+    let string_id = safe_intern(inout ctx, string_type);
+    print_id("string", string_id);
+    let isize_type = model.empty_type(model.TypeKind.Isize);
+    let isize_id = safe_intern(inout ctx, isize_type);
+    print_id("isize", isize_id);
+    let usize_type = model.empty_type(model.TypeKind.Usize);
+    let usize_id = safe_intern(inout ctx, usize_type);
+    print_id("usize", usize_id);
+    print_id("error", safe_intern(inout ctx,
+        model.empty_type(model.TypeKind.Error)));
+    print_id("thread_handle", safe_intern(inout ctx,
+        model.empty_type(model.TypeKind.ThreadHandle)));
+    print_id("mutex_handle", safe_intern(inout ctx,
+        model.empty_type(model.TypeKind.MutexHandle)));
+
+    let no_parameters = vec.empty[model.ParameterType]();
+    var fn1 = model.empty_type(model.TypeKind.Function);
+    fn1.parameters = no_parameters;
+    fn1.result = unit_id;
+    let fn1_id = safe_intern(inout ctx, fn1);
+    print_id("fn1", fn1_id);
+    print_id("fn1_dup", safe_intern(inout ctx, fn1));
+
+    let fn2 = function2(model.ParamMode.Ordinary, i8_id,
+        model.ParamMode.Inout, u16_id, i32_id, some(i64_id));
+    let fn2_id = safe_intern(inout ctx, fn2);
+    print_id("fn2", fn2_id);
+    print_id("fn2_dup", safe_intern(inout ctx, fn2));
+
+    let ns0 = nominal(model.TypeKind.NominalStruct, 0, ids1(i32_id));
+    let ns0_id = safe_intern(inout ctx, ns0);
+    print_id("ns0", ns0_id);
+    let ns1 = nominal(model.TypeKind.NominalStruct, 1, ids1(i32_id));
+    let ns1_id = safe_intern(inout ctx, ns1);
+    print_id("ns1", ns1_id);
+    let ne1 = nominal(model.TypeKind.NominalEnum, 1,
+        vec.empty[usize]());
+    let ne1_id = safe_intern(inout ctx, ne1);
+    print_id("ne1", ne1_id);
+    let tp7 = nominal(model.TypeKind.TypeParameter, 7,
+        vec.empty[usize]());
+    let tp7_id = safe_intern(inout ctx, tp7);
+    print_id("tp7", tp7_id);
+    let tp8 = nominal(model.TypeKind.TypeParameter, 8,
+        vec.empty[usize]());
+    let tp8_id = safe_intern(inout ctx, tp8);
+    print_id("tp8", tp8_id);
+    let tp9 = nominal(model.TypeKind.TypeParameter, 9,
+        vec.empty[usize]());
+    let tp9_id = safe_intern(inout ctx, tp9);
+    print_id("tp9", tp9_id);
+
+    let vec_i32 = collection(model.TypeKind.Vec, ids1(i32_id));
+    let vec_i32_id = safe_intern(inout ctx, vec_i32);
+    print_id("vec_i32", vec_i32_id);
+    let vec_i64 = collection(model.TypeKind.Vec, ids1(i64_id));
+    let vec_i64_id = safe_intern(inout ctx, vec_i64);
+    print_id("vec_i64", vec_i64_id);
+    let vec_p = collection(model.TypeKind.Vec, ids1(tp7_id));
+    let vec_p_id = safe_intern(inout ctx, vec_p);
+    print_id("vec_p", vec_p_id);
+    let slice_i32 = collection(model.TypeKind.Slice, ids1(i32_id));
+    let slice_i32_id = safe_intern(inout ctx, slice_i32);
+    print_id("slice_i32", slice_i32_id);
+    let slice_i64 = collection(model.TypeKind.Slice, ids1(i64_id));
+    let slice_i64_id = safe_intern(inout ctx, slice_i64);
+    print_id("slice_i64", slice_i64_id);
+    let weak_i32 = collection(model.TypeKind.Weak, ids1(i32_id));
+    let weak_i32_id = safe_intern(inout ctx, weak_i32);
+    print_id("weak_i32", weak_i32_id);
+    let weak_p = collection(model.TypeKind.Weak, ids1(tp7_id));
+    let weak_p_id = safe_intern(inout ctx, weak_p);
+    print_id("weak_p", weak_p_id);
+    let task_p_i64 = collection(model.TypeKind.Task, ids2(tp7_id, i64_id));
+    let task_p_i64_id = safe_intern(inout ctx, task_p_i64);
+    print_id("task_p_i64", task_p_i64_id);
+    let task_i64_i64 = collection(model.TypeKind.Task, ids2(i64_id, i64_id));
+    let task_i64_i64_id = safe_intern(inout ctx, task_i64_i64);
+    print_id("task_i64_i64", task_i64_i64_id);
+    let trait3_i32 = trait_object(3, ids1(i32_id));
+    let trait3_i32_id = safe_intern(inout ctx, trait3_i32);
+    print_id("trait3_i32", trait3_i32_id);
+    let trait3_i64 = trait_object(3, ids1(i64_id));
+    let trait3_i64_id = safe_intern(inout ctx, trait3_i64);
+    print_id("trait3_i64", trait3_i64_id);
+    let trait3_bool = trait_object(3, ids1(bool_id));
+    let trait3_bool_id = safe_intern(inout ctx, trait3_bool);
+    print_id("trait3_bool", trait3_bool_id);
+
+    let fopaque57 = foreign(model.TypeKind.ForeignOpaque, 5, 7);
+    let fopaque57_id = safe_intern(inout ctx, fopaque57);
+    print_id("fopaque57", fopaque57_id);
+    let fopaque58 = foreign(model.TypeKind.ForeignOpaque, 5, 8);
+    let fopaque58_id = safe_intern(inout ctx, fopaque58);
+    print_id("fopaque58", fopaque58_id);
+    let fcall57 = foreign(model.TypeKind.ForeignCallable, 5, 7);
+    let fcall57_id = safe_intern(inout ctx, fcall57);
+    print_id("fcall57", fcall57_id);
+    let fcall58 = foreign(model.TypeKind.ForeignCallable, 5, 8);
+    let fcall58_id = safe_intern(inout ctx, fcall58);
+    print_id("fcall58", fcall58_id);
+
+    let cptr0 = c_pointer(model.TypeKind.CForeignPointer, 0, ids1(u8_id));
+    let cptr0_id = safe_intern(inout ctx, cptr0);
+    print_id("cptr0", cptr0_id);
+    let cptr1 = c_pointer(model.TypeKind.CForeignPointer, 1, ids1(u8_id));
+    let cptr1_id = safe_intern(inout ctx, cptr1);
+    print_id("cptr1", cptr1_id);
+    let cbuf0 = c_pointer(model.TypeKind.CForeignBuffer, 0, ids1(u8_id));
+    let cbuf0_id = safe_intern(inout ctx, cbuf0);
+    print_id("cbuf0", cbuf0_id);
+    let crecord4 = c_declared(model.TypeKind.CForeignRecord, 4);
+    let crecord4_id = safe_intern(inout ctx, crecord4);
+    print_id("crecord4", crecord4_id);
+    let crecord5 = c_declared(model.TypeKind.CForeignRecord, 5);
+    let crecord5_id = safe_intern(inout ctx, crecord5);
+    print_id("crecord5", crecord5_id);
+    let cresource5 = c_declared(model.TypeKind.CForeignResource, 5);
+    let cresource5_id = safe_intern(inout ctx, cresource5);
+    print_id("cresource5", cresource5_id);
+    let ccallback6 = c_declared(model.TypeKind.CForeignCallback, 6);
+    let ccallback6_id = safe_intern(inout ctx, ccallback6);
+    print_id("ccallback6", ccallback6_id);
+    let copaque7 = c_declared(model.TypeKind.CForeignOpaque, 7);
+    let copaque7_id = safe_intern(inout ctx, copaque7);
+    print_id("copaque7", copaque7_id);
+
+    let cfg64 = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 64);
+    let cfg32 = model.CheckConfig(backend: model.Backend.Native,
+        word_bits: 32);
+    print_id("width_i8", safe_width(scalar(model.TypeKind.SignedInt, 8),
+        cfg64));
+    print_id("width_i32", safe_width(scalar(model.TypeKind.SignedInt, 32),
+        cfg64));
+    print_id("width_u64", safe_width(scalar(model.TypeKind.UnsignedInt, 64),
+        cfg32));
+    print_id("width_f32", safe_width(scalar(model.TypeKind.Float, 32),
+        cfg64));
+    print_id("width_f64", safe_width(scalar(model.TypeKind.Float, 64),
+        cfg64));
+    print_id("width_isize64", safe_width(isize_type, cfg64));
+    print_id("width_isize32", safe_width(isize_type, cfg32));
+    print_id("width_usize64", safe_width(usize_type, cfg64));
+    print_id("width_usize32", safe_width(usize_type, cfg32));
+
+    print_id("bad_i0", safe_intern(inout ctx,
+        scalar(model.TypeKind.SignedInt, 0)));
+    print_id("bad_i17", safe_intern(inout ctx,
+        scalar(model.TypeKind.SignedInt, 17)));
+    print_id("bad_u128", safe_intern(inout ctx,
+        scalar(model.TypeKind.UnsignedInt, 128)));
+    print_id("bad_f16", safe_intern(inout ctx,
+        scalar(model.TypeKind.Float, 16)));
+    var bad_fn_result = model.empty_type(model.TypeKind.Function);
+    bad_fn_result.parameters = vec.empty[model.ParameterType]();
+    print_id("bad_fn_result0", safe_intern(inout ctx, bad_fn_result));
+    let bad_parameters = vec.empty[model.ParameterType]();
+    vec.push(bad_parameters, param(model.ParamMode.Ordinary, 9999));
+    var bad_fn_param = model.empty_type(model.TypeKind.Function);
+    bad_fn_param.parameters = bad_parameters;
+    bad_fn_param.result = unit_id;
+    print_id("bad_fn_param_ref", safe_intern(inout ctx, bad_fn_param));
+    var bad_fn_throws = model.empty_type(model.TypeKind.Function);
+    bad_fn_throws.parameters = vec.empty[model.ParameterType]();
+    bad_fn_throws.result = unit_id;
+    bad_fn_throws.throws_type = some(9999);
+    print_id("bad_fn_throws_ref", safe_intern(inout ctx, bad_fn_throws));
+    var mut_unit_result = scalar(model.TypeKind.Unit, 0);
+    mut_unit_result.result = i32_id;
+    print_id("bad_unit_result", safe_intern(inout ctx, mut_unit_result));
+    var mut_unit_bits = scalar(model.TypeKind.Unit, 1);
+    print_id("bad_unit_bits", safe_intern(inout ctx, mut_unit_bits));
+    var mut_unit_decl = model.empty_type(model.TypeKind.Unit);
+    mut_unit_decl.declaration = 1;
+    print_id("bad_unit_decl", safe_intern(inout ctx, mut_unit_decl));
+    print_id("bad_vec0", safe_intern(inout ctx,
+        collection(model.TypeKind.Vec, vec.empty[usize]())));
+    print_id("bad_vec2", safe_intern(inout ctx,
+        collection(model.TypeKind.Vec, ids2(i8_id, i16_id))));
+    print_id("bad_slice0", safe_intern(inout ctx,
+        collection(model.TypeKind.Slice, vec.empty[usize]())));
+    print_id("bad_weak0", safe_intern(inout ctx,
+        collection(model.TypeKind.Weak, vec.empty[usize]())));
+    print_id("bad_task1", safe_intern(inout ctx,
+        collection(model.TypeKind.Task, ids1(i32_id))));
+    let bad_task3_args = ids2(i32_id, i64_id);
+    vec.push(bad_task3_args, bool_id);
+    print_id("bad_task3", safe_intern(inout ctx,
+        collection(model.TypeKind.Task, bad_task3_args)));
+    var mut_trait_decl0 = trait_object(0, ids1(i32_id));
+    print_id("bad_trait_decl0", safe_intern(inout ctx, mut_trait_decl0));
+    var mut_trait_bits = trait_object(3, ids1(i32_id));
+    mut_trait_bits.bits = 1;
+    print_id("bad_trait_bits", safe_intern(inout ctx, mut_trait_bits));
+    var mut_trait_params = trait_object(3, ids1(i32_id));
+    let trait_parameters = vec.empty[model.ParameterType]();
+    vec.push(trait_parameters, param(model.ParamMode.Ordinary, i32_id));
+    mut_trait_params.parameters = trait_parameters;
+    print_id("bad_trait_params", safe_intern(inout ctx, mut_trait_params));
+    print_id("bad_crecord0", safe_intern(inout ctx,
+        c_declared(model.TypeKind.CForeignRecord, 0)));
+    var mut_crecord_args = c_declared(model.TypeKind.CForeignRecord, 4);
+    mut_crecord_args.type_args = ids1(i32_id);
+    print_id("bad_crecord_args", safe_intern(inout ctx, mut_crecord_args));
+    var mut_crecord_bits = c_declared(model.TypeKind.CForeignRecord, 4);
+    mut_crecord_bits.bits = 1;
+    print_id("bad_crecord_bits", safe_intern(inout ctx, mut_crecord_bits));
+    var mut_cptr_args = c_pointer(model.TypeKind.CForeignPointer, 0,
+        vec.empty[usize]());
+    print_id("bad_cptr_args", safe_intern(inout ctx, mut_cptr_args));
+    var mut_cptr_bits = c_pointer(model.TypeKind.CForeignPointer, 2,
+        ids1(u8_id));
+    print_id("bad_cptr_bits", safe_intern(inout ctx, mut_cptr_bits));
+    var mut_cptr_ctype = c_pointer(model.TypeKind.CForeignPointer, 0,
+        ids1(u8_id));
+    mut_cptr_ctype.c_type = 1;
+    print_id("bad_cptr_ctype", safe_intern(inout ctx, mut_cptr_ctype));
+    var mut_nominal_binding = nominal(model.TypeKind.NominalStruct, 1,
+        vec.empty[usize]());
+    mut_nominal_binding.binding = 1;
+    print_id("bad_nominal_binding", safe_intern(inout ctx,
+        mut_nominal_binding));
+    var mut_foreign_args = foreign(model.TypeKind.ForeignOpaque, 5, 7);
+    mut_foreign_args.type_args = ids1(i32_id);
+    print_id("bad_foreign_args", safe_intern(inout ctx,
+        mut_foreign_args));
+    var mut_tp_binding = nominal(model.TypeKind.TypeParameter, 7,
+        vec.empty[usize]());
+    mut_tp_binding.binding = 1;
+    print_id("bad_tp_binding", safe_intern(inout ctx, mut_tp_binding));
+    print_id("bad_vec_arg_ref", safe_intern(inout ctx,
+        collection(model.TypeKind.Vec, ids1(9999))));
+    print_id("bad_nominal_arg_ref", safe_intern(inout ctx,
+        nominal(model.TypeKind.NominalStruct, 1, ids1(9999))));
+    print_id("bad_cptr_arg_ref", safe_intern(inout ctx,
+        c_pointer(model.TypeKind.CForeignPointer, 0, ids1(9999))));
+    print_id("invalid_size", types.size(ctx));
+
+    let alias_fn = alias_function(i32_id, i64_id);
+    let alias_fn_expected = alias_function(i32_id, i64_id);
+    let alias_fn_id = safe_intern(inout ctx, alias_fn);
+    print_id("alias_fn", alias_fn_id);
+    let alias_nom = alias_nominal(i32_id, i64_id);
+    let alias_nom_expected = alias_nominal(i32_id, i64_id);
+    let alias_nom_id = safe_intern(inout ctx, alias_nom);
+    print_id("alias_nom", alias_nom_id);
+
+    alias_fn.parameters[0].type_id = i8_id;
+    vec.push(alias_fn.parameters, param(model.ParamMode.Move, f64_id));
+    alias_nom.type_args[0] = i8_id;
+    vec.push(alias_nom.type_args, f64_id);
+    print_id("alias_fn_input_mutated", safe_intern(inout ctx, alias_fn));
+    print_id("alias_nom_input_mutated", safe_intern(inout ctx, alias_nom));
+    let alias_fn_found = find_type(ctx, alias_fn_id);
+    let alias_nom_found = find_type(ctx, alias_nom_id);
+    print_flag("alias_fn_after_input", types.equal(alias_fn_found,
+        alias_fn_expected));
+    print_flag("alias_nom_after_input", types.equal(alias_nom_found,
+        alias_nom_expected));
+    print_id("alias_fn_param0", alias_fn_found.parameters[0].type_id);
+    print_id("alias_fn_param_len", vec.len(alias_fn_found.parameters));
+    print_id("alias_nom_arg0", alias_nom_found.type_args[0]);
+    print_id("alias_nom_arg_len", vec.len(alias_nom_found.type_args));
+
+    alias_fn_found.parameters[0].type_id = i8_id;
+    vec.push(alias_fn_found.parameters, param(model.ParamMode.Move, f64_id));
+    alias_nom_found.type_args[0] = i8_id;
+    vec.push(alias_nom_found.type_args, f64_id);
+    let alias_fn_again = find_type(ctx, alias_fn_id);
+    let alias_nom_again = find_type(ctx, alias_nom_id);
+    print_flag("alias_fn_found_isolated", types.equal(alias_fn_again,
+        alias_fn_expected));
+    print_flag("alias_nom_found_isolated", types.equal(alias_nom_again,
+        alias_nom_expected));
+
+    let old_size = types.size(ctx);
+    var clone = types.clone_context(ctx);
+    print_id("clone_size", types.size(clone));
+    let clone_only = nominal(model.TypeKind.NominalStruct, 777,
+        ids1(i32_id));
+    let clone_new = safe_intern(inout clone, clone_only);
+    print_id("clone_new", clone_new);
+    print_id("clone_size_after", types.size(clone));
+    print_id("ctx_size_after_clone", types.size(ctx));
+    let ctx_new = safe_intern(inout ctx, clone_only);
+    print_id("ctx_new", ctx_new);
+    print_flag("ctx_new_is_old_plus_one", ctx_new == old_size + 1);
+    print_flag("clone_old_alias", types.equal(find_type(clone, alias_fn_id),
+        alias_fn_expected));
+    print_flag("ctx_old_alias", types.equal(find_type(ctx, alias_fn_id),
+        alias_fn_expected));
+
+    let struct_p = nominal(model.TypeKind.NominalStruct, 100, ids1(tp7_id));
+    let struct_p_id = safe_intern(inout ctx, struct_p);
+    print_id("struct_p", struct_p_id);
+    let vec_struct_p = collection(model.TypeKind.Vec, ids1(struct_p_id));
+    let vec_struct_p_id = safe_intern(inout ctx, vec_struct_p);
+    print_id("vec_struct_p", vec_struct_p_id);
+    let fn_p = function2(model.ParamMode.Ordinary, tp7_id,
+        model.ParamMode.Inout, i64_id, tp7_id, some(tp7_id));
+    let fn_p_id = safe_intern(inout ctx, fn_p);
+    print_id("fn_p", fn_p_id);
+    let fn_i64 = function2(model.ParamMode.Ordinary, i64_id,
+        model.ParamMode.Inout, i64_id, i64_id, some(i64_id));
+    let fn_i64_id = safe_intern(inout ctx, fn_i64);
+    print_id("fn_i64", fn_i64_id);
+    let fn_i64_inout = function2(model.ParamMode.Inout, i64_id,
+        model.ParamMode.Inout, i64_id, i64_id, some(i64_id));
+    let fn_i64_inout_id = safe_intern(inout ctx, fn_i64_inout);
+    print_id("fn_i64_inout", fn_i64_inout_id);
+    let fn_i64_no_throws = function2(model.ParamMode.Ordinary, i64_id,
+        model.ParamMode.Inout, i64_id, i64_id, none());
+    let fn_i64_no_throws_id = safe_intern(inout ctx, fn_i64_no_throws);
+    print_id("fn_i64_no_throws", fn_i64_no_throws_id);
+    let fn_i64_bool = function2(model.ParamMode.Ordinary, i64_id,
+        model.ParamMode.Inout, i64_id, bool_id, some(i64_id));
+    let fn_i64_bool_id = safe_intern(inout ctx, fn_i64_bool);
+    print_id("fn_i64_bool", fn_i64_bool_id);
+
+    let substitutions = vec.empty[model.Substitution]();
+    vec.push(substitutions, model.Substitution(symbol: 7, type_id: i64_id));
+    vec.push(substitutions, model.Substitution(symbol: 8, type_id: i32_id));
+    print_id("sub_tp7", safe_substitute(tp7_id, substitutions, inout ctx));
+    print_id("sub_tp8", safe_substitute(tp8_id, substitutions, inout ctx));
+    print_id("sub_tp9", safe_substitute(tp9_id, substitutions, inout ctx));
+    let sub_vec_p = safe_substitute(vec_p_id, substitutions, inout ctx);
+    print_id("sub_vec_p", sub_vec_p);
+    print_flag("sub_vec_p_is_vec_i64", sub_vec_p == vec_i64_id);
+    let sub_struct_p = safe_substitute(struct_p_id, substitutions,
+        inout ctx);
+    let struct_i64 = nominal(model.TypeKind.NominalStruct, 100,
+        ids1(i64_id));
+    let struct_i64_id = safe_intern(inout ctx, struct_i64);
+    print_id("sub_struct_p", sub_struct_p);
+    print_flag("sub_struct_p_is_struct_i64", sub_struct_p == struct_i64_id);
+    let sub_vec_struct_p = safe_substitute(vec_struct_p_id, substitutions,
+        inout ctx);
+    let vec_struct_i64 = collection(model.TypeKind.Vec, ids1(struct_i64_id));
+    let vec_struct_i64_id = safe_intern(inout ctx, vec_struct_i64);
+    print_id("sub_vec_struct_p", sub_vec_struct_p);
+    print_flag("sub_vec_struct_p_is_expected",
+        sub_vec_struct_p == vec_struct_i64_id);
+    let sub_task_p_i64 = safe_substitute(task_p_i64_id, substitutions,
+        inout ctx);
+    print_flag("sub_task_p_i64_is_expected",
+        sub_task_p_i64 == task_i64_i64_id);
+    let sub_fn_p = safe_substitute(fn_p_id, substitutions, inout ctx);
+    print_id("sub_fn_p", sub_fn_p);
+    let sub_fn_p_type = find_type(ctx, sub_fn_p);
+    print_flag("sub_fn_result", sub_fn_p_type.result == i64_id);
+    print_flag("sub_fn_param0",
+        sub_fn_p_type.parameters[0].type_id == i64_id);
+    print_flag("sub_fn_param1",
+        sub_fn_p_type.parameters[1].type_id == i64_id);
+    print_flag("sub_fn_throws", option.is_some(sub_fn_p_type.throws_type) &&
+        option.unwrap_or(sub_fn_p_type.throws_type, 0) == i64_id);
+    let sub_fn_p_again = safe_substitute(fn_p_id, substitutions, inout ctx);
+    print_flag("sub_fn_p_deterministic", sub_fn_p_again == sub_fn_p);
+    let fn_p_after = find_type(ctx, fn_p_id);
+    print_flag("sub_original_result", fn_p_after.result == tp7_id);
+    print_flag("sub_original_param0",
+        fn_p_after.parameters[0].type_id == tp7_id);
+    print_flag("sub_original_throws",
+        option.unwrap_or(fn_p_after.throws_type, 0) == tp7_id);
+    print_id("sub_bad0", safe_substitute(0, substitutions, inout ctx));
+    print_id("sub_bad9999", safe_substitute(9999, substitutions, inout ctx));
+
+    print_overlap("overlap_same_unit", unit_id, unit_id, ctx);
+    print_overlap("overlap_same_i32", i32_id, i32_id, ctx);
+    print_overlap("overlap_i32_i64", i32_id, i64_id, ctx);
+    print_overlap("overlap_i32_bool", i32_id, bool_id, ctx);
+    print_overlap("overlap_tp_i64", tp7_id, i64_id, ctx);
+    print_overlap("overlap_tp_tp", tp7_id, tp8_id, ctx);
+    print_overlap("overlap_vec_p_i64", vec_p_id, vec_i64_id, ctx);
+    print_overlap("overlap_vec_p_struct_p", vec_p_id, vec_struct_p_id, ctx);
+    print_overlap("overlap_tp_vec_p", tp7_id, vec_p_id, ctx);
+    print_overlap("overlap_task_p", task_p_i64_id, task_i64_i64_id, ctx);
+    let task_i64_p_id = safe_intern(inout ctx,
+        collection(model.TypeKind.Task, ids2(i64_id, tp7_id)));
+    print_overlap("overlap_task_swap", task_p_i64_id, task_i64_p_id, ctx);
+    print_overlap("overlap_weak_p", weak_p_id, weak_i32_id, ctx);
+    print_overlap("overlap_fn_p_i64", fn_p_id, fn_i64_id, ctx);
+    print_overlap("overlap_fn_mode", fn_i64_id, fn_i64_inout_id, ctx);
+    print_overlap("overlap_fn_throws", fn_i64_id, fn_i64_no_throws_id, ctx);
+    print_overlap("overlap_fn_result", fn_i64_id, fn_i64_bool_id, ctx);
+    let ns2_id = safe_intern(inout ctx,
+        nominal(model.TypeKind.NominalStruct, 2, ids1(i32_id)));
+    print_overlap("overlap_ns1_ns2", ns1_id, ns2_id, ctx);
+    print_overlap("overlap_ns_ne", ns1_id, ne1_id, ctx);
+    print_overlap("overlap_foreign_kind", fopaque57_id, fcall57_id, ctx);
+    print_overlap("overlap_foreign_binding", fopaque57_id, fopaque58_id, ctx);
+    print_overlap("overlap_foreign_callable_binding", fcall57_id, fcall58_id,
+        ctx);
+    print_overlap("overlap_trait_same", trait3_i32_id, trait3_i32_id, ctx);
+    print_overlap("overlap_trait_arg", trait3_i32_id, trait3_i64_id, ctx);
+    print_overlap("overlap_trait_arg_bool", trait3_i32_id, trait3_bool_id,
+        ctx);
+    print_overlap("overlap_slice_vec", slice_i64_id, vec_i64_id, ctx);
+    print_overlap("overlap_crecord_ctype", crecord4_id, cresource5_id, ctx);
+    print_overlap("overlap_crecord_ctype_ignored", crecord4_id, crecord5_id,
+        ctx);
+    print_overlap("overlap_cptr_bits", cptr0_id, cptr1_id, ctx);
+    print_overlap("overlap_callback_opaque", ccallback6_id, copaque7_id,
+        ctx);
+    print_i32("overlap_bad0", safe_overlap(0, i32_id, ctx));
+    print_i32("overlap_bad9999", safe_overlap(9999, i32_id, ctx));
+    print_i32("overlap_bad_right", safe_overlap(i32_id, 9999, ctx));
+
+    print_flag("final_alias_fn", types.equal(find_type(ctx, alias_fn_id),
+        alias_fn_expected));
+    print_flag("final_alias_nom", types.equal(find_type(ctx, alias_nom_id),
+        alias_nom_expected));
+    print_id("final_size", types.size(ctx));
+    return 0;
+}

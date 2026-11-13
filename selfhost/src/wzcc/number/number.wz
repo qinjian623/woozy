@@ -1,0 +1,583 @@
+// Exact numeric foundation for the self-hosted compiler.
+//
+// This package is pure Woozy and depends only on the published bigint
+// contract. Decimal literal decoding, rational arithmetic and every IEEE-754
+// operation are computed with exact integers: there is no host f64
+// intermediate, no strtod/f64 parse, no GMP/C helper and no call into the old
+// C++ constant evaluator.
+//
+// Rounding is round-to-nearest ties-to-even at the destination precision, so
+// subnormals, signed zeros, overflow to infinity and NaN classification are
+// reproduced without double rounding. Same-width IEEE conversion keeps every
+// bit; a cross-width NaN uses the canonical quiet NaN of the destination
+// width, which is what the existing C++ checker produces.
+package number;
+
+import "app/wzcc/bigint" as bigint;
+import "std/text" as text;
+import "std/vec" as vec;
+
+const F32_INFINITY u64 = 0x7f800000;
+const F64_INFINITY u64 = 0x7ff0000000000000;
+const F32_NAN u64 = 0x7fc00000;
+const F64_NAN u64 = 0x7ff8000000000000;
+// After trailing zeros are removed, no f32/f64 rounding boundary remains
+// outside this decimal magnitude. The shortcut must run after the strip so
+// trailing-zero spellings of small values stay exact.
+const DECIMAL_MAGNITUDE_LIMIT i64 = 400;
+
+pub enum IeeeKind {
+    Finite;
+    Infinity;
+    NaN;
+}
+
+pub struct Rational {
+    pub numerator bigint.BigInt;
+    pub denominator bigint.BigInt;
+}
+
+pub struct Ieee {
+    pub kind IeeeKind;
+    pub negative bool;
+    pub significand bigint.BigInt;
+    pub shift i64;
+}
+
+pub struct IntegerValue {
+    pub value bigint.BigInt;
+    pub bits u64;
+}
+
+pub enum Error {
+    InvalidLiteral(message string);
+    InvalidWidth;
+    ZeroDenominator;
+    NonFiniteInteger;
+    IntegerRange;
+}
+
+func one() bigint.BigInt {
+    return bigint.from_i64(1);
+}
+
+func pow2(bits u64) bigint.BigInt {
+    return bigint.shift_left(one(), bits);
+}
+
+func infinity_bits(width u32) u64 {
+    if width == 32 { return F32_INFINITY; }
+    return F64_INFINITY;
+}
+
+func nan_bits(width u32) u64 {
+    if width == 32 { return F32_NAN; }
+    return F64_NAN;
+}
+
+func sign_bit(negative bool, width u32) u64 {
+    if negative { return u64(1) << u64(width - 1); }
+    return 0;
+}
+
+func is_float_width(width u32) bool {
+    return width == 32 || width == 64;
+}
+
+func is_integer_width(width u32) bool {
+    return width == 8 || width == 16 || width == 32 || width == 64;
+}
+
+func is_odd(value bigint.BigInt) bool {
+    if value.sign == 0 { return false; }
+    return (value.limbs[0] & u32(1)) == u32(1);
+}
+
+// Low 64 bits of a nonnegative magnitude; callers only use it when the value
+// is known to fit (or when they want the zero-extended two's complement low
+// half, which this function also returns for longer magnitudes).
+func low_u64(value bigint.BigInt) u64 {
+    let length = vec.len(value.limbs);
+    if length == 0 { return 0; }
+    if length == 1 { return u64(value.limbs[0]); }
+    return (u64(value.limbs[1]) << 32) | u64(value.limbs[0]);
+}
+
+// bigint.divrem reports DivisionByZero; every call below divides by a value
+// that is nonzero by construction, so a fault would mean a broken bigint
+// contract. Report it as an invalid literal instead of guessing a result.
+func divide_or_fault(left bigint.BigInt, right bigint.BigInt,
+                     message string) bigint.DivRem throws Error {
+    try {
+        return bigint.divrem(left, right);
+    } catch error bigint.Error {
+        throw Error.InvalidLiteral(message);
+    }
+}
+
+func positive_remainder(value bigint.BigInt,
+                        modulus bigint.BigInt) bigint.BigInt throws Error {
+    let parts = divide_or_fault(value, modulus, "integer modulus fault");
+    if parts.remainder.sign < 0 {
+        return bigint.add(parts.remainder, modulus);
+    }
+    return parts.remainder;
+}
+
+// Precondition: denominator is positive. The public rational operators assume
+// well formed records; the catch only keeps this helper total if the bigint
+// contract is violated, instead of returning a bogus reduction.
+func reduce_ratio(numerator bigint.BigInt,
+                  denominator bigint.BigInt) Rational {
+    let common = bigint.gcd(numerator, denominator);
+    try {
+        let high = bigint.divrem(numerator, common);
+        let low = bigint.divrem(denominator, common);
+        return Rational(numerator: high.quotient, denominator: low.quotient);
+    } catch error bigint.Error {
+        return Rational(numerator: bigint.zero(), denominator: one());
+    }
+}
+
+pub func make_ratio(numerator bigint.BigInt,
+                    denominator bigint.BigInt) Rational throws Error {
+    if denominator.sign == 0 { throw Error.ZeroDenominator; }
+    var top = numerator;
+    var bottom = denominator;
+    if bottom.sign < 0 {
+        // Normalize the sign on a fresh value; the caller's handles are never
+        // mutated.
+        top = bigint.negate(top);
+        bottom = bigint.negate(bottom);
+    }
+    return reduce_ratio(top, bottom);
+}
+
+pub func ratio_add(left Rational, right Rational) Rational {
+    let numerator = bigint.add(
+        bigint.multiply(left.numerator, right.denominator),
+        bigint.multiply(right.numerator, left.denominator));
+    let denominator = bigint.multiply(left.denominator, right.denominator);
+    return reduce_ratio(numerator, denominator);
+}
+
+pub func ratio_subtract(left Rational, right Rational) Rational {
+    let numerator = bigint.subtract(
+        bigint.multiply(left.numerator, right.denominator),
+        bigint.multiply(right.numerator, left.denominator));
+    let denominator = bigint.multiply(left.denominator, right.denominator);
+    return reduce_ratio(numerator, denominator);
+}
+
+pub func ratio_multiply(left Rational, right Rational) Rational {
+    let numerator = bigint.multiply(left.numerator, right.numerator);
+    let denominator = bigint.multiply(left.denominator, right.denominator);
+    return reduce_ratio(numerator, denominator);
+}
+
+pub func ratio_divide(left Rational,
+                      right Rational) Rational throws Error {
+    if right.numerator.sign == 0 { throw Error.ZeroDenominator; }
+    let numerator = bigint.multiply(left.numerator, right.denominator);
+    let denominator = bigint.multiply(left.denominator, right.numerator);
+    return make_ratio(numerator, denominator);
+}
+
+pub func ratio_compare(left Rational, right Rational) i32 {
+    // Both denominators are positive, so cross multiplication preserves the
+    // ordering and never needs a host approximation.
+    let a = bigint.multiply(left.numerator, right.denominator);
+    let b = bigint.multiply(right.numerator, left.denominator);
+    return bigint.compare(a, b);
+}
+
+// Integer spelling as produced by the lexer: optional sign, then decimal
+// digits, or 0x/0o/0b followed by digits of that base. Underscores are
+// separators and are removed before validation; no prefix or underscore
+// handling is invented beyond the existing C++ decode in
+// src/hir/literal_value.cpp.
+pub func parse_integer_spelling(spelling string) bigint.BigInt throws Error {
+    let trimmed = text.replace(spelling, "_", "");
+    let length = text.len(trimmed);
+    if length == 0 { throw Error.InvalidLiteral("empty integer literal"); }
+    var base u32 = 10;
+    var digits = trimmed;
+    if length > 2 && trimmed[0] == 48 {
+        let marker = trimmed[1];
+        if marker == 120 || marker == 88 {
+            base = 16;
+            digits = trimmed[2:length];
+        } else if marker == 98 || marker == 66 {
+            base = 2;
+            digits = trimmed[2:length];
+        } else if marker == 111 || marker == 79 {
+            base = 8;
+            digits = trimmed[2:length];
+        }
+    }
+    if text.len(digits) == 0 { throw Error.InvalidLiteral("integer literal has no digits"); }
+    try {
+        return bigint.parse_digits(digits, base);
+    } catch error bigint.Error {
+        throw Error.InvalidLiteral("invalid integer literal spelling");
+    }
+}
+
+func parse_decimal_digits(digits string) bigint.BigInt throws Error {
+    try {
+        return bigint.parse_digits(digits, 10);
+    } catch error bigint.Error {
+        throw Error.InvalidLiteral("invalid decimal digit");
+    }
+}
+
+func parse_exponent(digits string) bigint.BigInt throws Error {
+    if text.len(digits) == 0 {
+        throw Error.InvalidLiteral("floating literal has no exponent digits");
+    }
+    try {
+        return bigint.parse_digits(digits, 10);
+    } catch error bigint.Error {
+        throw Error.InvalidLiteral("invalid floating literal exponent");
+    }
+}
+
+// The decimal exponent only reaches the binary kernel after the magnitude
+// shortcut, so a value outside this small bound cannot occur for a real
+// literal; report it instead of silently truncating.
+func exponent_i64(value bigint.BigInt) i64 throws Error {
+    if bigint.bit_length(value) > 62 {
+        throw Error.InvalidLiteral("floating literal exponent is out of range");
+    }
+    if value.sign == 0 { return 0; }
+    let magnitude = low_u64(value);
+    if value.sign < 0 { return -i64(magnitude); }
+    return i64(magnitude);
+}
+
+func pow10(exponent u64) bigint.BigInt {
+    var result = one();
+    var base = bigint.from_i64(10);
+    var remaining = exponent;
+    for remaining > 0 {
+        if remaining % 2 == 1 {
+            result = bigint.multiply(result, base);
+        }
+        remaining = remaining / 2;
+        if remaining > 0 {
+            base = bigint.multiply(base, base);
+        }
+    }
+    return result;
+}
+
+// Correctly round numerator/denominator (an exact nonnegative rational) to
+// binary32/binary64 with round-to-nearest ties-to-even. Mirrors the exact
+// kernel in src/hir/literal_value.cpp and src/sema/check.cpp: the exponent is
+// located with bit lengths, the significand is scaled, one exact division and
+// a ties-to-even increment are performed, and a carry out of the precision is
+// absorbed into the exponent.
+pub func exact_ratio_to_ieee(negative bool, numerator bigint.BigInt,
+                             denominator bigint.BigInt,
+                             width u32) u64 throws Error {
+    if !is_float_width(width) { throw Error.InvalidWidth; }
+    if denominator.sign == 0 { throw Error.ZeroDenominator; }
+    if numerator.sign < 0 || denominator.sign < 0 {
+        throw Error.InvalidLiteral("exact ratio requires a nonnegative numerator and a positive denominator");
+    }
+    let sign = sign_bit(negative, width);
+    if numerator.sign == 0 { return sign; }
+    var precision u32 = 53;
+    var bias i64 = 1023;
+    if width == 32 {
+        precision = 24;
+        bias = 127;
+    }
+    // e = floor(log2(numerator / denominator)), computed from exact bit
+    // lengths and then corrected once by comparison.
+    var e i64 = i64(bigint.bit_length(numerator)) -
+                i64(bigint.bit_length(denominator));
+    if e >= 0 {
+        let scaled = bigint.shift_left(denominator, u64(e));
+        if bigint.compare(numerator, scaled) < 0 { e -= 1; }
+    } else {
+        let scaled = bigint.shift_left(numerator, u64(-e));
+        if bigint.compare(scaled, denominator) < 0 { e -= 1; }
+    }
+    if e > bias { return sign | infinity_bits(width); }
+    let subnormal_exponent i64 = 1 - bias;
+    var floor_e i64 = e;
+    if floor_e < subnormal_exponent { floor_e = subnormal_exponent; }
+    let scale = i64(precision) - 1 - floor_e;
+    var top = numerator;
+    var bottom = denominator;
+    if scale >= 0 {
+        top = bigint.shift_left(top, u64(scale));
+    } else {
+        bottom = bigint.shift_left(bottom, u64(-scale));
+    }
+    let parts = divide_or_fault(top, bottom, "exact ratio division fault");
+    var q = parts.quotient;
+    let twice = bigint.shift_left(parts.remainder, 1);
+    let relation = bigint.compare(twice, bottom);
+    var round_up = false;
+    if relation > 0 {
+        round_up = true;
+    } else if relation == 0 && is_odd(q) {
+        round_up = true;
+    }
+    if round_up { q = bigint.add(q, one()); }
+    if bigint.compare(q, pow2(u64(precision))) >= 0 {
+        // The rounded significand is exactly 2^precision here, so the shift is
+        // lossless and the value stays normal.
+        q = bigint.shift_right(q, 1);
+        e += 1;
+    }
+    if e > bias { return sign | infinity_bits(width); }
+    let normal_limit = pow2(u64(precision - 1));
+    var normal = true;
+    if bigint.compare(q, normal_limit) < 0 { normal = false; }
+    var fraction = low_u64(q);
+    if normal { fraction -= u64(1) << u64(precision - 1); }
+    if !normal { return sign | fraction; }
+    var stored_e i64 = e;
+    if stored_e < subnormal_exponent { stored_e = subnormal_exponent; }
+    return sign | fraction | (u64(stored_e + bias) << u64(precision - 1));
+}
+
+// Decimal floating literal spelling -> IEEE bits. The decimal exponent is
+// kept as a bigint; trailing zeros are stripped before the +-400 magnitude
+// shortcut so spellings such as "1.000...e-400" stay exact. No host double or
+// strtod is involved at any point.
+pub func ieee_float_bits(spelling string, negative bool,
+                         width u32) u64 throws Error {
+    if !is_float_width(width) { throw Error.InvalidWidth; }
+    let sign = sign_bit(negative, width);
+    let source = text.replace(spelling, "_", "");
+    let length = text.len(source);
+    var marker = length;
+    var walk usize = 0;
+    for walk < length {
+        let rune = source[walk];
+        if rune == 101 || rune == 69 {
+            marker = walk;
+            break;
+        }
+        walk += 1;
+    }
+    var decimal_exponent = bigint.zero();
+    if marker < length {
+        if marker + 1 >= length {
+            throw Error.InvalidLiteral("floating literal has no exponent digits");
+        }
+        decimal_exponent = parse_exponent(source[marker + 1:length]);
+    }
+    let mantissa_length = marker;
+    var dot = mantissa_length;
+    var scan usize = 0;
+    for scan < mantissa_length {
+        if source[scan] == 46 {
+            if dot < mantissa_length {
+                throw Error.InvalidLiteral("floating literal has more than one decimal point");
+            }
+            dot = scan;
+        }
+        scan += 1;
+    }
+    var digits = source[0:mantissa_length];
+    if dot < mantissa_length {
+        digits = source[0:dot] + source[dot + 1:mantissa_length];
+        decimal_exponent = bigint.subtract(
+            decimal_exponent,
+            bigint.from_i64(i64(mantissa_length - dot - 1)));
+    }
+    let digits_length = text.len(digits);
+    if digits_length == 0 {
+        throw Error.InvalidLiteral("floating literal has no digits");
+    }
+    var check usize = 0;
+    for check < digits_length {
+        let rune = digits[check];
+        if rune < 48 || rune > 57 {
+            throw Error.InvalidLiteral("floating literal has an invalid digit");
+        }
+        check += 1;
+    }
+    var first = digits_length;
+    var forward usize = 0;
+    for forward < digits_length {
+        if digits[forward] != 48 {
+            first = forward;
+            break;
+        }
+        forward += 1;
+    }
+    // All-zero significand: the sign alone is the value, independent of the
+    // decimal exponent.
+    if first == digits_length { return sign; }
+    var last = digits_length;
+    var backward = digits_length;
+    for backward > 0 {
+        backward -= 1;
+        if digits[backward] != 48 {
+            last = backward;
+            break;
+        }
+    }
+    decimal_exponent = bigint.add(
+        decimal_exponent,
+        bigint.from_i64(i64(digits_length - last - 1)));
+    let trimmed = digits[first:last + 1];
+    let trimmed_length = text.len(trimmed);
+    let magnitude = bigint.add(
+        decimal_exponent, bigint.from_i64(i64(trimmed_length) - 1));
+    if bigint.compare(magnitude,
+                      bigint.from_i64(DECIMAL_MAGNITUDE_LIMIT)) > 0 {
+        return sign | infinity_bits(width);
+    }
+    if bigint.compare(magnitude,
+                      bigint.from_i64(-DECIMAL_MAGNITUDE_LIMIT)) < 0 {
+        return sign;
+    }
+    let exponent = exponent_i64(decimal_exponent);
+    var numerator = parse_decimal_digits(trimmed);
+    var denominator = one();
+    if exponent > 0 {
+        numerator = bigint.multiply(numerator, pow10(u64(exponent)));
+    } else if exponent < 0 {
+        denominator = pow10(u64(-exponent));
+    }
+    if numerator.sign == 0 { return sign; }
+    return exact_ratio_to_ieee(negative, numerator, denominator, width);
+}
+
+pub func decode_ieee(bits u64, width u32) Ieee throws Error {
+    if !is_float_width(width) { throw Error.InvalidWidth; }
+    var fraction_bits u32 = 52;
+    var exponent_bits u32 = 11;
+    var bias i64 = 1023;
+    if width == 32 {
+        fraction_bits = 23;
+        exponent_bits = 8;
+        bias = 127;
+    }
+    let negative = (bits >> u64(width - 1)) != 0;
+    let exponent_mask = (u64(1) << u64(exponent_bits)) - 1;
+    let fraction_mask = (u64(1) << u64(fraction_bits)) - 1;
+    let exponent = (bits >> u64(fraction_bits)) & exponent_mask;
+    let fraction = bits & fraction_mask;
+    if exponent == exponent_mask {
+        var kind = IeeeKind.Infinity;
+        if fraction != 0 { kind = IeeeKind.NaN; }
+        // Non-finite values do not use significand/shift; keep them at the
+        // canonical zero so a decoded record is deterministic.
+        return Ieee(kind: kind, negative: negative,
+                    significand: bigint.zero(), shift: 0);
+    }
+    if exponent == 0 {
+        return Ieee(kind: IeeeKind.Finite, negative: negative,
+                    significand: bigint.from_u64(fraction),
+                    shift: 1 - bias - i64(fraction_bits));
+    }
+    let significand = (u64(1) << u64(fraction_bits)) | fraction;
+    return Ieee(kind: IeeeKind.Finite, negative: negative,
+                significand: bigint.from_u64(significand),
+                shift: i64(exponent) - bias - i64(fraction_bits));
+}
+
+// Convert an already-rounded IEEE value to another width. Same width keeps
+// every bit. A narrower or wider finite value is re-rounded once from its
+// exact significand * 2^shift, never from a decimal spelling or a host double.
+func round_decoded(negative bool, significand bigint.BigInt, shift i64,
+                   width u32) u64 throws Error {
+    if shift >= 0 {
+        return exact_ratio_to_ieee(
+            negative, bigint.shift_left(significand, u64(shift)), one(), width);
+    }
+    return exact_ratio_to_ieee(
+        negative, significand, bigint.shift_left(one(), u64(-shift)), width);
+}
+
+pub func convert_ieee(bits u64, from_width u32,
+                      to_width u32) u64 throws Error {
+    if !is_float_width(from_width) || !is_float_width(to_width) {
+        throw Error.InvalidWidth;
+    }
+    if from_width == to_width { return bits; }
+    let decoded = decode_ieee(bits, from_width);
+    var result u64 = 0;
+    switch decoded.kind {
+        case IeeeKind.Finite: {
+            result = round_decoded(decoded.negative, decoded.significand,
+                                   decoded.shift, to_width);
+        }
+        case IeeeKind.Infinity: {
+            result = sign_bit(decoded.negative, to_width) |
+                     infinity_bits(to_width);
+        }
+        case IeeeKind.NaN: {
+            // The contract does not promise a NaN payload or sign across
+            // widths; use the same canonical quiet NaN as the C++ checker.
+            result = nan_bits(to_width);
+        }
+    }
+    return result;
+}
+
+pub func integer_to_ieee(value bigint.BigInt, width u32) u64 throws Error {
+    if !is_float_width(width) { throw Error.InvalidWidth; }
+    if value.sign == 0 { return 0; }
+    return exact_ratio_to_ieee(value.sign < 0, bigint.absolute(value), one(),
+                               width);
+}
+
+pub func truncate_ieee(bits u64, width u32) bigint.BigInt throws Error {
+    let decoded = decode_ieee(bits, width);
+    switch decoded.kind {
+        case IeeeKind.Finite: {}
+        case IeeeKind.Infinity: throw Error.NonFiniteInteger;
+        case IeeeKind.NaN: throw Error.NonFiniteInteger;
+    }
+    var magnitude = decoded.significand;
+    if decoded.shift >= 0 {
+        magnitude = bigint.shift_left(magnitude, u64(decoded.shift));
+    } else {
+        magnitude = bigint.shift_right(magnitude, u64(-decoded.shift));
+    }
+    if decoded.negative { return bigint.negate(magnitude); }
+    return magnitude;
+}
+
+pub func checked_integer(value bigint.BigInt, width u32,
+                         signed bool) IntegerValue throws Error {
+    if !is_integer_width(width) { throw Error.InvalidWidth; }
+    let modulus = pow2(u64(width));
+    let half = pow2(u64(width) - 1);
+    var low = bigint.zero();
+    var high = modulus;
+    if signed {
+        low = bigint.negate(half);
+        high = half;
+    }
+    if bigint.compare(value, low) < 0 || bigint.compare(value, high) >= 0 {
+        throw Error.IntegerRange;
+    }
+    return IntegerValue(
+        value: value,
+        bits: low_u64(positive_remainder(value, modulus)));
+}
+
+pub func wrap_integer(value bigint.BigInt, width u32,
+                      signed bool) IntegerValue throws Error {
+    if !is_integer_width(width) { throw Error.InvalidWidth; }
+    let modulus = pow2(u64(width));
+    let residue = positive_remainder(value, modulus);
+    var mathematical = residue;
+    if signed {
+        let half = pow2(u64(width) - 1);
+        if bigint.compare(residue, half) >= 0 {
+            mathematical = bigint.subtract(residue, modulus);
+        }
+    }
+    return IntegerValue(value: mathematical, bits: low_u64(residue));
+}

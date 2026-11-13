@@ -1,0 +1,299 @@
+package app;
+
+import "app/wzcc/input" as input;
+import "app/wzcc/model" as model;
+import "app/wzcc/source" as source;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+struct Checks {
+    pub passed usize;
+    pub failed usize;
+}
+
+func check(state inout Checks, name string, condition bool) throws os.Error {
+    if condition {
+        state.passed += 1;
+    } else {
+        state.failed += 1;
+        io.println("FAIL\t"+name);
+    }
+}
+
+func bytes_equal(left Vec[u8], right Vec[u8]) bool {
+    if vec.len(left) != vec.len(right) { return false; }
+    for var index usize = 0; index < vec.len(left); index += 1 {
+        if left[index] != right[index] { return false; }
+    }
+    return true;
+}
+
+func is_complete(value model.PhaseState) bool {
+    switch value {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func is_failed(value model.PhaseState) bool {
+    switch value {
+        case model.PhaseState.Failed: return true;
+        default: return false;
+    }
+}
+
+func is_source(value model.FailureKind) bool {
+    switch value {
+        case model.FailureKind.Source: return true;
+        default: return false;
+    }
+}
+
+func is_environment(value model.FailureKind) bool {
+    switch value {
+        case model.FailureKind.Environment: return true;
+        default: return false;
+    }
+}
+
+func diag(result input.ReadResult, index usize) model.Diagnostic {
+    if index < vec.len(result.diagnostics) { return result.diagnostics[index]; }
+    return model.diagnostic("","","",model.Span(snapshot: 0,
+        begin_byte: 0, end_byte: 0));
+}
+
+func check_invalid(state inout Checks, label string, result input.ReadResult,
+                   manager source.Manager, original Vec[u8], begin u64,
+                   end u64, message string) throws os.Error {
+    let diagnostic = diag(result,0);
+    check(inout state, label+": result shape",
+        is_failed(result.state) && is_source(result.failure) &&
+        !result.has_value && vec.len(result.diagnostics) == 1);
+    check(inout state, label+": diagnostic",
+        diagnostic.code == "E_INVALID_SOURCE" &&
+        diagnostic.phase == "lex" && diagnostic.severity == "error" &&
+        diagnostic.has_primary &&
+        diagnostic.primary.begin_byte == begin &&
+        diagnostic.primary.end_byte == end);
+    check(inout state, label+": message", diagnostic.message == message);
+    let retained = vec.len(manager.files) == 1 &&
+        vec.len(manager.snapshots) == 1 && manager.revision == 1;
+    var snapshot_ok = false;
+    if retained {
+        let snapshot = source.get(manager,1);
+        snapshot_ok = !snapshot.valid && snapshot.id == 1 &&
+            snapshot.revision_id == 1 &&
+            bytes_equal(snapshot.original,original) &&
+            snapshot.error_byte == begin &&
+            snapshot.error_length == end-begin &&
+            snapshot.error_message == message;
+    }
+    check(inout state, label+": retained snapshot", snapshot_ok);
+}
+
+func check_io(state inout Checks, label string, result input.ReadResult,
+              manager source.Manager, message string) throws os.Error {
+    let diagnostic = diag(result,0);
+    check(inout state, label+": result shape",
+        is_failed(result.state) && is_environment(result.failure) &&
+        !result.has_value && vec.len(result.diagnostics) == 1);
+    check(inout state, label+": diagnostic",
+        diagnostic.code == "E_INPUT_IO" &&
+        diagnostic.phase == "toolchain" && diagnostic.severity == "error" &&
+        !diagnostic.has_primary);
+    check(inout state, label+": message", diagnostic.message == message);
+    check(inout state, label+": manager unchanged",
+        vec.len(manager.files) == 0 && vec.len(manager.snapshots) == 0 &&
+        manager.revision == 0);
+}
+
+func check_valid(state inout Checks, label string, result input.ReadResult,
+                 manager source.Manager, original Vec[u8],
+                 normalized Vec[u8], file_id u64, revision u64,
+                 snapshot_id u64) throws os.Error {
+    check(inout state, label+": result shape",
+        is_complete(result.state) && result.has_value &&
+        vec.len(result.diagnostics) == 0);
+    check(inout state, label+": bytes",
+        result.value.valid && result.value.id == snapshot_id &&
+        result.value.revision_id == revision &&
+        result.value.file_id == file_id &&
+        bytes_equal(result.value.original,original) &&
+        bytes_equal(result.value.normalized,normalized));
+    check(inout state, label+": manager",
+        vec.len(manager.files) == usize(snapshot_id) &&
+        vec.len(manager.snapshots) == usize(snapshot_id) &&
+        manager.revision == revision);
+}
+
+func check_manager_alias(state inout Checks) throws os.Error {
+    var manager = source.manager();
+    var alias Vec[u8] = [65,66,67];
+    let file_id = source.add_file(inout manager,"alias.wz");
+    let snapshot = source.update(inout manager,file_id,alias);
+    alias[0] = 90;
+    let stored = source.get(manager,1);
+    check(inout state, "alias snapshot keeps copied bytes",
+        snapshot.original[0] == 65 && stored.original[0] == 65 &&
+        stored.normalized[0] == 65 && manager.files[0] == "alias.wz");
+}
+
+func main() i32 throws os.Error {
+    let args = process.args();
+    if vec.len(args) < 2 { return 2; }
+    let base = args[1];
+    var state = Checks(passed: 0, failed: 0);
+
+    let valid_original Vec[u8] =
+        [0xEF,0xBB,0xBF,0x61,0x0D,0x0A,0x62,0x0D,0x0A,0xC3,0xA9,0x0A];
+    let valid_normalized Vec[u8] =
+        [0x61,0x0A,0x62,0x0A,0xC3,0xA9,0x0A];
+    var manager = source.manager();
+    let valid_bom = input.read(base+"/valid-bom-crlf.bin",inout manager);
+    check_valid(inout state, "BOM+CRLF", valid_bom, manager, valid_original,
+        valid_normalized, 1, 1, 1);
+    check(inout state, "BOM+CRLF positions",
+        valid_bom.value.offsets[0] == 3 &&
+        source.position(valid_bom.value,6).line == 1 &&
+        source.position(valid_bom.value,6).character == 0 &&
+        source.byte_at(valid_bom.value,
+            model.Position(line: 2, character: 0)) == 9);
+
+    let utf8_original Vec[u8] = [0xF0,0x9F,0x98,0x80,0x0A,0x5A];
+    var utf8_manager = source.manager();
+    let utf8 = input.read(base+"/valid-utf8.bin",inout utf8_manager);
+    check_valid(inout state, "UTF-8", utf8, utf8_manager, utf8_original,
+        utf8_original, 1, 1, 1);
+    check(inout state, "UTF-8 positions",
+        source.position(utf8.value,4).line == 0 &&
+        source.position(utf8.value,4).character == 2 &&
+        source.byte_at(utf8.value,
+            model.Position(line: 1, character: 0)) == 5);
+
+    var empty_manager = source.manager();
+    let empty = input.read(base+"/empty.bin",inout empty_manager);
+    check_valid(inout state, "empty file", empty, empty_manager,
+        vec.empty[u8](), vec.empty[u8](), 1, 1, 1);
+
+    let bom Vec[u8] = [0xEF,0xBB,0xBF];
+    var bom_manager = source.manager();
+    let bom_only = input.read(base+"/bom-only.bin",inout bom_manager);
+    check_valid(inout state, "BOM only", bom_only, bom_manager, bom,
+        vec.empty[u8](), 1, 1, 1);
+
+    let nul Vec[u8] = [0x61,0x62,0x00,0x63,0x64];
+    var nul_manager = source.manager();
+    let nul_result = input.read(base+"/invalid-nul.bin",inout nul_manager);
+    check_invalid(inout state, "raw NUL", nul_result, nul_manager, nul,
+        2, 3, "raw NUL");
+
+    let nul_offset Vec[u8] =
+        [0xEF,0xBB,0xBF,0x61,0x0D,0x0A,0x00,0x62];
+    var nul_offset_manager = source.manager();
+    let nul_offset_result = input.read(base+"/invalid-nul-offset.bin",
+        inout nul_offset_manager);
+    check_invalid(inout state, "raw NUL after BOM+CRLF", nul_offset_result,
+        nul_offset_manager, nul_offset, 6, 7, "raw NUL");
+
+    let cr Vec[u8] = [0x61,0x0D,0x62];
+    var cr_manager = source.manager();
+    let cr_result = input.read(base+"/invalid-cr.bin",inout cr_manager);
+    check_invalid(inout state, "standalone CR", cr_result, cr_manager, cr,
+        1, 2, "standalone CR");
+
+    let continuation Vec[u8] = [0xC3,0x28];
+    var continuation_manager = source.manager();
+    let continuation_result = input.read(base+"/invalid-continuation.bin",
+        inout continuation_manager);
+    check_invalid(inout state, "invalid continuation", continuation_result,
+        continuation_manager, continuation, 0, 1, "invalid continuation");
+
+    let truncated Vec[u8] = [0xE2,0x82];
+    var truncated_manager = source.manager();
+    let truncated_result = input.read(base+"/invalid-truncated.bin",
+        inout truncated_manager);
+    check_invalid(inout state, "truncated UTF-8", truncated_result,
+        truncated_manager, truncated, 0, 2, "truncated UTF-8");
+
+    let overlong Vec[u8] = [0xC0,0x80];
+    var overlong_manager = source.manager();
+    let overlong_result = input.read(base+"/invalid-overlong.bin",
+        inout overlong_manager);
+    check_invalid(inout state, "overlong UTF-8", overlong_result,
+        overlong_manager, overlong, 0, 1, "invalid UTF-8");
+
+    let scalar Vec[u8] = [0xED,0xA0,0x80];
+    var scalar_manager = source.manager();
+    let scalar_result = input.read(base+"/invalid-scalar.bin",
+        inout scalar_manager);
+    check_invalid(inout state, "surrogate scalar", scalar_result,
+        scalar_manager, scalar, 0, 3, "invalid scalar");
+
+    let missing = base+"/does-not-exist.bin";
+    var missing_manager = source.manager();
+    let missing_result = input.read(missing,inout missing_manager);
+    check_io(inout state, "missing file", missing_result, missing_manager,
+        missing+": cannot read input (os error 2)");
+
+    let directory = base+"/directory";
+    var directory_manager = source.manager();
+    let directory_result = input.read(directory,inout directory_manager);
+    check_io(inout state, "directory read", directory_result,
+        directory_manager,
+        directory+": cannot read input (os error 21)");
+
+    var empty_path_manager = source.manager();
+    let empty_path_result = input.read("",inout empty_path_manager);
+    check_io(inout state, "empty path", empty_path_result,
+        empty_path_manager, ": cannot read input (os error 2)");
+
+    // A second read gets a new snapshot, while the first value and the
+    // manager's retained snapshot keep the old bytes.
+    let mutable = base+"/mutable.bin";
+    let first_bytes Vec[u8] = [0x66,0x69,0x72,0x73,0x74];
+    let second_bytes Vec[u8] = [0x73,0x65,0x63,0x6F,0x6E,0x64];
+    fs.write_text(mutable,"first",0o644);
+    var mutable_manager = source.manager();
+    let first = input.read(mutable,inout mutable_manager);
+    check_valid(inout state, "old snapshot first read", first,
+        mutable_manager, first_bytes, first_bytes, 1, 1, 1);
+    fs.write_text(mutable,"second",0o644);
+    let second = input.read(mutable,inout mutable_manager);
+    check_valid(inout state, "new snapshot second read", second,
+        mutable_manager, second_bytes, second_bytes, 2, 2, 2);
+    let old = source.get(mutable_manager,1);
+    check(inout state, "old snapshot immutable",
+        bytes_equal(first.value.original,first_bytes) &&
+        bytes_equal(old.original,first_bytes) &&
+        old.revision_id == 1 && second.value.id == 2);
+    check_manager_alias(inout state);
+
+    // I/O failure leaves the manager untouched; later invalid and valid reads
+    // still use revision 1 and 2 and both snapshots remain addressable.
+    var sequence_manager = source.manager();
+    let missing_again = input.read(missing,inout sequence_manager);
+    check_io(inout state, "missing before sequence", missing_again,
+        sequence_manager, missing+": cannot read input (os error 2)");
+    let sequence_invalid = input.read(base+"/invalid-nul.bin",
+        inout sequence_manager);
+    check_invalid(inout state, "invalid in sequence", sequence_invalid,
+        sequence_manager, nul, 2, 3, "raw NUL");
+    let sequence_valid = input.read(base+"/valid-utf8.bin",
+        inout sequence_manager);
+    check_valid(inout state, "valid after invalid", sequence_valid,
+        sequence_manager, utf8_original, utf8_original, 2, 2, 2);
+    let kept_invalid = source.get(sequence_manager,1);
+    check(inout state, "sequence keeps invalid snapshot",
+        !kept_invalid.valid && bytes_equal(kept_invalid.original,nul) &&
+        sequence_manager.revision == 2 &&
+        vec.len(sequence_manager.snapshots) == 2);
+
+    io.println("SUMMARY\t"+strconv.format_i64(i64(state.passed))+"\t"+
+        strconv.format_i64(i64(state.failed)));
+    if state.failed != 0 { return 1; }
+    return 0;
+}

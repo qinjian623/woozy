@@ -1,0 +1,32 @@
+// Dumps the frozen system-operation metadata. The dump format is shared with
+// selfhost/tests/system/oracle.cpp so run.sh can compare every field and the
+// exact order produced by the checked-in Woozy literal.
+package app;
+import "wzcc/wzcc/system" as system;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func main() i32 throws os.Error {
+    let specs = system.operations();
+    io.println("operations " + strconv.format_u64(u64(vec.len(specs))));
+    for spec in specs {
+        io.println("op " + strconv.format_u64(u64(spec.operation)));
+        io.println("name " + spec.name);
+        io.println("result " + spec.result);
+        io.println("owner " + spec.owner);
+        io.println("arity " + strconv.format_u64(u64(spec.type_arity)));
+        io.println("params " + strconv.format_u64(u64(vec.len(spec.parameters))));
+        for parameter in spec.parameters {
+            io.println("param " + parameter);
+        }
+        io.println("end");
+    }
+    let types = system.builtin_types();
+    io.println("builtin_types " + strconv.format_u64(u64(vec.len(types))));
+    for name in types {
+        io.println("builtin " + name);
+    }
+    return 0;
+}

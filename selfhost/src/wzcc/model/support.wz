@@ -1,0 +1,13 @@
+package model;
+
+pub enum SupportError {
+    Invalid(message string);
+    Limit(message string);
+}
+
+pub struct UnitResult {
+    pub state PhaseState;
+    pub failure FailureKind;
+    pub diagnostics Vec[Diagnostic];
+    pub has_value bool;
+}
