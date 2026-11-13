@@ -1,0 +1,502 @@
+// Test-only floating-point observation driver.
+//
+// The driver is ordinary Wz source.  It loads an explicit project and an
+// explicit stdlib source root, then runs the production front end, HIR
+// verification, Native lowering/verification and the public Native or Python
+// emitter.  It never imports the C++ front end, the old native helper, or a
+// test-only emitter body.  Native normal artifacts come from
+// nativebuild.build exactly as the CLI uses it; Python normal artifacts are the
+// public pythonemit.Output code/runtime pair.
+//
+// The metadata is built from the verified HIR's own types and the emitted
+// Output.  LLVM symbol spelling is recorded only for the exact scalar
+// signatures this observer supports.  Other signatures are marked
+// not_covered instead of guessing an aggregate ABI.
+package app;
+
+import "app/wzcc/digest" as digest;
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/model" as model;
+import "app/wzcc/nativebuild" as nativebuild;
+import "app/wzcc/nativeemit" as nativeemit;
+import "app/wzcc/nativelower" as nativelower;
+import "app/wzcc/project" as project;
+import "app/wzcc/pythonemit" as pythonemit;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/resources" as resources;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/types" as types;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/json" as json;
+import "std/option" as option;
+import "std/os" as os;
+import "std/path" as path;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/text" as text;
+import "std/vec" as vec;
+
+struct ScalarSignature {
+    result string;
+    parameters Vec[string];
+    covered bool;
+    reason string;
+}
+
+struct Arguments {
+    project string;
+    stdlib string;
+    resources string;
+    out string;
+    backend string;
+    opt u32;
+}
+
+func usize_text(value usize) string {
+    return strconv.format_u64(u64(value));
+}
+func u32_text(value u32) string {
+    return strconv.format_u64(u64(value));
+}
+func j_string(value string) json.Value {
+    return json.Value.String(value);
+}
+func j_bool(value bool) json.Value {
+    return json.Value.Bool(value);
+}
+func j_u(value usize) json.Value {
+    return json.Value.Number(usize_text(value));
+}
+func j_u32(value u32) json.Value {
+    return json.Value.Number(u32_text(value));
+}
+func j_object(members Vec[json.Member]) json.Value {
+    return json.Value.Object(members);
+}
+func j_array(values Vec[json.Value]) json.Value {
+    return json.Value.Array(values);
+}
+func member(name string, value json.Value) json.Member {
+    return json.Member(name: name, value: value);
+}
+func option_value(args Vec[string], name string) option.Option[string] {
+    for var index usize = 0; index + 1 < vec.len(args); index += 1 {
+        if args[index] == name {
+            return option.Option[string].Some(args[index + 1]);
+        }
+    }
+    return option.Option[string].None;
+}
+func require_value(args Vec[string], name string) string throws os.Error {
+    switch option_value(args, name) {
+        case option.Option.Some(value): return value;
+        case option.Option.None: {
+            io.eprintln("E_DRIVER_ARGUMENT: missing " + name);
+            throw os.Error.System(22, 0);
+        }
+    }
+}
+func parse_arguments(args Vec[string]) Arguments throws os.Error {
+    let backend = require_value(args, "--backend");
+    if backend != "native" && backend != "python" {
+        io.eprintln("E_DRIVER_ARGUMENT: --backend must be native or python");
+        throw os.Error.System(22, 0);
+    }
+    var opt u32 = 0;
+    switch option_value(args, "--opt") {
+        case option.Option.Some(value): {
+            try { opt = u32(strconv.parse_u64(value)); }
+            catch error strconv.Error {
+                io.eprintln("E_DRIVER_ARGUMENT: invalid --opt");
+                throw os.Error.System(22, 0);
+            }
+        }
+        case option.Option.None: {}
+    }
+    if opt != 0 && opt != 2 {
+        io.eprintln("E_DRIVER_ARGUMENT: --opt must be 0 or 2");
+        throw os.Error.System(22, 0);
+    }
+    return Arguments(project: require_value(args, "--project"),
+        stdlib: require_value(args, "--stdlib"),
+        resources: require_value(args, "--resources"),
+        out: require_value(args, "--out"),
+        backend: backend, opt: opt);
+}
+func is_directory(name string) bool throws os.Error {
+    try { return fs.is_dir(os.stat(name)); }
+    catch problem os.Error { return false; }
+}
+func serialize(value json.Value) string throws os.Error {
+    try { return json.serialize(value); }
+    catch error json.Error { throw os.Error.System(5, 0); }
+}
+func fail_code(code string, phase string, message string) i32 throws os.Error {
+    let diagnostics = vec.empty[json.Value]();
+    vec.push(diagnostics, j_object([
+        member("code", j_string(code)),
+        member("phase", j_string(phase)),
+        member("severity", j_string("error")),
+        member("message", j_string(message)),
+    ]));
+    io.println(serialize(j_object([
+        member("status", j_string("error")),
+        member("diagnostics", j_array(diagnostics)),
+    ])));
+    return 3;
+}
+func fail_diagnostics(state model.PhaseState, diagnostics Vec[model.Diagnostic]) i32 throws os.Error {
+    let values = vec.empty[json.Value]();
+    for diagnostic in diagnostics {
+        vec.push(values, j_object([
+            member("code", j_string(diagnostic.code)),
+            member("phase", j_string(diagnostic.phase)),
+            member("severity", j_string(diagnostic.severity)),
+            member("message", j_string(diagnostic.message)),
+        ]));
+    }
+    io.println(serialize(j_object([
+        member("status", j_string("error")),
+        member("diagnostics", j_array(values)),
+    ])));
+    return 3;
+}
+func scalar_name(module hir.HirModule, type_id usize) string {
+    switch types.find(module.types, type_id) {
+        case option.Option.Some(value): {
+            switch value.kind {
+                case model.TypeKind.Float: {
+                    if value.bits == 32 { return "f32"; }
+                    if value.bits == 64 { return "f64"; }
+                    return "float" + u32_text(value.bits);
+                }
+                case model.TypeKind.Bool: return "bool";
+                case model.TypeKind.SignedInt: return "i" + u32_text(value.bits);
+                case model.TypeKind.UnsignedInt: return "u" + u32_text(value.bits);
+                case model.TypeKind.Unit: return "Unit";
+                default: return "non_scalar";
+            }
+        }
+        case option.Option.None: return "invalid";
+    }
+}
+func is_supported_scalar(name string) bool {
+    return name == "f32" || name == "f64" || name == "bool" ||
+           name == "i32" || name == "Unit";
+}
+func signature_info(module hir.HirModule, function hir.HirFunction) ScalarSignature {
+    var result = ScalarSignature(result: "invalid", parameters: [],
+        covered: false, reason: "missing_signature");
+    switch types.find(module.types, function.signature) {
+        case option.Option.Some(signature): {
+            result.result = scalar_name(module, signature.result);
+            var covered = is_supported_scalar(result.result);
+            for parameter in signature.parameters {
+                vec.push(result.parameters, scalar_name(module, parameter.type_id));
+                switch parameter.mode {
+                    case model.ParamMode.Ordinary: {}
+                    default: covered = false;
+                }
+            }
+            for parameter in result.parameters {
+                if !is_supported_scalar(parameter) { covered = false; }
+            }
+            if function.is_async { covered = false; }
+            if vec.len(function.captures) != 0 { covered = false; }
+            result.covered = covered;
+            if !covered { result.reason = "unsupported_signature"; }
+            else { result.reason = ""; }
+        }
+        case option.Option.None: {}
+    }
+    return result;
+}
+func entry_symbol(module hir.HirModule) option.Option[usize] {
+    var entry = option.Option[usize].None;
+    for function in module.functions {
+        if function.symbol < vec.len(module.resolved.symbols) {
+            let symbol = module.resolved.symbols[function.symbol];
+            if symbol.module == module.identity && symbol.name == "main" {
+                entry = option.Option[usize].Some(symbol.id);
+            }
+        }
+    }
+    return entry;
+}
+func function_in_entry(module hir.HirModule, function hir.HirFunction) bool {
+    if function.symbol >= vec.len(module.resolved.symbols) { return false; }
+    return module.resolved.symbols[function.symbol].module == module.identity;
+}
+func llvm_symbol_present(ir string, symbol usize) bool {
+    let name = "lang.fn." + usize_text(symbol);
+    return text.contains(ir, "@" + name + "(") ||
+           text.contains(ir, "@\"" + name + "\"(");
+}
+func parameter_values(parameters Vec[string]) json.Value {
+    let values = vec.empty[json.Value]();
+    for parameter in parameters { vec.push(values, j_string(parameter)); }
+    return j_array(values);
+}
+func native_functions(module hir.HirModule, ir string) Vec[json.Value] {
+    let values = vec.empty[json.Value]();
+    for function in module.functions {
+        if !function_in_entry(module, function) { continue; }
+        let info = signature_info(module, function);
+        var covered = info.covered && llvm_symbol_present(ir, function.symbol);
+        var reason = info.reason;
+        if info.covered && !covered { reason = "llvm_symbol_missing"; }
+        var entry = vec.empty[json.Member]();
+        var status = "not_covered";
+        if covered { status = "covered"; }
+        vec.push(entry, member("source_name",
+            j_string(module.resolved.symbols[function.symbol].name)));
+        vec.push(entry, member("symbol", j_u(function.symbol)));
+        vec.push(entry, member("status", j_string(status)));
+        vec.push(entry, member("result", j_string(info.result)));
+        vec.push(entry, member("parameters", parameter_values(info.parameters)));
+        if covered {
+            vec.push(entry, member("llvm",
+                j_string("lang.fn." + usize_text(function.symbol))));
+        }
+        if reason != "" { vec.push(entry, member("reason", j_string(reason))); }
+        vec.push(values, j_object(entry));
+    }
+    return values;
+}
+func python_generated(output pythonemit.Output, symbol usize) option.Option[string] {
+    for name in output.symbols {
+        if name.symbol == symbol { return option.Option[string].Some(name.name); }
+    }
+    return option.Option[string].None;
+}
+func python_symbols(module hir.HirModule, output pythonemit.Output) Vec[json.Value] {
+    let values = vec.empty[json.Value]();
+    for name in output.symbols {
+        if name.symbol >= vec.len(module.resolved.symbols) { continue; }
+        let source = module.resolved.symbols[name.symbol];
+        vec.push(values, j_object([
+            member("symbol", j_u(name.symbol)),
+            member("generated", j_string(name.name)),
+            member("source_name", j_string(source.name)),
+        ]));
+    }
+    return values;
+}
+func python_functions(module hir.HirModule, output pythonemit.Output) Vec[json.Value] {
+    let values = vec.empty[json.Value]();
+    for function in module.functions {
+        if !function_in_entry(module, function) { continue; }
+        let generated = python_generated(output, function.symbol);
+        if !option.is_some(generated) { continue; }
+        let info = signature_info(module, function);
+        var generated_name = "";
+        switch generated { case option.Option.Some(value): generated_name = value; case option.Option.None: {} }
+        var status = "not_covered";
+        if info.covered { status = "covered"; }
+        vec.push(values, j_object([
+            member("source_name",
+                j_string(module.resolved.symbols[function.symbol].name)),
+            member("symbol", j_u(function.symbol)),
+            member("generated", j_string(generated_name)),
+            member("result", j_string(info.result)),
+            member("parameters", parameter_values(info.parameters)),
+            member("status", j_string(status)),
+        ]));
+    }
+    return values;
+}
+func joined_llvm(sections Vec[string]) string {
+    var value = "";
+    for section in sections { value += section; }
+    return value;
+}
+func write_text(name string, value string) throws os.Error {
+    fs.write_text(name, value, 0o644);
+}
+func run_native(args Arguments, original model.Project,
+                verified hirverify.VerifiedHirModule,
+                module hir.HirModule, entry usize) i32 throws os.Error {
+    let lowered = nativelower.lower(verified);
+    if !option.is_some(lowered.value) {
+        return fail_diagnostics(lowered.state, lowered.diagnostics);
+    }
+    var settings = nativeemit.default_options();
+    settings.optimization = args.opt;
+    var emitted = nativeemit.EmitResult(state: model.PhaseState.Failed,
+        failure: model.FailureKind.Internal, diagnostics: [],
+        value: option.Option[nativeemit.Output].None);
+    switch lowered.value {
+        case option.Option.Some(value): emitted = nativeemit.emit(value, entry, settings);
+        case option.Option.None: {
+            return fail_diagnostics(lowered.state, lowered.diagnostics);
+        }
+    }
+    if !option.is_some(emitted.value) {
+        return fail_diagnostics(emitted.state, emitted.diagnostics);
+    }
+    var output = nativeemit.Output(llvm_sections: [], c_adapter_source: "",
+        triple: "x86_64-unknown-linux-gnu", data_layout: nativeemit.DATA_LAYOUT,
+        has_async: false);
+    switch emitted.value {
+        case option.Option.Some(value): output = value;
+        case option.Option.None: return 3;
+    }
+    let ir = joined_llvm(output.llvm_sections);
+    let normal = args.out + "/normal";
+    fs.create_dir_all(normal, 0o755);
+    let built = nativebuild.build(output, original, normal, settings.optimization);
+    if !built.has_value {
+        return fail_diagnostics(built.state, built.diagnostics);
+    }
+    write_text(args.out + "/preopt.ll", ir);
+    let object_hash = digest.sha256(fs.read_file(normal + "/program.o"));
+    let program_hash = digest.sha256(fs.read_file(normal + "/program"));
+    let metadata = j_object([
+        member("schema", j_string("selfhost-float-observer/1")),
+        member("version", j_u(1)),
+        member("backend", j_string("native")),
+        member("word_bits", j_u32(module.config.word_bits)),
+        member("opt", j_u32(args.opt)),
+        member("entry_symbol", j_u(entry)),
+        member("preopt_llvm_sha256", j_string(digest.sha256(text.bytes(ir)))),
+        member("normal_object_sha256", j_string(object_hash)),
+        member("normal_program_sha256", j_string(program_hash)),
+        member("functions", j_array(native_functions(module, ir))),
+    ]);
+    write_text(args.out + "/float-metadata.json", serialize(metadata) + "\n");
+    io.println(serialize(j_object([
+        member("status", j_string("ok")),
+        member("backend", j_string("native")),
+        member("opt", j_u32(args.opt)),
+        member("preopt_llvm_sha256", j_string(digest.sha256(text.bytes(ir)))),
+        member("normal_object_sha256", j_string(object_hash)),
+        member("normal_program_sha256", j_string(program_hash)),
+    ])));
+    return 0;
+}
+func run_python(args Arguments, verified hirverify.VerifiedHirModule,
+                module hir.HirModule, entry usize) i32 throws os.Error {
+    let runtime = fs.read_text(args.resources + "/runtime/python/unicode18.py") +
+        "\n" + fs.read_text(args.resources + "/runtime/python/langrt.py");
+    let emitted = pythonemit.emit(verified, entry,
+        pythonemit.Options(entrypoint: true), runtime);
+    if !option.is_some(emitted.value) {
+        return fail_diagnostics(emitted.state, emitted.diagnostics);
+    }
+    var output = pythonemit.Output(code: "", runtime: "", source_map: [],
+        symbols: []);
+    switch emitted.value {
+        case option.Option.Some(value): output = value;
+        case option.Option.None: return 3;
+    }
+    let normal = args.out + "/normal";
+    fs.create_dir_all(normal, 0o755);
+    write_text(normal + "/program.py", output.code);
+    write_text(normal + "/langrt.py", output.runtime);
+    let metadata = j_object([
+        member("schema", j_string("selfhost-float-observer/1")),
+        member("version", j_u(1)),
+        member("contract", j_string("compiler-dev/1")),
+        member("backend", j_string("python")),
+        member("word_bits", j_u32(module.config.word_bits)),
+        member("entry_symbol", j_u(entry)),
+        member("normal_code_sha256", j_string(digest.sha256(text.bytes(output.code)))),
+        member("normal_runtime_sha256", j_string(digest.sha256(text.bytes(output.runtime)))),
+        member("symbols", j_array(python_symbols(module, output))),
+        member("functions", j_array(python_functions(module, output))),
+    ]);
+    let serialized = serialize(metadata) + "\n";
+    write_text(args.out + "/float-metadata.json", serialized);
+    write_text(normal + "/metadata.json", serialized);
+    io.println(serialize(j_object([
+        member("status", j_string("ok")),
+        member("backend", j_string("python")),
+        member("normal_code_sha256", j_string(digest.sha256(text.bytes(output.code)))),
+        member("normal_runtime_sha256", j_string(digest.sha256(text.bytes(output.runtime)))),
+        member("symbols", j_u(vec.len(output.symbols))),
+    ])));
+    return 0;
+}
+func run_verified(args Arguments, original model.Project,
+                  verified hirverify.VerifiedHirModule) i32 throws os.Error {
+    var module = hir.empty_module(
+        model.ResolvedProject(project: model.empty_project(), symbols: [],
+            occurrences: [], deferred_members: [], self_parameters: []), 0,
+        model.CheckConfig(backend: model.Backend.Native, word_bits: 64));
+    try { module = hirverify.snapshot(verified); }
+    catch error model.SupportError {
+        var message = "";
+        switch error {
+            case model.SupportError.Invalid(value): message = value;
+            case model.SupportError.Limit(value): message = value;
+        }
+        return fail_code("E_IR_INVALID", "lowering", message);
+    }
+    let entry = entry_symbol(module);
+    var entry_value usize = 0;
+    switch entry {
+        case option.Option.Some(value): entry_value = value;
+        case option.Option.None: {
+            return fail_code("E_CAPABILITY_UNAVAILABLE", "codegen",
+                "executable build requires main in the entry module");
+        }
+    }
+    if args.backend == "native" {
+        return run_native(args, original, verified, module, entry_value);
+    }
+    return run_python(args, verified, module, entry_value);
+}
+func run(args Arguments) i32 throws os.Error {
+    if !is_directory(args.stdlib) {
+        return fail_code("E_DRIVER_ARGUMENT", "toolchain",
+            "explicit stdlib directory is missing: " + args.stdlib);
+    }
+    if !is_directory(args.resources) {
+        return fail_code("E_DRIVER_ARGUMENT", "toolchain",
+            "explicit resources directory is missing: " + args.resources);
+    }
+    let exe_directory = resources.directory();
+    if exe_directory != args.resources {
+        return fail_code("E_DRIVER_ARGUMENT", "toolchain",
+            "resources must be the driver executable directory: " +
+            exe_directory + " != " + args.resources);
+    }
+    fs.create_dir_all(args.out, 0o755);
+    var manager = source.manager();
+    let project_options = model.ProjectOptions(manifest: args.project,
+        std_source_root: option.Option[string].Some(args.stdlib),
+        std_binding_bundle: option.Option[string].None);
+    let loaded = project.load(project_options, inout manager);
+    if !loaded.has_value {
+        return fail_diagnostics(loaded.state, loaded.diagnostics);
+    }
+    var original = loaded.value;
+    original.backend = args.backend;
+    let resolved = resolve.resolve_project(original);
+    if !resolved.has_value {
+        return fail_diagnostics(resolved.state, resolved.diagnostics);
+    }
+    let checked = sema.check_project(resolved,
+        option.Option[model.CheckConfig].None, hirverify.VerifyMode.Backend);
+    switch checked.value {
+        case option.Option.Some(verified):
+            return run_verified(args, original, verified);
+        case option.Option.None:
+            return fail_diagnostics(checked.state, checked.diagnostics);
+    }
+}
+func main() i32 throws os.Error {
+    let args = parse_arguments(process.args());
+    try { return run(args); }
+    catch error model.SupportError {
+        var message = "";
+        switch error {
+            case model.SupportError.Invalid(value): message = value;
+            case model.SupportError.Limit(value): message = value;
+        }
+        return fail_code("E_IR_INVALID", "lowering", message);
+    }
+}
