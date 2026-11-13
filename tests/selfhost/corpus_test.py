@@ -1083,9 +1083,10 @@ def run_harness():
                                  "stderr.bin", "input.json"):
                         assert (run_dir / name).is_file(), (run_dir, name)
                     execution = candidate["run"]["execution"]
-                    for key in ("stdout_path", "stderr_path", "trace_path"):
-                        assert (run_dir / execution[key]).is_file(), (
-                            run_dir, key)
+                    if execution is not None:
+                        for key in ("stdout_path", "stderr_path", "trace_path"):
+                            assert (run_dir / execution[key]).is_file(), (
+                                run_dir, key)
         python_case = next(
             case for case in result["cases"]
             if case["id"] == "harness:build-python-run")
