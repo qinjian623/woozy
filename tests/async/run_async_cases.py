@@ -196,6 +196,15 @@ def build_regular_cases(cli, root, out_base, env, catalog, build_timeout, run_ti
                     stderr,
                 )
                 raise SystemExit(1)
+            if "stderr" in case and stderr != case["stderr"]:
+                report_failure(
+                    f"positive case '{name}' O{opt}: stderr mismatch\n"
+                    f"EXPECTED:\n{case['stderr']}\nGOT:\n{stderr}",
+                    log_dir,
+                    stdout,
+                    stderr,
+                )
+                raise SystemExit(1)
             print(f"  [PASS] positive (O{opt}): {name}")
             passed += 1
     return passed

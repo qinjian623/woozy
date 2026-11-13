@@ -3116,11 +3116,9 @@ public:
       auto *error = llvm::BasicBlock::Create(context, "async.error", main);
       auto *cancelled =
           llvm::BasicBlock::Create(context, "async.cancelled", main);
-      builder.CreateCondBr(builder.CreateICmpEQ(status, builder.getInt32(1)),
-                           done,
-                           builder.CreateICmpEQ(status, builder.getInt32(2))
-                               ? error
-                               : cancelled);
+      auto *dispatch = builder.CreateSwitch(status, cancelled, 2);
+      dispatch->addCase(builder.getInt32(1), done);
+      dispatch->addCase(builder.getInt32(2), error);
       builder.SetInsertPoint(done);
       llvm::Value *value = builder.getInt32(0);
       if (type(payload).kind != hir::TypeKind::Unit) {

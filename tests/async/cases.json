@@ -43,6 +43,12 @@
       "stdout": "12\ncaught\n3\n"
     },
     {
+      "name": "cancel-main",
+      "exit": 1,
+      "stdout": "",
+      "stderr": ""
+    },
+    {
       "name": "cancel",
       "exit": 0,
       "stdout": "true\ntrue\nchild.cleanup\nworker.cleanup\n"

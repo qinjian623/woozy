@@ -1,0 +1,14 @@
+package app;
+import "std/async" as a;
+
+enum Failure { Bad; }
+
+async func child() i32 throws Failure {
+    return 42;
+}
+
+async func main() i32 throws Failure {
+    let pending = child();
+    a.cancel(pending);
+    return await pending;
+}
