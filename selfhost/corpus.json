@@ -3,7 +3,7 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "ee033c3e337cf294da4af5cccd9eb035cf0f03dc",
+  "git_head": "fdff24556a46463c4b8171bd30d26277a607c5cf",
   "previous_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
   "frozen_at": "2026-11-14",
   "repository_roots": [
@@ -2410,6 +2410,20 @@
       "path": "selfhost/tests/float_observer/run.py",
       "sha256": "1b23980267123746004e0637288aabb69b054319c7e86f74cbe13a572ecb61b7",
       "size": 82510,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/float_observer/supplemental.py",
+      "sha256": "d08c8351ae4ec8f7876cb3814bf74d7b341d4194a2bcfdeb77836fd9989c57d4",
+      "size": 53130,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/float_observer/supplemental_signature_controls.py",
+      "sha256": "a80034801c104b21a3b7f59556ae97c63584feb0cf6d0e358fffb544581ec139",
+      "size": 7553,
       "role": "runner_source",
       "assignment": []
     },
@@ -79537,7 +79551,7 @@
       "enabled": false,
       "runner": "selfhost/tests/float_observer/run.py",
       "runner_status": "component",
-      "reason": "Wz frontend/emitter floating observer with accepted CLI byte comparisons; core6440Native/3438Python verified separately; supplemental14projects/9observations and full corpus remain pending",
+      "reason": "Wz frontend/emitter floating observer: core6440Native/3438Python and supplemental14projects/9observations verified with retained CLI; modes/throws metadata unverified; latest Source compiler, malicious IR and full corpus remain pending",
       "tags": [
         "component"
       ]
@@ -79592,6 +79606,16 @@
       "path": "selfhost/tests/float_observer/run.py",
       "status": "component",
       "reason": "Floating observer checks actual numeric values through Wz driver and accepted CLI, with remaining supplemental scope explicit"
+    },
+    {
+      "path": "selfhost/tests/float_observer/supplemental.py",
+      "status": "component",
+      "reason": "Retained Woozy CLI Python supplemental14projects/9observations and exact typed/Panic signature controls; parameter_modes/throws metadata unverified; not a current compiler rebuild or full corpus result"
+    },
+    {
+      "path": "selfhost/tests/float_observer/supplemental_signature_controls.py",
+      "status": "component",
+      "reason": "Retained Woozy CLI Python supplemental14projects/9observations and exact typed/Panic signature controls; parameter_modes/throws metadata unverified; not a current compiler rebuild or full corpus result"
     },
     {
       "path": "selfhost/tests/float_observer/test_controls.py",
@@ -80746,7 +80770,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "ee033c3e337cf294da4af5cccd9eb035cf0f03dc",
+    "to_git_head": "fdff24556a46463c4b8171bd30d26277a607c5cf",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -80923,7 +80947,9 @@
       "selfhost/tests/python_capability/fixtures/value/text.wz",
       "selfhost/tests/python_capability/lang.toml",
       "selfhost/tests/python_capability/run.py",
-      "selfhost/tests/python_capability/src/main.wz"
+      "selfhost/tests/python_capability/src/main.wz",
+      "selfhost/tests/float_observer/supplemental.py",
+      "selfhost/tests/float_observer/supplemental_signature_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -81004,7 +81030,7 @@
         "accepted_task": "075656d3-cd5d-456d-a1e4-b15c38e86173"
       }
     ],
-    "new_freeze_path_count": 176,
+    "new_freeze_path_count": 178,
     "modified_freeze_path_count": 13,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 3
