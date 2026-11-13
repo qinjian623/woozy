@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
-  "previous_git_head": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
-  "frozen_at": "2026-11-13T23:22:54.503998+00:00",
+  "git_head": "a3ab6f925eba8ef3555bbc81f2098f6f24be1592",
+  "previous_git_head": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
+  "frozen_at": "2026-11-13T23:44:32.039740+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -31,7 +31,7 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1325,
+    "tracked_wz": 1326,
     "manifests": 1009,
     "tests_manifests": 960,
     "no_manifest_wz": 126,
@@ -1980,8 +1980,8 @@
     },
     {
       "path": "selfhost/src/wzcc/sema/a_instantiate.wz",
-      "sha256": "3d5192d073196f56c2ccd3e8ef72fa110b22c6b07ff63667165e94afff57fb05",
-      "size": 46245,
+      "sha256": "66cdfbf12a78d8fa2291cb65620bd9af915aebebf793747e7d6644066aaea299",
+      "size": 48180,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -4010,6 +4010,32 @@
         "project:selfhost/tests/sema_common/lang.toml"
       ],
       "manifest": "selfhost/tests/sema_common/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_recursion/run.py",
+      "sha256": "4207095a2f6e4f4fea40366b207eabe8475da3b696211d3b40d7261e09a82046",
+      "size": 16856,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_recursion/src/main.wz",
+      "sha256": "245d28c99b074189655fd8aa2c61d9a680bd692b4a21bd9026e5c46a189d0abf",
+      "size": 2329,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/lang.toml"
+      ],
+      "manifest": "selfhost/lang.toml",
+      "component_runner": "selfhost/tests/sema_recursion/run.py",
+      "reason": "Auxiliary Wz driver staged by the Sema recursion component; not a new CLI project or full corpus proof"
+    },
+    {
+      "path": "selfhost/tests/sema_recursion/test_process_controls.py",
+      "sha256": "3a76d9eba27564654981372764574d997d961e17d803702d4143d55a45b8f418",
+      "size": 6559,
+      "role": "runner_source",
+      "assignment": []
     },
     {
       "path": "selfhost/tests/source/lang.toml",
@@ -79847,6 +79873,16 @@
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
     },
     {
+      "path": "selfhost/tests/sema_recursion/run.py",
+      "status": "component",
+      "reason": "Generic-recursion component or strict process controls; O0/O2 depth rejection and finite/cache controls, not complete compiler/corpus parity"
+    },
+    {
+      "path": "selfhost/tests/sema_recursion/test_process_controls.py",
+      "status": "component",
+      "reason": "Generic-recursion component or strict process controls; O0/O2 depth rejection and finite/cache controls, not complete compiler/corpus parity"
+    },
+    {
       "path": "selfhost/tests/source/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
@@ -80804,7 +80840,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
+    "to_git_head": "a3ab6f925eba8ef3555bbc81f2098f6f24be1592",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -80986,7 +81022,10 @@
       "selfhost/tests/float_observer/supplemental_signature_controls.py",
       "selfhost/tests/hirverify/cache/driver.wz",
       "selfhost/tests/hirverify/cache/run.py",
-      "selfhost/tests/hirverify/cache/test_controls.py"
+      "selfhost/tests/hirverify/cache/test_controls.py",
+      "selfhost/tests/sema_recursion/run.py",
+      "selfhost/tests/sema_recursion/src/main.wz",
+      "selfhost/tests/sema_recursion/test_process_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -81101,10 +81140,20 @@
         "new_size": 18189,
         "commit": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
         "accepted_task": "dc450600-a237-40ff-b6d8-d8418183bd28"
+      },
+      {
+        "path": "selfhost/src/wzcc/sema/a_instantiate.wz",
+        "old_sha256": "3d5192d073196f56c2ccd3e8ef72fa110b22c6b07ff63667165e94afff57fb05",
+        "old_size": 46245,
+        "new_sha256": "66cdfbf12a78d8fa2291cb65620bd9af915aebebf793747e7d6644066aaea299",
+        "new_size": 48180,
+        "commit": "a3ab6f925eba8ef3555bbc81f2098f6f24be1592",
+        "origin_task": "ae3bf72c-7a7c-44d7-bc07-f4ab6b5f8964",
+        "review_basis": "Root static comparison, formal component r2 nine commands, independent strict seven-command replay and six integrated controls; original task intentionally interrupted during redundant old-Source check"
       }
     ],
-    "new_freeze_path_count": 181,
-    "modified_freeze_path_count": 17,
+    "new_freeze_path_count": 184,
+    "modified_freeze_path_count": 18,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 2,
     "compiler_source_stage1_semantic_differences": [
@@ -81112,7 +81161,8 @@
       "wzcc/hirverify/effectsrc.wz",
       "wzcc/hirverify/flow.wz",
       "wzcc/hirverify/run.wz",
-      "wzcc/hirverify/verify.wz"
+      "wzcc/hirverify/verify.wz",
+      "wzcc/sema/a_instantiate.wz"
     ],
     "module_runner_delta": {
       "commit": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
@@ -81127,6 +81177,21 @@
       "runner_status": "public_cli",
       "case_adaptation_required": 319,
       "runner_adaptation_required": 98
+    },
+    "generic_recursion_delta": {
+      "source_sha256": "66cdfbf12a78d8fa2291cb65620bd9af915aebebf793747e7d6644066aaea299",
+      "commit": "a3ab6f925eba8ef3555bbc81f2098f6f24be1592",
+      "limits_unchanged": [
+        48,
+        4096
+      ],
+      "component_r2": "/tmp/sema-recursion-test2/sema-recursion-xdd8zj5i/report.json",
+      "strict_replay": "checks/sema-recursion-runner-correction-20261114/strict-seven-ls3f2joo/report.json",
+      "Root_controls": "six groups passed",
+      "has_primary": "not serialized by the component; full CLI still pending",
+      "original_task_status": "intentionally interrupted; no completed-attempt agent_review claimed",
+      "test_runner_sha256": "4207095a2f6e4f4fea40366b207eabe8475da3b696211d3b40d7261e09a82046",
+      "corpus_expectations_unchanged": true
     }
   }
 }
