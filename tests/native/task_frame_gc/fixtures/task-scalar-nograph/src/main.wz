@@ -1,0 +1,22 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// A scalar-only Task is a provable leaf. No frame trace is generated, so the
+// startup wrapper must keep the no-graph fast path.
+async func work() i32 {
+    return 42;
+}
+
+func main() i32 throws os.Error {
+    let task = work();
+    a.spawn(task);
+    a.run_until(task);
+    if !a.finished(task) {
+        return 1;
+    }
+    io.println("scalar-ok");
+    a.shutdown();
+    return 0;
+}

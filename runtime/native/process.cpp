@@ -11,12 +11,52 @@
 #endif
 
 extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t,uint64_t,uint64_t,uint64_t) noexcept;
+// Optional private async fork hooks. They are weak so a program that links only
+// process does not pull runtime/native/async.cpp into the image. When async is
+// absent there is no executor, no async epoll and no fork gate to restore.
+extern "C" {
+int64_t lang_async_fork_reserve_v1(int32_t) noexcept __attribute__((weak));
+void lang_async_fork_release_v1() noexcept __attribute__((weak));
+void lang_async_fork_prepare_v1(int32_t) noexcept __attribute__((weak));
+void lang_async_fork_parent_v1(int32_t) noexcept __attribute__((weak));
+void lang_async_fork_child_v1(int32_t) noexcept __attribute__((weak));
+[[noreturn]] void lang_async_fork_refuse_v1() noexcept __attribute__((weak));
+}
 namespace {
 namespace linux = lang::native::linux_x86_64;
 int64_t sys(long n,long a=0,long b=0,long c=0,long d=0,long e=0,long f=0) noexcept {
   return linux::syscall6(n,a,b,c,d,e,f);
 }
 long addr(const void *p) noexcept {return reinterpret_cast<long>(p);}
+
+int64_t async_fork_reserve(bool exec_only) noexcept {
+  return lang_async_fork_reserve_v1
+             ? lang_async_fork_reserve_v1(exec_only ? 1 : 0)
+             : 0;
+}
+void async_fork_release() noexcept {
+  if (lang_async_fork_release_v1) lang_async_fork_release_v1();
+}
+void async_fork_prepare(bool exec_only) noexcept {
+  if (lang_async_fork_prepare_v1) lang_async_fork_prepare_v1(exec_only ? 1 : 0);
+}
+void async_fork_parent(bool exec_only) noexcept {
+  if (lang_async_fork_parent_v1) lang_async_fork_parent_v1(exec_only ? 1 : 0);
+}
+void async_fork_child(bool exec_only) noexcept {
+  if (lang_async_fork_child_v1) lang_async_fork_child_v1(exec_only ? 1 : 0);
+}
+#if defined(LANG_RUNTIME_HOSTED)
+[[noreturn]] void async_fork_refuse_foreign_executor() noexcept {
+  // The hosted atfork prepare is void, so direct libc fork cannot return a
+  // Source os.Error. Record the exact restriction and terminate instead of
+  // pretending the call threw or copying an executor owned by a vanished
+  // thread.
+  if (lang_async_fork_refuse_v1) lang_async_fork_refuse_v1();
+  lang_native_panic_v1(10, 0, 0, 0);
+}
+#endif
+
 uint64_t startup_argc;
 const char *const *startup_argv;
 const char *const *startup_environment;
@@ -35,6 +75,19 @@ thread_local LangGcProgramForkToken hosted_fork_token;
 thread_local bool hosted_fork_scope_owned;
 thread_local bool hosted_fork_atfork_scope;
 thread_local bool hosted_gc_fork_hooks;
+// Per-thread fork state for the optional async hooks. `reserved_outer` is set
+// by a Source language fork before its LaunchGuard; `gate_held` records that
+// this atfork prepare acquired the reservation itself (direct libc fork);
+// `async_held` records that the executor ticket lock was taken and must be
+// released by the parent/child hook.
+thread_local bool hosted_fork_exec_only;
+thread_local bool hosted_fork_reserved_outer;
+// Set by a Source lang_process_fork_v1 after its outer reservation succeeds.
+// The runtime parent hook releases this reservation before user parent
+// handlers; the wrapper only releases it if the hook could not run.
+thread_local bool hosted_fork_outer_owned;
+thread_local bool hosted_fork_gate_held;
+thread_local bool hosted_fork_async_held;
 #endif
 void launch_acquire() noexcept {
   while(__atomic_exchange_n(&launch_lock,1u,__ATOMIC_ACQUIRE))
@@ -71,6 +124,10 @@ struct Guard {Guard() noexcept {lock();} ~Guard(){unlock();}};
 // Per-thread state makes a failed-fork fallback idempotent even when another
 // thread has already entered its own atfork prepare handler.
 void hosted_fork_parent_release() noexcept {
+  if (hosted_fork_async_held) {
+    hosted_fork_async_held = false;
+    async_fork_parent(false);
+  }
   if (hosted_fork_locks_held) {
     hosted_fork_locks_held=false;
     // Reverse the prepare order: runtime -> world -> gc -> Weak -> allocator.
@@ -90,6 +147,23 @@ void hosted_fork_parent_release() noexcept {
   if(hosted_fork_owns_launch) {
     hosted_fork_owns_launch=false;
     launch_release();
+  }
+  // The reservation is outer to every internal lock. An atfork-acquired
+  // direct-fork reservation is released here; a Source fork's outer reservation
+  // is also released here when the runtime parent hook runs, with the wrapper
+  // keeping an idempotent fallback for paths where it did not.
+  if (hosted_fork_gate_held) {
+    hosted_fork_gate_held = false;
+    async_fork_release();
+  }
+  // A Source wrapper's reservation only protects the executor-TID decision and
+  // the actual fork. Release it here, before user parent handlers run, so a
+  // parent callback cannot be blocked by a binding reservation that no longer
+  // protects anything. The wrapper's post-fork fallback is idempotent.
+  if (hosted_fork_outer_owned) {
+    hosted_fork_outer_owned = false;
+    hosted_fork_reserved_outer = false;
+    async_fork_release();
   }
 }
 
@@ -251,13 +325,25 @@ int64_t setenv(Bytes name,Bytes value,int32_t overwrite,bool remove) noexcept {
   }
   lang_vec_release_v1(environment);environment=next;return 0;
 }
-int64_t fork_process() noexcept {
+// `exec_only` marks the internal spawn child: its executor is never continued
+// or cleaned and a foreign executor is allowed. `reserved` says the caller
+// already holds the async fork reservation (the Source language fork takes it
+// before LaunchGuard so a direct fork's reservation cannot deadlock with
+// launch).
+int64_t fork_process(bool exec_only,bool reserved) noexcept {
 #if defined(LANG_RUNTIME_HOSTED)
   // libc fork runs glibc's internal handlers and the atfork hooks registered
   // by runtime/hosted/process.cpp.  The hooks acquire/release our environment
   // and allocator locks; launch is held by the caller (spawn or
   // lang_process_fork_v1).  Only the calling thread survives in the child.
+  // The atfork prepare sees the exec-only flag and takes the async reservation
+  // there before launch for a direct libc fork. A Source fork already reserved
+  // before its LaunchGuard.
+  hosted_fork_exec_only = exec_only;
+  hosted_fork_reserved_outer = reserved;
   auto pid=lang_hosted_fork_v1();
+  hosted_fork_exec_only = false;
+  hosted_fork_reserved_outer = false;
   if(pid<0) {
     hosted_fork_parent_release();
     return pid;
@@ -269,6 +355,12 @@ int64_t fork_process() noexcept {
   }
   return pid;
 #else
+  bool owns_reservation = false;
+  if (!exec_only && !reserved) {
+    const auto status = async_fork_reserve(false);
+    if (status < 0) return status;
+    owns_reservation = true;
+  }
   lock();lang_alloc_fork_prepare_v1();lang_weak_fork_prepare_v1();
   const bool gc_fork_hooks = gc_fork_ready();
   if (gc_fork_hooks) {
@@ -279,6 +371,11 @@ int64_t fork_process() noexcept {
     if (world_prepare) world_prepare();
     if (runtime_prepare) runtime_prepare();
   }
+  // Async is the last prepare lock. For ordinary fork it acquires the executor
+  // ticket lock; for exec-only it only records the parent tid. NoGraph programs
+  // still take this path because scalar/Unit Tasks also bind the executor and
+  // own the async epoll.
+  async_fork_prepare(exec_only);
   auto pid=sys(57);
   if(!pid) {
     lang_alloc_fork_child_v1();
@@ -291,10 +388,16 @@ int64_t fork_process() noexcept {
       if (world_child) world_child();
       if (runtime_child) runtime_child();
     }
+    // Only now reset async ticket/TID/epoll state; the inherited allocator and
+    // GC locks are already consistent with the single surviving thread.
+    async_fork_child(exec_only);
     __atomic_store_n(&launch_lock,0u,__ATOMIC_RELAXED);
     __atomic_store_n(&environment_lock,0u,__ATOMIC_RELAXED);
     lang_thread_fork_child_v1();
   } else {
+    // Reverse order: async -> runtime -> world -> gc -> Weak -> allocator ->
+    // environment.
+    async_fork_parent(exec_only);
     if (gc_fork_hooks) {
       auto runtime_parent = lang::native::gc_program::hooks_v1.runtime_fork_parent;
       auto world_parent = lang::native::gc_program::hooks_v1.world_fork_parent;
@@ -305,6 +408,7 @@ int64_t fork_process() noexcept {
     }
     lang_weak_fork_parent_v1();lang_alloc_fork_parent_v1();unlock();
   }
+  if (owns_reservation) async_fork_release();
   return pid;
 #endif
 }
@@ -380,7 +484,7 @@ int64_t spawn(Bytes path,const LangVec *args,const LangVec *env,bool raw,int32_t
     sys(3,pipe[i]);pipe[i]=static_cast<int32_t>(r);
   }
   {
-    const auto pid=fork_process();
+    const auto pid=fork_process(true,false);
     if(pid<0) {status=pid;goto cleanup;}
     if(!pid) {
       sys(3,pipe[0]);
@@ -422,6 +526,17 @@ extern "C" void lang_hosted_process_atfork_prepare_v1() noexcept {
   // Direct libc fork enters the graph-stable scope before acquiring launch.
   // The language spawn/fork wrapper already entered it before its LaunchGuard.
   hosted_enter_fork_scope();
+  const bool exec_only = hosted_fork_exec_only;
+  // A Source fork took the reservation before its LaunchGuard. A direct libc
+  // fork must take it here, still before launch, so it cannot deadlock with a
+  // Source fork that already holds launch while waiting for the reservation.
+  // The void atfork prepare cannot return -EBUSY, so a foreign executor is a
+  // recorded terminal Panic.
+  if (!exec_only && !hosted_fork_reserved_outer) {
+    const auto reserved = async_fork_reserve(false);
+    if (reserved < 0) async_fork_refuse_foreign_executor();
+    hosted_fork_gate_held = true;
+  }
   // Language fork/spawn already holds launch through pipe cleanup. Direct
   // libc fork must also wait until those temporary descriptors are closed.
   if(!hosted_launch_owned) {
@@ -440,6 +555,10 @@ extern "C" void lang_hosted_process_atfork_prepare_v1() noexcept {
     if (world_prepare) world_prepare();
     if (runtime_prepare) runtime_prepare();
   }
+  // Async is the last prepare lock (ordinary fork) or just records the parent
+  // tid (exec-only spawn). NoGraph programs still pass through here.
+  async_fork_prepare(exec_only);
+  if (!exec_only) hosted_fork_async_held = true;
   hosted_fork_locks_held=true;
 }
 extern "C" void lang_hosted_process_atfork_parent_v1() noexcept {
@@ -461,6 +580,18 @@ extern "C" void lang_hosted_process_atfork_child_v1() noexcept {
     if (runtime_child) runtime_child();
     hosted_gc_fork_hooks = false;
   }
+  // Async only after allocator/Weak/GC/world/runtime, and before the process
+  // launch/environment locks are reset. The child hook resets both ticket words,
+  // clears the gate and closes only its inherited epoll descriptor.
+  async_fork_child(hosted_fork_exec_only);
+  hosted_fork_async_held = false;
+  hosted_fork_gate_held = false;
+  hosted_fork_outer_owned = false;
+  // The child no longer owns the parent's outer reservation (async_child reset
+  // the gate). Clear the thread-local pairing before user child handlers run,
+  // otherwise a nested direct libc fork from such a handler would skip its own
+  // reservation and then fail the prepare assertion.
+  hosted_fork_reserved_outer = false;
   __atomic_store_n(&environment_lock,0u,__ATOMIC_RELAXED);
   __atomic_store_n(&launch_lock,0u,__ATOMIC_RELAXED);
   // hosted/thread.cpp's own atfork child hook updates the pthread state.
@@ -512,7 +643,37 @@ extern "C" int64_t lang_process_unsetenv_v1(const LangText *name) noexcept {
 extern "C" int64_t lang_process_unsetenv_bytes_v1(const LangVec *name) noexcept {
   Bytes n;auto status=byte_view(name,n);return status<0?status:setenv(n,{},1,true);
 }
-extern "C" int64_t lang_process_fork_v1() noexcept {ForkScope fork_scope;LaunchGuard launch;return fork_process();}
+extern "C" int64_t lang_process_fork_v1() noexcept {
+  ForkScope fork_scope;
+  // Reserve before LaunchGuard. The reservation check and the fork itself must
+  // not interleave with a concurrent first executor bind; taking it here also
+  // prevents a direct hosted fork (which reserves before launch inside its
+  // atfork prepare) from waiting on launch while a Source fork waits on that
+  // reservation.
+  const auto reserved = async_fork_reserve(false);
+  if (reserved < 0) return reserved;
+#if defined(LANG_RUNTIME_HOSTED)
+  // The hosted runtime parent hook releases this reservation before user
+  // parent handlers. Keep the wrapper fallback for a fork path whose parent
+  // hook did not run.
+  hosted_fork_outer_owned = true;
+#endif
+  int64_t result;
+  {
+    LaunchGuard launch;
+    result = fork_process(false, true);
+  }
+  // The child hook already reset the gate; releasing here is a no-op there.
+#if defined(LANG_RUNTIME_HOSTED)
+  if (hosted_fork_outer_owned) {
+    hosted_fork_outer_owned = false;
+    async_fork_release();
+  }
+#else
+  async_fork_release();
+#endif
+  return result;
+}
 extern "C" int64_t lang_process_waitpid_v1(int32_t pid,int32_t options,int32_t *status) noexcept {
   if(!status)return -14;
   int32_t result=0;int64_t r;

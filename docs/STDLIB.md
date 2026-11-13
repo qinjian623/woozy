@@ -260,7 +260,15 @@ Slice 可索引、修改已有元素和遍历；修改会被原 Vec 及其他视
 
 复制 Box 后，两个变量共享同一单元，通过任何副本调用 `set` 都能被其他副本看到。`get` 不执行深复制，返回值里的 Vec 等引用对象仍共享底层对象。给一个 Box 变量重新赋值，只改变该变量指向的单元，不改变其他别名。
 
-跨线程访问同一可修改单元时，程序需要自行加锁。Box 不增加自动同步，也不提供弱引用接口；Native 中的强引用循环暂未自动回收。
+跨线程访问同一可修改单元时，程序需要自行加锁。Box 不增加自动同步。可以通过 `std/weak` 建立 Box 的弱引用；纯 Woozy 强引用循环会自动回收。
+
+## std/iter
+
+`Iterator[T]` 是 for-in 使用的标准 trait，声明 `func next(cursor inout Self) option.Option[T]`。for 只求值一次，按普通规则复制迭代器并推进副本；引用字段仍共享对象。next 不抛错，可用 Result 作为元素类型。完整示例见[自定义迭代器](TUTORIAL.md#自定义迭代器)。
+
+## std/async
+
+异步函数返回 Task；`spawn` 提交，`run` 或 `run_until` 推进执行器，`await` 取得结果。`sleep`、`readable` 和 `writable` 返回可等待任务。完整示例与取消、清理规则见[async 与 await](CONCURRENCY.md#async-与-await)。当前仅支持 Linux x86_64 Native。
 
 ## std/option 和 std/result
 
@@ -897,7 +905,7 @@ func main() i32 throws task.Error {
 | `spawn_with(path, arguments, env, input, output, error) i32` | 明确指定环境 Vec[string] 与三个 i32 描述符；-1 继承 |
 | `spawnp(command string, arguments Vec[string]) i32` | 按 PATH 查找程序 |
 | `execve(path string, arguments Vec[string], env Vec[string])`、`execv(path, arguments)` | 替换当前进程，成功不返回；execv 使用当前环境 |
-| `fork() i32` | 父进程取得子 PID，子进程取得 0 |
+| `fork() i32` | 父进程取得子 PID，子进程取得 0；async 执行器属于另一线程时抛出 os.Error |
 | `wait(pid i32) WaitStatus`、`waitpid(pid i32, options i32) WaitStatus` | 等待子进程；wait 自动重试 Interrupted |
 | `args()`、`args_bytes()` | `Vec[string]` 或原始 `Vec[Vec[u8]]` 参数，含第 0 项程序名 |
 | `environment()`、`environment_bytes()` | `NAME=value` 条目组成的 Vec，返回副本 |
@@ -999,8 +1007,8 @@ func main() throws os.Error {
 
 输出完整整数 `9007199254740993`，写回的 JSON 也保留原数字文本。field/index 返回 Option[Value]。解析重复对象键时保留最后一个值，位置保持第一次出现的位置；序列化手工构造的 Member 列表时保留所有成员。
 
-解析检查数字、控制字符和 Unicode 转义，Syntax(offset) 的位置按码点计数。数组与对象最多嵌套 256 层，超过时抛 DepthLimit；循环容器序列化也会报错。当前 ARC 不回收强引用循环，程序需要自行拆开它们；自动回收仍在开发。Error 还有 InvalidNumber 和 NumberRange。
+解析检查数字、控制字符和 Unicode 转义，Syntax(offset) 的位置按码点计数。数组与对象最多嵌套 256 层，超过时抛 DepthLimit；循环容器序列化也会报错。纯 Woozy 容器形成的强引用循环会自动回收；仍可访问的对象保持存活。Error 还有 InvalidNumber 和 NumberRange。
 
 ## 尚未提供
 
-捕获闭包、默认参数、模板特化和通用 Ptr 仍未支持。
+默认参数、模板特化和捕获闭包的保留型 C 回调尚未提供。C 互操作的有类型 Ptr 访问放在 unsafe 块内。

@@ -1,0 +1,28 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+
+// No Vec participates. The frame still owns the child Task handle and the
+// runtime owns both directions of the await link, so a non-null frame trace
+// must activate lang-gc-program/1 even in this otherwise scalar program.
+async func child() i32 {
+    await a.sleep(1);
+    return 7;
+}
+
+async func parent() i32 {
+    let child_task = child();
+    a.spawn(child_task);
+    return await child_task;
+}
+
+func main() i32 throws os.Error {
+    let task = parent();
+    a.spawn(task);
+    a.run_until(task);
+    if !a.finished(task) {
+        return 1;
+    }
+    a.shutdown();
+    return 0;
+}

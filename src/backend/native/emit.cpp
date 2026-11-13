@@ -85,7 +85,11 @@ class Emitter {
   std::map<SymbolId, llvm::Function *> async_starts, async_resume, async_destroy;
   std::map<TypeId, llvm::StructType *> promise_types;
   std::map<TypeId, int> promise_result_slot, promise_error_slot;
-  std::map<SymbolId, llvm::Function *> async_release;
+  // External C resources cannot be released from a stopped-world clear
+  // callback. These flags let an async frame reject a closure/trait box whose
+  // concrete payload may hold such a resource before any output is produced.
+  bool module_closure_owns_c_resource = false;
+  bool module_trait_box_owns_c_resource = false;
   llvm::Function *coro_resume_intrinsic = nullptr,
                  *coro_destroy_intrinsic = nullptr;
   std::map<std::string, llvm::StructType *> env_record_types;
@@ -188,6 +192,265 @@ class Emitter {
     if (slot < 0)
       fail("promise slot is absent for a Unit payload");
     return builder.CreateStructGEP(layout, promise, static_cast<unsigned>(slot));
+  }
+  // Typed Task/frame GC metadata. The coroutine publishes the address of a
+  // frame-resident record; the generated callbacks only address the fields of
+  // that record and never guess CoroSplit layout. Every owning (non-inout,
+  // non-borrowed) slot contributes its own storage and active-flag address, so
+  // metadata sees exactly the existing ownership slots. The promise address is
+  // the fourth callback-visible input. The runtime owns the Future and the
+  // two-way await links; this metadata never copies either.
+  struct AsyncFrameGcPlan {
+    llvm::StructType *metadata_type = nullptr;
+    llvm::Value *metadata = nullptr;
+    llvm::GlobalVariable *ops = nullptr;
+    bool trace = false;
+  };
+  bool type_owns_c_resource(TypeId id, std::set<uint64_t> &active,
+                            unsigned depth) {
+    if (depth > 64)
+      return true; // conservative: reject rather than run a C release late
+    const auto &t = type(id);
+    switch (t.kind) {
+    case hir::TypeKind::CForeignResource:
+      return true;
+    case hir::TypeKind::Vec:
+    case hir::TypeKind::Slice:
+      return type_owns_c_resource(t.type_args.at(0), active, depth + 1);
+    case hir::TypeKind::NominalStruct:
+    case hir::TypeKind::NominalEnum: {
+      if (!active.insert(id.value).second)
+        return false;
+      bool found = false;
+      if (t.kind == hir::TypeKind::NominalStruct) {
+        for (auto field : aggregates.fields(id))
+          if (type_owns_c_resource(field.type, active, depth + 1)) {
+            found = true;
+            break;
+          }
+      } else {
+        for (const auto &variant : aggregates.declaration(id).variants) {
+          if (found)
+            break;
+          for (auto field : aggregates.fields(id, variant.symbol))
+            if (type_owns_c_resource(field.type, active, depth + 1)) {
+              found = true;
+              break;
+            }
+        }
+      }
+      active.erase(id.value);
+      return found;
+    }
+    case hir::TypeKind::Function:
+      return module_closure_owns_c_resource;
+    case hir::TypeKind::TraitObject:
+      return module_trait_box_owns_c_resource;
+    default:
+      return false;
+    }
+  }
+  bool type_owns_c_resource(TypeId id) {
+    std::set<uint64_t> active;
+    return type_owns_c_resource(id, active, 0);
+  }
+  AsyncFrameGcPlan build_async_frame_gc(
+      const ir::Function &f, llvm::StructType *promise_layout,
+      llvm::Value *promise_ptr, int result_slot, int error_slot,
+      TypeId result_type, TypeId error_type,
+      const std::vector<size_t> &owner_slots) {
+    AsyncFrameGcPlan plan;
+    const std::string id = std::to_string(f.symbol.value);
+    std::vector<llvm::Type *> fields{builder.getPtrTy()};
+    for (size_t s : owner_slots) {
+      fields.push_back(builder.getPtrTy());
+      fields.push_back(builder.getPtrTy());
+    }
+    plan.metadata_type = llvm::StructType::create(
+        context, fields, "lang.async.frame.meta." + id);
+    plan.metadata = builder.CreateAlloca(plan.metadata_type, nullptr,
+                                         "async.frame.meta");
+    builder.CreateStore(
+        promise_ptr,
+        builder.CreateStructGEP(plan.metadata_type, plan.metadata, 0));
+    for (size_t n = 0; n < owner_slots.size(); ++n) {
+      const size_t s = owner_slots[n];
+      builder.CreateStore(
+          slots.at(s),
+          builder.CreateStructGEP(plan.metadata_type, plan.metadata,
+                                  1 + static_cast<unsigned>(2 * n)));
+      builder.CreateStore(
+          active.at(s),
+          builder.CreateStructGEP(plan.metadata_type, plan.metadata,
+                                  2 + static_cast<unsigned>(2 * n)));
+    }
+
+    const bool promise_result_strong =
+        result_slot >= 0 && has_strong_edge(result_type);
+    const bool promise_error_strong =
+        error_slot >= 0 && has_strong_edge(error_type);
+    plan.trace = promise_result_strong || promise_error_strong;
+    for (size_t s : owner_slots)
+      if (has_strong_edge(f.slots.at(s).type))
+        plan.trace = true;
+
+    llvm::Function *trace = nullptr;
+    llvm::Function *clear = nullptr;
+    {
+      llvm::IRBuilderBase::InsertPointGuard guard(builder);
+      if (plan.trace) {
+        trace = llvm::Function::Create(
+            gc_trace_type(), llvm::GlobalValue::InternalLinkage,
+            "lang.async.frame.trace." + id, module);
+        builder.SetInsertPoint(
+            llvm::BasicBlock::Create(context, "entry", trace));
+        auto *state = trace->getArg(0), *visitor = trace->getArg(1),
+             *visit_context = trace->getArg(2);
+        auto field = [&](unsigned index) {
+          return builder.CreateLoad(
+              builder.getPtrTy(),
+              builder.CreateStructGEP(plan.metadata_type, state, index));
+        };
+        auto *promise = field(0);
+        llvm::Value *status = nullptr, *claimed = nullptr;
+        if (promise_result_strong || promise_error_strong) {
+          status = builder.CreateLoad(
+              builder.getInt32Ty(),
+              builder.CreateStructGEP(promise_layout, promise, 0));
+          claimed = builder.CreateLoad(
+              builder.getInt32Ty(),
+              builder.CreateStructGEP(promise_layout, promise, 1));
+        }
+        auto conditional_trace = [&](llvm::Value *condition, TypeId type,
+                                     llvm::Value *address) {
+          auto *body =
+              llvm::BasicBlock::Create(context, "trace.edge", trace);
+          auto *next =
+              llvm::BasicBlock::Create(context, "trace.next", trace);
+          builder.CreateCondBr(condition, body, next);
+          builder.SetInsertPoint(body);
+          gc_trace_value(type, address, visitor, visit_context);
+          builder.CreateBr(next);
+          builder.SetInsertPoint(next);
+        };
+        // Every real ARC edge is reported once. A promise result/error is
+        // owned only while its status matches and its not-owned bit is clear;
+        // repeat await never consumes the promise's own reference.
+        if (promise_result_strong) {
+          auto *owned = builder.CreateICmpEQ(
+              builder.CreateAnd(claimed, builder.getInt32(1)),
+              builder.getInt32(0));
+          auto conditional = builder.CreateAnd(
+              builder.CreateICmpEQ(status, builder.getInt32(1)), owned);
+          conditional_trace(
+              conditional, result_type,
+              builder.CreateStructGEP(promise_layout, promise,
+                                      static_cast<unsigned>(result_slot)));
+        }
+        if (promise_error_strong) {
+          auto *owned = builder.CreateICmpEQ(
+              builder.CreateAnd(claimed, builder.getInt32(2)),
+              builder.getInt32(0));
+          auto conditional = builder.CreateAnd(
+              builder.CreateICmpEQ(status, builder.getInt32(2)), owned);
+          conditional_trace(
+              conditional, error_type,
+              builder.CreateStructGEP(promise_layout, promise,
+                                      static_cast<unsigned>(error_slot)));
+        }
+        for (size_t n = 0; n < owner_slots.size(); ++n) {
+          const size_t s = owner_slots[n];
+          if (!has_strong_edge(f.slots.at(s).type))
+            continue;
+          auto *flag_addr = field(2 + static_cast<unsigned>(2 * n));
+          auto *flag = builder.CreateLoad(builder.getInt1Ty(), flag_addr);
+          conditional_trace(flag, f.slots.at(s).type,
+                            field(1 + static_cast<unsigned>(2 * n)));
+        }
+        builder.CreateRetVoid();
+      }
+
+      clear = llvm::Function::Create(
+          llvm::FunctionType::get(builder.getVoidTy(), {builder.getPtrTy()},
+                                  false),
+          llvm::GlobalValue::InternalLinkage,
+          "lang.async.frame.clear." + id, module);
+      builder.SetInsertPoint(
+          llvm::BasicBlock::Create(context, "entry", clear));
+      auto *state = clear->getArg(0);
+      auto field = [&](unsigned index) {
+        return builder.CreateLoad(
+            builder.getPtrTy(),
+            builder.CreateStructGEP(plan.metadata_type, state, index));
+      };
+      // Drop frame-owned values in reverse order. Publishing inactive first
+      // makes a repeated clear a no-op and keeps the coroutine's initial
+      // destroy path from dropping a move parameter a second time.
+      for (size_t n = owner_slots.size(); n > 0; --n) {
+        const size_t s = owner_slots[n - 1];
+        auto *flag_addr = field(2 + static_cast<unsigned>(2 * (n - 1)));
+        auto *flag = builder.CreateLoad(builder.getInt1Ty(), flag_addr);
+        auto *drop = llvm::BasicBlock::Create(context, "clear.owner", clear);
+        auto *next = llvm::BasicBlock::Create(context, "clear.next", clear);
+        builder.CreateCondBr(flag, drop, next);
+        builder.SetInsertPoint(drop);
+        builder.CreateStore(builder.getFalse(), flag_addr);
+        builder.CreateCall(value_op(f.slots.at(s).type, false),
+                           {field(1 + static_cast<unsigned>(2 * (n - 1)))});
+        builder.CreateBr(next);
+        builder.SetInsertPoint(next);
+      }
+      auto *promise = field(0);
+      auto *status = builder.CreateLoad(
+          builder.getInt32Ty(),
+          builder.CreateStructGEP(promise_layout, promise, 0));
+      auto *claimed = builder.CreateLoad(
+          builder.getInt32Ty(),
+          builder.CreateStructGEP(promise_layout, promise, 1));
+      auto conditional_drop = [&](int slot, TypeId type, uint32_t bit,
+                                  uint32_t state_value) {
+        if (slot < 0 || !owning(type))
+          return;
+        auto *owned = builder.CreateICmpEQ(
+            builder.CreateAnd(claimed, builder.getInt32(bit)),
+            builder.getInt32(0));
+        auto *conditional = builder.CreateAnd(
+            builder.CreateICmpEQ(status, builder.getInt32(state_value)),
+            owned);
+        auto *drop = llvm::BasicBlock::Create(context, "clear.promise", clear);
+        auto *next = llvm::BasicBlock::Create(context, "clear.next", clear);
+        builder.CreateCondBr(conditional, drop, next);
+        builder.SetInsertPoint(drop);
+        // Clear the not-owned bit before dropping; a second clear sees it set.
+        builder.CreateStore(
+            builder.CreateOr(claimed, builder.getInt32(bit)),
+            builder.CreateStructGEP(promise_layout, promise, 1));
+        builder.CreateCall(
+            value_op(type, false),
+            {builder.CreateStructGEP(promise_layout, promise,
+                                     static_cast<unsigned>(slot))});
+        builder.CreateBr(next);
+        builder.SetInsertPoint(next);
+      };
+      conditional_drop(result_slot, result_type, 1, 1);
+      conditional_drop(error_slot, error_type, 2, 2);
+      builder.CreateRetVoid();
+    }
+
+    auto *ops_type = llvm::StructType::get(
+        context, {builder.getPtrTy(), builder.getPtrTy()});
+    llvm::Constant *trace_entry =
+        trace ? static_cast<llvm::Constant *>(trace)
+              : llvm::ConstantPointerNull::get(builder.getPtrTy());
+    auto *initializer = llvm::ConstantStruct::get(
+        ops_type, {trace_entry, static_cast<llvm::Constant *>(clear)});
+    plan.ops = new llvm::GlobalVariable(
+        module, ops_type, true, llvm::GlobalValue::PrivateLinkage, initializer,
+        "lang.async.frame.ops." + id);
+    plan.ops->setUnnamedAddr(llvm::GlobalValue::UnnamedAddr::None);
+    if (plan.trace)
+      gc_program_required = true;
+    return plan;
   }
   llvm::Type *lower_type(TypeId id) {
     if (auto found = layouts.find(id); found != layouts.end())
@@ -1771,6 +2034,26 @@ class Emitter {
         hf != hir_functions.end() && !hf->second->captures.empty();
     const unsigned parameter_offset = capturing ? 1 : 0;
     const bool is_async = f.async;
+    if (is_async) {
+      // A GC clear callback runs with the world stopped and therefore may not
+      // call an external C destructor/release. The existing payload-only defer
+      // interface cannot split a mixed aggregate or container, so reject every
+      // frame/promise owning type that can reach a C resource before emitting
+      // any program output. Pure Woozy owners use ordinary ARC drops.
+      const auto task = type(sig.result);
+      if (task.kind != hir::TypeKind::Task || task.type_args.size() != 2)
+        fail("async signature result is not a Task");
+      for (size_t s = 0; s < f.slots.size(); ++s) {
+        const auto &slot = f.slots[s];
+        if (slot.owner && !slot.inout && type_owns_c_resource(slot.type))
+          unsupported("async function frame owns an external C resource: "
+                      "stopped-world frame clear has no safe C release path");
+      }
+      for (auto payload : task.type_args)
+        if (type_owns_c_resource(payload))
+          unsupported("async Task promise owns an external C resource: "
+                      "stopped-world frame clear has no safe C release path");
+    }
     // The coroutine prologue must be the LLVM entry block. It is created
     // before the IR blocks so the first body block may have predecessors.
     llvm::BasicBlock *async_entry = nullptr;
@@ -1788,6 +2071,8 @@ class Emitter {
     llvm::BasicBlock *async_final = nullptr;
     llvm::BasicBlock *async_suspend_return = nullptr;
     llvm::Function *coro_promise_intrinsic = nullptr;
+    llvm::Value *frame_gc_state = nullptr;
+    llvm::GlobalVariable *frame_gc_ops = nullptr;
     if (is_async) {
       promise_layout = promise_type(sig.result);
       builder.SetInsertPoint(async_entry);
@@ -1822,22 +2107,6 @@ class Emitter {
           builder.CreateCall(coro_promise_intrinsic,
                              {coro_handle, builder.getInt32(8),
                               builder.getInt1(false)});
-      auto release_entry = async_release.find(f.symbol);
-      llvm::Value *release =
-          release_entry == async_release.end()
-              ? static_cast<llvm::Value *>(
-                    llvm::ConstantPointerNull::get(builder.getPtrTy()))
-              : static_cast<llvm::Value *>(release_entry->second);
-      auto publish = module.getOrInsertFunction(
-          "lang_async_publish_v1",
-          llvm::FunctionType::get(
-              builder.getVoidTy(),
-              {builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy(),
-               builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy()},
-              false));
-      builder.CreateCall(publish,
-                         {future, coro_handle, async_resume.at(f.symbol),
-                          async_destroy.at(f.symbol), promise_ptr, release});
     } else {
       builder.SetInsertPoint(blocks[0]);
     }
@@ -1903,6 +2172,25 @@ class Emitter {
         builder.CreateStore(builder.getTrue(), active[s]);
       }
     }
+    if (is_async) {
+      // The coroutine publishes one typed record for this SymbolId. Only the
+      // existing owning slot addresses, their active flags and the promise
+      // address are stored; no CoroSplit field number is assumed here.
+      std::vector<size_t> owner_slots;
+      for (size_t s = 0; s < f.slots.size(); ++s)
+        if (f.slots[s].owner && !f.slots[s].inout)
+          owner_slots.push_back(s);
+      const auto task = type(sig.result);
+      const auto result_type = task.type_args.at(0);
+      const auto error_type = task.type_args.at(1);
+      const int result_slot = promise_result_slot.at(sig.result);
+      const int error_slot = promise_error_slot.at(sig.result);
+      auto plan = build_async_frame_gc(
+          f, promise_layout, promise_ptr, result_slot, error_slot, result_type,
+          error_type, owner_slots);
+      frame_gc_state = plan.metadata;
+      frame_gc_ops = plan.ops;
+    }
     for (const auto &b : f.blocks) for (const auto &i : b.instructions)
       if (i.op == ir::Op::iteration_begin) {
         iteration_lengths.emplace(i.slot.value, builder.CreateAlloca(builder.getInt64Ty()));
@@ -1952,6 +2240,26 @@ class Emitter {
                                                         promise_ptr, 0));
       builder.CreateStore(zero, builder.CreateStructGEP(promise_layout,
                                                         promise_ptr, 1));
+      // Publish only after the promise status/ownership words, every owner
+      // slot/active flag and the typed metadata are complete. The runtime
+      // registers the Future from inside publish_v2 before adding it to the
+      // executor registry, and the initial suspend follows.
+      {
+        auto *future = fn->getArg(fn->arg_size() - 1);
+        auto publish = module.getOrInsertFunction(
+            "lang_async_publish_v2",
+            llvm::FunctionType::get(
+                builder.getVoidTy(),
+                {builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy(),
+                 builder.getPtrTy(), builder.getPtrTy(), builder.getPtrTy(),
+                 builder.getPtrTy()},
+                false));
+        builder.CreateCall(
+            publish,
+            {future, coro_handle, async_resume.at(f.symbol),
+             async_destroy.at(f.symbol), promise_ptr, frame_gc_state,
+             frame_gc_ops});
+      }
       auto *coro_save = llvm::Intrinsic::getOrInsertDeclaration(
           &module, llvm::Intrinsic::coro_save);
       auto *coro_suspend = llvm::Intrinsic::getOrInsertDeclaration(
@@ -2325,6 +2633,39 @@ public:
       llvm::errs() << ir::dump(input) << "\n";
     for (const auto &h : input.hir.module().functions)
       hir_functions.emplace(h.symbol, &h);
+    // Both flags are monotonic. Re-scan until a complete pass adds nothing:
+    // a closure can capture a dyn value whose concrete type holds a closure,
+    // and vice versa. A single pass would make the result depend on HIR node
+    // and declaration order even though the final module is the same. At most
+    // two false->true transitions can occur, so this is a bounded fixpoint over
+    // the two existing flags, not a new analysis framework.
+    bool external_release_flags_changed = true;
+    while (external_release_flags_changed) {
+      external_release_flags_changed = false;
+      for (const auto &node : input.hir.module().nodes) {
+        if (const auto *value = std::get_if<hir::FunctionValue>(&node.data)) {
+          bool owns = false;
+          for (const auto &capture : value->captures)
+            if (type_owns_c_resource(capture.type)) {
+              owns = true;
+              break;
+            }
+          if (value->bound && type_owns_c_resource(value->bound->type))
+            owns = true;
+          if (owns && !module_closure_owns_c_resource) {
+            module_closure_owns_c_resource = true;
+            external_release_flags_changed = true;
+          }
+        }
+        if (const auto *object =
+                std::get_if<hir::TraitObjectInit>(&node.data))
+          if (type_owns_c_resource(object->concrete) &&
+              !module_trait_box_owns_c_resource) {
+            module_trait_box_owns_c_resource = true;
+            external_release_flags_changed = true;
+          }
+      }
+    }
     bool has_async = false;
     coro_resume_intrinsic = llvm::Intrinsic::getOrInsertDeclaration(
         &module, llvm::Intrinsic::coro_resume);
@@ -2376,63 +2717,6 @@ public:
         builder.SetInsertPoint(
             llvm::BasicBlock::Create(context, "destroy", destroy));
         builder.CreateCall(coro_destroy_intrinsic, {destroy->getArg(0)});
-        builder.CreateRetVoid();
-      }
-      const auto &task = type(f.signature).result;
-      const auto &task_type = type(task);
-      const auto result_type = task_type.type_args.at(0);
-      const auto error_type = task_type.type_args.at(1);
-      auto *layout = promise_type(task);
-      const int result_slot = promise_result_slot.at(task);
-      const int error_slot = promise_error_slot.at(task);
-      const bool drop_result =
-          result_slot >= 0 && owning(result_type);
-      const bool drop_error = error_slot >= 0 && owning(error_type);
-      if (drop_result || drop_error) {
-        auto *release = llvm::Function::Create(
-            llvm::FunctionType::get(builder.getVoidTy(),
-                                    {builder.getPtrTy()}, false),
-            llvm::GlobalValue::InternalLinkage, "lang.release." + id, module);
-        async_release.emplace(f.symbol, release);
-        llvm::IRBuilderBase::InsertPointGuard guard(builder);
-        builder.SetInsertPoint(
-            llvm::BasicBlock::Create(context, "entry", release));
-        auto *promise = release->getArg(0);
-        auto *claimed = builder.CreateLoad(
-            builder.getInt32Ty(),
-            builder.CreateStructGEP(layout, promise, 1));
-        if (drop_result) {
-          auto *present = llvm::BasicBlock::Create(context, "claimed", release);
-          auto *next = llvm::BasicBlock::Create(context, "next", release);
-          builder.CreateCondBr(
-              builder.CreateICmpEQ(
-                  builder.CreateAnd(claimed, builder.getInt32(1)), 
-                  builder.getInt32(0)),
-              present, next);
-          builder.SetInsertPoint(present);
-          builder.CreateCall(value_op(result_type, false),
-                             {builder.CreateStructGEP(
-                                 layout, promise,
-                                 static_cast<unsigned>(result_slot))});
-          builder.CreateBr(next);
-          builder.SetInsertPoint(next);
-        }
-        if (drop_error) {
-          auto *present = llvm::BasicBlock::Create(context, "claimed", release);
-          auto *done = llvm::BasicBlock::Create(context, "done", release);
-          builder.CreateCondBr(
-              builder.CreateICmpEQ(
-                  builder.CreateAnd(claimed, builder.getInt32(2)),
-                  builder.getInt32(0)),
-              present, done);
-          builder.SetInsertPoint(present);
-          builder.CreateCall(value_op(error_type, false),
-                             {builder.CreateStructGEP(
-                                 layout, promise,
-                                 static_cast<unsigned>(error_slot))});
-          builder.CreateBr(done);
-          builder.SetInsertPoint(done);
-        }
         builder.CreateRetVoid();
       }
       {

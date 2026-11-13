@@ -499,4 +499,10 @@ endif()
 add_subdirectory(gc_activation)
 add_subdirectory(c_retained_static)
 
+add_subdirectory(task_frame_gc)
+
+add_subdirectory(async_memory)
+
 add_subdirectory(hosted_thread_gc)
+
+add_subdirectory(async_fork)

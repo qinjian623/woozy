@@ -1,0 +1,11 @@
+package iter;
+
+import "std/option" as option;
+
+// A user iterator advances an owned cursor in place. `for item in iterator`
+// evaluates the iterator expression once, copies it, advances that private copy
+// with `next`, and stops when `next` returns option.None. `next` is
+// non-throwing; an item type that can fail can itself be a std/result.Result.
+pub trait Iterator[T] {
+    func next(cursor inout Self) option.Option[T];
+}

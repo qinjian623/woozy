@@ -1,0 +1,22 @@
+package app;
+import "std/async" as a;
+import "std/vec" as vec;
+
+// A never-started move parameter places the caller's Vec into the coroutine
+// frame. The frame owns the Vec and the Vec owns the Task handle, so only
+// tracing the real move-parameter slot can reclaim this cycle.
+async func hold(values move Vec[Task[Unit,Unit]]) Unit { }
+
+func make_cycle() {
+    let values = vec.empty[Task[Unit,Unit]]();
+    let alias = values;
+    let task = hold(move alias);
+    vec.push(values, task);
+}
+
+func main() i32 {
+    for var i i32 = 0; i < 64; i += 1 {
+        make_cycle();
+    }
+    return 0;
+}

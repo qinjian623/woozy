@@ -224,6 +224,59 @@ class Checker {
         return &t;
     return nullptr;
   }
+  bool symbol_from_module(SymbolId s, std::string_view path,
+                          std::string_view name) const {
+    const auto &decl = symbol(s);
+    return decl.name == name &&
+           m.resolved->project->module(decl.module).logical_path == path;
+  }
+  // for-in only recognises the real std/iter.Iterator declaration. A user
+  // trait or enum merely spelled Iterator/Option cannot change loop semantics.
+  const TraitDecl *std_iterator_trait() const {
+    for (const auto &tr : m.traits)
+      if (symbol_from_module(tr.symbol, "std/iter", "Iterator"))
+        return &tr;
+    return nullptr;
+  }
+  bool std_option(TypeId id) const {
+    return type(id).kind == TypeKind::NominalEnum &&
+           symbol_from_module(type(id).declaration, "std/option", "Option");
+  }
+  struct IteratorCandidate {
+    const ImplDecl *impl = nullptr;
+    Substitutions substitutions;
+    TypeId element{0};
+  };
+  // Find the unique real Iterator application for one concrete Self. Matching
+  // only the method name is insufficient: a same-named inherent method or a
+  // different trait must not enable for-in.
+  std::optional<IteratorCandidate>
+  iterator_candidate(Ref r, TypeId actual, const TraitDecl &tr) {
+    std::optional<IteratorCandidate> found;
+    for (const auto &im : m.impls) {
+      if (!im.trait || im.trait->declaration != tr.symbol ||
+          im.trait->args.size() != 1)
+        continue;
+      Substitutions sub;
+      if (!try_infer(r, im.self_type, actual, sub))
+        continue;
+      const auto saved_depth = constraint_depth;
+      try {
+        finish_arguments(r, im.params, sub);
+      } catch (const Rejected &) {
+        constraint_depth = saved_depth;
+        continue;
+      }
+      auto element = substitute(im.trait->args[0], sub, m.types);
+      if (contains_parameter(element))
+        continue;
+      if (found)
+        reject(r, "ambiguous Iterator implementation for for-in",
+               "E_TYPE_MISMATCH");
+      found = IteratorCandidate{&im, std::move(sub), element};
+    }
+    return found;
+  }
   bool mentions_self(TypeId id, SymbolId self) const {
     std::vector<TypeId> pending{id};
     std::set<uint64_t> seen;
@@ -5170,27 +5223,173 @@ class Checker {
     }
     case AstKind::ForIn: {
       auto collection = expression(child(r, 0));
-      if (type(collection.value.type).kind != TypeKind::Vec &&
-          type(collection.value.type).kind != TypeKind::Slice &&
-          type(collection.value.type).kind != TypeKind::String)
-        reject(r, "for-in requires Vec, Slice or string");
+      const auto collection_type = collection.value.type;
+      const auto collection_kind = type(collection_type).kind;
+      const bool builtin = collection_kind == TypeKind::Vec ||
+                           collection_kind == TypeKind::Slice ||
+                           collection_kind == TypeKind::String;
+      const TraitDecl *iter_trait = builtin ? nullptr : std_iterator_trait();
+      const MethodPrototype *iterator_next = nullptr;
+      std::optional<IteratorCandidate> candidate;
+      std::optional<TraitRef> bound;
+      TypeId element_type{0};
+      const bool constrained_iterator =
+          !builtin && collection_kind == TypeKind::TypeParameter;
+      if (!builtin) {
+        if (!iter_trait)
+          reject(r, "for-in requires Vec, Slice, string or an Iterator "
+                    "implementation",
+                 "E_TYPE_MISMATCH");
+        for (const auto &prototype : iter_trait->methods)
+          if (symbol(prototype.symbol).name == "next") {
+            if (iterator_next)
+              reject(r, "std/iter.Iterator declares next more than once",
+                     "E_TYPE_MISMATCH");
+            iterator_next = &prototype;
+          }
+        if (!iterator_next)
+          reject(r, "std/iter.Iterator has no next method", "E_TYPE_MISMATCH");
+        if (!generic_params[iterator_next->symbol.value].empty())
+          reject(r, "generic Iterator.next is not supported by for-in",
+                 "E_CAPABILITY_UNAVAILABLE");
+        const auto &prototype_type = type(iterator_next->signature);
+        if (prototype_type.parameters.size() != 1 ||
+            prototype_type.parameters[0].mode != ParamMode::inout)
+          reject(r, "std/iter.Iterator.next must take one inout Self",
+                 "E_TYPE_MISMATCH");
+        if (prototype_type.throws_type)
+          reject(r, "std/iter.Iterator.next must not throw",
+                 "E_TYPE_MISMATCH");
+        if (!std_option(prototype_type.result) ||
+            type(prototype_type.result).type_args.size() != 1)
+          reject(r, "std/iter.Iterator.next must return std/option.Option[T]",
+                 "E_TYPE_MISMATCH");
+        if (constrained_iterator) {
+          const auto declared = type(collection_type).declaration;
+          auto found = bounds.find(declared.value);
+          if (found == bounds.end() || !found->second ||
+              found->second->declaration != iter_trait->symbol ||
+              found->second->args.size() != 1)
+            reject(r, "for-in requires the receiver type to implement "
+                      "std/iter.Iterator",
+                   "E_TYPE_MISMATCH");
+          bound = *found->second;
+          element_type = bound->args[0];
+        } else {
+          candidate = iterator_candidate(r, collection_type, *iter_trait);
+          if (!candidate)
+            reject(r, "for-in requires Vec, Slice, string or an Iterator "
+                      "implementation",
+                   "E_TYPE_MISMATCH");
+          element_type = candidate->element;
+        }
+      }
       auto saved = scope;
       scope = new_scope(r, saved);
-      auto id = node(r, unit, ForIn{definition(r), ScopeId{0}, HirNodeId{0}});
+      auto id = node(r, unit,
+                     ForIn{definition(r), ScopeId{0}, HirNodeId{0}, {}});
       loops.push_back(id);
       break_targets.push_back(id);
       auto bodyref = child(r, n.children.size() - 1);
       auto loop_scope = scope;
       scope = new_scope(bodyref, loop_scope);
       auto bs = scope;
-      auto element_type = type(collection.value.type).kind == TypeKind::String
-                              ? scalar(TypeKind::UnsignedInt, 32)
-                              : type(collection.value.type).type_args[0];
+      if (builtin)
+        element_type = collection_kind == TypeKind::String
+                            ? scalar(TypeKind::UnsignedInt, 32)
+                            : type(collection_type).type_args.at(0);
       locals[definition(r).value] = {element_type, false};
+      SymbolId cursor{0}, option_symbol{0};
+      HirNodeId cursor_place{0};
+      if (!builtin) {
+        cursor = hidden_local(definition(r), "$for_cursor");
+        option_symbol = hidden_local(definition(r), "$for_option");
+        // The synthetic next call is a ForIn child, so the call and its place
+        // use the loop scope. The per-iteration Option local stays in the body
+        // scope for its cleanup.
+        auto body_scope = scope;
+        scope = loop_scope;
+        cursor_place = node(r, collection_type, Place{cursor}, {});
+        scope = body_scope;
+      }
       auto body = block(bodyref, true);
+      // block(..., true) restores the body scope, not the loop scope.
+      std::optional<IteratorFor> iterator_meta;
+      if (!builtin) {
+        TypeId next_result{0};
+        std::vector<CallArg> next_args{
+            {0, 0, {}, ParamMode::inout, cursor_place}};
+        std::vector<HirNodeId> next_children{cursor_place};
+        std::variant<Call, ConstraintCall> next_call;
+        if (constrained_iterator) {
+          Substitutions sub{{iter_trait->self, collection_type}};
+          for (size_t i = 0; i < iter_trait->params.size(); ++i)
+            sub.push_back({iter_trait->params[i].symbol, bound->args.at(i)});
+          auto sig = substitute(iterator_next->signature, sub, m.types);
+          next_result = type(sig).result;
+          next_call = ConstraintCall{*bound, iterator_next->symbol,
+                                     collection_type, sig, next_args};
+        } else {
+          auto selected = select_method(
+              r, collection_type, "next",
+              TraitRef{iter_trait->symbol, {element_type}});
+          auto original = signatures.at(selected.method.value);
+          auto original_type = type(original);
+          if (original_type.parameters.size() != 1 ||
+              original_type.parameters[0].mode != ParamMode::inout)
+            reject(r, "Iterator.next implementation must take one inout Self",
+                   "E_TYPE_MISMATCH");
+          Substitutions sub = selected.substitutions;
+          infer(r, original_type.parameters[0].type, collection_type, sub);
+          auto type_args = finish_arguments(
+              r, generic_params[selected.method.value], sub);
+          auto sig = substitute(original, sub, m.types);
+          next_result = type(sig).result;
+          Call call;
+          call.kind = CalleeKind::direct;
+          call.signature = sig;
+          call.direct_symbol = selected.method;
+          call.args = next_args;
+          call.type_args = std::move(type_args);
+          next_call = std::move(call);
+        }
+        const auto &result_type = type(next_result);
+        if (!std_option(next_result) || result_type.type_args.size() != 1 ||
+            result_type.type_args[0] != element_type)
+          reject(r, "Iterator.next must return std/option.Option of the "
+                    "for-in element type",
+                 "E_TYPE_MISMATCH");
+        SymbolId some{0}, none{0}, some_field{0};
+        const auto &option_decl = nominal(next_result);
+        for (const auto &variant : option_decl.variants) {
+          if (symbol(variant.symbol).name == "Some") {
+            some = variant.symbol;
+            if (!variant.payload.empty())
+              some_field = variant.payload[0].symbol;
+          } else if (symbol(variant.symbol).name == "None")
+            none = variant.symbol;
+        }
+        if (!some.value || !none.value || !some_field.value)
+          reject(r, "std/option.Option must declare Some(value T) and None",
+                 "E_TYPE_MISMATCH");
+        auto body_scope = scope;
+        scope = loop_scope;
+        HirNodeId next_id = std::visit(
+            [&](auto &&call) {
+              return node(r, next_result, std::move(call), next_children);
+            },
+            next_call);
+        scope = body_scope;
+        iterator_meta = IteratorFor{cursor, option_symbol, next_id,
+                                    collection_type, element_type, some, none,
+                                    some_field};
+      }
       scope = loop_scope;
       m.nodes[id.value].children = {collection.id, body.id};
-      m.nodes[id.value].data = ForIn{definition(r), bs, body.id};
+      if (iterator_meta)
+        m.nodes[id.value].children.push_back(iterator_meta->next);
+      m.nodes[id.value].data =
+          ForIn{definition(r), bs, body.id, std::move(iterator_meta)};
       loops.pop_back();
       break_targets.pop_back();
       scope = saved;
@@ -5957,6 +6156,21 @@ class Checker {
     owned->symbols.push_back(s);
     return s.id;
   }
+  // Definitionless hidden locals for the user-Iterator lowering. They are
+  // ordinary value symbols for ownership/backends but are not source names.
+  SymbolId hidden_local(SymbolId origin, std::string_view prefix) {
+    auto s = symbol(origin);
+    s.id = SymbolId{owned->symbols.size()};
+    s.name = std::string(prefix) + std::to_string(s.id.value);
+    s.kind = modules::SymbolKind::value;
+    s.definition.reset();
+    s.declaration.reset();
+    s.exported = false;
+    s.target.reset();
+    s.foreign.reset();
+    owned->symbols.push_back(s);
+    return s.id;
+  }
   std::optional<std::vector<Ref>> explicit_method_type_refs(
       const HirNode &n) const {
     auto r = n.source.node;
@@ -6151,12 +6365,17 @@ class Checker {
     if (auto c = std::get_if<ConstraintCall>(&n.data)) {
       auto name = symbol(c->method).name;
       auto selected = select_method(n.source.node, c->receiver, name, c->trait);
-      auto method_args = constraint_method_arguments(n, *c, instance_sub);
-      auto own = method_own_parameters(selected.method);
-      if (own.size() != method_args.size())
-        throw std::invalid_argument("constraint method own parameter count");
-      for (size_t i = 0; i < own.size(); ++i)
-        selected.substitutions.push_back({own[i].symbol, method_args[i]});
+      const bool synthetic_iterator =
+          ast(n.source.node).kind == AstKind::ForIn;
+      if (!synthetic_iterator) {
+        auto method_args = constraint_method_arguments(n, *c, instance_sub);
+        auto own = method_own_parameters(selected.method);
+        if (own.size() != method_args.size())
+          throw std::invalid_argument("constraint method own parameter count");
+        for (size_t i = 0; i < own.size(); ++i)
+          selected.substitutions.push_back({own[i].symbol, method_args[i]});
+      } else if (!method_own_parameters(selected.method).empty())
+        throw std::invalid_argument("synthetic Iterator.next has own type args");
       auto args =
           finish_arguments(n.source.node, generic_params[selected.method.value],
                            selected.substitutions);
@@ -6277,8 +6496,17 @@ class Checker {
         b->symbol = rename(b->symbol);
       if (auto b = std::get_if<Move>(&n.data); b && b->binding)
         b->binding = rename(*b->binding);
-      if (auto b = std::get_if<ForIn>(&n.data))
+      if (auto b = std::get_if<ForIn>(&n.data)) {
         b->element = rename(b->element);
+        if (b->iterator) {
+          b->iterator->cursor = rename(b->iterator->cursor);
+          b->iterator->option = rename(b->iterator->option);
+          b->iterator->iterator =
+              substitute(b->iterator->iterator, sub, m.types);
+          b->iterator->element =
+              substitute(b->iterator->element, sub, m.types);
+        }
+      }
       if (auto b = std::get_if<Return>(&n.data))
         b->function = result;
       if (auto t = std::get_if<Try>(&n.data))
@@ -6353,6 +6581,8 @@ class Checker {
       if (auto c = std::get_if<ForIn>(&n.data)) {
         c->body = nodes.at(c->body.value);
         c->body_scope = scopes.at(c->body_scope.value);
+        if (c->iterator)
+          c->iterator->next = nodes.at(c->iterator->next.value);
       }
       if (auto c = std::get_if<StructInit>(&n.data))
         update_args(c->fields);

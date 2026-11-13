@@ -1031,6 +1031,67 @@ class Lower {
     }
     case hir::NodeKind::for_in: {
       const auto &fi = std::get<hir::ForIn>(n.data);
+      if (fi.iterator) {
+        const auto &it = *fi.iterator;
+        // Evaluate the source iterator exactly once and transfer a logical
+        // copy into the private cursor. The source binding is never advanced.
+        auto collection = expr(n.children[0]); take(n.children[0]);
+        auto cursor = slot(it.iterator);
+        slots[it.cursor] = cursor;
+        f.slots[cursor.value].binding = it.cursor;
+        if (owning(it.iterator))
+          f.slots[cursor.value].owner =
+              hir::OwnerRef{hir::OwnerKind::binding, it.cursor.value};
+        store(cursor, collection, s); full(id);
+
+        auto option = slot(node(it.next).type);
+        slots[it.option] = option;
+        f.slots[option.value].binding = it.option;
+        if (owning(node(it.next).type))
+          f.slots[option.value].owner =
+              hir::OwnerRef{hir::OwnerKind::binding, it.option.value};
+        auto element_slot = slot(it.element);
+        slots[fi.element] = element_slot;
+        f.slots[element_slot.value].binding = fi.element;
+        if (owning(it.element))
+          f.slots[element_slot.value].owner =
+              hir::OwnerRef{hir::OwnerKind::binding, fi.element.value};
+
+        auto condition = block(), some = block(), none = block(), step = block(),
+             done = block(), after = block();
+        jump(condition, s); loops.emplace(id, std::pair{after, step});
+        current = condition;
+        auto next_value = expr(it.next); take(it.next);
+        store(option, next_value, s); full(it.next);
+        auto option_value = access(Op::load, option, s);
+        Instruction test; test.op = Op::enum_test; test.type = boolean;
+        test.inputs = {option_value}; test.variant = it.some; test.source = s;
+        end(Exit::conditional, {emit(test)}, {some, none}, s);
+
+        current = some;
+        Instruction payload; payload.op = Op::enum_payload; payload.type = it.element;
+        payload.inputs = {option_value};
+        payload.variant = it.some; payload.field = it.some_field;
+        payload.source = s;
+        auto element = emit(payload);
+        if (owning(it.element)) {
+          Instruction copy; copy.op = Op::copy; copy.type = it.element;
+          copy.inputs = {element}; copy.source = s;
+          element = emit(copy);
+        }
+        store(element_slot, element, s);
+        stmt(fi.body); if (live()) jump(step, s);
+        current = step; jump(condition, s);
+
+        current = none;
+        if (owning(node(it.next).type))
+          effect(Op::destroy, option, s);
+        jump(done, s);
+        current = done;
+        ExitSite site{id, hir::ExitKind::normal, {}}; clean(site);
+        jump(after, s); finish(site);
+        loops.erase(id); current = after; break;
+      }
       auto collection = expr(n.children[0]); take(n.children[0]);
       auto hidden = slot(node(n.children[0]).type);
       iterations[id] = hidden;

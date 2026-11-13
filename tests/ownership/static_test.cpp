@@ -2044,6 +2044,115 @@ void corrections(std::string_view group) {
   std::cout << "correction " << group << " passed\n";
 }
 } // namespace
+
+void iterator_hir_tests(const fs::path &root) {
+  auto checked = project(root / "tests/iterator/fixtures/concrete-counter/lang.toml",
+                         Backend::native);
+  need(checked.success(), "Iterator fixture: " + diagnostics(checked));
+  auto module = std::move(*checked.value);
+  need(verify_types(module).success() && verify(module).success(),
+       "Iterator HIR did not verify");
+  auto loop = find(module, NodeKind::for_in);
+  const auto &iterator = std::get<ForIn>(module.nodes[loop.value].data);
+  need(iterator.iterator.has_value() && iterator.iterator->next.value &&
+           iterator.iterator->cursor.value && iterator.iterator->option.value,
+       "Iterator for-in hidden metadata missing");
+  ++probes;
+  invalid(module, "iterator next-child identity erased", [](auto &m) {
+    auto id = find(m, NodeKind::for_in);
+    auto &fi = std::get<ForIn>(m.nodes[id.value].data);
+    fi.iterator->next = fi.body;
+  });
+  invalid(module, "iterator Some payload identity changed", [](auto &m) {
+    auto id = find(m, NodeKind::for_in);
+    auto &fi = std::get<ForIn>(m.nodes[id.value].data);
+    fi.iterator->some_field = fi.iterator->none;
+  });
+  invalid(module, "iterator hidden cursor identity erased", [](auto &m) {
+    auto id = find(m, NodeKind::for_in);
+    auto &fi = std::get<ForIn>(m.nodes[id.value].data);
+    fi.iterator->cursor = fi.iterator->option;
+  });
+  invalid(module, "forged same-signature non-impl next symbol", [](auto &m) {
+    auto id = find(m, NodeKind::for_in);
+    auto &fi = std::get<ForIn>(m.nodes[id.value].data);
+    auto &call = std::get<Call>(m.nodes[fi.iterator->next.value].data);
+    std::optional<SymbolId> alternate;
+    for (const auto &f : m.functions)
+      if (m.resolved->symbols.at(f.symbol.value).name == "alternate") {
+        alternate = f.symbol;
+        call.signature = f.signature;
+      }
+    need(alternate.has_value(), "alternate function missing");
+    call.direct_symbol = *alternate;
+  });
+  invalid(module, "forged non-standard Option identity", [](auto &m) {
+    auto id = find(m, NodeKind::for_in);
+    auto &fi = std::get<ForIn>(m.nodes[id.value].data);
+    std::optional<SymbolId> fake_type;
+    for (const auto &s : m.resolved->symbols)
+      if (s.name == "Option" &&
+          s.kind == modules::SymbolKind::type &&
+          m.resolved->project->module(s.module).logical_path == "app")
+        fake_type = s.id;
+    need(fake_type.has_value(), "fake Option declaration missing");
+    const NominalDecl *decl = nullptr;
+    for (const auto &d : m.nominals)
+      if (d.symbol == *fake_type) decl = &d;
+    need(decl != nullptr, "fake Option nominal missing");
+    for (const auto &v : decl->variants) {
+      if (m.resolved->symbols.at(v.symbol.value).name == "Some") {
+        need(!v.payload.empty(), "fake Option Some payload missing");
+        fi.iterator->some = v.symbol;
+        fi.iterator->some_field = v.payload[0].symbol;
+      }
+      if (m.resolved->symbols.at(v.symbol.value).name == "None")
+        fi.iterator->none = v.symbol;
+    }
+  });
+
+  auto generic = project(root / "tests/iterator/fixtures/generic-function/lang.toml",
+                         Backend::native);
+  need(generic.success(), "generic Iterator fixture: " + diagnostics(generic));
+  need(verify_types(*generic.value).success() && verify(*generic.value).success(),
+       "generic Iterator HIR did not verify");
+  ++probes;
+  invalid(*generic.value, "forged non-standard Iterator trait identity", [](auto &m) {
+    std::optional<SymbolId> fake_trait;
+    for (const auto &s : m.resolved->symbols)
+      if (s.name == "Iterator" &&
+          s.kind == modules::SymbolKind::trait &&
+          m.resolved->project->module(s.module).logical_path == "app")
+        fake_trait = s.id;
+    need(fake_trait.has_value(), "fake Iterator trait missing");
+    const TraitDecl *decl = nullptr;
+    for (const auto &t : m.traits)
+      if (t.symbol == *fake_trait) decl = &t;
+    need(decl != nullptr && decl->methods.size() == 1,
+         "fake Iterator prototype missing");
+    for (auto &n : m.nodes)
+      if (auto call = std::get_if<ConstraintCall>(&n.data);
+          call && m.resolved->symbols.at(call->method.value).name == "next") {
+        call->trait.declaration = *fake_trait;
+        call->method = decl->methods[0].symbol;
+      }
+  });
+
+  auto exact = project(
+      root / "tests/iterator/fixtures/generic-exact-application/lang.toml",
+      Backend::native);
+  need(exact.success(), "exact Iterator application: " + diagnostics(exact));
+  need(verify_types(*exact.value).success() && verify(*exact.value).success(),
+       "exact Iterator application did not verify");
+  ++probes;
+  auto direct = project(root / "tests/iterator/fixtures/direct-next/lang.toml",
+                        Backend::native);
+  need(direct.success(), "direct next call: " + diagnostics(direct));
+  need(verify_types(*direct.value).success() && verify(*direct.value).success(),
+       "direct next call did not verify");
+  ++probes;
+}
+
 int main(int argc, char **argv) {
   try {
     need(argc == 2 || argc == 3,
@@ -2061,6 +2170,7 @@ int main(int argc, char **argv) {
     local_index_borrow_tests();
     extra_tests();
     computed_owning_switch_tests();
+    iterator_hir_tests(argv[1]);
     for (auto b : {Backend::native, Backend::python}) {
       // This signature-only regression intentionally has no owned locals.
       auto signature = project(

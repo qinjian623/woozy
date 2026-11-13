@@ -1,0 +1,35 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+// The parent's await link retains the child, and the child's waiter list
+// retains the parent. Both move parameters stay live until the child finishes.
+async func child(log move Vec[i32]) i32 {
+    await a.sleep(5);
+    vec.push(log, 7);
+    return 7;
+}
+
+async func parent(log move Vec[i32]) i32 {
+    let child_task = child(move log);
+    a.spawn(child_task);
+    return await child_task;
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[i32]();
+    let alias = log;
+    let task = parent(move alias);
+    a.spawn(task);
+    a.run_until(task);
+    if !a.finished(task) {
+        return 1;
+    }
+    if vec.len(log) != 1 || log[0] != 7 {
+        return 2;
+    }
+    io.println(log[0]);
+    return 0;
+}

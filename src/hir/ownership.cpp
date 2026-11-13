@@ -605,7 +605,17 @@ class Analysis {
     if (auto fi = std::get_if<ForIn>(&x.data)) {
       auto collection = ty(m, n(x.children[0]).type);
       TypeId element{};
-      if (collection.kind == TypeKind::String) {
+      if (fi->iterator) {
+        // The private iterator copy lives in the loop scope; the Option result
+        // is recreated in the body scope for every next call. Registering them
+        // in this order makes element, option, then cursor the reverse cleanup
+        // order at the corresponding exits.
+        local(fi->iterator->cursor, x.scope, fi->iterator->iterator,
+              ParamMode::move);
+        local(fi->iterator->option, fi->body_scope,
+              n(fi->iterator->next).type, ParamMode::move);
+        element = fi->iterator->element;
+      } else if (collection.kind == TypeKind::String) {
         for (uint64_t i = 1; i <= m.types.size(); ++i) {
           const auto &candidate = ty(m, TypeId{i});
           if (candidate.kind == TypeKind::UnsignedInt && candidate.bits == 32) {
@@ -1069,7 +1079,16 @@ class Analysis {
       full(id, x.children[0], true);
       const auto &fi = std::get<ForIn>(x.data);
       auto type = locals.at(fi.element.value).type;
-      if (owned(type))
+      if (fi.iterator) {
+        // next is evaluated once per iteration. Its successful result is
+        // transferred into the per-iteration Option local, not destroyed at
+        // the call full-expression. Some's payload is copied into the source
+        // element binding under the ordinary value rules.
+        full(fi.iterator->next, fi.iterator->next, true);
+        if (owned(type))
+          out.records.uses.push_back(
+              {id, 0, UseKind::copy, {}, type, fi.element});
+      } else if (owned(type))
         out.records.uses.push_back(
             {id, 0, UseKind::copy, {}, type, fi.element});
       records(x.children[1]);
@@ -1252,6 +1271,7 @@ class Analysis {
                                  l.type});
         }
         if (block.kind() == NodeKind::for_in &&
+            !std::get<ForIn>(block.data).iterator &&
             !contains(block.children[0], id)) {
           p.actions.push_back({CleanupKind::end_iteration,
                                {OwnerKind::iteration, construct.value},
@@ -1609,6 +1629,9 @@ class Analysis {
       if (!init.normal)
         return out;
       std::optional<State> head = init.normal;
+      const ForIn *loop_data = fi ? &std::get<ForIn>(x.data) : nullptr;
+      if (loop_data && loop_data->iterator)
+        (*head)[loop_data->iterator->cursor.value] = 1;
       auto known =
           fi ? nullptr : std::get_if<BoolLiteral>(&n(x.children[1]).data);
       for (size_t iteration = 0; iteration <= locals.size() * 2 + 2;
@@ -1622,8 +1645,11 @@ class Analysis {
         if (known && !known->value)
           break;
         auto entry = *cond.normal;
-        if (fi)
+        if (fi) {
           entry[std::get<ForIn>(x.data).element.value] = 1;
+          if (loop_data && loop_data->iterator)
+            entry[loop_data->iterator->option.value] = 1;
+        }
         auto body = statement(x.children[fi ? 1 : 3], entry);
         std::optional<State> back = body.normal;
         for (auto &e : body.edges) {

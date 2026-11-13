@@ -7,8 +7,8 @@
 // has run; it must not be called from inside a running task.
 package asynclib;
 
-// Submit a task to the executor without waiting for it. Spawning an already
-// started task is a no-op.
+// Queue a task without executing its body; run/await drives it. Spawning an
+// already started task is a no-op.
 pub func spawn[T,E](task Task[T,E]) {
     __woozy_async_spawn[T,E](task);
 }
@@ -24,12 +24,13 @@ pub func finished[T,E](task Task[T,E]) bool {
     return __woozy_async_finished[T,E](task);
 }
 
-// Run the executor until every pending task has completed.
+// Run submitted tasks and registered events; do not start unsubmitted tasks.
 pub func run() {
     __woozy_async_run();
 }
 
-// Run the executor until the given task completes. Other tasks stay pending.
+// Drive an already submitted task until completion. Spawn an ordinary Task
+// first; an unsubmitted task with no runnable work or events is not started.
 pub func run_until[T,E](task Task[T,E]) {
     __woozy_async_run_until[T,E](task);
 }

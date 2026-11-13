@@ -1,0 +1,19 @@
+schema_version = 1
+
+[package]
+name = "async_c_closure_dyn_order"
+source_root = "src"
+entry = "app"
+
+[build]
+backend = "native"
+word_bits = 64
+
+[build.native]
+runtime = "hosted"
+
+[dependencies.fixture]
+kind = "native"
+binding = "../../../c_ffi/bindings/fixture.json"
+libraries = ["ffi_fixture"]
+library_dirs = ["../../../c_ffi/fixture"]

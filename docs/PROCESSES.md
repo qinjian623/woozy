@@ -126,6 +126,8 @@ io.println(received.number); // 输出 10
 
 `process.fork() i32 throws os.Error` 在父进程返回子进程 PID，在子进程返回 0。普通变量和 Vec 随进程内存复制，父子之后的修改互不影响；需要共享数据时使用 [std/ipc](IPC.md) 或管道。
 
+若 async 执行器已属于另一线程，`process.fork` 在创建子进程前抛出 `os.Error`。执行器自身线程仍可 fork；父子分别继续自己的任务副本，取消或等待不会修改对方的事件监听。`spawn` 的子进程直接 exec，因此另一线程使用执行器不妨碍 spawn。
+
 多线程 fork 后，子进程只保留调用 fork 的线程。其他线程持有的业务锁状态仍被复制，不会自动解锁；这些线程在子进程也不会回来解锁。调用方要在 fork 前安排好业务锁和数据访问。这个线程保留规则与 [Linux fork](https://man7.org/linux/man-pages/man2/fork.2.html) 相同。
 
 Woozy 会修复自己的分配器等内部锁，使子进程可以使用运行库；它不会重置用户 Mutex 或 Condvar。继承的 ARC 引用计数不会减去已消失线程持有的引用，部分引用可能一直保留到 exec 或进程退出。子进程通常应尽快调用 exec，优先用 `spawn` 完成“启动另一个程序”的需求。

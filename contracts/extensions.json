@@ -13,7 +13,9 @@
     "capture_bindings": "Read-only captured bindings; shared referenced objects remain mutable through their APIs",
     "move_capture_syntax": "move func(...) { ... }; move every actually captured owning value, ordinary func copies",
     "weak_targets": "Vec, function values, ARC shared handles and std/box.Box[T]; exclude value structs/enums, string, fd wrappers and foreign Python/C objects",
-    "bound_move_receiver": "Bound move-Self methods are repeatable: copy receiver by ordinary value rules before every call, then transfer that copy; reject noncopyable receivers; no once-only function type"
+    "bound_move_receiver": "Bound move-Self methods are repeatable: copy receiver by ordinary value rules before every call, then transfer that copy; reject noncopyable receivers; no once-only function type",
+    "async_fork": "std/process.fork fails with os.Error before creating a child when the executor belongs to another thread; same-thread fork and exec-only spawn remain supported; inherited tasks do not migrate from a vanished thread",
+    "user_iteration": "std/iter.Iterator[T] next(inout Self)->std/option.Option[T]; for evaluates once, advances a private logical copy, shared fields stay shared; next nonthrowing, Result item allowed; ambiguous applications rejected"
   },
   "tasks": [
     {
@@ -73,7 +75,7 @@
       "id": "CON03",
       "title": "Async functions, await and task execution",
       "status": "in_progress",
-      "owner": "Root: entry/result cleanup and async parameter copies implemented; Source frame GC running; fork integration pending",
+      "owner": "Core implemented and main full171/171 passed; extra async TCP/UDP tests under one correction",
       "depends_on": [
         "LANG01",
         "MEM02",
@@ -88,7 +90,7 @@
     {
       "id": "LANG01",
       "title": "Capturing closures and bound method values",
-      "status": "in_progress",
+      "status": "complete",
       "owner": "root shared ABI; Pi implementation after published representation",
       "depends_on": [
         "MEM01"
@@ -102,7 +104,7 @@
     {
       "id": "LANG02",
       "title": "Dynamic trait objects",
-      "status": "in_progress",
+      "status": "complete",
       "owner": "Pi correction after Root review",
       "depends_on": [
         "LANG01",
@@ -117,7 +119,7 @@
     {
       "id": "LANG03",
       "title": "Slice views, typed pointers and richer mutable places",
-      "status": "in_progress",
+      "status": "complete",
       "owner": "Root: whole/field/index owning inout implemented in b37474f; Task and foreign inout remain rejected",
       "depends_on": [
         "MEM01",
@@ -132,8 +134,8 @@
     {
       "id": "LANG04",
       "title": "User-defined iteration",
-      "status": "planned",
-      "owner": "unassigned",
+      "status": "complete",
+      "owner": "Root integrated accepted code; main full171/171 passed 2026-11-13",
       "depends_on": [
         "LANG03"
       ],
@@ -146,7 +148,7 @@
     {
       "id": "MEM01",
       "title": "Weak references",
-      "status": "in_progress",
+      "status": "complete",
       "owner": "root",
       "depends_on": [],
       "acceptance": [
@@ -158,8 +160,8 @@
     {
       "id": "MEM02",
       "title": "Pure-Woozy cycle collection",
-      "status": "in_progress",
-      "owner": "root",
+      "status": "complete",
+      "owner": "Root integrated accepted code; main full171/171 passed 2026-11-13",
       "depends_on": [
         "MEM01",
         "LANG01"

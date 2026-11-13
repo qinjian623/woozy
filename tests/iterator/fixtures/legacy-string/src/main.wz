@@ -1,0 +1,8 @@
+package app;
+
+func main() i32 {
+    let text string = "A😀B";
+    var total i32 = 0;
+    for rune in text { total += i32(rune); }
+    return total - 128643;
+}

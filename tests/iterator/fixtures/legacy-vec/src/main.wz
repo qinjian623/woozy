@@ -1,0 +1,13 @@
+package app;
+
+func main() i32 {
+    let values Vec[i32] = [1, 2, 3];
+    let alias = values;
+    var sum i32 = 0;
+    for value in values {
+        if value == 1 { alias[1] = 20; }
+        sum += value;
+    }
+    if values[1] != 20 { return 1; }
+    return sum - 24;
+}

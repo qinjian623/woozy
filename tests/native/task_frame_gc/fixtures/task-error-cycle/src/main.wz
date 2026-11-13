@@ -1,0 +1,33 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/vec" as vec;
+
+struct Link { tasks Vec[Task[Unit,Failure]]; }
+enum Failure { Bad(link Link); }
+
+// The typed error payload is promise-owned. Storing the erroring Task into the
+// payload Link's Vec creates Task -> Future/promise -> error -> Task.
+async func fail() Unit throws Failure {
+    throw Failure.Bad(link: Link(tasks: []));
+}
+
+async func build_cycle() Unit throws Failure {
+    let task = fail();
+    try {
+        let ignored = await task;
+    } catch e Failure {
+        switch e {
+            case Failure.Bad(link):
+                vec.push(link.tasks, task);
+        }
+    }
+}
+
+func main() i32 throws os.Error {
+    let job = build_cycle();
+    a.spawn(job);
+    a.run_until(job);
+    a.shutdown();
+    return 0;
+}

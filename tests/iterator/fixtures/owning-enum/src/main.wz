@@ -1,0 +1,37 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+enum Payload { Empty; Full(values Vec[i32]); }
+struct Stream { values Vec[Payload]; index i32; count i32; }
+
+impl iter.Iterator[Payload] for Stream {
+    func next(cursor inout Self) option.Option[Payload] {
+        if cursor.index >= cursor.count { return option.Option[Payload].None; }
+        let item = cursor.values[cursor.index];
+        cursor.index = cursor.index + 1;
+        return option.Option[Payload].Some(item);
+    }
+}
+
+func main() i32 {
+    let stream = Stream(values: [
+        Payload.Full(values: [1, 2]),
+        Payload.Empty,
+        Payload.Full(values: [3, 4])
+    ], index: 0, count: 3);
+    var total i32 = 0;
+    for item in stream {
+        switch item {
+            case Payload.Full(values): total += values[0] + values[1];
+            case Payload.Empty: total += 10;
+        }
+    }
+    if stream.index != 0 { return 1; }
+    switch stream.values[0] {
+        case Payload.Full(values):
+            if values[1] != 2 { return 2; }
+        case Payload.Empty: return 3;
+    }
+    return total - 20;
+}

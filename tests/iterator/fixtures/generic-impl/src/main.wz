@@ -1,0 +1,22 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+struct Wrapper[T] { value T; index i32; }
+
+impl[T] iter.Iterator[T] for Wrapper[T] {
+    func next(cursor inout Self) option.Option[T] {
+        if cursor.index >= 2 { return option.Option[T].None; }
+        let item = cursor.value;
+        cursor.index = cursor.index + 1;
+        return option.Option[T].Some(item);
+    }
+}
+
+func main() i32 {
+    let source = Wrapper[i32](value: 7, index: 0);
+    var sum i32 = 0;
+    for item in source { sum += item; }
+    if source.index != 0 { return 1; }
+    return sum - 14;
+}

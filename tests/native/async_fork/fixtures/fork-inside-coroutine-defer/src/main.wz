@@ -1,0 +1,44 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/process" as process;
+import "std/vec" as vec;
+
+// process.fork() runs inside a real coroutine body. Both processes must return
+// from the same fork call exactly once, keep the current-coroutine marker, and
+// run the body's defer exactly once in their own address space. The Vec is a
+// normal shared ARC handle; fork copies the object privately, so each process
+// observes exactly one defer push.
+async func body(log Vec[i32]) i32 throws os.Error {
+    defer {
+        vec.push(log, 1);
+    }
+    let pid = i32(process.fork());
+    if pid == 0 {
+        return 100;
+    }
+    return 200;
+}
+
+async func main() i32 throws os.Error {
+    let log = vec.empty[i32]();
+    // A pending timer is inherited by both processes. The child epoll rebuild
+    // must keep the copied monotonic deadline and complete it independently.
+    let timer = a.sleep(100);
+    let value = await body(log);
+    await timer;
+    if !a.finished(timer) {
+        return 6;
+    }
+    if vec.len(log) != 1 {
+        return 4;
+    }
+    if value == 100 {
+        return 0;
+    }
+    if value != 200 {
+        return 5;
+    }
+    os.write_all_text(os.stdout(), "parent-ok\n");
+    return 0;
+}

@@ -262,4 +262,46 @@ func main() i32 throws os.Error {
 
 这些等待接口不能组合成 select；当前不提供多个 channel 的原子选择。
 
-暂不提供捕获闭包、强制线程取消、channel select 和异步运行时；取消只有 `std/cancel` 的协作式请求、检查与 channel 等待唤醒。Python 后端会拒绝这些线程和同步接口。
+`thread.spawn` 使用无捕获函数加明确参数。暂不提供强制线程取消和 channel select；`std/cancel` 的请求由任务主动检查，或由 channel 等待接口处理。Python 后端会拒绝这些线程和同步接口。
+
+
+## async 与 await
+
+异步函数调用返回 `Task[R,E]`，创建时不执行函数体。`await` 取得结果并传播该函数声明的错误；异步 main 由执行器运行。下面的程序输出 42：
+
+```wz
+package app;
+import "std/async" as tasks;
+import "std/io" as io;
+import "std/os" as os;
+
+async func answer() i32 {
+    await tasks.sleep(1);
+    return 42;
+}
+
+async func main() i32 throws os.Error {
+    io.println(await answer());
+    return 0;
+}
+```
+
+`std/async` 的操作如下：
+
+| 函数 | 行为 |
+| --- | --- |
+| `spawn(task)` | 将任务加入就绪队列，不立即执行函数体；重复提交不重复启动 |
+| `run()` | 执行已提交任务并等待已登记事件，不自动提交未启动的普通 Task |
+| `run_until(task)` | 等待已提交的目标任务；普通异步调用得到的 Task 需先 spawn，其他任务可继续待执行 |
+| `finished(task)` | 检查任务是否成功、失败或已取消 |
+| `cancel(task)` | 请求取消；已开始的任务恢复后执行退出清理 |
+| `shutdown()` | 取消尚未结束的任务并清理它们；不能从正在执行的任务内调用 |
+| `sleep(milliseconds)` | 返回按单调时间等待的任务 |
+| `readable(fd)`、`writable(fd)` | 等待描述符可读或可写，不执行读写，也不取得描述符所有权 |
+| `join(task)`、`join_all(tasks)` | 在异步函数中等待一个任务或依次等待一组任务，并传播声明的错误 |
+
+执行器属于首次使用它的线程；run、spawn、cancel 等操作只能在该线程调用。等待读写时使用非阻塞描述符，准备就绪后仍要处理实际读写的返回结果。普通拥有参数在创建 Task 时复制，Vec 等引用字段继续共享对象；未启动任务的最后句柄被释放时，不执行函数体。
+
+未启动或已完成 Task 中的纯 Woozy 强引用循环会自动回收。仍由执行器执行或等待事件的任务保持存活，清理句柄不会自动取消它；需要停止时调用 cancel 或 shutdown。异线程拥有执行器时 fork 抛出 os.Error，同线程 fork 的规则见[进程文档](PROCESSES.md)。
+
+目前 async 只支持 Linux x86_64 Native，inout 参数会在编译时拒绝。async 的参数、局部值、结果或错误不能包含外部 C 资源句柄。对函数值和 dyn 的资源检查目前按程序中出现的类型保守处理，因此含同类值、但实际没有保存 C 资源的 async 函数也可能被拒绝。Python 后端暂不支持 async。

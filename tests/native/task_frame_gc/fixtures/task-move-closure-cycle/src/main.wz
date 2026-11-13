@@ -1,0 +1,30 @@
+package app;
+import "std/async" as a;
+import "std/vec" as vec;
+
+// The move closure environment and the move Vec<Task> parameter are both frame
+// owners. The Vec holds the Task, so the frame -> closure env -> Vec -> frame
+// cycle is reachable only through the typed owner slots.
+async func hold(callback move (func() i32),
+                values move Vec[Task[Unit,Unit]]) Unit {
+    if callback() < 0 {
+    }
+}
+
+func make_cycle() {
+    let tasks = vec.empty[Task[Unit,Unit]]();
+    let captured = tasks;
+    let for_task = tasks;
+    let callback = move func() i32 {
+        return i32(vec.len(captured)) - 1;
+    };
+    let task = hold(move callback, move for_task);
+    vec.push(tasks, task);
+}
+
+func main() i32 {
+    for var i i32 = 0; i < 64; i += 1 {
+        make_cycle();
+    }
+    return 0;
+}

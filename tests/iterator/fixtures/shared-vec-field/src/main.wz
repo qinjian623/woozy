@@ -1,0 +1,31 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+struct Source { cursor i32; values Vec[i32]; }
+
+impl iter.Iterator[i32] for Source {
+    func next(cursor inout Self) option.Option[i32] {
+        if cursor.cursor >= 3 { return option.Option[i32].None; }
+        let item = cursor.values[cursor.cursor];
+        cursor.cursor = cursor.cursor + 1;
+        return option.Option[i32].Some(item);
+    }
+}
+
+func main() i32 {
+    let source = Source(cursor: 0, values: [1, 2, 3]);
+    var sum i32 = 0;
+    var first bool = true;
+    for item in source {
+        sum += item;
+        if first {
+            source.values[1] = 20;
+            first = false;
+        }
+    }
+    if source.cursor != 0 { return 1; }
+    if source.values[0] != 1 || source.values[1] != 20 ||
+       source.values[2] != 3 { return 2; }
+    return sum - 24;
+}

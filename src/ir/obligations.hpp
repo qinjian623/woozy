@@ -126,6 +126,8 @@ class RequiredExits {
     case hir::NodeKind::for_in: {
       flow.merge(expr(n.children[0]));
       const auto &fi = std::get<hir::ForIn>(n.data);
+      if (fi.iterator)
+        flow.merge(expr(fi.iterator->next));
       auto body = stmt(fi.body); flow.merge(body);
       flow.breaks.erase(id); flow.continues.erase(id);
       flow.merge(exit(id, hir::ExitKind::normal)); flow.falls = true;

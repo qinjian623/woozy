@@ -1,0 +1,8 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+struct Dual {index i32;}
+impl iter.Iterator[i32] for Dual {func next(cursor inout Self) option.Option[i32] {if cursor.index==2{return option.Option[i32].None;}cursor.index+=1;return option.Option[i32].Some(cursor.index);}}
+impl iter.Iterator[bool] for Dual {func next(cursor inout Self) option.Option[bool] {if cursor.index==2{return option.Option[bool].None;}cursor.index+=1;return option.Option[bool].Some(true);}}
+func sum[I iter.Iterator[i32]](source I) i32 {var total i32=0;for item in source {total+=item;}return total;}
+func main() i32 {let source=Dual(index:0);if sum[Dual](source)!=3||source.index!=0{return 1;}return 0;}

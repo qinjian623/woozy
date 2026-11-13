@@ -119,7 +119,7 @@ REJECTS = (
     {
         "id": "reject-resource-copy",
         "code": "E_CAPABILITY_UNAVAILABLE",
-        "message": "retain_symbol",
+        "messages": ("retain_symbol", "external C resource"),
         "purpose": "non-copyable C resource parameter is rejected",
     },
 )
@@ -263,9 +263,13 @@ def reject_check(case, opt, args, env, commands, hashes):
     need(payload.get("status") == "error", f"{case_id} O{opt}: {payload}")
     diagnostics = payload.get("diagnostics", [])
     need(any(diagnostic.get("code") == case["code"] and
-             case["message"] in diagnostic.get("message", "")
+             any(message in diagnostic.get("message", "")
+                 for message in case["messages"])
              for diagnostic in diagnostics),
          f"{case_id} O{opt} rejected with the wrong diagnostic: {diagnostics}")
+    for output in ("program", "program.o"):
+        need(not (directory / "cli" / output).exists(),
+             f"{case_id} O{opt} emitted {output} despite rejection")
     for path in (manifest, HERE / "fixtures" / case_id / "binding.json"):
         record_hash(hashes, args.root, path)
     return {

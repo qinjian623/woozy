@@ -1,0 +1,37 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+import "std/result" as result;
+
+enum Failure { Bad; }
+struct Results { index i32; count i32; }
+
+impl iter.Iterator[result.Result[i32, Failure]] for Results {
+    func next(cursor inout Self) option.Option[result.Result[i32, Failure]] {
+        if cursor.index >= cursor.count {
+            return option.Option[result.Result[i32, Failure]].None;
+        }
+        let index = cursor.index;
+        cursor.index = cursor.index + 1;
+        if index == 2 {
+            return option.Option[result.Result[i32, Failure]].Some(
+                result.Result[i32, Failure].Err(Failure.Bad));
+        }
+        return option.Option[result.Result[i32, Failure]].Some(
+            result.Result[i32, Failure].Ok(index + 1));
+    }
+}
+
+func main() i32 {
+    let source = Results(index: 0, count: 4);
+    var total i32 = 0;
+    for item in source {
+        switch item {
+            case result.Result.Ok(value): total += value;
+            case result.Result.Err(error):
+                switch error { case Failure.Bad: total += 10; }
+        }
+    }
+    if source.index != 0 { return 1; }
+    return total - 17;
+}

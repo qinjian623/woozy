@@ -160,6 +160,8 @@ if total == 10 {
 
 条件必须是 `bool`，`&&` 和 `||` 短路；赋值不是表达式。循环统一使用 `for`，支持三段式、条件式、`for-in` 和无条件循环。`break`、`continue` 会执行实际离开词法块中的 `defer`。
 
+自定义 for-in 实现 `std/iter.Iterator[T]`，其 `next(cursor inout Self)` 返回 `std/option.Option[T]`，不抛错。循环对表达式只求值一次，推进私有迭代器副本；引用字段仍共享对象。Some 产生元素，None 结束。见[教程示例](TUTORIAL.md#自定义迭代器)。
+
 `switch` 没有分支穿透，必须覆盖全部可能值；无法列全时写 `default` 或 `_`。每个分支有自己的作用域。裸标识符模式会建立新绑定，即使外层有同名 `const`，也不会当作常量匹配。
 
 ## struct、enum 与方法

@@ -1,0 +1,17 @@
+package app;
+import "fixture/lib" as fixture;
+import "std/async" as a;
+
+// A stopped-world frame clear cannot call an external C release. The compiler
+// must reject this frame owner before producing a program, rather than silently
+// performing the release under the collector or deferring the whole frame.
+async func hold(resource move fixture.OwnedResource) Unit { }
+
+func main() i32 {
+    let resource = fixture.cf_resource_new(1);
+    let task = hold(move resource);
+    a.spawn(task);
+    a.run_until(task);
+    a.shutdown();
+    return 0;
+}

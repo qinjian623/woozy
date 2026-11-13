@@ -25,6 +25,8 @@
 #include <cstring>
 #include <unistd.h>
 
+#include "../../runtime/native/gc.hpp"
+
 // ---------------------------------------------------------------------------
 // Freestanding runtime stubs: tracked allocator, terminal panic.
 // ---------------------------------------------------------------------------
@@ -95,6 +97,15 @@ extern "C" [[noreturn]] void lang_native_panic_v1(uint32_t cause, uint64_t,
   std::fprintf(stderr, "async_runtime: runtime Panic cause=%u\n", cause);
   std::abort();
 }
+
+// This suite exercises the executor without the GC layers, so it provides the
+// two program-layer symbols the executor references. They are never reached
+// because gc_program::enabled() stays 0 here; the real GC integration is
+// covered by tests/async_gc_runtime with the actual layers.
+extern "C" bool lang_gc_program_register_v1(void *, const LangGcOps *) noexcept {
+  std::abort();
+}
+extern "C" void lang_gc_program_unregister_v1(void *) noexcept { std::abort(); }
 
 #include "../../runtime/native/async.cpp"
 
@@ -352,10 +363,17 @@ namespace {
 // node, otherwise the shutdown scan reads freed storage.
 void scenario_unstarted_release_then_shutdown() noexcept {
   g_scenario = "unstarted-release-then-shutdown";
-  void *task = lang_async_task_new_v1();
-  expect(g_all == static_cast<Future *>(task), "task registered");
+  // A task joins the executor registry only when it is published, so both the
+  // bare and the published shape must leave no registry node behind.
+  void *bare = lang_async_task_new_v1();
+  expect(g_all == nullptr, "an unpublished task is not registered");
+  lang_async_task_release_v1(bare);
+  FakeFrame frame;
+  Future *task = make_task_frame(&frame);
+  expect(g_all == task, "published task registered");
   lang_async_task_release_v1(task);
   expect(g_all == nullptr, "release removes the registry node");
+  expect_equal(frame.destroy_count, 1, "frame destroyed once");
   check_executor_invariants("after release");
   lang_async_shutdown_v1();
   check_clean("after shutdown");

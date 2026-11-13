@@ -23,6 +23,7 @@ pub func setenv_bytes(name Vec[u8], value Vec[u8], overwrite bool) throws os.Err
 }
 pub func unsetenv(name string) throws os.Error { os.check(__woozy_process_unsetenv(name)); }
 pub func unsetenv_bytes(name Vec[u8]) throws os.Error { os.check(__woozy_process_unsetenv_bytes(name)); }
+// 执行器属于另一线程时抛出 os.Error，不创建子进程。
 pub func fork() i32 throws os.Error { return os.check(__woozy_process_fork()); }
 pub func waitpid(pid i32, options i32) WaitStatus throws os.Error { return os.check(__woozy_process_waitpid(pid,options)); }
 pub func wait(pid i32) WaitStatus throws os.Error {

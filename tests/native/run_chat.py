@@ -511,7 +511,13 @@ def elf_checks(program, environment):
     assert 'INTERP' not in headers['stdout'], headers
     assert 'NEEDED' not in dynamic['stdout'], dynamic
     undefined = [line.split() for line in symbols['stdout'].splitlines() if line.strip()]
-    assert all(kind == 'w' and name in {'lang_vec_observe_v1', 'lang_process_init_v1'}
+    optional_hooks = {
+        'lang_vec_observe_v1', 'lang_process_init_v1',
+        'lang_async_fork_reserve_v1', 'lang_async_fork_release_v1',
+        'lang_async_fork_prepare_v1', 'lang_async_fork_parent_v1',
+        'lang_async_fork_child_v1',
+    }
+    assert all(kind == 'w' and name in optional_hooks
                for kind, name in undefined), undefined
     return dict(headers=headers, dynamic=dynamic, undefined=undefined)
 

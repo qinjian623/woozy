@@ -416,6 +416,10 @@ class Verifier {
   std::map<uint64_t, const NominalDecl *> nominals;
   std::map<uint64_t, const FunctionInstance *> instances;
   std::vector<const HirFunction *> all_functions;
+  // Actual ForIn.iterator.next nodes. Only these synthetic calls may omit a
+  // written source method; a normal ConstraintCall cannot obtain the same
+  // exemption by merely pointing its Source at a ForIn statement.
+  std::set<const HirNode *> synthetic_iterator_calls;
   mutable TypeContext substituted;
   mutable std::map<std::tuple<uint64_t, uint64_t, std::vector<uint64_t>>,
                    bool>
@@ -858,6 +862,60 @@ class Verifier {
       if (t.symbol == id)
         return &t;
     return nullptr;
+  }
+  bool symbol_from_module(SymbolId id, std::string_view path,
+                          std::string_view name) const {
+    const auto &s = symbol(id);
+    return s.name == name &&
+           m.resolved->project->module(s.module).logical_path == path;
+  }
+  // The one real std/iter.Iterator declaration. A user trait with the same
+  // spelling is a different declaration and cannot authorize for-in.
+  const TraitDecl *std_iterator_trait() const {
+    for (const auto &t : m.traits)
+      if (symbol_from_module(t.symbol, "std/iter", "Iterator"))
+        return &t;
+    return nullptr;
+  }
+  const MethodPrototype *iterator_next_prototype(const TraitDecl &tr) const {
+    const MethodPrototype *result = nullptr;
+    for (const auto &p : tr.methods)
+      if (symbol(p.symbol).name == "next") {
+        need(result == nullptr,
+             "std/iter.Iterator declares next more than once");
+        result = &p;
+      }
+    need(result != nullptr, "std/iter.Iterator has no next method");
+    return result;
+  }
+  bool std_option(TypeId id) const {
+    const auto &t = type(id);
+    return t.kind == TypeKind::NominalEnum &&
+           symbol_from_module(t.declaration, "std/option", "Option");
+  }
+  // Resolve the unique impl for exactly this Self and complete trait argument.
+  // A concrete receiver may implement Iterator for several arguments; the loop
+  // element selects one application, not a global uniqueness requirement.
+  const ImplDecl *iterator_impl(TypeId self, TypeId element,
+                                Substitutions *out = nullptr) const {
+    const TraitDecl *tr = std_iterator_trait();
+    need(tr != nullptr, "std/iter.Iterator declaration missing");
+    const ImplDecl *result = nullptr;
+    for (const auto &im : m.impls) {
+      if (!im.trait || im.trait->declaration != tr->symbol ||
+          im.trait->args.size() != 1)
+        continue;
+      Substitutions sub;
+      if (!matches(im.self_type, self, sub))
+        continue;
+      if (!matches(im.trait->args[0], element, sub))
+        continue;
+      need(result == nullptr, "ambiguous Iterator implementation in for-in HIR");
+      result = &im;
+      if (out)
+        *out = std::move(sub);
+    }
+    return result;
   }
   bool mentions_self(TypeId id, SymbolId self) const {
     std::vector<TypeId> pending{id};
@@ -3014,6 +3072,185 @@ class Verifier {
       }
     }
   }
+  // Validate that one synthetic next call really belongs to
+  // std/iter.Iterator and to the selected implementation application. A
+  // same-shaped function or a different trait with a next method is not
+  // enough: the target, complete impl arguments, receiver place and Option
+  // identities must all agree with this ForIn.
+  void check_iterator_protocol(const HirNode &n, const ForIn &fi) const {
+    const auto &it = *fi.iterator;
+    need(n.children.size() == 3 && n.children[2] == it.next,
+         "for-in Iterator next is not this loop child");
+    const auto &next = node(it.next);
+    need(next.kind() == NodeKind::call ||
+             next.kind() == NodeKind::constraint_call,
+         "for-in Iterator next node kind");
+    const TraitDecl *tr = std_iterator_trait();
+    need(tr != nullptr, "std/iter.Iterator declaration missing");
+    need(tr->params.size() == 1, "std/iter.Iterator arity");
+    const MethodPrototype *prototype = iterator_next_prototype(*tr);
+    need(source_parameters(prototype->source).empty(),
+         "std/iter.Iterator.next has its own type parameters");
+    const auto &raw_next = type(prototype->signature);
+    need(raw_next.parameters.size() == 1 &&
+             raw_next.parameters.front().mode == ParamMode::inout &&
+             type(raw_next.parameters.front().type).kind ==
+                 TypeKind::TypeParameter &&
+             type(raw_next.parameters.front().type).declaration == tr->self,
+         "std/iter.Iterator.next prototype receiver");
+    need(!raw_next.throws_type, "std/iter.Iterator.next prototype throws");
+    need(std_option(raw_next.result), "std/iter.Iterator.next prototype result");
+
+    Substitutions sig_sub{{tr->self, it.iterator}};
+    sig_sub.push_back({tr->params[0].symbol, it.element});
+    auto expected_signature =
+        substitute(prototype->signature, sig_sub, substituted);
+    const auto &expected_type = type(expected_signature);
+    need(expected_type.result == next.type,
+         "for-in Iterator next result type");
+    need(!expected_type.throws_type, "for-in Iterator next signature throws");
+
+    const std::vector<CallArg> *args = nullptr;
+    TypeId next_signature{0};
+    if (const auto *call = std::get_if<Call>(&next.data)) {
+      need(call->kind == CalleeKind::direct && call->direct_symbol &&
+               !call->callee,
+           "for-in Iterator next is not a direct call");
+      args = &call->args;
+      next_signature = call->signature;
+      const ImplDecl *impl = nullptr;
+      Substitutions impl_sub;
+      impl = iterator_impl(it.iterator, it.element, &impl_sub);
+      need(impl != nullptr, "for-in Iterator implementation missing");
+      SymbolId target = *call->direct_symbol;
+      const FunctionInstance *instance = nullptr;
+      for (const auto &i : m.instances)
+        if (i.symbol == target) {
+          instance = &i;
+          target = i.origin;
+          break;
+        }
+      SymbolId expected_next{0};
+      for (auto method : impl->methods)
+        if (symbol(method).name == "next") {
+          need(!expected_next.value,
+               "Iterator implementation has duplicate next");
+          expected_next = method;
+        }
+      need(expected_next.value && target == expected_next,
+           "for-in next target is not the selected Iterator impl method");
+      std::vector<TypeId> complete;
+      for (auto parameter : impl->params) {
+        auto found = std::find_if(impl_sub.begin(), impl_sub.end(),
+                                  [&](auto entry) {
+                                    return entry.first == parameter.symbol;
+                                  });
+        need(found != impl_sub.end(),
+             "for-in Iterator impl argument is not determined");
+        complete.push_back(found->second);
+      }
+      if (instance) {
+        need(instance->type_args == complete,
+             "for-in Iterator instance arguments differ from the impl");
+      } else {
+        need(complete.empty(),
+             "generic Iterator impl survived without an instance");
+        need(call->type_args.empty(),
+             "non-instance for-in next has type arguments");
+      }
+    } else {
+      const auto &cc = std::get<ConstraintCall>(next.data);
+      need(cc.trait.declaration == tr->symbol &&
+               cc.trait.args.size() == 1 &&
+               cc.trait.args[0] == it.element,
+           "for-in ConstraintCall is not the exact std/iter.Iterator application");
+      need(cc.method == prototype->symbol,
+           "for-in ConstraintCall method is not std/iter.Iterator.next");
+      need(cc.receiver == it.iterator,
+           "for-in ConstraintCall receiver differs from the loop iterator");
+      args = &cc.args;
+      next_signature = cc.signature;
+    }
+
+    need(next_signature == expected_signature,
+         "for-in Iterator next is not the selected trait signature");
+    need(args != nullptr && args->size() == 1 && next.children.size() == 1,
+         "for-in Iterator next argument arity");
+    const auto &receiver = (*args)[0];
+    need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+             !receiver.label && receiver.mode == ParamMode::inout &&
+             receiver.expression == next.children[0],
+         "for-in Iterator next receiver mapping");
+    const auto &place = node(receiver.expression);
+    need(place.kind() == NodeKind::place &&
+             std::get<Place>(place.data).symbol == it.cursor &&
+             place.type == it.iterator && place.scope == n.scope,
+         "for-in Iterator next does not use this loop's hidden cursor");
+
+    need(std_option(next.type), "for-in next result is not std/option.Option");
+    const auto &option_type = type(next.type);
+    need(option_type.type_args.size() == 1 &&
+             option_type.type_args[0] == it.element,
+         "for-in Option element differs from Iterator[T]");
+    const NominalDecl *decl = nullptr;
+    for (const auto &d : m.nominals)
+      if (d.symbol == option_type.declaration) {
+        decl = &d;
+        break;
+      }
+    need(decl != nullptr, "for-in Option declaration missing");
+    const VariantDecl *some = nullptr, *none = nullptr;
+    for (const auto &variant : decl->variants) {
+      if (variant.symbol == it.some)
+        some = &variant;
+      if (variant.symbol == it.none)
+        none = &variant;
+    }
+    need(some != nullptr && none != nullptr && some != none,
+         "for-in Option Some/None identities");
+    need(some->payload.size() == 1 &&
+             some->payload[0].symbol == it.some_field,
+         "for-in Option Some payload field identity");
+    Substitutions option_sub;
+    for (size_t i = 0; i < decl->params.size(); ++i)
+      option_sub.push_back(
+          {decl->params[i].symbol, option_type.type_args.at(i)});
+    need(substitute(some->payload[0].type, option_sub, substituted) ==
+             it.element,
+         "for-in Option Some payload type differs from element");
+
+    // Hidden cursor/Option are not source bindings. The cursor is referenced
+    // by exactly the synthetic next place; neither may be read, written or
+    // bound by ordinary HIR nodes.
+    size_t cursor_places = 0;
+    for (size_t i = 0; i < m.nodes.size(); ++i) {
+      const auto &candidate = m.nodes[i];
+      auto reject_symbol = [&](SymbolId s) {
+        need(s != it.cursor && s != it.option,
+             "for-in hidden cursor/Option used as an ordinary binding");
+      };
+      if (auto read = std::get_if<Read>(&candidate.data))
+        reject_symbol(read->symbol);
+      if (auto binding = std::get_if<Binding>(&candidate.data))
+        reject_symbol(binding->symbol);
+      if (auto move = std::get_if<Move>(&candidate.data); move && move->binding)
+        reject_symbol(*move->binding);
+      if (auto value = std::get_if<FunctionValue>(&candidate.data))
+        for (const auto &capture : value->captures)
+          reject_symbol(capture.source);
+      if (auto p = std::get_if<Place>(&candidate.data)) {
+        if (p->symbol == it.cursor) {
+          need(HirNodeId{i} == next.children[0] &&
+                   candidate.scope == n.scope,
+               "for-in hidden cursor place belongs to another use");
+          ++cursor_places;
+        } else
+          reject_symbol(p->symbol);
+      }
+    }
+    need(cursor_places == 1, "for-in hidden cursor place count");
+  }
+
   void shape(HirNodeId id) const {
     check_cancelled(stop);
     const auto &n = node(id);
@@ -3355,15 +3592,32 @@ class Verifier {
       break;
     }
     case NodeKind::for_in: {
-      arity(2);
-      unit(n);
       const auto &fi = std::get<ForIn>(n.data);
-      need((type(expr(ch[0]).type).kind == TypeKind::Vec ||
-            type(expr(ch[0]).type).kind == TypeKind::Slice ||
-            type(expr(ch[0]).type).kind == TypeKind::String) && fi.body == ch[1] &&
-               node(fi.body).kind() == NodeKind::block &&
+      if (!fi.iterator) {
+        arity(2);
+        unit(n);
+        need((type(expr(ch[0]).type).kind == TypeKind::Vec ||
+              type(expr(ch[0]).type).kind == TypeKind::Slice ||
+              type(expr(ch[0]).type).kind == TypeKind::String),
+             "for-in type/body");
+      } else {
+        arity(3);
+        unit(n);
+        const auto &it = *fi.iterator;
+        need(it.next == ch[2], "for-in Iterator next child identity");
+        need(expr(ch[0]).type == it.iterator, "for-in Iterator source type");
+        need(symbol(it.cursor).kind == modules::SymbolKind::value &&
+                 !symbol(it.cursor).definition &&
+                 !symbol(it.cursor).declaration &&
+                 symbol(it.option).kind == modules::SymbolKind::value &&
+                 !symbol(it.option).definition &&
+                 !symbol(it.option).declaration,
+             "for-in Iterator hidden locals");
+        check_iterator_protocol(n, fi);
+      }
+      need(fi.body == ch[1] && node(fi.body).kind() == NodeKind::block &&
                node(fi.body).scope == fi.body_scope,
-           "for-in type/body");
+           "for-in body");
       declaration(fi.element, n.source, modules::SymbolKind::value,
                   AstKind::ForIn);
       break;
@@ -4566,7 +4820,53 @@ class Verifier {
         method = &p;
     need(method, "missing constraint method");
     auto written = source_method_call(n);
-    need(written.has_value(), "constraint call lost its source method");
+    if (!written) {
+      // The only source-produced ConstraintCall without a written method is
+      // the synthetic next(inout cursor) inside a user-Iterator for-in. Its
+      // real source is the enclosing ForIn statement and its arguments are
+      // the hidden cursor place, not source expressions.
+      need(synthetic_iterator_calls.count(&n),
+           "constraint call without a written method is not an Iterator next");
+      need(std_iterator_trait() == tr,
+           "synthetic for-in next is not std/iter.Iterator");
+      const auto &source_file =
+          *m.resolved->project->module(n.source.node.module)
+               .files.at(n.source.node.file);
+      need(source_file.node(n.source.node.node).kind == AstKind::ForIn,
+           "constraint call lost its source method");
+      need(symbol(c.method).name == "next" && c.args.size() == 1 &&
+               n.children.size() == 1,
+           "synthetic for-in next shape");
+      need(source_parameters(method->source).empty() &&
+               source_generics(method->source).empty(),
+           "synthetic for-in next is generic");
+      Substitutions sub{{tr->self, c.receiver}};
+      need(c.trait.args.size() == tr->params.size(),
+           "synthetic for-in next trait arity");
+      for (size_t i = 0; i < tr->params.size(); ++i)
+        sub.push_back({tr->params[i].symbol, c.trait.args[i]});
+      valid_type(c.signature, owner_allowed_check);
+      need(c.signature == substitute(method->signature, sub, substituted),
+           "synthetic for-in next signature mismatch");
+      const auto &sig = type(c.signature);
+      const auto &prototype = type(method->signature);
+      need(prototype.parameters.size() == 1 &&
+               prototype.parameters[0].mode == ParamMode::inout,
+           "synthetic for-in next prototype mode");
+      const auto &receiver = c.args[0];
+      need(receiver.source_index == 0 && receiver.parameter_index == 0 &&
+               !receiver.label && receiver.mode == ParamMode::inout &&
+               receiver.expression == n.children[0] &&
+               node(receiver.expression).type == c.receiver &&
+               n.type == sig.result,
+           "synthetic for-in next receiver/result");
+      const auto &place = node(receiver.expression);
+      need(inout_place(place) &&
+               inout_slot_type(m, place.type, owner_allowed_check),
+           "synthetic for-in next inout cursor");
+      check_call_aliases(c.args, false);
+      return;
+    }
     need(written->name == symbol(c.method).name,
          "constraint call source method differs from target");
     const bool template_qualifier =
@@ -4922,8 +5222,16 @@ class Verifier {
             expected = method;
           }
         need(expected.has_value(), "instance constraint impl method missing");
-        auto method_args =
-            constraint_method_arguments(x, *cc, *trait, *prototype);
+        std::vector<TypeId> method_values;
+        const auto &constraint_file =
+            *m.resolved->project->module(x.source.node.module)
+                 .files.at(x.source.node.file);
+        if (constraint_file.node(x.source.node.node).kind != AstKind::ForIn)
+          method_values =
+              constraint_method_arguments(x, *cc, *trait, *prototype).values;
+        else
+          need(source_parameters(prototype->source).empty(),
+               "synthetic for-in next retained method type parameters");
         std::vector<TypeId> complete;
         for (const auto &p : impl->params) {
           auto it = std::find_if(impl_sub.begin(), impl_sub.end(),
@@ -4934,7 +5242,7 @@ class Verifier {
                "instance constraint impl argument is not determined");
           complete.push_back(it->second);
         }
-        for (auto t : method_args.values)
+        for (auto t : method_values)
           complete.push_back(substitute(t, sub, substituted));
         const FunctionInstance *target_instance = nullptr;
         for (const auto &i : m.instances)
@@ -5014,6 +5322,21 @@ class Verifier {
                  v.body == nodes.at(r->body.value) &&
                  v.body_scope == scopes.at(r->body_scope.value),
              "instance for-in identity mismatch");
+        need(r->iterator.has_value() == v.iterator.has_value(),
+             "instance for-in form mismatch");
+        if (r->iterator) {
+          const auto &before = *r->iterator;
+          const auto &after = *v.iterator;
+          need(after.cursor == local(before.cursor) &&
+                   after.option == local(before.option) &&
+                   after.next == nodes.at(before.next.value) &&
+                   after.iterator ==
+                       substitute(before.iterator, sub, substituted) &&
+                   after.element == substitute(before.element, sub, substituted) &&
+                   after.some == before.some && after.none == before.none &&
+                   after.some_field == before.some_field,
+               "instance for-in Iterator identity mismatch");
+        }
       }
       if (auto r = std::get_if<Return>(&x.data))
         need(std::get<Return>(y.data).function == local(r->function),
@@ -5041,6 +5364,7 @@ class Verifier {
       }
     std::map<uint64_t, std::set<uint64_t>> template_symbols;
     std::set<uint64_t> capture_local_symbols;
+    std::set<uint64_t> synthetic_local_symbols;
     for (const auto &t : m.templates) {
       auto ps = parameter_set(t.params);
       need(!ps.empty(), "template without parameters");
@@ -5085,6 +5409,19 @@ class Verifier {
       for (const auto &capture : t.function.captures) {
         originals.insert(capture.local.value);
         capture_local_symbols.insert(capture.local.value);
+      }
+      std::vector<HirNodeId> hidden_pending{t.function.body};
+      while (!hidden_pending.empty()) {
+        const auto &hidden = node(hidden_pending.back());
+        hidden_pending.pop_back();
+        if (auto fi = std::get_if<ForIn>(&hidden.data); fi && fi->iterator) {
+          originals.insert(fi->iterator->cursor.value);
+          originals.insert(fi->iterator->option.value);
+          synthetic_local_symbols.insert(fi->iterator->cursor.value);
+          synthetic_local_symbols.insert(fi->iterator->option.value);
+        }
+        hidden_pending.insert(hidden_pending.end(), hidden.children.begin(),
+                              hidden.children.end());
       }
       need(originals.count(t.function.symbol.value),
            "template function is not its original declaration");
@@ -5137,13 +5474,14 @@ class Verifier {
         const auto &a = symbol(from), &b = symbol(to);
         need(originals.count(from.value),
              "renamed source is not an original template-owned symbol");
-        if (capture_local_symbols.count(from.value)) {
+        if (capture_local_symbols.count(from.value) ||
+            synthetic_local_symbols.count(from.value)) {
           need(a.kind == modules::SymbolKind::value &&
                    b.kind == modules::SymbolKind::value &&
                    a.name == b.name && a.module == b.module &&
                    !a.definition && !b.definition && !a.declaration &&
                    !b.declaration,
-               "capture local rename is not a definitionless value copy");
+               "hidden local rename is not a definitionless value copy");
           continue;
         }
         need(a.definition &&
@@ -5346,14 +5684,32 @@ class Verifier {
                                   enter[id.value]})
                    .second,
                "duplicate catch binding identity");
-      if (auto fi = std::get_if<ForIn>(&n.data))
+      if (auto fi = std::get_if<ForIn>(&n.data)) {
+        if (fi->iterator) {
+          need(locals
+                   .emplace(fi->iterator->cursor.value,
+                            Local{fi->iterator->iterator, n.scope, f.symbol,
+                                  true, enter[id.value]})
+                   .second,
+               "duplicate for-in Iterator cursor");
+          need(locals
+                   .emplace(fi->iterator->option.value,
+                            Local{node(fi->iterator->next).type,
+                                  fi->body_scope, f.symbol, false,
+                                  enter[id.value]})
+                   .second,
+               "duplicate for-in Iterator option");
+        }
         need(locals
                  .emplace(fi->element.value,
-                          Local{iteration_element(node(n.children[0]).type),
+                          Local{fi->iterator
+                                    ? fi->iterator->element
+                                    : iteration_element(node(n.children[0]).type),
                                 fi->body_scope, f.symbol, false,
                                 enter[id.value]})
                  .second,
              "duplicate for-in element");
+      }
       if (n.kind() == NodeKind::return_) {
         need(std::get<Return>(n.data).function == f.symbol,
              "return target function mismatch");
@@ -5747,10 +6103,27 @@ class Verifier {
         ++expected[id.value];
       todo.insert(todo.end(), n.children.begin(), n.children.end());
     }
+    std::set<uint64_t> synthetic_iterator_nodes;
+    {
+      std::vector<HirNodeId> scan{f.body};
+      while (!scan.empty()) {
+        auto scan_id = scan.back();
+        scan.pop_back();
+        const auto &scan_node = node(scan_id);
+        if (auto fi = std::get_if<ForIn>(&scan_node.data); fi && fi->iterator) {
+          synthetic_iterator_nodes.insert(fi->iterator->next.value);
+          for (auto child : node(fi->iterator->next).children)
+            synthetic_iterator_nodes.insert(child.value);
+        }
+        scan.insert(scan.end(), scan_node.children.begin(),
+                    scan_node.children.end());
+      }
+    }
     std::vector<HirNodeId> pending{f.body};
     while (!pending.empty()) {
       check_cancelled(stop);
-      const auto &n = node(pending.back());
+      auto current_id = pending.back();
+      const auto &n = node(current_id);
       pending.pop_back();
       const auto kind = file.node(n.source.node.node).kind;
       if (n.kind() == NodeKind::foreign_read) {
@@ -5762,13 +6135,14 @@ class Verifier {
       if (auto call = std::get_if<Call>(&n.data);
           call && call->kind == CalleeKind::foreign)
         actual_foreign_calls.insert(n.source.node.node.value);
-      if (kind == AstKind::Try || kind == AstKind::Defer ||
-          kind == AstKind::Throw || kind == AstKind::List ||
-          kind == AstKind::Slice || kind == AstKind::ForIn ||
-          index_syntax(file.node(n.source.node.node)) ||
-          (kind == AstKind::Unary &&
-           file.tokens[file.node(n.source.node.node).token_begin].spelling ==
-               "move")) {
+      if (!synthetic_iterator_nodes.count(current_id.value) &&
+          (kind == AstKind::Try || kind == AstKind::Defer ||
+           kind == AstKind::Throw || kind == AstKind::List ||
+           kind == AstKind::Slice || kind == AstKind::ForIn ||
+           index_syntax(file.node(n.source.node.node)) ||
+           (kind == AstKind::Unary &&
+            file.tokens[file.node(n.source.node.node).token_begin].spelling ==
+                "move"))) {
         need((kind == AstKind::Try && n.kind() == NodeKind::try_) ||
                  (kind == AstKind::Defer && n.kind() == NodeKind::defer_) ||
                  (kind == AstKind::Throw && n.kind() == NodeKind::throw_) ||
@@ -6559,6 +6933,13 @@ class Verifier {
   }
 
   void ownership_sources() const {
+    std::set<uint64_t> synthetic_iterator_nodes;
+    for (const auto &n : m.nodes)
+      if (auto fi = std::get_if<ForIn>(&n.data); fi && fi->iterator) {
+        synthetic_iterator_nodes.insert(fi->iterator->next.value);
+        for (auto child : node(fi->iterator->next).children)
+          synthetic_iterator_nodes.insert(child.value);
+      }
     std::set<uint64_t> owning_functions;
     for (const auto &n : m.nodes)
       if (n.kind() == NodeKind::move || n.kind() == NodeKind::for_in ||
@@ -6584,6 +6965,8 @@ class Verifier {
       return std::nullopt;
     };
     for (size_t i = 0; i < m.nodes.size(); ++i) {
+      if (synthetic_iterator_nodes.count(i))
+        continue;
       const auto &n = m.nodes[i];
       const auto &file = *m.resolved->project->module(n.source.node.module)
                               .files.at(n.source.node.file);
@@ -7320,6 +7703,18 @@ public:
     need(projected.size() == m.types.size() && expected_bindings == m.foreign_bindings,
          "foreign typed records differ from declarations");
     declarations();
+    // Hidden Iterator locals belong to exactly one ForIn, and only the actual
+    // next child may use the synthetic source-method exemption.
+    std::set<uint64_t> hidden_iterator_symbols;
+    for (const auto &n : m.nodes)
+      if (auto fi = std::get_if<ForIn>(&n.data); fi && fi->iterator) {
+        need(hidden_iterator_symbols.insert(fi->iterator->cursor.value).second,
+             "for-in hidden cursor is shared by another loop");
+        need(hidden_iterator_symbols.insert(fi->iterator->option.value).second,
+             "for-in hidden Option is shared by another loop");
+        if (fi->iterator->next.value < m.nodes.size())
+          synthetic_iterator_calls.insert(&m.nodes[fi->iterator->next.value]);
+      }
     std::set<uint64_t> declared_parameters;
     for (const auto &sym : m.resolved->symbols)
       if (sym.kind == modules::SymbolKind::type_parameter) {
@@ -8289,6 +8684,16 @@ std::string dump(const HirModule &m) {
             s << " element=" << data.element.value
               << " body_scope=" << data.body_scope.value
               << " body=" << data.body.value;
+            if (data.iterator) {
+              s << " iterator_cursor=" << data.iterator->cursor.value
+                << " iterator_option=" << data.iterator->option.value
+                << " iterator_next=" << data.iterator->next.value
+                << " iterator_type=" << data.iterator->iterator.value
+                << " iterator_element=" << data.iterator->element.value
+                << " iterator_some=" << data.iterator->some.value
+                << " iterator_none=" << data.iterator->none.value
+                << " iterator_field=" << data.iterator->some_field.value;
+            }
           } else if constexpr (std::is_same_v<T, Defer>) {
             s << " owner_scope=" << data.owner_scope.value;
             for (auto r : data.references)

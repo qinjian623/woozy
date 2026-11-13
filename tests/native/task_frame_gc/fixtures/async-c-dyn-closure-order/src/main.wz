@@ -1,0 +1,23 @@
+package app;
+import "fixture/lib" as fixture;
+
+// dyn -> closure -> C resource, with make_dyn declared before make_fn.
+trait Get { func get(self Self) i32; }
+struct Reader { action func() i32; }
+impl Get for Reader {
+    func get(self Reader) i32 { return self.action(); }
+}
+func make_dyn(resource fixture.OwnedResource) dyn Get {
+    let action = make_fn(resource);
+    return Reader(action: action);
+}
+func make_fn(resource fixture.OwnedResource) (func() i32) {
+    return func() i32 { return fixture.cf_resource_value(resource); };
+}
+async func hold(value move dyn Get) Unit { }
+func main() i32 {
+    let resource = fixture.cf_resource_new(42);
+    let value = make_dyn(resource);
+    let task = hold(move value);
+    return 0;
+}

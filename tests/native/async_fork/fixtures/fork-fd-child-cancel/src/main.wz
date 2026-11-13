@@ -1,0 +1,48 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/process" as process;
+import "std/vec" as vec;
+
+async func wait_readable(file os.File) Unit {
+    await a.readable(os.fd(file));
+}
+
+async func main() i32 throws os.Error {
+    let pipe = os.pipe(u32(os.O_CLOEXEC));
+    let waiter = wait_readable(pipe.read_end);
+    a.spawn(waiter);
+    // Let the waiter register its descriptor wait, then suspend again so main
+    // resumes with the descriptor future pending in the registry.
+    await a.sleep(0);
+    let pid = process.fork();
+    if pid == 0 {
+        // The inherited epoll belongs to the parent. Cancel locally without any
+        // ctl DEL, then build a private child epoll with an independent waiter.
+        a.cancel(waiter);
+        let child_pipe = os.pipe(u32(os.O_CLOEXEC));
+        let child_waiter = wait_readable(child_pipe.read_end);
+        a.spawn(child_waiter);
+        os.write(child_pipe.write_end, [9], 1);
+        await child_waiter;
+        let child_data = vec.make[u8](1, 0);
+        let child_count = os.read(child_pipe.read_end, child_data, 1);
+        if child_count != 1 || child_data[0] != 9 {
+            return 3;
+        }
+        return 0;
+    }
+    os.write(pipe.write_end, [7], 1);
+    await waiter;
+    let data = vec.make[u8](1, 0);
+    let count = os.read(pipe.read_end, data, 1);
+    if count != 1 || data[0] != 7 {
+        return 1;
+    }
+    let status = process.wait(pid);
+    if !process.exited(status) || process.exit_status(status) != 0 {
+        return 2;
+    }
+    os.write_all_text(os.stdout(), "parent-ok\n");
+    return 0;
+}

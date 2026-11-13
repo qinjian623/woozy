@@ -1,0 +1,44 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/process" as process;
+import "std/vec" as vec;
+
+// Observer fixture: bind the executor with no heap allocation, fork, redirect
+// only the child's stderr to a file, then let both processes allocate a Vec and
+// run one scalar Task. Keeping every owning value after the fork leaves the two
+// observer streams self-contained, so each process's counts can be checked.
+async func tick() i32 {
+    return 7;
+}
+
+func main() i32 throws os.Error {
+    a.run();
+    let child_log = os.open("/tmp/woozy-async-fork-observer-child.log",
+                            os.O_WRONLY | os.O_CREAT | os.O_TRUNC, 0o600);
+    let pid = process.fork();
+    if pid == 0 {
+        os.dup2(child_log, 2);
+        os.close(child_log);
+    } else {
+        os.close(child_log);
+    }
+    let values = vec.make[i32](4, 7);
+    vec.push(values, 9);
+    let task = tick();
+    a.spawn(task);
+    a.run_until(task);
+    a.shutdown();
+    if vec.len(values) != 5 {
+        return 2;
+    }
+    if pid == 0 {
+        return 0;
+    }
+    let status = process.wait(pid);
+    if !process.exited(status) || process.exit_status(status) != 0 {
+        return 1;
+    }
+    os.write_all_text(os.stdout(), "parent-ok\n");
+    return 0;
+}

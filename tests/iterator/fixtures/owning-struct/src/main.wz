@@ -1,0 +1,33 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+struct Item { name string; numbers Vec[i32]; }
+struct Bag { values Vec[Item]; index i32; count i32; }
+
+impl iter.Iterator[Item] for Bag {
+    func next(cursor inout Self) option.Option[Item] {
+        if cursor.index >= cursor.count { return option.Option[Item].None; }
+        let item = cursor.values[cursor.index];
+        cursor.index = cursor.index + 1;
+        return option.Option[Item].Some(item);
+    }
+}
+
+func main() i32 {
+    let bag = Bag(values: [
+        Item(name: "a", numbers: [1, 2]),
+        Item(name: "b", numbers: [3, 4])
+    ], index: 0, count: 2);
+    var total i32 = 0;
+    var deferred i32 = 0;
+    for item in bag {
+        defer { deferred += item.numbers[0]; }
+        total += item.numbers[0] + item.numbers[1];
+    }
+    if deferred != 4 { return 4; }
+    if bag.index != 0 { return 1; }
+    if bag.values[0].name != "a" { return 2; }
+    if bag.values[1].numbers[1] != 4 { return 3; }
+    return total - 10;
+}

@@ -716,6 +716,41 @@ func area_of_shape() i32 {
 
 `dyn Trait` 的方法必须是普通 `self Self` 接收者，所有非接收者参数必须是普通按值参数；`move` 或 `inout` 参数（例如 `move i32`）同样不能用于 dyn。方法不能有自身的泛型参数，也不能返回 `Self`、抛出错误或在非接收者参数中使用 `Self`。每个具体值必须有恰好一个完整 trait 实现。`Vec[dyn Trait]` 可以保存不同具体类型的值。完整规则见 [泛型和 trait](SEMANTICS.md#6-泛型和-trait)。
 
+### 自定义迭代器
+
+实现 `std/iter.Iterator[T]` 后，类型就能用于 for-in。next 通过 inout 修改迭代器，返回 Some 产生一个元素，返回 None 结束：
+
+```wz
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+struct Counter { value i32; limit i32; }
+
+impl iter.Iterator[i32] for Counter {
+    func next(cursor inout Self) option.Option[i32] {
+        if cursor.value >= cursor.limit {
+            return option.Option[i32].None;
+        }
+        let item = cursor.value;
+        cursor.value += 1;
+        return option.Option[i32].Some(item);
+    }
+}
+
+func main() i32 {
+    let source = Counter(value: 0, limit: 4);
+    var total i32 = 0;
+    for item in source { total += item; }
+    if source.value != 0 { return 1; }
+    return total - 6;
+}
+```
+
+for 只求值一次，并推进它保存的迭代器副本，所以这里 source.value 仍是 0。副本里的 Vec 等引用字段仍共享对象。要直接推进自己的可写变量，可调用 `(inout cursor).next()`。
+
+next 不能 throws；需要逐项报告错误时，让元素类型 T 为 Result。一个类型若有多个不同 Iterator 实参实现，直接 for-in 会报歧义；带明确 Iterator 约束的泛型函数可选定相应实现。只有同名 next 方法不够，必须实现标准 trait。
+
 ## 15. 线程与共享数据
 
 线程入口使用无捕获函数，工作数据通过参数传入。`thread.spawn[A](function, argument)` 创建线程，`thread.join(job)` 等待并取得 i64 结果；创建和等待可能抛出 `os.Error`。

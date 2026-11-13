@@ -1,0 +1,18 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+
+// An empty Unit Task owns no strong graph edge. Its frame must stay an
+// unregistered leaf and must not activate the GC world.
+async func work() Unit { }
+
+func main() i32 throws os.Error {
+    let task = work();
+    a.spawn(task);
+    a.run_until(task);
+    if !a.finished(task) {
+        return 1;
+    }
+    a.shutdown();
+    return 0;
+}

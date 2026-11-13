@@ -1,0 +1,24 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/vec" as vec;
+
+// Releasing a never-started Task must drop both move parameters exactly once
+// through clear_owners, but it must not run the body or its registered defer.
+async func job(values move Vec[i32], log move Vec[string]) Unit {
+    defer { vec.push(log, "SHOULD NOT RUN"); }
+    vec.push(values, 99);
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let alias = log;
+    {
+        let task = job([1], move alias);
+    }
+    a.shutdown();
+    if vec.len(log) != 0 {
+        return 1;
+    }
+    return 0;
+}

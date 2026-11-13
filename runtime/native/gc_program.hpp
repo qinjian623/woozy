@@ -54,6 +54,8 @@
 //
 //   program fork scope: suspend every outer SAFE level, enter the graph-stable
 //                       fork no-park interval
+//   async fork reservation (outer to all internal locks; also taken for a
+//                       NoGraph program that never enables this layer)
 //   launch lock
 //   environment lock
 //   allocator prepare
@@ -61,24 +63,47 @@
 //   lang-gc prepare
 //   lang-gc-world prepare
 //   lang-gc-runtime prepare
+//   async executor ticket lock (last; NoGraph included, exec-only spawn skips)
 //   fork
-//   parent: runtime parent, world parent, gc parent, Weak parent,
-//           allocator parent, environment unlock, launch unlock,
-//           restore the saved SAFE depth, leave the no-park interval
+//   parent: async executor ticket lock, runtime parent, world parent, gc parent,
+//           Weak parent, allocator parent, environment unlock, launch unlock,
+//           release the fork reservation, restore the saved SAFE depth, leave
+//           the no-park interval
 //   child:  allocator child, Weak child, gc child, world child,
-//           runtime child, reset runtime launch/environment locks, thread tid,
+//           runtime child, async child (reset both ticket words, retarget a
+//           same-thread executor to the child raw gettid, close only the
+//           inherited epoll descriptor and defer a private EPOLL_CLOEXEC
+//           rebuild), reset runtime launch/environment locks, thread tid,
 //           restore the saved SAFE depth, leave the no-park interval
 //
-// The child keeps only the calling thread registration and resets runtime
-// locks; it does not fabricate ARC drops for vanished threads. The fork scope
-// is entered before launch so a pending stop is waited out without holding
-// launch. Outer SAFE depths are saved on the stack token and restored exactly.
-// During the no-park interval synchronous callbacks and SAFE regions remain
-// legal; the node stays ACTIVE for stop/collection and a pending request is
-// handled when the interval ends after fork locks are released. A genuine
-// graph-critical region nested inside still rejects callbacks and SAFE.
-// Direct hosted libc fork is handled by the same atfork hooks. A fork from an
-// unregistered foreign thread is outside the world contract and Panics.
+// The async hooks are outside the `fork_ready()` condition: a scalar/Unit Task
+// in a NoGraph module still binds the executor, owns the async epoll and uses
+// the async ticket lock. They are optional weak references from process.cpp so
+// a program that only uses process does not link the async unit. The child
+// never sends EPOLL_CTL_DEL/ADD to the inherited parent instance, keeps
+// g_current for a fork inside a coroutine body, and does not fabricate ARC
+// drops for vanished threads. The async final release is not part of this lock
+// order: it unlinks the executor tables while the Task still has one strong
+// reference, performs the real GC unregister, and only then publishes zero and
+// runs frame cleanup. A fork snapshot may therefore retain a registered Future
+// with a positive reference, but never a registered zero-ref Future.
+//
+// A Source `std/process.fork` on a thread other than a bound executor returns
+// -EBUSY before forking (os.check turns that into os.Error); an unbound
+// executor stays unbound after the fork. Hosted direct libc fork has a void
+// atfork prepare and therefore records a marker and Panics for that case. An
+// internal spawn child is exec-only: it allows a foreign executor, does not
+// continue or clean inherited tasks, and skips epoll rebuild. The child keeps
+// only the calling thread registration and resets runtime locks; it does not
+// fabricate ARC drops for vanished threads. The fork scope is entered before
+// launch so a pending stop is waited out without holding launch. Outer SAFE
+// depths are saved on the stack token and restored exactly. During the no-park
+// interval synchronous callbacks and SAFE regions remain legal; the node stays
+// ACTIVE for stop/collection and a pending request is handled when the
+// interval ends after fork locks are released. A genuine graph-critical region
+// nested inside still rejects callbacks and SAFE. Direct hosted libc fork is
+// handled by the same atfork hooks. A fork from an unregistered foreign thread
+// is outside the world contract and Panics.
 
 typedef struct LangGcProgramForkToken {
   uint32_t magic;

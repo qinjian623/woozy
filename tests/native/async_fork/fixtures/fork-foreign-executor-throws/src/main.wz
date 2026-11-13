@@ -1,0 +1,64 @@
+package app;
+import "std/async" as a;
+import "std/ipc" as ipc;
+import "std/os" as os;
+import "std/process" as process;
+import "std/thread" as thread;
+
+async func scalar() i32 {
+    return 9;
+}
+
+func load(memory ipc.Memory, offset usize) i64 {
+    try { return ipc.atomic_load(memory, offset); }
+    catch error os.Error { return -1; }
+}
+
+func worker(memory ipc.Memory) i64 {
+    let task = scalar();
+    a.spawn(task);
+    a.run_until(task);
+    try { ipc.atomic_store(memory, 8, 1); }
+    catch error os.Error { return 1; }
+    for true {
+        let stop = load(memory, 16);
+        if stop != 0 {
+            break;
+        }
+    }
+    a.shutdown();
+    return 0;
+}
+
+func main() i32 throws os.Error {
+    let memory = ipc.map_anon(4096, ipc.PROT_READ | ipc.PROT_WRITE);
+    let worker_thread = thread.spawn[ipc.Memory](worker, memory);
+    for true {
+        let ready = ipc.atomic_load(memory, 8);
+        if ready != 0 {
+            break;
+        }
+    }
+    var rejected = false;
+    var error_code i32 = 0;
+    try {
+        let pid = process.fork();
+        if pid == 0 {
+            os.exit(0);
+        }
+    } catch error os.Error {
+        switch error {
+            case os.Error.System(code, completed):
+                rejected = true;
+                error_code = code;
+            default: throw error;
+        }
+    }
+    ipc.atomic_store(memory, 16, 1);
+    let worker_status = thread.join(worker_thread);
+    if !rejected || error_code != 16 || worker_status != 0 {
+        return 1;
+    }
+    os.write_all_text(os.stdout(), "parent-ok\n");
+    return 0;
+}

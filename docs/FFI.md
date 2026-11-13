@@ -131,6 +131,8 @@ C 调用没有 `throws` 效果，也不会自动把错误变成 `py.Error`。C �
 
 callback 只接受直接写出的无捕获、不抛错函数名，完整签名必须与 callback 声明一致。C 可以在调用期间使用函数指针，也可以保存它，稍后或从自己的线程调用。函数地址在程序运行期间有效。C 库负责自己的上下文数据，以及停止回调、等待正在执行的回调结束后再释放上下文；这不会保留 Woozy 局部变量。局部函数值变量、捕获闭包和抛错 callback 仍不能作为 C callback 实参。
 
+在 hosted 程序中，若 async 执行器属于另一线程，外部 C 库直接调用 libc `fork` 会产生 Panic；C 的 atfork 回调不能返回 Woozy 的 typed error。需要通过 `throws os.Error` 处理这项限制时，调用 `std/process.fork`。启动其他程序可用 `std/process.spawn`。
+
 ## 5 当前限制
 
 - 不支持 C 可变参数、数组/union/packed/bitfield record，也不支持在 Woozy 中构造 record 或修改 record 字段。

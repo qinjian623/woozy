@@ -1,0 +1,26 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+struct Counter { value i32; limit i32; }
+
+impl iter.Iterator[i32] for Counter {
+    func next(cursor inout Self) option.Option[i32] {
+        if cursor.value >= cursor.limit { return option.Option[i32].None; }
+        let item = cursor.value;
+        cursor.value = cursor.value + 1;
+        return option.Option[i32].Some(item);
+    }
+}
+
+func main() i32 {
+    let source = Counter(value: 7, limit: 7);
+    var ran i32 = 0;
+    for item in source {
+        ran += 1;
+        if item == 7 { ran += 10; }
+    }
+    if ran != 0 { return 1; }
+    if source.value != 7 { return 2; }
+    return 0;
+}

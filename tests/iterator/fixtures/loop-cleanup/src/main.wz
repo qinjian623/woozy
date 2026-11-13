@@ -1,0 +1,66 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+enum Failure { Stop; }
+struct Stream { values Vec[i32]; index i32; count i32; }
+
+impl iter.Iterator[i32] for Stream {
+    func next(cursor inout Self) option.Option[i32] {
+        if cursor.index >= cursor.count { return option.Option[i32].None; }
+        let item = cursor.values[cursor.index];
+        cursor.index = cursor.index + 1;
+        return option.Option[i32].Some(item);
+    }
+}
+
+func source() Stream {
+    return Stream(values: [1, 2, 3, 4], index: 0, count: 4);
+}
+
+func run_break() i32 {
+    let stream = source();
+    var log i32 = 0;
+    for item in stream {
+        defer { log += 10; }
+        if item == 1 { continue; }
+        if item == 2 { break; }
+        log += 100;
+    }
+    return log;
+}
+
+func run_return(trace Vec[i32]) i32 {
+    let stream = source();
+    for item in stream {
+        defer { trace[0] = trace[0] + 1; }
+        if item == 2 { return 100 + item; }
+    }
+    return 0;
+}
+
+func run_throw(trace Vec[i32]) i32 throws Failure {
+    let stream = source();
+    for item in stream {
+        defer { trace[1] = trace[1] + 1; }
+        if item == 2 { throw Failure.Stop; }
+    }
+    return 0;
+}
+
+func main() i32 {
+    if run_break() != 20 { return 1; }
+    let trace Vec[i32] = [0, 0];
+    if run_return(trace) != 102 { return 2; }
+    if trace[0] != 2 { return 3; }
+    var caught i32 = 0;
+    try {
+        let ignored = run_throw(trace);
+        if ignored == 9 { return 4; }
+    } catch error Failure {
+        caught = 1;
+    }
+    if caught != 1 { return 5; }
+    if trace[1] != 2 { return 6; }
+    return 0;
+}

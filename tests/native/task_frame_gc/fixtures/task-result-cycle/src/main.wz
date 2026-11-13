@@ -1,0 +1,28 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/vec" as vec;
+
+// A completed Task owns its promise result. The result Link shares a Vec with
+// the helper, which stores the same Task type back into it. The promise's
+// owning result slot is therefore a real cycle edge after every source handle
+// dies.
+struct Link { tasks Vec[Task[Link,Unit]]; }
+
+async func make() Link {
+    return Link(tasks: []);
+}
+
+async func build_cycle() Unit {
+    let task = make();
+    let value = await task;
+    vec.push(value.tasks, task);
+}
+
+func main() i32 throws os.Error {
+    let job = build_cycle();
+    a.spawn(job);
+    a.run_until(job);
+    a.shutdown();
+    return 0;
+}

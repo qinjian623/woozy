@@ -1,0 +1,28 @@
+package app;
+import "std/iter" as iter;
+import "std/option" as option;
+
+trait Iterator[T] { func next(cursor inout Self) option.Option[T]; }
+struct Counter { value i32; limit i32; }
+
+impl iter.Iterator[i32] for Counter {
+    func next(cursor inout Self) option.Option[i32] {
+        if cursor.value >= cursor.limit { return option.Option[i32].None; }
+        let item = cursor.value;
+        cursor.value = cursor.value + 1;
+        return option.Option[i32].Some(item);
+    }
+}
+
+func drain[T iter.Iterator[i32]](source T) i32 {
+    var sum i32 = 0;
+    for item in source { sum += item; }
+    return sum;
+}
+
+func main() i32 {
+    let source = Counter(value: 4, limit: 9);
+    let total = drain[Counter](source);
+    if source.value != 4 { return 1; }
+    return total - 30;
+}

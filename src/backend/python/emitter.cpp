@@ -1778,6 +1778,82 @@ class Emitter {
     }
     case NodeKind::for_in: {
       const auto &fi = std::get<ForIn>(n.data);
+      if (fi.iterator) {
+        const auto &it = *fi.iterator;
+        auto collection = expression(n.children[0], suite);
+        if (owned(it.iterator)) {
+          line(suite,
+               name(it.cursor) + " = _frame.slot(" +
+                   key(OwnerKind::binding, it.cursor.value) + ", " +
+                   ops(it.iterator) + ")",
+               n);
+          line(suite,
+               name(it.cursor) + ".install(" + take(n.children[0], collection) +
+                   ")",
+               n);
+        } else
+          line(suite,
+               name(it.cursor) + " = _rt.Cell(" +
+                   take(n.children[0], collection) + ")",
+               n);
+        full(id, suite);
+        const bool owning_option = owned(node(it.next).type);
+        const std::string option_value =
+            name(it.option) + (owning_option ? ".value" : "");
+        if (owning_option)
+          line(suite,
+               name(it.option) + " = _frame.slot(" +
+                   key(OwnerKind::binding, it.option.value) + ", " +
+                   ops(node(it.next).type) + ")",
+               n);
+        Statement loop{"while True", n.source.span, true, {}, {}};
+        line(loop.body, "_rt._gc_poll()", n);
+        auto next = expression(it.next, loop.body);
+        if (owning_option)
+          line(loop.body,
+               name(it.option) + ".install(" + take(it.next, next) + ")", n);
+        else
+          line(loop.body, name(it.option) + " = " + take(it.next, next), n);
+        full(it.next, loop.body);
+        Suite none_branch;
+        if (owning_option)
+          line(none_branch,
+               "_frame.drop(" + key(OwnerKind::binding, it.option.value) + ")",
+               n);
+        line(none_branch, "break", n);
+        loop.body.push_back(
+            {"if " + option_value + "[0] == " +
+                 std::to_string(it.none.value),
+             n.source.span,
+             true,
+             std::move(none_branch),
+             {}});
+        const bool owning_element = owned(it.element);
+        if (owning_element) {
+          line(loop.body,
+               name(fi.element) + " = _frame.slot(" +
+                   key(OwnerKind::binding, fi.element.value) + ", " +
+                   ops(it.element) + ")",
+               n);
+          line(loop.body,
+               name(fi.element) + ".install(" + ops(it.element) + ".copy(" +
+                   option_value + "[1][0]))",
+               n);
+        } else
+          line(loop.body,
+               name(fi.element) + " = " + option_value + "[1][0]", n);
+        available.insert(fi.element);
+        loops.push_back({id, code_scope});
+        break_targets.push_back(id);
+        Suite body;
+        statement(fi.body, body);
+        auto completed_loop = loops.back();
+        loops.pop_back();
+        break_targets.pop_back();
+        loop_body(std::move(body), loop.body, completed_loop, n);
+        scope_wrap(n.scope, {std::move(loop)}, suite, n);
+        break;
+      }
       auto collection = expression(n.children[0], suite);
       auto iteration_key = key(OwnerKind::iteration, id.value);
       line(suite,
@@ -2287,8 +2363,13 @@ public:
         pending.pop_back();
         const auto &n = node(id);
         collect_type(n.type);
-        if (auto fi = std::get_if<ForIn>(&n.data))
+        if (auto fi = std::get_if<ForIn>(&n.data)) {
           named.insert(fi->element);
+          if (fi->iterator) {
+            named.insert(fi->iterator->cursor);
+            named.insert(fi->iterator->option);
+          }
+        }
         if (auto c = std::get_if<Call>(&n.data))
           check_signature(c->signature, n.source.span);
         if (auto s = std::get_if<Switch>(&n.data))

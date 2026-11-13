@@ -1,0 +1,38 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/process" as process;
+
+async func wait_readable(file os.File) Unit {
+    await a.readable(os.fd(file));
+}
+
+async func main() i32 throws os.Error {
+    let pipe = os.pipe(u32(os.O_CLOEXEC));
+    let waiter = wait_readable(pipe.read_end);
+    a.spawn(waiter);
+    // Register the descriptor wait before the fork.
+    await a.sleep(0);
+    let pid = process.fork();
+    if pid == 0 {
+        // The child closes only its inherited epoll descriptor. The pending
+        // descriptor wait must be re-added to a private epoll and complete from
+        // the parent's byte, without any ctl DEL on the parent instance.
+        await waiter;
+        if !a.finished(waiter) {
+            return 3;
+        }
+        return 0;
+    }
+    os.write(pipe.write_end, [11], 1);
+    await waiter;
+    if !a.finished(waiter) {
+        return 1;
+    }
+    let status = process.wait(pid);
+    if !process.exited(status) || process.exit_status(status) != 0 {
+        return 2;
+    }
+    os.write_all_text(os.stdout(), "parent-ok\n");
+    return 0;
+}

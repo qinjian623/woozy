@@ -1,0 +1,35 @@
+package app;
+import "fixture/lib" as fixture;
+import "std/vec" as vec;
+
+// Real Task-cycle shape: the move closure captures a dyn value whose concrete
+// payload holds a C resource, and the closure also captures the Vec that owns
+// the never-started Task. The compiler must reject this before linking/output
+// so stopped-world clear can never run the C release.
+trait Get { func get(self Self) i32; }
+struct ResourceValue { resource fixture.OwnedResource; }
+impl Get for ResourceValue {
+    func get(self ResourceValue) i32 {
+        return fixture.cf_resource_value(self.resource);
+    }
+}
+func make_fn(resource fixture.OwnedResource,
+             tasks Vec[Task[Unit,Unit]]) (func() i32) {
+    let value dyn Get = make_dyn(resource);
+    return func() i32 { return value.get() + i32(vec.len(tasks)); };
+}
+func make_dyn(resource fixture.OwnedResource) dyn Get {
+    return ResourceValue(resource: resource);
+}
+async func hold(action move (func() i32)) Unit { }
+func make_cycle() {
+    let tasks = vec.empty[Task[Unit,Unit]]();
+    let resource = fixture.cf_resource_new(42);
+    let action = make_fn(resource, tasks);
+    let task = hold(move action);
+    vec.push(tasks, task);
+}
+func main() i32 {
+    make_cycle();
+    return 0;
+}

@@ -1,0 +1,33 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+import "std/process" as process;
+
+// NoGraph scalar Task: the program never enables lang-gc-program/1, but the
+// executor thread, its ticket lock and its epoll still exist before the fork.
+async func one() i32 {
+    return 7;
+}
+
+async func main() i32 throws os.Error {
+    let first = await one();
+    if first != 7 {
+        return 1;
+    }
+    let pid = process.fork();
+    if pid == 0 {
+        // Child inherited only this coroutine's thread. The ticket words and
+        // executor tid must be usable, and a new scalar task must complete.
+        let second = await one();
+        if second != 7 {
+            return 2;
+        }
+        return 0;
+    }
+    let status = process.wait(pid);
+    if !process.exited(status) || process.exit_status(status) != 0 {
+        return 3;
+    }
+    os.write_all_text(os.stdout(), "parent-ok\n");
+    return 0;
+}

@@ -35,6 +35,10 @@
     case hir::TypeKind::Vec:
     case hir::TypeKind::Function:
     case hir::TypeKind::Slice:
+    // A Task owns a Future that can, in turn, own a frame/promise edge back to
+    // this object (including its own result/error). The executor's kActive
+    // reference is an external root and is never part of this static edge.
+    case hir::TypeKind::Task:
       return true;
     case hir::TypeKind::TraitObject:
       // The trait box is itself a one-element Vec registered under its
@@ -118,6 +122,12 @@
       gc_visitor_call(owner, visitor, visit_context);
       return;
     }
+    case hir::TypeKind::Task:
+      // The Future is the registered graph node. A source Task handle owns one
+      // executor reference; the runtime reports its own await links.
+      gc_visitor_call(builder.CreateLoad(builder.getPtrTy(), address), visitor,
+                      visit_context);
+      return;
     case hir::TypeKind::NominalStruct: {
       auto fields = aggregates.fields(id);
       for (size_t n = 0; n < fields.size(); ++n)

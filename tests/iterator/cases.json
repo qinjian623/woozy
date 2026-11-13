@@ -1,0 +1,230 @@
+{
+  "schema": "compiler-dev/iterator-fixtures/1",
+  "contract": "compiler-dev/1",
+  "case_count": 22,
+  "accept_count": 15,
+  "reject_count": 7,
+  "policy": {
+    "check": "accepted fixtures must pass check on native and python; rejected fixtures must fail both with the recorded code and leave no program.",
+    "native": "accepted fixtures build and run at O0 and O2; an allocation-observer link checks every Vec allocation is released (zero live objects). requires_vec_allocations cases must allocate at least one Vec.",
+    "python": "accepted fixtures build and run with Python 3.12 and are imported through the existing ownership observer to check live language owners and Vec frees.",
+    "expected": "runtime_expected is an independent main-return value. Exit 0 alone is not accepted as cleanup evidence."
+  },
+  "cases": [
+    {
+      "id": "concrete-counter",
+      "kind": "accept",
+      "purpose": "concrete scalar cursor copy is advanced, original source is not",
+      "manifest": "tests/iterator/fixtures/concrete-counter/lang.toml",
+      "source": "tests/iterator/fixtures/concrete-counter/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "legacy-vec",
+      "kind": "accept",
+      "purpose": "built-in Vec for-in still copies each element and observes shared Vec writes",
+      "manifest": "tests/iterator/fixtures/legacy-vec/lang.toml",
+      "source": "tests/iterator/fixtures/legacy-vec/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": true,
+      "specification": "docs/SEMANTICS.md §7.1 Vec/Slice/string 遍历（回归）"
+    },
+    {
+      "id": "legacy-slice",
+      "kind": "accept",
+      "purpose": "built-in Slice for-in keeps its half-open view behavior",
+      "manifest": "tests/iterator/fixtures/legacy-slice/lang.toml",
+      "source": "tests/iterator/fixtures/legacy-slice/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §7.1 Vec/Slice/string 遍历（回归）",
+      "python_observer": false,
+      "python_observer_note": "the shared Python ownership observer cannot JSON-encode a Slice snapshot; CLI Python execution still checks the independent return"
+    },
+    {
+      "id": "legacy-string",
+      "kind": "accept",
+      "purpose": "built-in string for-in still yields Unicode code points",
+      "manifest": "tests/iterator/fixtures/legacy-string/lang.toml",
+      "source": "tests/iterator/fixtures/legacy-string/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §7.1 Vec/Slice/string 遍历（回归）"
+    },
+    {
+      "id": "single-evaluation",
+      "kind": "accept",
+      "purpose": "for-in evaluates the iterator expression once",
+      "manifest": "tests/iterator/fixtures/single-evaluation/lang.toml",
+      "source": "tests/iterator/fixtures/single-evaluation/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "shared-vec-field",
+      "kind": "accept",
+      "purpose": "shared Vec field is visible through the iterator copy; scalar cursor is not advanced",
+      "manifest": "tests/iterator/fixtures/shared-vec-field/lang.toml",
+      "source": "tests/iterator/fixtures/shared-vec-field/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": true,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "owning-struct",
+      "kind": "accept",
+      "purpose": "owning struct elements are copied and cleaned while the source stays intact",
+      "manifest": "tests/iterator/fixtures/owning-struct/lang.toml",
+      "source": "tests/iterator/fixtures/owning-struct/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": true,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "owning-enum",
+      "kind": "accept",
+      "purpose": "owning enum payloads are copied per iteration and the source payload survives",
+      "manifest": "tests/iterator/fixtures/owning-enum/lang.toml",
+      "source": "tests/iterator/fixtures/owning-enum/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": true,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "empty-none",
+      "kind": "accept",
+      "purpose": "an immediately None iterator runs no body and leaves the source untouched",
+      "manifest": "tests/iterator/fixtures/empty-none/lang.toml",
+      "source": "tests/iterator/fixtures/empty-none/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "generic-function",
+      "kind": "accept",
+      "purpose": "a T: Iterator[A] generic function can use for-in and advances only the copy",
+      "manifest": "tests/iterator/fixtures/generic-function/lang.toml",
+      "source": "tests/iterator/fixtures/generic-function/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "generic-impl",
+      "kind": "accept",
+      "purpose": "a generic impl[T] Iterator[T] for Wrapper[T] is selected by the concrete Self",
+      "manifest": "tests/iterator/fixtures/generic-impl/lang.toml",
+      "source": "tests/iterator/fixtures/generic-impl/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §6 泛型/trait、§2 for-in"
+    },
+    {
+      "id": "generic-exact-application",
+      "kind": "accept",
+      "purpose": "a T: Iterator[i32] bound selects the exact i32 application even when the concrete receiver also implements Iterator[bool]",
+      "manifest": "tests/iterator/fixtures/generic-exact-application/lang.toml",
+      "source": "tests/iterator/fixtures/generic-exact-application/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §6 泛型/trait 完整实参选择、§2 for-in"
+    },
+    {
+      "id": "direct-next",
+      "kind": "accept",
+      "purpose": "the standard Iterator.next remains callable through the existing explicit inout receiver rule",
+      "manifest": "tests/iterator/fixtures/direct-next/lang.toml",
+      "source": "tests/iterator/fixtures/direct-next/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §6 方法调用与 §7.2 inout receiver"
+    },
+    {
+      "id": "result-item",
+      "kind": "accept",
+      "purpose": "per-item failures use std/result.Result instead of a throwing next",
+      "manifest": "tests/iterator/fixtures/result-item/lang.toml",
+      "source": "tests/iterator/fixtures/result-item/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": false,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "loop-cleanup",
+      "kind": "accept",
+      "purpose": "continue, break, return and typed throw run defers and release the iterator copy",
+      "manifest": "tests/iterator/fixtures/loop-cleanup/lang.toml",
+      "source": "tests/iterator/fixtures/loop-cleanup/src/main.wz",
+      "expected_main_return": 0,
+      "requires_vec_allocations": true,
+      "specification": "docs/SEMANTICS.md §2 for-in、§5 求值、§6 泛型/trait、§7 值/ARC、§9 defer/清理"
+    },
+    {
+      "id": "reject-no-impl",
+      "kind": "reject",
+      "purpose": "a type without an Iterator implementation is rejected",
+      "manifest": "tests/iterator/fixtures/reject-no-impl/lang.toml",
+      "source": "tests/iterator/fixtures/reject-no-impl/src/main.wz",
+      "expected_code": "E_TYPE_MISMATCH",
+      "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    },
+    {
+      "id": "reject-fake-trait",
+      "kind": "reject",
+      "purpose": "a same-named user trait/Option is not the real std/iter protocol",
+      "manifest": "tests/iterator/fixtures/reject-fake-trait/lang.toml",
+      "source": "tests/iterator/fixtures/reject-fake-trait/src/main.wz",
+      "expected_code": "E_TYPE_MISMATCH",
+      "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    },
+    {
+      "id": "reject-ambiguous",
+      "kind": "reject",
+      "purpose": "two Iterator applications for one type make for-in ambiguous",
+      "manifest": "tests/iterator/fixtures/reject-ambiguous/lang.toml",
+      "source": "tests/iterator/fixtures/reject-ambiguous/src/main.wz",
+      "expected_code": "E_TYPE_MISMATCH",
+      "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    },
+    {
+      "id": "reject-next-result",
+      "kind": "reject",
+      "purpose": "next must return the real std/option.Option[T]",
+      "manifest": "tests/iterator/fixtures/reject-next-result/lang.toml",
+      "source": "tests/iterator/fixtures/reject-next-result/src/main.wz",
+      "expected_code": "E_TYPE_MISMATCH",
+      "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    },
+    {
+      "id": "reject-next-throws",
+      "kind": "reject",
+      "purpose": "next must not throw; per-item failures belong in T",
+      "manifest": "tests/iterator/fixtures/reject-next-throws/lang.toml",
+      "source": "tests/iterator/fixtures/reject-next-throws/src/main.wz",
+      "expected_code": "E_TYPE_MISMATCH",
+      "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    },
+    {
+      "id": "reject-next-ordinary-self",
+      "kind": "reject",
+      "purpose": "next must take the real Self inout",
+      "manifest": "tests/iterator/fixtures/reject-next-ordinary-self/lang.toml",
+      "source": "tests/iterator/fixtures/reject-next-ordinary-self/src/main.wz",
+      "expected_code": "E_TYPE_MISMATCH",
+      "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    },
+    {
+      "id": "reject-element-write",
+      "kind": "reject",
+      "purpose": "the for-in element binding keeps the old read-only let rule",
+      "manifest": "tests/iterator/fixtures/reject-element-write/lang.toml",
+      "source": "tests/iterator/fixtures/reject-element-write/src/main.wz",
+      "expected_code": "E_TYPE_MISMATCH",
+      "specification": "docs/SEMANTICS.md §2、§6、§7.2 普通参数只读/inout Self"
+    }
+  ]
+}

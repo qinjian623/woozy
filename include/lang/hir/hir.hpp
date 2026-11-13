@@ -382,10 +382,27 @@ struct IndexPlace {
 struct VecSlice {
   std::optional<HirNodeId> start, end;
 };
+// Appended user-Iterator form of for-in. The real source still owns the loop
+// and its element binding; these hidden locals hold the private iterator copy
+// and the per-iteration Option result. The third ForIn child is the synthetic
+// `next(inout cursor)` call. A trait-constrained T uses a ConstraintCall in
+// that child; the concrete instance transform replaces it with a direct Call.
+struct IteratorFor {
+  SymbolId cursor;      // loop-scope owning copy of the source iterator
+  SymbolId option;      // body-scope owning result of one next call
+  HirNodeId next;       // child 2; returns the complete Option type
+  TypeId iterator;      // source iterator type
+  TypeId element;       // trait argument T
+  SymbolId some, none;  // real std/option.Option variants
+  SymbolId some_field;  // Some payload field declaration
+};
 struct ForIn {
   SymbolId element;
   ScopeId body_scope;
   HirNodeId body;
+  // Present only for a user Iterator source. Vec/Slice/string keep the
+  // built-in indexed iteration and leave this empty.
+  std::optional<IteratorFor> iterator;
 };
 // Declared host access. Read kinds are value expressions; place kinds are
 // writable assignment targets. No access is inferred from host reflection.

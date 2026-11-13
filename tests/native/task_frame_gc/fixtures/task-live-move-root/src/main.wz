@@ -1,0 +1,37 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+struct Node { value i32; next Vec[Node]; }
+
+// The spawned Task is kept by the executor's kActive root while it runs. GC
+// pressure inside the frame must not reclaim its move parameter or frame.
+async func hold(log move Vec[i32]) Unit {
+    await a.sleep(1);
+    for var i i32 = 0; i < 128; i += 1 {
+        var ring Vec[Node] = [Node(value: i, next: [])];
+        ring[0] = Node(value: i + 1, next: ring);
+        if ring[0].next[0].value != i + 1 {
+            return;
+        }
+    }
+    vec.push(log, 42);
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[i32]();
+    let alias = log;
+    let task = hold(move alias);
+    a.spawn(task);
+    a.run_until(task);
+    if !a.finished(task) {
+        return 1;
+    }
+    if vec.len(log) != 1 || log[0] != 42 {
+        return 2;
+    }
+    io.println(log[0]);
+    return 0;
+}
