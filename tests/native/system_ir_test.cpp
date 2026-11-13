@@ -1,3 +1,4 @@
+#include "lang/backend/native.hpp"
 #include "lang/ir/native.hpp"
 #include "lang/sema/check.hpp"
 #include <algorithm>
@@ -25,8 +26,22 @@ struct Fixture {
     need(created, "mkdtemp failed");
     path = created;
     write("lang.toml", "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\nentry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
-    write("src/main.wz", "package app; import \"std/os\" as os; func main() i32 { os.write(); os.order(); os.nested(); os.deferred(); os.looped(); return 0; }");
+    write("stdlib/result/result.wz", "package result;\npub enum Result[T,E] { Ok(value T); Err(error E); }\n");
+    write("src/main.wz", "package app; import \"std/os\" as os; func main() i32 { os.write(); os.order(); os.nested(); os.deferred(); os.looped(); os.stat_bytes(); return 0; }");
     write("stdlib/os/os.wz", R"(package os;
+import "std/result" as result;
+pub struct Timespec { pub seconds i64; pub nanoseconds i64; }
+pub struct FileInfo {
+    pub device u64; pub inode u64; pub links u64;
+    pub mode u32; pub uid u32; pub gid u32; pub rdev u64;
+    pub size i64; pub block_size i64; pub blocks i64;
+    pub accessed Timespec; pub modified Timespec; pub changed Timespec;
+}
+pub func stat_bytes() i64 {
+    let bytes Vec[u8] = [46];
+    __woozy_os_stat_bytes(bytes);
+    return 0;
+}
 pub func write() i64 {
     let bytes Vec[u8] = [65,66,67,68];
     return __woozy_os_write(1,bytes,1,2);
@@ -91,6 +106,28 @@ void suite() {
   auto good = lowered.value->module();
   need(ir::verify(good).success(), "unchanged IR rejected");
   using hir::SystemOperation;
+  auto &stat_call = system(good, SystemOperation::fs_stat_bytes);
+  need(stat_call.inputs.size() == 1, "stat_bytes input count changed");
+  SymbolId entry;
+  for (auto &symbol : resolved.value->symbols)
+    if (symbol.name == "main" && symbol.kind == modules::SymbolKind::function)
+      entry = symbol.id;
+  auto published = ir::verify(good);
+  need(published.success(), "stat_bytes IR publication failed");
+  for (unsigned optimization : {0u, 2u}) {
+    backend::native::Options options;
+    options.optimization = optimization;
+    auto generated = backend::native::emit(*published.value, entry, options);
+    need(generated.success(), "stat_bytes LLVM emit failed: " +
+         diagnostics(generated));
+    const auto &llvm = generated.value->llvm_ir;
+    need(llvm.find("lang_sys_stat_v1") != std::string::npos,
+         "stat_bytes runtime symbol missing");
+    const auto &before = generated.value->llvm_before_optimization;
+    need(before.find(", i32 0, i32 5") != std::string::npos &&
+         before.find(", i32 0, i32 1") != std::string::npos,
+         "stat_bytes did not read Vec data/length fields\n" + before);
+  }
   rejected(good,"operation change",[](auto &m){ system(m,SystemOperation::write).system=SystemOperation::read; });
   rejected(good,"missing operation",[](auto &m){ system(m,SystemOperation::write).system.reset(); });
   rejected(good,"offset/count swap",[](auto &m){ auto &i=system(m,SystemOperation::write);std::swap(i.inputs[2],i.inputs[3]); });

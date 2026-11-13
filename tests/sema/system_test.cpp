@@ -32,6 +32,7 @@ struct Fixture {
     need(created, "mkdtemp failed");
     path = created;
     write("lang.toml", "schema_version=1\n[package]\nname=\"test\"\nsource_root=\"src\"\nentry=\"app\"\n[build]\nbackend=\"native\"\nword_bits=64\n");
+    write("stdlib/result/result.wz", "package result;\npub enum Result[T,E] { Ok(value T); Err(error E); }\n");
   }
   ~Fixture() { std::error_code ignored; fs::remove_all(path, ignored); }
   void write(const fs::path &name, const std::string &text) {
@@ -71,7 +72,34 @@ void bad(const HirModule &good, const std::string &name, const auto &edit) {
 }
 void suite() {
   Fixture fixture;
-  std::string os = "package os; pub func exercise() i64 { let bytes Vec[u8] = [0,1];\n";
+  // Appending the raw byte-path stat must not renumber or redirect any
+  // existing operation entry.
+  need(static_cast<unsigned>(SystemOperation::read) == 0, "read ID changed");
+  need(static_cast<unsigned>(SystemOperation::fs_stat) == 43, "fs_stat ID changed");
+  need(static_cast<unsigned>(SystemOperation::getrandom) == 76, "getrandom ID changed");
+  need(static_cast<unsigned>(SystemOperation::net_socket) == 85, "net_socket ID changed");
+  need(static_cast<unsigned>(SystemOperation::process_args) == 138, "process_args ID changed");
+  need(static_cast<unsigned>(SystemOperation::ffi_buffer) == 193, "ffi_buffer ID changed");
+  need(static_cast<unsigned>(SystemOperation::weak_empty) == 201, "weak_empty ID changed");
+  need(static_cast<unsigned>(SystemOperation::async_shutdown) == 212, "async_shutdown ID changed");
+  need(static_cast<unsigned>(SystemOperation::fs_stat_bytes) == 213, "fs_stat_bytes ID changed");
+  const auto *stat_bytes = system_operation_spec("__woozy_os_stat_bytes");
+  need(stat_bytes && stat_bytes->operation == SystemOperation::fs_stat_bytes &&
+           stat_bytes->result == "Result[std/os.FileInfo,i32]" &&
+           stat_bytes->count == 1 && stat_bytes->parameters[0] == "Vec[u8]" &&
+           stat_bytes->owner == "std/os" && stat_bytes->type_arity == 0,
+       "stat_bytes spec changed");
+  need(system_operation_spec(SystemOperation::fs_stat)->parameters[0] == "string",
+       "string stat entry changed");
+  std::string os = "package os;\nimport \"std/result\" as result;\n" + std::string(R"(pub struct Timespec { pub seconds i64; pub nanoseconds i64; }
+pub struct FileInfo {
+    pub device u64; pub inode u64; pub links u64;
+    pub mode u32; pub uid u32; pub gid u32; pub rdev u64;
+    pub size i64; pub block_size i64; pub blocks i64;
+    pub accessed Timespec; pub modified Timespec; pub changed Timespec;
+}
+)") +
+                   "pub func exercise() i64 { let bytes Vec[u8] = [0,1];\n";
   for (const auto &spec : system_operations) {
     os += std::string(spec.name) + "(";
     for (size_t i = 0; i < spec.count; ++i) {
@@ -80,6 +108,7 @@ void suite() {
     }
     os += ");\n";
   }
+  os += "__woozy_os_stat_bytes(bytes);\n";
   os += "return 0; } pub enum Error { System(code i32); }\n"
         "pub func checked() i64 throws Error { let result = __woozy_os_close(0); if result < 0 { throw Error.System(code: i32(-result)); } return result; }";
   auto resolved = fixture.resolve("package app; import \"std/os\" as os; func main() i32 throws os.Error { os.exercise(); os.checked(); return 0; }", os);
@@ -95,7 +124,9 @@ void suite() {
       need(call->direct_symbol && !call->callee, "system direct builtin target");
       need(!good.types.find(call->signature)->throws_type, "raw result must not gain a typed error");
     }
-  need(found.size() == system_operations.size(), "not all operations reached HIR");
+  need(found.size() == system_operations.size() + 1, "not all operations reached HIR");
+  need(found.count(SystemOperation::fs_stat_bytes) == 1,
+       "byte-path stat was not checked as a system call");
   const auto read = operation(good, SystemOperation::read);
   need(std::any_of(good.ownership.uses.begin(), good.ownership.uses.end(), [&](const auto &use) {
     return use.consumer == HirNodeId{read} && use.kind == UseKind::borrow && use.operand == 1;

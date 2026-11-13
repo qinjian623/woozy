@@ -1,0 +1,35 @@
+package app;
+import "std/io" as io;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+func error_code(problem os.Error) i32 {
+    switch problem {
+        case os.Error.Interrupted(code,completed): return code;
+        case os.Error.WouldBlock(code,completed): return code;
+        case os.Error.System(code,completed): return code;
+        case os.Error.NoProgress(completed): return 0;
+    }
+}
+func report(name string, bytes Vec[u8]) throws os.Error {
+    try {
+        let info=os.stat_bytes(bytes);
+        io.println(name+": ok mode="+strconv.format_u64(u64(info.mode))+
+            " size="+strconv.format_i64(info.size));
+    } catch problem os.Error {
+        io.println(name+": err "+strconv.format_i64(i64(error_code(problem))));
+    }
+}
+func main() i32 throws os.Error {
+    let args=process.args_bytes();
+    report("empty",vec.empty[u8]());
+    report("nul",[46,0,120]);
+    report("long",vec.make[u8](4096,65));
+    report("invalid",args[1]);
+    report("unicode",args[2]);
+    report("missing",args[3]);
+    report("notdir",args[4]);
+    return 0;
+}

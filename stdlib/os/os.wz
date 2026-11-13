@@ -142,6 +142,10 @@ pub func check[T](value result.Result[T,i32]) T throws Error {
 pub func fd(file File) i32 { return file.descriptor; }
 pub func from_fd(descriptor i32) File { return File(descriptor:descriptor); }
 pub func stat(path string) FileInfo throws Error { return check(__woozy_os_stat(path)); }
+// Linux paths are arbitrary bytes. Directory entries already carry raw bytes,
+// so callers that have no valid UTF-8 spelling can stat without inventing a
+// string; the runtime validates NUL and overlong paths before the syscall.
+pub func stat_bytes(path Vec[u8]) FileInfo throws Error { return check(__woozy_os_stat_bytes(path)); }
 pub func lstat(path string) FileInfo throws Error { return check(__woozy_os_lstat(path)); }
 pub func fstat(file File) FileInfo throws Error { return check(__woozy_os_fstat(file.descriptor)); }
 pub func rename(old_path string, new_path string) throws Error { check(__woozy_os_rename(old_path,new_path)); }

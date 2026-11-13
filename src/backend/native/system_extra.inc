@@ -83,6 +83,21 @@
       runtime(name.c_str(), builder.getVoidTy(), {out, args[0]});
       return builder.CreateLoad(lower_type(result), out);
     }
+    if (operation == SystemOperation::fs_stat_bytes) {
+      // The runtime stat ABI takes a borrowed path pointer plus an explicit
+      // byte length. A Vec descriptor keeps its element pointer in field 5 and
+      // its current length in field 1; an empty Vec has a null pointer and a
+      // zero length, which the runtime accepts without forming an address.
+      auto *path = vec_field(args[0], 5, builder.getPtrTy());
+      auto *length = vec_field(args[0], 1, builder.getInt64Ty());
+      const auto result_type = type(i.type).type_args.at(0);
+      auto *out = storage(lower_type(result_type));
+      auto *status = runtime("lang_sys_stat_v1", builder.getInt64Ty(),
+                             {path, length, out});
+      return stdlib_result(i.type, status, [&]() -> llvm::Value * {
+        return builder.CreateLoad(lower_type(result_type), out);
+      });
+    }
     const char *name = nullptr;
     bool output = false, output_first = false, raw = false;
     switch (*i.system) {
