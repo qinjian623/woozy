@@ -65,8 +65,12 @@ python3 selfhost/tests/float_observer/run.py --profile full \
 
 Full profile uses the original 10 floating fixtures (76 probes), the original
 native dynamic fixture (`3138`), the original values-cleanup fixture (`6`), and
-the Python APFloat table (`3362`). The Python supplemental 14 projects/9
-observations remain an explicit `not_run` item.
+the Python APFloat table (`3362`). `supplemental.py` separately checks the
+original Python supplemental 14 projects and 9 function observations with the
+retained CLI and driver. It checks exact result and parameter types, Cell
+updates, TypedError and Panic behavior. Driver metadata does not include
+parameter modes or throws declarations; those fields are not independently
+checked. This is a frozen-source result, not a build of the latest compiler.
 
 ## Runner controls
 
@@ -76,3 +80,8 @@ isolated tool fixtures and do not compile a language program. The runner
 validates the accepted compiler's complete frozen inputs with the existing
 bootstrap collector; a build record can be reused only after its source,
 binary, bootstrap, helper, runtime and clean exit checks pass.
+
+Run `python3 -B supplemental_signature_controls.py --evidence <results.json>`
+from this directory for the focused typed/Panic result-signature controls.
+Use `supplemental.py --help` for the full supplemental run; supply the frozen
+source tree and retained driver/CLI evidence associated with that build.
