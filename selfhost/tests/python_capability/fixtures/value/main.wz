@@ -1,0 +1,8 @@
+package app;
+
+import "std/text" as text;
+
+func main() i32 {
+    let n = text.text_len("abc");
+    return i32(n) - 3;
+}

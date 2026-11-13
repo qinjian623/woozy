@@ -1,0 +1,5 @@
+package os;
+
+pub func text_length(value string) usize {
+    return __woozy_os_text_length(value);
+}

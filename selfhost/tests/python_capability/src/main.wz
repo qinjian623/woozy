@@ -1,0 +1,343 @@
+// Component driver for the shared backend capability gate.
+//
+// The fixture sources are parsed, resolved and type-checked by the real Wz
+// frontend packages.  The same source bytes are then checked once with the
+// Native/64 config and once with the Python/64 config.  No CLI, code emitter
+// or Python runtime is involved here; this isolates the capability decision.
+package app;
+
+import "app/wzcc/hir" as hir;
+import "app/wzcc/hirverify" as hirverify;
+import "app/wzcc/lexer" as lexer;
+import "app/wzcc/model" as model;
+import "app/wzcc/parser" as parser;
+import "app/wzcc/resolve" as resolve;
+import "app/wzcc/sema" as sema;
+import "app/wzcc/source" as source;
+import "app/wzcc/system" as system;
+import "std/fs" as fs;
+import "std/io" as io;
+import "std/option" as option;
+import "std/os" as os;
+import "std/process" as process;
+import "std/strconv" as strconv;
+import "std/vec" as vec;
+
+enum DriverError {
+    Setup(message string);
+}
+
+struct Builder {
+    files Vec[model.ParseResult];
+    next_snapshot u64;
+}
+
+struct CallSite {
+    found bool;
+    operation u32;
+    begin u64;
+    end u64;
+    snapshot u64;
+}
+
+struct Report {
+    resolve_ok bool;
+    typed_ok bool;
+    result_ok bool;
+    code string;
+    phase string;
+    message string;
+    primary bool;
+    begin u64;
+    end u64;
+    call CallSite;
+}
+
+struct Test {
+    checks usize;
+    failures usize;
+}
+
+func empty_call() CallSite {
+    return CallSite(found: false, operation: 0, begin: 0, end: 0, snapshot: 0);
+}
+
+func empty_report() Report {
+    return Report(resolve_ok: false, typed_ok: false, result_ok: false,
+        code: "", phase: "", message: "", primary: false, begin: 0, end: 0,
+        call: empty_call());
+}
+
+func complete(value model.PhaseState) bool {
+    switch value {
+        case model.PhaseState.Complete: return true;
+        default: return false;
+    }
+}
+
+func bit(value bool) string {
+    if value { return "1"; }
+    return "0";
+}
+
+func none(value string) string {
+    if value == "" { return "none"; }
+    return value;
+}
+
+func operation_id(name string) u32 {
+    for spec in system.operations() {
+        if spec.name == name { return spec.operation; }
+    }
+    return 999999;
+}
+
+func read_bytes(path string) Vec[u8] throws DriverError {
+    try {
+        return fs.read_file(path);
+    } catch error os.Error {
+        throw DriverError.Setup("cannot read " + path);
+    }
+}
+
+func add_source(state inout Builder, path string, contents Vec[u8]) usize {
+    let snapshot_id = state.next_snapshot;
+    state.next_snapshot += 1;
+    let input = source.snapshot(snapshot_id, snapshot_id, snapshot_id, path,
+        contents);
+    let parsed = parser.parse(lexer.lex(input));
+    let index = vec.len(state.files);
+    vec.push(state.files, parsed);
+    return index;
+}
+
+func parsed_ok(value model.ParseResult) bool {
+    return value.has_value && !value.recovered && complete(value.state);
+}
+
+func first_import(file model.ParseResult) usize {
+    for id in file.nodes[file.root].children {
+        if model.ast_kind_id(file.nodes[id].kind) ==
+           model.ast_kind_id(model.AstKind.Import) {
+            return id;
+        }
+    }
+    return 0;
+}
+
+func build_pair(first_path string, second_path string, logical string,
+                package_name string, alias string, backend string)
+    model.Project throws DriverError {
+    var builder = Builder(files: vec.empty[model.ParseResult](),
+        next_snapshot: 1);
+    let first_index = add_source(inout builder, "app/main.wz",
+        read_bytes(first_path));
+    let second_index = add_source(inout builder, logical + "/lib.wz",
+        read_bytes(second_path));
+    if !parsed_ok(builder.files[first_index]) ||
+       !parsed_ok(builder.files[second_index]) {
+        throw DriverError.Setup("fixture did not parse");
+    }
+    let app_file = builder.files[first_index];
+    let import_node = first_import(app_file);
+    if import_node == 0 {
+        throw DriverError.Setup("fixture has no import");
+    }
+    var project = model.empty_project();
+    project.backend = backend;
+    project.entry = 0;
+    var imports = vec.empty[model.Import]();
+    vec.push(imports, model.Import(file: 0, node: import_node, target: 1,
+        alias: alias, span: app_file.nodes[import_node].span));
+    vec.push(project.modules, model.Module(id: 0, logical_path: "app",
+        identity: "app", package_name: "app", files: [first_index],
+        imports: imports, foreign_exports: vec.empty[model.ForeignExport](),
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None));
+    vec.push(project.modules, model.Module(id: 1, logical_path: logical,
+        identity: logical, package_name: package_name, files: [second_index],
+        imports: vec.empty[model.Import](),
+        foreign_exports: vec.empty[model.ForeignExport](),
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None));
+    project.files = builder.files;
+    return project;
+}
+
+func build_one(path string, backend string) model.Project throws DriverError {
+    var builder = Builder(files: vec.empty[model.ParseResult](),
+        next_snapshot: 1);
+    let index = add_source(inout builder, "app/main.wz", read_bytes(path));
+    if !parsed_ok(builder.files[index]) {
+        throw DriverError.Setup("fixture did not parse");
+    }
+    var project = model.empty_project();
+    project.backend = backend;
+    project.entry = 0;
+    vec.push(project.modules, model.Module(id: 0, logical_path: "app",
+        identity: "app", package_name: "app", files: [index],
+        imports: vec.empty[model.Import](),
+        foreign_exports: vec.empty[model.ForeignExport](),
+        binding: option.Option[model.BindingModuleRef].None,
+        c_binding: option.Option[usize].None));
+    project.files = builder.files;
+    return project;
+}
+
+func find_system_call(module hir.HirModule, operation u32) CallSite {
+    for node in module.nodes {
+        switch node.data {
+            case hir.NodeData.Call(value): {
+                switch value.kind {
+                    case hir.CalleeKind.System: {
+                        switch value.system {
+                            case option.Option.Some(found): {
+                                if found == operation {
+                                    return CallSite(found: true,
+                                        operation: found,
+                                        begin: node.source.span.begin_byte,
+                                        end: node.source.span.end_byte,
+                                        snapshot: node.source.span.snapshot);
+                                }
+                            }
+                            case option.Option.None: {}
+                        }
+                    }
+                    default: {}
+                }
+            }
+            default: {}
+        }
+    }
+    return empty_call();
+}
+
+func set_diagnostic(report inout Report, diagnostics Vec[model.Diagnostic]) {
+    if vec.len(diagnostics) == 0 { return; }
+    let diagnostic = diagnostics[0];
+    report.code = diagnostic.code;
+    report.phase = diagnostic.phase;
+    report.message = diagnostic.message;
+    report.primary = diagnostic.has_primary;
+    report.begin = diagnostic.primary.begin_byte;
+    report.end = diagnostic.primary.end_byte;
+}
+
+func run(project model.Project, operation u32) Report {
+    var report = empty_report();
+    let resolved = resolve.resolve_project(project);
+    if !complete(resolved.state) || !resolved.has_value {
+        set_diagnostic(inout report, resolved.diagnostics);
+        return report;
+    }
+    report.resolve_ok = true;
+    let typed = sema.check_types(resolved,
+        option.Option[model.CheckConfig].None);
+    if !complete(typed.state) || !typed.has_value {
+        set_diagnostic(inout report, typed.diagnostics);
+        return report;
+    }
+    report.typed_ok = true;
+    report.call = find_system_call(typed.value, operation);
+    let verified = hirverify.verify(typed.value,
+        hirverify.VerifyMode.Backend);
+    report.result_ok = complete(verified.state) &&
+        option.is_some(verified.value);
+    set_diagnostic(inout report, verified.diagnostics);
+    return report;
+}
+
+func check(test inout Test, condition bool, label string) throws os.Error {
+    test.checks += 1;
+    if !condition {
+        test.failures += 1;
+        io.println("FAIL " + label);
+    }
+}
+
+func print_report(label string, report Report) throws os.Error {
+    var result = "reject";
+    if report.result_ok { result = "accept"; }
+    io.println("CASE " + label + " resolve=" + bit(report.resolve_ok) +
+        " typed=" + bit(report.typed_ok) + " result=" + result +
+        " code=" + none(report.code) + " phase=" + none(report.phase) +
+        " primary=" + bit(report.primary) +
+        " begin=" + strconv.format_u64(report.begin) +
+        " end=" + strconv.format_u64(report.end) +
+        " call=" + bit(report.call.found) +
+        " operation=" + strconv.format_u64(u64(report.call.operation)) +
+        " call-begin=" + strconv.format_u64(report.call.begin) +
+        " call-end=" + strconv.format_u64(report.call.end) +
+        " message=" + none(report.message));
+}
+
+func main() i32 throws os.Error {
+    let argv = process.args();
+    if vec.len(argv) != 2 { return 2; }
+    let root = argv[1];
+    let os_operation = operation_id("__woozy_os_text_length");
+    let text_operation = operation_id("__woozy_text_len");
+    var test = Test(checks: 0, failures: 0);
+    var native_only_native = empty_report();
+    var native_only_python = empty_report();
+    var value_python = empty_report();
+    var ordinary_python = empty_report();
+    try {
+        let native_project = build_pair(root + "/native_only/main.wz",
+            root + "/native_only/os.wz", "std/os", "os", "os", "native");
+        let python_project = build_pair(root + "/native_only/main.wz",
+            root + "/native_only/os.wz", "std/os", "os", "os", "python");
+        let value_project = build_pair(root + "/value/main.wz",
+            root + "/value/text.wz", "std/text", "text", "text", "python");
+        let ordinary_project = build_one(root + "/ordinary/main.wz", "python");
+        native_only_native = run(native_project, os_operation);
+        native_only_python = run(python_project, os_operation);
+        value_python = run(value_project, text_operation);
+        ordinary_python = run(ordinary_project, text_operation);
+    } catch error DriverError {
+        switch error {
+            case DriverError.Setup(message): {
+                io.eprintln("SETUP " + message);
+                return 3;
+            }
+        }
+    }
+    print_report("native-only-native", native_only_native);
+    print_report("native-only-python", native_only_python);
+    print_report("value-python", value_python);
+    print_report("ordinary-python", ordinary_python);
+
+    check(inout test, native_only_native.resolve_ok &&
+        native_only_native.typed_ok && native_only_native.result_ok,
+        "Native/64 accepts the Native-only source");
+    check(inout test, native_only_native.call.found &&
+        native_only_native.call.operation == os_operation,
+        "Native/64 typed HIR carries the std/os system-call operation");
+    check(inout test, native_only_python.resolve_ok &&
+        native_only_python.typed_ok,
+        "Python/64 reaches the capability gate with typed HIR");
+    check(inout test, !native_only_python.result_ok,
+        "Python/64 rejects the Native-only system call");
+    check(inout test, native_only_python.code == "E_CAPABILITY_UNAVAILABLE",
+        "Python/64 rejection code");
+    check(inout test, native_only_python.phase == "type",
+        "Python/64 rejection phase");
+    check(inout test, native_only_python.message ==
+        "system operations require the Native/64 profile",
+        "Python/64 rejection message");
+    check(inout test, native_only_python.primary &&
+        native_only_python.begin == native_only_python.call.begin &&
+        native_only_python.end == native_only_python.call.end,
+        "Python/64 primary is the exact typed system-call span");
+    check(inout test, value_python.resolve_ok && value_python.typed_ok &&
+        value_python.result_ok && value_python.call.found &&
+        value_python.call.operation == text_operation,
+        "Python/64 still accepts a value system operation");
+    check(inout test, ordinary_python.resolve_ok && ordinary_python.typed_ok &&
+        ordinary_python.result_ok && !ordinary_python.call.found,
+        "Python/64 still accepts ordinary non-system calls");
+    io.println("SUMMARY checks=" + strconv.format_u64(u64(test.checks)) +
+        " failures=" + strconv.format_u64(u64(test.failures)));
+    if test.failures != 0 { return 1; }
+    return 0;
+}

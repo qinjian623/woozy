@@ -304,10 +304,16 @@ func capability_unavailable(feature string, span model.Span)
         has_value: false);
 }
 
+// Categories mirror the C++ capability gate: 0 is the
+// value_system_operations family that Python can lower, 1/2 are the
+// separately gated std/slice and std/weak families, and 3 is every remaining
+// operation (std/os, runtime handles, network, process, ffi, async, ...),
+// which requires Native/64.  The generated OperationSpec.owner field is the
+// typed identity; this is not a source-name check.
 func system_op_category(operation u32) u32 {
     let spec = system_spec(operation);
     if !spec.has {
-        return 1;
+        return 3;
     }
     if spec.owner == "std/slice" {
         return 1;
@@ -315,7 +321,12 @@ func system_op_category(operation u32) u32 {
     if spec.owner == "std/weak" {
         return 2;
     }
-    return 0;
+    if spec.owner == "std/unicode" || spec.owner == "std/text" ||
+       spec.owner == "std/vec" || spec.owner == "std/strconv" ||
+       spec.owner == "std/math" {
+        return 0;
+    }
+    return 3;
 }
 
 pub func check_backend_capabilities(input hir.HirModule) model.UnitResult {
@@ -369,7 +380,8 @@ pub func check_backend_capabilities(input hir.HirModule) model.UnitResult {
                     if !native64 {
                         let category = system_op_category(operation);
                         if (category == 1 && !flags.slice_values) ||
-                           (category == 2 && !flags.weak_values) {
+                           (category == 2 && !flags.weak_values) ||
+                           category == 3 {
                             return capability_unavailable(
                                 "system operations require the Native/64 profile",
                                 node.source.span);

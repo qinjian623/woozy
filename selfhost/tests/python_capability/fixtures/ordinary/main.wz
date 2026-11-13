@@ -1,0 +1,10 @@
+package app;
+
+func measure(value string) usize {
+    return 3;
+}
+
+func main() i32 {
+    let n = measure("abc");
+    return i32(n) - 3;
+}
