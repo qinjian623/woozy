@@ -3,9 +3,9 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
-  "previous_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-  "frozen_at": "2026-11-14",
+  "git_head": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
+  "previous_git_head": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+  "frozen_at": "2026-11-13T23:22:54.503998+00:00",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
     "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
@@ -14031,8 +14031,8 @@
     },
     {
       "path": "tests/modules/run_cases.py",
-      "sha256": "fc3af985dffd369d072d0157042e929f9a5e5485c9d8abb56f8e99ed0de70007",
-      "size": 2819,
+      "sha256": "3a264b3049a075189d9d16c1674d5ff5e662d40f631c9c1bad6b6fca6fc0dc77",
+      "size": 5776,
       "role": "runner_source",
       "assignment": []
     },
@@ -80804,7 +80804,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "1c8d20c882137004ad47241c0e2d2cdc61b3cb6d",
+    "to_git_head": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -81113,6 +81113,16 @@
       "wzcc/hirverify/flow.wz",
       "wzcc/hirverify/run.wz",
       "wzcc/hirverify/verify.wz"
-    ]
+    ],
+    "module_runner_delta": {
+      "commit": "93e112a4734a6c099e610e4ceb3a822b9c59ed0e",
+      "path": "tests/modules/run_cases.py",
+      "project_cli_mode": true,
+      "root_amendment": "finite positive timeout required",
+      "source_semantic_differences_unchanged": true,
+      "case_expectations_unchanged": true,
+      "proof": "checks/module-runner-root-amendment-20261114/result.json",
+      "scope": "20 original module cases; five vendor dependency manifests remain disabled pending classification"
+    }
   }
 }
