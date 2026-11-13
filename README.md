@@ -1,5 +1,7 @@
 # Woozy
 
+<img src="assets/woozy-eye-sparks.gif" alt="Woozy 项目形象" width="256">
+
 Woozy 是一门静态类型编程语言，支持局部类型推断、结构体、枚举、泛型与 trait 约束。源文件使用 `.wz` 后缀。
 
 ```wz
