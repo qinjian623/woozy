@@ -1,0 +1,12 @@
+package app;
+import "retained_static/lib" as retained;
+
+func danger(value i32, context u64) i32 throws i32 {
+    throw value + i32(context);
+}
+
+func main() i32 {
+    let slot retained.Slot = retained.wrs_open(0, 1);
+    retained.wrs_register(slot, danger, 5);
+    return 0;
+}

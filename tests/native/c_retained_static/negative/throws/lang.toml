@@ -1,0 +1,15 @@
+schema_version = 1
+[package]
+name = "negative_throws"
+source_root = "src"
+entry = "app"
+[build]
+backend = "native"
+word_bits = 64
+[build.native]
+runtime = "hosted"
+[dependencies.retained_static]
+kind = "native"
+binding = "../../bindings/retained_static.json"
+libraries = ["retained_static"]
+library_dirs = ["../../.build"]

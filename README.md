@@ -58,7 +58,7 @@ Native 与 Python 都会自动回收由 Vec、Box 和闭包环境形成的纯 Wo
 
 `std/box` 提供共享可变单元 `Box[T]`；`Weak[T]` 是内建弱引用类型，`std/weak` 提供 `empty`、`downgrade`、`upgrade` 操作。目标可以是 Vec、函数值、`Box[T]` 或带引用计数的共享句柄，弱引用不延长目标寿命，升级结果用 `Option[T]` 表示。
 
-Native 程序可以声明并调用 C 库的有类型函数，传递自然布局的 C record、Ptr 和 Buffer，或使用同步的无捕获回调。指针和 Buffer 的索引访问放在 unsafe 块内；C 错误码不会自动转换成 Woozy 错误。需要 libc 的库必须明确选择 hosted 运行方式，普通程序继续独立运行。
+Native 程序可以声明并调用 C 库的有类型函数，传递自然布局的 C record、Ptr 和 Buffer。无捕获、不抛错的函数可以交给 C 同步调用，或由 C 保存后稍后调用。指针和 Buffer 的索引访问放在 unsafe 块内；C 错误码不会自动转换成 Woozy 错误。需要 libc 的库必须明确选择 hosted 运行方式，普通程序继续独立运行。
 
 `std/process` 支持 spawn、exec、wait、参数和环境，`std/signal` 支持同步信号等待，`std/ipc` 支持共享内存及跨进程同步。多线程 fork 后只保留调用线程，业务锁由程序员处理，子进程通常应尽快 exec。
 

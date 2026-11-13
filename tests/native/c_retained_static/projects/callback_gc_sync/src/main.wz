@@ -1,0 +1,59 @@
+package app;
+import "retained_static/lib" as retained;
+
+// A real registrable graph: the outer Vec owns Vec[i32] elements.  The
+// callback reads both levels, so a no-graph startup optimization cannot skip
+// the GC path this test is meant to exercise.
+func graph_cb(value i32, context u64) i32 {
+    let outer Vec[Vec[i32]] = [
+        [value, value + 1],
+        [value + 2, value + 3]
+    ];
+    return outer[0][0] + outer[0][1] + outer[1][0] + outer[1][1] +
+        i32(context);
+}
+
+// The outer callback is already active when it calls a second C callback.
+// Each bridge call needs its own LIFO token and exact SAFE restoration.
+func nested_cb(value i32, context u64) i32 {
+    let inner = retained.wrs_apply(graph_cb, context, value + 1);
+    let outer Vec[Vec[i32]] = [[value, inner], [value + 1, inner + 1]];
+    return outer[0][0] + outer[0][1] + outer[1][0] + outer[1][1] +
+        i32(context);
+}
+
+func main() i32 {
+    {
+        let slot retained.Slot = retained.wrs_open(0, 9);
+        if retained.wrs_register(slot, graph_cb, 3) != 0 {
+            return 1;
+        }
+
+        // Synchronous callback from the already-registered main thread.
+        if retained.wrs_invoke(slot, 7) != 37 {
+            return 2;
+        }
+        if retained.wrs_invoke(slot, 8) != 41 {
+            return 3;
+        }
+        if retained.wrs_calls(slot) != 2 {
+            return 4;
+        }
+
+        // Nested callback, then the same graph callback again.  Failure to
+        // restore the outer callback's ACTIVE/SAFE state shows up here.
+        if retained.wrs_apply(nested_cb, 3, 7) != 101 {
+            return 5;
+        }
+        if retained.wrs_apply(graph_cb, 3, 7) != 37 {
+            return 6;
+        }
+    }
+    if retained.wrs_live_slots() != 0 {
+        return 7;
+    }
+    if retained.wrs_live_userdata() != 0 {
+        return 8;
+    }
+    return 0;
+}

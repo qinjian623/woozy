@@ -1,0 +1,313 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {
+      "logical_path": "retained_static/lib",
+      "provider": "native_library",
+      "library": "retained_static"
+    }
+  ],
+  "types": [
+    {
+      "id": "retained_static.Slot",
+      "module": "retained_static/lib",
+      "name": "Slot",
+      "kind": "resource",
+      "release_symbol": "wrs_release"
+    },
+    {
+      "id": "retained_static.Callback",
+      "module": "retained_static/lib",
+      "name": "Callback",
+      "kind": "callback",
+      "result": "i32",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ]
+    }
+  ],
+  "callables": [
+    {
+      "id": "retained_static.wrs_open",
+      "module": "retained_static/lib",
+      "name": "wrs_open",
+      "symbol": "wrs_open",
+      "parameters": [
+        {
+          "name": "initial",
+          "type": "i32"
+        },
+        {
+          "name": "tag",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "retained_static.Slot",
+        "ownership": "owned",
+        "release_symbol": "wrs_release"
+      }
+    },
+    {
+      "id": "retained_static.wrs_register",
+      "module": "retained_static/lib",
+      "name": "wrs_register",
+      "symbol": "wrs_register",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        },
+        {
+          "name": "callback",
+          "type": "retained_static.Callback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_invoke",
+      "module": "retained_static/lib",
+      "name": "wrs_invoke",
+      "symbol": "wrs_invoke",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_start_thread",
+      "module": "retained_static/lib",
+      "name": "wrs_start_thread",
+      "symbol": "wrs_start_thread",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        },
+        {
+          "name": "count",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_calls",
+      "module": "retained_static/lib",
+      "name": "wrs_calls",
+      "symbol": "wrs_calls",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_sum",
+      "module": "retained_static/lib",
+      "name": "wrs_sum",
+      "symbol": "wrs_sum",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_thread_calls",
+      "module": "retained_static/lib",
+      "name": "wrs_thread_calls",
+      "symbol": "wrs_thread_calls",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_thread_sum",
+      "module": "retained_static/lib",
+      "name": "wrs_thread_sum",
+      "symbol": "wrs_thread_sum",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        }
+      ],
+      "result": {
+        "type": "i64",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_live_slots",
+      "module": "retained_static/lib",
+      "name": "wrs_live_slots",
+      "symbol": "wrs_live_slots",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_live_userdata",
+      "module": "retained_static/lib",
+      "name": "wrs_live_userdata",
+      "symbol": "wrs_live_userdata",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_live_threads",
+      "module": "retained_static/lib",
+      "name": "wrs_live_threads",
+      "symbol": "wrs_live_threads",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_released_tag",
+      "module": "retained_static/lib",
+      "name": "wrs_released_tag",
+      "symbol": "wrs_released_tag",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_released_calls",
+      "module": "retained_static/lib",
+      "name": "wrs_released_calls",
+      "symbol": "wrs_released_calls",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_released_thread_calls",
+      "module": "retained_static/lib",
+      "name": "wrs_released_thread_calls",
+      "symbol": "wrs_released_thread_calls",
+      "parameters": [],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_apply",
+      "module": "retained_static/lib",
+      "name": "wrs_apply",
+      "symbol": "wrs_apply",
+      "parameters": [
+        {
+          "name": "callback",
+          "type": "retained_static.Callback"
+        },
+        {
+          "name": "context",
+          "type": "u64"
+        },
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_join",
+      "module": "retained_static/lib",
+      "name": "wrs_join",
+      "symbol": "wrs_join",
+      "parameters": [
+        {
+          "name": "slot",
+          "type": "retained_static.Slot"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    },
+    {
+      "id": "retained_static.wrs_touch",
+      "module": "retained_static/lib",
+      "name": "wrs_touch",
+      "symbol": "wrs_touch",
+      "parameters": [
+        {
+          "name": "value",
+          "type": "i32"
+        }
+      ],
+      "result": {
+        "type": "i32",
+        "ownership": "value"
+      }
+    }
+  ]
+}

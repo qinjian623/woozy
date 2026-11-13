@@ -1133,7 +1133,29 @@ class Emitter {
         value = builder.CreateTrunc(value, builder.getInt1Ty());
       call_args.push_back(value);
     }
+    // The C trampoline may be invoked later from an external pthread or from
+    // the C adapter's SAFE region. The token layout matches
+    // LangGcWorldCallbackToken: two pointers plus four u32 fields, 32 bytes
+    // with align 8 on x86_64. It is zero-initialized and scoped to this bridge
+    // call, so nested callbacks get distinct LIFO tokens.
+    auto *token_type = llvm::StructType::get(
+        context, {builder.getPtrTy(), builder.getPtrTy(),
+                  builder.getInt32Ty(), builder.getInt32Ty(),
+                  builder.getInt32Ty(), builder.getInt32Ty()});
+    auto *token = builder.CreateAlloca(token_type, nullptr, "c.cb.token");
+    builder.CreateStore(llvm::Constant::getNullValue(token_type), token);
+    auto enter = module.getOrInsertFunction(
+        "lang_gc_program_callback_enter_v1",
+        llvm::FunctionType::get(builder.getInt32Ty(), {builder.getPtrTy()},
+                                false));
+    auto *entered = builder.CreateCall(enter, {token});
     auto *call = builder.CreateCall(target, call_args);
+    auto leave = module.getOrInsertFunction(
+        "lang_gc_program_callback_leave_v1",
+        llvm::FunctionType::get(builder.getVoidTy(),
+                                {builder.getInt32Ty(), builder.getPtrTy()},
+                                false));
+    builder.CreateCall(leave, {entered, token});
     const bool unit = d.result.kind == modules::CTypeRef::Kind::scalar &&
                       d.result.scalar == "Unit";
     if (!unit) {

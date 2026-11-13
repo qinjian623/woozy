@@ -4,6 +4,7 @@
 #include <cstdint>
 
 #include "gc.hpp"
+#include "gc_world.hpp"
 
 // Private native program integration ABI: lang-gc-program/1.
 //
@@ -152,6 +153,18 @@ void lang_gc_program_leave_critical_v1(int32_t entered) LANG_GC_PROGRAM_NOEXCEPT
 // registration; leave unregisters only that registration.
 int32_t lang_gc_program_thread_enter_v1(void) LANG_GC_PROGRAM_NOEXCEPT;
 void lang_gc_program_thread_leave_v1(int32_t registered) LANG_GC_PROGRAM_NOEXCEPT;
+
+// Foreign-callback entry/leave. The token is the 32-byte zero-initialized
+// stack storage declared by lang-gc-world/1. enter returns 1 only when the
+// program is enabled, the caller is not the finished main thread, and the world
+// callback scope was entered; leave is a no-op for 0. The wrapper restores
+// the exact saved SAFE depth and registration ownership in gc_world.
+typedef LangGcWorldCallbackToken LangGcProgramCallbackToken;
+int32_t lang_gc_program_callback_enter_v1(
+    LangGcProgramCallbackToken *token) LANG_GC_PROGRAM_NOEXCEPT;
+void lang_gc_program_callback_leave_v1(
+    int32_t entered,
+    LangGcProgramCallbackToken *token) LANG_GC_PROGRAM_NOEXCEPT;
 
 // Stack-scoped fork hooks. One distinct, zero-initialized token per fork. The
 // enter hook must run before launch/environment/allocator locks are acquired;

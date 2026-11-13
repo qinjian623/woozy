@@ -1,0 +1,92 @@
+package app;
+import "retained_static/lib" as retained;
+
+// The C ABI callback declaration is fixed: i32(i32, u64), no throws, no capture.
+func retained_cb(value i32, context u64) i32 {
+    return value * 2 + i32(context);
+}
+
+func sync_cb(value i32, context u64) i32 {
+    return value + i32(context);
+}
+
+// Called from the C-owned pthread.  It reaches back into C, so the wrapper
+// must either register this foreign thread (graph-enabled program) or stay a
+// no-op (no-graph disabled program).
+func thread_cb(value i32, context u64) i32 {
+    return retained.wrs_touch(value) * 3 + i32(context);
+}
+
+func main() i32 {
+    // The original synchronous callback path must not regress.
+    if retained.wrs_apply(sync_cb, 5, 7) != 12 {
+        return 1;
+    }
+
+    {
+        let slot retained.Slot = retained.wrs_open(100, 77);
+        {
+            // A real local Fn value lives only in this block.  The C call
+            // receives the uncaptured static function, and the pointer stored
+            // by C must remain usable after this binding is gone.
+            let local func(i32, u64) i32 = retained_cb;
+            if retained.wrs_register(slot, retained_cb, 5) != 0 {
+                return 2;
+            }
+            if local(2, 3) != 7 {
+                return 3;
+            }
+        }
+
+        // The registration call has returned and the local Fn binding has left
+        // scope.  Call the retained pointer more than once.
+        if retained.wrs_invoke(slot, 7) != 19 {
+            return 4;
+        }
+        if retained.wrs_invoke(slot, 8) != 21 {
+            return 5;
+        }
+        if retained.wrs_calls(slot) != 2 {
+            return 6;
+        }
+        if retained.wrs_sum(slot) != 140 {
+            return 7;
+        }
+
+        // Install a callback that is also invoked from an external C pthread.
+        if retained.wrs_register(slot, thread_cb, 5) != 0 {
+            return 8;
+        }
+        if retained.wrs_start_thread(slot, 64) != 0 {
+            return 9;
+        }
+        // No explicit close: resource cleanup runs now.  wrs_release must
+        // join the worker and wait for any in-flight callback.
+    }
+
+    // wrs_release joined the worker, waited for in_flight to reach zero, then
+    // freed its own userdata.  Nothing may remain.
+    if retained.wrs_live_slots() != 0 {
+        return 10;
+    }
+    if retained.wrs_live_userdata() != 0 {
+        return 11;
+    }
+    if retained.wrs_live_threads() != 0 {
+        return 12;
+    }
+    if retained.wrs_released_tag() != 77 {
+        return 13;
+    }
+    if retained.wrs_released_calls() < 3 {
+        return 14;
+    }
+    if retained.wrs_released_thread_calls() < 1 {
+        return 15;
+    }
+    if retained.wrs_released_calls() !=
+        2 + retained.wrs_released_thread_calls() {
+        return 16;
+    }
+    return 0;
+}

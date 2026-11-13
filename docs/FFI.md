@@ -129,13 +129,13 @@ C record 的 `size`、`align` 和字段 `offset` 必须符合自然 C 布局。�
 
 C 调用没有 `throws` 效果，也不会自动把错误变成 `py.Error`。C 返回的错误码仍是声明类型上的普通值；`errno` 通过声明的获取接口读取，例如 glibc 的 `__errno_location()` 返回 `PtrMut[i32]`，或 getter 直接返回 `i32`。`ownership` 字段只描述值、借用、拥有或 `Unit`，不是错误处理机制。
 
-callback 只接受无捕获、不抛错的普通函数值，并且完整签名必须与 callback 声明完全一致。当前支持 C 在一次调用中同步使用该函数指针；不支持保留回调注册表、捕获闭包、抛错 callback，也不把任意语言闭包变成 C 函数指针。
+callback 只接受直接写出的无捕获、不抛错函数名，完整签名必须与 callback 声明一致。C 可以在调用期间使用函数指针，也可以保存它，稍后或从自己的线程调用。函数地址在程序运行期间有效。C 库负责自己的上下文数据，以及停止回调、等待正在执行的回调结束后再释放上下文；这不会保留 Woozy 局部变量。局部函数值变量、捕获闭包和抛错 callback 仍不能作为 C callback 实参。
 
 ## 5 当前限制
 
 - 不支持 C 可变参数、数组/union/packed/bitfield record，也不支持在 Woozy 中构造 record 或修改 record 字段。
 - 只接受 C 符号；C++ 库可先提供 `extern "C"` 接口，再按 C 声明使用；当前不直接支持 C++ ABI、名称修饰符号或 C++ 类型。Windows、macOS 和 ARM 目标也未提供。
-- 保留型 callback（retained callback）、捕获闭包、抛错 callback 均不支持；TLS 专用 ABI 不作为公共库接口提供。
+- 捕获闭包的保留型 callback 和抛错 callback 尚不支持；TLS 专用 ABI 不作为公共库接口提供。
 - 清单不提供任意链接器参数，也没有跳过库名或目录校验的入口；能链接什么由经过校验的 native 依赖决定。
 
 更多语言规则见 [语言规则](SEMANTICS.md)，标准库接口见 [标准库](STDLIB.md)，系统接口见 [系统接口](OS.md)，可运行项目见 [示例目录](../examples/)。

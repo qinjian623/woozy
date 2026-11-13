@@ -497,3 +497,4 @@ if(LANG_PYTHON312)
 endif()
 
 add_subdirectory(gc_activation)
+add_subdirectory(c_retained_static)

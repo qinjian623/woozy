@@ -1,0 +1,53 @@
+package app;
+import "retained_static/lib" as retained;
+
+// Reached from an external C pthread that is unregistered before callback
+// entry.  The callback builds and reads a registrable Vec[Vec[i32]] graph.
+func graph_cb(value i32, context u64) i32 {
+    let outer Vec[Vec[i32]] = [
+        [value, value + 1],
+        [value + 2, value + 3]
+    ];
+    return outer[0][0] + outer[0][1] + outer[1][0] + outer[1][1] +
+        i32(context);
+}
+
+func main() i32 {
+    {
+        let slot retained.Slot = retained.wrs_open(0, 11);
+        if retained.wrs_register(slot, graph_cb, 3) != 0 {
+            return 1;
+        }
+        if retained.wrs_start_thread(slot, 8) != 0 {
+            return 2;
+        }
+        if retained.wrs_join(slot) != 0 {
+            return 3;
+        }
+        if retained.wrs_thread_calls(slot) != 8 {
+            return 4;
+        }
+        // sum(4*i + 9, i=0..7) = 184
+        if retained.wrs_thread_sum(slot) != 184 {
+            return 5;
+        }
+        // The external callback registration is gone; the already-registered
+        // main thread can still run the same callback with restored SAFE state.
+        if retained.wrs_apply(graph_cb, 3, 7) != 37 {
+            return 6;
+        }
+    }
+    if retained.wrs_live_slots() != 0 {
+        return 7;
+    }
+    if retained.wrs_live_userdata() != 0 {
+        return 8;
+    }
+    if retained.wrs_live_threads() != 0 {
+        return 9;
+    }
+    if retained.wrs_released_thread_calls() != 8 {
+        return 10;
+    }
+    return 0;
+}

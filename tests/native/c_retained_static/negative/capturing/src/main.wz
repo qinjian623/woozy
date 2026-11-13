@@ -1,0 +1,12 @@
+package app;
+import "retained_static/lib" as retained;
+
+func main() i32 {
+    let base i32 = 7;
+    let captured = func(value i32, context u64) i32 {
+        return value + base + i32(context);
+    };
+    let slot retained.Slot = retained.wrs_open(0, 1);
+    retained.wrs_register(slot, captured, 5);
+    return 0;
+}

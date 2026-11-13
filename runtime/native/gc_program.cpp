@@ -213,6 +213,26 @@ extern "C" int32_t lang_gc_program_thread_enter_v1(void) noexcept {
   return thread_enter_hook();
 }
 
+extern "C" int32_t lang_gc_program_callback_enter_v1(
+    LangGcProgramCallbackToken *token) noexcept {
+  if (!token || !lang::native::gc_program::enabled() || main_after_finish())
+    return 0;
+  // gc_world accepts a zero-initialized token, registers an absent foreign
+  // thread only for this callback scope, saves the complete SAFE depth, and
+  // returns only when the thread is ACTIVE graph work.
+  lang_gc_world_callback_enter_v1(token);
+  return 1;
+}
+
+extern "C" void lang_gc_program_callback_leave_v1(
+    int32_t entered, LangGcProgramCallbackToken *token) noexcept {
+  if (!entered)
+    return;
+  // Restore the exact saved SAFE depth/state and remove a registration created
+  // by this callback's outermost scope. Existing registrations are retained.
+  lang_gc_world_callback_leave_v1(token);
+}
+
 extern "C" void lang_gc_program_thread_leave_v1(int32_t registered) noexcept {
   thread_leave_hook(registered);
 }
