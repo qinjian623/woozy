@@ -49,6 +49,20 @@ def main():
         cli = programs["cli"]
         assert "selfhost" in run([cli, "--version"]).stdout
         run([cli, "--help"])
+        for arguments in ([], ["unknown"], ["--help", "extra"],
+                          ["--version", "extra"], ["check"], ["build"],
+                          ["check", "--format"], ["check", "--format", "text"],
+                          ["check", "--project", ""],
+                          ["check", "--project", "-bad"],
+                          ["check", "--syntax-only", "one", "two"],
+                          ["build", "--syntax-only", "one", "--out-dir", "out"],
+                          ["check", "--project", "one", "--project", "two"],
+                          ["build", "--project", "one", "--out-dir", "out", "--opt", "3"],
+                          ["lsp"], ["capabilities", "--format", "json"]):
+            expected = run([stage0, *arguments], expected=1 if arguments and
+                           arguments[0] in ("lsp", "capabilities") else 2)
+            actual = run([cli, *arguments], expected=expected.returncode)
+            assert (actual.stdout, actual.stderr) == (expected.stdout, expected.stderr), arguments
         run([cli, "check", "--syntax-only"], expected=2)
         missing = json.loads(run([cli, "check", "--syntax-only", "--format", "json",
                                   work / "missing.wz"], expected=2).stdout)

@@ -4,6 +4,7 @@ import "std/vec" as vec;
 
 pub struct Options {
     pub valid bool;
+    pub error string;
     pub command string;
     pub syntax bool;
     pub json bool;
@@ -19,7 +20,9 @@ pub struct Options {
 func not_flag(value string) bool { return text.len(value) > 0 && value[0] != 45; }
 
 pub func arguments(args Vec[string]) Options {
-    var options = Options(valid: false, command: "", syntax: false, json: false,
+    var options = Options(valid: false,
+        error: "E_DRIVER_ARGUMENT: expected --help, --version, check, build, lsp or capabilities",
+        command: "", syntax: false, json: false,
         path: "", project: "", output: "", opt: "", target: "", std_binding: "", backend: "");
     if vec.len(args) < 2 { return options; }
     options.command = args[1];
@@ -32,6 +35,7 @@ pub func arguments(args Vec[string]) Options {
         return options;
     }
     if options.command != "check" && options.command != "build" { return options; }
+    options.error = "E_DRIVER_ARGUMENT: invalid check/build arguments";
     var index usize = 2;
     for index < vec.len(args) {
         let argument = args[index];
@@ -49,6 +53,7 @@ pub func arguments(args Vec[string]) Options {
         else { return options; }
         index += 1;
     }
+    options.error = "E_DRIVER_ARGUMENT: use check --syntax-only FILE, check --project MANIFEST, or build --project MANIFEST --out-dir DIR";
     if options.syntax {
         options.valid = options.command == "check" && options.path != "" && options.project == "" &&
             options.backend == "" && options.std_binding == "";

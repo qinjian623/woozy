@@ -45,8 +45,12 @@ func fail(options Options, code string, phase string, message string, failure mo
 pub func run(args Vec[string]) i32 throws os.Error {
     let options = arguments(args);
     if !options.valid {
-        io.eprintln("E_DRIVER_ARGUMENT: use check --syntax-only FILE, check --project MANIFEST, or build --project MANIFEST --out-dir DIR");
+        io.eprintln(options.error);
         return 2;
+    }
+    if options.command == "lsp" || options.command == "capabilities" {
+        io.eprintln("E_CAPABILITY_UNAVAILABLE: " + options.command + " is not implemented");
+        return 1;
     }
     if options.command == "--version" {
         io.println("woozyc 0.1.0-selfhost (compiler-dev/1)");
