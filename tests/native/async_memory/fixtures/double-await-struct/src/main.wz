@@ -1,0 +1,33 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+struct Payload { value i32; label i32; values Vec[i32]; }
+
+async func get() Payload {
+    await a.sleep(1);
+    return Payload(value: 42, label: 7, values: [1, 2]);
+}
+
+async func main() i32 throws os.Error {
+    let task = get();
+    var first = await task;
+    if first.value != 42 || first.label != 7 || first.values[0] != 1 {
+        return 1;
+    }
+    // Scalar fields copy by value, while a Vec field is an ordinary ARC handle
+    // and remains shared with the promise and the next await result.
+    first.value = 99;
+    first.values[0] = 99;
+    let second = await task;
+    if second.value != 42 || second.label != 7 {
+        return 2;
+    }
+    if second.values[0] != 99 {
+        return 3;
+    }
+    io.println(second.value);
+    io.println(second.values[0]);
+    return 0;
+}

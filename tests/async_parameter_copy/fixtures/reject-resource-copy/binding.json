@@ -1,0 +1,14 @@
+{
+  "schema_version": 2,
+  "contract": "compiler-dev/1",
+  "abi": "c",
+  "target": "x86_64-linux-gnu",
+  "requires_hosted": true,
+  "modules": [
+    {"logical_path": "reject/lib", "provider": "native_library", "library": "reject_fixture"}
+  ],
+  "types": [
+    {"id": "reject.Resource", "module": "reject/lib", "name": "Resource", "kind": "resource", "release_symbol": "reject_release"}
+  ],
+  "callables": []
+}

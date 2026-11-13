@@ -16,8 +16,8 @@
 ## 尚未完成
 
 - Task/协程帧图的自动回收未完成；不能把 Vec/Box/闭包以外的纯 Woozy 环都写成已回收。
-- 异步调用的普通参数保活未完成。
-- async 入口、重复 await、未启动/取消 Task 的 move 参数清理已由 Root 合入 `72028b1`；58 项源码检查与完整 149/149 CTest 通过。普通参数和 Task GC 仍未完成，用户文档不把 async/await 写成完整可用范围。
+- 普通async拥有参数已由Root整合：创建Task时立即逻辑复制，复用active标志清理；22配置与独立10组合通过。
+- async 入口、重复 await、未启动/取消 Task 的 move 参数清理已由 Root 合入 `72028b1`；58 项源码检查与完整 149/149 CTest 通过。Task GC 仍未完成，用户文档不把 async/await 写成完整可用范围。
 
 ## 本轮新增示例的核对
 

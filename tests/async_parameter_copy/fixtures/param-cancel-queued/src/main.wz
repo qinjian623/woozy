@@ -1,0 +1,22 @@
+package app;
+import "std/async" as a;
+import "std/os" as os;
+
+// Cancel a queued Task before its body ever runs. The first-resume cancel entry
+// goes directly to the common async final, which drops the copied parameter.
+async func take(data Vec[i32]) i32 {
+    return data[0];
+}
+
+func main() i32 throws os.Error {
+    let data Vec[i32] = [42];
+    let task = take(data);
+    a.spawn(task);
+    a.cancel(task);
+    a.run_until(task);
+    if !a.finished(task) {
+        return 1;
+    }
+    a.shutdown();
+    return 0;
+}

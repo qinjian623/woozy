@@ -1,0 +1,42 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+enum Failure { Bad(value Vec[i32]); }
+
+async func fail() i32 throws Failure {
+    await a.sleep(1);
+    throw Failure.Bad(value: [42]);
+}
+
+async func main() i32 throws os.Error {
+    let task = fail();
+    try {
+        let ignored = await task;
+        return 1;
+    } catch e Failure {
+        switch e {
+            case Failure.Bad(payload):
+                if payload[0] != 42 {
+                    return 2;
+                }
+                io.println(payload[0]);
+        }
+    }
+    // Re-await the same errored Task: the promise must keep the owning payload
+    // alive and hand out another ordinary copy.
+    try {
+        let ignored = await task;
+        return 3;
+    } catch e Failure {
+        switch e {
+            case Failure.Bad(payload):
+                if payload[0] != 42 {
+                    return 4;
+                }
+                io.println(payload[0]);
+        }
+    }
+    return 0;
+}

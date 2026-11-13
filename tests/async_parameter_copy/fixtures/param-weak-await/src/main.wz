@@ -1,0 +1,31 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/option" as option;
+import "std/weak" as weak;
+
+// A Weak parameter is an owning control-block handle. Its ordinary copy must be
+// retained across the suspension while the Task also owns the strong Vec.
+async func job(values Vec[i32], link Weak[Vec[i32]]) Unit throws os.Error {
+    await a.sleep(1);
+    io.println(values[0]);
+    switch weak.upgrade(link) {
+    case option.Option.Some(strong):
+        io.println(strong[0]);
+    case option.Option.None:
+        io.println(0);
+    }
+}
+
+func make() Task[Unit, os.Error] {
+    let values Vec[i32] = [42];
+    let link = weak.downgrade(values);
+    return job(values, link);
+}
+
+async func main() i32 throws os.Error {
+    let task = make();
+    await task;
+    return 0;
+}

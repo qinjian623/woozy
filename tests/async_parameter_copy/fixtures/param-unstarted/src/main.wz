@@ -1,0 +1,19 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// Destroying a never-started Task resumes the initial suspend directly. It must
+// release the private ordinary parameter copy without running the source body.
+async func job(data Vec[i32]) Unit throws os.Error {
+    io.println(data[0]);
+}
+
+func main() i32 throws os.Error {
+    {
+        let data Vec[i32] = [42];
+        let task = job(data);
+    }
+    a.shutdown();
+    return 0;
+}

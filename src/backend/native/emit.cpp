@@ -1886,9 +1886,22 @@ class Emitter {
     }
     for (size_t s = 0; s < f.slots.size(); ++s) {
       const auto &slot = f.slots[s];
-      if (slot.parameter && !slot.inout)
-        builder.CreateStore(fn->getArg(*slot.parameter + parameter_offset),
-                            slots[s]);
+      if (!slot.parameter || slot.inout) continue;
+      const auto &parameter = sig.parameters.at(*slot.parameter);
+      builder.CreateStore(fn->getArg(*slot.parameter + parameter_offset),
+                          slots[s]);
+      // An async ordinary parameter must not borrow the caller's value across
+      // the initial suspension. Give the frame one private owning copy and
+      // mark the guarded slot live so the common final/never-started cleanup
+      // releases exactly that copy. Move parameters already own the incoming
+      // value and keep their entry-active flag unchanged. Non-async ordinary
+      // parameters remain borrowed and are never destroyed.
+      const bool private_copy = is_async && slot.owner &&
+                                parameter.mode == hir::ParamMode::ordinary;
+      if (private_copy) {
+        builder.CreateCall(value_op(slot.type, true), {slots[s]});
+        builder.CreateStore(builder.getTrue(), active[s]);
+      }
     }
     for (const auto &b : f.blocks) for (const auto &i : b.instructions)
       if (i.op == ir::Op::iteration_begin) {

@@ -1,0 +1,30 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// Awaiting the same Task twice must return two ordinary owning copies of the
+// Vec result (ARC-shared handles), not transfer the promise value twice.
+async func get() Vec[i32] {
+    await a.sleep(1);
+    return [42];
+}
+
+async func main() i32 throws os.Error {
+    let task = get();
+    {
+        let first = await task;
+        if first[0] != 42 {
+            return 1;
+        }
+        io.println(first[0]);
+    }
+    {
+        let second = await task;
+        if second[0] != 42 {
+            return 2;
+        }
+        io.println(second[0]);
+    }
+    return 0;
+}

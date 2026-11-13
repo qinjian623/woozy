@@ -1,0 +1,33 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// The typed-error exit drops the frame-owned ordinary Vec parameter exactly
+// once while the promise keeps its separately owned error payload.
+enum Failure {
+    Bad(values Vec[i32]);
+}
+
+async func job(data Vec[i32]) Unit throws Failure {
+    await a.sleep(1);
+    throw Failure.Bad(values: [data[0]]);
+}
+
+func make() Task[Unit, Failure] {
+    let data Vec[i32] = [42];
+    return job(data);
+}
+
+async func main() i32 throws os.Error {
+    let task = make();
+    try {
+        await task;
+    } catch error Failure {
+        switch error {
+        case Failure.Bad(values):
+            io.println(values[0]);
+        }
+    }
+    return 0;
+}

@@ -1,0 +1,13 @@
+package app;
+import "reject/lib" as reject;
+import "std/async" as a;
+
+// A C resource without retain_symbol has no ordinary copy operation. The async
+// frame must reject this parameter instead of borrowing it across suspend.
+async func job(resource reject.Resource) Unit {
+    await a.sleep(1);
+}
+
+func main() i32 {
+    return 0;
+}

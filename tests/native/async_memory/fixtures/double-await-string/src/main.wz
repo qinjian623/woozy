@@ -1,0 +1,27 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+
+// The result must be a dynamic owning string, not a global literal: format_i64
+// allocates its digits at runtime and '+' calls lang_text_concat_v1 for another
+// allocation. Each await must retain its own handle; the first handle leaves
+// scope before the second await.
+async func get() string {
+    await a.sleep(1);
+    let left = strconv.format_i64(40 + 2);
+    let right = "!";
+    return left + right;
+}
+
+async func main() i32 throws os.Error {
+    let task = get();
+    {
+        let first = await task;
+        io.println(first);
+    }
+    let second = await task;
+    io.println(second);
+    return 0;
+}

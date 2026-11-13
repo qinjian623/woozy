@@ -1,0 +1,24 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// make's block owns data, and the Task is created there. The Task must keep a
+// private owning copy after make returns; it is first started only afterwards.
+async func job(data Vec[i32]) Unit throws os.Error {
+    await a.sleep(1);
+    io.println(data[0]);
+}
+
+func make() Task[Unit, os.Error] {
+    let data Vec[i32] = [42];
+    return job(data);
+}
+
+func main() i32 throws os.Error {
+    let task = make();
+    a.spawn(task);
+    a.run();
+    a.shutdown();
+    return 0;
+}

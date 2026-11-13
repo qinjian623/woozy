@@ -1,0 +1,38 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// Ordinary struct and enum parameters copy recursively. Their owning Vec
+// fields must stay alive across the suspension after make's block has ended.
+struct Holder {
+    values Vec[i32];
+}
+
+enum Payload {
+    Some(values Vec[i32]);
+    None;
+}
+
+async func job(holder Holder, payload Payload) Unit throws os.Error {
+    await a.sleep(1);
+    io.println(holder.values[0]);
+    switch payload {
+    case Payload.Some(values):
+        io.println(values[0]);
+    case Payload.None:
+        io.println(0);
+    }
+}
+
+func make() Task[Unit, os.Error] {
+    let holder = Holder(values: [7]);
+    let payload = Payload.Some(values: [9]);
+    return job(holder, payload);
+}
+
+async func main() i32 throws os.Error {
+    let task = make();
+    await task;
+    return 0;
+}

@@ -73,7 +73,7 @@
       "id": "CON03",
       "title": "Async functions, await and task execution",
       "status": "in_progress",
-      "owner": "Root: entry/result cleanup implemented; async parameter copies under review; Source frame GC running; fork integration pending",
+      "owner": "Root: entry/result cleanup and async parameter copies implemented; Source frame GC running; fork integration pending",
       "depends_on": [
         "LANG01",
         "MEM02",

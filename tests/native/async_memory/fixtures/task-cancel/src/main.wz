@@ -1,0 +1,30 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+// Cancel after the task has suspended: the defer runs, then the suspended
+// frame and Future must be released even though the source handle remains.
+async func child(log Vec[string]) Unit {
+    defer { vec.push(log, "cancel-cleanup"); }
+    await a.sleep(5000);
+    vec.push(log, "SHOULD NOT RUN");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let task = child(log);
+    a.spawn(task);
+    a.run_until(a.sleep(10));
+    a.cancel(task);
+    a.run_until(task);
+    if !a.finished(task) {
+        return 1;
+    }
+    a.shutdown();
+    for line in log {
+        io.println(line);
+    }
+    return 0;
+}

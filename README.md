@@ -52,7 +52,7 @@ func main() throws os.Error {
 
 `std/thread` 支持无捕获函数加明确参数的线程创建与等待，`std/sync` 提供互斥锁、条件变量和原子整数。共享可变数据需要程序员同步，原子 ARC 只保护引用计数。
 
-Native 与 Python 都会自动回收由 Vec、Box 和闭包环境形成的纯 Woozy 强引用环，在分配压力和程序正常退出时处理。涉及任务或协程帧的环和异步调用的普通参数保活尚未完成；异步函数与 await 仍在修正，暂不作为稳定范围。外部 Python/C 对象自身的环由宿主管理。
+Native 与 Python 都会自动回收由 Vec、Box 和闭包环境形成的纯 Woozy 强引用环，在分配压力和程序正常退出时处理。异步调用的普通拥有参数在创建Task时按普通规则复制并持有；涉及任务或协程帧的环尚未完成；异步函数与 await 仍在修正，暂不作为稳定范围。外部 Python/C 对象自身的环由宿主管理。
 
 `std/rwlock` 提供读写锁，`std/cancel` 提供协作取消。`std/channel` 提供有界或无界队列，以及超时和取消等待；`std/task` 提供固定工作线程的线程池与 Future，需要显式调用 shutdown。
 

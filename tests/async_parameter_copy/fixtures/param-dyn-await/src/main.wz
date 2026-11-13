@@ -1,0 +1,37 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// A dyn Trait parameter owns a boxed concrete value. Its ordinary copy must
+// clone that box so the Task can call the method after make's block ends.
+trait Readable {
+    func read(self Self) i32;
+}
+
+struct Cell {
+    values Vec[i32];
+}
+
+impl Readable for Cell {
+    func read(self Cell) i32 {
+        return self.values[0];
+    }
+}
+
+async func job(item dyn Readable) i32 throws os.Error {
+    await a.sleep(1);
+    return item.read();
+}
+
+func make() Task[i32, os.Error] {
+    let cell = Cell(values: [42]);
+    return job(cell);
+}
+
+async func main() i32 throws os.Error {
+    let task = make();
+    let value = await task;
+    io.println(value);
+    return 0;
+}

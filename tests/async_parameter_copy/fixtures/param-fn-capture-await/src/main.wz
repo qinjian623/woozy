@@ -1,0 +1,26 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// A capturing function value owns its closure environment. The ordinary async
+// parameter must retain that environment, not borrow make's temporary handle.
+async func job(action func() i32) i32 throws os.Error {
+    await a.sleep(1);
+    return action();
+}
+
+func make() Task[i32, os.Error] {
+    let values Vec[i32] = [42];
+    let action = func() i32 {
+        return values[0];
+    };
+    return job(action);
+}
+
+async func main() i32 throws os.Error {
+    let task = make();
+    let value = await task;
+    io.println(value);
+    return 0;
+}

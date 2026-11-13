@@ -1,0 +1,21 @@
+package app;
+import "std/async" as a;
+import "std/vec" as vec;
+
+// A never-started Task owns its frame, the frame owns the moved Vec, and the
+// Vec owns the Task. This pure Vec<Task> cycle must be reclaimed by GC.
+async func hold(values move Vec[Task[Unit,Unit]]) Unit { }
+
+func make_cycle() {
+    let values = vec.empty[Task[Unit,Unit]]();
+    let alias = values;
+    let task = hold(move alias);
+    vec.push(values, task);
+}
+
+func main() i32 {
+    for var i i32 = 0; i < 64; i += 1 {
+        make_cycle();
+    }
+    return 0;
+}

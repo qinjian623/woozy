@@ -1,0 +1,28 @@
+package app;
+import "std/async" as a;
+import "std/vec" as vec;
+
+// Task frame -> callback closure environment -> captured Vec -> Task frame.
+// The Task is never started, so no executor root keeps this cycle alive.
+async func hold(callback func() i32, values move Vec[Task[Unit,Unit]]) Unit {
+    if callback() < 0 {
+    }
+}
+
+func make_cycle() {
+    let tasks = vec.empty[Task[Unit,Unit]]();
+    let captured = tasks;
+    let for_task = tasks;
+    let callback = func() i32 {
+        return i32(vec.len(captured)) - 1;
+    };
+    let task = hold(callback, move for_task);
+    vec.push(tasks, task);
+}
+
+func main() i32 {
+    for var i i32 = 0; i < 64; i += 1 {
+        make_cycle();
+    }
+    return 0;
+}

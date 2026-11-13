@@ -1,0 +1,18 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// A never-spawned Task must release its Future and untouched frame when the
+// last source handle is dropped. Its body must not run.
+async func job() Unit throws os.Error {
+    io.println("SHOULD NOT RUN");
+}
+
+func main() i32 throws os.Error {
+    {
+        let task = job();
+    }
+    a.shutdown();
+    return 0;
+}

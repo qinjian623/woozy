@@ -1,0 +1,27 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/vec" as vec;
+
+// shutdown cancels a suspended task, runs its defer, and releases the frame.
+async func worker(log Vec[string]) Unit {
+    defer { vec.push(log, "shutdown-cleanup"); }
+    await a.sleep(5000);
+    vec.push(log, "SHOULD NOT RUN");
+}
+
+func main() i32 throws os.Error {
+    let log = vec.empty[string]();
+    let task = worker(log);
+    a.spawn(task);
+    a.run_until(a.sleep(10));
+    a.shutdown();
+    if !a.finished(task) {
+        return 1;
+    }
+    for line in log {
+        io.println(line);
+    }
+    return 0;
+}

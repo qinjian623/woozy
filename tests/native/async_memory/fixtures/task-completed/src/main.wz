@@ -1,0 +1,18 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+
+// The task completes with an owning Vec result. After the local Task handle
+// leaves scope, the Future, frame and promise value must all be released.
+async func get() Vec[i32] {
+    await a.sleep(1);
+    return [42];
+}
+
+async func main() i32 throws os.Error {
+    let task = get();
+    let value = await task;
+    io.println(value[0]);
+    return 0;
+}

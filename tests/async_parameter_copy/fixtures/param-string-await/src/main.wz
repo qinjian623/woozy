@@ -1,0 +1,24 @@
+package app;
+import "std/async" as a;
+import "std/io" as io;
+import "std/os" as os;
+import "std/strconv" as strconv;
+
+// The parameter is a dynamic owning string built by format_i64 and '+'. make
+// drops its local handle before the caller awaits; the Task copy must survive
+// the suspension and remain readable after the resume.
+async func job(text string) Unit throws os.Error {
+    await a.sleep(1);
+    io.println(text);
+}
+
+func make() Task[Unit, os.Error] {
+    let text = "value=" + strconv.format_i64(42);
+    return job(text);
+}
+
+async func main() i32 throws os.Error {
+    let task = make();
+    await task;
+    return 0;
+}
