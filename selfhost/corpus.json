@@ -3,7 +3,7 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
+  "git_head": "10d3f79beb8453c3c94c40bd455fd6be8c091448",
   "previous_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
   "frozen_at": "2026-11-14",
   "repository_roots": [
@@ -31,10 +31,10 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1317,
+    "tracked_wz": 1318,
     "manifests": 1008,
     "tests_manifests": 960,
-    "no_manifest_wz": 125,
+    "no_manifest_wz": 126,
     "auxiliary_dsl_inputs": 21
   },
   "files": [
@@ -2396,6 +2396,29 @@
         "project:selfhost/tests/digest/lang.toml"
       ],
       "manifest": "selfhost/tests/digest/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/float_observer/driver/main.wz",
+      "sha256": "a7dea21aedaae28e4a69ac0fd6824dfe003678f794d82fc6622becc61ef7413a",
+      "size": 20908,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/float_observer"
+      ]
+    },
+    {
+      "path": "selfhost/tests/float_observer/run.py",
+      "sha256": "1b23980267123746004e0637288aabb69b054319c7e86f74cbe13a572ecb61b7",
+      "size": 82510,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/float_observer/test_controls.py",
+      "sha256": "5b225cd8ea088b53f108d3af333bdd2e7ac2b5e303b0d8579e49b27bd445a519",
+      "size": 11015,
+      "role": "runner_source",
+      "assignment": []
     },
     {
       "path": "selfhost/tests/foreign_signature/lang.toml",
@@ -79428,6 +79451,20 @@
         "project",
         "public-cli"
       ]
+    },
+    {
+      "id": "component:selfhost/tests/float_observer",
+      "kind": "component",
+      "operation": "external",
+      "support": "existing_runner",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/float_observer/run.py",
+      "runner_status": "component",
+      "reason": "Wz frontend/emitter floating observer with accepted CLI byte comparisons; core6440Native/3438Python verified separately; supplemental14projects/9observations and full corpus remain pending",
+      "tags": [
+        "component"
+      ]
     }
   ],
   "runners": [
@@ -79455,6 +79492,16 @@
       "path": "selfhost/tests/digest/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "selfhost/tests/float_observer/run.py",
+      "status": "component",
+      "reason": "Floating observer checks actual numeric values through Wz driver and accepted CLI, with remaining supplemental scope explicit"
+    },
+    {
+      "path": "selfhost/tests/float_observer/test_controls.py",
+      "status": "component",
+      "reason": "Floating observer small process/provenance test controls, not a language-corpus pass"
     },
     {
       "path": "selfhost/tests/foreign_signature/run.py",
@@ -80599,7 +80646,7 @@
   ],
   "refreeze": {
     "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-    "to_git_head": "a3230692dd4b5a348be0dd6206c7862d968cfd66",
+    "to_git_head": "10d3f79beb8453c3c94c40bd455fd6be8c091448",
     "new_freeze_paths": [
       "selfhost/src/wzcc/cli/project.wz",
       "selfhost/src/wzcc/hirverify/api.wz",
@@ -80765,7 +80812,10 @@
       "selfhost/tests/stat_bytes_e/lang.toml",
       "selfhost/tests/stat_bytes_e/run.py",
       "selfhost/tests/stat_bytes_e/selftest_cleanup.py",
-      "selfhost/tests/stat_bytes_e/src/main.wz"
+      "selfhost/tests/stat_bytes_e/src/main.wz",
+      "selfhost/tests/float_observer/driver/main.wz",
+      "selfhost/tests/float_observer/run.py",
+      "selfhost/tests/float_observer/test_controls.py"
     ],
     "modified_freeze_paths": [
       {
@@ -80837,7 +80887,7 @@
         "accepted_task": "fa0f40d5-ef37-4604-8a3d-7677efbf475f"
       }
     ],
-    "new_freeze_path_count": 165,
+    "new_freeze_path_count": 168,
     "modified_freeze_path_count": 12,
     "compiler_source_count": 116,
     "compiler_source_stage1_whitespace_only_differences": 3
