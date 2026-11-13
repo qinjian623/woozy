@@ -3,12 +3,12 @@
   "contract": "compiler-dev/1",
   "plan": "/home/qin/Work/language-dev-20261103/checks/selfhost-corpus-plan-20261113.md",
   "plan_sha256": "7090e83a518efe2009ce10f961508e82181bdc7505d47b9c6954451689d5b164",
-  "git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
-  "previous_git_head": "191ccbddef99ffe56a86291257f6c2bc52db1a7b",
-  "frozen_at": "2026-11-13",
+  "git_head": "b5ac141619627dce9d9658ea8c1e03ca42ac5ca8",
+  "previous_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
+  "frozen_at": "2026-11-14",
   "repository_roots": [
     "/home/qin/Work/language-dev-20261103/compiler",
-    "/home/qin/.local/state/cli-agent-bridge/worktrees/736c34ac60001c1746eff2ed"
+    "/home/qin/.local/state/cli-agent-bridge/worktrees/0ff66c3f84c4a2a27b8edd9a"
   ],
   "freeze_basis": "tracked worktree bytes at the current Root HEAD; untracked in-progress files are excluded from the catalog and reported by freeze/coverage as formal-freeze gaps",
   "toolchain": {
@@ -31,10 +31,10 @@
     "rule": "freeze compares tracked paths and SHA-256 bytes; new tracked corpus files fail"
   },
   "coverage_expectations": {
-    "tracked_wz": 1198,
-    "manifests": 984,
+    "tracked_wz": 1317,
+    "manifests": 1008,
     "tests_manifests": 960,
-    "no_manifest_wz": 109,
+    "no_manifest_wz": 125,
     "auxiliary_dsl_inputs": 21
   },
   "files": [
@@ -254,8 +254,8 @@
     },
     {
       "path": "contracts/selfhost.json",
-      "sha256": "2535181cef99beac6d77b19b50c2ce8b8dd28f5bf8b502d6d80b795a714eb4ba",
-      "size": 13141,
+      "sha256": "dd7cbb7f3130bfde9b1a2a5c055a18934bb2ffd2c261265bc73cc2ec7ab03f92",
+      "size": 22993,
       "role": "metadata",
       "assignment": []
     },
@@ -1054,8 +1054,8 @@
     },
     {
       "path": "selfhost/bootstrap.py",
-      "sha256": "9a6d80396800e6dec0630fa84581b5874d7d0a2b54291b1f61635950a3aaf95c",
-      "size": 8372,
+      "sha256": "8733d71560a4706c2da7bf11dea6c7f635f44793c5b77d300ce1b3d5b878c7db",
+      "size": 25791,
       "role": "runner_source",
       "assignment": []
     },
@@ -1110,8 +1110,18 @@
     },
     {
       "path": "selfhost/src/wzcc/cli/driver.wz",
-      "sha256": "e3355244d3a14bc1c56e816bade1bafd36126ea5cbe2d9496d2929fb5c0f0ee8",
-      "size": 3636,
+      "sha256": "5dd6b8a700c46a3c6248f95ff9fb80aae3beca19f7681c64082edbd76322040b",
+      "size": 4661,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/cli/project.wz",
+      "sha256": "5395c673ee6a8f9615974bfdae737c066e7150338955121fbcde39a5bad3f7b3",
+      "size": 9670,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1202,6 +1212,156 @@
       "path": "selfhost/src/wzcc/hirdump/hirdump.wz",
       "sha256": "a14bbcc437ba7a558f9b6ad720a11a37015b3d6ccdb61684c887845634e81192",
       "size": 33525,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/api.wz",
+      "sha256": "c61c34174d3b94fa33733c1019d6f3a1e0604bc6e75b2e054bc81a1a95df8c3f",
+      "size": 5729,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/backend.wz",
+      "sha256": "56f60e13b61f0d105f3af9e28a06c6db67294458b6ed09dc48adb92d648b0fdf",
+      "size": 22088,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/decl.wz",
+      "sha256": "d446a31858a2f00bb9b36ef59fcff345c8ff9d22abe5db7dd013b427469da79d",
+      "size": 55390,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/effectsrc.wz",
+      "sha256": "c12289e983fa0d6edd50aa8c70a34652115b1eb5f71dfaf30c11a09b8791f61e",
+      "size": 37552,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/flow.wz",
+      "sha256": "8b108538a7dc2b3eb3c077f0d5b4e9f0c9bcda23be630f326a5a1bae55f1b962",
+      "size": 56328,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/instance.wz",
+      "sha256": "2d26326731974aa64f92aabd1602dbe1ecab88e14cc85e33925214b809535a07",
+      "size": 51611,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/method.wz",
+      "sha256": "a4ff40c3f805f3943d5803d37cfeddb4c613449ebfb767b690b49a3a15197aee",
+      "size": 60961,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/run.wz",
+      "sha256": "2702517aef9c4bc787d039d35d1181da829e41c06ad9b5af191597135805e46e",
+      "size": 16778,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/shape.wz",
+      "sha256": "ee8416424e12a0ff166a6d5d939d6dd0403fbe290b75b655659cf622ca277b39",
+      "size": 107680,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/shape_a.wz",
+      "sha256": "097fb565ccaac1ab1c0d4386e333ce9313c541236bd810ba2436b00758d1347a",
+      "size": 48934,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/source.wz",
+      "sha256": "096244c8889ef95f89ef699556841240d5c355d7c3f5732801c82e2ead9522e0",
+      "size": 26147,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/state.wz",
+      "sha256": "bb59a895a308a82b3a909597e666620b2dfd002e2351983e5ed5d6a95949e6c0",
+      "size": 16644,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/types.wz",
+      "sha256": "19ea6a41b402b186abb5829ba5f6a920bce7eb482242851c515af56a36b01de1",
+      "size": 17618,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/values.wz",
+      "sha256": "47159acfcd14fa3d3511fcf4b47fa3f3da44966506fb58cf4823857aef6969e1",
+      "size": 39137,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/hirverify/verify.wz",
+      "sha256": "1f429cfc37c3ed816618d577a4f200b5f3c2dd2dffcb630384f5a45034d3d72e",
+      "size": 17955,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1309,6 +1469,126 @@
       "manifest": "selfhost/lang.toml"
     },
     {
+      "path": "selfhost/src/wzcc/nativeemit/b_function.wz",
+      "sha256": "2fc84f442359429e6abe6db015e326718da806f0aef63cb2a0aaa141dcc96d5d",
+      "size": 26918,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/b_ops.wz",
+      "sha256": "d96702589c045703fd3d345b40cf83a9226b9352142b6c09e59e02472a397a91",
+      "size": 41797,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/b_type.wz",
+      "sha256": "d5713db0c3a7fba5cd74ff961f2501bdc14c443b68a2bc64f577906e875e3498",
+      "size": 27430,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/c_instructions.wz",
+      "sha256": "05ea6d275d360483bbcbb21036e2f6bc52cc23a9361b022408ca098eb5d2bec2",
+      "size": 29244,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/c_values.wz",
+      "sha256": "fe6865b7ca8518ca188e5252187b9440d5f2d310d3c87b22b49ad4a7a9b672cf",
+      "size": 60991,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/c_weak.wz",
+      "sha256": "39e8615daeaa2b817622a674d5ac911396ba430c1e3342e528bee7563bb44815",
+      "size": 19044,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/d_async_gc.wz",
+      "sha256": "80fa1e961568b94ad9746724b4a046ec29b5da3586de274ab9008093a8275a0a",
+      "size": 86549,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/e_adapter.wz",
+      "sha256": "4216ae852bb57aca9ab0bc1ba53a43232a6c8ac1676c5633c6d4fb6004c837c4",
+      "size": 23319,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/e_c_ffi.wz",
+      "sha256": "fd7ea48fbdc3177c8a54d1195b6593295d66e51dee29ed4db617b42b9d541790",
+      "size": 36094,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/e_common.wz",
+      "sha256": "648fd776a3fc4652b0ee9aa8bf4c65c181064259deef84a946dc77447a83afd2",
+      "size": 18405,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/e_system.wz",
+      "sha256": "141b6be66fb047d797f7acd0c04504b1a9c6a15fe117ecd0d6f2e418e7a00dfa",
+      "size": 47937,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeemit/emit.wz",
+      "sha256": "4070f4eb38912495ca022d32124bda09e1d287459c6fddf72513ac1875885659",
+      "size": 3176,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
       "path": "selfhost/src/wzcc/nativeemit/state.wz",
       "sha256": "5b7741ebc17da45971994606ee5dc5d950d07c58e0b6d54879db69664cd910b8",
       "size": 10942,
@@ -1339,6 +1619,156 @@
       "manifest": "selfhost/lang.toml"
     },
     {
+      "path": "selfhost/src/wzcc/nativeirdump/nativeirdump.wz",
+      "sha256": "3bcdf11dd3a9e6712623772172973b34ab283be14530c807dfc7894fbc044a8e",
+      "size": 13021,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativelayout/nativelayout.wz",
+      "sha256": "e8a6f64eeedda2a833a905a46f73416ae87c54c7c8ec094d0c841719cc02608c",
+      "size": 7029,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativelower/construct.wz",
+      "sha256": "b4d5ba611806ca637101c1302a38c8e497fda268d2aad99a72293ccdb74e8eb6",
+      "size": 5390,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativelower/expr.wz",
+      "sha256": "62e87db81bbc0d8615c6c7f4216b8342027be96fdbd18f37621fae30f9ff90ff",
+      "size": 34076,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativelower/nativelower.wz",
+      "sha256": "a1024aa42eed2e140054757f9035a0467fdeddc3122701c1356ff5591dd0838a",
+      "size": 3435,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativelower/state.wz",
+      "sha256": "6bb54dcc11d863e255d89e78776acd821805421687da413a7a48415c63e3eb11",
+      "size": 33554,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativelower/stmt.wz",
+      "sha256": "f9ff538a68bdee54e99c3264b92ab796f4f718c742e338eecf9a7ba598c952f7",
+      "size": 45893,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/cleanup.wz",
+      "sha256": "4230a4650490597481d33e4f721df6001212973450e582002304740d99ff7da4",
+      "size": 25443,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/copies.wz",
+      "sha256": "7f51807502928d913bfac8f0cdb79c9a7883f200fe59648c05d1acb5bc63e972",
+      "size": 7099,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/nativeverify.wz",
+      "sha256": "86af5a66e5fcbdbf9cdb058dce67b499bad50ddcc52a8b16e282575152159a3b",
+      "size": 3920,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/obligations.wz",
+      "sha256": "7db69e9621555b2aaf67dbc0f6497ccf5d94a05cb91c71606ef72b855a3c9048",
+      "size": 13314,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/ownership.wz",
+      "sha256": "2e5b0eef1f0912e981994515fd69e0ebe739967df0250a0a5ca5d8581b0ba5e1",
+      "size": 51709,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/support.wz",
+      "sha256": "e6d0c21ea9e44228416fabc0beaca5f2675e6e211043a0edcf87d88d938998fd",
+      "size": 41282,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/verify_function.wz",
+      "sha256": "c0e57de799d61be2c201dd81d24d7415347d606199cbdf3357882c3fdfc352ec",
+      "size": 34141,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/nativeverify/verify_ops.wz",
+      "sha256": "a9c375953da70100fbeae8d1220f37cac72788d9a162d0fd3428e24e08da3a48",
+      "size": 95676,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
       "path": "selfhost/src/wzcc/number/number.wz",
       "sha256": "1490c751b635ce6313d36a980352a043a85c5f4a9825a393c9c714d2f3552c3f",
       "size": 21368,
@@ -1350,8 +1780,8 @@
     },
     {
       "path": "selfhost/src/wzcc/ownership/analysis.wz",
-      "sha256": "a2a9ed16b403088967b159ac4aa5f99c6574f73300350342c30ac7cb503b4f1e",
-      "size": 110280,
+      "sha256": "406cdeec7fc1d929f456748d729c6ce688da18f3b0a7f84afc381a3fe56c79ad",
+      "size": 111988,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1430,8 +1860,68 @@
     },
     {
       "path": "selfhost/src/wzcc/project/project.wz",
-      "sha256": "5ed854ca47c5315aaf4c7987809d753bac41f0913fa834598dbe63c497938676",
-      "size": 24267,
+      "sha256": "062cdfb881e5627c49c05467eb2866a927858275a316eaf3b91cf8fbe03f79d4",
+      "size": 26006,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/pythonemit/api.wz",
+      "sha256": "1b995275e31aa15990e8c3e8dd359aa6c3cff23e8c5899a8ea7a736281078971",
+      "size": 1277,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/pythonemit/emit.wz",
+      "sha256": "ba917eb05f9c46bb383ba22e10f6cb547adbed0141c9650fa0ad41c9cb52c431",
+      "size": 19858,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/pythonemit/expr.wz",
+      "sha256": "c03338510717182d5d480a1c157a624544037564a47cb7c6c40100da24f46505",
+      "size": 50854,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/pythonemit/state.wz",
+      "sha256": "4e71fb116ce352c5ba5a31e1c9b6a914b24d2247c4f736b6f5a7c085ae3c65ad",
+      "size": 17987,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/pythonemit/stmt.wz",
+      "sha256": "7705cbd9de539b2ebde1a6d77fe8fe3ad2e9ce5305f7d21f42fbd16b26aa4a6b",
+      "size": 36946,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/pythonemit/writer.wz",
+      "sha256": "03cc81c1e64d243ddd2a2d76fd19479414a2aa7f7a09d2e4b3b21f5415a07e0e",
+      "size": 38233,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1462,6 +1952,126 @@
       "path": "selfhost/src/wzcc/resources/resources.wz",
       "sha256": "9c87d56694dd2b9ada145c4a38fc84e33d1eb6b2c326d55dd119d2715754246d",
       "size": 271,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/a_declarations.wz",
+      "sha256": "16a9d5d02dc81ceb89023e9897badc1145018859b43c1a6989786d0f40e981a9",
+      "size": 28685,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/a_helpers.wz",
+      "sha256": "6f6b62be63cbd0042fb9141cd2d72c849d3efdb13979d2d006b695363f85e5f2",
+      "size": 15442,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/a_instantiate.wz",
+      "sha256": "3d5192d073196f56c2ccd3e8ef72fa110b22c6b07ff63667165e94afff57fb05",
+      "size": 46245,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/a_types.wz",
+      "sha256": "b24f1241b79a76eddbb7d9ab098e69322ece715d3cd1c015c682fc9de682b4de",
+      "size": 91067,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_call.wz",
+      "sha256": "398b4d4c75fd2ffe867ec763753afe9906a994fd16c0b984eb87675cf40311c0",
+      "size": 43761,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_call2.wz",
+      "sha256": "7f5fa1cf87222b8145d1bdbb1c006de30a767245c0b17b28c63c6796c8635ce4",
+      "size": 45609,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_effects.wz",
+      "sha256": "8daebc56d4bc7c535745b980ed7f33f8a644d881a02b8ff31cadd29c5895be9b",
+      "size": 25298,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_expr.wz",
+      "sha256": "ddbd8973847a31ad8d4ce3764321aaa5577bfd3fdd76979d17fd8a2ac8a87266",
+      "size": 88477,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_place.wz",
+      "sha256": "2c884627e29e84ee5c1a4ec5ed486d3c543de7d62af358c89e7f1bdbae119f18",
+      "size": 31111,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_stmt.wz",
+      "sha256": "523a0ae9e7f08564d95ffc5b4b4b1c2952f1cbab9db370de68c29273b8bae003",
+      "size": 65177,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_typed_call.wz",
+      "sha256": "4af3dd5a31edb55fe5425ccb9664425fec03cda58dd9e4daa0b03734780f9e9f",
+      "size": 32871,
+      "role": "compiler_source",
+      "assignment": [
+        "compiler:source"
+      ],
+      "manifest": "selfhost/lang.toml"
+    },
+    {
+      "path": "selfhost/src/wzcc/sema/b_util.wz",
+      "sha256": "63932e97e8848966d2946ae5da6d3bcb761021e3b3744a860179920da32cd63b",
+      "size": 35540,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1550,8 +2160,8 @@
     },
     {
       "path": "selfhost/src/wzcc/system/system.wz",
-      "sha256": "b6ac7a8bb96b6dbc07401a37e1c139741b61b1426e0eefdbd3d2fca657a7dfb3",
-      "size": 34338,
+      "sha256": "8869493a79fede6faa100122fd35be955959fd74cc80c8cc6a922b9944d1830b",
+      "size": 34504,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1610,8 +2220,8 @@
     },
     {
       "path": "selfhost/src/wzcc/valueops/valueops.wz",
-      "sha256": "19149ef4e0cb4a76d6dfd52425eb4c3a552004bf04d84577aa9dd7785723a460",
-      "size": 64198,
+      "sha256": "0f2a1cb34a1b636bb78078775a935f0bff000d27244a5bebe354d376f04477f3",
+      "size": 65252,
       "role": "compiler_source",
       "assignment": [
         "compiler:source"
@@ -1923,6 +2533,128 @@
       "assignment": []
     },
     {
+      "path": "selfhost/tests/hirverify/exit_identity/fixture.wz",
+      "sha256": "31aa14347009514dd8f3fe4e4aa5f1c7a1a5eca73abd12770a2e59431e978977",
+      "size": 158,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/exit_identity/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/exit_identity/lang.toml",
+      "sha256": "c8cfbf255496f80f4f0e82e62c2f5099207802eb97e80d4edfac498abd95727a",
+      "size": 132,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/hirverify/exit_identity/src/main.wz",
+      "sha256": "7ba3cecde436f1be6bf03cf65d16e11ee54d5a337177668fe9054e08c73115d7",
+      "size": 4317,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/exit_identity/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/fixture.wz",
+      "sha256": "e93cdb1e63984e82a2c556ebce1374f5c79ce9f9d6c30ab2b577b4b30678a94b",
+      "size": 33,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/lang.toml",
+      "sha256": "3f84a5563d1904c02c5bfa36e79d43fc62e851aee7750c3094613ada2d15aed5",
+      "size": 130,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/hirverify/nonunit.wz",
+      "sha256": "b7c60a91887128e418aa92e75912bf8b1f3a926614d1d72a160901e058784afb",
+      "size": 73,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/run.py",
+      "sha256": "7e9ebb1c4a8cf9f7b8349dcfefa0a57dd3da4ac3bcd2d34b9efafa7196c06c46",
+      "size": 26830,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/src/fixes.wz",
+      "sha256": "8fa398da42e819de545ea36be341d9d9a25b1507029992a6f0972b76c739c369",
+      "size": 28413,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/src/main.wz",
+      "sha256": "cb3c70060ac0372fa1e869c82df1cd403b5d7fea1f6f13490efea23c3531aa52",
+      "size": 12248,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/template.wz",
+      "sha256": "b7350366292fa08e5d297150c2f83f559fbfb1cb9c56552cb0298d0f599bc339",
+      "size": 59,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/test_process_controls.py",
+      "sha256": "15d4bca9e957df81caf0f01e1eadc38dc160e6c0ce40ceb370759a2fa196bcf1",
+      "size": 13178,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/hirverify/throw.wz",
+      "sha256": "10d61a25a9d608f7742b6bcd32a0fcba5f5d37a1107e213ce4a297f592520194",
+      "size": 105,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/hirverify/trait-impl.wz",
+      "sha256": "0b557eb3ea1c064ce71ae2f4801181069722e795a3534bd3c3197b5d3078aa7a",
+      "size": 199,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/hirverify/lang.toml"
+      ],
+      "manifest": "selfhost/tests/hirverify/lang.toml"
+    },
+    {
       "path": "selfhost/tests/input/project/lang.toml",
       "sha256": "ebdacece56d647b2051398774778cd5afb49c4657427751415116c5caf932ebc",
       "size": 122,
@@ -2037,6 +2769,244 @@
       "assignment": []
     },
     {
+      "path": "selfhost/tests/nativeemit_b/main.wz",
+      "sha256": "b3db51f00d50b9a87fdb68ccc395e4a2b6da785c50112d05165469cfd790754f",
+      "size": 934,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_b"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_b/run.py",
+      "sha256": "6912ec5d3b2e685d5f25edc2eb315b155be516dbb3ec193322d71962cce3eb75",
+      "size": 16145,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeemit_b/selfcheck.wz",
+      "sha256": "1982e3f655aceba3d222b4759b050f207f1611e1d4630f4090679cf2d8816b83",
+      "size": 33238,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_b"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/branch_driver.wz",
+      "sha256": "f44784c83fab40c5fc79e28e13b831efc958687d33b9a5644b4f17b487b3ba25",
+      "size": 49460,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/references/lang.toml",
+      "sha256": "1f50eb68627c66bb6264324fddcac427ea1b6768b7c9f5616d98c7da5fb31e83",
+      "size": 126,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/references/src/main.wz",
+      "sha256": "250fa5d2f129a55a0ebb126169f5aed2a4881c8d409a7cda63a182273fdc5f0c",
+      "size": 2084,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ],
+      "manifest": "selfhost/tests/nativeemit_c/corpus/references/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/thread/lang.toml",
+      "sha256": "88d21ed4c57f4804ce08f26a3e3595c59d8f71000a1940b2a9669ad1f77154c2",
+      "size": 122,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/thread/src/main.wz",
+      "sha256": "3cf81f9fb028f4135b55371391b1e25a99c5098ba5d22313bcb3edadbd8d0e5c",
+      "size": 1119,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ],
+      "manifest": "selfhost/tests/nativeemit_c/corpus/thread/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/traits/lang.toml",
+      "sha256": "27e3c38e739aebfd14d33e899022ef8271a1ac0f56730efca419ebbebb43d2b1",
+      "size": 122,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/traits/src/main.wz",
+      "sha256": "44ed103de3da688c10f23cbf8515a081d8f3b4c6222fce4095190a4378fca0a4",
+      "size": 1793,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ],
+      "manifest": "selfhost/tests/nativeemit_c/corpus/traits/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/values/lang.toml",
+      "sha256": "4baacda6d76c084d5bf50c2d1c934a4efc6e0c60cf03239aed85563c62c01f28",
+      "size": 122,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/values/src/main.wz",
+      "sha256": "11b9219e39d3ef3c6ab3a5ab096f64b15c2f1461286a4f63d8c7186bb3c33226",
+      "size": 1795,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ],
+      "manifest": "selfhost/tests/nativeemit_c/corpus/values/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/weak/lang.toml",
+      "sha256": "ab337ddd8451daa65961eb3998869654f5666ebdf05c2b6da5ad876edcd26fa6",
+      "size": 120,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/corpus/weak/src/main.wz",
+      "sha256": "74407f66a5c739645c00d9b7d970ccfe7fd54a3543be05f40344e568a816ba17",
+      "size": 3048,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ],
+      "manifest": "selfhost/tests/nativeemit_c/corpus/weak/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/driver.wz",
+      "sha256": "00ed8304e79701635eacd342ab59337678cddcf5e674ec97c38e6641cc85b04e",
+      "size": 11229,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/main.wz",
+      "sha256": "810dbdb7bfc864262039192d881aa5cdf1411f60d8ab2be0f7d95b81cae1ef0f",
+      "size": 1191,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_c"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/run.py",
+      "sha256": "3fc9caa07d2fa3cfca4bfebd3e287026d3056012e9ffad628f6629a945a6dcf5",
+      "size": 31780,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeemit_d/main.wz",
+      "sha256": "c25688ad24ef5fe9f01a04dce91a54915ed1bb1fc9953936a6c56c0c7ef7fc33",
+      "size": 6439,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_d"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_d/raw/driver.wz",
+      "sha256": "b4fcca54c9e19bad9db157fcc355a7bb2baf3791eabef5d3871b70fd6e7b17a0",
+      "size": 21350,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_d"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_d/raw/main.wz",
+      "sha256": "a75f04398d8b6d9274f4bdcd5f72682e6048995a6a82c7769d2d4d413631c475",
+      "size": 556,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_d"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_d/run.py",
+      "sha256": "c0b2da7848550b4bf6cc1a580d986ee8326960f5e61a7aae011488ed8d971822",
+      "size": 17168,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/e_review_extra.wz",
+      "sha256": "da35deb488b3fd7d097d78d57f16479b2d3dcdeac426807c7e2049b997b51196",
+      "size": 14342,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_e"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/fix_check.py",
+      "sha256": "3723b4f3f84d48d2c50f6c269627a360baebea5c6ac166e322910e1387fcc5bc",
+      "size": 13072,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/main.wz",
+      "sha256": "e67611a1f1fe764ef1a7bc57457a4f85ba009c1a4ef54293678b4afb3006297a",
+      "size": 7504,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_e"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/probe_main.wz",
+      "sha256": "ed47fdca54994e963cb532786f9324a202ea8e0f1daf0fa41f540d5aadde6a24",
+      "size": 1051,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_e"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/review.wz",
+      "sha256": "20108a66b4098c207b77e1eb4edf0a6a8a207dc98fbaccccd8d15c9152c6e07e",
+      "size": 7178,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeemit_e"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/run.py",
+      "sha256": "e4968c0f473863743b74cd56809f0dc89c76979ea6d25830a42715d2de4cd8b2",
+      "size": 10538,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
       "path": "selfhost/tests/nativeemit_text/main.wz",
       "sha256": "d827bec1d301e1366c5a926f156914628858c2088c7f2849b3dd95deec38317b",
       "size": 8122,
@@ -2080,6 +3050,304 @@
       "manifest": "selfhost/tests/nativeir_records/lang.toml"
     },
     {
+      "path": "selfhost/tests/nativelower/fixtures/cfg/lang.toml",
+      "sha256": "a63c5edce832bedc0f06ae90c0f353c1a82482647cffb6a4fad3e7ba25059e8a",
+      "size": 140,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativelower/fixtures/cfg/src/main.wz",
+      "sha256": "07b1ae5a5ff763d70ab30a5e579f76185227feb197ba3cf26b4929af0b4a1fe9",
+      "size": 2498,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/fixtures/cfg/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativelower/helpers/control_take.wz",
+      "sha256": "e326a7761fdc6d793143293d0bd86aed27e197a8e8e23d5aa56236c6e023e9af",
+      "size": 527,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/helpers/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativelower/helpers/defect_take.wz",
+      "sha256": "66036ee8bf35a90b9fb8a4c69614d1f1de719d471482138dfbf808d85d8e9e84",
+      "size": 659,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/helpers/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativelower/helpers/lang.toml",
+      "sha256": "8abcf99a11d6e2b471bdcd32f179383ea512f29107b27957acacd5d33d0b5e53",
+      "size": 139,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativelower/helpers/main.wz",
+      "sha256": "f819955909dc1087ffa305e184d7757686f257123901ddfcc43629d7db0f272b",
+      "size": 3525,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/helpers/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativelower/helpers/review.wz",
+      "sha256": "7b950d81e2ccc669ceea3a248e3d23b39a8fb3fd3aa38cb3061f9cba829f9ebe",
+      "size": 4450,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/helpers/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativelower/lang.toml",
+      "sha256": "8abcf99a11d6e2b471bdcd32f179383ea512f29107b27957acacd5d33d0b5e53",
+      "size": 139,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativelower/lowercheck/lang.toml",
+      "sha256": "4f381e2ce38442e4903c623dce0ae861b94ed38a5819dd549c87dba7af4e5591",
+      "size": 142,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativelower/lowercheck/src/main.wz",
+      "sha256": "e9ff37912ed742cc7067ace8b736a5c83f1e3af8e627fd601153f77a9fca394f",
+      "size": 6774,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/lowercheck/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativelower/rich/src/main.wz",
+      "sha256": "a6a46403f41b36d9f4645de865afd04ff855f7a1fb81b5a9a8a940a129e4d9dc",
+      "size": 19232,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativelower/run.py",
+      "sha256": "87b11d238d8c028f90ba46e51c936911ed52a55e2dba6567eec1465ca4e42e31",
+      "size": 31982,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativelower/src/main.wz",
+      "sha256": "edd2a53b6461d43a5e64579d994aa1b8502e6a9f0c9c793a57bdecac00fade98",
+      "size": 4909,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativelower/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativelower/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/controls.py",
+      "sha256": "2231d31e5fbe84b38b01918fa09079ea496bcb4bbcd397ed20966a3c2f58275e",
+      "size": 13127,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/fixtures/enumclosure/lang.toml",
+      "sha256": "28f0dabdb1690a09969f922e74679c04c02f5ce0398b507ea9ede5792c770cb8",
+      "size": 141,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/callidentity/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/fixtures/enumclosure/src/main.wz",
+      "sha256": "ae811cd982190cb023f984a8f9c9c525387cd0de1d199d1fc52799164dfef49b",
+      "size": 799,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/callidentity/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeverify/callidentity/fixtures/enumclosure/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/fixtures/generic/lang.toml",
+      "sha256": "e944e1e8b22a125f3d262f788103018343a802b1219dff0fb5e347dc92ffea1b",
+      "size": 137,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/callidentity/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/fixtures/generic/src/main.wz",
+      "sha256": "1e0f998ee4e11bbab29e25bd2f473947c84ca8a96d94161968ca38920ddc1b26",
+      "size": 742,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/callidentity/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeverify/callidentity/fixtures/generic/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/lang.toml",
+      "sha256": "25b287a03a9d4e391538d518fc43190ef542b400821d60cdcf259086d8472f75",
+      "size": 142,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/callidentity/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/main.wz",
+      "sha256": "5e3b7d590d2c4d456e7b6f47b9cb841ba38aec7fc6f8e8d207a972caaab6f4f4",
+      "size": 14995,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/callidentity/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeverify/callidentity/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/run.py",
+      "sha256": "0b45b3e0f58013534d89c943d558e59ea7737ce77af00ceaabf9220cba4031fa",
+      "size": 25317,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeverify/driver/lang.toml",
+      "sha256": "b4ed51b1db77a42efe08cdd6521907b6c7010e6bd79b61970041c549a62a7538",
+      "size": 136,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/driver/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeverify/driver/main.wz",
+      "sha256": "8bc8923b197a56e9641c4f3339822032d3152c8fd64ed6b572574e787de170e4",
+      "size": 14735,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/driver/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeverify/driver/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/driver/run.py",
+      "sha256": "9cd87fe8048deed758c81a76f9e9c72f42791ae1534b30f460815f27a3d541cb",
+      "size": 8152,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeverify/layouttest/lang.toml",
+      "sha256": "b98f7ffc86894a6a5bb5d7222528113e19fcd5eb03afb0c7d0fac5259942684a",
+      "size": 142,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/layouttest/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeverify/layouttest/main.wz",
+      "sha256": "1a9cb082121c24afae925e98e3523825bf16e593f123d65cc7a2426654705774",
+      "size": 13963,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/layouttest/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeverify/layouttest/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/layouttest/run.py",
+      "sha256": "9069a322e919996ad5ad5b3e5dc8b4ed6c2849e8c0d1008a21d7199ade9630c5",
+      "size": 8305,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeverify/obligationstest/lang.toml",
+      "sha256": "7ec5489e82b4682c45ca5463b6d50ecb748633c16ed00636d3871927cab9b8d7",
+      "size": 147,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/obligationstest/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/nativeverify/obligationstest/main.wz",
+      "sha256": "87a7ff6b097e219c34e232e56f27c81a76379d20f456403f5f0ffea8a339dafe",
+      "size": 744,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/obligationstest/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeverify/obligationstest/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/obligationstest/run.py",
+      "sha256": "285de9fa0971134d15a22f79c304af55fb97c35e065a3bc5a7211b006ffede2a",
+      "size": 8256,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeverify/obligationstest/trace.wz",
+      "sha256": "b2fb9cd6b7514d95a3f5ce367b1061762c0017e81c38dd1069a7d462ff654212",
+      "size": 17330,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/nativeverify/obligationstest/lang.toml"
+      ],
+      "manifest": "selfhost/tests/nativeverify/obligationstest/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/packagecheck/run.py",
+      "sha256": "0edc5e193aff4dee41f4695225daf3aeb3587604b5f8d1df04e944ae28f98350",
+      "size": 8218,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/nativeverify/packagecheck/selftest.wz",
+      "sha256": "695e53ee130b341d17a5736a49ae21e0a0a0435ad664b150d12c07a90c95cea2",
+      "size": 20385,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/nativeverify/packagecheck"
+      ]
+    },
+    {
       "path": "selfhost/tests/number/run_number.py",
       "sha256": "0ccdbf8b0954a01a3be49196995e9116fb4cb4e0a88908006430e31b826d7223",
       "size": 47785,
@@ -2105,8 +3373,8 @@
     },
     {
       "path": "selfhost/tests/ownership/src/main.wz",
-      "sha256": "a26ee289e39ad3eaa9321c96f70f6c230329b6ada37558751a963f94923fd7e6",
-      "size": 62171,
+      "sha256": "6a3d7b44fa6963c0a676adef621dfb31ca32084a94633b008c130af5b8cf4b25",
+      "size": 62840,
       "role": "woozy_source",
       "assignment": [
         "project:selfhost/lang.toml"
@@ -2207,6 +3475,62 @@
         "project:selfhost/tests/project/lang.toml"
       ],
       "manifest": "selfhost/tests/project/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/pythonemit/differential_main.wz",
+      "sha256": "7a7a2e2b4c46d718446d4713a6a07dd6b1c873543ae195e83e3bf807d26129c5",
+      "size": 878,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/pythonemit/lang.toml"
+      ],
+      "manifest": "selfhost/tests/pythonemit/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/pythonemit/independent.wz",
+      "sha256": "35b9061bc47d7f677d067c5d4234d0f6d5b19898d98ac8bbd1f1e2d382c40c9e",
+      "size": 8795,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/pythonemit/lang.toml"
+      ],
+      "manifest": "selfhost/tests/pythonemit/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/pythonemit/lang.toml",
+      "sha256": "d8b2484ed00a7b8d23f0a1ce0df93c99253e69e4179f54f1c3db41c9ab8063a7",
+      "size": 131,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/pythonemit/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/pythonemit/main.wz",
+      "sha256": "52218c7eec6110c17ad459a369bda5e4d68c21d3fc484a618aeb25103ca3a842",
+      "size": 281,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/pythonemit/lang.toml"
+      ],
+      "manifest": "selfhost/tests/pythonemit/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/pythonemit/probe.wz",
+      "sha256": "a3d7c637c2ddd1743d68be167513e85c3b9f354a71c1a2e4bf557ef2f42509a9",
+      "size": 27394,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/pythonemit/lang.toml"
+      ],
+      "manifest": "selfhost/tests/pythonemit/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/pythonemit/run.py",
+      "sha256": "c2f6053f29957d6422825c6018810260029757bd6bed5218d7a1294fd0fa82f2",
+      "size": 32627,
+      "role": "runner_source",
+      "assignment": []
     },
     {
       "path": "selfhost/tests/render/lang.toml",
@@ -2381,6 +3705,140 @@
       "manifest": "selfhost/tests/resolve/lang.toml"
     },
     {
+      "path": "selfhost/tests/sema_a/helpers.wz",
+      "sha256": "6a0af0623041c73bbc2059cb59e04955c844bfa55e26502750c667fd5861bbaa",
+      "size": 27984,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/sema_a/lang.toml"
+      ],
+      "manifest": "selfhost/tests/sema_a/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_a/lang.toml",
+      "sha256": "6f7020fa4f369f9ce0d2719cef546b2892cd02549ffb50d3c46eab2cfdf39d5c",
+      "size": 77,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/sema_a/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/sema_a/run.py",
+      "sha256": "6bad695504e0401140eda1332b0389195b2224576095dd2e4a13e4f60b6249bb",
+      "size": 7093,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_a/src/main.wz",
+      "sha256": "cd620d45236465adc1f1f988595dec93c0c812293b9c1191cfcc86ba7e137604",
+      "size": 131,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/sema_a/lang.toml"
+      ],
+      "manifest": "selfhost/tests/sema_a/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_b/cases/foreign-property-read/lang.toml",
+      "sha256": "218b4d7f16fc300e4a0d7c61ce86bcd8239bee7e4f1e6e3e96cffebd05132bb6",
+      "size": 114,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ]
+    },
+    {
+      "path": "selfhost/tests/sema_b/cases/foreign-property-read/src/main.wz",
+      "sha256": "3e225386f78eeeaf3a208a4e30ab3cf1a697139cf2da6604bc761a43b29bd4b7",
+      "size": 93,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ],
+      "manifest": "selfhost/tests/sema_b/cases/foreign-property-read/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_b/cases/review-switch-binding/lang.toml",
+      "sha256": "218b4d7f16fc300e4a0d7c61ce86bcd8239bee7e4f1e6e3e96cffebd05132bb6",
+      "size": 114,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ]
+    },
+    {
+      "path": "selfhost/tests/sema_b/cases/review-switch-binding/src/main.wz",
+      "sha256": "ba9d05a0d57b16b21e21edf43fcaac880c90273404cd1cadea81d1ccc92cbe72",
+      "size": 138,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ],
+      "manifest": "selfhost/tests/sema_b/cases/review-switch-binding/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_b/cases/review-try-caught/lang.toml",
+      "sha256": "218b4d7f16fc300e4a0d7c61ce86bcd8239bee7e4f1e6e3e96cffebd05132bb6",
+      "size": 114,
+      "role": "manifest",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ]
+    },
+    {
+      "path": "selfhost/tests/sema_b/cases/review-try-caught/src/main.wz",
+      "sha256": "03e0f80cf8545dfe67a55927f1c0d76eebe479a730aec7b3658ffd1744f75b89",
+      "size": 138,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ],
+      "manifest": "selfhost/tests/sema_b/cases/review-try-caught/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/sema_b/compare_cpp.py",
+      "sha256": "4cddeb14c71fc4333f3a25b10110ae49460589ca199748f8e6bbbb85d3939577",
+      "size": 7276,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_b/helpers.wz",
+      "sha256": "a49972ed0485288b20cf60ce300255ca504c3a7e4b89c04fe1ad686717481ff6",
+      "size": 6251,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ]
+    },
+    {
+      "path": "selfhost/tests/sema_b/run.py",
+      "sha256": "fb86ba07cf9bff4972e2c10e9cbe53be9d33698b451c8738e8cf0b8dd4412acd",
+      "size": 10164,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/sema_b/src/main.wz",
+      "sha256": "a2b25400fe6ec0793f367c873e4366327d5e3dadb942b0e656a9b0c7dbac0896",
+      "size": 14971,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ]
+    },
+    {
+      "path": "selfhost/tests/sema_b/src/main_slim.wz",
+      "sha256": "d009966f6674562ae391daf0bc7964249cdc25b5249ebe3610fe752fb00cb103",
+      "size": 14359,
+      "role": "woozy_source",
+      "assignment": [
+        "component:selfhost/tests/sema_b"
+      ]
+    },
+    {
       "path": "selfhost/tests/sema_common/helpers.wz",
       "sha256": "79627c4bd7241cf5eb5e96b37c8f454e8907a1c3f34ab612716af8bae2b5741f",
       "size": 20772,
@@ -2441,6 +3899,92 @@
       "size": 6101,
       "role": "runner_source",
       "assignment": []
+    },
+    {
+      "path": "selfhost/tests/stat_bytes/lang.toml",
+      "sha256": "99717b4a4e46348e3487bcf5c486bd5753bc7ddc5726226a9b00289424a75e33",
+      "size": 131,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/stat_bytes/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/stat_bytes/run.py",
+      "sha256": "66d0275c1124a527fc6538a10c7804fc8b635c114056b26f2d9f820b68642467",
+      "size": 8161,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/stat_bytes/src/main.wz",
+      "sha256": "eda284265ed54f4d03c47bb0a0e796047317b0a2a93773b153e20b1c91e9faaf",
+      "size": 1130,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/stat_bytes/lang.toml"
+      ],
+      "manifest": "selfhost/tests/stat_bytes/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/stat_bytes/test_runner.py",
+      "sha256": "88176e409d7505ad92d306d0c0d1f388d1783b578b982f64933f835420c886b2",
+      "size": 3678,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/e_fs_abi.wz",
+      "sha256": "d6012ca8058ac799ea92fe3a3b4f208b8ab6d5f959c5041cb63afbe2821b62b5",
+      "size": 6406,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/stat_bytes_e/lang.toml"
+      ],
+      "manifest": "selfhost/tests/stat_bytes_e/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/e_stat_bytes.wz",
+      "sha256": "9232f4eb8990a383fa86c1183962de7f7a0d5a8c6d44b47402d8e86214f903ca",
+      "size": 6628,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/stat_bytes_e/lang.toml"
+      ],
+      "manifest": "selfhost/tests/stat_bytes_e/lang.toml"
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/lang.toml",
+      "sha256": "506621f0c2ae80652f4ab43697b4877d482e12c2d7d24158df4f37192d870ffe",
+      "size": 133,
+      "role": "manifest",
+      "assignment": [
+        "project:selfhost/tests/stat_bytes_e/lang.toml"
+      ]
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/run.py",
+      "sha256": "1d312ffe52479a8d070a99168c1968ea64772d205333435b164c1993bf9f9b81",
+      "size": 12976,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/selftest_cleanup.py",
+      "sha256": "ffa32647546f722675a0de2be40b96d9351f8de3b6c074ec30a16f35f72f0fa1",
+      "size": 13920,
+      "role": "runner_source",
+      "assignment": []
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/src/main.wz",
+      "sha256": "b68be75a41ef8895829b4ca52116853ba057a3a14f4adb2d78527d0df542428f",
+      "size": 589,
+      "role": "woozy_source",
+      "assignment": [
+        "project:selfhost/tests/stat_bytes_e/lang.toml"
+      ],
+      "manifest": "selfhost/tests/stat_bytes_e/lang.toml"
     },
     {
       "path": "selfhost/tests/system/lang.toml",
@@ -3411,8 +4955,8 @@
     },
     {
       "path": "stdlib/os/os.wz",
-      "sha256": "8da755004f0fc628479c2ec488832b7abb297d52308fbe55733287e494494a35",
-      "size": 8887,
+      "sha256": "8c7e15f6c1592807a41b4266330a08965079c48777f91a450106e2c6a1d54b8d",
+      "size": 9222,
       "role": "stdlib_source",
       "assignment": [
         "library:stdlib"
@@ -23378,8 +24922,8 @@
     },
     {
       "path": "tests/selfhost/bootstrap_test.py",
-      "sha256": "0d0f2746e00735fdb1bd529b4d4bb897798578032409ab4986e5f1392733a0ba",
-      "size": 1729,
+      "sha256": "f76dc3b1cd6c1c6937769009955b699abd157e3845c6c3a07398d9458c8a33ef",
+      "size": 18623,
       "role": "runner_source",
       "assignment": []
     },
@@ -24565,6 +26109,90 @@
       "runner": "selfhost/bootstrap.py",
       "runner_status": "component",
       "reason": "selfhost component fixture without a standalone manifest",
+      "tags": [
+        "component"
+      ]
+    },
+    {
+      "id": "component:selfhost/tests/nativeemit_b",
+      "kind": "component",
+      "operation": "external",
+      "support": "existing_runner",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeemit_b/run.py",
+      "runner_status": "component",
+      "reason": "nativeemit B text-emission component; C/D/E and public emit/nativeverify differential remain not_run",
+      "tags": [
+        "component"
+      ]
+    },
+    {
+      "id": "component:selfhost/tests/nativeemit_c",
+      "kind": "component",
+      "operation": "external",
+      "support": "existing_runner",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeemit_c/run.py",
+      "runner_status": "component",
+      "reason": "nativeemit C helper/branch component using C++ fixture oracles; merged public emit/nativeverify differential remains not_run",
+      "tags": [
+        "component"
+      ]
+    },
+    {
+      "id": "component:selfhost/tests/nativeemit_d",
+      "kind": "component",
+      "operation": "external",
+      "support": "existing_runner",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeemit_d/run.py",
+      "runner_status": "component",
+      "reason": "nativeemit D async/GC component; public_emit is not_run without the independent nativeverify entry",
+      "tags": [
+        "component"
+      ]
+    },
+    {
+      "id": "component:selfhost/tests/nativeemit_e",
+      "kind": "component",
+      "operation": "external",
+      "support": "existing_runner",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeemit_e/run.py",
+      "runner_status": "component",
+      "reason": "nativeemit E source check and conditional adapter component; partial/not_run stages are never a pass",
+      "tags": [
+        "component"
+      ]
+    },
+    {
+      "id": "component:selfhost/tests/nativeverify/packagecheck",
+      "kind": "component",
+      "operation": "external",
+      "support": "existing_runner",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeverify/packagecheck/run.py",
+      "runner_status": "component",
+      "reason": "nativeverify package-internal selftest component; not a compiler candidate or public CLI pass",
+      "tags": [
+        "component"
+      ]
+    },
+    {
+      "id": "component:selfhost/tests/sema_b",
+      "kind": "component",
+      "operation": "external",
+      "support": "existing_runner",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/sema_b/run.py",
+      "runner_status": "component",
+      "reason": "Sema B case component requiring A/hirverify dependencies; execution is optional and no complete Checker claim is made",
       "tags": [
         "component"
       ]
@@ -58685,6 +60313,196 @@
       }
     },
     {
+      "id": "project:selfhost/tests/hirverify/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/hirverify/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/hirverify/run.py",
+      "runner_status": "component",
+      "reason": "HIR verifier and flow exit-identity component; builds the verifier from real parser ASTs and checks fixed oracle results, not full Sema/backend/corpus parity",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/nativelower/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/nativelower/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativelower/run.py",
+      "runner_status": "component",
+      "reason": "Native CFG lowering/dump component; helper/lower/cfg stages are conditional and do not establish a public CLI corpus pass",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/nativeverify/callidentity/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/nativeverify/callidentity/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeverify/callidentity/run.py",
+      "runner_status": "component",
+      "reason": "nativeverify call-identity component over two Source fixtures (generic, enumclosure); fixtures validate the component API and are not a public_cli corpus pass",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/nativeverify/driver/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/nativeverify/driver/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeverify/driver/run.py",
+      "runner_status": "component",
+      "reason": "nativeverify reusable-driver component; stages the self-hosted pipeline but is not a public CLI corpus pass",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/nativeverify/layouttest/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/nativeverify/layouttest/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeverify/layouttest/run.py",
+      "runner_status": "component",
+      "reason": "Native aggregate layout component compared with the C++ layout oracle; not a public CLI corpus pass",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/nativeverify/obligationstest/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/nativeverify/obligationstest/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/nativeverify/obligationstest/run.py",
+      "runner_status": "component",
+      "reason": "required exit/call obligation algorithm component compared with the C++ oracle; claims no HIR verification or public CLI pass",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/pythonemit/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/pythonemit/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/pythonemit/run.py",
+      "runner_status": "component",
+      "reason": "pythonemit helper/identity component; complete package check and Python 3.12 execution remain not_run",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/sema_a/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/sema_a/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/sema_a/run.py",
+      "runner_status": "component",
+      "reason": "Sema A declaration/type/generic component; excludes a_instantiate and makes no complete Checker claim",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/stat_bytes/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/stat_bytes/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/stat_bytes/run.py",
+      "runner_status": "component",
+      "reason": "std/os.stat_bytes C++/Wz differential component; not a full corpus or public CLI candidate pass",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
+      "id": "project:selfhost/tests/stat_bytes_e/lang.toml",
+      "kind": "compiler_project",
+      "operation": "check",
+      "manifest": "selfhost/tests/stat_bytes_e/lang.toml",
+      "operations": [
+        "check"
+      ],
+      "expected": null,
+      "support": "component",
+      "adaptation": "component",
+      "enabled": false,
+      "runner": "selfhost/tests/stat_bytes_e/run.py",
+      "runner_status": "component",
+      "reason": "E system emitter stat_bytes component and ABI error-path fixture; full public CLI facade is not claimed",
+      "tags": [
+        "selfhost"
+      ]
+    },
+    {
       "id": "runner:tests/native/concurrency-timeouts/run.py",
       "kind": "runner_group",
       "operation": "external",
@@ -77659,6 +79477,16 @@
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
     },
     {
+      "path": "selfhost/tests/hirverify/run.py",
+      "status": "component",
+      "reason": "HIR verifier/exit-identity component test; not evidence a candidate passed public CLI or the full corpus"
+    },
+    {
+      "path": "selfhost/tests/hirverify/test_process_controls.py",
+      "status": "component",
+      "reason": "component helper for hirverify process-policy tests; does not compile or execute a candidate"
+    },
+    {
       "path": "selfhost/tests/input/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
@@ -77679,6 +79507,31 @@
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
     },
     {
+      "path": "selfhost/tests/nativeemit_b/run.py",
+      "status": "component",
+      "reason": "nativeemit B component test; not a public CLI/corpus pass"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_c/run.py",
+      "status": "component",
+      "reason": "nativeemit C component/fixture-oracle test; not a public CLI/corpus pass"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_d/run.py",
+      "status": "component",
+      "reason": "nativeemit D component test; public emit remains not_run"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/fix_check.py",
+      "status": "component",
+      "reason": "component helper used by the nativeemit E harness; not a candidate compile/execute entry"
+    },
+    {
+      "path": "selfhost/tests/nativeemit_e/run.py",
+      "status": "component",
+      "reason": "nativeemit E component test; partial/not_run stages are not a public CLI/corpus pass"
+    },
+    {
       "path": "selfhost/tests/nativeemit_text/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
@@ -77687,6 +79540,41 @@
       "path": "selfhost/tests/nativeir_records/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "selfhost/tests/nativelower/run.py",
+      "status": "component",
+      "reason": "Native CFG lowering/dump component test; not a public CLI/corpus pass"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/controls.py",
+      "status": "component",
+      "reason": "component negative-control helper for callidentity; not a public_cli pass"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/callidentity/run.py",
+      "status": "component",
+      "reason": "nativeverify call-identity component over two Source fixtures; not a public_cli full-corpus pass"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/driver/run.py",
+      "status": "component",
+      "reason": "nativeverify reusable-driver component test; not a public CLI/corpus pass"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/layouttest/run.py",
+      "status": "component",
+      "reason": "Native aggregate layout component test; not a public CLI/corpus pass"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/obligationstest/run.py",
+      "status": "component",
+      "reason": "exit/call obligation component test; not a public CLI/corpus pass"
+    },
+    {
+      "path": "selfhost/tests/nativeverify/packagecheck/run.py",
+      "status": "component",
+      "reason": "nativeverify package-internal component test; not a compiler candidate pass"
     },
     {
       "path": "selfhost/tests/number/run_number.py",
@@ -77719,6 +79607,11 @@
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
     },
     {
+      "path": "selfhost/tests/pythonemit/run.py",
+      "status": "component",
+      "reason": "pythonemit helper/identity component test; full runtime/Python 3.12 execution remains not_run"
+    },
+    {
       "path": "selfhost/tests/resolve/compare.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
@@ -77729,6 +79622,21 @@
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
     },
     {
+      "path": "selfhost/tests/sema_a/run.py",
+      "status": "component",
+      "reason": "Sema A component test; not a complete Checker or public CLI pass"
+    },
+    {
+      "path": "selfhost/tests/sema_b/compare_cpp.py",
+      "status": "component",
+      "reason": "C++ comparison helper for sema_b; not a candidate compile/execute entry"
+    },
+    {
+      "path": "selfhost/tests/sema_b/run.py",
+      "status": "component",
+      "reason": "Sema B component test; execution is optional and not a complete Checker or public CLI pass"
+    },
+    {
       "path": "selfhost/tests/sema_common/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
@@ -77737,6 +79645,26 @@
       "path": "selfhost/tests/source/run.py",
       "status": "component",
       "reason": "C++/runtime component test; not evidence a candidate compiled Woozy"
+    },
+    {
+      "path": "selfhost/tests/stat_bytes/run.py",
+      "status": "component",
+      "reason": "std/os.stat_bytes component differential test; not a full corpus candidate pass"
+    },
+    {
+      "path": "selfhost/tests/stat_bytes/test_runner.py",
+      "status": "component",
+      "reason": "component self-test of stat_bytes runner process controls; not a compiler candidate pass"
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/run.py",
+      "status": "component",
+      "reason": "E system emitter stat_bytes component test; not a public CLI/corpus pass"
+    },
+    {
+      "path": "selfhost/tests/stat_bytes_e/selftest_cleanup.py",
+      "status": "component",
+      "reason": "component cleanup self-test for stat_bytes_e; not a compiler candidate pass"
     },
     {
       "path": "selfhost/tests/system/run.sh",
@@ -78670,74 +80598,230 @@
     }
   ],
   "refreeze": {
-    "from_git_head": "191ccbddef99ffe56a86291257f6c2bc52db1a7b",
-    "to_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
+    "from_git_head": "3d7139bc10cab5d62cb4e04c614db8d86e5ee871",
+    "to_git_head": "b5ac141619627dce9d9658ea8c1e03ca42ac5ca8",
     "new_freeze_paths": [
-      "selfhost/src/wzcc/bindings/bindings.wz",
-      "selfhost/src/wzcc/constant/constant.wz",
-      "selfhost/src/wzcc/literal/literal.wz",
-      "selfhost/src/wzcc/nativebuild/nativebuild.wz",
-      "selfhost/src/wzcc/ownership/analysis.wz",
-      "selfhost/src/wzcc/ownership/complete.wz",
-      "selfhost/src/wzcc/ownership/equality.wz",
-      "selfhost/src/wzcc/ownership/errors.wz",
-      "selfhost/src/wzcc/ownership/ownership.wz",
-      "selfhost/src/wzcc/project/project.wz",
-      "selfhost/src/wzcc/valueops/valueops.wz",
-      "selfhost/tests/bindings/fixtures/c_events.json",
-      "selfhost/tests/bindings/fixtures/c_other.json",
-      "selfhost/tests/bindings/lang.toml",
-      "selfhost/tests/bindings/run.py",
-      "selfhost/tests/bindings/src/main.wz",
-      "selfhost/tests/constant/lang.toml",
-      "selfhost/tests/constant/regression/src/main.wz",
-      "selfhost/tests/constant/run.py",
-      "selfhost/tests/constant/src/main.wz",
-      "selfhost/tests/nativebuild/main.wz",
-      "selfhost/tests/nativebuild/run.py",
-      "selfhost/tests/ownership/independent/main.wz",
-      "selfhost/tests/ownership/run.py",
-      "selfhost/tests/ownership/src/main.wz",
-      "selfhost/tests/project/lang.toml",
-      "selfhost/tests/project/run.py",
-      "selfhost/tests/project/src/main.wz"
+      "selfhost/src/wzcc/cli/project.wz",
+      "selfhost/src/wzcc/hirverify/api.wz",
+      "selfhost/src/wzcc/hirverify/backend.wz",
+      "selfhost/src/wzcc/hirverify/decl.wz",
+      "selfhost/src/wzcc/hirverify/effectsrc.wz",
+      "selfhost/src/wzcc/hirverify/flow.wz",
+      "selfhost/src/wzcc/hirverify/instance.wz",
+      "selfhost/src/wzcc/hirverify/method.wz",
+      "selfhost/src/wzcc/hirverify/run.wz",
+      "selfhost/src/wzcc/hirverify/shape.wz",
+      "selfhost/src/wzcc/hirverify/shape_a.wz",
+      "selfhost/src/wzcc/hirverify/source.wz",
+      "selfhost/src/wzcc/hirverify/state.wz",
+      "selfhost/src/wzcc/hirverify/types.wz",
+      "selfhost/src/wzcc/hirverify/values.wz",
+      "selfhost/src/wzcc/hirverify/verify.wz",
+      "selfhost/src/wzcc/nativeemit/b_function.wz",
+      "selfhost/src/wzcc/nativeemit/b_ops.wz",
+      "selfhost/src/wzcc/nativeemit/b_type.wz",
+      "selfhost/src/wzcc/nativeemit/c_instructions.wz",
+      "selfhost/src/wzcc/nativeemit/c_values.wz",
+      "selfhost/src/wzcc/nativeemit/c_weak.wz",
+      "selfhost/src/wzcc/nativeemit/d_async_gc.wz",
+      "selfhost/src/wzcc/nativeemit/e_adapter.wz",
+      "selfhost/src/wzcc/nativeemit/e_c_ffi.wz",
+      "selfhost/src/wzcc/nativeemit/e_common.wz",
+      "selfhost/src/wzcc/nativeemit/e_system.wz",
+      "selfhost/src/wzcc/nativeemit/emit.wz",
+      "selfhost/src/wzcc/nativeirdump/nativeirdump.wz",
+      "selfhost/src/wzcc/nativelayout/nativelayout.wz",
+      "selfhost/src/wzcc/nativelower/construct.wz",
+      "selfhost/src/wzcc/nativelower/expr.wz",
+      "selfhost/src/wzcc/nativelower/nativelower.wz",
+      "selfhost/src/wzcc/nativelower/state.wz",
+      "selfhost/src/wzcc/nativelower/stmt.wz",
+      "selfhost/src/wzcc/nativeverify/cleanup.wz",
+      "selfhost/src/wzcc/nativeverify/copies.wz",
+      "selfhost/src/wzcc/nativeverify/nativeverify.wz",
+      "selfhost/src/wzcc/nativeverify/obligations.wz",
+      "selfhost/src/wzcc/nativeverify/ownership.wz",
+      "selfhost/src/wzcc/nativeverify/support.wz",
+      "selfhost/src/wzcc/nativeverify/verify_function.wz",
+      "selfhost/src/wzcc/nativeverify/verify_ops.wz",
+      "selfhost/src/wzcc/pythonemit/api.wz",
+      "selfhost/src/wzcc/pythonemit/emit.wz",
+      "selfhost/src/wzcc/pythonemit/expr.wz",
+      "selfhost/src/wzcc/pythonemit/state.wz",
+      "selfhost/src/wzcc/pythonemit/stmt.wz",
+      "selfhost/src/wzcc/pythonemit/writer.wz",
+      "selfhost/src/wzcc/sema/a_declarations.wz",
+      "selfhost/src/wzcc/sema/a_helpers.wz",
+      "selfhost/src/wzcc/sema/a_instantiate.wz",
+      "selfhost/src/wzcc/sema/a_types.wz",
+      "selfhost/src/wzcc/sema/b_call.wz",
+      "selfhost/src/wzcc/sema/b_call2.wz",
+      "selfhost/src/wzcc/sema/b_effects.wz",
+      "selfhost/src/wzcc/sema/b_expr.wz",
+      "selfhost/src/wzcc/sema/b_place.wz",
+      "selfhost/src/wzcc/sema/b_stmt.wz",
+      "selfhost/src/wzcc/sema/b_typed_call.wz",
+      "selfhost/src/wzcc/sema/b_util.wz",
+      "selfhost/tests/hirverify/exit_identity/fixture.wz",
+      "selfhost/tests/hirverify/exit_identity/lang.toml",
+      "selfhost/tests/hirverify/exit_identity/src/main.wz",
+      "selfhost/tests/hirverify/fixture.wz",
+      "selfhost/tests/hirverify/lang.toml",
+      "selfhost/tests/hirverify/nonunit.wz",
+      "selfhost/tests/hirverify/run.py",
+      "selfhost/tests/hirverify/src/fixes.wz",
+      "selfhost/tests/hirverify/src/main.wz",
+      "selfhost/tests/hirverify/template.wz",
+      "selfhost/tests/hirverify/test_process_controls.py",
+      "selfhost/tests/hirverify/throw.wz",
+      "selfhost/tests/hirverify/trait-impl.wz",
+      "selfhost/tests/nativeemit_b/main.wz",
+      "selfhost/tests/nativeemit_b/run.py",
+      "selfhost/tests/nativeemit_b/selfcheck.wz",
+      "selfhost/tests/nativeemit_c/branch_driver.wz",
+      "selfhost/tests/nativeemit_c/corpus/references/lang.toml",
+      "selfhost/tests/nativeemit_c/corpus/references/src/main.wz",
+      "selfhost/tests/nativeemit_c/corpus/thread/lang.toml",
+      "selfhost/tests/nativeemit_c/corpus/thread/src/main.wz",
+      "selfhost/tests/nativeemit_c/corpus/traits/lang.toml",
+      "selfhost/tests/nativeemit_c/corpus/traits/src/main.wz",
+      "selfhost/tests/nativeemit_c/corpus/values/lang.toml",
+      "selfhost/tests/nativeemit_c/corpus/values/src/main.wz",
+      "selfhost/tests/nativeemit_c/corpus/weak/lang.toml",
+      "selfhost/tests/nativeemit_c/corpus/weak/src/main.wz",
+      "selfhost/tests/nativeemit_c/driver.wz",
+      "selfhost/tests/nativeemit_c/main.wz",
+      "selfhost/tests/nativeemit_c/run.py",
+      "selfhost/tests/nativeemit_d/main.wz",
+      "selfhost/tests/nativeemit_d/raw/driver.wz",
+      "selfhost/tests/nativeemit_d/raw/main.wz",
+      "selfhost/tests/nativeemit_d/run.py",
+      "selfhost/tests/nativeemit_e/e_review_extra.wz",
+      "selfhost/tests/nativeemit_e/fix_check.py",
+      "selfhost/tests/nativeemit_e/main.wz",
+      "selfhost/tests/nativeemit_e/probe_main.wz",
+      "selfhost/tests/nativeemit_e/review.wz",
+      "selfhost/tests/nativeemit_e/run.py",
+      "selfhost/tests/nativelower/fixtures/cfg/lang.toml",
+      "selfhost/tests/nativelower/fixtures/cfg/src/main.wz",
+      "selfhost/tests/nativelower/helpers/control_take.wz",
+      "selfhost/tests/nativelower/helpers/defect_take.wz",
+      "selfhost/tests/nativelower/helpers/lang.toml",
+      "selfhost/tests/nativelower/helpers/main.wz",
+      "selfhost/tests/nativelower/helpers/review.wz",
+      "selfhost/tests/nativelower/lang.toml",
+      "selfhost/tests/nativelower/lowercheck/lang.toml",
+      "selfhost/tests/nativelower/lowercheck/src/main.wz",
+      "selfhost/tests/nativelower/rich/src/main.wz",
+      "selfhost/tests/nativelower/run.py",
+      "selfhost/tests/nativelower/src/main.wz",
+      "selfhost/tests/nativeverify/callidentity/controls.py",
+      "selfhost/tests/nativeverify/callidentity/fixtures/enumclosure/lang.toml",
+      "selfhost/tests/nativeverify/callidentity/fixtures/enumclosure/src/main.wz",
+      "selfhost/tests/nativeverify/callidentity/fixtures/generic/lang.toml",
+      "selfhost/tests/nativeverify/callidentity/fixtures/generic/src/main.wz",
+      "selfhost/tests/nativeverify/callidentity/lang.toml",
+      "selfhost/tests/nativeverify/callidentity/main.wz",
+      "selfhost/tests/nativeverify/callidentity/run.py",
+      "selfhost/tests/nativeverify/driver/lang.toml",
+      "selfhost/tests/nativeverify/driver/main.wz",
+      "selfhost/tests/nativeverify/driver/run.py",
+      "selfhost/tests/nativeverify/layouttest/lang.toml",
+      "selfhost/tests/nativeverify/layouttest/main.wz",
+      "selfhost/tests/nativeverify/layouttest/run.py",
+      "selfhost/tests/nativeverify/obligationstest/lang.toml",
+      "selfhost/tests/nativeverify/obligationstest/main.wz",
+      "selfhost/tests/nativeverify/obligationstest/run.py",
+      "selfhost/tests/nativeverify/obligationstest/trace.wz",
+      "selfhost/tests/nativeverify/packagecheck/run.py",
+      "selfhost/tests/nativeverify/packagecheck/selftest.wz",
+      "selfhost/tests/pythonemit/differential_main.wz",
+      "selfhost/tests/pythonemit/independent.wz",
+      "selfhost/tests/pythonemit/lang.toml",
+      "selfhost/tests/pythonemit/main.wz",
+      "selfhost/tests/pythonemit/probe.wz",
+      "selfhost/tests/pythonemit/run.py",
+      "selfhost/tests/sema_a/helpers.wz",
+      "selfhost/tests/sema_a/lang.toml",
+      "selfhost/tests/sema_a/run.py",
+      "selfhost/tests/sema_a/src/main.wz",
+      "selfhost/tests/sema_b/cases/foreign-property-read/lang.toml",
+      "selfhost/tests/sema_b/cases/foreign-property-read/src/main.wz",
+      "selfhost/tests/sema_b/cases/review-switch-binding/lang.toml",
+      "selfhost/tests/sema_b/cases/review-switch-binding/src/main.wz",
+      "selfhost/tests/sema_b/cases/review-try-caught/lang.toml",
+      "selfhost/tests/sema_b/cases/review-try-caught/src/main.wz",
+      "selfhost/tests/sema_b/compare_cpp.py",
+      "selfhost/tests/sema_b/helpers.wz",
+      "selfhost/tests/sema_b/run.py",
+      "selfhost/tests/sema_b/src/main.wz",
+      "selfhost/tests/sema_b/src/main_slim.wz",
+      "selfhost/tests/stat_bytes/lang.toml",
+      "selfhost/tests/stat_bytes/run.py",
+      "selfhost/tests/stat_bytes/src/main.wz",
+      "selfhost/tests/stat_bytes/test_runner.py",
+      "selfhost/tests/stat_bytes_e/e_fs_abi.wz",
+      "selfhost/tests/stat_bytes_e/e_stat_bytes.wz",
+      "selfhost/tests/stat_bytes_e/lang.toml",
+      "selfhost/tests/stat_bytes_e/run.py",
+      "selfhost/tests/stat_bytes_e/selftest_cleanup.py",
+      "selfhost/tests/stat_bytes_e/src/main.wz"
     ],
     "modified_freeze_paths": [
       {
-        "path": "selfhost/src/wzcc/input/input.wz",
-        "old_sha256": "51100b6f3de026356840221f2c7f6a18c0e1938d0ee41f0b2445b2a11aeb69d2",
-        "new_sha256": "e29bd5a4e0f33d903011727519c6ef95bbce2e69262334d1466396da313b6fe8"
+        "path": "contracts/selfhost.json",
+        "old_sha256": "2535181cef99beac6d77b19b50c2ce8b8dd28f5bf8b502d6d80b795a714eb4ba",
+        "new_sha256": "dd7cbb7f3130bfde9b1a2a5c055a18934bb2ffd2c261265bc73cc2ec7ab03f92"
       },
       {
-        "path": "selfhost/src/wzcc/paths/paths.wz",
-        "old_sha256": "c60aa06e826074581ecca204e4057a54f0743e034a6f00bf09b78376273ba1d0",
-        "new_sha256": "67b4236be406335340f38b362065634cca1eeaf28279290344e4a0c4c6c6498e"
+        "path": "selfhost/bootstrap.py",
+        "old_sha256": "9a6d80396800e6dec0630fa84581b5874d7d0a2b54291b1f61635950a3aaf95c",
+        "new_sha256": "8733d71560a4706c2da7bf11dea6c7f635f44793c5b77d300ce1b3d5b878c7db"
       },
       {
-        "path": "selfhost/tests/input/project/src/main.wz",
-        "old_sha256": "b5e41143b7c502447a791024db6b946ec334f56d115eaf802e6168a730f7fc80",
-        "new_sha256": "86f3d5765a1273c899cfd47e6394492d2f40fa18f54e8c926d2e99abc6828dca"
+        "path": "selfhost/src/wzcc/cli/driver.wz",
+        "old_sha256": "e3355244d3a14bc1c56e816bade1bafd36126ea5cbe2d9496d2929fb5c0f0ee8",
+        "new_sha256": "5dd6b8a700c46a3c6248f95ff9fb80aae3beca19f7681c64082edbd76322040b"
       },
       {
-        "path": "selfhost/tests/input/run.py",
-        "old_sha256": "b819cbb6870fdf3f29d2fd2c589f18855055fc58cc452d082ce6abb31feceba0",
-        "new_sha256": "1a91b21eaa1873e42793a9a9d5491e59bc0ba5b6be6838ddb613f66cbbd5104a"
+        "path": "selfhost/src/wzcc/ownership/analysis.wz",
+        "old_sha256": "a2a9ed16b403088967b159ac4aa5f99c6574f73300350342c30ac7cb503b4f1e",
+        "new_sha256": "406cdeec7fc1d929f456748d729c6ce688da18f3b0a7f84afc381a3fe56c79ad"
       },
       {
-        "path": "selfhost/tests/paths/project/src/main.wz",
-        "old_sha256": "9b89f85472df3723cacd4eef9406a401ae58b55fce3f8eaa5596773af368c08a",
-        "new_sha256": "dca46e08d90c497d7a22b4bdfde06e567ba7510e6b7087273d680b082bf0d59c"
+        "path": "selfhost/src/wzcc/project/project.wz",
+        "old_sha256": "5ed854ca47c5315aaf4c7987809d753bac41f0913fa834598dbe63c497938676",
+        "new_sha256": "062cdfb881e5627c49c05467eb2866a927858275a316eaf3b91cf8fbe03f79d4"
       },
       {
-        "path": "selfhost/tests/paths/run.py",
-        "old_sha256": "fcd7c82b209241311324e8052e437c6328b79f74a1e1ff2c6cb50ac585335c92",
-        "new_sha256": "f5063956202563cd73e2b5877213c0a14464a868e686a833554f499af75f2df2"
+        "path": "selfhost/src/wzcc/system/system.wz",
+        "old_sha256": "b6ac7a8bb96b6dbc07401a37e1c139741b61b1426e0eefdbd3d2fca657a7dfb3",
+        "new_sha256": "8869493a79fede6faa100122fd35be955959fd74cc80c8cc6a922b9944d1830b"
       },
       {
-        "path": "tests/selfhost/CMakeLists.txt",
-        "old_sha256": "009a185a8a9bea9c0298a3d717c8b94add068bc596eb0d6db418bc72a1675e44",
-        "new_sha256": "348186bba1c88a743a892d71a65afbcfa0e2aa76a8820ffc12a2f24ed17128e8"
+        "path": "selfhost/src/wzcc/valueops/valueops.wz",
+        "old_sha256": "19149ef4e0cb4a76d6dfd52425eb4c3a552004bf04d84577aa9dd7785723a460",
+        "new_sha256": "0f2a1cb34a1b636bb78078775a935f0bff000d27244a5bebe354d376f04477f3"
+      },
+      {
+        "path": "selfhost/tests/ownership/src/main.wz",
+        "old_sha256": "a26ee289e39ad3eaa9321c96f70f6c230329b6ada37558751a963f94923fd7e6",
+        "new_sha256": "6a3d7b44fa6963c0a676adef621dfb31ca32084a94633b008c130af5b8cf4b25"
+      },
+      {
+        "path": "stdlib/os/os.wz",
+        "old_sha256": "8da755004f0fc628479c2ec488832b7abb297d52308fbe55733287e494494a35",
+        "new_sha256": "8c7e15f6c1592807a41b4266330a08965079c48777f91a450106e2c6a1d54b8d"
+      },
+      {
+        "path": "tests/selfhost/bootstrap_test.py",
+        "old_sha256": "0d0f2746e00735fdb1bd529b4d4bb897798578032409ab4986e5f1392733a0ba",
+        "new_sha256": "f76dc3b1cd6c1c6937769009955b699abd157e3845c6c3a07398d9458c8a33ef"
       }
-    ]
+    ],
+    "new_freeze_path_count": 165,
+    "modified_freeze_path_count": 10,
+    "compiler_source_count": 116,
+    "compiler_source_stage1_whitespace_only_differences": 3
   }
 }

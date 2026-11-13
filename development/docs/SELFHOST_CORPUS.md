@@ -4,9 +4,9 @@
 `tests/selfhost/corpus_test.py` 的实际范围。它是进行中的执行器，不是完整自举或全语料
 通过证明。
 
-当前清单共 1234 项，启用 881、未启用 353。Native 161 项、Python 65 项、迭代器等双后端 178 项、闭包等 Native 98 项均已独立复测并合入；原 285 项记录仍保留。线程池另 11 项已按参考记录合入。471 个文件尚无已启用用例，324 项仍需改写运行方式，99 个复杂 runner 尚未接入。额外诊断字段只记录来源，执行器仍以两版完整 JSON 对照判断，尚未单独检查这些字段。
+当前清单共 1250 项，启用 881、未启用 369。Native 161 项、Python 65 项、迭代器等双后端 178 项、闭包等 Native 98 项均已独立复测并合入；原 285 项记录仍保留。线程池另 11 项已按参考记录合入。590 个文件尚无已启用用例，324 项仍需改写运行方式，99 个复杂 runner 尚未接入。额外诊断字段只记录来源，执行器仍以两版完整 JSON 对照判断，尚未单独检查这些字段。
 
-源文件 SHA、角色、大小和 runner 路径清单没有随用例合并改变；线程池 runner 的分类已从 adaptation_required 改为 public_cli；Python 批次追加 131 条文件分配，最新双后端批次另追加 178 条。随后接受的类型分类和字节路径修改、新增测试尚未写入冻结清单；执行器仍会拒绝这些旧哈希和缺项，不能把参考记录当作当前候选编译器通过。完整候选语料与第二、三代自举未运行。以下 285 项的数量和命令记录描述的是之前那批结果。
+2026-11-14 的 tracked 再冻结已把已接受提交中的已跟踪源码写入清单：文件记录 2672→2837（新增 165、修改 10、删除 0），runner 211→233，case 1234→1250（新增 16 个 disabled component case）。原 881 个 enabled 用例逐字段未变。线程池 runner 的分类已从 adaptation_required 改为 public_cli；Python 批次追加 131 条文件分配，最新双后端批次另追加 178 条。执行器仍不把参考记录当作完整候选编译器通过；完整候选语料与第二、三代自举未运行。以下旧批次的数量和命令记录描述生成时的状态。
 
 最新 178 项来自 89 个项目，每项保留 Native/Python 两个独立 ID，并追加 178 条文件分配。另 98 项中，78 项执行了 Native O0/O2，20 项只做静态检查。11 个浮点项目的 main 没有数值比较，因此这些记录只证明能编译并运行到入口返回，不能证明舍入、NaN/Inf、非正规数或 FMA 规则；原数值观察测试仍未接入。
 
@@ -518,3 +518,108 @@ python3 tests/selfhost/corpus_test.py \
 已复核的 `SH10n-threadpool-corpus-repeats-20261114` delta 现已应用到 Root：只更改 11 个既有线程池用例与 `tests/native/threadpool/run_threadpool.py` 的分类。其他 1223 个用例、2672 条文件记录和 210 个 runner 保持原值。parallel、multi-submit-wait、backpressure、close-drain、close-submit-race、owned-results、self-join、lifecycle 在每个 O0/O2 程序上各运行 3 次，result-error 各 2 次，invalid-arguments 和 panic-task 各 1 次，共 22 次构建、56 次执行。普通用例每次限时 60 秒、exit 0 且输出为空；panic-task 每次限时 20 秒、exit 101，并检查 division-by-zero Panic 前缀。
 
 这 22 次构建和 56 次执行来自已保留的 C++ 参考编译器记录。新增 Woozy 候选、881 项启用子集、完整语料及三代自举没有因本次合入获得通过结论。原 delta 文件和参考记录保留原字节，其中“尚未应用”描述生成该文件时的状态；本次 Root 应用状态、前后清单与逐项差异记在 `checks/threadpool-root-delta-integration-20261114/`。本次没有刷新源码 hash、文件角色、文件分配或其他冻结字段；已知陈旧 hash 与缺项仍会失败，`formal_freeze_ready` 保持 false。
+
+## 已接受提交的 tracked 源码再冻结（2026-11-14）
+
+本节只记录最新一次冻结；上文旧数字保留为生成时状态。基准清单为 3d7139b 冻结的
+`47f7c6d8a2d113645ebeb3bb07739651a7bd173eae148c89f7f24dfea1cdb664`，新清单
+SHA-256 为 `7e3cec635fe4b6196568d228b797ac8bd8d381b445000de8ec1d64d9bd958bb7`，
+对应 HEAD `b5ac141619627dce9d9658ea8c1e03ca42ac5ca8`。
+
+| 项 | 之前 | 之后 |
+|---|---:|---:|
+| 文件记录 | 2672 | 2837 |
+| case 总数 | 1234 | 1250 |
+| enabled | 881 | 881（逐字段不变） |
+| disabled | 353 | 369 |
+| runner | 211 | 233 |
+| adaptation_required runner | 99 | 99（不变） |
+| compiler_source | 55 | 116 |
+
+新增 165 个 tracked 冻结路径：61 个 `compiler_source`、58 个 `woozy_source`、
+24 个 manifest、22 个 runner 源文件。修改 10 个既有文件记录（只更新已接受提交
+产生的 SHA/大小，角色与 assignment 不变），删除 0 个：
+
+- `50a6713`：106 条新增路径，另修改 `cli/driver.wz`、`project/project.wz`。
+- `37f5555`：55 条新增 hirverify/sema 路径。
+- `8c765d2`：4 条新增 stat_bytes 路径，另修改 `system/system.wz`、`stdlib/os/os.wz`。
+- `084a1e5`：修改 ownership analysis、valueops 和 ownership 测试源码。
+- `0d517f6`：修改 `tests/selfhost/bootstrap_test.py`；`b5ac141` 最终修改
+  `contracts/selfhost.json` 与 `selfhost/bootstrap.py`。
+
+逐路径 old/new SHA 在 `refreeze.modified_freeze_paths` 与
+`.work-tmp/selfhost-refreeze-20261114/verification.json` 的 `paths[]`。
+10 个修改项的新字节均等于 `b5ac141` 的 blob；旧 catalog 中
+`contracts/selfhost.json` 的哈希本来就不是 3d7139b 的 blob，本次按实际 tracked
+字节更新并单独记录，没有修改源文件。
+
+### 116 个 compiler source
+
+`selfhost/src` 的 116 个 `.wz` 全部按当前 tracked 字节登记为
+`compiler_source`，assignment 仍为 `compiler:source`，manifest 仍为
+`selfhost/lang.toml`。stage1 构建早于提交 50a6713，并保留当时的 116 个源文件字节。当前提交只去掉了
+其中 3 处空白：`hirverify/run.wz` 尾随空格，以及 `nativelower/construct.wz`、
+`nativeverify/copies.wz` 各一个 EOF 空行。`nativeverify/verify_ops.wz` 的新哈希
+等于已接受函数类型修正 `a9c375953da70100fbeae8d1220f37cac72788d9a162d0fd3428e24e08da3a48`。
+本轮没有重编 116 个源，也没有用参考 stage1 结果代替候选结果。
+
+### 新组件分类
+
+新增 16 个 disabled component case，全部 `enabled=false`、
+`adaptation=component`、`runner_status=component`，并写明具体限制：
+
+| case | runner |
+|---|---|
+| `project:selfhost/tests/hirverify/lang.toml` | `selfhost/tests/hirverify/run.py` |
+| `component:selfhost/tests/nativeemit_b` | `selfhost/tests/nativeemit_b/run.py` |
+| `component:selfhost/tests/nativeemit_c` | `selfhost/tests/nativeemit_c/run.py` |
+| `component:selfhost/tests/nativeemit_d` | `selfhost/tests/nativeemit_d/run.py` |
+| `component:selfhost/tests/nativeemit_e` | `selfhost/tests/nativeemit_e/run.py` |
+| `project:selfhost/tests/nativelower/lang.toml` | `selfhost/tests/nativelower/run.py` |
+| `project:selfhost/tests/nativeverify/callidentity/lang.toml` | `selfhost/tests/nativeverify/callidentity/run.py` |
+| `project:selfhost/tests/nativeverify/driver/lang.toml` | `selfhost/tests/nativeverify/driver/run.py` |
+| `project:selfhost/tests/nativeverify/layouttest/lang.toml` | `selfhost/tests/nativeverify/layouttest/run.py` |
+| `project:selfhost/tests/nativeverify/obligationstest/lang.toml` | `selfhost/tests/nativeverify/obligationstest/run.py` |
+| `component:selfhost/tests/nativeverify/packagecheck` | `selfhost/tests/nativeverify/packagecheck/run.py` |
+| `project:selfhost/tests/pythonemit/lang.toml` | `selfhost/tests/pythonemit/run.py` |
+| `project:selfhost/tests/sema_a/lang.toml` | `selfhost/tests/sema_a/run.py` |
+| `component:selfhost/tests/sema_b` | `selfhost/tests/sema_b/run.py` |
+| `project:selfhost/tests/stat_bytes/lang.toml` | `selfhost/tests/stat_bytes/run.py` |
+| `project:selfhost/tests/stat_bytes_e/lang.toml` | `selfhost/tests/stat_bytes_e/run.py` |
+
+callidentity 的 generic 与 enumclosure 两个 Source fixture 只做组件 API 验证，
+不登记为 `public_cli` 通过。nativeemit_c 的 corpus、nativelower 的 fixtures/helpers/
+lowercheck、sema_b 的 cases 等嵌套 manifest 和源码分配到所属组件的 disabled
+case，没有额外伪造独立项目通过。22 个新 runner 源文件全部登记为 component；
+helper 脚本单独写明不编译或执行候选。复杂 99 个 runner 仍为
+`adaptation_required`，未改写。
+
+`coverage_expectations` 已按实际文件更新为：`tracked_wz=1317`、
+`manifests=1008`、`tests_manifests=960`（只计 `tests/` 下）、
+`no_manifest_wz=125`、`auxiliary_dsl_inputs=21`。
+
+### 私有核对与负控制
+
+本轮只在自己的 worktree 内修改 `selfhost/corpus.json` 和本节文档，未写 Root、
+index 或远端，未重编、未跑全候选、stage2/3 或 116 源构建。对 tracked 路径运行
+`_inventory_errors` 为 0；`coverage_report` 如实保持不完整：
+
+- `files_without_enabled_case=590`、`disabled_cases=369`、
+  `adaptation_required=324`、`runners_require_adaptation=99`。
+- `complete=false`；没有把 `formal_freeze_ready` 报成 true。
+
+负控制使用明确路径模拟，没有调用默认 `check_inventory`/`coverage` CLI，也没有
+扫描整个仓库的 untracked：
+
+- 显式 untracked 列表 1 项、显式 dirty 列表 1 项分别产生对应 reason，二者同时
+  出现时两条 reason 都在；这只是私有模拟，不是 Root formal freeze。
+- 内存清单负控制覆盖缺文件、错哈希、把 component case 改成 enabled、缺
+  component reason、缺 runner 分类、缺 assignment、refreeze 指向未登记路径，
+  均被 `_inventory_errors` 拒绝。
+- 新建临时小 Git 仓库实际验证 `git ls-files` 跟踪集合：修改、未跟踪新增、commit
+  后新增、删除及 commit 后删除均按预期变化。
+
+完整 56 项断言、每路径 SHA、负控制输出、输入记录哈希和覆盖报告在
+`.work-tmp/selfhost-refreeze-20261114/verification.json`。该目录是原作者工作区的
+私有报告。Root 后续独立核对了 2837 条实际文件与提交字节、原 881 个启用用例
+和所有旧记录，并运行负控制后接受并合入；这不表示完整候选语料已通过。
